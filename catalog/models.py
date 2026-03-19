@@ -1,6 +1,13 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import JSON
 
@@ -12,44 +19,72 @@ def utcnow() -> datetime:
 
 
 class CollectionRecord(Base):
-    __tablename__ = 'collections'
+    __tablename__ = "collections"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     title: Mapped[str] = mapped_column(String, nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
-    license: Mapped[str] = mapped_column(String, nullable=False, default='proprietary')
-    keywords_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    license: Mapped[str] = mapped_column(
+        String, nullable=False, default="proprietary"
+    )
+    keywords_json: Mapped[list] = mapped_column(
+        JSON, nullable=False, default=list
+    )
     extra_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
 
 
 class ItemRecord(Base):
-    __tablename__ = 'items'
-    __table_args__ = (UniqueConstraint('collection_id', 'logical_id', 'version', name='uq_item_version'),)
+    __tablename__ = "items"
+    __table_args__ = (
+        UniqueConstraint(
+            "collection_id", "logical_id", "version", name="uq_item_version"
+        ),
+    )
 
     item_id: Mapped[str] = mapped_column(String, primary_key=True)
-    collection_id: Mapped[str] = mapped_column(ForeignKey('collections.id'), nullable=False, index=True)
+    collection_id: Mapped[str] = mapped_column(
+        ForeignKey("collections.id"), nullable=False, index=True
+    )
     logical_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     kind: Mapped[str] = mapped_column(String, nullable=False, index=True)
     geometry_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     bbox_json: Mapped[list | None] = mapped_column(JSON, nullable=True)
-    datetime_value: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
-    properties_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    assets_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    stac_extensions_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    datetime_value: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    properties_json: Mapped[dict] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    assets_json: Mapped[dict] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    stac_extensions_json: Mapped[list] = mapped_column(
+        JSON, nullable=False, default=list
+    )
     links_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     raw_json: Mapped[dict] = mapped_column(JSON, nullable=False)
-    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
 
 
 class AssetRecord(Base):
-    __tablename__ = 'assets'
+    __tablename__ = "assets"
 
     stable_id: Mapped[str] = mapped_column(String, primary_key=True)
-    item_id: Mapped[str] = mapped_column(ForeignKey('items.item_id'), nullable=False, index=True)
-    collection_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    item_id: Mapped[str] = mapped_column(
+        ForeignKey("items.item_id"), nullable=False, index=True
+    )
+    collection_id: Mapped[str] = mapped_column(
+        String, nullable=False, index=True
+    )
     logical_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     asset_key: Mapped[str] = mapped_column(String, nullable=False)
@@ -57,26 +92,48 @@ class AssetRecord(Base):
     media_type: Mapped[str | None] = mapped_column(String, nullable=True)
     roles_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     asset_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
 
 
 class WorkflowRunRecord(Base):
-    __tablename__ = 'workflow_runs'
+    __tablename__ = "workflow_runs"
 
     run_id: Mapped[str] = mapped_column(String, primary_key=True)
     workflow_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
-    metadata_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    metadata_json: Mapped[dict] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    ended_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
 
 
 class LineageRecord(Base):
-    __tablename__ = 'lineage'
+    __tablename__ = "lineage"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    derived_asset_id: Mapped[str] = mapped_column(ForeignKey('assets.stable_id'), nullable=False, index=True)
-    source_asset_id: Mapped[str] = mapped_column(ForeignKey('assets.stable_id'), nullable=False, index=True)
-    run_id: Mapped[str] = mapped_column(ForeignKey('workflow_runs.run_id'), nullable=False, index=True)
-    relation: Mapped[str] = mapped_column(String, nullable=False, default='derived_from')
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    id: Mapped[int] = mapped_column(
+        Integer, primary_key=True, autoincrement=True
+    )
+    derived_asset_id: Mapped[str] = mapped_column(
+        ForeignKey("assets.stable_id"), nullable=False, index=True
+    )
+    source_asset_id: Mapped[str] = mapped_column(
+        ForeignKey("assets.stable_id"), nullable=False, index=True
+    )
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("workflow_runs.run_id"), nullable=False, index=True
+    )
+    relation: Mapped[str] = mapped_column(
+        String, nullable=False, default="derived_from"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )

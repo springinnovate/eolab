@@ -5,25 +5,29 @@ from .db import get_session, init_db
 from .schemas import (
     BulkRegisterRequest,
     CollectionCreate,
+    DerivedRegisterRequest,
     RegisterItemRequest,
     ResolveAssetsRequest,
     SearchRequest,
+    WorkflowRunCreate,
 )
 from .service import (
     create_collection,
     delete_item,
-    resolve_asset,
     get_item_record,
-    provenance_doc,
+    get_workflow_run,
     register_bulk,
+    register_derived,
     register_item,
-    resolve_assets_doc,
+    register_workflow_run,
+    resolve_asset,
+    resolve_assets,
     search_doc,
     serialize_collection_doc,
     serialize_collection_items_doc,
     serialize_root_doc,
 )
-from .stac import serialize_item
+from .stac import dt_to_str, serialize_item
 
 app = FastAPI(title="Immutable STAC Catalog", version="0.1.0")
 
@@ -152,6 +156,42 @@ def register_bulk_route(
     }
 
 
+@app.post("/runs", status_code=status.HTTP_201_CREATED)
+def create_run(
+    payload: WorkflowRunCreate, session: Session = Depends(get_session)
+) -> dict:
+    run = register_workflow_run(session, payload)
+    return {
+        "run_id": run.run_id,
+        "workflow_id": run.workflow_id,
+        "metadata": dict(run.metadata_json or {}),
+        "started_at": dt_to_str(run.started_at),
+        "ended_at": dt_to_str(run.ended_at),
+    }
+
+
+@app.get("/runs/{run_id}")
+def get_run(run_id: str, session: Session = Depends(get_session)) -> dict:
+    run = get_workflow_run(session, run_id)
+    return {
+        "run_id": run.run_id,
+        "workflow_id": run.workflow_id,
+        "metadata": dict(run.metadata_json or {}),
+        "started_at": dt_to_str(run.started_at),
+        "ended_at": dt_to_str(run.ended_at),
+    }
+
+
+@app.post("/register/derived", status_code=status.HTTP_201_CREATED)
+def register_derived_route(
+    payload: DerivedRegisterRequest,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> dict:
+    record = register_derived(session, payload)
+    return serialize_item(record, str(request.base_url))
+
+
 @app.post("/search")
 def search(
     payload: SearchRequest,
@@ -162,21 +202,14 @@ def search(
 
 
 @app.get("/resolve/assets/{stable_id}")
-def resolve_asset(
+def resolve_asset_route(
     stable_id: str, session: Session = Depends(get_session)
 ) -> dict:
     return resolve_asset(session, stable_id)
 
 
 @app.post("/resolve/assets")
-def resolve_assets(
+def resolve_assets_route(
     payload: ResolveAssetsRequest, session: Session = Depends(get_session)
 ) -> dict:
-    return resolve_assets_doc(session, payload.asset_ids)
-
-
-@app.get("/assets/{stable_id}/provenance")
-def asset_provenance(
-    stable_id: str, session: Session = Depends(get_session)
-) -> dict:
-    return provenance_doc(session, stable_id)
+    return resolve_assets(session, payload.asset_ids)

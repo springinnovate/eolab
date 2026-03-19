@@ -453,35 +453,3 @@ def resolve_assets(session: Session, asset_ids: list[str]) -> dict[str, Any]:
     return {
         "assets": [resolve_asset(session, stable_id) for stable_id in asset_ids]
     }
-
-
-def provenance_doc(session: Session, stable_id: str) -> dict[str, Any]:
-    derived = resolve_asset(session, stable_id)
-    lineage_rows = list(
-        session.scalars(
-            select(LineageRecord)
-            .where(LineageRecord.derived_asset_id == stable_id)
-            .order_by(LineageRecord.id)
-        ).all()
-    )
-    if not lineage_rows:
-        return {"derived_asset": derived, "workflow_run": None, "sources": []}
-    run = session.get(WorkflowRunRecord, lineage_rows[0].run_id)
-    sources = [
-        resolve_asset(session, row.source_asset_id) for row in lineage_rows
-    ]
-    return {
-        "derived_asset": derived,
-        "workflow_run": (
-            None
-            if run is None
-            else {
-                "run_id": run.run_id,
-                "workflow_id": run.workflow_id,
-                "metadata": dict(run.metadata_json or {}),
-                "started_at": dt_to_str(run.started_at),
-                "ended_at": dt_to_str(run.ended_at),
-            }
-        ),
-        "sources": sources,
-    }
