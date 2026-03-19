@@ -184,7 +184,7 @@ def _persist_item(
 
 
 def register_item(session: Session, payload: RegisterItemRequest) -> ItemRecord:
-    _autocreate_collection(session, payload.collection_id)
+    collection_record = get_collection_record(session, payload.collection_id)
     if payload.item.get("type") not in {None, "Feature"}:
         raise HTTPException(
             status_code=400, detail="only STAC Items are supported"

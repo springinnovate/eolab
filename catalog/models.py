@@ -1,97 +1,143 @@
+from sqlalchemy import (
+    Column,
+    String,
+    DateTime,
+    Float,
+    JSON,
+    ForeignKey,
+    Text,
+    Index,
+)
+from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
 
-from sqlalchemy import (
-    DateTime,
-    ForeignKey,
-    Integer,
-    String,
-    Text,
-    UniqueConstraint,
-)
-from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy.types import JSON
-
-from .db import Base
+from stac_catalog.db.database import Base
 
 
-def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+class CatalogORM(Base):
+    __tablename__ = "catalogs"
+
+    id = Column(String, primary_key=True, index=True)
+    # TODO: what other types are there?
+    type = Column(String, nullable=False, default="Catalog")
+    title = Column(String, nullable=True)
+    description = Column(Text, nullable=False)
+    stac_version = Column(String, nullable=False, default="1.1.0")
+    stac_extensions = Column(JSON, nullable=True, default=list)
+    extra_fields = Column(JSON, nullable=True, default=dict)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    collections = relationship(
+        "CollectionORM", back_populates="catalog", cascade="all, delete-orphan"
+    )
 
 
-class CollectionRecord(Base):
+class CollectionORM(Base):
     __tablename__ = "collections"
 
-    id: Mapped[str] = mapped_column(String, primary_key=True)
-    title: Mapped[str] = mapped_column(String, nullable=False)
-    description: Mapped[str] = mapped_column(Text, nullable=False)
-    license: Mapped[str] = mapped_column(
-        String, nullable=False, default="proprietary"
+    id = Column(String, primary_key=True)
+    catalog_id = Column(
+        String, ForeignKey("catalogs.id", ondelete="CASCADE"), nullable=False
     )
-    keywords_json: Mapped[list] = mapped_column(
-        JSON, nullable=False, default=list
-    )
-    extra_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=utcnow
+    type = Column(String, nullable=False, default="Collection")
+    title = Column(String, nullable=True)
+    description = Column(Text, nullable=False)
+    stac_version = Column(String, nullable=False, default="1.0.0")
+    stac_extensions = Column(JSON, nullable=True, default=list)
+    license = Column(String, nullable=False, default="proprietary")
+    keywords = Column(JSON, nullable=True, default=list)
+    providers = Column(JSON, nullable=True, default=list)
+
+    # Spatial extent: bbox as [west, south, east, north]
+    # TODO: turn this into a list or something OGC compliant.
+    bbox_west = Column(Float, nullable=True)
+    bbox_south = Column(Float, nullable=True)
+    bbox_east = Column(Float, nullable=True)
+    bbox_north = Column(Float, nullable=True)
+
+    # Temporal extent
+    temporal_start = Column(DateTime, nullable=True)
+    temporal_end = Column(DateTime, nullable=True)
+
+    summaries = Column(JSON, nullable=True, default=dict)
+    extra_fields = Column(JSON, nullable=True, default=dict)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
     )
 
+    catalog = relationship("CatalogORM", back_populates="collections")
+    items = relationship(
+        "ItemORM", back_populates="collection", cascade="all, delete-orphan"
+    )
 
-class ItemRecord(Base):
+    __table_args__ = (Index("ix_collections_catalog_id", "catalog_id"),)
+
+
+class ItemORM(Base):
     __tablename__ = "items"
+
+    id = Column(String, primary_key=True)
+    collection_id = Column(
+        String, ForeignKey("collections.id", ondelete="CASCADE"), nullable=False
+    )
+    catalog_id = Column(String, nullable=False)
+    type = Column(String, nullable=False, default="Feature")
+    stac_version = Column(String, nullable=False, default="1.0.0")
+    stac_extensions = Column(JSON, nullable=True, default=list)
+
+    # Geometry stored as GeoJSON dict
+    geometry = Column(JSON, nullable=True)
+
+    # Bbox denormalized for fast spatial queries
+    bbox_west = Column(Float, nullable=True)
+    bbox_south = Column(Float, nullable=True)
+    bbox_east = Column(Float, nullable=True)
+    bbox_north = Column(Float, nullable=True)
+
+    # Core STAC properties
+    datetime = Column(DateTime, nullable=True)
+    start_datetime = Column(DateTime, nullable=True)
+    end_datetime = Column(DateTime, nullable=True)
+    created = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+    platform = Column(String, nullable=True)
+    instruments = Column(JSON, nullable=True)
+    constellation = Column(String, nullable=True)
+    mission = Column(String, nullable=True)
+    gsd = Column(Float, nullable=True)
+    eo_cloud_cover = Column(Float, nullable=True)
+    extra_properties = Column(JSON, nullable=True, default=dict)
+
+    # Assets: dict of asset_key -> asset object
+    assets = Column(JSON, nullable=False, default=dict)
+
+    # Links
+    links = Column(JSON, nullable=True, default=list)
+
+    collection = relationship("CollectionORM", back_populates="items")
+
     __table_args__ = (
-        UniqueConstraint(
-            "collection_id", "logical_id", "version", name="uq_item_version"
+        Index("ix_items_collection_id", "collection_id"),
+        Index("ix_items_catalog_id", "catalog_id"),
+        Index("ix_items_datetime", "datetime"),
+        Index(
+            "ix_items_bbox",
+            "bbox_west",
+            "bbox_south",
+            "bbox_east",
+            "bbox_north",
         ),
-    )
-
-    item_id: Mapped[str] = mapped_column(String, primary_key=True)
-    collection_id: Mapped[str] = mapped_column(
-        ForeignKey("collections.id"), nullable=False, index=True
-    )
-    logical_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
-    version: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    kind: Mapped[str] = mapped_column(String, nullable=False, index=True)
-    geometry_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    bbox_json: Mapped[list | None] = mapped_column(JSON, nullable=True)
-    datetime_value: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True, index=True
-    )
-    properties_json: Mapped[dict] = mapped_column(
-        JSON, nullable=False, default=dict
-    )
-    assets_json: Mapped[dict] = mapped_column(
-        JSON, nullable=False, default=dict
-    )
-    stac_extensions_json: Mapped[list] = mapped_column(
-        JSON, nullable=False, default=list
-    )
-    links_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
-    raw_json: Mapped[dict] = mapped_column(JSON, nullable=False)
-    deleted_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True, index=True
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=utcnow
-    )
-
-
-class AssetRecord(Base):
-    __tablename__ = "assets"
-
-    stable_id: Mapped[str] = mapped_column(String, primary_key=True)
-    item_id: Mapped[str] = mapped_column(
-        ForeignKey("items.item_id"), nullable=False, index=True
-    )
-    collection_id: Mapped[str] = mapped_column(
-        String, nullable=False, index=True
-    )
-    logical_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
-    version: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    asset_key: Mapped[str] = mapped_column(String, nullable=False)
-    href: Mapped[str] = mapped_column(Text, nullable=False)
-    media_type: Mapped[str | None] = mapped_column(String, nullable=True)
-    roles_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
-    asset_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=utcnow
+        Index("ix_items_platform", "platform"),
     )
