@@ -80,7 +80,6 @@ class CollectionORM(Base):
     description = Column(Text, nullable=False)
     stac_version = Column(String, nullable=False)
     stac_extensions = Column(JSON, nullable=True)
-    # Can
     license = Column(String, nullable=False, default="proprietary")
     keywords = Column(JSON, nullable=True, default=list)
     providers = Column(JSON, nullable=True, default=list)
