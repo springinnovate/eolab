@@ -5,21 +5,21 @@ from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .models import (
+from eolab_catalog.db.models import (
     AssetRecord,
     CollectionRecord,
     ItemRecord,
     LineageRecord,
     WorkflowRunRecord,
 )
-from .schemas import (
+from eolab_catalog.api.schemas import (
     CollectionCreate,
     DerivedRegisterRequest,
     RegisterItemRequest,
     SearchRequest,
     WorkflowRunCreate,
 )
-from .stac import (
+from eolab_catalog.stac import (
     bbox_from_geometry,
     bbox_overlaps,
     canonical_item,

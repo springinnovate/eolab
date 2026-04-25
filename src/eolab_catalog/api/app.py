@@ -1,7 +1,7 @@
 from fastapi import Depends, FastAPI, Request, status
 from sqlalchemy.orm import Session
 
-from .db import get_session, init_db
+from eolab_catalog.db.session import get_session, init_db
 from .schemas import (
     BulkRegisterRequest,
     CollectionCreate,
@@ -11,7 +11,7 @@ from .schemas import (
     SearchRequest,
     WorkflowRunCreate,
 )
-from .service import (
+from eolab_catalog.services.catalog import (
     create_collection,
     delete_item,
     get_item_record,
@@ -27,7 +27,7 @@ from .service import (
     serialize_collection_items_doc,
     serialize_root_doc,
 )
-from .stac import dt_to_str, serialize_item
+from eolab_catalog.stac import dt_to_str, serialize_item
 
 app = FastAPI(title="Immutable STAC Catalog", version="0.1.0")
 

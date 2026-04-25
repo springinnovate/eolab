@@ -11,7 +11,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
 
-from stac_catalog.db.database import Base
+from eolab_catalog.db.session import Base
 
 
 class CatalogORM(Base):
@@ -78,8 +78,9 @@ class CollectionORM(Base):
     type = Column(String, nullable=False, default="Collection")
     title = Column(String, nullable=True)
     description = Column(Text, nullable=False)
-    stac_version = Column(String, nullable=False, default="1.0.0")
-    stac_extensions = Column(JSON, nullable=True, default=list)
+    stac_version = Column(String, nullable=False)
+    stac_extensions = Column(JSON, nullable=True)
+    # Can
     license = Column(String, nullable=False, default="proprietary")
     keywords = Column(JSON, nullable=True, default=list)
     providers = Column(JSON, nullable=True, default=list)
