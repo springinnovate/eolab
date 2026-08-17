@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0f1115" />
+    <title>EOLab</title>
+  </head>
+  <body>
+    <main id="app">
+      <div id="map" aria-label="Interactive Earth observation map"></div>
+
+      <section class="control-panel" id="control-panel" aria-label="EOLab controls">
+        <header class="panel-header">
+          <div>
+            <p class="eyebrow">Earth observation workspace</p>
+            <h1 id="app-title">EOLab</h1>
+            <p class="subtitle" id="app-subtitle">Catalog-driven Earth observation</p>
+          </div>
+          <button class="icon-button" id="collapse-panel" type="button" aria-label="Collapse control panel">
+            <span aria-hidden="true">&#10005;</span>
+          </button>
+        </header>
+
+        <div class="system-state" id="system-state" role="status">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="system-state-text">Loading runtime configuration</span>
+        </div>
+
+        <nav class="panel-tabs" aria-label="Workspace sections" role="tablist">
+          <button class="tab-button is-active" type="button" role="tab" aria-selected="true" data-panel="catalog">Catalog</button>
+          <button class="tab-button" type="button" role="tab" aria-selected="false" data-panel="processing">Processing</button>
+          <button class="tab-button" type="button" role="tab" aria-selected="false" data-panel="runs">Runs</button>
+        </nav>
+
+        <div class="panel-content">
+          <section class="tab-panel is-active" id="panel-catalog" role="tabpanel">
+            <p class="section-label">Data discovery</p>
+            <h2>Catalog</h2>
+            <p class="section-copy" id="catalog-message">Checking catalog configuration.</p>
+            <a class="catalog-link" id="catalog-link" hidden target="_blank" rel="noreferrer">Open configured catalog</a>
+            <div class="empty-state">
+              <span class="empty-state-mark" aria-hidden="true">01</span>
+              <div>
+                <strong>Catalog connection comes next</strong>
+                <p>This shell is ready for STAC search, layer selection, metadata, and provenance.</p>
+              </div>
+            </div>
+          </section>
+
+          <section class="tab-panel" id="panel-processing" role="tabpanel" hidden>
+            <p class="section-label">Reusable computation</p>
+            <h2>Processing</h2>
+            <p class="section-copy">EOLab Functions and Jobs are intentionally outside this bootstrap milestone.</p>
+            <div class="empty-state">
+              <span class="empty-state-mark" aria-hidden="true">02</span>
+              <div>
+                <strong>Designed, not yet connected</strong>
+                <p>Future workflows will resolve catalog inputs, estimate work, and register derived outputs.</p>
+              </div>
+            </div>
+          </section>
+
+          <section class="tab-panel" id="panel-runs" role="tabpanel" hidden>
+            <p class="section-label">Execution history</p>
+            <h2>Runs</h2>
+            <p class="section-copy">Run status, logs, metrics, and provenance will appear here.</p>
+            <div class="empty-state">
+              <span class="empty-state-mark" aria-hidden="true">03</span>
+              <div>
+                <strong>No execution service yet</strong>
+                <p>The initial deployment stays focused on a reliable application and viewer foundation.</p>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <footer class="panel-footer">
+          <span>Runtime configured</span>
+          <span id="app-version">dev</span>
+        </footer>
+      </section>
+
+      <button class="panel-opener" id="open-panel" type="button" hidden>Open EOLab</button>
+      <div class="map-position" id="map-position" aria-live="polite">0.000, 0.000</div>
+    </main>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
