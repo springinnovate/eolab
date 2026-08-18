@@ -4,18 +4,18 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#0f1115" />
-    <title>EOLab</title>
+    <title>Loading application</title>
   </head>
   <body>
     <main id="app">
       <div id="map" aria-label="Interactive Earth observation map"></div>
 
-      <section class="control-panel" id="control-panel" aria-label="EOLab controls">
+      <section class="control-panel" id="control-panel" aria-label="Application controls">
         <header class="panel-header">
           <div>
             <p class="eyebrow">Earth observation workspace</p>
-            <h1 id="app-title">EOLab</h1>
-            <p class="subtitle" id="app-subtitle">Catalog-driven Earth observation</p>
+            <h1 id="app-title"></h1>
+            <p class="subtitle" id="app-subtitle"></p>
           </div>
           <button class="icon-button" id="collapse-panel" type="button" aria-label="Collapse control panel">
             <span aria-hidden="true">&#10005;</span>
@@ -77,11 +77,11 @@
 
         <footer class="panel-footer">
           <span>Runtime configured</span>
-          <span id="app-version">dev</span>
+          <span id="app-version"></span>
         </footer>
       </section>
 
-      <button class="panel-opener" id="open-panel" type="button" hidden>Open EOLab</button>
+      <button class="panel-opener" id="open-panel" type="button" hidden>Open controls</button>
       <div class="map-position" id="map-position" aria-live="polite">0.000, 0.000</div>
     </main>
 
