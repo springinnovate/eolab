@@ -15,7 +15,7 @@ EOLab is an open source platform for Earth observation analysis and visualizatio
 
 ## Run with Docker Compose
 
-Create `.env` from `.env.example`, set `EOLAB_DATABASE_PASSWORD`, and set `SOURCE_COMMIT` to the full 40-character SHA reported by `git rev-parse HEAD`. Choose `true` or `false` for `EOLAB_LOAD_SAMPLE_CATALOG`, then start the stack with the local port override:
+Create `.env` from `.env.example`, set `EOLAB_DATABASE_PASSWORD`, and choose `true` or `false` for `EOLAB_LOAD_SAMPLE_CATALOG`. To display a Git-derived version locally, replace the `SOURCE_COMMIT` fallback with the full 40-character SHA reported by `git rev-parse HEAD`. Then start the stack with the local port override:
 
 ```console
 docker compose -f docker-compose.yml -f docker-compose.local.yml up --build --detach

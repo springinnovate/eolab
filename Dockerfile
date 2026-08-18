@@ -6,12 +6,16 @@ RUN apk add --no-cache git
 
 WORKDIR /source
 
-RUN test -n "$SOURCE_COMMIT" \
-    && git init \
-    && git remote add origin https://github.com/springinnovate/eolab.git \
-    && git fetch --filter=blob:none --tags origin "$SOURCE_COMMIT" \
-    && git checkout --detach FETCH_HEAD \
-    && git describe --tags --always > /version \
+RUN if [ "$SOURCE_COMMIT" = "Version cannot be determined outside a Coolify deployment" ]; then \
+        printf '%s\n' "$SOURCE_COMMIT" > /version; \
+    else \
+        test -n "$SOURCE_COMMIT" \
+        && git init \
+        && git remote add origin https://github.com/springinnovate/eolab.git \
+        && git fetch --filter=blob:none --tags origin "$SOURCE_COMMIT" \
+        && git checkout --detach FETCH_HEAD \
+        && git describe --tags --always > /version; \
+    fi \
     && test -s /version
 
 
