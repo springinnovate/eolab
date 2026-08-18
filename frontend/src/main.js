@@ -250,7 +250,7 @@ async function refreshCatalog(appGlobalConfiguration, leafletMap) {
     systemStateElement.classList.add("is-warning");
     systemStateTextElement.textContent = "Catalog unavailable";
     catalogMessageElement.textContent =
-      "The map remains available. Check the catalog services and try again.";
+      "Check the catalog services and try again.";
     catalogSummaryElement.textContent = catalogError.message;
   } finally {
     refreshCatalogButton.disabled = false;
