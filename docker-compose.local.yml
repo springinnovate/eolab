@@ -1,0 +1,5 @@
+# Publish EOLab on the host loopback interface for manual Docker Compose runs.
+services:
+  app:
+    ports:
+      - "127.0.0.1:${EOLAB_HOST_PORT:-8000}:8000"

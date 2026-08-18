@@ -1,4 +1,102 @@
 services:
+  database:
+    image: ghcr.io/stac-utils/pgstac-postgres:v0.9.12@sha256:0822287990ae8c0d200eb7143b320d02157bd1da0500cc1b0957603a603896c6
+    restart: unless-stopped
+    environment:
+      - "POSTGRES_USER=eolab"
+      # Reject an unset or blank database password before any containers start.
+      - "POSTGRES_PASSWORD=${EOLAB_DATABASE_PASSWORD:?EOLAB_DATABASE_PASSWORD must be set}"
+      - "POSTGRES_DB=eolab"
+      - "PGUSER=eolab"
+      - "PGPASSWORD=${EOLAB_DATABASE_PASSWORD:?EOLAB_DATABASE_PASSWORD must be set}"
+      - "PGDATABASE=eolab"
+    expose:
+      - "5432"
+    volumes:
+      - pgstac-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U eolab -d eolab
+      interval: 10s
+      timeout: 5s
+      start_period: 60s
+      retries: 10
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  # Initializes pgSTAC in a new database and applies schema upgrades thereafter.
+  pgstac-migrate:
+    image: ghcr.io/stac-utils/pgstac-pypgstac:v0.9.12@sha256:672faad776b55afe15fadb27589c390c4fc93de5bc73e8889d2c29a600c5dba4
+    restart: "no"
+    environment:
+      - "PGUSER=eolab"
+      - "PGPASSWORD=${EOLAB_DATABASE_PASSWORD:?EOLAB_DATABASE_PASSWORD must be set}"
+      - "PGDATABASE=eolab"
+      - "PGHOST=database"
+      - "PGPORT=5432"
+    depends_on:
+      database:
+        condition: service_healthy
+    command:
+      - pypgstac
+      - migrate
+
+  stac-api:
+    image: ghcr.io/stac-utils/stac-fastapi-pgstac:6.3.1@sha256:db117b91302f7983ce4e07658768a6e8d2f6716613252a15f5dcdbda8dae9883
+    restart: unless-stopped
+    environment:
+      - "PGUSER=eolab"
+      - "PGPASSWORD=${EOLAB_DATABASE_PASSWORD:?EOLAB_DATABASE_PASSWORD must be set}"
+      - "PGDATABASE=eolab"
+      - "PGHOST=database"
+      - "PGPORT=5432"
+      - "DB_MIN_CONN_SIZE=1"
+      - "DB_MAX_CONN_SIZE=5"
+      - "ROOT_PATH=/stac"
+      - "STAC_FASTAPI_TITLE=EOLab STAC API"
+      - "STAC_FASTAPI_DESCRIPTION=Searchable geospatial assets registered with EOLab"
+      - "STAC_FASTAPI_LANDING_ID=eolab-stac"
+    expose:
+      - "8080"
+    depends_on:
+      pgstac-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/_mgmt/health', timeout=3)
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 10
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  catalog-seed:
+    build:
+      context: .
+      dockerfile: Dockerfile.catalog-seed
+    restart: "no"
+    environment:
+      - "LOAD_SAMPLE_CATALOG=${EOLAB_LOAD_SAMPLE_CATALOG:?EOLAB_LOAD_SAMPLE_CATALOG must be true or false}"
+      - "PGUSER=eolab"
+      - "PGPASSWORD=${EOLAB_DATABASE_PASSWORD:?EOLAB_DATABASE_PASSWORD must be set}"
+      - "PGDATABASE=eolab"
+      - "PGHOST=database"
+      - "PGPORT=5432"
+    depends_on:
+      pgstac-migrate:
+        condition: service_completed_successfully
+
   app:
     build:
       context: .
@@ -7,14 +105,15 @@ services:
         SOURCE_COMMIT: ${SOURCE_COMMIT:?SOURCE_COMMIT must identify the source revision}
     restart: unless-stopped
     environment:
-      - "EOLAB_APP_TITLE=${EOLAB_APP_TITLE:-EOLab}"
-      - "EOLAB_APP_SUBTITLE=${EOLAB_APP_SUBTITLE:-Explore, process, and visualize geospatial data}"
-      - "EOLAB_CATALOG_URL=${EOLAB_CATALOG_URL:-}"
-      - "EOLAB_BASEMAP_URL=${EOLAB_BASEMAP_URL:-https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png}"
-      - "EOLAB_BASEMAP_ATTRIBUTION=${EOLAB_BASEMAP_ATTRIBUTION:-&copy; OpenStreetMap contributors}"
-      - "EOLAB_INITIAL_LATITUDE=${EOLAB_INITIAL_LATITUDE:-20}"
-      - "EOLAB_INITIAL_LONGITUDE=${EOLAB_INITIAL_LONGITUDE:-0}"
-      - "EOLAB_INITIAL_ZOOM=${EOLAB_INITIAL_ZOOM:-2}"
+      - "APP_TITLE=${EOLAB_APP_TITLE:-EOLab}"
+      - "APP_SUBTITLE=${EOLAB_APP_SUBTITLE:-Explore, process, and visualize geospatial data}"
+      - "CATALOG_URL=${EOLAB_CATALOG_URL:-/stac}"
+      - "CATALOG_INTERNAL_URL=http://stac-api:8080"
+      - "BASEMAP_URL=${EOLAB_BASEMAP_URL:-https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png}"
+      - "BASEMAP_ATTRIBUTION=${EOLAB_BASEMAP_ATTRIBUTION:-&copy; OpenStreetMap contributors}"
+      - "INITIAL_LATITUDE=${EOLAB_INITIAL_LATITUDE:-20}"
+      - "INITIAL_LONGITUDE=${EOLAB_INITIAL_LONGITUDE:-0}"
+      - "INITIAL_ZOOM=${EOLAB_INITIAL_ZOOM:-2}"
     expose:
       - "8000"
     healthcheck:
@@ -32,3 +131,8 @@ services:
       options:
         max-size: 10m
         max-file: "3"
+
+volumes:
+  # Use a predictable name so the database volume is easy to identify and delete.
+  pgstac-data:
+    name: ${EOLAB_DATABASE_VOLUME_NAME:-eolab-pgstac-data}

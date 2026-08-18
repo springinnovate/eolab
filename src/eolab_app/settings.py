@@ -15,7 +15,8 @@ class Settings:
     app_title: str
     app_subtitle: str
     app_version: str
-    catalog_url: str | None
+    catalog_url: str
+    catalog_internal_url: str
     basemap_url: str
     basemap_attribution: str
     initial_latitude: float
@@ -30,31 +31,33 @@ class Settings:
                 outside its documented range.
         """
         required_text_settings = {
-            "EOLAB_APP_TITLE": self.app_title,
-            "EOLAB_APP_SUBTITLE": self.app_subtitle,
+            "APP_TITLE": self.app_title,
+            "APP_SUBTITLE": self.app_subtitle,
             "application version": self.app_version,
-            "EOLAB_BASEMAP_URL": self.basemap_url,
-            "EOLAB_BASEMAP_ATTRIBUTION": self.basemap_attribution,
+            "CATALOG_URL": self.catalog_url,
+            "CATALOG_INTERNAL_URL": self.catalog_internal_url,
+            "BASEMAP_URL": self.basemap_url,
+            "BASEMAP_ATTRIBUTION": self.basemap_attribution,
         }
         for environment_variable_name, setting_value in required_text_settings.items():
             if not setting_value:
                 raise ValueError(f"{environment_variable_name} must not be blank")
 
         if not -90 <= self.initial_latitude <= 90:
-            raise ValueError("EOLAB_INITIAL_LATITUDE must be between -90 and 90")
+            raise ValueError("INITIAL_LATITUDE must be between -90 and 90")
         if not -180 <= self.initial_longitude <= 180:
-            raise ValueError("EOLAB_INITIAL_LONGITUDE must be between -180 and 180")
+            raise ValueError("INITIAL_LONGITUDE must be between -180 and 180")
         if not 0 <= self.initial_zoom <= 22:
-            raise ValueError("EOLAB_INITIAL_ZOOM must be between 0 and 22")
+            raise ValueError("INITIAL_ZOOM must be between 0 and 22")
 
     def as_public_dict(self) -> dict[str, object]:
         """Serialize settings for the public browser configuration endpoint.
 
         Returns:
             Browser configuration containing application identity strings,
-            ``catalogUrl`` as a URL string or ``None``, basemap URL and
-            attribution strings, and numeric initial-view latitude, longitude,
-            and zoom values.
+            the browser-facing ``catalogUrl``, basemap URL and attribution
+            strings, and numeric initial-view latitude, longitude, and zoom
+            values. The internal catalog service URL is not exposed.
         """
         return {
             "appTitle": self.app_title,
@@ -83,24 +86,23 @@ def load_settings(
 
     Returns:
         Validated settings with surrounding whitespace removed from text,
-        a blank catalog URL normalized to ``None``, map values parsed as
-        floating-point numbers, and the application version read from the
-        baked version file.
+        map values parsed as floating-point numbers, and the application
+        version read from the baked version file.
 
     Raises:
         FileNotFoundError: If the baked version file does not exist.
         KeyError: If a required environment variable is missing.
         ValueError: If a setting violates its type or range contract.
     """
-    catalog_url = os.environ["EOLAB_CATALOG_URL"].strip()
     return Settings(
-        app_title=os.environ["EOLAB_APP_TITLE"].strip(),
-        app_subtitle=os.environ["EOLAB_APP_SUBTITLE"].strip(),
+        app_title=os.environ["APP_TITLE"].strip(),
+        app_subtitle=os.environ["APP_SUBTITLE"].strip(),
         app_version=version_file_path.read_text(encoding="utf-8").strip(),
-        catalog_url=catalog_url or None,
-        basemap_url=os.environ["EOLAB_BASEMAP_URL"].strip(),
-        basemap_attribution=os.environ["EOLAB_BASEMAP_ATTRIBUTION"].strip(),
-        initial_latitude=float(os.environ["EOLAB_INITIAL_LATITUDE"]),
-        initial_longitude=float(os.environ["EOLAB_INITIAL_LONGITUDE"]),
-        initial_zoom=float(os.environ["EOLAB_INITIAL_ZOOM"]),
+        catalog_url=os.environ["CATALOG_URL"].strip(),
+        catalog_internal_url=os.environ["CATALOG_INTERNAL_URL"].strip(),
+        basemap_url=os.environ["BASEMAP_URL"].strip(),
+        basemap_attribution=os.environ["BASEMAP_ATTRIBUTION"].strip(),
+        initial_latitude=float(os.environ["INITIAL_LATITUDE"]),
+        initial_longitude=float(os.environ["INITIAL_LONGITUDE"]),
+        initial_zoom=float(os.environ["INITIAL_ZOOM"]),
     )
