@@ -103,15 +103,15 @@ services:
         SOURCE_COMMIT: ${SOURCE_COMMIT:?SOURCE_COMMIT must identify the source revision}
     restart: unless-stopped
     environment:
-      - "EOLAB_APP_TITLE=${EOLAB_APP_TITLE:-EOLab}"
-      - "EOLAB_APP_SUBTITLE=${EOLAB_APP_SUBTITLE:-Explore, process, and visualize geospatial data}"
-      - "EOLAB_CATALOG_URL=${EOLAB_CATALOG_URL:-/stac}"
-      - "EOLAB_CATALOG_INTERNAL_URL=http://stac-api:8080"
-      - "EOLAB_BASEMAP_URL=${EOLAB_BASEMAP_URL:-https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png}"
-      - "EOLAB_BASEMAP_ATTRIBUTION=${EOLAB_BASEMAP_ATTRIBUTION:-&copy; OpenStreetMap contributors}"
-      - "EOLAB_INITIAL_LATITUDE=${EOLAB_INITIAL_LATITUDE:-20}"
-      - "EOLAB_INITIAL_LONGITUDE=${EOLAB_INITIAL_LONGITUDE:-0}"
-      - "EOLAB_INITIAL_ZOOM=${EOLAB_INITIAL_ZOOM:-2}"
+      - "APP_TITLE=${EOLAB_APP_TITLE:-EOLab}"
+      - "APP_SUBTITLE=${EOLAB_APP_SUBTITLE:-Explore, process, and visualize geospatial data}"
+      - "CATALOG_URL=${EOLAB_CATALOG_URL:-/stac}"
+      - "CATALOG_INTERNAL_URL=http://stac-api:8080"
+      - "BASEMAP_URL=${EOLAB_BASEMAP_URL:-https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png}"
+      - "BASEMAP_ATTRIBUTION=${EOLAB_BASEMAP_ATTRIBUTION:-&copy; OpenStreetMap contributors}"
+      - "INITIAL_LATITUDE=${EOLAB_INITIAL_LATITUDE:-20}"
+      - "INITIAL_LONGITUDE=${EOLAB_INITIAL_LONGITUDE:-0}"
+      - "INITIAL_ZOOM=${EOLAB_INITIAL_ZOOM:-2}"
     expose:
       - "8000"
     healthcheck:

@@ -12,15 +12,15 @@ from eolab_app.settings import load_settings
 
 
 DEFAULT_ENVIRONMENT = {
-    "EOLAB_APP_TITLE": "EOLab",
-    "EOLAB_APP_SUBTITLE": "Explore, process, and visualize geospatial data",
-    "EOLAB_CATALOG_URL": "/stac",
-    "EOLAB_CATALOG_INTERNAL_URL": "http://stac-api:8080",
-    "EOLAB_BASEMAP_URL": "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-    "EOLAB_BASEMAP_ATTRIBUTION": "&copy; OpenStreetMap contributors",
-    "EOLAB_INITIAL_LATITUDE": "20",
-    "EOLAB_INITIAL_LONGITUDE": "0",
-    "EOLAB_INITIAL_ZOOM": "2",
+    "APP_TITLE": "EOLab",
+    "APP_SUBTITLE": "Explore, process, and visualize geospatial data",
+    "CATALOG_URL": "/stac",
+    "CATALOG_INTERNAL_URL": "http://stac-api:8080",
+    "BASEMAP_URL": "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+    "BASEMAP_ATTRIBUTION": "&copy; OpenStreetMap contributors",
+    "INITIAL_LATITUDE": "20",
+    "INITIAL_LONGITUDE": "0",
+    "INITIAL_ZOOM": "2",
 }
 
 
@@ -60,8 +60,8 @@ def test_configuration_endpoint_reads_environment(
     version_file_path: Path,
 ) -> None:
     """Expose the deployment environment through the public configuration."""
-    monkeypatch.setenv("EOLAB_APP_TITLE", "WWF EOLab")
-    monkeypatch.setenv("EOLAB_CATALOG_URL", "https://catalog.example.test")
+    monkeypatch.setenv("APP_TITLE", "WWF EOLab")
+    monkeypatch.setenv("CATALOG_URL", "https://catalog.example.test")
 
     response = TestClient(create_app(version_file_path)).get("/api/config")
 
@@ -183,9 +183,9 @@ def test_load_settings_requires_complete_environment(
     version_file_path: Path,
 ) -> None:
     """Reject a deployment that omits a contracted environment variable."""
-    monkeypatch.delenv("EOLAB_APP_TITLE")
+    monkeypatch.delenv("APP_TITLE")
 
-    with pytest.raises(KeyError, match="EOLAB_APP_TITLE"):
+    with pytest.raises(KeyError, match="APP_TITLE"):
         load_settings(version_file_path)
 
 
@@ -216,7 +216,7 @@ def test_load_settings_rejects_malformed_number(
     version_file_path: Path,
 ) -> None:
     """Reject a numeric setting that cannot be parsed as a number."""
-    monkeypatch.setenv("EOLAB_INITIAL_ZOOM", "not-a-number")
+    monkeypatch.setenv("INITIAL_ZOOM", "not-a-number")
 
     with pytest.raises(ValueError):
         load_settings(version_file_path)
@@ -225,9 +225,9 @@ def test_load_settings_rejects_malformed_number(
 @pytest.mark.parametrize(
     ("environment_variable_name", "invalid_value"),
     (
-        ("EOLAB_INITIAL_LATITUDE", "91"),
-        ("EOLAB_INITIAL_LONGITUDE", "-181"),
-        ("EOLAB_INITIAL_ZOOM", "23"),
+        ("INITIAL_LATITUDE", "91"),
+        ("INITIAL_LONGITUDE", "-181"),
+        ("INITIAL_ZOOM", "23"),
     ),
 )
 def test_load_settings_rejects_out_of_range_number(
