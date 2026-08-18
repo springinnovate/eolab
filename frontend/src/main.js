@@ -94,6 +94,12 @@ function applyAppGlobalConfiguration(appGlobalConfiguration) {
   document.querySelector("#app-version").textContent =
     appGlobalConfiguration.appVersion;
   document
+    .querySelector("#map")
+    .setAttribute(
+      "aria-label",
+      `${appGlobalConfiguration.appTitle} interactive map`,
+    );
+  document
     .querySelector("#control-panel")
     .setAttribute("aria-label", `${appGlobalConfiguration.appTitle} controls`);
   document.querySelector("#open-panel").textContent =
