@@ -17,6 +17,7 @@ class Settings:
     app_version: str
     catalog_url: str
     catalog_internal_url: str
+    scan_source_path: Path
     basemap_url: str
     basemap_attribution: str
     initial_latitude: float
@@ -49,6 +50,10 @@ class Settings:
             raise ValueError("INITIAL_LONGITUDE must be between -180 and 180")
         if not 0 <= self.initial_zoom <= 22:
             raise ValueError("INITIAL_ZOOM must be between 0 and 22")
+        if not self.scan_source_path.is_absolute():
+            raise ValueError("SCAN_SOURCE_PATH must be an absolute path")
+        if not self.scan_source_path.is_dir():
+            raise ValueError("SCAN_SOURCE_PATH must be an existing directory")
 
     def as_public_dict(self) -> dict[str, object]:
         """Serialize settings for the public browser configuration endpoint.
@@ -100,6 +105,7 @@ def load_settings(
         app_version=version_file_path.read_text(encoding="utf-8").strip(),
         catalog_url=os.environ["CATALOG_URL"].strip(),
         catalog_internal_url=os.environ["CATALOG_INTERNAL_URL"].strip(),
+        scan_source_path=Path(os.environ["SCAN_SOURCE_PATH"]),
         basemap_url=os.environ["BASEMAP_URL"].strip(),
         basemap_attribution=os.environ["BASEMAP_ATTRIBUTION"].strip(),
         initial_latitude=float(os.environ["INITIAL_LATITUDE"]),

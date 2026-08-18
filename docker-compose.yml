@@ -57,6 +57,7 @@ services:
       - "DB_MIN_CONN_SIZE=1"
       - "DB_MAX_CONN_SIZE=5"
       - "ROOT_PATH=/stac"
+      - "ENABLE_TRANSACTIONS_EXTENSIONS=TRUE"
       - "STAC_FASTAPI_TITLE=EOLab STAC API"
       - "STAC_FASTAPI_DESCRIPTION=Searchable geospatial assets registered with EOLab"
       - "STAC_FASTAPI_LANDING_ID=eolab-stac"
@@ -109,6 +110,7 @@ services:
       - "APP_SUBTITLE=${EOLAB_APP_SUBTITLE:-Explore, process, and visualize geospatial data}"
       - "CATALOG_URL=${EOLAB_CATALOG_URL:-/stac}"
       - "CATALOG_INTERNAL_URL=http://stac-api:8080"
+      - "SCAN_SOURCE_PATH=/scan-source"
       - "BASEMAP_URL=${EOLAB_BASEMAP_URL:-https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png}"
       - "BASEMAP_ATTRIBUTION=${EOLAB_BASEMAP_ATTRIBUTION:-&copy; OpenStreetMap contributors}"
       - "INITIAL_LATITUDE=${EOLAB_INITIAL_LATITUDE:-20}"
@@ -116,6 +118,11 @@ services:
       - "INITIAL_ZOOM=${EOLAB_INITIAL_ZOOM:-2}"
     expose:
       - "8000"
+    volumes:
+      - type: bind
+        source: ${EOLAB_SCAN_SOURCE_PATH}
+        target: /scan-source
+        read_only: true
     healthcheck:
       test:
         - CMD

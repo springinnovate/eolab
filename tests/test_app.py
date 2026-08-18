@@ -16,6 +16,7 @@ DEFAULT_ENVIRONMENT = {
     "APP_SUBTITLE": "Explore, process, and visualize geospatial data",
     "CATALOG_URL": "/stac",
     "CATALOG_INTERNAL_URL": "http://stac-api:8080",
+    "SCAN_SOURCE_PATH": str(Path.cwd()),
     "BASEMAP_URL": "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
     "BASEMAP_ATTRIBUTION": "&copy; OpenStreetMap contributors",
     "INITIAL_LATITUDE": "20",
@@ -81,6 +82,18 @@ def test_configuration_endpoint_reads_environment(
             "zoom": 2,
         },
     }
+
+
+def test_scan_status_is_available_before_first_scan(
+    configured_environment: None,
+    version_file_path: Path,
+) -> None:
+    """Expose an idle scanner state for the browser on initial startup."""
+    response = TestClient(create_app(version_file_path)).get("/api/scans/current")
+
+    assert response.status_code == 200
+    assert response.json()["state"] == "not_started"
+    assert response.json()["discovered"] == 0
 
 
 def test_stac_proxy_forwards_public_read_request(
@@ -219,6 +232,24 @@ def test_load_settings_rejects_malformed_number(
     monkeypatch.setenv("INITIAL_ZOOM", "not-a-number")
 
     with pytest.raises(ValueError):
+        load_settings(version_file_path)
+
+
+def test_load_settings_requires_an_existing_absolute_scan_directory(
+    configured_environment: None,
+    monkeypatch: pytest.MonkeyPatch,
+    version_file_path: Path,
+) -> None:
+    """Reject a missing or relative internal scan mount."""
+    monkeypatch.setenv("SCAN_SOURCE_PATH", "relative/path")
+    with pytest.raises(ValueError, match="absolute path"):
+        load_settings(version_file_path)
+
+    monkeypatch.setenv(
+        "SCAN_SOURCE_PATH",
+        str((Path.cwd() / "missing-scan-directory").resolve()),
+    )
+    with pytest.raises(ValueError, match="existing directory"):
         load_settings(version_file_path)
 
 

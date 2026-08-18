@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.staticfiles import StaticFiles
 
 from eolab_app.settings import APPLICATION_VERSION_PATH, load_settings
+from eolab_app.scanning import ScanManager, StacApiWriter
 
 
 def create_app(
@@ -39,6 +40,13 @@ def create_app(
         description=app_global_configuration.app_subtitle,
         version=app_global_configuration.app_version,
     )
+    scan_manager = ScanManager(
+        app_global_configuration.scan_source_path,
+        StacApiWriter(
+            app_global_configuration.catalog_internal_url,
+            catalog_transport,
+        ),
+    )
 
     @application.get("/healthz", tags=["system"])
     def healthz() -> dict[str, str]:
@@ -61,6 +69,30 @@ def create_app(
             The public application configuration.
         """
         return app_global_configuration.as_public_dict()
+
+    @application.get("/api/scans/current", tags=["catalog"])
+    async def current_scan() -> dict[str, object]:
+        """Return current GeoTIFF scan progress.
+
+        Returns:
+            A snapshot of the active or most recently completed scan.
+        """
+        return scan_manager.status()
+
+    @application.post("/api/scans", status_code=202, tags=["catalog"])
+    async def start_scan() -> dict[str, object]:
+        """Start a recursive scan of the configured read-only source.
+
+        Returns:
+            Initial progress for the new scan.
+
+        Raises:
+            HTTPException: If another scan is still running.
+        """
+        try:
+            return await scan_manager.start()
+        except RuntimeError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
 
     @application.api_route(
         "/stac",

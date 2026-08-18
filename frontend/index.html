@@ -51,6 +51,16 @@
               <strong id="catalog-summary">Connecting to the STAC API</strong>
               <button class="secondary-button" id="refresh-catalog" type="button">Refresh</button>
             </div>
+            <section class="scan-card" aria-labelledby="scan-heading">
+              <div class="catalog-toolbar">
+                <strong id="scan-heading">Mounted GeoTIFFs</strong>
+                <button class="secondary-button" id="start-scan" type="button">Scan directory</button>
+              </div>
+              <p id="scan-status" class="scan-status" role="status">No scan has been started.</p>
+              <progress id="scan-progress" max="1" value="0" hidden></progress>
+              <p id="scan-counts" class="scan-counts"></p>
+              <ul id="scan-errors" class="scan-errors" aria-live="polite"></ul>
+            </section>
             <div class="catalog-results" id="catalog-results" aria-live="polite"></div>
             <a class="catalog-link" id="catalog-link" target="_blank" rel="noreferrer">Open STAC API</a>
           </section>

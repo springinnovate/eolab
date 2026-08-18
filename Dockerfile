@@ -37,6 +37,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends libexpat1 \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN addgroup --system eolab \
     && adduser --system --ingroup eolab --home /app eolab
 
@@ -46,6 +50,7 @@ COPY --from=frontend-builder /build/frontend/dist/ ./src/eolab_app/static/
 COPY --from=versioner /version /app/version
 
 RUN pip install --no-cache-dir . \
+    && python -c "import rasterio" \
     && chown -R eolab:eolab /app
 
 USER eolab
