@@ -83,7 +83,7 @@ services:
     image: ghcr.io/stac-utils/pgstac-pypgstac:v0.9.12@sha256:672faad776b55afe15fadb27589c390c4fc93de5bc73e8889d2c29a600c5dba4
     restart: "no"
     environment:
-      - "EOLAB_LOAD_SAMPLE_CATALOG=${EOLAB_LOAD_SAMPLE_CATALOG:?EOLAB_LOAD_SAMPLE_CATALOG must be true or false}"
+      - "LOAD_SAMPLE_CATALOG=${EOLAB_LOAD_SAMPLE_CATALOG:?EOLAB_LOAD_SAMPLE_CATALOG must be true or false}"
       - "PGUSER=eolab"
       - "PGPASSWORD=${EOLAB_DATABASE_PASSWORD:?EOLAB_DATABASE_PASSWORD must be set}"
       - "PGDATABASE=eolab"

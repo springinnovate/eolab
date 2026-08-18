@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-case "${EOLAB_LOAD_SAMPLE_CATALOG}" in
+case "${LOAD_SAMPLE_CATALOG}" in
   true)
     pypgstac load collections /catalog/sample/collections.ndjson --method upsert
     pypgstac load items /catalog/sample/items.ndjson --method upsert
