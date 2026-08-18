@@ -9,7 +9,6 @@ services:
     environment:
       - "EOLAB_APP_TITLE=${EOLAB_APP_TITLE:-EOLab}"
       - "EOLAB_APP_SUBTITLE=${EOLAB_APP_SUBTITLE:-Explore, process, and visualize geospatial data}"
-      - "EOLAB_APP_VERSION=${EOLAB_APP_VERSION:-dev}"
       - "EOLAB_CATALOG_URL=${EOLAB_CATALOG_URL:-}"
       - "EOLAB_BASEMAP_URL=${EOLAB_BASEMAP_URL:-https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png}"
       - "EOLAB_BASEMAP_ATTRIBUTION=${EOLAB_BASEMAP_ATTRIBUTION:-&copy; OpenStreetMap contributors}"

@@ -2,6 +2,10 @@
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
+
+
+APPLICATION_VERSION_PATH = Path("/app/version")
 
 
 @dataclass(frozen=True)
@@ -28,7 +32,7 @@ class Settings:
         required_text_settings = {
             "EOLAB_APP_TITLE": self.app_title,
             "EOLAB_APP_SUBTITLE": self.app_subtitle,
-            "EOLAB_APP_VERSION": self.app_version,
+            "application version": self.app_version,
             "EOLAB_BASEMAP_URL": self.basemap_url,
             "EOLAB_BASEMAP_ATTRIBUTION": self.basemap_attribution,
         }
@@ -69,15 +73,22 @@ class Settings:
         }
 
 
-def load_settings() -> Settings:
-    """Load application settings from the process environment.
+def load_settings(
+    version_file_path: Path = APPLICATION_VERSION_PATH,
+) -> Settings:
+    """Load application settings from the environment and baked version file.
+
+    Args:
+        version_file_path: File containing the Git-derived application version.
 
     Returns:
         Validated settings with surrounding whitespace removed from text,
-        a blank catalog URL normalized to ``None``, and map values parsed as
-        floating-point numbers.
+        a blank catalog URL normalized to ``None``, map values parsed as
+        floating-point numbers, and the application version read from the
+        baked version file.
 
     Raises:
+        FileNotFoundError: If the baked version file does not exist.
         KeyError: If a required environment variable is missing.
         ValueError: If a setting violates its type or range contract.
     """
@@ -85,7 +96,7 @@ def load_settings() -> Settings:
     return Settings(
         app_title=os.environ["EOLAB_APP_TITLE"].strip(),
         app_subtitle=os.environ["EOLAB_APP_SUBTITLE"].strip(),
-        app_version=os.environ["EOLAB_APP_VERSION"].strip(),
+        app_version=version_file_path.read_text(encoding="utf-8").strip(),
         catalog_url=catalog_url or None,
         basemap_url=os.environ["EOLAB_BASEMAP_URL"].strip(),
         basemap_attribution=os.environ["EOLAB_BASEMAP_ATTRIBUTION"].strip(),

@@ -5,11 +5,14 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from eolab_app.settings import load_settings
+from eolab_app.settings import APPLICATION_VERSION_PATH, load_settings
 
 
-def create_app() -> FastAPI:
+def create_app(version_file_path: Path = APPLICATION_VERSION_PATH) -> FastAPI:
     """Create an application from the deployment environment.
+
+    Args:
+        version_file_path: File containing the Git-derived application version.
 
     Returns:
         A FastAPI application configured from the validated deployment
@@ -17,10 +20,11 @@ def create_app() -> FastAPI:
         registered and its static frontend mounted.
 
     Raises:
+        FileNotFoundError: If the baked version file does not exist.
         KeyError: If a required environment variable is missing.
         ValueError: If an environment value violates the settings contract.
     """
-    app_global_configuration = load_settings()
+    app_global_configuration = load_settings(version_file_path)
     application = FastAPI(
         title=app_global_configuration.app_title,
         description=app_global_configuration.app_subtitle,
