@@ -47,7 +47,10 @@ class Settings:
         """Serialize settings for the public browser configuration endpoint.
 
         Returns:
-            The browser-facing application configuration.
+            Browser configuration containing application identity strings,
+            ``catalogUrl`` as a URL string or ``None``, basemap URL and
+            attribution strings, and numeric initial-view latitude, longitude,
+            and zoom values.
         """
         return {
             "appTitle": self.app_title,
