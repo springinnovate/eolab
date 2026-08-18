@@ -80,7 +80,9 @@ services:
         max-file: "3"
 
   catalog-seed:
-    image: ghcr.io/stac-utils/pgstac-pypgstac:v0.9.12@sha256:672faad776b55afe15fadb27589c390c4fc93de5bc73e8889d2c29a600c5dba4
+    build:
+      context: .
+      dockerfile: Dockerfile.catalog-seed
     restart: "no"
     environment:
       - "LOAD_SAMPLE_CATALOG=${EOLAB_LOAD_SAMPLE_CATALOG:?EOLAB_LOAD_SAMPLE_CATALOG must be true or false}"
@@ -89,14 +91,9 @@ services:
       - "PGDATABASE=eolab"
       - "PGHOST=database"
       - "PGPORT=5432"
-    volumes:
-      - ./catalog:/catalog:ro
     depends_on:
       pgstac-migrate:
         condition: service_completed_successfully
-    entrypoint:
-      - /bin/sh
-      - /catalog/load_sample.sh
 
   app:
     build:
