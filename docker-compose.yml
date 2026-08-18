@@ -4,6 +4,7 @@ services:
     restart: unless-stopped
     environment:
       - "POSTGRES_USER=eolab"
+      # Reject an unset or blank database password before any containers start.
       - "POSTGRES_PASSWORD=${EOLAB_DATABASE_PASSWORD:?EOLAB_DATABASE_PASSWORD must be set}"
       - "POSTGRES_DB=eolab"
       - "PGUSER=eolab"
