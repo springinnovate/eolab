@@ -2,18 +2,6 @@
 
 EOLab is an open source platform for Earth observation analysis and visualization. This first milestone provides a deployable application shell: a Leaflet map, runtime configuration, and placeholder surfaces for the catalog, processing, and run history that will follow.
 
-## Run with Docker
-
-Copy `.env.example` to `.env`, adjust any public runtime settings, and run:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
-```
-
-Open <http://localhost:8000>. The liveness endpoint is available at <http://localhost:8000/healthz>.
-
-The production Compose file intentionally does not publish a host port. The development override publishes port 8000 for local use.
-
 ## Deploy with Coolify
 
 1. Create a new Coolify resource from this GitHub repository.
@@ -37,39 +25,3 @@ The production Compose file intentionally does not publish a host port. The deve
 | `EOLAB_INITIAL_ZOOM` | `2` | Initial Leaflet zoom, from 0 to 22 |
 
 Runtime settings are read by FastAPI, so changing them does not require rebuilding the frontend image.
-
-## Develop locally
-
-Install the Python application and test dependencies:
-
-```bash
-python -m venv .venv
-python -m pip install -e ".[dev]"
-```
-
-Start the API:
-
-```bash
-uvicorn eolab_app.main:app --reload --port 8000
-```
-
-In a second terminal, install and start the frontend:
-
-```bash
-cd frontend
-npm ci
-npm run dev
-```
-
-The Vite development server runs at <http://localhost:5173> and proxies API requests to FastAPI.
-
-Run the validation checks with:
-
-```bash
-pytest
-cd frontend && npm run build
-```
-
-## Deliberate first-milestone boundaries
-
-This scaffold does not yet include PgSTAC, GeoServer, authentication, persistent storage, or geoprocessing workers. Those components will be introduced through focused issues after the deployment foundation is proven.
