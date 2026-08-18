@@ -6,8 +6,8 @@ EOLab is an open source platform for Earth observation analysis and visualizatio
 
 1. Create a new Coolify resource from this GitHub repository.
 2. Select the **Docker Compose** build pack and use `/docker-compose.yml`.
-3. Set `EOLAB_DATABASE_PASSWORD` to a long random value in the **Production** deployment environment before the first deployment.
-4. Set `EOLAB_LOAD_SAMPLE_CATALOG=true` while evaluating the catalog. Set it to `false` before the first deployment to start with an empty catalog. Disabling it later stops future sample upserts but does not delete records already loaded.
+3. In Coolify's **Production** environment variables, set `EOLAB_DATABASE_PASSWORD` to a long random value before the first deployment.
+4. In Coolify's **Production** environment variables, set `EOLAB_LOAD_SAMPLE_CATALOG=true` while evaluating the catalog. Set it to `false` before the first deployment to start with an empty catalog. Disabling it later stops future sample upserts but does not delete records already loaded.
 5. In the project **Configuration**, select **Domains** for the `app` service and enter the public domain with internal port `8000`, such as `https://eolab.example.com:8000`.
 6. In **Advanced**, enable **Include Source Commit in Build**. On Coolify versions that label this setting **Source Commit Availability**, select **Available during build**. EOLab uses `SOURCE_COMMIT` to derive the displayed version from Git tags and the deployed commit.
 7. Set any other deployment-specific `EOLAB_*` values listed in `.env.example`.
