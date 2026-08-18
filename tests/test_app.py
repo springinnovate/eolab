@@ -1,7 +1,9 @@
 """Test the EOLab application and its runtime settings contract."""
 
+import json
 from pathlib import Path
 
+import httpx2
 import pytest
 from fastapi.testclient import TestClient
 
@@ -12,7 +14,8 @@ from eolab_app.settings import load_settings
 DEFAULT_ENVIRONMENT = {
     "EOLAB_APP_TITLE": "EOLab",
     "EOLAB_APP_SUBTITLE": "Explore, process, and visualize geospatial data",
-    "EOLAB_CATALOG_URL": "",
+    "EOLAB_CATALOG_URL": "/stac",
+    "EOLAB_CATALOG_INTERNAL_URL": "http://stac-api:8080",
     "EOLAB_BASEMAP_URL": "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
     "EOLAB_BASEMAP_ATTRIBUTION": "&copy; OpenStreetMap contributors",
     "EOLAB_INITIAL_LATITUDE": "20",
@@ -77,6 +80,100 @@ def test_configuration_endpoint_reads_environment(
             "longitude": 0,
             "zoom": 2,
         },
+    }
+
+
+def test_stac_proxy_forwards_public_read_request(
+    configured_environment: None,
+    version_file_path: Path,
+) -> None:
+    """Expose an internal STAC response through the public catalog path."""
+
+    def catalog_response(request: httpx2.Request) -> httpx2.Response:
+        assert str(request.url) == "http://stac-api:8080/collections?limit=4"
+        assert request.headers["x-forwarded-host"] == "testserver"
+        assert request.headers["x-forwarded-proto"] == "http"
+        return httpx2.Response(
+            200,
+            json={"collections": []},
+            headers={"Content-Type": "application/json"},
+        )
+
+    response = TestClient(
+        create_app(
+            version_file_path,
+            catalog_transport=httpx2.MockTransport(catalog_response),
+        )
+    ).get("/stac/collections?limit=4")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/json"
+    assert response.json() == {"collections": []}
+
+
+def test_stac_proxy_forwards_item_search(
+    configured_environment: None,
+    version_file_path: Path,
+) -> None:
+    """Forward standard POST Item Search without exposing write endpoints."""
+
+    def catalog_response(request: httpx2.Request) -> httpx2.Response:
+        assert request.method == "POST"
+        assert str(request.url) == "http://stac-api:8080/search"
+        assert json.loads(request.content) == {"limit": 20}
+        return httpx2.Response(
+            200,
+            json={"type": "FeatureCollection", "features": []},
+            headers={"Content-Type": "application/geo+json"},
+        )
+
+    response = TestClient(
+        create_app(
+            version_file_path,
+            catalog_transport=httpx2.MockTransport(catalog_response),
+        )
+    ).post("/stac/search", json={"limit": 20})
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/geo+json"
+    assert response.json() == {"type": "FeatureCollection", "features": []}
+
+
+def test_stac_proxy_rejects_catalog_writes(
+    configured_environment: None,
+    version_file_path: Path,
+) -> None:
+    """Keep STAC transaction routes private to the Compose network."""
+    response = TestClient(create_app(version_file_path)).post(
+        "/stac/collections",
+        json={"id": "not-allowed"},
+    )
+
+    assert response.status_code == 405
+    assert response.json() == {
+        "detail": "Only STAC Item Search accepts POST requests"
+    }
+
+
+def test_stac_proxy_reports_unavailable_catalog(
+    configured_environment: None,
+    version_file_path: Path,
+) -> None:
+    """Report catalog connectivity failure without failing application startup."""
+
+    def unavailable_catalog(request: httpx2.Request) -> httpx2.Response:
+        raise httpx2.ConnectError("catalog unavailable", request=request)
+
+    response = TestClient(
+        create_app(
+            version_file_path,
+            catalog_transport=httpx2.MockTransport(unavailable_catalog),
+        )
+    ).get("/stac")
+
+    assert response.status_code == 502
+    assert response.json() == {
+        "detail": "The STAC catalog service is unavailable"
     }
 
 

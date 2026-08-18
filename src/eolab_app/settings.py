@@ -15,7 +15,8 @@ class Settings:
     app_title: str
     app_subtitle: str
     app_version: str
-    catalog_url: str | None
+    catalog_url: str
+    catalog_internal_url: str
     basemap_url: str
     basemap_attribution: str
     initial_latitude: float
@@ -33,6 +34,8 @@ class Settings:
             "EOLAB_APP_TITLE": self.app_title,
             "EOLAB_APP_SUBTITLE": self.app_subtitle,
             "application version": self.app_version,
+            "EOLAB_CATALOG_URL": self.catalog_url,
+            "EOLAB_CATALOG_INTERNAL_URL": self.catalog_internal_url,
             "EOLAB_BASEMAP_URL": self.basemap_url,
             "EOLAB_BASEMAP_ATTRIBUTION": self.basemap_attribution,
         }
@@ -52,9 +55,9 @@ class Settings:
 
         Returns:
             Browser configuration containing application identity strings,
-            ``catalogUrl`` as a URL string or ``None``, basemap URL and
-            attribution strings, and numeric initial-view latitude, longitude,
-            and zoom values.
+            the browser-facing ``catalogUrl``, basemap URL and attribution
+            strings, and numeric initial-view latitude, longitude, and zoom
+            values. The internal catalog service URL is not exposed.
         """
         return {
             "appTitle": self.app_title,
@@ -83,21 +86,20 @@ def load_settings(
 
     Returns:
         Validated settings with surrounding whitespace removed from text,
-        a blank catalog URL normalized to ``None``, map values parsed as
-        floating-point numbers, and the application version read from the
-        baked version file.
+        map values parsed as floating-point numbers, and the application
+        version read from the baked version file.
 
     Raises:
         FileNotFoundError: If the baked version file does not exist.
         KeyError: If a required environment variable is missing.
         ValueError: If a setting violates its type or range contract.
     """
-    catalog_url = os.environ["EOLAB_CATALOG_URL"].strip()
     return Settings(
         app_title=os.environ["EOLAB_APP_TITLE"].strip(),
         app_subtitle=os.environ["EOLAB_APP_SUBTITLE"].strip(),
         app_version=version_file_path.read_text(encoding="utf-8").strip(),
-        catalog_url=catalog_url or None,
+        catalog_url=os.environ["EOLAB_CATALOG_URL"].strip(),
+        catalog_internal_url=os.environ["EOLAB_CATALOG_INTERNAL_URL"].strip(),
         basemap_url=os.environ["EOLAB_BASEMAP_URL"].strip(),
         basemap_attribution=os.environ["EOLAB_BASEMAP_ATTRIBUTION"].strip(),
         initial_latitude=float(os.environ["EOLAB_INITIAL_LATITUDE"]),
