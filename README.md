@@ -38,4 +38,8 @@ Open `http://localhost:8000`. Set `EOLAB_HOST_PORT` to use a different loopback 
 | `EOLAB_INITIAL_LONGITUDE`   | `0`                                               | Initial map longitude                        |
 | `EOLAB_INITIAL_ZOOM`        | `2`                                               | Initial Leaflet zoom, from 0 to 22           |
 
-Deleting `pgstac-data` permanently deletes the catalog. On the next deployment PostgreSQL creates a new empty database and applies the current `EOLAB_DATABASE_PASSWORD`; use this reset only when losing existing catalog records is intentional.
+## How to reset the database
+
+Reset the database if its password is lost or out of sync, or if you want to discard the catalog and start over. Stop the deployment, delete the `pgstac-data` volume, confirm the desired `EOLAB_DATABASE_PASSWORD`, and deploy again.
+
+Deleting the volume permanently deletes the catalog. On the next deployment PostgreSQL creates a new empty database and applies the current password.
