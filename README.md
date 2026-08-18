@@ -38,8 +38,6 @@ Open `http://localhost:8000`. Set `EOLAB_HOST_PORT` to use a different loopback 
 | `EOLAB_INITIAL_LONGITUDE`   | `0`                                               | Initial map longitude                        |
 | `EOLAB_INITIAL_ZOOM`        | `2`                                               | Initial Leaflet zoom, from 0 to 22           |
 
-Application identity, catalog URL, and map settings are read by FastAPI, so changing them does not require rebuilding the frontend image. The database password and sample-data choice are consumed by the catalog services.
-
 Set `EOLAB_DATABASE_PASSWORD` before the first deployment and retain it. PostgreSQL applies this bootstrap value only when it creates the `pgstac-data` volume; changing the environment variable later does not rotate the existing database role password and will disconnect the catalog services.
 
 Deleting `pgstac-data` permanently deletes the catalog. On the next deployment PostgreSQL creates a new empty database and applies the current `EOLAB_DATABASE_PASSWORD`; use this reset only when losing existing catalog records is intentional.
