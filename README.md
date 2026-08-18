@@ -7,8 +7,9 @@ EOLab is an open source platform for Earth observation analysis and visualizatio
 1. Create a new Coolify resource from this GitHub repository.
 2. Select the **Docker Compose** build pack and use `/docker-compose.yml`.
 3. In the project **Configuration**, select **Domains** for the `app` service and enter the public domain with internal port `8000`, such as `https://eolab.example.com:8000`.
-4. In **Environment Variables**, set any deployment-specific `EOLAB_*` values listed in `.env.example`.
-5. Open the **Actions** menu in the upper-right corner and select **Deploy**.
+4. Furthermore, in the application **Configuration**, set **Source Commit Availability** to **Available during build**. This is because EOLab uses `SOURCE_COMMIT` to derive the displayed version from Git tags and the deployed commit.
+5. In **Environment Variables**, set any deployment-specific `EOLAB_*` values listed in `.env.example`.
+6. Open the **Actions** menu in the upper-right corner and select **Deploy**.
 
 ## Runtime configuration
 
