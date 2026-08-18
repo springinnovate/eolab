@@ -17,8 +17,11 @@ def create_app(
 
     Args:
         version_file_path: File containing the Git-derived application version.
-        catalog_transport: Optional HTTP transport used to reach the internal
-            STAC API. Production uses the default network transport.
+            The default allows Uvicorn to invoke this factory without arguments;
+            tests pass a temporary version file.
+        catalog_transport: HTTP transport used to reach the internal STAC API.
+            The default creates a real network transport; tests pass a mock
+            transport.
 
     Returns:
         A FastAPI application configured from the validated deployment
