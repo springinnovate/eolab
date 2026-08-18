@@ -13,8 +13,6 @@ EOLab is an open source platform for Earth observation analysis and visualizatio
 7. Set any other desired deployment-specific `EOLAB_*` values listed in `.env.example`.
 8. Open the **Actions** menu in the upper-right corner and select **Deploy**.
 
-After pulling a revision that changes `docker-compose.yml`, use **Reload Compose File** before deploying so Coolify discovers new or renamed deployment variables. Variables such as `APP_TITLE` may appear as **Managed by Docker Compose**; edit the corresponding public `EOLAB_*` variable instead.
-
 ## Run with Docker Compose
 
 Create `.env` from `.env.example`, set `EOLAB_DATABASE_PASSWORD`, and set `SOURCE_COMMIT` to the full 40-character SHA reported by `git rev-parse HEAD`. Choose `true` or `false` for `EOLAB_LOAD_SAMPLE_CATALOG`, then start the stack with the local port override:
