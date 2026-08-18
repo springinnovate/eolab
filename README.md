@@ -49,7 +49,25 @@ Open the **Catalog** panel and select **Scan directory**. EOLab searches the con
 
 Scans create or update the `eolab-mounted-geotiffs` STAC Collection. Item identifiers are derived from each file's path relative to the mounted root, so scanning the same path again updates its Item instead of adding a duplicate. A later scan does not delete records for files that have disappeared or moved.
 
+Each scanned Item stores normalized directory and filename components as standard STAC `keywords`. After deploying this version over a catalog created by an earlier version, run the scan once to add those keywords to existing Items.
+
 The scanner uses `ACQUISITIONDATETIME` from GDAL's `IMAGERY` metadata domain when it contains an RFC 3339 timestamp with a UTC offset. Otherwise it uses the source file's filesystem modification time as the required STAC Item `datetime`, records the same value as `updated` on the data Asset, and explains the fallback in the Item description. Filesystem creation time is not used because its meaning differs among operating systems. A malformed `ACQUISITIONDATETIME` is reported as a file failure rather than guessed or silently replaced.
+
+## Search the catalog
+
+The Catalog search field waits briefly after typing stops, then searches the complete catalog through the STAC Free-Text Search `q` parameter. Search terms use prefix matching, so `grass` matches a path keyword such as `grassland`. Multiple terms must all match. Clearing the field returns to the unfiltered catalog.
+
+Results are returned 20 at a time. **Previous** and **Next** follow the pagination requests supplied by the STAC API. Result footprints are not all drawn at once: selecting a result displays its footprint, while pointer hover or keyboard focus temporarily displays a lighter preview.
+
+The `pgstac-migrate` service automatically creates a PostgreSQL GIN index over the same Item title, description, and keywords expression used by pgSTAC free-text search. PostgreSQL maintains the index when a scan creates or updates an Item. The index consumes database storage and adds some work to catalog writes in exchange for avoiding a full Item scan during text searches.
+
+On a deployment with enough Items for PostgreSQL to prefer the index, inspect the active plan from a server shell with:
+
+```console
+docker compose exec database psql -U eolab -d eolab -c "EXPLAIN (ANALYZE, BUFFERS) SELECT id FROM pgstac.items WHERE (to_tsvector('english', content->'properties'->>'description') || to_tsvector('english', coalesce(content->'properties'->>'title', '')) || to_tsvector('english', coalesce(content->'properties'->>'keywords', ''))) @@ to_tsquery('english', 'grass:*') ORDER BY datetime DESC, id DESC LIMIT 20;"
+```
+
+The plan should reference `eolab_items_free_text_idx` or one of its partition indexes. PostgreSQL may reasonably choose a sequential scan for a very small catalog because reading the table directly is cheaper.
 
 ## How to reset the database
 
