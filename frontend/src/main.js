@@ -2,6 +2,8 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "./style.css";
 
+let catalogFootprints = null;
+
 /**
  * Browser-safe application settings loaded from the backend.
  *
@@ -9,7 +11,7 @@ import "./style.css";
  * @property {string} appTitle Application title.
  * @property {string} appSubtitle Application subtitle.
  * @property {string} appVersion Deployed application version.
- * @property {string|null} catalogUrl Configured STAC catalog URL.
+ * @property {string} catalogUrl Browser-facing STAC catalog URL.
  * @property {{url: string, attribution: string}} basemap Basemap settings.
  * @property {{latitude: number, longitude: number, zoom: number}} initialView Initial map view.
  */
@@ -107,23 +109,169 @@ function applyAppGlobalConfiguration(appGlobalConfiguration) {
 
   const systemStateElement = document.querySelector("#system-state");
   const systemStateTextElement = document.querySelector("#system-state-text");
-  const catalogMessageElement = document.querySelector("#catalog-message");
   const catalogLinkElement = document.querySelector("#catalog-link");
 
-  if (appGlobalConfiguration.catalogUrl !== null) {
+  systemStateElement.classList.remove("is-connected", "is-warning");
+  systemStateTextElement.textContent = "Connecting to catalog";
+  catalogLinkElement.href = appGlobalConfiguration.catalogUrl;
+}
+
+/**
+ * Loads STAC Collections and Items and renders their current state.
+ *
+ * @param {AppGlobalConfiguration} appGlobalConfiguration Application settings.
+ * @param {L.Map} leafletMap The initialized Leaflet map.
+ * @return {Promise<void>} Resolves after the catalog request is displayed.
+ */
+async function refreshCatalog(appGlobalConfiguration, leafletMap) {
+  const systemStateElement = document.querySelector("#system-state");
+  const systemStateTextElement = document.querySelector("#system-state-text");
+  const catalogMessageElement = document.querySelector("#catalog-message");
+  const catalogSummaryElement = document.querySelector("#catalog-summary");
+  const catalogResultsElement = document.querySelector("#catalog-results");
+  const refreshCatalogButton = document.querySelector("#refresh-catalog");
+
+  systemStateElement.classList.remove("is-connected", "is-warning");
+  systemStateTextElement.textContent = "Refreshing catalog";
+  catalogMessageElement.textContent =
+    "Requesting Collections and Items from the STAC API.";
+  catalogSummaryElement.textContent = "Loading catalog contents";
+  catalogResultsElement.replaceChildren();
+  refreshCatalogButton.disabled = true;
+
+  const catalogUrl = appGlobalConfiguration.catalogUrl.replace(/\/$/, "");
+
+  try {
+    const [collectionsResponse, itemsResponse] = await Promise.all([
+      fetch(`${catalogUrl}/collections`, {
+        headers: { Accept: "application/json" },
+      }),
+      fetch(`${catalogUrl}/search`, {
+        method: "POST",
+        headers: {
+          Accept: "application/geo+json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ limit: 20 }),
+      }),
+    ]);
+
+    if (!collectionsResponse.ok) {
+      throw new Error(
+        `STAC Collections returned ${collectionsResponse.status}`,
+      );
+    }
+    if (!itemsResponse.ok) {
+      throw new Error(`STAC Item Search returned ${itemsResponse.status}`);
+    }
+
+    const collectionsDocument = await collectionsResponse.json();
+    const itemCollection = await itemsResponse.json();
+    if (!Array.isArray(collectionsDocument.collections)) {
+      throw new Error("STAC Collections response has no collections array");
+    }
+    if (!Array.isArray(itemCollection.features)) {
+      throw new Error("STAC Item Search response has no features array");
+    }
+
+    const newCatalogFootprints = L.geoJSON(itemCollection, {
+      style: {
+        color: "#007ac2",
+        fillColor: "#007ac2",
+        fillOpacity: 0.16,
+        weight: 2,
+      },
+      onEachFeature(item, footprintLayer) {
+        const tooltipContent = document.createElement("span");
+        tooltipContent.textContent = item.properties.title ?? item.id;
+        footprintLayer.bindTooltip(tooltipContent);
+      },
+    }).addTo(leafletMap);
+
+    if (catalogFootprints !== null) {
+      leafletMap.removeLayer(catalogFootprints);
+    }
+    catalogFootprints = newCatalogFootprints;
+
+    if (itemCollection.features.length > 0) {
+      leafletMap.fitBounds(newCatalogFootprints.getBounds().pad(0.15), {
+        maxZoom: 8,
+      });
+    }
+
+    const itemCountLabel =
+      itemCollection.numberMatched > itemCollection.features.length
+        ? `${itemCollection.features.length} of ${itemCollection.numberMatched} items shown`
+        : `${itemCollection.features.length} items shown`;
+
     systemStateElement.classList.add("is-connected");
-    systemStateTextElement.textContent = "Catalog endpoint configured";
+    systemStateTextElement.textContent = `Catalog connected · ${itemCountLabel}`;
     catalogMessageElement.textContent =
-      "A catalog endpoint is configured. Connectivity and STAC browsing will be added in the next catalog milestone.";
-    catalogLinkElement.href = appGlobalConfiguration.catalogUrl;
-    catalogLinkElement.textContent = appGlobalConfiguration.catalogUrl;
-    catalogLinkElement.hidden = false;
-  } else {
-    systemStateTextElement.textContent =
-      "Viewer online · catalog not configured";
+      "These records and map footprints were returned by the deployed STAC API.";
+    const onlyCollection = collectionsDocument.collections[0];
+    const collectionLabel =
+      collectionsDocument.collections.length === 1
+        ? (onlyCollection.title ?? onlyCollection.id)
+        : `${collectionsDocument.collections.length} collections shown`;
+    catalogSummaryElement.textContent = `${collectionLabel} · ${itemCountLabel}`;
+
+    for (const item of itemCollection.features) {
+      const itemButton = document.createElement("button");
+      itemButton.className = "catalog-result";
+      itemButton.type = "button";
+
+      const itemTitle = document.createElement("strong");
+      itemTitle.textContent = item.properties.title ?? item.id;
+      const itemDescription = document.createElement("span");
+      itemDescription.textContent = item.properties.description ?? item.id;
+      const itemDate = document.createElement("small");
+      itemDate.textContent = item.properties.datetime;
+
+      itemButton.append(itemTitle, itemDescription, itemDate);
+      itemButton.addEventListener("click", () => {
+        leafletMap.fitBounds(L.geoJSON(item).getBounds().pad(0.2), {
+          maxZoom: 9,
+        });
+      });
+      catalogResultsElement.append(itemButton);
+    }
+
+    if (itemCollection.features.length === 0) {
+      const emptyCatalogMessage = document.createElement("p");
+      emptyCatalogMessage.className = "catalog-empty";
+      emptyCatalogMessage.textContent = "The catalog is connected but has no Items.";
+      catalogResultsElement.append(emptyCatalogMessage);
+    }
+  } catch (catalogError) {
+    if (catalogFootprints !== null) {
+      leafletMap.removeLayer(catalogFootprints);
+      catalogFootprints = null;
+    }
+    systemStateElement.classList.add("is-warning");
+    systemStateTextElement.textContent = "Catalog unavailable";
     catalogMessageElement.textContent =
-      "Set EOLAB_CATALOG_URL in Coolify when a STAC API is ready. The viewer remains usable without one.";
+      "The map remains available. Check the catalog services and try again.";
+    catalogSummaryElement.textContent = catalogError.message;
+  } finally {
+    refreshCatalogButton.disabled = false;
   }
+}
+
+/**
+ * Connects the Catalog panel controls and performs its initial request.
+ *
+ * @param {AppGlobalConfiguration} appGlobalConfiguration Application settings.
+ * @param {L.Map} leafletMap The initialized Leaflet map.
+ * @return {Promise<void>} Resolves after the initial catalog refresh.
+ */
+async function initializeCatalog(appGlobalConfiguration, leafletMap) {
+  document
+    .querySelector("#refresh-catalog")
+    .addEventListener(
+      "click",
+      refreshCatalog.bind(null, appGlobalConfiguration, leafletMap),
+    );
+  await refreshCatalog(appGlobalConfiguration, leafletMap);
 }
 
 /**
@@ -209,6 +357,7 @@ async function startApplication() {
   const leafletMap = initializeMap(appGlobalConfiguration);
   initializeWorkspaceTabs();
   initializeControlPanel(leafletMap);
+  await initializeCatalog(appGlobalConfiguration, leafletMap);
 }
 
 startApplication();

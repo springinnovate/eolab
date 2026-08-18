@@ -47,14 +47,12 @@
             <p class="section-label">Data discovery</p>
             <h2>Catalog</h2>
             <p class="section-copy" id="catalog-message">Checking catalog configuration.</p>
-            <a class="catalog-link" id="catalog-link" hidden target="_blank" rel="noreferrer">Open configured catalog</a>
-            <div class="empty-state">
-              <span class="empty-state-mark" aria-hidden="true">01</span>
-              <div>
-                <strong>Catalog connection comes next</strong>
-                <p>This shell is ready for STAC search, layer selection, metadata, and provenance.</p>
-              </div>
+            <div class="catalog-toolbar">
+              <strong id="catalog-summary">Connecting to the STAC API</strong>
+              <button class="secondary-button" id="refresh-catalog" type="button">Refresh</button>
             </div>
+            <div class="catalog-results" id="catalog-results" aria-live="polite"></div>
+            <a class="catalog-link" id="catalog-link" target="_blank" rel="noreferrer">Open STAC API</a>
           </section>
 
           <section class="tab-panel" id="panel-processing" role="tabpanel" hidden>
