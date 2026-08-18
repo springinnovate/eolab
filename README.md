@@ -13,8 +13,6 @@ EOLab is an open source platform for Earth observation analysis and visualizatio
 7. Set any other desired deployment-specific `EOLAB_*` values listed in `.env.example`.
 8. Open the **Actions** menu in the upper-right corner and select **Deploy**.
 
-Coolify presents the whole Compose application as one resource, so separate settings pages for `pgstac-migrate` and `catalog-seed` are not required. Compose marks both as one-shot jobs with `restart: "no"`; after successful work they exit with code `0` while the long-running services remain available.
-
 After pulling a revision that changes `docker-compose.yml`, use **Reload Compose File** before deploying so Coolify discovers new or renamed deployment variables. Variables such as `APP_TITLE` may appear as **Managed by Docker Compose**; edit the corresponding public `EOLAB_*` variable instead.
 
 ## Run with Docker Compose
