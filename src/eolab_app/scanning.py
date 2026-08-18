@@ -229,6 +229,15 @@ class ScanManager:
 
 
 def _discover_geotiffs(source_root: Path) -> tuple[list[Path], list[dict[str, str]]]:
+    """Find GeoTIFFs recursively without stopping on unreadable directories.
+
+    Args:
+        source_root: Directory at the root of the configured scan mount.
+
+    Returns:
+        Discovered `.tif` and `.tiff` paths in deterministic traversal order,
+        together with any directory-walk errors keyed by relative path.
+    """
     geotiff_paths: list[Path] = []
     errors: list[dict[str, str]] = []
 
