@@ -14,7 +14,10 @@ import httpx2
 from eolab_app.geotiff import build_stac_item
 
 
-MOUNTED_GEOTIFF_COLLECTION = {
+# The single-source scanner currently puts all discovered Items in one fixed
+# Collection. Collection metadata can move into scan-source configuration when
+# EOLab supports multiple independently configured sources.
+DEFAULT_SCAN_COLLECTION = {
     "type": "Collection",
     "stac_version": "1.0.0",
     "id": "eolab-mounted-geotiffs",
@@ -178,7 +181,7 @@ class ScanManager:
             self._status["state"] = "scanning"
 
             async with self.catalog_writer.session() as catalog_session:
-                await catalog_session.upsert_collection(MOUNTED_GEOTIFF_COLLECTION)
+                await catalog_session.upsert_collection(DEFAULT_SCAN_COLLECTION)
                 for geotiff_path in geotiff_paths:
                     relative_path = geotiff_path.relative_to(self.source_root).as_posix()
                     self._status["currentFile"] = relative_path
