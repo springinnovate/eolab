@@ -6,7 +6,7 @@ EOLab is an open source platform for Earth observation analysis and visualizatio
 
 1. Create a new Coolify resource from this GitHub repository.
 2. Select the **Docker Compose** build pack and use `/docker-compose.yml`.
-3. In Coolify's **Production** environment variables, set `EOLAB_DATABASE_PASSWORD` to a long random value before the first deployment.
+3. In Coolify's **Production** environment variables, set `EOLAB_DATABASE_PASSWORD` to a long random value before the first deployment and retain it. PostgreSQL applies this password when it initializes the persistent database volume; changing the environment variable later does not rotate the database password.
 4. In Coolify's **Production** environment variables, set `EOLAB_LOAD_SAMPLE_CATALOG=true` while evaluating the catalog. Set it to `false` before the first deployment to start with an empty catalog. Disabling it later stops future sample upserts but does not delete records already loaded.
 5. In the project **Configuration**, select **Domains** for the `app` service and enter the public domain with internal port `8000` as `https://eolab.example.com:8000`.
 6. In **Advanced**, enable **Include Source Commit in Build**. On Coolify versions that label this setting **Source Commit Availability**, select **Available during build**. EOLab uses `SOURCE_COMMIT` to derive the displayed version from Git tags and the deployed commit.
@@ -37,8 +37,6 @@ Open `http://localhost:8000`. Set `EOLAB_HOST_PORT` to use a different loopback 
 | `EOLAB_INITIAL_LATITUDE`    | `20`                                              | Initial map latitude                         |
 | `EOLAB_INITIAL_LONGITUDE`   | `0`                                               | Initial map longitude                        |
 | `EOLAB_INITIAL_ZOOM`        | `2`                                               | Initial Leaflet zoom, from 0 to 22           |
-
-Set `EOLAB_DATABASE_PASSWORD` before the first deployment and retain it. PostgreSQL applies this bootstrap value only when it creates the `pgstac-data` volume; changing the environment variable later does not rotate the existing database role password and will disconnect the catalog services.
 
 Deleting `pgstac-data` permanently deletes the catalog. On the next deployment PostgreSQL creates a new empty database and applies the current `EOLAB_DATABASE_PASSWORD`; use this reset only when losing existing catalog records is intentional.
 
