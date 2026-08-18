@@ -25,11 +25,11 @@ def test_public_app_variables_are_not_self_referential() -> None:
         assert f'"{deployment_variable}=${{{deployment_variable}' not in compose
 
 
-def test_scan_source_is_a_required_read_only_deployment_mount() -> None:
+def test_scan_source_is_a_read_only_deployment_mount() -> None:
     """Let Coolify configure the host path without exposing it in the container."""
     compose = COMPOSE_PATH.read_text(encoding="utf-8")
 
-    assert "source: ${EOLAB_SCAN_SOURCE_PATH:?EOLAB_SCAN_SOURCE_PATH must be set}" in compose
+    assert "source: ${EOLAB_SCAN_SOURCE_PATH}" in compose
     assert "target: /scan-source" in compose
     assert "read_only: true" in compose
     assert '"SCAN_SOURCE_PATH=/scan-source"' in compose

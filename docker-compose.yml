@@ -120,7 +120,7 @@ services:
       - "8000"
     volumes:
       - type: bind
-        source: ${EOLAB_SCAN_SOURCE_PATH:?EOLAB_SCAN_SOURCE_PATH must be set}
+        source: ${EOLAB_SCAN_SOURCE_PATH}
         target: /scan-source
         read_only: true
     healthcheck:
