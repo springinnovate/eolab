@@ -73,7 +73,9 @@ def load_settings() -> Settings:
     """Load application settings from the process environment.
 
     Returns:
-        Validated application settings.
+        Validated settings with surrounding whitespace removed from text,
+        a blank catalog URL normalized to ``None``, and map values parsed as
+        floating-point numbers.
 
     Raises:
         KeyError: If a required environment variable is missing.
