@@ -3,6 +3,7 @@ import "leaflet/dist/leaflet.css";
 import "./style.css";
 
 let catalogFootprints = null;
+let scanPollTimeout = null;
 
 /**
  * Browser-safe application settings loaded from the backend.
@@ -275,6 +276,128 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
 }
 
 /**
+ * Displays the current mounted-directory scan state.
+ *
+ * @param {Object} scanStatus Scan progress returned by the backend.
+ * @return {void}
+ */
+function renderScanStatus(scanStatus) {
+  const startScanButton = document.querySelector("#start-scan");
+  const scanStatusElement = document.querySelector("#scan-status");
+  const scanProgressElement = document.querySelector("#scan-progress");
+  const scanCountsElement = document.querySelector("#scan-counts");
+  const scanErrorsElement = document.querySelector("#scan-errors");
+  const isRunning = ["discovering", "scanning"].includes(scanStatus.state);
+
+  startScanButton.disabled = isRunning;
+  startScanButton.textContent = isRunning ? "Scanning…" : "Scan directory";
+  scanProgressElement.hidden = scanStatus.state === "not_started";
+  scanProgressElement.max = Math.max(scanStatus.discovered, 1);
+  scanProgressElement.value = scanStatus.processed;
+  scanCountsElement.textContent =
+    scanStatus.state === "not_started"
+      ? ""
+      : `${scanStatus.discovered} discovered · ${scanStatus.processed} processed · ` +
+        `${scanStatus.indexed} indexed · ${scanStatus.failed} failed`;
+
+  const statusMessages = {
+    not_started: "No scan has been started.",
+    discovering: "Discovering GeoTIFF files in the mounted directory.",
+    scanning: scanStatus.currentFile
+      ? `Processing ${scanStatus.currentFile}`
+      : "Preparing discovered GeoTIFF files.",
+    completed: "Scan completed. The catalog has been refreshed.",
+    failed: "The scan stopped before it could complete.",
+  };
+  scanStatusElement.textContent =
+    statusMessages[scanStatus.state] ?? `Unknown scan state: ${scanStatus.state}`;
+
+  scanErrorsElement.replaceChildren();
+  for (const scanError of scanStatus.errors) {
+    const errorItem = document.createElement("li");
+    errorItem.textContent = scanError.path
+      ? `${scanError.path}: ${scanError.error}`
+      : scanError.error;
+    scanErrorsElement.append(errorItem);
+  }
+}
+
+/**
+ * Polls scan progress until the current scan finishes.
+ *
+ * @param {AppGlobalConfiguration} appGlobalConfiguration Application settings.
+ * @param {L.Map} leafletMap The initialized Leaflet map.
+ * @param {boolean} refreshWhenComplete Whether completion should refresh STAC.
+ * @return {Promise<void>} Resolves after the current status is displayed.
+ */
+async function pollScan(
+  appGlobalConfiguration,
+  leafletMap,
+  refreshWhenComplete,
+) {
+  const scanResponse = await fetch("/api/scans/current", {
+    headers: { Accept: "application/json" },
+  });
+  if (!scanResponse.ok) {
+    throw new Error(`Scan status returned ${scanResponse.status}`);
+  }
+
+  const scanStatus = await scanResponse.json();
+  renderScanStatus(scanStatus);
+  if (["discovering", "scanning"].includes(scanStatus.state)) {
+    scanPollTimeout = window.setTimeout(
+      pollScan.bind(null, appGlobalConfiguration, leafletMap, true),
+      750,
+    );
+  } else if (refreshWhenComplete && scanStatus.state === "completed") {
+    await refreshCatalog(appGlobalConfiguration, leafletMap);
+  }
+}
+
+/**
+ * Starts a mounted-directory scan from the Catalog panel.
+ *
+ * @param {AppGlobalConfiguration} appGlobalConfiguration Application settings.
+ * @param {L.Map} leafletMap The initialized Leaflet map.
+ * @return {Promise<void>} Resolves after polling has been scheduled.
+ */
+async function startScan(appGlobalConfiguration, leafletMap) {
+  try {
+    if (scanPollTimeout !== null) {
+      window.clearTimeout(scanPollTimeout);
+    }
+    const startResponse = await fetch("/api/scans", {
+      method: "POST",
+      headers: { Accept: "application/json" },
+    });
+    if (!startResponse.ok && startResponse.status !== 409) {
+      throw new Error(`Starting scan returned ${startResponse.status}`);
+    }
+    await pollScan(appGlobalConfiguration, leafletMap, true);
+  } catch (scanError) {
+    document.querySelector("#start-scan").disabled = false;
+    document.querySelector("#scan-status").textContent = scanError.message;
+  }
+}
+
+/**
+ * Connects the mounted-directory scanner controls.
+ *
+ * @param {AppGlobalConfiguration} appGlobalConfiguration Application settings.
+ * @param {L.Map} leafletMap The initialized Leaflet map.
+ * @return {Promise<void>} Resolves after current scan state is displayed.
+ */
+async function initializeScanner(appGlobalConfiguration, leafletMap) {
+  document
+    .querySelector("#start-scan")
+    .addEventListener(
+      "click",
+      startScan.bind(null, appGlobalConfiguration, leafletMap),
+    );
+  await pollScan(appGlobalConfiguration, leafletMap, false);
+}
+
+/**
  * Enables selection among the workspace tabs.
  *
  * @return {void}
@@ -358,6 +481,7 @@ async function startApplication() {
   initializeWorkspaceTabs();
   initializeControlPanel(leafletMap);
   await initializeCatalog(appGlobalConfiguration, leafletMap);
+  await initializeScanner(appGlobalConfiguration, leafletMap);
 }
 
 startApplication();
