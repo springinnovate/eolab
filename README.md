@@ -39,5 +39,3 @@ Open `http://localhost:8000`. Set `EOLAB_HOST_PORT` to use a different loopback 
 | `EOLAB_INITIAL_ZOOM`        | `2`                                               | Initial Leaflet zoom, from 0 to 22           |
 
 Deleting `pgstac-data` permanently deletes the catalog. On the next deployment PostgreSQL creates a new empty database and applies the current `EOLAB_DATABASE_PASSWORD`; use this reset only when losing existing catalog records is intentional.
-
-The Compose-only `CATALOG_INTERNAL_URL` points the application container to `http://stac-api:8080`. It is never returned by `/api/config`; browsers use the public `/stac` path instead.
