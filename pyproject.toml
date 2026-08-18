@@ -12,6 +12,7 @@ license = { file = "LICENSE" }
 dependencies = [
     "fastapi>=0.115,<1",
     "httpx2>=2.9,<3",
+    "rasterio>=1.5,<2",
     "uvicorn[standard]>=0.30,<1",
 ]
 
