@@ -12,7 +12,9 @@ def create_app() -> FastAPI:
     """Create an application from the deployment environment.
 
     Returns:
-        The configured FastAPI application.
+        A FastAPI application configured from the validated deployment
+        environment, with its health and public-configuration routes
+        registered and its static frontend mounted.
 
     Raises:
         KeyError: If a required environment variable is missing.
