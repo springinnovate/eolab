@@ -3,6 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        SOURCE_COMMIT: ${SOURCE_COMMIT:?SOURCE_COMMIT must identify the source revision}
     restart: unless-stopped
     environment:
       - "EOLAB_APP_TITLE=${EOLAB_APP_TITLE:-EOLab}"

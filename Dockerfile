@@ -1,3 +1,20 @@
+FROM alpine:3.21 AS versioner
+
+ARG SOURCE_COMMIT
+
+RUN apk add --no-cache git
+
+WORKDIR /source
+
+RUN test -n "$SOURCE_COMMIT" \
+    && git init \
+    && git remote add origin https://github.com/springinnovate/eolab.git \
+    && git fetch --filter=blob:none --tags origin "$SOURCE_COMMIT" \
+    && git checkout --detach FETCH_HEAD \
+    && git describe --tags --always > /version \
+    && test -s /version
+
+
 FROM node:22-alpine AS frontend-builder
 
 WORKDIR /build/frontend
@@ -22,6 +39,7 @@ RUN addgroup --system eolab \
 COPY pyproject.toml README.md LICENSE ./
 COPY src/ ./src/
 COPY --from=frontend-builder /build/frontend/dist/ ./src/eolab_app/static/
+COPY --from=versioner /version /app/version
 
 RUN pip install --no-cache-dir . \
     && chown -R eolab:eolab /app
