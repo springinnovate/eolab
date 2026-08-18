@@ -1,30 +1,51 @@
+"""Create the EOLab FastAPI application and serve its browser assets."""
+
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from eolab_app.settings import get_settings
+from eolab_app.settings import load_settings
 
 
 def create_app() -> FastAPI:
+    """Create an application from the deployment environment.
+
+    Returns:
+        The configured FastAPI application.
+
+    Raises:
+        KeyError: If a required environment variable is missing.
+        ValueError: If an environment value violates the settings contract.
+    """
+    app_global_configuration = load_settings()
     application = FastAPI(
-        title="EOLab",
-        description="Catalog-driven Earth observation application shell.",
-        version="0.1.0",
+        title=app_global_configuration.app_title,
+        description=app_global_configuration.app_subtitle,
+        version=app_global_configuration.app_version,
     )
 
     @application.get("/healthz", tags=["system"])
     def healthz() -> dict[str, str]:
-        settings = get_settings()
+        """Report application liveness and the configured release version.
+
+        Returns:
+            The current liveness status.
+        """
         return {
             "status": "ok",
             "service": "eolab",
-            "version": settings.app_version,
+            "version": app_global_configuration.app_version,
         }
 
     @application.get("/api/config", tags=["system"])
-    def public_config() -> dict[str, object]:
-        return get_settings().as_public_dict()
+    def public_configuration() -> dict[str, object]:
+        """Return the browser-safe application configuration.
+
+        Returns:
+            The public application configuration.
+        """
+        return app_global_configuration.as_public_dict()
 
     static_directory = Path(__file__).parent / "static"
     application.mount(
@@ -34,6 +55,3 @@ def create_app() -> FastAPI:
     )
 
     return application
-
-
-app = create_app()

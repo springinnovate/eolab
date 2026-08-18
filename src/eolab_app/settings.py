@@ -1,44 +1,13 @@
+"""Load and validate EOLab application settings from the environment."""
+
 import os
 from dataclasses import dataclass
 
 
-def _text(name: str, default: str, *, allow_blank: bool = False) -> str:
-    value = os.getenv(name)
-    if value is None:
-        return default
-
-    value = value.strip()
-    if value or allow_blank:
-        return value
-    return default
-
-
-def _optional_text(name: str) -> str | None:
-    value = os.getenv(name, "").strip()
-    return value or None
-
-
-def _number(
-    name: str,
-    default: float,
-    *,
-    minimum: float,
-    maximum: float,
-) -> float:
-    raw_value = os.getenv(name)
-    if raw_value is None:
-        return default
-
-    try:
-        value = float(raw_value)
-    except ValueError:
-        return default
-
-    return max(minimum, min(maximum, value))
-
-
 @dataclass(frozen=True)
 class Settings:
+    """Validated runtime settings for the EOLab application."""
+
     app_title: str
     app_subtitle: str
     app_version: str
@@ -49,7 +18,37 @@ class Settings:
     initial_longitude: float
     initial_zoom: float
 
+    def __post_init__(self) -> None:
+        """Validate the application settings contract.
+
+        Raises:
+            ValueError: If a required text setting is blank or a map value is
+                outside its documented range.
+        """
+        required_text_settings = {
+            "EOLAB_APP_TITLE": self.app_title,
+            "EOLAB_APP_SUBTITLE": self.app_subtitle,
+            "EOLAB_APP_VERSION": self.app_version,
+            "EOLAB_BASEMAP_URL": self.basemap_url,
+            "EOLAB_BASEMAP_ATTRIBUTION": self.basemap_attribution,
+        }
+        for environment_variable_name, setting_value in required_text_settings.items():
+            if not setting_value:
+                raise ValueError(f"{environment_variable_name} must not be blank")
+
+        if not -90 <= self.initial_latitude <= 90:
+            raise ValueError("EOLAB_INITIAL_LATITUDE must be between -90 and 90")
+        if not -180 <= self.initial_longitude <= 180:
+            raise ValueError("EOLAB_INITIAL_LONGITUDE must be between -180 and 180")
+        if not 0 <= self.initial_zoom <= 22:
+            raise ValueError("EOLAB_INITIAL_ZOOM must be between 0 and 22")
+
     def as_public_dict(self) -> dict[str, object]:
+        """Serialize settings for the public browser configuration endpoint.
+
+        Returns:
+            The browser-facing application configuration.
+        """
         return {
             "appTitle": self.app_title,
             "appSubtitle": self.app_subtitle,
@@ -67,39 +66,25 @@ class Settings:
         }
 
 
-def get_settings() -> Settings:
+def load_settings() -> Settings:
+    """Load application settings from the process environment.
+
+    Returns:
+        Validated application settings.
+
+    Raises:
+        KeyError: If a required environment variable is missing.
+        ValueError: If a setting violates its type or range contract.
+    """
+    catalog_url = os.environ["EOLAB_CATALOG_URL"].strip()
     return Settings(
-        app_title=_text("EOLAB_APP_TITLE", "EOLab"),
-        app_subtitle=_text(
-            "EOLAB_APP_SUBTITLE",
-            "Catalog-driven Earth observation",
-        ),
-        app_version=_text("EOLAB_APP_VERSION", "dev"),
-        catalog_url=_optional_text("EOLAB_CATALOG_URL"),
-        basemap_url=_text(
-            "EOLAB_BASEMAP_URL",
-            "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-        ),
-        basemap_attribution=_text(
-            "EOLAB_BASEMAP_ATTRIBUTION",
-            "&copy; OpenStreetMap contributors",
-        ),
-        initial_latitude=_number(
-            "EOLAB_INITIAL_LATITUDE",
-            20,
-            minimum=-90,
-            maximum=90,
-        ),
-        initial_longitude=_number(
-            "EOLAB_INITIAL_LONGITUDE",
-            0,
-            minimum=-180,
-            maximum=180,
-        ),
-        initial_zoom=_number(
-            "EOLAB_INITIAL_ZOOM",
-            2,
-            minimum=0,
-            maximum=22,
-        ),
+        app_title=os.environ["EOLAB_APP_TITLE"].strip(),
+        app_subtitle=os.environ["EOLAB_APP_SUBTITLE"].strip(),
+        app_version=os.environ["EOLAB_APP_VERSION"].strip(),
+        catalog_url=catalog_url or None,
+        basemap_url=os.environ["EOLAB_BASEMAP_URL"].strip(),
+        basemap_attribution=os.environ["EOLAB_BASEMAP_ATTRIBUTION"].strip(),
+        initial_latitude=float(os.environ["EOLAB_INITIAL_LATITUDE"]),
+        initial_longitude=float(os.environ["EOLAB_INITIAL_LONGITUDE"]),
+        initial_zoom=float(os.environ["EOLAB_INITIAL_ZOOM"]),
     )
