@@ -133,4 +133,6 @@ services:
         max-file: "3"
 
 volumes:
+  # Use a predictable name so the database volume is easy to identify and delete.
   pgstac-data:
+    name: ${EOLAB_DATABASE_VOLUME_NAME:-eolab-pgstac-data}

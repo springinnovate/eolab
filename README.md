@@ -25,21 +25,22 @@ Open `http://localhost:8000`. Set `EOLAB_HOST_PORT` to use a different loopback 
 
 ## Runtime configuration
 
-| Variable                    | Default                                           | Purpose                                      |
-| --------------------------- | ------------------------------------------------- | -------------------------------------------- |
-| `EOLAB_DATABASE_PASSWORD`   | none                                              | Required internal PostgreSQL password        |
-| `EOLAB_LOAD_SAMPLE_CATALOG` | none                                              | Required `true` or `false` sample-data choice |
-| `EOLAB_APP_TITLE`           | `EOLab`                                           | Browser and panel title                      |
-| `EOLAB_APP_SUBTITLE`        | `Explore, process, and visualize geospatial data` | Short panel description                      |
-| `EOLAB_CATALOG_URL`         | `/stac`                                           | Browser-facing STAC API path                 |
-| `EOLAB_BASEMAP_URL`         | OpenStreetMap tiles                               | Leaflet tile URL template                    |
-| `EOLAB_BASEMAP_ATTRIBUTION` | OpenStreetMap attribution                         | Basemap attribution text                     |
-| `EOLAB_INITIAL_LATITUDE`    | `20`                                              | Initial map latitude                         |
-| `EOLAB_INITIAL_LONGITUDE`   | `0`                                               | Initial map longitude                        |
-| `EOLAB_INITIAL_ZOOM`        | `2`                                               | Initial Leaflet zoom, from 0 to 22           |
+| Variable                     | Default                                           | Purpose                                        |
+| ---------------------------- | ------------------------------------------------- | ---------------------------------------------- |
+| `EOLAB_DATABASE_PASSWORD`    | none                                              | Required internal PostgreSQL password          |
+| `EOLAB_DATABASE_VOLUME_NAME` | `eolab-pgstac-data`                               | Database volume name, unique per deployment    |
+| `EOLAB_LOAD_SAMPLE_CATALOG`  | none                                              | Required `true` or `false` sample-data choice  |
+| `EOLAB_APP_TITLE`            | `EOLab`                                           | Browser and panel title                        |
+| `EOLAB_APP_SUBTITLE`         | `Explore, process, and visualize geospatial data` | Short panel description                        |
+| `EOLAB_CATALOG_URL`          | `/stac`                                           | Browser-facing STAC API path                   |
+| `EOLAB_BASEMAP_URL`          | OpenStreetMap tiles                               | Leaflet tile URL template                      |
+| `EOLAB_BASEMAP_ATTRIBUTION`  | OpenStreetMap attribution                         | Basemap attribution text                       |
+| `EOLAB_INITIAL_LATITUDE`     | `20`                                              | Initial map latitude                           |
+| `EOLAB_INITIAL_LONGITUDE`    | `0`                                               | Initial map longitude                          |
+| `EOLAB_INITIAL_ZOOM`         | `2`                                               | Initial Leaflet zoom, from 0 to 22             |
 
 ## How to reset the database
 
-Reset the database if its password is lost or out of sync, or if you want to discard the catalog and start over. Stop the deployment, delete the `pgstac-data` volume, confirm the desired `EOLAB_DATABASE_PASSWORD`, and deploy again.
+Reset the database if its password is lost or out of sync, or if you want to discard the catalog and start over. Stop the deployment, delete the volume named by `EOLAB_DATABASE_VOLUME_NAME`, confirm the desired `EOLAB_DATABASE_PASSWORD`, and deploy again.
 
 Deleting the volume permanently deletes the catalog. On the next deployment PostgreSQL creates a new empty database and applies the current password.
