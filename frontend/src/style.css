@@ -264,6 +264,10 @@ h2 {
   white-space: nowrap;
 }
 
+.catalog-link[hidden] {
+  display: none;
+}
+
 .empty-state {
   display: grid;
   grid-template-columns: auto 1fr;
