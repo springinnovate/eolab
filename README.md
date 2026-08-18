@@ -6,13 +6,16 @@ EOLab is an open source platform for Earth observation analysis and visualizatio
 
 1. Create a new Coolify resource from this GitHub repository.
 2. Select the **Docker Compose** build pack and use `/docker-compose.yml`.
-3. In the settings for `pgstac-migrate` and `catalog-seed`, enable **Exclude from service status** (called **Exclude from health checks** by some Coolify versions). These are one-shot services that should exit after successful work.
-4. Set `EOLAB_DATABASE_PASSWORD` to a long random value in the deployment environment before the first deployment.
-5. Set `EOLAB_LOAD_SAMPLE_CATALOG=true` while evaluating the catalog. Set it to `false` before the first deployment to start with an empty catalog. Disabling it later stops future sample upserts but does not delete records already loaded.
-6. In the project **Configuration**, select **Domains** for the `app` service and enter the public domain with internal port `8000`, such as `https://eolab.example.com:8000`.
-7. In **Advanced**, enable **Include Source Commit in Build**. On Coolify versions that label this setting **Source Commit Availability**, select **Available during build**. EOLab uses `SOURCE_COMMIT` to derive the displayed version from Git tags and the deployed commit.
-8. Set any other deployment-specific `EOLAB_*` values listed in `.env.example`.
-9. Open the **Actions** menu in the upper-right corner and select **Deploy**.
+3. Set `EOLAB_DATABASE_PASSWORD` to a long random value in the **Production** deployment environment before the first deployment.
+4. Set `EOLAB_LOAD_SAMPLE_CATALOG=true` while evaluating the catalog. Set it to `false` before the first deployment to start with an empty catalog. Disabling it later stops future sample upserts but does not delete records already loaded.
+5. In the project **Configuration**, select **Domains** for the `app` service and enter the public domain with internal port `8000`, such as `https://eolab.example.com:8000`.
+6. In **Advanced**, enable **Include Source Commit in Build**. On Coolify versions that label this setting **Source Commit Availability**, select **Available during build**. EOLab uses `SOURCE_COMMIT` to derive the displayed version from Git tags and the deployed commit.
+7. Set any other deployment-specific `EOLAB_*` values listed in `.env.example`.
+8. Open the **Actions** menu in the upper-right corner and select **Deploy**.
+
+Coolify presents the whole Compose application as one resource, so separate settings pages for `pgstac-migrate` and `catalog-seed` are not required. Compose marks both as one-shot jobs with `restart: "no"`; after successful work they exit with code `0` while the long-running services remain available.
+
+After pulling a revision that changes `docker-compose.yml`, use **Reload Compose File** before deploying so Coolify discovers new or renamed deployment variables. Variables such as `APP_TITLE` may appear as **Managed by Docker Compose**; edit the corresponding public `EOLAB_*` variable instead.
 
 ## Run with Docker Compose
 
@@ -43,6 +46,8 @@ The `catalog-seed` service upserts the sample records, so deployment and manual 
 docker compose run --rm catalog-seed
 ```
 
+The seed loader and sample records are copied into the `catalog-seed` image during its build. They do not rely on a deployment-time host bind mount, so the job works when Coolify builds from an isolated Git checkout.
+
 To remove the sample Collection and its Items, first set `EOLAB_LOAD_SAMPLE_CATALOG=false`, then run:
 
 ```console
@@ -72,4 +77,6 @@ Application identity, catalog URL, and map settings are read by FastAPI, so chan
 
 Set `EOLAB_DATABASE_PASSWORD` before the first deployment and retain it. PostgreSQL applies this bootstrap value only when it creates the `pgstac-data` volume; changing the environment variable later does not rotate the existing database role password and will disconnect the catalog services.
 
-The Compose-only `EOLAB_CATALOG_INTERNAL_URL` points the application container to `http://stac-api:8080`. It is never returned by `/api/config`; browsers use the public `/stac` path instead.
+Deleting `pgstac-data` permanently deletes the catalog. On the next deployment PostgreSQL creates a new empty database and applies the current `EOLAB_DATABASE_PASSWORD`; use this reset only when losing existing catalog records is intentional.
+
+The Compose-only `CATALOG_INTERNAL_URL` points the application container to `http://stac-api:8080`. It is never returned by `/api/config`; browsers use the public `/stac` path instead.
