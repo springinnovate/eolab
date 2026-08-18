@@ -23,37 +23,6 @@ docker compose -f docker-compose.yml -f docker-compose.local.yml up --build --de
 
 Open `http://localhost:8000`. Set `EOLAB_HOST_PORT` to use a different loopback port.
 
-## Verify the catalog
-
-Open the deployed application after all services start. A working deployment displays:
-
-- `Catalog connected · 4 items shown` in the application status;
-- the **EOLab sample geospatial data** Collection in the Catalog panel;
-- four sample Item cards; and
-- four blue Item footprints on the map.
-
-Select an Item card to zoom to its footprint. Select **Refresh** to repeat the live STAC requests. The **Open STAC API** link opens the standards-compliant landing page at `/stac`; `/stac/collections` and `/stac/search` are available beneath it.
-
-If the catalog is unavailable, the Catalog panel reports the failing STAC request while the map and `/healthz` remain available. Application health is intentionally independent from catalog health, so also check `/stac/_mgmt/health` and the catalog service logs when diagnosing a deployment.
-
-The `catalog-seed` service upserts the sample records, so deployment and manual reruns do not create duplicates:
-
-```console
-docker compose run --rm catalog-seed
-```
-
-The seed loader and sample records are copied into the `catalog-seed` image during its build. They do not rely on a deployment-time host bind mount, so the job works when Coolify builds from an isolated Git checkout.
-
-To remove the sample Collection and its Items, first set `EOLAB_LOAD_SAMPLE_CATALOG=false`, then run:
-
-```console
-docker compose exec database psql -U eolab -d eolab -c "SELECT pgstac.delete_collection('eolab-sample-data');"
-```
-
-Catalog records are stored in the `pgstac-data` Docker volume and survive container recreation.
-
-`pgstac-migrate` and `catalog-seed` are one-shot services. They should finish with exit code `0` and may appear as **Exited** or **Completed** in Coolify; that is expected. The `app`, `database`, and `stac-api` services should remain running.
-
 ## Runtime configuration
 
 | Variable                    | Default                                           | Purpose                                      |
