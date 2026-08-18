@@ -1,6 +1,6 @@
 # EOLab
 
-EOLab is an open source platform for Earth observation analysis and visualization. The current application provides a Leaflet map and a persistent STAC catalog backed by pgSTAC.
+EOLab is an open source platform for Earth observation analysis and visualization. It provides a Leaflet map and a persistent STAC catalog backed by pgSTAC.
 
 ## Deploy with Coolify
 
