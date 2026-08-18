@@ -1,3 +1,4 @@
+# Publish EOLab on the host loopback interface for manual Docker Compose runs.
 services:
   app:
     ports:
