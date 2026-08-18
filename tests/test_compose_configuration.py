@@ -41,3 +41,59 @@ def test_internal_stac_api_enables_writes_for_scanning() -> None:
     compose = COMPOSE_PATH.read_text(encoding="utf-8")
 
     assert '"ENABLE_TRANSACTIONS_EXTENSIONS=TRUE"' in compose
+
+
+def test_catalog_migrator_packages_application_migrations() -> None:
+    """Apply EOLab indexes after the pinned pgSTAC schema migration."""
+    repository_root = COMPOSE_PATH.parent
+    compose = COMPOSE_PATH.read_text(encoding="utf-8")
+    dockerfile = (repository_root / "Dockerfile.catalog-migrate").read_text(
+        encoding="utf-8"
+    )
+    migration_script = (repository_root / "catalog" / "migrate.sh").read_text(
+        encoding="utf-8"
+    )
+    index_migration = (
+        repository_root
+        / "catalog"
+        / "migrations"
+        / "0001_item_free_text_index.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "dockerfile: Dockerfile.catalog-migrate" in compose
+    assert "pypgstac migrate" in migration_script
+    assert "psql --set=ON_ERROR_STOP=1" in migration_script
+    assert "COPY catalog/migrations/ /catalog/migrations/" in dockerfile
+    assert "ON pgstac.items" in index_migration
+    assert "USING GIN" in index_migration
+    assert "pgstac.get_version() <> '0.9.12'" in index_migration
+    assert (
+        "to_tsvector('english', content->'properties'->>'description')"
+        in index_migration
+    )
+    assert (
+        "to_tsvector('english', coalesce(content->'properties'->>'title', ''))"
+        in index_migration
+    )
+    assert (
+        "to_tsvector('english', coalesce(content->'properties'->>'keywords', ''))"
+        in index_migration
+    )
+
+
+def test_stac_api_image_enables_item_free_text_search() -> None:
+    """Expose pgSTAC's Item q support through the standard STAC extension."""
+    repository_root = COMPOSE_PATH.parent
+    compose = COMPOSE_PATH.read_text(encoding="utf-8")
+    dockerfile = (repository_root / "Dockerfile.stac-api").read_text(
+        encoding="utf-8"
+    )
+    stac_api = (repository_root / "catalog" / "stac_api.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "dockerfile: Dockerfile.stac-api" in compose
+    assert "stac-fastapi-pgstac:6.3.1@sha256:" in dockerfile
+    assert "COPY catalog/stac_api.py /app/eolab_stac_api.py" in dockerfile
+    assert '"free_text": FreeTextExtension(),' in stac_api
+    assert "create_post_request_model" in stac_api

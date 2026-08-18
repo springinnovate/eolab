@@ -133,7 +133,7 @@ def test_stac_proxy_forwards_item_search(
     def catalog_response(request: httpx2.Request) -> httpx2.Response:
         assert request.method == "POST"
         assert str(request.url) == "http://stac-api:8080/search"
-        assert json.loads(request.content) == {"limit": 20}
+        assert json.loads(request.content) == {"limit": 20, "q": ["grass:*"]}
         return httpx2.Response(
             200,
             json={"type": "FeatureCollection", "features": []},
@@ -145,7 +145,7 @@ def test_stac_proxy_forwards_item_search(
             version_file_path,
             catalog_transport=httpx2.MockTransport(catalog_response),
         )
-    ).post("/stac/search", json={"limit": 20})
+    ).post("/stac/search", json={"limit": 20, "q": ["grass:*"]})
 
     assert response.status_code == 200
     assert response.headers["content-type"] == "application/geo+json"

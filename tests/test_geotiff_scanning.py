@@ -104,6 +104,23 @@ def test_item_identifier_is_stable_for_relative_path(tmp_path: Path) -> None:
     assert first_item["id"] == second_item["id"]
 
 
+def test_geotiff_path_components_become_searchable_keywords(tmp_path: Path) -> None:
+    """Index normalized path components through standard STAC keywords."""
+    geotiff_path = tmp_path / "Nat Semi-Grassland P" / "HMI_2022.tif"
+    write_geotiff(geotiff_path)
+
+    item = build_stac_item(tmp_path, geotiff_path)
+
+    assert item["properties"]["keywords"] == [
+        "nat",
+        "semi",
+        "grassland",
+        "p",
+        "hmi",
+        "2022",
+    ]
+
+
 class RecordingCatalogSession:
     """Record catalog writes while providing an async context manager."""
 

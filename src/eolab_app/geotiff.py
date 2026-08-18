@@ -46,6 +46,16 @@ def build_stac_item(source_root: Path, geotiff_path: Path) -> dict[str, Any]:
     """
     relative_path = geotiff_path.relative_to(source_root)
     relative_path_text = relative_path.as_posix()
+    path_keywords = list(
+        dict.fromkeys(
+            keyword
+            for keyword in re.split(
+                r"[\W_]+",
+                relative_path.with_suffix("").as_posix().lower(),
+            )
+            if keyword
+        )
+    )
     filesystem_modified_at = datetime.fromtimestamp(
         geotiff_path.stat().st_mtime,
         tz=timezone.utc,
@@ -101,6 +111,7 @@ def build_stac_item(source_root: Path, geotiff_path: Path) -> dict[str, Any]:
             "datetime": _format_datetime(item_datetime),
             "title": relative_path_text,
             "description": description,
+            "keywords": path_keywords,
             "proj:shape": [dataset.height, dataset.width],
             "proj:transform": list(dataset.transform)[:6],
         }
