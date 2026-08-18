@@ -28,6 +28,7 @@ services:
         max-size: 10m
         max-file: "3"
 
+  # Initializes pgSTAC in a new database and applies schema upgrades thereafter.
   pgstac-migrate:
     image: ghcr.io/stac-utils/pgstac-pypgstac:v0.9.12@sha256:672faad776b55afe15fadb27589c390c4fc93de5bc73e8889d2c29a600c5dba4
     restart: "no"
