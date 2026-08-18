@@ -10,13 +10,18 @@ EOLab is an open source platform for Earth observation analysis and visualizatio
 4. In **Environment Variables**, set any deployment-specific `EOLAB_*` values listed in `.env.example`.
 5. Open the **Actions** menu in the upper-right corner and select **Deploy**.
 
+## Application version
+
+The production image derives its application version from the Git source commit during the Docker build. Coolify supplies the source commit automatically, so there is no version environment variable to maintain.
+
+The displayed value follows `git describe --tags --always`: a build from the `0.1.0` tag displays `0.1.0`, while later commits display a value such as `0.1.0-3-g1a2b3c4`. The same value is shown in the viewer and returned by `/api/config` and `/healthz`.
+
 ## Runtime configuration
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `EOLAB_APP_TITLE` | `EOLab` | Browser and panel title |
 | `EOLAB_APP_SUBTITLE` | `Explore, process, and visualize geospatial data` | Short panel description |
-| `EOLAB_APP_VERSION` | `dev` | Version shown in the UI and health response |
 | `EOLAB_CATALOG_URL` | empty | Optional future STAC API location |
 | `EOLAB_BASEMAP_URL` | OpenStreetMap tiles | Leaflet tile URL template |
 | `EOLAB_BASEMAP_ATTRIBUTION` | OpenStreetMap attribution | Basemap attribution text |
