@@ -1,6 +1,6 @@
 # EOLab
 
-EOLab is an open source, catalog-driven platform for Earth observation analysis and visualization. This first milestone provides a deployable application shell: a Leaflet map, runtime configuration, and placeholder surfaces for the catalog, processing, and run history that will follow.
+EOLab is an open source platform for Earth observation analysis and visualization. This first milestone provides a deployable application shell: a Leaflet map, runtime configuration, and placeholder surfaces for the catalog, processing, and run history that will follow.
 
 ## Run with Docker
 
@@ -18,20 +18,16 @@ The production Compose file intentionally does not publish a host port. The deve
 
 1. Create a new Coolify resource from this GitHub repository.
 2. Select the **Docker Compose** build pack and use `/docker-compose.yml`.
-3. Attach the public domain to the `app` service on internal port `8000`.
-4. Set any desired `EOLAB_*` environment variables from `.env.example`.
-5. Deploy and configure Coolify's health check to use `/healthz` if it is not detected from Compose.
-
-Coolify should provide the reverse proxy and TLS certificate. The Compose stack does not bundle Traefik or publish a production host port.
-
-All values returned by `/api/config` are public browser configuration. Do not put passwords, tokens, or other secrets in `EOLAB_*` variables intended for this endpoint.
+3. In the project **Configuration**, select **Domains** for the `app` service and enter the public domain with internal port `8000`, such as `https://eolab.example.com:8000`.
+4. In **Environment Variables**, set any deployment-specific `EOLAB_*` values listed in `.env.example`.
+5. Open the **Actions** menu in the upper-right corner and select **Deploy**.
 
 ## Runtime configuration
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `EOLAB_APP_TITLE` | `EOLab` | Browser and panel title |
-| `EOLAB_APP_SUBTITLE` | `Catalog-driven Earth observation` | Short panel description |
+| `EOLAB_APP_SUBTITLE` | `Explore, process, and visualize geospatial data` | Short panel description |
 | `EOLAB_APP_VERSION` | `dev` | Version shown in the UI and health response |
 | `EOLAB_CATALOG_URL` | empty | Optional future STAC API location |
 | `EOLAB_BASEMAP_URL` | OpenStreetMap tiles | Leaflet tile URL template |
