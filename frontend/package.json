@@ -1,0 +1,14 @@
+{
+  "name": "eolab-frontend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build"
+  },
+  "dependencies": {
+    "leaflet": "1.9.4"
+  },
+  "devDependencies": {
+    "vite": "8.2.1"
+  }
+}

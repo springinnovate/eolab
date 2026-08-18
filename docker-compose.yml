@@ -1,0 +1,33 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - "EOLAB_APP_TITLE=${EOLAB_APP_TITLE:-EOLab}"
+      - "EOLAB_APP_SUBTITLE=${EOLAB_APP_SUBTITLE:-Explore, process, and visualize geospatial data}"
+      - "EOLAB_APP_VERSION=${EOLAB_APP_VERSION:-dev}"
+      - "EOLAB_CATALOG_URL=${EOLAB_CATALOG_URL:-}"
+      - "EOLAB_BASEMAP_URL=${EOLAB_BASEMAP_URL:-https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png}"
+      - "EOLAB_BASEMAP_ATTRIBUTION=${EOLAB_BASEMAP_ATTRIBUTION:-&copy; OpenStreetMap contributors}"
+      - "EOLAB_INITIAL_LATITUDE=${EOLAB_INITIAL_LATITUDE:-20}"
+      - "EOLAB_INITIAL_LONGITUDE=${EOLAB_INITIAL_LONGITUDE:-0}"
+      - "EOLAB_INITIAL_ZOOM=${EOLAB_INITIAL_ZOOM:-2}"
+    expose:
+      - "8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
