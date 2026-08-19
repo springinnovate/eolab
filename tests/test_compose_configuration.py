@@ -102,13 +102,7 @@ def test_catalog_migrator_adds_datetime_substring_queryables() -> None:
 
     assert "eolab_datetime_text" in migration
     assert "eolab_end_datetime_text" in migration
-    for update_guard in (
-        "existing.definition IS DISTINCT FROM desired.definition",
-        "existing.property_path IS DISTINCT FROM desired.property_path",
-        "existing.property_wrapper IS DISTINCT FROM 'to_text'",
-        "existing.property_index_type IS NOT NULL",
-    ):
-        assert update_guard in migration
+    assert "WHEN MATCHED" not in migration
     assert "NULLIF(content->'properties'->'datetime', 'null'::jsonb)" in migration
     assert "content->'properties'->'start_datetime'" in migration
     assert "eolab_items_datetime_text_trgm_idx" in migration
