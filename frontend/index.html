@@ -88,12 +88,13 @@
                     <ul id="scan-errors" class="scan-errors"></ul>
                   </details>
                 </section>
-                <div class="catalog-results" id="catalog-results" aria-live="polite"></div>
-                <nav class="catalog-pagination" aria-label="Catalog result pages">
-                  <button class="secondary-button" id="previous-catalog-page" type="button" disabled>Previous</button>
-                  <span id="catalog-page-status">Page 1</span>
-                  <button class="secondary-button" id="next-catalog-page" type="button" disabled>Next</button>
-                </nav>
+                <div class="catalog-results" id="catalog-results"></div>
+                <div class="catalog-stream-status">
+                  <span id="catalog-stream-status">Loading Catalog Items</span>
+                  <button class="secondary-button" id="retry-catalog-page" type="button" hidden>Retry</button>
+                </div>
+                <div class="catalog-load-sentinel" id="catalog-load-sentinel" aria-hidden="true"></div>
+                <p class="visually-hidden" id="catalog-stream-announcement" role="status" aria-live="polite"></p>
                 <a class="catalog-link" id="catalog-link" target="_blank" rel="noreferrer">Open STAC API</a>
               </div>
               <aside

@@ -5,6 +5,7 @@ import {
   buildCatalogItemDetails,
   buildSubstringFilter,
   CatalogFootprintController,
+  CatalogResultStream,
   CatalogSearchClient,
   createDebouncedAction,
   findPaginationLink,
@@ -157,33 +158,33 @@ test("CatalogSearchClient ignores a superseded response", async () => {
   assert.equal(pendingResponses[0].options.signal.aborted, true);
 });
 
-test("formatCatalogItemCount displays catalog totals and page ranges", () => {
+test("formatCatalogItemCount displays loaded and matched totals", () => {
   const itemCollection = {
     features: Array.from({ length: 20 }),
     numberMatched: 106967,
   };
 
   assert.equal(
-    formatCatalogItemCount(itemCollection, 1, false),
-    "Showing 1–20 of 106,967 Items",
+    formatCatalogItemCount(itemCollection, 20, false),
+    "Showing 20 of 106,967 Items",
   );
   itemCollection.numberMatchedEstimated = true;
   assert.equal(
-    formatCatalogItemCount(itemCollection, 1, false),
-    "Showing 1–20 of 106,967 (est.) Items",
+    formatCatalogItemCount(itemCollection, 20, false),
+    "Showing 20 of 106,967 (est.) Items",
   );
   assert.equal(
     formatCatalogItemCount(
       { features: Array.from({ length: 5 }), numberMatched: 25 },
-      2,
+      25,
       false,
     ),
-    "Showing 21–25 of 25 Items",
+    "Showing 25 of 25 Items",
   );
 });
 
 test("formatCatalogItemCount handles empty, singular, and filtered results", () => {
-  assert.equal(formatCatalogItemCount(emptyItemCollection, 1, false), "0 Items");
+  assert.equal(formatCatalogItemCount(emptyItemCollection, 0, false), "0 Items");
   assert.equal(
     formatCatalogItemCount({ features: [{}], numberMatched: 1 }, 1, false),
     "Showing 1 of 1 Item",
@@ -225,6 +226,127 @@ test("findPaginationLink returns standard STAC pagination relations", () => {
 
   assert.equal(findPaginationLink(document, ["next"]), nextLink);
   assert.equal(findPaginationLink(document, ["prev"]), previousLink);
+});
+
+test("CatalogResultStream keeps one provider page ready", async () => {
+  let resolvePrefetch;
+  const followedLinks = [];
+  const secondPageLink = { rel: "next", href: "/second-page" };
+  const thirdPageLink = { rel: "next", href: "/third-page" };
+  const secondPage = {
+    ...emptyItemCollection,
+    links: [thirdPageLink],
+    numberMatched: 60,
+  };
+  const searchClient = {
+    async search() {
+      return {
+        ...emptyItemCollection,
+        links: [secondPageLink],
+        numberMatched: 60,
+      };
+    },
+    follow(link) {
+      followedLinks.push(link);
+      return new Promise((resolve) => {
+        resolvePrefetch = resolve;
+      });
+    },
+  };
+  const resultStream = new CatalogResultStream(searchClient);
+  await resultStream.restart("");
+
+  const firstPrefetch = resultStream.prefetchNextPage();
+  const sharedPrefetch = resultStream.prefetchNextPage();
+  resolvePrefetch(secondPage);
+
+  assert.equal(await firstPrefetch, secondPage);
+  assert.equal(await sharedPrefetch, secondPage);
+  assert.equal(await resultStream.loadNextPage(), secondPage);
+  assert.deepEqual(followedLinks, [secondPageLink]);
+  assert.equal(resultStream.hasNextPage, true);
+});
+
+test("CatalogResultStream prevents duplicate next-page requests", async () => {
+  let resolveNextPage;
+  const followedLinks = [];
+  const nextLink = { rel: "next", href: "/next-page" };
+  const searchClient = {
+    async search() {
+      return { ...emptyItemCollection, links: [nextLink], numberMatched: 2 };
+    },
+    follow(link) {
+      followedLinks.push(link);
+      return new Promise((resolve) => {
+        resolveNextPage = resolve;
+      });
+    },
+  };
+  const resultStream = new CatalogResultStream(searchClient);
+  await resultStream.restart("");
+
+  const pendingPage = resultStream.loadNextPage();
+  assert.equal(await resultStream.loadNextPage(), null);
+  assert.deepEqual(followedLinks, [nextLink]);
+
+  resolveNextPage({ ...emptyItemCollection, numberMatched: 2 });
+  assert.notEqual(await pendingPage, null);
+  assert.equal(resultStream.hasNextPage, false);
+  assert.equal(await resultStream.loadNextPage(), null);
+  assert.equal(followedLinks.length, 1);
+});
+
+test("CatalogResultStream retains a failed page for retry", async () => {
+  const followedLinks = [];
+  const nextLink = { rel: "next", href: "/retry-page" };
+  const searchClient = {
+    async search() {
+      return { ...emptyItemCollection, links: [nextLink], numberMatched: 1 };
+    },
+    async follow(link) {
+      followedLinks.push(link);
+      if (followedLinks.length === 1) {
+        throw new Error("temporary failure");
+      }
+      return { ...emptyItemCollection, numberMatched: 1 };
+    },
+  };
+  const resultStream = new CatalogResultStream(searchClient);
+  await resultStream.restart("");
+
+  await assert.rejects(resultStream.loadNextPage(), /temporary failure/);
+  assert.equal(resultStream.hasNextPage, true);
+  assert.notEqual(await resultStream.loadNextPage(), null);
+  assert.deepEqual(followedLinks, [nextLink, nextLink]);
+});
+
+test("CatalogResultStream ignores a page from a superseded search", async () => {
+  let resolveOldPage;
+  const searchClient = {
+    async search(searchText) {
+      return {
+        ...emptyItemCollection,
+        links: searchText === "old"
+          ? [{ rel: "next", href: "/old-page" }]
+          : [],
+        numberMatched: searchText === "old" ? 2 : 0,
+      };
+    },
+    follow() {
+      return new Promise((resolve) => {
+        resolveOldPage = resolve;
+      });
+    },
+  };
+  const resultStream = new CatalogResultStream(searchClient);
+  await resultStream.restart("old");
+  const oldPageRequest = resultStream.loadNextPage();
+
+  await resultStream.restart("new");
+  resolveOldPage({ ...emptyItemCollection, numberMatched: 2 });
+
+  assert.equal(await oldPageRequest, null);
+  assert.equal(resultStream.hasNextPage, false);
 });
 
 test("buildCatalogItemDetails presents scanned GeoTIFF metadata", () => {

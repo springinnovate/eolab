@@ -537,21 +537,18 @@ h5 {
   color: var(--text-3);
 }
 
-.catalog-pagination {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
+.catalog-stream-status {
+  display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 10px;
   margin-top: 14px;
-}
-
-.catalog-pagination .secondary-button:last-child {
-  justify-self: end;
-}
-
-.catalog-pagination span {
   color: var(--text-3);
   font-size: 0.72rem;
+}
+
+.catalog-load-sentinel {
+  height: 1px;
 }
 
 .scan-card {
@@ -612,6 +609,8 @@ h5 {
 }
 
 .catalog-result {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 84px;
   display: grid;
   gap: 5px;
   width: 100%;
