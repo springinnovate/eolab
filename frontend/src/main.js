@@ -344,12 +344,12 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
     }
   }
 
-  const runDebouncedSearch = createDebouncedAction(
+  const scheduleCatalogSearch = createDebouncedAction(
     loadCatalogPage.bind(null, null, 0, false),
     300,
     window,
   );
-  catalogSearchInput.addEventListener("input", runDebouncedSearch);
+  catalogSearchInput.addEventListener("input", scheduleCatalogSearch);
   refreshCatalogButton.addEventListener(
     "click",
     loadCatalogPage.bind(null, null, 0, true),
