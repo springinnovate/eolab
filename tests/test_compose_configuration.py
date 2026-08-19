@@ -35,7 +35,19 @@ def test_scan_paths_share_one_read_only_deployment_mount() -> None:
     assert '"SCAN_MOUNT_PATH=/scan-source"' in compose
     assert '"SCAN_PATHS_WITHIN_MOUNT=${EOLAB_SCAN_PATHS_WITHIN_MOUNT:' in compose
     assert '"SCAN_DISPLAY_PATH_PREFIX=${EOLAB_SCAN_DISPLAY_PATH_PREFIX:' in compose
+    assert '"SCAN_WORKER_COUNT=${EOLAB_SCAN_WORKER_COUNT:-8}"' in compose
     assert '"EOLAB_SCAN_MOUNT_PATH=${EOLAB_SCAN_MOUNT_PATH' not in compose
+
+
+def test_app_can_count_existing_catalog_items() -> None:
+    """Give the app read access to pgSTAC for one count at scan start."""
+    compose = COMPOSE_PATH.read_text(encoding="utf-8")
+
+    assert '"PGHOST=database"' in compose
+    assert '"PGPORT=5432"' in compose
+    assert '"PGDATABASE=eolab"' in compose
+    assert '"PGUSER=eolab"' in compose
+    assert '"PGPASSWORD=${EOLAB_DATABASE_PASSWORD:' in compose
 
 
 def test_internal_stac_api_enables_writes_for_scanning() -> None:

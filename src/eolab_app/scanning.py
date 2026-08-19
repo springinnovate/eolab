@@ -10,11 +10,11 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 import httpx2
+import psycopg
 
 from eolab_app.geotiff import build_stac_item
 
 
-GEOTIFF_METADATA_CONCURRENCY = 8
 STAC_ITEM_BATCH_SIZE = 100
 MAX_SCAN_ERROR_DETAILS = 100
 CATALOG_WRITE_TIMEOUT_SECONDS = 120
@@ -57,6 +57,24 @@ class CatalogWriter(Protocol):
 
     def session(self) -> AbstractAsyncContextManager[CatalogWriteSession]:
         """Open one catalog write session."""
+
+
+class CatalogItemCounter(Protocol):
+    """Count Items already stored in the catalog database."""
+
+    async def count_items(self) -> int:
+        """Return the exact number of existing catalog Items."""
+
+
+class PgStacItemCounter:
+    """Count catalog Items through the app's standard libpq environment."""
+
+    async def count_items(self) -> int:
+        """Return the number of rows in pgSTAC's partitioned Items table."""
+        async with await psycopg.AsyncConnection.connect() as connection:
+            cursor = await connection.execute("SELECT count(*) FROM pgstac.items")
+            row = await cursor.fetchone()
+        return row[0]
 
 
 class StacApiWriter:
@@ -144,10 +162,14 @@ class ScanManager:
         source_root: Path,
         source_paths: tuple[Path, ...],
         catalog_writer: CatalogWriter,
+        catalog_item_counter: CatalogItemCounter,
+        metadata_worker_count: int,
     ) -> None:
         self.source_root = source_root
         self.source_paths = source_paths
         self.catalog_writer = catalog_writer
+        self.catalog_item_counter = catalog_item_counter
+        self.metadata_worker_count = metadata_worker_count
         self._start_lock = asyncio.Lock()
         self._task: asyncio.Task[None] | None = None
         self._status = self._new_status("not_started")
@@ -175,6 +197,9 @@ class ScanManager:
 
     async def _run(self) -> None:
         try:
+            self._status["catalogItemsBeforeScan"] = (
+                await self.catalog_item_counter.count_items()
+            )
             geotiff_paths, discovery_errors = await asyncio.to_thread(
                 _discover_geotiffs,
                 self.source_root,
@@ -193,13 +218,17 @@ class ScanManager:
             async with self.catalog_writer.session() as catalog_session:
                 await catalog_session.upsert_collection(DEFAULT_SCAN_COLLECTION)
                 path_queue: asyncio.Queue[Path | None] = asyncio.Queue(
-                    maxsize=GEOTIFF_METADATA_CONCURRENCY * 2
+                    maxsize=self.metadata_worker_count * 2
                 )
                 result_queue: asyncio.Queue[
                     tuple[Path, dict[str, Any] | Exception] | None
                 ] = asyncio.Queue(maxsize=STAC_ITEM_BATCH_SIZE * 2)
                 path_producer = asyncio.create_task(
-                    _enqueue_geotiff_paths(geotiff_paths, path_queue)
+                    _enqueue_geotiff_paths(
+                        geotiff_paths,
+                        path_queue,
+                        self.metadata_worker_count,
+                    )
                 )
                 metadata_workers = [
                     asyncio.create_task(
@@ -209,12 +238,12 @@ class ScanManager:
                             result_queue,
                         )
                     )
-                    for _ in range(GEOTIFF_METADATA_CONCURRENCY)
+                    for _ in range(self.metadata_worker_count)
                 ]
                 pending_items: list[dict[str, Any]] = []
                 completed_workers = 0
                 try:
-                    while completed_workers < GEOTIFF_METADATA_CONCURRENCY:
+                    while completed_workers < self.metadata_worker_count:
                         metadata_result = await result_queue.get()
                         if metadata_result is None:
                             completed_workers += 1
@@ -277,6 +306,7 @@ class ScanManager:
             "processed": 0,
             "indexed": 0,
             "failed": 0,
+            "catalogItemsBeforeScan": None,
             "currentFile": None,
             "startedAt": None,
             "finishedAt": None,
@@ -288,11 +318,12 @@ class ScanManager:
 async def _enqueue_geotiff_paths(
     geotiff_paths: list[Path],
     path_queue: asyncio.Queue[Path | None],
+    metadata_worker_count: int,
 ) -> None:
     """Feed discovered paths to a bounded metadata-work queue."""
     for geotiff_path in geotiff_paths:
         await path_queue.put(geotiff_path)
-    for _ in range(GEOTIFF_METADATA_CONCURRENCY):
+    for _ in range(metadata_worker_count):
         await path_queue.put(None)
 
 

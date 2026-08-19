@@ -14,9 +14,10 @@ EOLab is an open source platform for Earth observation analysis and visualizatio
    EOLAB_SCAN_MOUNT_PATH=/mnt/storage/bigbucket
    EOLAB_SCAN_PATHS_WITHIN_MOUNT=["eolab_catalog_data/observations","eolab_catalog_data/model_outputs"]
    EOLAB_SCAN_DISPLAY_PATH_PREFIX=bigboi -- Z:\bigbucket
+   EOLAB_SCAN_WORKER_COUNT=8
    ```
 
-   `EOLAB_SCAN_MOUNT_PATH` is an absolute path on the deployment server. Coolify does not list it automatically because Compose uses it as a bind-mount source, so add it manually. Each entry in `EOLAB_SCAN_PATHS_WITHIN_MOUNT` is relative to that mount; use `["."]` to scan the entire mount. `EOLAB_SCAN_DISPLAY_PATH_PREFIX` is the path description shown to users in the Item inspector. The mounted directories and GeoTIFFs must be readable by the application container.
+   `EOLAB_SCAN_MOUNT_PATH` is an absolute path on the deployment server. Coolify does not list it automatically because Compose uses it as a bind-mount source, so add it manually. Each entry in `EOLAB_SCAN_PATHS_WITHIN_MOUNT` is relative to that mount; use `["."]` to scan the entire mount. `EOLAB_SCAN_DISPLAY_PATH_PREFIX` is the path description shown to users in the Item inspector. `EOLAB_SCAN_WORKER_COUNT` is the number of GeoTIFFs whose metadata EOLab reads concurrently and must be a positive integer. The mounted directories and GeoTIFFs must be readable by the application container.
 6. In the project **Configuration**, select **Domains** for the `app` service and enter the public domain with internal port `8000` as `https://eolab.example.com:8000`.
 7. In **Advanced**, enable **Include Source Commit in Build**. On Coolify versions that label this setting **Source Commit Availability**, select **Available during build**. EOLab uses `SOURCE_COMMIT` to derive the displayed version from Git tags and the deployed commit.
 8. Set any other desired deployment-specific `EOLAB_*` values listed in `.env.example`.
@@ -24,7 +25,7 @@ EOLab is an open source platform for Earth observation analysis and visualizatio
 
 ## Run with Docker Compose
 
-Copy `.env.example` to `.env`, set `EOLAB_DATABASE_PASSWORD`, choose `true` or `false` for `EOLAB_LOAD_SAMPLE_CATALOG`, and configure the three scan variables described below. To display a Git-derived version locally, replace the `SOURCE_COMMIT` fallback with the full 40-character SHA reported by `git rev-parse HEAD`.
+Copy `.env.example` to `.env`, set `EOLAB_DATABASE_PASSWORD`, choose `true` or `false` for `EOLAB_LOAD_SAMPLE_CATALOG`, and configure the scan variables described below. To display a Git-derived version locally, replace the `SOURCE_COMMIT` fallback with the full 40-character SHA reported by `git rev-parse HEAD`.
 
 Start the stack with the local port override:
 
@@ -44,6 +45,7 @@ Open `http://localhost:8000`. Set `EOLAB_HOST_PORT` to use a different loopback 
 | `EOLAB_SCAN_MOUNT_PATH`      | none                                              | Required absolute host directory mounted read-only                  |
 | `EOLAB_SCAN_PATHS_WITHIN_MOUNT` | none                                           | Required JSON array of relative directories to scan                 |
 | `EOLAB_SCAN_DISPLAY_PATH_PREFIX` | none                                          | Required user-facing root shown for mounted files                   |
+| `EOLAB_SCAN_WORKER_COUNT`    | `8`                                               | Concurrent GeoTIFF metadata readers                              |
 | `EOLAB_APP_TITLE`            | `EOLab`                                           | Browser and panel title                        |
 | `EOLAB_APP_SUBTITLE`         | `Explore, process, and visualize geospatial data` | Short panel description                        |
 | `EOLAB_CATALOG_URL`          | `/stac`                                           | Browser-facing STAC API path                   |
@@ -55,7 +57,7 @@ Open `http://localhost:8000`. Set `EOLAB_HOST_PORT` to use a different loopback 
 
 ## Scan mounted GeoTIFFs
 
-Open the **Catalog** panel and select **Scan directories**. EOLab searches each configured path recursively for `.tif` and `.tiff` files, shows live discovered, processed, indexed, and failed counts, and refreshes the catalog when the scan completes. It reads metadata from up to eight GeoTIFFs concurrently and uses standard STAC Bulk Transactions to upsert batches of 100 Items. A failure in one file does not stop the remaining scan; a catalog write failure stops the scan. Configured paths cannot be duplicated, nested inside one another, or escape the mount.
+Open the **Catalog** panel and select **Scan directories**. EOLab searches each configured path recursively for `.tif` and `.tiff` files, shows how many Items were already in the catalog plus live discovered, processed, indexed, and failed counts, and refreshes the catalog when the scan completes. It reads metadata using `EOLAB_SCAN_WORKER_COUNT` concurrent workers and uses standard STAC Bulk Transactions to upsert batches of 100 Items. A failure in one file does not stop the remaining scan; a catalog write failure stops the scan. Configured paths cannot be duplicated, nested inside one another, or escape the mount.
 
 Scans create or update the `eolab-mounted-geotiffs` STAC Collection. Item identifiers are derived from each file's path relative to the mounted root, so scanning the same path again updates its Item instead of adding a duplicate. A later scan does not delete records for files that have disappeared or moved. The STAC Asset retains its container `file:` URI; the inspector combines its mount-relative title with `EOLAB_SCAN_DISPLAY_PATH_PREFIX` so users see the location as it is known on their own system. Changing the display prefix requires redeployment but not rescanning.
 

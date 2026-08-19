@@ -556,10 +556,18 @@ function renderScanStatus(scanStatus) {
     scanProgressElement.hidden = scanStatus.state === "not_started";
     scanProgressElement.max = Math.max(scanStatus.discovered, 1);
     scanProgressElement.value = scanStatus.processed;
+    const existingCatalogCount = Number.isInteger(
+        scanStatus.catalogItemsBeforeScan
+    )
+        ? `${scanStatus.catalogItemsBeforeScan} already in catalog`
+        : isRunning
+          ? "Catalog count pending"
+          : "Catalog count unavailable";
     scanCountsElement.textContent =
         scanStatus.state === "not_started"
             ? ""
-            : `${scanStatus.discovered} discovered · ${scanStatus.processed} processed · ` +
+            : `${existingCatalogCount} · ${scanStatus.discovered} discovered · ` +
+              `${scanStatus.processed} processed · ` +
               `${scanStatus.indexed} indexed · ${scanStatus.failed} failed`;
 
     const statusMessages = {

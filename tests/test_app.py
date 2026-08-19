@@ -19,6 +19,7 @@ DEFAULT_ENVIRONMENT = {
     "SCAN_MOUNT_PATH": str(Path.cwd()),
     "SCAN_PATHS_WITHIN_MOUNT": '["."]',
     "SCAN_DISPLAY_PATH_PREFIX": "bigboi -- Z:\\bigbucket",
+    "SCAN_WORKER_COUNT": "8",
     "BASEMAP_URL": "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
     "BASEMAP_ATTRIBUTION": "&copy; OpenStreetMap contributors",
     "INITIAL_LATITUDE": "20",
@@ -243,13 +244,22 @@ def test_load_settings_rejects_blank_version(
         load_settings(blank_version_path)
 
 
+@pytest.mark.parametrize(
+    ("environment_variable_name", "invalid_value"),
+    (
+        ("INITIAL_ZOOM", "not-a-number"),
+        ("SCAN_WORKER_COUNT", "1.5"),
+    ),
+)
 def test_load_settings_rejects_malformed_number(
     configured_environment: None,
     monkeypatch: pytest.MonkeyPatch,
+    environment_variable_name: str,
+    invalid_value: str,
     version_file_path: Path,
 ) -> None:
     """Reject a numeric setting that cannot be parsed as a number."""
-    monkeypatch.setenv("INITIAL_ZOOM", "not-a-number")
+    monkeypatch.setenv(environment_variable_name, invalid_value)
 
     with pytest.raises(ValueError):
         load_settings(version_file_path)
@@ -308,6 +318,7 @@ def test_load_settings_rejects_invalid_scan_path_lists(
         ("INITIAL_LATITUDE", "91"),
         ("INITIAL_LONGITUDE", "-181"),
         ("INITIAL_ZOOM", "23"),
+        ("SCAN_WORKER_COUNT", "0"),
     ),
 )
 def test_load_settings_rejects_out_of_range_number(

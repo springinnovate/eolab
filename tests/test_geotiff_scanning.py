@@ -150,12 +150,25 @@ class RecordingCatalogWriter:
         return self.write_session
 
 
+class RecordingCatalogItemCounter:
+    """Return a representative catalog Item count without PostgreSQL."""
+
+    async def count_items(self) -> int:
+        return 37
+
+
 def test_scan_continues_after_an_invalid_geotiff(tmp_path: Path) -> None:
     """Index valid files, report invalid files, and keep stable upsert results."""
     write_geotiff(tmp_path / "valid.TIF")
     (tmp_path / "invalid.tiff").write_text("not a raster", encoding="utf-8")
     catalog_writer = RecordingCatalogWriter()
-    scan_manager = ScanManager(tmp_path, (tmp_path,), catalog_writer)
+    scan_manager = ScanManager(
+        tmp_path,
+        (tmp_path,),
+        catalog_writer,
+        RecordingCatalogItemCounter(),
+        8,
+    )
 
     async def run_twice() -> tuple[dict[str, Any], dict[str, Any]]:
         await scan_manager.start()
@@ -174,6 +187,7 @@ def test_scan_continues_after_an_invalid_geotiff(tmp_path: Path) -> None:
     assert first_status["processed"] == 2
     assert first_status["indexed"] == 1
     assert first_status["failed"] == 1
+    assert first_status["catalogItemsBeforeScan"] == 37
     assert first_status["errors"][0]["path"] == "invalid.tiff"
     assert second_status["indexed"] == 1
     assert len(catalog_writer.write_session.collections) == 1
@@ -191,6 +205,8 @@ def test_scan_combines_multiple_directories_under_one_mount(tmp_path: Path) -> N
         tmp_path,
         (observations_path, model_outputs_path),
         catalog_writer,
+        RecordingCatalogItemCounter(),
+        8,
     )
 
     async def run_scan() -> dict[str, Any]:
@@ -213,7 +229,7 @@ def test_scan_reads_metadata_concurrently_and_bulk_upserts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Bound metadata concurrency and write 205 Items as 100, 100, and 5."""
+    """Honor configured concurrency and write 205 Items as 100, 100, and 5."""
     for item_index in range(205):
         (tmp_path / f"item-{item_index:03}.tif").touch()
 
@@ -243,7 +259,13 @@ def test_scan_reads_metadata_concurrently_and_bulk_upserts(
     monkeypatch.setattr("eolab_app.scanning.build_stac_item", build_item)
     monkeypatch.setattr("eolab_app.scanning.asyncio.to_thread", yielding_to_thread)
     catalog_writer = RecordingCatalogWriter()
-    scan_manager = ScanManager(tmp_path, (tmp_path,), catalog_writer)
+    scan_manager = ScanManager(
+        tmp_path,
+        (tmp_path,),
+        catalog_writer,
+        RecordingCatalogItemCounter(),
+        3,
+    )
 
     async def run_scan() -> dict[str, Any]:
         await scan_manager.start()
@@ -253,7 +275,7 @@ def test_scan_reads_metadata_concurrently_and_bulk_upserts(
 
     status = asyncio.run(run_scan())
 
-    assert maximum_metadata_calls == 8
+    assert maximum_metadata_calls == 3
     assert [
         len(item_batch)
         for item_batch in catalog_writer.write_session.item_batches
@@ -279,6 +301,8 @@ def test_scan_caps_error_details_without_losing_failure_count(
         tmp_path,
         (tmp_path,),
         RecordingCatalogWriter(),
+        RecordingCatalogItemCounter(),
+        8,
     )
 
     async def run_scan() -> dict[str, Any]:
@@ -319,6 +343,8 @@ def test_scan_stops_after_a_bulk_catalog_failure(
         tmp_path,
         (tmp_path,),
         catalog_writer,
+        RecordingCatalogItemCounter(),
+        8,
     )
 
     async def run_scan() -> dict[str, Any]:
@@ -343,7 +369,13 @@ def test_scan_stops_after_a_bulk_catalog_failure(
 def test_scan_prevents_overlap(tmp_path: Path) -> None:
     """Reject a second start while directory discovery is still running."""
     catalog_writer = RecordingCatalogWriter()
-    scan_manager = ScanManager(tmp_path, (tmp_path,), catalog_writer)
+    scan_manager = ScanManager(
+        tmp_path,
+        (tmp_path,),
+        catalog_writer,
+        RecordingCatalogItemCounter(),
+        8,
+    )
 
     async def start_twice() -> None:
         await scan_manager.start()
