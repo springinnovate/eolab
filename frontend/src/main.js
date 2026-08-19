@@ -165,7 +165,8 @@ async function loadCatalogCollections(catalogUrl) {
 }
 
 /**
- * Creates a semantic list of text-only metadata values.
+ * Creates a semantic metadata list whose labels are application display text
+ * and whose values come from the selected STAC Item and Collection.
  *
  * @param {{label: string, value: string}[]} metadata Inspector metadata.
  * @return {HTMLDListElement} Definition list containing the metadata.
