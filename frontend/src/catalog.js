@@ -82,7 +82,7 @@ export function findPaginationLink(itemCollection, relations) {
  * @param {Object[]} collections STAC Collections available to the Catalog.
  * @return {Object} Text-only metadata grouped for inspector rendering.
  */
-export function buildCatalogItemInspector(item, collections) {
+export function buildCatalogItemDetails(item, collections) {
   const properties = item.properties;
   const collection = collections.find(
     (candidateCollection) => candidateCollection.id === item.collection,

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  buildCatalogItemInspector,
+  buildCatalogItemDetails,
   buildSubstringFilter,
   CatalogFootprintController,
   CatalogSearchClient,
@@ -156,8 +156,8 @@ test("findPaginationLink returns standard STAC pagination relations", () => {
   assert.equal(findPaginationLink(document, ["prev"]), previousLink);
 });
 
-test("buildCatalogItemInspector presents scanned GeoTIFF metadata", () => {
-  const inspector = buildCatalogItemInspector(
+test("buildCatalogItemDetails presents scanned GeoTIFF metadata", () => {
+  const inspector = buildCatalogItemDetails(
     {
       id: "stable-item-id",
       collection: "eolab-mounted-geotiffs",
@@ -227,8 +227,8 @@ test("buildCatalogItemInspector presents scanned GeoTIFF metadata", () => {
   ]);
 });
 
-test("buildCatalogItemInspector omits unavailable optional metadata", () => {
-  const inspector = buildCatalogItemInspector(
+test("buildCatalogItemDetails omits unavailable optional metadata", () => {
+  const inspector = buildCatalogItemDetails(
     {
       id: "minimal-item",
       collection: "sample",

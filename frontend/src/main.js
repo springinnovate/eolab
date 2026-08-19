@@ -1,7 +1,7 @@
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import {
-    buildCatalogItemInspector,
+    buildCatalogItemDetails,
     CatalogFootprintController,
     CatalogSearchClient,
     CatalogWorkspaceController,
@@ -218,7 +218,7 @@ function renderCatalogItemInspector(item, collections) {
         return;
     }
 
-    const inspector = buildCatalogItemInspector(item, collections);
+    const inspector = buildCatalogItemDetails(item, collections);
     inspectorHeading.textContent = inspector.title;
     if (inspector.description !== null) {
         const description = document.createElement("p");
