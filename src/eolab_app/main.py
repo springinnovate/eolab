@@ -110,7 +110,7 @@ def create_app(
 
     @application.get("/api/scans/current", tags=["catalog"])
     async def current_scan() -> dict[str, object]:
-        """Return current GeoTIFF scan progress.
+        """Return current mounted-dataset scan progress.
 
         Returns:
             A snapshot of the active or most recently completed scan.

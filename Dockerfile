@@ -50,7 +50,7 @@ COPY --from=frontend-builder /build/frontend/dist/ ./src/eolab_app/static/
 COPY --from=versioner /version /app/version
 
 RUN pip install --no-cache-dir . \
-    && python -c "import rasterio" \
+    && python -c "import fiona; import rasterio; assert 'ESRI Shapefile' in fiona.supported_drivers" \
     && chown -R eolab:eolab /app
 
 USER eolab
