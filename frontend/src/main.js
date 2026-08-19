@@ -451,17 +451,44 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
         }
     }
 
-    /** Observe the end of the list only while another page is available. */
-    function observeNextCatalogPage() {
+    /** Prepare one page ahead, then watch for the user to reach it. */
+    async function prefetchNextCatalogPage() {
+        const searchSequence = catalogState.searchSequence;
         retryPageButton.hidden = true;
-        if (resultStream.hasNextPage) {
+        streamStatusElement.textContent = "Preparing more Catalog Items…";
+        try {
+            const bufferedPage = await resultStream.prefetchNextPage();
+            if (
+                searchSequence !== catalogState.searchSequence ||
+                bufferedPage === null
+            ) {
+                return;
+            }
             streamStatusElement.textContent =
-                "More Items load automatically as you scroll.";
-            pageObserver.observe(loadSentinelElement);
-        } else {
-            streamStatusElement.textContent = "End of results.";
+                "More Items are ready as you scroll.";
+            if (!resultStream.isLoading) {
+                pageObserver.observe(loadSentinelElement);
+            }
+        } catch (catalogError) {
+            if (searchSequence !== catalogState.searchSequence) {
+                return;
+            }
             pageObserver.unobserve(loadSentinelElement);
+            streamStatusElement.textContent =
+                `Additional Items could not be prepared: ${catalogError.message}`;
+            retryPageButton.hidden = false;
         }
+    }
+
+    /** Prepare another page or display the end of the active stream. */
+    function observeNextCatalogPage() {
+        pageObserver.unobserve(loadSentinelElement);
+        retryPageButton.hidden = true;
+        if (!resultStream.hasNextPage) {
+            streamStatusElement.textContent = "End of results.";
+            return;
+        }
+        void prefetchNextCatalogPage();
     }
 
     /** Start a new search and replace every result from the previous stream. */
@@ -569,7 +596,7 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
         "click",
         loadCatalog.bind(null, true)
     );
-    retryPageButton.addEventListener("click", loadNextCatalogPage);
+    retryPageButton.addEventListener("click", prefetchNextCatalogPage);
 
     await loadCatalog(true);
     return loadCatalog.bind(null, true);

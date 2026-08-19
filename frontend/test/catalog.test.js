@@ -228,6 +228,45 @@ test("findPaginationLink returns standard STAC pagination relations", () => {
   assert.equal(findPaginationLink(document, ["prev"]), previousLink);
 });
 
+test("CatalogResultStream keeps one provider page ready", async () => {
+  let resolvePrefetch;
+  const followedLinks = [];
+  const secondPageLink = { rel: "next", href: "/second-page" };
+  const thirdPageLink = { rel: "next", href: "/third-page" };
+  const secondPage = {
+    ...emptyItemCollection,
+    links: [thirdPageLink],
+    numberMatched: 60,
+  };
+  const searchClient = {
+    async search() {
+      return {
+        ...emptyItemCollection,
+        links: [secondPageLink],
+        numberMatched: 60,
+      };
+    },
+    follow(link) {
+      followedLinks.push(link);
+      return new Promise((resolve) => {
+        resolvePrefetch = resolve;
+      });
+    },
+  };
+  const resultStream = new CatalogResultStream(searchClient);
+  await resultStream.restart("");
+
+  const firstPrefetch = resultStream.prefetchNextPage();
+  const sharedPrefetch = resultStream.prefetchNextPage();
+  resolvePrefetch(secondPage);
+
+  assert.equal(await firstPrefetch, secondPage);
+  assert.equal(await sharedPrefetch, secondPage);
+  assert.equal(await resultStream.loadNextPage(), secondPage);
+  assert.deepEqual(followedLinks, [secondPageLink]);
+  assert.equal(resultStream.hasNextPage, true);
+});
+
 test("CatalogResultStream prevents duplicate next-page requests", async () => {
   let resolveNextPage;
   const followedLinks = [];

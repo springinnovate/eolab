@@ -350,6 +350,8 @@ export class CatalogResultStream {
   /** @param {CatalogSearchClient} searchClient STAC Item Search client. */
   constructor(searchClient) {
     this.searchClient = searchClient;
+    this.bufferedPage = null;
+    this.prefetchPromise = null;
     this.nextLink = null;
     this.isLoading = false;
     this.searchSequence = 0;
@@ -357,7 +359,9 @@ export class CatalogResultStream {
 
   /** @return {boolean} Whether another provider page is available. */
   get hasNextPage() {
-    return this.nextLink !== null;
+    return this.bufferedPage !== null ||
+      this.prefetchPromise !== null ||
+      this.nextLink !== null;
   }
 
   /**
@@ -368,6 +372,8 @@ export class CatalogResultStream {
    */
   async restart(searchText) {
     const searchSequence = ++this.searchSequence;
+    this.bufferedPage = null;
+    this.prefetchPromise = null;
     this.nextLink = null;
     this.isLoading = true;
     try {
@@ -388,20 +394,26 @@ export class CatalogResultStream {
   }
 
   /**
-   * Loads the next page once, retaining its link when the request fails.
+   * Fetches and retains the next page without adding it to the displayed list.
+   * Concurrent callers share the same provider request.
    *
-   * @return {Promise<Object|null>} Next ItemCollection, or null when no load
-   *     was needed or the request was superseded.
+   * @return {Promise<Object|null>} Buffered ItemCollection, or null when the
+   *     stream has ended or the request was superseded.
    */
-  async loadNextPage() {
-    if (this.isLoading || this.nextLink === null) {
+  async prefetchNextPage() {
+    if (this.bufferedPage !== null) {
+      return this.bufferedPage;
+    }
+    if (this.prefetchPromise !== null) {
+      return this.prefetchPromise;
+    }
+    if (this.nextLink === null) {
       return null;
     }
 
     const searchSequence = this.searchSequence;
     const nextLink = this.nextLink;
-    this.isLoading = true;
-    try {
+    const prefetchPromise = (async () => {
       const itemCollection = await this.searchClient.follow(nextLink);
       if (
         searchSequence !== this.searchSequence ||
@@ -410,6 +422,44 @@ export class CatalogResultStream {
         return null;
       }
       this.nextLink = findPaginationLink(itemCollection, ["next"]);
+      this.bufferedPage = itemCollection;
+      return itemCollection;
+    })();
+    this.prefetchPromise = prefetchPromise;
+    try {
+      return await prefetchPromise;
+    } finally {
+      if (
+        searchSequence === this.searchSequence &&
+        this.prefetchPromise === prefetchPromise
+      ) {
+        this.prefetchPromise = null;
+      }
+    }
+  }
+
+  /**
+   * Takes the prepared next page once, retaining its link when fetching fails.
+   *
+   * @return {Promise<Object|null>} Next ItemCollection, or null when no load
+   *     was needed or the request was superseded.
+   */
+  async loadNextPage() {
+    if (this.isLoading || !this.hasNextPage) {
+      return null;
+    }
+
+    const searchSequence = this.searchSequence;
+    this.isLoading = true;
+    try {
+      const itemCollection = await this.prefetchNextPage();
+      if (
+        searchSequence !== this.searchSequence ||
+        itemCollection === null
+      ) {
+        return null;
+      }
+      this.bufferedPage = null;
       return itemCollection;
     } finally {
       if (searchSequence === this.searchSequence) {
