@@ -14,6 +14,7 @@ test("buildPrefixQuery creates safe partial-word terms", () => {
     buildPrefixQuery(" Nat_semi grass! "),
     "nat:* AND semi:* AND grass:*",
   );
+  assert.equal(buildPrefixQuery("2002"), "2002:*");
   assert.equal(buildPrefixQuery("---"), null);
 });
 

@@ -55,7 +55,7 @@ The scanner uses `ACQUISITIONDATETIME` from GDAL's `IMAGERY` metadata domain whe
 
 ## Search the catalog
 
-The Catalog search field waits briefly after typing stops, then searches the complete catalog through the STAC Free-Text Search `q` parameter. Search terms use prefix matching, so `grass` matches a path keyword such as `grassland`. Multiple terms must all match. Clearing the field returns to the unfiltered catalog.
+The Catalog search field waits briefly after typing stops, then searches Item titles, descriptions, and keywords across the complete catalog through the STAC Free-Text Search `q` parameter. The scanner turns directory and filename components into keywords, so `2002` matches both a file such as `grassland_2002.tif` and a description containing `2002`. Search terms use prefix matching, so `grass` also matches `grassland`. Multiple terms must all match. Clearing the field returns to the unfiltered catalog.
 
 Results are returned 20 at a time. **Previous** and **Next** follow the pagination requests supplied by the STAC API. Result footprints are not all drawn at once: selecting a result displays its footprint, while pointer hover or keyboard focus temporarily displays a lighter preview.
 
