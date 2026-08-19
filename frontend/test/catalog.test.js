@@ -415,8 +415,9 @@ test("buildCatalogItemDetails presents scanned GeoTIFF metadata", () => {
       label: "Collection",
       value: "Mounted GeoTIFFs (eolab-mounted-geotiffs)",
     },
+    { label: "Dataset type", value: "Raster" },
     { label: "Item datetime", value: "2025-02-11T17:31:52Z" },
-    { label: "Geometry", value: "Polygon" },
+    { label: "Footprint geometry", value: "Polygon" },
     { label: "Bounding box", value: "-123, 48.8, -122.7, 49" },
     { label: "Coordinate reference system", value: "EPSG:4326" },
     { label: "Raster dimensions", value: "3 × 2 pixels" },
@@ -445,6 +446,92 @@ test("buildCatalogItemDetails presents scanned GeoTIFF metadata", () => {
       ],
     },
   ]);
+  assert.deepEqual(inspector.fields, []);
+});
+
+test("buildCatalogItemDetails presents mounted Shapefile metadata", () => {
+  const inspector = buildCatalogItemDetails(
+    {
+      id: "shapefile-stable-id",
+      collection: "eolab-mounted-vectors",
+      bbox: [-123, 48, -122, 49],
+      geometry: { type: "Polygon", coordinates: [] },
+      properties: {
+        datetime: "2025-04-03T12:30:00Z",
+        title: "Vectors/habitat.shp",
+        description: "Item datetime uses the latest component modification time.",
+        "proj:epsg": 3857,
+        "table:row_count": 12345,
+        "table:columns": [
+          { name: "geometry", type: "Polygon" },
+          { name: "habitat", type: "str:80" },
+          { name: "rank", type: "int:18" },
+        ],
+        "table:primary_geometry": "geometry",
+      },
+      assets: {
+        shp: {
+          href: "file:///scan-source/Vectors/habitat.shp",
+          type: "application/vnd.shp",
+          title: "Vectors/habitat.shp",
+          roles: ["data"],
+          updated: "2025-04-03T12:30:00Z",
+        },
+        dbf: {
+          href: "file:///scan-source/Vectors/habitat.dbf",
+          type: "application/vnd.dbf",
+          title: "Vectors/habitat.dbf",
+          roles: ["data"],
+        },
+      },
+    },
+    [{ id: "eolab-mounted-vectors", title: "Mounted vector datasets" }],
+    "bigboi -- Z:\\bigbucket",
+  );
+
+  assert.deepEqual(inspector.metadata, [
+    { label: "Item ID", value: "shapefile-stable-id" },
+    {
+      label: "Collection",
+      value: "Mounted vector datasets (eolab-mounted-vectors)",
+    },
+    { label: "Dataset type", value: "Vector" },
+    { label: "Item datetime", value: "2025-04-03T12:30:00Z" },
+    { label: "Footprint geometry", value: "Polygon" },
+    { label: "Bounding box", value: "-123, 48, -122, 49" },
+    { label: "Coordinate reference system", value: "EPSG:3857" },
+    { label: "Feature count", value: "12,345" },
+    { label: "Declared feature geometry type", value: "Polygon" },
+  ]);
+  assert.deepEqual(inspector.fields, [
+    { label: "habitat", value: "str:80" },
+    { label: "rank", value: "int:18" },
+  ]);
+  assert.deepEqual(
+    inspector.assets.map((asset) => ({
+      key: asset.key,
+      location: asset.metadata[0],
+      bands: asset.bands,
+    })),
+    [
+      {
+        key: "shp",
+        location: {
+          label: "Original location",
+          value: "bigboi -- Z:\\bigbucket\\Vectors\\habitat.shp",
+        },
+        bands: [],
+      },
+      {
+        key: "dbf",
+        location: {
+          label: "Original location",
+          value: "bigboi -- Z:\\bigbucket\\Vectors\\habitat.dbf",
+        },
+        bands: [],
+      },
+    ],
+  );
 });
 
 test("buildCatalogItemDetails omits unavailable optional metadata", () => {
@@ -476,6 +563,7 @@ test("buildCatalogItemDetails omits unavailable optional metadata", () => {
     },
   ]);
   assert.deepEqual(inspector.assets, []);
+  assert.deepEqual(inspector.fields, []);
 });
 
 test("buildCatalogItemDetails preserves non-file Asset locations", () => {
@@ -495,6 +583,28 @@ test("buildCatalogItemDetails preserves non-file Asset locations", () => {
 
   assert.deepEqual(inspector.assets[0].metadata, [
     { label: "Location", value: "https://example.test/data.tif" },
+  ]);
+});
+
+test("buildCatalogItemDetails classifies only known mounted Collections", () => {
+  const inspector = buildCatalogItemDetails(
+    {
+      id: "external-item",
+      collection: "constructor",
+      geometry: null,
+      properties: { datetime: "2025-01-01T00:00:00Z" },
+      assets: { data: { href: "file:///external/data.tif" } },
+    },
+    [],
+    "bigboi -- Z:\\bigbucket",
+  );
+
+  assert.equal(
+    inspector.metadata.some(({ label }) => label === "Dataset type"),
+    false,
+  );
+  assert.deepEqual(inspector.assets[0].metadata, [
+    { label: "Location", value: "file:///external/data.tif" },
   ]);
 });
 

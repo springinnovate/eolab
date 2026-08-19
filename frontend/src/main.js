@@ -6,7 +6,8 @@ import {
     CatalogResultStream,
     CatalogSearchClient,
     createDebouncedAction,
-    formatCatalogItemCount
+    formatCatalogItemCount,
+    MOUNTED_DATASET_TYPES,
 } from "./catalog.js";
 import "./style.css";
 
@@ -242,6 +243,15 @@ function renderCatalogItemInspector(
     }
     inspectorContent.append(createCatalogMetadataList(inspector.metadata));
 
+    if (inspector.fields.length > 0) {
+        const fieldsHeading = document.createElement("h4");
+        fieldsHeading.textContent = "Fields";
+        inspectorContent.append(
+            fieldsHeading,
+            createCatalogMetadataList(inspector.fields)
+        );
+    }
+
     // Introduce the Item's Asset records or their empty state.
     const assetsHeading = document.createElement("h4");
     assetsHeading.textContent = "Assets";
@@ -397,11 +407,15 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
             const itemDescription = document.createElement("span");
             itemDescription.textContent =
                 item.properties.description ?? item.id;
-            const itemDate = document.createElement("small");
-            itemDate.textContent =
+            const itemSummary = document.createElement("small");
+            const datasetType = MOUNTED_DATASET_TYPES.get(item.collection);
+            const itemDatetime =
                 item.properties.datetime ?? "Datetime unavailable";
+            itemSummary.textContent = datasetType === undefined
+                ? itemDatetime
+                : `${datasetType} · ${itemDatetime}`;
 
-            itemButton.append(itemTitle, itemDescription, itemDate);
+            itemButton.append(itemTitle, itemDescription, itemSummary);
             itemButton.addEventListener("click", () => {
                 if (catalogState.selectedButton !== null) {
                     catalogState.selectedButton.classList.remove("is-selected");
@@ -640,10 +654,11 @@ function renderScanStatus(scanStatus) {
 
     const statusMessages = {
         not_started: "No scan has been started.",
-        discovering: "Discovering GeoTIFF files in the mounted directory.",
+        discovering:
+            "Discovering geospatial datasets in the mounted directories.",
         scanning: scanStatus.currentFile
             ? `Latest file: ${scanStatus.currentFile}`
-            : "Preparing discovered GeoTIFF files.",
+            : "Preparing discovered geospatial datasets.",
         completed: "Scan completed. The catalog has been refreshed.",
         failed: "The scan stopped before it could complete."
     };

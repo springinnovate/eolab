@@ -5,6 +5,10 @@ const CATALOG_SUBSTRING_PROPERTIES = [
   "eolab_datetime_text",
   "eolab_end_datetime_text",
 ];
+export const MOUNTED_DATASET_TYPES = new Map([
+  ["eolab-mounted-geotiffs", "Raster"],
+  ["eolab-mounted-vectors", "Vector"],
+]);
 
 /**
  * Formats the position and total from a STAC ItemCollection.
@@ -110,7 +114,7 @@ export function findPaginationLink(itemCollection, relations) {
 /**
  * Builds display details for a STAC Item, including its identity, datetime or
  * datetime range, geometry, bounding box, projection, raster dimensions,
- * Assets, and raster bands.
+ * Assets, vector fields, and raster bands.
  *
  * @param {Object} item STAC Item selected in the result list.
  * @param {Object[]} collections STAC Collections available to the Catalog.
@@ -133,6 +137,10 @@ export function buildCatalogItemDetails(
     { label: "Item ID", value: item.id },
     { label: "Collection", value: collectionLabel },
   ];
+  const datasetType = MOUNTED_DATASET_TYPES.get(item.collection);
+  if (datasetType !== undefined) {
+    metadata.push({ label: "Dataset type", value: datasetType });
+  }
 
   if (properties.datetime === null) {
     metadata.push({
@@ -143,7 +151,7 @@ export function buildCatalogItemDetails(
     metadata.push({ label: "Item datetime", value: properties.datetime });
   }
   if (item.geometry !== null) {
-    metadata.push({ label: "Geometry", value: item.geometry.type });
+    metadata.push({ label: "Footprint geometry", value: item.geometry.type });
   }
   if (item.bbox !== undefined) {
     metadata.push({ label: "Bounding box", value: item.bbox.join(", ") });
@@ -166,9 +174,31 @@ export function buildCatalogItemDetails(
       value: `${width} × ${height} pixels`,
     });
   }
+  if (properties["table:row_count"] !== undefined) {
+    metadata.push({
+      label: "Feature count",
+      value: properties["table:row_count"].toLocaleString(),
+    });
+  }
+  const primaryGeometryColumn = (properties["table:columns"] ?? []).find(
+    (column) => column.name === properties["table:primary_geometry"],
+  );
+  if (primaryGeometryColumn !== undefined) {
+    metadata.push({
+      label: "Declared feature geometry type",
+      value: primaryGeometryColumn.type,
+    });
+  }
+
+  const fields = (properties["table:columns"] ?? [])
+    .filter((column) => column.name !== properties["table:primary_geometry"])
+    .map((column) => ({
+      label: column.name,
+      value: column.type ?? "Not provided",
+    }));
 
   const assets = Object.entries(item.assets).map(([assetKey, asset]) => {
-    const isMountedFile = item.collection === "eolab-mounted-geotiffs" &&
+    const isMountedFile = datasetType !== undefined &&
       asset.href.startsWith("file:");
     let location = asset.href;
     if (isMountedFile) {
@@ -219,6 +249,7 @@ export function buildCatalogItemDetails(
     title: properties.title ?? item.id,
     description: properties.description ?? null,
     metadata,
+    fields,
     assets,
   };
 }
