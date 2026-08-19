@@ -91,6 +91,25 @@ def test_catalog_migrator_packages_application_migrations() -> None:
     )
 
 
+def test_catalog_migrator_adds_datetime_substring_queryables() -> None:
+    """Expose standard STAC datetime values as indexed text queryables."""
+    migration = (
+        COMPOSE_PATH.parent
+        / "catalog"
+        / "migrations"
+        / "0003_datetime_substring_indexes.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "eolab_datetime_text" in migration
+    assert "eolab_end_datetime_text" in migration
+    assert "NULLIF(content->'properties'->'datetime', 'null'::jsonb)" in migration
+    assert "content->'properties'->'start_datetime'" in migration
+    assert "eolab_items_datetime_text_trgm_idx" in migration
+    assert "eolab_items_end_datetime_text_trgm_idx" in migration
+    assert migration.count("USING GIN") == 2
+    assert migration.count("gin_trgm_ops") == 2
+
+
 def test_stac_api_uses_the_pinned_upstream_image() -> None:
     """Use upstream CQL2 Filter support without a custom API image."""
     compose = COMPOSE_PATH.read_text(encoding="utf-8")
