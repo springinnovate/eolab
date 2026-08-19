@@ -59,15 +59,18 @@ class CatalogWriter(Protocol):
         """Open one catalog write session."""
 
 
-class CatalogItemInventory(Protocol):
-    """Identify Items already stored in a catalog Collection."""
+class CatalogDatabase(Protocol):
+    """Provide the scanner's direct pgSTAC database operations."""
 
     async def existing_item_ids(self, collection_identifier: str) -> set[str]:
         """Return the identifiers already stored in one Collection."""
 
+    async def invalidate_search_count_cache(self) -> None:
+        """Discard cached Item Search counts after a scan."""
 
-class PgStacItemInventory:
-    """Read existing Item identifiers through the standard libpq environment."""
+
+class PgStacCatalogDatabase:
+    """Access pgSTAC through the standard libpq environment."""
 
     async def existing_item_ids(self, collection_identifier: str) -> set[str]:
         """Return the Item identifiers in one pgSTAC Collection."""
@@ -77,6 +80,11 @@ class PgStacItemInventory:
                 (collection_identifier,),
             )
             return {row[0] async for row in cursor}
+
+    async def invalidate_search_count_cache(self) -> None:
+        """Discard cached Item Search counts after a scan."""
+        async with await psycopg.AsyncConnection.connect() as connection:
+            await connection.execute("DELETE FROM pgstac.search_wheres")
 
 
 class StacApiWriter:
@@ -164,13 +172,13 @@ class ScanManager:
         source_root: Path,
         source_paths: tuple[Path, ...],
         catalog_writer: CatalogWriter,
-        catalog_item_inventory: CatalogItemInventory,
+        catalog_database: CatalogDatabase,
         metadata_worker_count: int,
     ) -> None:
         self.source_root = source_root
         self.source_paths = source_paths
         self.catalog_writer = catalog_writer
-        self.catalog_item_inventory = catalog_item_inventory
+        self.catalog_database = catalog_database
         self.metadata_worker_count = metadata_worker_count
         self._start_lock = asyncio.Lock()
         self._task: asyncio.Task[None] | None = None
@@ -200,7 +208,7 @@ class ScanManager:
     async def _run(self) -> None:
         try:
             existing_item_ids = (
-                await self.catalog_item_inventory.existing_item_ids(
+                await self.catalog_database.existing_item_ids(
                     DEFAULT_SCAN_COLLECTION["id"]
                 )
             )
@@ -297,6 +305,7 @@ class ScanManager:
                         existing_item_ids,
                     )
 
+            await self.catalog_database.invalidate_search_count_cache()
             self._status["state"] = "completed"
         except Exception as error:
             self._status["state"] = "failed"

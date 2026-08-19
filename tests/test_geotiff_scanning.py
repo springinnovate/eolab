@@ -218,15 +218,19 @@ class RecordingCatalogWriter:
         return self.write_session
 
 
-class RecordingCatalogItemInventory:
-    """Report Item identifiers already written by the recording Catalog."""
+class RecordingCatalogDatabase:
+    """Record direct database operations requested by the scanner."""
 
     def __init__(self, catalog_writer: RecordingCatalogWriter) -> None:
         self.catalog_writer = catalog_writer
+        self.search_count_cache_invalidations = 0
 
     async def existing_item_ids(self, collection_identifier: str) -> set[str]:
         assert collection_identifier == "eolab-mounted-geotiffs"
         return set(self.catalog_writer.write_session.items)
+
+    async def invalidate_search_count_cache(self) -> None:
+        self.search_count_cache_invalidations += 1
 
 
 def test_scan_continues_after_an_invalid_geotiff(tmp_path: Path) -> None:
@@ -234,11 +238,12 @@ def test_scan_continues_after_an_invalid_geotiff(tmp_path: Path) -> None:
     write_geotiff(tmp_path / "valid.TIF")
     (tmp_path / "invalid.tiff").write_text("not a raster", encoding="utf-8")
     catalog_writer = RecordingCatalogWriter()
+    catalog_database = RecordingCatalogDatabase(catalog_writer)
     scan_manager = ScanManager(
         tmp_path,
         (tmp_path,),
         catalog_writer,
-        RecordingCatalogItemInventory(catalog_writer),
+        catalog_database,
         8,
     )
 
@@ -265,6 +270,7 @@ def test_scan_continues_after_an_invalid_geotiff(tmp_path: Path) -> None:
     assert second_status["alreadyInCatalog"] == 1
     assert len(catalog_writer.write_session.collections) == 1
     assert len(catalog_writer.write_session.items) == 1
+    assert catalog_database.search_count_cache_invalidations == 2
 
 
 def test_scan_combines_multiple_directories_under_one_mount(tmp_path: Path) -> None:
@@ -278,7 +284,7 @@ def test_scan_combines_multiple_directories_under_one_mount(tmp_path: Path) -> N
         tmp_path,
         (observations_path, model_outputs_path),
         catalog_writer,
-        RecordingCatalogItemInventory(catalog_writer),
+        RecordingCatalogDatabase(catalog_writer),
         8,
     )
 
@@ -342,7 +348,7 @@ def test_scan_reads_metadata_concurrently_and_bulk_upserts(
         tmp_path,
         (tmp_path,),
         catalog_writer,
-        RecordingCatalogItemInventory(catalog_writer),
+        RecordingCatalogDatabase(catalog_writer),
         3,
     )
 
@@ -382,7 +388,7 @@ def test_scan_caps_error_details_without_losing_failure_count(
         tmp_path,
         (tmp_path,),
         catalog_writer,
-        RecordingCatalogItemInventory(catalog_writer),
+        RecordingCatalogDatabase(catalog_writer),
         8,
     )
 
@@ -420,11 +426,12 @@ def test_scan_stops_after_a_bulk_catalog_failure(
     catalog_writer = RecordingCatalogWriter(
         RuntimeError("catalog unavailable")
     )
+    catalog_database = RecordingCatalogDatabase(catalog_writer)
     scan_manager = ScanManager(
         tmp_path,
         (tmp_path,),
         catalog_writer,
-        RecordingCatalogItemInventory(catalog_writer),
+        catalog_database,
         8,
     )
 
@@ -445,6 +452,7 @@ def test_scan_stops_after_a_bulk_catalog_failure(
         "path": None,
         "error": "Scan stopped: catalog unavailable",
     }
+    assert catalog_database.search_count_cache_invalidations == 0
 
 
 def test_scan_prevents_overlap(tmp_path: Path) -> None:
@@ -454,7 +462,7 @@ def test_scan_prevents_overlap(tmp_path: Path) -> None:
         tmp_path,
         (tmp_path,),
         catalog_writer,
-        RecordingCatalogItemInventory(catalog_writer),
+        RecordingCatalogDatabase(catalog_writer),
         8,
     )
 

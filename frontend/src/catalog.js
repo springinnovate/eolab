@@ -1,6 +1,36 @@
 const CATALOG_PAGE_SIZE = 20;
 
 /**
+ * Formats the position and total from a STAC ItemCollection.
+ *
+ * @param {Object} itemCollection STAC ItemCollection response.
+ * @param {number} pageNumber Current one-based page number.
+ * @param {boolean} isFiltered Whether the Item Search includes a filter.
+ * @return {string} Human-readable result range and total.
+ */
+export function formatCatalogItemCount(
+  itemCollection,
+  pageNumber,
+  isFiltered,
+) {
+  const returnedItemCount = itemCollection.features.length;
+  const matchedItemCount = itemCollection.numberMatched;
+  const qualifier = isFiltered ? "matching " : "";
+  const itemNoun = matchedItemCount === 1 ? "Item" : "Items";
+  if (returnedItemCount === 0) {
+    return `0 ${qualifier}${itemNoun}`;
+  }
+
+  const firstItemNumber = (pageNumber - 1) * CATALOG_PAGE_SIZE + 1;
+  const lastItemNumber = firstItemNumber + returnedItemCount - 1;
+  const displayedRange = firstItemNumber === lastItemNumber
+    ? firstItemNumber.toLocaleString()
+    : `${firstItemNumber.toLocaleString()}–${lastItemNumber.toLocaleString()}`;
+  const estimatedLabel = itemCollection.numberMatchedEstimated ? " (est.)" : "";
+  return `Showing ${displayedRange} of ${matchedItemCount.toLocaleString()}${estimatedLabel} ${qualifier}${itemNoun}`;
+}
+
+/**
  * Builds a standard CQL2 substring filter for Item titles and descriptions.
  *
  * @param {string} searchText Text entered in the Catalog search field.
@@ -204,6 +234,7 @@ export class CatalogSearchClient {
     this.fetchImplementation = fetchImplementation.bind(globalThis);
     this.activeAbortController = null;
     this.requestSequence = 0;
+    this.numberMatchedEstimated = null;
   }
 
   /**
@@ -213,6 +244,7 @@ export class CatalogSearchClient {
    * @return {Promise<Object|null>} ItemCollection, or null when superseded.
    */
   search(searchText) {
+    this.numberMatchedEstimated = null;
     const searchBody = { limit: CATALOG_PAGE_SIZE };
     const substringFilter = buildSubstringFilter(searchText);
     if (substringFilter !== null) {
@@ -293,6 +325,25 @@ export class CatalogSearchClient {
     if (!Array.isArray(itemCollection.features)) {
       throw new Error("STAC Item Search response has no features array");
     }
+    if (
+      !Number.isInteger(itemCollection.numberMatched) ||
+      itemCollection.numberMatched < itemCollection.features.length
+    ) {
+      throw new Error("STAC Item Search response has no valid numberMatched");
+    }
+    const estimateHeader = searchResponse.headers.get(
+      "X-EOLab-Number-Matched-Estimated",
+    );
+    if (estimateHeader !== null) {
+      if (estimateHeader !== "true" && estimateHeader !== "false") {
+        throw new Error("Catalog response has an invalid count estimate header");
+      }
+      this.numberMatchedEstimated = estimateHeader === "true";
+    }
+    if (this.numberMatchedEstimated === null) {
+      throw new Error("Catalog response has no count estimate header");
+    }
+    itemCollection.numberMatchedEstimated = this.numberMatchedEstimated;
     return itemCollection;
   }
 }
