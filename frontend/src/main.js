@@ -185,7 +185,7 @@ function createCatalogMetadataList(metadata) {
 }
 
 /**
- * Displays one selected STAC Item without interpreting catalog text as HTML.
+ * Displays the selected STAC Item in the inspector.
  *
  * @param {Object|null} item Selected STAC Item, or null for the empty state.
  * @param {Object[]} collections STAC Collections available to the Catalog.
