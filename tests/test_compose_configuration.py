@@ -102,7 +102,9 @@ def test_catalog_migrator_adds_datetime_substring_queryables() -> None:
 
     assert "eolab_datetime_text" in migration
     assert "eolab_end_datetime_text" in migration
-    assert "WHEN MATCHED" not in migration
+    assert "MERGE INTO pgstac.queryables" not in migration
+    assert "IF has_datetime_queryable <> has_end_datetime_queryable" in migration
+    assert "IF NOT has_datetime_queryable THEN" in migration
     assert "NULLIF(content->'properties'->'datetime', 'null'::jsonb)" in migration
     assert "content->'properties'->'start_datetime'" in migration
     assert "eolab_items_datetime_text_trgm_idx" in migration
