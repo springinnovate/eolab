@@ -76,6 +76,99 @@ export function findPaginationLink(itemCollection, relations) {
 }
 
 /**
+ * Builds display details for a STAC Item, including its identity, datetime or
+ * datetime range, geometry, bounding box, projection, raster dimensions,
+ * Assets, and raster bands.
+ *
+ * @param {Object} item STAC Item selected in the result list.
+ * @param {Object[]} collections STAC Collections available to the Catalog.
+ * @return {Object} Text-only metadata grouped for inspector rendering.
+ */
+export function buildCatalogItemDetails(item, collections) {
+  const properties = item.properties;
+  const collection = collections.find(
+    (candidateCollection) => candidateCollection.id === item.collection,
+  );
+  const collectionLabel = collection?.title
+    ? `${collection.title} (${item.collection})`
+    : item.collection;
+  const metadata = [
+    { label: "Item ID", value: item.id },
+    { label: "Collection", value: collectionLabel },
+  ];
+
+  if (properties.datetime === null) {
+    metadata.push({
+      label: "Item datetime range",
+      value: `${properties.start_datetime} – ${properties.end_datetime}`,
+    });
+  } else {
+    metadata.push({ label: "Item datetime", value: properties.datetime });
+  }
+  if (item.geometry !== null) {
+    metadata.push({ label: "Geometry", value: item.geometry.type });
+  }
+  if (item.bbox !== undefined) {
+    metadata.push({ label: "Bounding box", value: item.bbox.join(", ") });
+  }
+  if (properties["proj:epsg"] !== undefined) {
+    metadata.push({
+      label: "Coordinate reference system",
+      value: `EPSG:${properties["proj:epsg"]}`,
+    });
+  } else if (properties["proj:wkt2"] !== undefined) {
+    metadata.push({
+      label: "Coordinate reference system",
+      value: properties["proj:wkt2"],
+    });
+  }
+  if (properties["proj:shape"] !== undefined) {
+    const [height, width] = properties["proj:shape"];
+    metadata.push({
+      label: "Raster dimensions",
+      value: `${width} × ${height} pixels`,
+    });
+  }
+
+  const assets = Object.entries(item.assets).map(([assetKey, asset]) => {
+    const assetMetadata = [{ label: "Location", value: asset.href }];
+    if (asset.type !== undefined) {
+      assetMetadata.push({ label: "Media type", value: asset.type });
+    }
+    if (asset.roles !== undefined) {
+      assetMetadata.push({ label: "Roles", value: asset.roles.join(", ") });
+    }
+    if (asset.updated !== undefined) {
+      assetMetadata.push({ label: "File modified", value: asset.updated });
+    }
+
+    const bands = (asset["raster:bands"] ?? []).map((band, bandIndex) => {
+      const bandMetadata = [
+        { label: "Data type", value: band.data_type },
+      ];
+      if (Object.hasOwn(band, "nodata")) {
+        bandMetadata.push({ label: "Nodata", value: String(band.nodata) });
+      }
+      return { title: `Band ${bandIndex + 1}`, metadata: bandMetadata };
+    });
+
+    return {
+      key: assetKey,
+      title: asset.title ?? assetKey,
+      metadata: assetMetadata,
+      bands,
+    };
+  });
+
+  return {
+    title: properties.title ?? item.id,
+    description: properties.description ?? null,
+    metadata,
+    assets,
+  };
+}
+
+/**
  * Issues standard STAC Item Search requests while cancelling stale work.
  */
 export class CatalogSearchClient {

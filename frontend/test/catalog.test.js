@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildCatalogItemDetails,
   buildSubstringFilter,
   CatalogFootprintController,
   CatalogSearchClient,
@@ -152,6 +153,107 @@ test("findPaginationLink returns standard STAC pagination relations", () => {
 
   assert.equal(findPaginationLink(document, ["next"]), nextLink);
   assert.equal(findPaginationLink(document, ["prev"]), previousLink);
+});
+
+test("buildCatalogItemDetails presents scanned GeoTIFF metadata", () => {
+  const inspector = buildCatalogItemDetails(
+    {
+      id: "stable-item-id",
+      collection: "eolab-mounted-geotiffs",
+      bbox: [-123, 48.8, -122.7, 49],
+      geometry: { type: "Polygon", coordinates: [] },
+      properties: {
+        datetime: "2025-02-11T17:31:52Z",
+        title: "Model Outputs/grassland_2002.tif",
+        description: "Item datetime uses the filesystem modification time.",
+        "proj:epsg": 4326,
+        "proj:shape": [2, 3],
+      },
+      assets: {
+        data: {
+          href: "file:///data/Model Outputs/grassland_2002.tif",
+          type: "image/tiff; application=geotiff",
+          title: "Model Outputs/grassland_2002.tif",
+          roles: ["data"],
+          updated: "2025-02-11T17:31:52Z",
+          "raster:bands": [{ data_type: "uint8", nodata: 0 }],
+        },
+      },
+    },
+    [{ id: "eolab-mounted-geotiffs", title: "Mounted GeoTIFFs" }],
+  );
+
+  assert.equal(inspector.title, "Model Outputs/grassland_2002.tif");
+  assert.equal(
+    inspector.description,
+    "Item datetime uses the filesystem modification time.",
+  );
+  assert.deepEqual(inspector.metadata, [
+    { label: "Item ID", value: "stable-item-id" },
+    {
+      label: "Collection",
+      value: "Mounted GeoTIFFs (eolab-mounted-geotiffs)",
+    },
+    { label: "Item datetime", value: "2025-02-11T17:31:52Z" },
+    { label: "Geometry", value: "Polygon" },
+    { label: "Bounding box", value: "-123, 48.8, -122.7, 49" },
+    { label: "Coordinate reference system", value: "EPSG:4326" },
+    { label: "Raster dimensions", value: "3 × 2 pixels" },
+  ]);
+  assert.deepEqual(inspector.assets, [
+    {
+      key: "data",
+      title: "Model Outputs/grassland_2002.tif",
+      metadata: [
+        {
+          label: "Location",
+          value: "file:///data/Model Outputs/grassland_2002.tif",
+        },
+        { label: "Media type", value: "image/tiff; application=geotiff" },
+        { label: "Roles", value: "data" },
+        { label: "File modified", value: "2025-02-11T17:31:52Z" },
+      ],
+      bands: [
+        {
+          title: "Band 1",
+          metadata: [
+            { label: "Data type", value: "uint8" },
+            { label: "Nodata", value: "0" },
+          ],
+        },
+      ],
+    },
+  ]);
+});
+
+test("buildCatalogItemDetails omits unavailable optional metadata", () => {
+  const inspector = buildCatalogItemDetails(
+    {
+      id: "minimal-item",
+      collection: "sample",
+      geometry: null,
+      properties: {
+        datetime: null,
+        start_datetime: "2024-06-15T00:00:00Z",
+        end_datetime: "2024-06-16T00:00:00Z",
+        title: "<img src=x onerror=alert(1)>",
+      },
+      assets: {},
+    },
+    [],
+  );
+
+  assert.equal(inspector.title, "<img src=x onerror=alert(1)>");
+  assert.equal(inspector.description, null);
+  assert.deepEqual(inspector.metadata, [
+    { label: "Item ID", value: "minimal-item" },
+    { label: "Collection", value: "sample" },
+    {
+      label: "Item datetime range",
+      value: "2024-06-15T00:00:00Z – 2024-06-16T00:00:00Z",
+    },
+  ]);
+  assert.deepEqual(inspector.assets, []);
 });
 
 test("createDebouncedAction runs only the latest scheduled action", () => {

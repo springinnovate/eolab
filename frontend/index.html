@@ -44,39 +44,77 @@
 
         <div class="panel-content">
           <section class="tab-panel is-active" id="panel-catalog" role="tabpanel">
-            <p class="section-label">Data discovery</p>
-            <h2>Catalog</h2>
-            <p class="section-copy" id="catalog-message">Checking catalog configuration.</p>
-            <div class="catalog-toolbar">
-              <strong id="catalog-summary">Connecting to the STAC API</strong>
-              <button class="secondary-button" id="refresh-catalog" type="button">Refresh</button>
-            </div>
-            <label class="catalog-search" for="catalog-search">
-              <span>Search catalog</span>
-              <input
-                id="catalog-search"
-                type="search"
-                autocomplete="off"
-                placeholder="Filename, title, description, or keyword"
-              />
-            </label>
-            <section class="scan-card" aria-labelledby="scan-heading">
-              <div class="catalog-toolbar">
-                <strong id="scan-heading">Mounted GeoTIFFs</strong>
-                <button class="secondary-button" id="start-scan" type="button">Scan directory</button>
+            <div class="catalog-heading">
+              <div>
+                <p class="section-label">Data discovery</p>
+                <h2>Catalog</h2>
               </div>
-              <p id="scan-status" class="scan-status" role="status">No scan has been started.</p>
-              <progress id="scan-progress" max="1" value="0" hidden></progress>
-              <p id="scan-counts" class="scan-counts"></p>
-              <ul id="scan-errors" class="scan-errors" aria-live="polite"></ul>
-            </section>
-            <div class="catalog-results" id="catalog-results" aria-live="polite"></div>
-            <nav class="catalog-pagination" aria-label="Catalog result pages">
-              <button class="secondary-button" id="previous-catalog-page" type="button" disabled>Previous</button>
-              <span id="catalog-page-status">Page 1</span>
-              <button class="secondary-button" id="next-catalog-page" type="button" disabled>Next</button>
-            </nav>
-            <a class="catalog-link" id="catalog-link" target="_blank" rel="noreferrer">Open STAC API</a>
+              <button
+                class="secondary-button"
+                id="toggle-catalog-workspace"
+                type="button"
+                aria-controls="catalog-item-inspector"
+                aria-expanded="false"
+              >
+                Expand catalog
+              </button>
+            </div>
+            <p class="section-copy" id="catalog-message">Checking catalog configuration.</p>
+            <div class="catalog-layout" id="catalog-layout">
+              <div class="catalog-browser">
+                <div class="catalog-toolbar">
+                  <strong id="catalog-summary">Connecting to the STAC API</strong>
+                  <button class="secondary-button" id="refresh-catalog" type="button">Refresh</button>
+                </div>
+                <label class="catalog-search" for="catalog-search">
+                  <span>Search catalog</span>
+                  <input
+                    id="catalog-search"
+                    type="search"
+                    autocomplete="off"
+                    placeholder="Filename, title, description, or keyword"
+                  />
+                </label>
+                <section class="scan-card" aria-labelledby="scan-heading">
+                  <div class="catalog-toolbar">
+                    <strong id="scan-heading">Mounted GeoTIFFs</strong>
+                    <button class="secondary-button" id="start-scan" type="button">Scan directory</button>
+                  </div>
+                  <p id="scan-status" class="scan-status" role="status">No scan has been started.</p>
+                  <progress id="scan-progress" max="1" value="0" hidden></progress>
+                  <p id="scan-counts" class="scan-counts"></p>
+                  <ul id="scan-errors" class="scan-errors" aria-live="polite"></ul>
+                </section>
+                <div class="catalog-results" id="catalog-results" aria-live="polite"></div>
+                <nav class="catalog-pagination" aria-label="Catalog result pages">
+                  <button class="secondary-button" id="previous-catalog-page" type="button" disabled>Previous</button>
+                  <span id="catalog-page-status">Page 1</span>
+                  <button class="secondary-button" id="next-catalog-page" type="button" disabled>Next</button>
+                </nav>
+                <a class="catalog-link" id="catalog-link" target="_blank" rel="noreferrer">Open STAC API</a>
+              </div>
+              <aside
+                class="catalog-inspector"
+                id="catalog-item-inspector"
+                aria-hidden="true"
+                aria-labelledby="catalog-inspector-heading"
+              >
+                <p class="section-label">Selected record</p>
+                <h3 id="catalog-inspector-heading">Item inspector</h3>
+                <div id="catalog-inspector-content">
+                  <div class="catalog-inspector-empty">
+                    <strong>No item selected</strong>
+                    <p>Select a Catalog result to inspect its metadata.</p>
+                  </div>
+                </div>
+                <p
+                  class="visually-hidden"
+                  id="catalog-inspector-status"
+                  role="status"
+                  aria-live="polite"
+                ></p>
+              </aside>
+            </div>
           </section>
 
           <section class="tab-panel" id="panel-processing" role="tabpanel" hidden>
