@@ -130,22 +130,9 @@ function applyAppGlobalConfiguration(appGlobalConfiguration) {
  * @return {L.GeoJSON} Leaflet footprint layer.
  */
 function createCatalogFootprintLayer(item, visualState) {
-  const styles = {
-    selected: {
-      color: "#007ac2",
-      fillColor: "#007ac2",
-      fillOpacity: 0.16,
-      weight: 2.5,
-    },
-    preview: {
-      color: "#72bde5",
-      dashArray: "5 5",
-      fillColor: "#72bde5",
-      fillOpacity: 0.06,
-      weight: 1.5,
-    },
-  };
-  return L.geoJSON(item, { style: styles[visualState] });
+  return L.geoJSON(item, {
+    style: { className: `catalog-footprint is-${visualState}` },
+  });
 }
 
 /**

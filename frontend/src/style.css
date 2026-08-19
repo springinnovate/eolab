@@ -415,6 +415,21 @@ h2 {
   box-shadow: inset 3px 0 0 var(--brand);
 }
 
+.catalog-footprint.is-selected {
+  fill: var(--brand);
+  fill-opacity: 0.16;
+  stroke: var(--brand);
+  stroke-width: 2.5;
+}
+
+.catalog-footprint.is-preview {
+  fill: #72bde5;
+  fill-opacity: 0.06;
+  stroke: #72bde5;
+  stroke-dasharray: 5 5;
+  stroke-width: 1.5;
+}
+
 .catalog-result strong {
   font-size: 0.86rem;
 }
