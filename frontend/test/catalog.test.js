@@ -40,6 +40,25 @@ test("CatalogSearchClient sends standard STAC q search", async () => {
   });
 });
 
+test("CatalogSearchClient invokes fetch with the global receiver", async () => {
+  let invocationReceiver;
+  async function receiverSensitiveFetch() {
+    invocationReceiver = this;
+    if (this !== globalThis) {
+      throw new TypeError("Illegal invocation");
+    }
+    return new Response(
+      JSON.stringify({ type: "FeatureCollection", features: [], links: [] }),
+      { status: 200 },
+    );
+  }
+  const client = new CatalogSearchClient("/stac", receiverSensitiveFetch);
+
+  await client.search("");
+
+  assert.equal(invocationReceiver, globalThis);
+});
+
 test("CatalogSearchClient follows the provider pagination contract", async () => {
   let capturedRequest;
   const client = new CatalogSearchClient(

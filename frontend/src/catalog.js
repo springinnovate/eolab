@@ -65,7 +65,7 @@ export class CatalogSearchClient {
    */
   constructor(catalogUrl, fetchImplementation = globalThis.fetch) {
     this.catalogUrl = catalogUrl.replace(/\/$/, "");
-    this.fetchImplementation = fetchImplementation;
+    this.fetchImplementation = fetchImplementation.bind(globalThis);
     this.activeAbortController = null;
     this.requestSequence = 0;
   }
