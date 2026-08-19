@@ -273,62 +273,6 @@ export class CatalogSearchClient {
 }
 
 /**
- * Owns the explicit compact or expanded Catalog layout state.
- */
-export class CatalogWorkspaceController {
-  /**
-   * @param {HTMLElement} appElement Application layout root.
-   * @param {HTMLButtonElement} toggleButton Catalog layout toggle.
-   * @param {HTMLElement} inspectorElement Item inspector region.
-   * @param {Function} onLayoutChange Called after layout state changes.
-   */
-  constructor(appElement, toggleButton, inspectorElement, onLayoutChange) {
-    this.appElement = appElement;
-    this.toggleButton = toggleButton;
-    this.inspectorElement = inspectorElement;
-    this.onLayoutChange = onLayoutChange;
-    this.isExpanded = false;
-  }
-
-  /** Switches between the compact panel and expanded Catalog workspace. */
-  toggle() {
-    this.setExpanded(!this.isExpanded);
-  }
-
-  /**
-   * @param {boolean} isExpanded Whether the Catalog workspace is expanded.
-   * @return {void}
-   */
-  setExpanded(isExpanded) {
-    if (isExpanded === this.isExpanded) {
-      return;
-    }
-    this.isExpanded = isExpanded;
-    this.appElement.classList.toggle("is-catalog-workspace", isExpanded);
-    this.toggleButton.setAttribute("aria-expanded", String(isExpanded));
-    this.toggleButton.textContent = isExpanded
-      ? "Return to map"
-      : "Expand catalog";
-    this.inspectorElement.setAttribute("aria-hidden", String(!isExpanded));
-    this.onLayoutChange();
-  }
-
-  /**
-   * Returns an expanded Catalog to the map layout when Escape is pressed.
-   *
-   * @param {KeyboardEvent} keyboardEvent Document keyboard event.
-   * @return {void}
-   */
-  handleKeyDown(keyboardEvent) {
-    if (keyboardEvent.key === "Escape" && this.isExpanded) {
-      keyboardEvent.preventDefault();
-      this.setExpanded(false);
-      this.toggleButton.focus();
-    }
-  }
-}
-
-/**
  * Manages the persistent selected footprint and transient preview footprint.
  */
 export class CatalogFootprintController {

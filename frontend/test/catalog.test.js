@@ -6,7 +6,6 @@ import {
   buildSubstringFilter,
   CatalogFootprintController,
   CatalogSearchClient,
-  CatalogWorkspaceController,
   createDebouncedAction,
   findPaginationLink,
 } from "../src/catalog.js";
@@ -255,69 +254,6 @@ test("buildCatalogItemDetails omits unavailable optional metadata", () => {
     },
   ]);
   assert.deepEqual(inspector.assets, []);
-});
-
-test("CatalogWorkspaceController expands and returns with Escape", () => {
-  const classes = new Set();
-  const attributes = new Map();
-  let layoutChangeCount = 0;
-  let focusCount = 0;
-  let prevented = false;
-  const appElement = {
-    classList: {
-      toggle(className, isPresent) {
-        if (isPresent) {
-          classes.add(className);
-        } else {
-          classes.delete(className);
-        }
-      },
-    },
-  };
-  const toggleButton = {
-    textContent: "Expand catalog",
-    setAttribute(name, value) {
-      attributes.set(name, value);
-    },
-    focus() {
-      focusCount += 1;
-    },
-  };
-  const inspectorElement = {
-    setAttribute(name, value) {
-      attributes.set(`inspector:${name}`, value);
-    },
-  };
-  const workspace = new CatalogWorkspaceController(
-    appElement,
-    toggleButton,
-    inspectorElement,
-    () => {
-      layoutChangeCount += 1;
-    },
-  );
-
-  workspace.toggle();
-
-  assert.equal(classes.has("is-catalog-workspace"), true);
-  assert.equal(attributes.get("aria-expanded"), "true");
-  assert.equal(attributes.get("inspector:aria-hidden"), "false");
-  assert.equal(toggleButton.textContent, "Return to map");
-
-  workspace.handleKeyDown({
-    key: "Escape",
-    preventDefault() {
-      prevented = true;
-    },
-  });
-
-  assert.equal(classes.has("is-catalog-workspace"), false);
-  assert.equal(attributes.get("aria-expanded"), "false");
-  assert.equal(attributes.get("inspector:aria-hidden"), "true");
-  assert.equal(toggleButton.textContent, "Expand catalog");
-  assert.equal(layoutChangeCount, 2);
-  assert.equal(focusCount, 1);
-  assert.equal(prevented, true);
 });
 
 test("createDebouncedAction runs only the latest scheduled action", () => {

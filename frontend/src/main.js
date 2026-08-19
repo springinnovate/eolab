@@ -4,7 +4,6 @@ import {
     buildCatalogItemDetails,
     CatalogFootprintController,
     CatalogSearchClient,
-    CatalogWorkspaceController,
     createDebouncedAction,
     findPaginationLink
 } from "./catalog.js";
@@ -635,10 +634,10 @@ async function initializeScanner(refreshCatalog) {
 /**
  * Enables selection among the workspace tabs.
  *
- * @param {CatalogWorkspaceController} catalogWorkspace Catalog layout state.
+ * @param {Function} setCatalogWorkspaceExpanded Sets the Catalog layout state.
  * @return {void}
  */
-function initializeWorkspaceTabs(catalogWorkspace) {
+function initializeWorkspaceTabs(setCatalogWorkspaceExpanded) {
     const workspaceTabButtons = document.querySelectorAll(".tab-button");
     const workspaceTabPanels = document.querySelectorAll(".tab-panel");
 
@@ -652,7 +651,7 @@ function initializeWorkspaceTabs(catalogWorkspace) {
         const selectedTabButton = tabSelectionEvent.currentTarget;
         const selectedPanelName = selectedTabButton.dataset.panel;
         if (selectedPanelName !== "catalog") {
-            catalogWorkspace.setExpanded(false);
+            setCatalogWorkspaceExpanded(false);
         }
 
         for (const candidateTabButton of workspaceTabButtons) {
@@ -681,7 +680,7 @@ function initializeWorkspaceTabs(catalogWorkspace) {
  * Enables collapsing and reopening the control panel.
  *
  * @param {L.Map} leafletMap The initialized Leaflet map.
- * @return {CatalogWorkspaceController} Catalog layout controller.
+ * @return {Function} Sets whether the Catalog workspace is expanded.
  */
 function initializeControlPanel(leafletMap) {
     const appElement = document.querySelector("#app");
@@ -693,17 +692,33 @@ function initializeControlPanel(leafletMap) {
     const catalogInspector = document.querySelector(
         "#catalog-item-inspector"
     );
-    const catalogWorkspace = new CatalogWorkspaceController(
-        appElement,
-        catalogWorkspaceToggle,
-        catalogInspector,
-        () => {
-            window.setTimeout(
-                () => leafletMap.invalidateSize(),
-                CONTROL_PANEL_TRANSITION_MILLISECONDS
-            );
+    let catalogWorkspaceIsExpanded = false;
+
+    /**
+     * Sets whether the Catalog uses the expanded workspace.
+     *
+     * @param {boolean} isExpanded Whether the workspace is expanded.
+     * @return {void}
+     */
+    function setCatalogWorkspaceExpanded(isExpanded) {
+        if (isExpanded === catalogWorkspaceIsExpanded) {
+            return;
         }
-    );
+        catalogWorkspaceIsExpanded = isExpanded;
+        appElement.classList.toggle("is-catalog-workspace", isExpanded);
+        catalogWorkspaceToggle.setAttribute(
+            "aria-expanded",
+            String(isExpanded)
+        );
+        catalogWorkspaceToggle.textContent = isExpanded
+            ? "Return to map"
+            : "Expand catalog";
+        catalogInspector.setAttribute("aria-hidden", String(!isExpanded));
+        window.setTimeout(
+            () => leafletMap.invalidateSize(),
+            CONTROL_PANEL_TRANSITION_MILLISECONDS
+        );
+    }
 
     /**
      * Sets whether the control panel is collapsed.
@@ -712,25 +727,30 @@ function initializeControlPanel(leafletMap) {
      * @return {void}
      */
     function setControlPanelCollapsed(isCollapsed) {
+        const catalogWorkspaceWasExpanded = catalogWorkspaceIsExpanded;
         if (isCollapsed) {
-            catalogWorkspace.setExpanded(false);
+            setCatalogWorkspaceExpanded(false);
         }
         controlPanelElement.classList.toggle("is-collapsed", isCollapsed);
         openPanelButton.hidden = !isCollapsed;
-        window.setTimeout(
-            () => leafletMap.invalidateSize(),
-            CONTROL_PANEL_TRANSITION_MILLISECONDS
-        );
+        if (!catalogWorkspaceWasExpanded) {
+            window.setTimeout(
+                () => leafletMap.invalidateSize(),
+                CONTROL_PANEL_TRANSITION_MILLISECONDS
+            );
+        }
     }
 
-    catalogWorkspaceToggle.addEventListener(
-        "click",
-        catalogWorkspace.toggle.bind(catalogWorkspace)
-    );
-    document.addEventListener(
-        "keydown",
-        catalogWorkspace.handleKeyDown.bind(catalogWorkspace)
-    );
+    catalogWorkspaceToggle.addEventListener("click", () => {
+        setCatalogWorkspaceExpanded(!catalogWorkspaceIsExpanded);
+    });
+    document.addEventListener("keydown", (keyboardEvent) => {
+        if (keyboardEvent.key === "Escape" && catalogWorkspaceIsExpanded) {
+            keyboardEvent.preventDefault();
+            setCatalogWorkspaceExpanded(false);
+            catalogWorkspaceToggle.focus();
+        }
+    });
     document
         .querySelector("#collapse-panel")
         .addEventListener("click", setControlPanelCollapsed.bind(null, true));
@@ -738,7 +758,7 @@ function initializeControlPanel(leafletMap) {
         "click",
         setControlPanelCollapsed.bind(null, false)
     );
-    return catalogWorkspace;
+    return setCatalogWorkspaceExpanded;
 }
 
 /**
@@ -750,8 +770,8 @@ async function startApplication() {
     const appGlobalConfiguration = await loadAppGlobalConfiguration();
     applyAppGlobalConfiguration(appGlobalConfiguration);
     const leafletMap = initializeMap(appGlobalConfiguration);
-    const catalogWorkspace = initializeControlPanel(leafletMap);
-    initializeWorkspaceTabs(catalogWorkspace);
+    const setCatalogWorkspaceExpanded = initializeControlPanel(leafletMap);
+    initializeWorkspaceTabs(setCatalogWorkspaceExpanded);
     const refreshCatalog = await initializeCatalog(
         appGlobalConfiguration,
         leafletMap
