@@ -41,3 +41,45 @@ def test_internal_stac_api_enables_writes_for_scanning() -> None:
     compose = COMPOSE_PATH.read_text(encoding="utf-8")
 
     assert '"ENABLE_TRANSACTIONS_EXTENSIONS=TRUE"' in compose
+
+
+def test_catalog_migrator_packages_application_migrations() -> None:
+    """Apply EOLab indexes after the pinned pgSTAC schema migration."""
+    repository_root = COMPOSE_PATH.parent
+    compose = COMPOSE_PATH.read_text(encoding="utf-8")
+    dockerfile = (repository_root / "Dockerfile.catalog-migrate").read_text(
+        encoding="utf-8"
+    )
+    migration_script = (repository_root / "catalog" / "migrate.sh").read_text(
+        encoding="utf-8"
+    )
+    index_migration = (
+        repository_root
+        / "catalog"
+        / "migrations"
+        / "0001_item_substring_indexes.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "dockerfile: Dockerfile.catalog-migrate" in compose
+    assert "pypgstac migrate" in migration_script
+    assert "psql --set=ON_ERROR_STOP=1" in migration_script
+    assert "COPY catalog/migrations/ /catalog/migrations/" in dockerfile
+    assert "pgstac.get_version() <> '0.9.12'" in index_migration
+    assert "CREATE EXTENSION IF NOT EXISTS pg_trgm" in index_migration
+    assert "eolab_items_title_trgm_idx" in index_migration
+    assert "eolab_items_description_trgm_idx" in index_migration
+    assert index_migration.count("USING GIN") == 2
+    assert index_migration.count("gin_trgm_ops") == 2
+    assert "upper(pgstac.to_text(content->'properties'->'title'))" in index_migration
+    assert (
+        "upper(pgstac.to_text(content->'properties'->'description'))"
+        in index_migration
+    )
+
+
+def test_stac_api_uses_the_pinned_upstream_image() -> None:
+    """Use upstream CQL2 Filter support without a custom API image."""
+    compose = COMPOSE_PATH.read_text(encoding="utf-8")
+
+    assert "stac-fastapi-pgstac:6.3.1@sha256:" in compose
+    assert "dockerfile: Dockerfile.stac-api" not in compose

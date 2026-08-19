@@ -51,6 +51,15 @@
               <strong id="catalog-summary">Connecting to the STAC API</strong>
               <button class="secondary-button" id="refresh-catalog" type="button">Refresh</button>
             </div>
+            <label class="catalog-search" for="catalog-search">
+              <span>Search catalog</span>
+              <input
+                id="catalog-search"
+                type="search"
+                autocomplete="off"
+                placeholder="Filename, title, description, or keyword"
+              />
+            </label>
             <section class="scan-card" aria-labelledby="scan-heading">
               <div class="catalog-toolbar">
                 <strong id="scan-heading">Mounted GeoTIFFs</strong>
@@ -62,6 +71,11 @@
               <ul id="scan-errors" class="scan-errors" aria-live="polite"></ul>
             </section>
             <div class="catalog-results" id="catalog-results" aria-live="polite"></div>
+            <nav class="catalog-pagination" aria-label="Catalog result pages">
+              <button class="secondary-button" id="previous-catalog-page" type="button" disabled>Previous</button>
+              <span id="catalog-page-status">Page 1</span>
+              <button class="secondary-button" id="next-catalog-page" type="button" disabled>Next</button>
+            </nav>
             <a class="catalog-link" id="catalog-link" target="_blank" rel="noreferrer">Open STAC API</a>
           </section>
 

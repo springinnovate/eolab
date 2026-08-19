@@ -51,6 +51,10 @@ Scans create or update the `eolab-mounted-geotiffs` STAC Collection. Item identi
 
 The scanner uses `ACQUISITIONDATETIME` from GDAL's `IMAGERY` metadata domain when it contains an RFC 3339 timestamp with a UTC offset. Otherwise it uses the source file's filesystem modification time as the required STAC Item `datetime`, records the same value as `updated` on the data Asset, and explains the fallback in the Item description. Filesystem creation time is not used because its meaning differs among operating systems. A malformed `ACQUISITIONDATETIME` is reported as a file failure rather than guessed or silently replaced.
 
+## Search the catalog
+
+The Catalog search finds case-insensitive matches in Item filenames, relative paths, and descriptions. Enter any part of a filename or description; for example, `2002` matches both `grassland_2002.tif` and a description containing `2002`. Clear the search field to show the complete catalog.
+
 ## How to reset the database
 
 Deleting the database volume permanently deletes the catalog. To intentionally discard the catalog and start over, stop the deployment, delete the volume named by `EOLAB_DATABASE_VOLUME_NAME`, and deploy again. PostgreSQL creates a new empty database during startup.

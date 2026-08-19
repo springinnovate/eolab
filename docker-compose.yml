@@ -30,7 +30,9 @@ services:
 
   # Initializes pgSTAC in a new database and applies schema upgrades thereafter.
   pgstac-migrate:
-    image: ghcr.io/stac-utils/pgstac-pypgstac:v0.9.12@sha256:672faad776b55afe15fadb27589c390c4fc93de5bc73e8889d2c29a600c5dba4
+    build:
+      context: .
+      dockerfile: Dockerfile.catalog-migrate
     restart: "no"
     environment:
       - "PGUSER=eolab"
@@ -41,9 +43,6 @@ services:
     depends_on:
       database:
         condition: service_healthy
-    command:
-      - pypgstac
-      - migrate
 
   stac-api:
     image: ghcr.io/stac-utils/stac-fastapi-pgstac:6.3.1@sha256:db117b91302f7983ce4e07658768a6e8d2f6716613252a15f5dcdbda8dae9883

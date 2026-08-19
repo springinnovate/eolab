@@ -37,18 +37,20 @@ body,
 }
 
 button,
-a {
+a,
+input {
   font: inherit;
 }
 
 button:focus-visible,
-a:focus-visible {
+a:focus-visible,
+input:focus-visible {
   outline: 2px solid var(--brand);
   outline-offset: 2px;
 }
 
 button:disabled {
-  cursor: wait;
+  cursor: not-allowed;
   opacity: 0.55;
 }
 
@@ -306,6 +308,47 @@ h2 {
   gap: 9px;
 }
 
+.catalog-search {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 16px;
+  color: var(--text-2);
+  font-size: 0.74rem;
+  font-weight: 650;
+}
+
+.catalog-search input {
+  width: 100%;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  padding: 9px 10px;
+  color: var(--text-1);
+  font-size: 0.8rem;
+  font-weight: 400;
+}
+
+.catalog-search input::placeholder {
+  color: var(--text-3);
+}
+
+.catalog-pagination {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.catalog-pagination .secondary-button:last-child {
+  justify-self: end;
+}
+
+.catalog-pagination span {
+  color: var(--text-3);
+  font-size: 0.72rem;
+}
+
 .scan-card {
   margin-bottom: 16px;
   border: 1px solid var(--border-2);
@@ -364,6 +407,27 @@ h2 {
 .catalog-result:hover {
   border-color: var(--brand);
   background: #f2f9fd;
+}
+
+.catalog-result.is-selected {
+  border-color: var(--brand);
+  background: #e5f4fc;
+  box-shadow: inset 3px 0 0 var(--brand);
+}
+
+.catalog-footprint.is-selected {
+  fill: var(--brand);
+  fill-opacity: 0.16;
+  stroke: var(--brand);
+  stroke-width: 2.5;
+}
+
+.catalog-footprint.is-preview {
+  fill: #72bde5;
+  fill-opacity: 0.06;
+  stroke: #72bde5;
+  stroke-dasharray: 5 5;
+  stroke-width: 1.5;
 }
 
 .catalog-result strong {

@@ -104,6 +104,17 @@ def test_item_identifier_is_stable_for_relative_path(tmp_path: Path) -> None:
     assert first_item["id"] == second_item["id"]
 
 
+def test_geotiff_title_preserves_relative_filename(tmp_path: Path) -> None:
+    """Preserve the literal relative path used by Catalog substring search."""
+    geotiff_path = tmp_path / "Model Outputs" / "grassland_2002.tif"
+    write_geotiff(geotiff_path)
+
+    item = build_stac_item(tmp_path, geotiff_path)
+
+    assert item["properties"]["title"] == "Model Outputs/grassland_2002.tif"
+    assert "keywords" not in item["properties"]
+
+
 class RecordingCatalogSession:
     """Record catalog writes while providing an async context manager."""
 
