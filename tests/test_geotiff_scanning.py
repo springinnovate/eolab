@@ -118,9 +118,11 @@ def test_geotiff_title_preserves_relative_filename(tmp_path: Path) -> None:
 class RecordingCatalogSession:
     """Record catalog writes while providing an async context manager."""
 
-    def __init__(self) -> None:
+    def __init__(self, item_error: Exception | None = None) -> None:
         self.collections: dict[str, dict[str, Any]] = {}
         self.items: dict[str, dict[str, Any]] = {}
+        self.item_batches: list[list[dict[str, Any]]] = []
+        self.item_error = item_error
 
     async def __aenter__(self) -> "RecordingCatalogSession":
         return self
@@ -131,15 +133,18 @@ class RecordingCatalogSession:
     async def upsert_collection(self, collection: dict[str, Any]) -> None:
         self.collections[collection["id"]] = collection
 
-    async def upsert_item(self, item: dict[str, Any]) -> None:
-        self.items[item["id"]] = item
+    async def upsert_items(self, items: list[dict[str, Any]]) -> None:
+        self.item_batches.append(items)
+        if self.item_error is not None:
+            raise self.item_error
+        self.items.update((item["id"], item) for item in items)
 
 
 class RecordingCatalogWriter:
     """Return the same in-memory write session for every scan."""
 
-    def __init__(self) -> None:
-        self.write_session = RecordingCatalogSession()
+    def __init__(self, item_error: Exception | None = None) -> None:
+        self.write_session = RecordingCatalogSession(item_error)
 
     def session(self) -> AbstractAsyncContextManager[RecordingCatalogSession]:
         return self.write_session
@@ -204,6 +209,137 @@ def test_scan_combines_multiple_directories_under_one_mount(tmp_path: Path) -> N
     } == {"observations/result.tif", "model_outputs/result.tif"}
 
 
+def test_scan_reads_metadata_concurrently_and_bulk_upserts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bound metadata concurrency and write 205 Items as 100, 100, and 5."""
+    for item_index in range(205):
+        (tmp_path / f"item-{item_index:03}.tif").touch()
+
+    active_metadata_calls = 0
+    maximum_metadata_calls = 0
+
+    def build_item(source_root: Path, geotiff_path: Path) -> dict[str, Any]:
+        relative_path = geotiff_path.relative_to(source_root).as_posix()
+        return {
+            "id": relative_path,
+            "collection": "eolab-mounted-geotiffs",
+        }
+
+    async def yielding_to_thread(function: Any, *args: Any) -> Any:
+        nonlocal active_metadata_calls, maximum_metadata_calls
+        if function is not build_item:
+            return function(*args)
+
+        active_metadata_calls += 1
+        maximum_metadata_calls = max(maximum_metadata_calls, active_metadata_calls)
+        await asyncio.sleep(0)
+        try:
+            return function(*args)
+        finally:
+            active_metadata_calls -= 1
+
+    monkeypatch.setattr("eolab_app.scanning.build_stac_item", build_item)
+    monkeypatch.setattr("eolab_app.scanning.asyncio.to_thread", yielding_to_thread)
+    catalog_writer = RecordingCatalogWriter()
+    scan_manager = ScanManager(tmp_path, (tmp_path,), catalog_writer)
+
+    async def run_scan() -> dict[str, Any]:
+        await scan_manager.start()
+        while scan_manager.status()["state"] in {"discovering", "scanning"}:
+            await asyncio.sleep(0)
+        return scan_manager.status()
+
+    status = asyncio.run(run_scan())
+
+    assert maximum_metadata_calls == 8
+    assert [
+        len(item_batch)
+        for item_batch in catalog_writer.write_session.item_batches
+    ] == [100, 100, 5]
+    assert status["processed"] == 205
+    assert status["indexed"] == 205
+    assert status["failed"] == 0
+
+
+def test_scan_caps_error_details_without_losing_failure_count(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep status polling bounded when many files cannot be read."""
+    for item_index in range(105):
+        (tmp_path / f"invalid-{item_index:03}.tif").touch()
+
+    def reject_item(source_root: Path, geotiff_path: Path) -> dict[str, Any]:
+        raise ValueError("invalid raster")
+
+    monkeypatch.setattr("eolab_app.scanning.build_stac_item", reject_item)
+    scan_manager = ScanManager(
+        tmp_path,
+        (tmp_path,),
+        RecordingCatalogWriter(),
+    )
+
+    async def run_scan() -> dict[str, Any]:
+        await scan_manager.start()
+        while scan_manager.status()["state"] in {"discovering", "scanning"}:
+            await asyncio.sleep(0.01)
+        return scan_manager.status()
+
+    status = asyncio.run(run_scan())
+
+    assert status["state"] == "completed"
+    assert status["processed"] == 105
+    assert status["failed"] == 105
+    assert len(status["errors"]) == 100
+    assert status["errorsTruncated"] is True
+
+
+def test_scan_stops_after_a_bulk_catalog_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stop and cancel queued work after a systemic catalog failure."""
+    for item_index in range(500):
+        (tmp_path / f"item-{item_index:03}.tif").touch()
+
+    def build_item(source_root: Path, geotiff_path: Path) -> dict[str, Any]:
+        relative_path = geotiff_path.relative_to(source_root).as_posix()
+        return {
+            "id": relative_path,
+            "collection": "eolab-mounted-geotiffs",
+        }
+
+    monkeypatch.setattr("eolab_app.scanning.build_stac_item", build_item)
+    catalog_writer = RecordingCatalogWriter(
+        RuntimeError("catalog unavailable")
+    )
+    scan_manager = ScanManager(
+        tmp_path,
+        (tmp_path,),
+        catalog_writer,
+    )
+
+    async def run_scan() -> dict[str, Any]:
+        await scan_manager.start()
+        while scan_manager.status()["state"] in {"discovering", "scanning"}:
+            await asyncio.sleep(0.01)
+        return scan_manager.status()
+
+    status = asyncio.run(run_scan())
+
+    assert status["state"] == "failed"
+    assert status["processed"] == 100
+    assert status["indexed"] == 0
+    assert status["failed"] == 0
+    assert len(catalog_writer.write_session.item_batches) == 1
+    assert status["errors"][-1] == {
+        "path": None,
+        "error": "Scan stopped: catalog unavailable",
+    }
+
+
 def test_scan_prevents_overlap(tmp_path: Path) -> None:
     """Reject a second start while directory discovery is still running."""
     catalog_writer = RecordingCatalogWriter()
@@ -217,19 +353,18 @@ def test_scan_prevents_overlap(tmp_path: Path) -> None:
     asyncio.run(start_twice())
 
 
-def test_catalog_writer_creates_or_updates_standard_stac_resources() -> None:
-    """Use Transactions API create and update routes for idempotent scans."""
-    requests: list[tuple[str, str]] = []
+def test_catalog_writer_uses_standard_bulk_upserts() -> None:
+    """Upsert a batch without per-Item existence requests."""
+    requests: list[tuple[str, str, object | None]] = []
 
     def catalog_response(request: httpx2.Request) -> httpx2.Response:
-        requests.append((request.method, request.url.path))
+        request_body = json.loads(request.content) if request.content else None
+        requests.append((request.method, request.url.path, request_body))
         if request.method == "GET" and request.url.path.endswith(
             "/eolab-mounted-geotiffs"
         ):
             return httpx2.Response(404)
-        if request.method == "GET":
-            return httpx2.Response(200, json={"id": "existing"})
-        return httpx2.Response(200, json={"id": "written"})
+        return httpx2.Response(200, json="written")
 
     writer = StacApiWriter(
         "http://stac-api:8080",
@@ -241,24 +376,37 @@ def test_catalog_writer_creates_or_updates_standard_stac_resources() -> None:
             await session.upsert_collection(
                 {"id": "eolab-mounted-geotiffs"}
             )
-            await session.upsert_item(
-                {
+            await session.upsert_items(
+                [{
                     "id": "geotiff-123",
                     "collection": "eolab-mounted-geotiffs",
-                }
+                }]
             )
 
     asyncio.run(write_records())
 
     assert requests == [
-        ("GET", "/collections/eolab-mounted-geotiffs"),
-        ("POST", "/collections"),
         (
             "GET",
-            "/collections/eolab-mounted-geotiffs/items/geotiff-123",
+            "/collections/eolab-mounted-geotiffs",
+            None,
         ),
         (
-            "PUT",
-            "/collections/eolab-mounted-geotiffs/items/geotiff-123",
+            "POST",
+            "/collections",
+            {"id": "eolab-mounted-geotiffs"},
+        ),
+        (
+            "POST",
+            "/collections/eolab-mounted-geotiffs/bulk_items",
+            {
+                "method": "upsert",
+                "items": {
+                    "geotiff-123": {
+                        "id": "geotiff-123",
+                        "collection": "eolab-mounted-geotiffs",
+                    }
+                },
+            },
         ),
     ]

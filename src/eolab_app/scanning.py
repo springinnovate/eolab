@@ -14,6 +14,11 @@ import httpx2
 from eolab_app.geotiff import build_stac_item
 
 
+GEOTIFF_METADATA_CONCURRENCY = 8
+STAC_ITEM_BATCH_SIZE = 100
+MAX_SCAN_ERROR_DETAILS = 100
+CATALOG_WRITE_TIMEOUT_SECONDS = 120
+
 # The scanner currently puts all discovered Items in one fixed Collection.
 # Collection metadata can move into scan configuration when EOLab supports
 # independently described sources.
@@ -43,8 +48,8 @@ class CatalogWriteSession(Protocol):
     async def upsert_collection(self, collection: dict[str, Any]) -> None:
         """Create or replace a STAC Collection."""
 
-    async def upsert_item(self, item: dict[str, Any]) -> None:
-        """Create or replace a STAC Item."""
+    async def upsert_items(self, items: list[dict[str, Any]]) -> None:
+        """Create or replace a batch of STAC Items."""
 
 
 class CatalogWriter(Protocol):
@@ -87,7 +92,7 @@ class StacApiWriteSession:
         self.client = httpx2.AsyncClient(
             base_url=self.catalog_internal_url,
             transport=self.transport,
-            timeout=30,
+            timeout=CATALOG_WRITE_TIMEOUT_SECONDS,
         )
         return self
 
@@ -97,43 +102,36 @@ class StacApiWriteSession:
 
     async def upsert_collection(self, collection: dict[str, Any]) -> None:
         """Create or replace a STAC Collection."""
-        collection_identifier = collection["id"]
-        await self._upsert(
-            resource_path=f"/collections/{collection_identifier}",
-            create_path="/collections",
-            document=collection,
-        )
-
-    async def upsert_item(self, item: dict[str, Any]) -> None:
-        """Create or replace a STAC Item."""
-        collection_identifier = item["collection"]
-        item_identifier = item["id"]
-        await self._upsert(
-            resource_path=(
-                f"/collections/{collection_identifier}/items/{item_identifier}"
-            ),
-            create_path=f"/collections/{collection_identifier}/items",
-            document=item,
-        )
-
-    async def _upsert(
-        self,
-        resource_path: str,
-        create_path: str,
-        document: dict[str, Any],
-    ) -> None:
         if self.client is None:
             raise RuntimeError("Catalog write session has not been opened")
 
+        collection_identifier = collection["id"]
+        resource_path = f"/collections/{collection_identifier}"
         existing_response = await self.client.get(resource_path)
         if existing_response.status_code == 404:
-            write_response = await self.client.post(create_path, json=document)
+            write_response = await self.client.post("/collections", json=collection)
         elif existing_response.is_success:
-            write_response = await self.client.put(resource_path, json=document)
+            write_response = await self.client.put(resource_path, json=collection)
         else:
             _raise_catalog_error(existing_response)
             return
 
+        if not write_response.is_success:
+            _raise_catalog_error(write_response)
+
+    async def upsert_items(self, items: list[dict[str, Any]]) -> None:
+        """Create or replace STAC Items through one Bulk Transaction request."""
+        if self.client is None:
+            raise RuntimeError("Catalog write session has not been opened")
+
+        collection_identifier = items[0]["collection"]
+        write_response = await self.client.post(
+            f"/collections/{collection_identifier}/bulk_items",
+            json={
+                "method": "upsert",
+                "items": {item["id"]: item for item in items},
+            },
+        )
         if not write_response.is_success:
             _raise_catalog_error(write_response)
 
@@ -184,30 +182,81 @@ class ScanManager:
             )
             self._status["discovered"] = len(geotiff_paths)
             self._status["failed"] = len(discovery_errors)
-            self._status["errors"].extend(discovery_errors)
+            self._status["errors"].extend(
+                discovery_errors[:MAX_SCAN_ERROR_DETAILS]
+            )
+            self._status["errorsTruncated"] = (
+                len(discovery_errors) > MAX_SCAN_ERROR_DETAILS
+            )
             self._status["state"] = "scanning"
 
             async with self.catalog_writer.session() as catalog_session:
                 await catalog_session.upsert_collection(DEFAULT_SCAN_COLLECTION)
-                for geotiff_path in geotiff_paths:
-                    relative_path = geotiff_path.relative_to(self.source_root).as_posix()
-                    self._status["currentFile"] = relative_path
-                    try:
-                        item = await asyncio.to_thread(
-                            build_stac_item,
+                path_queue: asyncio.Queue[Path | None] = asyncio.Queue(
+                    maxsize=GEOTIFF_METADATA_CONCURRENCY * 2
+                )
+                result_queue: asyncio.Queue[
+                    tuple[Path, dict[str, Any] | Exception] | None
+                ] = asyncio.Queue(maxsize=STAC_ITEM_BATCH_SIZE * 2)
+                path_producer = asyncio.create_task(
+                    _enqueue_geotiff_paths(geotiff_paths, path_queue)
+                )
+                metadata_workers = [
+                    asyncio.create_task(
+                        _read_geotiff_metadata(
                             self.source_root,
-                            geotiff_path,
+                            path_queue,
+                            result_queue,
                         )
-                        await catalog_session.upsert_item(item)
-                    except Exception as error:
-                        self._status["failed"] += 1
-                        self._status["errors"].append(
-                            {"path": relative_path, "error": str(error)}
-                        )
-                    else:
-                        self._status["indexed"] += 1
-                    finally:
+                    )
+                    for _ in range(GEOTIFF_METADATA_CONCURRENCY)
+                ]
+                pending_items: list[dict[str, Any]] = []
+                completed_workers = 0
+                try:
+                    while completed_workers < GEOTIFF_METADATA_CONCURRENCY:
+                        metadata_result = await result_queue.get()
+                        if metadata_result is None:
+                            completed_workers += 1
+                            continue
+
+                        geotiff_path, item_or_error = metadata_result
+                        relative_path = geotiff_path.relative_to(
+                            self.source_root
+                        ).as_posix()
+                        self._status["currentFile"] = relative_path
                         self._status["processed"] += 1
+                        if isinstance(item_or_error, Exception):
+                            self._status["failed"] += 1
+                            if len(self._status["errors"]) < MAX_SCAN_ERROR_DETAILS:
+                                self._status["errors"].append(
+                                    {
+                                        "path": relative_path,
+                                        "error": str(item_or_error),
+                                    }
+                                )
+                            else:
+                                self._status["errorsTruncated"] = True
+                        else:
+                            pending_items.append(item_or_error)
+
+                        if len(pending_items) == STAC_ITEM_BATCH_SIZE:
+                            await catalog_session.upsert_items(pending_items)
+                            self._status["indexed"] += len(pending_items)
+                            pending_items = []
+                finally:
+                    path_producer.cancel()
+                    for metadata_worker in metadata_workers:
+                        metadata_worker.cancel()
+                    await asyncio.gather(
+                        path_producer,
+                        *metadata_workers,
+                        return_exceptions=True,
+                    )
+
+                if pending_items:
+                    await catalog_session.upsert_items(pending_items)
+                    self._status["indexed"] += len(pending_items)
 
             self._status["state"] = "completed"
         except Exception as error:
@@ -232,7 +281,40 @@ class ScanManager:
             "startedAt": None,
             "finishedAt": None,
             "errors": [],
+            "errorsTruncated": False,
         }
+
+
+async def _enqueue_geotiff_paths(
+    geotiff_paths: list[Path],
+    path_queue: asyncio.Queue[Path | None],
+) -> None:
+    """Feed discovered paths to a bounded metadata-work queue."""
+    for geotiff_path in geotiff_paths:
+        await path_queue.put(geotiff_path)
+    for _ in range(GEOTIFF_METADATA_CONCURRENCY):
+        await path_queue.put(None)
+
+
+async def _read_geotiff_metadata(
+    source_root: Path,
+    path_queue: asyncio.Queue[Path | None],
+    result_queue: asyncio.Queue[
+        tuple[Path, dict[str, Any] | Exception] | None
+    ],
+) -> None:
+    """Read GeoTIFF metadata until the producer signals completion."""
+    while (geotiff_path := await path_queue.get()) is not None:
+        try:
+            item_or_error = await asyncio.to_thread(
+                build_stac_item,
+                source_root,
+                geotiff_path,
+            )
+        except Exception as error:
+            item_or_error = error
+        await result_queue.put((geotiff_path, item_or_error))
+    await result_queue.put(None)
 
 
 def _discover_geotiffs(

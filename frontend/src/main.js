@@ -566,7 +566,7 @@ function renderScanStatus(scanStatus) {
         not_started: "No scan has been started.",
         discovering: "Discovering GeoTIFF files in the mounted directory.",
         scanning: scanStatus.currentFile
-            ? `Processing ${scanStatus.currentFile}`
+            ? `Latest file: ${scanStatus.currentFile}`
             : "Preparing discovered GeoTIFF files.",
         completed: "Scan completed. The catalog has been refreshed.",
         failed: "The scan stopped before it could complete."
@@ -582,6 +582,12 @@ function renderScanStatus(scanStatus) {
             ? `${scanError.path}: ${scanError.error}`
             : scanError.error;
         scanErrorsElement.append(errorItem);
+    }
+    if (scanStatus.errorsTruncated) {
+        const truncatedErrorsMessage = document.createElement("li");
+        truncatedErrorsMessage.textContent =
+            "Additional file failures are not shown.";
+        scanErrorsElement.append(truncatedErrorsMessage);
     }
 }
 

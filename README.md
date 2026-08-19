@@ -55,7 +55,7 @@ Open `http://localhost:8000`. Set `EOLAB_HOST_PORT` to use a different loopback 
 
 ## Scan mounted GeoTIFFs
 
-Open the **Catalog** panel and select **Scan directories**. EOLab searches each configured path recursively for `.tif` and `.tiff` files, shows live discovered, processed, indexed, and failed counts, and refreshes the catalog when the scan completes. A failure in one file does not stop the remaining scan. Configured paths cannot be duplicated, nested inside one another, or escape the mount.
+Open the **Catalog** panel and select **Scan directories**. EOLab searches each configured path recursively for `.tif` and `.tiff` files, shows live discovered, processed, indexed, and failed counts, and refreshes the catalog when the scan completes. It reads metadata from up to eight GeoTIFFs concurrently and uses standard STAC Bulk Transactions to upsert batches of 100 Items. A failure in one file does not stop the remaining scan; a catalog write failure stops the scan. Configured paths cannot be duplicated, nested inside one another, or escape the mount.
 
 Scans create or update the `eolab-mounted-geotiffs` STAC Collection. Item identifiers are derived from each file's path relative to the mounted root, so scanning the same path again updates its Item instead of adding a duplicate. A later scan does not delete records for files that have disappeared or moved. The STAC Asset retains its container `file:` URI; the inspector combines its mount-relative title with `EOLAB_SCAN_DISPLAY_PATH_PREFIX` so users see the location as it is known on their own system. Changing the display prefix requires redeployment but not rescanning.
 
