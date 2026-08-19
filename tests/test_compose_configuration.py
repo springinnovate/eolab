@@ -113,6 +113,23 @@ def test_catalog_migrator_adds_datetime_substring_queryables() -> None:
     assert migration.count("gin_trgm_ops") == 2
 
 
+def test_catalog_migrator_hides_datetime_paths_from_pgstac_indexes() -> None:
+    """Keep application trigram indexes outside pgSTAC's index ownership."""
+    migration = (
+        COMPOSE_PATH.parent
+        / "catalog"
+        / "migrations"
+        / "0004_datetime_index_wrappers.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "eolab_item_datetime_text(item_content jsonb)" in migration
+    assert "eolab_item_end_datetime_text" in migration
+    assert "property_path = 'content'" in migration
+    assert "upper(pgstac.eolab_item_datetime_text(content))" in migration
+    assert "upper(pgstac.eolab_item_end_datetime_text(content))" in migration
+    assert migration.count("gin_trgm_ops") == 2
+
+
 def test_stac_api_uses_the_pinned_upstream_image() -> None:
     """Use upstream CQL2 Filter support without a custom API image."""
     compose = COMPOSE_PATH.read_text(encoding="utf-8")
