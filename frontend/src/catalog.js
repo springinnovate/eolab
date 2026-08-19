@@ -34,7 +34,8 @@ export function buildSubstringFilter(searchText) {
 }
 
 /**
- * Creates a restartable delayed action.
+ * Creates a restartable delayed action for server-backed search. Native search
+ * inputs emit each change immediately and do not provide this delay.
  *
  * @param {Function} action Action to invoke after the delay.
  * @param {number} delayMilliseconds Quiet period before invocation.
