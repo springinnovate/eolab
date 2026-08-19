@@ -66,7 +66,7 @@ The scanner uses `ACQUISITIONDATETIME` from GDAL's `IMAGERY` metadata domain whe
 
 ## Search the catalog
 
-The Catalog search finds case-insensitive matches in Item filenames, relative paths, and descriptions. Enter any part of a filename or description; for example, `2002` matches both `grassland_2002.tif` and a description containing `2002`. Clear the search field to show the complete catalog.
+The Catalog search finds case-insensitive matches in Item filenames, relative paths, descriptions, and standard STAC datetime values. Enter any part of the text; for example, `2002` matches both `grassland_2002.tif` and a description containing `2002`, while `2025-01` matches a datetime containing that year and month. Dates use the same literal substring search as other text; date-range searches are a separate feature. Clear the search field to show the complete catalog.
 
 ## How to reset the database
 

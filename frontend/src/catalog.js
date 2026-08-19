@@ -1,4 +1,10 @@
 const CATALOG_PAGE_SIZE = 20;
+const CATALOG_SUBSTRING_PROPERTIES = [
+  "title",
+  "description",
+  "eolab_datetime_text",
+  "eolab_end_datetime_text",
+];
 
 /**
  * Formats the position and total from a STAC ItemCollection.
@@ -25,14 +31,16 @@ export function formatCatalogItemCount(
 }
 
 /**
- * Builds a standard CQL2 substring filter for Item titles and descriptions.
+ * Builds a standard CQL2 substring filter for Item text and datetime values.
+ * The EOLab queryables expose standard STAC datetime fields as text because
+ * pgSTAC's native datetime queryables are timestamps rather than strings.
  *
  * @param {string} searchText Text entered in the Catalog search field.
  * @return {Object|null} CQL2 JSON filter, or null for no filter.
  * @example
  * // "2004" becomes the CQL2 equivalent of:
  * // casei(title) LIKE casei("%2004%")
- * // OR casei(description) LIKE casei("%2004%")
+ * // OR casei(description) LIKE casei("%2004%"), and so on.
  * buildSubstringFilter("2004");
  */
 export function buildSubstringFilter(searchText) {
@@ -47,7 +55,7 @@ export function buildSubstringFilter(searchText) {
   const pattern = { op: "casei", args: [`%${literalPattern}%`] };
   return {
     op: "or",
-    args: ["title", "description"].map((propertyName) => ({
+    args: CATALOG_SUBSTRING_PROPERTIES.map((propertyName) => ({
       op: "like",
       args: [
         { op: "casei", args: [{ property: propertyName }] },

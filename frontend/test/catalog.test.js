@@ -18,6 +18,12 @@ const emptyItemCollection = {
   links: [],
   numberMatched: 0,
 };
+const expectedSubstringProperties = [
+  "title",
+  "description",
+  "eolab_datetime_text",
+  "eolab_end_datetime_text",
+];
 
 function itemCollectionResponse(
   itemCollection = emptyItemCollection,
@@ -31,10 +37,10 @@ function itemCollectionResponse(
   });
 }
 
-test("buildSubstringFilter preserves literal filename text", () => {
+test("buildSubstringFilter preserves literal filename and date text", () => {
   assert.deepEqual(buildSubstringFilter(" Grassland_2004%\\ABC "), {
     op: "or",
-    args: ["title", "description"].map((propertyName) => ({
+    args: expectedSubstringProperties.map((propertyName) => ({
       op: "like",
       args: [
         { op: "casei", args: [{ property: propertyName }] },
@@ -43,6 +49,26 @@ test("buildSubstringFilter preserves literal filename text", () => {
     })),
   });
   assert.equal(buildSubstringFilter("   "), null);
+});
+
+test("buildSubstringFilter treats partial and invalid dates as literal text", () => {
+  const partialDateFilter = buildSubstringFilter(" 2025-01 ");
+  const invalidDateFilter = buildSubstringFilter("2025-13");
+
+  assert.deepEqual(
+    partialDateFilter.args.map((comparison) => comparison.args[1]),
+    Array(expectedSubstringProperties.length).fill({
+      op: "casei",
+      args: ["%2025-01%"],
+    }),
+  );
+  assert.deepEqual(
+    invalidDateFilter.args.map((comparison) => comparison.args[1]),
+    Array(expectedSubstringProperties.length).fill({
+      op: "casei",
+      args: ["%2025-13%"],
+    }),
+  );
 });
 
 test("CatalogSearchClient sends a standard STAC CQL2 substring search", async () => {
@@ -64,7 +90,7 @@ test("CatalogSearchClient sends a standard STAC CQL2 substring search", async ()
     "filter-lang": "cql2-json",
     filter: {
       op: "or",
-      args: ["title", "description"].map((propertyName) => ({
+      args: expectedSubstringProperties.map((propertyName) => ({
         op: "like",
         args: [
           { op: "casei", args: [{ property: propertyName }] },
