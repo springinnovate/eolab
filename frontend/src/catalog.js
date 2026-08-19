@@ -1,17 +1,31 @@
 const CATALOG_PAGE_SIZE = 20;
 
 /**
- * Converts user-entered text into a safe PostgreSQL prefix query.
+ * Builds a standard CQL2 substring filter for Item titles and descriptions.
  *
  * @param {string} searchText Text entered in the Catalog search field.
- * @return {string|null} Advanced STAC free-text query or null for no filter.
+ * @return {Object|null} CQL2 JSON filter, or null for no filter.
  */
-export function buildPrefixQuery(searchText) {
-  const terms = searchText
-    .normalize("NFKC")
-    .toLocaleLowerCase()
-    .match(/[\p{L}\p{N}]+/gu);
-  return terms?.map((term) => `${term}:*`).join(" AND ") ?? null;
+export function buildSubstringFilter(searchText) {
+  const normalizedSearchText = searchText.normalize("NFKC").trim();
+  if (normalizedSearchText === "") {
+    return null;
+  }
+  const literalPattern = normalizedSearchText
+    .replaceAll("\\", "\\\\")
+    .replaceAll("%", "\\%")
+    .replaceAll("_", "\\_");
+  const pattern = { op: "casei", args: [`%${literalPattern}%`] };
+  return {
+    op: "or",
+    args: ["title", "description"].map((propertyName) => ({
+      op: "like",
+      args: [
+        { op: "casei", args: [{ property: propertyName }] },
+        pattern,
+      ],
+    })),
+  };
 }
 
 /**
@@ -71,16 +85,17 @@ export class CatalogSearchClient {
   }
 
   /**
-   * Starts the first page of a standard STAC free-text search.
+   * Starts the first page of a standard STAC CQL2 substring search.
    *
    * @param {string} searchText User-entered search text.
    * @return {Promise<Object|null>} ItemCollection, or null when superseded.
    */
   search(searchText) {
     const searchBody = { limit: CATALOG_PAGE_SIZE };
-    const prefixQuery = buildPrefixQuery(searchText);
-    if (prefixQuery !== null) {
-      searchBody.q = [prefixQuery];
+    const substringFilter = buildSubstringFilter(searchText);
+    if (substringFilter !== null) {
+      searchBody["filter-lang"] = "cql2-json";
+      searchBody.filter = substringFilter;
     }
     return this.request({
       href: `${this.catalogUrl}/search`,

@@ -2,23 +2,28 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  buildPrefixQuery,
+  buildSubstringFilter,
   CatalogFootprintController,
   CatalogSearchClient,
   createDebouncedAction,
   findPaginationLink,
 } from "../src/catalog.js";
 
-test("buildPrefixQuery creates safe partial-word terms", () => {
-  assert.equal(
-    buildPrefixQuery(" Nat_semi grass! "),
-    "nat:* AND semi:* AND grass:*",
-  );
-  assert.equal(buildPrefixQuery("2002"), "2002:*");
-  assert.equal(buildPrefixQuery("---"), null);
+test("buildSubstringFilter preserves literal filename text", () => {
+  assert.deepEqual(buildSubstringFilter(" Grassland_2004%\\ABC "), {
+    op: "or",
+    args: ["title", "description"].map((propertyName) => ({
+      op: "like",
+      args: [
+        { op: "casei", args: [{ property: propertyName }] },
+        { op: "casei", args: ["%Grassland\\_2004\\%\\\\ABC%"] },
+      ],
+    })),
+  });
+  assert.equal(buildSubstringFilter("   "), null);
 });
 
-test("CatalogSearchClient sends standard STAC q search", async () => {
+test("CatalogSearchClient sends a standard STAC CQL2 substring search", async () => {
   let capturedRequest;
   const client = new CatalogSearchClient(
     "/stac",
@@ -31,13 +36,23 @@ test("CatalogSearchClient sends standard STAC q search", async () => {
     },
   );
 
-  await client.search("grass");
+  await client.search("2004");
 
   assert.equal(capturedRequest.url, "/stac/search");
   assert.equal(capturedRequest.options.method, "POST");
   assert.deepEqual(JSON.parse(capturedRequest.options.body), {
     limit: 20,
-    q: ["grass:*"],
+    "filter-lang": "cql2-json",
+    filter: {
+      op: "or",
+      args: ["title", "description"].map((propertyName) => ({
+        op: "like",
+        args: [
+          { op: "casei", args: [{ property: propertyName }] },
+          { op: "casei", args: ["%2004%"] },
+        ],
+      })),
+    },
   });
 });
 
@@ -78,14 +93,18 @@ test("CatalogSearchClient follows the provider pagination contract", async () =>
     href: "/stac/search",
     method: "POST",
     headers: { "Search-Context": "catalog" },
-    body: { limit: 20, q: ["grass:*"], token: "next:item-20" },
+    body: {
+      limit: 20,
+      filter: { op: "like", args: [{ property: "title" }, "%2004%"] },
+      token: "next:item-20",
+    },
   });
 
   assert.equal(capturedRequest.url, "/stac/search");
   assert.equal(capturedRequest.options.headers.get("Search-Context"), "catalog");
   assert.deepEqual(JSON.parse(capturedRequest.options.body), {
     limit: 20,
-    q: ["grass:*"],
+    filter: { op: "like", args: [{ property: "title" }, "%2004%"] },
     token: "next:item-20",
   });
 });

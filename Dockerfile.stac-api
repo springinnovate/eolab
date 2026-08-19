@@ -1,7 +1,0 @@
-FROM ghcr.io/stac-utils/stac-fastapi-pgstac:6.3.1@sha256:db117b91302f7983ce4e07658768a6e8d2f6716613252a15f5dcdbda8dae9883
-
-WORKDIR /app
-
-COPY catalog/stac_api.py /app/eolab_stac_api.py
-
-CMD ["uvicorn", "eolab_stac_api:create_app", "--factory", "--host", "0.0.0.0", "--port", "8080"]
