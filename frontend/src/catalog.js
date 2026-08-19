@@ -76,7 +76,9 @@ export function findPaginationLink(itemCollection, relations) {
 }
 
 /**
- * Builds the display model for a STAC Item inspector.
+ * Builds display details for a STAC Item, including its identity, datetime or
+ * datetime range, geometry, bounding box, projection, raster dimensions,
+ * Assets, and raster bands.
  *
  * @param {Object} item STAC Item selected in the result list.
  * @param {Object[]} collections STAC Collections available to the Catalog.
