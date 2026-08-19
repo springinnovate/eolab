@@ -586,10 +586,25 @@ h5 {
   accent-color: var(--brand);
 }
 
+.scan-errors-disclosure {
+  margin-top: 9px;
+  border-top: 1px solid var(--border-2);
+  padding-top: 8px;
+}
+
+.scan-errors-disclosure summary {
+  cursor: pointer;
+  color: var(--status-danger);
+  font-size: 0.74rem;
+  font-weight: 600;
+}
+
 .scan-errors {
   display: grid;
   gap: 4px;
-  margin: 9px 0 0;
+  max-height: 180px;
+  margin: 7px 0 0;
+  overflow-y: auto;
   padding-left: 18px;
   color: var(--status-danger);
   font-size: 0.72rem;

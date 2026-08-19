@@ -16,7 +16,10 @@ DEFAULT_ENVIRONMENT = {
     "APP_SUBTITLE": "Explore, process, and visualize geospatial data",
     "CATALOG_URL": "/stac",
     "CATALOG_INTERNAL_URL": "http://stac-api:8080",
-    "SCAN_SOURCE_PATH": str(Path.cwd()),
+    "SCAN_MOUNT_PATH": str(Path.cwd()),
+    "SCAN_PATHS_WITHIN_MOUNT": '["."]',
+    "SCAN_DISPLAY_PATH_PREFIX": "bigboi -- Z:\\bigbucket",
+    "SCAN_WORKER_COUNT": "8",
     "BASEMAP_URL": "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
     "BASEMAP_ATTRIBUTION": "&copy; OpenStreetMap contributors",
     "INITIAL_LATITUDE": "20",
@@ -72,6 +75,7 @@ def test_configuration_endpoint_reads_environment(
         "appSubtitle": "Explore, process, and visualize geospatial data",
         "appVersion": "0.1.0-2-gabcdef0",
         "catalogUrl": "https://catalog.example.test",
+        "scanDisplayPathPrefix": "bigboi -- Z:\\bigbucket",
         "basemap": {
             "url": "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
             "attribution": "&copy; OpenStreetMap contributors",
@@ -240,13 +244,22 @@ def test_load_settings_rejects_blank_version(
         load_settings(blank_version_path)
 
 
+@pytest.mark.parametrize(
+    ("environment_variable_name", "invalid_value"),
+    (
+        ("INITIAL_ZOOM", "not-a-number"),
+        ("SCAN_WORKER_COUNT", "1.5"),
+    ),
+)
 def test_load_settings_rejects_malformed_number(
     configured_environment: None,
     monkeypatch: pytest.MonkeyPatch,
+    environment_variable_name: str,
+    invalid_value: str,
     version_file_path: Path,
 ) -> None:
     """Reject a numeric setting that cannot be parsed as a number."""
-    monkeypatch.setenv("INITIAL_ZOOM", "not-a-number")
+    monkeypatch.setenv(environment_variable_name, invalid_value)
 
     with pytest.raises(ValueError):
         load_settings(version_file_path)
@@ -258,16 +271,45 @@ def test_load_settings_requires_an_existing_absolute_scan_directory(
     version_file_path: Path,
 ) -> None:
     """Reject a missing or relative internal scan mount."""
-    monkeypatch.setenv("SCAN_SOURCE_PATH", "relative/path")
+    monkeypatch.setenv("SCAN_MOUNT_PATH", "relative/path")
     with pytest.raises(ValueError, match="absolute path"):
         load_settings(version_file_path)
 
     monkeypatch.setenv(
-        "SCAN_SOURCE_PATH",
+        "SCAN_MOUNT_PATH",
         str((Path.cwd() / "missing-scan-directory").resolve()),
     )
     with pytest.raises(ValueError, match="existing directory"):
         load_settings(version_file_path)
+
+
+def test_load_settings_rejects_invalid_scan_path_lists(
+    configured_environment: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    version_file_path: Path,
+) -> None:
+    """Reject malformed, escaping, missing, duplicate, or overlapping paths."""
+    (tmp_path / "first" / "nested").mkdir(parents=True)
+    monkeypatch.setenv("SCAN_MOUNT_PATH", str(tmp_path))
+
+    monkeypatch.setenv("SCAN_PATHS_WITHIN_MOUNT", "not JSON")
+    with pytest.raises(ValueError):
+        load_settings(version_file_path)
+
+    invalid_path_lists = (
+        ('"first"', "JSON array"),
+        ("[]", "at least one"),
+        (json.dumps([str(tmp_path / "first")]), "relative"),
+        ('["../outside"]', "must not contain"),
+        ('["missing"]', "existing directories"),
+        ('["first", "first"]', "duplicated"),
+        ('["first", "first/nested"]', "overlap"),
+    )
+    for scan_paths, expected_error in invalid_path_lists:
+        monkeypatch.setenv("SCAN_PATHS_WITHIN_MOUNT", scan_paths)
+        with pytest.raises(ValueError, match=expected_error):
+            load_settings(version_file_path)
 
 
 @pytest.mark.parametrize(
@@ -276,6 +318,7 @@ def test_load_settings_requires_an_existing_absolute_scan_directory(
         ("INITIAL_LATITUDE", "91"),
         ("INITIAL_LONGITUDE", "-181"),
         ("INITIAL_ZOOM", "23"),
+        ("SCAN_WORKER_COUNT", "0"),
     ),
 )
 def test_load_settings_rejects_out_of_range_number(

@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.staticfiles import StaticFiles
 
 from eolab_app.settings import APPLICATION_VERSION_PATH, load_settings
-from eolab_app.scanning import ScanManager, StacApiWriter
+from eolab_app.scanning import PgStacItemInventory, ScanManager, StacApiWriter
 
 
 def create_app(
@@ -41,11 +41,17 @@ def create_app(
         version=app_global_configuration.app_version,
     )
     scan_manager = ScanManager(
-        app_global_configuration.scan_source_path,
+        app_global_configuration.scan_mount_path,
+        tuple(
+            app_global_configuration.scan_mount_path / relative_path
+            for relative_path in app_global_configuration.scan_paths_within_mount
+        ),
         StacApiWriter(
             app_global_configuration.catalog_internal_url,
             catalog_transport,
         ),
+        PgStacItemInventory(),
+        app_global_configuration.scan_worker_count,
     )
 
     @application.get("/healthz", tags=["system"])

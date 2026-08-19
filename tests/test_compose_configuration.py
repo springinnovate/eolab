@@ -25,15 +25,29 @@ def test_public_app_variables_are_not_self_referential() -> None:
         assert f'"{deployment_variable}=${{{deployment_variable}' not in compose
 
 
-def test_scan_source_is_a_read_only_deployment_mount() -> None:
-    """Let Coolify configure the host path without exposing it in the container."""
+def test_scan_paths_share_one_read_only_deployment_mount() -> None:
+    """Keep the host mount separate from container-relative scan paths."""
     compose = COMPOSE_PATH.read_text(encoding="utf-8")
 
-    assert "source: ${EOLAB_SCAN_SOURCE_PATH}" in compose
+    assert "source: ${EOLAB_SCAN_MOUNT_PATH}" in compose
     assert "target: /scan-source" in compose
     assert "read_only: true" in compose
-    assert '"SCAN_SOURCE_PATH=/scan-source"' in compose
-    assert '"EOLAB_SCAN_SOURCE_PATH=${EOLAB_SCAN_SOURCE_PATH' not in compose
+    assert '"SCAN_MOUNT_PATH=/scan-source"' in compose
+    assert '"SCAN_PATHS_WITHIN_MOUNT=${EOLAB_SCAN_PATHS_WITHIN_MOUNT:' in compose
+    assert '"SCAN_DISPLAY_PATH_PREFIX=${EOLAB_SCAN_DISPLAY_PATH_PREFIX:' in compose
+    assert '"SCAN_WORKER_COUNT=${EOLAB_SCAN_WORKER_COUNT:-8}"' in compose
+    assert '"EOLAB_SCAN_MOUNT_PATH=${EOLAB_SCAN_MOUNT_PATH' not in compose
+
+
+def test_app_can_inventory_existing_catalog_items() -> None:
+    """Give the app database access to classify existing scanner Items."""
+    compose = COMPOSE_PATH.read_text(encoding="utf-8")
+
+    assert '"PGHOST=database"' in compose
+    assert '"PGPORT=5432"' in compose
+    assert '"PGDATABASE=eolab"' in compose
+    assert '"PGUSER=eolab"' in compose
+    assert '"PGPASSWORD=${EOLAB_DATABASE_PASSWORD:' in compose
 
 
 def test_internal_stac_api_enables_writes_for_scanning() -> None:

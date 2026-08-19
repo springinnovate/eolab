@@ -78,12 +78,15 @@
                 <section class="scan-card" aria-labelledby="scan-heading">
                   <div class="catalog-toolbar">
                     <strong id="scan-heading">Mounted GeoTIFFs</strong>
-                    <button class="secondary-button" id="start-scan" type="button">Scan directory</button>
+                    <button class="secondary-button" id="start-scan" type="button">Scan directories</button>
                   </div>
                   <p id="scan-status" class="scan-status" role="status">No scan has been started.</p>
                   <progress id="scan-progress" max="1" value="0" hidden></progress>
                   <p id="scan-counts" class="scan-counts"></p>
-                  <ul id="scan-errors" class="scan-errors" aria-live="polite"></ul>
+                  <details id="scan-errors-disclosure" class="scan-errors-disclosure" hidden>
+                    <summary id="scan-errors-summary">Error details</summary>
+                    <ul id="scan-errors" class="scan-errors"></ul>
+                  </details>
                 </section>
                 <div class="catalog-results" id="catalog-results" aria-live="polite"></div>
                 <nav class="catalog-pagination" aria-label="Catalog result pages">

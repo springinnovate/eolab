@@ -82,9 +82,14 @@ export function findPaginationLink(itemCollection, relations) {
  *
  * @param {Object} item STAC Item selected in the result list.
  * @param {Object[]} collections STAC Collections available to the Catalog.
+ * @param {string} scanDisplayPathPrefix User-facing root for mounted files.
  * @return {Object} Text-only metadata grouped for inspector rendering.
  */
-export function buildCatalogItemDetails(item, collections) {
+export function buildCatalogItemDetails(
+  item,
+  collections,
+  scanDisplayPathPrefix,
+) {
   const properties = item.properties;
   const collection = collections.find(
     (candidateCollection) => candidateCollection.id === item.collection,
@@ -131,7 +136,25 @@ export function buildCatalogItemDetails(item, collections) {
   }
 
   const assets = Object.entries(item.assets).map(([assetKey, asset]) => {
-    const assetMetadata = [{ label: "Location", value: asset.href }];
+    const isMountedFile = item.collection === "eolab-mounted-geotiffs" &&
+      asset.href.startsWith("file:");
+    let location = asset.href;
+    if (isMountedFile) {
+      const separator = scanDisplayPathPrefix.includes("\\") ? "\\" : "/";
+      const relativePath = (asset.title ?? properties.title ?? item.id).replaceAll(
+        "/",
+        separator,
+      );
+      const joiner = scanDisplayPathPrefix.endsWith("/") ||
+        scanDisplayPathPrefix.endsWith("\\")
+        ? ""
+        : separator;
+      location = `${scanDisplayPathPrefix}${joiner}${relativePath}`;
+    }
+    const assetMetadata = [{
+      label: isMountedFile ? "Original location" : "Location",
+      value: location,
+    }];
     if (asset.type !== undefined) {
       assetMetadata.push({ label: "Media type", value: asset.type });
     }

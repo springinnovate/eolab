@@ -22,6 +22,7 @@ let scanPollTimeout = null;
  * @property {string} appSubtitle Application subtitle.
  * @property {string} appVersion Deployed application version.
  * @property {string} catalogUrl Browser-facing STAC catalog URL.
+ * @property {string} scanDisplayPathPrefix User-facing root for mounted files.
  * @property {{url: string, attribution: string}} basemap Basemap settings.
  * @property {{latitude: number, longitude: number, zoom: number}} initialView Initial map view.
  */
@@ -189,9 +190,14 @@ function createCatalogMetadataList(metadata) {
  *
  * @param {Object|null} item Selected STAC Item, or null for the empty state.
  * @param {Object[]} collections STAC Collections available to the Catalog.
+ * @param {string} scanDisplayPathPrefix User-facing root for mounted files.
  * @return {void}
  */
-function renderCatalogItemInspector(item, collections) {
+function renderCatalogItemInspector(
+    item,
+    collections,
+    scanDisplayPathPrefix
+) {
     const inspectorHeading = document.querySelector(
         "#catalog-inspector-heading"
     );
@@ -220,7 +226,11 @@ function renderCatalogItemInspector(item, collections) {
     }
 
     // Render the Item's identity, description, and core metadata.
-    const inspector = buildCatalogItemDetails(item, collections);
+    const inspector = buildCatalogItemDetails(
+        item,
+        collections,
+        scanDisplayPathPrefix
+    );
     inspectorHeading.textContent = inspector.title;
     if (inspector.description !== null) {
         const description = document.createElement("p");
@@ -325,7 +335,8 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
         catalogState.selectedButton = null;
         renderCatalogItemInspector(
             null,
-            catalogState.collectionsDocument?.collections ?? []
+            catalogState.collectionsDocument?.collections ?? [],
+            appGlobalConfiguration.scanDisplayPathPrefix
         );
     }
 
@@ -401,7 +412,8 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
                 footprintController.select(item);
                 renderCatalogItemInspector(
                     item,
-                    catalogState.collectionsDocument.collections
+                    catalogState.collectionsDocument.collections,
+                    appGlobalConfiguration.scanDisplayPathPrefix
                 );
             });
             itemButton.addEventListener("pointerenter", () => {
@@ -536,25 +548,36 @@ function renderScanStatus(scanStatus) {
     const scanStatusElement = document.querySelector("#scan-status");
     const scanProgressElement = document.querySelector("#scan-progress");
     const scanCountsElement = document.querySelector("#scan-counts");
+    const scanErrorsDisclosureElement = document.querySelector(
+        "#scan-errors-disclosure"
+    );
+    const scanErrorsSummaryElement = document.querySelector(
+        "#scan-errors-summary"
+    );
     const scanErrorsElement = document.querySelector("#scan-errors");
     const isRunning = ["discovering", "scanning"].includes(scanStatus.state);
 
     startScanButton.disabled = isRunning;
-    startScanButton.textContent = isRunning ? "Scanning…" : "Scan directory";
+    startScanButton.textContent = isRunning ? "Scanning…" : "Scan directories";
     scanProgressElement.hidden = scanStatus.state === "not_started";
     scanProgressElement.max = Math.max(scanStatus.discovered, 1);
     scanProgressElement.value = scanStatus.processed;
+    const newlyCataloged = scanStatus.indexed - scanStatus.alreadyInCatalog;
     scanCountsElement.textContent =
         scanStatus.state === "not_started"
             ? ""
-            : `${scanStatus.discovered} discovered · ${scanStatus.processed} processed · ` +
-              `${scanStatus.indexed} indexed · ${scanStatus.failed} failed`;
+            : `${scanStatus.discovered.toLocaleString()} discovered · ` +
+              `${scanStatus.processed.toLocaleString()} processed · ` +
+              `${newlyCataloged.toLocaleString()} newly cataloged · ` +
+              `${scanStatus.alreadyInCatalog.toLocaleString()} ` +
+              `already in catalog · ` +
+              `${scanStatus.failed.toLocaleString()} failed`;
 
     const statusMessages = {
         not_started: "No scan has been started.",
         discovering: "Discovering GeoTIFF files in the mounted directory.",
         scanning: scanStatus.currentFile
-            ? `Processing ${scanStatus.currentFile}`
+            ? `Latest file: ${scanStatus.currentFile}`
             : "Preparing discovered GeoTIFF files.",
         completed: "Scan completed. The catalog has been refreshed.",
         failed: "The scan stopped before it could complete."
@@ -563,6 +586,11 @@ function renderScanStatus(scanStatus) {
         statusMessages[scanStatus.state] ??
         `Unknown scan state: ${scanStatus.state}`;
 
+    scanErrorsDisclosureElement.hidden =
+        scanStatus.state === "not_started" || scanStatus.errors.length === 0;
+    scanErrorsSummaryElement.textContent = scanStatus.errorsTruncated
+        ? `Error details (${scanStatus.errors.length.toLocaleString()} shown)`
+        : `Error details (${scanStatus.errors.length.toLocaleString()})`;
     scanErrorsElement.replaceChildren();
     for (const scanError of scanStatus.errors) {
         const errorItem = document.createElement("li");
@@ -570,6 +598,12 @@ function renderScanStatus(scanStatus) {
             ? `${scanError.path}: ${scanError.error}`
             : scanError.error;
         scanErrorsElement.append(errorItem);
+    }
+    if (scanStatus.errorsTruncated) {
+        const truncatedErrorsMessage = document.createElement("li");
+        truncatedErrorsMessage.textContent =
+            "Additional file failures are not shown.";
+        scanErrorsElement.append(truncatedErrorsMessage);
     }
 }
 
@@ -611,6 +645,7 @@ async function startScan(refreshCatalog) {
         if (scanPollTimeout !== null) {
             window.clearTimeout(scanPollTimeout);
         }
+        document.querySelector("#scan-errors-disclosure").open = false;
         const startResponse = await fetch("/api/scans", {
             method: "POST",
             headers: { Accept: "application/json" }
