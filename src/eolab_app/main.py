@@ -17,7 +17,9 @@ async def _number_matched_is_estimated(
     number_matched: int,
 ) -> bool:
     """Report whether pgSTAC supplied its estimate for an Item Search count."""
-    async with await psycopg.AsyncConnection.connect() as connection:
+    async with await psycopg.AsyncConnection.connect(
+        options="-c search_path=pgstac,public"
+    ) as connection:
         cursor = await connection.execute(
             """
             SELECT total_count IS NULL

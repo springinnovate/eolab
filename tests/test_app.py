@@ -1,13 +1,16 @@
 """Test the EOLab application and its runtime settings contract."""
 
+import asyncio
 import json
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import httpx2
+import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
-from eolab_app.main import create_app
+from eolab_app.main import _number_matched_is_estimated, create_app
 from eolab_app.settings import load_settings
 
 
@@ -196,6 +199,24 @@ def test_stac_proxy_forwards_item_search(
         "features": [],
         "numberMatched": 106967,
     }
+
+
+def test_count_estimate_lookup_uses_pgstac_search_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Resolve pgSTAC functions called without schema-qualified names."""
+    cursor = AsyncMock()
+    cursor.fetchone.return_value = (True,)
+    connection = AsyncMock()
+    connection.__aenter__.return_value = connection
+    connection.execute.return_value = cursor
+    connect = AsyncMock(return_value=connection)
+    monkeypatch.setattr(psycopg.AsyncConnection, "connect", connect)
+
+    assert asyncio.run(
+        _number_matched_is_estimated(b'{"limit": 20}', 106967)
+    )
+    connect.assert_awaited_once_with(options="-c search_path=pgstac,public")
 
 
 def test_stac_proxy_rejects_catalog_writes(
