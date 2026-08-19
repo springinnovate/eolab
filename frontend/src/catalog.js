@@ -1,6 +1,35 @@
 const CATALOG_PAGE_SIZE = 20;
 
 /**
+ * Formats the position and total from a STAC ItemCollection.
+ *
+ * @param {Object} itemCollection STAC ItemCollection response.
+ * @param {number} pageNumber Current one-based page number.
+ * @param {boolean} isFiltered Whether the Item Search includes a filter.
+ * @return {string} Human-readable result range and total.
+ */
+export function formatCatalogItemCount(
+  itemCollection,
+  pageNumber,
+  isFiltered,
+) {
+  const returnedItemCount = itemCollection.features.length;
+  const matchedItemCount = itemCollection.numberMatched;
+  const qualifier = isFiltered ? "matching " : "";
+  const itemNoun = matchedItemCount === 1 ? "Item" : "Items";
+  if (returnedItemCount === 0) {
+    return `0 ${qualifier}${itemNoun}`;
+  }
+
+  const firstItemNumber = (pageNumber - 1) * CATALOG_PAGE_SIZE + 1;
+  const lastItemNumber = firstItemNumber + returnedItemCount - 1;
+  const displayedRange = firstItemNumber === lastItemNumber
+    ? firstItemNumber.toLocaleString()
+    : `${firstItemNumber.toLocaleString()}–${lastItemNumber.toLocaleString()}`;
+  return `Showing ${displayedRange} of ${matchedItemCount.toLocaleString()} ${qualifier}${itemNoun}`;
+}
+
+/**
  * Builds a standard CQL2 substring filter for Item titles and descriptions.
  *
  * @param {string} searchText Text entered in the Catalog search field.
@@ -292,6 +321,12 @@ export class CatalogSearchClient {
     }
     if (!Array.isArray(itemCollection.features)) {
       throw new Error("STAC Item Search response has no features array");
+    }
+    if (
+      !Number.isInteger(itemCollection.numberMatched) ||
+      itemCollection.numberMatched < itemCollection.features.length
+    ) {
+      throw new Error("STAC Item Search response has no valid numberMatched");
     }
     return itemCollection;
   }

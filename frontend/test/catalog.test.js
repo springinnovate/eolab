@@ -8,7 +8,15 @@ import {
   CatalogSearchClient,
   createDebouncedAction,
   findPaginationLink,
+  formatCatalogItemCount,
 } from "../src/catalog.js";
+
+const emptyItemCollection = {
+  type: "FeatureCollection",
+  features: [],
+  links: [],
+  numberMatched: 0,
+};
 
 test("buildSubstringFilter preserves literal filename text", () => {
   assert.deepEqual(buildSubstringFilter(" Grassland_2004%\\ABC "), {
@@ -30,10 +38,7 @@ test("CatalogSearchClient sends a standard STAC CQL2 substring search", async ()
     "/stac",
     async (url, options) => {
       capturedRequest = { url, options };
-      return new Response(
-        JSON.stringify({ type: "FeatureCollection", features: [], links: [] }),
-        { status: 200 },
-      );
+      return new Response(JSON.stringify(emptyItemCollection), { status: 200 });
     },
   );
 
@@ -64,10 +69,7 @@ test("CatalogSearchClient invokes fetch with the global receiver", async () => {
     if (this !== globalThis) {
       throw new TypeError("Illegal invocation");
     }
-    return new Response(
-      JSON.stringify({ type: "FeatureCollection", features: [], links: [] }),
-      { status: 200 },
-    );
+    return new Response(JSON.stringify(emptyItemCollection), { status: 200 });
   }
   const client = new CatalogSearchClient("/stac", receiverSensitiveFetch);
 
@@ -82,10 +84,7 @@ test("CatalogSearchClient follows the provider pagination contract", async () =>
     "/stac",
     async (url, options) => {
       capturedRequest = { url, options };
-      return new Response(
-        JSON.stringify({ type: "FeatureCollection", features: [], links: [] }),
-        { status: 200 },
-      );
+      return new Response(JSON.stringify(emptyItemCollection), { status: 200 });
     },
   );
 
@@ -126,6 +125,7 @@ test("CatalogSearchClient ignores a superseded response", async () => {
         type: "FeatureCollection",
         features: [{ id: "second" }],
         links: [],
+        numberMatched: 1,
       }),
       { status: 200 },
     ),
@@ -136,6 +136,7 @@ test("CatalogSearchClient ignores a superseded response", async () => {
         type: "FeatureCollection",
         features: [{ id: "first" }],
         links: [],
+        numberMatched: 1,
       }),
       { status: 200 },
     ),
@@ -144,6 +145,52 @@ test("CatalogSearchClient ignores a superseded response", async () => {
   assert.equal(await firstRequest, null);
   assert.equal((await secondRequest).features[0].id, "second");
   assert.equal(pendingResponses[0].options.signal.aborted, true);
+});
+
+test("formatCatalogItemCount displays catalog totals and page ranges", () => {
+  const itemCollection = {
+    features: Array.from({ length: 20 }),
+    numberMatched: 106967,
+  };
+
+  assert.equal(
+    formatCatalogItemCount(itemCollection, 1, false),
+    "Showing 1–20 of 106,967 Items",
+  );
+  assert.equal(
+    formatCatalogItemCount(
+      { features: Array.from({ length: 5 }), numberMatched: 25 },
+      2,
+      false,
+    ),
+    "Showing 21–25 of 25 Items",
+  );
+});
+
+test("formatCatalogItemCount handles empty, singular, and filtered results", () => {
+  assert.equal(formatCatalogItemCount(emptyItemCollection, 1, false), "0 Items");
+  assert.equal(
+    formatCatalogItemCount({ features: [{}], numberMatched: 1 }, 1, false),
+    "Showing 1 of 1 Item",
+  );
+  assert.equal(
+    formatCatalogItemCount({ features: [{}], numberMatched: 1 }, 1, true),
+    "Showing 1 of 1 matching Item",
+  );
+});
+
+test("CatalogSearchClient requires a valid numberMatched", async () => {
+  const client = new CatalogSearchClient("/stac", async () => {
+    return new Response(
+      JSON.stringify({ type: "FeatureCollection", features: [], links: [] }),
+      { status: 200 },
+    );
+  });
+
+  await assert.rejects(
+    client.search(""),
+    /STAC Item Search response has no valid numberMatched/,
+  );
 });
 
 test("findPaginationLink returns standard STAC pagination relations", () => {

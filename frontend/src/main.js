@@ -5,7 +5,8 @@ import {
     CatalogFootprintController,
     CatalogSearchClient,
     createDebouncedAction,
-    findPaginationLink
+    findPaginationLink,
+    formatCatalogItemCount
 } from "./catalog.js";
 import "./style.css";
 
@@ -358,12 +359,12 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
         pageStatusElement.textContent = `Page ${catalogState.pageNumber}`;
 
         const returnedItemCount = itemCollection.features.length;
-        const matchedItemCount = itemCollection.numberMatched;
-        const itemCountLabel =
-            Number.isInteger(matchedItemCount) &&
-            matchedItemCount > returnedItemCount
-                ? `${returnedItemCount} of ${matchedItemCount} items on this page`
-                : `${returnedItemCount} items on this page`;
+        const isFiltered = catalogSearchInput.value.trim() !== "";
+        const itemCountLabel = formatCatalogItemCount(
+            itemCollection,
+            catalogState.pageNumber,
+            isFiltered
+        );
         const collections = catalogState.collectionsDocument.collections;
         const collectionLabel =
             collections.length === 1
@@ -372,7 +373,7 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
 
         systemStateElement.classList.add("is-connected");
         systemStateTextElement.textContent = `Catalog connected · ${itemCountLabel}`;
-        catalogMessageElement.textContent = catalogSearchInput.value.trim()
+        catalogMessageElement.textContent = isFiltered
             ? "Matching records were returned from the complete STAC catalog."
             : "Records were returned from the deployed STAC catalog.";
         catalogSummaryElement.textContent = `${collectionLabel} · ${itemCountLabel}`;

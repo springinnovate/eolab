@@ -147,7 +147,11 @@ def test_stac_proxy_forwards_item_search(
         }
         return httpx2.Response(
             200,
-            json={"type": "FeatureCollection", "features": []},
+            json={
+                "type": "FeatureCollection",
+                "features": [],
+                "numberMatched": 106967,
+            },
             headers={"Content-Type": "application/geo+json"},
         )
 
@@ -170,7 +174,11 @@ def test_stac_proxy_forwards_item_search(
 
     assert response.status_code == 200
     assert response.headers["content-type"] == "application/geo+json"
-    assert response.json() == {"type": "FeatureCollection", "features": []}
+    assert response.json() == {
+        "type": "FeatureCollection",
+        "features": [],
+        "numberMatched": 106967,
+    }
 
 
 def test_stac_proxy_rejects_catalog_writes(
