@@ -26,7 +26,8 @@ export function formatCatalogItemCount(
   const displayedRange = firstItemNumber === lastItemNumber
     ? firstItemNumber.toLocaleString()
     : `${firstItemNumber.toLocaleString()}–${lastItemNumber.toLocaleString()}`;
-  return `Showing ${displayedRange} of ${matchedItemCount.toLocaleString()} ${qualifier}${itemNoun}`;
+  const estimatedLabel = itemCollection.numberMatchedEstimated ? " (est.)" : "";
+  return `Showing ${displayedRange} of ${matchedItemCount.toLocaleString()}${estimatedLabel} ${qualifier}${itemNoun}`;
 }
 
 /**
@@ -233,6 +234,7 @@ export class CatalogSearchClient {
     this.fetchImplementation = fetchImplementation.bind(globalThis);
     this.activeAbortController = null;
     this.requestSequence = 0;
+    this.numberMatchedEstimated = null;
   }
 
   /**
@@ -242,6 +244,7 @@ export class CatalogSearchClient {
    * @return {Promise<Object|null>} ItemCollection, or null when superseded.
    */
   search(searchText) {
+    this.numberMatchedEstimated = null;
     const searchBody = { limit: CATALOG_PAGE_SIZE };
     const substringFilter = buildSubstringFilter(searchText);
     if (substringFilter !== null) {
@@ -328,6 +331,19 @@ export class CatalogSearchClient {
     ) {
       throw new Error("STAC Item Search response has no valid numberMatched");
     }
+    const estimateHeader = searchResponse.headers.get(
+      "X-EOLab-Number-Matched-Estimated",
+    );
+    if (estimateHeader !== null) {
+      if (estimateHeader !== "true" && estimateHeader !== "false") {
+        throw new Error("Catalog response has an invalid count estimate header");
+      }
+      this.numberMatchedEstimated = estimateHeader === "true";
+    }
+    if (this.numberMatchedEstimated === null) {
+      throw new Error("Catalog response has no count estimate header");
+    }
+    itemCollection.numberMatchedEstimated = this.numberMatchedEstimated;
     return itemCollection;
   }
 }

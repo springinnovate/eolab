@@ -134,6 +134,21 @@ def test_stac_proxy_forwards_item_search(
 ) -> None:
     """Forward standard POST Item Search without exposing write endpoints."""
 
+    async def number_matched_is_estimated(
+        search_request_body: bytes,
+        number_matched: int,
+    ) -> bool:
+        assert json.loads(search_request_body) == {
+            "limit": 20,
+            "filter-lang": "cql2-json",
+            "filter": {
+                "op": "like",
+                "args": [{"property": "title"}, "%2004%"],
+            },
+        }
+        assert number_matched == 106967
+        return True
+
     def catalog_response(request: httpx2.Request) -> httpx2.Response:
         assert request.method == "POST"
         assert str(request.url) == "http://stac-api:8080/search"
@@ -159,6 +174,7 @@ def test_stac_proxy_forwards_item_search(
         create_app(
             version_file_path,
             catalog_transport=httpx2.MockTransport(catalog_response),
+            number_matched_estimate_lookup=number_matched_is_estimated,
         )
     ).post(
         "/stac/search",
@@ -174,6 +190,7 @@ def test_stac_proxy_forwards_item_search(
 
     assert response.status_code == 200
     assert response.headers["content-type"] == "application/geo+json"
+    assert response.headers["x-eolab-number-matched-estimated"] == "true"
     assert response.json() == {
         "type": "FeatureCollection",
         "features": [],

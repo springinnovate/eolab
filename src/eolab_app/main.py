@@ -1,8 +1,10 @@
 """Create the EOLab FastAPI application and serve its browser assets."""
 
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import httpx2
+import psycopg
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -10,9 +12,35 @@ from eolab_app.settings import APPLICATION_VERSION_PATH, load_settings
 from eolab_app.scanning import PgStacItemInventory, ScanManager, StacApiWriter
 
 
+async def _number_matched_is_estimated(
+    search_request_body: bytes,
+    number_matched: int,
+) -> bool:
+    """Report whether pgSTAC supplied its estimate for an Item Search count."""
+    async with await psycopg.AsyncConnection.connect() as connection:
+        cursor = await connection.execute(
+            """
+            SELECT total_count IS NULL
+            FROM pgstac.search_wheres
+            WHERE md5(_where) = md5(
+                pgstac.stac_search_to_where(%s::jsonb)
+            )
+            AND COALESCE(total_count, estimated_count) = %s
+            """,
+            (search_request_body.decode(), number_matched),
+        )
+        result = await cursor.fetchone()
+    if result is None:
+        raise RuntimeError("pgSTAC did not record Item Search count statistics")
+    return result[0]
+
+
 def create_app(
     version_file_path: Path = APPLICATION_VERSION_PATH,
     catalog_transport: httpx2.AsyncBaseTransport | None = None,
+    number_matched_estimate_lookup: Callable[[bytes, int], Awaitable[bool]] = (
+        _number_matched_is_estimated
+    ),
 ) -> FastAPI:
     """Create an application from the deployment environment.
 
@@ -23,6 +51,8 @@ def create_app(
         catalog_transport: HTTP transport used to reach the internal STAC API.
             The default creates a real network transport; tests pass a mock
             transport.
+        number_matched_estimate_lookup: Determines whether pgSTAC estimated an
+            Item Search count. Tests pass a database-free implementation.
 
     Returns:
         A FastAPI application configured from the validated deployment
@@ -151,6 +181,7 @@ def create_app(
         if forwarded_port := request.headers.get("x-forwarded-port"):
             forwarded_headers["x-forwarded-port"] = forwarded_port
 
+        request_body = await request.body()
         try:
             async with httpx2.AsyncClient(
                 transport=catalog_transport,
@@ -160,7 +191,7 @@ def create_app(
                     request.method,
                     upstream_url,
                     params=request.query_params,
-                    content=await request.body(),
+                    content=request_body,
                     headers=forwarded_headers,
                 )
         except httpx2.RequestError as error:
@@ -172,6 +203,18 @@ def create_app(
         response_headers = {}
         if response_content_type := catalog_response.headers.get("content-type"):
             response_headers["content-type"] = response_content_type
+        if (
+            catalog_response.is_success
+            and request.method == "POST"
+            and catalog_path.strip("/") == "search"
+        ):
+            number_matched = catalog_response.json()["numberMatched"]
+            response_headers["x-eolab-number-matched-estimated"] = str(
+                await number_matched_estimate_lookup(
+                    request_body,
+                    number_matched,
+                )
+            ).lower()
         return Response(
             content=catalog_response.content,
             status_code=catalog_response.status_code,
