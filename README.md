@@ -53,19 +53,7 @@ The scanner uses `ACQUISITIONDATETIME` from GDAL's `IMAGERY` metadata domain whe
 
 ## Search the catalog
 
-The Catalog search field waits briefly after typing stops, then performs a case-insensitive substring search over Item titles and descriptions across the complete catalog. The scanner preserves each file's relative path in the Item title, so `2002` matches both a file such as `grassland_2002.tif` and a description containing `2002`. Search text is treated literally, including underscores and percent signs, and can match an arbitrary fragment such as part of a hash. Clearing the field returns to the unfiltered catalog. Requests use the standard STAC Filter extension with CQL2 JSON.
-
-Results are returned 20 at a time. **Previous** and **Next** follow the pagination requests supplied by the STAC API. Result footprints are not all drawn at once: selecting a result displays its footprint, while pointer hover or keyboard focus temporarily displays a lighter preview.
-
-The `pgstac-migrate` service enables PostgreSQL's `pg_trgm` extension and creates GIN trigram indexes over the case-insensitive Item title and description expressions used by the CQL2 filter. PostgreSQL maintains the indexes when a scan creates or updates an Item. The indexes consume database storage and add some work to catalog writes in exchange for supporting indexed searches with a wildcard at the beginning of the pattern.
-
-On a deployment with enough Items for PostgreSQL to prefer the index, inspect the active plan from a server shell with:
-
-```console
-docker compose exec database psql -U eolab -d eolab -c "EXPLAIN (ANALYZE, BUFFERS) SELECT id FROM pgstac.items WHERE upper(pgstac.to_text(content->'properties'->'title')) LIKE upper('%2004%') OR upper(pgstac.to_text(content->'properties'->'description')) LIKE upper('%2004%') ORDER BY datetime DESC, id DESC LIMIT 20;"
-```
-
-The plan should reference `eolab_items_title_trgm_idx`, `eolab_items_description_trgm_idx`, or their partition indexes. PostgreSQL may reasonably choose a sequential scan for a very small catalog because reading the table directly is cheaper. Very short search strings may also produce too few trigrams for a selective index scan.
+The Catalog search finds case-insensitive matches in Item filenames, relative paths, and descriptions. Enter any part of a filename or description; for example, `2002` matches both `grassland_2002.tif` and a description containing `2002`. Clear the search field to show the complete catalog.
 
 ## How to reset the database
 
