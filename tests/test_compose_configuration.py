@@ -39,8 +39,8 @@ def test_scan_paths_share_one_read_only_deployment_mount() -> None:
     assert '"EOLAB_SCAN_MOUNT_PATH=${EOLAB_SCAN_MOUNT_PATH' not in compose
 
 
-def test_app_can_count_existing_catalog_items() -> None:
-    """Give the app read access to pgSTAC for one count at scan start."""
+def test_app_can_inventory_existing_catalog_items() -> None:
+    """Give the app database access to classify existing scanner Items."""
     compose = COMPOSE_PATH.read_text(encoding="utf-8")
 
     assert '"PGHOST=database"' in compose

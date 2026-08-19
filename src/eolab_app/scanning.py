@@ -59,22 +59,24 @@ class CatalogWriter(Protocol):
         """Open one catalog write session."""
 
 
-class CatalogItemCounter(Protocol):
-    """Count Items already stored in the catalog database."""
+class CatalogItemInventory(Protocol):
+    """Identify Items already stored in a catalog Collection."""
 
-    async def count_items(self) -> int:
-        """Return the exact number of existing catalog Items."""
+    async def existing_item_ids(self, collection_identifier: str) -> set[str]:
+        """Return the identifiers already stored in one Collection."""
 
 
-class PgStacItemCounter:
-    """Count catalog Items through the app's standard libpq environment."""
+class PgStacItemInventory:
+    """Read existing Item identifiers through the standard libpq environment."""
 
-    async def count_items(self) -> int:
-        """Return the number of rows in pgSTAC's partitioned Items table."""
+    async def existing_item_ids(self, collection_identifier: str) -> set[str]:
+        """Return the Item identifiers in one pgSTAC Collection."""
         async with await psycopg.AsyncConnection.connect() as connection:
-            cursor = await connection.execute("SELECT count(*) FROM pgstac.items")
-            row = await cursor.fetchone()
-        return row[0]
+            cursor = await connection.execute(
+                "SELECT id FROM pgstac.items WHERE collection = %s",
+                (collection_identifier,),
+            )
+            return {row[0] async for row in cursor}
 
 
 class StacApiWriter:
@@ -162,13 +164,13 @@ class ScanManager:
         source_root: Path,
         source_paths: tuple[Path, ...],
         catalog_writer: CatalogWriter,
-        catalog_item_counter: CatalogItemCounter,
+        catalog_item_inventory: CatalogItemInventory,
         metadata_worker_count: int,
     ) -> None:
         self.source_root = source_root
         self.source_paths = source_paths
         self.catalog_writer = catalog_writer
-        self.catalog_item_counter = catalog_item_counter
+        self.catalog_item_inventory = catalog_item_inventory
         self.metadata_worker_count = metadata_worker_count
         self._start_lock = asyncio.Lock()
         self._task: asyncio.Task[None] | None = None
@@ -197,8 +199,10 @@ class ScanManager:
 
     async def _run(self) -> None:
         try:
-            self._status["catalogItemsBeforeScan"] = (
-                await self.catalog_item_counter.count_items()
+            existing_item_ids = (
+                await self.catalog_item_inventory.existing_item_ids(
+                    DEFAULT_SCAN_COLLECTION["id"]
+                )
             )
             geotiff_paths, discovery_errors = await asyncio.to_thread(
                 _discover_geotiffs,
@@ -270,8 +274,11 @@ class ScanManager:
                             pending_items.append(item_or_error)
 
                         if len(pending_items) == STAC_ITEM_BATCH_SIZE:
-                            await catalog_session.upsert_items(pending_items)
-                            self._status["indexed"] += len(pending_items)
+                            await self._upsert_items(
+                                catalog_session,
+                                pending_items,
+                                existing_item_ids,
+                            )
                             pending_items = []
                 finally:
                     path_producer.cancel()
@@ -284,8 +291,11 @@ class ScanManager:
                     )
 
                 if pending_items:
-                    await catalog_session.upsert_items(pending_items)
-                    self._status["indexed"] += len(pending_items)
+                    await self._upsert_items(
+                        catalog_session,
+                        pending_items,
+                        existing_item_ids,
+                    )
 
             self._status["state"] = "completed"
         except Exception as error:
@@ -297,6 +307,19 @@ class ScanManager:
             self._status["currentFile"] = None
             self._status["finishedAt"] = _utc_now()
 
+    async def _upsert_items(
+        self,
+        catalog_session: CatalogWriteSession,
+        items: list[dict[str, Any]],
+        existing_item_ids: set[str],
+    ) -> None:
+        """Write one batch and classify its successfully cataloged Items."""
+        await catalog_session.upsert_items(items)
+        self._status["indexed"] += len(items)
+        self._status["alreadyInCatalog"] += sum(
+            item["id"] in existing_item_ids for item in items
+        )
+
     @staticmethod
     def _new_status(state: str) -> dict[str, Any]:
         return {
@@ -305,8 +328,8 @@ class ScanManager:
             "discovered": 0,
             "processed": 0,
             "indexed": 0,
+            "alreadyInCatalog": 0,
             "failed": 0,
-            "catalogItemsBeforeScan": None,
             "currentFile": None,
             "startedAt": None,
             "finishedAt": None,

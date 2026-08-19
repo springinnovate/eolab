@@ -150,11 +150,15 @@ class RecordingCatalogWriter:
         return self.write_session
 
 
-class RecordingCatalogItemCounter:
-    """Return a representative catalog Item count without PostgreSQL."""
+class RecordingCatalogItemInventory:
+    """Report Item identifiers already written by the recording Catalog."""
 
-    async def count_items(self) -> int:
-        return 37
+    def __init__(self, catalog_writer: RecordingCatalogWriter) -> None:
+        self.catalog_writer = catalog_writer
+
+    async def existing_item_ids(self, collection_identifier: str) -> set[str]:
+        assert collection_identifier == "eolab-mounted-geotiffs"
+        return set(self.catalog_writer.write_session.items)
 
 
 def test_scan_continues_after_an_invalid_geotiff(tmp_path: Path) -> None:
@@ -166,7 +170,7 @@ def test_scan_continues_after_an_invalid_geotiff(tmp_path: Path) -> None:
         tmp_path,
         (tmp_path,),
         catalog_writer,
-        RecordingCatalogItemCounter(),
+        RecordingCatalogItemInventory(catalog_writer),
         8,
     )
 
@@ -186,10 +190,11 @@ def test_scan_continues_after_an_invalid_geotiff(tmp_path: Path) -> None:
     assert first_status["discovered"] == 2
     assert first_status["processed"] == 2
     assert first_status["indexed"] == 1
+    assert first_status["alreadyInCatalog"] == 0
     assert first_status["failed"] == 1
-    assert first_status["catalogItemsBeforeScan"] == 37
     assert first_status["errors"][0]["path"] == "invalid.tiff"
     assert second_status["indexed"] == 1
+    assert second_status["alreadyInCatalog"] == 1
     assert len(catalog_writer.write_session.collections) == 1
     assert len(catalog_writer.write_session.items) == 1
 
@@ -205,7 +210,7 @@ def test_scan_combines_multiple_directories_under_one_mount(tmp_path: Path) -> N
         tmp_path,
         (observations_path, model_outputs_path),
         catalog_writer,
-        RecordingCatalogItemCounter(),
+        RecordingCatalogItemInventory(catalog_writer),
         8,
     )
 
@@ -259,11 +264,17 @@ def test_scan_reads_metadata_concurrently_and_bulk_upserts(
     monkeypatch.setattr("eolab_app.scanning.build_stac_item", build_item)
     monkeypatch.setattr("eolab_app.scanning.asyncio.to_thread", yielding_to_thread)
     catalog_writer = RecordingCatalogWriter()
+    for existing_item_index in (0, 100, 204):
+        existing_item_identifier = f"item-{existing_item_index:03}.tif"
+        catalog_writer.write_session.items[existing_item_identifier] = {
+            "id": existing_item_identifier,
+            "collection": "eolab-mounted-geotiffs",
+        }
     scan_manager = ScanManager(
         tmp_path,
         (tmp_path,),
         catalog_writer,
-        RecordingCatalogItemCounter(),
+        RecordingCatalogItemInventory(catalog_writer),
         3,
     )
 
@@ -282,6 +293,7 @@ def test_scan_reads_metadata_concurrently_and_bulk_upserts(
     ] == [100, 100, 5]
     assert status["processed"] == 205
     assert status["indexed"] == 205
+    assert status["alreadyInCatalog"] == 3
     assert status["failed"] == 0
 
 
@@ -297,11 +309,12 @@ def test_scan_caps_error_details_without_losing_failure_count(
         raise ValueError("invalid raster")
 
     monkeypatch.setattr("eolab_app.scanning.build_stac_item", reject_item)
+    catalog_writer = RecordingCatalogWriter()
     scan_manager = ScanManager(
         tmp_path,
         (tmp_path,),
-        RecordingCatalogWriter(),
-        RecordingCatalogItemCounter(),
+        catalog_writer,
+        RecordingCatalogItemInventory(catalog_writer),
         8,
     )
 
@@ -343,7 +356,7 @@ def test_scan_stops_after_a_bulk_catalog_failure(
         tmp_path,
         (tmp_path,),
         catalog_writer,
-        RecordingCatalogItemCounter(),
+        RecordingCatalogItemInventory(catalog_writer),
         8,
     )
 
@@ -373,7 +386,7 @@ def test_scan_prevents_overlap(tmp_path: Path) -> None:
         tmp_path,
         (tmp_path,),
         catalog_writer,
-        RecordingCatalogItemCounter(),
+        RecordingCatalogItemInventory(catalog_writer),
         8,
     )
 

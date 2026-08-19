@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.staticfiles import StaticFiles
 
 from eolab_app.settings import APPLICATION_VERSION_PATH, load_settings
-from eolab_app.scanning import PgStacItemCounter, ScanManager, StacApiWriter
+from eolab_app.scanning import PgStacItemInventory, ScanManager, StacApiWriter
 
 
 def create_app(
@@ -50,7 +50,7 @@ def create_app(
             app_global_configuration.catalog_internal_url,
             catalog_transport,
         ),
-        PgStacItemCounter(),
+        PgStacItemInventory(),
         app_global_configuration.scan_worker_count,
     )
 

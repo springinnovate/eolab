@@ -548,6 +548,12 @@ function renderScanStatus(scanStatus) {
     const scanStatusElement = document.querySelector("#scan-status");
     const scanProgressElement = document.querySelector("#scan-progress");
     const scanCountsElement = document.querySelector("#scan-counts");
+    const scanErrorsDisclosureElement = document.querySelector(
+        "#scan-errors-disclosure"
+    );
+    const scanErrorsSummaryElement = document.querySelector(
+        "#scan-errors-summary"
+    );
     const scanErrorsElement = document.querySelector("#scan-errors");
     const isRunning = ["discovering", "scanning"].includes(scanStatus.state);
 
@@ -556,19 +562,16 @@ function renderScanStatus(scanStatus) {
     scanProgressElement.hidden = scanStatus.state === "not_started";
     scanProgressElement.max = Math.max(scanStatus.discovered, 1);
     scanProgressElement.value = scanStatus.processed;
-    const existingCatalogCount = Number.isInteger(
-        scanStatus.catalogItemsBeforeScan
-    )
-        ? `${scanStatus.catalogItemsBeforeScan} already in catalog`
-        : isRunning
-          ? "Catalog count pending"
-          : "Catalog count unavailable";
+    const newlyCataloged = scanStatus.indexed - scanStatus.alreadyInCatalog;
     scanCountsElement.textContent =
         scanStatus.state === "not_started"
             ? ""
-            : `${existingCatalogCount} · ${scanStatus.discovered} discovered · ` +
-              `${scanStatus.processed} processed · ` +
-              `${scanStatus.indexed} indexed · ${scanStatus.failed} failed`;
+            : `${scanStatus.discovered.toLocaleString()} discovered · ` +
+              `${scanStatus.processed.toLocaleString()} processed · ` +
+              `${newlyCataloged.toLocaleString()} newly cataloged · ` +
+              `${scanStatus.alreadyInCatalog.toLocaleString()} ` +
+              `already in catalog · ` +
+              `${scanStatus.failed.toLocaleString()} failed`;
 
     const statusMessages = {
         not_started: "No scan has been started.",
@@ -583,6 +586,11 @@ function renderScanStatus(scanStatus) {
         statusMessages[scanStatus.state] ??
         `Unknown scan state: ${scanStatus.state}`;
 
+    scanErrorsDisclosureElement.hidden =
+        scanStatus.state === "not_started" || scanStatus.errors.length === 0;
+    scanErrorsSummaryElement.textContent = scanStatus.errorsTruncated
+        ? `Error details (${scanStatus.errors.length.toLocaleString()} shown)`
+        : `Error details (${scanStatus.errors.length.toLocaleString()})`;
     scanErrorsElement.replaceChildren();
     for (const scanError of scanStatus.errors) {
         const errorItem = document.createElement("li");
@@ -637,6 +645,7 @@ async function startScan(refreshCatalog) {
         if (scanPollTimeout !== null) {
             window.clearTimeout(scanPollTimeout);
         }
+        document.querySelector("#scan-errors-disclosure").open = false;
         const startResponse = await fetch("/api/scans", {
             method: "POST",
             headers: { Accept: "application/json" }
