@@ -234,7 +234,9 @@ test("buildCatalogItemDetails omits unavailable optional metadata", () => {
       collection: "sample",
       geometry: null,
       properties: {
-        datetime: "2024-06-15T00:00:00Z",
+        datetime: null,
+        start_datetime: "2024-06-15T00:00:00Z",
+        end_datetime: "2024-06-16T00:00:00Z",
         title: "<img src=x onerror=alert(1)>",
       },
       assets: {},
@@ -247,7 +249,10 @@ test("buildCatalogItemDetails omits unavailable optional metadata", () => {
   assert.deepEqual(inspector.metadata, [
     { label: "Item ID", value: "minimal-item" },
     { label: "Collection", value: "sample" },
-    { label: "Item datetime", value: "2024-06-15T00:00:00Z" },
+    {
+      label: "Item datetime range",
+      value: "2024-06-15T00:00:00Z – 2024-06-16T00:00:00Z",
+    },
   ]);
   assert.deepEqual(inspector.assets, []);
 });

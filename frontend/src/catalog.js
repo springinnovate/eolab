@@ -95,16 +95,13 @@ export function buildCatalogItemDetails(item, collections) {
     { label: "Collection", value: collectionLabel },
   ];
 
-  if (properties.datetime !== null && properties.datetime !== undefined) {
-    metadata.push({ label: "Item datetime", value: properties.datetime });
-  } else if (
-    properties.start_datetime !== undefined &&
-    properties.end_datetime !== undefined
-  ) {
+  if (properties.datetime === null) {
     metadata.push({
       label: "Item datetime range",
       value: `${properties.start_datetime} – ${properties.end_datetime}`,
     });
+  } else {
+    metadata.push({ label: "Item datetime", value: properties.datetime });
   }
   if (item.geometry !== null) {
     metadata.push({ label: "Geometry", value: item.geometry.type });
