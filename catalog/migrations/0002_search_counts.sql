@@ -3,8 +3,8 @@ BEGIN;
 INSERT INTO pgstac.pgstac_settings (name, value)
 VALUES
     ('context', 'auto'),
-    -- Re-evaluate each search so a scan refresh cannot return a cached count.
-    ('context_stats_ttl', '0 seconds')
+    -- EOLab invalidates this cache after scans; the TTL covers other writers.
+    ('context_stats_ttl', '1 day')
 ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value;
 
 COMMIT;
