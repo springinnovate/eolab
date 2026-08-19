@@ -203,6 +203,7 @@ function renderCatalogItemInspector(item, collections) {
     );
     inspectorContent.replaceChildren();
 
+    // Render the empty state when no Item is selected.
     if (item === null) {
         inspectorHeading.textContent = "Item inspector";
         const emptyInspector = document.createElement("div");
@@ -218,6 +219,7 @@ function renderCatalogItemInspector(item, collections) {
         return;
     }
 
+    // Render the Item's identity, description, and core metadata.
     const inspector = buildCatalogItemDetails(item, collections);
     inspectorHeading.textContent = inspector.title;
     if (inspector.description !== null) {
@@ -228,6 +230,7 @@ function renderCatalogItemInspector(item, collections) {
     }
     inspectorContent.append(createCatalogMetadataList(inspector.metadata));
 
+    // Introduce the Item's Asset records or their empty state.
     const assetsHeading = document.createElement("h4");
     assetsHeading.textContent = "Assets";
     inspectorContent.append(assetsHeading);
@@ -238,6 +241,7 @@ function renderCatalogItemInspector(item, collections) {
         inspectorContent.append(noAssetsMessage);
     }
 
+    // Render the metadata for each Asset.
     for (const asset of inspector.assets) {
         const assetCard = document.createElement("article");
         assetCard.className = "catalog-asset";
@@ -252,6 +256,7 @@ function renderCatalogItemInspector(item, collections) {
             createCatalogMetadataList(asset.metadata)
         );
 
+        // Render Raster extension band metadata when the Asset supplies it.
         if (asset.bands.length > 0) {
             const bandsHeading = document.createElement("strong");
             bandsHeading.className = "catalog-bands-heading";
@@ -277,6 +282,7 @@ function renderCatalogItemInspector(item, collections) {
         inspectorContent.append(assetCard);
     }
 
+    // Announce the selected Item to assistive technologies.
     inspectorStatus.textContent = `Showing details for ${inspector.title}.`;
 }
 
