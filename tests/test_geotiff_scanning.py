@@ -12,7 +12,8 @@ import httpx2
 import numpy
 import pytest
 import rasterio
-from rasterio.transform import from_origin
+from affine import Affine
+from rasterio.transform import from_bounds, from_origin
 
 from eolab_app.geotiff import (
     ACQUISITION_DATETIME_DESCRIPTION,
@@ -25,22 +26,29 @@ from eolab_app.scanning import ScanManager, StacApiWriter
 def write_geotiff(
     path: Path,
     acquisition_datetime: str | None = None,
+    *,
+    crs: str = "EPSG:4326",
+    transform: Affine | None = None,
+    width: int = 3,
+    height: int = 2,
 ) -> None:
     """Write a small spatially valid GeoTIFF fixture."""
     path.parent.mkdir(parents=True, exist_ok=True)
+    if transform is None:
+        transform = from_origin(-123, 49, 0.1, 0.1)
     with rasterio.open(
         path,
         "w",
         driver="GTiff",
-        width=3,
-        height=2,
+        width=width,
+        height=height,
         count=1,
         dtype="uint8",
-        crs="EPSG:4326",
-        transform=from_origin(-123, 49, 0.1, 0.1),
+        crs=crs,
+        transform=transform,
         nodata=0,
     ) as dataset:
-        dataset.write(numpy.ones((1, 2, 3), dtype="uint8"))
+        dataset.write(numpy.ones((1, height, width), dtype="uint8"))
         if acquisition_datetime is not None:
             dataset.update_tags(
                 ns="IMAGERY",
@@ -78,6 +86,66 @@ def test_geotiff_discloses_filesystem_timestamp_fallback(tmp_path: Path) -> None
     assert item["properties"]["datetime"] == "2025-02-11T17:31:52Z"
     assert item["properties"]["description"] == FALLBACK_DATETIME_DESCRIPTION
     assert item["assets"]["data"]["updated"] == "2025-02-11T17:31:52Z"
+
+
+def test_geotiff_transforms_bounds_with_an_invalid_projected_corner(
+    tmp_path: Path,
+) -> None:
+    """Catalog a valid raster whose rectangular extent exceeds its CRS domain."""
+    geotiff_path = tmp_path / "partial-eckert-iv.tif"
+    projected_bounds = (
+        -10834025.0233928,
+        5015601.46147158,
+        -2980025.0233928,
+        8432601.46147158,
+    )
+    width = height = 10
+    write_geotiff(
+        geotiff_path,
+        crs="+proj=eck4 +lon_0=0 +ellps=GRS80 +units=m +no_defs",
+        transform=from_bounds(*projected_bounds, width, height),
+        width=width,
+        height=height,
+    )
+
+    item = build_stac_item(tmp_path, geotiff_path)
+
+    assert item["bbox"] == pytest.approx(
+        [-178.045549, 40.049153, -35.118271, 86.417527]
+    )
+    assert item["geometry"] == {
+        "type": "Polygon",
+        "coordinates": [[
+            [item["bbox"][0], item["bbox"][1]],
+            [item["bbox"][2], item["bbox"][1]],
+            [item["bbox"][2], item["bbox"][3]],
+            [item["bbox"][0], item["bbox"][3]],
+            [item["bbox"][0], item["bbox"][1]],
+        ]],
+    }
+
+
+def test_geotiff_rejects_fully_untransformable_bounds(tmp_path: Path) -> None:
+    """Reject a raster when no finite WGS 84 extent can be produced."""
+    geotiff_path = tmp_path / "invalid-eckert-iv-extent.tif"
+    width = height = 10
+    write_geotiff(
+        geotiff_path,
+        crs="+proj=eck4 +lon_0=0 +ellps=GRS80 +units=m +no_defs",
+        transform=from_bounds(
+            30_000_000,
+            30_000_000,
+            31_000_000,
+            31_000_000,
+            width,
+            height,
+        ),
+        width=width,
+        height=height,
+    )
+
+    with pytest.raises(ValueError, match="could not be transformed"):
+        build_stac_item(tmp_path, geotiff_path)
 
 
 def test_geotiff_rejects_ambiguous_acquisition_datetime(tmp_path: Path) -> None:

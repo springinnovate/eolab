@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import rasterio
-from rasterio.warp import transform_geom
+from rasterio.warp import transform_bounds
 
 
 GEOTIFF_MEDIA_TYPE = "image/tiff; application=geotiff"
@@ -57,35 +57,29 @@ def build_stac_item(source_root: Path, geotiff_path: Path) -> dict[str, Any]:
         if dataset.width < 1 or dataset.height < 1:
             raise ValueError("GeoTIFF has invalid raster dimensions")
 
-        source_footprint = {
+        bbox = list(
+            transform_bounds(
+                dataset.crs,
+                "EPSG:4326",
+                *dataset.bounds,
+            )
+        )
+        if not all(math.isfinite(coordinate) for coordinate in bbox):
+            raise ValueError("GeoTIFF bounds could not be transformed to WGS 84")
+
+        west, south, east, north = bbox
+        footprint = {
             "type": "Polygon",
             "coordinates": [
                 [
-                    dataset.transform * (0, 0),
-                    dataset.transform * (dataset.width, 0),
-                    dataset.transform * (dataset.width, dataset.height),
-                    dataset.transform * (0, dataset.height),
-                    dataset.transform * (0, 0),
+                    [west, south],
+                    [east, south],
+                    [east, north],
+                    [west, north],
+                    [west, south],
                 ]
             ],
         }
-        footprint = transform_geom(dataset.crs, "EPSG:4326", source_footprint)
-        coordinates = footprint["coordinates"][0]
-        if not coordinates or not all(
-            math.isfinite(coordinate)
-            for position in coordinates
-            for coordinate in position[:2]
-        ):
-            raise ValueError("GeoTIFF footprint could not be transformed to WGS 84")
-
-        longitudes = [position[0] for position in coordinates]
-        latitudes = [position[1] for position in coordinates]
-        bbox = [
-            min(longitudes),
-            min(latitudes),
-            max(longitudes),
-            max(latitudes),
-        ]
 
         acquisition_datetime = dataset.tags(ns="IMAGERY").get(
             "ACQUISITIONDATETIME"
