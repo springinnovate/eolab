@@ -66,7 +66,6 @@ def test_catalog_migrator_packages_application_migrations() -> None:
     assert "COPY catalog/migrations/ /catalog/migrations/" in dockerfile
     assert "pgstac.get_version() <> '0.9.12'" in index_migration
     assert "CREATE EXTENSION IF NOT EXISTS pg_trgm" in index_migration
-    assert "DROP INDEX IF EXISTS pgstac.eolab_items_free_text_idx" in index_migration
     assert "eolab_items_title_trgm_idx" in index_migration
     assert "eolab_items_description_trgm_idx" in index_migration
     assert index_migration.count("USING GIN") == 2

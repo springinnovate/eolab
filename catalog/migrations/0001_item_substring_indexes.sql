@@ -11,8 +11,6 @@ $migration$;
 
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
-DROP INDEX IF EXISTS pgstac.eolab_items_free_text_idx;
-
 CREATE INDEX IF NOT EXISTS eolab_items_title_trgm_idx
 ON pgstac.items
 USING GIN ((
