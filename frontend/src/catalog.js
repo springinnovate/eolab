@@ -5,6 +5,11 @@ const CATALOG_PAGE_SIZE = 20;
  *
  * @param {string} searchText Text entered in the Catalog search field.
  * @return {Object|null} CQL2 JSON filter, or null for no filter.
+ * @example
+ * // "2004" becomes the CQL2 equivalent of:
+ * // casei(title) LIKE casei("%2004%")
+ * // OR casei(description) LIKE casei("%2004%")
+ * buildSubstringFilter("2004");
  */
 export function buildSubstringFilter(searchText) {
   const normalizedSearchText = searchText.normalize("NFKC").trim();
