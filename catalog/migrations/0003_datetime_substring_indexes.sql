@@ -32,7 +32,15 @@ USING (
         )
 ) AS desired(name, definition, property_path)
 ON existing.name = desired.name AND existing.collection_ids IS NULL
-WHEN MATCHED THEN
+-- A no-op UPDATE fires pgSTAC's queryable trigger, which rebuilds partition
+-- indexes and conflicts with the child indexes attached below. Only write a
+-- queryable when its stored definition actually differs.
+WHEN MATCHED AND (
+    existing.definition IS DISTINCT FROM desired.definition
+    OR existing.property_path IS DISTINCT FROM desired.property_path
+    OR existing.property_wrapper IS DISTINCT FROM 'to_text'
+    OR existing.property_index_type IS NOT NULL
+) THEN
     UPDATE SET
         definition = desired.definition,
         property_path = desired.property_path,
