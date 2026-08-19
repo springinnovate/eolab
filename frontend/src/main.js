@@ -3,14 +3,15 @@ import "leaflet/dist/leaflet.css";
 import {
     buildCatalogItemDetails,
     CatalogFootprintController,
+    CatalogResultStream,
     CatalogSearchClient,
     createDebouncedAction,
-    findPaginationLink,
     formatCatalogItemCount
 } from "./catalog.js";
 import "./style.css";
 
 const CATALOG_SEARCH_DEBOUNCE_MILLISECONDS = 300;
+const CATALOG_LOAD_ROOT_MARGIN = "300px 0px";
 const CONTROL_PANEL_TRANSITION_MILLISECONDS = 240;
 
 let scanPollTimeout = null;
@@ -298,7 +299,7 @@ function renderCatalogItemInspector(
 }
 
 /**
- * Connects catalog search, paging, selection, and refresh controls.
+ * Connects Catalog search, progressive loading, selection, and refresh controls.
  *
  * @param {AppGlobalConfiguration} appGlobalConfiguration Application settings.
  * @param {L.Map} leafletMap The initialized Leaflet map.
@@ -312,21 +313,29 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
     const catalogResultsElement = document.querySelector("#catalog-results");
     const catalogSearchInput = document.querySelector("#catalog-search");
     const refreshCatalogButton = document.querySelector("#refresh-catalog");
-    const previousPageButton = document.querySelector("#previous-catalog-page");
-    const nextPageButton = document.querySelector("#next-catalog-page");
-    const pageStatusElement = document.querySelector("#catalog-page-status");
+    const streamStatusElement = document.querySelector(
+        "#catalog-stream-status"
+    );
+    const retryPageButton = document.querySelector("#retry-catalog-page");
+    const loadSentinelElement = document.querySelector(
+        "#catalog-load-sentinel"
+    );
+    const streamAnnouncementElement = document.querySelector(
+        "#catalog-stream-announcement"
+    );
     const catalogUrl = appGlobalConfiguration.catalogUrl.replace(/\/$/, "");
-    const searchClient = new CatalogSearchClient(catalogUrl);
+    const resultStream = new CatalogResultStream(
+        new CatalogSearchClient(catalogUrl)
+    );
     const footprintController = new CatalogFootprintController(
         leafletMap,
         createCatalogFootprintLayer
     );
     const catalogState = {
         collectionsDocument: null,
-        loadSequence: 0,
-        nextLink: null,
-        pageNumber: 1,
-        previousLink: null,
+        loadedItemCount: 0,
+        searchSequence: 0,
+        searchText: "",
         selectedButton: null
     };
 
@@ -342,27 +351,19 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
     }
 
     /**
-     * Displays one successful Item Search page.
+     * Appends one successful Item Search page to the active result stream.
      *
      * @param {Object} itemCollection STAC ItemCollection response.
+     * @param {boolean} fitMap Whether to fit the map to this page.
      * @return {void}
      */
-    function renderCatalogPage(itemCollection) {
-        clearCatalogSelection();
-        catalogResultsElement.replaceChildren();
-        catalogState.nextLink = findPaginationLink(itemCollection, ["next"]);
-        catalogState.previousLink = findPaginationLink(itemCollection, [
-            "prev"
-        ]);
-        previousPageButton.disabled = catalogState.previousLink === null;
-        nextPageButton.disabled = catalogState.nextLink === null;
-        pageStatusElement.textContent = `Page ${catalogState.pageNumber}`;
-
+    function appendCatalogPage(itemCollection, fitMap) {
         const returnedItemCount = itemCollection.features.length;
-        const isFiltered = catalogSearchInput.value.trim() !== "";
+        catalogState.loadedItemCount += returnedItemCount;
+        const isFiltered = catalogState.searchText.trim() !== "";
         const itemCountLabel = formatCatalogItemCount(
             itemCollection,
-            catalogState.pageNumber,
+            catalogState.loadedItemCount,
             isFiltered
         );
         const collections = catalogState.collectionsDocument.collections;
@@ -378,9 +379,11 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
             : "Records were returned from the deployed STAC catalog.";
         catalogSummaryElement.textContent = `${collectionLabel} · ${itemCountLabel}`;
 
-        const pageBounds = L.geoJSON(itemCollection).getBounds();
-        if (pageBounds.isValid()) {
-            leafletMap.fitBounds(pageBounds.pad(0.15), { maxZoom: 8 });
+        if (fitMap) {
+            const pageBounds = L.geoJSON(itemCollection).getBounds();
+            if (pageBounds.isValid()) {
+                leafletMap.fitBounds(pageBounds.pad(0.15), { maxZoom: 8 });
+            }
         }
 
         for (const item of itemCollection.features) {
@@ -432,110 +435,144 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
             catalogResultsElement.append(itemButton);
         }
 
-        if (returnedItemCount === 0) {
+        if (catalogState.loadedItemCount === 0) {
             const emptyCatalogMessage = document.createElement("p");
             emptyCatalogMessage.className = "catalog-empty";
-            emptyCatalogMessage.textContent = catalogSearchInput.value.trim()
-                ? `No Items matched “${catalogSearchInput.value.trim()}”.`
+            emptyCatalogMessage.textContent = catalogState.searchText.trim()
+                ? `No Items matched “${catalogState.searchText.trim()}”.`
                 : "The catalog is connected but has no Items.";
             catalogResultsElement.append(emptyCatalogMessage);
         }
+
+        if (!fitMap) {
+            streamAnnouncementElement.textContent =
+                `${returnedItemCount.toLocaleString()} additional Items loaded. ` +
+                `${catalogState.loadedItemCount.toLocaleString()} Items shown.`;
+        }
     }
 
-    /**
-     * Loads either the first search page or a supplied STAC pagination link.
-     *
-     * @param {Object|null} paginationLink Provider link to follow.
-     * @param {number} pageChange Relative page-number change.
-     * @param {boolean} reloadCollections Whether to refresh Collection metadata.
-     * @return {Promise<void>} Resolves when the active request is displayed.
-     */
-    async function loadCatalogPage(
-        paginationLink = null,
-        pageChange = 0,
-        reloadCollections = false
-    ) {
-        const loadSequence = ++catalogState.loadSequence;
+    /** Observe the end of the list only while another page is available. */
+    function observeNextCatalogPage() {
+        retryPageButton.hidden = true;
+        if (resultStream.hasNextPage) {
+            streamStatusElement.textContent =
+                "More Items load automatically as you scroll.";
+            pageObserver.observe(loadSentinelElement);
+        } else {
+            streamStatusElement.textContent = "End of results.";
+            pageObserver.unobserve(loadSentinelElement);
+        }
+    }
+
+    /** Start a new search and replace every result from the previous stream. */
+    async function loadCatalog(reloadCollections = false) {
+        const searchSequence = ++catalogState.searchSequence;
+        catalogState.searchText = catalogSearchInput.value;
+        catalogState.loadedItemCount = 0;
+        pageObserver.unobserve(loadSentinelElement);
+        retryPageButton.hidden = true;
+        clearCatalogSelection();
+        catalogResultsElement.replaceChildren();
+        catalogResultsElement.setAttribute("aria-busy", "true");
         systemStateElement.classList.remove("is-connected", "is-warning");
         systemStateTextElement.textContent = "Searching catalog";
         catalogMessageElement.textContent =
             "Requesting Collections and Items from the STAC API.";
         catalogSummaryElement.textContent = "Loading catalog contents";
+        streamStatusElement.textContent = "Loading Catalog Items…";
         refreshCatalogButton.disabled = true;
-        previousPageButton.disabled = true;
-        nextPageButton.disabled = true;
 
         try {
             const collectionsRequest =
                 reloadCollections || catalogState.collectionsDocument === null
                     ? loadCatalogCollections(catalogUrl)
                     : Promise.resolve(catalogState.collectionsDocument);
-            const itemsRequest =
-                paginationLink === null
-                    ? searchClient.search(catalogSearchInput.value)
-                    : searchClient.follow(paginationLink);
             const [collectionsDocument, itemCollection] = await Promise.all([
                 collectionsRequest,
-                itemsRequest
+                resultStream.restart(catalogState.searchText)
             ]);
             if (
-                loadSequence !== catalogState.loadSequence ||
+                searchSequence !== catalogState.searchSequence ||
                 itemCollection === null
             ) {
                 return;
             }
             catalogState.collectionsDocument = collectionsDocument;
-            catalogState.pageNumber =
-                paginationLink === null
-                    ? 1
-                    : catalogState.pageNumber + pageChange;
-            renderCatalogPage(itemCollection);
+            appendCatalogPage(itemCollection, true);
+            observeNextCatalogPage();
         } catch (catalogError) {
-            if (loadSequence !== catalogState.loadSequence) {
+            if (searchSequence !== catalogState.searchSequence) {
                 return;
             }
-            clearCatalogSelection();
-            catalogResultsElement.replaceChildren();
-            catalogState.nextLink = null;
-            catalogState.previousLink = null;
             systemStateElement.classList.add("is-warning");
             systemStateTextElement.textContent = "Catalog unavailable";
             catalogMessageElement.textContent =
                 "Check the catalog services and try again.";
             catalogSummaryElement.textContent = catalogError.message;
+            streamStatusElement.textContent = "Catalog search failed.";
         } finally {
-            if (loadSequence === catalogState.loadSequence) {
+            if (searchSequence === catalogState.searchSequence) {
+                catalogResultsElement.setAttribute("aria-busy", "false");
                 refreshCatalogButton.disabled = false;
-                previousPageButton.disabled =
-                    catalogState.previousLink === null;
-                nextPageButton.disabled = catalogState.nextLink === null;
             }
         }
     }
 
+    /** Append the provider's next page while retaining existing results. */
+    async function loadNextCatalogPage() {
+        if (resultStream.isLoading || !resultStream.hasNextPage) {
+            return;
+        }
+
+        const searchSequence = catalogState.searchSequence;
+        pageObserver.unobserve(loadSentinelElement);
+        retryPageButton.hidden = true;
+        streamStatusElement.textContent = "Loading more Catalog Items…";
+        catalogResultsElement.setAttribute("aria-busy", "true");
+        try {
+            const itemCollection = await resultStream.loadNextPage();
+            if (
+                searchSequence !== catalogState.searchSequence ||
+                itemCollection === null
+            ) {
+                return;
+            }
+            appendCatalogPage(itemCollection, false);
+            observeNextCatalogPage();
+        } catch (catalogError) {
+            if (searchSequence !== catalogState.searchSequence) {
+                return;
+            }
+            streamStatusElement.textContent =
+                `Additional Items could not be loaded: ${catalogError.message}`;
+            retryPageButton.hidden = false;
+        } finally {
+            if (searchSequence === catalogState.searchSequence) {
+                catalogResultsElement.setAttribute("aria-busy", "false");
+            }
+        }
+    }
+
+    const pageObserver = new IntersectionObserver((entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+            void loadNextCatalogPage();
+        }
+    }, { rootMargin: CATALOG_LOAD_ROOT_MARGIN });
+
     const scheduleCatalogSearch = createDebouncedAction(
-        loadCatalogPage.bind(null, null, 0, false),
+        loadCatalog.bind(null, false),
         CATALOG_SEARCH_DEBOUNCE_MILLISECONDS,
         window
     );
     catalogSearchInput.addEventListener("input", scheduleCatalogSearch);
     refreshCatalogButton.addEventListener(
         "click",
-        loadCatalogPage.bind(null, null, 0, true)
+        loadCatalog.bind(null, true)
     );
-    previousPageButton.addEventListener("click", () => {
-        if (catalogState.previousLink !== null) {
-            loadCatalogPage(catalogState.previousLink, -1, false);
-        }
-    });
-    nextPageButton.addEventListener("click", () => {
-        if (catalogState.nextLink !== null) {
-            loadCatalogPage(catalogState.nextLink, 1, false);
-        }
-    });
+    retryPageButton.addEventListener("click", loadNextCatalogPage);
 
-    await loadCatalogPage(null, 0, true);
-    return loadCatalogPage.bind(null, null, 0, true);
+    await loadCatalog(true);
+    return loadCatalog.bind(null, true);
 }
 
 /**

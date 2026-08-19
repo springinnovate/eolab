@@ -4,30 +4,24 @@ const CATALOG_PAGE_SIZE = 20;
  * Formats the position and total from a STAC ItemCollection.
  *
  * @param {Object} itemCollection STAC ItemCollection response.
- * @param {number} pageNumber Current one-based page number.
+ * @param {number} displayedItemCount Number of Items currently rendered.
  * @param {boolean} isFiltered Whether the Item Search includes a filter.
- * @return {string} Human-readable result range and total.
+ * @return {string} Human-readable rendered and matched Item counts.
  */
 export function formatCatalogItemCount(
   itemCollection,
-  pageNumber,
+  displayedItemCount,
   isFiltered,
 ) {
-  const returnedItemCount = itemCollection.features.length;
   const matchedItemCount = itemCollection.numberMatched;
   const qualifier = isFiltered ? "matching " : "";
   const itemNoun = matchedItemCount === 1 ? "Item" : "Items";
-  if (returnedItemCount === 0) {
+  if (displayedItemCount === 0) {
     return `0 ${qualifier}${itemNoun}`;
   }
 
-  const firstItemNumber = (pageNumber - 1) * CATALOG_PAGE_SIZE + 1;
-  const lastItemNumber = firstItemNumber + returnedItemCount - 1;
-  const displayedRange = firstItemNumber === lastItemNumber
-    ? firstItemNumber.toLocaleString()
-    : `${firstItemNumber.toLocaleString()}–${lastItemNumber.toLocaleString()}`;
   const estimatedLabel = itemCollection.numberMatchedEstimated ? " (est.)" : "";
-  return `Showing ${displayedRange} of ${matchedItemCount.toLocaleString()}${estimatedLabel} ${qualifier}${itemNoun}`;
+  return `Showing ${displayedItemCount.toLocaleString()} of ${matchedItemCount.toLocaleString()}${estimatedLabel} ${qualifier}${itemNoun}`;
 }
 
 /**
@@ -345,6 +339,83 @@ export class CatalogSearchClient {
     }
     itemCollection.numberMatchedEstimated = this.numberMatchedEstimated;
     return itemCollection;
+  }
+}
+
+/**
+ * Tracks one progressively loaded Catalog search and its provider-supplied
+ * next-page link.
+ */
+export class CatalogResultStream {
+  /** @param {CatalogSearchClient} searchClient STAC Item Search client. */
+  constructor(searchClient) {
+    this.searchClient = searchClient;
+    this.nextLink = null;
+    this.isLoading = false;
+    this.searchSequence = 0;
+  }
+
+  /** @return {boolean} Whether another provider page is available. */
+  get hasNextPage() {
+    return this.nextLink !== null;
+  }
+
+  /**
+   * Replaces the active result stream with a new search.
+   *
+   * @param {string} searchText User-entered search text.
+   * @return {Promise<Object|null>} First ItemCollection, or null if superseded.
+   */
+  async restart(searchText) {
+    const searchSequence = ++this.searchSequence;
+    this.nextLink = null;
+    this.isLoading = true;
+    try {
+      const itemCollection = await this.searchClient.search(searchText);
+      if (
+        searchSequence !== this.searchSequence ||
+        itemCollection === null
+      ) {
+        return null;
+      }
+      this.nextLink = findPaginationLink(itemCollection, ["next"]);
+      return itemCollection;
+    } finally {
+      if (searchSequence === this.searchSequence) {
+        this.isLoading = false;
+      }
+    }
+  }
+
+  /**
+   * Loads the next page once, retaining its link when the request fails.
+   *
+   * @return {Promise<Object|null>} Next ItemCollection, or null when no load
+   *     was needed or the request was superseded.
+   */
+  async loadNextPage() {
+    if (this.isLoading || this.nextLink === null) {
+      return null;
+    }
+
+    const searchSequence = this.searchSequence;
+    const nextLink = this.nextLink;
+    this.isLoading = true;
+    try {
+      const itemCollection = await this.searchClient.follow(nextLink);
+      if (
+        searchSequence !== this.searchSequence ||
+        itemCollection === null
+      ) {
+        return null;
+      }
+      this.nextLink = findPaginationLink(itemCollection, ["next"]);
+      return itemCollection;
+    } finally {
+      if (searchSequence === this.searchSequence) {
+        this.isLoading = false;
+      }
+    }
   }
 }
 
