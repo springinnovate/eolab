@@ -1,5 +1,7 @@
 BEGIN;
 
+SET LOCAL search_path TO pgstac, public;
+
 DO $migration$
 BEGIN
     IF pgstac.get_version() <> '0.9.12' THEN
