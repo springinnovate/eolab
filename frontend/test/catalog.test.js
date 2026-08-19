@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildCatalogItemInspector,
   buildSubstringFilter,
   CatalogFootprintController,
   CatalogSearchClient,
+  CatalogWorkspaceController,
   createDebouncedAction,
   findPaginationLink,
 } from "../src/catalog.js";
@@ -152,6 +154,165 @@ test("findPaginationLink returns standard STAC pagination relations", () => {
 
   assert.equal(findPaginationLink(document, ["next"]), nextLink);
   assert.equal(findPaginationLink(document, ["prev"]), previousLink);
+});
+
+test("buildCatalogItemInspector presents scanned GeoTIFF metadata", () => {
+  const inspector = buildCatalogItemInspector(
+    {
+      id: "stable-item-id",
+      collection: "eolab-mounted-geotiffs",
+      bbox: [-123, 48.8, -122.7, 49],
+      geometry: { type: "Polygon", coordinates: [] },
+      properties: {
+        datetime: "2025-02-11T17:31:52Z",
+        title: "Model Outputs/grassland_2002.tif",
+        description: "Item datetime uses the filesystem modification time.",
+        "proj:epsg": 4326,
+        "proj:shape": [2, 3],
+      },
+      assets: {
+        data: {
+          href: "file:///data/Model Outputs/grassland_2002.tif",
+          type: "image/tiff; application=geotiff",
+          title: "Model Outputs/grassland_2002.tif",
+          roles: ["data"],
+          updated: "2025-02-11T17:31:52Z",
+          "raster:bands": [{ data_type: "uint8", nodata: 0 }],
+        },
+      },
+    },
+    [{ id: "eolab-mounted-geotiffs", title: "Mounted GeoTIFFs" }],
+  );
+
+  assert.equal(inspector.title, "Model Outputs/grassland_2002.tif");
+  assert.equal(
+    inspector.description,
+    "Item datetime uses the filesystem modification time.",
+  );
+  assert.deepEqual(inspector.metadata, [
+    { label: "Item ID", value: "stable-item-id" },
+    {
+      label: "Collection",
+      value: "Mounted GeoTIFFs (eolab-mounted-geotiffs)",
+    },
+    { label: "Item datetime", value: "2025-02-11T17:31:52Z" },
+    { label: "Geometry", value: "Polygon" },
+    { label: "Bounding box", value: "-123, 48.8, -122.7, 49" },
+    { label: "Coordinate reference system", value: "EPSG:4326" },
+    { label: "Raster dimensions", value: "3 × 2 pixels" },
+  ]);
+  assert.deepEqual(inspector.assets, [
+    {
+      key: "data",
+      title: "Model Outputs/grassland_2002.tif",
+      metadata: [
+        {
+          label: "Location",
+          value: "file:///data/Model Outputs/grassland_2002.tif",
+        },
+        { label: "Media type", value: "image/tiff; application=geotiff" },
+        { label: "Roles", value: "data" },
+        { label: "File modified", value: "2025-02-11T17:31:52Z" },
+      ],
+      bands: [
+        {
+          title: "Band 1",
+          metadata: [
+            { label: "Data type", value: "uint8" },
+            { label: "Nodata", value: "0" },
+          ],
+        },
+      ],
+    },
+  ]);
+});
+
+test("buildCatalogItemInspector omits unavailable optional metadata", () => {
+  const inspector = buildCatalogItemInspector(
+    {
+      id: "minimal-item",
+      collection: "sample",
+      geometry: null,
+      properties: {
+        datetime: "2024-06-15T00:00:00Z",
+        title: "<img src=x onerror=alert(1)>",
+      },
+      assets: {},
+    },
+    [],
+  );
+
+  assert.equal(inspector.title, "<img src=x onerror=alert(1)>");
+  assert.equal(inspector.description, null);
+  assert.deepEqual(inspector.metadata, [
+    { label: "Item ID", value: "minimal-item" },
+    { label: "Collection", value: "sample" },
+    { label: "Item datetime", value: "2024-06-15T00:00:00Z" },
+  ]);
+  assert.deepEqual(inspector.assets, []);
+});
+
+test("CatalogWorkspaceController expands and returns with Escape", () => {
+  const classes = new Set();
+  const attributes = new Map();
+  let layoutChangeCount = 0;
+  let focusCount = 0;
+  let prevented = false;
+  const appElement = {
+    classList: {
+      toggle(className, isPresent) {
+        if (isPresent) {
+          classes.add(className);
+        } else {
+          classes.delete(className);
+        }
+      },
+    },
+  };
+  const toggleButton = {
+    textContent: "Expand catalog",
+    setAttribute(name, value) {
+      attributes.set(name, value);
+    },
+    focus() {
+      focusCount += 1;
+    },
+  };
+  const inspectorElement = {
+    setAttribute(name, value) {
+      attributes.set(`inspector:${name}`, value);
+    },
+  };
+  const workspace = new CatalogWorkspaceController(
+    appElement,
+    toggleButton,
+    inspectorElement,
+    () => {
+      layoutChangeCount += 1;
+    },
+  );
+
+  workspace.toggle();
+
+  assert.equal(classes.has("is-catalog-workspace"), true);
+  assert.equal(attributes.get("aria-expanded"), "true");
+  assert.equal(attributes.get("inspector:aria-hidden"), "false");
+  assert.equal(toggleButton.textContent, "Return to map");
+
+  workspace.handleKeyDown({
+    key: "Escape",
+    preventDefault() {
+      prevented = true;
+    },
+  });
+
+  assert.equal(classes.has("is-catalog-workspace"), false);
+  assert.equal(attributes.get("aria-expanded"), "false");
+  assert.equal(attributes.get("inspector:aria-hidden"), "true");
+  assert.equal(toggleButton.textContent, "Expand catalog");
+  assert.equal(layoutChangeCount, 2);
+  assert.equal(focusCount, 1);
+  assert.equal(prevented, true);
 });
 
 test("createDebouncedAction runs only the latest scheduled action", () => {

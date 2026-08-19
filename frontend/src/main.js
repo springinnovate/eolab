@@ -1,14 +1,17 @@
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import {
+    buildCatalogItemInspector,
     CatalogFootprintController,
     CatalogSearchClient,
+    CatalogWorkspaceController,
     createDebouncedAction,
     findPaginationLink
 } from "./catalog.js";
 import "./style.css";
 
 const CATALOG_SEARCH_DEBOUNCE_MILLISECONDS = 300;
+const CONTROL_PANEL_TRANSITION_MILLISECONDS = 240;
 
 let scanPollTimeout = null;
 
@@ -163,6 +166,121 @@ async function loadCatalogCollections(catalogUrl) {
 }
 
 /**
+ * Creates a semantic list of text-only metadata values.
+ *
+ * @param {{label: string, value: string}[]} metadata Inspector metadata.
+ * @return {HTMLDListElement} Definition list containing the metadata.
+ */
+function createCatalogMetadataList(metadata) {
+    const metadataList = document.createElement("dl");
+    metadataList.className = "catalog-metadata";
+    for (const metadataEntry of metadata) {
+        const metadataTerm = document.createElement("dt");
+        metadataTerm.textContent = metadataEntry.label;
+        const metadataDescription = document.createElement("dd");
+        metadataDescription.textContent = metadataEntry.value;
+        metadataList.append(metadataTerm, metadataDescription);
+    }
+    return metadataList;
+}
+
+/**
+ * Displays one selected STAC Item without interpreting catalog text as HTML.
+ *
+ * @param {Object|null} item Selected STAC Item, or null for the empty state.
+ * @param {Object[]} collections STAC Collections available to the Catalog.
+ * @return {void}
+ */
+function renderCatalogItemInspector(item, collections) {
+    const inspectorHeading = document.querySelector(
+        "#catalog-inspector-heading"
+    );
+    const inspectorContent = document.querySelector(
+        "#catalog-inspector-content"
+    );
+    const inspectorStatus = document.querySelector(
+        "#catalog-inspector-status"
+    );
+    inspectorContent.replaceChildren();
+
+    if (item === null) {
+        inspectorHeading.textContent = "Item inspector";
+        const emptyInspector = document.createElement("div");
+        emptyInspector.className = "catalog-inspector-empty";
+        const emptyHeading = document.createElement("strong");
+        emptyHeading.textContent = "No item selected";
+        const emptyMessage = document.createElement("p");
+        emptyMessage.textContent =
+            "Select a Catalog result to inspect its metadata.";
+        emptyInspector.append(emptyHeading, emptyMessage);
+        inspectorContent.append(emptyInspector);
+        inspectorStatus.textContent = "No Catalog Item is selected.";
+        return;
+    }
+
+    const inspector = buildCatalogItemInspector(item, collections);
+    inspectorHeading.textContent = inspector.title;
+    if (inspector.description !== null) {
+        const description = document.createElement("p");
+        description.className = "catalog-inspector-description";
+        description.textContent = inspector.description;
+        inspectorContent.append(description);
+    }
+    inspectorContent.append(createCatalogMetadataList(inspector.metadata));
+
+    const assetsHeading = document.createElement("h4");
+    assetsHeading.textContent = "Assets";
+    inspectorContent.append(assetsHeading);
+    if (inspector.assets.length === 0) {
+        const noAssetsMessage = document.createElement("p");
+        noAssetsMessage.className = "catalog-inspector-note";
+        noAssetsMessage.textContent = "No Assets are recorded for this Item.";
+        inspectorContent.append(noAssetsMessage);
+    }
+
+    for (const asset of inspector.assets) {
+        const assetCard = document.createElement("article");
+        assetCard.className = "catalog-asset";
+        const assetHeading = document.createElement("h5");
+        assetHeading.textContent = asset.title;
+        const assetKey = document.createElement("p");
+        assetKey.className = "catalog-asset-key";
+        assetKey.textContent = `Asset key: ${asset.key}`;
+        assetCard.append(
+            assetHeading,
+            assetKey,
+            createCatalogMetadataList(asset.metadata)
+        );
+
+        if (asset.bands.length > 0) {
+            const bandsHeading = document.createElement("strong");
+            bandsHeading.className = "catalog-bands-heading";
+            bandsHeading.textContent = "Raster bands";
+            const bandList = document.createElement("ul");
+            bandList.className = "catalog-band-list";
+            for (const band of asset.bands) {
+                const bandItem = document.createElement("li");
+                const bandHeading = document.createElement("strong");
+                bandHeading.textContent = band.title;
+                const bandDetails = document.createElement("span");
+                bandDetails.textContent = band.metadata
+                    .map(
+                        (metadataEntry) =>
+                            `${metadataEntry.label}: ${metadataEntry.value}`
+                    )
+                    .join(" · ");
+                bandItem.append(bandHeading, bandDetails);
+                bandList.append(bandItem);
+            }
+            assetCard.append(bandsHeading, bandList);
+        }
+        inspectorContent.append(assetCard);
+    }
+
+    inspectorStatus.textContent = `Showing details for ${inspector.title}.`;
+}
+
+/**
  * Connects catalog search, paging, selection, and refresh controls.
  *
  * @param {AppGlobalConfiguration} appGlobalConfiguration Application settings.
@@ -195,6 +313,16 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
         selectedButton: null
     };
 
+    /** Clears the selected result, footprint, and inspector together. */
+    function clearCatalogSelection() {
+        footprintController.clear();
+        catalogState.selectedButton = null;
+        renderCatalogItemInspector(
+            null,
+            catalogState.collectionsDocument?.collections ?? []
+        );
+    }
+
     /**
      * Displays one successful Item Search page.
      *
@@ -202,8 +330,7 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
      * @return {void}
      */
     function renderCatalogPage(itemCollection) {
-        footprintController.clear();
-        catalogState.selectedButton = null;
+        clearCatalogSelection();
         catalogResultsElement.replaceChildren();
         catalogState.nextLink = findPaginationLink(itemCollection, ["next"]);
         catalogState.previousLink = findPaginationLink(itemCollection, [
@@ -266,6 +393,10 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
                 itemButton.classList.add("is-selected");
                 itemButton.setAttribute("aria-pressed", "true");
                 footprintController.select(item);
+                renderCatalogItemInspector(
+                    item,
+                    catalogState.collectionsDocument.collections
+                );
             });
             itemButton.addEventListener("pointerenter", () => {
                 footprintController.preview(item);
@@ -344,7 +475,7 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
             if (loadSequence !== catalogState.loadSequence) {
                 return;
             }
-            footprintController.clear();
+            clearCatalogSelection();
             catalogResultsElement.replaceChildren();
             catalogState.nextLink = null;
             catalogState.previousLink = null;
@@ -504,9 +635,10 @@ async function initializeScanner(refreshCatalog) {
 /**
  * Enables selection among the workspace tabs.
  *
+ * @param {CatalogWorkspaceController} catalogWorkspace Catalog layout state.
  * @return {void}
  */
-function initializeWorkspaceTabs() {
+function initializeWorkspaceTabs(catalogWorkspace) {
     const workspaceTabButtons = document.querySelectorAll(".tab-button");
     const workspaceTabPanels = document.querySelectorAll(".tab-panel");
 
@@ -519,6 +651,9 @@ function initializeWorkspaceTabs() {
     function selectWorkspaceTab(tabSelectionEvent) {
         const selectedTabButton = tabSelectionEvent.currentTarget;
         const selectedPanelName = selectedTabButton.dataset.panel;
+        if (selectedPanelName !== "catalog") {
+            catalogWorkspace.setExpanded(false);
+        }
 
         for (const candidateTabButton of workspaceTabButtons) {
             const isSelectedTab = candidateTabButton === selectedTabButton;
@@ -546,11 +681,29 @@ function initializeWorkspaceTabs() {
  * Enables collapsing and reopening the control panel.
  *
  * @param {L.Map} leafletMap The initialized Leaflet map.
- * @return {void}
+ * @return {CatalogWorkspaceController} Catalog layout controller.
  */
 function initializeControlPanel(leafletMap) {
+    const appElement = document.querySelector("#app");
     const controlPanelElement = document.querySelector("#control-panel");
     const openPanelButton = document.querySelector("#open-panel");
+    const catalogWorkspaceToggle = document.querySelector(
+        "#toggle-catalog-workspace"
+    );
+    const catalogInspector = document.querySelector(
+        "#catalog-item-inspector"
+    );
+    const catalogWorkspace = new CatalogWorkspaceController(
+        appElement,
+        catalogWorkspaceToggle,
+        catalogInspector,
+        () => {
+            window.setTimeout(
+                () => leafletMap.invalidateSize(),
+                CONTROL_PANEL_TRANSITION_MILLISECONDS
+            );
+        }
+    );
 
     /**
      * Sets whether the control panel is collapsed.
@@ -559,11 +712,25 @@ function initializeControlPanel(leafletMap) {
      * @return {void}
      */
     function setControlPanelCollapsed(isCollapsed) {
+        if (isCollapsed) {
+            catalogWorkspace.setExpanded(false);
+        }
         controlPanelElement.classList.toggle("is-collapsed", isCollapsed);
         openPanelButton.hidden = !isCollapsed;
-        window.setTimeout(() => leafletMap.invalidateSize(), 240);
+        window.setTimeout(
+            () => leafletMap.invalidateSize(),
+            CONTROL_PANEL_TRANSITION_MILLISECONDS
+        );
     }
 
+    catalogWorkspaceToggle.addEventListener(
+        "click",
+        catalogWorkspace.toggle.bind(catalogWorkspace)
+    );
+    document.addEventListener(
+        "keydown",
+        catalogWorkspace.handleKeyDown.bind(catalogWorkspace)
+    );
     document
         .querySelector("#collapse-panel")
         .addEventListener("click", setControlPanelCollapsed.bind(null, true));
@@ -571,6 +738,7 @@ function initializeControlPanel(leafletMap) {
         "click",
         setControlPanelCollapsed.bind(null, false)
     );
+    return catalogWorkspace;
 }
 
 /**
@@ -582,8 +750,8 @@ async function startApplication() {
     const appGlobalConfiguration = await loadAppGlobalConfiguration();
     applyAppGlobalConfiguration(appGlobalConfiguration);
     const leafletMap = initializeMap(appGlobalConfiguration);
-    initializeWorkspaceTabs();
-    initializeControlPanel(leafletMap);
+    const catalogWorkspace = initializeControlPanel(leafletMap);
+    initializeWorkspaceTabs(catalogWorkspace);
     const refreshCatalog = await initializeCatalog(
         appGlobalConfiguration,
         leafletMap

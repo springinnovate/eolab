@@ -76,6 +76,100 @@ export function findPaginationLink(itemCollection, relations) {
 }
 
 /**
+ * Builds the display model for a STAC Item inspector.
+ *
+ * @param {Object} item STAC Item selected in the result list.
+ * @param {Object[]} collections STAC Collections available to the Catalog.
+ * @return {Object} Text-only metadata grouped for inspector rendering.
+ */
+export function buildCatalogItemInspector(item, collections) {
+  const properties = item.properties;
+  const collection = collections.find(
+    (candidateCollection) => candidateCollection.id === item.collection,
+  );
+  const collectionLabel = collection?.title
+    ? `${collection.title} (${item.collection})`
+    : item.collection;
+  const metadata = [
+    { label: "Item ID", value: item.id },
+    { label: "Collection", value: collectionLabel },
+  ];
+
+  if (properties.datetime !== null && properties.datetime !== undefined) {
+    metadata.push({ label: "Item datetime", value: properties.datetime });
+  } else if (
+    properties.start_datetime !== undefined &&
+    properties.end_datetime !== undefined
+  ) {
+    metadata.push({
+      label: "Item datetime range",
+      value: `${properties.start_datetime} – ${properties.end_datetime}`,
+    });
+  }
+  if (item.geometry !== null) {
+    metadata.push({ label: "Geometry", value: item.geometry.type });
+  }
+  if (item.bbox !== undefined) {
+    metadata.push({ label: "Bounding box", value: item.bbox.join(", ") });
+  }
+  if (properties["proj:epsg"] !== undefined) {
+    metadata.push({
+      label: "Coordinate reference system",
+      value: `EPSG:${properties["proj:epsg"]}`,
+    });
+  } else if (properties["proj:wkt2"] !== undefined) {
+    metadata.push({
+      label: "Coordinate reference system",
+      value: properties["proj:wkt2"],
+    });
+  }
+  if (properties["proj:shape"] !== undefined) {
+    const [height, width] = properties["proj:shape"];
+    metadata.push({
+      label: "Raster dimensions",
+      value: `${width} × ${height} pixels`,
+    });
+  }
+
+  const assets = Object.entries(item.assets).map(([assetKey, asset]) => {
+    const assetMetadata = [{ label: "Location", value: asset.href }];
+    if (asset.type !== undefined) {
+      assetMetadata.push({ label: "Media type", value: asset.type });
+    }
+    if (asset.roles !== undefined) {
+      assetMetadata.push({ label: "Roles", value: asset.roles.join(", ") });
+    }
+    if (asset.updated !== undefined) {
+      assetMetadata.push({ label: "File modified", value: asset.updated });
+    }
+
+    const bands = (asset["raster:bands"] ?? []).map((band, bandIndex) => {
+      const bandMetadata = [
+        { label: "Data type", value: band.data_type },
+      ];
+      if (Object.hasOwn(band, "nodata")) {
+        bandMetadata.push({ label: "Nodata", value: String(band.nodata) });
+      }
+      return { title: `Band ${bandIndex + 1}`, metadata: bandMetadata };
+    });
+
+    return {
+      key: assetKey,
+      title: asset.title ?? assetKey,
+      metadata: assetMetadata,
+      bands,
+    };
+  });
+
+  return {
+    title: properties.title ?? item.id,
+    description: properties.description ?? null,
+    metadata,
+    assets,
+  };
+}
+
+/**
  * Issues standard STAC Item Search requests while cancelling stale work.
  */
 export class CatalogSearchClient {
@@ -178,6 +272,62 @@ export class CatalogSearchClient {
       throw new Error("STAC Item Search response has no features array");
     }
     return itemCollection;
+  }
+}
+
+/**
+ * Owns the explicit compact or expanded Catalog layout state.
+ */
+export class CatalogWorkspaceController {
+  /**
+   * @param {HTMLElement} appElement Application layout root.
+   * @param {HTMLButtonElement} toggleButton Catalog layout toggle.
+   * @param {HTMLElement} inspectorElement Item inspector region.
+   * @param {Function} onLayoutChange Called after layout state changes.
+   */
+  constructor(appElement, toggleButton, inspectorElement, onLayoutChange) {
+    this.appElement = appElement;
+    this.toggleButton = toggleButton;
+    this.inspectorElement = inspectorElement;
+    this.onLayoutChange = onLayoutChange;
+    this.isExpanded = false;
+  }
+
+  /** Switches between the compact panel and expanded Catalog workspace. */
+  toggle() {
+    this.setExpanded(!this.isExpanded);
+  }
+
+  /**
+   * @param {boolean} isExpanded Whether the Catalog workspace is expanded.
+   * @return {void}
+   */
+  setExpanded(isExpanded) {
+    if (isExpanded === this.isExpanded) {
+      return;
+    }
+    this.isExpanded = isExpanded;
+    this.appElement.classList.toggle("is-catalog-workspace", isExpanded);
+    this.toggleButton.setAttribute("aria-expanded", String(isExpanded));
+    this.toggleButton.textContent = isExpanded
+      ? "Return to map"
+      : "Expand catalog";
+    this.inspectorElement.setAttribute("aria-hidden", String(!isExpanded));
+    this.onLayoutChange();
+  }
+
+  /**
+   * Returns an expanded Catalog to the map layout when Escape is pressed.
+   *
+   * @param {KeyboardEvent} keyboardEvent Document keyboard event.
+   * @return {void}
+   */
+  handleKeyDown(keyboardEvent) {
+    if (keyboardEvent.key === "Escape" && this.isExpanded) {
+      keyboardEvent.preventDefault();
+      this.setExpanded(false);
+      this.toggleButton.focus();
+    }
   }
 }
 
