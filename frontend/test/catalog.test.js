@@ -145,13 +145,13 @@ test("CatalogSearchClient ignores a superseded response", async () => {
   assert.equal(pendingResponses[0].options.signal.aborted, true);
 });
 
-test("findPaginationLink accepts STAC relation names", () => {
+test("findPaginationLink returns standard STAC pagination relations", () => {
   const nextLink = { rel: "next", href: "/next" };
   const previousLink = { rel: "prev", href: "/previous" };
   const document = { links: [nextLink, previousLink] };
 
   assert.equal(findPaginationLink(document, ["next"]), nextLink);
-  assert.equal(findPaginationLink(document, ["prev", "previous"]), previousLink);
+  assert.equal(findPaginationLink(document, ["prev"]), previousLink);
 });
 
 test("createDebouncedAction runs only the latest scheduled action", () => {

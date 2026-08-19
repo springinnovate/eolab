@@ -201,10 +201,7 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
     catalogState.selectedButton = null;
     catalogResultsElement.replaceChildren();
     catalogState.nextLink = findPaginationLink(itemCollection, ["next"]);
-    catalogState.previousLink = findPaginationLink(itemCollection, [
-      "prev",
-      "previous",
-    ]);
+    catalogState.previousLink = findPaginationLink(itemCollection, ["prev"]);
     previousPageButton.disabled = catalogState.previousLink === null;
     nextPageButton.disabled = catalogState.nextLink === null;
     pageStatusElement.textContent = `Page ${catalogState.pageNumber}`;
