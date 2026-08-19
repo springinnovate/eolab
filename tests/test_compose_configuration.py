@@ -25,15 +25,17 @@ def test_public_app_variables_are_not_self_referential() -> None:
         assert f'"{deployment_variable}=${{{deployment_variable}' not in compose
 
 
-def test_scan_source_is_a_read_only_deployment_mount() -> None:
-    """Let Coolify configure the host path without exposing it in the container."""
+def test_scan_paths_share_one_read_only_deployment_mount() -> None:
+    """Keep the host mount separate from container-relative scan paths."""
     compose = COMPOSE_PATH.read_text(encoding="utf-8")
 
-    assert "source: ${EOLAB_SCAN_SOURCE_PATH}" in compose
+    assert "source: ${EOLAB_SCAN_MOUNT_PATH}" in compose
     assert "target: /scan-source" in compose
     assert "read_only: true" in compose
-    assert '"SCAN_SOURCE_PATH=/scan-source"' in compose
-    assert '"EOLAB_SCAN_SOURCE_PATH=${EOLAB_SCAN_SOURCE_PATH' not in compose
+    assert '"SCAN_MOUNT_PATH=/scan-source"' in compose
+    assert '"SCAN_PATHS_WITHIN_MOUNT=${EOLAB_SCAN_PATHS_WITHIN_MOUNT:' in compose
+    assert '"SCAN_DISPLAY_PATH_PREFIX=${EOLAB_SCAN_DISPLAY_PATH_PREFIX:' in compose
+    assert '"EOLAB_SCAN_MOUNT_PATH=${EOLAB_SCAN_MOUNT_PATH' not in compose
 
 
 def test_internal_stac_api_enables_writes_for_scanning() -> None:

@@ -41,7 +41,11 @@ def create_app(
         version=app_global_configuration.app_version,
     )
     scan_manager = ScanManager(
-        app_global_configuration.scan_source_path,
+        app_global_configuration.scan_mount_path,
+        tuple(
+            app_global_configuration.scan_mount_path / relative_path
+            for relative_path in app_global_configuration.scan_paths_within_mount
+        ),
         StacApiWriter(
             app_global_configuration.catalog_internal_url,
             catalog_transport,

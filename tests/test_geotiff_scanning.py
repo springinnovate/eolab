@@ -150,7 +150,7 @@ def test_scan_continues_after_an_invalid_geotiff(tmp_path: Path) -> None:
     write_geotiff(tmp_path / "valid.TIF")
     (tmp_path / "invalid.tiff").write_text("not a raster", encoding="utf-8")
     catalog_writer = RecordingCatalogWriter()
-    scan_manager = ScanManager(tmp_path, catalog_writer)
+    scan_manager = ScanManager(tmp_path, (tmp_path,), catalog_writer)
 
     async def run_twice() -> tuple[dict[str, Any], dict[str, Any]]:
         await scan_manager.start()
@@ -175,10 +175,39 @@ def test_scan_continues_after_an_invalid_geotiff(tmp_path: Path) -> None:
     assert len(catalog_writer.write_session.items) == 1
 
 
+def test_scan_combines_multiple_directories_under_one_mount(tmp_path: Path) -> None:
+    """Scan configured directories while retaining mount-relative Item paths."""
+    observations_path = tmp_path / "observations"
+    model_outputs_path = tmp_path / "model_outputs"
+    write_geotiff(observations_path / "result.tif")
+    write_geotiff(model_outputs_path / "result.tif")
+    catalog_writer = RecordingCatalogWriter()
+    scan_manager = ScanManager(
+        tmp_path,
+        (observations_path, model_outputs_path),
+        catalog_writer,
+    )
+
+    async def run_scan() -> dict[str, Any]:
+        await scan_manager.start()
+        while scan_manager.status()["state"] in {"discovering", "scanning"}:
+            await asyncio.sleep(0.01)
+        return scan_manager.status()
+
+    status = asyncio.run(run_scan())
+
+    assert status["state"] == "completed"
+    assert status["indexed"] == 2
+    assert {
+        item["properties"]["title"]
+        for item in catalog_writer.write_session.items.values()
+    } == {"observations/result.tif", "model_outputs/result.tif"}
+
+
 def test_scan_prevents_overlap(tmp_path: Path) -> None:
     """Reject a second start while directory discovery is still running."""
     catalog_writer = RecordingCatalogWriter()
-    scan_manager = ScanManager(tmp_path, catalog_writer)
+    scan_manager = ScanManager(tmp_path, (tmp_path,), catalog_writer)
 
     async def start_twice() -> None:
         await scan_manager.start()

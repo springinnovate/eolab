@@ -181,6 +181,7 @@ test("buildCatalogItemDetails presents scanned GeoTIFF metadata", () => {
       },
     },
     [{ id: "eolab-mounted-geotiffs", title: "Mounted GeoTIFFs" }],
+    "bigboi -- Z:\\bigbucket",
   );
 
   assert.equal(inspector.title, "Model Outputs/grassland_2002.tif");
@@ -206,8 +207,8 @@ test("buildCatalogItemDetails presents scanned GeoTIFF metadata", () => {
       title: "Model Outputs/grassland_2002.tif",
       metadata: [
         {
-          label: "Location",
-          value: "file:///data/Model Outputs/grassland_2002.tif",
+          label: "Original location",
+          value: "bigboi -- Z:\\bigbucket\\Model Outputs\\grassland_2002.tif",
         },
         { label: "Media type", value: "image/tiff; application=geotiff" },
         { label: "Roles", value: "data" },
@@ -241,6 +242,7 @@ test("buildCatalogItemDetails omits unavailable optional metadata", () => {
       assets: {},
     },
     [],
+    "/shared/bigbucket",
   );
 
   assert.equal(inspector.title, "<img src=x onerror=alert(1)>");
@@ -254,6 +256,26 @@ test("buildCatalogItemDetails omits unavailable optional metadata", () => {
     },
   ]);
   assert.deepEqual(inspector.assets, []);
+});
+
+test("buildCatalogItemDetails preserves non-file Asset locations", () => {
+  const inspector = buildCatalogItemDetails(
+    {
+      id: "remote-item",
+      collection: "sample",
+      geometry: null,
+      properties: { datetime: "2025-01-01T00:00:00Z" },
+      assets: {
+        data: { href: "https://example.test/data.tif" },
+      },
+    },
+    [],
+    "bigboi -- Z:\\bigbucket",
+  );
+
+  assert.deepEqual(inspector.assets[0].metadata, [
+    { label: "Location", value: "https://example.test/data.tif" },
+  ]);
 });
 
 test("createDebouncedAction runs only the latest scheduled action", () => {

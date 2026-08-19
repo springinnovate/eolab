@@ -1,5 +1,6 @@
 """Load and validate EOLab application settings from the environment."""
 
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,7 +18,9 @@ class Settings:
     app_version: str
     catalog_url: str
     catalog_internal_url: str
-    scan_source_path: Path
+    scan_mount_path: Path
+    scan_paths_within_mount: tuple[Path, ...]
+    scan_display_path_prefix: str
     basemap_url: str
     basemap_attribution: str
     initial_latitude: float
@@ -37,6 +40,7 @@ class Settings:
             "application version": self.app_version,
             "CATALOG_URL": self.catalog_url,
             "CATALOG_INTERNAL_URL": self.catalog_internal_url,
+            "SCAN_DISPLAY_PATH_PREFIX": self.scan_display_path_prefix,
             "BASEMAP_URL": self.basemap_url,
             "BASEMAP_ATTRIBUTION": self.basemap_attribution,
         }
@@ -50,10 +54,40 @@ class Settings:
             raise ValueError("INITIAL_LONGITUDE must be between -180 and 180")
         if not 0 <= self.initial_zoom <= 22:
             raise ValueError("INITIAL_ZOOM must be between 0 and 22")
-        if not self.scan_source_path.is_absolute():
-            raise ValueError("SCAN_SOURCE_PATH must be an absolute path")
-        if not self.scan_source_path.is_dir():
-            raise ValueError("SCAN_SOURCE_PATH must be an existing directory")
+        if not self.scan_mount_path.is_absolute():
+            raise ValueError("SCAN_MOUNT_PATH must be an absolute path")
+        if not self.scan_mount_path.is_dir():
+            raise ValueError("SCAN_MOUNT_PATH must be an existing directory")
+        if not self.scan_paths_within_mount:
+            raise ValueError("SCAN_PATHS_WITHIN_MOUNT must contain at least one path")
+
+        resolved_mount_path = self.scan_mount_path.resolve()
+        source_paths: list[Path] = []
+        for relative_path in self.scan_paths_within_mount:
+            if relative_path.is_absolute():
+                raise ValueError("SCAN_PATHS_WITHIN_MOUNT paths must be relative")
+            if ".." in relative_path.parts:
+                raise ValueError("SCAN_PATHS_WITHIN_MOUNT paths must not contain '..'")
+            source_path = (resolved_mount_path / relative_path).resolve()
+            if not source_path.is_relative_to(resolved_mount_path):
+                raise ValueError(
+                    "SCAN_PATHS_WITHIN_MOUNT paths must remain within the mount"
+                )
+            if not source_path.is_dir():
+                raise ValueError(
+                    "SCAN_PATHS_WITHIN_MOUNT paths must identify existing directories"
+                )
+            source_paths.append(source_path)
+
+        if len(source_paths) != len(set(source_paths)):
+            raise ValueError("SCAN_PATHS_WITHIN_MOUNT paths must not be duplicated")
+        for source_index, source_path in enumerate(source_paths):
+            for other_source_path in source_paths[source_index + 1 :]:
+                if (
+                    source_path in other_source_path.parents
+                    or other_source_path in source_path.parents
+                ):
+                    raise ValueError("SCAN_PATHS_WITHIN_MOUNT paths must not overlap")
 
     def as_public_dict(self) -> dict[str, object]:
         """Serialize settings for the public browser configuration endpoint.
@@ -69,6 +103,7 @@ class Settings:
             "appSubtitle": self.app_subtitle,
             "appVersion": self.app_version,
             "catalogUrl": self.catalog_url,
+            "scanDisplayPathPrefix": self.scan_display_path_prefix,
             "basemap": {
                 "url": self.basemap_url,
                 "attribution": self.basemap_attribution,
@@ -99,13 +134,21 @@ def load_settings(
         KeyError: If a required environment variable is missing.
         ValueError: If a setting violates its type or range contract.
     """
+    scan_paths = json.loads(os.environ["SCAN_PATHS_WITHIN_MOUNT"])
+    if not isinstance(scan_paths, list) or not all(
+        isinstance(scan_path, str) and scan_path for scan_path in scan_paths
+    ):
+        raise ValueError("SCAN_PATHS_WITHIN_MOUNT must be a JSON array of paths")
+
     return Settings(
         app_title=os.environ["APP_TITLE"].strip(),
         app_subtitle=os.environ["APP_SUBTITLE"].strip(),
         app_version=version_file_path.read_text(encoding="utf-8").strip(),
         catalog_url=os.environ["CATALOG_URL"].strip(),
         catalog_internal_url=os.environ["CATALOG_INTERNAL_URL"].strip(),
-        scan_source_path=Path(os.environ["SCAN_SOURCE_PATH"]),
+        scan_mount_path=Path(os.environ["SCAN_MOUNT_PATH"]),
+        scan_paths_within_mount=tuple(Path(scan_path) for scan_path in scan_paths),
+        scan_display_path_prefix=os.environ["SCAN_DISPLAY_PATH_PREFIX"].strip(),
         basemap_url=os.environ["BASEMAP_URL"].strip(),
         basemap_attribution=os.environ["BASEMAP_ATTRIBUTION"].strip(),
         initial_latitude=float(os.environ["INITIAL_LATITUDE"]),

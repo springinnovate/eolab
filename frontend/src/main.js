@@ -22,6 +22,7 @@ let scanPollTimeout = null;
  * @property {string} appSubtitle Application subtitle.
  * @property {string} appVersion Deployed application version.
  * @property {string} catalogUrl Browser-facing STAC catalog URL.
+ * @property {string} scanDisplayPathPrefix User-facing root for mounted files.
  * @property {{url: string, attribution: string}} basemap Basemap settings.
  * @property {{latitude: number, longitude: number, zoom: number}} initialView Initial map view.
  */
@@ -189,9 +190,14 @@ function createCatalogMetadataList(metadata) {
  *
  * @param {Object|null} item Selected STAC Item, or null for the empty state.
  * @param {Object[]} collections STAC Collections available to the Catalog.
+ * @param {string} scanDisplayPathPrefix User-facing root for mounted files.
  * @return {void}
  */
-function renderCatalogItemInspector(item, collections) {
+function renderCatalogItemInspector(
+    item,
+    collections,
+    scanDisplayPathPrefix
+) {
     const inspectorHeading = document.querySelector(
         "#catalog-inspector-heading"
     );
@@ -220,7 +226,11 @@ function renderCatalogItemInspector(item, collections) {
     }
 
     // Render the Item's identity, description, and core metadata.
-    const inspector = buildCatalogItemDetails(item, collections);
+    const inspector = buildCatalogItemDetails(
+        item,
+        collections,
+        scanDisplayPathPrefix
+    );
     inspectorHeading.textContent = inspector.title;
     if (inspector.description !== null) {
         const description = document.createElement("p");
@@ -325,7 +335,8 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
         catalogState.selectedButton = null;
         renderCatalogItemInspector(
             null,
-            catalogState.collectionsDocument?.collections ?? []
+            catalogState.collectionsDocument?.collections ?? [],
+            appGlobalConfiguration.scanDisplayPathPrefix
         );
     }
 
@@ -401,7 +412,8 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
                 footprintController.select(item);
                 renderCatalogItemInspector(
                     item,
-                    catalogState.collectionsDocument.collections
+                    catalogState.collectionsDocument.collections,
+                    appGlobalConfiguration.scanDisplayPathPrefix
                 );
             });
             itemButton.addEventListener("pointerenter", () => {
@@ -540,7 +552,7 @@ function renderScanStatus(scanStatus) {
     const isRunning = ["discovering", "scanning"].includes(scanStatus.state);
 
     startScanButton.disabled = isRunning;
-    startScanButton.textContent = isRunning ? "Scanning…" : "Scan directory";
+    startScanButton.textContent = isRunning ? "Scanning…" : "Scan directories";
     scanProgressElement.hidden = scanStatus.state === "not_started";
     scanProgressElement.max = Math.max(scanStatus.discovered, 1);
     scanProgressElement.value = scanStatus.processed;

@@ -14,9 +14,9 @@ import httpx2
 from eolab_app.geotiff import build_stac_item
 
 
-# The single-source scanner currently puts all discovered Items in one fixed
-# Collection. Collection metadata can move into scan-source configuration when
-# EOLab supports multiple independently configured sources.
+# The scanner currently puts all discovered Items in one fixed Collection.
+# Collection metadata can move into scan configuration when EOLab supports
+# independently described sources.
 DEFAULT_SCAN_COLLECTION = {
     "type": "Collection",
     "stac_version": "1.0.0",
@@ -141,8 +141,14 @@ class StacApiWriteSession:
 class ScanManager:
     """Own the single in-process scan and its observable progress."""
 
-    def __init__(self, source_root: Path, catalog_writer: CatalogWriter) -> None:
+    def __init__(
+        self,
+        source_root: Path,
+        source_paths: tuple[Path, ...],
+        catalog_writer: CatalogWriter,
+    ) -> None:
         self.source_root = source_root
+        self.source_paths = source_paths
         self.catalog_writer = catalog_writer
         self._start_lock = asyncio.Lock()
         self._task: asyncio.Task[None] | None = None
@@ -174,6 +180,7 @@ class ScanManager:
             geotiff_paths, discovery_errors = await asyncio.to_thread(
                 _discover_geotiffs,
                 self.source_root,
+                self.source_paths,
             )
             self._status["discovered"] = len(geotiff_paths)
             self._status["failed"] = len(discovery_errors)
@@ -228,11 +235,15 @@ class ScanManager:
         }
 
 
-def _discover_geotiffs(source_root: Path) -> tuple[list[Path], list[dict[str, str]]]:
+def _discover_geotiffs(
+    source_root: Path,
+    source_paths: tuple[Path, ...],
+) -> tuple[list[Path], list[dict[str, str]]]:
     """Find GeoTIFFs recursively without stopping on unreadable directories.
 
     Args:
         source_root: Directory at the root of the configured scan mount.
+        source_paths: Directories within the mount to search recursively.
 
     Returns:
         Discovered `.tif` and `.tiff` paths in deterministic traversal order,
@@ -245,14 +256,16 @@ def _discover_geotiffs(source_root: Path) -> tuple[list[Path], list[dict[str, st
         error_path = Path(error.filename).relative_to(source_root).as_posix()
         errors.append({"path": error_path, "error": str(error)})
 
-    for directory_path, directory_names, file_names in os.walk(
-        source_root,
-        onerror=record_walk_error,
-    ):
-        directory_names.sort()
-        for file_name in sorted(file_names):
-            if Path(file_name).suffix.lower() in {".tif", ".tiff"}:
-                geotiff_paths.append(Path(directory_path) / file_name)
+    for source_path in source_paths:
+        for directory_path, directory_names, file_names in os.walk(
+            source_path,
+            onerror=record_walk_error,
+        ):
+            directory_names.sort()
+            for file_name in sorted(file_names):
+                if Path(file_name).suffix.lower() in {".tif", ".tiff"}:
+                    geotiff_paths.append(Path(directory_path) / file_name)
+    geotiff_paths.sort(key=lambda path: path.relative_to(source_root).as_posix())
     return geotiff_paths, errors
 
 
