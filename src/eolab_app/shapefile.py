@@ -181,7 +181,9 @@ def build_stac_item(
         extension: datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
         for extension, path in components.items()
     }
-    properties["datetime"] = _format_datetime(max(component_modified_at.values()))
+    properties["datetime"] = (
+        max(component_modified_at.values()).isoformat().replace("+00:00", "Z")
+    )
 
     footprint = None
     if bbox is not None:
@@ -210,7 +212,11 @@ def build_stac_item(
                 "type": SHAPEFILE_COMPONENT_TYPES[extension],
                 "title": component_path.relative_to(source_root).as_posix(),
                 "roles": asset_roles,
-                "updated": _format_datetime(component_modified_at[extension]),
+                "updated": (
+                    component_modified_at[extension]
+                    .isoformat()
+                    .replace("+00:00", "Z")
+                ),
             }
 
     item_identifier = hashlib.sha256(relative_path_text.encode("utf-8")).hexdigest()
@@ -240,8 +246,3 @@ def _component_extension(file_name: str) -> str | None:
         if lower_file_name.endswith(extension):
             return extension
     return None
-
-
-def _format_datetime(value: datetime) -> str:
-    """Format a UTC timestamp for STAC."""
-    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
