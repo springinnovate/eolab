@@ -82,7 +82,9 @@ services:
         max-file: "3"
 
   geoserver:
-    image: docker.osgeo.org/geoserver:3.0.1@sha256:7cb827ba3f6d9fc04a6647fc0cfa6c254fc642407f0d99281fdf026d2540b558
+    build:
+      context: .
+      dockerfile: Dockerfile.geoserver
     restart: unless-stopped
     environment:
       - "SKIP_DEMO_DATA=true"
@@ -100,6 +102,9 @@ services:
       - "8080"
     volumes:
       - geoserver-data:/opt/geoserver_data
+      # Primary container-level protection. The image also verifies the
+      # effective kernel mount mode at startup in case deployment metadata
+      # reports or requests this bind as writable.
       - type: bind
         source: ${EOLAB_SCAN_MOUNT_PATH}
         target: /scan-source
@@ -194,6 +199,9 @@ services:
     expose:
       - "8000"
     volumes:
+      # Primary container-level protection. The image also verifies the
+      # effective kernel mount mode at startup in case deployment metadata
+      # reports or requests this bind as writable.
       - type: bind
         source: ${EOLAB_SCAN_MOUNT_PATH}
         target: /scan-source

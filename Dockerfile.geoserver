@@ -1,0 +1,7 @@
+FROM docker.osgeo.org/geoserver:3.0.1@sha256:7cb827ba3f6d9fc04a6647fc0cfa6c254fc642407f0d99281fdf026d2540b558
+
+COPY --chmod=0555 deployment/require-read-only-scan-source.sh \
+    /usr/local/bin/require-read-only-scan-source
+
+ENTRYPOINT ["/usr/local/bin/require-read-only-scan-source"]
+CMD ["bash", "/opt/startup.sh"]

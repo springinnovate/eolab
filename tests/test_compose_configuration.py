@@ -41,6 +41,31 @@ def test_scan_paths_share_one_read_only_deployment_mount() -> None:
     assert '"EOLAB_SCAN_MOUNT_PATH=${EOLAB_SCAN_MOUNT_PATH' not in compose
 
 
+def test_app_and_geoserver_refuse_a_writable_scan_mount() -> None:
+    """Verify the effective kernel mode before either long-running service starts."""
+    repository_root = COMPOSE_PATH.parent
+    app_dockerfile = (repository_root / "Dockerfile").read_text(encoding="utf-8")
+    geoserver_dockerfile = (repository_root / "Dockerfile.geoserver").read_text(
+        encoding="utf-8"
+    )
+    guard = (
+        repository_root / "deployment" / "require-read-only-scan-source.sh"
+    ).read_text(encoding="utf-8")
+
+    entrypoint = 'ENTRYPOINT ["/usr/local/bin/require-read-only-scan-source"]'
+    assert entrypoint in app_dockerfile
+    assert entrypoint in geoserver_dockerfile
+    assert 'CMD ["bash", "/opt/startup.sh"]' in geoserver_dockerfile
+    assert (
+        "FROM docker.osgeo.org/geoserver:3.0.1@sha256:"
+        "7cb827ba3f6d9fc04a6647fc0cfa6c254fc642407f0d99281fdf026d2540b558"
+        in geoserver_dockerfile
+    )
+    assert '/proc/self/mountinfo' in guard
+    assert '/scan-source ro(,| )' in guard
+    assert 'exec "$@"' in guard
+
+
 def test_app_image_avoids_repeated_gdal_directory_listing() -> None:
     """Avoid enumerating large mounted directories for every dataset open."""
     dockerfile = (COMPOSE_PATH.parent / "Dockerfile").read_text(encoding="utf-8")
@@ -73,11 +98,7 @@ def test_geoserver_is_internal_persistent_and_reads_the_scan_mount() -> None:
         "  geoserver-init:\n", 1
     )[0]
 
-    assert (
-        "image: docker.osgeo.org/geoserver:3.0.1@sha256:"
-        "7cb827ba3f6d9fc04a6647fc0cfa6c254fc642407f0d99281fdf026d2540b558"
-        in geoserver_service
-    )
+    assert "dockerfile: Dockerfile.geoserver" in geoserver_service
     assert "ports:" not in geoserver_service
     assert '"8080"' in geoserver_service
     assert "source: ${EOLAB_SCAN_MOUNT_PATH}" in geoserver_service
