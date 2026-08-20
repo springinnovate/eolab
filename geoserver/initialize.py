@@ -12,6 +12,8 @@ from urllib.request import Request, urlopen
 WORKSPACE_NAME = "eolab"
 RASTER_STYLE_NAME = "dynamic-raster"
 RASTER_STYLE_PATH = Path(__file__).with_name(f"{RASTER_STYLE_NAME}.sld")
+SCAN_SOURCE_URL_CHECK_NAME = "eolab-scan-source"
+SCAN_SOURCE_URL_PATTERN = r"^file:///scan-source/.*$"
 ADMIN_PASSWORD_PATTERN = re.compile(r"[A-Za-z0-9._-]{16,}")
 
 
@@ -90,7 +92,7 @@ def initialize_geoserver(
     master_password: str,
     raster_style: bytes,
 ) -> None:
-    """Ensure the EOLab master password, workspace, and raster style.
+    """Ensure the EOLab security and rendering configuration.
 
     Args:
         client: Authenticated internal GeoServer REST client.
@@ -114,6 +116,39 @@ def initialize_geoserver(
             "application/json",
         )
         _require_status(status, 200, "PUT", master_password_path)
+
+    url_check_path = f"/urlchecks/{SCAN_SOURCE_URL_CHECK_NAME}"
+    status, _ = client.request("GET", f"{url_check_path}.json")
+    url_check = json.dumps(
+        {
+            "regexUrlCheck": {
+                "name": SCAN_SOURCE_URL_CHECK_NAME,
+                "description": (
+                    "Allow GeoServer to publish files from EOLab's "
+                    "read-only scan mount"
+                ),
+                "enabled": True,
+                "regex": SCAN_SOURCE_URL_PATTERN,
+            }
+        }
+    ).encode()
+    if status == 404:
+        status, _ = client.request(
+            "POST",
+            "/urlchecks",
+            url_check,
+            "application/json",
+        )
+        _require_status(status, 201, "POST", "/urlchecks")
+    else:
+        _require_status(status, 200, "GET", url_check_path)
+        status, _ = client.request(
+            "PUT",
+            url_check_path,
+            url_check,
+            "application/json",
+        )
+        _require_status(status, 200, "PUT", url_check_path)
 
     workspace_path = f"/workspaces/{WORKSPACE_NAME}.json"
     status, _ = client.request(
@@ -189,7 +224,7 @@ def main() -> None:
         master_password,
         RASTER_STYLE_PATH.read_bytes(),
     )
-    print("EOLab GeoServer workspace and raster style are ready.")
+    print("EOLab GeoServer security and rendering configuration are ready.")
 
 
 if __name__ == "__main__":
