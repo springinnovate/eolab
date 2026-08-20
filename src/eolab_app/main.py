@@ -65,8 +65,8 @@ PUBLIC_WMS_QUERY_PARAMETERS = {
 }
 
 
-def _validated_wms_query(request: Request) -> list[tuple[str, str]]:
-    """Validate and return one supported WMS GET query.
+def _validated_public_wms_query(request: Request) -> list[tuple[str, str]]:
+    """Validate an untrusted request against the public WMS contract.
 
     Args:
         request: Incoming WMS request.
@@ -394,7 +394,7 @@ def create_app(
                 status_code=405,
                 detail="The public WMS endpoint accepts only GET requests",
             )
-        query_entries = _validated_wms_query(request)
+        query_entries = _validated_public_wms_query(request)
         internal_geoserver_url = (
             app_global_configuration.geoserver_internal_url.rstrip("/")
         )
