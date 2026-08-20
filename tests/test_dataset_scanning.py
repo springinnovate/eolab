@@ -23,7 +23,13 @@ from eolab_app.geotiff import (
     SUGGESTED_WARP_BOUNDS_DESCRIPTION,
     build_stac_item as build_geotiff_stac_item,
 )
-from eolab_app.scanning import DATASET_ITEM_BUILDERS, ScanManager, StacApiWriter
+from eolab_app.scanning import (
+    DATASET_ITEM_BUILDERS,
+    DatasetCandidate,
+    ScanManager,
+    StacApiWriter,
+    _build_dataset_metadata,
+)
 from eolab_app.shapefile import (
     FALLBACK_DATETIME_DESCRIPTION as SHAPEFILE_DATETIME_DESCRIPTION,
     build_stac_item as build_shapefile_stac_item,
@@ -602,6 +608,21 @@ def test_scan_continues_after_an_invalid_geotiff(tmp_path: Path) -> None:
     assert first_status["indexed"] == 1
     assert first_status["alreadyInCatalog"] == 0
     assert first_status["failed"] == 2
+    assert set(first_status["timing"]) == {
+        "elapsedSeconds",
+        "catalogInventorySeconds",
+        "discoverySeconds",
+        "metadataResultWaitSeconds",
+        "metadataWorkerSeconds",
+        "metadataProcessingSeconds",
+        "metadataIoWaitSeconds",
+        "catalogWriteSeconds",
+        "cacheInvalidationSeconds",
+    }
+    assert first_status["timing"]["metadataWorkerSeconds"] == pytest.approx(
+        first_status["timing"]["metadataProcessingSeconds"]
+        + first_status["timing"]["metadataIoWaitSeconds"]
+    )
     assert {error["path"] for error in first_status["errors"]} == {
         "invalid.tiff",
         "missing-crs.tif",
@@ -878,7 +899,7 @@ def test_scan_reads_metadata_concurrently_and_bulk_upserts(
 
     async def yielding_to_thread(function: Any, *args: Any) -> Any:
         nonlocal active_metadata_calls, maximum_metadata_calls
-        if function is not build_item:
+        if function is not _build_dataset_metadata:
             return function(*args)
 
         active_metadata_calls += 1
@@ -923,6 +944,42 @@ def test_scan_reads_metadata_concurrently_and_bulk_upserts(
     assert status["indexed"] == 210
     assert status["alreadyInCatalog"] == 0
     assert status["failed"] == 0
+
+
+def test_dataset_metadata_timing_separates_cpu_from_wait(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Derive estimated I/O wait from worker elapsed and thread CPU time."""
+    dataset_path = tmp_path / "item.tif"
+    dataset_path.touch()
+
+    def build_item(source_root: Path, path: Path) -> dict[str, Any]:
+        return {
+            "id": path.name,
+            "collection": "eolab-mounted-geotiffs",
+            "geometry": {"type": "Point", "coordinates": [0, 0]},
+        }
+
+    elapsed_clock = iter([10.0, 12.5])
+    processing_clock = iter([3.0, 3.4])
+    monkeypatch.setitem(DATASET_ITEM_BUILDERS, ".tif", build_item)
+    monkeypatch.setattr(
+        "eolab_app.scanning.perf_counter",
+        lambda: next(elapsed_clock),
+    )
+    monkeypatch.setattr(
+        "eolab_app.scanning.thread_time",
+        lambda: next(processing_clock),
+    )
+
+    result = _build_dataset_metadata(
+        tmp_path,
+        DatasetCandidate(dataset_path),
+    )
+
+    assert result.elapsed_seconds == 2.5
+    assert result.processing_seconds == pytest.approx(0.4)
 
 
 def test_scan_caps_error_details_without_losing_failure_count(

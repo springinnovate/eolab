@@ -10,6 +10,7 @@ import {
   createDebouncedAction,
   findPaginationLink,
   formatCatalogItemCount,
+  formatScanTiming,
   formatScanStatusSummary,
 } from "../src/catalog.js";
 
@@ -254,6 +255,42 @@ test("formatScanStatusSummary distinguishes scan and dataset failures", () => {
   assert.throws(
     () => formatScanStatusSummary({ state: "complete", failed: 0 }),
     /Unknown scan state: complete/,
+  );
+});
+
+test("formatScanTiming distinguishes wall and cumulative worker clocks", () => {
+  assert.deepEqual(
+    formatScanTiming(
+      {
+        elapsedSeconds: 3723.4,
+        catalogInventorySeconds: 0.023,
+        discoverySeconds: 62,
+        metadataResultWaitSeconds: 59.6,
+        metadataWorkerSeconds: 10800,
+        metadataIoWaitSeconds: 9000,
+        metadataProcessingSeconds: 1800,
+        catalogWriteSeconds: 4.25,
+        cacheInvalidationSeconds: 0,
+      },
+      32,
+    ),
+    [
+      { label: "Elapsed wall time", value: "1h 2m 3s" },
+      { label: "Catalog inventory", value: "23 ms" },
+      { label: "Dataset discovery", value: "1m 2s" },
+      { label: "Waiting for metadata results", value: "59.6 s" },
+      { label: "Metadata workers (32, cumulative)", value: "3h 0m 0s" },
+      {
+        label: "Metadata I/O wait (estimated, cumulative)",
+        value: "2h 30m 0s",
+      },
+      {
+        label: "Metadata processing CPU (cumulative)",
+        value: "30m 0s",
+      },
+      { label: "Catalog writes", value: "4.3 s" },
+      { label: "Search-count refresh", value: "0 ms" },
+    ],
   );
 });
 

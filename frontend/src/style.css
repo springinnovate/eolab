@@ -598,6 +598,39 @@ h5 {
   color: var(--text-3);
 }
 
+.scan-timing {
+  margin-top: 14px;
+}
+
+.scan-timing h4 {
+  margin: 0 0 8px;
+  font-size: 0.85rem;
+}
+
+.scan-timing dl {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 16px;
+  margin: 0;
+}
+
+.scan-timing dt {
+  color: var(--text-3);
+}
+
+.scan-timing dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.scan-timing p {
+  margin: 8px 0 0;
+  color: var(--text-3);
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+
 .scan-card progress {
   width: 100%;
   height: 8px;

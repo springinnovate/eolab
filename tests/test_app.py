@@ -101,6 +101,18 @@ def test_scan_status_is_available_before_first_scan(
     assert response.status_code == 200
     assert response.json()["state"] == "not_started"
     assert response.json()["discovered"] == 0
+    assert response.json()["workerCount"] == 8
+    assert response.json()["timing"] == {
+        "elapsedSeconds": 0.0,
+        "catalogInventorySeconds": 0.0,
+        "discoverySeconds": 0.0,
+        "metadataResultWaitSeconds": 0.0,
+        "metadataWorkerSeconds": 0.0,
+        "metadataProcessingSeconds": 0.0,
+        "metadataIoWaitSeconds": 0.0,
+        "catalogWriteSeconds": 0.0,
+        "cacheInvalidationSeconds": 0.0,
+    }
 
 
 def test_stac_proxy_forwards_public_read_request(

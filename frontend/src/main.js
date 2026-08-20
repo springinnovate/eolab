@@ -7,6 +7,7 @@ import {
     CatalogSearchClient,
     createDebouncedAction,
     formatCatalogItemCount,
+    formatScanTiming,
     formatScanStatusSummary,
     MOUNTED_DATASET_TYPES,
 } from "./catalog.js";
@@ -643,6 +644,10 @@ function renderScanStatus(scanStatus) {
     const scanStatusElement = document.querySelector("#scan-status");
     const scanProgressElement = document.querySelector("#scan-progress");
     const scanCountsElement = document.querySelector("#scan-counts");
+    const scanTimingElement = document.querySelector("#scan-timing");
+    const scanTimingValuesElement = document.querySelector(
+        "#scan-timing-values"
+    );
     const scanErrorsDisclosureElement = document.querySelector(
         "#scan-errors-disclosure"
     );
@@ -675,6 +680,19 @@ function renderScanStatus(scanStatus) {
               `${scanStatus.alreadyInCatalog.toLocaleString()} ` +
               `already in catalog · ` +
               `${scanStatus.failed.toLocaleString()} failed`;
+
+    scanTimingElement.hidden = scanStatus.state === "not_started";
+    scanTimingValuesElement.replaceChildren();
+    for (const timingRow of formatScanTiming(
+        scanStatus.timing,
+        scanStatus.workerCount
+    )) {
+        const timingLabel = document.createElement("dt");
+        timingLabel.textContent = timingRow.label;
+        const timingValue = document.createElement("dd");
+        timingValue.textContent = timingRow.value;
+        scanTimingValuesElement.append(timingLabel, timingValue);
+    }
 
     const statusMessages = {
         not_started: "No scan has been started.",
