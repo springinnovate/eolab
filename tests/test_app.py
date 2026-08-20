@@ -25,6 +25,7 @@ DEFAULT_ENVIRONMENT = {
     "SCAN_PATHS_WITHIN_MOUNT": '["."]',
     "SCAN_DISPLAY_PATH_PREFIX": "bigboi -- Z:\\bigbucket",
     "SCAN_WORKER_COUNT": "8",
+    "SCAN_WRITER_COUNT": "4",
     "SCAN_BATCH_SIZE": "100",
     "BASEMAP_URL": "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
     "BASEMAP_ATTRIBUTION": "&copy; OpenStreetMap contributors",
@@ -108,6 +109,7 @@ def test_scan_status_is_available_before_first_scan(
     assert response.json()["state"] == "not_started"
     assert response.json()["discovered"] == 0
     assert response.json()["workerCount"] == 8
+    assert response.json()["writerCount"] == 4
     assert response.json()["batchSize"] == 250
     assert response.json()["timing"] == {
         "elapsedSeconds": 0.0,
@@ -468,6 +470,7 @@ def test_load_settings_rejects_blank_version(
     (
         ("INITIAL_ZOOM", "not-a-number"),
         ("SCAN_WORKER_COUNT", "1.5"),
+        ("SCAN_WRITER_COUNT", "1.5"),
         ("SCAN_BATCH_SIZE", "1.5"),
     ),
 )
@@ -539,6 +542,7 @@ def test_load_settings_rejects_invalid_scan_path_lists(
         ("INITIAL_LONGITUDE", "-181"),
         ("INITIAL_ZOOM", "23"),
         ("SCAN_WORKER_COUNT", "0"),
+        ("SCAN_WRITER_COUNT", "0"),
         ("SCAN_BATCH_SIZE", "0"),
     ),
 )

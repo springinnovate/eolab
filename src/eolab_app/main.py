@@ -226,6 +226,7 @@ def create_app(
         ),
         PgStacCatalogDatabase(),
         app_global_configuration.scan_worker_count,
+        app_global_configuration.scan_writer_count,
         app_global_configuration.scan_batch_size,
     )
 
