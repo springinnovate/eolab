@@ -11,6 +11,33 @@ export const MOUNTED_DATASET_TYPES = new Map([
 ]);
 
 /**
+ * Formats the compact mounted-directory scan state.
+ *
+ * @param {Object} scanStatus Scan progress returned by the backend.
+ * @return {string} Human-readable scan summary.
+ */
+export function formatScanStatusSummary(scanStatus) {
+  switch (scanStatus.state) {
+    case "not_started":
+      return "Scan status — Not started";
+    case "discovering":
+    case "scanning":
+      return "Scan status — In progress";
+    case "completed": {
+      if (scanStatus.failed === 0) {
+        return "Scan status — Complete";
+      }
+      const errorNoun = scanStatus.failed === 1 ? "error" : "errors";
+      return `Scan status — Complete · ${scanStatus.failed.toLocaleString()} dataset ${errorNoun}`;
+    }
+    case "failed":
+      return "Scan status — Failed";
+    default:
+      throw new Error(`Unknown scan state: ${scanStatus.state}`);
+  }
+}
+
+/**
  * Formats the position and total from a STAC ItemCollection.
  *
  * @param {Object} itemCollection STAC ItemCollection response.

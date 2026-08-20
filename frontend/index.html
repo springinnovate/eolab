@@ -80,22 +80,29 @@
                     <strong id="scan-heading">Mounted datasets</strong>
                     <button class="secondary-button" id="start-scan" type="button">Scan directories</button>
                   </div>
-                  <p id="scan-status" class="scan-status" role="status">No scan has been started.</p>
-                  <progress id="scan-progress" max="1" value="0" hidden></progress>
-                  <p id="scan-counts" class="scan-counts"></p>
-                  <details id="scan-errors-disclosure" class="scan-errors-disclosure" hidden>
-                    <summary id="scan-errors-summary">Error details</summary>
-                    <ul id="scan-errors" class="scan-errors"></ul>
+                  <details id="scan-status-disclosure" class="scan-status-disclosure">
+                    <summary id="scan-status-summary">Scan status — Not started</summary>
+                    <div class="scan-status-details">
+                      <p id="scan-status" class="scan-status" role="status">No scan has been started.</p>
+                      <progress id="scan-progress" max="1" value="0" hidden></progress>
+                      <p id="scan-counts" class="scan-counts"></p>
+                      <details id="scan-errors-disclosure" class="scan-errors-disclosure" hidden>
+                        <summary id="scan-errors-summary">Error details</summary>
+                        <ul id="scan-errors" class="scan-errors"></ul>
+                      </details>
+                    </div>
                   </details>
                 </section>
-                <div class="catalog-results" id="catalog-results"></div>
-                <div class="catalog-stream-status">
-                  <span id="catalog-stream-status">Loading Catalog Items</span>
-                  <button class="secondary-button" id="retry-catalog-page" type="button" hidden>Retry</button>
+                <div class="catalog-results-scroll" id="catalog-results-scroll">
+                  <div class="catalog-results" id="catalog-results"></div>
+                  <div class="catalog-stream-status">
+                    <span id="catalog-stream-status">Loading Catalog Items</span>
+                    <button class="secondary-button" id="retry-catalog-page" type="button" hidden>Retry</button>
+                  </div>
+                  <div class="catalog-load-sentinel" id="catalog-load-sentinel" aria-hidden="true"></div>
+                  <a class="catalog-link" id="catalog-link" target="_blank" rel="noreferrer">Open STAC API</a>
                 </div>
-                <div class="catalog-load-sentinel" id="catalog-load-sentinel" aria-hidden="true"></div>
                 <p class="visually-hidden" id="catalog-stream-announcement" role="status" aria-live="polite"></p>
-                <a class="catalog-link" id="catalog-link" target="_blank" rel="noreferrer">Open STAC API</a>
               </div>
               <aside
                 class="catalog-inspector"
