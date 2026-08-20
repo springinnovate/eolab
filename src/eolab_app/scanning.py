@@ -227,6 +227,7 @@ class ScanManager:
         catalog_writer: CatalogWriter,
         catalog_database: CatalogDatabase,
         metadata_worker_count: int,
+        catalog_writer_count: int,
         item_batch_size: int,
     ) -> None:
         self.source_root = source_root
@@ -234,6 +235,7 @@ class ScanManager:
         self.catalog_writer = catalog_writer
         self.catalog_database = catalog_database
         self.metadata_worker_count = metadata_worker_count
+        self.catalog_writer_count = catalog_writer_count
         self.item_batch_size = item_batch_size
         self._start_lock = asyncio.Lock()
         self._task: asyncio.Task[None] | None = None
@@ -347,83 +349,126 @@ class ScanManager:
                 pending_items_by_collection: dict[str, list[dict[str, Any]]] = {
                     collection["id"]: [] for collection in SCAN_COLLECTIONS
                 }
+                catalog_write_tasks: set[asyncio.Task[None]] = set()
                 completed_workers = 0
                 try:
-                    while completed_workers < self.metadata_worker_count:
-                        phase_started = perf_counter()
-                        metadata_result = await result_queue.get()
-                        self._status["timing"]["metadataResultWaitSeconds"] += (
-                            perf_counter() - phase_started
-                        )
-                        if metadata_result is None:
-                            completed_workers += 1
-                            continue
+                    try:
+                        while completed_workers < self.metadata_worker_count:
+                            completed_writes = {
+                                task
+                                for task in catalog_write_tasks
+                                if task.done()
+                            }
+                            for completed_write in completed_writes:
+                                catalog_write_tasks.remove(completed_write)
+                                completed_write.result()
 
-                        dataset_path = metadata_result.path
-                        self._status["timing"]["metadataWorkerSeconds"] += (
-                            metadata_result.elapsed_seconds
-                        )
-                        self._status["timing"]["metadataProcessingSeconds"] += (
-                            metadata_result.processing_seconds
-                        )
-                        self._status["timing"]["metadataIoWaitSeconds"] += max(
-                            metadata_result.elapsed_seconds
-                            - metadata_result.processing_seconds,
-                            0,
-                        )
-                        relative_path = dataset_path.relative_to(
-                            self.source_root
-                        ).as_posix()
-                        self._status["currentFile"] = relative_path
-                        self._status["processed"] += 1
-                        if metadata_result.error is not None:
-                            self._status["failed"] += 1
-                            if len(self._status["errors"]) < MAX_SCAN_ERROR_DETAILS:
-                                self._status["errors"].append(
-                                    {
-                                        "path": relative_path,
-                                        "error": metadata_result.error,
-                                    }
-                                )
+                            phase_started = perf_counter()
+                            metadata_result = await result_queue.get()
+                            self._status["timing"][
+                                "metadataResultWaitSeconds"
+                            ] += perf_counter() - phase_started
+                            if metadata_result is None:
+                                completed_workers += 1
+                                continue
+
+                            dataset_path = metadata_result.path
+                            self._status["timing"]["metadataWorkerSeconds"] += (
+                                metadata_result.elapsed_seconds
+                            )
+                            self._status["timing"][
+                                "metadataProcessingSeconds"
+                            ] += metadata_result.processing_seconds
+                            self._status["timing"][
+                                "metadataIoWaitSeconds"
+                            ] += max(
+                                metadata_result.elapsed_seconds
+                                - metadata_result.processing_seconds,
+                                0,
+                            )
+                            relative_path = dataset_path.relative_to(
+                                self.source_root
+                            ).as_posix()
+                            self._status["currentFile"] = relative_path
+                            self._status["processed"] += 1
+                            if metadata_result.error is not None:
+                                self._status["failed"] += 1
+                                if (
+                                    len(self._status["errors"])
+                                    < MAX_SCAN_ERROR_DETAILS
+                                ):
+                                    self._status["errors"].append(
+                                        {
+                                            "path": relative_path,
+                                            "error": metadata_result.error,
+                                        }
+                                    )
+                                else:
+                                    self._status["errorsTruncated"] = True
                             else:
-                                self._status["errorsTruncated"] = True
-                        else:
-                            item = metadata_result.item
-                            pending_items = pending_items_by_collection[
-                                item["collection"]
-                            ]
-                            pending_items.append(item)
-                            if len(pending_items) == self.item_batch_size:
-                                await self._upsert_items(
-                                    catalog_session,
-                                    pending_items,
-                                    existing_item_keys,
-                                )
-                                pending_items_by_collection[
+                                item = metadata_result.item
+                                pending_items = pending_items_by_collection[
                                     item["collection"]
-                                ] = []
+                                ]
+                                pending_items.append(item)
+                                if len(pending_items) == self.item_batch_size:
+                                    catalog_write_tasks.add(
+                                        asyncio.create_task(
+                                            self._upsert_items(
+                                                catalog_session,
+                                                pending_items,
+                                                existing_item_keys,
+                                            )
+                                        )
+                                    )
+                                    pending_items_by_collection[
+                                        item["collection"]
+                                    ] = []
+                                    await self._enforce_catalog_writer_limit(
+                                        catalog_write_tasks
+                                    )
+                    finally:
+                        path_producer.cancel()
+                        for metadata_worker in metadata_workers:
+                            metadata_worker.cancel()
+                        await asyncio.gather(
+                            path_producer,
+                            *metadata_workers,
+                            return_exceptions=True,
+                        )
+                        await asyncio.to_thread(
+                            metadata_executor.shutdown,
+                            wait=True,
+                            cancel_futures=True,
+                        )
+
+                    for pending_items in pending_items_by_collection.values():
+                        if pending_items:
+                            catalog_write_tasks.add(
+                                asyncio.create_task(
+                                    self._upsert_items(
+                                        catalog_session,
+                                        pending_items,
+                                        existing_item_keys,
+                                    )
+                                )
+                            )
+                            await self._enforce_catalog_writer_limit(
+                                catalog_write_tasks
+                            )
+
+                    if catalog_write_tasks:
+                        await asyncio.wait(catalog_write_tasks)
+                        for catalog_write_task in catalog_write_tasks:
+                            catalog_write_task.result()
+                        catalog_write_tasks.clear()
                 finally:
-                    path_producer.cancel()
-                    for metadata_worker in metadata_workers:
-                        metadata_worker.cancel()
+                    for catalog_write_task in catalog_write_tasks:
+                        catalog_write_task.cancel()
                     await asyncio.gather(
-                        path_producer,
-                        *metadata_workers,
+                        *catalog_write_tasks,
                         return_exceptions=True,
                     )
-                    await asyncio.to_thread(
-                        metadata_executor.shutdown,
-                        wait=True,
-                        cancel_futures=True,
-                    )
-
-                for pending_items in pending_items_by_collection.values():
-                    if pending_items:
-                        await self._upsert_items(
-                            catalog_session,
-                            pending_items,
-                            existing_item_keys,
-                        )
 
             phase_started = perf_counter()
             try:
@@ -446,6 +491,21 @@ class ScanManager:
                 self._status["timing"]["elapsedSeconds"] = (
                     self._finished_at_monotonic - self._started_at_monotonic
                 )
+
+    async def _enforce_catalog_writer_limit(
+        self,
+        catalog_write_tasks: set[asyncio.Task[None]],
+    ) -> None:
+        """Wait for and validate a write when all writer slots are occupied."""
+        if len(catalog_write_tasks) < self.catalog_writer_count:
+            return
+        completed_writes, _ = await asyncio.wait(
+            catalog_write_tasks,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for completed_write in completed_writes:
+            catalog_write_tasks.remove(completed_write)
+            completed_write.result()
 
     async def _upsert_items(
         self,
@@ -477,6 +537,7 @@ class ScanManager:
             "alreadyInCatalog": 0,
             "failed": 0,
             "workerCount": self.metadata_worker_count,
+            "writerCount": self.catalog_writer_count,
             "batchSize": self.item_batch_size,
             "currentFile": None,
             "startedAt": None,
