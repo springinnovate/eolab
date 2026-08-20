@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Any
 
 import rasterio
-from rasterio.warp import transform_bounds
+from rasterio.transform import array_bounds
+from rasterio.warp import calculate_default_transform, transform_bounds
 
 
 GEOTIFF_MEDIA_TYPE = "image/tiff; application=geotiff"
@@ -24,6 +25,12 @@ ACQUISITION_DATETIME_DESCRIPTION = (
     "The Item datetime uses ACQUISITIONDATETIME from the GeoTIFF's GDAL "
     "IMAGERY metadata domain."
 )
+SUGGESTED_WARP_BOUNDS_DESCRIPTION = (
+    "The spatial footprint is a conservative WGS 84 destination envelope "
+    "suggested by GDAL because the raster's rectangular outer boundary "
+    "could not be transformed."
+)
+WGS84_ROUNDING_TOLERANCE = 1e-7
 RFC3339_TIMESTAMP = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$"
 )
@@ -57,15 +64,7 @@ def build_stac_item(source_root: Path, geotiff_path: Path) -> dict[str, Any]:
         if dataset.width < 1 or dataset.height < 1:
             raise ValueError("GeoTIFF has invalid raster dimensions")
 
-        bbox = list(
-            transform_bounds(
-                dataset.crs,
-                "EPSG:4326",
-                *dataset.bounds,
-            )
-        )
-        if not all(math.isfinite(coordinate) for coordinate in bbox):
-            raise ValueError("GeoTIFF bounds could not be transformed to WGS 84")
+        bbox, used_suggested_warp_bounds = _derive_wgs84_bbox(dataset)
 
         west, south, east, north = bbox
         footprint = {
@@ -90,6 +89,8 @@ def build_stac_item(source_root: Path, geotiff_path: Path) -> dict[str, Any]:
         else:
             item_datetime = _parse_acquisition_datetime(acquisition_datetime)
             description = ACQUISITION_DATETIME_DESCRIPTION
+        if used_suggested_warp_bounds:
+            description = f"{description} {SUGGESTED_WARP_BOUNDS_DESCRIPTION}"
 
         properties: dict[str, Any] = {
             "datetime": _format_datetime(item_datetime),
@@ -136,6 +137,75 @@ def build_stac_item(source_root: Path, geotiff_path: Path) -> dict[str, Any]:
             }
         },
     }
+
+
+def _derive_wgs84_bbox(
+    dataset: rasterio.io.DatasetReader,
+) -> tuple[list[float], bool]:
+    """Derive a WGS 84 bounding box without reading raster pixels.
+
+    Args:
+        dataset: Open raster dataset with a coordinate reference system.
+
+    Returns:
+        The WGS 84 bounding box and whether GDAL's suggested warp output was
+        required.
+
+    Raises:
+        ValueError: If GDAL cannot produce a valid WGS 84 destination extent.
+    """
+    bbox = list(
+        transform_bounds(
+            dataset.crs,
+            "EPSG:4326",
+            *dataset.bounds,
+        )
+    )
+    if all(math.isfinite(coordinate) for coordinate in bbox):
+        return bbox, False
+
+    destination_transform, destination_width, destination_height = (
+        calculate_default_transform(
+            dataset.crs,
+            "EPSG:4326",
+            dataset.width,
+            dataset.height,
+            *dataset.bounds,
+        )
+    )
+
+    if (
+        destination_width < 1
+        or destination_height < 1
+        or not all(
+            math.isfinite(coefficient) for coefficient in destination_transform
+        )
+    ):
+        raise ValueError("GeoTIFF bounds could not be transformed to WGS 84")
+
+    west, south, east, north = array_bounds(
+        destination_height,
+        destination_width,
+        destination_transform,
+    )
+    if not (
+        -180 - WGS84_ROUNDING_TOLERANCE
+        <= west
+        < east
+        <= 180 + WGS84_ROUNDING_TOLERANCE
+        and -90 - WGS84_ROUNDING_TOLERANCE
+        <= south
+        < north
+        <= 90 + WGS84_ROUNDING_TOLERANCE
+    ):
+        raise ValueError("GeoTIFF bounds could not be transformed to WGS 84")
+
+    return [
+        max(west, -180),
+        max(south, -90),
+        min(east, 180),
+        min(north, 90),
+    ], True
 
 
 def _parse_acquisition_datetime(value: str) -> datetime:
