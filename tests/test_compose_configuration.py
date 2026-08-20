@@ -102,11 +102,31 @@ def test_catalog_migrator_adds_datetime_substring_queryables() -> None:
 
     assert "eolab_datetime_text" in migration
     assert "eolab_end_datetime_text" in migration
+    assert "MERGE INTO pgstac.queryables" not in migration
+    assert "IF has_datetime_queryable <> has_end_datetime_queryable" in migration
+    assert "IF NOT has_datetime_queryable THEN" in migration
     assert "NULLIF(content->'properties'->'datetime', 'null'::jsonb)" in migration
     assert "content->'properties'->'start_datetime'" in migration
     assert "eolab_items_datetime_text_trgm_idx" in migration
     assert "eolab_items_end_datetime_text_trgm_idx" in migration
     assert migration.count("USING GIN") == 2
+    assert migration.count("gin_trgm_ops") == 2
+
+
+def test_catalog_migrator_hides_datetime_paths_from_pgstac_indexes() -> None:
+    """Keep application trigram indexes outside pgSTAC's index ownership."""
+    migration = (
+        COMPOSE_PATH.parent
+        / "catalog"
+        / "migrations"
+        / "0004_datetime_index_wrappers.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "eolab_item_datetime_text(item_content jsonb)" in migration
+    assert "eolab_item_end_datetime_text" in migration
+    assert "property_path = 'content'" in migration
+    assert "upper(pgstac.eolab_item_datetime_text(content))" in migration
+    assert "upper(pgstac.eolab_item_end_datetime_text(content))" in migration
     assert migration.count("gin_trgm_ops") == 2
 
 

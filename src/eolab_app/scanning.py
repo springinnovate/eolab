@@ -1,9 +1,10 @@
-"""Run mounted-directory GeoTIFF scans and write their STAC records."""
+"""Scan mounted directories for geospatial datasets and write STAC records."""
 
 import asyncio
 import os
 from contextlib import AbstractAsyncContextManager
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
@@ -12,17 +13,18 @@ from uuid import uuid4
 import httpx2
 import psycopg
 
-from eolab_app.geotiff import build_stac_item
+from eolab_app.geotiff import build_stac_item as build_geotiff_stac_item
+from eolab_app.shapefile import (
+    build_stac_item as build_shapefile_stac_item,
+    discover_shapefile_datasets,
+)
 
 
 STAC_ITEM_BATCH_SIZE = 100
 MAX_SCAN_ERROR_DETAILS = 100
 CATALOG_WRITE_TIMEOUT_SECONDS = 120
 
-# The scanner currently puts all discovered Items in one fixed Collection.
-# Collection metadata can move into scan configuration when EOLab supports
-# independently described sources.
-DEFAULT_SCAN_COLLECTION = {
+GEOTIFF_COLLECTION = {
     "type": "Collection",
     "stac_version": "1.0.0",
     "id": "eolab-mounted-geotiffs",
@@ -40,6 +42,38 @@ DEFAULT_SCAN_COLLECTION = {
     },
     "links": [],
 }
+SHAPEFILE_COLLECTION = {
+    "type": "Collection",
+    "stac_version": "1.0.0",
+    "id": "eolab-mounted-vectors",
+    "title": "Mounted vector datasets",
+    "description": (
+        "Vector datasets discovered in the configured read-only EOLab scan "
+        "source. An Item's datetime is the latest filesystem modification "
+        "time among the files that form the dataset."
+    ),
+    "license": "other",
+    "extent": {
+        "spatial": {"bbox": [[-180, -90, 180, 90]]},
+        "temporal": {"interval": [[None, None]]},
+    },
+    "links": [],
+}
+SCAN_COLLECTIONS = (GEOTIFF_COLLECTION, SHAPEFILE_COLLECTION)
+DATASET_ITEM_BUILDERS = {
+    ".tif": build_geotiff_stac_item,
+    ".tiff": build_geotiff_stac_item,
+    ".shp": build_shapefile_stac_item,
+}
+SINGLE_FILE_DATASET_EXTENSIONS = {".tif", ".tiff"}
+
+
+@dataclass(frozen=True)
+class DatasetCandidate:
+    """A primary dataset path and any pre-grouped companion files."""
+
+    path: Path
+    component_paths: tuple[Path, ...] = ()
 
 
 class CatalogWriteSession(Protocol):
@@ -62,8 +96,11 @@ class CatalogWriter(Protocol):
 class CatalogDatabase(Protocol):
     """Provide the scanner's direct pgSTAC database operations."""
 
-    async def existing_item_ids(self, collection_identifier: str) -> set[str]:
-        """Return the identifiers already stored in one Collection."""
+    async def existing_item_keys(
+        self,
+        collection_identifiers: tuple[str, ...],
+    ) -> set[tuple[str, str]]:
+        """Return Collection and Item identifiers already stored."""
 
     async def invalidate_search_count_cache(self) -> None:
         """Discard cached Item Search counts after a scan."""
@@ -72,14 +109,17 @@ class CatalogDatabase(Protocol):
 class PgStacCatalogDatabase:
     """Access pgSTAC through the standard libpq environment."""
 
-    async def existing_item_ids(self, collection_identifier: str) -> set[str]:
-        """Return the Item identifiers in one pgSTAC Collection."""
+    async def existing_item_keys(
+        self,
+        collection_identifiers: tuple[str, ...],
+    ) -> set[tuple[str, str]]:
+        """Return Collection and Item identifiers from pgSTAC."""
         async with await psycopg.AsyncConnection.connect() as connection:
             cursor = await connection.execute(
-                "SELECT id FROM pgstac.items WHERE collection = %s",
-                (collection_identifier,),
+                "SELECT collection, id FROM pgstac.items WHERE collection = ANY(%s)",
+                (list(collection_identifiers),),
             )
-            return {row[0] async for row in cursor}
+            return {(row[0], row[1]) async for row in cursor}
 
     async def invalidate_search_count_cache(self) -> None:
         """Discard cached Item Search counts after a scan."""
@@ -148,7 +188,7 @@ class StacApiWriteSession:
             _raise_catalog_error(write_response)
 
     async def upsert_items(self, items: list[dict[str, Any]]) -> None:
-        """Create or replace STAC Items through one Bulk Transaction request."""
+        """Create or replace one nonempty, single-Collection Item batch."""
         if self.client is None:
             raise RuntimeError("Catalog write session has not been opened")
 
@@ -199,7 +239,7 @@ class ScanManager:
         """
         async with self._start_lock:
             if self._task is not None and not self._task.done():
-                raise RuntimeError("A GeoTIFF scan is already running")
+                raise RuntimeError("A dataset scan is already running")
             self._status = self._new_status("discovering")
             self._status["startedAt"] = _utc_now()
             self._task = asyncio.create_task(self._run())
@@ -207,17 +247,15 @@ class ScanManager:
 
     async def _run(self) -> None:
         try:
-            existing_item_ids = (
-                await self.catalog_database.existing_item_ids(
-                    DEFAULT_SCAN_COLLECTION["id"]
-                )
+            existing_item_keys = await self.catalog_database.existing_item_keys(
+                tuple(collection["id"] for collection in SCAN_COLLECTIONS)
             )
-            geotiff_paths, discovery_errors = await asyncio.to_thread(
-                _discover_geotiffs,
+            dataset_candidates, discovery_errors = await asyncio.to_thread(
+                _discover_datasets,
                 self.source_root,
                 self.source_paths,
             )
-            self._status["discovered"] = len(geotiff_paths)
+            self._status["discovered"] = len(dataset_candidates)
             self._status["failed"] = len(discovery_errors)
             self._status["errors"].extend(
                 discovery_errors[:MAX_SCAN_ERROR_DETAILS]
@@ -228,23 +266,24 @@ class ScanManager:
             self._status["state"] = "scanning"
 
             async with self.catalog_writer.session() as catalog_session:
-                await catalog_session.upsert_collection(DEFAULT_SCAN_COLLECTION)
-                path_queue: asyncio.Queue[Path | None] = asyncio.Queue(
+                for collection in SCAN_COLLECTIONS:
+                    await catalog_session.upsert_collection(collection)
+                path_queue: asyncio.Queue[DatasetCandidate | None] = asyncio.Queue(
                     maxsize=self.metadata_worker_count * 2
                 )
                 result_queue: asyncio.Queue[
                     tuple[Path, dict[str, Any] | Exception] | None
                 ] = asyncio.Queue(maxsize=STAC_ITEM_BATCH_SIZE * 2)
                 path_producer = asyncio.create_task(
-                    _enqueue_geotiff_paths(
-                        geotiff_paths,
+                    _enqueue_dataset_candidates(
+                        dataset_candidates,
                         path_queue,
                         self.metadata_worker_count,
                     )
                 )
                 metadata_workers = [
                     asyncio.create_task(
-                        _read_geotiff_metadata(
+                        _read_dataset_metadata(
                             self.source_root,
                             path_queue,
                             result_queue,
@@ -252,7 +291,9 @@ class ScanManager:
                     )
                     for _ in range(self.metadata_worker_count)
                 ]
-                pending_items: list[dict[str, Any]] = []
+                pending_items_by_collection: dict[str, list[dict[str, Any]]] = {
+                    collection["id"]: [] for collection in SCAN_COLLECTIONS
+                }
                 completed_workers = 0
                 try:
                     while completed_workers < self.metadata_worker_count:
@@ -261,8 +302,8 @@ class ScanManager:
                             completed_workers += 1
                             continue
 
-                        geotiff_path, item_or_error = metadata_result
-                        relative_path = geotiff_path.relative_to(
+                        dataset_path, item_or_error = metadata_result
+                        relative_path = dataset_path.relative_to(
                             self.source_root
                         ).as_posix()
                         self._status["currentFile"] = relative_path
@@ -279,15 +320,19 @@ class ScanManager:
                             else:
                                 self._status["errorsTruncated"] = True
                         else:
+                            pending_items = pending_items_by_collection[
+                                item_or_error["collection"]
+                            ]
                             pending_items.append(item_or_error)
-
-                        if len(pending_items) == STAC_ITEM_BATCH_SIZE:
-                            await self._upsert_items(
-                                catalog_session,
-                                pending_items,
-                                existing_item_ids,
-                            )
-                            pending_items = []
+                            if len(pending_items) == STAC_ITEM_BATCH_SIZE:
+                                await self._upsert_items(
+                                    catalog_session,
+                                    pending_items,
+                                    existing_item_keys,
+                                )
+                                pending_items_by_collection[
+                                    item_or_error["collection"]
+                                ] = []
                 finally:
                     path_producer.cancel()
                     for metadata_worker in metadata_workers:
@@ -298,12 +343,13 @@ class ScanManager:
                         return_exceptions=True,
                     )
 
-                if pending_items:
-                    await self._upsert_items(
-                        catalog_session,
-                        pending_items,
-                        existing_item_ids,
-                    )
+                for pending_items in pending_items_by_collection.values():
+                    if pending_items:
+                        await self._upsert_items(
+                            catalog_session,
+                            pending_items,
+                            existing_item_keys,
+                        )
 
             await self.catalog_database.invalidate_search_count_cache()
             self._status["state"] = "completed"
@@ -320,13 +366,14 @@ class ScanManager:
         self,
         catalog_session: CatalogWriteSession,
         items: list[dict[str, Any]],
-        existing_item_ids: set[str],
+        existing_item_keys: set[tuple[str, str]],
     ) -> None:
         """Write one batch and classify its successfully cataloged Items."""
         await catalog_session.upsert_items(items)
         self._status["indexed"] += len(items)
         self._status["alreadyInCatalog"] += sum(
-            item["id"] in existing_item_ids for item in items
+            (item["collection"], item["id"]) in existing_item_keys
+            for item in items
         )
 
     @staticmethod
@@ -347,54 +394,57 @@ class ScanManager:
         }
 
 
-async def _enqueue_geotiff_paths(
-    geotiff_paths: list[Path],
-    path_queue: asyncio.Queue[Path | None],
+async def _enqueue_dataset_candidates(
+    dataset_candidates: list[DatasetCandidate],
+    path_queue: asyncio.Queue[DatasetCandidate | None],
     metadata_worker_count: int,
 ) -> None:
-    """Feed discovered paths to a bounded metadata-work queue."""
-    for geotiff_path in geotiff_paths:
-        await path_queue.put(geotiff_path)
+    """Feed discovered datasets to a bounded metadata-work queue."""
+    for dataset_candidate in dataset_candidates:
+        await path_queue.put(dataset_candidate)
     for _ in range(metadata_worker_count):
         await path_queue.put(None)
 
 
-async def _read_geotiff_metadata(
+async def _read_dataset_metadata(
     source_root: Path,
-    path_queue: asyncio.Queue[Path | None],
+    path_queue: asyncio.Queue[DatasetCandidate | None],
     result_queue: asyncio.Queue[
         tuple[Path, dict[str, Any] | Exception] | None
     ],
 ) -> None:
-    """Read GeoTIFF metadata until the producer signals completion."""
-    while (geotiff_path := await path_queue.get()) is not None:
+    """Read dataset metadata until the producer signals completion."""
+    while (dataset_candidate := await path_queue.get()) is not None:
+        dataset_path = dataset_candidate.path
+        builder_arguments: list[Any] = [source_root, dataset_path]
+        if dataset_candidate.component_paths:
+            builder_arguments.append(dataset_candidate.component_paths)
         try:
             item_or_error = await asyncio.to_thread(
-                build_stac_item,
-                source_root,
-                geotiff_path,
+                DATASET_ITEM_BUILDERS[dataset_path.suffix.lower()],
+                *builder_arguments,
             )
         except Exception as error:
             item_or_error = error
-        await result_queue.put((geotiff_path, item_or_error))
+        await result_queue.put((dataset_path, item_or_error))
     await result_queue.put(None)
 
 
-def _discover_geotiffs(
+def _discover_datasets(
     source_root: Path,
     source_paths: tuple[Path, ...],
-) -> tuple[list[Path], list[dict[str, str]]]:
-    """Find GeoTIFFs recursively without stopping on unreadable directories.
+) -> tuple[list[DatasetCandidate], list[dict[str, str]]]:
+    """Find supported datasets without stopping on unreadable directories.
 
     Args:
         source_root: Directory at the root of the configured scan mount.
         source_paths: Directories within the mount to search recursively.
 
     Returns:
-        Discovered `.tif` and `.tiff` paths in deterministic traversal order,
-        together with any directory-walk errors keyed by relative path.
+        Supported dataset paths in deterministic traversal order, together
+        with any directory-walk errors keyed by relative path.
     """
-    geotiff_paths: list[Path] = []
+    dataset_candidates: list[DatasetCandidate] = []
     errors: list[dict[str, str]] = []
 
     def record_walk_error(error: OSError) -> None:
@@ -408,10 +458,21 @@ def _discover_geotiffs(
         ):
             directory_names.sort()
             for file_name in sorted(file_names):
-                if Path(file_name).suffix.lower() in {".tif", ".tiff"}:
-                    geotiff_paths.append(Path(directory_path) / file_name)
-    geotiff_paths.sort(key=lambda path: path.relative_to(source_root).as_posix())
-    return geotiff_paths, errors
+                if Path(file_name).suffix.lower() in SINGLE_FILE_DATASET_EXTENSIONS:
+                    dataset_candidates.append(
+                        DatasetCandidate(Path(directory_path) / file_name)
+                    )
+            dataset_candidates.extend(
+                DatasetCandidate(shapefile_path, component_paths)
+                for shapefile_path, component_paths in discover_shapefile_datasets(
+                    Path(directory_path),
+                    file_names,
+                )
+            )
+    dataset_candidates.sort(
+        key=lambda candidate: candidate.path.relative_to(source_root).as_posix()
+    )
+    return dataset_candidates, errors
 
 
 def _raise_catalog_error(response: httpx2.Response) -> None:
