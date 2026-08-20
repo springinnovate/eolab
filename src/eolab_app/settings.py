@@ -22,6 +22,7 @@ class Settings:
     scan_paths_within_mount: tuple[Path, ...]
     scan_display_path_prefix: str
     scan_worker_count: int
+    scan_writer_count: int
     scan_batch_size: int
     basemap_url: str
     basemap_attribution: str
@@ -58,6 +59,8 @@ class Settings:
             raise ValueError("INITIAL_ZOOM must be between 0 and 22")
         if self.scan_worker_count < 1:
             raise ValueError("SCAN_WORKER_COUNT must be greater than zero")
+        if self.scan_writer_count < 1:
+            raise ValueError("SCAN_WRITER_COUNT must be greater than zero")
         if self.scan_batch_size < 1:
             raise ValueError("SCAN_BATCH_SIZE must be greater than zero")
         if not self.scan_mount_path.is_absolute():
@@ -156,6 +159,7 @@ def load_settings(
         scan_paths_within_mount=tuple(Path(scan_path) for scan_path in scan_paths),
         scan_display_path_prefix=os.environ["SCAN_DISPLAY_PATH_PREFIX"].strip(),
         scan_worker_count=int(os.environ["SCAN_WORKER_COUNT"]),
+        scan_writer_count=int(os.environ["SCAN_WRITER_COUNT"]),
         scan_batch_size=int(os.environ["SCAN_BATCH_SIZE"]),
         basemap_url=os.environ["BASEMAP_URL"].strip(),
         basemap_attribution=os.environ["BASEMAP_ATTRIBUTION"].strip(),

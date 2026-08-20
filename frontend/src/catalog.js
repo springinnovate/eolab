@@ -65,10 +65,11 @@ export function formatScanStatusSummary(scanStatus) {
  *
  * @param {Object} timing Scan timing values in seconds.
  * @param {number} workerCount Number of concurrent metadata processes.
+ * @param {number} writerCount Number of concurrent catalog writers.
  * @param {number} batchSize Maximum Items in one catalog write.
  * @return {Object[]} Human-readable timing labels and values.
  */
-export function formatScanTiming(timing, workerCount, batchSize) {
+export function formatScanTiming(timing, workerCount, writerCount, batchSize) {
     return [
         { label: "Elapsed wall time", seconds: timing.elapsedSeconds },
         {
@@ -93,7 +94,9 @@ export function formatScanTiming(timing, workerCount, batchSize) {
             seconds: timing.metadataProcessingSeconds
         },
         {
-            label: `Catalog writes (${batchSize} Items/batch)`,
+            label:
+                `Catalog writes (${writerCount} writers, ${batchSize} ` +
+                "Items/batch, cumulative)",
             seconds: timing.catalogWriteSeconds
         },
         {

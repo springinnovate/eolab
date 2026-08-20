@@ -566,6 +566,65 @@ class RecordingCatalogSession:
         )
 
 
+class ConcurrentRecordingCatalogSession(RecordingCatalogSession):
+    """Hold writes until the configured concurrency has been observed."""
+
+    def __init__(self, expected_concurrent_writes: int) -> None:
+        super().__init__()
+        self.expected_concurrent_writes = expected_concurrent_writes
+        self.active_writes = 0
+        self.maximum_concurrent_writes = 0
+        self.all_writers_started = asyncio.Event()
+
+    async def upsert_items(self, items: list[dict[str, Any]]) -> None:
+        self.active_writes += 1
+        self.maximum_concurrent_writes = max(
+            self.maximum_concurrent_writes,
+            self.active_writes,
+        )
+        if self.active_writes == self.expected_concurrent_writes:
+            self.all_writers_started.set()
+        try:
+            await asyncio.wait_for(self.all_writers_started.wait(), 2)
+            await super().upsert_items(items)
+        finally:
+            self.active_writes -= 1
+
+
+class FailingConcurrentCatalogSession(RecordingCatalogSession):
+    """Fail one write after all writer slots are occupied."""
+
+    def __init__(self, expected_concurrent_writes: int) -> None:
+        super().__init__()
+        self.expected_concurrent_writes = expected_concurrent_writes
+        self.active_writes = 0
+        self.maximum_concurrent_writes = 0
+        self.cancelled_writes = 0
+        self.all_writers_started = asyncio.Event()
+
+    async def upsert_items(self, items: list[dict[str, Any]]) -> None:
+        write_index = len(self.item_batches)
+        self.item_batches.append(items)
+        self.active_writes += 1
+        self.maximum_concurrent_writes = max(
+            self.maximum_concurrent_writes,
+            self.active_writes,
+        )
+        if self.active_writes == self.expected_concurrent_writes:
+            self.all_writers_started.set()
+        try:
+            await asyncio.wait_for(self.all_writers_started.wait(), 2)
+            if write_index == 0:
+                raise RuntimeError("catalog unavailable")
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.cancelled_writes += 1
+                raise
+        finally:
+            self.active_writes -= 1
+
+
 class RecordingCatalogWriter:
     """Return the same in-memory write session for every scan."""
 
@@ -606,10 +665,12 @@ def test_scan_status_reports_worker_count_before_start(tmp_path: Path) -> None:
         catalog_writer,
         RecordingCatalogDatabase(catalog_writer),
         17,
+        3,
         100,
     )
 
     assert scan_manager.status()["workerCount"] == 17
+    assert scan_manager.status()["writerCount"] == 3
 
 
 def test_metadata_executor_uses_spawned_processes(
@@ -677,6 +738,7 @@ def test_scan_continues_after_an_invalid_geotiff(tmp_path: Path) -> None:
         catalog_writer,
         catalog_database,
         8,
+        2,
         100,
     )
 
@@ -735,6 +797,7 @@ def test_scan_reports_null_geometry_before_catalog_write(tmp_path: Path) -> None
         catalog_writer,
         RecordingCatalogDatabase(catalog_writer),
         2,
+        2,
         100,
     )
 
@@ -779,6 +842,7 @@ def test_scan_combines_multiple_directories_under_one_mount(tmp_path: Path) -> N
         catalog_writer,
         RecordingCatalogDatabase(catalog_writer),
         8,
+        2,
         100,
     )
 
@@ -811,6 +875,7 @@ def test_scan_catalogs_raster_and_shapefile_datasets_together(
         catalog_writer,
         RecordingCatalogDatabase(catalog_writer),
         4,
+        2,
         100,
     )
 
@@ -858,6 +923,7 @@ def test_scan_continues_after_an_incomplete_shapefile(tmp_path: Path) -> None:
         catalog_writer,
         RecordingCatalogDatabase(catalog_writer),
         2,
+        2,
         100,
     )
 
@@ -891,6 +957,7 @@ def test_scan_continues_after_an_unreadable_shapefile(tmp_path: Path) -> None:
         (tmp_path,),
         catalog_writer,
         RecordingCatalogDatabase(catalog_writer),
+        2,
         2,
         100,
     )
@@ -945,6 +1012,7 @@ def test_existing_items_are_classified_by_collection_and_identifier(
         (tmp_path,),
         catalog_writer,
         RecordingCatalogDatabase(catalog_writer),
+        2,
         2,
         100,
     )
@@ -1016,6 +1084,7 @@ def test_scan_reads_metadata_concurrently_and_bulk_upserts(
         catalog_writer,
         RecordingCatalogDatabase(catalog_writer),
         3,
+        2,
         40,
     )
 
@@ -1043,6 +1112,102 @@ def test_scan_reads_metadata_concurrently_and_bulk_upserts(
     assert status["indexed"] == 210
     assert status["alreadyInCatalog"] == 0
     assert status["failed"] == 0
+
+
+def test_scan_runs_the_configured_number_of_catalog_writers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Run four bounded bulk writes concurrently and flush the remainder."""
+    for item_index in range(405):
+        (tmp_path / f"item-{item_index:03}.tif").touch()
+
+    def build_item(source_root: Path, geotiff_path: Path) -> dict[str, Any]:
+        relative_path = geotiff_path.relative_to(source_root).as_posix()
+        return {
+            "id": relative_path,
+            "collection": "eolab-mounted-geotiffs",
+            "geometry": {"type": "Point", "coordinates": [0, 0]},
+        }
+
+    monkeypatch.setitem(DATASET_ITEM_BUILDERS, ".tif", build_item)
+    catalog_writer = RecordingCatalogWriter()
+    concurrent_session = ConcurrentRecordingCatalogSession(4)
+    catalog_writer.write_session = concurrent_session
+    scan_manager = ScanManager(
+        tmp_path,
+        (tmp_path,),
+        catalog_writer,
+        RecordingCatalogDatabase(catalog_writer),
+        8,
+        4,
+        100,
+    )
+
+    async def run_scan() -> dict[str, Any]:
+        await scan_manager.start()
+        while scan_manager.status()["state"] in {"discovering", "scanning"}:
+            await asyncio.sleep(0)
+        return scan_manager.status()
+
+    status = asyncio.run(run_scan())
+
+    assert status["state"] == "completed"
+    assert status["indexed"] == 405
+    assert concurrent_session.maximum_concurrent_writes == 4
+    assert sorted(map(len, concurrent_session.item_batches)) == [
+        5,
+        100,
+        100,
+        100,
+        100,
+    ]
+
+
+def test_scan_cancels_concurrent_writers_after_one_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stop the scan and cancel other writes after one writer fails."""
+    for item_index in range(400):
+        (tmp_path / f"item-{item_index:03}.tif").touch()
+
+    def build_item(source_root: Path, geotiff_path: Path) -> dict[str, Any]:
+        relative_path = geotiff_path.relative_to(source_root).as_posix()
+        return {
+            "id": relative_path,
+            "collection": "eolab-mounted-geotiffs",
+            "geometry": {"type": "Point", "coordinates": [0, 0]},
+        }
+
+    monkeypatch.setitem(DATASET_ITEM_BUILDERS, ".tif", build_item)
+    catalog_writer = RecordingCatalogWriter()
+    concurrent_session = FailingConcurrentCatalogSession(4)
+    catalog_writer.write_session = concurrent_session
+    catalog_database = RecordingCatalogDatabase(catalog_writer)
+    scan_manager = ScanManager(
+        tmp_path,
+        (tmp_path,),
+        catalog_writer,
+        catalog_database,
+        8,
+        4,
+        100,
+    )
+
+    async def run_scan() -> dict[str, Any]:
+        await scan_manager.start()
+        while scan_manager.status()["state"] in {"discovering", "scanning"}:
+            await asyncio.sleep(0)
+        return scan_manager.status()
+
+    status = asyncio.run(run_scan())
+
+    assert status["state"] == "failed"
+    assert status["indexed"] == 0
+    assert concurrent_session.maximum_concurrent_writes == 4
+    assert concurrent_session.cancelled_writes == 3
+    assert catalog_database.search_count_cache_invalidations == 0
 
 
 def test_dataset_metadata_timing_separates_cpu_from_wait(
@@ -1100,6 +1265,7 @@ def test_scan_caps_error_details_without_losing_failure_count(
         catalog_writer,
         RecordingCatalogDatabase(catalog_writer),
         8,
+        2,
         100,
     )
 
@@ -1145,6 +1311,7 @@ def test_scan_stops_after_a_bulk_catalog_failure(
         catalog_writer,
         catalog_database,
         8,
+        1,
         100,
     )
 
@@ -1177,6 +1344,7 @@ def test_scan_prevents_overlap(tmp_path: Path) -> None:
         catalog_writer,
         RecordingCatalogDatabase(catalog_writer),
         8,
+        2,
         100,
     )
 
