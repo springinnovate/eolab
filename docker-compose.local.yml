@@ -3,3 +3,6 @@ services:
   app:
     ports:
       - "127.0.0.1:${EOLAB_HOST_PORT:-8000}:8000"
+  geoserver:
+    ports:
+      - "127.0.0.1:${EOLAB_GEOSERVER_HOST_PORT:-8081}:8080"

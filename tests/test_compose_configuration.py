@@ -66,6 +66,75 @@ def test_internal_stac_api_enables_writes_for_scanning() -> None:
     assert '"ENABLE_TRANSACTIONS_EXTENSIONS=TRUE"' in compose
 
 
+def test_geoserver_is_internal_persistent_and_reads_the_scan_mount() -> None:
+    """Keep GeoServer private while preserving its config and shared datasets."""
+    compose = COMPOSE_PATH.read_text(encoding="utf-8")
+    geoserver_service = compose.split("  geoserver:\n", 1)[1].split(
+        "  geoserver-init:\n", 1
+    )[0]
+
+    assert (
+        "image: docker.osgeo.org/geoserver:3.0.1@sha256:"
+        "7cb827ba3f6d9fc04a6647fc0cfa6c254fc642407f0d99281fdf026d2540b558"
+        in geoserver_service
+    )
+    assert "ports:" not in geoserver_service
+    assert '"8080"' in geoserver_service
+    assert "source: ${EOLAB_SCAN_MOUNT_PATH}" in geoserver_service
+    assert "target: /scan-source" in geoserver_service
+    assert "read_only: true" in geoserver_service
+    assert "geoserver-data:/opt/geoserver_data" in geoserver_service
+    assert '"RUN_UNPRIVILEGED=true"' in geoserver_service
+    assert '"SKIP_DEMO_DATA=true"' in geoserver_service
+    assert '"CORS_ENABLED=false"' in geoserver_service
+    assert '"JSONP_ENABLED=false"' in geoserver_service
+    assert (
+        '"PROXY_BASE_URL=$${X-Forwarded-Proto}://$${X-Forwarded-Host}/geoserver '
+        'http://geoserver:8080/geoserver"'
+        in geoserver_service
+    )
+    assert '"PROXY_BASE_URL_HEADERS=true"' in geoserver_service
+    assert '"GEOSERVER_ADMIN_PASSWORD=${EOLAB_GEOSERVER_ADMIN_PASSWORD:' in (
+        geoserver_service
+    )
+    assert "start_period: 120s" in geoserver_service
+    assert "name: ${EOLAB_GEOSERVER_DATA_VOLUME_NAME:-eolab-geoserver-data}" in (
+        compose
+    )
+
+
+def test_geoserver_initializer_is_idempotent_image_owned_configuration() -> None:
+    """Package bootstrap assets and gate them on a healthy GeoServer."""
+    repository_root = COMPOSE_PATH.parent
+    compose = COMPOSE_PATH.read_text(encoding="utf-8")
+    initializer = (repository_root / "geoserver" / "initialize.py").read_text(
+        encoding="utf-8"
+    )
+    initializer_dockerfile = (
+        repository_root / "Dockerfile.geoserver-init"
+    ).read_text(encoding="utf-8")
+
+    assert "dockerfile: Dockerfile.geoserver-init" in compose
+    assert "condition: service_healthy" in compose
+    assert '"GEOSERVER_MASTER_PASSWORD=${EOLAB_GEOSERVER_MASTER_PASSWORD:' in compose
+    assert "COPY geoserver/ ./" in initializer_dockerfile
+    assert 'client.request("DELETE"' not in initializer
+    assert 'WORKSPACE_NAME = "eolab"' in initializer
+    assert 'RASTER_STYLE_NAME = "dynamic-raster"' in initializer
+
+
+def test_app_exposes_only_the_public_wms_url() -> None:
+    """Separate the browser WMS route from GeoServer's internal address."""
+    compose = COMPOSE_PATH.read_text(encoding="utf-8")
+    app_service = compose.split("  app:\n", 1)[1].split("\nvolumes:\n", 1)[0]
+
+    assert '"WMS_URL=/geoserver/eolab/wms"' in app_service
+    assert '"GEOSERVER_INTERNAL_URL=http://geoserver:8080/geoserver"' in app_service
+    assert "EOLAB_GEOSERVER_ADMIN_PASSWORD" not in app_service
+    assert "EOLAB_GEOSERVER_MASTER_PASSWORD" not in app_service
+    assert "depends_on:" not in app_service
+
+
 def test_catalog_migrator_packages_application_migrations() -> None:
     """Apply EOLab indexes after the pinned pgSTAC schema migration."""
     repository_root = COMPOSE_PATH.parent

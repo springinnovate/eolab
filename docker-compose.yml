@@ -81,6 +81,68 @@ services:
         max-size: 10m
         max-file: "3"
 
+  geoserver:
+    image: docker.osgeo.org/geoserver:3.0.1@sha256:7cb827ba3f6d9fc04a6647fc0cfa6c254fc642407f0d99281fdf026d2540b558
+    restart: unless-stopped
+    environment:
+      - "SKIP_DEMO_DATA=true"
+      - "RUN_UNPRIVILEGED=true"
+      - "WEBAPP_CONTEXT=geoserver"
+      - "ROOT_WEBAPP_REDIRECT=false"
+      - "CORS_ENABLED=false"
+      - "JSONP_ENABLED=false"
+      - "INSTALL_EXTENSIONS=false"
+      - "PROXY_BASE_URL=$${X-Forwarded-Proto}://$${X-Forwarded-Host}/geoserver http://geoserver:8080/geoserver"
+      - "PROXY_BASE_URL_HEADERS=true"
+      - "GEOSERVER_ADMIN_USER=eolab"
+      - "GEOSERVER_ADMIN_PASSWORD=${EOLAB_GEOSERVER_ADMIN_PASSWORD:?EOLAB_GEOSERVER_ADMIN_PASSWORD must be set}"
+    expose:
+      - "8080"
+    volumes:
+      - geoserver-data:/opt/geoserver_data
+      - type: bind
+        source: ${EOLAB_SCAN_MOUNT_PATH}
+        target: /scan-source
+        read_only: true
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - --fail
+        - --silent
+        - --show-error
+        - --output
+        - /dev/null
+        - http://127.0.0.1:8080/geoserver/web/wicket/resource/org.geoserver.web.GeoServerBasePage/img/logo.png
+      interval: 30s
+      timeout: 10s
+      start_period: 120s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  geoserver-init:
+    build:
+      context: .
+      dockerfile: Dockerfile.geoserver-init
+    restart: "no"
+    environment:
+      - "GEOSERVER_INTERNAL_URL=http://geoserver:8080/geoserver"
+      - "GEOSERVER_ADMIN_USER=eolab"
+      - "GEOSERVER_ADMIN_PASSWORD=${EOLAB_GEOSERVER_ADMIN_PASSWORD:?EOLAB_GEOSERVER_ADMIN_PASSWORD must be set}"
+      - "GEOSERVER_MASTER_PASSWORD=${EOLAB_GEOSERVER_MASTER_PASSWORD:?EOLAB_GEOSERVER_MASTER_PASSWORD must be set}"
+    depends_on:
+      geoserver:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
   catalog-seed:
     build:
       context: .
@@ -109,6 +171,8 @@ services:
       - "APP_SUBTITLE=${EOLAB_APP_SUBTITLE:-Explore, process, and visualize geospatial data}"
       - "CATALOG_URL=${EOLAB_CATALOG_URL:-/stac}"
       - "CATALOG_INTERNAL_URL=http://stac-api:8080"
+      - "WMS_URL=/geoserver/eolab/wms"
+      - "GEOSERVER_INTERNAL_URL=http://geoserver:8080/geoserver"
       - "PGHOST=database"
       - "PGPORT=5432"
       - "PGDATABASE=eolab"
@@ -152,3 +216,5 @@ volumes:
   # Use a predictable name so the database volume is easy to identify and delete.
   pgstac-data:
     name: ${EOLAB_DATABASE_VOLUME_NAME:-eolab-pgstac-data}
+  geoserver-data:
+    name: ${EOLAB_GEOSERVER_DATA_VOLUME_NAME:-eolab-geoserver-data}
