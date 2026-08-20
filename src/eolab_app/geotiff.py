@@ -30,6 +30,10 @@ SUGGESTED_WARP_BOUNDS_DESCRIPTION = (
     "suggested by GDAL because the raster's rectangular outer boundary "
     "could not be transformed."
 )
+MISSING_CRS_DESCRIPTION = (
+    "The GeoTIFF has no coordinate reference system, so its spatial "
+    "footprint is unavailable."
+)
 WGS84_ROUNDING_TOLERANCE = 1e-7
 RFC3339_TIMESTAMP = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$"
@@ -44,11 +48,12 @@ def build_stac_item(source_root: Path, geotiff_path: Path) -> dict[str, Any]:
         geotiff_path: GeoTIFF below the mounted root.
 
     Returns:
-        A STAC Item containing the raster footprint and spatial metadata.
+        A STAC Item containing raster metadata and a footprint when its
+        coordinate reference system is available.
 
     Raises:
-        ValueError: If the path escapes the source root, raster spatial metadata
-            is incomplete, or an embedded acquisition time is malformed.
+        ValueError: If the path escapes the source root, raster dimensions are
+            invalid, or an embedded acquisition time is malformed.
         rasterio.errors.RasterioError: If GDAL cannot read the file.
     """
     relative_path = geotiff_path.relative_to(source_root)
@@ -59,26 +64,28 @@ def build_stac_item(source_root: Path, geotiff_path: Path) -> dict[str, Any]:
     )
 
     with rasterio.open(geotiff_path) as dataset:
-        if dataset.crs is None:
-            raise ValueError("GeoTIFF has no coordinate reference system")
         if dataset.width < 1 or dataset.height < 1:
             raise ValueError("GeoTIFF has invalid raster dimensions")
 
-        bbox, used_suggested_warp_bounds = _derive_wgs84_bbox(dataset)
-
-        west, south, east, north = bbox
-        footprint = {
-            "type": "Polygon",
-            "coordinates": [
-                [
-                    [west, south],
-                    [east, south],
-                    [east, north],
-                    [west, north],
-                    [west, south],
-                ]
-            ],
-        }
+        if dataset.crs is None:
+            bbox = None
+            footprint = None
+            used_suggested_warp_bounds = False
+        else:
+            bbox, used_suggested_warp_bounds = _derive_wgs84_bbox(dataset)
+            west, south, east, north = bbox
+            footprint = {
+                "type": "Polygon",
+                "coordinates": [
+                    [
+                        [west, south],
+                        [east, south],
+                        [east, north],
+                        [west, north],
+                        [west, south],
+                    ]
+                ],
+            }
 
         acquisition_datetime = dataset.tags(ns="IMAGERY").get(
             "ACQUISITIONDATETIME"
@@ -91,6 +98,8 @@ def build_stac_item(source_root: Path, geotiff_path: Path) -> dict[str, Any]:
             description = ACQUISITION_DATETIME_DESCRIPTION
         if used_suggested_warp_bounds:
             description = f"{description} {SUGGESTED_WARP_BOUNDS_DESCRIPTION}"
+        elif dataset.crs is None:
+            description = f"{description} {MISSING_CRS_DESCRIPTION}"
 
         properties: dict[str, Any] = {
             "datetime": _format_datetime(item_datetime),
@@ -99,10 +108,11 @@ def build_stac_item(source_root: Path, geotiff_path: Path) -> dict[str, Any]:
             "proj:shape": [dataset.height, dataset.width],
             "proj:transform": list(dataset.transform)[:6],
         }
-        if epsg_code := dataset.crs.to_epsg():
-            properties["proj:epsg"] = epsg_code
-        else:
-            properties["proj:wkt2"] = dataset.crs.to_wkt()
+        if dataset.crs is not None:
+            if epsg_code := dataset.crs.to_epsg():
+                properties["proj:epsg"] = epsg_code
+            else:
+                properties["proj:wkt2"] = dataset.crs.to_wkt()
 
         raster_bands = []
         for data_type, nodata_value in zip(
@@ -116,14 +126,13 @@ def build_stac_item(source_root: Path, geotiff_path: Path) -> dict[str, Any]:
             raster_bands.append(band)
 
     item_identifier = hashlib.sha256(relative_path_text.encode("utf-8")).hexdigest()
-    return {
+    item = {
         "type": "Feature",
         "stac_version": "1.0.0",
         "stac_extensions": [PROJECTION_EXTENSION, RASTER_EXTENSION],
         "id": f"geotiff-{item_identifier[:24]}",
         "collection": "eolab-mounted-geotiffs",
         "geometry": footprint,
-        "bbox": bbox,
         "properties": properties,
         "links": [],
         "assets": {
@@ -137,6 +146,9 @@ def build_stac_item(source_root: Path, geotiff_path: Path) -> dict[str, Any]:
             }
         },
     }
+    if bbox is not None:
+        item["bbox"] = bbox
+    return item
 
 
 def _derive_wgs84_bbox(

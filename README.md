@@ -66,6 +66,8 @@ One Shapefile Item groups files with the same exact base name. The `.shp`, `.shx
 
 For GeoTIFFs, the scanner uses `ACQUISITIONDATETIME` from GDAL's `IMAGERY` metadata domain when it contains an RFC 3339 timestamp with a UTC offset. Otherwise it uses the source file's filesystem modification time as the required STAC Item `datetime`. A Shapefile Item uses the latest modification time among its component files. Each fallback is explained in the Item description, and every Asset records its own modification time as `updated`. Filesystem creation time is not used because its meaning differs among operating systems. A malformed GeoTIFF `ACQUISITIONDATETIME` is reported as a dataset failure rather than guessed or silently replaced.
 
+GeoTIFFs without a coordinate reference system are cataloged as unlocated STAC Items with `geometry: null` and no `bbox`. Their filenames, timestamps, raster dimensions, bands, and Assets remain available, while the inspector reports that the spatial reference is unavailable and does not draw a footprint. EOLab never assumes EPSG:4326 from coordinate values. A CRS that GDAL recognizes from a standard sidecar such as PAM `.aux.xml` continues through the normal spatial path.
+
 ## Search the catalog
 
 The Catalog search finds case-insensitive matches in Item filenames, relative paths, descriptions, and standard STAC datetime values. Enter any part of the text; for example, `2002` matches both `grassland_2002.tif` and a description containing `2002`, while `2025-01` matches a datetime containing that year and month. Dates use the same literal substring search as other text; date-range searches are a separate feature. Clear the search field to show the complete catalog.

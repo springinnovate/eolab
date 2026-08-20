@@ -14,11 +14,13 @@ import numpy
 import pytest
 import rasterio
 from affine import Affine
+from rasterio.crs import CRS
 from rasterio.transform import from_bounds, from_origin
 
 from eolab_app.geotiff import (
     ACQUISITION_DATETIME_DESCRIPTION,
     FALLBACK_DATETIME_DESCRIPTION,
+    MISSING_CRS_DESCRIPTION,
     SUGGESTED_WARP_BOUNDS_DESCRIPTION,
     build_stac_item as build_geotiff_stac_item,
 )
@@ -34,7 +36,7 @@ def write_geotiff(
     path: Path,
     acquisition_datetime: str | None = None,
     *,
-    crs: str = "EPSG:4326",
+    crs: str | None = "EPSG:4326",
     transform: Affine | None = None,
     width: int = 3,
     height: int = 2,
@@ -133,6 +135,45 @@ def test_geotiff_discloses_filesystem_timestamp_fallback(tmp_path: Path) -> None
     assert item["properties"]["datetime"] == "2025-02-11T17:31:52Z"
     assert item["properties"]["description"] == FALLBACK_DATETIME_DESCRIPTION
     assert item["assets"]["data"]["updated"] == "2025-02-11T17:31:52Z"
+
+
+def test_geotiff_without_crs_is_cataloged_without_spatial_extent(
+    tmp_path: Path,
+) -> None:
+    """Retain readable raster metadata without inventing a spatial reference."""
+    geotiff_path = tmp_path / "missing-crs.tif"
+    write_geotiff(geotiff_path, crs=None)
+
+    item = build_geotiff_stac_item(tmp_path, geotiff_path)
+
+    assert item["geometry"] is None
+    assert "bbox" not in item
+    assert "proj:epsg" not in item["properties"]
+    assert "proj:wkt2" not in item["properties"]
+    assert item["properties"]["proj:shape"] == [2, 3]
+    assert item["properties"]["proj:transform"] == pytest.approx(
+        [0.1, 0, -123, 0, -0.1, 49]
+    )
+    assert item["properties"]["description"] == (
+        f"{FALLBACK_DATETIME_DESCRIPTION} {MISSING_CRS_DESCRIPTION}"
+    )
+
+
+def test_geotiff_uses_crs_from_gdal_pam_sidecar(tmp_path: Path) -> None:
+    """Use a standard sidecar CRS that GDAL recognizes for the dataset."""
+    geotiff_path = tmp_path / "sidecar-crs.tif"
+    write_geotiff(geotiff_path, crs=None)
+    geotiff_path.with_suffix(".tif.aux.xml").write_text(
+        f"<PAMDataset><SRS>{CRS.from_epsg(4326).to_wkt()}</SRS></PAMDataset>",
+        encoding="utf-8",
+    )
+
+    item = build_geotiff_stac_item(tmp_path, geotiff_path)
+
+    assert item["properties"]["proj:epsg"] == 4326
+    assert item["bbox"] == pytest.approx([-123, 48.8, -122.7, 49])
+    assert item["geometry"]["type"] == "Polygon"
+    assert MISSING_CRS_DESCRIPTION not in item["properties"]["description"]
 
 
 def test_geotiff_transforms_bounds_with_an_invalid_projected_corner(
@@ -544,6 +585,7 @@ class RecordingCatalogDatabase:
 def test_scan_continues_after_an_invalid_geotiff(tmp_path: Path) -> None:
     """Index valid files, report invalid files, and keep stable upsert results."""
     write_geotiff(tmp_path / "valid.TIF")
+    write_geotiff(tmp_path / "missing-crs.tif", crs=None)
     (tmp_path / "invalid.tiff").write_text("not a raster", encoding="utf-8")
     catalog_writer = RecordingCatalogWriter()
     catalog_database = RecordingCatalogDatabase(catalog_writer)
@@ -568,16 +610,23 @@ def test_scan_continues_after_an_invalid_geotiff(tmp_path: Path) -> None:
     first_status, second_status = asyncio.run(run_twice())
 
     assert first_status["state"] == "completed"
-    assert first_status["discovered"] == 2
-    assert first_status["processed"] == 2
-    assert first_status["indexed"] == 1
+    assert first_status["discovered"] == 3
+    assert first_status["processed"] == 3
+    assert first_status["indexed"] == 2
     assert first_status["alreadyInCatalog"] == 0
     assert first_status["failed"] == 1
     assert first_status["errors"][0]["path"] == "invalid.tiff"
-    assert second_status["indexed"] == 1
-    assert second_status["alreadyInCatalog"] == 1
+    assert second_status["indexed"] == 2
+    assert second_status["alreadyInCatalog"] == 2
     assert len(catalog_writer.write_session.collections) == 2
-    assert len(catalog_writer.write_session.items) == 1
+    assert len(catalog_writer.write_session.items) == 2
+    missing_crs_item = next(
+        item
+        for item in catalog_writer.write_session.items.values()
+        if item["properties"]["title"] == "missing-crs.tif"
+    )
+    assert missing_crs_item["geometry"] is None
+    assert "bbox" not in missing_crs_item
     assert catalog_database.search_count_cache_invalidations == 2
 
 

@@ -196,6 +196,11 @@ export function buildCatalogItemDetails(
             label: "Coordinate reference system",
             value: properties["proj:wkt2"]
         });
+    } else if (datasetType === "Raster") {
+        metadata.push({
+            label: "Coordinate reference system",
+            value: "Spatial reference unavailable"
+        });
     }
     if (properties["proj:shape"] !== undefined) {
         const [height, width] = properties["proj:shape"];
@@ -589,6 +594,10 @@ export class CatalogFootprintController {
         this.clearPreview();
         this.removeLayer(this.selectedLayer);
         this.selectedItemKey = this.itemKey(item);
+        if (item.geometry === null) {
+            this.selectedLayer = null;
+            return;
+        }
         this.selectedLayer = this.layerFactory(item, "selected").addTo(
             this.leafletMap
         );
@@ -606,7 +615,10 @@ export class CatalogFootprintController {
      */
     preview(item) {
         this.clearPreview();
-        if (this.itemKey(item) !== this.selectedItemKey) {
+        if (
+            item.geometry !== null &&
+            this.itemKey(item) !== this.selectedItemKey
+        ) {
             this.previewLayer = this.layerFactory(item, "preview").addTo(
                 this.leafletMap
             );

@@ -485,6 +485,36 @@ test("buildCatalogItemDetails presents scanned GeoTIFF metadata", () => {
   assert.deepEqual(inspector.fields, []);
 });
 
+test("buildCatalogItemDetails identifies a GeoTIFF without a CRS", () => {
+  const inspector = buildCatalogItemDetails(
+    {
+      id: "missing-crs",
+      collection: "eolab-mounted-geotiffs",
+      geometry: null,
+      properties: {
+        datetime: "2025-02-11T17:31:52Z",
+        title: "Model Outputs/unlocated.tif",
+        "proj:shape": [20, 30],
+      },
+      assets: {},
+    },
+    [],
+    "bigboi -- Z:\\bigbucket",
+  );
+
+  assert.deepEqual(inspector.metadata, [
+    { label: "Item ID", value: "missing-crs" },
+    { label: "Collection", value: "eolab-mounted-geotiffs" },
+    { label: "Dataset type", value: "Raster" },
+    { label: "Item datetime", value: "2025-02-11T17:31:52Z" },
+    {
+      label: "Coordinate reference system",
+      value: "Spatial reference unavailable",
+    },
+    { label: "Raster dimensions", value: "30 × 20 pixels" },
+  ]);
+});
+
 test("buildCatalogItemDetails presents mounted Shapefile metadata", () => {
   const inspector = buildCatalogItemDetails(
     {
@@ -728,4 +758,29 @@ test("CatalogFootprintController distinguishes selection and preview", () => {
 
   controller.clear();
   assert.deepEqual(removedLayers, [layers[1], layers[0]]);
+});
+
+test("CatalogFootprintController omits unlocated Item layers", () => {
+  const removedLayers = [];
+  const map = {
+    removeLayer(layer) {
+      removedLayers.push(layer);
+    },
+  };
+  let layerFactoryCalls = 0;
+  const controller = new CatalogFootprintController(map, () => {
+    layerFactoryCalls += 1;
+  });
+  const item = {
+    id: "unlocated",
+    collection: "eolab-mounted-geotiffs",
+    geometry: null,
+  };
+
+  controller.select(item);
+  controller.preview(item);
+  controller.clear();
+
+  assert.equal(layerFactoryCalls, 0);
+  assert.deepEqual(removedLayers, []);
 });
