@@ -64,7 +64,7 @@ export function formatScanStatusSummary(scanStatus) {
  * Formats the performance clocks in a scan-status response.
  *
  * @param {Object} timing Scan timing values in seconds.
- * @param {number} workerCount Number of concurrent metadata workers.
+ * @param {number} workerCount Number of concurrent metadata processes.
  * @param {number} batchSize Maximum Items in one catalog write.
  * @return {Object[]} Human-readable timing labels and values.
  */

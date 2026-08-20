@@ -2,12 +2,14 @@
 
 import asyncio
 import os
+from concurrent.futures import Executor, ProcessPoolExecutor
 from contextlib import AbstractAsyncContextManager
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from multiprocessing import get_context
 from pathlib import Path
-from time import perf_counter, thread_time
+from time import perf_counter, process_time
 from typing import Any, Protocol
 from uuid import uuid4
 
@@ -81,7 +83,8 @@ class DatasetMetadataResult:
     """One dataset result with worker wall and CPU measurements."""
 
     path: Path
-    item_or_error: dict[str, Any] | Exception
+    item: dict[str, Any] | None
+    error: str | None
     elapsed_seconds: float
     processing_seconds: float
 
@@ -320,6 +323,9 @@ class ScanManager:
                 result_queue: asyncio.Queue[DatasetMetadataResult | None] = (
                     asyncio.Queue(maxsize=self.item_batch_size * 2)
                 )
+                metadata_executor = _create_metadata_executor(
+                    self.metadata_worker_count
+                )
                 path_producer = asyncio.create_task(
                     _enqueue_dataset_candidates(
                         dataset_candidates,
@@ -333,6 +339,7 @@ class ScanManager:
                             self.source_root,
                             path_queue,
                             result_queue,
+                            metadata_executor,
                         )
                     )
                     for _ in range(self.metadata_worker_count)
@@ -353,7 +360,6 @@ class ScanManager:
                             continue
 
                         dataset_path = metadata_result.path
-                        item_or_error = metadata_result.item_or_error
                         self._status["timing"]["metadataWorkerSeconds"] += (
                             metadata_result.elapsed_seconds
                         )
@@ -370,22 +376,23 @@ class ScanManager:
                         ).as_posix()
                         self._status["currentFile"] = relative_path
                         self._status["processed"] += 1
-                        if isinstance(item_or_error, Exception):
+                        if metadata_result.error is not None:
                             self._status["failed"] += 1
                             if len(self._status["errors"]) < MAX_SCAN_ERROR_DETAILS:
                                 self._status["errors"].append(
                                     {
                                         "path": relative_path,
-                                        "error": str(item_or_error),
+                                        "error": metadata_result.error,
                                     }
                                 )
                             else:
                                 self._status["errorsTruncated"] = True
                         else:
+                            item = metadata_result.item
                             pending_items = pending_items_by_collection[
-                                item_or_error["collection"]
+                                item["collection"]
                             ]
-                            pending_items.append(item_or_error)
+                            pending_items.append(item)
                             if len(pending_items) == self.item_batch_size:
                                 await self._upsert_items(
                                     catalog_session,
@@ -393,7 +400,7 @@ class ScanManager:
                                     existing_item_keys,
                                 )
                                 pending_items_by_collection[
-                                    item_or_error["collection"]
+                                    item["collection"]
                                 ] = []
                 finally:
                     path_producer.cancel()
@@ -403,6 +410,11 @@ class ScanManager:
                         path_producer,
                         *metadata_workers,
                         return_exceptions=True,
+                    )
+                    await asyncio.to_thread(
+                        metadata_executor.shutdown,
+                        wait=True,
+                        cancel_futures=True,
                     )
 
                 for pending_items in pending_items_by_collection.values():
@@ -501,10 +513,13 @@ async def _read_dataset_metadata(
     source_root: Path,
     path_queue: asyncio.Queue[DatasetCandidate | None],
     result_queue: asyncio.Queue[DatasetMetadataResult | None],
+    metadata_executor: Executor,
 ) -> None:
     """Read dataset metadata until the producer signals completion."""
+    event_loop = asyncio.get_running_loop()
     while (dataset_candidate := await path_queue.get()) is not None:
-        metadata_result = await asyncio.to_thread(
+        metadata_result = await event_loop.run_in_executor(
+            metadata_executor,
             _build_dataset_metadata,
             source_root,
             dataset_candidate,
@@ -519,30 +534,41 @@ def _build_dataset_metadata(
 ) -> DatasetMetadataResult:
     """Build one Item while separating worker CPU from elapsed time."""
     elapsed_started = perf_counter()
-    processing_started = thread_time()
+    processing_started = process_time()
     dataset_path = dataset_candidate.path
     builder_arguments: list[Any] = [source_root, dataset_path]
     if dataset_candidate.component_paths:
         builder_arguments.append(dataset_candidate.component_paths)
     try:
-        item_or_error = DATASET_ITEM_BUILDERS[dataset_path.suffix.lower()](
+        item = DATASET_ITEM_BUILDERS[dataset_path.suffix.lower()](
             *builder_arguments
         )
-        if item_or_error["geometry"] is None:
+        if item["geometry"] is None:
             raise ValueError(
                 "Dataset has no spatial footprint; pgSTAC requires Item geometry"
             )
+        error_message = None
     except Exception as error:
-        item_or_error = error
+        item = None
+        error_message = str(error)
     elapsed_seconds = perf_counter() - elapsed_started
     return DatasetMetadataResult(
         path=dataset_path,
-        item_or_error=item_or_error,
+        item=item,
+        error=error_message,
         elapsed_seconds=elapsed_seconds,
         processing_seconds=min(
-            thread_time() - processing_started,
+            process_time() - processing_started,
             elapsed_seconds,
         ),
+    )
+
+
+def _create_metadata_executor(worker_count: int) -> ProcessPoolExecutor:
+    """Create isolated metadata workers without inheriting app threads."""
+    return ProcessPoolExecutor(
+        max_workers=worker_count,
+        mp_context=get_context("spawn"),
     )
 
 

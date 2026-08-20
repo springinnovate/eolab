@@ -40,6 +40,13 @@ def test_scan_paths_share_one_read_only_deployment_mount() -> None:
     assert '"EOLAB_SCAN_MOUNT_PATH=${EOLAB_SCAN_MOUNT_PATH' not in compose
 
 
+def test_app_image_avoids_repeated_gdal_directory_listing() -> None:
+    """Avoid enumerating large mounted directories for every dataset open."""
+    dockerfile = (COMPOSE_PATH.parent / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "GDAL_DISABLE_READDIR_ON_OPEN=TRUE" in dockerfile
+
+
 def test_app_can_inventory_existing_catalog_items() -> None:
     """Give the app database access to classify existing scanner Items."""
     compose = COMPOSE_PATH.read_text(encoding="utf-8")
