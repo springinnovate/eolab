@@ -36,6 +36,7 @@ def test_scan_paths_share_one_read_only_deployment_mount() -> None:
     assert '"SCAN_PATHS_WITHIN_MOUNT=${EOLAB_SCAN_PATHS_WITHIN_MOUNT:' in compose
     assert '"SCAN_DISPLAY_PATH_PREFIX=${EOLAB_SCAN_DISPLAY_PATH_PREFIX:' in compose
     assert '"SCAN_WORKER_COUNT=${EOLAB_SCAN_WORKER_COUNT:-8}"' in compose
+    assert '"SCAN_BATCH_SIZE=${EOLAB_SCAN_BATCH_SIZE:-100}"' in compose
     assert '"EOLAB_SCAN_MOUNT_PATH=${EOLAB_SCAN_MOUNT_PATH' not in compose
 
 

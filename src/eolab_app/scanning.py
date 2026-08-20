@@ -21,7 +21,6 @@ from eolab_app.shapefile import (
 )
 
 
-STAC_ITEM_BATCH_SIZE = 100
 MAX_SCAN_ERROR_DETAILS = 100
 CATALOG_WRITE_TIMEOUT_SECONDS = 120
 
@@ -225,12 +224,14 @@ class ScanManager:
         catalog_writer: CatalogWriter,
         catalog_database: CatalogDatabase,
         metadata_worker_count: int,
+        item_batch_size: int,
     ) -> None:
         self.source_root = source_root
         self.source_paths = source_paths
         self.catalog_writer = catalog_writer
         self.catalog_database = catalog_database
         self.metadata_worker_count = metadata_worker_count
+        self.item_batch_size = item_batch_size
         self._start_lock = asyncio.Lock()
         self._task: asyncio.Task[None] | None = None
         self._started_at_monotonic: float | None = None
@@ -317,7 +318,7 @@ class ScanManager:
                     maxsize=self.metadata_worker_count * 2
                 )
                 result_queue: asyncio.Queue[DatasetMetadataResult | None] = (
-                    asyncio.Queue(maxsize=STAC_ITEM_BATCH_SIZE * 2)
+                    asyncio.Queue(maxsize=self.item_batch_size * 2)
                 )
                 path_producer = asyncio.create_task(
                     _enqueue_dataset_candidates(
@@ -385,7 +386,7 @@ class ScanManager:
                                 item_or_error["collection"]
                             ]
                             pending_items.append(item_or_error)
-                            if len(pending_items) == STAC_ITEM_BATCH_SIZE:
+                            if len(pending_items) == self.item_batch_size:
                                 await self._upsert_items(
                                     catalog_session,
                                     pending_items,
@@ -464,6 +465,7 @@ class ScanManager:
             "alreadyInCatalog": 0,
             "failed": 0,
             "workerCount": self.metadata_worker_count,
+            "batchSize": self.item_batch_size,
             "currentFile": None,
             "startedAt": None,
             "finishedAt": None,

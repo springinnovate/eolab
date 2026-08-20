@@ -584,6 +584,7 @@ def test_scan_status_reports_worker_count_before_start(tmp_path: Path) -> None:
         catalog_writer,
         RecordingCatalogDatabase(catalog_writer),
         17,
+        100,
     )
 
     assert scan_manager.status()["workerCount"] == 17
@@ -602,6 +603,7 @@ def test_scan_continues_after_an_invalid_geotiff(tmp_path: Path) -> None:
         catalog_writer,
         catalog_database,
         8,
+        100,
     )
 
     async def run_twice() -> tuple[dict[str, Any], dict[str, Any]]:
@@ -659,6 +661,7 @@ def test_scan_reports_null_geometry_before_catalog_write(tmp_path: Path) -> None
         catalog_writer,
         RecordingCatalogDatabase(catalog_writer),
         2,
+        100,
     )
 
     async def run_scan() -> dict[str, Any]:
@@ -702,6 +705,7 @@ def test_scan_combines_multiple_directories_under_one_mount(tmp_path: Path) -> N
         catalog_writer,
         RecordingCatalogDatabase(catalog_writer),
         8,
+        100,
     )
 
     async def run_scan() -> dict[str, Any]:
@@ -733,6 +737,7 @@ def test_scan_catalogs_raster_and_shapefile_datasets_together(
         catalog_writer,
         RecordingCatalogDatabase(catalog_writer),
         4,
+        100,
     )
 
     async def run_twice() -> tuple[dict[str, Any], dict[str, Any]]:
@@ -779,6 +784,7 @@ def test_scan_continues_after_an_incomplete_shapefile(tmp_path: Path) -> None:
         catalog_writer,
         RecordingCatalogDatabase(catalog_writer),
         2,
+        100,
     )
 
     async def run_scan() -> dict[str, Any]:
@@ -812,6 +818,7 @@ def test_scan_continues_after_an_unreadable_shapefile(tmp_path: Path) -> None:
         catalog_writer,
         RecordingCatalogDatabase(catalog_writer),
         2,
+        100,
     )
 
     async def run_scan() -> dict[str, Any]:
@@ -865,6 +872,7 @@ def test_existing_items_are_classified_by_collection_and_identifier(
         catalog_writer,
         RecordingCatalogDatabase(catalog_writer),
         2,
+        100,
     )
 
     async def run_scan() -> dict[str, Any]:
@@ -934,6 +942,7 @@ def test_scan_reads_metadata_concurrently_and_bulk_upserts(
         catalog_writer,
         RecordingCatalogDatabase(catalog_writer),
         3,
+        40,
     )
 
     async def run_scan() -> dict[str, Any]:
@@ -949,10 +958,12 @@ def test_scan_reads_metadata_concurrently_and_bulk_upserts(
         (item_batch[0]["collection"], len(item_batch))
         for item_batch in catalog_writer.write_session.item_batches
     ) == [
-        ("eolab-mounted-geotiffs", 5),
-        ("eolab-mounted-geotiffs", 100),
-        ("eolab-mounted-vectors", 5),
-        ("eolab-mounted-vectors", 100),
+        ("eolab-mounted-geotiffs", 25),
+        ("eolab-mounted-geotiffs", 40),
+        ("eolab-mounted-geotiffs", 40),
+        ("eolab-mounted-vectors", 25),
+        ("eolab-mounted-vectors", 40),
+        ("eolab-mounted-vectors", 40),
     ]
     assert status["processed"] == 210
     assert status["indexed"] == 210
@@ -1015,6 +1026,7 @@ def test_scan_caps_error_details_without_losing_failure_count(
         catalog_writer,
         RecordingCatalogDatabase(catalog_writer),
         8,
+        100,
     )
 
     async def run_scan() -> dict[str, Any]:
@@ -1059,6 +1071,7 @@ def test_scan_stops_after_a_bulk_catalog_failure(
         catalog_writer,
         catalog_database,
         8,
+        100,
     )
 
     async def run_scan() -> dict[str, Any]:
@@ -1090,6 +1103,7 @@ def test_scan_prevents_overlap(tmp_path: Path) -> None:
         catalog_writer,
         RecordingCatalogDatabase(catalog_writer),
         8,
+        100,
     )
 
     async def start_twice() -> None:

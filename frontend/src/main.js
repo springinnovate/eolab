@@ -685,7 +685,8 @@ function renderScanStatus(scanStatus) {
     scanTimingValuesElement.replaceChildren();
     for (const timingRow of formatScanTiming(
         scanStatus.timing,
-        scanStatus.workerCount
+        scanStatus.workerCount,
+        scanStatus.batchSize
     )) {
         const timingLabel = document.createElement("dt");
         timingLabel.textContent = timingRow.label;

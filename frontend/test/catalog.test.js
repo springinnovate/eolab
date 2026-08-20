@@ -273,6 +273,7 @@ test("formatScanTiming distinguishes wall and cumulative worker clocks", () => {
         cacheInvalidationSeconds: 0,
       },
       32,
+      100,
     ),
     [
       { label: "Elapsed wall time", value: "1h 2m 3s" },
@@ -288,7 +289,7 @@ test("formatScanTiming distinguishes wall and cumulative worker clocks", () => {
         label: "Metadata processing CPU (cumulative)",
         value: "30m 0s",
       },
-      { label: "Catalog writes", value: "4.3 s" },
+      { label: "Catalog writes (100 Items/batch)", value: "4.3 s" },
       { label: "Search-count refresh", value: "0 ms" },
     ],
   );
