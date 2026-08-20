@@ -575,6 +575,20 @@ class RecordingCatalogDatabase:
         self.search_count_cache_invalidations += 1
 
 
+def test_scan_status_reports_worker_count_before_start(tmp_path: Path) -> None:
+    """Construct the initial status from the configured worker count."""
+    catalog_writer = RecordingCatalogWriter()
+    scan_manager = ScanManager(
+        tmp_path,
+        (tmp_path,),
+        catalog_writer,
+        RecordingCatalogDatabase(catalog_writer),
+        17,
+    )
+
+    assert scan_manager.status()["workerCount"] == 17
+
+
 def test_scan_continues_after_an_invalid_geotiff(tmp_path: Path) -> None:
     """Index valid files, report invalid files, and keep stable upsert results."""
     write_geotiff(tmp_path / "valid.TIF")

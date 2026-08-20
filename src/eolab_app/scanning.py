@@ -454,8 +454,7 @@ class ScanManager:
             for item in items
         )
 
-    @staticmethod
-    def _new_status(state: str) -> dict[str, Any]:
+    def _new_status(self, state: str) -> dict[str, Any]:
         return {
             "id": str(uuid4()),
             "state": state,
@@ -533,11 +532,15 @@ def _build_dataset_metadata(
             )
     except Exception as error:
         item_or_error = error
+    elapsed_seconds = perf_counter() - elapsed_started
     return DatasetMetadataResult(
         path=dataset_path,
         item_or_error=item_or_error,
-        elapsed_seconds=perf_counter() - elapsed_started,
-        processing_seconds=thread_time() - processing_started,
+        elapsed_seconds=elapsed_seconds,
+        processing_seconds=min(
+            thread_time() - processing_started,
+            elapsed_seconds,
+        ),
     )
 
 
