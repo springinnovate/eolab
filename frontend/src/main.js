@@ -7,6 +7,7 @@ import {
     CatalogSearchClient,
     createDebouncedAction,
     formatCatalogItemCount,
+    formatScanStatusSummary,
     MOUNTED_DATASET_TYPES,
 } from "./catalog.js";
 import "./style.css";
@@ -321,6 +322,9 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
     const catalogMessageElement = document.querySelector("#catalog-message");
     const catalogSummaryElement = document.querySelector("#catalog-summary");
     const catalogResultsElement = document.querySelector("#catalog-results");
+    const catalogResultsScrollElement = document.querySelector(
+        "#catalog-results-scroll"
+    );
     const catalogSearchInput = document.querySelector("#catalog-search");
     const refreshCatalogButton = document.querySelector("#refresh-catalog");
     const streamStatusElement = document.querySelector(
@@ -594,11 +598,17 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
         }
     }
 
-    const pageObserver = new IntersectionObserver((entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) {
-            void loadNextCatalogPage();
+    const pageObserver = new IntersectionObserver(
+        (entries) => {
+            if (entries.some((entry) => entry.isIntersecting)) {
+                void loadNextCatalogPage();
+            }
+        },
+        {
+            root: catalogResultsScrollElement,
+            rootMargin: CATALOG_LOAD_ROOT_MARGIN,
         }
-    }, { rootMargin: CATALOG_LOAD_ROOT_MARGIN });
+    );
 
     const scheduleCatalogSearch = createDebouncedAction(
         loadCatalog.bind(null, false),
@@ -624,6 +634,12 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
  */
 function renderScanStatus(scanStatus) {
     const startScanButton = document.querySelector("#start-scan");
+    const scanStatusDisclosureElement = document.querySelector(
+        "#scan-status-disclosure"
+    );
+    const scanStatusSummaryElement = document.querySelector(
+        "#scan-status-summary"
+    );
     const scanStatusElement = document.querySelector("#scan-status");
     const scanProgressElement = document.querySelector("#scan-progress");
     const scanCountsElement = document.querySelector("#scan-counts");
@@ -635,9 +651,17 @@ function renderScanStatus(scanStatus) {
     );
     const scanErrorsElement = document.querySelector("#scan-errors");
     const isRunning = ["discovering", "scanning"].includes(scanStatus.state);
+    const wasRunning = scanStatusDisclosureElement.dataset.running === "true";
 
     startScanButton.disabled = isRunning;
     startScanButton.textContent = isRunning ? "Scanning…" : "Scan directories";
+    scanStatusSummaryElement.textContent = formatScanStatusSummary(scanStatus);
+    // Set the default only when a scan starts or stops so polling does not
+    // override a user's disclosure choice during the same run.
+    if (isRunning !== wasRunning) {
+        scanStatusDisclosureElement.open = isRunning;
+    }
+    scanStatusDisclosureElement.dataset.running = String(isRunning);
     scanProgressElement.hidden = scanStatus.state === "not_started";
     scanProgressElement.max = Math.max(scanStatus.discovered, 1);
     scanProgressElement.value = scanStatus.processed;
@@ -725,6 +749,7 @@ async function startScan(refreshCatalog) {
         if (scanPollTimeout !== null) {
             window.clearTimeout(scanPollTimeout);
         }
+        document.querySelector("#scan-status-disclosure").open = true;
         document.querySelector("#scan-errors-disclosure").open = false;
         const startResponse = await fetch("/api/scans", {
             method: "POST",

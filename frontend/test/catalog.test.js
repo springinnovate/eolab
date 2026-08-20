@@ -10,6 +10,7 @@ import {
   createDebouncedAction,
   findPaginationLink,
   formatCatalogItemCount,
+  formatScanStatusSummary,
 } from "../src/catalog.js";
 
 const emptyItemCollection = {
@@ -218,6 +219,41 @@ test("formatCatalogItemCount handles empty, singular, and filtered results", () 
   assert.equal(
     formatCatalogItemCount({ features: [{}], numberMatched: 1 }, 1, true),
     "Showing 1 of 1 matching Item",
+  );
+});
+
+test("formatScanStatusSummary distinguishes scan and dataset failures", () => {
+  assert.equal(
+    formatScanStatusSummary({ state: "not_started", failed: 0 }),
+    "Scan status — Not started",
+  );
+  assert.equal(
+    formatScanStatusSummary({ state: "discovering", failed: 0 }),
+    "Scan status — In progress",
+  );
+  assert.equal(
+    formatScanStatusSummary({ state: "scanning", failed: 12 }),
+    "Scan status — In progress",
+  );
+  assert.equal(
+    formatScanStatusSummary({ state: "completed", failed: 0 }),
+    "Scan status — Complete",
+  );
+  assert.equal(
+    formatScanStatusSummary({ state: "completed", failed: 1 }),
+    "Scan status — Complete · 1 dataset error",
+  );
+  assert.equal(
+    formatScanStatusSummary({ state: "completed", failed: 2487 }),
+    "Scan status — Complete · 2,487 dataset errors",
+  );
+  assert.equal(
+    formatScanStatusSummary({ state: "failed", failed: 0 }),
+    "Scan status — Failed",
+  );
+  assert.throws(
+    () => formatScanStatusSummary({ state: "complete", failed: 0 }),
+    /Unknown scan state: complete/,
   );
 });
 
