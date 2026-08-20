@@ -268,31 +268,22 @@ def test_geotiff_uses_suggested_warp_bounds_for_global_projection(
     )
 
 
-def test_geotiff_clamps_harmless_wgs84_rounding(
+def test_geotiff_normalizes_global_cog_pixel_edge_bounds(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Clamp only suggested bounds within the explicit WGS 84 tolerance."""
-    geotiff_path = tmp_path / "rounded-bounds.tif"
-    write_geotiff(geotiff_path)
-    monkeypatch.setattr(
-        "eolab_app.geotiff.transform_bounds",
-        lambda *args, **kwargs: (float("inf"),) * 4,
+    """Clip the representative global COG's pixel edges to valid WGS 84."""
+    geotiff_path = tmp_path / "cog_HMv20240801_2022s_AA_300.tif"
+    bounds = (
+        -180.000823370733,
+        -90.0004116853666,
+        180.000823370733,
+        90.0004116853666,
     )
-    monkeypatch.setattr(
-        "eolab_app.geotiff.calculate_default_transform",
-        lambda *args, **kwargs: (
-            from_bounds(
-                -180.00000005,
-                -90.00000005,
-                180.00000005,
-                90.00000005,
-                10,
-                10,
-            ),
-            10,
-            10,
-        ),
+    write_geotiff(
+        geotiff_path,
+        transform=from_bounds(*bounds, 10, 10),
+        width=10,
+        height=10,
     )
 
     item = build_geotiff_stac_item(tmp_path, geotiff_path)
@@ -305,10 +296,10 @@ def test_geotiff_clamps_harmless_wgs84_rounding(
     [
         (Affine.identity(), 0, 10),
         (Affine(float("nan"), 0, 0, 0, 1, 0), 10, 10),
-        (from_bounds(-181, -90, 180, 90, 10, 10), 10, 10),
+        (from_bounds(-200, -90, -181, 90, 10, 10), 10, 10),
         (from_bounds(10, 0, 0, 10, 10, 10), 10, 10),
     ],
-    ids=("empty-grid", "non-finite-transform", "invalid-longitude", "reversed"),
+    ids=("empty-grid", "non-finite-transform", "outside-longitude", "reversed"),
 )
 def test_geotiff_rejects_invalid_suggested_warp_output(
     tmp_path: Path,

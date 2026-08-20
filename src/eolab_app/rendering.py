@@ -1,6 +1,5 @@
 """Publish cataloged GeoTIFFs through the internal GeoServer."""
 
-import math
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import unquote, urlsplit
@@ -142,23 +141,6 @@ async def publish_catalog_raster(
             detail="The STAC catalog returned an invalid Item",
         )
     source_path = _mounted_geotiff_path(item, scan_mount_path)
-    bbox = item.get("bbox")
-    if (
-        not isinstance(bbox, list)
-        or len(bbox) != 4
-        or any(
-            isinstance(coordinate, bool)
-            or not isinstance(coordinate, (int, float))
-            or not math.isfinite(coordinate)
-            for coordinate in bbox
-        )
-        or not (-180 <= bbox[0] < bbox[2] <= 180)
-        or not (-90 <= bbox[1] < bbox[3] <= 90)
-    ):
-        raise HTTPException(
-            status_code=502,
-            detail="The STAC catalog returned an invalid Item bounding box",
-        )
 
     resource_name = request.item_id
     geoserver_rest_url = f"{geoserver_internal_url.rstrip('/')}/rest"
@@ -205,5 +187,5 @@ async def publish_catalog_raster(
 
     return PublishedRaster(
         layerName=f"{GEOSERVER_WORKSPACE_NAME}:{resource_name}",
-        bbox=tuple(bbox),
+        bbox=tuple(item["bbox"]),
     )

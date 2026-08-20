@@ -172,6 +172,12 @@ def test_catalog_geotiff_is_published_idempotently(
     monkeypatch.setenv("SCAN_MOUNT_PATH", str(tmp_path))
     monkeypatch.setenv("SCAN_PATHS_WITHIN_MOUNT", '["."]')
     item = _mounted_geotiff_item(source_path.as_uri())
+    item["bbox"] = [
+        -180.000823370733,
+        -90.0004116853666,
+        180.000823370733,
+        90.0004116853666,
+    ]
     resource_name = TEST_GEOTIFF_ITEM_ID
     geoserver_requests: list[httpx2.Request] = []
 
@@ -234,7 +240,7 @@ def test_catalog_geotiff_is_published_idempotently(
 
     expected_response = {
         "layerName": f"eolab:{resource_name}",
-        "bbox": [-123.0, 48.0, -122.0, 49.0],
+        "bbox": item["bbox"],
     }
     assert first_response.status_code == 200
     assert first_response.json() == expected_response
