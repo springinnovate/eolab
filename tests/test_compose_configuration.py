@@ -120,7 +120,7 @@ def test_geoserver_initializer_is_idempotent_image_owned_configuration() -> None
     assert "COPY geoserver/ ./" in initializer_dockerfile
     assert 'client.request("DELETE"' not in initializer
     assert 'WORKSPACE_NAME = "eolab"' in initializer
-    assert 'RASTER_STYLE_NAME = "eolab-dynamic-raster"' in initializer
+    assert 'RASTER_STYLE_NAME = "dynamic-raster"' in initializer
 
 
 def test_app_exposes_only_the_public_wms_url() -> None:

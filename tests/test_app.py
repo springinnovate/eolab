@@ -342,7 +342,7 @@ def test_wms_proxy_allows_bounded_png_rendering(
         )
     ).get(
         "/geoserver/eolab/wms?service=WMS&version=1.3.0&request=GetMap"
-        "&layers=eolab%3Aexample&styles=eolab-dynamic-raster"
+        "&layers=eolab%3Aexample&styles=dynamic-raster"
         "&crs=EPSG%3A3857&bbox=0%2C0%2C1%2C1"
         "&width=256&height=256&format=image%2Fpng&transparent=true"
     )

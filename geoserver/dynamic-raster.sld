@@ -5,9 +5,9 @@
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
   xsi:schemaLocation="http://www.opengis.net/sld http://schemas.opengis.net/sld/1.0.0/StyledLayerDescriptor.xsd">
   <NamedLayer>
-    <Name>eolab-dynamic-raster</Name>
+    <Name>dynamic-raster</Name>
     <UserStyle>
-      <Title>EOLab dynamic raster ramp</Title>
+      <Title>Dynamic raster ramp</Title>
       <FeatureTypeStyle>
         <Rule>
           <RasterSymbolizer>

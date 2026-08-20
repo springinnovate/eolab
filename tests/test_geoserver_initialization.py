@@ -58,7 +58,7 @@ def test_initialization_creates_only_missing_eolab_resources() -> None:
         "workspace": {"name": "eolab"}
     }
     assert client.requests[5][1] == (
-        "/workspaces/eolab/styles?name=eolab-dynamic-raster"
+        "/workspaces/eolab/styles?name=dynamic-raster"
     )
     assert client.requests[5][2] == b"<sld/>"
 
@@ -83,7 +83,7 @@ def test_initialization_updates_existing_style_without_destructive_changes() -> 
         "PUT",
     ]
     assert client.requests[-1][1] == (
-        "/workspaces/eolab/styles/eolab-dynamic-raster"
+        "/workspaces/eolab/styles/dynamic-raster"
     )
     assert client.requests[-1][2] == b"<current-style/>"
     assert all(request[0] != "DELETE" for request in client.requests)

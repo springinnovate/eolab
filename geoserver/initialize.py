@@ -10,7 +10,7 @@ from urllib.request import Request, urlopen
 
 
 WORKSPACE_NAME = "eolab"
-RASTER_STYLE_NAME = "eolab-dynamic-raster"
+RASTER_STYLE_NAME = "dynamic-raster"
 RASTER_STYLE_PATH = Path(__file__).with_name(f"{RASTER_STYLE_NAME}.sld")
 ADMIN_PASSWORD_PATTERN = re.compile(r"[A-Za-z0-9._-]{16,}")
 
