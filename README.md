@@ -66,15 +66,7 @@ Open `http://localhost:8000`. The local override also makes the GeoServer admini
 
 ## Rendering service
 
-GeoServer runs only on the internal Compose network. It receives the same dataset tree as the scanner at `/scan-source`, mounted read-only, while its configuration is stored separately in the Docker volume named by `EOLAB_GEOSERVER_DATA_VOLUME_NAME`. The one-shot `geoserver-init` service changes the default keystore password and safely creates or updates the `eolab` workspace and `eolab-dynamic-raster` style. An **Exited (0)** or **Completed** initializer is expected after each successful deployment.
-
-The application header reports **Rendering service ready** after a same-origin WMS GetCapabilities request succeeds. Select **Capabilities** to inspect that response. If GeoServer is starting or unavailable, the header reports it independently; EOLab's `/healthz`, map, scanner, and catalog remain available and the browser retries the check.
-
-EOLab currently permits only WMS GetCapabilities, GetMap, GetFeatureInfo, and GetLegendGraphic GET requests at `/geoserver/eolab/wms`. It sends them to the `eolab` workspace virtual service, limits requested images to 4096 pixels per dimension, permits only inert image, JSON, or plain-text output formats, and rejects arbitrary parameters such as remote SLD URLs. Administrative REST, the GeoServer web interface, WFS, WCS, and write operations are not public. This foundation creates no layers yet; registering and displaying one selected STAC GeoTIFF is the next step.
-
-Keep the GeoServer passwords stable in Coolify. Changing the master password is applied safely by `geoserver-init` on the next deployment. The official GeoServer image reapplies the configured administrator account at startup, so do not manually add GeoServer users or roles in this EOLab-owned instance yet.
-
-Deleting the GeoServer data volume permanently removes its workspaces, styles, stores, and layers, but does not delete the STAC catalog or mounted source files. The next deployment recreates the EOLab workspace and base style.
+GeoServer is configured automatically. Keep `EOLAB_GEOSERVER_ADMIN_PASSWORD` and `EOLAB_GEOSERVER_MASTER_PASSWORD` stable in Coolify. The administrator password must contain at least 16 letters, numbers, hyphens, underscores, or periods. The master password must contain at least eight characters with no surrounding whitespace and must differ from the administrator password.
 
 ## Scan mounted datasets
 
