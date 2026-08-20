@@ -208,10 +208,7 @@ def test_catalog_geotiff_is_published_idempotently(
             assert b"<name>dynamic-raster</name>" in request.content
             assert b"<workspace>eolab</workspace>" in request.content
             return httpx2.Response(200)
-        assert request.method == "GET"
-        assert request.url.path == f"{layer_path}.json"
-        assert request.headers["accept"] == "application/json"
-        return httpx2.Response(200, json={"layer": {"enabled": True}})
+        raise AssertionError(f"Unexpected GeoServer request: {request}")
 
     with TestClient(
         create_app(
@@ -242,8 +239,8 @@ def test_catalog_geotiff_is_published_idempotently(
     assert first_response.status_code == 200
     assert first_response.json() == expected_response
     assert repeated_response.json() == expected_response
-    assert len(geoserver_requests) == 6
-    assert len({request.url.path for request in geoserver_requests}) == 3
+    assert [request.method for request in geoserver_requests] == ["PUT"] * 4
+    assert len({request.url.path for request in geoserver_requests}) == 2
 
 
 @pytest.mark.parametrize(

@@ -203,29 +203,6 @@ async def publish_catalog_raster(
             detail="GeoServer could not style the selected GeoTIFF",
         )
 
-    try:
-        layer_response = await geoserver_client.get(
-            f"{layer_url}.json",
-            headers={"Accept": "application/json"},
-        )
-    except httpx2.RequestError as error:
-        raise HTTPException(
-            status_code=502,
-            detail="The rendering service is unavailable",
-        ) from error
-    try:
-        layer_is_ready = (
-            layer_response.status_code == 200
-            and layer_response.json()["layer"]["enabled"] is True
-        )
-    except (KeyError, TypeError, ValueError):
-        layer_is_ready = False
-    if not layer_is_ready:
-        raise HTTPException(
-            status_code=502,
-            detail="GeoServer did not enable the selected GeoTIFF",
-        )
-
     return PublishedRaster(
         layerName=f"{GEOSERVER_WORKSPACE_NAME}:{resource_name}",
         bbox=tuple(bbox),
