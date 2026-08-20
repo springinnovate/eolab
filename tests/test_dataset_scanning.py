@@ -20,7 +20,6 @@ from rasterio.transform import from_bounds, from_origin
 from eolab_app.geotiff import (
     ACQUISITION_DATETIME_DESCRIPTION,
     FALLBACK_DATETIME_DESCRIPTION,
-    MISSING_CRS_DESCRIPTION,
     SUGGESTED_WARP_BOUNDS_DESCRIPTION,
     build_stac_item as build_geotiff_stac_item,
 )
@@ -137,26 +136,15 @@ def test_geotiff_discloses_filesystem_timestamp_fallback(tmp_path: Path) -> None
     assert item["assets"]["data"]["updated"] == "2025-02-11T17:31:52Z"
 
 
-def test_geotiff_without_crs_is_cataloged_without_spatial_extent(
+def test_geotiff_without_crs_is_a_dataset_error(
     tmp_path: Path,
 ) -> None:
-    """Retain readable raster metadata without inventing a spatial reference."""
+    """Reject missing spatial metadata without guessing a CRS."""
     geotiff_path = tmp_path / "missing-crs.tif"
     write_geotiff(geotiff_path, crs=None)
 
-    item = build_geotiff_stac_item(tmp_path, geotiff_path)
-
-    assert item["geometry"] is None
-    assert "bbox" not in item
-    assert "proj:epsg" not in item["properties"]
-    assert "proj:wkt2" not in item["properties"]
-    assert item["properties"]["proj:shape"] == [2, 3]
-    assert item["properties"]["proj:transform"] == pytest.approx(
-        [0.1, 0, -123, 0, -0.1, 49]
-    )
-    assert item["properties"]["description"] == (
-        f"{FALLBACK_DATETIME_DESCRIPTION} {MISSING_CRS_DESCRIPTION}"
-    )
+    with pytest.raises(ValueError, match="no coordinate reference system"):
+        build_geotiff_stac_item(tmp_path, geotiff_path)
 
 
 def test_geotiff_uses_crs_from_gdal_pam_sidecar(tmp_path: Path) -> None:
@@ -173,7 +161,6 @@ def test_geotiff_uses_crs_from_gdal_pam_sidecar(tmp_path: Path) -> None:
     assert item["properties"]["proj:epsg"] == 4326
     assert item["bbox"] == pytest.approx([-123, 48.8, -122.7, 49])
     assert item["geometry"]["type"] == "Polygon"
-    assert MISSING_CRS_DESCRIPTION not in item["properties"]["description"]
 
 
 def test_geotiff_transforms_bounds_with_an_invalid_projected_corner(
@@ -612,22 +599,59 @@ def test_scan_continues_after_an_invalid_geotiff(tmp_path: Path) -> None:
     assert first_status["state"] == "completed"
     assert first_status["discovered"] == 3
     assert first_status["processed"] == 3
-    assert first_status["indexed"] == 2
+    assert first_status["indexed"] == 1
     assert first_status["alreadyInCatalog"] == 0
-    assert first_status["failed"] == 1
-    assert first_status["errors"][0]["path"] == "invalid.tiff"
-    assert second_status["indexed"] == 2
-    assert second_status["alreadyInCatalog"] == 2
+    assert first_status["failed"] == 2
+    assert {error["path"] for error in first_status["errors"]} == {
+        "invalid.tiff",
+        "missing-crs.tif",
+    }
+    assert second_status["indexed"] == 1
+    assert second_status["alreadyInCatalog"] == 1
     assert len(catalog_writer.write_session.collections) == 2
-    assert len(catalog_writer.write_session.items) == 2
-    missing_crs_item = next(
-        item
-        for item in catalog_writer.write_session.items.values()
-        if item["properties"]["title"] == "missing-crs.tif"
-    )
-    assert missing_crs_item["geometry"] is None
-    assert "bbox" not in missing_crs_item
+    assert len(catalog_writer.write_session.items) == 1
     assert catalog_database.search_count_cache_invalidations == 2
+
+
+def test_scan_reports_null_geometry_before_catalog_write(tmp_path: Path) -> None:
+    """Treat an empty dataset as one failure instead of rejecting its batch."""
+    write_shapefile(tmp_path / "empty.shp", write_feature=False)
+    write_geotiff(tmp_path / "valid.tif")
+    catalog_writer = RecordingCatalogWriter()
+    scan_manager = ScanManager(
+        tmp_path,
+        (tmp_path,),
+        catalog_writer,
+        RecordingCatalogDatabase(catalog_writer),
+        2,
+    )
+
+    async def run_scan() -> dict[str, Any]:
+        await scan_manager.start()
+        while scan_manager.status()["state"] in {"discovering", "scanning"}:
+            await asyncio.sleep(0.01)
+        return scan_manager.status()
+
+    status = asyncio.run(run_scan())
+
+    assert status["state"] == "completed"
+    assert status["discovered"] == 2
+    assert status["processed"] == 2
+    assert status["indexed"] == 1
+    assert status["failed"] == 1
+    assert status["errors"] == [
+        {
+            "path": "empty.shp",
+            "error": (
+                "Dataset has no spatial footprint; pgSTAC requires Item geometry"
+            ),
+        }
+    ]
+    assert all(
+        item["geometry"] is not None
+        for batch in catalog_writer.write_session.item_batches
+        for item in batch
+    )
 
 
 def test_scan_combines_multiple_directories_under_one_mount(tmp_path: Path) -> None:
@@ -788,7 +812,11 @@ def test_existing_items_are_classified_by_collection_and_identifier(
             if dataset_path.suffix.lower() == ".shp"
             else "eolab-mounted-geotiffs"
         )
-        return {"id": "same-id", "collection": collection}
+        return {
+            "id": "same-id",
+            "collection": collection,
+            "geometry": {"type": "Point", "coordinates": [0, 0]},
+        }
 
     monkeypatch.setitem(DATASET_ITEM_BUILDERS, ".tif", build_item)
     monkeypatch.setitem(DATASET_ITEM_BUILDERS, ".shp", build_item)
@@ -845,6 +873,7 @@ def test_scan_reads_metadata_concurrently_and_bulk_upserts(
                 if dataset_path.suffix.lower() == ".shp"
                 else "eolab-mounted-geotiffs"
             ),
+            "geometry": {"type": "Point", "coordinates": [0, 0]},
         }
 
     async def yielding_to_thread(function: Any, *args: Any) -> Any:
@@ -945,6 +974,7 @@ def test_scan_stops_after_a_bulk_catalog_failure(
         return {
             "id": relative_path,
             "collection": "eolab-mounted-geotiffs",
+            "geometry": {"type": "Point", "coordinates": [0, 0]},
         }
 
     monkeypatch.setitem(DATASET_ITEM_BUILDERS, ".tif", build_item)

@@ -424,6 +424,11 @@ async def _read_dataset_metadata(
                 DATASET_ITEM_BUILDERS[dataset_path.suffix.lower()],
                 *builder_arguments,
             )
+            if item_or_error["geometry"] is None:
+                raise ValueError(
+                    "Dataset has no spatial footprint; pgSTAC requires Item "
+                    "geometry"
+                )
         except Exception as error:
             item_or_error = error
         await result_queue.put((dataset_path, item_or_error))
