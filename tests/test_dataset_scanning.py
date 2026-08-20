@@ -19,6 +19,7 @@ from rasterio.transform import from_bounds, from_origin
 from eolab_app.geotiff import (
     ACQUISITION_DATETIME_DESCRIPTION,
     FALLBACK_DATETIME_DESCRIPTION,
+    SUGGESTED_WARP_BOUNDS_DESCRIPTION,
     build_stac_item as build_geotiff_stac_item,
 )
 from eolab_app.scanning import DATASET_ITEM_BUILDERS, ScanManager, StacApiWriter
@@ -136,8 +137,13 @@ def test_geotiff_discloses_filesystem_timestamp_fallback(tmp_path: Path) -> None
 
 def test_geotiff_transforms_bounds_with_an_invalid_projected_corner(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Catalog a valid raster whose rectangular extent exceeds its CRS domain."""
+    monkeypatch.setattr(
+        "eolab_app.geotiff.calculate_default_transform",
+        lambda *args, **kwargs: pytest.fail("Suggested warp fallback was called"),
+    )
     geotiff_path = tmp_path / "partial-eckert-iv.tif"
     projected_bounds = (
         -10834025.0233928,
@@ -171,6 +177,108 @@ def test_geotiff_transforms_bounds_with_an_invalid_projected_corner(
     }
 
 
+def test_geotiff_uses_suggested_warp_bounds_for_global_projection(
+    tmp_path: Path,
+) -> None:
+    """Catalog the representative global raster without reading its pixels."""
+    geotiff_path = tmp_path / "global-eckert-iv.tif"
+    geotiff_path.parent.mkdir(parents=True, exist_ok=True)
+    with rasterio.open(
+        geotiff_path,
+        "w",
+        driver="GTiff",
+        width=16_923,
+        height=8_462,
+        count=1,
+        dtype="uint8",
+        crs="+proj=eck4 +lon_0=0 +datum=WGS84 +units=m +no_defs",
+        transform=Affine(
+            2_000,
+            0,
+            -16_921_202.923,
+            0,
+            -2_000,
+            8_461_398.539,
+        ),
+        compress="DEFLATE",
+        tiled=True,
+    ):
+        pass
+
+    item = build_geotiff_stac_item(tmp_path, geotiff_path)
+
+    assert item["bbox"] == pytest.approx(
+        [-180, -89.987236406, 180, 90]
+    )
+    assert item["properties"]["description"] == (
+        f"{FALLBACK_DATETIME_DESCRIPTION} "
+        f"{SUGGESTED_WARP_BOUNDS_DESCRIPTION}"
+    )
+
+
+def test_geotiff_clamps_harmless_wgs84_rounding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Clamp only suggested bounds within the explicit WGS 84 tolerance."""
+    geotiff_path = tmp_path / "rounded-bounds.tif"
+    write_geotiff(geotiff_path)
+    monkeypatch.setattr(
+        "eolab_app.geotiff.transform_bounds",
+        lambda *args, **kwargs: (float("inf"),) * 4,
+    )
+    monkeypatch.setattr(
+        "eolab_app.geotiff.calculate_default_transform",
+        lambda *args, **kwargs: (
+            from_bounds(
+                -180.00000005,
+                -90.00000005,
+                180.00000005,
+                90.00000005,
+                10,
+                10,
+            ),
+            10,
+            10,
+        ),
+    )
+
+    item = build_geotiff_stac_item(tmp_path, geotiff_path)
+
+    assert item["bbox"] == [-180, -90, 180, 90]
+
+
+@pytest.mark.parametrize(
+    "suggested_output",
+    [
+        (Affine.identity(), 0, 10),
+        (Affine(float("nan"), 0, 0, 0, 1, 0), 10, 10),
+        (from_bounds(-181, -90, 180, 90, 10, 10), 10, 10),
+        (from_bounds(10, 0, 0, 10, 10, 10), 10, 10),
+    ],
+    ids=("empty-grid", "non-finite-transform", "invalid-longitude", "reversed"),
+)
+def test_geotiff_rejects_invalid_suggested_warp_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    suggested_output: tuple[Affine, int, int],
+) -> None:
+    """Reject malformed suggested grids instead of publishing invalid STAC."""
+    geotiff_path = tmp_path / "invalid-suggested-grid.tif"
+    write_geotiff(geotiff_path)
+    monkeypatch.setattr(
+        "eolab_app.geotiff.transform_bounds",
+        lambda *args, **kwargs: (float("inf"),) * 4,
+    )
+    monkeypatch.setattr(
+        "eolab_app.geotiff.calculate_default_transform",
+        lambda *args, **kwargs: suggested_output,
+    )
+
+    with pytest.raises(ValueError, match="could not be transformed"):
+        build_geotiff_stac_item(tmp_path, geotiff_path)
+
+
 def test_geotiff_rejects_fully_untransformable_bounds(tmp_path: Path) -> None:
     """Reject a raster when no finite WGS 84 extent can be produced."""
     geotiff_path = tmp_path / "invalid-eckert-iv-extent.tif"
@@ -190,7 +298,10 @@ def test_geotiff_rejects_fully_untransformable_bounds(tmp_path: Path) -> None:
         height=height,
     )
 
-    with pytest.raises(ValueError, match="could not be transformed"):
+    with pytest.raises(
+        rasterio._err.CPLE_AppDefinedError,
+        match="unable to compute output bounds",
+    ):
         build_geotiff_stac_item(tmp_path, geotiff_path)
 
 
