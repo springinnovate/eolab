@@ -66,7 +66,7 @@ One Shapefile Item groups files with the same exact base name. The `.shp`, `.shx
 
 For GeoTIFFs, the scanner uses `ACQUISITIONDATETIME` from GDAL's `IMAGERY` metadata domain when it contains an RFC 3339 timestamp with a UTC offset. Otherwise it uses the source file's filesystem modification time as the required STAC Item `datetime`. A Shapefile Item uses the latest modification time among its component files. Each fallback is explained in the Item description, and every Asset records its own modification time as `updated`. Filesystem creation time is not used because its meaning differs among operating systems. A malformed GeoTIFF `ACQUISITIONDATETIME` is reported as a dataset failure rather than guessed or silently replaced.
 
-GeoTIFFs without a coordinate reference system are reported as individual dataset errors because pgSTAC requires every stored Item to have a spatial footprint. A CRS that GDAL recognizes from a standard sidecar such as PAM `.aux.xml` continues through the normal spatial path. The scanner rejects any dataset without a footprint before bulk upsert, so one unsupported Item cannot stop the complete scan.
+GeoTIFFs without a coordinate reference system are reported as individual dataset errors because pgSTAC requires every stored Item to have a spatial footprint.
 
 ## Search the catalog
 
