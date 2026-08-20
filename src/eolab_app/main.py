@@ -13,8 +13,10 @@ from eolab_app.settings import APPLICATION_VERSION_PATH, load_settings
 from eolab_app.scanning import PgStacCatalogDatabase, ScanManager, StacApiWriter
 
 
-WMS_COMMON_QUERY_PARAMETERS = frozenset({"request", "service", "version"})
-WMS_MAP_QUERY_PARAMETERS = WMS_COMMON_QUERY_PARAMETERS | {
+PUBLIC_WMS_COMMON_QUERY_PARAMETERS = frozenset(
+    {"request", "service", "version"}
+)
+PUBLIC_WMS_MAP_QUERY_PARAMETERS = PUBLIC_WMS_COMMON_QUERY_PARAMETERS | {
     "bbox",
     "bgcolor",
     "crs",
@@ -30,11 +32,11 @@ WMS_MAP_QUERY_PARAMETERS = WMS_COMMON_QUERY_PARAMETERS | {
     "transparent",
     "width",
 }
-WMS_QUERY_PARAMETERS = {
-    "getcapabilities": WMS_COMMON_QUERY_PARAMETERS
+PUBLIC_WMS_QUERY_PARAMETERS = {
+    "getcapabilities": PUBLIC_WMS_COMMON_QUERY_PARAMETERS
     | {"acceptformats", "acceptversions", "sections", "updatesequence"},
-    "getmap": WMS_MAP_QUERY_PARAMETERS | {"tiled", "tilesorigin"},
-    "getfeatureinfo": WMS_MAP_QUERY_PARAMETERS
+    "getmap": PUBLIC_WMS_MAP_QUERY_PARAMETERS | {"tiled", "tilesorigin"},
+    "getfeatureinfo": PUBLIC_WMS_MAP_QUERY_PARAMETERS
     | {
         "buffer",
         "feature_count",
@@ -46,7 +48,7 @@ WMS_QUERY_PARAMETERS = {
         "x",
         "y",
     },
-    "getlegendgraphic": WMS_COMMON_QUERY_PARAMETERS
+    "getlegendgraphic": PUBLIC_WMS_COMMON_QUERY_PARAMETERS
     | {
         "bgcolor",
         "env",
@@ -84,7 +86,7 @@ def _validated_wms_query(request: Request) -> list[tuple[str, str]]:
         raise HTTPException(status_code=400, detail="service must be WMS")
 
     operation = normalized_query.get("request", "").lower()
-    allowed_parameters = WMS_QUERY_PARAMETERS.get(operation)
+    allowed_parameters = PUBLIC_WMS_QUERY_PARAMETERS.get(operation)
     if allowed_parameters is None:
         raise HTTPException(status_code=400, detail="Unsupported WMS operation")
     unsupported_parameters = normalized_query.keys() - allowed_parameters
