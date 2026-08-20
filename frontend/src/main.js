@@ -9,9 +9,14 @@ import {
     formatCatalogItemCount,
     formatScanTiming,
     formatScanStatusSummary,
+    MOUNTED_GEOTIFF_COLLECTION_ID,
     MOUNTED_DATASET_TYPES,
 } from "./catalog.js";
-import { loadWmsCapabilities } from "./rendering.js";
+import {
+    CatalogRasterLayerController,
+    loadWmsCapabilities,
+    publishCatalogRaster,
+} from "./rendering.js";
 import "./style.css";
 
 const CATALOG_SEARCH_DEBOUNCE_MILLISECONDS = 300;
@@ -398,6 +403,15 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
     const streamAnnouncementElement = document.querySelector(
         "#catalog-stream-announcement"
     );
+    const catalogMapActionsElement = document.querySelector(
+        "#catalog-map-actions"
+    );
+    const catalogLayerToggle = document.querySelector(
+        "#toggle-catalog-layer"
+    );
+    const catalogLayerStatus = document.querySelector(
+        "#catalog-layer-status"
+    );
     const catalogUrl = appGlobalConfiguration.catalogUrl.replace(/\/$/, "");
     const resultStream = new CatalogResultStream(
         new CatalogSearchClient(catalogUrl)
@@ -406,18 +420,60 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
         leafletMap,
         createCatalogFootprintLayer
     );
+    const rasterLayerController = new CatalogRasterLayerController(
+        leafletMap,
+        publishCatalogRaster,
+        (publishedRaster) => {
+            const [west, south, east, north] = publishedRaster.bbox;
+            const rasterLayer = L.tileLayer.wms(
+                appGlobalConfiguration.wmsUrl,
+                {
+                    layers: publishedRaster.layerName,
+                    format: "image/png",
+                    transparent: true,
+                    version: "1.3.0",
+                    bounds: [
+                        [south, west],
+                        [north, east]
+                    ]
+                }
+            );
+            rasterLayer.once("tileerror", () => {
+                if (rasterLayerController.activeLayer === rasterLayer) {
+                    catalogLayerStatus.textContent =
+                        "Map tiles could not be rendered.";
+                }
+            });
+            return rasterLayer;
+        }
+    );
     const catalogState = {
         collectionsDocument: null,
         loadedItemCount: 0,
         searchSequence: 0,
         searchText: "",
-        selectedButton: null
+        selectedButton: null,
+        selectedItem: null
     };
+
+    /** Show the map action only for the selected mounted GeoTIFF. */
+    function updateCatalogMapAction(item) {
+        const canRender =
+            item?.collection === MOUNTED_GEOTIFF_COLLECTION_ID;
+        catalogMapActionsElement.hidden = !canRender;
+        catalogMapActionsElement.setAttribute("aria-busy", "false");
+        catalogLayerToggle.disabled = false;
+        catalogLayerToggle.textContent = "View on map";
+        catalogLayerStatus.textContent = "";
+    }
 
     /** Clears the selected result, footprint, and inspector together. */
     function clearCatalogSelection() {
         footprintController.clear();
+        rasterLayerController.clear();
         catalogState.selectedButton = null;
+        catalogState.selectedItem = null;
+        updateCatalogMapAction(null);
         renderCatalogItemInspector(
             null,
             catalogState.collectionsDocument?.collections ?? [],
@@ -482,6 +538,7 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
 
             itemButton.append(itemTitle, itemDescription, itemSummary);
             itemButton.addEventListener("click", () => {
+                const selectionChanged = catalogState.selectedItem !== item;
                 if (catalogState.selectedButton !== null) {
                     catalogState.selectedButton.classList.remove("is-selected");
                     catalogState.selectedButton.setAttribute(
@@ -489,7 +546,11 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
                         "false"
                     );
                 }
+                if (selectionChanged) {
+                    rasterLayerController.clear();
+                }
                 catalogState.selectedButton = itemButton;
+                catalogState.selectedItem = item;
                 itemButton.classList.add("is-selected");
                 itemButton.setAttribute("aria-pressed", "true");
                 footprintController.select(item);
@@ -498,6 +559,9 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
                     catalogState.collectionsDocument.collections,
                     appGlobalConfiguration.scanDisplayPathPrefix
                 );
+                if (selectionChanged) {
+                    updateCatalogMapAction(item);
+                }
             });
             itemButton.addEventListener("pointerenter", () => {
                 footprintController.preview(item);
@@ -682,6 +746,46 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
         loadCatalog.bind(null, true)
     );
     retryPageButton.addEventListener("click", prefetchNextCatalogPage);
+    catalogLayerToggle.addEventListener("click", async () => {
+        const selectedItem = catalogState.selectedItem;
+        if (selectedItem === null) {
+            return;
+        }
+        if (rasterLayerController.activeLayer !== null) {
+            rasterLayerController.clear();
+            catalogLayerToggle.textContent = "View on map";
+            catalogLayerStatus.textContent = "Raster removed from the map.";
+            return;
+        }
+
+        catalogMapActionsElement.setAttribute("aria-busy", "true");
+        catalogLayerToggle.disabled = true;
+        catalogLayerToggle.textContent = "Adding to map…";
+        catalogLayerStatus.textContent = "Preparing the selected raster.";
+        try {
+            const publishedRaster = await rasterLayerController.show(
+                selectedItem
+            );
+            if (
+                publishedRaster === null ||
+                catalogState.selectedItem !== selectedItem
+            ) {
+                return;
+            }
+            catalogLayerToggle.textContent = "Remove from map";
+            catalogLayerStatus.textContent = "Raster displayed on the map.";
+        } catch (renderingError) {
+            if (catalogState.selectedItem === selectedItem) {
+                catalogLayerToggle.textContent = "View on map";
+                catalogLayerStatus.textContent = renderingError.message;
+            }
+        } finally {
+            if (catalogState.selectedItem === selectedItem) {
+                catalogMapActionsElement.setAttribute("aria-busy", "false");
+                catalogLayerToggle.disabled = false;
+            }
+        }
+    });
 
     await loadCatalog(true);
     return loadCatalog.bind(null, true);

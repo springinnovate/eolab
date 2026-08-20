@@ -32,3 +32,104 @@ export async function loadWmsCapabilities(
     }
     return capabilitiesUrl;
 }
+
+/**
+ * Ask EOLab to publish the authoritative STAC Item as a WMS layer.
+ *
+ * @param {Object} item Selected STAC Item.
+ * @param {Function} fetchImplementation Fetch implementation used by the browser.
+ * @return {Promise<{layerName: string, bbox: number[]}>} Published WMS layer.
+ * @throws {Error} If publication fails or violates the response contract.
+ */
+export async function publishCatalogRaster(
+    item,
+    fetchImplementation = globalThis.fetch
+) {
+    const response = await fetchImplementation.call(
+        globalThis,
+        "/api/rendering/layers",
+        {
+            method: "POST",
+            headers: {
+                Accept: "application/json",
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                collectionId: item.collection,
+                itemId: item.id
+            })
+        }
+    );
+    if (!response.ok) {
+        const errorDocument = await response.json();
+        throw new Error(errorDocument.detail);
+    }
+
+    const publishedRaster = await response.json();
+    if (
+        typeof publishedRaster.layerName !== "string" ||
+        publishedRaster.layerName === ""
+    ) {
+        throw new Error("Raster publication returned no WMS layer name");
+    }
+    const bbox = publishedRaster.bbox;
+    if (
+        !Array.isArray(bbox) ||
+        bbox.length !== 4 ||
+        !bbox.every(Number.isFinite) ||
+        bbox[0] >= bbox[2] ||
+        bbox[1] >= bbox[3]
+    ) {
+        throw new Error("Raster publication returned an invalid bounding box");
+    }
+    return publishedRaster;
+}
+
+/** Manage one WMS layer while ignoring publication results for stale selections. */
+export class CatalogRasterLayerController {
+    /**
+     * @param {Object} leafletMap Leaflet-compatible map.
+     * @param {Function} publishRaster Publishes one selected STAC Item.
+     * @param {Function} layerFactory Creates a Leaflet layer from publication.
+     */
+    constructor(leafletMap, publishRaster, layerFactory) {
+        this.leafletMap = leafletMap;
+        this.publishRaster = publishRaster;
+        this.layerFactory = layerFactory;
+        this.activeLayer = null;
+        this.requestSequence = 0;
+    }
+
+    /**
+     * Publish and display one Item unless the request was superseded.
+     *
+     * @param {Object} item Selected STAC Item.
+     * @return {Promise<Object|null>} Published layer details, or null if stale.
+     */
+    async show(item) {
+        const requestSequence = ++this.requestSequence;
+        const publishedRaster = await this.publishRaster(item);
+        if (requestSequence !== this.requestSequence) {
+            return null;
+        }
+        this.removeActiveLayer();
+        this.activeLayer = this.layerFactory(publishedRaster).addTo(
+            this.leafletMap
+        );
+        return publishedRaster;
+    }
+
+    /** Remove the displayed layer and invalidate any pending publication. */
+    clear() {
+        this.requestSequence += 1;
+        this.removeActiveLayer();
+    }
+
+    /** Remove the active layer without advancing the request sequence. */
+    removeActiveLayer() {
+        if (this.activeLayer !== null) {
+            this.leafletMap.removeLayer(this.activeLayer);
+            this.activeLayer = null;
+        }
+    }
+}

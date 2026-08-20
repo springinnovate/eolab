@@ -173,6 +173,8 @@ services:
       - "CATALOG_INTERNAL_URL=http://stac-api:8080"
       - "WMS_URL=/geoserver/eolab/wms"
       - "GEOSERVER_INTERNAL_URL=http://geoserver:8080/geoserver"
+      - "GEOSERVER_ADMIN_USER=eolab"
+      - "GEOSERVER_ADMIN_PASSWORD=${EOLAB_GEOSERVER_ADMIN_PASSWORD:?EOLAB_GEOSERVER_ADMIN_PASSWORD must be set}"
       - "PGHOST=database"
       - "PGPORT=5432"
       - "PGDATABASE=eolab"

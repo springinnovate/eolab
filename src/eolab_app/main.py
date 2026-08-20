@@ -1,5 +1,7 @@
 """Create the EOLab FastAPI application and serve its browser assets."""
 
+import asyncio
+
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -9,6 +11,11 @@ import psycopg
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.staticfiles import StaticFiles
 
+from eolab_app.rendering import (
+    CatalogRasterRequest,
+    PublishedRaster,
+    publish_catalog_raster,
+)
 from eolab_app.settings import APPLICATION_VERSION_PATH, load_settings
 from eolab_app.scanning import PgStacCatalogDatabase, ScanManager, StacApiWriter
 
@@ -199,16 +206,31 @@ def create_app(
         ValueError: If an environment value violates the settings contract.
     """
     app_global_configuration = load_settings(version_file_path)
-    geoserver_client = httpx2.AsyncClient(
+    catalog_client = httpx2.AsyncClient(
+        transport=catalog_transport,
+        timeout=10,
+    )
+    geoserver_wms_client = httpx2.AsyncClient(
         transport=geoserver_transport,
         timeout=30,
     )
+    geoserver_rest_client = httpx2.AsyncClient(
+        transport=geoserver_transport,
+        timeout=30,
+        auth=httpx2.BasicAuth(
+            app_global_configuration.geoserver_admin_user,
+            app_global_configuration.geoserver_admin_password,
+        ),
+    )
+    raster_publish_lock = asyncio.Lock()
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        """Close the shared GeoServer connection pool at application shutdown."""
+        """Close shared upstream connection pools at application shutdown."""
         yield
-        await geoserver_client.aclose()
+        await catalog_client.aclose()
+        await geoserver_wms_client.aclose()
+        await geoserver_rest_client.aclose()
 
     application = FastAPI(
         title=app_global_configuration.app_title,
@@ -278,6 +300,23 @@ def create_app(
         except RuntimeError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
 
+    @application.post(
+        "/api/rendering/layers",
+        response_model=PublishedRaster,
+        tags=["rendering"],
+    )
+    async def publish_raster(request: CatalogRasterRequest) -> PublishedRaster:
+        """Publish one authoritative mounted GeoTIFF as a WMS layer."""
+        async with raster_publish_lock:
+            return await publish_catalog_raster(
+                request,
+                app_global_configuration.scan_mount_path,
+                catalog_client,
+                geoserver_rest_client,
+                app_global_configuration.catalog_internal_url,
+                app_global_configuration.geoserver_internal_url,
+            )
+
     @application.api_route(
         "/stac",
         methods=["GET", "POST"],
@@ -331,17 +370,13 @@ def create_app(
 
         request_body = await request.body()
         try:
-            async with httpx2.AsyncClient(
-                transport=catalog_transport,
-                timeout=10,
-            ) as catalog_client:
-                catalog_response = await catalog_client.request(
-                    request.method,
-                    upstream_url,
-                    params=request.query_params,
-                    content=request_body,
-                    headers=forwarded_headers,
-                )
+            catalog_response = await catalog_client.request(
+                request.method,
+                upstream_url,
+                params=request.query_params,
+                content=request_body,
+                headers=forwarded_headers,
+            )
         except httpx2.RequestError as error:
             raise HTTPException(
                 status_code=502,
@@ -412,7 +447,7 @@ def create_app(
         if forwarded_port := request.headers.get("x-forwarded-port"):
             forwarded_headers["x-forwarded-port"] = forwarded_port
         try:
-            geoserver_response = await geoserver_client.get(
+            geoserver_response = await geoserver_wms_client.get(
                 f"{internal_geoserver_url}/eolab/wms",
                 params=query_entries,
                 headers=forwarded_headers,

@@ -13,6 +13,8 @@ from rasterio.warp import calculate_default_transform, transform_bounds
 
 
 GEOTIFF_MEDIA_TYPE = "image/tiff; application=geotiff"
+MOUNTED_GEOTIFF_COLLECTION_ID = "eolab-mounted-geotiffs"
+MOUNTED_GEOTIFF_ITEM_ID_PATTERN = r"^geotiff-[0-9a-f]{24}$"
 PROJECTION_EXTENSION = (
     "https://stac-extensions.github.io/projection/v1.1.0/schema.json"
 )
@@ -121,7 +123,7 @@ def build_stac_item(source_root: Path, geotiff_path: Path) -> dict[str, Any]:
         "stac_version": "1.0.0",
         "stac_extensions": [PROJECTION_EXTENSION, RASTER_EXTENSION],
         "id": f"geotiff-{item_identifier[:24]}",
-        "collection": "eolab-mounted-geotiffs",
+        "collection": MOUNTED_GEOTIFF_COLLECTION_ID,
         "geometry": footprint,
         "bbox": bbox,
         "properties": properties,

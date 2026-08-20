@@ -68,6 +68,8 @@ Open `http://localhost:8000`. The local override also makes the GeoServer admini
 
 GeoServer is configured automatically. Keep `EOLAB_GEOSERVER_ADMIN_PASSWORD` and `EOLAB_GEOSERVER_MASTER_PASSWORD` stable in Coolify. The administrator password must contain at least 16 letters, numbers, hyphens, underscores, or periods. The master password must contain at least eight characters with no surrounding whitespace and must differ from the administrator password.
 
+Select a mounted GeoTIFF in the Catalog and choose **View on map** to publish and display it. The publication request sends only the Collection and Item IDs; GeoServer credentials remain inside the Compose network.
+
 ## Scan mounted datasets
 
 Open the **Catalog** panel and select **Scan directories**. EOLab searches each configured path recursively for GeoTIFF (`.tif` and `.tiff`) and ESRI Shapefile (`.shp`) datasets, matching extensions case-insensitively. After each successful bulk upsert, the live status classifies processed datasets as newly cataloged or already present, alongside discovered, processed, and failed counts. Error details are collapsed by default and remain independently scrollable when opened, so the Catalog results remain usable during a scan. EOLab reads metadata using `EOLAB_SCAN_WORKER_COUNT` concurrent processes and uses `EOLAB_SCAN_WRITER_COUNT` concurrent STAC Bulk Transactions, each containing at most `EOLAB_SCAN_BATCH_SIZE` Items from one Collection. Catalog-write timing is cumulative across writers and can exceed wall time. A failure in one dataset does not stop the remaining scan; a catalog inventory or write failure stops the scan. Configured paths cannot be duplicated, nested inside one another, or escape the mount.

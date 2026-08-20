@@ -122,6 +122,21 @@
               >
                 <p class="section-label">Selected record</p>
                 <h3 id="catalog-inspector-heading">Item inspector</h3>
+                <div class="catalog-map-actions" id="catalog-map-actions" hidden>
+                  <button
+                    class="secondary-button"
+                    id="toggle-catalog-layer"
+                    type="button"
+                  >
+                    View on map
+                  </button>
+                  <p
+                    id="catalog-layer-status"
+                    role="status"
+                    aria-live="polite"
+                    aria-atomic="true"
+                  ></p>
+                </div>
                 <div id="catalog-inspector-content">
                   <div class="catalog-inspector-empty">
                     <strong>No item selected</strong>

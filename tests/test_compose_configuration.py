@@ -123,14 +123,15 @@ def test_geoserver_initializer_is_idempotent_image_owned_configuration() -> None
     assert 'RASTER_STYLE_NAME = "dynamic-raster"' in initializer
 
 
-def test_app_exposes_only_the_public_wms_url() -> None:
-    """Separate the browser WMS route from GeoServer's internal address."""
+def test_app_keeps_geoserver_registration_credentials_internal() -> None:
+    """Give the backend REST access without exposing the keystore secret."""
     compose = COMPOSE_PATH.read_text(encoding="utf-8")
     app_service = compose.split("  app:\n", 1)[1].split("\nvolumes:\n", 1)[0]
 
     assert '"WMS_URL=/geoserver/eolab/wms"' in app_service
     assert '"GEOSERVER_INTERNAL_URL=http://geoserver:8080/geoserver"' in app_service
-    assert "EOLAB_GEOSERVER_ADMIN_PASSWORD" not in app_service
+    assert '"GEOSERVER_ADMIN_USER=eolab"' in app_service
+    assert '"GEOSERVER_ADMIN_PASSWORD=${EOLAB_GEOSERVER_ADMIN_PASSWORD:' in app_service
     assert "EOLAB_GEOSERVER_MASTER_PASSWORD" not in app_service
     assert "depends_on:" not in app_service
 
