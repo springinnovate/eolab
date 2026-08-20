@@ -11,11 +11,14 @@ import {
     formatScanStatusSummary,
     MOUNTED_DATASET_TYPES,
 } from "./catalog.js";
+import { loadWmsCapabilities } from "./rendering.js";
 import "./style.css";
 
 const CATALOG_SEARCH_DEBOUNCE_MILLISECONDS = 300;
 const CATALOG_LOAD_ROOT_MARGIN = "300px 0px";
 const CONTROL_PANEL_TRANSITION_MILLISECONDS = 240;
+const RENDERING_RETRY_MILLISECONDS = 5000;
+const RENDERING_MONITOR_MILLISECONDS = 60000;
 
 let scanPollTimeout = null;
 
@@ -27,6 +30,7 @@ let scanPollTimeout = null;
  * @property {string} appSubtitle Application subtitle.
  * @property {string} appVersion Deployed application version.
  * @property {string} catalogUrl Browser-facing STAC catalog URL.
+ * @property {string} wmsUrl Browser-facing WMS endpoint.
  * @property {string} scanDisplayPathPrefix User-facing root for mounted files.
  * @property {{url: string, attribution: string}} basemap Basemap settings.
  * @property {{latitude: number, longitude: number, zoom: number}} initialView Initial map view.
@@ -133,6 +137,62 @@ function applyAppGlobalConfiguration(appGlobalConfiguration) {
     systemStateElement.classList.remove("is-connected", "is-warning");
     systemStateTextElement.textContent = "Connecting to catalog";
     catalogLinkElement.href = appGlobalConfiguration.catalogUrl;
+}
+
+/**
+ * Reports GeoServer readiness independently from Catalog availability.
+ *
+ * @param {AppGlobalConfiguration} appGlobalConfiguration Application settings.
+ * @return {void}
+ */
+function initializeRendering(appGlobalConfiguration) {
+    const renderingStateElement = document.querySelector("#rendering-state");
+    const renderingStateTextElement = document.querySelector(
+        "#rendering-state-text"
+    );
+    const capabilitiesLinkElement = document.querySelector(
+        "#wms-capabilities-link"
+    );
+    let renderingServiceWasReady = false;
+
+    /** Monitor WMS, retrying more frequently while it is unavailable. */
+    async function checkRenderingService() {
+        try {
+            capabilitiesLinkElement.href = await loadWmsCapabilities(
+                appGlobalConfiguration.wmsUrl
+            );
+            capabilitiesLinkElement.hidden = false;
+            renderingStateElement.classList.remove("is-warning");
+            renderingStateElement.classList.add("is-connected");
+            if (!renderingServiceWasReady) {
+                renderingStateTextElement.textContent =
+                    "Rendering service ready";
+            }
+            renderingServiceWasReady = true;
+            window.setTimeout(
+                checkRenderingService,
+                RENDERING_MONITOR_MILLISECONDS
+            );
+        } catch {
+            capabilitiesLinkElement.hidden = true;
+            if (
+                renderingServiceWasReady ||
+                !renderingStateElement.classList.contains("is-warning")
+            ) {
+                renderingStateElement.classList.remove("is-connected");
+                renderingStateElement.classList.add("is-warning");
+                renderingStateTextElement.textContent =
+                    "Rendering service unavailable";
+            }
+            renderingServiceWasReady = false;
+            window.setTimeout(
+                checkRenderingService,
+                RENDERING_RETRY_MILLISECONDS
+            );
+        }
+    }
+
+    void checkRenderingService();
 }
 
 /**
@@ -935,6 +995,7 @@ function initializeControlPanel(leafletMap) {
 async function startApplication() {
     const appGlobalConfiguration = await loadAppGlobalConfiguration();
     applyAppGlobalConfiguration(appGlobalConfiguration);
+    initializeRendering(appGlobalConfiguration);
     const leafletMap = initializeMap(appGlobalConfiguration);
     const setCatalogWorkspaceExpanded = initializeControlPanel(leafletMap);
     initializeWorkspaceTabs(setCatalogWorkspaceExpanded);

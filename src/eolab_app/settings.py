@@ -18,6 +18,8 @@ class Settings:
     app_version: str
     catalog_url: str
     catalog_internal_url: str
+    wms_url: str
+    geoserver_internal_url: str
     scan_mount_path: Path
     scan_paths_within_mount: tuple[Path, ...]
     scan_display_path_prefix: str
@@ -42,6 +44,8 @@ class Settings:
             "application version": self.app_version,
             "CATALOG_URL": self.catalog_url,
             "CATALOG_INTERNAL_URL": self.catalog_internal_url,
+            "WMS_URL": self.wms_url,
+            "GEOSERVER_INTERNAL_URL": self.geoserver_internal_url,
             "SCAN_DISPLAY_PATH_PREFIX": self.scan_display_path_prefix,
             "BASEMAP_URL": self.basemap_url,
             "BASEMAP_ATTRIBUTION": self.basemap_attribution,
@@ -100,15 +104,16 @@ class Settings:
 
         Returns:
             Browser configuration containing application identity strings,
-            the browser-facing ``catalogUrl``, basemap URL and attribution
-            strings, and numeric initial-view latitude, longitude, and zoom
-            values. The internal catalog service URL is not exposed.
+            the browser-facing catalog and WMS URLs, basemap URL and
+            attribution strings, and numeric initial-view latitude,
+            longitude, and zoom values. Internal service URLs are not exposed.
         """
         return {
             "appTitle": self.app_title,
             "appSubtitle": self.app_subtitle,
             "appVersion": self.app_version,
             "catalogUrl": self.catalog_url,
+            "wmsUrl": self.wms_url,
             "scanDisplayPathPrefix": self.scan_display_path_prefix,
             "basemap": {
                 "url": self.basemap_url,
@@ -152,6 +157,8 @@ def load_settings(
         app_version=version_file_path.read_text(encoding="utf-8").strip(),
         catalog_url=os.environ["CATALOG_URL"].strip(),
         catalog_internal_url=os.environ["CATALOG_INTERNAL_URL"].strip(),
+        wms_url=os.environ["WMS_URL"].strip(),
+        geoserver_internal_url=os.environ["GEOSERVER_INTERNAL_URL"].strip(),
         scan_mount_path=Path(os.environ["SCAN_MOUNT_PATH"]),
         scan_paths_within_mount=tuple(Path(scan_path) for scan_path in scan_paths),
         scan_display_path_prefix=os.environ["SCAN_DISPLAY_PATH_PREFIX"].strip(),

@@ -1,6 +1,7 @@
 """Create the EOLab FastAPI application and serve its browser assets."""
 
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx2
@@ -10,6 +11,131 @@ from fastapi.staticfiles import StaticFiles
 
 from eolab_app.settings import APPLICATION_VERSION_PATH, load_settings
 from eolab_app.scanning import PgStacCatalogDatabase, ScanManager, StacApiWriter
+
+
+WMS_COMMON_QUERY_PARAMETERS = frozenset({"request", "service", "version"})
+WMS_MAP_QUERY_PARAMETERS = WMS_COMMON_QUERY_PARAMETERS | {
+    "bbox",
+    "bgcolor",
+    "crs",
+    "elevation",
+    "env",
+    "exceptions",
+    "format",
+    "height",
+    "layers",
+    "srs",
+    "styles",
+    "time",
+    "transparent",
+    "width",
+}
+WMS_QUERY_PARAMETERS = {
+    "getcapabilities": WMS_COMMON_QUERY_PARAMETERS
+    | {"acceptformats", "acceptversions", "sections", "updatesequence"},
+    "getmap": WMS_MAP_QUERY_PARAMETERS | {"tiled", "tilesorigin"},
+    "getfeatureinfo": WMS_MAP_QUERY_PARAMETERS
+    | {
+        "buffer",
+        "feature_count",
+        "i",
+        "info_format",
+        "j",
+        "propertyname",
+        "query_layers",
+        "x",
+        "y",
+    },
+    "getlegendgraphic": WMS_COMMON_QUERY_PARAMETERS
+    | {
+        "bgcolor",
+        "env",
+        "format",
+        "height",
+        "layer",
+        "legend_options",
+        "rule",
+        "scale",
+        "style",
+        "transparent",
+        "width",
+    },
+}
+
+
+def _validated_wms_query(request: Request) -> list[tuple[str, str]]:
+    """Validate and return one supported WMS GET query.
+
+    Args:
+        request: Incoming WMS request.
+
+    Returns:
+        Query entries accepted by EOLab's public WMS contract.
+
+    Raises:
+        HTTPException: If the request is not an allowed WMS operation or uses
+            an unsupported or repeated parameter.
+    """
+    query_entries = list(request.query_params.multi_items())
+    normalized_query = {key.lower(): value for key, value in query_entries}
+    if len(normalized_query) != len(query_entries):
+        raise HTTPException(status_code=400, detail="WMS parameters must not repeat")
+    if normalized_query.get("service", "").lower() != "wms":
+        raise HTTPException(status_code=400, detail="service must be WMS")
+
+    operation = normalized_query.get("request", "").lower()
+    allowed_parameters = WMS_QUERY_PARAMETERS.get(operation)
+    if allowed_parameters is None:
+        raise HTTPException(status_code=400, detail="Unsupported WMS operation")
+    unsupported_parameters = normalized_query.keys() - allowed_parameters
+    if unsupported_parameters:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Unsupported WMS parameter: "
+                f"{sorted(unsupported_parameters)[0]}"
+            ),
+        )
+
+    for dimension_name in ("width", "height"):
+        if dimension_name not in normalized_query:
+            continue
+        try:
+            dimension = int(normalized_query[dimension_name])
+        except ValueError as error:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{dimension_name} must be an integer",
+            ) from error
+        if not 1 <= dimension <= 4096:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{dimension_name} must be between 1 and 4096",
+            )
+    if operation in {"getmap", "getlegendgraphic"}:
+        if normalized_query.get("format", "").lower() != "image/png":
+            raise HTTPException(
+                status_code=400,
+                detail="WMS map and legend format must be image/png",
+            )
+    elif operation == "getfeatureinfo":
+        if normalized_query.get("format", "image/png").lower() != "image/png":
+            raise HTTPException(
+                status_code=400,
+                detail="WMS map format must be image/png",
+            )
+        if normalized_query.get("info_format", "").lower() not in {
+            "application/json",
+            "text/plain",
+        }:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "WMS feature information format must be application/json "
+                    "or text/plain"
+                ),
+            )
+    return query_entries
 
 
 async def _number_matched_is_estimated(
@@ -40,6 +166,7 @@ async def _number_matched_is_estimated(
 def create_app(
     version_file_path: Path = APPLICATION_VERSION_PATH,
     catalog_transport: httpx2.AsyncBaseTransport | None = None,
+    geoserver_transport: httpx2.AsyncBaseTransport | None = None,
     number_matched_estimate_lookup: Callable[[bytes, int], Awaitable[bool]] = (
         _number_matched_is_estimated
     ),
@@ -51,6 +178,9 @@ def create_app(
             The default allows Uvicorn to invoke this factory without arguments;
             tests pass a temporary version file.
         catalog_transport: HTTP transport used to reach the internal STAC API.
+            The default creates a real network transport; tests pass a mock
+            transport.
+        geoserver_transport: HTTP transport used to reach internal GeoServer.
             The default creates a real network transport; tests pass a mock
             transport.
         number_matched_estimate_lookup: Determines whether pgSTAC estimated an
@@ -67,10 +197,22 @@ def create_app(
         ValueError: If an environment value violates the settings contract.
     """
     app_global_configuration = load_settings(version_file_path)
+    geoserver_client = httpx2.AsyncClient(
+        transport=geoserver_transport,
+        timeout=30,
+    )
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        """Close the shared GeoServer connection pool at application shutdown."""
+        yield
+        await geoserver_client.aclose()
+
     application = FastAPI(
         title=app_global_configuration.app_title,
         description=app_global_configuration.app_subtitle,
         version=app_global_configuration.app_version,
+        lifespan=lifespan,
     )
     scan_manager = ScanManager(
         app_global_configuration.scan_mount_path,
@@ -221,6 +363,78 @@ def create_app(
         return Response(
             content=catalog_response.content,
             status_code=catalog_response.status_code,
+            headers=response_headers,
+        )
+
+    # Claim non-GET methods before the catch-all static mount so they receive
+    # the WMS contract's 405 response instead of being treated as asset paths.
+    @application.api_route(
+        "/geoserver/eolab/wms",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        include_in_schema=False,
+    )
+    async def wms(request: Request) -> Response:
+        """Expose supported read-only WMS operations for the EOLab workspace.
+
+        Args:
+            request: Incoming WMS request.
+
+        Returns:
+            GeoServer's response body, status, and safe response headers.
+
+        Raises:
+            HTTPException: If the query is outside the public WMS contract or
+                GeoServer cannot be reached.
+        """
+        if request.method != "GET":
+            raise HTTPException(
+                status_code=405,
+                detail="The public WMS endpoint accepts only GET requests",
+            )
+        query_entries = _validated_wms_query(request)
+        internal_geoserver_url = (
+            app_global_configuration.geoserver_internal_url.rstrip("/")
+        )
+        forwarded_headers = {
+            "accept": request.headers.get("accept", "*/*"),
+            "x-forwarded-host": request.headers.get(
+                "x-forwarded-host",
+                request.headers["host"],
+            ),
+            "x-forwarded-proto": request.headers.get(
+                "x-forwarded-proto",
+                request.url.scheme,
+            ),
+        }
+        if forwarded_port := request.headers.get("x-forwarded-port"):
+            forwarded_headers["x-forwarded-port"] = forwarded_port
+        try:
+            geoserver_response = await geoserver_client.get(
+                f"{internal_geoserver_url}/eolab/wms",
+                params=query_entries,
+                headers=forwarded_headers,
+            )
+        except httpx2.RequestError as error:
+            raise HTTPException(
+                status_code=502,
+                detail="The rendering service is unavailable",
+            ) from error
+
+        response_headers = {
+            header_name: header_value
+            for header_name in (
+                "cache-control",
+                "content-disposition",
+                "content-type",
+                "etag",
+                "last-modified",
+            )
+            if (header_value := geoserver_response.headers.get(header_name))
+        }
+        response_headers["x-content-type-options"] = "nosniff"
+        return Response(
+            content=geoserver_response.content,
+            status_code=geoserver_response.status_code,
             headers=response_headers,
         )
 

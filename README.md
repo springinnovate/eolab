@@ -7,8 +7,9 @@ EOLab is an open source platform for Earth observation analysis and visualizatio
 1. Create a new Coolify resource from this GitHub repository.
 2. Select the **Docker Compose** build pack and use `/docker-compose.yml`.
 3. In Coolify's **Production** environment variables, set `EOLAB_DATABASE_PASSWORD` to a long random value before the first deployment. Keep this value: PostgreSQL uses it when initializing the persistent database volume, and changing the environment variable later does not change the database password.
-4. In Coolify's **Production** environment variables, set `EOLAB_LOAD_SAMPLE_CATALOG=true` to load the sample Collection and Items, or set it to `false` to start with an empty catalog. Changing it to `false` later prevents future sample upserts but does not delete existing sample records.
-5. Configure the read-only scan mount and the directories EOLab should search. In the EOLab resource's **Production** environment variables, select **Add** and create these variables:
+4. Set `EOLAB_GEOSERVER_ADMIN_PASSWORD` and `EOLAB_GEOSERVER_MASTER_PASSWORD` to different long random values. Use at least 16 letters, numbers, hyphens, underscores, or periods for the administrator password. The master password must contain at least eight characters with no surrounding whitespace. GeoServer uses the first value for its internal administrator account; EOLab's initializer applies the second to the GeoServer keystore without exposing either value to the browser.
+5. Set `EOLAB_LOAD_SAMPLE_CATALOG=true` to load the sample Collection and Items, or set it to `false` to start with an empty catalog. Changing it to `false` later prevents future sample upserts but does not delete existing sample records.
+6. Configure the read-only scan mount and the directories EOLab should search. In the EOLab resource's **Production** environment variables, select **Add** and create these variables:
 
     ```text
     EOLAB_SCAN_MOUNT_PATH=/mnt/storage/bigbucket
@@ -20,14 +21,14 @@ EOLab is an open source platform for Earth observation analysis and visualizatio
 
     `EOLAB_SCAN_MOUNT_PATH` is an absolute path on the deployment server. Coolify does not list it automatically because Compose uses it as a bind-mount source, so add it manually. Each entry in `EOLAB_SCAN_PATHS_WITHIN_MOUNT` is relative to that mount; use `["."]` to scan the entire mount. `EOLAB_SCAN_DISPLAY_PATH_PREFIX` is the path description shown to users in the Item inspector. `EOLAB_SCAN_WORKER_COUNT` is the number of concurrent metadata processes. `EOLAB_SCAN_BATCH_SIZE` is the maximum number of Items in one catalog bulk upsert. Both must be positive integers. The mounted directories and dataset files must be readable by the application container.
 
-6. In the project **Configuration**, select **Domains** for the `app` service and enter the public domain with internal port `8000` as `https://eolab.example.com:8000`.
-7. In **Advanced**, enable **Include Source Commit in Build**. On Coolify versions that label this setting **Source Commit Availability**, select **Available during build**. EOLab uses `SOURCE_COMMIT` to derive the displayed version from Git tags and the deployed commit.
-8. Set any other desired deployment-specific `EOLAB_*` values listed in `.env.example`.
-9. Open the **Actions** menu in the upper-right corner and select **Deploy**.
+7. In the project **Configuration**, select **Domains** for the `app` service and enter the public domain with internal port `8000` as `https://eolab.example.com:8000`. Do not attach a domain to the `geoserver` service; EOLab exposes only its restricted WMS route.
+8. In **Advanced**, enable **Include Source Commit in Build**. On Coolify versions that label this setting **Source Commit Availability**, select **Available during build**. EOLab uses `SOURCE_COMMIT` to derive the displayed version from Git tags and the deployed commit.
+9. Set any other desired deployment-specific `EOLAB_*` values listed in `.env.example`.
+10. Open the **Actions** menu in the upper-right corner and select **Deploy**.
 
 ## Run with Docker Compose
 
-Copy `.env.example` to `.env`, set `EOLAB_DATABASE_PASSWORD`, choose `true` or `false` for `EOLAB_LOAD_SAMPLE_CATALOG`, and configure the scan variables described below. To display a Git-derived version locally, replace the `SOURCE_COMMIT` fallback with the full 40-character SHA reported by `git rev-parse HEAD`.
+Copy `.env.example` to `.env`, set the database and two GeoServer passwords, choose `true` or `false` for `EOLAB_LOAD_SAMPLE_CATALOG`, and configure the scan variables described below. To display a Git-derived version locally, replace the `SOURCE_COMMIT` fallback with the full 40-character SHA reported by `git rev-parse HEAD`.
 
 Start the stack with the local port override:
 
@@ -35,7 +36,7 @@ Start the stack with the local port override:
 docker compose -f docker-compose.yml -f docker-compose.local.yml up --build --detach
 ```
 
-Open `http://localhost:8000`. Set `EOLAB_HOST_PORT` to use a different loopback port.
+Open `http://localhost:8000`. The local override also makes the GeoServer administration interface available only from the same machine at `http://localhost:8081/geoserver/web/`; sign in as `eolab` with `EOLAB_GEOSERVER_ADMIN_PASSWORD`. Set `EOLAB_HOST_PORT` or `EOLAB_GEOSERVER_HOST_PORT` to use different loopback ports.
 
 ## Runtime configuration
 
@@ -43,6 +44,9 @@ Open `http://localhost:8000`. Set `EOLAB_HOST_PORT` to use a different loopback 
 | -------------------------------- | ------------------------------------------------- | --------------------------------------------------- |
 | `EOLAB_DATABASE_PASSWORD`        | none                                              | Required internal PostgreSQL password               |
 | `EOLAB_DATABASE_VOLUME_NAME`     | `eolab-pgstac-data`                               | Database volume name, unique per deployment         |
+| `EOLAB_GEOSERVER_ADMIN_PASSWORD` | none                                              | Required internal GeoServer administrator password  |
+| `EOLAB_GEOSERVER_MASTER_PASSWORD` | none                                              | Required GeoServer keystore password                 |
+| `EOLAB_GEOSERVER_DATA_VOLUME_NAME` | `eolab-geoserver-data`                          | Persistent GeoServer configuration volume name      |
 | `EOLAB_LOAD_SAMPLE_CATALOG`      | none                                              | Required `true` or `false` sample-data choice       |
 | `EOLAB_SCAN_MOUNT_PATH`          | none                                              | Required absolute host directory mounted read-only  |
 | `EOLAB_SCAN_PATHS_WITHIN_MOUNT`  | none                                              | Required JSON array of relative directories to scan |
@@ -57,6 +61,18 @@ Open `http://localhost:8000`. Set `EOLAB_HOST_PORT` to use a different loopback 
 | `EOLAB_INITIAL_LATITUDE`         | `20`                                              | Initial map latitude                                |
 | `EOLAB_INITIAL_LONGITUDE`        | `0`                                               | Initial map longitude                               |
 | `EOLAB_INITIAL_ZOOM`             | `2`                                               | Initial Leaflet zoom, from 0 to 22                  |
+
+## Rendering service
+
+GeoServer runs only on the internal Compose network. It receives the same dataset tree as the scanner at `/scan-source`, mounted read-only, while its configuration is stored separately in the Docker volume named by `EOLAB_GEOSERVER_DATA_VOLUME_NAME`. The one-shot `geoserver-init` service changes the default keystore password and safely creates or updates the `eolab` workspace and `eolab-dynamic-raster` style. An **Exited (0)** or **Completed** initializer is expected after each successful deployment.
+
+The application header reports **Rendering service ready** after a same-origin WMS GetCapabilities request succeeds. Select **Capabilities** to inspect that response. If GeoServer is starting or unavailable, the header reports it independently; EOLab's `/healthz`, map, scanner, and catalog remain available and the browser retries the check.
+
+EOLab currently permits only WMS GetCapabilities, GetMap, GetFeatureInfo, and GetLegendGraphic GET requests at `/geoserver/eolab/wms`. It sends them to the `eolab` workspace virtual service, limits requested images to 4096 pixels per dimension, permits only inert image, JSON, or plain-text output formats, and rejects arbitrary parameters such as remote SLD URLs. Administrative REST, the GeoServer web interface, WFS, WCS, and write operations are not public. This foundation creates no layers yet; registering and displaying one selected STAC GeoTIFF is the next step.
+
+Keep the GeoServer passwords stable in Coolify. Changing the master password is applied safely by `geoserver-init` on the next deployment. The official GeoServer image reapplies the configured administrator account at startup, so do not manually add GeoServer users or roles in this EOLab-owned instance yet.
+
+Deleting the GeoServer data volume permanently removes its workspaces, styles, stores, and layers, but does not delete the STAC catalog or mounted source files. The next deployment recreates the EOLab workspace and base style.
 
 ## Scan mounted datasets
 

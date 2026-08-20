@@ -238,6 +238,15 @@ h5 {
   box-shadow: 0 0 0 4px rgb(218 124 11 / 12%);
 }
 
+#wms-capabilities-link {
+  margin-left: auto;
+  color: var(--brand-hover);
+}
+
+#wms-capabilities-link[hidden] {
+  display: none;
+}
+
 .panel-tabs {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

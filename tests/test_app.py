@@ -19,6 +19,8 @@ DEFAULT_ENVIRONMENT = {
     "APP_SUBTITLE": "Explore, process, and visualize geospatial data",
     "CATALOG_URL": "/stac",
     "CATALOG_INTERNAL_URL": "http://stac-api:8080",
+    "WMS_URL": "/geoserver/eolab/wms",
+    "GEOSERVER_INTERNAL_URL": "http://geoserver:8080/geoserver",
     "SCAN_MOUNT_PATH": str(Path.cwd()),
     "SCAN_PATHS_WITHIN_MOUNT": '["."]',
     "SCAN_DISPLAY_PATH_PREFIX": "bigboi -- Z:\\bigbucket",
@@ -79,6 +81,7 @@ def test_configuration_endpoint_reads_environment(
         "appSubtitle": "Explore, process, and visualize geospatial data",
         "appVersion": "0.1.0-2-gabcdef0",
         "catalogUrl": "https://catalog.example.test",
+        "wmsUrl": "/geoserver/eolab/wms",
         "scanDisplayPathPrefix": "bigboi -- Z:\\bigbucket",
         "basemap": {
             "url": "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
@@ -270,6 +273,160 @@ def test_stac_proxy_reports_unavailable_catalog(
     assert response.status_code == 502
     assert response.json() == {
         "detail": "The STAC catalog service is unavailable"
+    }
+
+
+def test_wms_proxy_forwards_supported_read_operation(
+    configured_environment: None,
+    version_file_path: Path,
+) -> None:
+    """Expose EOLab workspace WMS without exposing GeoServer itself."""
+
+    def geoserver_response(request: httpx2.Request) -> httpx2.Response:
+        assert request.method == "GET"
+        assert str(request.url) == (
+            "http://geoserver:8080/geoserver/eolab/wms"
+            "?service=WMS&version=1.3.0&request=GetCapabilities"
+        )
+        assert request.headers["x-forwarded-host"] == "testserver"
+        assert request.headers["x-forwarded-proto"] == "http"
+        return httpx2.Response(
+            200,
+            content=b'<WMS_Capabilities version="1.3.0"/>',
+            headers={
+                "Content-Type": "application/xml",
+                "Cache-Control": "no-cache",
+            },
+        )
+
+    response = TestClient(
+        create_app(
+            version_file_path,
+            geoserver_transport=httpx2.MockTransport(geoserver_response),
+        )
+    ).get(
+        "/geoserver/eolab/wms"
+        "?service=WMS&version=1.3.0&request=GetCapabilities"
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/xml"
+    assert response.headers["cache-control"] == "no-cache"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.content == b'<WMS_Capabilities version="1.3.0"/>'
+
+
+def test_wms_proxy_allows_bounded_png_rendering(
+    configured_environment: None,
+    version_file_path: Path,
+) -> None:
+    """Allow the inert tile response required by the Leaflet viewer."""
+
+    def geoserver_response(request: httpx2.Request) -> httpx2.Response:
+        assert request.url.params["request"] == "GetMap"
+        assert request.url.params["format"] == "image/png"
+        assert request.url.params["width"] == "256"
+        assert request.url.params["height"] == "256"
+        return httpx2.Response(
+            200,
+            content=b"png bytes",
+            headers={"Content-Type": "image/png"},
+        )
+
+    response = TestClient(
+        create_app(
+            version_file_path,
+            geoserver_transport=httpx2.MockTransport(geoserver_response),
+        )
+    ).get(
+        "/geoserver/eolab/wms?service=WMS&version=1.3.0&request=GetMap"
+        "&layers=eolab%3Aexample&styles=eolab-dynamic-raster"
+        "&crs=EPSG%3A3857&bbox=0%2C0%2C1%2C1"
+        "&width=256&height=256&format=image%2Fpng&transparent=true"
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.content == b"png bytes"
+
+
+@pytest.mark.parametrize(
+    ("query", "detail"),
+    (
+        ("service=WFS&request=GetCapabilities", "service must be WMS"),
+        ("service=WMS&request=DescribeLayer", "Unsupported WMS operation"),
+        (
+            "service=WMS&request=GetMap&sld=https://example.test/style.sld",
+            "Unsupported WMS parameter: sld",
+        ),
+        (
+            "service=WMS&request=GetMap&width=5000",
+            "width must be between 1 and 4096",
+        ),
+        (
+            "service=WMS&request=GetMap&format=application/openlayers",
+            "WMS map and legend format must be image/png",
+        ),
+        (
+            "service=WMS&request=GetFeatureInfo&info_format=text/html",
+            (
+                "WMS feature information format must be application/json "
+                "or text/plain"
+            ),
+        ),
+    ),
+)
+def test_wms_proxy_rejects_requests_outside_its_public_contract(
+    configured_environment: None,
+    version_file_path: Path,
+    query: str,
+    detail: str,
+) -> None:
+    """Reject non-WMS operations, remote styles, and oversized rendering."""
+    response = TestClient(create_app(version_file_path)).get(
+        f"/geoserver/eolab/wms?{query}"
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": detail}
+
+
+def test_wms_proxy_rejects_post(
+    configured_environment: None,
+    version_file_path: Path,
+) -> None:
+    """Keep every state-changing GeoServer operation off the public route."""
+    response = TestClient(create_app(version_file_path)).post(
+        "/geoserver/eolab/wms?service=WMS&request=GetCapabilities"
+    )
+
+    assert response.status_code == 405
+
+
+def test_unavailable_geoserver_does_not_change_app_health(
+    configured_environment: None,
+    version_file_path: Path,
+) -> None:
+    """Keep application liveness independent from rendering readiness."""
+
+    def unavailable_geoserver(request: httpx2.Request) -> httpx2.Response:
+        raise httpx2.ConnectError("GeoServer unavailable", request=request)
+
+    client = TestClient(
+        create_app(
+            version_file_path,
+            geoserver_transport=httpx2.MockTransport(unavailable_geoserver),
+        )
+    )
+
+    assert client.get("/healthz").status_code == 200
+    response = client.get(
+        "/geoserver/eolab/wms?service=WMS&request=GetCapabilities"
+    )
+    assert response.status_code == 502
+    assert response.json() == {
+        "detail": "The rendering service is unavailable"
     }
 
 
