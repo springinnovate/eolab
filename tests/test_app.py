@@ -23,6 +23,7 @@ DEFAULT_ENVIRONMENT = {
     "SCAN_PATHS_WITHIN_MOUNT": '["."]',
     "SCAN_DISPLAY_PATH_PREFIX": "bigboi -- Z:\\bigbucket",
     "SCAN_WORKER_COUNT": "8",
+    "SCAN_BATCH_SIZE": "100",
     "BASEMAP_URL": "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
     "BASEMAP_ATTRIBUTION": "&copy; OpenStreetMap contributors",
     "INITIAL_LATITUDE": "20",
@@ -93,14 +94,29 @@ def test_configuration_endpoint_reads_environment(
 
 def test_scan_status_is_available_before_first_scan(
     configured_environment: None,
+    monkeypatch: pytest.MonkeyPatch,
     version_file_path: Path,
 ) -> None:
     """Expose an idle scanner state for the browser on initial startup."""
+    monkeypatch.setenv("SCAN_BATCH_SIZE", "250")
     response = TestClient(create_app(version_file_path)).get("/api/scans/current")
 
     assert response.status_code == 200
     assert response.json()["state"] == "not_started"
     assert response.json()["discovered"] == 0
+    assert response.json()["workerCount"] == 8
+    assert response.json()["batchSize"] == 250
+    assert response.json()["timing"] == {
+        "elapsedSeconds": 0.0,
+        "catalogInventorySeconds": 0.0,
+        "discoverySeconds": 0.0,
+        "metadataResultWaitSeconds": 0.0,
+        "metadataWorkerSeconds": 0.0,
+        "metadataProcessingSeconds": 0.0,
+        "metadataIoWaitSeconds": 0.0,
+        "catalogWriteSeconds": 0.0,
+        "cacheInvalidationSeconds": 0.0,
+    }
 
 
 def test_stac_proxy_forwards_public_read_request(
@@ -295,6 +311,7 @@ def test_load_settings_rejects_blank_version(
     (
         ("INITIAL_ZOOM", "not-a-number"),
         ("SCAN_WORKER_COUNT", "1.5"),
+        ("SCAN_BATCH_SIZE", "1.5"),
     ),
 )
 def test_load_settings_rejects_malformed_number(
@@ -365,6 +382,7 @@ def test_load_settings_rejects_invalid_scan_path_lists(
         ("INITIAL_LONGITUDE", "-181"),
         ("INITIAL_ZOOM", "23"),
         ("SCAN_WORKER_COUNT", "0"),
+        ("SCAN_BATCH_SIZE", "0"),
     ),
 )
 def test_load_settings_rejects_out_of_range_number(

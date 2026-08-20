@@ -11,6 +11,29 @@ export const MOUNTED_DATASET_TYPES = new Map([
 ]);
 
 /**
+ * Formats a duration at a useful precision for a live scan.
+ *
+ * @param {number} seconds Duration in seconds.
+ * @return {string} Human-readable duration.
+ */
+function formatDuration(seconds) {
+    if (seconds < 1) {
+        return `${Math.round(seconds * 1000).toLocaleString()} ms`;
+    }
+    if (seconds < 60) {
+        return `${seconds.toFixed(1)} s`;
+    }
+
+    const totalSeconds = Math.round(seconds);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const remainingSeconds = totalSeconds % 60;
+    return hours === 0
+        ? `${minutes}m ${remainingSeconds}s`
+        : `${hours}h ${minutes}m ${remainingSeconds}s`;
+}
+
+/**
  * Formats the compact mounted-directory scan state.
  *
  * @param {Object} scanStatus Scan progress returned by the backend.
@@ -35,6 +58,52 @@ export function formatScanStatusSummary(scanStatus) {
         default:
             throw new Error(`Unknown scan state: ${scanStatus.state}`);
     }
+}
+
+/**
+ * Formats the performance clocks in a scan-status response.
+ *
+ * @param {Object} timing Scan timing values in seconds.
+ * @param {number} workerCount Number of concurrent metadata processes.
+ * @param {number} batchSize Maximum Items in one catalog write.
+ * @return {Object[]} Human-readable timing labels and values.
+ */
+export function formatScanTiming(timing, workerCount, batchSize) {
+    return [
+        { label: "Elapsed wall time", seconds: timing.elapsedSeconds },
+        {
+            label: "Catalog inventory",
+            seconds: timing.catalogInventorySeconds
+        },
+        { label: "Dataset discovery", seconds: timing.discoverySeconds },
+        {
+            label: "Waiting for metadata results",
+            seconds: timing.metadataResultWaitSeconds
+        },
+        {
+            label: `Metadata workers (${workerCount}, cumulative)`,
+            seconds: timing.metadataWorkerSeconds
+        },
+        {
+            label: "Metadata I/O wait (estimated, cumulative)",
+            seconds: timing.metadataIoWaitSeconds
+        },
+        {
+            label: "Metadata processing CPU (cumulative)",
+            seconds: timing.metadataProcessingSeconds
+        },
+        {
+            label: `Catalog writes (${batchSize} Items/batch)`,
+            seconds: timing.catalogWriteSeconds
+        },
+        {
+            label: "Search-count refresh",
+            seconds: timing.cacheInvalidationSeconds
+        }
+    ].map(({ label, seconds }) => ({
+        label,
+        value: formatDuration(seconds)
+    }));
 }
 
 /**

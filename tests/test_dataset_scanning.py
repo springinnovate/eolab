@@ -3,9 +3,11 @@
 import asyncio
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractAsyncContextManager
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Barrier, Lock
 from typing import Any
 
 import httpx2
@@ -23,12 +25,30 @@ from eolab_app.geotiff import (
     SUGGESTED_WARP_BOUNDS_DESCRIPTION,
     build_stac_item as build_geotiff_stac_item,
 )
-from eolab_app.scanning import DATASET_ITEM_BUILDERS, ScanManager, StacApiWriter
+from eolab_app.scanning import (
+    DATASET_ITEM_BUILDERS,
+    DatasetCandidate,
+    ScanManager,
+    StacApiWriter,
+    _build_dataset_metadata,
+    _create_metadata_executor,
+)
 from eolab_app.shapefile import (
     FALLBACK_DATETIME_DESCRIPTION as SHAPEFILE_DATETIME_DESCRIPTION,
     build_stac_item as build_shapefile_stac_item,
     discover_shapefile_datasets,
 )
+
+
+@pytest.fixture(autouse=True)
+def use_thread_executor_for_scan_unit_tests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep parent-process test doubles visible to scan workers."""
+    monkeypatch.setattr(
+        "eolab_app.scanning._create_metadata_executor",
+        ThreadPoolExecutor,
+    )
 
 
 def write_geotiff(
@@ -147,14 +167,18 @@ def test_geotiff_without_crs_is_a_dataset_error(
         build_geotiff_stac_item(tmp_path, geotiff_path)
 
 
-def test_geotiff_uses_crs_from_gdal_pam_sidecar(tmp_path: Path) -> None:
-    """Use a standard sidecar CRS that GDAL recognizes for the dataset."""
+def test_geotiff_uses_crs_from_gdal_pam_sidecar(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep targeted sidecar discovery when directory listing is disabled."""
     geotiff_path = tmp_path / "sidecar-crs.tif"
     write_geotiff(geotiff_path, crs=None)
     geotiff_path.with_suffix(".tif.aux.xml").write_text(
         f"<PAMDataset><SRS>{CRS.from_epsg(4326).to_wkt()}</SRS></PAMDataset>",
         encoding="utf-8",
     )
+    monkeypatch.setenv("GDAL_DISABLE_READDIR_ON_OPEN", "TRUE")
 
     item = build_geotiff_stac_item(tmp_path, geotiff_path)
 
@@ -368,8 +392,11 @@ def test_geotiff_title_preserves_relative_filename(tmp_path: Path) -> None:
     assert "keywords" not in item["properties"]
 
 
-def test_shapefile_builds_one_projected_vector_item(tmp_path: Path) -> None:
-    """Catalog one Shapefile with its projection, schema, and sidecars."""
+def test_shapefile_builds_one_projected_vector_item(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Catalog Shapefile components without listing their directory."""
     shapefile_path, component_paths = write_shapefile(
         tmp_path / "nested" / "habitat.shp"
     )
@@ -379,6 +406,7 @@ def test_shapefile_builds_one_projected_vector_item(tmp_path: Path) -> None:
             component_path,
             (modified_at.timestamp(), modified_at.timestamp()),
         )
+    monkeypatch.setenv("GDAL_DISABLE_READDIR_ON_OPEN", "TRUE")
 
     item = build_shapefile_stac_item(
         tmp_path,
@@ -569,6 +597,73 @@ class RecordingCatalogDatabase:
         self.search_count_cache_invalidations += 1
 
 
+def test_scan_status_reports_worker_count_before_start(tmp_path: Path) -> None:
+    """Construct the initial status from the configured worker count."""
+    catalog_writer = RecordingCatalogWriter()
+    scan_manager = ScanManager(
+        tmp_path,
+        (tmp_path,),
+        catalog_writer,
+        RecordingCatalogDatabase(catalog_writer),
+        17,
+        100,
+    )
+
+    assert scan_manager.status()["workerCount"] == 17
+
+
+def test_metadata_executor_uses_spawned_processes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Isolate GDAL workers from app threads and Python interpreters."""
+    executor_arguments: dict[str, Any] = {}
+
+    class RecordingProcessPoolExecutor:
+        def __init__(self, **arguments: Any) -> None:
+            executor_arguments.update(arguments)
+
+    monkeypatch.setattr(
+        "eolab_app.scanning.ProcessPoolExecutor",
+        RecordingProcessPoolExecutor,
+    )
+
+    executor = _create_metadata_executor(8)
+
+    assert isinstance(executor, RecordingProcessPoolExecutor)
+    assert executor_arguments["max_workers"] == 8
+    assert executor_arguments["mp_context"].get_start_method() == "spawn"
+
+
+def test_spawned_metadata_process_builds_dataset_items(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Load GDAL and exchange raster and vector Items between processes."""
+    geotiff_path = tmp_path / "spawned.tif"
+    write_geotiff(geotiff_path)
+    shapefile_path, component_paths = write_shapefile(tmp_path / "spawned.shp")
+    monkeypatch.setenv("GDAL_DISABLE_READDIR_ON_OPEN", "TRUE")
+
+    with _create_metadata_executor(1) as executor:
+        results = [
+            executor.submit(
+                _build_dataset_metadata,
+                tmp_path,
+                dataset_candidate,
+            ).result(timeout=15)
+            for dataset_candidate in (
+                DatasetCandidate(geotiff_path),
+                DatasetCandidate(shapefile_path, component_paths),
+            )
+        ]
+
+    assert all(result.error is None for result in results)
+    assert [result.item["properties"]["title"] for result in results] == [
+        "spawned.tif",
+        "spawned.shp",
+    ]
+
+
 def test_scan_continues_after_an_invalid_geotiff(tmp_path: Path) -> None:
     """Index valid files, report invalid files, and keep stable upsert results."""
     write_geotiff(tmp_path / "valid.TIF")
@@ -582,6 +677,7 @@ def test_scan_continues_after_an_invalid_geotiff(tmp_path: Path) -> None:
         catalog_writer,
         catalog_database,
         8,
+        100,
     )
 
     async def run_twice() -> tuple[dict[str, Any], dict[str, Any]]:
@@ -602,6 +698,21 @@ def test_scan_continues_after_an_invalid_geotiff(tmp_path: Path) -> None:
     assert first_status["indexed"] == 1
     assert first_status["alreadyInCatalog"] == 0
     assert first_status["failed"] == 2
+    assert set(first_status["timing"]) == {
+        "elapsedSeconds",
+        "catalogInventorySeconds",
+        "discoverySeconds",
+        "metadataResultWaitSeconds",
+        "metadataWorkerSeconds",
+        "metadataProcessingSeconds",
+        "metadataIoWaitSeconds",
+        "catalogWriteSeconds",
+        "cacheInvalidationSeconds",
+    }
+    assert first_status["timing"]["metadataWorkerSeconds"] == pytest.approx(
+        first_status["timing"]["metadataProcessingSeconds"]
+        + first_status["timing"]["metadataIoWaitSeconds"]
+    )
     assert {error["path"] for error in first_status["errors"]} == {
         "invalid.tiff",
         "missing-crs.tif",
@@ -624,6 +735,7 @@ def test_scan_reports_null_geometry_before_catalog_write(tmp_path: Path) -> None
         catalog_writer,
         RecordingCatalogDatabase(catalog_writer),
         2,
+        100,
     )
 
     async def run_scan() -> dict[str, Any]:
@@ -667,6 +779,7 @@ def test_scan_combines_multiple_directories_under_one_mount(tmp_path: Path) -> N
         catalog_writer,
         RecordingCatalogDatabase(catalog_writer),
         8,
+        100,
     )
 
     async def run_scan() -> dict[str, Any]:
@@ -698,6 +811,7 @@ def test_scan_catalogs_raster_and_shapefile_datasets_together(
         catalog_writer,
         RecordingCatalogDatabase(catalog_writer),
         4,
+        100,
     )
 
     async def run_twice() -> tuple[dict[str, Any], dict[str, Any]]:
@@ -744,6 +858,7 @@ def test_scan_continues_after_an_incomplete_shapefile(tmp_path: Path) -> None:
         catalog_writer,
         RecordingCatalogDatabase(catalog_writer),
         2,
+        100,
     )
 
     async def run_scan() -> dict[str, Any]:
@@ -777,6 +892,7 @@ def test_scan_continues_after_an_unreadable_shapefile(tmp_path: Path) -> None:
         catalog_writer,
         RecordingCatalogDatabase(catalog_writer),
         2,
+        100,
     )
 
     async def run_scan() -> dict[str, Any]:
@@ -830,6 +946,7 @@ def test_existing_items_are_classified_by_collection_and_identifier(
         catalog_writer,
         RecordingCatalogDatabase(catalog_writer),
         2,
+        100,
     )
 
     async def run_scan() -> dict[str, Any]:
@@ -859,39 +976,39 @@ def test_scan_reads_metadata_concurrently_and_bulk_upserts(
 
     active_metadata_calls = 0
     maximum_metadata_calls = 0
+    metadata_barrier = Barrier(3)
+    metadata_lock = Lock()
 
     def build_item(
         source_root: Path,
         dataset_path: Path,
         *component_paths: tuple[Path, ...],
     ) -> dict[str, Any]:
-        relative_path = dataset_path.relative_to(source_root).as_posix()
-        return {
-            "id": relative_path,
-            "collection": (
-                "eolab-mounted-vectors"
-                if dataset_path.suffix.lower() == ".shp"
-                else "eolab-mounted-geotiffs"
-            ),
-            "geometry": {"type": "Point", "coordinates": [0, 0]},
-        }
-
-    async def yielding_to_thread(function: Any, *args: Any) -> Any:
         nonlocal active_metadata_calls, maximum_metadata_calls
-        if function is not build_item:
-            return function(*args)
-
-        active_metadata_calls += 1
-        maximum_metadata_calls = max(maximum_metadata_calls, active_metadata_calls)
-        await asyncio.sleep(0)
+        with metadata_lock:
+            active_metadata_calls += 1
+            maximum_metadata_calls = max(
+                maximum_metadata_calls,
+                active_metadata_calls,
+            )
         try:
-            return function(*args)
+            metadata_barrier.wait(timeout=5)
+            relative_path = dataset_path.relative_to(source_root).as_posix()
+            return {
+                "id": relative_path,
+                "collection": (
+                    "eolab-mounted-vectors"
+                    if dataset_path.suffix.lower() == ".shp"
+                    else "eolab-mounted-geotiffs"
+                ),
+                "geometry": {"type": "Point", "coordinates": [0, 0]},
+            }
         finally:
-            active_metadata_calls -= 1
+            with metadata_lock:
+                active_metadata_calls -= 1
 
     monkeypatch.setitem(DATASET_ITEM_BUILDERS, ".tif", build_item)
     monkeypatch.setitem(DATASET_ITEM_BUILDERS, ".shp", build_item)
-    monkeypatch.setattr("eolab_app.scanning.asyncio.to_thread", yielding_to_thread)
     catalog_writer = RecordingCatalogWriter()
     scan_manager = ScanManager(
         tmp_path,
@@ -899,6 +1016,7 @@ def test_scan_reads_metadata_concurrently_and_bulk_upserts(
         catalog_writer,
         RecordingCatalogDatabase(catalog_writer),
         3,
+        40,
     )
 
     async def run_scan() -> dict[str, Any]:
@@ -914,15 +1032,53 @@ def test_scan_reads_metadata_concurrently_and_bulk_upserts(
         (item_batch[0]["collection"], len(item_batch))
         for item_batch in catalog_writer.write_session.item_batches
     ) == [
-        ("eolab-mounted-geotiffs", 5),
-        ("eolab-mounted-geotiffs", 100),
-        ("eolab-mounted-vectors", 5),
-        ("eolab-mounted-vectors", 100),
+        ("eolab-mounted-geotiffs", 25),
+        ("eolab-mounted-geotiffs", 40),
+        ("eolab-mounted-geotiffs", 40),
+        ("eolab-mounted-vectors", 25),
+        ("eolab-mounted-vectors", 40),
+        ("eolab-mounted-vectors", 40),
     ]
     assert status["processed"] == 210
     assert status["indexed"] == 210
     assert status["alreadyInCatalog"] == 0
     assert status["failed"] == 0
+
+
+def test_dataset_metadata_timing_separates_cpu_from_wait(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Derive estimated I/O wait from worker elapsed and thread CPU time."""
+    dataset_path = tmp_path / "item.tif"
+    dataset_path.touch()
+
+    def build_item(source_root: Path, path: Path) -> dict[str, Any]:
+        return {
+            "id": path.name,
+            "collection": "eolab-mounted-geotiffs",
+            "geometry": {"type": "Point", "coordinates": [0, 0]},
+        }
+
+    elapsed_clock = iter([10.0, 12.5])
+    processing_clock = iter([3.0, 3.4])
+    monkeypatch.setitem(DATASET_ITEM_BUILDERS, ".tif", build_item)
+    monkeypatch.setattr(
+        "eolab_app.scanning.perf_counter",
+        lambda: next(elapsed_clock),
+    )
+    monkeypatch.setattr(
+        "eolab_app.scanning.process_time",
+        lambda: next(processing_clock),
+    )
+
+    result = _build_dataset_metadata(
+        tmp_path,
+        DatasetCandidate(dataset_path),
+    )
+
+    assert result.elapsed_seconds == 2.5
+    assert result.processing_seconds == pytest.approx(0.4)
 
 
 def test_scan_caps_error_details_without_losing_failure_count(
@@ -944,6 +1100,7 @@ def test_scan_caps_error_details_without_losing_failure_count(
         catalog_writer,
         RecordingCatalogDatabase(catalog_writer),
         8,
+        100,
     )
 
     async def run_scan() -> dict[str, Any]:
@@ -988,6 +1145,7 @@ def test_scan_stops_after_a_bulk_catalog_failure(
         catalog_writer,
         catalog_database,
         8,
+        100,
     )
 
     async def run_scan() -> dict[str, Any]:
@@ -1019,6 +1177,7 @@ def test_scan_prevents_overlap(tmp_path: Path) -> None:
         catalog_writer,
         RecordingCatalogDatabase(catalog_writer),
         8,
+        100,
     )
 
     async def start_twice() -> None:

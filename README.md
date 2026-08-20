@@ -15,9 +15,10 @@ EOLab is an open source platform for Earth observation analysis and visualizatio
     EOLAB_SCAN_PATHS_WITHIN_MOUNT=["eolab_catalog_data/observations","eolab_catalog_data/model_outputs"]
     EOLAB_SCAN_DISPLAY_PATH_PREFIX=bigboi -- Z:\bigbucket
     EOLAB_SCAN_WORKER_COUNT=8
+    EOLAB_SCAN_BATCH_SIZE=100
     ```
 
-    `EOLAB_SCAN_MOUNT_PATH` is an absolute path on the deployment server. Coolify does not list it automatically because Compose uses it as a bind-mount source, so add it manually. Each entry in `EOLAB_SCAN_PATHS_WITHIN_MOUNT` is relative to that mount; use `["."]` to scan the entire mount. `EOLAB_SCAN_DISPLAY_PATH_PREFIX` is the path description shown to users in the Item inspector. `EOLAB_SCAN_WORKER_COUNT` is the number of datasets whose metadata EOLab reads concurrently and must be a positive integer. The mounted directories and dataset files must be readable by the application container.
+    `EOLAB_SCAN_MOUNT_PATH` is an absolute path on the deployment server. Coolify does not list it automatically because Compose uses it as a bind-mount source, so add it manually. Each entry in `EOLAB_SCAN_PATHS_WITHIN_MOUNT` is relative to that mount; use `["."]` to scan the entire mount. `EOLAB_SCAN_DISPLAY_PATH_PREFIX` is the path description shown to users in the Item inspector. `EOLAB_SCAN_WORKER_COUNT` is the number of concurrent metadata processes. `EOLAB_SCAN_BATCH_SIZE` is the maximum number of Items in one catalog bulk upsert. Both must be positive integers. The mounted directories and dataset files must be readable by the application container.
 
 6. In the project **Configuration**, select **Domains** for the `app` service and enter the public domain with internal port `8000` as `https://eolab.example.com:8000`.
 7. In **Advanced**, enable **Include Source Commit in Build**. On Coolify versions that label this setting **Source Commit Availability**, select **Available during build**. EOLab uses `SOURCE_COMMIT` to derive the displayed version from Git tags and the deployed commit.
@@ -46,7 +47,8 @@ Open `http://localhost:8000`. Set `EOLAB_HOST_PORT` to use a different loopback 
 | `EOLAB_SCAN_MOUNT_PATH`          | none                                              | Required absolute host directory mounted read-only  |
 | `EOLAB_SCAN_PATHS_WITHIN_MOUNT`  | none                                              | Required JSON array of relative directories to scan |
 | `EOLAB_SCAN_DISPLAY_PATH_PREFIX` | none                                              | Required user-facing root shown for mounted files   |
-| `EOLAB_SCAN_WORKER_COUNT`        | `8`                                               | Concurrent dataset metadata readers                 |
+| `EOLAB_SCAN_WORKER_COUNT`        | `8`                                               | Concurrent dataset metadata processes               |
+| `EOLAB_SCAN_BATCH_SIZE`          | `100`                                             | Maximum Items per catalog bulk upsert                |
 | `EOLAB_APP_TITLE`                | `EOLab`                                           | Browser and panel title                             |
 | `EOLAB_APP_SUBTITLE`             | `Explore, process, and visualize geospatial data` | Short panel description                             |
 | `EOLAB_CATALOG_URL`              | `/stac`                                           | Browser-facing STAC API path                        |
@@ -58,7 +60,9 @@ Open `http://localhost:8000`. Set `EOLAB_HOST_PORT` to use a different loopback 
 
 ## Scan mounted datasets
 
-Open the **Catalog** panel and select **Scan directories**. EOLab searches each configured path recursively for GeoTIFF (`.tif` and `.tiff`) and ESRI Shapefile (`.shp`) datasets, matching extensions case-insensitively. After each successful bulk upsert, the live status classifies processed datasets as newly cataloged or already present, alongside discovered, processed, and failed counts. Error details are collapsed by default and remain independently scrollable when opened, so the Catalog results remain usable during a scan. EOLab reads metadata using `EOLAB_SCAN_WORKER_COUNT` concurrent workers and uses standard STAC Bulk Transactions to upsert batches of 100 Items per Collection. A failure in one dataset does not stop the remaining scan; a catalog inventory or write failure stops the scan. Configured paths cannot be duplicated, nested inside one another, or escape the mount.
+Open the **Catalog** panel and select **Scan directories**. EOLab searches each configured path recursively for GeoTIFF (`.tif` and `.tiff`) and ESRI Shapefile (`.shp`) datasets, matching extensions case-insensitively. After each successful bulk upsert, the live status classifies processed datasets as newly cataloged or already present, alongside discovered, processed, and failed counts. Error details are collapsed by default and remain independently scrollable when opened, so the Catalog results remain usable during a scan. EOLab reads metadata using `EOLAB_SCAN_WORKER_COUNT` concurrent processes and uses standard STAC Bulk Transactions to upsert at most `EOLAB_SCAN_BATCH_SIZE` Items per Collection and request. A failure in one dataset does not stop the remaining scan; a catalog inventory or write failure stops the scan. Configured paths cannot be duplicated, nested inside one another, or escape the mount.
+
+The live performance timing separates elapsed wall time, catalog inventory, filesystem discovery, time awaiting metadata results, catalog writes, and search-count refresh. Metadata worker time is cumulative across all workers, so it can exceed elapsed wall time. Worker CPU time estimates metadata processing; the remainder of worker wall time is reported as estimated I/O wait and also includes time the operating system leaves a worker unscheduled. These measurements are diagnostic rather than additive percentages.
 
 Scans create or update the `eolab-mounted-geotiffs` and `eolab-mounted-vectors` STAC Collections. Item identifiers are derived from each primary file's path relative to the mounted root, so scanning the same path again updates its Item instead of adding a duplicate. A later scan does not delete records for files that have disappeared or moved. STAC Assets retain their container `file:` URIs; the inspector combines their mount-relative titles with `EOLAB_SCAN_DISPLAY_PATH_PREFIX` so users see each location as it is known on their own system.
 

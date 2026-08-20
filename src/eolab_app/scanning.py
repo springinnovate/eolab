@@ -2,11 +2,14 @@
 
 import asyncio
 import os
+from concurrent.futures import Executor, ProcessPoolExecutor
 from contextlib import AbstractAsyncContextManager
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from multiprocessing import get_context
 from pathlib import Path
+from time import perf_counter, process_time
 from typing import Any, Protocol
 from uuid import uuid4
 
@@ -20,7 +23,6 @@ from eolab_app.shapefile import (
 )
 
 
-STAC_ITEM_BATCH_SIZE = 100
 MAX_SCAN_ERROR_DETAILS = 100
 CATALOG_WRITE_TIMEOUT_SECONDS = 120
 
@@ -74,6 +76,17 @@ class DatasetCandidate:
 
     path: Path
     component_paths: tuple[Path, ...] = ()
+
+
+@dataclass(frozen=True)
+class DatasetMetadataResult:
+    """One dataset result with worker wall and CPU measurements."""
+
+    path: Path
+    item: dict[str, Any] | None
+    error: str | None
+    elapsed_seconds: float
+    processing_seconds: float
 
 
 class CatalogWriteSession(Protocol):
@@ -214,19 +227,33 @@ class ScanManager:
         catalog_writer: CatalogWriter,
         catalog_database: CatalogDatabase,
         metadata_worker_count: int,
+        item_batch_size: int,
     ) -> None:
         self.source_root = source_root
         self.source_paths = source_paths
         self.catalog_writer = catalog_writer
         self.catalog_database = catalog_database
         self.metadata_worker_count = metadata_worker_count
+        self.item_batch_size = item_batch_size
         self._start_lock = asyncio.Lock()
         self._task: asyncio.Task[None] | None = None
+        self._started_at_monotonic: float | None = None
+        self._finished_at_monotonic: float | None = None
         self._status = self._new_status("not_started")
 
     def status(self) -> dict[str, Any]:
         """Return an isolated snapshot of current scan progress."""
-        return deepcopy(self._status)
+        status = deepcopy(self._status)
+        if self._started_at_monotonic is not None:
+            elapsed_until = (
+                perf_counter()
+                if self._finished_at_monotonic is None
+                else self._finished_at_monotonic
+            )
+            status["timing"]["elapsedSeconds"] = (
+                elapsed_until - self._started_at_monotonic
+            )
+        return status
 
     async def start(self) -> dict[str, Any]:
         """Start a scan unless one is already running.
@@ -242,19 +269,35 @@ class ScanManager:
                 raise RuntimeError("A dataset scan is already running")
             self._status = self._new_status("discovering")
             self._status["startedAt"] = _utc_now()
+            self._started_at_monotonic = perf_counter()
+            self._finished_at_monotonic = None
             self._task = asyncio.create_task(self._run())
             return self.status()
 
     async def _run(self) -> None:
         try:
-            existing_item_keys = await self.catalog_database.existing_item_keys(
-                tuple(collection["id"] for collection in SCAN_COLLECTIONS)
-            )
-            dataset_candidates, discovery_errors = await asyncio.to_thread(
-                _discover_datasets,
-                self.source_root,
-                self.source_paths,
-            )
+            phase_started = perf_counter()
+            try:
+                existing_item_keys = (
+                    await self.catalog_database.existing_item_keys(
+                        tuple(collection["id"] for collection in SCAN_COLLECTIONS)
+                    )
+                )
+            finally:
+                self._status["timing"]["catalogInventorySeconds"] = (
+                    perf_counter() - phase_started
+                )
+            phase_started = perf_counter()
+            try:
+                dataset_candidates, discovery_errors = await asyncio.to_thread(
+                    _discover_datasets,
+                    self.source_root,
+                    self.source_paths,
+                )
+            finally:
+                self._status["timing"]["discoverySeconds"] = (
+                    perf_counter() - phase_started
+                )
             self._status["discovered"] = len(dataset_candidates)
             self._status["failed"] = len(discovery_errors)
             self._status["errors"].extend(
@@ -266,14 +309,23 @@ class ScanManager:
             self._status["state"] = "scanning"
 
             async with self.catalog_writer.session() as catalog_session:
-                for collection in SCAN_COLLECTIONS:
-                    await catalog_session.upsert_collection(collection)
+                phase_started = perf_counter()
+                try:
+                    for collection in SCAN_COLLECTIONS:
+                        await catalog_session.upsert_collection(collection)
+                finally:
+                    self._status["timing"]["catalogWriteSeconds"] += (
+                        perf_counter() - phase_started
+                    )
                 path_queue: asyncio.Queue[DatasetCandidate | None] = asyncio.Queue(
                     maxsize=self.metadata_worker_count * 2
                 )
-                result_queue: asyncio.Queue[
-                    tuple[Path, dict[str, Any] | Exception] | None
-                ] = asyncio.Queue(maxsize=STAC_ITEM_BATCH_SIZE * 2)
+                result_queue: asyncio.Queue[DatasetMetadataResult | None] = (
+                    asyncio.Queue(maxsize=self.item_batch_size * 2)
+                )
+                metadata_executor = _create_metadata_executor(
+                    self.metadata_worker_count
+                )
                 path_producer = asyncio.create_task(
                     _enqueue_dataset_candidates(
                         dataset_candidates,
@@ -287,6 +339,7 @@ class ScanManager:
                             self.source_root,
                             path_queue,
                             result_queue,
+                            metadata_executor,
                         )
                     )
                     for _ in range(self.metadata_worker_count)
@@ -297,41 +350,57 @@ class ScanManager:
                 completed_workers = 0
                 try:
                     while completed_workers < self.metadata_worker_count:
+                        phase_started = perf_counter()
                         metadata_result = await result_queue.get()
+                        self._status["timing"]["metadataResultWaitSeconds"] += (
+                            perf_counter() - phase_started
+                        )
                         if metadata_result is None:
                             completed_workers += 1
                             continue
 
-                        dataset_path, item_or_error = metadata_result
+                        dataset_path = metadata_result.path
+                        self._status["timing"]["metadataWorkerSeconds"] += (
+                            metadata_result.elapsed_seconds
+                        )
+                        self._status["timing"]["metadataProcessingSeconds"] += (
+                            metadata_result.processing_seconds
+                        )
+                        self._status["timing"]["metadataIoWaitSeconds"] += max(
+                            metadata_result.elapsed_seconds
+                            - metadata_result.processing_seconds,
+                            0,
+                        )
                         relative_path = dataset_path.relative_to(
                             self.source_root
                         ).as_posix()
                         self._status["currentFile"] = relative_path
                         self._status["processed"] += 1
-                        if isinstance(item_or_error, Exception):
+                        if metadata_result.error is not None:
                             self._status["failed"] += 1
                             if len(self._status["errors"]) < MAX_SCAN_ERROR_DETAILS:
                                 self._status["errors"].append(
                                     {
                                         "path": relative_path,
-                                        "error": str(item_or_error),
+                                        "error": metadata_result.error,
                                     }
                                 )
                             else:
                                 self._status["errorsTruncated"] = True
                         else:
+                            item = metadata_result.item
                             pending_items = pending_items_by_collection[
-                                item_or_error["collection"]
+                                item["collection"]
                             ]
-                            pending_items.append(item_or_error)
-                            if len(pending_items) == STAC_ITEM_BATCH_SIZE:
+                            pending_items.append(item)
+                            if len(pending_items) == self.item_batch_size:
                                 await self._upsert_items(
                                     catalog_session,
                                     pending_items,
                                     existing_item_keys,
                                 )
                                 pending_items_by_collection[
-                                    item_or_error["collection"]
+                                    item["collection"]
                                 ] = []
                 finally:
                     path_producer.cancel()
@@ -342,6 +411,11 @@ class ScanManager:
                         *metadata_workers,
                         return_exceptions=True,
                     )
+                    await asyncio.to_thread(
+                        metadata_executor.shutdown,
+                        wait=True,
+                        cancel_futures=True,
+                    )
 
                 for pending_items in pending_items_by_collection.values():
                     if pending_items:
@@ -351,7 +425,13 @@ class ScanManager:
                             existing_item_keys,
                         )
 
-            await self.catalog_database.invalidate_search_count_cache()
+            phase_started = perf_counter()
+            try:
+                await self.catalog_database.invalidate_search_count_cache()
+            finally:
+                self._status["timing"]["cacheInvalidationSeconds"] = (
+                    perf_counter() - phase_started
+                )
             self._status["state"] = "completed"
         except Exception as error:
             self._status["state"] = "failed"
@@ -361,6 +441,11 @@ class ScanManager:
         finally:
             self._status["currentFile"] = None
             self._status["finishedAt"] = _utc_now()
+            self._finished_at_monotonic = perf_counter()
+            if self._started_at_monotonic is not None:
+                self._status["timing"]["elapsedSeconds"] = (
+                    self._finished_at_monotonic - self._started_at_monotonic
+                )
 
     async def _upsert_items(
         self,
@@ -369,15 +454,20 @@ class ScanManager:
         existing_item_keys: set[tuple[str, str]],
     ) -> None:
         """Write one batch and classify its successfully cataloged Items."""
-        await catalog_session.upsert_items(items)
+        phase_started = perf_counter()
+        try:
+            await catalog_session.upsert_items(items)
+        finally:
+            self._status["timing"]["catalogWriteSeconds"] += (
+                perf_counter() - phase_started
+            )
         self._status["indexed"] += len(items)
         self._status["alreadyInCatalog"] += sum(
             (item["collection"], item["id"]) in existing_item_keys
             for item in items
         )
 
-    @staticmethod
-    def _new_status(state: str) -> dict[str, Any]:
+    def _new_status(self, state: str) -> dict[str, Any]:
         return {
             "id": str(uuid4()),
             "state": state,
@@ -386,11 +476,24 @@ class ScanManager:
             "indexed": 0,
             "alreadyInCatalog": 0,
             "failed": 0,
+            "workerCount": self.metadata_worker_count,
+            "batchSize": self.item_batch_size,
             "currentFile": None,
             "startedAt": None,
             "finishedAt": None,
             "errors": [],
             "errorsTruncated": False,
+            "timing": {
+                "elapsedSeconds": 0.0,
+                "catalogInventorySeconds": 0.0,
+                "discoverySeconds": 0.0,
+                "metadataResultWaitSeconds": 0.0,
+                "metadataWorkerSeconds": 0.0,
+                "metadataProcessingSeconds": 0.0,
+                "metadataIoWaitSeconds": 0.0,
+                "catalogWriteSeconds": 0.0,
+                "cacheInvalidationSeconds": 0.0,
+            },
         }
 
 
@@ -409,30 +512,64 @@ async def _enqueue_dataset_candidates(
 async def _read_dataset_metadata(
     source_root: Path,
     path_queue: asyncio.Queue[DatasetCandidate | None],
-    result_queue: asyncio.Queue[
-        tuple[Path, dict[str, Any] | Exception] | None
-    ],
+    result_queue: asyncio.Queue[DatasetMetadataResult | None],
+    metadata_executor: Executor,
 ) -> None:
     """Read dataset metadata until the producer signals completion."""
+    event_loop = asyncio.get_running_loop()
     while (dataset_candidate := await path_queue.get()) is not None:
-        dataset_path = dataset_candidate.path
-        builder_arguments: list[Any] = [source_root, dataset_path]
-        if dataset_candidate.component_paths:
-            builder_arguments.append(dataset_candidate.component_paths)
-        try:
-            item_or_error = await asyncio.to_thread(
-                DATASET_ITEM_BUILDERS[dataset_path.suffix.lower()],
-                *builder_arguments,
-            )
-            if item_or_error["geometry"] is None:
-                raise ValueError(
-                    "Dataset has no spatial footprint; pgSTAC requires Item "
-                    "geometry"
-                )
-        except Exception as error:
-            item_or_error = error
-        await result_queue.put((dataset_path, item_or_error))
+        metadata_result = await event_loop.run_in_executor(
+            metadata_executor,
+            _build_dataset_metadata,
+            source_root,
+            dataset_candidate,
+        )
+        await result_queue.put(metadata_result)
     await result_queue.put(None)
+
+
+def _build_dataset_metadata(
+    source_root: Path,
+    dataset_candidate: DatasetCandidate,
+) -> DatasetMetadataResult:
+    """Build one Item while separating worker CPU from elapsed time."""
+    elapsed_started = perf_counter()
+    processing_started = process_time()
+    dataset_path = dataset_candidate.path
+    builder_arguments: list[Any] = [source_root, dataset_path]
+    if dataset_candidate.component_paths:
+        builder_arguments.append(dataset_candidate.component_paths)
+    try:
+        item = DATASET_ITEM_BUILDERS[dataset_path.suffix.lower()](
+            *builder_arguments
+        )
+        if item["geometry"] is None:
+            raise ValueError(
+                "Dataset has no spatial footprint; pgSTAC requires Item geometry"
+            )
+        error_message = None
+    except Exception as error:
+        item = None
+        error_message = str(error)
+    elapsed_seconds = perf_counter() - elapsed_started
+    return DatasetMetadataResult(
+        path=dataset_path,
+        item=item,
+        error=error_message,
+        elapsed_seconds=elapsed_seconds,
+        processing_seconds=min(
+            process_time() - processing_started,
+            elapsed_seconds,
+        ),
+    )
+
+
+def _create_metadata_executor(worker_count: int) -> ProcessPoolExecutor:
+    """Create isolated metadata workers without inheriting app threads."""
+    return ProcessPoolExecutor(
+        max_workers=worker_count,
+        mp_context=get_context("spawn"),
+    )
 
 
 def _discover_datasets(

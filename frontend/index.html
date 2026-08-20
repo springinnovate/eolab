@@ -86,6 +86,11 @@
                       <p id="scan-status" class="scan-status" role="status">No scan has been started.</p>
                       <progress id="scan-progress" max="1" value="0" hidden></progress>
                       <p id="scan-counts" class="scan-counts"></p>
+                      <section id="scan-timing" class="scan-timing" aria-labelledby="scan-timing-heading" hidden>
+                        <h4 id="scan-timing-heading">Performance timing</h4>
+                        <dl id="scan-timing-values"></dl>
+                        <p>Cumulative worker clocks overlap across workers and can exceed elapsed time. Metadata I/O wait is estimated from worker wall time minus worker CPU time.</p>
+                      </section>
                       <details id="scan-errors-disclosure" class="scan-errors-disclosure" hidden>
                         <summary id="scan-errors-summary">Error details</summary>
                         <ul id="scan-errors" class="scan-errors"></ul>
