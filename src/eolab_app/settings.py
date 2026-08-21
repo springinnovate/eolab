@@ -2,7 +2,7 @@
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -20,6 +20,8 @@ class Settings:
     catalog_internal_url: str
     wms_url: str
     geoserver_internal_url: str
+    geoserver_admin_user: str
+    geoserver_admin_password: str = field(repr=False)
     scan_mount_path: Path
     scan_paths_within_mount: tuple[Path, ...]
     scan_display_path_prefix: str
@@ -47,6 +49,8 @@ class Settings:
             "CATALOG_INTERNAL_URL": self.catalog_internal_url,
             "WMS_URL": self.wms_url,
             "GEOSERVER_INTERNAL_URL": self.geoserver_internal_url,
+            "GEOSERVER_ADMIN_USER": self.geoserver_admin_user,
+            "GEOSERVER_ADMIN_PASSWORD": self.geoserver_admin_password,
             "SCAN_DISPLAY_PATH_PREFIX": self.scan_display_path_prefix,
             "BASEMAP_URL": self.basemap_url,
             "BASEMAP_ATTRIBUTION": self.basemap_attribution,
@@ -162,6 +166,8 @@ def load_settings(
         catalog_internal_url=os.environ["CATALOG_INTERNAL_URL"].strip(),
         wms_url=os.environ["WMS_URL"].strip(),
         geoserver_internal_url=os.environ["GEOSERVER_INTERNAL_URL"].strip(),
+        geoserver_admin_user=os.environ["GEOSERVER_ADMIN_USER"].strip(),
+        geoserver_admin_password=os.environ["GEOSERVER_ADMIN_PASSWORD"],
         scan_mount_path=Path(os.environ["SCAN_MOUNT_PATH"]),
         scan_paths_within_mount=tuple(Path(scan_path) for scan_path in scan_paths),
         scan_display_path_prefix=os.environ["SCAN_DISPLAY_PATH_PREFIX"].strip(),

@@ -13,6 +13,8 @@ from rasterio.warp import calculate_default_transform, transform_bounds
 
 
 GEOTIFF_MEDIA_TYPE = "image/tiff; application=geotiff"
+MOUNTED_GEOTIFF_COLLECTION_ID = "eolab-mounted-geotiffs"
+MOUNTED_GEOTIFF_ITEM_ID_PATTERN = r"^geotiff-[0-9a-f]{24}$"
 PROJECTION_EXTENSION = (
     "https://stac-extensions.github.io/projection/v1.1.0/schema.json"
 )
@@ -30,7 +32,6 @@ SUGGESTED_WARP_BOUNDS_DESCRIPTION = (
     "suggested by GDAL because the raster's rectangular outer boundary "
     "could not be transformed."
 )
-WGS84_ROUNDING_TOLERANCE = 1e-7
 RFC3339_TIMESTAMP = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$"
 )
@@ -121,7 +122,7 @@ def build_stac_item(source_root: Path, geotiff_path: Path) -> dict[str, Any]:
         "stac_version": "1.0.0",
         "stac_extensions": [PROJECTION_EXTENSION, RASTER_EXTENSION],
         "id": f"geotiff-{item_identifier[:24]}",
-        "collection": "eolab-mounted-geotiffs",
+        "collection": MOUNTED_GEOTIFF_COLLECTION_ID,
         "geometry": footprint,
         "bbox": bbox,
         "properties": properties,
@@ -161,51 +162,52 @@ def _derive_wgs84_bbox(
             *dataset.bounds,
         )
     )
-    if all(math.isfinite(coordinate) for coordinate in bbox):
-        return bbox, False
-
-    destination_transform, destination_width, destination_height = (
-        calculate_default_transform(
-            dataset.crs,
-            "EPSG:4326",
-            dataset.width,
-            dataset.height,
-            *dataset.bounds,
+    used_suggested_warp_bounds = False
+    if not all(math.isfinite(coordinate) for coordinate in bbox):
+        destination_transform, destination_width, destination_height = (
+            calculate_default_transform(
+                dataset.crs,
+                "EPSG:4326",
+                dataset.width,
+                dataset.height,
+                *dataset.bounds,
+            )
         )
-    )
 
-    if (
-        destination_width < 1
-        or destination_height < 1
-        or not all(
-            math.isfinite(coefficient) for coefficient in destination_transform
+        if (
+            destination_width < 1
+            or destination_height < 1
+            or not all(
+                math.isfinite(coefficient)
+                for coefficient in destination_transform
+            )
+        ):
+            raise ValueError("GeoTIFF bounds could not be transformed to WGS 84")
+
+        bbox = list(
+            array_bounds(
+                destination_height,
+                destination_width,
+                destination_transform,
+            )
         )
-    ):
-        raise ValueError("GeoTIFF bounds could not be transformed to WGS 84")
+        used_suggested_warp_bounds = True
 
-    west, south, east, north = array_bounds(
-        destination_height,
-        destination_width,
-        destination_transform,
-    )
-    if not (
-        -180 - WGS84_ROUNDING_TOLERANCE
-        <= west
-        < east
-        <= 180 + WGS84_ROUNDING_TOLERANCE
-        and -90 - WGS84_ROUNDING_TOLERANCE
-        <= south
-        < north
-        <= 90 + WGS84_ROUNDING_TOLERANCE
-    ):
-        raise ValueError("GeoTIFF bounds could not be transformed to WGS 84")
-
-    return [
+    west, south, east, north = bbox
+    normalized_bbox = [
         max(west, -180),
         max(south, -90),
         min(east, 180),
         min(north, 90),
-    ], True
+    ]
+    if not (
+        all(math.isfinite(coordinate) for coordinate in normalized_bbox)
+        and normalized_bbox[0] < normalized_bbox[2]
+        and normalized_bbox[1] < normalized_bbox[3]
+    ):
+        raise ValueError("GeoTIFF bounds could not be transformed to WGS 84")
+
+    return normalized_bbox, used_suggested_warp_bounds
 
 
 def _parse_acquisition_datetime(value: str) -> datetime:

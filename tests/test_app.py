@@ -1,6 +1,7 @@
 """Test the EOLab application and its runtime settings contract."""
 
 import asyncio
+import base64
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -21,6 +22,8 @@ DEFAULT_ENVIRONMENT = {
     "CATALOG_INTERNAL_URL": "http://stac-api:8080",
     "WMS_URL": "/geoserver/eolab/wms",
     "GEOSERVER_INTERNAL_URL": "http://geoserver:8080/geoserver",
+    "GEOSERVER_ADMIN_USER": "eolab",
+    "GEOSERVER_ADMIN_PASSWORD": "valid-admin-password",
     "SCAN_MOUNT_PATH": str(Path.cwd()),
     "SCAN_PATHS_WITHIN_MOUNT": '["."]',
     "SCAN_DISPLAY_PATH_PREFIX": "bigboi -- Z:\\bigbucket",
@@ -33,6 +36,37 @@ DEFAULT_ENVIRONMENT = {
     "INITIAL_LONGITUDE": "0",
     "INITIAL_ZOOM": "2",
 }
+TEST_GEOTIFF_ITEM_ID = "geotiff-0123456789abcdef01234567"
+
+
+def _mounted_geotiff_item(asset_href: str) -> dict[str, object]:
+    """Build the scanner-owned STAC Item contract used by rendering tests."""
+    return {
+        "type": "Feature",
+        "id": TEST_GEOTIFF_ITEM_ID,
+        "collection": "eolab-mounted-geotiffs",
+        "bbox": [-123.0, 48.0, -122.0, 49.0],
+        "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+                [
+                    [-123.0, 48.0],
+                    [-122.0, 48.0],
+                    [-122.0, 49.0],
+                    [-123.0, 49.0],
+                    [-123.0, 48.0],
+                ]
+            ],
+        },
+        "properties": {"datetime": "2025-01-01T00:00:00Z"},
+        "assets": {
+            "data": {
+                "href": asset_href,
+                "type": "image/tiff; application=geotiff",
+                "roles": ["data"],
+            }
+        },
+    }
 
 
 @pytest.fixture
@@ -94,6 +128,7 @@ def test_configuration_endpoint_reads_environment(
             "zoom": 2,
         },
     }
+    assert "valid-admin-password" not in repr(load_settings(version_file_path))
 
 
 def test_scan_status_is_available_before_first_scan(
@@ -122,6 +157,222 @@ def test_scan_status_is_available_before_first_scan(
         "catalogWriteSeconds": 0.0,
         "cacheInvalidationSeconds": 0.0,
     }
+
+
+def test_catalog_geotiff_is_published_idempotently(
+    configured_environment: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    version_file_path: Path,
+) -> None:
+    """Resolve STAC server-side and reuse one deterministic GeoServer layer."""
+    source_path = tmp_path / "nested" / "raster with spaces.tif"
+    source_path.parent.mkdir()
+    source_path.write_bytes(b"representative raster")
+    monkeypatch.setenv("SCAN_MOUNT_PATH", str(tmp_path))
+    monkeypatch.setenv("SCAN_PATHS_WITHIN_MOUNT", '["."]')
+    item = _mounted_geotiff_item(source_path.as_uri())
+    item["bbox"] = [
+        -180.000823370733,
+        -90.0004116853666,
+        180.000823370733,
+        90.0004116853666,
+    ]
+    resource_name = TEST_GEOTIFF_ITEM_ID
+    geoserver_requests: list[httpx2.Request] = []
+
+    def upstream_response(request: httpx2.Request) -> httpx2.Response:
+        if request.url.host == "stac-api":
+            assert request.url.path == (
+                "/collections/eolab-mounted-geotiffs/items/"
+                + TEST_GEOTIFF_ITEM_ID
+            )
+            assert "authorization" not in request.headers
+            return httpx2.Response(200, json=item)
+
+        geoserver_requests.append(request)
+        expected_authorization = "Basic " + base64.b64encode(
+            b"eolab:valid-admin-password"
+        ).decode()
+        assert request.headers["authorization"] == expected_authorization
+        external_geotiff_path = (
+            "/geoserver/rest/workspaces/eolab/coveragestores/"
+            f"{resource_name}/external.geotiff"
+        )
+        layer_path = f"/geoserver/rest/workspaces/eolab/layers/{resource_name}"
+        if request.url.path == external_geotiff_path:
+            assert request.method == "PUT"
+            assert request.headers["accept"] == "application/json"
+            assert request.headers["content-type"] == "text/plain"
+            assert request.url.params["configure"] == "first"
+            assert request.url.params["coverageName"] == resource_name
+            assert request.content.decode() == source_path.resolve().as_uri()
+            return httpx2.Response(201)
+        if request.url.path == f"{layer_path}.xml":
+            assert request.method == "PUT"
+            assert request.headers["content-type"] == "application/xml"
+            assert b"<name>dynamic-raster</name>" in request.content
+            assert b"<workspace>eolab</workspace>" in request.content
+            return httpx2.Response(200)
+        raise AssertionError(f"Unexpected GeoServer request: {request}")
+
+    with TestClient(
+        create_app(
+            version_file_path,
+            catalog_transport=httpx2.MockTransport(upstream_response),
+            geoserver_transport=httpx2.MockTransport(upstream_response),
+        )
+    ) as client:
+        first_response = client.post(
+            "/api/rendering/layers",
+            json={
+                "collectionId": "eolab-mounted-geotiffs",
+                "itemId": TEST_GEOTIFF_ITEM_ID,
+            },
+        )
+        repeated_response = client.post(
+            "/api/rendering/layers",
+            json={
+                "collectionId": "eolab-mounted-geotiffs",
+                "itemId": TEST_GEOTIFF_ITEM_ID,
+            },
+        )
+
+    expected_response = {
+        "layerName": f"eolab:{resource_name}",
+        "bbox": item["bbox"],
+    }
+    assert first_response.status_code == 200
+    assert first_response.json() == expected_response
+    assert repeated_response.json() == expected_response
+    assert [request.method for request in geoserver_requests] == ["PUT"] * 4
+    assert len({request.url.path for request in geoserver_requests}) == 2
+
+
+@pytest.mark.parametrize(
+    "request_body",
+    (
+        {
+            "collectionId": "eolab-mounted-geotiffs",
+            "itemId": "geotiff-id",
+            "href": "file:///etc/passwd",
+        },
+        {"collectionId": "eolab-mounted-vectors", "itemId": "vector-id"},
+        {"collectionId": 1, "itemId": "geotiff-id"},
+        {
+            "collectionId": "eolab-mounted-geotiffs",
+            "itemId": "../geotiff?item#fragment",
+        },
+        {
+            "collection_id": "eolab-mounted-geotiffs",
+            "item_id": "geotiff-0123456789abcdef01234567",
+        },
+    ),
+)
+def test_raster_publication_rejects_browser_paths_and_unsupported_items(
+    configured_environment: None,
+    version_file_path: Path,
+    request_body: dict[str, object],
+) -> None:
+    """Reject invalid public input before making any upstream request."""
+    upstream_request = AsyncMock()
+    client = TestClient(
+        create_app(
+            version_file_path,
+            catalog_transport=httpx2.MockTransport(upstream_request),
+            geoserver_transport=httpx2.MockTransport(upstream_request),
+        )
+    )
+
+    response = client.post("/api/rendering/layers", json=request_body)
+
+    assert response.status_code == 422
+    upstream_request.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "asset_location",
+    ("remote", "outside", "traversal"),
+)
+def test_raster_publication_rejects_assets_outside_the_scan_mount(
+    configured_environment: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    version_file_path: Path,
+    asset_location: str,
+) -> None:
+    """Never let a catalog record expand GeoServer's filesystem boundary."""
+    scan_mount_path = tmp_path / "scan-source"
+    scan_mount_path.mkdir()
+    outside_path = tmp_path / "outside.tif"
+    outside_path.write_bytes(b"outside")
+    monkeypatch.setenv("SCAN_MOUNT_PATH", str(scan_mount_path))
+    monkeypatch.setenv("SCAN_PATHS_WITHIN_MOUNT", '["."]')
+    asset_hrefs = {
+        "remote": "https://example.test/raster.tif",
+        "outside": outside_path.as_uri(),
+        "traversal": f"{scan_mount_path.as_uri()}/../outside.tif",
+    }
+    item = _mounted_geotiff_item(asset_hrefs[asset_location])
+    geoserver_requests = []
+
+    def catalog_response(_: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=item)
+
+    def geoserver_response(request: httpx2.Request) -> httpx2.Response:
+        geoserver_requests.append(request)
+        return httpx2.Response(500)
+
+    response = TestClient(
+        create_app(
+            version_file_path,
+            catalog_transport=httpx2.MockTransport(catalog_response),
+            geoserver_transport=httpx2.MockTransport(geoserver_response),
+        )
+    ).post(
+        "/api/rendering/layers",
+        json={
+            "collectionId": "eolab-mounted-geotiffs",
+            "itemId": TEST_GEOTIFF_ITEM_ID,
+        },
+    )
+
+    assert response.status_code == 422
+    assert geoserver_requests == []
+
+
+def test_raster_publication_rejects_a_mismatched_catalog_item(
+    configured_environment: None,
+    version_file_path: Path,
+) -> None:
+    """Require the authoritative STAC response to match the requested Item."""
+    item = _mounted_geotiff_item("file:///scan-source/raster.tif")
+    item["id"] = "geotiff-abcdef0123456789abcdef01"
+    geoserver_requests = []
+
+    def catalog_response(_: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=item)
+
+    def geoserver_response(request: httpx2.Request) -> httpx2.Response:
+        geoserver_requests.append(request)
+        return httpx2.Response(500)
+
+    response = TestClient(
+        create_app(
+            version_file_path,
+            catalog_transport=httpx2.MockTransport(catalog_response),
+            geoserver_transport=httpx2.MockTransport(geoserver_response),
+        )
+    ).post(
+        "/api/rendering/layers",
+        json={
+            "collectionId": "eolab-mounted-geotiffs",
+            "itemId": TEST_GEOTIFF_ITEM_ID,
+        },
+    )
+
+    assert response.status_code == 502
+    assert geoserver_requests == []
 
 
 def test_stac_proxy_forwards_public_read_request(
@@ -286,6 +537,7 @@ def test_wms_proxy_forwards_supported_read_operation(
 
     def geoserver_response(request: httpx2.Request) -> httpx2.Response:
         assert request.method == "GET"
+        assert "authorization" not in request.headers
         assert str(request.url) == (
             "http://geoserver:8080/geoserver/eolab/wms"
             "?service=WMS&version=1.3.0&request=GetCapabilities"

@@ -16,7 +16,10 @@ from uuid import uuid4
 import httpx2
 import psycopg
 
-from eolab_app.geotiff import build_stac_item as build_geotiff_stac_item
+from eolab_app.geotiff import (
+    MOUNTED_GEOTIFF_COLLECTION_ID,
+    build_stac_item as build_geotiff_stac_item,
+)
 from eolab_app.shapefile import (
     build_stac_item as build_shapefile_stac_item,
     discover_shapefile_datasets,
@@ -29,7 +32,7 @@ CATALOG_WRITE_TIMEOUT_SECONDS = 120
 GEOTIFF_COLLECTION = {
     "type": "Collection",
     "stac_version": "1.0.0",
-    "id": "eolab-mounted-geotiffs",
+    "id": MOUNTED_GEOTIFF_COLLECTION_ID,
     "title": "Mounted GeoTIFFs",
     "description": (
         "GeoTIFF files discovered in the configured read-only EOLab scan source. "

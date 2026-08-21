@@ -22,6 +22,8 @@ EOLab is an open source platform for Earth observation analysis and visualizatio
 
     `EOLAB_SCAN_MOUNT_PATH` is an absolute path on the deployment server. Coolify does not list it automatically because Compose uses it as a bind-mount source, so add it manually. Each entry in `EOLAB_SCAN_PATHS_WITHIN_MOUNT` is relative to that mount; use `["."]` to scan the entire mount. `EOLAB_SCAN_DISPLAY_PATH_PREFIX` is the path description shown to users in the Item inspector. `EOLAB_SCAN_WORKER_COUNT` is the number of concurrent metadata processes. `EOLAB_SCAN_WRITER_COUNT` is the maximum number of catalog bulk upserts in progress at once. `EOLAB_SCAN_BATCH_SIZE` is the maximum number of Items in each bulk upsert. All three must be positive integers. The mounted directories and dataset files must be readable by the application container.
 
+    To audit a running container, use `docker exec <container> grep ' /scan-source ' /proc/self/mountinfo`. The mount options immediately after `/scan-source` must begin with `ro`; for NFS, the filesystem options after the `- nfs4 ...` separator should also contain `ro`. Treat this kernel-reported state as authoritative. A `docker inspect` mount entry may still show `Mode: rw` because it describes Docker's bind request rather than a read-only property inherited from the host filesystem.
+
 7. In the project **Configuration**, select **Domains** for the `app` service and enter the public domain with internal port `8000` as `https://eolab.example.com:8000`. Do not attach a domain to the `geoserver` service; EOLab exposes only its restricted WMS route.
 8. In **Advanced**, enable **Include Source Commit in Build**. On Coolify versions that label this setting **Source Commit Availability**, select **Available during build**. EOLab uses `SOURCE_COMMIT` to derive the displayed version from Git tags and the deployed commit.
 9. Set any other desired deployment-specific `EOLAB_*` values listed in `.env.example`.
@@ -41,28 +43,28 @@ Open `http://localhost:8000`. The local override also makes the GeoServer admini
 
 ## Runtime configuration
 
-| Variable                         | Default                                           | Purpose                                             |
-| -------------------------------- | ------------------------------------------------- | --------------------------------------------------- |
-| `EOLAB_DATABASE_PASSWORD`        | none                                              | Required internal PostgreSQL password               |
-| `EOLAB_DATABASE_VOLUME_NAME`     | `eolab-pgstac-data`                               | Database volume name, unique per deployment         |
-| `EOLAB_GEOSERVER_ADMIN_PASSWORD` | none                                              | Required internal GeoServer administrator password  |
-| `EOLAB_GEOSERVER_MASTER_PASSWORD` | none                                              | Required GeoServer keystore password                 |
-| `EOLAB_GEOSERVER_DATA_VOLUME_NAME` | `eolab-geoserver-data`                          | Persistent GeoServer configuration volume name      |
-| `EOLAB_LOAD_SAMPLE_CATALOG`      | none                                              | Required `true` or `false` sample-data choice       |
-| `EOLAB_SCAN_MOUNT_PATH`          | none                                              | Required absolute host directory mounted read-only  |
-| `EOLAB_SCAN_PATHS_WITHIN_MOUNT`  | none                                              | Required JSON array of relative directories to scan |
-| `EOLAB_SCAN_DISPLAY_PATH_PREFIX` | none                                              | Required user-facing root shown for mounted files   |
-| `EOLAB_SCAN_WORKER_COUNT`        | `8`                                               | Concurrent dataset metadata processes               |
-| `EOLAB_SCAN_WRITER_COUNT`        | `4`                                               | Concurrent catalog bulk upserts                      |
-| `EOLAB_SCAN_BATCH_SIZE`          | `100`                                             | Maximum Items per catalog bulk upsert                |
-| `EOLAB_APP_TITLE`                | `EOLab`                                           | Browser and panel title                             |
-| `EOLAB_APP_SUBTITLE`             | `Explore, process, and visualize geospatial data` | Short panel description                             |
-| `EOLAB_CATALOG_URL`              | `/stac`                                           | Browser-facing STAC API path                        |
-| `EOLAB_BASEMAP_URL`              | OpenStreetMap tiles                               | Leaflet tile URL template                           |
-| `EOLAB_BASEMAP_ATTRIBUTION`      | OpenStreetMap attribution                         | Basemap attribution text                            |
-| `EOLAB_INITIAL_LATITUDE`         | `20`                                              | Initial map latitude                                |
-| `EOLAB_INITIAL_LONGITUDE`        | `0`                                               | Initial map longitude                               |
-| `EOLAB_INITIAL_ZOOM`             | `2`                                               | Initial Leaflet zoom, from 0 to 22                  |
+| Variable                           | Default                                           | Purpose                                             |
+| ---------------------------------- | ------------------------------------------------- | --------------------------------------------------- |
+| `EOLAB_DATABASE_PASSWORD`          | none                                              | Required internal PostgreSQL password               |
+| `EOLAB_DATABASE_VOLUME_NAME`       | `eolab-pgstac-data`                               | Database volume name, unique per deployment         |
+| `EOLAB_GEOSERVER_ADMIN_PASSWORD`   | none                                              | Required internal GeoServer administrator password  |
+| `EOLAB_GEOSERVER_MASTER_PASSWORD`  | none                                              | Required GeoServer keystore password                |
+| `EOLAB_GEOSERVER_DATA_VOLUME_NAME` | `eolab-geoserver-data`                            | Persistent GeoServer configuration volume name      |
+| `EOLAB_LOAD_SAMPLE_CATALOG`        | none                                              | Required `true` or `false` sample-data choice       |
+| `EOLAB_SCAN_MOUNT_PATH`            | none                                              | Required absolute host directory mounted read-only  |
+| `EOLAB_SCAN_PATHS_WITHIN_MOUNT`    | none                                              | Required JSON array of relative directories to scan |
+| `EOLAB_SCAN_DISPLAY_PATH_PREFIX`   | none                                              | Required user-facing root shown for mounted files   |
+| `EOLAB_SCAN_WORKER_COUNT`          | `8`                                               | Concurrent dataset metadata processes               |
+| `EOLAB_SCAN_WRITER_COUNT`          | `4`                                               | Concurrent catalog bulk upserts                     |
+| `EOLAB_SCAN_BATCH_SIZE`            | `100`                                             | Maximum Items per catalog bulk upsert               |
+| `EOLAB_APP_TITLE`                  | `EOLab`                                           | Browser and panel title                             |
+| `EOLAB_APP_SUBTITLE`               | `Explore, process, and visualize geospatial data` | Short panel description                             |
+| `EOLAB_CATALOG_URL`                | `/stac`                                           | Browser-facing STAC API path                        |
+| `EOLAB_BASEMAP_URL`                | OpenStreetMap tiles                               | Leaflet tile URL template                           |
+| `EOLAB_BASEMAP_ATTRIBUTION`        | OpenStreetMap attribution                         | Basemap attribution text                            |
+| `EOLAB_INITIAL_LATITUDE`           | `20`                                              | Initial map latitude                                |
+| `EOLAB_INITIAL_LONGITUDE`          | `0`                                               | Initial map longitude                               |
+| `EOLAB_INITIAL_ZOOM`               | `2`                                               | Initial Leaflet zoom, from 0 to 22                  |
 
 ## Rendering service
 
