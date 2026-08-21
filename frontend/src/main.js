@@ -748,7 +748,8 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
     retryPageButton.addEventListener("click", prefetchNextCatalogPage);
     catalogLayerToggle.addEventListener("click", async () => {
         const selectedItem = catalogState.selectedItem;
-        if (rasterLayerController.activeLayer !== null) {
+        const rasterIsDisplayed = rasterLayerController.activeLayer !== null;
+        if (rasterIsDisplayed) {
             rasterLayerController.clear();
             catalogLayerToggle.textContent = "View on map";
             catalogLayerStatus.textContent = "Raster removed from the map.";
