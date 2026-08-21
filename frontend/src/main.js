@@ -13,16 +13,27 @@ import {
     MOUNTED_DATASET_TYPES,
 } from "./catalog.js";
 import {
+    applyRasterColorPalette,
     assessCatalogRaster,
+    buildRasterLegend,
     CatalogRasterLayerController,
+    DEFAULT_RASTER_STYLE,
+    formatRasterPixelValue,
+    getCatalogRasterBasename,
+    getRasterPixelProbePosition,
     loadWmsCapabilities,
+    RASTER_COLOR_PALETTES,
+    RasterPixelProbeController,
     publishCatalogRaster,
+    sampleCatalogRasterPixel,
+    serializeRasterStyle,
 } from "./rendering.js";
 import "./style.css";
 
 const CATALOG_SEARCH_DEBOUNCE_MILLISECONDS = 300;
 const CATALOG_LOAD_ROOT_MARGIN = "300px 0px";
 const CONTROL_PANEL_TRANSITION_MILLISECONDS = 240;
+const RASTER_STYLE_DEBOUNCE_MILLISECONDS = 200;
 const RENDERING_RETRY_MILLISECONDS = 5000;
 const RENDERING_MONITOR_MILLISECONDS = 60000;
 
@@ -377,6 +388,388 @@ function renderCatalogItemInspector(
 }
 
 /**
+ * Connects raster appearance controls and pointer probing to the Leaflet map.
+ *
+ * The returned boundary owns the single rendered raster, its committed style,
+ * and every interaction that is valid only while that raster is displayed.
+ *
+ * @param {AppGlobalConfiguration} appGlobalConfiguration Application settings.
+ * @param {L.Map} leafletMap The initialized Leaflet map.
+ * @param {HTMLElement} catalogLayerStatus Raster action status text.
+ * @return {{
+ *   clear: Function,
+ *   reset: Function,
+ *   show: Function,
+ *   readonly isDisplayed: boolean
+ * }} Raster visualization controls used by the Catalog selection workflow.
+ */
+function initializeRasterVisualization(
+    appGlobalConfiguration,
+    leafletMap,
+    catalogLayerStatus
+) {
+    const rasterStyleControls = document.querySelector(
+        "#raster-style-controls"
+    );
+    const rasterPalette = document.querySelector("#raster-palette");
+    const rasterStyleInputs = {
+        minimum: document.querySelector("#raster-minimum"),
+        midpoint: document.querySelector("#raster-midpoint"),
+        maximum: document.querySelector("#raster-maximum"),
+        minimumColor: document.querySelector("#raster-minimum-color"),
+        midpointColor: document.querySelector("#raster-midpoint-color"),
+        maximumColor: document.querySelector("#raster-maximum-color")
+    };
+    const rasterLegend = document.querySelector("#raster-legend");
+    const rasterLegendLabels = {
+        minimum: document.querySelector("#raster-legend-minimum"),
+        midpoint: document.querySelector("#raster-legend-midpoint"),
+        maximum: document.querySelector("#raster-legend-maximum")
+    };
+    const rasterStyleError = document.querySelector("#raster-style-error");
+    const resetRasterStyleButton = document.querySelector(
+        "#reset-raster-style"
+    );
+    const rasterPixelProbe = document.querySelector("#raster-pixel-probe");
+    const rasterPixelProbeName = document.querySelector(
+        "#raster-pixel-probe-name"
+    );
+    const rasterPixelProbeReading = document.querySelector(
+        "#raster-pixel-probe-reading"
+    );
+    let rasterStyle = { ...DEFAULT_RASTER_STYLE };
+    let rasterPixelProbeLabel = "";
+    let pixelProbeClientPosition = null;
+    let pixelProbeSize = { width: 0, height: 0 };
+    let rasterStyleCommitTimeout = null;
+
+    const rasterLayerController = new CatalogRasterLayerController(
+        leafletMap,
+        publishCatalogRaster,
+        (publishedRaster) => {
+            const [west, south, east, north] = publishedRaster.bbox;
+            const rasterLayer = L.tileLayer.wms(
+                appGlobalConfiguration.wmsUrl,
+                {
+                    layers: publishedRaster.layerName,
+                    styles: "dynamic-raster",
+                    env: serializeRasterStyle(rasterStyle),
+                    format: "image/png",
+                    transparent: true,
+                    version: "1.3.0",
+                    bounds: [
+                        [south, west],
+                        [north, east]
+                    ]
+                }
+            );
+            rasterLayer.once("tileerror", () => {
+                if (rasterLayerController.activeLayer === rasterLayer) {
+                    catalogLayerStatus.textContent =
+                        "Map tiles could not be rendered.";
+                }
+            });
+            return rasterLayer;
+        }
+    );
+    const pixelProbeController = new RasterPixelProbeController(
+        sampleCatalogRasterPixel,
+        renderRasterPixel,
+        renderRasterPixelError
+    );
+
+    for (const [paletteName, palette] of Object.entries(
+        RASTER_COLOR_PALETTES
+    )) {
+        const paletteOption = document.createElement("option");
+        paletteOption.value = paletteName;
+        paletteOption.textContent = palette.label;
+        rasterPalette.append(paletteOption);
+    }
+    const customPaletteOption = document.createElement("option");
+    customPaletteOption.value = "custom";
+    customPaletteOption.textContent = "Custom";
+    rasterPalette.append(customPaletteOption);
+
+    /** Read a candidate style from the appearance controls. */
+    function readRasterStyleControls() {
+        return {
+            minimum: rasterStyleInputs.minimum.value === ""
+                ? Number.NaN
+                : Number(rasterStyleInputs.minimum.value),
+            midpoint: rasterStyleInputs.midpoint.value === ""
+                ? Number.NaN
+                : Number(rasterStyleInputs.midpoint.value),
+            maximum: rasterStyleInputs.maximum.value === ""
+                ? Number.NaN
+                : Number(rasterStyleInputs.maximum.value),
+            minimumColor: rasterStyleInputs.minimumColor.value,
+            midpointColor: rasterStyleInputs.midpointColor.value,
+            maximumColor: rasterStyleInputs.maximumColor.value
+        };
+    }
+
+    /** Present one style validation error on the fields it describes. */
+    function reportRasterStyleError(styleError = null) {
+        rasterStyleError.textContent = styleError?.message ?? "";
+        for (const input of Object.values(rasterStyleInputs)) {
+            input.removeAttribute("aria-invalid");
+        }
+        if (styleError === null) {
+            return;
+        }
+        const invalidFields = styleError.fieldGroup === "colors"
+            ? ["minimumColor", "midpointColor", "maximumColor"]
+            : ["minimum", "midpoint", "maximum"];
+        for (const fieldName of invalidFields) {
+            rasterStyleInputs[fieldName].setAttribute(
+                "aria-invalid",
+                "true"
+            );
+        }
+    }
+
+    /** Render the legend for one committed raster style. */
+    function renderRasterStyleLegend(style) {
+        const legend = buildRasterLegend(style);
+        rasterLegend.style.background = legend.gradient;
+        rasterLegend.setAttribute("aria-label", legend.description);
+        rasterLegendLabels.midpoint.style.left =
+            `${legend.midpointPosition}%`;
+        for (const thresholdName of ["minimum", "midpoint", "maximum"]) {
+            rasterLegendLabels[thresholdName].textContent =
+                style[thresholdName];
+        }
+    }
+
+    /** Validate the current controls without changing the committed legend. */
+    function validateRasterStyleControls() {
+        const candidateStyle = readRasterStyleControls();
+        try {
+            const environment = serializeRasterStyle(candidateStyle);
+            reportRasterStyleError();
+            return { style: candidateStyle, environment };
+        } catch (styleError) {
+            reportRasterStyleError(styleError);
+            return null;
+        }
+    }
+
+    /** Display one style in the controls without changing the map layer. */
+    function setRasterStyleControls(style, paletteName) {
+        for (const fieldName of Object.keys(rasterStyleInputs)) {
+            rasterStyleInputs[fieldName].value = style[fieldName];
+        }
+        rasterPalette.value = paletteName;
+        renderRasterStyleLegend(style);
+        reportRasterStyleError();
+    }
+
+    /** Commit one valid control state to the current WMS layer. */
+    function commitRasterStyle() {
+        if (rasterStyleCommitTimeout !== null) {
+            window.clearTimeout(rasterStyleCommitTimeout);
+            rasterStyleCommitTimeout = null;
+        }
+        const candidate = validateRasterStyleControls();
+        if (
+            candidate === null ||
+            rasterLayerController.activeLayer === null
+        ) {
+            return;
+        }
+        rasterStyle = candidate.style;
+        renderRasterStyleLegend(rasterStyle);
+        rasterLayerController.activeLayer.setParams({
+            styles: "dynamic-raster",
+            env: candidate.environment
+        });
+    }
+
+    /** Commit the latest valid style after rapid edits settle. */
+    function scheduleRasterStyleCommit() {
+        validateRasterStyleControls();
+        if (rasterStyleCommitTimeout !== null) {
+            window.clearTimeout(rasterStyleCommitTimeout);
+        }
+        rasterStyleCommitTimeout = window.setTimeout(
+            () => {
+                rasterStyleCommitTimeout = null;
+                commitRasterStyle();
+            },
+            RASTER_STYLE_DEBOUNCE_MILLISECONDS
+        );
+    }
+
+    /** Restore the initial appearance for a newly selected Item. */
+    function resetRasterStyle() {
+        rasterStyle = { ...DEFAULT_RASTER_STYLE };
+        setRasterStyleControls(rasterStyle, "blue-yellow-red");
+    }
+
+    /** Move the readout using only cached layout dimensions. */
+    function positionRasterPixelProbe() {
+        if (pixelProbeClientPosition === null || rasterPixelProbe.hidden) {
+            return;
+        }
+        const position = getRasterPixelProbePosition(
+            pixelProbeClientPosition,
+            pixelProbeSize,
+            { width: window.innerWidth, height: window.innerHeight }
+        );
+        rasterPixelProbe.style.transform =
+            `translate3d(${position.x}px, ${position.y}px, 0)`;
+    }
+
+    /** Show and remeasure the readout after its text changes. */
+    function showRasterPixelProbe() {
+        rasterPixelProbe.hidden = false;
+        const bounds = rasterPixelProbe.getBoundingClientRect();
+        pixelProbeSize = { width: bounds.width, height: bounds.height };
+        positionRasterPixelProbe();
+    }
+
+    /** Replace the filename and sampled detail shown in the pointer readout. */
+    function setRasterPixelProbeContent(detail) {
+        rasterPixelProbeName.textContent = rasterPixelProbeLabel;
+        rasterPixelProbeName.title = rasterPixelProbeLabel;
+        rasterPixelProbeReading.textContent = detail;
+    }
+
+    /** Display one current pixel response beside the pointer. */
+    function renderRasterPixel(pixel, point) {
+        let pixelValue = "Outside raster";
+        if (pixel.inBounds) {
+            pixelValue = pixel.value === null
+                ? "No data"
+                : formatRasterPixelValue(pixel.value);
+        }
+        setRasterPixelProbeContent(
+            `Lon ${point.longitude.toFixed(5)} · ` +
+            `Lat ${point.latitude.toFixed(5)}\nPixel: ${pixelValue}`
+        );
+        showRasterPixelProbe();
+    }
+
+    /** Report a current pixel request failure without affecting the layer. */
+    function renderRasterPixelError(error, point) {
+        setRasterPixelProbeContent(
+            `Lon ${point.longitude.toFixed(5)} · ` +
+            `Lat ${point.latitude.toFixed(5)}\nPixel unavailable: ` +
+            error.message
+        );
+        showRasterPixelProbe();
+    }
+
+    /** Remove the active raster and every interaction tied to it. */
+    function clear() {
+        if (rasterStyleCommitTimeout !== null) {
+            window.clearTimeout(rasterStyleCommitTimeout);
+            rasterStyleCommitTimeout = null;
+        }
+        rasterLayerController.clear();
+        pixelProbeController.clear();
+        pixelProbeClientPosition = null;
+        rasterPixelProbeLabel = "";
+        rasterStyleControls.hidden = true;
+        rasterPixelProbe.hidden = true;
+    }
+
+    /** Remove the active raster and restore the default appearance. */
+    function reset() {
+        clear();
+        resetRasterStyle();
+    }
+
+    /** Publish and display one selected Catalog raster. */
+    async function show(item) {
+        const publishedRaster = await rasterLayerController.show(item);
+        if (publishedRaster !== null) {
+            rasterPixelProbeLabel = getCatalogRasterBasename(item);
+            rasterStyleControls.hidden = false;
+            pixelProbeController.activate(item);
+        }
+        return publishedRaster;
+    }
+
+    for (const input of Object.values(rasterStyleInputs)) {
+        input.addEventListener("input", () => {
+            if (input.type === "color") {
+                rasterPalette.value = "custom";
+            }
+            scheduleRasterStyleCommit();
+        });
+        input.addEventListener("change", commitRasterStyle);
+    }
+    rasterPalette.addEventListener("change", () => {
+        if (rasterPalette.value === "custom") {
+            return;
+        }
+        const candidate = validateRasterStyleControls();
+        if (candidate === null) {
+            rasterPalette.value = "custom";
+            return;
+        }
+        setRasterStyleControls(
+            applyRasterColorPalette(
+                candidate.style,
+                rasterPalette.value
+            ),
+            rasterPalette.value
+        );
+        commitRasterStyle();
+    });
+    resetRasterStyleButton.addEventListener("click", () => {
+        resetRasterStyle();
+        commitRasterStyle();
+    });
+    leafletMap
+        .getContainer()
+        .addEventListener("pointermove", (pointerEvent) => {
+            if (rasterLayerController.activeLayer !== null) {
+                pixelProbeClientPosition = {
+                    x: pointerEvent.clientX,
+                    y: pointerEvent.clientY
+                };
+                positionRasterPixelProbe();
+            }
+        });
+    leafletMap.on("mousemove", (mapEvent) => {
+        if (rasterLayerController.activeLayer === null) {
+            return;
+        }
+        const wrappedPosition = mapEvent.latlng.wrap();
+        const point = {
+            longitude: wrappedPosition.lng,
+            latitude: wrappedPosition.lat
+        };
+        if (rasterPixelProbe.hidden) {
+            setRasterPixelProbeContent(
+                `Lon ${point.longitude.toFixed(5)} · ` +
+                `Lat ${point.latitude.toFixed(5)}\nPixel: Reading…`
+            );
+            showRasterPixelProbe();
+        }
+        pixelProbeController.move(point);
+    });
+    leafletMap.getContainer().addEventListener("mouseleave", () => {
+        pixelProbeController.cancel();
+        pixelProbeClientPosition = null;
+        rasterPixelProbe.hidden = true;
+    });
+
+    resetRasterStyle();
+    return {
+        clear,
+        reset,
+        show,
+        get isDisplayed() {
+            return rasterLayerController.activeLayer !== null;
+        }
+    };
+}
+
+/**
  * Connects Catalog search, progressive loading, selection, and refresh controls.
  *
  * @param {AppGlobalConfiguration} appGlobalConfiguration Application settings.
@@ -421,32 +814,10 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
         leafletMap,
         createCatalogFootprintLayer
     );
-    const rasterLayerController = new CatalogRasterLayerController(
+    const rasterVisualization = initializeRasterVisualization(
+        appGlobalConfiguration,
         leafletMap,
-        publishCatalogRaster,
-        (publishedRaster) => {
-            const [west, south, east, north] = publishedRaster.bbox;
-            const rasterLayer = L.tileLayer.wms(
-                appGlobalConfiguration.wmsUrl,
-                {
-                    layers: publishedRaster.layerName,
-                    format: "image/png",
-                    transparent: true,
-                    version: "1.3.0",
-                    bounds: [
-                        [south, west],
-                        [north, east]
-                    ]
-                }
-            );
-            rasterLayer.once("tileerror", () => {
-                if (rasterLayerController.activeLayer === rasterLayer) {
-                    catalogLayerStatus.textContent =
-                        "Map tiles could not be rendered.";
-                }
-            });
-            return rasterLayer;
-        }
+        catalogLayerStatus
     );
     const catalogState = {
         collectionsDocument: null,
@@ -455,7 +826,6 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
         selectedButton: null,
         selectedItem: null
     };
-
     /** Apply the scanner-owned visualization decision to the map action. */
     function updateCatalogMapAction(item) {
         const visualization = getRasterVisualization(item);
@@ -472,7 +842,7 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
     /** Clears the selected result, footprint, and inspector together. */
     function clearCatalogSelection() {
         footprintController.clear();
-        rasterLayerController.clear();
+        rasterVisualization.reset();
         catalogState.selectedButton = null;
         catalogState.selectedItem = null;
         updateCatalogMapAction(null);
@@ -548,7 +918,7 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
                     );
                 }
                 if (selectionChanged) {
-                    rasterLayerController.clear();
+                    rasterVisualization.reset();
                 }
                 catalogState.selectedButton = itemButton;
                 catalogState.selectedItem = item;
@@ -780,9 +1150,8 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
             return;
         }
 
-        const rasterIsDisplayed = rasterLayerController.activeLayer !== null;
-        if (rasterIsDisplayed) {
-            rasterLayerController.clear();
+        if (rasterVisualization.isDisplayed) {
+            rasterVisualization.clear();
             catalogLayerToggle.textContent = "View on map";
             catalogLayerStatus.textContent = "Raster removed from the map.";
             return;
@@ -793,7 +1162,7 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
         catalogLayerToggle.textContent = "Adding to map…";
         catalogLayerStatus.textContent = "Preparing the selected raster.";
         try {
-            const publishedRaster = await rasterLayerController.show(
+            const publishedRaster = await rasterVisualization.show(
                 selectedItem
             );
             if (
@@ -803,7 +1172,8 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
                 return;
             }
             catalogLayerToggle.textContent = "Remove from map";
-            catalogLayerStatus.textContent = "Raster displayed on the map.";
+            catalogLayerStatus.textContent =
+                "Raster displayed. Hover over the map to inspect pixels.";
         } catch (renderingError) {
             if (catalogState.selectedItem === selectedItem) {
                 catalogLayerToggle.textContent = "View on map";

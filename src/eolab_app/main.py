@@ -1,7 +1,8 @@
 """Create the EOLab FastAPI application and serve its browser assets."""
 
 import asyncio
-
+import math
+import re
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -12,10 +13,14 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.staticfiles import StaticFiles
 
 from eolab_app.rendering import (
+    CatalogPixelRequest,
     CatalogRasterRequest,
     PublishedRaster,
     PublishedRasterRegistry,
+    RASTER_PIXEL_READ_CONCURRENCY,
+    RasterPixel,
     publish_catalog_raster,
+    sample_catalog_raster_pixel,
     update_catalog_raster_assessment,
 )
 from eolab_app.settings import APPLICATION_VERSION_PATH, load_settings
@@ -72,6 +77,58 @@ PUBLIC_WMS_QUERY_PARAMETERS = {
         "width",
     },
 }
+RASTER_STYLE_ENVIRONMENT_KEYS = frozenset(
+    {"min", "med", "max", "cmin", "cmed", "cmax"}
+)
+RASTER_STYLE_COLOR_PATTERN = re.compile(r"#[0-9a-fA-F]{6}")
+RASTER_STYLE_ENVIRONMENT_ERROR = (
+    "env must define ordered finite min, med, and max values plus cmin, "
+    "cmed, and cmax six-digit hex colors"
+)
+
+
+def _validate_raster_style_environment(environment: str) -> None:
+    """Validate the six substitutions consumed by the dynamic raster SLD.
+
+    Args:
+        environment: Untrusted WMS ``env`` query value.
+
+    Raises:
+        HTTPException: If the value is not exactly the six finite, ordered
+            threshold and color assignments used by EOLab's raster style.
+    """
+    invalid_environment = HTTPException(
+        status_code=400,
+        detail=RASTER_STYLE_ENVIRONMENT_ERROR,
+    )
+    fields = environment.split(";")
+    if len(environment) > 256 or len(fields) != 6:
+        raise invalid_environment
+
+    assignments = {}
+    for field in fields:
+        name, separator, value = field.partition(":")
+        if separator == "" or name in assignments:
+            raise invalid_environment
+        assignments[name] = value
+    if assignments.keys() != RASTER_STYLE_ENVIRONMENT_KEYS:
+        raise invalid_environment
+
+    try:
+        thresholds = tuple(
+            float(assignments[name]) for name in ("min", "med", "max")
+        )
+    except ValueError as error:
+        raise invalid_environment from error
+    if not (
+        all(math.isfinite(value) for value in thresholds)
+        and thresholds[0] < thresholds[1] < thresholds[2]
+        and all(
+            RASTER_STYLE_COLOR_PATTERN.fullmatch(assignments[name])
+            for name in ("cmin", "cmed", "cmax")
+        )
+    ):
+        raise invalid_environment
 
 
 def _validated_public_wms_query(
@@ -149,6 +206,8 @@ def _validated_public_wms_query(
                     "or text/plain"
                 ),
             )
+    if "env" in normalized_query:
+        _validate_raster_style_environment(normalized_query["env"])
     layer_name = None
     if operation == "getmap":
         layer_name = normalized_query.get("layers")
@@ -257,6 +316,9 @@ def create_app(
         ),
     )
     raster_publish_lock = asyncio.Lock()
+    raster_pixel_read_semaphore = asyncio.Semaphore(
+        RASTER_PIXEL_READ_CONCURRENCY
+    )
     published_rasters = PublishedRasterRegistry()
 
     @asynccontextmanager
@@ -368,6 +430,21 @@ def create_app(
                 app_global_configuration.geoserver_internal_url,
                 published_rasters,
             )
+
+    @application.post(
+        "/api/rendering/pixels",
+        response_model=RasterPixel,
+        tags=["rendering"],
+    )
+    async def sample_raster_pixel(
+        request: CatalogPixelRequest,
+    ) -> RasterPixel:
+        """Read one pixel from the selected published raster."""
+        return await sample_catalog_raster_pixel(
+            request,
+            published_rasters,
+            raster_pixel_read_semaphore,
+        )
 
     @application.api_route(
         "/stac",
