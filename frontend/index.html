@@ -41,14 +41,8 @@
           <a id="wms-capabilities-link" target="_blank" rel="noreferrer" hidden>Capabilities</a>
         </div>
 
-        <nav class="panel-tabs" aria-label="Workspace sections" role="tablist">
-          <button class="tab-button is-active" type="button" role="tab" aria-selected="true" data-panel="catalog">Catalog</button>
-          <button class="tab-button" type="button" role="tab" aria-selected="false" data-panel="processing">Processing</button>
-          <button class="tab-button" type="button" role="tab" aria-selected="false" data-panel="runs">Runs</button>
-        </nav>
-
         <div class="panel-content">
-          <section class="tab-panel is-active" id="panel-catalog" role="tabpanel">
+          <section class="catalog-panel">
             <div class="catalog-heading">
               <div>
                 <p class="section-label">Data discovery</p>
@@ -150,32 +144,6 @@
                   aria-live="polite"
                 ></p>
               </aside>
-            </div>
-          </section>
-
-          <section class="tab-panel" id="panel-processing" role="tabpanel" hidden>
-            <p class="section-label">Reusable computation</p>
-            <h2>Processing</h2>
-            <p class="section-copy">EOLab Functions and Jobs are intentionally outside this bootstrap milestone.</p>
-            <div class="empty-state">
-              <span class="empty-state-mark" aria-hidden="true">02</span>
-              <div>
-                <strong>Designed, not yet connected</strong>
-                <p>Future workflows will resolve catalog inputs, estimate work, and register derived outputs.</p>
-              </div>
-            </div>
-          </section>
-
-          <section class="tab-panel" id="panel-runs" role="tabpanel" hidden>
-            <p class="section-label">Execution history</p>
-            <h2>Runs</h2>
-            <p class="section-copy">Run status, logs, metrics, and provenance will appear here.</p>
-            <div class="empty-state">
-              <span class="empty-state-mark" aria-hidden="true">03</span>
-              <div>
-                <strong>No execution service yet</strong>
-                <p>The initial deployment stays focused on a reliable application and viewer foundation.</p>
-              </div>
             </div>
           </section>
         </div>

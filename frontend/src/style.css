@@ -181,8 +181,7 @@ h5 {
 }
 
 .subtitle,
-.section-copy,
-.empty-state p {
+.section-copy {
   color: var(--text-2);
   line-height: 1.55;
 }
@@ -247,46 +246,6 @@ h5 {
   display: none;
 }
 
-.panel-tabs {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  padding: 10px 14px 0;
-  border-bottom: 1px solid var(--border-3);
-}
-
-.tab-button {
-  position: relative;
-  cursor: pointer;
-  border: 0;
-  background: transparent;
-  padding: 11px 8px 13px;
-  color: var(--text-3);
-  font-size: 0.8rem;
-  font-weight: 650;
-}
-
-.tab-button::after {
-  position: absolute;
-  right: 12px;
-  bottom: -1px;
-  left: 12px;
-  height: 2px;
-  content: "";
-  background: transparent;
-}
-
-.tab-button:hover {
-  color: var(--text-1);
-}
-
-.tab-button.is-active {
-  color: var(--brand-hover);
-}
-
-.tab-button.is-active::after {
-  background: var(--brand);
-}
-
 .panel-content {
   min-height: 0;
   flex: 1;
@@ -294,18 +253,10 @@ h5 {
   padding: 25px 24px;
 }
 
-.tab-panel {
-  animation: panel-in 160ms ease-out;
-}
-
-.tab-panel.is-active {
+.catalog-panel {
   height: 100%;
   min-height: 0;
   overflow-y: auto;
-}
-
-.tab-panel[hidden] {
-  display: none;
 }
 
 .section-copy {
@@ -759,40 +710,6 @@ h5 {
   font-size: 0.8rem;
 }
 
-.empty-state {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 14px;
-  padding: 17px;
-  border: 1px solid var(--border-2);
-  border-radius: var(--radius);
-  background: var(--surface-3);
-}
-
-.empty-state-mark {
-  display: grid;
-  width: 34px;
-  height: 34px;
-  place-items: center;
-  border: 1px solid rgb(0 122 194 / 35%);
-  border-radius: 50%;
-  background: #d6efff;
-  color: var(--brand-hover);
-  font-size: 0.7rem;
-  font-weight: 700;
-}
-
-.empty-state strong {
-  display: block;
-  margin: 1px 0 6px;
-  font-size: 0.88rem;
-}
-
-.empty-state p {
-  margin-bottom: 0;
-  font-size: 0.8rem;
-}
-
 .panel-footer {
   display: flex;
   justify-content: space-between;
@@ -847,18 +764,6 @@ h5 {
 
 .control-panel.is-collapsed ~ .map-position {
   right: 20px;
-}
-
-@keyframes panel-in {
-  from {
-    transform: translateY(4px);
-    opacity: 0;
-  }
-
-  to {
-    transform: translateY(0);
-    opacity: 1;
-  }
 }
 
 @media (max-width: 1024px) {
