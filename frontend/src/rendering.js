@@ -277,6 +277,17 @@ export async function sampleCatalogRasterPixel(
 }
 
 /**
+ * Read the display basename from a scanner-owned GeoTIFF Asset URL.
+ *
+ * @param {Object} item Selected mounted GeoTIFF STAC Item.
+ * @return {string} Decoded raster filename, including its extension.
+ */
+export function getCatalogRasterBasename(item) {
+    const pathname = new URL(item.assets.data.href).pathname;
+    return decodeURIComponent(pathname.slice(pathname.lastIndexOf("/") + 1));
+}
+
+/**
  * Position the pixel readout beside the pointer without viewport overflow.
  *
  * @param {{x: number, y: number}} pointer Browser viewport position.

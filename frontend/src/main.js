@@ -19,6 +19,7 @@ import {
     CatalogRasterLayerController,
     DEFAULT_RASTER_STYLE,
     formatRasterPixelValue,
+    getCatalogRasterBasename,
     getRasterPixelProbePosition,
     loadWmsCapabilities,
     RASTER_COLOR_PALETTES,
@@ -430,7 +431,14 @@ function initializeRasterVisualization(
         "#reset-raster-style"
     );
     const rasterPixelProbe = document.querySelector("#raster-pixel-probe");
+    const rasterPixelProbeName = document.querySelector(
+        "#raster-pixel-probe-name"
+    );
+    const rasterPixelProbeReading = document.querySelector(
+        "#raster-pixel-probe-reading"
+    );
     let rasterStyle = { ...DEFAULT_RASTER_STYLE };
+    let rasterPixelProbeLabel = "";
     let pixelProbeClientPosition = null;
     let pixelProbeSize = { width: 0, height: 0 };
     let rasterStyleCommitTimeout = null;
@@ -621,6 +629,13 @@ function initializeRasterVisualization(
         positionRasterPixelProbe();
     }
 
+    /** Replace the filename and sampled detail shown in the pointer readout. */
+    function setRasterPixelProbeContent(detail) {
+        rasterPixelProbeName.textContent = rasterPixelProbeLabel;
+        rasterPixelProbeName.title = rasterPixelProbeLabel;
+        rasterPixelProbeReading.textContent = detail;
+    }
+
     /** Display one current pixel response beside the pointer. */
     function renderRasterPixel(pixel, point) {
         let pixelValue = "Outside raster";
@@ -629,18 +644,20 @@ function initializeRasterVisualization(
                 ? "No data"
                 : formatRasterPixelValue(pixel.value);
         }
-        rasterPixelProbe.textContent =
+        setRasterPixelProbeContent(
             `Lon ${point.longitude.toFixed(5)} · ` +
-            `Lat ${point.latitude.toFixed(5)}\nPixel: ${pixelValue}`;
+            `Lat ${point.latitude.toFixed(5)}\nPixel: ${pixelValue}`
+        );
         showRasterPixelProbe();
     }
 
     /** Report a current pixel request failure without affecting the layer. */
     function renderRasterPixelError(error, point) {
-        rasterPixelProbe.textContent =
+        setRasterPixelProbeContent(
             `Lon ${point.longitude.toFixed(5)} · ` +
             `Lat ${point.latitude.toFixed(5)}\nPixel unavailable: ` +
-            error.message;
+            error.message
+        );
         showRasterPixelProbe();
     }
 
@@ -653,6 +670,7 @@ function initializeRasterVisualization(
         rasterLayerController.clear();
         pixelProbeController.clear();
         pixelProbeClientPosition = null;
+        rasterPixelProbeLabel = "";
         rasterStyleControls.hidden = true;
         rasterPixelProbe.hidden = true;
     }
@@ -667,6 +685,7 @@ function initializeRasterVisualization(
     async function show(item) {
         const publishedRaster = await rasterLayerController.show(item);
         if (publishedRaster !== null) {
+            rasterPixelProbeLabel = getCatalogRasterBasename(item);
             rasterStyleControls.hidden = false;
             pixelProbeController.activate(item);
         }
@@ -725,9 +744,10 @@ function initializeRasterVisualization(
             latitude: wrappedPosition.lat
         };
         if (rasterPixelProbe.hidden) {
-            rasterPixelProbe.textContent =
+            setRasterPixelProbeContent(
                 `Lon ${point.longitude.toFixed(5)} · ` +
-                `Lat ${point.latitude.toFixed(5)}\nPixel: Reading…`;
+                `Lat ${point.latitude.toFixed(5)}\nPixel: Reading…`
+            );
             showRasterPixelProbe();
         }
         pixelProbeController.move(point);

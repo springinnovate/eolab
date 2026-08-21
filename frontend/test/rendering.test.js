@@ -8,6 +8,7 @@ import {
   CatalogRasterLayerController,
   DEFAULT_RASTER_STYLE,
   formatRasterPixelValue,
+  getCatalogRasterBasename,
   getRasterPixelProbePosition,
   loadWmsCapabilities,
   RasterPixelProbeController,
@@ -19,6 +20,11 @@ import {
 const MOUNTED_GEOTIFF_ITEM = Object.freeze({
   collection: "eolab-mounted-geotiffs",
   id: "geotiff-0123456789abcdef01234567",
+  assets: {
+    data: {
+      href: "file:///scan-source/folder/annual%20temperature.tif",
+    },
+  },
 });
 
 test("raster style serializes the dynamic SLD contract", () => {
@@ -371,6 +377,13 @@ test("pixel probe formats small values with four significant digits", () => {
   assert.equal(formatRasterPixelValue(0.0000123456), "1.235e-5");
   assert.equal(formatRasterPixelValue(-0.0001), "-1.000e-4");
   assert.equal(formatRasterPixelValue(0), "0");
+});
+
+test("pixel probe labels the selected raster by its decoded basename", () => {
+  assert.equal(
+    getCatalogRasterBasename(MOUNTED_GEOTIFF_ITEM),
+    "annual temperature.tif",
+  );
 });
 
 function createFakeClock() {
