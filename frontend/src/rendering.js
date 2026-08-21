@@ -66,12 +66,6 @@ export async function publishCatalogRaster(
     }
 
     const publishedRaster = await response.json();
-    if (
-        typeof publishedRaster.layerName !== "string" ||
-        publishedRaster.layerName === ""
-    ) {
-        throw new Error("Raster publication returned no WMS layer name");
-    }
     const bbox = publishedRaster.bbox;
     if (
         !Array.isArray(bbox) ||

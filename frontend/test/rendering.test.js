@@ -111,19 +111,6 @@ test("publishCatalogRaster reports the backend detail", async () => {
   );
 });
 
-test("publishCatalogRaster requires a WMS layer name", async () => {
-  await assert.rejects(
-    publishCatalogRaster(
-      MOUNTED_GEOTIFF_ITEM,
-      async () => new Response(
-        JSON.stringify({ bbox: [-123, 48, -122, 49] }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      ),
-    ),
-    /no WMS layer name/,
-  );
-});
-
 test("publishCatalogRaster requires a valid bounding box", async () => {
   await assert.rejects(
     publishCatalogRaster(
