@@ -143,29 +143,20 @@ export function formatScanTiming(timing, workerCount, writerCount, batchSize) {
 }
 
 /**
- * Formats the position and total from a STAC ItemCollection.
+ * Formats the matched total from a STAC ItemCollection.
  *
  * @param {Object} itemCollection STAC ItemCollection response.
- * @param {number} displayedItemCount Number of Items currently rendered.
  * @param {boolean} isFiltered Whether the Item Search includes a filter.
- * @return {string} Human-readable rendered and matched Item counts.
+ * @return {string} Human-readable matched Item count.
  */
-export function formatCatalogItemCount(
-    itemCollection,
-    displayedItemCount,
-    isFiltered
-) {
+export function formatCatalogItemCount(itemCollection, isFiltered) {
     const matchedItemCount = itemCollection.numberMatched;
     const qualifier = isFiltered ? "matching " : "";
     const itemNoun = matchedItemCount === 1 ? "Item" : "Items";
-    if (displayedItemCount === 0) {
-        return `0 ${qualifier}${itemNoun}`;
-    }
-
     const estimatedLabel = itemCollection.numberMatchedEstimated
         ? " (est.)"
         : "";
-    return `Showing ${displayedItemCount.toLocaleString()} of ${matchedItemCount.toLocaleString()}${estimatedLabel} ${qualifier}${itemNoun}`;
+    return `${matchedItemCount.toLocaleString()}${estimatedLabel} ${qualifier}${itemNoun}`;
 }
 
 /**

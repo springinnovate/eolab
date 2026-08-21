@@ -187,40 +187,36 @@ test("CatalogSearchClient ignores a superseded response", async () => {
   assert.equal(pendingResponses[0].options.signal.aborted, true);
 });
 
-test("formatCatalogItemCount displays loaded and matched totals", () => {
+test("formatCatalogItemCount displays exact and estimated totals", () => {
   const itemCollection = {
     features: Array.from({ length: 20 }),
     numberMatched: 106967,
   };
 
   assert.equal(
-    formatCatalogItemCount(itemCollection, 20, false),
-    "Showing 20 of 106,967 Items",
+    formatCatalogItemCount(itemCollection, false),
+    "106,967 Items",
   );
   itemCollection.numberMatchedEstimated = true;
   assert.equal(
-    formatCatalogItemCount(itemCollection, 20, false),
-    "Showing 20 of 106,967 (est.) Items",
-  );
-  assert.equal(
-    formatCatalogItemCount(
-      { features: Array.from({ length: 5 }), numberMatched: 25 },
-      25,
-      false,
-    ),
-    "Showing 25 of 25 Items",
+    formatCatalogItemCount(itemCollection, false),
+    "106,967 (est.) Items",
   );
 });
 
 test("formatCatalogItemCount handles empty, singular, and filtered results", () => {
-  assert.equal(formatCatalogItemCount(emptyItemCollection, 0, false), "0 Items");
+  assert.equal(formatCatalogItemCount(emptyItemCollection, false), "0 Items");
   assert.equal(
-    formatCatalogItemCount({ features: [{}], numberMatched: 1 }, 1, false),
-    "Showing 1 of 1 Item",
+    formatCatalogItemCount({ features: [{}], numberMatched: 1 }, false),
+    "1 Item",
   );
   assert.equal(
-    formatCatalogItemCount({ features: [{}], numberMatched: 1 }, 1, true),
-    "Showing 1 of 1 matching Item",
+    formatCatalogItemCount({ features: [{}], numberMatched: 1 }, true),
+    "1 matching Item",
+  );
+  assert.equal(
+    formatCatalogItemCount({ features: [], numberMatched: 534 }, true),
+    "534 matching Items",
   );
 });
 

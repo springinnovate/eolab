@@ -450,7 +450,6 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
     );
     const catalogState = {
         collectionsDocument: null,
-        loadedItemCount: 0,
         searchSequence: 0,
         searchText: "",
         selectedButton: null,
@@ -493,27 +492,26 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
      */
     function appendCatalogPage(itemCollection, fitMap) {
         const returnedItemCount = itemCollection.features.length;
-        catalogState.loadedItemCount += returnedItemCount;
-        const isFiltered = catalogState.searchText.trim() !== "";
-        const itemCountLabel = formatCatalogItemCount(
-            itemCollection,
-            catalogState.loadedItemCount,
-            isFiltered
-        );
-        const collections = catalogState.collectionsDocument.collections;
-        const collectionLabel =
-            collections.length === 1
-                ? (collections[0].title ?? collections[0].id)
-                : `${collections.length} collections`;
-
-        systemStateElement.classList.add("is-connected");
-        systemStateTextElement.textContent = `Catalog connected · ${itemCountLabel}`;
-        catalogMessageElement.textContent = isFiltered
-            ? "Matching records were returned from the complete STAC catalog."
-            : "Records were returned from the deployed STAC catalog.";
-        catalogSummaryElement.textContent = `${collectionLabel} · ${itemCountLabel}`;
-
         if (fitMap) {
+            const isFiltered = catalogState.searchText.trim() !== "";
+            const itemCountLabel = formatCatalogItemCount(
+                itemCollection,
+                isFiltered
+            );
+            const collections = catalogState.collectionsDocument.collections;
+            const collectionLabel =
+                collections.length === 1
+                    ? (collections[0].title ?? collections[0].id)
+                    : `${collections.length} collections`;
+            systemStateElement.classList.add("is-connected");
+            systemStateTextElement.textContent =
+                `Catalog connected · ${itemCountLabel}`;
+            catalogMessageElement.textContent = isFiltered
+                ? "Matching records were returned from the complete STAC catalog."
+                : "Records were returned from the deployed STAC catalog.";
+            catalogSummaryElement.textContent =
+                `${collectionLabel} · ${itemCountLabel}`;
+
             const pageBounds = L.geoJSON(itemCollection).getBounds();
             if (pageBounds.isValid()) {
                 leafletMap.fitBounds(pageBounds.pad(0.15), { maxZoom: 8 });
@@ -581,7 +579,7 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
             catalogResultsElement.append(itemButton);
         }
 
-        if (catalogState.loadedItemCount === 0) {
+        if (catalogResultsElement.childElementCount === 0) {
             const emptyCatalogMessage = document.createElement("p");
             emptyCatalogMessage.className = "catalog-empty";
             emptyCatalogMessage.textContent = catalogState.searchText.trim()
@@ -592,8 +590,7 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
 
         if (!fitMap) {
             streamAnnouncementElement.textContent =
-                `${returnedItemCount.toLocaleString()} additional Items loaded. ` +
-                `${catalogState.loadedItemCount.toLocaleString()} Items shown.`;
+                `${returnedItemCount.toLocaleString()} additional Items loaded.`;
         }
     }
 
@@ -641,7 +638,6 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
     async function loadCatalog(reloadCollections = false) {
         const searchSequence = ++catalogState.searchSequence;
         catalogState.searchText = catalogSearchInput.value;
-        catalogState.loadedItemCount = 0;
         pageObserver.unobserve(loadSentinelElement);
         retryPageButton.hidden = true;
         clearCatalogSelection();
