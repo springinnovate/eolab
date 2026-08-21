@@ -487,12 +487,12 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
      * Appends one successful Item Search page to the active result stream.
      *
      * @param {Object} itemCollection STAC ItemCollection response.
-     * @param {boolean} fitMap Whether to fit the map to this page.
+     * @param {boolean} isInitialPage Whether this starts a new result stream.
      * @return {void}
      */
-    function appendCatalogPage(itemCollection, fitMap) {
+    function appendCatalogPage(itemCollection, isInitialPage) {
         const returnedItemCount = itemCollection.features.length;
-        if (fitMap) {
+        if (isInitialPage) {
             const isFiltered = catalogState.searchText.trim() !== "";
             const itemCountLabel = formatCatalogItemCount(
                 itemCollection,
@@ -588,7 +588,7 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
             catalogResultsElement.append(emptyCatalogMessage);
         }
 
-        if (!fitMap) {
+        if (!isInitialPage) {
             streamAnnouncementElement.textContent =
                 `${returnedItemCount.toLocaleString()} additional Items loaded.`;
         }
