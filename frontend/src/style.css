@@ -638,6 +638,24 @@ h5 {
   color: var(--text-3);
 }
 
+.catalog-search small {
+  color: var(--text-3);
+  font-weight: 400;
+}
+
+.catalog-search input[aria-invalid="true"] {
+  border-color: var(--status-danger);
+}
+
+.catalog-search-error {
+  color: var(--status-danger);
+  font-weight: 500;
+}
+
+.catalog-search-error:empty {
+  display: none;
+}
+
 .catalog-stream-status {
   display: flex;
   align-items: center;

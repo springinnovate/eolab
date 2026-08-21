@@ -3,10 +3,12 @@ import test from "node:test";
 
 import {
   buildCatalogItemDetails,
+  buildCatalogFilter,
   buildSubstringFilter,
   CatalogFootprintController,
   CatalogResultStream,
   CatalogSearchClient,
+  CatalogSearchSyntaxError,
   createDebouncedAction,
   findPaginationLink,
   formatCatalogItemCount,
@@ -27,6 +29,21 @@ const expectedSubstringProperties = [
   "eolab_datetime_text",
   "eolab_end_datetime_text",
 ];
+const cogMediaType =
+  "image/tiff; application=geotiff; profile=cloud-optimized";
+
+function expectedSubstringFilter(searchText) {
+  return {
+    op: "or",
+    args: expectedSubstringProperties.map((propertyName) => ({
+      op: "like",
+      args: [
+        { op: "casei", args: [{ property: propertyName }] },
+        { op: "casei", args: [`%${searchText}%`] },
+      ],
+    })),
+  };
+}
 
 function itemCollectionResponse(
   itemCollection = emptyItemCollection,
@@ -74,6 +91,61 @@ test("buildSubstringFilter treats partial and invalid dates as literal text", ()
   );
 });
 
+test("buildCatalogFilter combines literal text and COG metadata", () => {
+  const combinedFilter = {
+    op: "and",
+    args: [
+      expectedSubstringFilter("barley"),
+      {
+        op: "=",
+        args: [
+          { property: "eolab_data_asset_media_type" },
+          cogMediaType,
+        ],
+      },
+    ],
+  };
+  assert.deepEqual(buildCatalogFilter(" barley FORMAT:COG "), combinedFilter);
+  assert.deepEqual(buildCatalogFilter("format:cog barley"), combinedFilter);
+  assert.deepEqual(buildCatalogFilter("format:cog"), {
+    op: "=",
+    args: [
+      { property: "eolab_data_asset_media_type" },
+      cogMediaType,
+    ],
+  });
+  assert.deepEqual(
+    buildCatalogFilter("my_cog_filename.tif"),
+    expectedSubstringFilter("my\\_cog\\_filename.tif"),
+  );
+  assert.deepEqual(
+    buildCatalogFilter("2025-01-01T12:30"),
+    expectedSubstringFilter("2025-01-01T12:30"),
+  );
+  assert.deepEqual(
+    buildCatalogFilter("Z:\\bigbucket\\barley.tif"),
+    expectedSubstringFilter("Z:\\\\bigbucket\\\\barley.tif"),
+  );
+  assert.equal(buildCatalogFilter("  "), null);
+});
+
+test("buildCatalogFilter rejects syntax outside the field contract", () => {
+  const invalidSearches = [
+    "format:",
+    "format:geotiff",
+    "format:cog format:cog",
+    "datatype:cog",
+    "collection:rasters",
+    "barley & format:cog",
+  ];
+  for (const invalidSearch of invalidSearches) {
+    assert.throws(
+      () => buildCatalogFilter(invalidSearch),
+      CatalogSearchSyntaxError,
+    );
+  }
+});
+
 test("CatalogSearchClient sends a standard STAC CQL2 substring search", async () => {
   let capturedRequest;
   const client = new CatalogSearchClient(
@@ -102,6 +174,45 @@ test("CatalogSearchClient sends a standard STAC CQL2 substring search", async ()
       })),
     },
   });
+});
+
+test("CatalogSearchClient sends the parsed COG filter", async () => {
+  let capturedRequest;
+  const client = new CatalogSearchClient("/stac", async (url, options) => {
+    capturedRequest = { url, options };
+    return itemCollectionResponse();
+  });
+
+  await client.search("barley format:cog");
+
+  assert.equal(capturedRequest.url, "/stac/search");
+  assert.deepEqual(JSON.parse(capturedRequest.options.body).filter, {
+    op: "and",
+    args: [
+      expectedSubstringFilter("barley"),
+      {
+        op: "=",
+        args: [
+          { property: "eolab_data_asset_media_type" },
+          cogMediaType,
+        ],
+      },
+    ],
+  });
+});
+
+test("CatalogSearchClient rejects invalid syntax without a request", () => {
+  let requestCount = 0;
+  const client = new CatalogSearchClient("/stac", async () => {
+    requestCount += 1;
+    return itemCollectionResponse();
+  });
+
+  assert.throws(
+    () => client.search("format:geotiff"),
+    CatalogSearchSyntaxError,
+  );
+  assert.equal(requestCount, 0);
 });
 
 test("CatalogSearchClient invokes fetch with the global receiver", async () => {

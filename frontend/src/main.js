@@ -5,6 +5,7 @@ import {
     CatalogFootprintController,
     CatalogResultStream,
     CatalogSearchClient,
+    CatalogSearchSyntaxError,
     createDebouncedAction,
     formatCatalogItemCount,
     formatScanTiming,
@@ -786,6 +787,7 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
         "#catalog-results-scroll"
     );
     const catalogSearchInput = document.querySelector("#catalog-search");
+    const catalogSearchError = document.querySelector("#catalog-search-error");
     const refreshCatalogButton = document.querySelector("#refresh-catalog");
     const streamStatusElement = document.querySelector(
         "#catalog-stream-status"
@@ -1008,6 +1010,8 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
     async function loadCatalog(reloadCollections = false) {
         const searchSequence = ++catalogState.searchSequence;
         catalogState.searchText = catalogSearchInput.value;
+        catalogSearchInput.removeAttribute("aria-invalid");
+        catalogSearchError.textContent = "";
         pageObserver.unobserve(loadSentinelElement);
         retryPageButton.hidden = true;
         clearCatalogSelection();
@@ -1041,6 +1045,17 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
             observeNextCatalogPage();
         } catch (catalogError) {
             if (searchSequence !== catalogState.searchSequence) {
+                return;
+            }
+            if (catalogError instanceof CatalogSearchSyntaxError) {
+                catalogSearchInput.setAttribute("aria-invalid", "true");
+                catalogSearchError.textContent = catalogError.message;
+                systemStateTextElement.textContent =
+                    "Catalog search needs correction";
+                catalogMessageElement.textContent =
+                    "Correct the field filter and try again.";
+                catalogSummaryElement.textContent = catalogError.message;
+                streamStatusElement.textContent = "Catalog search was not sent.";
                 return;
             }
             systemStateElement.classList.add("is-warning");
