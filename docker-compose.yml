@@ -150,22 +150,6 @@ services:
         max-size: 10m
         max-file: "3"
 
-  catalog-seed:
-    build:
-      context: .
-      dockerfile: Dockerfile.catalog-seed
-    restart: "no"
-    environment:
-      - "LOAD_SAMPLE_CATALOG=${EOLAB_LOAD_SAMPLE_CATALOG:?EOLAB_LOAD_SAMPLE_CATALOG must be true or false}"
-      - "PGUSER=eolab"
-      - "PGPASSWORD=${EOLAB_DATABASE_PASSWORD:?EOLAB_DATABASE_PASSWORD must be set}"
-      - "PGDATABASE=eolab"
-      - "PGHOST=database"
-      - "PGPORT=5432"
-    depends_on:
-      pgstac-migrate:
-        condition: service_completed_successfully
-
   app:
     build:
       context: .

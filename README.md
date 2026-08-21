@@ -12,8 +12,7 @@ EOLab is an open source platform for Earth observation analysis and visualizatio
    `EOLAB_GEOSERVER_MAX_HEAP_SIZE=4g`, and
    `EOLAB_GEOSERVER_WMS_RENDER_COUNT=2` if Coolify does not list those
    defaulted variables automatically.
-5. Set `EOLAB_LOAD_SAMPLE_CATALOG=true` to load the sample Collection and Items, or set it to `false` to start with an empty catalog. Changing it to `false` later prevents future sample upserts but does not delete existing sample records.
-6. Configure the read-only scan mount and the directories EOLab should search. In the EOLab resource's **Production** environment variables, select **Add** and create these variables:
+5. Configure the read-only scan mount and the directories EOLab should search. In the EOLab resource's **Production** environment variables, select **Add** and create these variables:
 
     ```text
     EOLAB_SCAN_MOUNT_PATH=/mnt/storage/bigbucket
@@ -28,14 +27,14 @@ EOLab is an open source platform for Earth observation analysis and visualizatio
 
     To audit a running container, use `docker exec <container> grep ' /scan-source ' /proc/self/mountinfo`. The mount options immediately after `/scan-source` must begin with `ro`; for NFS, the filesystem options after the `- nfs4 ...` separator should also contain `ro`. Treat this kernel-reported state as authoritative. A `docker inspect` mount entry may still show `Mode: rw` because it describes Docker's bind request rather than a read-only property inherited from the host filesystem.
 
-7. In the project **Configuration**, select **Domains** for the `app` service and enter the public domain with internal port `8000` as `https://eolab.example.com:8000`. Do not attach a domain to the `geoserver` service; EOLab exposes only its restricted WMS route.
-8. In **Advanced**, enable **Include Source Commit in Build**. On Coolify versions that label this setting **Source Commit Availability**, select **Available during build**. EOLab uses `SOURCE_COMMIT` to derive the displayed version from Git tags and the deployed commit.
-9. Set any other desired deployment-specific `EOLAB_*` values listed in `.env.example`.
-10. Open the **Actions** menu in the upper-right corner and select **Deploy**.
+6. In the project **Configuration**, select **Domains** for the `app` service and enter the public domain with internal port `8000` as `https://eolab.example.com:8000`. Do not attach a domain to the `geoserver` service; EOLab exposes only its restricted WMS route.
+7. In **Advanced**, enable **Include Source Commit in Build**. On Coolify versions that label this setting **Source Commit Availability**, select **Available during build**. EOLab uses `SOURCE_COMMIT` to derive the displayed version from Git tags and the deployed commit.
+8. Set any other desired deployment-specific `EOLAB_*` values listed in `.env.example`.
+9. Open the **Actions** menu in the upper-right corner and select **Deploy**.
 
 ## Run with Docker Compose
 
-Copy `.env.example` to `.env`, set the database and two GeoServer passwords, choose `true` or `false` for `EOLAB_LOAD_SAMPLE_CATALOG`, and configure the scan variables described below. To display a Git-derived version locally, replace the `SOURCE_COMMIT` fallback with the full 40-character SHA reported by `git rev-parse HEAD`.
+Copy `.env.example` to `.env`, set the database and two GeoServer passwords, and configure the scan variables described below. To display a Git-derived version locally, replace the `SOURCE_COMMIT` fallback with the full 40-character SHA reported by `git rev-parse HEAD`.
 
 Start the stack with the local port override:
 
@@ -44,6 +43,8 @@ docker compose -f docker-compose.yml -f docker-compose.local.yml up --build --de
 ```
 
 Open `http://localhost:8000`. The local override also makes the GeoServer administration interface available only from the same machine at `http://localhost:8081/geoserver/web/`; sign in as `eolab` with `EOLAB_GEOSERVER_ADMIN_PASSWORD`. Set `EOLAB_HOST_PORT` or `EOLAB_GEOSERVER_HOST_PORT` to use different loopback ports.
+
+EOLab no longer loads a sample Collection during deployment. Upgrading does not remove sample records that an earlier release already stored in the persistent database; deleting those records remains a separate, deliberate database operation.
 
 ## Runtime configuration
 
@@ -57,7 +58,6 @@ Open `http://localhost:8000`. The local override also makes the GeoServer admini
 | `EOLAB_GEOSERVER_CPU_LIMIT`        | `4`                                               | GeoServer container CPU limit                        |
 | `EOLAB_GEOSERVER_MAX_HEAP_SIZE`    | `4g`                                              | Maximum GeoServer Java heap (`m` or `g`)             |
 | `EOLAB_GEOSERVER_WMS_RENDER_COUNT` | `2`                                               | Concurrent GeoServer WMS map renders                 |
-| `EOLAB_LOAD_SAMPLE_CATALOG`        | none                                              | Required `true` or `false` sample-data choice       |
 | `EOLAB_SCAN_MOUNT_PATH`            | none                                              | Required absolute host directory mounted read-only  |
 | `EOLAB_SCAN_PATHS_WITHIN_MOUNT`    | none                                              | Required JSON array of relative directories to scan |
 | `EOLAB_SCAN_DISPLAY_PATH_PREFIX`   | none                                              | Required user-facing root shown for mounted files   |
