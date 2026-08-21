@@ -754,7 +754,7 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
         if (getRasterVisualization(selectedItem) === undefined) {
             catalogMapActionsElement.setAttribute("aria-busy", "true");
             catalogLayerToggle.disabled = true;
-            catalogLayerToggle.textContent = "Assessing…";
+            catalogLayerToggle.textContent = "Assessing...";
             catalogLayerStatus.textContent =
                 "Inspecting the selected raster.";
             try {
