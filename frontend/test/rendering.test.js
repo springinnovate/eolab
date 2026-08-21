@@ -7,6 +7,7 @@ import {
   buildRasterLegend,
   CatalogRasterLayerController,
   DEFAULT_RASTER_STYLE,
+  getRasterPixelProbePosition,
   loadWmsCapabilities,
   RasterPixelProbeController,
   publishCatalogRaster,
@@ -348,6 +349,20 @@ test("RasterPixelProbeController completes one read before sampling the latest p
   ]);
   clock.advanceTo(100);
   assert.deepEqual(requests[1].point, { longitude: 2, latitude: 20 });
+});
+
+test("pixel probe position follows the pointer and flips at viewport edges", () => {
+  const probeSize = { width: 100, height: 40 };
+  const viewport = { width: 500, height: 300 };
+
+  assert.deepEqual(
+    getRasterPixelProbePosition({ x: 100, y: 100 }, probeSize, viewport),
+    { x: 112, y: 112 },
+  );
+  assert.deepEqual(
+    getRasterPixelProbePosition({ x: 490, y: 290 }, probeSize, viewport),
+    { x: 378, y: 238 },
+  );
 });
 
 function createFakeClock() {

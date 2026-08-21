@@ -52,6 +52,8 @@ export const RASTER_COLOR_PALETTES = Object.freeze({
 
 const RASTER_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 export const PIXEL_PROBE_INTERVAL_MILLISECONDS = 100;
+const PIXEL_PROBE_OFFSET_PIXELS = 12;
+const PIXEL_PROBE_VIEWPORT_MARGIN_PIXELS = 8;
 
 function rasterStyleContractError(message, fieldGroup) {
     return Object.assign(new Error(message), { fieldGroup });
@@ -272,6 +274,53 @@ export async function sampleCatalogRasterPixel(
         throw new Error(errorDocument.detail);
     }
     return response.json();
+}
+
+/**
+ * Position the pixel readout beside the pointer without viewport overflow.
+ *
+ * @param {{x: number, y: number}} pointer Browser viewport position.
+ * @param {{width: number, height: number}} probeSize Readout dimensions.
+ * @param {{width: number, height: number}} viewport Viewport dimensions.
+ * @return {{x: number, y: number}} Top-left readout position.
+ */
+export function getRasterPixelProbePosition(pointer, probeSize, viewport) {
+    const maximumX = Math.max(
+        PIXEL_PROBE_VIEWPORT_MARGIN_PIXELS,
+        viewport.width - probeSize.width -
+        PIXEL_PROBE_VIEWPORT_MARGIN_PIXELS
+    );
+    const maximumY = Math.max(
+        PIXEL_PROBE_VIEWPORT_MARGIN_PIXELS,
+        viewport.height - probeSize.height -
+        PIXEL_PROBE_VIEWPORT_MARGIN_PIXELS
+    );
+    const preferredX = pointer.x + PIXEL_PROBE_OFFSET_PIXELS;
+    const preferredY = pointer.y + PIXEL_PROBE_OFFSET_PIXELS;
+    return {
+        x: Math.max(
+            PIXEL_PROBE_VIEWPORT_MARGIN_PIXELS,
+            Math.min(
+                preferredX + probeSize.width +
+                    PIXEL_PROBE_VIEWPORT_MARGIN_PIXELS <= viewport.width
+                    ? preferredX
+                    : pointer.x - probeSize.width -
+                    PIXEL_PROBE_OFFSET_PIXELS,
+                maximumX
+            )
+        ),
+        y: Math.max(
+            PIXEL_PROBE_VIEWPORT_MARGIN_PIXELS,
+            Math.min(
+                preferredY + probeSize.height +
+                    PIXEL_PROBE_VIEWPORT_MARGIN_PIXELS <= viewport.height
+                    ? preferredY
+                    : pointer.y - probeSize.height -
+                    PIXEL_PROBE_OFFSET_PIXELS,
+                maximumY
+            )
+        )
+    };
 }
 
 /** Sample the latest hover position at most every 100 milliseconds. */

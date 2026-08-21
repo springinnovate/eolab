@@ -952,6 +952,8 @@ h5 {
 
 .raster-pixel-probe {
   position: fixed;
+  top: 0;
+  left: 0;
   z-index: 1050;
   max-width: min(310px, calc(100vw - 16px));
   pointer-events: none;
@@ -964,6 +966,7 @@ h5 {
   font: 0.72rem/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   overflow-wrap: anywhere;
   white-space: pre-line;
+  will-change: transform;
 }
 
 .raster-pixel-probe[hidden] {

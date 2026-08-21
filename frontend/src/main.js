@@ -18,6 +18,7 @@ import {
     buildRasterLegend,
     CatalogRasterLayerController,
     DEFAULT_RASTER_STYLE,
+    getRasterPixelProbePosition,
     loadWmsCapabilities,
     RASTER_COLOR_PALETTES,
     RasterPixelProbeController,
@@ -430,6 +431,7 @@ function initializeRasterVisualization(
     const rasterPixelProbe = document.querySelector("#raster-pixel-probe");
     let rasterStyle = { ...DEFAULT_RASTER_STYLE };
     let pixelProbeClientPosition = null;
+    let pixelProbeSize = { width: 0, height: 0 };
     let rasterStyleCommitTimeout = null;
 
     const rasterLayerController = new CatalogRasterLayerController(
@@ -596,27 +598,26 @@ function initializeRasterVisualization(
         setRasterStyleControls(rasterStyle, "blue-yellow-red");
     }
 
-    /** Position the pointer probe without allowing viewport overflow. */
+    /** Move the readout using only cached layout dimensions. */
     function positionRasterPixelProbe() {
-        if (pixelProbeClientPosition === null) {
+        if (pixelProbeClientPosition === null || rasterPixelProbe.hidden) {
             return;
         }
-        const offset = 12;
-        const probeBounds = rasterPixelProbe.getBoundingClientRect();
-        rasterPixelProbe.style.left = `${Math.max(
-            8,
-            Math.min(
-                pixelProbeClientPosition.x + offset,
-                window.innerWidth - probeBounds.width - 8
-            )
-        )}px`;
-        rasterPixelProbe.style.top = `${Math.max(
-            8,
-            Math.min(
-                pixelProbeClientPosition.y + offset,
-                window.innerHeight - probeBounds.height - 8
-            )
-        )}px`;
+        const position = getRasterPixelProbePosition(
+            pixelProbeClientPosition,
+            pixelProbeSize,
+            { width: window.innerWidth, height: window.innerHeight }
+        );
+        rasterPixelProbe.style.transform =
+            `translate3d(${position.x}px, ${position.y}px, 0)`;
+    }
+
+    /** Show and remeasure the readout after its text changes. */
+    function showRasterPixelProbe() {
+        rasterPixelProbe.hidden = false;
+        const bounds = rasterPixelProbe.getBoundingClientRect();
+        pixelProbeSize = { width: bounds.width, height: bounds.height };
+        positionRasterPixelProbe();
     }
 
     /** Display one current pixel response beside the pointer. */
@@ -630,7 +631,7 @@ function initializeRasterVisualization(
         rasterPixelProbe.textContent =
             `Lon ${point.longitude.toFixed(5)} · ` +
             `Lat ${point.latitude.toFixed(5)}\nPixel: ${pixelValue}`;
-        positionRasterPixelProbe();
+        showRasterPixelProbe();
     }
 
     /** Report a current pixel request failure without affecting the layer. */
@@ -639,7 +640,7 @@ function initializeRasterVisualization(
             `Lon ${point.longitude.toFixed(5)} · ` +
             `Lat ${point.latitude.toFixed(5)}\nPixel unavailable: ` +
             error.message;
-        positionRasterPixelProbe();
+        showRasterPixelProbe();
     }
 
     /** Remove the active raster and every interaction tied to it. */
@@ -702,6 +703,17 @@ function initializeRasterVisualization(
         resetRasterStyle();
         commitRasterStyle();
     });
+    leafletMap
+        .getContainer()
+        .addEventListener("pointermove", (pointerEvent) => {
+            if (rasterLayerController.activeLayer !== null) {
+                pixelProbeClientPosition = {
+                    x: pointerEvent.clientX,
+                    y: pointerEvent.clientY
+                };
+                positionRasterPixelProbe();
+            }
+        });
     leafletMap.on("mousemove", (mapEvent) => {
         if (rasterLayerController.activeLayer === null) {
             return;
@@ -711,17 +723,12 @@ function initializeRasterVisualization(
             longitude: wrappedPosition.lng,
             latitude: wrappedPosition.lat
         };
-        pixelProbeClientPosition = {
-            x: mapEvent.originalEvent.clientX,
-            y: mapEvent.originalEvent.clientY
-        };
         if (rasterPixelProbe.hidden) {
             rasterPixelProbe.textContent =
                 `Lon ${point.longitude.toFixed(5)} · ` +
                 `Lat ${point.latitude.toFixed(5)}\nPixel: Reading…`;
-            rasterPixelProbe.hidden = false;
+            showRasterPixelProbe();
         }
-        positionRasterPixelProbe();
         pixelProbeController.move(point);
     });
     leafletMap.getContainer().addEventListener("mouseleave", () => {
