@@ -9,10 +9,11 @@ import {
     formatCatalogItemCount,
     formatScanTiming,
     formatScanStatusSummary,
-    MOUNTED_GEOTIFF_COLLECTION_ID,
+    getRasterVisualization,
     MOUNTED_DATASET_TYPES,
 } from "./catalog.js";
 import {
+    assessCatalogRaster,
     CatalogRasterLayerController,
     loadWmsCapabilities,
     publishCatalogRaster,
@@ -456,15 +457,17 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
         selectedItem: null
     };
 
-    /** Show the map action only for the selected mounted GeoTIFF. */
+    /** Apply the scanner-owned visualization decision to the map action. */
     function updateCatalogMapAction(item) {
-        const canRender =
-            item?.collection === MOUNTED_GEOTIFF_COLLECTION_ID;
-        catalogMapActionsElement.hidden = !canRender;
+        const visualization = getRasterVisualization(item);
+        catalogMapActionsElement.hidden = visualization === null;
         catalogMapActionsElement.setAttribute("aria-busy", "false");
         catalogLayerToggle.disabled = false;
-        catalogLayerToggle.textContent = "View on map";
-        catalogLayerStatus.textContent = "";
+        catalogLayerToggle.hidden = visualization?.eligible === false;
+        catalogLayerToggle.textContent = visualization === undefined
+            ? "Assess for visualization"
+            : "View on map";
+        catalogLayerStatus.textContent = visualization?.reason ?? "";
     }
 
     /** Clears the selected result, footprint, and inspector together. */
@@ -748,6 +751,39 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
     retryPageButton.addEventListener("click", prefetchNextCatalogPage);
     catalogLayerToggle.addEventListener("click", async () => {
         const selectedItem = catalogState.selectedItem;
+        if (getRasterVisualization(selectedItem) === undefined) {
+            catalogMapActionsElement.setAttribute("aria-busy", "true");
+            catalogLayerToggle.disabled = true;
+            catalogLayerToggle.textContent = "Assessing...";
+            catalogLayerStatus.textContent =
+                "Inspecting the selected raster.";
+            try {
+                const assessedItem = await assessCatalogRaster(selectedItem);
+                if (catalogState.selectedItem !== selectedItem) {
+                    return;
+                }
+                Object.assign(selectedItem, assessedItem);
+                renderCatalogItemInspector(
+                    selectedItem,
+                    catalogState.collectionsDocument.collections,
+                    appGlobalConfiguration.scanDisplayPathPrefix
+                );
+                updateCatalogMapAction(selectedItem);
+            } catch (assessmentError) {
+                if (catalogState.selectedItem === selectedItem) {
+                    catalogLayerToggle.textContent =
+                        "Assess for visualization";
+                    catalogLayerStatus.textContent = assessmentError.message;
+                }
+            } finally {
+                if (catalogState.selectedItem === selectedItem) {
+                    catalogMapActionsElement.setAttribute("aria-busy", "false");
+                    catalogLayerToggle.disabled = false;
+                }
+            }
+            return;
+        }
+
         const rasterIsDisplayed = rasterLayerController.activeLayer !== null;
         if (rasterIsDisplayed) {
             rasterLayerController.clear();

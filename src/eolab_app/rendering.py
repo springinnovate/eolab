@@ -1,22 +1,29 @@
 """Publish cataloged GeoTIFFs through the internal GeoServer."""
 
+import asyncio
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import unquote, urlsplit
 
 import httpx2
+import rasterio
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from eolab_app.geotiff import (
-    GEOTIFF_MEDIA_TYPE,
+    GEOTIFF_MEDIA_TYPES,
     MOUNTED_GEOTIFF_COLLECTION_ID,
     MOUNTED_GEOTIFF_ITEM_ID_PATTERN,
+    RENDERING_METADATA_KEY,
+    RENDERING_POLICY,
+    build_stac_item as build_geotiff_stac_item,
+    inspect_geotiff_renderability,
 )
 
 
 GEOSERVER_WORKSPACE_NAME = "eolab"
 GEOSERVER_RASTER_STYLE_NAME = "dynamic-raster"
+SourceSignature = tuple[int, int, int, int, int]
 
 
 class CatalogRasterRequest(BaseModel):
@@ -41,12 +48,109 @@ class PublishedRaster(BaseModel):
     bbox: tuple[float, float, float, float]
 
 
+def _source_signature(source_path: Path) -> SourceSignature:
+    """Identify the mounted file inspected before GeoServer publication.
+
+    Args:
+        source_path: Mounted GeoTIFF to identify.
+
+    Returns:
+        Filesystem identity, size, and modification timestamps.
+
+    Raises:
+        OSError: If the source metadata cannot be read.
+    """
+    file_status = source_path.stat()
+    return (
+        file_status.st_dev,
+        file_status.st_ino,
+        file_status.st_size,
+        file_status.st_mtime_ns,
+        file_status.st_ctime_ns,
+    )
+
+
+class PublishedRasterRegistry:
+    """Allow WMS access only to current files approved by this app process."""
+
+    def __init__(self) -> None:
+        self._sources: dict[str, tuple[Path, SourceSignature]] = {}
+
+    def authorize(
+        self,
+        layer_name: str,
+        source_path: Path,
+        inspected_signature: SourceSignature,
+    ) -> None:
+        """Authorize a layer if its source is unchanged since inspection.
+
+        Args:
+            layer_name: Workspace-qualified GeoServer layer name.
+            source_path: Mounted GeoTIFF backing the layer.
+            inspected_signature: Source identity captured before publication.
+
+        Raises:
+            HTTPException: If the source changed or disappeared during
+                publication.
+        """
+        try:
+            current_signature = _source_signature(source_path)
+        except OSError:
+            current_signature = None
+        if current_signature != inspected_signature:
+            raise HTTPException(
+                status_code=409,
+                detail="The GeoTIFF changed while it was being published",
+            )
+        self._sources[layer_name] = (source_path, inspected_signature)
+
+    def require_current(self, layer_name: str) -> None:
+        """Require a layer authorized from a source that has not changed.
+
+        Args:
+            layer_name: Workspace-qualified GeoServer layer name.
+
+        Raises:
+            HTTPException: If the layer is not authorized or its source has
+                changed since publication.
+        """
+        authorization = self._sources.get(layer_name)
+        if authorization is None:
+            raise HTTPException(
+                status_code=400,
+                detail="The WMS layer has not been approved for visualization",
+            )
+        source_path, approved_signature = authorization
+        try:
+            current_signature = _source_signature(source_path)
+        except OSError:
+            current_signature = None
+        if current_signature != approved_signature:
+            self._sources.pop(layer_name, None)
+            raise HTTPException(
+                status_code=409,
+                detail="The visualized GeoTIFF changed; select it again",
+            )
+
+
 def _mounted_geotiff_path(item: dict[str, Any], scan_mount_path: Path) -> Path:
-    """Resolve the scanner-owned data Asset to a readable mounted GeoTIFF."""
+    """Resolve the scanner-owned data Asset to a readable mounted GeoTIFF.
+
+    Args:
+        item: Authoritative STAC Item from the catalog.
+        scan_mount_path: Read-only root shared by the scanner and GeoServer.
+
+    Returns:
+        Canonical path to the mounted GeoTIFF.
+
+    Raises:
+        HTTPException: If the data Asset is missing, unavailable, not a
+            GeoTIFF, or outside the scan mount.
+    """
     assets = item.get("assets")
     data_asset = assets.get("data") if isinstance(assets, dict) else None
     if not isinstance(data_asset, dict) or (
-        data_asset.get("type") != GEOTIFF_MEDIA_TYPE
+        data_asset.get("type") not in GEOTIFF_MEDIA_TYPES
         or data_asset.get("roles") != ["data"]
         or not isinstance(data_asset.get("href"), str)
     ):
@@ -93,15 +197,25 @@ def _mounted_geotiff_path(item: dict[str, Any], scan_mount_path: Path) -> Path:
     return source_path
 
 
-async def publish_catalog_raster(
+async def _load_catalog_item(
     request: CatalogRasterRequest,
-    scan_mount_path: Path,
     catalog_client: httpx2.AsyncClient,
-    geoserver_client: httpx2.AsyncClient,
     catalog_internal_url: str,
-    geoserver_internal_url: str,
-) -> PublishedRaster:
-    """Resolve a STAC Item and idempotently publish its GeoTIFF in GeoServer."""
+) -> dict[str, Any]:
+    """Load the authoritative scanner-owned STAC Item.
+
+    Args:
+        request: Validated Collection and Item identity.
+        catalog_client: Shared client for the internal STAC API.
+        catalog_internal_url: Internal STAC API base URL.
+
+    Returns:
+        STAC Item matching the requested identity.
+
+    Raises:
+        HTTPException: If the catalog is unavailable, the Item is missing, or
+            the response violates the requested identity.
+    """
     catalog_item_url = (
         f"{catalog_internal_url.rstrip('/')}/collections/"
         f"{request.collection_id}/items/{request.item_id}"
@@ -140,7 +254,167 @@ async def publish_catalog_raster(
             status_code=502,
             detail="The STAC catalog returned an invalid Item",
         )
+    return item
+
+
+async def update_catalog_raster_assessment(
+    request: CatalogRasterRequest,
+    scan_mount_path: Path,
+    catalog_client: httpx2.AsyncClient,
+    catalog_internal_url: str,
+) -> dict[str, Any]:
+    """Update one Item with the current raster visualization assessment.
+
+    Existing assessments under the current policy are returned unchanged.
+    Otherwise, the function rebuilds the Item from its mounted GeoTIFF and
+    upserts that one Item without scanning sibling datasets.
+
+    Args:
+        request: Validated Collection and Item identity.
+        scan_mount_path: Read-only root containing the cataloged GeoTIFF.
+        catalog_client: Shared client for the internal STAC API.
+        catalog_internal_url: Internal STAC API base URL.
+
+    Returns:
+        The existing or newly assessed STAC Item.
+
+    Raises:
+        HTTPException: If the Item cannot be loaded, its GeoTIFF cannot be
+            assessed, the mounted file no longer matches the Item, or the
+            updated Item cannot be saved.
+    """
+    item = await _load_catalog_item(
+        request,
+        catalog_client,
+        catalog_internal_url,
+    )
     source_path = _mounted_geotiff_path(item, scan_mount_path)
+    existing_assessment = item["assets"]["data"].get(RENDERING_METADATA_KEY)
+    if (
+        existing_assessment is not None
+        and existing_assessment.get("policy") == RENDERING_POLICY
+    ):
+        return item
+
+    try:
+        updated_item = await asyncio.to_thread(
+            build_geotiff_stac_item,
+            scan_mount_path,
+            source_path,
+        )
+    except ValueError as error:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Visualization unavailable: {error}",
+        ) from error
+    except (OSError, rasterio.errors.RasterioError) as error:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Visualization unavailable: the raster metadata could not "
+                "be read."
+            ),
+        ) from error
+
+    if updated_item["id"] != request.item_id:
+        raise HTTPException(
+            status_code=409,
+            detail="The mounted GeoTIFF no longer matches the catalog Item",
+        )
+    try:
+        update_response = await catalog_client.post(
+            f"{catalog_internal_url.rstrip('/')}/collections/"
+            f"{request.collection_id}/bulk_items",
+            json={
+                "method": "upsert",
+                "items": {request.item_id: updated_item},
+            },
+        )
+    except httpx2.RequestError as error:
+        raise HTTPException(
+            status_code=502,
+            detail="The STAC catalog service is unavailable",
+        ) from error
+    if not update_response.is_success:
+        raise HTTPException(
+            status_code=502,
+            detail="The STAC catalog could not save the raster assessment",
+        )
+    return updated_item
+
+
+async def publish_catalog_raster(
+    request: CatalogRasterRequest,
+    scan_mount_path: Path,
+    catalog_client: httpx2.AsyncClient,
+    geoserver_client: httpx2.AsyncClient,
+    catalog_internal_url: str,
+    geoserver_internal_url: str,
+    raster_registry: PublishedRasterRegistry,
+) -> PublishedRaster:
+    """Resolve and idempotently publish one approved catalog GeoTIFF.
+
+    Args:
+        request: Validated Collection and Item identity.
+        scan_mount_path: Read-only root shared with GeoServer.
+        catalog_client: Shared client for the internal STAC API.
+        geoserver_client: Authenticated client for GeoServer REST requests.
+        catalog_internal_url: Internal STAC API base URL.
+        geoserver_internal_url: Internal GeoServer base URL.
+        raster_registry: Registry authorizing public WMS access to current
+            source files.
+
+    Returns:
+        Browser-safe WMS layer identity and WGS 84 bounding box.
+
+    Raises:
+        HTTPException: If the Item or source is unavailable or ineligible, the
+            current source no longer passes assessment, or GeoServer cannot
+            publish and style the layer.
+    """
+    item = await _load_catalog_item(
+        request,
+        catalog_client,
+        catalog_internal_url,
+    )
+    source_path = _mounted_geotiff_path(item, scan_mount_path)
+    rendering_metadata = item["assets"]["data"].get(RENDERING_METADATA_KEY)
+    if (
+        rendering_metadata is None
+        or rendering_metadata.get("policy") != RENDERING_POLICY
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Visualization unavailable: assess this raster first.",
+        )
+    if not rendering_metadata["eligible"]:
+        raise HTTPException(
+            status_code=409,
+            detail=rendering_metadata["reason"],
+        )
+
+    try:
+        inspected_source_signature = await asyncio.to_thread(
+            _source_signature,
+            source_path,
+        )
+        current_rendering_metadata = await asyncio.to_thread(
+            inspect_geotiff_renderability,
+            source_path,
+        )
+    except (OSError, rasterio.errors.RasterioError) as error:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Visualization unavailable: the raster metadata can no "
+                "longer be read."
+            ),
+        ) from error
+    if not current_rendering_metadata["eligible"]:
+        raise HTTPException(
+            status_code=409,
+            detail=current_rendering_metadata["reason"],
+        )
 
     resource_name = request.item_id
     geoserver_rest_url = f"{geoserver_internal_url.rstrip('/')}/rest"
@@ -185,7 +459,14 @@ async def publish_catalog_raster(
             detail="GeoServer could not style the selected GeoTIFF",
         )
 
+    layer_name = f"{GEOSERVER_WORKSPACE_NAME}:{resource_name}"
+    await asyncio.to_thread(
+        raster_registry.authorize,
+        layer_name,
+        source_path,
+        inspected_source_signature,
+    )
     return PublishedRaster(
-        layerName=f"{GEOSERVER_WORKSPACE_NAME}:{resource_name}",
+        layerName=layer_name,
         bbox=tuple(item["bbox"]),
     )

@@ -6,10 +6,42 @@ const CATALOG_SUBSTRING_PROPERTIES = [
     "eolab_end_datetime_text"
 ];
 export const MOUNTED_GEOTIFF_COLLECTION_ID = "eolab-mounted-geotiffs";
+const RASTER_RENDERING_POLICY = "raster-v2";
 export const MOUNTED_DATASET_TYPES = new Map([
     [MOUNTED_GEOTIFF_COLLECTION_ID, "Raster"],
     ["eolab-mounted-vectors", "Vector"]
 ]);
+
+/**
+ * Returns the scanner-owned visualization decision for a mounted GeoTIFF.
+ *
+ * @param {Object|null} item Selected STAC Item.
+ * @return {Object|null|undefined} Rendering metadata, null for a non-raster
+ * Item, or undefined when the selected raster has not been assessed.
+ */
+export function getRasterVisualization(item) {
+    if (item?.collection !== MOUNTED_GEOTIFF_COLLECTION_ID) {
+        return null;
+    }
+    const renderingMetadata = item.assets.data["eolab:rendering"];
+    return renderingMetadata?.policy === RASTER_RENDERING_POLICY
+        ? renderingMetadata
+        : undefined;
+}
+
+/** Format a byte count without implying decimal storage units. */
+function formatByteSize(byteCount) {
+    const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let value = byteCount;
+    let unitIndex = 0;
+    while (value >= 1024 && unitIndex < units.length - 1) {
+        value /= 1024;
+        unitIndex += 1;
+    }
+    return `${value.toLocaleString(undefined, {
+        maximumFractionDigits: 1
+    })} ${units[unitIndex]}`;
+}
 
 /**
  * Formats a duration at a useful precision for a live scan.
@@ -241,7 +273,6 @@ export function buildCatalogItemDetails(
     if (datasetType !== undefined) {
         metadata.push({ label: "Dataset type", value: datasetType });
     }
-
     if (properties.datetime === null) {
         metadata.push({
             label: "Item datetime range",
@@ -340,6 +371,62 @@ export function buildCatalogItemDetails(
                 label: "File modified",
                 value: asset.updated
             });
+        }
+        if (asset["file:size"] !== undefined) {
+            assetMetadata.push({
+                label: "File size",
+                value: formatByteSize(asset["file:size"])
+            });
+        }
+        const renderingMetadata = asset["eolab:rendering"];
+        if (renderingMetadata !== undefined) {
+            assetMetadata.push(
+                {
+                    label: "Storage profile",
+                    value: asset.type.includes("profile=cloud-optimized")
+                        ? "Cloud Optimized GeoTIFF"
+                        : "GeoTIFF"
+                },
+                {
+                    label: "Block shapes",
+                    value: renderingMetadata.block_shapes
+                        .map(
+                            ([height, width]) =>
+                                `${width} × ${height} pixels`
+                        )
+                        .join(" · ")
+                },
+                {
+                    label: "Overview storage",
+                    value: {
+                        none: "None",
+                        internal: "Internal",
+                        external: "External sidecar"
+                    }[renderingMetadata.overview_storage]
+                },
+                {
+                    label: "Overview factors",
+                    value: renderingMetadata.overview_factors
+                        .map((factors, bandIndex) =>
+                            factors.length === 0
+                                ? `Band ${bandIndex + 1}: None`
+                                : `Band ${bandIndex + 1}: ${factors
+                                      .map((factor) => `${factor}×`)
+                                      .join(", ")}`
+                        )
+                        .join(" · ")
+                },
+                {
+                    label: "Compression",
+                    value: renderingMetadata.compression ?? "None"
+                },
+                {
+                    label: "Estimated full-resolution pixel data",
+                    value: formatByteSize(
+                        renderingMetadata.estimated_uncompressed_bytes
+                    )
+                }
+            );
         }
 
         const bands = (asset["raster:bands"] ?? []).map((band, bandIndex) => {

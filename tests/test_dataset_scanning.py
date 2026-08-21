@@ -8,6 +8,7 @@ from contextlib import AbstractAsyncContextManager
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Barrier, Lock
+from types import SimpleNamespace
 from typing import Any
 
 import httpx2
@@ -17,12 +18,19 @@ import pytest
 import rasterio
 from affine import Affine
 from rasterio.crs import CRS
+from rasterio.enums import Resampling
+from rasterio.shutil import copy as copy_raster
 from rasterio.transform import from_bounds, from_origin
 
 from eolab_app.geotiff import (
     ACQUISITION_DATETIME_DESCRIPTION,
+    COG_MEDIA_TYPE,
     FALLBACK_DATETIME_DESCRIPTION,
+    FILE_EXTENSION,
+    GEOTIFF_MEDIA_TYPE,
+    RENDERING_METADATA_KEY,
     SUGGESTED_WARP_BOUNDS_DESCRIPTION,
+    assess_raster_renderability,
     build_stac_item as build_geotiff_stac_item,
 )
 from eolab_app.scanning import (
@@ -84,6 +92,43 @@ def write_geotiff(
             )
 
 
+class RasterLayout:
+    """Supply raster structure to the pure rendering-policy assessment."""
+
+    def __init__(
+        self,
+        *,
+        width: int,
+        height: int,
+        data_types: tuple[str, ...] = ("uint8",),
+        block_shapes: tuple[tuple[int, int], ...] = ((1, 1),),
+        overview_factors: tuple[tuple[int, ...], ...] = ((),),
+        compression: str | None = None,
+        external_overview_suffix: str | None = None,
+    ) -> None:
+        self.width = width
+        self.height = height
+        self.dtypes = data_types
+        self.count = len(data_types)
+        self.indexes = tuple(range(1, self.count + 1))
+        self.block_shapes = block_shapes
+        self._overview_factors = overview_factors
+        self.files = (
+            ("raster.tif", f"raster.tif{external_overview_suffix}")
+            if external_overview_suffix is not None
+            else ("raster.tif",)
+        )
+        self.compression = (
+            SimpleNamespace(value=compression)
+            if compression is not None
+            else None
+        )
+
+    def overviews(self, band_index: int) -> tuple[int, ...]:
+        """Return overview factors for a one-based band index."""
+        return self._overview_factors[band_index - 1]
+
+
 def write_shapefile(
     path: Path,
     *,
@@ -139,7 +184,253 @@ def test_geotiff_uses_embedded_acquisition_datetime(tmp_path: Path) -> None:
     assert item["assets"]["data"]["raster:bands"] == [
         {"data_type": "uint8", "nodata": 0.0}
     ]
+    assert item["assets"]["data"]["type"] == GEOTIFF_MEDIA_TYPE
+    assert FILE_EXTENSION in item["stac_extensions"]
+    assert item["assets"]["data"]["file:size"] > 0
+    assert item["assets"]["data"][RENDERING_METADATA_KEY] == {
+        "policy": "raster-v2",
+        "eligible": True,
+        "bounded_blocks": True,
+        "block_shapes": [[2, 3]],
+        "overview_factors": [[]],
+        "overview_storage": "none",
+        "compression": None,
+        "estimated_uncompressed_bytes": 6,
+    }
     json.dumps(item)
+
+
+def test_cog_profile_is_recorded_from_gdal_layout_metadata(
+    tmp_path: Path,
+) -> None:
+    """Identify a COG from GDAL metadata rather than its filename."""
+    source_path = tmp_path / "source.tif"
+    cog_path = tmp_path / "optimized.tif"
+    write_geotiff(source_path, width=512, height=2048)
+    copy_raster(source_path, cog_path, driver="COG", compress="DEFLATE")
+
+    item = build_geotiff_stac_item(tmp_path, cog_path)
+
+    assert item["assets"]["data"]["type"] == COG_MEDIA_TYPE
+    rendering_metadata = item["assets"]["data"][RENDERING_METADATA_KEY]
+    assert rendering_metadata["bounded_blocks"] is True
+    assert rendering_metadata["block_shapes"] == [[512, 512]]
+    assert rendering_metadata["overview_factors"] == [[2, 4]]
+    assert rendering_metadata["overview_storage"] == "internal"
+    assert rendering_metadata["compression"] == "DEFLATE"
+
+
+def test_external_geotiff_overviews_are_recorded(tmp_path: Path) -> None:
+    """Recognize an overview pyramid stored outside the GeoTIFF."""
+    geotiff_path = tmp_path / "external-overviews.tif"
+    write_geotiff(geotiff_path, width=512, height=512)
+
+    with rasterio.Env(TIFF_USE_OVR="YES"):
+        with rasterio.open(geotiff_path, "r+") as dataset:
+            dataset.build_overviews([2], Resampling.nearest)
+        with rasterio.open(geotiff_path) as dataset:
+            assessment = assess_raster_renderability(dataset)
+
+    assert geotiff_path.with_suffix(".tif.ovr").is_file()
+    assert assessment["overview_factors"] == [[2]]
+    assert assessment["overview_storage"] == "external"
+
+
+@pytest.mark.parametrize(
+    ("layout", "eligible", "reason_fragment"),
+    (
+        (
+            RasterLayout(
+                width=2_000,
+                height=1_000,
+                block_shapes=((1, 2_000),),
+            ),
+            True,
+            None,
+        ),
+        (
+            RasterLayout(
+                width=10_000,
+                height=7_000,
+                block_shapes=((1, 10_000),),
+            ),
+            False,
+            "needs smaller internal blocks",
+        ),
+        (
+            RasterLayout(
+                width=50_000,
+                height=50_000,
+                data_types=("float32",),
+                block_shapes=((512, 512),),
+                overview_factors=((2, 4, 8, 16, 32),),
+                compression="DEFLATE",
+            ),
+            True,
+            None,
+        ),
+        (
+            RasterLayout(
+                width=50_000,
+                height=50_000,
+                data_types=("float32",),
+                block_shapes=((512, 512),),
+                overview_factors=((2, 4, 8),),
+                compression="DEFLATE",
+            ),
+            False,
+            "exceeds 64 MiB of decoded pixel data",
+        ),
+        (
+            RasterLayout(
+                width=50_000,
+                height=50_000,
+                data_types=("float32",),
+                block_shapes=((512, 512),),
+                overview_factors=((2, 4, 16, 32),),
+                compression="DEFLATE",
+            ),
+            False,
+            "beginning at 2x without skipped levels",
+        ),
+        (
+            RasterLayout(
+                width=133_584,
+                height=66_792,
+                data_types=("float32",),
+                block_shapes=((512, 512),),
+                overview_factors=((2, 4, 8, 16, 32),),
+                compression="ZSTD",
+            ),
+            True,
+            None,
+        ),
+        (
+            RasterLayout(
+                width=300_000,
+                height=10_000,
+                data_types=("float32",),
+                block_shapes=((512, 512),),
+                overview_factors=((2, 4, 8, 16, 32),),
+            ),
+            False,
+            "wider or taller than 8192 pixels",
+        ),
+        (
+            RasterLayout(
+                width=50_000,
+                height=50_000,
+                data_types=("float32",),
+                block_shapes=((2048, 2048),),
+                overview_factors=((2, 4, 8, 16, 32),),
+            ),
+            False,
+            "needs smaller internal blocks",
+        ),
+        (
+            RasterLayout(
+                width=10,
+                height=10,
+                data_types=("uint8", "uint8", "uint8"),
+                block_shapes=((10, 10),) * 3,
+                overview_factors=((),) * 3,
+            ),
+            False,
+            "supports one-band rasters",
+        ),
+        (
+            RasterLayout(
+                width=10,
+                height=10,
+                data_types=("uint32",),
+                block_shapes=((10, 10),),
+            ),
+            False,
+            "does not support uint32 pixels",
+        ),
+    ),
+    ids=(
+        "small-full-width-blocks",
+        "large-full-width-blocks",
+        "large-overviewed",
+        "shallow-overviews",
+        "gapped-overviews",
+        "global-cog-overviews",
+        "oversized-coarsest-overview",
+        "oversized-blocks",
+        "multiple-bands",
+        "unsupported-data-type",
+    ),
+)
+def test_raster_renderability_policy(
+    layout: RasterLayout,
+    eligible: bool,
+    reason_fragment: str | None,
+) -> None:
+    """Apply one conservative policy to synthetic raster structures."""
+    assessment = assess_raster_renderability(layout)
+
+    assert assessment["eligible"] is eligible
+    if reason_fragment is None:
+        assert "reason" not in assessment
+    else:
+        assert reason_fragment in assessment["reason"]
+
+
+@pytest.mark.parametrize("sidecar_suffix", (".ovr", ".aux", ".rrd"))
+def test_large_raster_requires_internal_overviews(
+    sidecar_suffix: str,
+) -> None:
+    """Reject overview pyramids whose sidecar can disappear independently."""
+    assessment = assess_raster_renderability(
+        RasterLayout(
+            width=50_000,
+            height=50_000,
+            data_types=("float32",),
+            block_shapes=((512, 512),),
+            overview_factors=((2, 4, 8, 16, 32),),
+            external_overview_suffix=sidecar_suffix,
+        )
+    )
+
+    assert assessment["eligible"] is False
+    assert assessment["overview_storage"] == "external"
+    assert "needs an internal overview pyramid" in assessment["reason"]
+
+
+@pytest.mark.parametrize(
+    ("rasterio_data_type", "stac_data_type"),
+    (
+        ("complex_int16", "cint16"),
+        ("complex64", "other"),
+        ("complex128", "cfloat64"),
+    ),
+)
+def test_complex_geotiff_data_types_use_stac_names(
+    tmp_path: Path,
+    rasterio_data_type: str,
+    stac_data_type: str,
+) -> None:
+    """Map Rasterio's complex names to the Raster Extension vocabulary."""
+    geotiff_path = tmp_path / f"{rasterio_data_type}.tif"
+    with rasterio.open(
+        geotiff_path,
+        "w",
+        driver="GTiff",
+        width=1,
+        height=1,
+        count=1,
+        dtype=rasterio_data_type,
+        crs="EPSG:4326",
+        transform=from_origin(-123, 49, 1, 1),
+    ):
+        pass
+
+    item = build_geotiff_stac_item(tmp_path, geotiff_path)
+
+    assert item["assets"]["data"]["raster:bands"] == [
+        {"data_type": stac_data_type}
+    ]
 
 
 def test_geotiff_discloses_filesystem_timestamp_fallback(tmp_path: Path) -> None:

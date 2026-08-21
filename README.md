@@ -8,6 +8,10 @@ EOLab is an open source platform for Earth observation analysis and visualizatio
 2. Select the **Docker Compose** build pack and use `/docker-compose.yml`.
 3. In Coolify's **Production** environment variables, set `EOLAB_DATABASE_PASSWORD` to a long random value before the first deployment. Keep this value: PostgreSQL uses it when initializing the persistent database volume, and changing the environment variable later does not change the database password.
 4. Set `EOLAB_GEOSERVER_ADMIN_PASSWORD` and `EOLAB_GEOSERVER_MASTER_PASSWORD` to different long random values. Use at least 16 letters, numbers, hyphens, underscores, or periods for the administrator password. The master password must contain at least eight characters with no surrounding whitespace. GeoServer uses the first value for its internal administrator account; EOLab's initializer applies the second to the GeoServer keystore without exposing either value to the browser.
+   Add `EOLAB_GEOSERVER_CPU_LIMIT=4`,
+   `EOLAB_GEOSERVER_MAX_HEAP_SIZE=4g`, and
+   `EOLAB_GEOSERVER_WMS_RENDER_COUNT=2` if Coolify does not list those
+   defaulted variables automatically.
 5. Set `EOLAB_LOAD_SAMPLE_CATALOG=true` to load the sample Collection and Items, or set it to `false` to start with an empty catalog. Changing it to `false` later prevents future sample upserts but does not delete existing sample records.
 6. Configure the read-only scan mount and the directories EOLab should search. In the EOLab resource's **Production** environment variables, select **Add** and create these variables:
 
@@ -50,6 +54,9 @@ Open `http://localhost:8000`. The local override also makes the GeoServer admini
 | `EOLAB_GEOSERVER_ADMIN_PASSWORD`   | none                                              | Required internal GeoServer administrator password  |
 | `EOLAB_GEOSERVER_MASTER_PASSWORD`  | none                                              | Required GeoServer keystore password                |
 | `EOLAB_GEOSERVER_DATA_VOLUME_NAME` | `eolab-geoserver-data`                            | Persistent GeoServer configuration volume name      |
+| `EOLAB_GEOSERVER_CPU_LIMIT`        | `4`                                               | GeoServer container CPU limit                        |
+| `EOLAB_GEOSERVER_MAX_HEAP_SIZE`    | `4g`                                              | Maximum GeoServer Java heap (`m` or `g`)             |
+| `EOLAB_GEOSERVER_WMS_RENDER_COUNT` | `2`                                               | Concurrent GeoServer WMS map renders                 |
 | `EOLAB_LOAD_SAMPLE_CATALOG`        | none                                              | Required `true` or `false` sample-data choice       |
 | `EOLAB_SCAN_MOUNT_PATH`            | none                                              | Required absolute host directory mounted read-only  |
 | `EOLAB_SCAN_PATHS_WITHIN_MOUNT`    | none                                              | Required JSON array of relative directories to scan |
@@ -70,6 +77,17 @@ Open `http://localhost:8000`. The local override also makes the GeoServer admini
 
 GeoServer is configured automatically. Keep `EOLAB_GEOSERVER_ADMIN_PASSWORD` and `EOLAB_GEOSERVER_MASTER_PASSWORD` stable in Coolify. The administrator password must contain at least 16 letters, numbers, hyphens, underscores, or periods. The master password must contain at least eight characters with no surrounding whitespace and must differ from the administrator password.
 
+GeoServer may use up to `EOLAB_GEOSERVER_CPU_LIMIT` CPUs and
+`EOLAB_GEOSERVER_MAX_HEAP_SIZE` of Java heap. Its control-flow extension runs
+at most `EOLAB_GEOSERVER_WMS_RENDER_COUNT` WMS map renders concurrently and
+queues the remaining tile requests. Change these Coolify variables and
+redeploy to tune the service; Java detects the Docker CPU limit without an
+`ActiveProcessorCount` override. The CPU limit must be positive, the render
+count must be a positive integer, and the heap must be at least `256m` with an
+`m` or `g` suffix.
+
+The scanner assesses mounted GeoTIFFs before offering **View on map**. The initial policy accepts supported one-band rasters that are small enough for direct rendering, or larger rasters with bounded base-resolution blocks and a complete internal overview pyramid. Other rasters remain fully searchable and inspectable with an explanation of why visualization is unavailable. For existing Items created before this policy, **Assess for visualization** inspects and updates only the selected raster.
+
 ## Scan mounted datasets
 
 Open the **Catalog** panel and select **Scan directories**. EOLab searches each configured path recursively for GeoTIFF (`.tif` and `.tiff`) and ESRI Shapefile (`.shp`) datasets, matching extensions case-insensitively. After each successful bulk upsert, the live status classifies processed datasets as newly cataloged or already present, alongside discovered, processed, and failed counts. Error details are collapsed by default and remain independently scrollable when opened, so the Catalog results remain usable during a scan. EOLab reads metadata using `EOLAB_SCAN_WORKER_COUNT` concurrent processes and uses `EOLAB_SCAN_WRITER_COUNT` concurrent STAC Bulk Transactions, each containing at most `EOLAB_SCAN_BATCH_SIZE` Items from one Collection. Catalog-write timing is cumulative across writers and can exceed wall time. A failure in one dataset does not stop the remaining scan; a catalog inventory or write failure stops the scan. Configured paths cannot be duplicated, nested inside one another, or escape the mount.
@@ -81,6 +99,8 @@ Scans create or update the `eolab-mounted-geotiffs` and `eolab-mounted-vectors` 
 One Shapefile Item groups files with the same exact base name. The `.shp`, `.shx`, `.dbf`, and `.prj` components are required; recognized `.cpg`, `.qix`, `.sbn`, `.sbx`, and `.shp.xml` companions are included when present. Missing or unreadable required components produce one dataset error. The Item records the native CRS and bounds, feature count, declared layer geometry type, and field names and types using published STAC Projection and Table extensions. Empty Shapefiles are reported as dataset errors because pgSTAC requires every stored Item to have a spatial footprint.
 
 For GeoTIFFs, the scanner uses `ACQUISITIONDATETIME` from GDAL's `IMAGERY` metadata domain when it contains an RFC 3339 timestamp with a UTC offset. Otherwise it uses the source file's filesystem modification time as the required STAC Item `datetime`. A Shapefile Item uses the latest modification time among its component files. Each fallback is explained in the Item description, and every Asset records its own modification time as `updated`. Filesystem creation time is not used because its meaning differs among operating systems. A malformed GeoTIFF `ACQUISITIONDATETIME` is reported as a dataset failure rather than guessed or silently replaced.
+
+GeoTIFF Items also record standard file size, dimensions, and band metadata plus an EOLab-local `eolab:rendering` Asset member containing the versioned structural assessment. This member records whether the base-resolution blocks meet the large-raster limit, their exact shapes, overview factors and storage, compression, estimated full-resolution pixel data, eligibility, and an explanation when unavailable. It is a local STAC foreign member rather than a claim that the file passed full COG validation.
 
 GeoTIFFs without a coordinate reference system are reported as individual dataset errors because pgSTAC requires every stored Item to have a spatial footprint.
 
