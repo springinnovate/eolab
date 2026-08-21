@@ -96,21 +96,16 @@ export class CatalogRasterLayerController {
         if (requestSequence !== this.requestSequence) {
             return null;
         }
-        this.removeActiveLayer();
+        this.clear();
         this.activeLayer = this.layerFactory(publishedRaster).addTo(
             this.leafletMap
         );
         return publishedRaster;
     }
 
-    /** Remove the displayed layer and invalidate any pending publication. */
+    /** Invalidate pending publication and remove a displayed layer, if any. */
     clear() {
         this.requestSequence += 1;
-        this.removeActiveLayer();
-    }
-
-    /** Remove the active layer without advancing the request sequence. */
-    removeActiveLayer() {
         if (this.activeLayer !== null) {
             this.leafletMap.removeLayer(this.activeLayer);
             this.activeLayer = null;
