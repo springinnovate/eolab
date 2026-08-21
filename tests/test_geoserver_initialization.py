@@ -8,7 +8,7 @@ from geoserver.initialize import initialize_geoserver, main
 
 
 class RecordingGeoServerClient:
-    """Return planned REST responses while recording every request."""
+    """Return planned HTTP (status, body) pairs while recording requests."""
 
     def __init__(self, responses: list[tuple[int, bytes]]) -> None:
         self.responses = iter(responses)
