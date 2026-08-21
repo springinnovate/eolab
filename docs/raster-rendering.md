@@ -98,13 +98,19 @@ while EOLab's health and catalog remain independent of rendering availability.
 The eligibility gate prevents known unsuitable sources from entering this path
 through the normal UI.
 
+The pinned GeoServer image includes its matching control-flow extension.
+`EOLAB_GEOSERVER_WMS_RENDER_COUNT` limits active GetMap renders and queues the
+remaining Leaflet tiles. `EOLAB_GEOSERVER_MAX_HEAP_SIZE` sets the Java heap
+ceiling, and `EOLAB_GEOSERVER_CPU_LIMIT` applies Docker's CPU quota. The
+defaults are two renders, a 4 GiB maximum heap, and four CPUs. Java 21 detects
+the Docker quota, so EOLab does not set `ActiveProcessorCount` separately.
+
 GeoServer also supports workspace WMS limits. A sensible experiment starting
 point is 16 MiB request memory, 120 seconds rendering time, and 100 rendering
 errors. The request-memory estimate does not include all source decoding, so
-it cannot replace the policy above. Aggregate GetMap concurrency requires the
-GeoServer control-flow extension; start with two concurrent GetMap requests if
-that extension is added. These settings are recommendations to validate during
-the experiment, not configuration silently imposed by this change.
+it cannot replace the policy or concurrency bound above. These workspace WMS
+settings remain recommendations to validate during the experiment rather than
+configuration silently imposed by this change.
 
 ## Coolify acceptance experiment
 
@@ -122,7 +128,7 @@ The three production representatives are:
 | Class | Mounted source | Pre-policy observation | Expected `raster-v2` result |
 | --- | --- | --- | --- |
 | Small conventional GeoTIFF | `bck_archive/cnc_project/optimization/prioritzr_output_country_allscales/solution_can_tar_100_res_1km.tif` | Rendered quickly; elapsed time and peak memory were not captured | Eligible through the decoded-size limit |
-| Cloud Optimized GeoTIFF | `eolab_catalog_data/hmi_2022/cog_HMv20240801_2022s_AA_300.tif` | Earlier publication/bounds failures prevented a clean performance measurement | Eligible only if its actual tiles and overviews satisfy the policy |
+| Cloud Optimized GeoTIFF | `eolab_catalog_data/hmi_2022/cog_HMv20240801_2022s_AA_300.tif` | A zoomed-out view rendered, then a zoom produced enough concurrent tiles to exhaust the former 1 GiB heap and restart GeoServer | Eligible; rerun with the new runtime bounds |
 | Previously failing large raster | `bck_archive/ndr_sdr_global/data/Kfac_SoilGrid1km_GloSEM_v1.1_md5_e1c74b67ad7fdaf6f69f1f722a5c7dfb.tif` | A map request exhausted the GeoServer Java heap | Unavailable unless its actual layout contains suitable tiles and overviews |
 
 Record the deployment run here before marking the draft pull request ready:

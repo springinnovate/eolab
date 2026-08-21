@@ -1,5 +1,7 @@
 """Test deployment contracts expressed by Docker Compose."""
 
+import os
+import subprocess
 from pathlib import Path
 
 
@@ -54,9 +56,13 @@ def test_app_and_geoserver_refuse_a_writable_scan_mount() -> None:
         repository_root / "deployment" / "require-read-only-scan-source.sh"
     ).read_text(encoding="utf-8")
 
-    entrypoint = 'ENTRYPOINT ["/usr/local/bin/require-read-only-scan-source"]'
-    assert entrypoint in app_dockerfile
-    assert entrypoint in geoserver_dockerfile
+    assert 'ENTRYPOINT ["/usr/local/bin/require-read-only-scan-source"]' in (
+        app_dockerfile
+    )
+    assert (
+        'ENTRYPOINT ["/usr/local/bin/start-geoserver"]'
+        in geoserver_dockerfile
+    )
     assert 'CMD ["bash", "/opt/startup.sh"]' in geoserver_dockerfile
     assert (
         "FROM docker.osgeo.org/geoserver:3.0.1@sha256:"
@@ -66,6 +72,79 @@ def test_app_and_geoserver_refuse_a_writable_scan_mount() -> None:
     assert '/proc/self/mountinfo' in guard
     assert '/scan-source ro(,| )' in guard
     assert 'exec "$@"' in guard
+
+
+def test_geoserver_has_bounded_tunable_rendering_resources() -> None:
+    """Pin render scheduling while leaving its limits deployer-configurable."""
+    repository_root = COMPOSE_PATH.parent
+    compose = COMPOSE_PATH.read_text(encoding="utf-8")
+    geoserver_dockerfile = (repository_root / "Dockerfile.geoserver").read_text(
+        encoding="utf-8"
+    )
+    startup = (
+        repository_root / "deployment" / "start-geoserver.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "cpus: ${EOLAB_GEOSERVER_CPU_LIMIT:-4}" in compose
+    assert (
+        '"GEOSERVER_MAX_HEAP_SIZE=${EOLAB_GEOSERVER_MAX_HEAP_SIZE:-4g}"'
+        in compose
+    )
+    assert (
+        '"GEOSERVER_WMS_RENDER_COUNT=${EOLAB_GEOSERVER_WMS_RENDER_COUNT:-2}"'
+        in compose
+    )
+    assert "geoserver-3.0.1-control-flow-plugin.zip" in geoserver_dockerfile
+    assert (
+        "sha256:08e1c95e0f753fa6b63f815d3314764d891d9cf1bee418dcae6"
+        "ea5bf25025a1d"
+        in geoserver_dockerfile
+    )
+    assert 'export EXTRA_JAVA_OPTS="-Xms256m -Xmx${GEOSERVER_MAX_HEAP_SIZE}"' in (
+        startup
+    )
+    assert "'^[1-9][0-9]*$'" in startup
+    assert "'^[1-9][0-9]*[mMgG]$'" in startup
+    assert 'if [ "$heap_megabytes" -lt 256 ]' in startup
+    assert "printf 'ows.wms.getmap=%s\\n'" in startup
+    assert "ActiveProcessorCount" not in compose
+    assert "ActiveProcessorCount" not in geoserver_dockerfile
+
+
+def test_geoserver_rejects_invalid_runtime_limits() -> None:
+    """Fail startup before Java receives malformed or unusable limits."""
+    repository_root = COMPOSE_PATH.parent
+    base_environment = os.environ | {
+        "GEOSERVER_WMS_RENDER_COUNT": "2",
+        "GEOSERVER_MAX_HEAP_SIZE": "4g",
+    }
+    invalid_limits = (
+        (
+            {"GEOSERVER_WMS_RENDER_COUNT": "0"},
+            "GEOSERVER_WMS_RENDER_COUNT must be a positive integer",
+        ),
+        (
+            {"GEOSERVER_MAX_HEAP_SIZE": "4g -XX:ActiveProcessorCount=32"},
+            "GEOSERVER_MAX_HEAP_SIZE must be an integer followed by m or g",
+        ),
+        (
+            {"GEOSERVER_MAX_HEAP_SIZE": "128m"},
+            "GEOSERVER_MAX_HEAP_SIZE must be at least 256m",
+        ),
+    )
+
+    for environment_override, expected_error in invalid_limits:
+        result = subprocess.run(
+            ["sh", "deployment/start-geoserver.sh", "true"],
+            cwd=repository_root,
+            env=base_environment | environment_override,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        assert result.returncode == 1
+        assert result.stderr.strip() == expected_error
 
 
 def test_app_image_avoids_repeated_gdal_directory_listing() -> None:

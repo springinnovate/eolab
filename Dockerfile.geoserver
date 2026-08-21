@@ -1,7 +1,17 @@
 FROM docker.osgeo.org/geoserver:3.0.1@sha256:7cb827ba3f6d9fc04a6647fc0cfa6c254fc642407f0d99281fdf026d2540b558
 
+ADD --checksum=sha256:08e1c95e0f753fa6b63f815d3314764d891d9cf1bee418dcae6ea5bf25025a1d \
+    https://downloads.sourceforge.net/project/geoserver/GeoServer/3.0.1/extensions/geoserver-3.0.1-control-flow-plugin.zip \
+    /tmp/control-flow.zip
+
+RUN unzip -q /tmp/control-flow.zip "*.jar" \
+        -d /usr/local/tomcat/webapps/geoserver/WEB-INF/lib \
+    && rm /tmp/control-flow.zip
+
 COPY --chmod=0555 deployment/require-read-only-scan-source.sh \
     /usr/local/bin/require-read-only-scan-source
+COPY --chmod=0555 deployment/start-geoserver.sh \
+    /usr/local/bin/start-geoserver
 
-ENTRYPOINT ["/usr/local/bin/require-read-only-scan-source"]
+ENTRYPOINT ["/usr/local/bin/start-geoserver"]
 CMD ["bash", "/opt/startup.sh"]
