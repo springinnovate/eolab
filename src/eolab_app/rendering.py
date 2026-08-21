@@ -75,11 +75,8 @@ class PublishedRasterRegistry:
         """Authorize a layer if its source is unchanged since inspection."""
         try:
             current_signature = _source_signature(source_path)
-        except OSError as error:
-            raise HTTPException(
-                status_code=409,
-                detail="The GeoTIFF changed while it was being published",
-            ) from error
+        except OSError:
+            current_signature = None
         if current_signature != inspected_signature:
             raise HTTPException(
                 status_code=409,
@@ -98,18 +95,14 @@ class PublishedRasterRegistry:
         source_path, approved_signature = authorization
         try:
             current_signature = _source_signature(source_path)
-        except OSError as error:
+        except OSError:
             current_signature = None
-            source_error = error
-        else:
-            source_error = None
         if current_signature != approved_signature:
-            if self._sources.get(layer_name) == authorization:
-                self._sources.pop(layer_name)
+            self._sources.pop(layer_name, None)
             raise HTTPException(
                 status_code=409,
                 detail="The visualized GeoTIFF changed; select it again",
-            ) from source_error
+            )
 
 
 def _mounted_geotiff_path(item: dict[str, Any], scan_mount_path: Path) -> Path:
