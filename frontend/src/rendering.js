@@ -84,10 +84,11 @@ export class CatalogRasterLayerController {
     }
 
     /**
-     * Publish and display one Item unless the request was superseded.
+     * Publish and display one Item unless selection changed while awaiting it.
      *
      * @param {Object} item Selected STAC Item.
-     * @return {Promise<Object|null>} Published layer details, or null if stale.
+     * @return {Promise<Object|null>} Published layer details, or null after a
+     * selection change.
      */
     async show(item) {
         const requestSequence = ++this.requestSequence;
