@@ -71,7 +71,7 @@ def _mounted_geotiff_item(
                 "type": asset_media_type,
                 "roles": ["data"],
                 "eolab:rendering": {
-                    "policy": "raster-v1",
+                    "policy": "raster-v2",
                     "eligible": True,
                     "bounded_blocks": True,
                     "block_shapes": [[1, 1]],
@@ -290,18 +290,22 @@ def test_catalog_geotiff_is_published_idempotently(
     assert len({request.url.path for request in geoserver_requests}) == 2
 
 
-def test_one_legacy_raster_is_assessed_and_updated(
+def test_one_outdated_raster_is_assessed_and_updated(
     configured_environment: None,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     version_file_path: Path,
 ) -> None:
-    """Backfill one selected Item without scanning the mounted directory."""
+    """Upgrade one selected Item without scanning the mounted directory."""
     source_path = tmp_path / "raster.tif"
     _write_geotiff(source_path)
     current_item = build_geotiff_stac_item(tmp_path, source_path)
     item_id = current_item["id"]
-    del current_item["assets"]["data"]["eolab:rendering"]
+    current_item["assets"]["data"]["eolab:rendering"] = {
+        "policy": "raster-v1",
+        "eligible": False,
+        "reason": "Visualization unavailable under the former policy.",
+    }
     monkeypatch.setenv("SCAN_MOUNT_PATH", str(tmp_path))
     monkeypatch.setenv("SCAN_PATHS_WITHIN_MOUNT", '["."]')
     catalog_requests = []
@@ -346,7 +350,7 @@ def test_one_legacy_raster_is_assessed_and_updated(
 
     assert first_response.status_code == 200
     assert first_response.json()["assets"]["data"]["eolab:rendering"] == {
-        "policy": "raster-v1",
+        "policy": "raster-v2",
         "eligible": True,
         "bounded_blocks": True,
         "block_shapes": [[1, 1]],
@@ -372,7 +376,7 @@ def test_one_legacy_raster_is_assessed_and_updated(
         ),
         (
             {
-                "policy": "raster-v1",
+                "policy": "raster-v2",
                 "eligible": False,
                 "reason": (
                     "Visualization unavailable: this raster needs smaller "

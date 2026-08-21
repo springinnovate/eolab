@@ -8,7 +8,7 @@ or request will render successfully.
 
 ## Initial policy
 
-The `raster-v1` policy accepts a mounted GeoTIFF when it has exactly one band
+The `raster-v2` policy accepts a mounted GeoTIFF when it has exactly one band
 with a supported scalar data type (`uint8`, `uint16`, `int16`, `int32`,
 `float32`, or `float64`) and one of these conditions is true:
 
@@ -39,9 +39,10 @@ The pixel-data estimate is the width × height × sample bytes across bands. It
 does not include masks, overviews, decoder buffers, reprojection buffers,
 rendered output, or concurrent requests.
 
-Existing Items have no `raster-v1` assessment. They remain searchable and
-inspectable, and **Assess for visualization** updates only the selected Item.
-A full mounted-source rescan is not required for this upgrade.
+Items without a `raster-v2` assessment, including Items assessed under the
+earlier 4096-pixel limit, remain searchable and inspectable. **Assess for
+visualization** updates only the selected Item. A full mounted-source rescan is
+not required for this upgrade.
 
 Before publication, EOLab resolves the authoritative STAC Item and repeats the
 same bounded metadata inspection on the current mounted file. This second
@@ -118,7 +119,7 @@ scanner's exact unavailable explanation.
 
 The three production representatives are:
 
-| Class | Mounted source | Pre-policy observation | Expected `raster-v1` result |
+| Class | Mounted source | Pre-policy observation | Expected `raster-v2` result |
 | --- | --- | --- | --- |
 | Small conventional GeoTIFF | `bck_archive/cnc_project/optimization/prioritzr_output_country_allscales/solution_can_tar_100_res_1km.tif` | Rendered quickly; elapsed time and peak memory were not captured | Eligible through the decoded-size limit |
 | Cloud Optimized GeoTIFF | `eolab_catalog_data/hmi_2022/cog_HMv20240801_2022s_AA_300.tif` | Earlier publication/bounds failures prevented a clean performance measurement | Eligible only if its actual tiles and overviews satisfy the policy |

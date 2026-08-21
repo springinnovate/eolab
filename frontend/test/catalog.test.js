@@ -456,7 +456,7 @@ test("CatalogResultStream ignores a page from a superseded search", async () => 
 
 test("buildCatalogItemDetails presents scanned GeoTIFF metadata", () => {
   const renderingMetadata = {
-    policy: "raster-v1",
+    policy: "raster-v2",
     eligible: true,
     bounded_blocks: true,
     block_shapes: [[256, 256]],
@@ -562,6 +562,17 @@ test("getRasterVisualization distinguishes unassessed and non-raster Items", () 
   assert.equal(getRasterVisualization(legacyRaster), undefined);
   assert.equal(
     getRasterVisualization({
+      collection: "eolab-mounted-geotiffs",
+      assets: {
+        data: {
+          "eolab:rendering": { policy: "raster-v1", eligible: false },
+        },
+      },
+    }),
+    undefined,
+  );
+  assert.equal(
+    getRasterVisualization({
       collection: "eolab-mounted-vectors",
       assets: {},
     }),
@@ -571,7 +582,7 @@ test("getRasterVisualization distinguishes unassessed and non-raster Items", () 
 
 test("getRasterVisualization returns the scanner decision", () => {
   const renderingMetadata = {
-    policy: "raster-v1",
+    policy: "raster-v2",
     eligible: false,
     reason:
       "Visualization unavailable: this raster needs smaller internal blocks.",

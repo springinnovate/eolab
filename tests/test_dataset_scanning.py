@@ -188,7 +188,7 @@ def test_geotiff_uses_embedded_acquisition_datetime(tmp_path: Path) -> None:
     assert FILE_EXTENSION in item["stac_extensions"]
     assert item["assets"]["data"]["file:size"] > 0
     assert item["assets"]["data"][RENDERING_METADATA_KEY] == {
-        "policy": "raster-v1",
+        "policy": "raster-v2",
         "eligible": True,
         "bounded_blocks": True,
         "block_shapes": [[2, 3]],

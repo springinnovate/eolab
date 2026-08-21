@@ -20,7 +20,7 @@ GEOTIFF_MEDIA_TYPES = frozenset({GEOTIFF_MEDIA_TYPE, COG_MEDIA_TYPE})
 MOUNTED_GEOTIFF_COLLECTION_ID = "eolab-mounted-geotiffs"
 MOUNTED_GEOTIFF_ITEM_ID_PATTERN = r"^geotiff-[0-9a-f]{24}$"
 RENDERING_METADATA_KEY = "eolab:rendering"
-RENDERING_POLICY = "raster-v1"
+RENDERING_POLICY = "raster-v2"
 DIRECT_RENDERING_MAX_BYTES = 64 * 1024 * 1024
 OVERVIEW_RENDERING_MAX_BYTES = 64 * 1024 * 1024
 OVERVIEW_RENDERING_MAX_DIMENSION = 8192
@@ -76,7 +76,7 @@ RFC3339_TIMESTAMP = re.compile(
 def assess_raster_renderability(
     dataset: rasterio.io.DatasetReader,
 ) -> dict[str, Any]:
-    """Assess a raster's eligibility under the raster-v1 policy.
+    """Assess a raster's eligibility under the raster-v2 policy.
 
     The assessment reads only dataset structure and overview metadata. It does
     not sample or decode raster pixels.

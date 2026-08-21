@@ -6,7 +6,7 @@ const CATALOG_SUBSTRING_PROPERTIES = [
     "eolab_end_datetime_text"
 ];
 export const MOUNTED_GEOTIFF_COLLECTION_ID = "eolab-mounted-geotiffs";
-const RASTER_RENDERING_POLICY = "raster-v1";
+const RASTER_RENDERING_POLICY = "raster-v2";
 export const MOUNTED_DATASET_TYPES = new Map([
     [MOUNTED_GEOTIFF_COLLECTION_ID, "Raster"],
     ["eolab-mounted-vectors", "Vector"]
