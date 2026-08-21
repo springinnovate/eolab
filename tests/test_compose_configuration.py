@@ -314,6 +314,33 @@ def test_catalog_migrator_hides_datetime_paths_from_pgstac_indexes() -> None:
     assert migration.count("gin_trgm_ops") == 2
 
 
+def test_catalog_migrator_indexes_data_asset_media_type() -> None:
+    """Expose the authoritative nested Asset type as an indexed queryable."""
+    migration = (
+        COMPOSE_PATH.parent
+        / "catalog"
+        / "migrations"
+        / "0005_data_asset_media_type_queryable.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "pgstac.get_version() <> '0.9.12'" in migration
+    assert (
+        "CREATE OR REPLACE FUNCTION pgstac.eolab_data_asset_media_type"
+        not in migration
+    )
+    assert "DROP FUNCTION pgstac.eolab_data_asset_media_type(jsonb)" in migration
+    assert "'eolab_data_asset_media_type'" in migration
+    assert "'assets.data.type'" in migration
+    assert "existing_queryable.property_path IS NOT NULL" in migration
+    assert "existing_queryable.property_wrapper IS NOT NULL" in migration
+    assert "property_index_type IS NOT NULL" in migration
+    assert "eolab_items_data_asset_media_type_idx" in migration
+    assert (
+        "pgstac.to_text(content->'assets'->'data'->'type')"
+        in migration
+    )
+
+
 def test_stac_api_uses_the_pinned_upstream_image() -> None:
     """Use upstream CQL2 Filter support without a custom API image."""
     compose = COMPOSE_PATH.read_text(encoding="utf-8")

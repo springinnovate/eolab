@@ -5,6 +5,10 @@ const CATALOG_SUBSTRING_PROPERTIES = [
     "eolab_datetime_text",
     "eolab_end_datetime_text"
 ];
+const CATALOG_DATA_ASSET_MEDIA_TYPE_PROPERTY = "assets.data.type";
+const COG_MEDIA_TYPE =
+    "image/tiff; application=geotiff; profile=cloud-optimized";
+const CATALOG_FILTER_FIELD_PATTERN = /^[a-z][a-z0-9_-]*$/i;
 export const MOUNTED_GEOTIFF_COLLECTION_ID = "eolab-mounted-geotiffs";
 const RASTER_RENDERING_POLICY = "raster-v2";
 export const MOUNTED_DATASET_TYPES = new Map([
@@ -189,6 +193,85 @@ export function buildSubstringFilter(searchText) {
             args: [{ op: "casei", args: [{ property: propertyName }] }, pattern]
         }))
     };
+}
+
+/** Error raised when user-entered Catalog filter syntax is not supported. */
+export class CatalogSearchSyntaxError extends Error {
+    constructor(message) {
+        super(message);
+        this.name = "CatalogSearchSyntaxError";
+    }
+}
+
+/**
+ * Build the application-owned CQL2 filter for Catalog text and field syntax.
+ * Whitespace-separated text terms match independently and are combined with
+ * field filters using AND.
+ *
+ * @param {string} searchText Text and field filters entered by the user.
+ * @return {Object|null} CQL2 JSON filter, or null for an empty search.
+ * @throws {CatalogSearchSyntaxError} If a field filter is unsupported.
+ */
+export function buildCatalogFilter(searchText) {
+    const normalizedSearchText = searchText.normalize("NFKC").trim();
+    if (normalizedSearchText === "") {
+        return null;
+    }
+
+    const literalTokens = [];
+    let hasCogFormatFilter = false;
+    for (const token of normalizedSearchText.split(/\s+/)) {
+        if (token === "&") {
+            throw new CatalogSearchSyntaxError(
+                "Use spaces instead of &: search terms and filters are " +
+                "combined automatically."
+            );
+        }
+        const separatorIndex = token.indexOf(":");
+        const fieldName = token.slice(0, separatorIndex);
+        const fieldValue = token.slice(separatorIndex + 1);
+        if (
+            separatorIndex < 1 ||
+            !CATALOG_FILTER_FIELD_PATTERN.test(fieldName) ||
+            (fieldName.length === 1 && /^[\\/]/.test(fieldValue))
+        ) {
+            literalTokens.push(token);
+            continue;
+        }
+
+        const normalizedFieldName = fieldName.toLowerCase();
+        const normalizedFieldValue = fieldValue.toLowerCase();
+        if (normalizedFieldName !== "format") {
+            throw new CatalogSearchSyntaxError(
+                `Unsupported Catalog filter: ${fieldName}`
+            );
+        }
+        if (normalizedFieldValue !== "cog") {
+            throw new CatalogSearchSyntaxError(
+                "The supported format filter is format:cog."
+            );
+        }
+        if (hasCogFormatFilter) {
+            throw new CatalogSearchSyntaxError(
+                "The format filter may appear only once."
+            );
+        }
+        hasCogFormatFilter = true;
+    }
+
+    const filters = literalTokens.map((token) => buildSubstringFilter(token));
+    if (hasCogFormatFilter) {
+        filters.push({
+            op: "=",
+            args: [
+                { property: CATALOG_DATA_ASSET_MEDIA_TYPE_PROPERTY },
+                COG_MEDIA_TYPE
+            ]
+        });
+    }
+    return filters.length === 1
+        ? filters[0]
+        : { op: "and", args: filters };
 }
 
 /**
@@ -475,10 +558,10 @@ export class CatalogSearchClient {
     search(searchText) {
         this.numberMatchedEstimated = null;
         const searchBody = { limit: CATALOG_PAGE_SIZE };
-        const substringFilter = buildSubstringFilter(searchText);
-        if (substringFilter !== null) {
+        const catalogFilter = buildCatalogFilter(searchText);
+        if (catalogFilter !== null) {
             searchBody["filter-lang"] = "cql2-json";
-            searchBody.filter = substringFilter;
+            searchBody.filter = catalogFilter;
         }
         return this.request({
             href: `${this.catalogUrl}/search`,

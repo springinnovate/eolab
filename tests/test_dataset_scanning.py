@@ -220,6 +220,16 @@ def test_cog_profile_is_recorded_from_gdal_layout_metadata(
     assert rendering_metadata["compression"] == "DEFLATE"
 
 
+def test_cog_filename_does_not_define_the_storage_profile(tmp_path: Path) -> None:
+    """Do not classify an ordinary GeoTIFF from a suggestive filename."""
+    geotiff_path = tmp_path / "looks_like_a_cog.tif"
+    write_geotiff(geotiff_path)
+
+    item = build_geotiff_stac_item(tmp_path, geotiff_path)
+
+    assert item["assets"]["data"]["type"] == GEOTIFF_MEDIA_TYPE
+
+
 def test_external_geotiff_overviews_are_recorded(tmp_path: Path) -> None:
     """Recognize an overview pyramid stored outside the GeoTIFF."""
     geotiff_path = tmp_path / "external-overviews.tif"

@@ -71,8 +71,15 @@
                     id="catalog-search"
                     type="search"
                     autocomplete="off"
-                    placeholder="Filename, title, description, or date"
+                    placeholder="Filename, description, date, or format:cog"
+                    aria-describedby="catalog-search-help catalog-search-error"
                   />
+                  <small id="catalog-search-help">Example: ESA 2020 format:cog</small>
+                  <span
+                    class="catalog-search-error"
+                    id="catalog-search-error"
+                    role="status"
+                  ></span>
                 </label>
                 <section class="scan-card" aria-labelledby="scan-heading">
                   <div class="catalog-toolbar">
