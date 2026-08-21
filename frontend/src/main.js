@@ -1008,7 +1008,7 @@ function initializeControlPanel(leafletMap) {
     const catalogInspector = document.querySelector(
         "#catalog-item-inspector"
     );
-    let catalogWorkspaceIsExpanded = false;
+    let catalogWorkspaceIsExpanded = true;
 
     /**
      * Sets whether the Catalog uses the expanded workspace.
@@ -1027,7 +1027,7 @@ function initializeControlPanel(leafletMap) {
             String(isExpanded)
         );
         catalogWorkspaceToggle.textContent = isExpanded
-            ? "Return to map"
+            ? "Minimize catalog"
             : "Expand catalog";
         catalogInspector.setAttribute("aria-hidden", String(!isExpanded));
         window.setTimeout(
