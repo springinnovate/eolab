@@ -33,21 +33,15 @@ export async function loadWmsCapabilities(
     return capabilitiesUrl;
 }
 
-/**
- * Ask EOLab to publish the authoritative STAC Item as a WMS layer.
- *
- * @param {Object} item Selected STAC Item.
- * @param {Function} fetchImplementation Fetch implementation used by the browser.
- * @return {Promise<{layerName: string, bbox: number[]}>} Published WMS layer.
- * @throws {Error} If publication fails or violates the response contract.
- */
-export async function publishCatalogRaster(
+/** Send one selected STAC Item identity to a rendering endpoint. */
+async function postCatalogRasterAction(
+    endpoint,
     item,
     fetchImplementation = globalThis.fetch
 ) {
     const response = await fetchImplementation.call(
         globalThis,
-        "/api/rendering/layers",
+        endpoint,
         {
             method: "POST",
             headers: {
@@ -66,6 +60,30 @@ export async function publishCatalogRaster(
     }
 
     return response.json();
+}
+
+/** Assess and update one selected legacy raster Item. */
+export function assessCatalogRaster(
+    item,
+    fetchImplementation = globalThis.fetch
+) {
+    return postCatalogRasterAction(
+        "/api/rendering/assessments",
+        item,
+        fetchImplementation
+    );
+}
+
+/** Ask EOLab to publish the authoritative STAC Item as a WMS layer. */
+export function publishCatalogRaster(
+    item,
+    fetchImplementation = globalThis.fetch
+) {
+    return postCatalogRasterAction(
+        "/api/rendering/layers",
+        item,
+        fetchImplementation
+    );
 }
 
 /** Manage one WMS layer while ignoring publication results for stale selections. */

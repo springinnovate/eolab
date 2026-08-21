@@ -13,6 +13,7 @@ import rasterio
 from fastapi.testclient import TestClient
 from rasterio.transform import from_origin
 
+from eolab_app.geotiff import build_stac_item as build_geotiff_stac_item
 from eolab_app.main import _number_matched_is_estimated, create_app
 from eolab_app.settings import load_settings
 
@@ -289,12 +290,85 @@ def test_catalog_geotiff_is_published_idempotently(
     assert len({request.url.path for request in geoserver_requests}) == 2
 
 
+def test_one_legacy_raster_is_assessed_and_updated(
+    configured_environment: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    version_file_path: Path,
+) -> None:
+    """Backfill one selected Item without scanning the mounted directory."""
+    source_path = tmp_path / "raster.tif"
+    _write_geotiff(source_path)
+    current_item = build_geotiff_stac_item(tmp_path, source_path)
+    item_id = current_item["id"]
+    del current_item["assets"]["data"]["eolab:rendering"]
+    monkeypatch.setenv("SCAN_MOUNT_PATH", str(tmp_path))
+    monkeypatch.setenv("SCAN_PATHS_WITHIN_MOUNT", '["."]')
+    catalog_requests = []
+
+    def catalog_response(request: httpx2.Request) -> httpx2.Response:
+        nonlocal current_item
+        catalog_requests.append(request)
+        item_path = (
+            "/collections/eolab-mounted-geotiffs/items/" + item_id
+        )
+        if request.method == "GET" and request.url.path == item_path:
+            return httpx2.Response(200, json=current_item)
+        if request.method == "POST":
+            assert request.url.path == (
+                "/collections/eolab-mounted-geotiffs/bulk_items"
+            )
+            request_document = json.loads(request.content)
+            assert request_document["method"] == "upsert"
+            assert list(request_document["items"]) == [item_id]
+            current_item = request_document["items"][item_id]
+            return httpx2.Response(200, json="Successfully upserted 1 item.")
+        raise AssertionError(f"Unexpected catalog request: {request}")
+
+    with TestClient(
+        create_app(
+            version_file_path,
+            catalog_transport=httpx2.MockTransport(catalog_response),
+        )
+    ) as client:
+        request_body = {
+            "collectionId": "eolab-mounted-geotiffs",
+            "itemId": item_id,
+        }
+        first_response = client.post(
+            "/api/rendering/assessments",
+            json=request_body,
+        )
+        repeated_response = client.post(
+            "/api/rendering/assessments",
+            json=request_body,
+        )
+
+    assert first_response.status_code == 200
+    assert first_response.json()["assets"]["data"]["eolab:rendering"] == {
+        "policy": "raster-v1",
+        "eligible": True,
+        "bounded_blocks": True,
+        "block_shapes": [[1, 1]],
+        "overview_factors": [[]],
+        "overview_storage": "none",
+        "compression": None,
+        "estimated_uncompressed_bytes": 1,
+    }
+    assert repeated_response.json() == first_response.json()
+    assert [request.method for request in catalog_requests] == [
+        "GET",
+        "POST",
+        "GET",
+    ]
+
+
 @pytest.mark.parametrize(
     ("rendering_metadata", "expected_detail"),
     (
         (
             None,
-            "Visualization unavailable: rescan this raster to assess it.",
+            "Visualization unavailable: assess this raster first.",
         ),
         (
             {
@@ -468,6 +542,10 @@ def test_raster_changed_during_publication_is_not_authorized(
 
 
 @pytest.mark.parametrize(
+    "endpoint",
+    ("/api/rendering/assessments", "/api/rendering/layers"),
+)
+@pytest.mark.parametrize(
     "request_body",
     (
         {
@@ -487,9 +565,10 @@ def test_raster_changed_during_publication_is_not_authorized(
         },
     ),
 )
-def test_raster_publication_rejects_browser_paths_and_unsupported_items(
+def test_raster_actions_reject_browser_paths_and_unsupported_items(
     configured_environment: None,
     version_file_path: Path,
+    endpoint: str,
     request_body: dict[str, object],
 ) -> None:
     """Reject invalid public input before making any upstream request."""
@@ -502,7 +581,7 @@ def test_raster_publication_rejects_browser_paths_and_unsupported_items(
         )
     )
 
-    response = client.post("/api/rendering/layers", json=request_body)
+    response = client.post(endpoint, json=request_body)
 
     assert response.status_code == 422
     upstream_request.assert_not_awaited()

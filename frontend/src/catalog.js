@@ -7,8 +7,6 @@ const CATALOG_SUBSTRING_PROPERTIES = [
 ];
 export const MOUNTED_GEOTIFF_COLLECTION_ID = "eolab-mounted-geotiffs";
 const RASTER_RENDERING_POLICY = "raster-v1";
-const UNASSESSED_RASTER_MESSAGE =
-    "Visualization unavailable: rescan this raster to assess it.";
 export const MOUNTED_DATASET_TYPES = new Map([
     [MOUNTED_GEOTIFF_COLLECTION_ID, "Raster"],
     ["eolab-mounted-vectors", "Vector"]
@@ -18,7 +16,8 @@ export const MOUNTED_DATASET_TYPES = new Map([
  * Returns the scanner-owned visualization decision for a mounted GeoTIFF.
  *
  * @param {Object|null} item Selected STAC Item.
- * @return {Object|null} Rendering metadata, or null for a non-raster Item.
+ * @return {Object|null|undefined} Rendering metadata, null for a non-raster
+ * Item, or undefined when the selected raster has not been assessed.
  */
 export function getRasterVisualization(item) {
     if (item?.collection !== MOUNTED_GEOTIFF_COLLECTION_ID) {
@@ -27,11 +26,7 @@ export function getRasterVisualization(item) {
     const renderingMetadata = item.assets.data["eolab:rendering"];
     return renderingMetadata?.policy === RASTER_RENDERING_POLICY
         ? renderingMetadata
-        : {
-            policy: RASTER_RENDERING_POLICY,
-            eligible: false,
-            reason: UNASSESSED_RASTER_MESSAGE
-        };
+        : undefined;
 }
 
 /** Format a byte count without implying decimal storage units. */

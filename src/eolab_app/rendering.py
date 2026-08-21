@@ -16,6 +16,7 @@ from eolab_app.geotiff import (
     MOUNTED_GEOTIFF_ITEM_ID_PATTERN,
     RENDERING_METADATA_KEY,
     RENDERING_POLICY,
+    build_stac_item as build_geotiff_stac_item,
     inspect_geotiff_renderability,
 )
 
@@ -163,16 +164,12 @@ def _mounted_geotiff_path(item: dict[str, Any], scan_mount_path: Path) -> Path:
     return source_path
 
 
-async def publish_catalog_raster(
+async def _load_catalog_item(
     request: CatalogRasterRequest,
-    scan_mount_path: Path,
     catalog_client: httpx2.AsyncClient,
-    geoserver_client: httpx2.AsyncClient,
     catalog_internal_url: str,
-    geoserver_internal_url: str,
-    raster_registry: PublishedRasterRegistry,
-) -> PublishedRaster:
-    """Resolve a STAC Item and idempotently publish its GeoTIFF in GeoServer."""
+) -> dict[str, Any]:
+    """Load the authoritative scanner-owned STAC Item."""
     catalog_item_url = (
         f"{catalog_internal_url.rstrip('/')}/collections/"
         f"{request.collection_id}/items/{request.item_id}"
@@ -211,6 +208,91 @@ async def publish_catalog_raster(
             status_code=502,
             detail="The STAC catalog returned an invalid Item",
         )
+    return item
+
+
+async def assess_catalog_raster(
+    request: CatalogRasterRequest,
+    scan_mount_path: Path,
+    catalog_client: httpx2.AsyncClient,
+    catalog_internal_url: str,
+) -> dict[str, Any]:
+    """Assess and update one legacy raster Item without scanning its siblings."""
+    item = await _load_catalog_item(
+        request,
+        catalog_client,
+        catalog_internal_url,
+    )
+    source_path = _mounted_geotiff_path(item, scan_mount_path)
+    existing_assessment = item["assets"]["data"].get(RENDERING_METADATA_KEY)
+    if (
+        existing_assessment is not None
+        and existing_assessment.get("policy") == RENDERING_POLICY
+    ):
+        return item
+
+    try:
+        updated_item = await asyncio.to_thread(
+            build_geotiff_stac_item,
+            scan_mount_path,
+            source_path,
+        )
+    except ValueError as error:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Visualization unavailable: {error}",
+        ) from error
+    except (OSError, rasterio.errors.RasterioError) as error:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Visualization unavailable: the raster metadata could not "
+                "be read."
+            ),
+        ) from error
+
+    if updated_item["id"] != request.item_id:
+        raise HTTPException(
+            status_code=409,
+            detail="The mounted GeoTIFF no longer matches the catalog Item",
+        )
+    try:
+        update_response = await catalog_client.post(
+            f"{catalog_internal_url.rstrip('/')}/collections/"
+            f"{request.collection_id}/bulk_items",
+            json={
+                "method": "upsert",
+                "items": {request.item_id: updated_item},
+            },
+        )
+    except httpx2.RequestError as error:
+        raise HTTPException(
+            status_code=502,
+            detail="The STAC catalog service is unavailable",
+        ) from error
+    if not update_response.is_success:
+        raise HTTPException(
+            status_code=502,
+            detail="The STAC catalog could not save the raster assessment",
+        )
+    return updated_item
+
+
+async def publish_catalog_raster(
+    request: CatalogRasterRequest,
+    scan_mount_path: Path,
+    catalog_client: httpx2.AsyncClient,
+    geoserver_client: httpx2.AsyncClient,
+    catalog_internal_url: str,
+    geoserver_internal_url: str,
+    raster_registry: PublishedRasterRegistry,
+) -> PublishedRaster:
+    """Resolve a STAC Item and idempotently publish its GeoTIFF in GeoServer."""
+    item = await _load_catalog_item(
+        request,
+        catalog_client,
+        catalog_internal_url,
+    )
     source_path = _mounted_geotiff_path(item, scan_mount_path)
     rendering_metadata = item["assets"]["data"].get(RENDERING_METADATA_KEY)
     if (
@@ -219,9 +301,7 @@ async def publish_catalog_raster(
     ):
         raise HTTPException(
             status_code=409,
-            detail=(
-                "Visualization unavailable: rescan this raster to assess it."
-            ),
+            detail="Visualization unavailable: assess this raster first.",
         )
     if not rendering_metadata["eligible"]:
         raise HTTPException(

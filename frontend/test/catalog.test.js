@@ -553,17 +553,13 @@ test("buildCatalogItemDetails presents scanned GeoTIFF metadata", () => {
   assert.deepEqual(inspector.fields, []);
 });
 
-test("getRasterVisualization fails closed for legacy raster Items", () => {
+test("getRasterVisualization distinguishes unassessed and non-raster Items", () => {
   const legacyRaster = {
     collection: "eolab-mounted-geotiffs",
     assets: { data: {} },
   };
 
-  assert.deepEqual(getRasterVisualization(legacyRaster), {
-    policy: "raster-v1",
-    eligible: false,
-    reason: "Visualization unavailable: rescan this raster to assess it.",
-  });
+  assert.equal(getRasterVisualization(legacyRaster), undefined);
   assert.equal(
     getRasterVisualization({
       collection: "eolab-mounted-vectors",
@@ -576,7 +572,9 @@ test("getRasterVisualization fails closed for legacy raster Items", () => {
 test("getRasterVisualization returns the scanner decision", () => {
   const renderingMetadata = {
     policy: "raster-v1",
-    eligible: true,
+    eligible: false,
+    reason:
+      "Visualization unavailable: this raster needs smaller internal blocks.",
   };
 
   assert.equal(

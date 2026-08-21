@@ -15,6 +15,7 @@ from eolab_app.rendering import (
     CatalogRasterRequest,
     PublishedRaster,
     PublishedRasterRegistry,
+    assess_catalog_raster,
     publish_catalog_raster,
 )
 from eolab_app.settings import APPLICATION_VERSION_PATH, load_settings
@@ -333,6 +334,22 @@ def create_app(
             return await scan_manager.start()
         except RuntimeError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @application.post(
+        "/api/rendering/assessments",
+        response_model=dict[str, object],
+        tags=["rendering"],
+    )
+    async def assess_raster(
+        request: CatalogRasterRequest,
+    ) -> dict[str, object]:
+        """Assess and update one selected legacy raster Item."""
+        return await assess_catalog_raster(
+            request,
+            app_global_configuration.scan_mount_path,
+            catalog_client,
+            app_global_configuration.catalog_internal_url,
+        )
 
     @application.post(
         "/api/rendering/layers",

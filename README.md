@@ -70,7 +70,7 @@ Open `http://localhost:8000`. The local override also makes the GeoServer admini
 
 GeoServer is configured automatically. Keep `EOLAB_GEOSERVER_ADMIN_PASSWORD` and `EOLAB_GEOSERVER_MASTER_PASSWORD` stable in Coolify. The administrator password must contain at least 16 letters, numbers, hyphens, underscores, or periods. The master password must contain at least eight characters with no surrounding whitespace and must differ from the administrator password.
 
-The scanner assesses mounted GeoTIFFs before offering **View on map**. The initial policy accepts supported one-band rasters that are small enough for direct rendering, or larger rasters with bounded base-resolution blocks and a complete internal overview pyramid. Other rasters remain fully searchable and inspectable with an explanation of why visualization is unavailable. Existing raster Items require a rescan before they receive this assessment. See [Raster rendering policy and experiment](docs/raster-rendering.md) for the exact limits and large-raster recommendation.
+The scanner assesses mounted GeoTIFFs before offering **View on map**. The initial policy accepts supported one-band rasters that are small enough for direct rendering, or larger rasters with bounded base-resolution blocks and a complete internal overview pyramid. Other rasters remain fully searchable and inspectable with an explanation of why visualization is unavailable. For existing Items created before this policy, **Assess for visualization** inspects and updates only the selected raster. See [Raster rendering policy and experiment](docs/raster-rendering.md) for the exact limits and large-raster recommendation.
 
 ## Scan mounted datasets
 

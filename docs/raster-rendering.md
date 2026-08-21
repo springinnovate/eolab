@@ -37,8 +37,8 @@ does not include masks, overviews, decoder buffers, reprojection buffers,
 rendered output, or concurrent requests.
 
 Existing Items have no `raster-v1` assessment. They remain searchable and
-inspectable, but visualization stays unavailable until the mounted source is
-rescanned.
+inspectable, and **Assess for visualization** updates only the selected Item.
+A full mounted-source rescan is not required for this upgrade.
 
 Before publication, EOLab resolves the authoritative STAC Item and repeats the
 same bounded metadata inspection on the current mounted file. This second
@@ -109,9 +109,9 @@ a regional view. Run each request once cold and once again unchanged. Record
 HTTP status, response bytes, `curl` wall time, sampled peak GeoServer memory and
 CPU from `docker stats`, and whether `/healthz` remains healthy.
 
-Also verify the browser contract directly: an eligible Item shows **View on
-map** without a warning, while an ineligible or unassessed Item hides the button
-and shows the scanner's exact explanation.
+Also verify the browser contract directly: an unassessed Item shows **Assess for
+visualization**; afterward the same location either shows **View on map** or the
+scanner's exact unavailable explanation.
 
 The three production representatives are:
 

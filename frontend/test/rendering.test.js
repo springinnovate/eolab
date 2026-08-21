@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  assessCatalogRaster,
   CatalogRasterLayerController,
   loadWmsCapabilities,
   publishCatalogRaster,
@@ -58,6 +59,45 @@ test("loadWmsCapabilities rejects a non-WMS document", async () => {
     ),
     /unexpected document/
   );
+});
+
+test("assessCatalogRaster sends only the STAC Item identity", async () => {
+  const requests = [];
+  const assessedItem = {
+    ...MOUNTED_GEOTIFF_ITEM,
+    assets: {
+      data: {
+        "eolab:rendering": { policy: "raster-v1", eligible: true },
+      },
+    },
+  };
+
+  assert.deepEqual(
+    await assessCatalogRaster(MOUNTED_GEOTIFF_ITEM, async (url, options) => {
+      requests.push({ url, options });
+      return new Response(JSON.stringify(assessedItem), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }),
+    assessedItem,
+  );
+  assert.deepEqual(requests, [
+    {
+      url: "/api/rendering/assessments",
+      options: {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          collectionId: "eolab-mounted-geotiffs",
+          itemId: "geotiff-0123456789abcdef01234567",
+        }),
+      },
+    },
+  ]);
 });
 
 test("publishCatalogRaster sends only the STAC Item identity", async () => {
