@@ -49,7 +49,17 @@ class PublishedRaster(BaseModel):
 
 
 def _source_signature(source_path: Path) -> SourceSignature:
-    """Identify the mounted file inspected before GeoServer publication."""
+    """Identify the mounted file inspected before GeoServer publication.
+
+    Args:
+        source_path: Mounted GeoTIFF to identify.
+
+    Returns:
+        Filesystem identity, size, and modification timestamps.
+
+    Raises:
+        OSError: If the source metadata cannot be read.
+    """
     file_status = source_path.stat()
     return (
         file_status.st_dev,
@@ -72,7 +82,17 @@ class PublishedRasterRegistry:
         source_path: Path,
         inspected_signature: SourceSignature,
     ) -> None:
-        """Authorize a layer if its source is unchanged since inspection."""
+        """Authorize a layer if its source is unchanged since inspection.
+
+        Args:
+            layer_name: Workspace-qualified GeoServer layer name.
+            source_path: Mounted GeoTIFF backing the layer.
+            inspected_signature: Source identity captured before publication.
+
+        Raises:
+            HTTPException: If the source changed or disappeared during
+                publication.
+        """
         try:
             current_signature = _source_signature(source_path)
         except OSError:
@@ -85,7 +105,15 @@ class PublishedRasterRegistry:
         self._sources[layer_name] = (source_path, inspected_signature)
 
     def require_current(self, layer_name: str) -> None:
-        """Require a layer authorized from a source that has not changed."""
+        """Require a layer authorized from a source that has not changed.
+
+        Args:
+            layer_name: Workspace-qualified GeoServer layer name.
+
+        Raises:
+            HTTPException: If the layer is not authorized or its source has
+                changed since publication.
+        """
         authorization = self._sources.get(layer_name)
         if authorization is None:
             raise HTTPException(
@@ -106,7 +134,19 @@ class PublishedRasterRegistry:
 
 
 def _mounted_geotiff_path(item: dict[str, Any], scan_mount_path: Path) -> Path:
-    """Resolve the scanner-owned data Asset to a readable mounted GeoTIFF."""
+    """Resolve the scanner-owned data Asset to a readable mounted GeoTIFF.
+
+    Args:
+        item: Authoritative STAC Item from the catalog.
+        scan_mount_path: Read-only root shared by the scanner and GeoServer.
+
+    Returns:
+        Canonical path to the mounted GeoTIFF.
+
+    Raises:
+        HTTPException: If the data Asset is missing, unavailable, not a
+            GeoTIFF, or outside the scan mount.
+    """
     assets = item.get("assets")
     data_asset = assets.get("data") if isinstance(assets, dict) else None
     if not isinstance(data_asset, dict) or (
@@ -162,7 +202,20 @@ async def _load_catalog_item(
     catalog_client: httpx2.AsyncClient,
     catalog_internal_url: str,
 ) -> dict[str, Any]:
-    """Load the authoritative scanner-owned STAC Item."""
+    """Load the authoritative scanner-owned STAC Item.
+
+    Args:
+        request: Validated Collection and Item identity.
+        catalog_client: Shared client for the internal STAC API.
+        catalog_internal_url: Internal STAC API base URL.
+
+    Returns:
+        STAC Item matching the requested identity.
+
+    Raises:
+        HTTPException: If the catalog is unavailable, the Item is missing, or
+            the response violates the requested identity.
+    """
     catalog_item_url = (
         f"{catalog_internal_url.rstrip('/')}/collections/"
         f"{request.collection_id}/items/{request.item_id}"
@@ -204,13 +257,32 @@ async def _load_catalog_item(
     return item
 
 
-async def assess_catalog_raster(
+async def update_catalog_raster_assessment(
     request: CatalogRasterRequest,
     scan_mount_path: Path,
     catalog_client: httpx2.AsyncClient,
     catalog_internal_url: str,
 ) -> dict[str, Any]:
-    """Assess and update one legacy raster Item without scanning its siblings."""
+    """Update one Item with the current raster visualization assessment.
+
+    Existing assessments under the current policy are returned unchanged.
+    Otherwise, the function rebuilds the Item from its mounted GeoTIFF and
+    upserts that one Item without scanning sibling datasets.
+
+    Args:
+        request: Validated Collection and Item identity.
+        scan_mount_path: Read-only root containing the cataloged GeoTIFF.
+        catalog_client: Shared client for the internal STAC API.
+        catalog_internal_url: Internal STAC API base URL.
+
+    Returns:
+        The existing or newly assessed STAC Item.
+
+    Raises:
+        HTTPException: If the Item cannot be loaded, its GeoTIFF cannot be
+            assessed, the mounted file no longer matches the Item, or the
+            updated Item cannot be saved.
+    """
     item = await _load_catalog_item(
         request,
         catalog_client,
@@ -280,7 +352,26 @@ async def publish_catalog_raster(
     geoserver_internal_url: str,
     raster_registry: PublishedRasterRegistry,
 ) -> PublishedRaster:
-    """Resolve a STAC Item and idempotently publish its GeoTIFF in GeoServer."""
+    """Resolve and idempotently publish one approved catalog GeoTIFF.
+
+    Args:
+        request: Validated Collection and Item identity.
+        scan_mount_path: Read-only root shared with GeoServer.
+        catalog_client: Shared client for the internal STAC API.
+        geoserver_client: Authenticated client for GeoServer REST requests.
+        catalog_internal_url: Internal STAC API base URL.
+        geoserver_internal_url: Internal GeoServer base URL.
+        raster_registry: Registry authorizing public WMS access to current
+            source files.
+
+    Returns:
+        Browser-safe WMS layer identity and WGS 84 bounding box.
+
+    Raises:
+        HTTPException: If the Item or source is unavailable or ineligible, the
+            current source no longer passes assessment, or GeoServer cannot
+            publish and style the layer.
+    """
     item = await _load_catalog_item(
         request,
         catalog_client,

@@ -15,8 +15,8 @@ from eolab_app.rendering import (
     CatalogRasterRequest,
     PublishedRaster,
     PublishedRasterRegistry,
-    assess_catalog_raster,
     publish_catalog_raster,
+    update_catalog_raster_assessment,
 )
 from eolab_app.settings import APPLICATION_VERSION_PATH, load_settings
 from eolab_app.scanning import PgStacCatalogDatabase, ScanManager, StacApiWriter
@@ -344,7 +344,7 @@ def create_app(
         request: CatalogRasterRequest,
     ) -> dict[str, object]:
         """Assess and update one selected legacy raster Item."""
-        return await assess_catalog_raster(
+        return await update_catalog_raster_assessment(
             request,
             app_global_configuration.scan_mount_path,
             catalog_client,
