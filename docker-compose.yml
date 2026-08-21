@@ -103,9 +103,7 @@ services:
       - "8080"
     volumes:
       - geoserver-data:/opt/geoserver_data
-      # Primary container-level protection. The image also verifies the
-      # effective kernel mount mode at startup in case deployment metadata
-      # reports or requests this bind as writable.
+      # GeoServer also verifies at startup that /scan-source is read-only.
       - type: bind
         source: ${EOLAB_SCAN_MOUNT_PATH}
         target: /scan-source
