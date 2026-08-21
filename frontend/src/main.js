@@ -485,9 +485,6 @@ function initializeRasterVisualization(
     const rasterSampleWindowNumber = document.querySelector(
         "#raster-sample-window-number"
     );
-    const toggleRasterSampleWindowButton = document.querySelector(
-        "#toggle-raster-sample-window"
-    );
     const sampleRasterMapCenterButton = document.querySelector(
         "#sample-raster-map-center"
     );
@@ -1019,33 +1016,16 @@ function initializeRasterVisualization(
                 `Approximately ${selectedRasterWindowSizeKm} km × ` +
                 `${selectedRasterWindowSizeKm} km window selected: ` +
                 `W ${west.toFixed(3)}, S ${south.toFixed(3)}, ` +
-                `E ${east.toFixed(3)}, N ${north.toFixed(3)}.` +
-                (rasterSampleWindowController.isEnabled
-                    ? " Move and click again to replace it."
-                    : "");
+                `E ${east.toFixed(3)}, N ${north.toFixed(3)}. ` +
+                "Move and click again to replace it.";
         } else {
-            nextStatus = rasterSampleWindowController.isEnabled
-                ? "Whole-raster distribution selected. Move over the map " +
-                  "and click to sample this window."
-                : "Whole-raster distribution selected.";
+            nextStatus =
+                "Whole-raster distribution selected. Move over the map " +
+                "and click to display this window's histogram.";
         }
         if (rasterSampleWindowStatus.textContent !== nextStatus) {
             rasterSampleWindowStatus.textContent = nextStatus;
         }
-    }
-
-    /** Keep the toggle semantics and map handlers synchronized. */
-    function setRasterSampleWindowMode(enabled) {
-        if (enabled) {
-            rasterSampleWindowController.enable();
-        } else {
-            rasterSampleWindowController.disable();
-        }
-        toggleRasterSampleWindowButton.setAttribute(
-            "aria-pressed",
-            String(enabled)
-        );
-        renderRasterSampleWindowGuidance("");
     }
 
     /** Commit one map rectangle and replace only selected-area statistics. */
@@ -1087,7 +1067,6 @@ function initializeRasterVisualization(
         selectedRasterBounds = null;
         selectedRasterWindowSizeKm = null;
         setRasterSampleWindowSize(DEFAULT_RASTER_SAMPLE_WINDOW_SIZE_KM);
-        toggleRasterSampleWindowButton.setAttribute("aria-pressed", "false");
         clearRasterSampleWindowButton.disabled = true;
         renderRasterSampleWindowGuidance("");
     }
@@ -1182,6 +1161,8 @@ function initializeRasterVisualization(
             rasterPixelProbeLabel = getCatalogRasterBasename(item);
             rasterStyleControls.hidden = false;
             pixelProbeController.activate(item);
+            rasterSampleWindowController.enable();
+            renderRasterSampleWindowGuidance("");
             void wholeRasterStatisticsController.activate(item, {
                 styleRevision: rasterStyleRevision,
                 autoApply: rasterStyleRevision === 0
@@ -1280,9 +1261,6 @@ function initializeRasterVisualization(
                 rasterSampleWindowController.windowSizeKm
             );
         }
-    });
-    toggleRasterSampleWindowButton.addEventListener("click", () => {
-        setRasterSampleWindowMode(!rasterSampleWindowController.isEnabled);
     });
     sampleRasterMapCenterButton.addEventListener("click", () => {
         rasterSampleWindowController.sampleMapCenter();

@@ -1082,7 +1082,7 @@ export class RasterSampleWindowController {
         return this.#selectAt(this.leafletMap.getCenter());
     }
 
-    /** Remove only the committed area, retaining the current selection mode. */
+    /** Remove only the committed area, retaining the hover interaction. */
     clearSelection() {
         if (this.selectionLayer !== null) {
             this.leafletMap.removeLayer(this.selectionLayer);

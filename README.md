@@ -92,16 +92,16 @@ While a raster is displayed, **Raster appearance** shows an approximate
 band-1 distribution from a fixed, bounded sample. EOLab initially applies the
 sample's 5th, 50th, and 95th percentiles, and the user can apply other ordered
 percentiles or directly edit the color palette and minimum, midpoint, and
-maximum display values. **Select area on map** adds a 1–300 km window that
+maximum display values. Whenever a raster is displayed, a 1–300 km window
 follows the pointer without reading the raster; clicking or tapping fixes that
-window and calculates its bounded distribution. **Sample map center** provides
-the same action for keyboard users, and **Use whole raster** restores the
-retained dataset distribution. Masked, nodata, and non-finite samples are
-excluded. A statistics failure leaves the raster, manual appearance controls,
-and hover pixel picker available. These appearance changes are session-only:
-they do not modify either the source raster or its catalog Item. Selected
-windows that cross a pole or the antimeridian are rejected rather than being
-interpreted as a different area.
+window and displays its bounded histogram. **Sample map center** provides the
+same action for keyboard users, and **Use whole raster** restores the retained
+dataset distribution while leaving the hover window active. Masked, nodata,
+and non-finite samples are excluded. A statistics failure leaves the raster,
+manual appearance controls, and hover pixel picker available. These appearance
+changes are session-only: they do not modify either the source raster or its
+catalog Item. Selected windows that cross a pole or the antimeridian are
+rejected rather than being interpreted as a different area.
 
 ## Scan mounted datasets
 
