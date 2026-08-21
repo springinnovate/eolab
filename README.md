@@ -86,7 +86,7 @@ redeploy to tune the service; Java detects the Docker CPU limit without an
 count must be a positive integer, and the heap must be at least `256m` with an
 `m` or `g` suffix.
 
-The scanner assesses mounted GeoTIFFs before offering **View on map**. The initial policy accepts supported one-band rasters that are small enough for direct rendering, or larger rasters with bounded base-resolution blocks and a complete internal overview pyramid. Other rasters remain fully searchable and inspectable with an explanation of why visualization is unavailable. For existing Items created before this policy, **Assess for visualization** inspects and updates only the selected raster. See [Raster rendering policy and experiment](docs/raster-rendering.md) for the exact limits and large-raster recommendation.
+The scanner assesses mounted GeoTIFFs before offering **View on map**. The initial policy accepts supported one-band rasters that are small enough for direct rendering, or larger rasters with bounded base-resolution blocks and a complete internal overview pyramid. Other rasters remain fully searchable and inspectable with an explanation of why visualization is unavailable. For existing Items created before this policy, **Assess for visualization** inspects and updates only the selected raster.
 
 ## Scan mounted datasets
 
