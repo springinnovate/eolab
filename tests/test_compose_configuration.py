@@ -44,7 +44,9 @@ def test_scan_paths_share_one_read_only_deployment_mount() -> None:
 def test_app_and_geoserver_refuse_a_writable_scan_mount() -> None:
     """Verify the effective kernel mode before either long-running service starts."""
     repository_root = COMPOSE_PATH.parent
-    app_dockerfile = (repository_root / "Dockerfile").read_text(encoding="utf-8")
+    app_dockerfile = (repository_root / "Dockerfile.app").read_text(
+        encoding="utf-8"
+    )
     geoserver_dockerfile = (repository_root / "Dockerfile.geoserver").read_text(
         encoding="utf-8"
     )
@@ -68,7 +70,9 @@ def test_app_and_geoserver_refuse_a_writable_scan_mount() -> None:
 
 def test_app_image_avoids_repeated_gdal_directory_listing() -> None:
     """Avoid enumerating large mounted directories for every dataset open."""
-    dockerfile = (COMPOSE_PATH.parent / "Dockerfile").read_text(encoding="utf-8")
+    dockerfile = (COMPOSE_PATH.parent / "Dockerfile.app").read_text(
+        encoding="utf-8"
+    )
 
     assert "GDAL_DISABLE_READDIR_ON_OPEN=TRUE" in dockerfile
 

@@ -166,7 +166,7 @@ services:
   app:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.app
       args:
         SOURCE_COMMIT: ${SOURCE_COMMIT:?SOURCE_COMMIT must identify the source revision}
     restart: unless-stopped
