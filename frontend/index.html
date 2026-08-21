@@ -137,6 +137,86 @@
                     aria-atomic="true"
                   ></p>
                 </div>
+                <fieldset
+                  class="raster-style-controls"
+                  id="raster-style-controls"
+                  hidden
+                >
+                  <legend>Raster appearance</legend>
+                  <label class="raster-palette" for="raster-palette">
+                    <span>Color palette</span>
+                    <select id="raster-palette"></select>
+                  </label>
+                  <div class="raster-style-stops">
+                    <label for="raster-minimum">
+                      <span>Minimum</span>
+                      <input
+                        id="raster-minimum"
+                        type="number"
+                        step="any"
+                        aria-describedby="raster-style-error"
+                      />
+                    </label>
+                    <input
+                      id="raster-minimum-color"
+                      type="color"
+                      aria-label="Minimum color"
+                      aria-describedby="raster-style-error"
+                    />
+                    <label for="raster-midpoint">
+                      <span>Midpoint</span>
+                      <input
+                        id="raster-midpoint"
+                        type="number"
+                        step="any"
+                        aria-describedby="raster-style-error"
+                      />
+                    </label>
+                    <input
+                      id="raster-midpoint-color"
+                      type="color"
+                      aria-label="Midpoint color"
+                      aria-describedby="raster-style-error"
+                    />
+                    <label for="raster-maximum">
+                      <span>Maximum</span>
+                      <input
+                        id="raster-maximum"
+                        type="number"
+                        step="any"
+                        aria-describedby="raster-style-error"
+                      />
+                    </label>
+                    <input
+                      id="raster-maximum-color"
+                      type="color"
+                      aria-label="Maximum color"
+                      aria-describedby="raster-style-error"
+                    />
+                  </div>
+                  <div
+                    class="raster-legend"
+                    id="raster-legend"
+                    role="img"
+                  ></div>
+                  <div class="raster-legend-labels" aria-hidden="true">
+                    <span id="raster-legend-minimum"></span>
+                    <span id="raster-legend-midpoint"></span>
+                    <span id="raster-legend-maximum"></span>
+                  </div>
+                  <p
+                    class="raster-style-error"
+                    id="raster-style-error"
+                    role="status"
+                  ></p>
+                  <button
+                    class="secondary-button"
+                    id="reset-raster-style"
+                    type="button"
+                  >
+                    Reset colors and range
+                  </button>
+                </fieldset>
                 <div id="catalog-inspector-content">
                   <div class="catalog-inspector-empty">
                     <strong>No item selected</strong>
@@ -189,7 +269,13 @@
       <button class="panel-opener" id="open-panel" type="button" hidden>
         OPEN LABEL TO BE SET BY CONFIGURATION
       </button>
-      <div class="map-position" id="map-position" aria-live="polite">0.000, 0.000</div>
+      <div class="map-position" id="map-position">0.000, 0.000</div>
+      <div
+        class="raster-pixel-probe"
+        id="raster-pixel-probe"
+        aria-hidden="true"
+        hidden
+      ></div>
     </main>
 
     <script type="module" src="/src/main.js"></script>

@@ -2,15 +2,73 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  applyRasterColorPalette,
   assessCatalogRaster,
+  buildRasterLegend,
   CatalogRasterLayerController,
+  DEFAULT_RASTER_STYLE,
   loadWmsCapabilities,
+  RasterPixelProbeController,
   publishCatalogRaster,
+  sampleCatalogRasterPixel,
+  serializeRasterStyle,
 } from "../src/rendering.js";
 
 const MOUNTED_GEOTIFF_ITEM = Object.freeze({
   collection: "eolab-mounted-geotiffs",
   id: "geotiff-0123456789abcdef01234567",
+});
+
+test("raster style serializes the dynamic SLD contract", () => {
+  assert.equal(
+    serializeRasterStyle(DEFAULT_RASTER_STYLE),
+    "min:0;med:50;max:100;cmin:#2b83ba;cmed:#ffffbf;cmax:#d7191c",
+  );
+});
+
+test("raster palettes preserve thresholds and drive the numeric legend", () => {
+  const style = applyRasterColorPalette(
+    { ...DEFAULT_RASTER_STYLE, midpoint: 25 },
+    "viridis",
+  );
+
+  assert.deepEqual(style, {
+    minimum: 0,
+    midpoint: 25,
+    maximum: 100,
+    minimumColor: "#440154",
+    midpointColor: "#21918c",
+    maximumColor: "#fde725",
+  });
+  assert.deepEqual(buildRasterLegend(style), {
+    midpointPosition: 25,
+    gradient:
+      "linear-gradient(90deg, #440154 0%, #21918c 25%, #fde725 100%)",
+    description:
+      "Color ramp: 0 at #440154, 25 at #21918c, and 100 at #fde725.",
+  });
+});
+
+test("raster style rejects values outside its six-field contract", () => {
+  assert.throws(
+    () => serializeRasterStyle({ ...DEFAULT_RASTER_STYLE, minimum: NaN }),
+    /finite numbers/,
+  );
+  assert.throws(
+    () => serializeRasterStyle({ ...DEFAULT_RASTER_STYLE, midpoint: 100 }),
+    /Minimum must be less/,
+  );
+  assert.throws(
+    () => serializeRasterStyle({
+      ...DEFAULT_RASTER_STYLE,
+      maximumColor: "red",
+    }),
+    /six-digit hex/,
+  );
+  assert.throws(
+    () => applyRasterColorPalette(DEFAULT_RASTER_STYLE, "constructor"),
+    /Unknown raster palette/,
+  );
 });
 
 test("loadWmsCapabilities validates the public WMS endpoint", async () => {
@@ -150,6 +208,172 @@ test("publishCatalogRaster reports the backend detail", async () => {
     /Catalog Item not found/,
   );
 });
+
+test("sampleCatalogRasterPixel sends only Item identity and WGS 84 position", async () => {
+  const requests = [];
+  const abortController = new AbortController();
+  const pixel = await sampleCatalogRasterPixel(
+    MOUNTED_GEOTIFF_ITEM,
+    { longitude: -122.25, latitude: 48.75 },
+    abortController.signal,
+    async (url, options) => {
+      requests.push({ url, options });
+      return new Response(
+        JSON.stringify({
+          longitude: -122.25,
+          latitude: 48.75,
+          row: 2,
+          column: 4,
+          inBounds: true,
+          value: 12.5,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    },
+  );
+
+  assert.equal(pixel.value, 12.5);
+  assert.deepEqual(requests, [
+    {
+      url: "/api/rendering/pixels",
+      options: {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          collectionId: "eolab-mounted-geotiffs",
+          itemId: "geotiff-0123456789abcdef01234567",
+          longitude: -122.25,
+          latitude: 48.75,
+        }),
+        signal: abortController.signal,
+      },
+    },
+  ]);
+});
+
+test("RasterPixelProbeController samples immediately then keeps the latest point", async () => {
+  const clock = createFakeClock();
+  const requests = [];
+  const results = [];
+  const controller = new RasterPixelProbeController(
+    (_item, point, signal) => {
+      requests.push({ point, signal });
+      return Promise.resolve({ inBounds: true, value: point.longitude });
+    },
+    (result, point) => results.push({ result, point }),
+    () => assert.fail("Unexpected pixel error"),
+    { clock, now: () => clock.time },
+  );
+
+  controller.activate(MOUNTED_GEOTIFF_ITEM);
+  controller.move({ longitude: 1, latitude: 10 });
+  await Promise.resolve();
+  clock.time = 20;
+  controller.move({ longitude: 2, latitude: 20 });
+  clock.time = 50;
+  controller.move({ longitude: 3, latitude: 30 });
+
+  assert.equal(requests.length, 1);
+  clock.advanceTo(100);
+  await Promise.resolve();
+
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].signal.aborted, false);
+  assert.deepEqual(requests[1].point, {
+    longitude: 3,
+    latitude: 30,
+  });
+  assert.deepEqual(results, [
+    {
+      result: { inBounds: true, value: 1 },
+      point: { longitude: 1, latitude: 10 },
+    },
+    {
+      result: { inBounds: true, value: 3 },
+      point: { longitude: 3, latitude: 30 },
+    },
+  ]);
+});
+
+test("RasterPixelProbeController aborts and ignores cleared work", async () => {
+  const requests = [];
+  const results = [];
+  const controller = new RasterPixelProbeController(
+    (_item, point, signal) => new Promise((resolve) => {
+      requests.push({ point, signal, resolve });
+    }),
+    (result) => results.push(result),
+    () => assert.fail("Unexpected pixel error"),
+  );
+
+  controller.activate(MOUNTED_GEOTIFF_ITEM);
+  controller.move({ longitude: 1, latitude: 2 });
+  controller.clear();
+  requests[0].resolve({ inBounds: true, value: 7 });
+  await Promise.resolve();
+
+  assert.equal(requests[0].signal.aborted, true);
+  assert.deepEqual(results, []);
+});
+
+test("RasterPixelProbeController completes one read before sampling the latest point", async () => {
+  const clock = createFakeClock();
+  const requests = [];
+  const results = [];
+  const controller = new RasterPixelProbeController(
+    (_item, point, signal) => new Promise((resolve) => {
+      requests.push({ point, signal, resolve });
+    }),
+    (result, point) => results.push({ result, point }),
+    () => assert.fail("Unexpected pixel error"),
+    { clock, now: () => clock.time },
+  );
+
+  controller.activate(MOUNTED_GEOTIFF_ITEM);
+  controller.move({ longitude: 1, latitude: 10 });
+  clock.time = 20;
+  controller.move({ longitude: 2, latitude: 20 });
+  requests[0].resolve({ inBounds: true, value: 1 });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(requests[0].signal.aborted, false);
+  assert.deepEqual(results, [
+    {
+      result: { inBounds: true, value: 1 },
+      point: { longitude: 1, latitude: 10 },
+    },
+  ]);
+  clock.advanceTo(100);
+  assert.deepEqual(requests[1].point, { longitude: 2, latitude: 20 });
+});
+
+function createFakeClock() {
+  return {
+    time: 0,
+    nextTimerId: 1,
+    timers: new Map(),
+    setTimeout(callback, delay) {
+      const timerId = this.nextTimerId++;
+      this.timers.set(timerId, { callback, at: this.time + delay });
+      return timerId;
+    },
+    clearTimeout(timerId) {
+      this.timers.delete(timerId);
+    },
+    advanceTo(time) {
+      this.time = time;
+      for (const [timerId, timer] of this.timers) {
+        if (timer.at <= time) {
+          this.timers.delete(timerId);
+          timer.callback();
+        }
+      }
+    },
+  };
+}
 
 test("CatalogRasterLayerController ignores stale publication results", async () => {
   const leafletMap = { removeLayer() {} };
