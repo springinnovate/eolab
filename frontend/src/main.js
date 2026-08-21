@@ -18,6 +18,7 @@ import {
     buildRasterLegend,
     CatalogRasterLayerController,
     DEFAULT_RASTER_STYLE,
+    formatRasterPixelValue,
     getRasterPixelProbePosition,
     loadWmsCapabilities,
     RASTER_COLOR_PALETTES,
@@ -626,7 +627,7 @@ function initializeRasterVisualization(
         if (pixel.inBounds) {
             pixelValue = pixel.value === null
                 ? "No data"
-                : Number(pixel.value.toPrecision(6)).toString();
+                : formatRasterPixelValue(pixel.value);
         }
         rasterPixelProbe.textContent =
             `Lon ${point.longitude.toFixed(5)} · ` +

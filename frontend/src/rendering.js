@@ -323,6 +323,16 @@ export function getRasterPixelProbePosition(pointer, probeSize, viewport) {
     };
 }
 
+/**
+ * Format one finite pixel value in scientific notation.
+ *
+ * @param {number} value Sampled raster value.
+ * @return {string} Value with four significant digits, or zero.
+ */
+export function formatRasterPixelValue(value) {
+    return value === 0 ? "0" : value.toExponential(3);
+}
+
 /** Sample the latest hover position at most every 100 milliseconds. */
 export class RasterPixelProbeController {
     /**

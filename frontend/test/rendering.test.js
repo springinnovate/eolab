@@ -7,6 +7,7 @@ import {
   buildRasterLegend,
   CatalogRasterLayerController,
   DEFAULT_RASTER_STYLE,
+  formatRasterPixelValue,
   getRasterPixelProbePosition,
   loadWmsCapabilities,
   RasterPixelProbeController,
@@ -363,6 +364,13 @@ test("pixel probe position follows the pointer and flips at viewport edges", () 
     getRasterPixelProbePosition({ x: 490, y: 290 }, probeSize, viewport),
     { x: 378, y: 238 },
   );
+});
+
+test("pixel probe formats small values with four significant digits", () => {
+  assert.equal(formatRasterPixelValue(0.0001), "1.000e-4");
+  assert.equal(formatRasterPixelValue(0.0000123456), "1.235e-5");
+  assert.equal(formatRasterPixelValue(-0.0001), "-1.000e-4");
+  assert.equal(formatRasterPixelValue(0), "0");
 });
 
 function createFakeClock() {
