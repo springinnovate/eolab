@@ -1053,6 +1053,124 @@ def test_pixel_probe_samples_nodata_and_outside_the_published_raster(
     }
 
 
+def test_raster_statistics_sample_a_published_projected_raster(
+    configured_environment: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    version_file_path: Path,
+) -> None:
+    """Summarize native pixels without interpreting a projected WGS 84 bbox."""
+    source_path = tmp_path / "projected.tif"
+    with rasterio.open(
+        source_path,
+        "w",
+        driver="GTiff",
+        width=2,
+        height=2,
+        count=1,
+        dtype="int16",
+        crs="EPSG:3857",
+        transform=from_origin(-100_000, 100_000, 100_000, 100_000),
+    ) as dataset:
+        dataset.write(
+            numpy.array([[10, 20], [30, 40]], dtype="int16"),
+            1,
+        )
+    monkeypatch.setenv("SCAN_MOUNT_PATH", str(tmp_path))
+    monkeypatch.setenv("SCAN_PATHS_WITHIN_MOUNT", '["."]')
+    item = _mounted_geotiff_item(source_path.as_uri())
+
+    def upstream_response(request: httpx2.Request) -> httpx2.Response:
+        if request.url.host == "stac-api":
+            return httpx2.Response(200, json=item)
+        if request.url.path.endswith("/external.geotiff"):
+            return httpx2.Response(201)
+        if request.url.path.endswith(f"/{TEST_GEOTIFF_ITEM_ID}.xml"):
+            return httpx2.Response(200)
+        raise AssertionError(f"Unexpected upstream request: {request}")
+
+    request_identity = {
+        "collectionId": "eolab-mounted-geotiffs",
+        "itemId": TEST_GEOTIFF_ITEM_ID,
+    }
+    with TestClient(
+        create_app(
+            version_file_path,
+            catalog_transport=httpx2.MockTransport(upstream_response),
+            geoserver_transport=httpx2.MockTransport(upstream_response),
+        )
+    ) as client:
+        assert client.post(
+            "/api/rendering/layers",
+            json=request_identity,
+        ).status_code == 200
+        response = client.post(
+            "/api/rendering/statistics",
+            json=request_identity,
+        )
+
+    assert response.status_code == 200
+    response_document = response.json()
+    assert response_document == {
+        "band": 1,
+        "sourceWidth": 2,
+        "sourceHeight": 2,
+        "sourcePixelCount": 4,
+        "sampleWidth": 2,
+        "sampleHeight": 2,
+        "sampledPixelCount": 4,
+        "validSampleCount": 4,
+        "estimated": False,
+        "sampleMinimum": 10.0,
+        "sampleMaximum": 40.0,
+        "percentiles": {"p05": 11.5, "p50": 25.0, "p95": 38.5},
+        "histogram": response_document["histogram"],
+        "suggestedRange": {
+            "minimum": 11.5,
+            "midpoint": 25.0,
+            "maximum": 38.5,
+        },
+    }
+    assert len(response_document["histogram"]["counts"]) == 64
+    assert len(response_document["histogram"]["edges"]) == 65
+    assert sum(response_document["histogram"]["counts"]) == 4
+
+
+@pytest.mark.parametrize(
+    ("request_body", "expected_status"),
+    (
+        (
+            {
+                "collectionId": "eolab-mounted-geotiffs",
+                "itemId": TEST_GEOTIFF_ITEM_ID,
+            },
+            400,
+        ),
+        (
+            {
+                "collectionId": "eolab-mounted-geotiffs",
+                "itemId": TEST_GEOTIFF_ITEM_ID,
+                "href": "file:///etc/passwd",
+            },
+            422,
+        ),
+    ),
+)
+def test_raster_statistics_require_the_published_identity_contract(
+    configured_environment: None,
+    version_file_path: Path,
+    request_body: dict[str, object],
+    expected_status: int,
+) -> None:
+    """Reject unpublished raster identities and every browser-supplied path."""
+    response = TestClient(create_app(version_file_path)).post(
+        "/api/rendering/statistics",
+        json=request_body,
+    )
+
+    assert response.status_code == expected_status
+
+
 def test_pixel_probe_requires_an_approved_current_raster(
     configured_environment: None,
     version_file_path: Path,

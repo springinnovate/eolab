@@ -88,7 +88,14 @@ count must be a positive integer, and the heap must be at least `256m` with an
 
 The scanner assesses mounted GeoTIFFs before offering **View on map**. The initial policy accepts supported one-band rasters that are small enough for direct rendering, or larger rasters with bounded base-resolution blocks and a complete internal overview pyramid. Other rasters remain fully searchable and inspectable with an explanation of why visualization is unavailable. For existing Items created before this policy, **Assess for visualization** inspects and updates only the selected raster.
 
-While a raster is displayed, **Raster appearance** controls change its color palette and minimum, midpoint, and maximum display values without modifying the source. Hovering over the map reports the corresponding band-1 pixel value. Automatic ranges and histogram-based thresholds are planned separately; the initial `0 / 50 / 100` range remains directly editable.
+While a raster is displayed, **Raster appearance** shows an approximate
+band-1 distribution from a fixed, bounded sample. EOLab initially applies the
+sample's 5th, 50th, and 95th percentiles, and the user can apply other ordered
+percentiles or directly edit the color palette and minimum, midpoint, and
+maximum display values. Masked, nodata, and non-finite samples are excluded. A
+statistics failure leaves the raster, manual appearance controls, and hover
+pixel picker available. These appearance changes are session-only: they do not
+modify either the source raster or its catalog Item.
 
 ## Scan mounted datasets
 

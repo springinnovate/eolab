@@ -449,6 +449,111 @@ h5 {
   transform: none;
 }
 
+.raster-histogram {
+  margin-top: 14px;
+  border-top: 1px solid var(--border-2);
+  padding-top: 12px;
+}
+
+.raster-histogram-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.75rem;
+}
+
+.raster-histogram-heading .secondary-button {
+  margin-top: 0;
+  padding: 5px 8px;
+}
+
+.raster-histogram-status {
+  margin: 5px 0 8px;
+  color: var(--text-2);
+  font-size: 0.7rem;
+  line-height: 1.4;
+}
+
+.raster-histogram-chart {
+  display: block;
+  width: 100%;
+  height: 112px;
+  border: 1px solid var(--border-2);
+  border-radius: 2px;
+  background: var(--surface-2);
+}
+
+.raster-histogram-chart[hidden],
+.raster-histogram-axis[hidden],
+.raster-percentile-controls[hidden] {
+  display: none;
+}
+
+.raster-histogram-bar {
+  fill: var(--brand);
+  opacity: 0.78;
+}
+
+.raster-histogram-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 3px;
+  color: var(--text-3);
+  font: 0.65rem/1.3 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.raster-percentile-controls {
+  display: grid;
+  gap: 7px;
+  margin-top: 12px;
+}
+
+.raster-percentile-controls > strong {
+  font-size: 0.73rem;
+}
+
+.raster-percentile-controls > p:not(.raster-style-error) {
+  margin: -3px 0 1px;
+  color: var(--text-3);
+  font-size: 0.68rem;
+  line-height: 1.35;
+}
+
+.raster-percentile-controls label {
+  display: grid;
+  grid-template-columns: 44px minmax(70px, 1fr) minmax(105px, auto);
+  gap: 7px;
+  align-items: center;
+  color: var(--text-2);
+  font-size: 0.68rem;
+  font-weight: 650;
+}
+
+.raster-percentile-controls input[type="range"] {
+  width: 100%;
+  min-width: 0;
+  accent-color: var(--brand);
+}
+
+.raster-percentile-controls input[aria-invalid="true"] {
+  accent-color: var(--status-danger);
+}
+
+.raster-percentile-controls output {
+  overflow: hidden;
+  color: var(--text-3);
+  font: 0.65rem/1.3 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.raster-percentile-controls .secondary-button {
+  justify-self: start;
+  margin-top: 2px;
+}
+
 .raster-style-error {
   margin: 9px 0 0;
   color: var(--status-danger);
@@ -460,7 +565,7 @@ h5 {
   display: none;
 }
 
-.raster-style-controls .secondary-button {
+.raster-style-controls > .secondary-button {
   margin-top: 11px;
 }
 

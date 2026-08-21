@@ -17,6 +17,12 @@ export const DEFAULT_RASTER_STYLE = Object.freeze({
     maximumColor: "#d7191c"
 });
 
+export const DEFAULT_RASTER_PERCENTILES = Object.freeze({
+    lower: 5,
+    middle: 50,
+    upper: 95
+});
+
 export const RASTER_COLOR_PALETTES = Object.freeze({
     "blue-yellow-red": Object.freeze({
         label: "Blue–yellow–red",
@@ -57,6 +63,301 @@ const PIXEL_PROBE_VIEWPORT_MARGIN_PIXELS = 8;
 
 function rasterStyleContractError(message, fieldGroup) {
     return Object.assign(new Error(message), { fieldGroup });
+}
+
+function rasterStatisticsContractError(detail) {
+    return new Error(`Raster statistics returned invalid ${detail}.`);
+}
+
+function isPositiveInteger(value) {
+    return Number.isInteger(value) && value > 0;
+}
+
+/**
+ * Validate the fixed, bounded raster-statistics response contract.
+ *
+ * @param {Object} statistics Candidate response from EOLab.
+ * @return {Object} The validated response.
+ * @throws {Error} If the document violates the rendering API contract.
+ */
+export function validateRasterStatistics(statistics) {
+    if (statistics === null || typeof statistics !== "object") {
+        throw rasterStatisticsContractError("response data");
+    }
+    if (statistics.band !== 1) {
+        throw rasterStatisticsContractError("band identity");
+    }
+
+    const dimensions = [
+        statistics.sourceWidth,
+        statistics.sourceHeight,
+        statistics.sourcePixelCount,
+        statistics.sampleWidth,
+        statistics.sampleHeight,
+        statistics.sampledPixelCount,
+        statistics.validSampleCount
+    ];
+    if (!dimensions.every(isPositiveInteger)) {
+        throw rasterStatisticsContractError("sample dimensions");
+    }
+    if (
+        statistics.sampleWidth > statistics.sourceWidth ||
+        statistics.sampleHeight > statistics.sourceHeight ||
+        statistics.sampleWidth > 512 ||
+        statistics.sampleHeight > 512 ||
+        statistics.sourcePixelCount !==
+            statistics.sourceWidth * statistics.sourceHeight ||
+        statistics.sampledPixelCount !==
+            statistics.sampleWidth * statistics.sampleHeight ||
+        statistics.validSampleCount > statistics.sampledPixelCount
+    ) {
+        throw rasterStatisticsContractError("sample counts");
+    }
+    if (typeof statistics.estimated !== "boolean") {
+        throw rasterStatisticsContractError("estimate metadata");
+    }
+
+    const sampleValues = [
+        statistics.sampleMinimum,
+        statistics.sampleMaximum,
+        statistics.percentiles?.p05,
+        statistics.percentiles?.p50,
+        statistics.percentiles?.p95
+    ];
+    if (!sampleValues.every(Number.isFinite)) {
+        throw rasterStatisticsContractError("sample values");
+    }
+    const [sampleMinimum, sampleMaximum, p05, p50, p95] = sampleValues;
+    if (!(
+        sampleMinimum <= p05 &&
+        p05 <= p50 &&
+        p50 <= p95 &&
+        p95 <= sampleMaximum
+    )) {
+        throw rasterStatisticsContractError("percentile order");
+    }
+
+    const counts = statistics.histogram?.counts;
+    const edges = statistics.histogram?.edges;
+    if (
+        !Array.isArray(counts) ||
+        counts.length !== 64 ||
+        !counts.every((count) => Number.isInteger(count) && count >= 0) ||
+        counts.reduce((total, count) => total + count, 0) !==
+            statistics.validSampleCount
+    ) {
+        throw rasterStatisticsContractError("histogram counts");
+    }
+    if (
+        !Array.isArray(edges) ||
+        edges.length !== counts.length + 1 ||
+        !edges.every(Number.isFinite) ||
+        !edges.slice(1).every((edge, index) => edge > edges[index]) ||
+        edges[0] > sampleMinimum ||
+        edges.at(-1) < sampleMaximum
+    ) {
+        throw rasterStatisticsContractError("histogram edges");
+    }
+
+    const suggestedRange = statistics.suggestedRange;
+    if (
+        suggestedRange === null ||
+        typeof suggestedRange !== "object" ||
+        ![
+            suggestedRange.minimum,
+            suggestedRange.midpoint,
+            suggestedRange.maximum
+        ].every(Number.isFinite) ||
+        !(
+            suggestedRange.minimum < suggestedRange.midpoint &&
+            suggestedRange.midpoint < suggestedRange.maximum
+        )
+    ) {
+        throw rasterStatisticsContractError("suggested range");
+    }
+    return statistics;
+}
+
+/**
+ * Estimate one percentile from the validated fixed-bin histogram.
+ *
+ * Exact p05, p50, and p95 sample percentiles are retained from the backend;
+ * other positions are interpolated within the containing histogram bin.
+ *
+ * @param {Object} statistics Validated raster statistics.
+ * @param {number} percentile Percentile from 0 through 100.
+ * @return {number} Approximate sampled raster value.
+ */
+export function estimateRasterHistogramPercentile(statistics, percentile) {
+    if (!Number.isFinite(percentile) || percentile < 0 || percentile > 100) {
+        throw new Error("Raster percentile must be between 0 and 100.");
+    }
+    if (statistics.sampleMinimum === statistics.sampleMaximum) {
+        return statistics.sampleMinimum;
+    }
+    if (percentile === 0) {
+        return statistics.sampleMinimum;
+    }
+    if (percentile === 5) {
+        return statistics.percentiles.p05;
+    }
+    if (percentile === 50) {
+        return statistics.percentiles.p50;
+    }
+    if (percentile === 95) {
+        return statistics.percentiles.p95;
+    }
+    if (percentile === 100) {
+        return statistics.sampleMaximum;
+    }
+
+    const { counts, edges } = statistics.histogram;
+    const target = statistics.validSampleCount * percentile / 100;
+    let cumulative = 0;
+    for (let binIndex = 0; binIndex < counts.length; binIndex += 1) {
+        const nextCumulative = cumulative + counts[binIndex];
+        if (target <= nextCumulative && counts[binIndex] > 0) {
+            const fraction = (target - cumulative) / counts[binIndex];
+            const value = edges[binIndex] +
+                fraction * (edges[binIndex + 1] - edges[binIndex]);
+            let lowerBound = statistics.sampleMinimum;
+            let upperBound = statistics.percentiles.p05;
+            if (percentile > 5 && percentile < 50) {
+                lowerBound = statistics.percentiles.p05;
+                upperBound = statistics.percentiles.p50;
+            } else if (percentile > 50 && percentile < 95) {
+                lowerBound = statistics.percentiles.p50;
+                upperBound = statistics.percentiles.p95;
+            } else if (percentile > 95) {
+                lowerBound = statistics.percentiles.p95;
+                upperBound = statistics.sampleMaximum;
+            }
+            return Math.max(lowerBound, Math.min(upperBound, value));
+        }
+        cumulative = nextCumulative;
+    }
+    return statistics.sampleMaximum;
+}
+
+function rasterRangePadding(values) {
+    const magnitude = Math.max(...values.map(Math.abs));
+    if (magnitude === 0) {
+        return 1e-12;
+    }
+    return Math.max(magnitude * 1e-6, Number.MIN_VALUE);
+}
+
+/** Expand repeated quantiles just enough to satisfy the strict style range. */
+function makeRasterRangeStrict(minimum, midpoint, maximum) {
+    if (minimum < midpoint && midpoint < maximum) {
+        return { minimum, midpoint, maximum };
+    }
+
+    const padding = rasterRangePadding([minimum, midpoint, maximum]);
+    if (minimum === midpoint && midpoint === maximum) {
+        const expandedMinimum = midpoint - padding;
+        const expandedMaximum = midpoint + padding;
+        if (
+            Number.isFinite(expandedMinimum) &&
+            Number.isFinite(expandedMaximum) &&
+            expandedMinimum < midpoint &&
+            midpoint < expandedMaximum
+        ) {
+            return {
+                minimum: expandedMinimum,
+                midpoint,
+                maximum: expandedMaximum
+            };
+        }
+        if (Number.isFinite(expandedMinimum) && expandedMinimum < midpoint) {
+            return {
+                minimum: midpoint - 2 * padding,
+                midpoint: expandedMinimum,
+                maximum: midpoint
+            };
+        }
+        return {
+            minimum: midpoint,
+            midpoint: midpoint + padding,
+            maximum: midpoint + 2 * padding
+        };
+    }
+    if (minimum === midpoint) {
+        const expandedMinimum = minimum - padding;
+        if (Number.isFinite(expandedMinimum) && expandedMinimum < midpoint) {
+            return { minimum: expandedMinimum, midpoint, maximum };
+        }
+    }
+    if (midpoint === maximum) {
+        const expandedMaximum = maximum + padding;
+        if (Number.isFinite(expandedMaximum) && midpoint < expandedMaximum) {
+            return { minimum, midpoint, maximum: expandedMaximum };
+        }
+    }
+    throw new Error("Raster percentiles could not form an ordered range.");
+}
+
+/**
+ * Apply histogram percentile values to the canonical raster style.
+ *
+ * @param {RasterStyle} style Current colors and thresholds.
+ * @param {Object} statistics Validated raster statistics.
+ * @param {{lower:number,middle:number,upper:number}} percentiles Selection.
+ * @return {RasterStyle} Style with approximate histogram-derived thresholds.
+ */
+export function deriveRasterStyleFromStatistics(
+    style,
+    statistics,
+    percentiles = DEFAULT_RASTER_PERCENTILES
+) {
+    const { lower, middle, upper } = percentiles;
+    if (!(
+        Number.isFinite(lower) &&
+        Number.isFinite(middle) &&
+        Number.isFinite(upper) &&
+        0 <= lower &&
+        lower < middle &&
+        middle < upper &&
+        upper <= 100
+    )) {
+        throw rasterStyleContractError(
+            "Lower, middle, and upper percentiles must be in increasing order.",
+            "percentiles"
+        );
+    }
+
+    let range = statistics.suggestedRange;
+    if (
+        lower !== DEFAULT_RASTER_PERCENTILES.lower ||
+        middle !== DEFAULT_RASTER_PERCENTILES.middle ||
+        upper !== DEFAULT_RASTER_PERCENTILES.upper
+    ) {
+        const values = [
+            estimateRasterHistogramPercentile(statistics, lower),
+            estimateRasterHistogramPercentile(statistics, middle),
+            estimateRasterHistogramPercentile(statistics, upper)
+        ];
+        range = makeRasterRangeStrict(...values);
+    }
+    return {
+        ...style,
+        minimum: range.minimum,
+        midpoint: range.midpoint,
+        maximum: range.maximum
+    };
+}
+
+/** Return an initial style only if no manual edit superseded its request. */
+export function deriveInitialRasterStyleFromStatistics(
+    style,
+    statistics,
+    requestedStyleRevision,
+    currentStyleRevision
+) {
+    if (requestedStyleRevision !== currentStyleRevision) {
+        return null;
+    }
+    return deriveRasterStyleFromStatistics(style, statistics);
 }
 
 /**
@@ -233,6 +534,43 @@ export function publishCatalogRaster(
         item,
         fetchImplementation
     );
+}
+
+/**
+ * Load the bounded band-1 sample statistics for one published Catalog raster.
+ *
+ * @param {Object} item Selected STAC Item.
+ * @param {AbortSignal} signal Cancellation signal for a stale selection.
+ * @param {Function} fetchImplementation Browser fetch implementation.
+ * @return {Promise<Object>} Validated fixed-bin raster statistics.
+ * @throws {Error} If EOLab cannot calculate or validate the statistics.
+ */
+export async function loadCatalogRasterStatistics(
+    item,
+    signal,
+    fetchImplementation = globalThis.fetch
+) {
+    const response = await fetchImplementation.call(
+        globalThis,
+        "/api/rendering/statistics",
+        {
+            method: "POST",
+            headers: {
+                Accept: "application/json",
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                collectionId: item.collection,
+                itemId: item.id
+            }),
+            signal
+        }
+    );
+    if (!response.ok) {
+        const errorDocument = await response.json();
+        throw new Error(errorDocument.detail);
+    }
+    return validateRasterStatistics(await response.json());
 }
 
 /**
@@ -472,6 +810,75 @@ export class RasterPixelProbeController {
                 this.#schedule();
             }
         }
+    }
+}
+
+/** Manage one statistics lifecycle and ignore stale raster responses. */
+export class RasterStatisticsController {
+    /**
+     * @param {Function} loadStatistics Loads one Item with an AbortSignal.
+     * @param {Function} onLoading Receives the active Item and request context.
+     * @param {Function} onResult Receives current statistics, Item, and context.
+     * @param {Function} onError Receives the current failure, Item, and context.
+     */
+    constructor(loadStatistics, onLoading, onResult, onError) {
+        this.loadStatistics = loadStatistics;
+        this.onLoading = onLoading;
+        this.onResult = onResult;
+        this.onError = onError;
+        this.item = null;
+        this.abortController = null;
+        this.requestSequence = 0;
+    }
+
+    /** Start a new statistics request for the active rendered Item. */
+    async activate(item, context = undefined) {
+        this.clear();
+        this.item = item;
+        const requestSequence = ++this.requestSequence;
+        const abortController = new AbortController();
+        this.abortController = abortController;
+        this.onLoading(item, context);
+        let statistics;
+        try {
+            statistics = await this.loadStatistics(
+                item,
+                abortController.signal
+            );
+        } catch (error) {
+            if (
+                error.name !== "AbortError" &&
+                requestSequence === this.requestSequence
+            ) {
+                this.onError(error, item, context);
+            }
+            return null;
+        } finally {
+            if (this.abortController === abortController) {
+                this.abortController = null;
+            }
+        }
+        if (requestSequence !== this.requestSequence) {
+            return null;
+        }
+        this.onResult(statistics, item, context);
+        return statistics;
+    }
+
+    /** Repeat the active Item's request after a recoverable failure. */
+    retry(context = undefined) {
+        const item = this.item;
+        return item === null
+            ? Promise.resolve(null)
+            : this.activate(item, context);
+    }
+
+    /** Abort and invalidate pending work and forget the active Item. */
+    clear() {
+        this.requestSequence += 1;
+        this.abortController?.abort();
+        this.abortController = null;
+        this.item = null;
     }
 }
 

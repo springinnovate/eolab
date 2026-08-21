@@ -19,6 +19,8 @@ from eolab_app.rendering import (
     PublishedRasterRegistry,
     RASTER_PIXEL_READ_CONCURRENCY,
     RasterPixel,
+    RasterStatistics,
+    RasterStatisticsService,
     publish_catalog_raster,
     sample_catalog_raster_pixel,
     update_catalog_raster_assessment,
@@ -320,6 +322,7 @@ def create_app(
         RASTER_PIXEL_READ_CONCURRENCY
     )
     published_rasters = PublishedRasterRegistry()
+    raster_statistics_service = RasterStatisticsService(published_rasters)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -445,6 +448,17 @@ def create_app(
             published_rasters,
             raster_pixel_read_semaphore,
         )
+
+    @application.post(
+        "/api/rendering/statistics",
+        response_model=RasterStatistics,
+        tags=["rendering"],
+    )
+    async def raster_statistics(
+        request: CatalogRasterRequest,
+    ) -> RasterStatistics:
+        """Summarize one published raster through a bounded sample."""
+        return await raster_statistics_service.get(request)
 
     @application.api_route(
         "/stac",
