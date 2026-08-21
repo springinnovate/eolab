@@ -104,6 +104,8 @@ services:
       - "GEOSERVER_ADMIN_PASSWORD=${EOLAB_GEOSERVER_ADMIN_PASSWORD:?EOLAB_GEOSERVER_ADMIN_PASSWORD must be set}"
     expose:
       - "8080"
+      # Prometheus text is available only to services on this Compose network.
+      - "9404"
     volumes:
       - geoserver-data:/opt/geoserver_data
       # GeoServer also verifies at startup that /scan-source is read-only.
@@ -164,6 +166,8 @@ services:
       - "CATALOG_INTERNAL_URL=http://stac-api:8080"
       - "WMS_URL=/geoserver/eolab/wms"
       - "GEOSERVER_INTERNAL_URL=http://geoserver:8080/geoserver"
+      - "GEOSERVER_METRICS_INTERNAL_URL=http://geoserver:9404/metrics"
+      - "GEOSERVER_WMS_RENDER_COUNT=${EOLAB_GEOSERVER_WMS_RENDER_COUNT:-2}"
       - "GEOSERVER_ADMIN_USER=eolab"
       - "GEOSERVER_ADMIN_PASSWORD=${EOLAB_GEOSERVER_ADMIN_PASSWORD:?EOLAB_GEOSERVER_ADMIN_PASSWORD must be set}"
       - "PGHOST=database"

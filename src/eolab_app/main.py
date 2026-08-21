@@ -4,7 +4,7 @@ import asyncio
 import math
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 
 import httpx2
@@ -12,6 +12,11 @@ import psycopg
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.staticfiles import StaticFiles
 
+from eolab_app.diagnostics import (
+    GetMapRequestTracker,
+    RenderingDiagnostics,
+    RenderingDiagnosticsService,
+)
 from eolab_app.rendering import (
     CatalogPixelRequest,
     CatalogRasterRequest,
@@ -133,15 +138,16 @@ def _validate_raster_style_environment(environment: str) -> None:
 
 def _validated_public_wms_query(
     request: Request,
-) -> tuple[list[tuple[str, str]], str | None]:
+) -> tuple[list[tuple[str, str]], str | None, str]:
     """Validate an untrusted request against the public WMS contract.
 
     Args:
         request: Incoming WMS request.
 
     Returns:
-        Query entries accepted by EOLab's public WMS contract and the one
-        requested data layer, or None for GetCapabilities.
+        Query entries accepted by EOLab's public WMS contract, the one
+        requested data layer or None for GetCapabilities, and the normalized
+        operation established by validation.
 
     Raises:
         HTTPException: If the request is not an allowed WMS operation or uses
@@ -237,7 +243,7 @@ def _validated_public_wms_query(
             status_code=400,
             detail="Exactly one WMS layer must be requested",
         )
-    return query_entries, layer_name
+    return query_entries, layer_name, operation
 
 
 async def _number_matched_is_estimated(
@@ -269,6 +275,7 @@ def create_app(
     version_file_path: Path = APPLICATION_VERSION_PATH,
     catalog_transport: httpx2.AsyncBaseTransport | None = None,
     geoserver_transport: httpx2.AsyncBaseTransport | None = None,
+    geoserver_diagnostics_transport: httpx2.AsyncBaseTransport | None = None,
     number_matched_estimate_lookup: Callable[[bytes, int], Awaitable[bool]] = (
         _number_matched_is_estimated
     ),
@@ -285,6 +292,9 @@ def create_app(
         geoserver_transport: HTTP transport used to reach internal GeoServer.
             The default creates a real network transport; tests pass a mock
             transport.
+        geoserver_diagnostics_transport: HTTP transport used only for bounded
+            internal metrics and WMS readiness probes. The default creates a
+            real network transport; tests pass a mock transport.
         number_matched_estimate_lookup: Determines whether pgSTAC estimated an
             Item Search count. Tests pass a database-free implementation.
 
@@ -315,19 +325,37 @@ def create_app(
             app_global_configuration.geoserver_admin_password,
         ),
     )
+    geoserver_diagnostics_client = httpx2.AsyncClient(
+        transport=geoserver_diagnostics_transport,
+        timeout=3,
+    )
     raster_publish_lock = asyncio.Lock()
     raster_pixel_read_semaphore = asyncio.Semaphore(
         RASTER_PIXEL_READ_CONCURRENCY
     )
     published_rasters = PublishedRasterRegistry()
+    get_map_request_tracker = GetMapRequestTracker(
+        app_global_configuration.geoserver_wms_render_count
+    )
+    rendering_diagnostics = RenderingDiagnosticsService(
+        geoserver_diagnostics_client,
+        app_global_configuration.geoserver_metrics_internal_url,
+        app_global_configuration.geoserver_internal_url,
+        get_map_request_tracker,
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         """Close shared upstream connection pools at application shutdown."""
-        yield
-        await catalog_client.aclose()
-        await geoserver_wms_client.aclose()
-        await geoserver_rest_client.aclose()
+        async with AsyncExitStack() as client_stack:
+            for client in (
+                catalog_client,
+                geoserver_wms_client,
+                geoserver_rest_client,
+                geoserver_diagnostics_client,
+            ):
+                client_stack.push_async_callback(client.aclose)
+            yield
 
     application = FastAPI(
         title=app_global_configuration.app_title,
@@ -372,6 +400,18 @@ def create_app(
             The public application configuration.
         """
         return app_global_configuration.as_public_dict()
+
+    @application.get(
+        "/api/rendering/diagnostics",
+        response_model=RenderingDiagnostics,
+        tags=["rendering"],
+    )
+    async def rendering_diagnostics_summary(
+        response: Response,
+    ) -> RenderingDiagnostics:
+        """Return a fresh browser-safe summary of internal rendering state."""
+        response.headers["cache-control"] = "no-store"
+        return await rendering_diagnostics.get()
 
     @application.get("/api/scans/current", tags=["catalog"])
     async def current_scan() -> dict[str, object]:
@@ -558,7 +598,7 @@ def create_app(
                 status_code=405,
                 detail="The public WMS endpoint accepts only GET requests",
             )
-        query_entries, layer_name = _validated_public_wms_query(request)
+        query_entries, layer_name, operation = _validated_public_wms_query(request)
         if layer_name is not None:
             await asyncio.to_thread(
                 published_rasters.require_current,
@@ -581,11 +621,27 @@ def create_app(
         if forwarded_port := request.headers.get("x-forwarded-port"):
             forwarded_headers["x-forwarded-port"] = forwarded_port
         try:
-            geoserver_response = await geoserver_wms_client.get(
-                f"{internal_geoserver_url}/eolab/wms",
-                params=query_entries,
-                headers=forwarded_headers,
-            )
+            if operation == "getmap":
+                with get_map_request_tracker.track() as tracked_request:
+                    geoserver_response = await geoserver_wms_client.get(
+                        f"{internal_geoserver_url}/eolab/wms",
+                        params=query_entries,
+                        headers=forwarded_headers,
+                    )
+                    response_media_type = geoserver_response.headers.get(
+                        "content-type",
+                        "",
+                    ).partition(";")[0].lower()
+                    tracked_request.succeeded = (
+                        geoserver_response.is_success
+                        and response_media_type == "image/png"
+                    )
+            else:
+                geoserver_response = await geoserver_wms_client.get(
+                    f"{internal_geoserver_url}/eolab/wms",
+                    params=query_entries,
+                    headers=forwarded_headers,
+                )
         except httpx2.RequestError as error:
             raise HTTPException(
                 status_code=502,

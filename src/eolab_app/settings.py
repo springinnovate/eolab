@@ -20,6 +20,8 @@ class Settings:
     catalog_internal_url: str
     wms_url: str
     geoserver_internal_url: str
+    geoserver_metrics_internal_url: str
+    geoserver_wms_render_count: int
     geoserver_admin_user: str
     geoserver_admin_password: str = field(repr=False)
     scan_mount_path: Path
@@ -49,6 +51,7 @@ class Settings:
             "CATALOG_INTERNAL_URL": self.catalog_internal_url,
             "WMS_URL": self.wms_url,
             "GEOSERVER_INTERNAL_URL": self.geoserver_internal_url,
+            "GEOSERVER_METRICS_INTERNAL_URL": self.geoserver_metrics_internal_url,
             "GEOSERVER_ADMIN_USER": self.geoserver_admin_user,
             "GEOSERVER_ADMIN_PASSWORD": self.geoserver_admin_password,
             "SCAN_DISPLAY_PATH_PREFIX": self.scan_display_path_prefix,
@@ -67,6 +70,8 @@ class Settings:
             raise ValueError("INITIAL_ZOOM must be between 0 and 22")
         if self.scan_worker_count < 1:
             raise ValueError("SCAN_WORKER_COUNT must be greater than zero")
+        if self.geoserver_wms_render_count < 1:
+            raise ValueError("GEOSERVER_WMS_RENDER_COUNT must be greater than zero")
         if self.scan_writer_count < 1:
             raise ValueError("SCAN_WRITER_COUNT must be greater than zero")
         if self.scan_batch_size < 1:
@@ -166,6 +171,10 @@ def load_settings(
         catalog_internal_url=os.environ["CATALOG_INTERNAL_URL"].strip(),
         wms_url=os.environ["WMS_URL"].strip(),
         geoserver_internal_url=os.environ["GEOSERVER_INTERNAL_URL"].strip(),
+        geoserver_metrics_internal_url=os.environ[
+            "GEOSERVER_METRICS_INTERNAL_URL"
+        ].strip(),
+        geoserver_wms_render_count=int(os.environ["GEOSERVER_WMS_RENDER_COUNT"]),
         geoserver_admin_user=os.environ["GEOSERVER_ADMIN_USER"].strip(),
         geoserver_admin_password=os.environ["GEOSERVER_ADMIN_PASSWORD"],
         scan_mount_path=Path(os.environ["SCAN_MOUNT_PATH"]),

@@ -23,21 +23,25 @@ import {
     formatRasterPixelValue,
     getCatalogRasterBasename,
     getRasterPixelProbePosition,
-    loadWmsCapabilities,
     RASTER_COLOR_PALETTES,
     RasterPixelProbeController,
     publishCatalogRaster,
     sampleCatalogRasterPixel,
     serializeRasterStyle,
 } from "./rendering.js";
+import {
+    applyRenderingDiagnosticsViewModel,
+    buildRenderingDiagnosticsViewModel,
+    buildUnavailableRenderingDiagnosticsViewModel,
+    loadRenderingDiagnostics,
+    RenderingDiagnosticsPoller,
+} from "./rendering-diagnostics.js";
 import "./style.css";
 
 const CATALOG_SEARCH_DEBOUNCE_MILLISECONDS = 300;
 const CATALOG_LOAD_ROOT_MARGIN = "300px 0px";
 const CONTROL_PANEL_TRANSITION_MILLISECONDS = 240;
 const RASTER_STYLE_DEBOUNCE_MILLISECONDS = 200;
-const RENDERING_RETRY_MILLISECONDS = 5000;
-const RENDERING_MONITOR_MILLISECONDS = 60000;
 
 let scanPollTimeout = null;
 
@@ -158,60 +162,72 @@ function applyAppGlobalConfiguration(appGlobalConfiguration) {
     catalogLinkElement.href = appGlobalConfiguration.catalogUrl;
 }
 
-/**
- * Reports GeoServer readiness independently from Catalog availability.
- *
- * @param {AppGlobalConfiguration} appGlobalConfiguration Application settings.
- * @return {void}
- */
-function initializeRendering(appGlobalConfiguration) {
-    const renderingStateElement = document.querySelector("#rendering-state");
-    const renderingStateTextElement = document.querySelector(
-        "#rendering-state-text"
+/** Display safe GeoServer diagnostics independently from application health. */
+function initializeRenderingDiagnostics() {
+    const disclosureElement = document.querySelector(
+        "#rendering-diagnostics"
     );
-    const capabilitiesLinkElement = document.querySelector(
-        "#wms-capabilities-link"
+    const stateTextElement = document.querySelector("#rendering-state-text");
+    const stateAnnouncementElement = document.querySelector(
+        "#rendering-state-announcement"
     );
-    let renderingServiceWasReady = false;
+    const observedElement = document.querySelector("#rendering-observed");
+    const observedVerbElement = document.querySelector(
+        "#rendering-observed-verb"
+    );
+    const observedAtElement = document.querySelector(
+        "#rendering-observed-at"
+    );
+    const diagnosticsElements = {
+        disclosure: disclosureElement,
+        stateText: stateTextElement,
+        stateAnnouncement: stateAnnouncementElement,
+        observed: observedElement,
+        observedVerb: observedVerbElement,
+        observedAt: observedAtElement,
+        values: {
+            heap: document.querySelector("#rendering-heap"),
+            cpu: document.querySelector("#rendering-cpu"),
+            requests: document.querySelector("#rendering-requests"),
+            latestGetMap: document.querySelector(
+                "#rendering-latest-get-map"
+            ),
+            failures: document.querySelector("#rendering-failures"),
+            garbageCollection: document.querySelector(
+                "#rendering-garbage-collection"
+            ),
+            threads: document.querySelector("#rendering-threads"),
+            uptime: document.querySelector("#rendering-uptime")
+        }
+    };
 
-    /** Monitor WMS, retrying more frequently while it is unavailable. */
-    async function checkRenderingService() {
-        try {
-            capabilitiesLinkElement.href = await loadWmsCapabilities(
-                appGlobalConfiguration.wmsUrl
+    const poller = new RenderingDiagnosticsPoller(
+        loadRenderingDiagnostics,
+        (diagnostics) => {
+            applyRenderingDiagnosticsViewModel(
+                diagnosticsElements,
+                buildRenderingDiagnosticsViewModel(diagnostics)
             );
-            capabilitiesLinkElement.hidden = false;
-            renderingStateElement.classList.remove("is-warning");
-            renderingStateElement.classList.add("is-connected");
-            if (!renderingServiceWasReady) {
-                renderingStateTextElement.textContent =
-                    "Rendering service ready";
-            }
-            renderingServiceWasReady = true;
-            window.setTimeout(
-                checkRenderingService,
-                RENDERING_MONITOR_MILLISECONDS
-            );
-        } catch {
-            capabilitiesLinkElement.hidden = true;
-            if (
-                renderingServiceWasReady ||
-                !renderingStateElement.classList.contains("is-warning")
-            ) {
-                renderingStateElement.classList.remove("is-connected");
-                renderingStateElement.classList.add("is-warning");
-                renderingStateTextElement.textContent =
-                    "Rendering service unavailable";
-            }
-            renderingServiceWasReady = false;
-            window.setTimeout(
-                checkRenderingService,
-                RENDERING_RETRY_MILLISECONDS
+        },
+        () => {
+            applyRenderingDiagnosticsViewModel(
+                diagnosticsElements,
+                buildUnavailableRenderingDiagnosticsViewModel()
             );
         }
+    );
+
+    /** Match polling frequency to whether the user can see the details. */
+    function synchronizePollingMode() {
+        poller.setMode({
+            pageVisible: document.visibilityState === "visible",
+            expanded: disclosureElement.open
+        });
     }
 
-    void checkRenderingService();
+    disclosureElement.addEventListener("toggle", synchronizePollingMode);
+    document.addEventListener("visibilitychange", synchronizePollingMode);
+    synchronizePollingMode();
 }
 
 /**
@@ -1481,7 +1497,7 @@ function initializeControlPanel(leafletMap) {
 async function startApplication() {
     const appGlobalConfiguration = await loadAppGlobalConfiguration();
     applyAppGlobalConfiguration(appGlobalConfiguration);
-    initializeRendering(appGlobalConfiguration);
+    initializeRenderingDiagnostics();
     const leafletMap = initializeMap(appGlobalConfiguration);
     initializeControlPanel(leafletMap);
     const refreshCatalog = await initializeCatalog(
