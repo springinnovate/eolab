@@ -129,6 +129,30 @@ test("buildCatalogFilter combines literal text and COG metadata", () => {
   assert.equal(buildCatalogFilter("  "), null);
 });
 
+test("buildCatalogFilter combines each literal search term with AND", () => {
+  assert.deepEqual(buildCatalogFilter("ESA 2020"), {
+    op: "and",
+    args: [
+      expectedSubstringFilter("ESA"),
+      expectedSubstringFilter("2020"),
+    ],
+  });
+  assert.deepEqual(buildCatalogFilter("ESA 2020 format:cog"), {
+    op: "and",
+    args: [
+      expectedSubstringFilter("ESA"),
+      expectedSubstringFilter("2020"),
+      {
+        op: "=",
+        args: [
+          { property: "assets.data.type" },
+          cogMediaType,
+        ],
+      },
+    ],
+  });
+});
+
 test("buildCatalogFilter rejects syntax outside the field contract", () => {
   const invalidSearches = [
     "format:",

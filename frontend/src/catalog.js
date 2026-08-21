@@ -205,6 +205,8 @@ export class CatalogSearchSyntaxError extends Error {
 
 /**
  * Build the application-owned CQL2 filter for Catalog text and field syntax.
+ * Whitespace-separated text terms match independently and are combined with
+ * field filters using AND.
  *
  * @param {string} searchText Text and field filters entered by the user.
  * @return {Object|null} CQL2 JSON filter, or null for an empty search.
@@ -257,11 +259,7 @@ export function buildCatalogFilter(searchText) {
         hasCogFormatFilter = true;
     }
 
-    const filters = [];
-    const substringFilter = buildSubstringFilter(literalTokens.join(" "));
-    if (substringFilter !== null) {
-        filters.push(substringFilter);
-    }
+    const filters = literalTokens.map((token) => buildSubstringFilter(token));
     if (hasCogFormatFilter) {
         filters.push({
             op: "=",
