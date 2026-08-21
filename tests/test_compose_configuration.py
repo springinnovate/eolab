@@ -109,6 +109,7 @@ def test_geoserver_is_internal_persistent_and_reads_the_scan_mount() -> None:
     assert '"SKIP_DEMO_DATA=true"' in geoserver_service
     assert '"CORS_ENABLED=false"' in geoserver_service
     assert '"JSONP_ENABLED=false"' in geoserver_service
+    assert '"JAVA_TOOL_OPTIONS=-XX:+ExitOnOutOfMemoryError"' in geoserver_service
     assert (
         '"PROXY_BASE_URL=$${X-Forwarded-Proto}://$${X-Forwarded-Host}/geoserver '
         'http://geoserver:8080/geoserver"'

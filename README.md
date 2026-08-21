@@ -76,6 +76,8 @@ Select a mounted GeoTIFF in the Catalog and choose **View on map** to publish an
 
 GeoServer's external-URL checks remain enabled. During each deployment, `geoserver-init` creates or repairs one narrow rule that permits `file:///scan-source/...` and no other local-file prefix. This lets GeoServer publish validated files from the shared scan mount without disabling its protection against arbitrary external URLs.
 
+If GeoServer exhausts its Java heap, the JVM exits instead of remaining unresponsive. Docker's `unless-stopped` policy then restarts the GeoServer container; the rendering status may be unavailable while it starts, but the EOLab catalog remains available.
+
 ## Scan mounted datasets
 
 Open the **Catalog** panel and select **Scan directories**. EOLab searches each configured path recursively for GeoTIFF (`.tif` and `.tiff`) and ESRI Shapefile (`.shp`) datasets, matching extensions case-insensitively. After each successful bulk upsert, the live status classifies processed datasets as newly cataloged or already present, alongside discovered, processed, and failed counts. Error details are collapsed by default and remain independently scrollable when opened, so the Catalog results remain usable during a scan. EOLab reads metadata using `EOLAB_SCAN_WORKER_COUNT` concurrent processes and uses `EOLAB_SCAN_WRITER_COUNT` concurrent STAC Bulk Transactions, each containing at most `EOLAB_SCAN_BATCH_SIZE` Items from one Collection. Catalog-write timing is cumulative across writers and can exceed wall time. A failure in one dataset does not stop the remaining scan; a catalog inventory or write failure stops the scan. Configured paths cannot be duplicated, nested inside one another, or escape the mount.
