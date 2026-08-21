@@ -98,6 +98,38 @@ export function formatScanStatusSummary(scanStatus) {
 }
 
 /**
+ * Formats scanner-owned catalog reconciliation progress.
+ *
+ * @param {Object} reconciliation Reconciliation state from scan status.
+ * @return {string} Human-readable cleanup status.
+ */
+export function formatScanReconciliation(reconciliation) {
+    const counts =
+        `${reconciliation.checked.toLocaleString()} checked · ` +
+        `${reconciliation.missing.toLocaleString()} missing · ` +
+        `${reconciliation.removed.toLocaleString()} removed`;
+    switch (reconciliation.state) {
+        case "not_started":
+            return "Catalog cleanup: Not started";
+        case "checking":
+            return `Catalog cleanup: Checking · ${counts}`;
+        case "deleting":
+            return `Catalog cleanup: Removing missing Items · ${counts}`;
+        case "completed":
+            return `Catalog cleanup: Complete · ${counts}`;
+        case "failed":
+            return (
+                `Catalog cleanup: Failed · ${counts} · ` +
+                reconciliation.error
+            );
+        default:
+            throw new Error(
+                `Unknown reconciliation state: ${reconciliation.state}`
+            );
+    }
+}
+
+/**
  * Formats the performance clocks in a scan-status response.
  *
  * @param {Object} timing Scan timing values in seconds.
@@ -135,6 +167,10 @@ export function formatScanTiming(timing, workerCount, writerCount, batchSize) {
                 `Catalog writes (${writerCount} writers, ${batchSize} ` +
                 "Items/batch, cumulative)",
             seconds: timing.catalogWriteSeconds
+        },
+        {
+            label: "Catalog cleanup",
+            seconds: timing.reconciliationSeconds
         },
         {
             label: "Search-count refresh",

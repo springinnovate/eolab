@@ -12,6 +12,7 @@ import {
   createDebouncedAction,
   findPaginationLink,
   formatCatalogItemCount,
+  formatScanReconciliation,
   formatScanTiming,
   formatScanStatusSummary,
   getRasterVisualization,
@@ -390,6 +391,39 @@ test("formatScanStatusSummary distinguishes scan and dataset failures", () => {
   );
 });
 
+test("formatScanReconciliation reports cleanup progress and failures", () => {
+  assert.equal(
+    formatScanReconciliation({
+      state: "checking",
+      checked: 1234,
+      missing: 12,
+      removed: 0,
+      error: null,
+    }),
+    "Catalog cleanup: Checking · 1,234 checked · 12 missing · 0 removed",
+  );
+  assert.equal(
+    formatScanReconciliation({
+      state: "completed",
+      checked: 1234,
+      missing: 12,
+      removed: 12,
+      error: null,
+    }),
+    "Catalog cleanup: Complete · 1,234 checked · 12 missing · 12 removed",
+  );
+  assert.equal(
+    formatScanReconciliation({
+      state: "failed",
+      checked: 800,
+      missing: 2,
+      removed: 0,
+      error: "NFS unavailable",
+    }),
+    "Catalog cleanup: Failed · 800 checked · 2 missing · 0 removed · NFS unavailable",
+  );
+});
+
 test("formatScanTiming distinguishes wall and cumulative worker clocks", () => {
   assert.deepEqual(
     formatScanTiming(
@@ -402,6 +436,7 @@ test("formatScanTiming distinguishes wall and cumulative worker clocks", () => {
         metadataIoWaitSeconds: 9000,
         metadataProcessingSeconds: 1800,
         catalogWriteSeconds: 4.25,
+        reconciliationSeconds: 65,
         cacheInvalidationSeconds: 0,
       },
       32,
@@ -426,6 +461,7 @@ test("formatScanTiming distinguishes wall and cumulative worker clocks", () => {
         label: "Catalog writes (2 writers, 100 Items/batch, cumulative)",
         value: "4.3 s",
       },
+      { label: "Catalog cleanup", value: "1m 5s" },
       { label: "Search-count refresh", value: "0 ms" },
     ],
   );

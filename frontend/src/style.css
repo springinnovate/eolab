@@ -694,7 +694,8 @@ h5 {
 }
 
 .scan-status,
-.scan-counts {
+.scan-counts,
+.scan-reconciliation {
   margin-bottom: 8px;
   color: var(--text-2);
   font-size: 0.78rem;
@@ -704,6 +705,15 @@ h5 {
 .scan-counts {
   margin-bottom: 0;
   color: var(--text-3);
+}
+
+.scan-reconciliation {
+  margin: 6px 0 0;
+  color: var(--text-3);
+}
+
+.scan-reconciliation.is-error {
+  color: var(--status-danger);
 }
 
 .scan-timing {

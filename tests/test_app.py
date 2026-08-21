@@ -184,6 +184,13 @@ def test_scan_status_is_available_before_first_scan(
     assert response.json()["workerCount"] == 8
     assert response.json()["writerCount"] == 4
     assert response.json()["batchSize"] == 250
+    assert response.json()["reconciliation"] == {
+        "state": "not_started",
+        "checked": 0,
+        "missing": 0,
+        "removed": 0,
+        "error": None,
+    }
     assert response.json()["timing"] == {
         "elapsedSeconds": 0.0,
         "catalogInventorySeconds": 0.0,
@@ -193,6 +200,7 @@ def test_scan_status_is_available_before_first_scan(
         "metadataProcessingSeconds": 0.0,
         "metadataIoWaitSeconds": 0.0,
         "catalogWriteSeconds": 0.0,
+        "reconciliationSeconds": 0.0,
         "cacheInvalidationSeconds": 0.0,
     }
 

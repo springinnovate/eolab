@@ -8,6 +8,7 @@ import {
     CatalogSearchSyntaxError,
     createDebouncedAction,
     formatCatalogItemCount,
+    formatScanReconciliation,
     formatScanTiming,
     formatScanStatusSummary,
     getRasterVisualization,
@@ -1223,6 +1224,9 @@ function renderScanStatus(scanStatus) {
     const scanStatusElement = document.querySelector("#scan-status");
     const scanProgressElement = document.querySelector("#scan-progress");
     const scanCountsElement = document.querySelector("#scan-counts");
+    const scanReconciliationElement = document.querySelector(
+        "#scan-reconciliation"
+    );
     const scanTimingElement = document.querySelector("#scan-timing");
     const scanTimingValuesElement = document.querySelector(
         "#scan-timing-values"
@@ -1259,6 +1263,14 @@ function renderScanStatus(scanStatus) {
               `${scanStatus.alreadyInCatalog.toLocaleString()} ` +
               `already in catalog · ` +
               `${scanStatus.failed.toLocaleString()} failed`;
+    scanReconciliationElement.hidden = scanStatus.state === "not_started";
+    scanReconciliationElement.textContent = formatScanReconciliation(
+        scanStatus.reconciliation
+    );
+    scanReconciliationElement.classList.toggle(
+        "is-error",
+        scanStatus.reconciliation.state === "failed"
+    );
 
     scanTimingElement.hidden = scanStatus.state === "not_started";
     scanTimingValuesElement.replaceChildren();

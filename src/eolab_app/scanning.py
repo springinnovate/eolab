@@ -1,16 +1,21 @@
 """Scan mounted directories for geospatial datasets and write STAC records."""
 
 import asyncio
+import json
 import os
+import tempfile
+from collections.abc import AsyncIterator, Iterable
 from concurrent.futures import Executor, ProcessPoolExecutor
 from contextlib import AbstractAsyncContextManager
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from itertools import batched
 from multiprocessing import get_context
 from pathlib import Path
 from time import perf_counter, process_time
 from typing import Any, Protocol
+from urllib.parse import unquote, urlsplit
 from uuid import uuid4
 
 import httpx2
@@ -28,6 +33,9 @@ from eolab_app.shapefile import (
 
 MAX_SCAN_ERROR_DETAILS = 100
 CATALOG_WRITE_TIMEOUT_SECONDS = 120
+RECONCILIATION_PAGE_SIZE = 500
+RECONCILIATION_CHECK_CONCURRENCY = 8
+RECONCILIATION_MEMORY_LIMIT_BYTES = 1024 * 1024
 
 GEOTIFF_COLLECTION = {
     "type": "Collection",
@@ -75,7 +83,12 @@ SINGLE_FILE_DATASET_EXTENSIONS = {".tif", ".tiff"}
 
 @dataclass(frozen=True)
 class DatasetCandidate:
-    """A primary dataset path and any pre-grouped companion files."""
+    """A primary dataset path and any pre-grouped companion files.
+
+    Attributes:
+        path: Primary dataset path.
+        component_paths: Companion files belonging to a multipart dataset.
+    """
 
     path: Path
     component_paths: tuple[Path, ...] = ()
@@ -83,7 +96,15 @@ class DatasetCandidate:
 
 @dataclass(frozen=True)
 class DatasetMetadataResult:
-    """One dataset result with worker wall and CPU measurements."""
+    """One dataset result with worker wall and CPU measurements.
+
+    Attributes:
+        path: Primary dataset path.
+        item: Built STAC Item, or ``None`` when metadata extraction failed.
+        error: Failure text, or ``None`` when metadata extraction succeeded.
+        elapsed_seconds: Worker wall time.
+        processing_seconds: Worker CPU time.
+    """
 
     path: Path
     item: dict[str, Any] | None
@@ -92,21 +113,48 @@ class DatasetMetadataResult:
     processing_seconds: float
 
 
+@dataclass(frozen=True)
+class CatalogItemSource:
+    """Source Assets for one scanner-owned catalog Item.
+
+    Attributes:
+        collection: Collection containing the Item.
+        item_id: Item identifier within the Collection.
+        asset_hrefs: Required source Asset locations.
+    """
+
+    collection: str
+    item_id: str
+    asset_hrefs: tuple[str, ...]
+
+
 class CatalogWriteSession(Protocol):
     """Catalog operations required by one scan."""
 
     async def upsert_collection(self, collection: dict[str, Any]) -> None:
-        """Create or replace a STAC Collection."""
+        """Create or replace a STAC Collection.
+
+        Args:
+            collection: Complete STAC Collection document.
+        """
 
     async def upsert_items(self, items: list[dict[str, Any]]) -> None:
-        """Create or replace a batch of STAC Items."""
+        """Create or replace a batch of STAC Items.
+
+        Args:
+            items: Nonempty batch belonging to one Collection.
+        """
 
 
 class CatalogWriter(Protocol):
     """Factory for a scan-scoped catalog write session."""
 
     def session(self) -> AbstractAsyncContextManager[CatalogWriteSession]:
-        """Open one catalog write session."""
+        """Open one catalog write session.
+
+        Returns:
+            Async context manager for a shared write session.
+        """
 
 
 class CatalogDatabase(Protocol):
@@ -116,7 +164,42 @@ class CatalogDatabase(Protocol):
         self,
         collection_identifiers: tuple[str, ...],
     ) -> set[tuple[str, str]]:
-        """Return Collection and Item identifiers already stored."""
+        """Return Collection and Item identifiers already stored.
+
+        Args:
+            collection_identifiers: Collections included in the inventory.
+
+        Returns:
+            Existing Collection and Item identifier pairs.
+        """
+
+    def scanner_item_pages(
+        self,
+        collection_identifiers: tuple[str, ...],
+        page_size: int,
+    ) -> AsyncIterator[list[CatalogItemSource]]:
+        """Stream bounded pages of scanner-owned source Assets.
+
+        Args:
+            collection_identifiers: Scanner-owned Collections to inspect.
+            page_size: Maximum number of Items in each page.
+
+        Yields:
+            Pages ordered by Collection and Item identifier.
+        """
+
+    async def delete_item_batches(
+        self,
+        item_batches: Iterable[list[tuple[str, str]]],
+    ) -> int:
+        """Atomically delete bounded batches of Collection and Item IDs.
+
+        Args:
+            item_batches: Batches of Collection and Item identifier pairs.
+
+        Returns:
+            Number of Items removed.
+        """
 
     async def invalidate_search_count_cache(self) -> None:
         """Discard cached Item Search counts after a scan."""
@@ -129,13 +212,104 @@ class PgStacCatalogDatabase:
         self,
         collection_identifiers: tuple[str, ...],
     ) -> set[tuple[str, str]]:
-        """Return Collection and Item identifiers from pgSTAC."""
+        """Return Collection and Item identifiers from pgSTAC.
+
+        Args:
+            collection_identifiers: Collections included in the inventory.
+
+        Returns:
+            Existing Collection and Item identifier pairs.
+        """
         async with await psycopg.AsyncConnection.connect() as connection:
             cursor = await connection.execute(
                 "SELECT collection, id FROM pgstac.items WHERE collection = ANY(%s)",
                 (list(collection_identifiers),),
             )
             return {(row[0], row[1]) async for row in cursor}
+
+    async def scanner_item_pages(
+        self,
+        collection_identifiers: tuple[str, ...],
+        page_size: int,
+    ) -> AsyncIterator[list[CatalogItemSource]]:
+        """Stream scanner-owned source Assets in stable key order.
+
+        Args:
+            collection_identifiers: Scanner-owned Collections to inspect.
+            page_size: Maximum number of Items in each page.
+
+        Yields:
+            Pages ordered by Collection and Item identifier.
+        """
+        after: tuple[str, str] | None = None
+        async with await psycopg.AsyncConnection.connect() as connection:
+            while True:
+                if after is None:
+                    cursor = await connection.execute(
+                        """
+                        SELECT collection, id, content->'assets'
+                        FROM pgstac.items
+                        WHERE collection = ANY(%s)
+                        ORDER BY collection, id
+                        LIMIT %s
+                        """,
+                        (list(collection_identifiers), page_size),
+                    )
+                else:
+                    cursor = await connection.execute(
+                        """
+                        SELECT collection, id, content->'assets'
+                        FROM pgstac.items
+                        WHERE collection = ANY(%s)
+                          AND (collection, id) > (%s, %s)
+                        ORDER BY collection, id
+                        LIMIT %s
+                        """,
+                        (
+                            list(collection_identifiers),
+                            after[0],
+                            after[1],
+                            page_size,
+                        ),
+                    )
+                rows = await cursor.fetchall()
+                if not rows:
+                    return
+                page = [
+                    _catalog_item_source(collection, item_id, assets)
+                    for collection, item_id, assets in rows
+                ]
+                yield page
+                after = (page[-1].collection, page[-1].item_id)
+
+    async def delete_item_batches(
+        self,
+        item_batches: Iterable[list[tuple[str, str]]],
+    ) -> int:
+        """Delete bounded key batches in one pgSTAC transaction.
+
+        Args:
+            item_batches: Batches of Collection and Item identifier pairs.
+
+        Returns:
+            Number of Items removed.
+        """
+        removed = 0
+        async with await psycopg.AsyncConnection.connect() as connection:
+            for item_keys in item_batches:
+                collections, item_ids = zip(*item_keys, strict=True)
+                cursor = await connection.execute(
+                    """
+                    DELETE FROM pgstac.items AS item
+                    USING unnest(%s::text[], %s::text[])
+                        AS stale(collection, id)
+                    WHERE item.collection = stale.collection
+                      AND item.id = stale.id
+                    """,
+                    (list(collections), list(item_ids)),
+                )
+                removed += cursor.rowcount
+        return removed
 
     async def invalidate_search_count_cache(self) -> None:
         """Discard cached Item Search counts after a scan."""
@@ -151,12 +325,21 @@ class StacApiWriter:
         catalog_internal_url: str,
         transport: httpx2.AsyncBaseTransport | None = None,
     ) -> None:
-        """Configure the internal catalog client."""
+        """Configure the internal catalog client.
+
+        Args:
+            catalog_internal_url: Internal STAC API base URL.
+            transport: Optional HTTP transport used by tests.
+        """
         self.catalog_internal_url = catalog_internal_url.rstrip("/")
         self.transport = transport
 
     def session(self) -> "StacApiWriteSession":
-        """Open a shared HTTP session for one scan."""
+        """Open a shared HTTP session for one scan.
+
+        Returns:
+            Unopened scan-scoped write session.
+        """
         return StacApiWriteSession(self.catalog_internal_url, self.transport)
 
 
@@ -168,11 +351,22 @@ class StacApiWriteSession:
         catalog_internal_url: str,
         transport: httpx2.AsyncBaseTransport | None,
     ) -> None:
+        """Configure a scan-scoped write session.
+
+        Args:
+            catalog_internal_url: Internal STAC API base URL.
+            transport: Optional HTTP transport used by tests.
+        """
         self.catalog_internal_url = catalog_internal_url
         self.transport = transport
         self.client: httpx2.AsyncClient | None = None
 
     async def __aenter__(self) -> "StacApiWriteSession":
+        """Open the shared HTTP client.
+
+        Returns:
+            Open write session.
+        """
         self.client = httpx2.AsyncClient(
             base_url=self.catalog_internal_url,
             transport=self.transport,
@@ -181,11 +375,25 @@ class StacApiWriteSession:
         return self
 
     async def __aexit__(self, *exception_details: object) -> None:
+        """Close the shared HTTP client.
+
+        Args:
+            *exception_details: Exception context supplied by the async
+                context-manager protocol.
+        """
         if self.client is not None:
             await self.client.aclose()
 
     async def upsert_collection(self, collection: dict[str, Any]) -> None:
-        """Create or replace a STAC Collection."""
+        """Create or replace a STAC Collection.
+
+        Args:
+            collection: Complete STAC Collection document.
+
+        Raises:
+            RuntimeError: If the session is unopened or the STAC API rejects
+                the operation.
+        """
         if self.client is None:
             raise RuntimeError("Catalog write session has not been opened")
 
@@ -204,7 +412,15 @@ class StacApiWriteSession:
             _raise_catalog_error(write_response)
 
     async def upsert_items(self, items: list[dict[str, Any]]) -> None:
-        """Create or replace one nonempty, single-Collection Item batch."""
+        """Create or replace one nonempty, single-Collection Item batch.
+
+        Args:
+            items: Nonempty batch belonging to one Collection.
+
+        Raises:
+            RuntimeError: If the session is unopened or the STAC API rejects
+                the operation.
+        """
         if self.client is None:
             raise RuntimeError("Catalog write session has not been opened")
 
@@ -233,6 +449,17 @@ class ScanManager:
         catalog_writer_count: int,
         item_batch_size: int,
     ) -> None:
+        """Configure the scanner and its bounded worker pools.
+
+        Args:
+            source_root: Root of the mounted source tree.
+            source_paths: Directories within the mount to scan.
+            catalog_writer: STAC Transactions writer.
+            catalog_database: Direct pgSTAC operations.
+            metadata_worker_count: Concurrent metadata worker processes.
+            catalog_writer_count: Concurrent catalog writes.
+            item_batch_size: Maximum Items per bulk write or delete batch.
+        """
         self.source_root = source_root
         self.source_paths = source_paths
         self.catalog_writer = catalog_writer
@@ -247,7 +474,11 @@ class ScanManager:
         self._status = self._new_status("not_started")
 
     def status(self) -> dict[str, Any]:
-        """Return an isolated snapshot of current scan progress."""
+        """Return an isolated snapshot of current scan progress.
+
+        Returns:
+            Deep copy of the current status with live elapsed time.
+        """
         status = deepcopy(self._status)
         if self._started_at_monotonic is not None:
             elapsed_until = (
@@ -280,6 +511,8 @@ class ScanManager:
             return self.status()
 
     async def _run(self) -> None:
+        """Run metadata indexing and missing-Item reconciliation."""
+        reconciliation_task: asyncio.Task[int] | None = None
         try:
             phase_started = perf_counter()
             try:
@@ -349,6 +582,9 @@ class ScanManager:
                     )
                     for _ in range(self.metadata_worker_count)
                 ]
+                reconciliation_task = asyncio.create_task(
+                    self._reconcile_missing_items()
+                )
                 pending_items_by_collection: dict[str, list[dict[str, Any]]] = {
                     collection["id"]: [] for collection in SCAN_COLLECTIONS
                 }
@@ -473,6 +709,8 @@ class ScanManager:
                         return_exceptions=True,
                     )
 
+            await reconciliation_task
+
             phase_started = perf_counter()
             try:
                 await self.catalog_database.invalidate_search_count_cache()
@@ -482,6 +720,11 @@ class ScanManager:
                 )
             self._status["state"] = "completed"
         except Exception as error:
+            removed_items = 0
+            if reconciliation_task is not None:
+                removed_items = await reconciliation_task
+            if removed_items:
+                await self.catalog_database.invalidate_search_count_cache()
             self._status["state"] = "failed"
             self._status["errors"].append(
                 {"path": None, "error": f"Scan stopped: {error}"}
@@ -495,11 +738,95 @@ class ScanManager:
                     self._finished_at_monotonic - self._started_at_monotonic
                 )
 
+    async def _reconcile_missing_items(self) -> int:
+        """Verify scanner-owned source Assets, then delete proven stale Items.
+
+        Returns:
+            Number of catalog Items removed. A cleanup failure returns zero
+            and is recorded in scan status.
+        """
+        reconciliation = self._status["reconciliation"]
+        reconciliation["state"] = "checking"
+        phase_started = perf_counter()
+        try:
+            mount_signature = await asyncio.to_thread(
+                _source_signature,
+                self.source_root,
+            )
+            with tempfile.SpooledTemporaryFile(
+                # Bound app memory if most of a large catalog is missing while
+                # preserving the verify-everything-before-deleting contract.
+                max_size=RECONCILIATION_MEMORY_LIMIT_BYTES,
+                mode="w+t",
+                encoding="utf-8",
+            ) as missing_items:
+                async for item_page in self.catalog_database.scanner_item_pages(
+                    tuple(collection["id"] for collection in SCAN_COLLECTIONS),
+                    RECONCILIATION_PAGE_SIZE,
+                ):
+                    for item_group in batched(
+                        item_page,
+                        RECONCILIATION_CHECK_CONCURRENCY,
+                    ):
+                        availability = await asyncio.gather(*(
+                            asyncio.to_thread(
+                                _catalog_item_is_missing,
+                                item,
+                                self.source_root,
+                            )
+                            for item in item_group
+                        ))
+                        for item, is_missing in zip(
+                            item_group,
+                            availability,
+                            strict=True,
+                        ):
+                            reconciliation["checked"] += 1
+                            if is_missing:
+                                reconciliation["missing"] += 1
+                                missing_items.write(json.dumps([
+                                    item.collection,
+                                    item.item_id,
+                                ]))
+                                missing_items.write("\n")
+
+                if await asyncio.to_thread(
+                    _source_signature,
+                    self.source_root,
+                ) != mount_signature:
+                    raise OSError(
+                        "The mounted scan source changed during reconciliation"
+                    )
+
+                reconciliation["state"] = "deleting"
+                missing_items.seek(0)
+                reconciliation["removed"] = (
+                    await self.catalog_database.delete_item_batches(
+                        _missing_item_batches(
+                            missing_items,
+                            self.item_batch_size,
+                        )
+                    )
+                )
+            reconciliation["state"] = "completed"
+        except Exception as error:
+            reconciliation["state"] = "failed"
+            reconciliation["error"] = str(error)
+        finally:
+            self._status["timing"]["reconciliationSeconds"] = (
+                perf_counter() - phase_started
+            )
+        return reconciliation["removed"]
+
     async def _enforce_catalog_writer_limit(
         self,
         catalog_write_tasks: set[asyncio.Task[None]],
     ) -> None:
-        """Wait for and validate a write when all writer slots are occupied."""
+        """Wait for and validate a write when all writer slots are occupied.
+
+        Args:
+            catalog_write_tasks: Active catalog-write tasks.
+        """
         if len(catalog_write_tasks) < self.catalog_writer_count:
             return
         completed_writes, _ = await asyncio.wait(
@@ -516,7 +843,13 @@ class ScanManager:
         items: list[dict[str, Any]],
         existing_item_keys: set[tuple[str, str]],
     ) -> None:
-        """Write one batch and classify its successfully cataloged Items."""
+        """Write one batch and classify its successfully cataloged Items.
+
+        Args:
+            catalog_session: Open STAC write session.
+            items: Nonempty batch belonging to one Collection.
+            existing_item_keys: Catalog inventory captured before the scan.
+        """
         phase_started = perf_counter()
         try:
             await catalog_session.upsert_items(items)
@@ -531,6 +864,14 @@ class ScanManager:
         )
 
     def _new_status(self, state: str) -> dict[str, Any]:
+        """Create an empty status record.
+
+        Args:
+            state: Initial scanner state.
+
+        Returns:
+            Mutable status record for one scan run.
+        """
         return {
             "id": str(uuid4()),
             "state": state,
@@ -547,6 +888,13 @@ class ScanManager:
             "finishedAt": None,
             "errors": [],
             "errorsTruncated": False,
+            "reconciliation": {
+                "state": "not_started",
+                "checked": 0,
+                "missing": 0,
+                "removed": 0,
+                "error": None,
+            },
             "timing": {
                 "elapsedSeconds": 0.0,
                 "catalogInventorySeconds": 0.0,
@@ -556,9 +904,130 @@ class ScanManager:
                 "metadataProcessingSeconds": 0.0,
                 "metadataIoWaitSeconds": 0.0,
                 "catalogWriteSeconds": 0.0,
+                "reconciliationSeconds": 0.0,
                 "cacheInvalidationSeconds": 0.0,
             },
         }
+
+
+def _catalog_item_source(
+    collection: str,
+    item_id: str,
+    assets: dict[str, Any],
+) -> CatalogItemSource:
+    """Extract source Assets required by a scanner-owned Collection.
+
+    Args:
+        collection: Collection containing the Item.
+        item_id: Item identifier within the Collection.
+        assets: STAC Asset mapping stored by pgSTAC.
+
+    Returns:
+        Item identity and its required source Asset locations.
+
+    Raises:
+        ValueError: If a required source Asset is missing.
+    """
+    required_asset_keys = (
+        ("data",)
+        if collection == MOUNTED_GEOTIFF_COLLECTION_ID
+        else ("shp", "shx", "dbf", "prj")
+    )
+    try:
+        asset_hrefs = tuple(assets[key]["href"] for key in required_asset_keys)
+    except KeyError as error:
+        raise ValueError(
+            f"{collection}/{item_id} is missing required source Assets"
+        ) from error
+    return CatalogItemSource(collection, item_id, asset_hrefs)
+
+
+def _catalog_item_is_missing(
+    item: CatalogItemSource,
+    source_root: Path,
+) -> bool:
+    """Check whether any required Asset is absent from the mounted source.
+
+    Args:
+        item: Catalog Item source locations to inspect.
+        source_root: Root of the mounted source tree.
+
+    Returns:
+        Whether at least one required source Asset is missing.
+
+    Raises:
+        ValueError: If an Asset location is outside the mounted source.
+        OSError: If an Asset exists but is not a mounted file.
+    """
+    mount_uri = urlsplit(source_root.resolve().as_uri())
+    mount_uri_path = unquote(mount_uri.path).rstrip("/")
+    is_missing = False
+    for asset_href in item.asset_hrefs:
+        asset_uri = urlsplit(asset_href)
+        asset_uri_path = unquote(asset_uri.path)
+        if (
+            asset_uri.scheme != "file"
+            or asset_uri.netloc != mount_uri.netloc
+            or asset_uri.query
+            or asset_uri.fragment
+            or not asset_uri_path.startswith(f"{mount_uri_path}/")
+        ):
+            raise ValueError(
+                f"{item.collection}/{item.item_id} has an Asset outside the scan mount"
+            )
+        relative_path = Path(asset_uri_path[len(mount_uri_path) + 1 :])
+        try:
+            source_path = (source_root / relative_path).resolve(strict=True)
+        except FileNotFoundError:
+            is_missing = True
+            continue
+        if (
+            not source_path.is_relative_to(source_root.resolve())
+            or not source_path.is_file()
+        ):
+            raise OSError(
+                f"{item.collection}/{item.item_id} source Asset is not a mounted file"
+            )
+    return is_missing
+
+
+def _source_signature(
+    source_root: Path,
+) -> tuple[int, int]:
+    """Identify the mounted root before the destructive phase begins.
+
+    Args:
+        source_root: Root of the mounted source tree.
+
+    Returns:
+        Device and inode identifiers for the mounted root.
+    """
+    file_status = source_root.stat()
+    return file_status.st_dev, file_status.st_ino
+
+
+def _missing_item_batches(
+    missing_items: Iterable[str],
+    batch_size: int,
+) -> Iterable[list[tuple[str, str]]]:
+    """Decode spooled missing keys into bounded database batches.
+
+    Args:
+        missing_items: JSON-encoded Collection and Item identifier pairs.
+        batch_size: Maximum number of keys per batch.
+
+    Yields:
+        Bounded batches of Collection and Item identifier pairs.
+    """
+    batch: list[tuple[str, str]] = []
+    for line in missing_items:
+        collection, item_id = json.loads(line)
+        batch.append((collection, item_id))
+        if len(batch) == batch_size:
+            yield batch
+            batch = []
+    if batch:
+        yield batch
 
 
 async def _enqueue_dataset_candidates(
@@ -566,7 +1035,13 @@ async def _enqueue_dataset_candidates(
     path_queue: asyncio.Queue[DatasetCandidate | None],
     metadata_worker_count: int,
 ) -> None:
-    """Feed discovered datasets to a bounded metadata-work queue."""
+    """Feed discovered datasets to a bounded metadata-work queue.
+
+    Args:
+        dataset_candidates: Datasets awaiting metadata extraction.
+        path_queue: Bounded worker input queue.
+        metadata_worker_count: Number of completion sentinels to enqueue.
+    """
     for dataset_candidate in dataset_candidates:
         await path_queue.put(dataset_candidate)
     for _ in range(metadata_worker_count):
@@ -579,7 +1054,14 @@ async def _read_dataset_metadata(
     result_queue: asyncio.Queue[DatasetMetadataResult | None],
     metadata_executor: Executor,
 ) -> None:
-    """Read dataset metadata until the producer signals completion."""
+    """Read dataset metadata until the producer signals completion.
+
+    Args:
+        source_root: Root of the mounted source tree.
+        path_queue: Bounded worker input queue.
+        result_queue: Bounded metadata result queue.
+        metadata_executor: Executor running metadata extraction.
+    """
     event_loop = asyncio.get_running_loop()
     while (dataset_candidate := await path_queue.get()) is not None:
         metadata_result = await event_loop.run_in_executor(
@@ -596,7 +1078,15 @@ def _build_dataset_metadata(
     source_root: Path,
     dataset_candidate: DatasetCandidate,
 ) -> DatasetMetadataResult:
-    """Build one Item while separating worker CPU from elapsed time."""
+    """Build one Item while separating worker CPU from elapsed time.
+
+    Args:
+        source_root: Root of the mounted source tree.
+        dataset_candidate: Dataset and any companion files to inspect.
+
+    Returns:
+        Item or per-dataset failure with worker timing.
+    """
     elapsed_started = perf_counter()
     processing_started = process_time()
     dataset_path = dataset_candidate.path
@@ -629,7 +1119,14 @@ def _build_dataset_metadata(
 
 
 def _create_metadata_executor(worker_count: int) -> ProcessPoolExecutor:
-    """Create isolated metadata workers without inheriting app threads."""
+    """Create isolated metadata workers without inheriting app threads.
+
+    Args:
+        worker_count: Number of worker processes.
+
+    Returns:
+        Spawn-based metadata executor.
+    """
     return ProcessPoolExecutor(
         max_workers=worker_count,
         mp_context=get_context("spawn"),
@@ -682,6 +1179,14 @@ def _discover_datasets(
 
 
 def _raise_catalog_error(response: httpx2.Response) -> None:
+    """Raise a bounded error for an unsuccessful STAC API response.
+
+    Args:
+        response: Unsuccessful STAC API response.
+
+    Raises:
+        RuntimeError: Always, with bounded upstream response text.
+    """
     detail = response.text[:500]
     raise RuntimeError(
         f"STAC API returned {response.status_code} for {response.request.method} "
@@ -690,4 +1195,9 @@ def _raise_catalog_error(response: httpx2.Response) -> None:
 
 
 def _utc_now() -> str:
+    """Return the current UTC time in STAC timestamp form.
+
+    Returns:
+        ISO 8601 timestamp ending in ``Z``.
+    """
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
