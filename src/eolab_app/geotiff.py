@@ -23,7 +23,7 @@ RENDERING_METADATA_KEY = "eolab:rendering"
 RENDERING_POLICY = "raster-v1"
 DIRECT_RENDERING_MAX_BYTES = 64 * 1024 * 1024
 OVERVIEW_RENDERING_MAX_BYTES = 64 * 1024 * 1024
-OVERVIEW_RENDERING_MAX_DIMENSION = 4096
+OVERVIEW_RENDERING_MAX_DIMENSION = 8192
 RENDERING_MAX_BLOCK_EDGE = 1024
 SUPPORTED_RENDERING_DATA_TYPES = frozenset(
     {"uint8", "uint16", "int16", "int32", "float32", "float64"}
@@ -144,8 +144,8 @@ def assess_raster_renderability(
     elif overview_storage != "internal":
         eligible = False
         reason = (
-            "Visualization unavailable: this raster needs a complete "
-            "internal overview pyramid."
+            "Visualization unavailable: this raster needs an internal "
+            "overview pyramid."
         )
     else:
         factors = overview_factors[0]
@@ -160,23 +160,40 @@ def assess_raster_renderability(
                 )
             )
         )
-        coarsest_factor = factors[-1] if complete_overview_pyramid else 1
-        useful_overview_pyramid = complete_overview_pyramid and (
-            max(
-                math.ceil(dataset.width / coarsest_factor),
-                math.ceil(dataset.height / coarsest_factor),
+        if not complete_overview_pyramid:
+            eligible = False
+            reason = (
+                "Visualization unavailable: this raster needs an internal "
+                "overview pyramid beginning at 2x without skipped levels."
             )
-            <= OVERVIEW_RENDERING_MAX_DIMENSION
-            and math.ceil(dataset.width / coarsest_factor)
-            * math.ceil(dataset.height / coarsest_factor)
-            * bytes_per_pixel
-            <= OVERVIEW_RENDERING_MAX_BYTES
-        )
-        eligible = useful_overview_pyramid
-        reason = None if useful_overview_pyramid else (
-            "Visualization unavailable: this raster needs a complete "
-            "internal overview pyramid."
-        )
+        else:
+            coarsest_factor = factors[-1]
+            coarsest_width = math.ceil(dataset.width / coarsest_factor)
+            coarsest_height = math.ceil(dataset.height / coarsest_factor)
+            coarsest_bytes = (
+                coarsest_width * coarsest_height * bytes_per_pixel
+            )
+            if (
+                max(coarsest_width, coarsest_height)
+                > OVERVIEW_RENDERING_MAX_DIMENSION
+            ):
+                eligible = False
+                reason = (
+                    "Visualization unavailable: the coarsest internal "
+                    "overview is wider or taller than "
+                    f"{OVERVIEW_RENDERING_MAX_DIMENSION} pixels."
+                )
+            elif coarsest_bytes > OVERVIEW_RENDERING_MAX_BYTES:
+                eligible = False
+                reason = (
+                    "Visualization unavailable: the coarsest internal "
+                    "overview exceeds "
+                    f"{OVERVIEW_RENDERING_MAX_BYTES // (1024 * 1024)} MiB "
+                    "of decoded pixel data."
+                )
+            else:
+                eligible = True
+                reason = None
 
     rendering_metadata = {
         "policy": RENDERING_POLICY,

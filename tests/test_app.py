@@ -451,8 +451,8 @@ def test_raster_publication_reassesses_a_changed_source(
         lambda _: {
             "eligible": False,
             "reason": (
-                "Visualization unavailable: this raster needs a complete "
-                "internal overview pyramid."
+                "Visualization unavailable: the coarsest internal overview "
+                "exceeds 64 MiB of decoded pixel data."
             ),
         },
     )
@@ -481,8 +481,8 @@ def test_raster_publication_reassesses_a_changed_source(
     assert response.status_code == 409
     assert response.json() == {
         "detail": (
-            "Visualization unavailable: this raster needs a complete "
-            "internal overview pyramid."
+            "Visualization unavailable: the coarsest internal overview "
+            "exceeds 64 MiB of decoded pixel data."
         )
     }
     assert geoserver_requests == []

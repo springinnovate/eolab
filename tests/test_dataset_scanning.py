@@ -279,7 +279,7 @@ def test_external_geotiff_overviews_are_recorded(tmp_path: Path) -> None:
                 compression="DEFLATE",
             ),
             False,
-            "needs a complete internal overview pyramid",
+            "exceeds 64 MiB of decoded pixel data",
         ),
         (
             RasterLayout(
@@ -291,7 +291,30 @@ def test_external_geotiff_overviews_are_recorded(tmp_path: Path) -> None:
                 compression="DEFLATE",
             ),
             False,
-            "needs a complete internal overview pyramid",
+            "beginning at 2x without skipped levels",
+        ),
+        (
+            RasterLayout(
+                width=133_584,
+                height=66_792,
+                data_types=("float32",),
+                block_shapes=((512, 512),),
+                overview_factors=((2, 4, 8, 16, 32),),
+                compression="ZSTD",
+            ),
+            True,
+            None,
+        ),
+        (
+            RasterLayout(
+                width=300_000,
+                height=10_000,
+                data_types=("float32",),
+                block_shapes=((512, 512),),
+                overview_factors=((2, 4, 8, 16, 32),),
+            ),
+            False,
+            "wider or taller than 8192 pixels",
         ),
         (
             RasterLayout(
@@ -332,6 +355,8 @@ def test_external_geotiff_overviews_are_recorded(tmp_path: Path) -> None:
         "large-overviewed",
         "shallow-overviews",
         "gapped-overviews",
+        "global-cog-overviews",
+        "oversized-coarsest-overview",
         "oversized-blocks",
         "multiple-bands",
         "unsupported-data-type",
@@ -370,7 +395,7 @@ def test_large_raster_requires_internal_overviews(
 
     assert assessment["eligible"] is False
     assert assessment["overview_storage"] == "external"
-    assert "needs a complete internal overview pyramid" in assessment["reason"]
+    assert "needs an internal overview pyramid" in assessment["reason"]
 
 
 @pytest.mark.parametrize(

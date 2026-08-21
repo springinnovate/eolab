@@ -16,11 +16,14 @@ with a supported scalar data type (`uint8`, `uint16`, `int16`, `int32`,
 2. Each base-resolution block is no more than 1024 pixels on either edge, and
    it has a complete internal overview pyramid beginning at 2× with no greater
    than 2× gap between levels. The coarsest overview must reduce the raster to
-   no more than 4096 pixels on either edge and 64 MiB decoded.
+   no more than 8192 pixels on either edge and 64 MiB decoded.
 
-These are conservative starting bounds on decoded source and output sizes,
-with room for GeoServer's reprojection and Java overhead. The Coolify
-experiment below determines whether they should be adjusted.
+These are conservative starting bounds on decoded source size, with room for
+GeoServer's reprojection and Java overhead. The 8192-pixel overview limit also
+accepts common global COG pyramids whose last 2× level is slightly larger than
+4096 pixels; the separate 64 MiB limit still bounds its decoded pixel data.
+The Coolify experiment below determines whether these limits should be
+adjusted.
 
 The scanner reads dimensions, band data types, base-resolution block shapes,
 compression, overview factors and storage, and GDAL's `LAYOUT=COG` indicator
