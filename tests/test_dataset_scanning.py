@@ -7,13 +7,15 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractAsyncContextManager
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import Barrier, Lock
+from threading import Barrier, Event, Lock
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import httpx2
 import fiona
 import numpy
+import psycopg
 import pytest
 import rasterio
 from affine import Affine
@@ -34,11 +36,15 @@ from eolab_app.geotiff import (
     build_stac_item as build_geotiff_stac_item,
 )
 from eolab_app.scanning import (
+    CatalogItemSource,
     DATASET_ITEM_BUILDERS,
     DatasetCandidate,
+    PgStacCatalogDatabase,
     ScanManager,
     StacApiWriter,
     _build_dataset_metadata,
+    _catalog_item_is_missing,
+    _catalog_item_source,
     _create_metadata_executor,
 )
 from eolab_app.shapefile import (
@@ -923,6 +929,8 @@ class RecordingCatalogDatabase:
     def __init__(self, catalog_writer: RecordingCatalogWriter) -> None:
         self.catalog_writer = catalog_writer
         self.search_count_cache_invalidations = 0
+        self.deleted_batches: list[list[tuple[str, str]]] = []
+        self.requested_page_sizes: list[int] = []
 
     async def existing_item_keys(
         self,
@@ -933,6 +941,43 @@ class RecordingCatalogDatabase:
             "eolab-mounted-vectors",
         )
         return set(self.catalog_writer.write_session.items)
+
+    async def scanner_item_pages(
+        self,
+        collection_identifiers: tuple[str, ...],
+        page_size: int,
+    ):
+        self.requested_page_sizes.append(page_size)
+        scanner_items = [
+            _catalog_item_source(
+                collection,
+                item_id,
+                item["assets"],
+            )
+            for (collection, item_id), item in sorted(
+                self.catalog_writer.write_session.items.items()
+            )
+            if collection in collection_identifiers and item.get("assets")
+        ]
+        for page_start in range(0, len(scanner_items), page_size):
+            yield scanner_items[page_start : page_start + page_size]
+
+    async def delete_item_batches(
+        self,
+        item_batches,
+    ) -> int:
+        batches = list(item_batches)
+        self.deleted_batches.extend(batches)
+        item_keys = [
+            item_key
+            for item_batch in batches
+            for item_key in item_batch
+        ]
+        removed = 0
+        for item_key in item_keys:
+            if self.catalog_writer.write_session.items.pop(item_key, None):
+                removed += 1
+        return removed
 
     async def invalidate_search_count_cache(self) -> None:
         self.search_count_cache_invalidations += 1
@@ -975,6 +1020,77 @@ def test_metadata_executor_uses_spawned_processes(
     assert isinstance(executor, RecordingProcessPoolExecutor)
     assert executor_arguments["max_workers"] == 8
     assert executor_arguments["mp_context"].get_start_method() == "spawn"
+
+
+def test_pgstac_database_pages_scanner_assets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Read only scanner Collections through a bounded keyset query."""
+    first_cursor = AsyncMock()
+    first_cursor.fetchall.return_value = [
+        (
+            "eolab-mounted-geotiffs",
+            "geotiff-1",
+            {"data": {"href": "file:///scan-source/one.tif"}},
+        )
+    ]
+    empty_cursor = AsyncMock()
+    empty_cursor.fetchall.return_value = []
+    connection = AsyncMock()
+    connection.__aenter__.return_value = connection
+    connection.execute.side_effect = [first_cursor, empty_cursor]
+    monkeypatch.setattr(
+        psycopg.AsyncConnection,
+        "connect",
+        AsyncMock(return_value=connection),
+    )
+
+    async def read_pages() -> list[list[CatalogItemSource]]:
+        return [
+            page
+            async for page in PgStacCatalogDatabase().scanner_item_pages(
+                ("eolab-mounted-geotiffs", "eolab-mounted-vectors"),
+                500,
+            )
+        ]
+
+    pages = asyncio.run(read_pages())
+
+    assert pages == [[
+        CatalogItemSource(
+            "eolab-mounted-geotiffs",
+            "geotiff-1",
+            ("file:///scan-source/one.tif",),
+        )
+    ]]
+    assert connection.execute.await_count == 2
+    assert "(collection, id) >" in connection.execute.await_args_list[1].args[0]
+
+
+def test_pgstac_database_deletes_batches_in_one_transaction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Use bounded delete statements without committing between batches."""
+    first_cursor = SimpleNamespace(rowcount=2)
+    second_cursor = SimpleNamespace(rowcount=1)
+    connection = AsyncMock()
+    connection.__aenter__.return_value = connection
+    connection.execute.side_effect = [first_cursor, second_cursor]
+    connect = AsyncMock(return_value=connection)
+    monkeypatch.setattr(psycopg.AsyncConnection, "connect", connect)
+
+    removed = asyncio.run(PgStacCatalogDatabase().delete_item_batches([
+        [("collection-a", "same-id"), ("collection-b", "same-id")],
+        [("collection-a", "another-id")],
+    ]))
+
+    assert removed == 3
+    connect.assert_awaited_once_with()
+    assert connection.execute.await_count == 2
+    assert connection.execute.await_args_list[0].args[1] == (
+        ["collection-a", "collection-b"],
+        ["same-id", "same-id"],
+    )
 
 
 def test_spawned_metadata_process_builds_dataset_items(
@@ -1051,6 +1167,7 @@ def test_scan_continues_after_an_invalid_geotiff(tmp_path: Path) -> None:
         "metadataProcessingSeconds",
         "metadataIoWaitSeconds",
         "catalogWriteSeconds",
+        "reconciliationSeconds",
         "cacheInvalidationSeconds",
     }
     assert first_status["timing"]["metadataWorkerSeconds"] == pytest.approx(
@@ -1192,6 +1309,403 @@ def test_scan_catalogs_raster_and_shapefile_datasets_together(
         len({item["collection"] for item in item_batch}) == 1
         for item_batch in catalog_writer.write_session.item_batches
     )
+
+
+def test_scan_removes_missing_raster_without_pruning_unscanned_paths(
+    tmp_path: Path,
+) -> None:
+    """Reconcile stored Assets independently of configured discovery subsets."""
+    scanned_path = tmp_path / "scanned"
+    unscanned_path = tmp_path / "unscanned"
+    stale_path = unscanned_path / "old raster.tif"
+    present_path = unscanned_path / "still present.tif"
+    write_geotiff(scanned_path / "current.tif")
+    write_geotiff(stale_path)
+    write_geotiff(present_path)
+    stale_item = build_geotiff_stac_item(tmp_path, stale_path)
+    present_item = build_geotiff_stac_item(tmp_path, present_path)
+    same_id_vector = {
+        "collection": "eolab-mounted-vectors",
+        "id": stale_item["id"],
+        "assets": {
+            key: {"href": present_path.resolve().as_uri()}
+            for key in ("shp", "shx", "dbf", "prj")
+        },
+    }
+    stale_path.unlink()
+    catalog_writer = RecordingCatalogWriter()
+    catalog_writer.write_session.items.update({
+        (stale_item["collection"], stale_item["id"]): stale_item,
+        (present_item["collection"], present_item["id"]): present_item,
+        (same_id_vector["collection"], same_id_vector["id"]): same_id_vector,
+        ("external-collection", "external-item"): {
+            "collection": "external-collection",
+            "id": "external-item",
+            "assets": present_item["assets"],
+        },
+    })
+    catalog_database = RecordingCatalogDatabase(catalog_writer)
+    scan_manager = ScanManager(
+        tmp_path,
+        (scanned_path,),
+        catalog_writer,
+        catalog_database,
+        2,
+        2,
+        100,
+    )
+
+    async def run_twice() -> tuple[dict[str, Any], dict[str, Any]]:
+        await scan_manager.start()
+        while scan_manager.status()["state"] in {"discovering", "scanning"}:
+            await asyncio.sleep(0.01)
+        first_status = scan_manager.status()
+        restarted_scan_manager = ScanManager(
+            tmp_path,
+            (scanned_path,),
+            catalog_writer,
+            catalog_database,
+            2,
+            2,
+            100,
+        )
+        await restarted_scan_manager.start()
+        while restarted_scan_manager.status()["state"] in {
+            "discovering",
+            "scanning",
+        }:
+            await asyncio.sleep(0.01)
+        return first_status, restarted_scan_manager.status()
+
+    status, repeated_status = asyncio.run(run_twice())
+
+    assert status["state"] == "completed"
+    assert status["reconciliation"] == {
+        "state": "completed",
+        "checked": 3,
+        "missing": 1,
+        "removed": 1,
+        "error": None,
+    }
+    assert (stale_item["collection"], stale_item["id"]) not in (
+        catalog_writer.write_session.items
+    )
+    assert (present_item["collection"], present_item["id"]) in (
+        catalog_writer.write_session.items
+    )
+    assert (same_id_vector["collection"], same_id_vector["id"]) in (
+        catalog_writer.write_session.items
+    )
+    assert ("external-collection", "external-item") in (
+        catalog_writer.write_session.items
+    )
+    assert repeated_status["reconciliation"]["missing"] == 0
+    assert repeated_status["reconciliation"]["removed"] == 0
+
+
+@pytest.mark.parametrize("missing_extension", [".shp", ".shx", ".dbf", ".prj"])
+def test_scan_removes_shapefile_when_a_required_component_is_missing(
+    tmp_path: Path,
+    missing_extension: str,
+) -> None:
+    """Treat every required Shapefile component as source availability."""
+    shapefile_path, component_paths = write_shapefile(tmp_path / "habitat.shp")
+    item = build_shapefile_stac_item(
+        tmp_path,
+        shapefile_path,
+        component_paths,
+    )
+    next(
+        path
+        for path in component_paths
+        if path.suffix.lower() == missing_extension
+    ).unlink()
+    catalog_writer = RecordingCatalogWriter()
+    item_key = (item["collection"], item["id"])
+    catalog_writer.write_session.items[item_key] = item
+    scan_manager = ScanManager(
+        tmp_path,
+        (tmp_path,),
+        catalog_writer,
+        RecordingCatalogDatabase(catalog_writer),
+        2,
+        2,
+        100,
+    )
+
+    async def run_scan() -> dict[str, Any]:
+        await scan_manager.start()
+        while scan_manager.status()["state"] in {"discovering", "scanning"}:
+            await asyncio.sleep(0.01)
+        return scan_manager.status()
+
+    status = asyncio.run(run_scan())
+
+    assert status["state"] == "completed"
+    assert status["reconciliation"]["removed"] == 1
+    assert item_key not in catalog_writer.write_session.items
+
+
+def test_reconciliation_failure_never_deletes_candidates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep every Item when any source check reports an access failure."""
+    missing_href = (tmp_path / "missing.tif").resolve().as_uri()
+    catalog_writer = RecordingCatalogWriter()
+    item_key = ("eolab-mounted-geotiffs", "geotiff-missing")
+    catalog_writer.write_session.items[item_key] = {
+        "collection": item_key[0],
+        "id": item_key[1],
+        "assets": {"data": {"href": missing_href}},
+    }
+    catalog_database = RecordingCatalogDatabase(catalog_writer)
+    monkeypatch.setattr(
+        "eolab_app.scanning._catalog_item_is_missing",
+        lambda *_: (_ for _ in ()).throw(PermissionError("NFS unavailable")),
+    )
+    scan_manager = ScanManager(
+        tmp_path,
+        (tmp_path,),
+        catalog_writer,
+        catalog_database,
+        2,
+        2,
+        100,
+    )
+
+    async def run_scan() -> dict[str, Any]:
+        await scan_manager.start()
+        while scan_manager.status()["state"] in {"discovering", "scanning"}:
+            await asyncio.sleep(0.01)
+        return scan_manager.status()
+
+    status = asyncio.run(run_scan())
+
+    assert status["state"] == "completed"
+    assert status["reconciliation"]["state"] == "failed"
+    assert status["reconciliation"]["error"] == "NFS unavailable"
+    assert status["reconciliation"]["removed"] == 0
+    assert catalog_database.deleted_batches == []
+    assert item_key in catalog_writer.write_session.items
+
+
+def test_missing_asset_does_not_hide_a_later_access_error(tmp_path: Path) -> None:
+    """Complete every required-Asset check before classifying one Item."""
+    directory_asset = tmp_path / "not-a-file"
+    directory_asset.mkdir()
+    item = CatalogItemSource(
+        "eolab-mounted-vectors",
+        "shapefile-incomplete",
+        (
+            (tmp_path / "missing.shp").resolve().as_uri(),
+            directory_asset.resolve().as_uri(),
+        ),
+    )
+
+    with pytest.raises(OSError, match="not a mounted file"):
+        _catalog_item_is_missing(item, tmp_path)
+
+
+def test_changed_mount_aborts_reconciliation_before_delete(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Require one stable mounted-root identity across the read-only pass."""
+    catalog_writer = RecordingCatalogWriter()
+    item_key = ("eolab-mounted-geotiffs", "geotiff-missing")
+    catalog_writer.write_session.items[item_key] = {
+        "collection": item_key[0],
+        "id": item_key[1],
+        "assets": {
+            "data": {"href": (tmp_path / "missing.tif").resolve().as_uri()}
+        },
+    }
+    catalog_database = RecordingCatalogDatabase(catalog_writer)
+    signatures = iter([(1, 2), (3, 4)])
+    monkeypatch.setattr(
+        "eolab_app.scanning._source_signature",
+        lambda *_: next(signatures),
+    )
+    scan_manager = ScanManager(
+        tmp_path,
+        (tmp_path,),
+        catalog_writer,
+        catalog_database,
+        1,
+        1,
+        100,
+    )
+
+    async def run_scan() -> dict[str, Any]:
+        await scan_manager.start()
+        while scan_manager.status()["state"] in {"discovering", "scanning"}:
+            await asyncio.sleep(0.01)
+        return scan_manager.status()
+
+    status = asyncio.run(run_scan())
+
+    assert status["reconciliation"]["state"] == "failed"
+    assert status["reconciliation"]["missing"] == 1
+    assert status["reconciliation"]["removed"] == 0
+    assert catalog_database.deleted_batches == []
+    assert item_key in catalog_writer.write_session.items
+
+
+def test_reconciliation_checks_and_deletes_in_bounded_batches(
+    tmp_path: Path,
+) -> None:
+    """Bound catalog pages, NFS checks, and delete statements for large scans."""
+    catalog_writer = RecordingCatalogWriter()
+    for item_index in range(205):
+        item_id = f"geotiff-missing-{item_index:03}-café"
+        catalog_writer.write_session.items[
+            ("eolab-mounted-geotiffs", item_id)
+        ] = {
+            "collection": "eolab-mounted-geotiffs",
+            "id": item_id,
+            "assets": {
+                "data": {
+                    "href": (
+                        tmp_path / f"missing file {item_index:03}.tif"
+                    ).resolve().as_uri()
+                }
+            },
+        }
+    catalog_database = RecordingCatalogDatabase(catalog_writer)
+    scan_manager = ScanManager(
+        tmp_path,
+        (tmp_path,),
+        catalog_writer,
+        catalog_database,
+        2,
+        2,
+        40,
+    )
+
+    async def run_scan() -> dict[str, Any]:
+        await scan_manager.start()
+        while scan_manager.status()["state"] in {"discovering", "scanning"}:
+            await asyncio.sleep(0.01)
+        return scan_manager.status()
+
+    status = asyncio.run(run_scan())
+
+    assert status["reconciliation"]["checked"] == 205
+    assert status["reconciliation"]["missing"] == 205
+    assert status["reconciliation"]["removed"] == 205
+    assert catalog_database.requested_page_sizes == [500]
+    assert list(map(len, catalog_database.deleted_batches)) == [40] * 5 + [5]
+
+
+def test_reconciliation_overlaps_metadata_extraction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Start source verification while metadata workers are still active."""
+    dataset_path = tmp_path / "current.tif"
+    dataset_path.touch()
+    metadata_started = Event()
+    reconciliation_started = Event()
+
+    def build_item(source_root: Path, path: Path) -> dict[str, Any]:
+        metadata_started.set()
+        assert reconciliation_started.wait(2)
+        return {
+            "collection": "eolab-mounted-geotiffs",
+            "id": "geotiff-current",
+            "geometry": {"type": "Point", "coordinates": [0, 0]},
+        }
+
+    def check_item(*_: object) -> bool:
+        assert metadata_started.wait(2)
+        reconciliation_started.set()
+        return False
+
+    monkeypatch.setitem(DATASET_ITEM_BUILDERS, ".tif", build_item)
+    monkeypatch.setattr(
+        "eolab_app.scanning._catalog_item_is_missing",
+        check_item,
+    )
+    catalog_writer = RecordingCatalogWriter()
+    catalog_writer.write_session.items[
+        ("eolab-mounted-geotiffs", "geotiff-existing")
+    ] = {
+        "collection": "eolab-mounted-geotiffs",
+        "id": "geotiff-existing",
+        "assets": {"data": {"href": dataset_path.resolve().as_uri()}},
+    }
+    scan_manager = ScanManager(
+        tmp_path,
+        (tmp_path,),
+        catalog_writer,
+        RecordingCatalogDatabase(catalog_writer),
+        1,
+        1,
+        100,
+    )
+
+    async def run_scan() -> dict[str, Any]:
+        await scan_manager.start()
+        while scan_manager.status()["state"] in {"discovering", "scanning"}:
+            await asyncio.sleep(0.01)
+        return scan_manager.status()
+
+    status = asyncio.run(run_scan())
+
+    assert status["state"] == "completed"
+    assert status["indexed"] == 1
+    assert status["reconciliation"]["checked"] == 1
+
+
+def test_catalog_delete_failure_rolls_back_reconciliation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Report a destructive-phase failure without claiming an Item removal."""
+    catalog_writer = RecordingCatalogWriter()
+    item_key = ("eolab-mounted-geotiffs", "geotiff-missing")
+    catalog_writer.write_session.items[item_key] = {
+        "collection": item_key[0],
+        "id": item_key[1],
+        "assets": {
+            "data": {"href": (tmp_path / "missing.tif").resolve().as_uri()}
+        },
+    }
+    catalog_database = RecordingCatalogDatabase(catalog_writer)
+
+    async def reject_deletes(item_batches) -> int:
+        list(item_batches)
+        raise RuntimeError("catalog delete failed")
+
+    monkeypatch.setattr(
+        catalog_database,
+        "delete_item_batches",
+        reject_deletes,
+    )
+    scan_manager = ScanManager(
+        tmp_path,
+        (tmp_path,),
+        catalog_writer,
+        catalog_database,
+        1,
+        1,
+        100,
+    )
+
+    async def run_scan() -> dict[str, Any]:
+        await scan_manager.start()
+        while scan_manager.status()["state"] in {"discovering", "scanning"}:
+            await asyncio.sleep(0.01)
+        return scan_manager.status()
+
+    status = asyncio.run(run_scan())
+
+    assert status["state"] == "completed"
+    assert status["reconciliation"]["state"] == "failed"
+    assert status["reconciliation"]["missing"] == 1
+    assert status["reconciliation"]["removed"] == 0
+    assert item_key in catalog_writer.write_session.items
 
 
 def test_scan_continues_after_an_incomplete_shapefile(tmp_path: Path) -> None:
@@ -1609,6 +2123,7 @@ def test_scan_stops_after_a_bulk_catalog_failure(
     assert status["processed"] == 100
     assert status["indexed"] == 0
     assert status["failed"] == 0
+    assert status["reconciliation"]["state"] == "completed"
     assert len(catalog_writer.write_session.item_batches) == 1
     assert status["errors"][-1] == {
         "path": None,

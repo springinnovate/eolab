@@ -1,16 +1,21 @@
 """Scan mounted directories for geospatial datasets and write STAC records."""
 
 import asyncio
+import json
 import os
+import tempfile
+from collections.abc import AsyncIterator, Iterable
 from concurrent.futures import Executor, ProcessPoolExecutor
 from contextlib import AbstractAsyncContextManager
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from itertools import batched
 from multiprocessing import get_context
 from pathlib import Path
 from time import perf_counter, process_time
 from typing import Any, Protocol
+from urllib.parse import unquote, urlsplit
 from uuid import uuid4
 
 import httpx2
@@ -28,6 +33,8 @@ from eolab_app.shapefile import (
 
 MAX_SCAN_ERROR_DETAILS = 100
 CATALOG_WRITE_TIMEOUT_SECONDS = 120
+RECONCILIATION_PAGE_SIZE = 500
+RECONCILIATION_CHECK_CONCURRENCY = 8
 
 GEOTIFF_COLLECTION = {
     "type": "Collection",
@@ -92,6 +99,15 @@ class DatasetMetadataResult:
     processing_seconds: float
 
 
+@dataclass(frozen=True)
+class CatalogItemSource:
+    """Scanner-owned Item identity and the Assets that prove it exists."""
+
+    collection: str
+    item_id: str
+    asset_hrefs: tuple[str, ...]
+
+
 class CatalogWriteSession(Protocol):
     """Catalog operations required by one scan."""
 
@@ -118,6 +134,19 @@ class CatalogDatabase(Protocol):
     ) -> set[tuple[str, str]]:
         """Return Collection and Item identifiers already stored."""
 
+    def scanner_item_pages(
+        self,
+        collection_identifiers: tuple[str, ...],
+        page_size: int,
+    ) -> AsyncIterator[list[CatalogItemSource]]:
+        """Stream bounded pages of scanner-owned source Assets."""
+
+    async def delete_item_batches(
+        self,
+        item_batches: Iterable[list[tuple[str, str]]],
+    ) -> int:
+        """Atomically delete bounded batches of Collection and Item IDs."""
+
     async def invalidate_search_count_cache(self) -> None:
         """Discard cached Item Search counts after a scan."""
 
@@ -136,6 +165,75 @@ class PgStacCatalogDatabase:
                 (list(collection_identifiers),),
             )
             return {(row[0], row[1]) async for row in cursor}
+
+    async def scanner_item_pages(
+        self,
+        collection_identifiers: tuple[str, ...],
+        page_size: int,
+    ) -> AsyncIterator[list[CatalogItemSource]]:
+        """Stream scanner-owned source Assets in stable key order."""
+        after: tuple[str, str] | None = None
+        async with await psycopg.AsyncConnection.connect() as connection:
+            while True:
+                if after is None:
+                    cursor = await connection.execute(
+                        """
+                        SELECT collection, id, content->'assets'
+                        FROM pgstac.items
+                        WHERE collection = ANY(%s)
+                        ORDER BY collection, id
+                        LIMIT %s
+                        """,
+                        (list(collection_identifiers), page_size),
+                    )
+                else:
+                    cursor = await connection.execute(
+                        """
+                        SELECT collection, id, content->'assets'
+                        FROM pgstac.items
+                        WHERE collection = ANY(%s)
+                          AND (collection, id) > (%s, %s)
+                        ORDER BY collection, id
+                        LIMIT %s
+                        """,
+                        (
+                            list(collection_identifiers),
+                            after[0],
+                            after[1],
+                            page_size,
+                        ),
+                    )
+                rows = await cursor.fetchall()
+                if not rows:
+                    return
+                page = [
+                    _catalog_item_source(collection, item_id, assets)
+                    for collection, item_id, assets in rows
+                ]
+                yield page
+                after = (page[-1].collection, page[-1].item_id)
+
+    async def delete_item_batches(
+        self,
+        item_batches: Iterable[list[tuple[str, str]]],
+    ) -> int:
+        """Delete bounded key batches in one pgSTAC transaction."""
+        removed = 0
+        async with await psycopg.AsyncConnection.connect() as connection:
+            for item_keys in item_batches:
+                collections, item_ids = zip(*item_keys, strict=True)
+                cursor = await connection.execute(
+                    """
+                    DELETE FROM pgstac.items AS item
+                    USING unnest(%s::text[], %s::text[])
+                        AS stale(collection, id)
+                    WHERE item.collection = stale.collection
+                      AND item.id = stale.id
+                    """,
+                    (list(collections), list(item_ids)),
+                )
+                removed += cursor.rowcount
+        return removed
 
     async def invalidate_search_count_cache(self) -> None:
         """Discard cached Item Search counts after a scan."""
@@ -280,6 +378,7 @@ class ScanManager:
             return self.status()
 
     async def _run(self) -> None:
+        reconciliation_task: asyncio.Task[int] | None = None
         try:
             phase_started = perf_counter()
             try:
@@ -349,6 +448,9 @@ class ScanManager:
                     )
                     for _ in range(self.metadata_worker_count)
                 ]
+                reconciliation_task = asyncio.create_task(
+                    self._reconcile_missing_items()
+                )
                 pending_items_by_collection: dict[str, list[dict[str, Any]]] = {
                     collection["id"]: [] for collection in SCAN_COLLECTIONS
                 }
@@ -473,6 +575,8 @@ class ScanManager:
                         return_exceptions=True,
                     )
 
+            await reconciliation_task
+
             phase_started = perf_counter()
             try:
                 await self.catalog_database.invalidate_search_count_cache()
@@ -482,6 +586,11 @@ class ScanManager:
                 )
             self._status["state"] = "completed"
         except Exception as error:
+            removed_items = 0
+            if reconciliation_task is not None:
+                removed_items = await reconciliation_task
+            if removed_items:
+                await self.catalog_database.invalidate_search_count_cache()
             self._status["state"] = "failed"
             self._status["errors"].append(
                 {"path": None, "error": f"Scan stopped: {error}"}
@@ -494,6 +603,79 @@ class ScanManager:
                 self._status["timing"]["elapsedSeconds"] = (
                     self._finished_at_monotonic - self._started_at_monotonic
                 )
+
+    async def _reconcile_missing_items(self) -> int:
+        """Verify scanner-owned source Assets, then delete proven stale Items."""
+        reconciliation = self._status["reconciliation"]
+        reconciliation["state"] = "checking"
+        phase_started = perf_counter()
+        try:
+            mount_signature = await asyncio.to_thread(
+                _source_signature,
+                self.source_root,
+            )
+            with tempfile.SpooledTemporaryFile(
+                max_size=1024 * 1024,
+                mode="w+t",
+                encoding="utf-8",
+            ) as missing_items:
+                async for item_page in self.catalog_database.scanner_item_pages(
+                    tuple(collection["id"] for collection in SCAN_COLLECTIONS),
+                    RECONCILIATION_PAGE_SIZE,
+                ):
+                    for item_group in batched(
+                        item_page,
+                        RECONCILIATION_CHECK_CONCURRENCY,
+                    ):
+                        availability = await asyncio.gather(*(
+                            asyncio.to_thread(
+                                _catalog_item_is_missing,
+                                item,
+                                self.source_root,
+                            )
+                            for item in item_group
+                        ))
+                        for item, is_missing in zip(
+                            item_group,
+                            availability,
+                            strict=True,
+                        ):
+                            reconciliation["checked"] += 1
+                            if is_missing:
+                                reconciliation["missing"] += 1
+                                missing_items.write(json.dumps([
+                                    item.collection,
+                                    item.item_id,
+                                ]))
+                                missing_items.write("\n")
+
+                if await asyncio.to_thread(
+                    _source_signature,
+                    self.source_root,
+                ) != mount_signature:
+                    raise OSError(
+                        "The mounted scan source changed during reconciliation"
+                    )
+
+                reconciliation["state"] = "deleting"
+                missing_items.seek(0)
+                reconciliation["removed"] = (
+                    await self.catalog_database.delete_item_batches(
+                        _missing_item_batches(
+                            missing_items,
+                            self.item_batch_size,
+                        )
+                    )
+                )
+            reconciliation["state"] = "completed"
+        except Exception as error:
+            reconciliation["state"] = "failed"
+            reconciliation["error"] = str(error)
+        finally:
+            self._status["timing"]["reconciliationSeconds"] = (
+                perf_counter() - phase_started
+            )
+        return reconciliation["removed"]
 
     async def _enforce_catalog_writer_limit(
         self,
@@ -547,6 +729,13 @@ class ScanManager:
             "finishedAt": None,
             "errors": [],
             "errorsTruncated": False,
+            "reconciliation": {
+                "state": "not_started",
+                "checked": 0,
+                "missing": 0,
+                "removed": 0,
+                "error": None,
+            },
             "timing": {
                 "elapsedSeconds": 0.0,
                 "catalogInventorySeconds": 0.0,
@@ -556,9 +745,95 @@ class ScanManager:
                 "metadataProcessingSeconds": 0.0,
                 "metadataIoWaitSeconds": 0.0,
                 "catalogWriteSeconds": 0.0,
+                "reconciliationSeconds": 0.0,
                 "cacheInvalidationSeconds": 0.0,
             },
         }
+
+
+def _catalog_item_source(
+    collection: str,
+    item_id: str,
+    assets: object,
+) -> CatalogItemSource:
+    """Extract the source Assets required by a scanner-owned Collection."""
+    if not isinstance(assets, dict):
+        raise ValueError(f"{collection}/{item_id} has no Asset mapping")
+    required_asset_keys = (
+        ("data",)
+        if collection == MOUNTED_GEOTIFF_COLLECTION_ID
+        else ("shp", "shx", "dbf", "prj")
+    )
+    try:
+        asset_hrefs = tuple(assets[key]["href"] for key in required_asset_keys)
+    except (KeyError, TypeError) as error:
+        raise ValueError(
+            f"{collection}/{item_id} is missing required source Assets"
+        ) from error
+    if not all(isinstance(href, str) for href in asset_hrefs):
+        raise ValueError(f"{collection}/{item_id} has an invalid Asset href")
+    return CatalogItemSource(collection, item_id, asset_hrefs)
+
+
+def _catalog_item_is_missing(
+    item: CatalogItemSource,
+    source_root: Path,
+) -> bool:
+    """Return true when any required Asset is absent from the mounted source."""
+    mount_uri = urlsplit(source_root.resolve().as_uri())
+    mount_uri_path = unquote(mount_uri.path).rstrip("/")
+    is_missing = False
+    for asset_href in item.asset_hrefs:
+        asset_uri = urlsplit(asset_href)
+        asset_uri_path = unquote(asset_uri.path)
+        if (
+            asset_uri.scheme != "file"
+            or asset_uri.netloc != mount_uri.netloc
+            or asset_uri.query
+            or asset_uri.fragment
+            or not asset_uri_path.startswith(f"{mount_uri_path}/")
+        ):
+            raise ValueError(
+                f"{item.collection}/{item.item_id} has an Asset outside the scan mount"
+            )
+        relative_path = Path(asset_uri_path[len(mount_uri_path) + 1 :])
+        try:
+            source_path = (source_root / relative_path).resolve(strict=True)
+        except FileNotFoundError:
+            is_missing = True
+            continue
+        if (
+            not source_path.is_relative_to(source_root.resolve())
+            or not source_path.is_file()
+        ):
+            raise OSError(
+                f"{item.collection}/{item.item_id} source Asset is not a mounted file"
+            )
+    return is_missing
+
+
+def _source_signature(
+    source_root: Path,
+) -> tuple[int, int]:
+    """Identify the mounted root before the destructive phase begins."""
+    file_status = source_root.stat()
+    return file_status.st_dev, file_status.st_ino
+
+
+def _missing_item_batches(
+    missing_items: Iterable[str],
+    batch_size: int,
+) -> Iterable[list[tuple[str, str]]]:
+    """Decode spooled missing keys into bounded database batches."""
+    batch: list[tuple[str, str]] = []
+    for line in missing_items:
+        collection, item_id = json.loads(line)
+        batch.append((collection, item_id))
+        if len(batch) == batch_size:
+            yield batch
+            batch = []
+    if batch:
+        yield batch
 
 
 async def _enqueue_dataset_candidates(
