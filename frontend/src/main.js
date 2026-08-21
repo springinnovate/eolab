@@ -19,6 +19,7 @@ import {
     assessCatalogRaster,
     buildRasterLegend,
     CatalogRasterLayerController,
+    DEFAULT_RASTER_SAMPLE_WINDOW_SIZE_KM,
     DEFAULT_RASTER_PERCENTILES,
     DEFAULT_RASTER_STYLE,
     deriveInitialRasterStyleFromStatistics,
@@ -31,8 +32,10 @@ import {
     loadWmsCapabilities,
     RASTER_COLOR_PALETTES,
     RasterPixelProbeController,
+    RasterSampleWindowController,
     RasterStatisticsController,
     publishCatalogRaster,
+    rasterStatisticsMatchesSelection,
     sampleCatalogRasterPixel,
     serializeRasterStyle,
 } from "./rendering.js";
@@ -476,6 +479,24 @@ function initializeRasterVisualization(
     const retryRasterStatisticsButton = document.querySelector(
         "#retry-raster-statistics"
     );
+    const rasterSampleWindowRange = document.querySelector(
+        "#raster-sample-window-range"
+    );
+    const rasterSampleWindowNumber = document.querySelector(
+        "#raster-sample-window-number"
+    );
+    const toggleRasterSampleWindowButton = document.querySelector(
+        "#toggle-raster-sample-window"
+    );
+    const sampleRasterMapCenterButton = document.querySelector(
+        "#sample-raster-map-center"
+    );
+    const clearRasterSampleWindowButton = document.querySelector(
+        "#clear-raster-sample-window"
+    );
+    const rasterSampleWindowStatus = document.querySelector(
+        "#raster-sample-window-status"
+    );
     const rasterPixelProbe = document.querySelector("#raster-pixel-probe");
     const rasterPixelProbeName = document.querySelector(
         "#raster-pixel-probe-name"
@@ -490,6 +511,13 @@ function initializeRasterVisualization(
     let rasterStyleCommitTimeout = null;
     let rasterStyleRevision = 0;
     let rasterStatistics = null;
+    let rasterStatisticsIsApplicable = false;
+    let wholeRasterStatistics = null;
+    let wholeRasterStatisticsState = "idle";
+    let wholeRasterStatisticsError = null;
+    let selectedRasterBounds = null;
+    let selectedRasterWindowSizeKm = null;
+    let activeRasterItem = null;
 
     const rasterLayerController = new CatalogRasterLayerController(
         leafletMap,
@@ -525,11 +553,36 @@ function initializeRasterVisualization(
         renderRasterPixel,
         renderRasterPixelError
     );
-    const rasterStatisticsController = new RasterStatisticsController(
+    const rasterSampleWindowController = new RasterSampleWindowController(
+        leafletMap,
+        (bounds, layerKind) => L.rectangle(bounds, layerKind === "preview"
+            ? {
+                color: "#f97316",
+                weight: 2,
+                fill: false,
+                interactive: false
+            }
+            : {
+                color: "#2563eb",
+                weight: 2,
+                fillColor: "#3b82f6",
+                fillOpacity: 0.12,
+                interactive: false
+            }),
+        selectRasterSampleWindow,
+        renderRasterSampleWindowGuidance
+    );
+    const wholeRasterStatisticsController = new RasterStatisticsController(
         loadCatalogRasterStatistics,
-        renderRasterStatisticsLoading,
-        renderRasterStatistics,
-        renderRasterStatisticsError
+        renderWholeRasterStatisticsLoading,
+        renderWholeRasterStatistics,
+        renderWholeRasterStatisticsError
+    );
+    const selectedRasterStatisticsController = new RasterStatisticsController(
+        loadCatalogRasterStatistics,
+        renderSelectedRasterStatisticsLoading,
+        renderSelectedRasterStatistics,
+        renderSelectedRasterStatisticsError
     );
 
     for (const [paletteName, palette] of Object.entries(
@@ -657,11 +710,11 @@ function initializeRasterVisualization(
 
     /** Restore the initial appearance for a newly selected Item. */
     function resetRasterStyle() {
-        rasterStyle = rasterStatistics === null
+        rasterStyle = wholeRasterStatistics === null
             ? { ...DEFAULT_RASTER_STYLE }
             : deriveRasterStyleFromStatistics(
                 DEFAULT_RASTER_STYLE,
-                rasterStatistics
+                wholeRasterStatistics
             );
         setRasterStyleControls(rasterStyle, "blue-yellow-red");
     }
@@ -715,13 +768,15 @@ function initializeRasterVisualization(
         rasterPercentileError.textContent = isOrdered
             ? ""
             : "Choose lower, middle, and upper percentiles in increasing order.";
-        applyRasterPercentilesButton.disabled = !isOrdered;
+        applyRasterPercentilesButton.disabled =
+            !isOrdered || !rasterStatisticsIsApplicable;
         return isOrdered ? percentiles : null;
     }
 
     /** Remove histogram data and controls belonging to a previous layer. */
     function clearRasterStatisticsPresentation() {
         rasterStatistics = null;
+        rasterStatisticsIsApplicable = false;
         rasterHistogram.setAttribute("aria-busy", "false");
         rasterHistogramStatus.textContent = "";
         rasterHistogramChart.replaceChildren();
@@ -732,12 +787,14 @@ function initializeRasterVisualization(
         resetRasterPercentileControls();
     }
 
-    /** Present the bounded statistics request without blocking manual styling. */
-    function renderRasterStatisticsLoading() {
+    /** Present one bounded statistics request without blocking manual styling. */
+    function renderRasterStatisticsLoading(scope) {
         clearRasterStatisticsPresentation();
         rasterHistogram.setAttribute("aria-busy", "true");
         rasterHistogramStatus.textContent =
-            "Calculating an approximate whole-raster distribution…";
+            scope === "selectedArea"
+                ? "Calculating an approximate distribution for the selected area…"
+                : "Calculating an approximate whole-raster distribution…";
     }
 
     /** Build the fixed 64-bar SVG from validated histogram counts. */
@@ -775,10 +832,38 @@ function initializeRasterVisualization(
         rasterHistogramChart.hidden = false;
     }
 
-    /** Present one current histogram and optionally apply its initial range. */
-    function renderRasterStatistics(statistics, _item, requestContext) {
+    /** Apply the initial whole-raster range if no manual edit superseded it. */
+    function applyInitialWholeRasterStyle(statistics, requestContext) {
+        if (requestContext?.autoApply !== true) {
+            return false;
+        }
+        const initialStyle = deriveInitialRasterStyleFromStatistics(
+            rasterStyle,
+            statistics,
+            requestContext.styleRevision,
+            rasterStyleRevision
+        );
+        if (initialStyle === null) {
+            return false;
+        }
+        rasterStyle = initialStyle;
+        setRasterStyleControls(rasterStyle, rasterPalette.value);
+        commitRasterStyle();
+        return true;
+    }
+
+    /** Present one current whole-raster or selected-area histogram. */
+    function renderRasterStatistics(
+        statistics,
+        initialRangeApplied = false,
+        allowApply = true
+    ) {
         rasterStatistics = statistics;
+        rasterStatisticsIsApplicable =
+            allowApply &&
+            rasterStatisticsMatchesSelection(statistics, selectedRasterBounds);
         rasterHistogram.setAttribute("aria-busy", "false");
+        retryRasterStatisticsButton.hidden = true;
         renderRasterHistogramChart(statistics);
         rasterHistogramMinimum.textContent =
             `≈ ${formatRasterPixelValue(statistics.sampleMinimum)}`;
@@ -791,43 +876,39 @@ function initializeRasterVisualization(
 
         const excludedCount =
             statistics.sampledPixelCount - statistics.validSampleCount;
+        const sourceDescription = statistics.scope === "selectedArea"
+            ? "source-cell window"
+            : "source raster";
+        const scopeDescription = statistics.scope === "selectedArea"
+            ? "Selected-area approximate distribution"
+            : "Whole-raster approximate distribution";
         const provenance =
             `${statistics.validSampleCount.toLocaleString()} valid pixels ` +
             `from a ${statistics.sampleWidth.toLocaleString()} × ` +
             `${statistics.sampleHeight.toLocaleString()} sample of the ` +
             `${statistics.sourceWidth.toLocaleString()} × ` +
-            `${statistics.sourceHeight.toLocaleString()} source`;
+            `${statistics.sourceHeight.toLocaleString()} ${sourceDescription}`;
         const excluded = excludedCount === 0
             ? ""
             : `; ${excludedCount.toLocaleString()} masked, nodata, or ` +
               "nonfinite sample pixels excluded";
 
-        const initialStyle = requestContext?.autoApply === true
-            ? deriveInitialRasterStyleFromStatistics(
-                rasterStyle,
-                statistics,
-                requestContext.styleRevision,
-                rasterStyleRevision
-            )
-            : null;
-        if (initialStyle !== null) {
-            rasterStyle = initialStyle;
-            setRasterStyleControls(rasterStyle, rasterPalette.value);
-            commitRasterStyle();
+        if (initialRangeApplied) {
             rasterHistogramStatus.textContent =
-                `Approximate distribution: ${provenance}${excluded}. ` +
+                `${scopeDescription}: ${provenance}${excluded}. ` +
                 "The approximate 5th, 50th, and 95th percentile range was " +
                 "applied.";
         } else {
             rasterHistogramStatus.textContent =
-                `Approximate distribution: ${provenance}${excluded}. ` +
+                `${scopeDescription}: ${provenance}${excluded}. ` +
                 "Your current appearance was preserved.";
         }
     }
 
-    /** Keep manual rendering usable after a recoverable statistics failure. */
-    function renderRasterStatisticsError(error) {
+    /** Keep manual rendering usable after one recoverable statistics failure. */
+    function renderRasterStatisticsError(error, scope) {
         rasterStatistics = null;
+        rasterStatisticsIsApplicable = false;
         rasterHistogram.setAttribute("aria-busy", "false");
         rasterHistogramChart.replaceChildren();
         rasterHistogramChart.hidden = true;
@@ -835,8 +916,180 @@ function initializeRasterVisualization(
         rasterPercentileControls.hidden = true;
         retryRasterStatisticsButton.hidden = false;
         rasterHistogramStatus.textContent =
-            `Approximate distribution unavailable: ${error.message} ` +
+            `${scope === "selectedArea" ? "Selected-area" : "Whole-raster"} ` +
+            `distribution unavailable: ${error.message} ` +
             "Manual appearance controls remain available.";
+    }
+
+    function renderWholeRasterStatisticsLoading() {
+        wholeRasterStatisticsState = "loading";
+        wholeRasterStatisticsError = null;
+        if (selectedRasterBounds === null) {
+            renderRasterStatisticsLoading("wholeRaster");
+        }
+    }
+
+    function renderWholeRasterStatistics(statistics, _item, requestContext) {
+        wholeRasterStatistics = statistics;
+        wholeRasterStatisticsState = "ready";
+        wholeRasterStatisticsError = null;
+        const initialRangeApplied = applyInitialWholeRasterStyle(
+            statistics,
+            requestContext
+        );
+        if (selectedRasterBounds === null) {
+            renderRasterStatistics(statistics, initialRangeApplied);
+        }
+    }
+
+    function renderWholeRasterStatisticsError(error) {
+        wholeRasterStatisticsState = "error";
+        wholeRasterStatisticsError = error;
+        if (selectedRasterBounds === null) {
+            renderRasterStatisticsError(error, "wholeRaster");
+        }
+    }
+
+    function renderSelectedRasterStatisticsLoading() {
+        rasterStatisticsIsApplicable = false;
+        rasterHistogram.setAttribute("aria-busy", "true");
+        retryRasterStatisticsButton.hidden = true;
+        applyRasterPercentilesButton.disabled = true;
+        rasterHistogramStatus.textContent = rasterStatistics === null
+            ? "Calculating an approximate distribution for the selected area…"
+            : "Calculating an approximate distribution for the selected area… " +
+              "The previous distribution remains visible for reference and " +
+              "cannot be applied to this selection.";
+    }
+
+    function renderSelectedRasterStatistics(statistics) {
+        renderRasterStatistics(statistics);
+    }
+
+    function renderSelectedRasterStatisticsError(error) {
+        rasterStatisticsIsApplicable = false;
+        if (
+            rasterStatistics === null &&
+            wholeRasterStatisticsState === "ready"
+        ) {
+            renderRasterStatistics(wholeRasterStatistics, false, false);
+        }
+        rasterHistogram.setAttribute("aria-busy", "false");
+        retryRasterStatisticsButton.hidden = false;
+        applyRasterPercentilesButton.disabled = true;
+        rasterHistogramStatus.textContent = rasterStatistics === null
+            ? `Selected-area distribution unavailable: ${error.message} ` +
+              "Manual appearance controls remain available."
+            : `Selected-area distribution unavailable: ${error.message} ` +
+              "The previous distribution remains visible for reference but " +
+              "cannot be applied to this selection. Your appearance was " +
+              "preserved.";
+    }
+
+    /** Return the retained dataset distribution after clearing an area. */
+    function restoreWholeRasterStatistics() {
+        selectedRasterStatisticsController.clear();
+        selectedRasterBounds = null;
+        selectedRasterWindowSizeKm = null;
+        rasterSampleWindowController.clearSelection();
+        clearRasterSampleWindowButton.disabled = true;
+        renderRasterSampleWindowGuidance("");
+        if (wholeRasterStatisticsState === "ready") {
+            renderRasterStatistics(wholeRasterStatistics);
+        } else if (wholeRasterStatisticsState === "loading") {
+            renderRasterStatisticsLoading("wholeRaster");
+        } else if (wholeRasterStatisticsState === "error") {
+            renderRasterStatisticsError(
+                wholeRasterStatisticsError,
+                "wholeRaster"
+            );
+        } else {
+            clearRasterStatisticsPresentation();
+        }
+    }
+
+    /** Describe the persistent selection separately from a transient preview. */
+    function renderRasterSampleWindowGuidance(guidance) {
+        let nextStatus;
+        if (guidance) {
+            nextStatus = guidance;
+        } else if (selectedRasterBounds !== null) {
+            const { west, south, east, north } = selectedRasterBounds;
+            nextStatus =
+                `Approximately ${selectedRasterWindowSizeKm} km × ` +
+                `${selectedRasterWindowSizeKm} km window selected: ` +
+                `W ${west.toFixed(3)}, S ${south.toFixed(3)}, ` +
+                `E ${east.toFixed(3)}, N ${north.toFixed(3)}.` +
+                (rasterSampleWindowController.isEnabled
+                    ? " Move and click again to replace it."
+                    : "");
+        } else {
+            nextStatus = rasterSampleWindowController.isEnabled
+                ? "Whole-raster distribution selected. Move over the map " +
+                  "and click to sample this window."
+                : "Whole-raster distribution selected.";
+        }
+        if (rasterSampleWindowStatus.textContent !== nextStatus) {
+            rasterSampleWindowStatus.textContent = nextStatus;
+        }
+    }
+
+    /** Keep the toggle semantics and map handlers synchronized. */
+    function setRasterSampleWindowMode(enabled) {
+        if (enabled) {
+            rasterSampleWindowController.enable();
+        } else {
+            rasterSampleWindowController.disable();
+        }
+        toggleRasterSampleWindowButton.setAttribute(
+            "aria-pressed",
+            String(enabled)
+        );
+        renderRasterSampleWindowGuidance("");
+    }
+
+    /** Commit one map rectangle and replace only selected-area statistics. */
+    function selectRasterSampleWindow(bounds) {
+        selectedRasterBounds = bounds;
+        selectedRasterWindowSizeKm =
+            rasterSampleWindowController.windowSizeKm;
+        clearRasterSampleWindowButton.disabled = false;
+        renderRasterSampleWindowGuidance("");
+        void selectedRasterStatisticsController.activate(
+            activeRasterItem,
+            undefined,
+            bounds
+        );
+    }
+
+    /** Apply one valid size from either synchronized control. */
+    function setRasterSampleWindowSize(value) {
+        const sideLengthKm = Number(value);
+        try {
+            rasterSampleWindowController.setWindowSize(sideLengthKm);
+        } catch {
+            rasterSampleWindowNumber.setAttribute("aria-invalid", "true");
+            rasterSampleWindowStatus.textContent =
+                "Choose a window size from 1 through 300 km.";
+            return false;
+        }
+        rasterSampleWindowNumber.removeAttribute("aria-invalid");
+        rasterSampleWindowRange.value = String(sideLengthKm);
+        rasterSampleWindowNumber.value = String(sideLengthKm);
+        renderRasterSampleWindowGuidance("");
+        return true;
+    }
+
+    /** Restore controls and map interaction for a removed or changed Item. */
+    function resetRasterSampleWindow() {
+        rasterSampleWindowController.clear();
+        selectedRasterStatisticsController.clear();
+        selectedRasterBounds = null;
+        selectedRasterWindowSizeKm = null;
+        setRasterSampleWindowSize(DEFAULT_RASTER_SAMPLE_WINDOW_SIZE_KM);
+        toggleRasterSampleWindowButton.setAttribute("aria-pressed", "false");
+        clearRasterSampleWindowButton.disabled = true;
+        renderRasterSampleWindowGuidance("");
     }
 
     /** Move the readout using only cached layout dimensions. */
@@ -901,8 +1154,13 @@ function initializeRasterVisualization(
         }
         rasterLayerController.clear();
         pixelProbeController.clear();
-        rasterStatisticsController.clear();
+        wholeRasterStatisticsController.clear();
+        resetRasterSampleWindow();
         clearRasterStatisticsPresentation();
+        activeRasterItem = null;
+        wholeRasterStatistics = null;
+        wholeRasterStatisticsState = "idle";
+        wholeRasterStatisticsError = null;
         pixelProbeClientPosition = null;
         rasterPixelProbeLabel = "";
         rasterStyleControls.hidden = true;
@@ -920,10 +1178,11 @@ function initializeRasterVisualization(
     async function show(item) {
         const publishedRaster = await rasterLayerController.show(item);
         if (publishedRaster !== null) {
+            activeRasterItem = item;
             rasterPixelProbeLabel = getCatalogRasterBasename(item);
             rasterStyleControls.hidden = false;
             pixelProbeController.activate(item);
-            void rasterStatisticsController.activate(item, {
+            void wholeRasterStatisticsController.activate(item, {
                 styleRevision: rasterStyleRevision,
                 autoApply: rasterStyleRevision === 0
             });
@@ -964,12 +1223,18 @@ function initializeRasterVisualization(
         rasterStyleRevision += 1;
         resetRasterStyle();
         commitRasterStyle();
-        if (rasterStatistics !== null) {
+        if (wholeRasterStatistics !== null) {
             resetRasterPercentileControls();
             updateRasterPercentileValues();
+            const scopeNote = selectedRasterBounds === null
+                ? ""
+                : rasterStatisticsIsApplicable
+                    ? " The selected-area distribution remains available."
+                    : " The previous distribution remains reference-only " +
+                      "and cannot be applied to the current selected area.";
             rasterHistogramStatus.textContent =
-                "Reset the display to the approximate 5th, 50th, and 95th " +
-                "percentile range.";
+                "Reset appearance to the whole-raster approximate 5th, " +
+                `50th, and 95th percentile range.${scopeNote}`;
         }
     });
     for (const input of Object.values(rasterPercentileInputs)) {
@@ -994,10 +1259,36 @@ function initializeRasterVisualization(
             "display range.";
     });
     retryRasterStatisticsButton.addEventListener("click", () => {
-        void rasterStatisticsController.retry({
-            styleRevision: rasterStyleRevision,
-            autoApply: rasterStyleRevision === 0
-        });
+        if (selectedRasterBounds !== null) {
+            void selectedRasterStatisticsController.retry();
+        } else {
+            void wholeRasterStatisticsController.retry({
+                styleRevision: rasterStyleRevision,
+                autoApply: rasterStyleRevision === 0
+            });
+        }
+    });
+    rasterSampleWindowRange.addEventListener("input", () => {
+        setRasterSampleWindowSize(rasterSampleWindowRange.value);
+    });
+    rasterSampleWindowNumber.addEventListener("input", () => {
+        setRasterSampleWindowSize(rasterSampleWindowNumber.value);
+    });
+    rasterSampleWindowNumber.addEventListener("change", () => {
+        if (!setRasterSampleWindowSize(rasterSampleWindowNumber.value)) {
+            setRasterSampleWindowSize(
+                rasterSampleWindowController.windowSizeKm
+            );
+        }
+    });
+    toggleRasterSampleWindowButton.addEventListener("click", () => {
+        setRasterSampleWindowMode(!rasterSampleWindowController.isEnabled);
+    });
+    sampleRasterMapCenterButton.addEventListener("click", () => {
+        rasterSampleWindowController.sampleMapCenter();
+    });
+    clearRasterSampleWindowButton.addEventListener("click", () => {
+        restoreWholeRasterStatistics();
     });
     leafletMap
         .getContainer()
@@ -1034,6 +1325,7 @@ function initializeRasterVisualization(
         rasterPixelProbe.hidden = true;
     });
 
+    resetRasterSampleWindow();
     resetRasterStyle();
     return {
         clear,

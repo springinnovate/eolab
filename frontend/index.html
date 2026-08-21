@@ -207,6 +207,77 @@
                     <span id="raster-legend-maximum"></span>
                   </div>
                   <section
+                    class="raster-sample-window"
+                    aria-labelledby="raster-sample-window-heading"
+                  >
+                    <strong id="raster-sample-window-heading">Histogram area</strong>
+                    <p id="raster-sample-window-description">
+                      Use the whole raster, or select an approximate ground-distance window on the map.
+                    </p>
+                    <div class="raster-sample-window-size">
+                      <label for="raster-sample-window-range">
+                        <span>Window size</span>
+                        <input
+                          id="raster-sample-window-range"
+                          type="range"
+                          min="1"
+                          max="300"
+                          step="1"
+                          value="200"
+                          aria-describedby="raster-sample-window-description raster-sample-window-status"
+                        />
+                      </label>
+                      <label for="raster-sample-window-number">
+                        <span>km</span>
+                        <input
+                          id="raster-sample-window-number"
+                          type="number"
+                          min="1"
+                          max="300"
+                          step="1"
+                          value="200"
+                          inputmode="numeric"
+                          aria-label="Window size in kilometers"
+                          aria-describedby="raster-sample-window-description raster-sample-window-status"
+                        />
+                      </label>
+                    </div>
+                    <div class="raster-sample-window-actions">
+                      <button
+                        class="secondary-button"
+                        id="toggle-raster-sample-window"
+                        type="button"
+                        aria-pressed="false"
+                      >
+                        Select area on map
+                      </button>
+                      <button
+                        class="secondary-button"
+                        id="sample-raster-map-center"
+                        type="button"
+                      >
+                        Sample map center
+                      </button>
+                      <button
+                        class="secondary-button"
+                        id="clear-raster-sample-window"
+                        type="button"
+                        disabled
+                      >
+                        Use whole raster
+                      </button>
+                    </div>
+                    <p
+                      class="raster-sample-window-status"
+                      id="raster-sample-window-status"
+                      role="status"
+                      aria-live="polite"
+                      aria-atomic="true"
+                    >
+                      Whole-raster distribution selected.
+                    </p>
+                  </section>
+                  <section
                     class="raster-histogram"
                     id="raster-histogram"
                     aria-labelledby="raster-histogram-heading"

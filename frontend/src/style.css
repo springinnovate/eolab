@@ -449,6 +449,81 @@ h5 {
   transform: none;
 }
 
+.raster-sample-window {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+  border-top: 1px solid var(--border-2);
+  padding-top: 12px;
+}
+
+.raster-sample-window > strong {
+  font-size: 0.75rem;
+}
+
+.raster-sample-window > p {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 0.68rem;
+  line-height: 1.4;
+}
+
+.raster-sample-window-size {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 72px;
+  gap: 8px;
+  align-items: end;
+}
+
+.raster-sample-window-size label {
+  display: grid;
+  gap: 4px;
+  color: var(--text-2);
+  font-size: 0.68rem;
+  font-weight: 650;
+}
+
+.raster-sample-window-size input[type="range"] {
+  width: 100%;
+  min-width: 0;
+  accent-color: var(--brand);
+}
+
+.raster-sample-window-size input[type="number"] {
+  min-width: 0;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  padding: 7px 8px;
+  color: var(--text-1);
+}
+
+.raster-sample-window-size input[aria-invalid="true"] {
+  border-color: var(--status-danger);
+  accent-color: var(--status-danger);
+}
+
+.raster-sample-window-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.raster-sample-window-actions .secondary-button {
+  margin-top: 0;
+  padding: 6px 8px;
+}
+
+.raster-sample-window-actions [aria-pressed="true"] {
+  border-color: var(--brand);
+  background: var(--brand);
+  color: var(--surface-1);
+}
+
+.raster-sample-window-status {
+  min-height: 1em;
+}
+
 .raster-histogram {
   margin-top: 14px;
   border-top: 1px solid var(--border-2);

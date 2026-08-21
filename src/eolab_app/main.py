@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from eolab_app.rendering import (
     CatalogPixelRequest,
     CatalogRasterRequest,
+    CatalogRasterStatisticsRequest,
     PublishedRaster,
     PublishedRasterRegistry,
     RASTER_PIXEL_READ_CONCURRENCY,
@@ -267,6 +268,12 @@ async def _number_matched_is_estimated(
     return result[0]
 
 
+async def _wait_for_http_disconnect(request: Request) -> None:
+    """Wait until the ASGI server reports that the browser disconnected."""
+    while (message := await request.receive())["type"] != "http.disconnect":
+        pass
+
+
 def create_app(
     version_file_path: Path = APPLICATION_VERSION_PATH,
     catalog_transport: httpx2.AsyncBaseTransport | None = None,
@@ -455,10 +462,36 @@ def create_app(
         tags=["rendering"],
     )
     async def raster_statistics(
-        request: CatalogRasterRequest,
+        request: CatalogRasterStatisticsRequest,
+        http_request: Request,
     ) -> RasterStatistics:
-        """Summarize one published raster through a bounded sample."""
-        return await raster_statistics_service.get(request)
+        """Summarize a whole raster or selected area through a bounded sample."""
+        statistics_task = asyncio.create_task(
+            raster_statistics_service.get(request)
+        )
+        disconnect_task = asyncio.create_task(
+            _wait_for_http_disconnect(http_request)
+        )
+        try:
+            completed_tasks, _ = await asyncio.wait(
+                (statistics_task, disconnect_task),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if statistics_task in completed_tasks:
+                return statistics_task.result()
+
+            raise HTTPException(
+                status_code=499,
+                detail="The raster statistics request was canceled",
+            )
+        finally:
+            disconnect_task.cancel()
+            statistics_task.cancel()
+            await asyncio.gather(
+                statistics_task,
+                disconnect_task,
+                return_exceptions=True,
+            )
 
     @application.api_route(
         "/stac",

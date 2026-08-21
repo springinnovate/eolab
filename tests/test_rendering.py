@@ -6,13 +6,20 @@ from pathlib import Path
 
 import numpy
 import pytest
+import rasterio
 from fastapi import HTTPException
+from pydantic import ValidationError
+from rasterio.coords import BoundingBox
 from rasterio.enums import Resampling
+from rasterio.features import geometry_mask
+from rasterio.transform import Affine, from_bounds, from_origin
+from rasterio.warp import transform as transform_coordinates
 from rasterio.windows import Window
 
 from eolab_app.rendering import (
-    CatalogRasterRequest,
     CatalogPixelRequest,
+    CatalogRasterStatisticsRequest,
+    NoRasterBoundsOverlapError,
     NoValidRasterSamplesError,
     PublishedRasterRegistry,
     RasterPixel,
@@ -21,6 +28,7 @@ from eolab_app.rendering import (
     RasterStatistics,
     RasterStatisticsService,
     RasterValueRange,
+    Wgs84Bounds,
     _bounded_raster_sample_shape,
     _read_raster_pixel,
     _read_raster_statistics,
@@ -68,8 +76,11 @@ class _RasterDataset:
 class _StatisticsDataset:
     """Return a controlled masked sample and record its bounded read."""
 
+    crs = "EPSG:3857"
     width = 4
     height = 2
+    transform = from_origin(0, 2, 1, 1)
+    bounds = BoundingBox(0, 0, 4, 2)
 
     def __init__(self, sample: numpy.ma.MaskedArray) -> None:
         self.sample = sample
@@ -85,17 +96,32 @@ class _StatisticsDataset:
         self,
         band: int,
         *,
+        window: Window | None = None,
         out_shape: tuple[int, int],
         masked: bool,
         resampling: Resampling,
     ) -> numpy.ma.MaskedArray:
-        self.read_arguments = (band, out_shape, masked, resampling)
+        self.read_arguments = (band, window, out_shape, masked, resampling)
         return self.sample
 
 
-def _statistics_result(value: float = 1) -> RasterStatistics:
+def _statistics_result(
+    value: float = 1,
+    selected_bounds: tuple[float, float, float, float] | None = None,
+) -> RasterStatistics:
     """Build one valid statistics response for service coordination tests."""
     return RasterStatistics(
+        scope="selectedArea" if selected_bounds is not None else "wholeRaster",
+        selectedBounds=(
+            Wgs84Bounds(
+                west=selected_bounds[0],
+                south=selected_bounds[1],
+                east=selected_bounds[2],
+                north=selected_bounds[3],
+            )
+            if selected_bounds is not None
+            else None
+        ),
         sourceWidth=1,
         sourceHeight=1,
         sourcePixelCount=1,
@@ -178,6 +204,8 @@ def test_raster_statistics_filter_nodata_and_nonfinite_values(
 
     assert statistics.model_dump(by_alias=True) == {
         "band": 1,
+        "scope": "wholeRaster",
+        "selectedBounds": None,
         "sourceWidth": 4,
         "sourceHeight": 2,
         "sourcePixelCount": 8,
@@ -204,10 +232,227 @@ def test_raster_statistics_filter_nodata_and_nonfinite_values(
     assert len(statistics.histogram.edges) == 65
     assert dataset.read_arguments == (
         1,
+        None,
         (2, 4),
         True,
         Resampling.nearest,
     )
+
+
+@pytest.mark.parametrize(
+    "selected_bounds",
+    (
+        {"west": 10, "south": -1, "east": 10, "north": 1},
+        {"west": 10, "south": -1, "east": -10, "north": 1},
+        {"west": -1, "south": 10, "east": 1, "north": 10},
+        {"west": -1, "south": 10, "east": 1, "north": -10},
+        {"west": -181, "south": -1, "east": 1, "north": 1},
+        {"west": "-1", "south": -1, "east": 1, "north": 1},
+        {
+            "west": -1,
+            "south": -1,
+            "east": 1,
+            "north": 1,
+            "path": "/scan-source/raster.tif",
+        },
+    ),
+)
+def test_raster_statistics_request_rejects_invalid_selected_bounds(
+    selected_bounds: dict[str, object],
+) -> None:
+    """Accept only finite, ordered, non-wrapping WGS 84 rectangles."""
+    with pytest.raises(ValidationError):
+        CatalogRasterStatisticsRequest.model_validate(
+            {
+                "collectionId": "eolab-mounted-geotiffs",
+                "itemId": "geotiff-0123456789abcdef01234567",
+                "selectedBounds": selected_bounds,
+            }
+        )
+
+
+def test_selected_area_statistics_transform_clip_and_bound_the_source_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Read only the projected raster intersection through the 512px budget."""
+    dataset = _StatisticsDataset(
+        numpy.ma.zeros((512, 341), dtype="float32")
+    )
+    dataset.width = 1_000
+    dataset.height = 800
+    dataset.transform = (
+        Affine.translation(2_000, 8_000)
+        * Affine.rotation(25)
+        * Affine.scale(10, -10)
+    )
+    selected_bounds = Wgs84Bounds(
+        west=-2,
+        south=-1,
+        east=3,
+        north=4,
+    )
+    transform_call = None
+
+    def project_ring(
+        source_crs: object,
+        target_crs: object,
+        longitudes: list[float],
+        latitudes: list[float],
+    ) -> tuple[list[float], list[float]]:
+        nonlocal transform_call
+        transform_call = (
+            source_crs,
+            target_crs,
+            longitudes,
+            latitudes,
+        )
+        pixel_coordinates = [
+            (
+                (longitude + 1) * 100 - 0.25,
+                460 - latitude * 140 - 0.25,
+            )
+            for longitude, latitude in zip(
+                longitudes,
+                latitudes,
+                strict=True,
+            )
+        ]
+        projected_coordinates = [
+            dataset.transform * pixel_coordinate
+            for pixel_coordinate in pixel_coordinates
+        ]
+        return (
+            [coordinate[0] for coordinate in projected_coordinates],
+            [coordinate[1] for coordinate in projected_coordinates],
+        )
+
+    monkeypatch.setattr("eolab_app.rendering.rasterio.open", lambda _: dataset)
+    monkeypatch.setattr("eolab_app.rendering.transform", project_ring)
+
+    statistics = _read_raster_statistics(
+        Path("projected-raster.tif"),
+        selected_bounds.canonical_tuple(),
+    )
+
+    assert transform_call is not None
+    assert transform_call[:2] == ("EPSG:4326", "EPSG:3857")
+    transformed_ring = tuple(zip(*transform_call[2:], strict=True))
+    assert len(transformed_ring) == 89
+    assert transformed_ring[0] == (-2.0, -1.0)
+    assert transformed_ring[-1] == (-2.0, -1.0)
+    assert (-2.0, 4.0) in transformed_ring
+    assert (3.0, -1.0) in transformed_ring
+    assert (3.0, 4.0) in transformed_ring
+    assert dataset.read_arguments == (
+        1,
+        Window(0, 0, 400, 600),
+        (512, 341),
+        True,
+        Resampling.nearest,
+    )
+    assert statistics.scope == "selectedArea"
+    assert statistics.selected_bounds == selected_bounds
+    assert statistics.source_width == 400
+    assert statistics.source_height == 600
+    assert statistics.source_pixel_count == 240_000
+    assert statistics.sample_width == 341
+    assert statistics.sample_height == 512
+    assert statistics.sampled_pixel_count <= 512 * 512
+    assert statistics.estimated is True
+
+
+def test_selected_area_statistics_mask_a_non_axis_aligned_projected_polygon(
+    tmp_path: Path,
+) -> None:
+    """Exclude distinctive pixels that fall only in a projected envelope."""
+    selected_bounds = (-130.0, 45.0, -60.0, 75.0)
+    west, south, east, north = selected_bounds
+    denominator = 22
+    wgs84_ring: list[tuple[float, float]] = []
+    edge_endpoints = (
+        ((west, south), (east, south)),
+        ((east, south), (east, north)),
+        ((east, north), (west, north)),
+        ((west, north), (west, south)),
+    )
+    for edge_index, (start, end) in enumerate(edge_endpoints):
+        for step in range(0 if edge_index == 0 else 1, denominator + 1):
+            fraction = step / denominator
+            wgs84_ring.append(
+                (
+                    start[0] + (end[0] - start[0]) * fraction,
+                    start[1] + (end[1] - start[1]) * fraction,
+                )
+            )
+
+    projected_x, projected_y = transform_coordinates(
+        "EPSG:4326",
+        "EPSG:3347",
+        [coordinate[0] for coordinate in wgs84_ring],
+        [coordinate[1] for coordinate in wgs84_ring],
+    )
+    projected_ring = tuple(zip(projected_x, projected_y, strict=True))
+    width = 200
+    height = 160
+    raster_transform = from_bounds(
+        min(projected_x),
+        min(projected_y),
+        max(projected_x),
+        max(projected_y),
+        width,
+        height,
+    )
+    inside_selection = geometry_mask(
+        [{"type": "Polygon", "coordinates": [projected_ring]}],
+        out_shape=(height, width),
+        transform=raster_transform,
+        all_touched=True,
+        invert=True,
+    )
+    assert 0 < int(inside_selection.sum()) < width * height
+    raster_values = numpy.where(inside_selection, 7, 997).astype("float32")
+    source_path = tmp_path / "non-axis-aligned-selection.tif"
+    with rasterio.open(
+        source_path,
+        "w",
+        driver="GTiff",
+        width=width,
+        height=height,
+        count=1,
+        dtype="float32",
+        crs="EPSG:3347",
+        transform=raster_transform,
+    ) as dataset:
+        dataset.write(raster_values, 1)
+
+    statistics = _read_raster_statistics(source_path, selected_bounds)
+
+    assert statistics.source_width == width
+    assert statistics.source_height == height
+    assert statistics.valid_sample_count == int(inside_selection.sum())
+    assert statistics.sample_minimum == 7
+    assert statistics.sample_maximum == 7
+
+
+def test_selected_area_statistics_reject_an_empty_raster_intersection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Give an empty projected intersection its own stable failure type."""
+    dataset = _StatisticsDataset(numpy.ma.zeros((1, 1), dtype="float32"))
+    monkeypatch.setattr("eolab_app.rendering.rasterio.open", lambda _: dataset)
+    monkeypatch.setattr(
+        "eolab_app.rendering.transform",
+        lambda _source, _target, x_values, y_values: (
+            [100 + value for value in x_values],
+            [100 + value for value in y_values],
+        ),
+    )
+
+    with pytest.raises(NoRasterBoundsOverlapError):
+        _read_raster_statistics(
+            Path("projected-raster.tif"),
+            (-1, -1, 1, 1),
+        )
 
 
 def test_raster_statistics_sample_shape_never_exceeds_its_budget() -> None:
@@ -270,6 +515,68 @@ def test_raster_statistics_reject_an_empty_bounded_sample(
 
     with pytest.raises(NoValidRasterSamplesError):
         _read_raster_statistics(Path("empty.tif"))
+
+
+@pytest.mark.parametrize(
+    ("read_error", "expected_detail"),
+    (
+        (
+            NoRasterBoundsOverlapError(),
+            "The selected area does not overlap the raster",
+        ),
+        (
+            NoValidRasterSamplesError(),
+            (
+                "No finite, non-nodata pixels were found in the bounded "
+                "raster sample"
+            ),
+        ),
+    ),
+)
+def test_statistics_service_returns_stable_selection_conflicts(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    read_error: ValueError,
+    expected_detail: str,
+) -> None:
+    """Expose empty overlap and empty samples as deliberate 409 contracts."""
+    source_path = tmp_path / "raster.tif"
+    source_path.write_bytes(b"source")
+    item_id = "geotiff-0123456789abcdef01234567"
+    registry = PublishedRasterRegistry()
+    registry.authorize(
+        f"eolab:{item_id}",
+        source_path,
+        _source_signature(source_path),
+    )
+    service = RasterStatisticsService(registry)
+    request = CatalogRasterStatisticsRequest.model_validate(
+        {
+            "collectionId": "eolab-mounted-geotiffs",
+            "itemId": item_id,
+            "selectedBounds": {
+                "west": -1,
+                "south": -1,
+                "east": 1,
+                "north": 1,
+            },
+        }
+    )
+
+    async def to_thread(function: object, *args: object) -> object:
+        if function is _read_raster_statistics:
+            raise read_error
+        return function(*args)
+
+    monkeypatch.setattr("eolab_app.rendering.asyncio.to_thread", to_thread)
+
+    async def request_statistics() -> None:
+        with pytest.raises(HTTPException) as error:
+            await service.get(request)
+        assert error.value.status_code == 409
+        assert error.value.detail == expected_detail
+
+    asyncio.run(request_statistics())
 
 
 def test_pixel_sampler_limits_concurrent_raster_reads(
@@ -410,7 +717,7 @@ def test_statistics_service_coalesces_caches_and_invalidates_by_signature(
     registry = PublishedRasterRegistry()
     registry.authorize(layer_name, source_path, _source_signature(source_path))
     service = RasterStatisticsService(registry)
-    request = CatalogRasterRequest.model_validate(
+    request = CatalogRasterStatisticsRequest.model_validate(
         {
             "collectionId": "eolab-mounted-geotiffs",
             "itemId": "geotiff-0123456789abcdef01234567",
@@ -459,6 +766,88 @@ def test_statistics_service_coalesces_caches_and_invalidates_by_signature(
     asyncio.run(exercise_cache())
 
 
+def test_statistics_service_caches_each_canonical_selected_area_separately(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Include selected bounds in cache and in-flight work identity."""
+    source_path = tmp_path / "raster.tif"
+    source_path.write_bytes(b"source")
+    item_id = "geotiff-0123456789abcdef01234567"
+    registry = PublishedRasterRegistry()
+    registry.authorize(
+        f"eolab:{item_id}",
+        source_path,
+        _source_signature(source_path),
+    )
+    service = RasterStatisticsService(registry)
+    identity = {
+        "collectionId": "eolab-mounted-geotiffs",
+        "itemId": item_id,
+    }
+    whole_request = CatalogRasterStatisticsRequest.model_validate(identity)
+    west_request = CatalogRasterStatisticsRequest.model_validate(
+        {
+            **identity,
+            "selectedBounds": {
+                "west": -2,
+                "south": -1,
+                "east": 0,
+                "north": 1,
+            },
+        }
+    )
+    equivalent_west_request = CatalogRasterStatisticsRequest.model_validate(
+        {
+            **identity,
+            "selectedBounds": {
+                "west": -2.0,
+                "south": -1.0,
+                "east": 0.0,
+                "north": 1.0,
+            },
+        }
+    )
+    east_request = CatalogRasterStatisticsRequest.model_validate(
+        {
+            **identity,
+            "selectedBounds": {
+                "west": 0,
+                "south": -1,
+                "east": 2,
+                "north": 1,
+            },
+        }
+    )
+    read_bounds = []
+
+    async def to_thread(function: object, *args: object) -> object:
+        if function is _read_raster_statistics:
+            bounds = args[1]
+            read_bounds.append(bounds)
+            return _statistics_result(float(len(read_bounds)), bounds)
+        return function(*args)
+
+    monkeypatch.setattr("eolab_app.rendering.asyncio.to_thread", to_thread)
+
+    async def exercise_cache() -> None:
+        whole = await service.get(whole_request)
+        west = await service.get(west_request)
+        assert await service.get(equivalent_west_request) is west
+        east = await service.get(east_request)
+
+        assert whole.scope == "wholeRaster"
+        assert west.scope == "selectedArea"
+        assert east.scope == "selectedArea"
+
+    asyncio.run(exercise_cache())
+    assert read_bounds == [
+        None,
+        (-2.0, -1.0, 0.0, 1.0),
+        (0.0, -1.0, 2.0, 1.0),
+    ]
+
+
 def test_statistics_service_rejects_a_source_changed_during_read(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -471,7 +860,7 @@ def test_statistics_service_rejects_a_source_changed_during_read(
     registry = PublishedRasterRegistry()
     registry.authorize(layer_name, source_path, _source_signature(source_path))
     service = RasterStatisticsService(registry)
-    request = CatalogRasterRequest.model_validate(
+    request = CatalogRasterStatisticsRequest.model_validate(
         {
             "collectionId": "eolab-mounted-geotiffs",
             "itemId": item_id,
@@ -529,7 +918,7 @@ def test_cancelled_statistics_request_retains_its_capacity_slot(
             _source_signature(source_path),
         )
         requests.append(
-            CatalogRasterRequest.model_validate(
+            CatalogRasterStatisticsRequest.model_validate(
                 {
                     "collectionId": "eolab-mounted-geotiffs",
                     "itemId": item_id,
@@ -596,7 +985,7 @@ def test_cancelled_queued_statistics_do_not_delay_the_current_request(
             _source_signature(source_path),
         )
         requests.append(
-            CatalogRasterRequest.model_validate(
+            CatalogRasterStatisticsRequest.model_validate(
                 {
                     "collectionId": "eolab-mounted-geotiffs",
                     "itemId": item_id,

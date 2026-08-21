@@ -1059,7 +1059,7 @@ def test_raster_statistics_sample_a_published_projected_raster(
     tmp_path: Path,
     version_file_path: Path,
 ) -> None:
-    """Summarize native pixels without interpreting a projected WGS 84 bbox."""
+    """Transform, clip, and summarize a WGS 84 area in a projected raster."""
     source_path = tmp_path / "projected.tif"
     with rasterio.open(
         source_path,
@@ -1108,11 +1108,37 @@ def test_raster_statistics_sample_a_published_projected_raster(
             "/api/rendering/statistics",
             json=request_identity,
         )
+        selected_response = client.post(
+            "/api/rendering/statistics",
+            json={
+                **request_identity,
+                "selectedBounds": {
+                    "west": -2,
+                    "south": -2,
+                    "east": 0,
+                    "north": 2,
+                },
+            },
+        )
+        outside_response = client.post(
+            "/api/rendering/statistics",
+            json={
+                **request_identity,
+                "selectedBounds": {
+                    "west": 10,
+                    "south": 10,
+                    "east": 11,
+                    "north": 11,
+                },
+            },
+        )
 
     assert response.status_code == 200
     response_document = response.json()
     assert response_document == {
         "band": 1,
+        "scope": "wholeRaster",
+        "selectedBounds": None,
         "sourceWidth": 2,
         "sourceHeight": 2,
         "sourcePixelCount": 4,
@@ -1135,6 +1161,130 @@ def test_raster_statistics_sample_a_published_projected_raster(
     assert len(response_document["histogram"]["edges"]) == 65
     assert sum(response_document["histogram"]["counts"]) == 4
 
+    assert selected_response.status_code == 200
+    selected_document = selected_response.json()
+    assert selected_document == {
+        "band": 1,
+        "scope": "selectedArea",
+        "selectedBounds": {
+            "west": -2.0,
+            "south": -2.0,
+            "east": 0.0,
+            "north": 2.0,
+        },
+        "sourceWidth": 1,
+        "sourceHeight": 2,
+        "sourcePixelCount": 2,
+        "sampleWidth": 1,
+        "sampleHeight": 2,
+        "sampledPixelCount": 2,
+        "validSampleCount": 2,
+        "estimated": False,
+        "sampleMinimum": 10.0,
+        "sampleMaximum": 30.0,
+        "percentiles": {"p05": 11.0, "p50": 20.0, "p95": 29.0},
+        "histogram": selected_document["histogram"],
+        "suggestedRange": {
+            "minimum": 11.0,
+            "midpoint": 20.0,
+            "maximum": 29.0,
+        },
+    }
+    assert sum(selected_document["histogram"]["counts"]) == 2
+
+    assert outside_response.status_code == 409
+    assert outside_response.json() == {
+        "detail": "The selected area does not overlap the raster"
+    }
+
+
+def test_raster_statistics_disconnect_cancels_the_service_waiter(
+    configured_environment: None,
+    monkeypatch: pytest.MonkeyPatch,
+    version_file_path: Path,
+) -> None:
+    """Discard queued statistics work when an aborted fetch disconnects."""
+
+    class BlockingStatisticsService:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.canceled = asyncio.Event()
+
+        async def get(self, _request: object) -> None:
+            self.started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.canceled.set()
+                raise
+
+    statistics_service = BlockingStatisticsService()
+    monkeypatch.setattr(
+        "eolab_app.main.RasterStatisticsService",
+        lambda _registry: statistics_service,
+    )
+    application = create_app(version_file_path)
+    request_body = json.dumps(
+        {
+            "collectionId": "eolab-mounted-geotiffs",
+            "itemId": TEST_GEOTIFF_ITEM_ID,
+        }
+    ).encode()
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/api/rendering/statistics",
+        "raw_path": b"/api/rendering/statistics",
+        "query_string": b"",
+        "headers": [
+            (b"host", b"testserver"),
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(request_body)).encode()),
+        ],
+        "client": ("127.0.0.1", 12345),
+        "server": ("testserver", 80),
+        "root_path": "",
+        "state": {},
+    }
+
+    async def exercise_disconnect() -> list[dict[str, object]]:
+        request_messages: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+        await request_messages.put(
+            {
+                "type": "http.request",
+                "body": request_body,
+                "more_body": False,
+            }
+        )
+        response_messages: list[dict[str, object]] = []
+
+        async def receive() -> dict[str, object]:
+            return await request_messages.get()
+
+        async def send(message: dict[str, object]) -> None:
+            response_messages.append(message)
+
+        async with application.router.lifespan_context(application):
+            request_task = asyncio.create_task(
+                application(scope, receive, send)
+            )
+            await asyncio.wait_for(statistics_service.started.wait(), 1)
+            await request_messages.put({"type": "http.disconnect"})
+            await asyncio.wait_for(request_task, 1)
+        return response_messages
+
+    response_messages = asyncio.run(exercise_disconnect())
+
+    assert statistics_service.canceled.is_set()
+    assert next(
+        message["status"]
+        for message in response_messages
+        if message["type"] == "http.response.start"
+    ) == 499
+
 
 @pytest.mark.parametrize(
     ("request_body", "expected_status"),
@@ -1151,6 +1301,40 @@ def test_raster_statistics_sample_a_published_projected_raster(
                 "collectionId": "eolab-mounted-geotiffs",
                 "itemId": TEST_GEOTIFF_ITEM_ID,
                 "href": "file:///etc/passwd",
+            },
+            422,
+        ),
+        (
+            {
+                "collectionId": "eolab-mounted-geotiffs",
+                "itemId": TEST_GEOTIFF_ITEM_ID,
+                "selectedBounds": {
+                    "west": 170,
+                    "south": -10,
+                    "east": -170,
+                    "north": 10,
+                },
+            },
+            422,
+        ),
+        (
+            {
+                "collectionId": "eolab-mounted-geotiffs",
+                "itemId": TEST_GEOTIFF_ITEM_ID,
+                "selectedBounds": {
+                    "west": -10,
+                    "south": 5,
+                    "east": 10,
+                    "north": 5,
+                },
+            },
+            422,
+        ),
+        (
+            {
+                "collectionId": "eolab-mounted-geotiffs",
+                "itemId": TEST_GEOTIFF_ITEM_ID,
+                "histogramBins": 1_000_000,
             },
             422,
         ),

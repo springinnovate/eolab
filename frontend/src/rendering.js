@@ -23,6 +23,12 @@ export const DEFAULT_RASTER_PERCENTILES = Object.freeze({
     upper: 95
 });
 
+export const DEFAULT_RASTER_SAMPLE_WINDOW_SIZE_KM = 200;
+export const MINIMUM_RASTER_SAMPLE_WINDOW_SIZE_KM = 1;
+export const MAXIMUM_RASTER_SAMPLE_WINDOW_SIZE_KM = 300;
+export const RASTER_SAMPLE_WINDOW_EDGE_GUIDANCE =
+    "Move the sample window away from the pole or date line.";
+
 export const RASTER_COLOR_PALETTES = Object.freeze({
     "blue-yellow-red": Object.freeze({
         label: "Blue–yellow–red",
@@ -60,6 +66,9 @@ const RASTER_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 export const PIXEL_PROBE_INTERVAL_MILLISECONDS = 100;
 const PIXEL_PROBE_OFFSET_PIXELS = 12;
 const PIXEL_PROBE_VIEWPORT_MARGIN_PIXELS = 8;
+const WGS84_MEAN_RADIUS_KM = 6371.0088;
+
+class RasterSampleWindowBoundaryError extends RangeError {}
 
 function rasterStyleContractError(message, fieldGroup) {
     return Object.assign(new Error(message), { fieldGroup });
@@ -69,8 +78,69 @@ function rasterStatisticsContractError(detail) {
     return new Error(`Raster statistics returned invalid ${detail}.`);
 }
 
+/** Return a user-safe rendering error from FastAPI or an upstream proxy. */
+async function renderingRequestError(response, action) {
+    const fallbackMessage = `${action} failed (${response.status})`;
+    if (!response.headers.get("content-type")?.toLowerCase().includes(
+        "application/json"
+    )) {
+        return new Error(fallbackMessage);
+    }
+    try {
+        const errorDocument = await response.json();
+        return new Error(
+            typeof errorDocument.detail === "string" &&
+                errorDocument.detail.trim() !== ""
+                ? errorDocument.detail
+                : fallbackMessage
+        );
+    } catch {
+        return new Error(fallbackMessage);
+    }
+}
+
 function isPositiveInteger(value) {
     return Number.isInteger(value) && value > 0;
+}
+
+/** Enforce the fixed user-facing sample-size contract. */
+export function validateRasterSampleWindowSize(sideLengthKm) {
+    if (
+        !Number.isFinite(sideLengthKm) ||
+        !Number.isInteger(sideLengthKm) ||
+        sideLengthKm < MINIMUM_RASTER_SAMPLE_WINDOW_SIZE_KM ||
+        sideLengthKm > MAXIMUM_RASTER_SAMPLE_WINDOW_SIZE_KM
+    ) {
+        throw new RangeError(
+            `Raster sample size must be between ` +
+            `${MINIMUM_RASTER_SAMPLE_WINDOW_SIZE_KM} and ` +
+            `${MAXIMUM_RASTER_SAMPLE_WINDOW_SIZE_KM} kilometers.`
+        );
+    }
+    return sideLengthKm;
+}
+
+/** Validate one server-compatible WGS 84 statistics rectangle. */
+export function validateRasterSelectedBounds(bounds) {
+    if (bounds === null || typeof bounds !== "object") {
+        throw rasterStatisticsContractError("selected bounds");
+    }
+    const fieldNames = ["west", "south", "east", "north"];
+    if (
+        Object.keys(bounds).length !== fieldNames.length ||
+        !fieldNames.every((fieldName) => Object.hasOwn(bounds, fieldName))
+    ) {
+        throw rasterStatisticsContractError("selected bounds");
+    }
+    const { west, south, east, north } = bounds;
+    if (
+        ![west, south, east, north].every(Number.isFinite) ||
+        west < -180 || east > 180 || south < -90 || north > 90 ||
+        !(west < east && south < north)
+    ) {
+        throw rasterStatisticsContractError("selected bounds");
+    }
+    return bounds;
 }
 
 /**
@@ -86,6 +156,17 @@ export function validateRasterStatistics(statistics) {
     }
     if (statistics.band !== 1) {
         throw rasterStatisticsContractError("band identity");
+    }
+    if (
+        statistics.scope === "wholeRaster" &&
+        statistics.selectedBounds !== null
+    ) {
+        throw rasterStatisticsContractError("whole-raster scope");
+    }
+    if (statistics.scope === "selectedArea") {
+        validateRasterSelectedBounds(statistics.selectedBounds);
+    } else if (statistics.scope !== "wholeRaster") {
+        throw rasterStatisticsContractError("statistics scope");
     }
 
     const dimensions = [
@@ -176,6 +257,101 @@ export function validateRasterStatistics(statistics) {
         throw rasterStatisticsContractError("suggested range");
     }
     return statistics;
+}
+
+/** Return whether one distribution belongs to the active histogram scope. */
+export function rasterStatisticsMatchesSelection(statistics, selectedBounds) {
+    if (selectedBounds === null) {
+        return statistics.scope === "wholeRaster";
+    }
+    return (
+        statistics.scope === "selectedArea" &&
+        ["west", "south", "east", "north"].every(
+            (fieldName) =>
+                statistics.selectedBounds?.[fieldName] ===
+                selectedBounds[fieldName]
+        )
+    );
+}
+
+/** Return a destination reached along a spherical WGS 84 geodesic. */
+function rasterSampleDestination(center, distanceKm, bearingDegrees) {
+    const latitude = center.latitude * Math.PI / 180;
+    const longitude = center.longitude * Math.PI / 180;
+    const bearing = bearingDegrees * Math.PI / 180;
+    const angularDistance = distanceKm / WGS84_MEAN_RADIUS_KM;
+    const destinationLatitude = Math.asin(
+        Math.sin(latitude) * Math.cos(angularDistance) +
+        Math.cos(latitude) * Math.sin(angularDistance) * Math.cos(bearing)
+    );
+    const longitudeOffset = Math.atan2(
+        Math.sin(bearing) * Math.sin(angularDistance) * Math.cos(latitude),
+        Math.cos(angularDistance) -
+            Math.sin(latitude) * Math.sin(destinationLatitude)
+    );
+    const unwrappedLongitude = longitude + longitudeOffset;
+    const normalizedLongitude =
+        ((unwrappedLongitude * 180 / Math.PI + 540) % 360) - 180;
+    return {
+        latitude: destinationLatitude * 180 / Math.PI,
+        longitude: normalizedLongitude
+    };
+}
+
+/**
+ * Build an axis-aligned WGS 84 square whose ground dimensions approximate the
+ * requested side length. A date-line or polar crossing is deliberately not
+ * represented by the selected-bounds API contract.
+ */
+export function buildRasterSampleWindowBounds(center, sideLengthKm) {
+    if (
+        !Number.isFinite(center?.longitude) ||
+        !Number.isFinite(center?.latitude) ||
+        center.longitude < -180 || center.longitude > 180 ||
+        center.latitude < -90 || center.latitude > 90
+    ) {
+        throw new RangeError("Raster sample center must be a WGS 84 position.");
+    }
+    validateRasterSampleWindowSize(sideLengthKm);
+
+    const halfDiagonalKm = sideLengthKm / Math.sqrt(2);
+    const halfDiagonalRadians = halfDiagonalKm / WGS84_MEAN_RADIUS_KM;
+    if (
+        Math.abs(center.latitude * Math.PI / 180) +
+            halfDiagonalRadians >= Math.PI / 2
+    ) {
+        throw new RasterSampleWindowBoundaryError(
+            RASTER_SAMPLE_WINDOW_EDGE_GUIDANCE
+        );
+    }
+    const corners = [315, 45, 135, 225].map((bearing) =>
+        rasterSampleDestination(center, halfDiagonalKm, bearing)
+    );
+    const longitudes = corners.map((corner) => corner.longitude);
+    const latitudes = corners.map((corner) => corner.latitude);
+    if (Math.max(...longitudes) - Math.min(...longitudes) >= 180) {
+        throw new RasterSampleWindowBoundaryError(
+            RASTER_SAMPLE_WINDOW_EDGE_GUIDANCE
+        );
+    }
+    return validateRasterSelectedBounds({
+        west: Math.min(...longitudes),
+        south: Math.min(...latitudes),
+        east: Math.max(...longitudes),
+        north: Math.max(...latitudes)
+    });
+}
+
+/** Convert canonical bounds to Leaflet corners in one visible world copy. */
+export function rasterSampleBoundsToLeaflet(bounds, longitudeOffset = 0) {
+    validateRasterSelectedBounds(bounds);
+    if (!Number.isFinite(longitudeOffset)) {
+        throw new RangeError("Raster sample longitude offset must be finite.");
+    }
+    return [
+        [bounds.south, bounds.west + longitudeOffset],
+        [bounds.north, bounds.east + longitudeOffset]
+    ];
 }
 
 /**
@@ -505,8 +681,7 @@ async function postCatalogRasterAction(
         }
     );
     if (!response.ok) {
-        const errorDocument = await response.json();
-        throw new Error(errorDocument.detail);
+        throw await renderingRequestError(response, "Rendering request");
     }
 
     return response.json();
@@ -541,6 +716,7 @@ export function publishCatalogRaster(
  *
  * @param {Object} item Selected STAC Item.
  * @param {AbortSignal} signal Cancellation signal for a stale selection.
+ * @param {Object|null} selectedBounds Optional WGS 84 sampling rectangle.
  * @param {Function} fetchImplementation Browser fetch implementation.
  * @return {Promise<Object>} Validated fixed-bin raster statistics.
  * @throws {Error} If EOLab cannot calculate or validate the statistics.
@@ -548,8 +724,18 @@ export function publishCatalogRaster(
 export async function loadCatalogRasterStatistics(
     item,
     signal,
+    selectedBounds = null,
     fetchImplementation = globalThis.fetch
 ) {
+    const requestDocument = {
+        collectionId: item.collection,
+        itemId: item.id
+    };
+    if (selectedBounds !== null) {
+        requestDocument.selectedBounds = validateRasterSelectedBounds(
+            selectedBounds
+        );
+    }
     const response = await fetchImplementation.call(
         globalThis,
         "/api/rendering/statistics",
@@ -559,18 +745,33 @@ export async function loadCatalogRasterStatistics(
                 Accept: "application/json",
                 "Content-Type": "application/json"
             },
-            body: JSON.stringify({
-                collectionId: item.collection,
-                itemId: item.id
-            }),
+            body: JSON.stringify(requestDocument),
             signal
         }
     );
     if (!response.ok) {
-        const errorDocument = await response.json();
-        throw new Error(errorDocument.detail);
+        throw await renderingRequestError(
+            response,
+            "Raster statistics request"
+        );
     }
-    return validateRasterStatistics(await response.json());
+    const statistics = validateRasterStatistics(await response.json());
+    if (selectedBounds === null && statistics.scope !== "wholeRaster") {
+        throw rasterStatisticsContractError("whole-raster response scope");
+    }
+    if (selectedBounds !== null) {
+        if (statistics.scope !== "selectedArea") {
+            throw rasterStatisticsContractError("selected-area response scope");
+        }
+        for (const fieldName of ["west", "south", "east", "north"]) {
+            if (statistics.selectedBounds[fieldName] !== selectedBounds[fieldName]) {
+                throw rasterStatisticsContractError(
+                    "selected-area response bounds"
+                );
+            }
+        }
+    }
+    return statistics;
 }
 
 /**
@@ -608,8 +809,7 @@ export async function sampleCatalogRasterPixel(
         }
     );
     if (!response.ok) {
-        const errorDocument = await response.json();
-        throw new Error(errorDocument.detail);
+        throw await renderingRequestError(response, "Pixel sample request");
     }
     return response.json();
 }
@@ -813,6 +1013,176 @@ export class RasterPixelProbeController {
     }
 }
 
+/** Own the explicit hover-preview and click-to-sample map interaction. */
+export class RasterSampleWindowController {
+    /**
+     * @param {Object} leafletMap Leaflet-compatible map.
+     * @param {Function} layerFactory Creates preview or selection rectangles.
+     * @param {Function} onSelect Receives committed WGS 84 bounds.
+     * @param {Function} onGuidance Receives user-safe selection guidance.
+     */
+    constructor(leafletMap, layerFactory, onSelect, onGuidance) {
+        this.leafletMap = leafletMap;
+        this.layerFactory = layerFactory;
+        this.onSelect = onSelect;
+        this.onGuidance = onGuidance;
+        this.windowSizeKm = DEFAULT_RASTER_SAMPLE_WINDOW_SIZE_KM;
+        this.enabled = false;
+        this.lastPosition = null;
+        this.previewLayer = null;
+        this.selectionLayer = null;
+        this.selectionBounds = null;
+        this.onMouseMove = (event) => this.#previewAt(event.latlng);
+        this.onMouseOut = () => this.#removePreview();
+        this.onMouseOver = (event) => {
+            const position = event.latlng ?? this.lastPosition;
+            if (position !== null) {
+                this.#previewAt(position);
+            }
+        };
+        this.onClick = (event) => this.#selectAt(event.latlng);
+    }
+
+    /** Start selection handlers without issuing a statistics request. */
+    enable() {
+        if (this.enabled) {
+            return;
+        }
+        this.enabled = true;
+        this.leafletMap.on("mousemove", this.onMouseMove);
+        this.leafletMap.on("mouseout", this.onMouseOut);
+        this.leafletMap.on("mouseover", this.onMouseOver);
+        this.leafletMap.on("click", this.onClick);
+        this.#previewAt(this.leafletMap.getCenter());
+    }
+
+    /** Stop selection handlers while retaining the committed rectangle. */
+    disable() {
+        if (!this.enabled) {
+            return;
+        }
+        this.leafletMap.off("mousemove", this.onMouseMove);
+        this.leafletMap.off("mouseout", this.onMouseOut);
+        this.leafletMap.off("mouseover", this.onMouseOver);
+        this.leafletMap.off("click", this.onClick);
+        this.enabled = false;
+        this.#removePreview();
+    }
+
+    /** Change the ground-distance side length used by later previews/clicks. */
+    setWindowSize(sideLengthKm) {
+        this.windowSizeKm = validateRasterSampleWindowSize(sideLengthKm);
+        if (this.enabled && this.lastPosition !== null) {
+            this.#previewAt(this.lastPosition);
+        }
+    }
+
+    /** Commit a selection at the current map center for keyboard/touch access. */
+    sampleMapCenter() {
+        return this.#selectAt(this.leafletMap.getCenter());
+    }
+
+    /** Remove only the committed area, retaining the current selection mode. */
+    clearSelection() {
+        if (this.selectionLayer !== null) {
+            this.leafletMap.removeLayer(this.selectionLayer);
+            this.selectionLayer = null;
+        }
+        this.selectionBounds = null;
+    }
+
+    /** Remove all layers, handlers, and pointer state for the active Item. */
+    clear() {
+        this.disable();
+        this.clearSelection();
+        this.lastPosition = null;
+        this.onGuidance("");
+    }
+
+    get isEnabled() {
+        return this.enabled;
+    }
+
+    get selectedBounds() {
+        return this.selectionBounds;
+    }
+
+    #boundsAt(position) {
+        const normalizedPosition = this.#normalizePosition(position);
+        try {
+            const bounds = buildRasterSampleWindowBounds(
+                {
+                    longitude: normalizedPosition.lng,
+                    latitude: normalizedPosition.lat
+                },
+                this.windowSizeKm
+            );
+            this.onGuidance("");
+            return {
+                bounds,
+                leafletBounds: rasterSampleBoundsToLeaflet(
+                    bounds,
+                    position.lng - normalizedPosition.lng
+                )
+            };
+        } catch (error) {
+            if (!(error instanceof RasterSampleWindowBoundaryError)) {
+                throw error;
+            }
+            this.#removePreview();
+            this.onGuidance(RASTER_SAMPLE_WINDOW_EDGE_GUIDANCE);
+            return null;
+        }
+    }
+
+    #previewAt(position) {
+        this.lastPosition = position;
+        const sampleWindow = this.#boundsAt(position);
+        if (sampleWindow === null) {
+            return;
+        }
+        if (this.previewLayer === null) {
+            this.previewLayer = this.layerFactory(
+                sampleWindow.leafletBounds,
+                "preview"
+            ).addTo(this.leafletMap);
+        } else {
+            this.previewLayer.setBounds(sampleWindow.leafletBounds);
+        }
+    }
+
+    #selectAt(position) {
+        this.lastPosition = position;
+        const sampleWindow = this.#boundsAt(position);
+        if (sampleWindow === null) {
+            return null;
+        }
+        if (this.selectionLayer === null) {
+            this.selectionLayer = this.layerFactory(
+                sampleWindow.leafletBounds,
+                "selection"
+            ).addTo(this.leafletMap);
+        } else {
+            this.selectionLayer.setBounds(sampleWindow.leafletBounds);
+        }
+        this.selectionBounds = sampleWindow.bounds;
+        this.onSelect(sampleWindow.bounds);
+        return sampleWindow.bounds;
+    }
+
+    #normalizePosition(position) {
+        const longitude = ((position.lng + 180) % 360 + 360) % 360 - 180;
+        return { lng: longitude, lat: position.lat };
+    }
+
+    #removePreview() {
+        if (this.previewLayer !== null) {
+            this.leafletMap.removeLayer(this.previewLayer);
+            this.previewLayer = null;
+        }
+    }
+}
+
 /** Manage one statistics lifecycle and ignore stale raster responses. */
 export class RasterStatisticsController {
     /**
@@ -827,14 +1197,16 @@ export class RasterStatisticsController {
         this.onResult = onResult;
         this.onError = onError;
         this.item = null;
+        this.selectedBounds = null;
         this.abortController = null;
         this.requestSequence = 0;
     }
 
     /** Start a new statistics request for the active rendered Item. */
-    async activate(item, context = undefined) {
+    async activate(item, context = undefined, selectedBounds = null) {
         this.clear();
         this.item = item;
+        this.selectedBounds = selectedBounds;
         const requestSequence = ++this.requestSequence;
         const abortController = new AbortController();
         this.abortController = abortController;
@@ -843,7 +1215,8 @@ export class RasterStatisticsController {
         try {
             statistics = await this.loadStatistics(
                 item,
-                abortController.signal
+                abortController.signal,
+                selectedBounds
             );
         } catch (error) {
             if (
@@ -868,9 +1241,10 @@ export class RasterStatisticsController {
     /** Repeat the active Item's request after a recoverable failure. */
     retry(context = undefined) {
         const item = this.item;
+        const selectedBounds = this.selectedBounds;
         return item === null
             ? Promise.resolve(null)
-            : this.activate(item, context);
+            : this.activate(item, context, selectedBounds);
     }
 
     /** Abort and invalidate pending work and forget the active Item. */
@@ -879,6 +1253,7 @@ export class RasterStatisticsController {
         this.abortController?.abort();
         this.abortController = null;
         this.item = null;
+        this.selectedBounds = null;
     }
 }
 
