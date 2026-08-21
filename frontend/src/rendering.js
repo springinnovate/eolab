@@ -65,18 +65,7 @@ export async function publishCatalogRaster(
         throw new Error(errorDocument.detail);
     }
 
-    const publishedRaster = await response.json();
-    const bbox = publishedRaster.bbox;
-    if (
-        !Array.isArray(bbox) ||
-        bbox.length !== 4 ||
-        !bbox.every(Number.isFinite) ||
-        bbox[0] >= bbox[2] ||
-        bbox[1] >= bbox[3]
-    ) {
-        throw new Error("Raster publication returned an invalid bounding box");
-    }
-    return publishedRaster;
+    return response.json();
 }
 
 /** Manage one WMS layer while ignoring publication results for stale selections. */

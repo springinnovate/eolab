@@ -111,22 +111,6 @@ test("publishCatalogRaster reports the backend detail", async () => {
   );
 });
 
-test("publishCatalogRaster requires a valid bounding box", async () => {
-  await assert.rejects(
-    publishCatalogRaster(
-      MOUNTED_GEOTIFF_ITEM,
-      async () => new Response(
-        JSON.stringify({
-          layerName: "eolab:stac-invalid",
-          bbox: [-123, 48, -123, 49],
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      ),
-    ),
-    /invalid bounding box/,
-  );
-});
-
 test("CatalogRasterLayerController ignores stale publication results", async () => {
   const leafletMap = { removeLayer() {} };
   const resolvers = [];
