@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from eolab_app.rendering import (
     CatalogRasterRequest,
     PublishedRaster,
+    PublishedRasterRegistry,
     publish_catalog_raster,
 )
 from eolab_app.settings import APPLICATION_VERSION_PATH, load_settings
@@ -72,14 +73,17 @@ PUBLIC_WMS_QUERY_PARAMETERS = {
 }
 
 
-def _validated_public_wms_query(request: Request) -> list[tuple[str, str]]:
+def _validated_public_wms_query(
+    request: Request,
+) -> tuple[list[tuple[str, str]], str | None]:
     """Validate an untrusted request against the public WMS contract.
 
     Args:
         request: Incoming WMS request.
 
     Returns:
-        Query entries accepted by EOLab's public WMS contract.
+        Query entries accepted by EOLab's public WMS contract and the one
+        requested data layer, or None for GetCapabilities.
 
     Raises:
         HTTPException: If the request is not an allowed WMS operation or uses
@@ -116,10 +120,10 @@ def _validated_public_wms_query(request: Request) -> list[tuple[str, str]]:
                 status_code=400,
                 detail=f"{dimension_name} must be an integer",
             ) from error
-        if not 1 <= dimension <= 4096:
+        if not 1 <= dimension <= 2048:
             raise HTTPException(
                 status_code=400,
-                detail=f"{dimension_name} must be between 1 and 4096",
+                detail=f"{dimension_name} must be between 1 and 2048",
             )
     if operation in {"getmap", "getlegendgraphic"}:
         if normalized_query.get("format", "").lower() != "image/png":
@@ -144,7 +148,36 @@ def _validated_public_wms_query(request: Request) -> list[tuple[str, str]]:
                     "or text/plain"
                 ),
             )
-    return query_entries
+    layer_name = None
+    if operation == "getmap":
+        layer_name = normalized_query.get("layers")
+    elif operation == "getfeatureinfo":
+        layer_name = normalized_query.get("layers")
+        if normalized_query.get("query_layers") != layer_name:
+            raise HTTPException(
+                status_code=400,
+                detail="query_layers must match layers",
+            )
+    elif operation == "getlegendgraphic":
+        layer_name = normalized_query.get("layer")
+    style_parameter = "style" if operation == "getlegendgraphic" else "styles"
+    if normalized_query.get(style_parameter, "") not in {
+        "",
+        "dynamic-raster",
+        "eolab:dynamic-raster",
+    }:
+        raise HTTPException(
+            status_code=400,
+            detail="WMS style must be dynamic-raster",
+        )
+    if operation != "getcapabilities" and (
+        not layer_name or "," in layer_name
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Exactly one WMS layer must be requested",
+        )
+    return query_entries, layer_name
 
 
 async def _number_matched_is_estimated(
@@ -223,6 +256,7 @@ def create_app(
         ),
     )
     raster_publish_lock = asyncio.Lock()
+    published_rasters = PublishedRasterRegistry()
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -315,6 +349,7 @@ def create_app(
                 geoserver_rest_client,
                 app_global_configuration.catalog_internal_url,
                 app_global_configuration.geoserver_internal_url,
+                published_rasters,
             )
 
     @application.api_route(
@@ -429,7 +464,12 @@ def create_app(
                 status_code=405,
                 detail="The public WMS endpoint accepts only GET requests",
             )
-        query_entries = _validated_public_wms_query(request)
+        query_entries, layer_name = _validated_public_wms_query(request)
+        if layer_name is not None:
+            await asyncio.to_thread(
+                published_rasters.require_current,
+                layer_name,
+            )
         internal_geoserver_url = (
             app_global_configuration.geoserver_internal_url.rstrip("/")
         )

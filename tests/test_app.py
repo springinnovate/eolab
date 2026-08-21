@@ -9,7 +9,9 @@ from unittest.mock import AsyncMock
 import httpx2
 import psycopg
 import pytest
+import rasterio
 from fastapi.testclient import TestClient
+from rasterio.transform import from_origin
 
 from eolab_app.main import _number_matched_is_estimated, create_app
 from eolab_app.settings import load_settings
@@ -39,7 +41,10 @@ DEFAULT_ENVIRONMENT = {
 TEST_GEOTIFF_ITEM_ID = "geotiff-0123456789abcdef01234567"
 
 
-def _mounted_geotiff_item(asset_href: str) -> dict[str, object]:
+def _mounted_geotiff_item(
+    asset_href: str,
+    asset_media_type: str = "image/tiff; application=geotiff",
+) -> dict[str, object]:
     """Build the scanner-owned STAC Item contract used by rendering tests."""
     return {
         "type": "Feature",
@@ -62,11 +67,38 @@ def _mounted_geotiff_item(asset_href: str) -> dict[str, object]:
         "assets": {
             "data": {
                 "href": asset_href,
-                "type": "image/tiff; application=geotiff",
+                "type": asset_media_type,
                 "roles": ["data"],
+                "eolab:rendering": {
+                    "policy": "raster-v1",
+                    "eligible": True,
+                    "bounded_blocks": True,
+                    "block_shapes": [[1, 1]],
+                    "overview_factors": [[]],
+                    "overview_storage": "none",
+                    "compression": None,
+                    "estimated_uncompressed_bytes": 1,
+                },
             }
         },
     }
+
+
+def _write_geotiff(path: Path) -> None:
+    """Create a minimal GeoTIFF whose current structure can be reassessed."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with rasterio.open(
+        path,
+        "w",
+        driver="GTiff",
+        width=1,
+        height=1,
+        count=1,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=from_origin(-123, 49, 1, 1),
+    ):
+        pass
 
 
 @pytest.fixture
@@ -159,19 +191,27 @@ def test_scan_status_is_available_before_first_scan(
     }
 
 
+@pytest.mark.parametrize(
+    "asset_media_type",
+    (
+        "image/tiff; application=geotiff",
+        "image/tiff; application=geotiff; profile=cloud-optimized",
+    ),
+    ids=("geotiff", "cog"),
+)
 def test_catalog_geotiff_is_published_idempotently(
     configured_environment: None,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     version_file_path: Path,
+    asset_media_type: str,
 ) -> None:
     """Resolve STAC server-side and reuse one deterministic GeoServer layer."""
     source_path = tmp_path / "nested" / "raster with spaces.tif"
-    source_path.parent.mkdir()
-    source_path.write_bytes(b"representative raster")
+    _write_geotiff(source_path)
     monkeypatch.setenv("SCAN_MOUNT_PATH", str(tmp_path))
     monkeypatch.setenv("SCAN_PATHS_WITHIN_MOUNT", '["."]')
-    item = _mounted_geotiff_item(source_path.as_uri())
+    item = _mounted_geotiff_item(source_path.as_uri(), asset_media_type)
     item["bbox"] = [
         -180.000823370733,
         -90.0004116853666,
@@ -247,6 +287,184 @@ def test_catalog_geotiff_is_published_idempotently(
     assert repeated_response.json() == expected_response
     assert [request.method for request in geoserver_requests] == ["PUT"] * 4
     assert len({request.url.path for request in geoserver_requests}) == 2
+
+
+@pytest.mark.parametrize(
+    ("rendering_metadata", "expected_detail"),
+    (
+        (
+            None,
+            "Visualization unavailable: rescan this raster to assess it.",
+        ),
+        (
+            {
+                "policy": "raster-v1",
+                "eligible": False,
+                "reason": (
+                    "Visualization unavailable: this raster needs smaller "
+                    "internal blocks."
+                ),
+            },
+            (
+                "Visualization unavailable: this raster needs smaller "
+                "internal blocks."
+            ),
+        ),
+    ),
+    ids=("unassessed", "ineligible"),
+)
+def test_raster_publication_requires_scanner_eligibility(
+    configured_environment: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    version_file_path: Path,
+    rendering_metadata: dict[str, object] | None,
+    expected_detail: str,
+) -> None:
+    """Refuse legacy and unsuitable Items before contacting GeoServer."""
+    source_path = tmp_path / "raster.tif"
+    _write_geotiff(source_path)
+    monkeypatch.setenv("SCAN_MOUNT_PATH", str(tmp_path))
+    monkeypatch.setenv("SCAN_PATHS_WITHIN_MOUNT", '["."]')
+    item = _mounted_geotiff_item(source_path.as_uri())
+    if rendering_metadata is None:
+        del item["assets"]["data"]["eolab:rendering"]
+    else:
+        item["assets"]["data"]["eolab:rendering"] = rendering_metadata
+    geoserver_requests = []
+
+    def catalog_response(_: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=item)
+
+    def geoserver_response(request: httpx2.Request) -> httpx2.Response:
+        geoserver_requests.append(request)
+        return httpx2.Response(500)
+
+    response = TestClient(
+        create_app(
+            version_file_path,
+            catalog_transport=httpx2.MockTransport(catalog_response),
+            geoserver_transport=httpx2.MockTransport(geoserver_response),
+        )
+    ).post(
+        "/api/rendering/layers",
+        json={
+            "collectionId": "eolab-mounted-geotiffs",
+            "itemId": TEST_GEOTIFF_ITEM_ID,
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": expected_detail}
+    assert geoserver_requests == []
+
+
+def test_raster_publication_reassesses_a_changed_source(
+    configured_environment: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    version_file_path: Path,
+) -> None:
+    """Refuse a source that became unsuitable after its catalog scan."""
+    source_path = tmp_path / "raster.tif"
+    _write_geotiff(source_path)
+    monkeypatch.setenv("SCAN_MOUNT_PATH", str(tmp_path))
+    monkeypatch.setenv("SCAN_PATHS_WITHIN_MOUNT", '["."]')
+    item = _mounted_geotiff_item(source_path.as_uri())
+    geoserver_requests = []
+    monkeypatch.setattr(
+        "eolab_app.rendering.inspect_geotiff_renderability",
+        lambda _: {
+            "eligible": False,
+            "reason": (
+                "Visualization unavailable: this raster needs a complete "
+                "internal overview pyramid."
+            ),
+        },
+    )
+
+    def catalog_response(_: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=item)
+
+    def geoserver_response(request: httpx2.Request) -> httpx2.Response:
+        geoserver_requests.append(request)
+        return httpx2.Response(500)
+
+    response = TestClient(
+        create_app(
+            version_file_path,
+            catalog_transport=httpx2.MockTransport(catalog_response),
+            geoserver_transport=httpx2.MockTransport(geoserver_response),
+        )
+    ).post(
+        "/api/rendering/layers",
+        json={
+            "collectionId": "eolab-mounted-geotiffs",
+            "itemId": TEST_GEOTIFF_ITEM_ID,
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": (
+            "Visualization unavailable: this raster needs a complete "
+            "internal overview pyramid."
+        )
+    }
+    assert geoserver_requests == []
+
+
+def test_raster_changed_during_publication_is_not_authorized(
+    configured_environment: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    version_file_path: Path,
+) -> None:
+    """Keep a source replacement out of WMS after GeoServer REST succeeds."""
+    source_path = tmp_path / "raster.tif"
+    _write_geotiff(source_path)
+    monkeypatch.setenv("SCAN_MOUNT_PATH", str(tmp_path))
+    monkeypatch.setenv("SCAN_PATHS_WITHIN_MOUNT", '["."]')
+    item = _mounted_geotiff_item(source_path.as_uri())
+    geoserver_requests = []
+
+    def upstream_response(request: httpx2.Request) -> httpx2.Response:
+        if request.url.host == "stac-api":
+            return httpx2.Response(200, json=item)
+        geoserver_requests.append(request)
+        if request.url.path.endswith("/external.geotiff"):
+            source_path.write_bytes(b"replacement")
+            return httpx2.Response(201)
+        if request.url.path.endswith(f"/{TEST_GEOTIFF_ITEM_ID}.xml"):
+            return httpx2.Response(200)
+        raise AssertionError(f"Unexpected GeoServer request: {request}")
+
+    with TestClient(
+        create_app(
+            version_file_path,
+            catalog_transport=httpx2.MockTransport(upstream_response),
+            geoserver_transport=httpx2.MockTransport(upstream_response),
+        )
+    ) as client:
+        publication_response = client.post(
+            "/api/rendering/layers",
+            json={
+                "collectionId": "eolab-mounted-geotiffs",
+                "itemId": TEST_GEOTIFF_ITEM_ID,
+            },
+        )
+        tile_response = client.get(
+            "/geoserver/eolab/wms?service=WMS&request=GetMap"
+            f"&layers=eolab%3A{TEST_GEOTIFF_ITEM_ID}"
+            "&width=256&height=256&format=image%2Fpng"
+        )
+
+    assert publication_response.status_code == 409
+    assert publication_response.json() == {
+        "detail": "The GeoTIFF changed while it was being published"
+    }
+    assert tile_response.status_code == 400
+    assert len(geoserver_requests) == 2
 
 
 @pytest.mark.parametrize(
@@ -572,11 +790,27 @@ def test_wms_proxy_forwards_supported_read_operation(
 
 def test_wms_proxy_allows_bounded_png_rendering(
     configured_environment: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
     version_file_path: Path,
 ) -> None:
-    """Allow the inert tile response required by the Leaflet viewer."""
+    """Allow tiles only after this app process approves the current source."""
 
-    def geoserver_response(request: httpx2.Request) -> httpx2.Response:
+    source_path = tmp_path / "raster.tif"
+    _write_geotiff(source_path)
+    monkeypatch.setenv("SCAN_MOUNT_PATH", str(tmp_path))
+    monkeypatch.setenv("SCAN_PATHS_WITHIN_MOUNT", '["."]')
+    item = _mounted_geotiff_item(source_path.as_uri())
+    wms_requests = []
+
+    def upstream_response(request: httpx2.Request) -> httpx2.Response:
+        if request.url.host == "stac-api":
+            return httpx2.Response(200, json=item)
+        if request.url.path.endswith("/external.geotiff"):
+            return httpx2.Response(201)
+        if request.url.path.endswith(f"/{TEST_GEOTIFF_ITEM_ID}.xml"):
+            return httpx2.Response(200)
+        wms_requests.append(request)
         assert request.url.params["request"] == "GetMap"
         assert request.url.params["format"] == "image/png"
         assert request.url.params["width"] == "256"
@@ -587,22 +821,71 @@ def test_wms_proxy_allows_bounded_png_rendering(
             headers={"Content-Type": "image/png"},
         )
 
+    with TestClient(
+        create_app(
+            version_file_path,
+            catalog_transport=httpx2.MockTransport(upstream_response),
+            geoserver_transport=httpx2.MockTransport(upstream_response),
+        )
+    ) as client:
+        publication_response = client.post(
+            "/api/rendering/layers",
+            json={
+                "collectionId": "eolab-mounted-geotiffs",
+                "itemId": TEST_GEOTIFF_ITEM_ID,
+            },
+        )
+        tile_url = (
+            "/geoserver/eolab/wms"
+            "?service=WMS&version=1.3.0&request=GetMap"
+            f"&layers=eolab%3A{TEST_GEOTIFF_ITEM_ID}"
+            "&styles=dynamic-raster&crs=EPSG%3A3857"
+            "&bbox=0%2C0%2C1%2C1&width=256&height=256"
+            "&format=image%2Fpng&transparent=true"
+        )
+        response = client.get(tile_url)
+        source_path.write_bytes(b"replacement")
+        changed_source_response = client.get(tile_url)
+
+    assert publication_response.status_code == 200
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.content == b"png bytes"
+    assert len(wms_requests) == 1
+    assert changed_source_response.status_code == 409
+    assert changed_source_response.json() == {
+        "detail": "The visualized GeoTIFF changed; select it again"
+    }
+
+
+def test_wms_proxy_rejects_a_layer_not_approved_by_this_app_process(
+    configured_environment: None,
+    version_file_path: Path,
+) -> None:
+    """Keep layers persisted by an older deployment outside the public WMS."""
+    geoserver_requests = []
+
+    def geoserver_response(request: httpx2.Request) -> httpx2.Response:
+        geoserver_requests.append(request)
+        return httpx2.Response(500)
+
     response = TestClient(
         create_app(
             version_file_path,
             geoserver_transport=httpx2.MockTransport(geoserver_response),
         )
     ).get(
-        "/geoserver/eolab/wms?service=WMS&version=1.3.0&request=GetMap"
-        "&layers=eolab%3Aexample&styles=dynamic-raster"
-        "&crs=EPSG%3A3857&bbox=0%2C0%2C1%2C1"
-        "&width=256&height=256&format=image%2Fpng&transparent=true"
+        "/geoserver/eolab/wms?service=WMS&request=GetMap"
+        f"&layers=eolab%3A{TEST_GEOTIFF_ITEM_ID}"
+        "&width=256&height=256&format=image%2Fpng"
     )
 
-    assert response.status_code == 200
-    assert response.headers["content-type"] == "image/png"
-    assert response.headers["x-content-type-options"] == "nosniff"
-    assert response.content == b"png bytes"
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": "The WMS layer has not been approved for visualization"
+    }
+    assert geoserver_requests == []
 
 
 @pytest.mark.parametrize(
@@ -615,8 +898,32 @@ def test_wms_proxy_allows_bounded_png_rendering(
             "Unsupported WMS parameter: sld",
         ),
         (
-            "service=WMS&request=GetMap&width=5000",
-            "width must be between 1 and 4096",
+            "service=WMS&request=GetMap&layers=eolab%3Afirst"
+            "&LAYERS=eolab%3Asecond&format=image%2Fpng",
+            "WMS parameters must not repeat",
+        ),
+        (
+            "service=WMS&request=GetMap&layers=eolab%3Aexample"
+            "&styles=expensive-style&format=image%2Fpng",
+            "WMS style must be dynamic-raster",
+        ),
+        (
+            "service=WMS&request=GetMap&layers=eolab%3Afirst%2Ceolab%3Asecond"
+            "&format=image%2Fpng",
+            "Exactly one WMS layer must be requested",
+        ),
+        (
+            "service=WMS&request=GetFeatureInfo&layers=eolab%3Afirst"
+            "&query_layers=eolab%3Asecond&info_format=text%2Fplain",
+            "query_layers must match layers",
+        ),
+        (
+            "service=WMS&request=GetLegendGraphic&format=image%2Fpng",
+            "Exactly one WMS layer must be requested",
+        ),
+        (
+            "service=WMS&request=GetMap&width=2049",
+            "width must be between 1 and 2048",
         ),
         (
             "service=WMS&request=GetMap&format=application/openlayers",
