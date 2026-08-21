@@ -12,6 +12,7 @@ import {
   formatCatalogItemCount,
   formatScanTiming,
   formatScanStatusSummary,
+  getRasterVisualization,
 } from "../src/catalog.js";
 
 const emptyItemCollection = {
@@ -454,6 +455,16 @@ test("CatalogResultStream ignores a page from a superseded search", async () => 
 });
 
 test("buildCatalogItemDetails presents scanned GeoTIFF metadata", () => {
+  const renderingMetadata = {
+    policy: "raster-v1",
+    eligible: true,
+    bounded_blocks: true,
+    block_shapes: [[256, 256]],
+    overview_factors: [[2, 4]],
+    overview_storage: "internal",
+    compression: "DEFLATE",
+    estimated_uncompressed_bytes: 12 * 1024 * 1024,
+  };
   const inspector = buildCatalogItemDetails(
     {
       id: "stable-item-id",
@@ -470,11 +481,13 @@ test("buildCatalogItemDetails presents scanned GeoTIFF metadata", () => {
       assets: {
         data: {
           href: "file:///data/Model Outputs/grassland_2002.tif",
-          type: "image/tiff; application=geotiff",
+          type: "image/tiff; application=geotiff; profile=cloud-optimized",
           title: "Model Outputs/grassland_2002.tif",
           roles: ["data"],
           updated: "2025-02-11T17:31:52Z",
+          "file:size": 2048,
           "raster:bands": [{ data_type: "uint8", nodata: 0 }],
+          "eolab:rendering": renderingMetadata,
         },
       },
     },
@@ -509,9 +522,22 @@ test("buildCatalogItemDetails presents scanned GeoTIFF metadata", () => {
           label: "Original location",
           value: "bigboi -- Z:\\bigbucket\\Model Outputs\\grassland_2002.tif",
         },
-        { label: "Media type", value: "image/tiff; application=geotiff" },
+        {
+          label: "Media type",
+          value: "image/tiff; application=geotiff; profile=cloud-optimized",
+        },
         { label: "Roles", value: "data" },
         { label: "File modified", value: "2025-02-11T17:31:52Z" },
+        { label: "File size", value: "2 KiB" },
+        { label: "Storage profile", value: "Cloud Optimized GeoTIFF" },
+        { label: "Block shapes", value: "256 × 256 pixels" },
+        { label: "Overview storage", value: "Internal" },
+        { label: "Overview factors", value: "Band 1: 2×, 4×" },
+        { label: "Compression", value: "DEFLATE" },
+        {
+          label: "Estimated full-resolution pixel data",
+          value: "12 MiB",
+        },
       ],
       bands: [
         {
@@ -525,6 +551,41 @@ test("buildCatalogItemDetails presents scanned GeoTIFF metadata", () => {
     },
   ]);
   assert.deepEqual(inspector.fields, []);
+});
+
+test("getRasterVisualization fails closed for legacy raster Items", () => {
+  const legacyRaster = {
+    collection: "eolab-mounted-geotiffs",
+    assets: { data: {} },
+  };
+
+  assert.deepEqual(getRasterVisualization(legacyRaster), {
+    policy: "raster-v1",
+    eligible: false,
+    reason: "Visualization unavailable: rescan this raster to assess it.",
+  });
+  assert.equal(
+    getRasterVisualization({
+      collection: "eolab-mounted-vectors",
+      assets: {},
+    }),
+    null,
+  );
+});
+
+test("getRasterVisualization returns the scanner decision", () => {
+  const renderingMetadata = {
+    policy: "raster-v1",
+    eligible: true,
+  };
+
+  assert.equal(
+    getRasterVisualization({
+      collection: "eolab-mounted-geotiffs",
+      assets: { data: { "eolab:rendering": renderingMetadata } },
+    }),
+    renderingMetadata,
+  );
 });
 
 test("buildCatalogItemDetails presents mounted Shapefile metadata", () => {

@@ -9,7 +9,7 @@ import {
     formatCatalogItemCount,
     formatScanTiming,
     formatScanStatusSummary,
-    MOUNTED_GEOTIFF_COLLECTION_ID,
+    getRasterVisualization,
     MOUNTED_DATASET_TYPES,
 } from "./catalog.js";
 import {
@@ -456,15 +456,15 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
         selectedItem: null
     };
 
-    /** Show the map action only for the selected mounted GeoTIFF. */
+    /** Apply the scanner-owned visualization decision to the map action. */
     function updateCatalogMapAction(item) {
-        const canRender =
-            item?.collection === MOUNTED_GEOTIFF_COLLECTION_ID;
-        catalogMapActionsElement.hidden = !canRender;
+        const visualization = getRasterVisualization(item);
+        catalogMapActionsElement.hidden = visualization === null;
         catalogMapActionsElement.setAttribute("aria-busy", "false");
         catalogLayerToggle.disabled = false;
+        catalogLayerToggle.hidden = !visualization?.eligible;
         catalogLayerToggle.textContent = "View on map";
-        catalogLayerStatus.textContent = "";
+        catalogLayerStatus.textContent = visualization?.reason ?? "";
     }
 
     /** Clears the selected result, footprint, and inspector together. */
