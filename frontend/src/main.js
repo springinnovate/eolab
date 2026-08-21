@@ -993,55 +993,10 @@ async function initializeScanner(refreshCatalog) {
 }
 
 /**
- * Enables selection among the workspace tabs.
- *
- * @param {Function} setCatalogWorkspaceExpanded Sets the Catalog layout state.
- * @return {void}
- */
-function initializeWorkspaceTabs(setCatalogWorkspaceExpanded) {
-    const workspaceTabButtons = document.querySelectorAll(".tab-button");
-    const workspaceTabPanels = document.querySelectorAll(".tab-panel");
-
-    /**
-     * Selects the workspace tab that received a click.
-     *
-     * @param {MouseEvent} tabSelectionEvent Tab click event.
-     * @return {void}
-     */
-    function selectWorkspaceTab(tabSelectionEvent) {
-        const selectedTabButton = tabSelectionEvent.currentTarget;
-        const selectedPanelName = selectedTabButton.dataset.panel;
-        if (selectedPanelName !== "catalog") {
-            setCatalogWorkspaceExpanded(false);
-        }
-
-        for (const candidateTabButton of workspaceTabButtons) {
-            const isSelectedTab = candidateTabButton === selectedTabButton;
-            candidateTabButton.classList.toggle("is-active", isSelectedTab);
-            candidateTabButton.setAttribute(
-                "aria-selected",
-                String(isSelectedTab)
-            );
-        }
-
-        for (const candidateTabPanel of workspaceTabPanels) {
-            const isSelectedPanel =
-                candidateTabPanel.id === `panel-${selectedPanelName}`;
-            candidateTabPanel.classList.toggle("is-active", isSelectedPanel);
-            candidateTabPanel.hidden = !isSelectedPanel;
-        }
-    }
-
-    for (const workspaceTabButton of workspaceTabButtons) {
-        workspaceTabButton.addEventListener("click", selectWorkspaceTab);
-    }
-}
-
-/**
  * Enables collapsing and reopening the control panel.
  *
  * @param {L.Map} leafletMap The initialized Leaflet map.
- * @return {Function} Sets whether the Catalog workspace is expanded.
+ * @return {void}
  */
 function initializeControlPanel(leafletMap) {
     const appElement = document.querySelector("#app");
@@ -1119,7 +1074,6 @@ function initializeControlPanel(leafletMap) {
         "click",
         setControlPanelCollapsed.bind(null, false)
     );
-    return setCatalogWorkspaceExpanded;
 }
 
 /**
@@ -1132,8 +1086,7 @@ async function startApplication() {
     applyAppGlobalConfiguration(appGlobalConfiguration);
     initializeRendering(appGlobalConfiguration);
     const leafletMap = initializeMap(appGlobalConfiguration);
-    const setCatalogWorkspaceExpanded = initializeControlPanel(leafletMap);
-    initializeWorkspaceTabs(setCatalogWorkspaceExpanded);
+    initializeControlPanel(leafletMap);
     const refreshCatalog = await initializeCatalog(
         appGlobalConfiguration,
         leafletMap
