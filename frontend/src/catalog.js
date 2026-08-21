@@ -5,7 +5,7 @@ const CATALOG_SUBSTRING_PROPERTIES = [
     "eolab_datetime_text",
     "eolab_end_datetime_text"
 ];
-const CATALOG_DATA_ASSET_MEDIA_TYPE_PROPERTY = "eolab_data_asset_media_type";
+const CATALOG_DATA_ASSET_MEDIA_TYPE_PROPERTY = "assets.data.type";
 const COG_MEDIA_TYPE =
     "image/tiff; application=geotiff; profile=cloud-optimized";
 const CATALOG_FILTER_FIELD_PATTERN = /^[a-z][a-z0-9_-]*$/i;

@@ -324,16 +324,19 @@ def test_catalog_migrator_indexes_data_asset_media_type() -> None:
     ).read_text(encoding="utf-8")
 
     assert "pgstac.get_version() <> '0.9.12'" in migration
-    assert "FUNCTION pgstac.eolab_data_asset_media_type(" in migration
-    assert "item_content jsonb" in migration
-    assert "item_content->'assets'->'data'->>'type'" in migration
+    assert (
+        "CREATE OR REPLACE FUNCTION pgstac.eolab_data_asset_media_type"
+        not in migration
+    )
+    assert "DROP FUNCTION pgstac.eolab_data_asset_media_type(jsonb)" in migration
     assert "'eolab_data_asset_media_type'" in migration
-    assert "property_path" in migration
-    assert "'content'" in migration
+    assert "'assets.data.type'" in migration
+    assert "existing_queryable.property_path IS NOT NULL" in migration
+    assert "existing_queryable.property_wrapper IS NOT NULL" in migration
     assert "property_index_type IS NOT NULL" in migration
     assert "eolab_items_data_asset_media_type_idx" in migration
     assert (
-        "ON pgstac.items (pgstac.eolab_data_asset_media_type(content))"
+        "pgstac.to_text(content->'assets'->'data'->'type')"
         in migration
     )
 

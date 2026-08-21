@@ -99,7 +99,7 @@ test("buildCatalogFilter combines literal text and COG metadata", () => {
       {
         op: "=",
         args: [
-          { property: "eolab_data_asset_media_type" },
+          { property: "assets.data.type" },
           cogMediaType,
         ],
       },
@@ -110,7 +110,7 @@ test("buildCatalogFilter combines literal text and COG metadata", () => {
   assert.deepEqual(buildCatalogFilter("format:cog"), {
     op: "=",
     args: [
-      { property: "eolab_data_asset_media_type" },
+      { property: "assets.data.type" },
       cogMediaType,
     ],
   });
@@ -193,7 +193,7 @@ test("CatalogSearchClient sends the parsed COG filter", async () => {
       {
         op: "=",
         args: [
-          { property: "eolab_data_asset_media_type" },
+          { property: "assets.data.type" },
           cogMediaType,
         ],
       },
