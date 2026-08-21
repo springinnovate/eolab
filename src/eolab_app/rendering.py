@@ -1,6 +1,7 @@
 """Publish cataloged GeoTIFFs through the internal GeoServer."""
 
 import asyncio
+import math
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import unquote, urlsplit
@@ -9,6 +10,8 @@ import httpx2
 import rasterio
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field
+from rasterio.warp import transform
+from rasterio.windows import Window
 
 from eolab_app.geotiff import (
     GEOTIFF_MEDIA_TYPES,
@@ -23,6 +26,7 @@ from eolab_app.geotiff import (
 
 GEOSERVER_WORKSPACE_NAME = "eolab"
 GEOSERVER_RASTER_STYLE_NAME = "dynamic-raster"
+RASTER_PIXEL_READ_CONCURRENCY = 2
 SourceSignature = tuple[int, int, int, int, int]
 
 
@@ -46,6 +50,34 @@ class PublishedRaster(BaseModel):
 
     layer_name: str = Field(alias="layerName")
     bbox: tuple[float, float, float, float]
+
+
+class CatalogPixelRequest(CatalogRasterRequest):
+    """Identify one published raster and a WGS 84 position to sample."""
+
+    longitude: float = Field(
+        strict=True,
+        ge=-180,
+        le=180,
+        allow_inf_nan=False,
+    )
+    latitude: float = Field(
+        strict=True,
+        ge=-90,
+        le=90,
+        allow_inf_nan=False,
+    )
+
+
+class RasterPixel(BaseModel):
+    """One band-1 pixel sampled from a published catalog raster."""
+
+    longitude: float
+    latitude: float
+    row: int | None
+    column: int | None
+    in_bounds: bool = Field(alias="inBounds")
+    value: float | None
 
 
 def _source_signature(source_path: Path) -> SourceSignature:
@@ -104,11 +136,14 @@ class PublishedRasterRegistry:
             )
         self._sources[layer_name] = (source_path, inspected_signature)
 
-    def require_current(self, layer_name: str) -> None:
+    def require_current(self, layer_name: str) -> Path:
         """Require a layer authorized from a source that has not changed.
 
         Args:
             layer_name: Workspace-qualified GeoServer layer name.
+
+        Returns:
+            Canonical path to the authorized mounted GeoTIFF.
 
         Raises:
             HTTPException: If the layer is not authorized or its source has
@@ -131,6 +166,149 @@ class PublishedRasterRegistry:
                 status_code=409,
                 detail="The visualized GeoTIFF changed; select it again",
             )
+        return source_path
+
+
+def _read_raster_pixel(
+    source_path: Path,
+    longitude: float,
+    latitude: float,
+) -> RasterPixel:
+    """Read one band-1 pixel at a WGS 84 position.
+
+    Args:
+        source_path: Authorized mounted GeoTIFF.
+        longitude: WGS 84 longitude.
+        latitude: WGS 84 latitude.
+
+    Returns:
+        Sample value and source cell, or an out-of-bounds response.
+
+    Raises:
+        OSError: If the source cannot be read.
+        rasterio.errors.RasterioError: If GDAL cannot open or sample it.
+        ValueError: If its coordinate reference system cannot transform the
+            requested position.
+    """
+    with rasterio.open(source_path) as dataset:
+        x_coordinates, y_coordinates = transform(
+            "EPSG:4326",
+            dataset.crs,
+            [longitude],
+            [latitude],
+        )
+        if not all(
+            math.isfinite(coordinate)
+            for coordinate in (x_coordinates[0], y_coordinates[0])
+        ):
+            return RasterPixel(
+                longitude=longitude,
+                latitude=latitude,
+                row=None,
+                column=None,
+                inBounds=False,
+                value=None,
+            )
+        row, column = dataset.index(x_coordinates[0], y_coordinates[0])
+        if not (0 <= row < dataset.height and 0 <= column < dataset.width):
+            return RasterPixel(
+                longitude=longitude,
+                latitude=latitude,
+                row=None,
+                column=None,
+                inBounds=False,
+                value=None,
+            )
+
+        sample = dataset.read(
+            1,
+            window=Window(column, row, 1, 1),
+            masked=True,
+        )
+        value = None if sample.count() == 0 else float(sample[0, 0])
+        if value is not None and not math.isfinite(value):
+            value = None
+        return RasterPixel(
+            longitude=longitude,
+            latitude=latitude,
+            row=row,
+            column=column,
+            inBounds=True,
+            value=value,
+        )
+
+
+def _read_current_raster_pixel(
+    request: CatalogPixelRequest,
+    raster_registry: PublishedRasterRegistry,
+) -> RasterPixel:
+    """Resolve and sample an approved raster in one worker-thread job.
+
+    Args:
+        request: Validated Item identity and WGS 84 position.
+        raster_registry: Current-process publication authorizations.
+
+    Returns:
+        The sampled band-1 value and source cell.
+
+    Raises:
+        HTTPException: If the layer is unapproved or its source changed.
+        OSError: If the source cannot be read.
+        rasterio.errors.RasterioError: If GDAL cannot sample the source.
+        ValueError: If its coordinate reference system cannot transform the
+            requested position.
+    """
+    layer_name = f"{GEOSERVER_WORKSPACE_NAME}:{request.item_id}"
+    source_path = raster_registry.require_current(layer_name)
+    return _read_raster_pixel(
+        source_path,
+        request.longitude,
+        request.latitude,
+    )
+
+
+async def sample_catalog_raster_pixel(
+    request: CatalogPixelRequest,
+    raster_registry: PublishedRasterRegistry,
+    read_semaphore: asyncio.Semaphore,
+) -> RasterPixel:
+    """Sample one pixel without exceeding the app's raster-read capacity.
+
+    Args:
+        request: Validated Item identity and WGS 84 position.
+        raster_registry: Current-process publication authorizations.
+        read_semaphore: Limit for concurrent Rasterio reads.
+
+    Returns:
+        The sampled band-1 value and source cell.
+
+    Raises:
+        HTTPException: If the source is unapproved, changed, or unreadable.
+    """
+    await read_semaphore.acquire()
+    read_task = asyncio.create_task(
+        asyncio.to_thread(
+            _read_current_raster_pixel,
+            request,
+            raster_registry,
+        )
+    )
+
+    # HTTP cancellation cannot stop a GDAL thread. Keep its slot occupied until
+    # the actual read ends, and retrieve any exception from a detached task.
+    def release_read_slot(completed_task: asyncio.Task[RasterPixel]) -> None:
+        read_semaphore.release()
+        if not completed_task.cancelled():
+            completed_task.exception()
+
+    read_task.add_done_callback(release_read_slot)
+    try:
+        return await asyncio.shield(read_task)
+    except (OSError, ValueError, rasterio.errors.RasterioError) as error:
+        raise HTTPException(
+            status_code=409,
+            detail="The selected raster could not be sampled",
+        ) from error
 
 
 def _mounted_geotiff_path(item: dict[str, Any], scan_mount_path: Path) -> Path:
