@@ -1,14 +1,27 @@
 /** Minimal SVG element implementation shared by raster view tests. */
-export class FakeSvgElement {
+export class FakeSvgElement extends EventTarget {
   /**
    * @param {string} tagName SVG tag name represented by this fake.
    */
   constructor(tagName) {
+    super();
     this.tagName = tagName;
     this.attributes = new Map();
     this.children = [];
     this.classNames = [];
-    this.classList = { add: (name) => this.classNames.push(name) };
+    this.classList = {
+      add: (name) => {
+        if (!this.classNames.includes(name)) {
+          this.classNames.push(name);
+        }
+      },
+      contains: (name) => this.classNames.includes(name),
+      remove: (name) => {
+        this.classNames = this.classNames.filter(
+          (className) => className !== name,
+        );
+      },
+    };
     this.style = {};
     this.textContent = "";
   }
@@ -16,11 +29,11 @@ export class FakeSvgElement {
   /**
    * Append one child node.
    *
-   * @param {FakeSvgElement} child Child SVG element.
+   * @param {...FakeSvgElement} children Child SVG elements.
    * @return {void}
    */
-  append(child) {
-    this.children.push(child);
+  append(...children) {
+    this.children.push(...children);
   }
 
   /**
@@ -63,6 +76,7 @@ export class FakeSvgElement {
   hasAttribute(name) {
     return this.attributes.has(name);
   }
+
 }
 
 /** Minimal document implementation that creates FakeSvgElement instances. */
