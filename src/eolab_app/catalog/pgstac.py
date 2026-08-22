@@ -198,11 +198,15 @@ def catalog_item_source(
     Raises:
         ValueError: If a required source Asset is missing.
     """
-    required_asset_keys = (
-        ("data",)
-        if collection == MOUNTED_GEOTIFF_COLLECTION_ID
-        else ("shp", "shx", "dbf", "prj")
-    )
+    if (
+        collection == MOUNTED_GEOTIFF_COLLECTION_ID
+        or item_id.startswith(("geopackage-", "geojson-"))
+    ):
+        required_asset_keys = ("data",)
+    elif item_id.startswith("zipped-shapefile-"):
+        required_asset_keys = ("archive",)
+    else:
+        required_asset_keys = ("shp", "shx", "dbf", "prj")
     try:
         asset_hrefs = tuple(assets[key]["href"] for key in required_asset_keys)
     except KeyError as error:

@@ -24,6 +24,22 @@ def test_pgstac_inventory_requires_scanner_owned_source_assets() -> None:
         raise AssertionError("missing data Asset was accepted")
 
 
+@pytest.mark.parametrize("item_id", ("geopackage-layer", "geojson-file"))
+def test_pgstac_inventory_tracks_single_file_vector_assets(item_id: str) -> None:
+    """Use the data Asset for each supported single-file vector format.
+
+    Args:
+        item_id: Format-specific Item identity prefix under test.
+    """
+    source = catalog_item_source(
+        "eolab-mounted-vectors",
+        item_id,
+        {"data": {"href": "file:///scan-source/vector-data"}},
+    )
+
+    assert source.asset_hrefs == ("file:///scan-source/vector-data",)
+
+
 def test_pgstac_random_item_uses_filtered_selection_function(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

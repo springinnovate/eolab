@@ -2,7 +2,7 @@
 
 EOLab's mounted-source scanner treats a source dataset and a STAC Item as different units. One discovered source is processed exactly once, but its handler may emit zero, one, or several Items. The coordinator batches every emitted Item by Collection and writes it through the existing bounded bulk-upsert path.
 
-The currently registered formats are GeoTIFF, GeoPackage, mounted Shapefile, and GeoJSON FeatureCollection. Zipped Shapefile and File Geodatabase are not registered or implemented.
+The currently registered formats are GeoTIFF, GeoPackage, mounted Shapefile, ZIP-contained Shapefile, and GeoJSON FeatureCollection. File Geodatabase is not registered or implemented.
 
 ## Registry composition
 
@@ -25,7 +25,7 @@ A discovery callable receives the current `directory_path`, sorted `directory_na
 
 A directory-backed format should return the container directory as a match and return that directory name in `pruned_directory_names`. `FilesystemDatasetDiscovery` then removes it from `os.walk`'s mutable traversal list, so files inside the container cannot become independent GeoTIFF, Shapefile, or other candidates. The registry rejects pruning names that were not in the listing and rejects two handlers claiming the same primary path. Final candidates are sorted by mount-relative POSIX path, independent of configured source-path order or filesystem enumeration order.
 
-File Geodatabase is the expected directory-container example, but this refactor does not recognize `.gdb` directories. ZIP/Shapefile is expected to be a single-file container and therefore needs no directory pruning.
+File Geodatabase is the expected directory-container example, but this refactor does not recognize `.gdb` directories. ZIP/Shapefile is a single-file container and therefore needs no directory pruning. Its handler validates one archive and emits one Item per valid internal Shapefile in deterministic internal-path order. It reads members directly through GDAL's `/vsizip/` filesystem, enforces explicit archive and decompression ceilings before metadata access, and never extracts temporary files. Invalid internal Shapefiles are logged independently so valid siblings remain catalogable; when none are valid, the source archive returns one captured dataset error.
 
 ## Metadata results and failures
 
@@ -37,7 +37,7 @@ File Geodatabase is the expected directory-container example, but this refactor 
 
 If a builder raises, the worker captures one source-dataset error and returns no Items. If any emitted Item has no geometry, the whole source result fails because pgSTAC requires geometry. A failed source does not stop unrelated candidates. A catalog inventory or bulk-write failure remains systemic and stops the scan while cancelling sibling work as before.
 
-The GeoPackage handler performs narrower isolation inside its multi-layer source: expected open or spatial-metadata failures for one named layer are logged and skipped, so valid sibling layers can still produce Items. If no spatial vector layer remains catalogable, the handler raises and the worker reports the normal source-dataset error. Nonspatial attribute tables are a successful zero-Item condition, not a layer failure. This behavior stays inside the focused handler because the shared result contract intentionally has no partially successful error shape.
+The GeoPackage and ZIP/Shapefile handlers perform narrower isolation inside their multi-dataset sources: expected open or spatial-metadata failures for one layer or internal Shapefile are logged and skipped, so valid siblings can still produce Items. If no spatial vector dataset remains catalogable, the handler raises and the worker reports the normal source-dataset error. GeoPackage nonspatial attribute tables are a successful zero-Item condition, not a layer failure. This behavior stays inside each focused handler because the shared result contract intentionally has no partially successful error shape.
 
 Each emitted Item must use a Collection from `SCAN_COLLECTION_IDENTIFIERS`. A future vector handler should normally use `eolab-mounted-vectors`; adding a new Collection requires an explicit catalog ownership and reconciliation decision rather than an implicit handler side effect. Item IDs must be stable functions of the mount-relative source identity and, for multi-Item datasets, the layer identity. Existing GeoTIFF and Shapefile ID functions must not change.
 
