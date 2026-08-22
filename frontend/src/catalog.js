@@ -718,6 +718,18 @@ export function buildCatalogItemDetails(
  */
 function buildVectorInspectorDetails(properties) {
     const metadata = [];
+    if (properties["eolab:layer_name"] !== undefined) {
+        metadata.push({
+            label: "Layer name",
+            value: properties["eolab:layer_name"]
+        });
+    }
+    if (properties["eolab:layer_alias"] !== undefined) {
+        metadata.push({
+            label: "Layer alias",
+            value: properties["eolab:layer_alias"]
+        });
+    }
     if (properties["table:row_count"] !== undefined) {
         metadata.push({
             label: "Feature count",

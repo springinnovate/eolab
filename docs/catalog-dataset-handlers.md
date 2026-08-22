@@ -2,7 +2,7 @@
 
 EOLab's mounted-source scanner treats a source dataset and a STAC Item as different units. One discovered source is processed exactly once, but its handler may emit zero, one, or several Items. The coordinator batches every emitted Item by Collection and writes it through the existing bounded bulk-upsert path.
 
-The currently registered formats are GeoTIFF and mounted Shapefile. GeoPackage, zipped Shapefile, GeoJSON, and File Geodatabase are intentionally not registered or implemented by this contract.
+The currently registered formats are GeoTIFF, mounted Shapefile, and Esri File Geodatabase. GeoPackage, zipped Shapefile, and GeoJSON are not registered by this implementation.
 
 ## Registry composition
 
@@ -25,7 +25,9 @@ A discovery callable receives the current `directory_path`, sorted `directory_na
 
 A directory-backed format should return the container directory as a match and return that directory name in `pruned_directory_names`. `FilesystemDatasetDiscovery` then removes it from `os.walk`'s mutable traversal list, so files inside the container cannot become independent GeoTIFF, Shapefile, or other candidates. The registry rejects pruning names that were not in the listing and rejects two handlers claiming the same primary path. Final candidates are sorted by mount-relative POSIX path, independent of configured source-path order or filesystem enumeration order.
 
-File Geodatabase is the expected directory-container example, but this refactor does not recognize `.gdb` directories. ZIP/Shapefile is expected to be a single-file container and therefore needs no directory pruning.
+File Geodatabase is the directory-container implementation: its handler recognizes `.gdb` child directories case-insensitively, returns the container as one source dataset, and prunes all traversal below it. ZIP/Shapefile is expected to be a single-file container and therefore needs no directory pruning.
+
+The File Geodatabase handler uses Fiona with an explicit `OpenFileGDB` driver allowlist and verifies that GDAL selected that driver for every layer. It emits one Item per readable spatial feature class, skips nonspatial tables, and isolates a failing layer when another spatial layer remains readable. Each Item ID hashes the mount-relative geodatabase path together with the exact layer name, so rescans and mounts at different host roots preserve identity. Every layer Item points its data Asset at the user-provided `.gdb` location. Because feature classes do not provide a standardized timestamp used by EOLab, all Items from a geodatabase use the latest filesystem modification time among the container directory and its descendants.
 
 ## Metadata results and failures
 
