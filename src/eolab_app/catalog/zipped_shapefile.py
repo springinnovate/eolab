@@ -488,6 +488,10 @@ def _build_stac_item(
         missing_list = ", ".join(sorted(missing_extensions))
         raise ValueError(f"Shapefile is missing required components: {missing_list}")
 
+    archive_modified_at_text = archive_modified_at.isoformat().replace(
+        "+00:00",
+        "Z",
+    )
     dataset_path = _gdal_zip_member_path(
         archive_path,
         archived_shapefile.shapefile_path,
@@ -514,7 +518,7 @@ def _build_stac_item(
         properties: dict[str, Any] = {
             "title": f"{relative_archive_text}!/{internal_path_text}",
             "description": FALLBACK_DATETIME_DESCRIPTION,
-            "datetime": _stac_datetime(archive_modified_at),
+            "datetime": archive_modified_at_text,
             **build_vector_table_properties(
                 feature_count,
                 geometry_type,
@@ -566,7 +570,7 @@ def _build_stac_item(
                 "type": ZIP_MEDIA_TYPE,
                 "title": relative_archive_path.as_posix(),
                 "roles": ["data"],
-                "updated": _stac_datetime(archive_modified_at),
+                "updated": archive_modified_at_text,
             },
         },
     }
@@ -630,15 +634,3 @@ def _component_extension(file_name: str) -> str | None:
         if lower_file_name.endswith(extension):
             return extension
     return None
-
-
-def _stac_datetime(value: datetime) -> str:
-    """Serialize an aware datetime in the repository's STAC form.
-
-    Args:
-        value: Timezone-aware timestamp to serialize.
-
-    Returns:
-        ISO 8601 text with UTC represented by a trailing ``Z``.
-    """
-    return value.isoformat().replace("+00:00", "Z")
