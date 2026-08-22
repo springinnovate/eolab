@@ -2,7 +2,7 @@
 
 EOLab's mounted-source scanner treats a source dataset and a STAC Item as different units. One discovered source is processed exactly once, but its handler may emit zero, one, or several Items. The coordinator batches every emitted Item by Collection and writes it through the existing bounded bulk-upsert path.
 
-The currently registered formats are GeoTIFF, GeoPackage, and mounted Shapefile. Zipped Shapefile, GeoJSON, and File Geodatabase are intentionally not registered or implemented by this contract.
+The currently registered formats are GeoTIFF, GeoPackage, mounted Shapefile, and GeoJSON FeatureCollection. Zipped Shapefile and File Geodatabase are not registered or implemented.
 
 ## Registry composition
 
@@ -65,6 +65,14 @@ Vector handlers should use `build_vector_table_properties()` from `src/eolab_app
 Handlers should include the published STAC Table Extension URL and Projection Extension metadata that the source can actually provide. They must not emit empty format-specific properties for unavailable values. The Catalog inspector reads these Table and Projection Extension fields data-first: feature count, declared geometry type, and attribute rows appear only when present. This preserves current Shapefile presentation while allowing another vector handler to reuse the same inspector without format checks.
 
 Format-specific Assets, media types, timestamps, layer selection, and ID rules remain in the focused handler. The GeoPackage handler records the exact layer name as `eolab:geopackage_layer` on both the Item and its container Asset; its Item title combines the mount-relative container path and layer name so existing text search and inspector presentation identify both. Shared vector conventions are not permission to flatten distinct container or multi-layer semantics into a broad utility.
+
+### GeoJSON streaming and CRS contract
+
+The GeoJSON handler recognizes only `.geojson` files and treats one FeatureCollection as one source and one Item. It incrementally parses the document and materializes at most one feature at a time. Aggregate memory is therefore independent of feature count and file size except for the current feature, while the retained schema is capped at 1,024 property names of at most 1,024 characters each. Exceeding either schema limit produces one isolated dataset error rather than unbounded memory growth.
+
+RFC 7946 defines GeoJSON coordinates as WGS 84 longitude and latitude. A missing or null legacy `crs` member follows that standard. For compatibility, the handler also accepts a legacy named CRS only when it unambiguously identifies EPSG:4326 or OGC CRS84. Any projected, linked, unknown, or malformed legacy CRS declaration is rejected; the scanner never guesses or silently reprojects GeoJSON coordinates. Coordinate positions must contain finite numeric axes within longitude and latitude ranges.
+
+Property columns preserve every observed JSON type in deterministic union strings, so mixed scalar types and explicit nulls are not narrowed to an inaccurate inferred type. A property omitted from some features does not invent a null value. Geometry types use the same union convention. The handler computes the footprint from streamed coordinates instead of trusting an optional source `bbox` member.
 
 ## Required tests for a new handler
 
