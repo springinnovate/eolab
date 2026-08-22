@@ -22,6 +22,7 @@ import {
     getRasterVisualization,
     MOUNTED_DATASET_TYPES,
 } from "./catalog.js";
+import { initializeCatalogPaneControls } from "./catalog-pane-controller.js";
 import { assessCatalogRaster } from "./raster/api.js";
 import { initializeRasterViewer } from "./raster/raster-viewer.js";
 import {
@@ -1126,6 +1127,7 @@ function initializeControlPanel(leafletMap) {
  * @return {Promise<void>} Resolves after the interface is initialized.
  */
 async function startApplication() {
+    initializeCatalogPaneControls();
     const appGlobalConfiguration = await loadAppGlobalConfiguration();
     applyAppGlobalConfiguration(appGlobalConfiguration);
     initializeRenderingDiagnostics();
