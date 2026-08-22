@@ -5,11 +5,13 @@ import test from "node:test";
 import {
   buildCatalogItemDetails,
   buildCatalogSearch,
+  buildCatalogSearchRequest,
   buildSubstringFilter,
   CatalogFootprintController,
   CatalogResultStream,
   CatalogSearchClient,
   CatalogSearchSyntaxError,
+  CatalogSurpriseClient,
   createDebouncedAction,
   findPaginationLink,
   formatCatalogItemCount,
@@ -337,6 +339,103 @@ test("Catalog search help presents the viewable filter", () => {
     catalogMarkup,
     /ESA format:cog viewable:true date:2020-01-01\.\.2020-12-31/,
   );
+});
+
+test("Surprise me appears immediately after Catalog search", () => {
+  const catalogMarkup = readFileSync(
+    new URL("../index.html", import.meta.url),
+    "utf8",
+  );
+  const searchEnd = catalogMarkup.indexOf(
+    "</label>",
+    catalogMarkup.indexOf('id="catalog-search"'),
+  );
+  const surpriseButton = catalogMarkup.indexOf('id="surprise-catalog"');
+  const scanControls = catalogMarkup.indexOf('class="scan-card"');
+
+  assert.ok(searchEnd < surpriseButton);
+  assert.ok(surpriseButton < scanControls);
+  assert.match(
+    catalogMarkup,
+    /<button[\s\S]*id="surprise-catalog"[\s\S]*type="button"/,
+  );
+  assert.match(catalogMarkup, /id="catalog-surprise-status" role="status"/);
+});
+
+test("CatalogSurpriseClient sends active filters and prior Item identity", async () => {
+  let capturedRequest;
+  const selectedItem = {
+    type: "Feature",
+    id: "item-random",
+    collection: "collection-a",
+    properties: { title: "Random Item" },
+  };
+  const client = new CatalogSurpriseClient(
+    "/api/catalog/surprise",
+    async (url, options) => {
+      capturedRequest = { url, options };
+      return new Response(JSON.stringify({ item: selectedItem }), {
+        status: 200,
+      });
+    },
+  );
+
+  assert.deepEqual(
+    await client.surprise(
+      "barley format:cog viewable:true date:2020-01..2020-03",
+      { collection: "collection-a", id: "item-previous" },
+    ),
+    selectedItem,
+  );
+
+  assert.equal(capturedRequest.url, "/api/catalog/surprise");
+  assert.equal(capturedRequest.options.method, "POST");
+  assert.deepEqual(JSON.parse(capturedRequest.options.body), {
+    search: buildCatalogSearchRequest(
+      "barley format:cog viewable:true date:2020-01..2020-03",
+    ),
+    exclude: { collection: "collection-a", id: "item-previous" },
+  });
+  assert.equal(
+    "limit" in JSON.parse(capturedRequest.options.body).search,
+    false,
+  );
+});
+
+test("CatalogSurpriseClient reports no-match detail", async () => {
+  const client = new CatalogSurpriseClient(
+    "/api/catalog/surprise",
+    async () => new Response(
+      JSON.stringify({ detail: "No Catalog Items match the active filters" }),
+      { status: 404 },
+    ),
+  );
+
+  await assert.rejects(
+    client.surprise("date:1900"),
+    /No Catalog Items match the active filters/,
+  );
+});
+
+test("Surprise selection preserves the result-loading path", () => {
+  const mainSource = readFileSync(
+    new URL("../src/main.js", import.meta.url),
+    "utf8",
+  );
+  const handlerStart = mainSource.indexOf(
+    'surpriseCatalogButton.addEventListener("click"',
+  );
+  const handlerEnd = mainSource.indexOf(
+    "refreshCatalogButton.addEventListener",
+    handlerStart,
+  );
+  const surpriseHandler = mainSource.slice(handlerStart, handlerEnd);
+
+  assert.match(surpriseHandler, /selectCatalogItem\(item\)/);
+  assert.match(surpriseHandler, /catalogState\.searchText/);
+  assert.doesNotMatch(surpriseHandler, /catalogSearchInput\.value/);
+  assert.doesNotMatch(surpriseHandler, /loadCatalog\(/);
+  assert.doesNotMatch(surpriseHandler, /replaceChildren\(/);
 });
 
 test("CatalogSearchClient sends a standard STAC CQL2 substring search", async () => {
