@@ -5,7 +5,6 @@ lowercaseOutputLabelNames: true
 includeObjectNames:
   - "java.lang:type=Memory"
   - "java.lang:type=OperatingSystem"
-  - "java.lang:type=GarbageCollector,name=*"
   - "java.lang:type=Threading"
   - "java.lang:type=Runtime"
 httpServer:
@@ -32,19 +31,6 @@ rules:
     name: eolab_jvm_process_cpu_load_ratio
     value: '$1'
     type: GAUGE
-  - pattern: 'java.lang<type=GarbageCollector, name=(.+)><>CollectionCount: (.*)'
-    name: eolab_jvm_gc_collection_count_total
-    value: '$2'
-    labels:
-      collector: '$1'
-    type: COUNTER
-  - pattern: 'java.lang<type=GarbageCollector, name=(.+)><>CollectionTime: (.*)'
-    name: eolab_jvm_gc_collection_time_seconds_total
-    value: '$2'
-    valueFactor: 0.001
-    labels:
-      collector: '$1'
-    type: COUNTER
   - pattern: 'java.lang<type=Threading><>ThreadCount: (.*)'
     name: eolab_jvm_live_threads
     value: '$1'

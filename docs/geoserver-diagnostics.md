@@ -16,7 +16,7 @@ while it is closed, and stops while the browser tab is hidden. EOLab's own
 | --- | --- |
 | Java heap | `MemoryMXBean.HeapMemoryUsage`; used, committed, and maximum bytes. The maximum comes from the JVM `-Xmx` value configured by `EOLAB_GEOSERVER_MAX_HEAP_SIZE`, not host RAM. |
 | GeoServer process CPU | `OperatingSystemMXBean.ProcessCpuLoad`, shown as a percentage of the CPU capacity visible to the JVM. Docker's `EOLAB_GEOSERVER_CPU_LIMIT` controls that visible capacity. |
-| Garbage collection | Sum of collection count and elapsed collection time across the JVM's bounded set of garbage collectors, cumulative since GeoServer started. |
+| Garbage collection | Sum of the Java agent's standard `jvm_gc_collection_seconds_count` and `_sum` series across its bounded `gc` labels, cumulative since GeoServer started. |
 | Live threads | Current `ThreadingMXBean.ThreadCount` inside GeoServer's JVM. |
 | JVM uptime | Time since the current GeoServer JVM started. |
 | Active GetMaps | Valid public GetMap requests currently passing through EOLab. The displayed concurrency limit comes from `EOLAB_GEOSERVER_WMS_RENDER_COUNT`. |

@@ -52,10 +52,12 @@ eolab_jvm_heap_used_bytes 268435456
 eolab_jvm_heap_committed_bytes 536870912
 eolab_jvm_heap_max_bytes 1073741824
 eolab_jvm_process_cpu_load_ratio 0.125
-eolab_jvm_gc_collection_count_total{collector="young"} 7
-eolab_jvm_gc_collection_count_total{collector="old"} 2
-eolab_jvm_gc_collection_time_seconds_total{collector="young"} 0.75
-eolab_jvm_gc_collection_time_seconds_total{collector="old"} 0.25
+jvm_gc_collection_seconds_count{gc="G1 Concurrent GC"} 10
+jvm_gc_collection_seconds_sum{gc="G1 Concurrent GC"} 0.056
+jvm_gc_collection_seconds_count{gc="G1 Old Generation"} 0
+jvm_gc_collection_seconds_sum{gc="G1 Old Generation"} 0.0
+jvm_gc_collection_seconds_count{gc="G1 Young Generation"} 32
+jvm_gc_collection_seconds_sum{gc="G1 Young Generation"} 0.305
 eolab_jvm_live_threads 42
 eolab_jvm_uptime_seconds 3600.5
 """.strip()
@@ -233,7 +235,7 @@ def test_rendering_diagnostics_exposes_only_the_safe_summary(
             "usedPercent": 25.0,
         },
         "cpu": {"processLoadPercent": 12.5},
-        "garbageCollection": {"count": 9, "seconds": 1.0},
+        "garbageCollection": {"count": 42, "seconds": 0.361},
         "threads": {"live": 42},
         "uptimeSeconds": 3600.5,
         "requests": {

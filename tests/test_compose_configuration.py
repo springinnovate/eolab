@@ -157,12 +157,12 @@ def test_geoserver_exports_only_allowlisted_jvm_metrics_internally() -> None:
         "eolab_jvm_heap_committed_bytes",
         "eolab_jvm_heap_max_bytes",
         "eolab_jvm_process_cpu_load_ratio",
-        "eolab_jvm_gc_collection_count_total",
-        "eolab_jvm_gc_collection_time_seconds_total",
         "eolab_jvm_live_threads",
         "eolab_jvm_uptime_seconds",
     ):
         assert metric_name in exporter_configuration
+    assert "GarbageCollector" not in exporter_configuration
+    assert "eolab_jvm_gc_" not in exporter_configuration
 
 
 def test_geoserver_rejects_invalid_runtime_limits() -> None:

@@ -28,8 +28,8 @@ _METRIC_LINE_PATTERN = re.compile(
     rf"(?P<labels>\{{[^\r\n]*\}})?\s+"
     rf"(?P<value>{_NUMBER_PATTERN})$"
 )
-_COLLECTOR_LABEL_PATTERN = re.compile(
-    r'^\{collector="(?:[^"\\]|\\.)+"\}$'
+_GC_LABEL_PATTERN = re.compile(
+    r'^\{gc="(?:[^"\\]|\\.)+"\}$'
 )
 _SINGLETON_METRICS = {
     "eolab_jvm_heap_used_bytes": "heap_used_bytes",
@@ -39,8 +39,8 @@ _SINGLETON_METRICS = {
     "eolab_jvm_live_threads": "live_threads",
     "eolab_jvm_uptime_seconds": "uptime_seconds",
 }
-_GC_COUNT_METRIC = "eolab_jvm_gc_collection_count_total"
-_GC_SECONDS_METRIC = "eolab_jvm_gc_collection_time_seconds_total"
+_GC_COUNT_METRIC = "jvm_gc_collection_seconds_count"
+_GC_SECONDS_METRIC = "jvm_gc_collection_seconds_sum"
 
 
 class _StrictModel(BaseModel):
@@ -257,8 +257,8 @@ def parse_jmx_metrics(document: str) -> JvmMetrics:
             continue
         match = _METRIC_LINE_PATTERN.fullmatch(line)
         if match is None:
-            if line.startswith("eolab_jvm_"):
-                raise RenderingDiagnosticsError("Malformed EOLab metric line")
+            if line.startswith(("eolab_jvm_", "jvm_gc_collection_seconds_")):
+                raise RenderingDiagnosticsError("Malformed required metric line")
             continue
 
         metric_name = match.group("name")
@@ -276,9 +276,9 @@ def parse_jmx_metrics(document: str) -> JvmMetrics:
 
         if metric_name not in {_GC_COUNT_METRIC, _GC_SECONDS_METRIC}:
             continue
-        if labels is None or _COLLECTOR_LABEL_PATTERN.fullmatch(labels) is None:
+        if labels is None or _GC_LABEL_PATTERN.fullmatch(labels) is None:
             raise RenderingDiagnosticsError(
-                f"{metric_name} must use exactly one collector label"
+                f"{metric_name} must use exactly one gc label"
             )
         values_by_collector = (
             garbage_collection_counts

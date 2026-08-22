@@ -22,10 +22,12 @@ eolab_jvm_heap_used_bytes 2.68435456E8
 eolab_jvm_heap_committed_bytes 5.36870912E8
 eolab_jvm_heap_max_bytes 1.073741824E9
 eolab_jvm_process_cpu_load_ratio 0.125
-eolab_jvm_gc_collection_count_total{collector="G1 Young Generation"} 7
-eolab_jvm_gc_collection_count_total{collector="G1 Old Generation"} 2.0
-eolab_jvm_gc_collection_time_seconds_total{collector="G1 Young Generation"} 0.75
-eolab_jvm_gc_collection_time_seconds_total{collector="G1 Old Generation"} 0.25
+jvm_gc_collection_seconds_count{gc="G1 Concurrent GC"} 10
+jvm_gc_collection_seconds_sum{gc="G1 Concurrent GC"} 0.056
+jvm_gc_collection_seconds_count{gc="G1 Old Generation"} 0
+jvm_gc_collection_seconds_sum{gc="G1 Old Generation"} 0.0
+jvm_gc_collection_seconds_count{gc="G1 Young Generation"} 32
+jvm_gc_collection_seconds_sum{gc="G1 Young Generation"} 0.305
 eolab_jvm_live_threads 42.0
 eolab_jvm_uptime_seconds 3600.5
 """.strip()
@@ -39,8 +41,8 @@ def test_parse_jmx_metrics_accepts_only_the_owned_metric_contract() -> None:
     assert metrics.heap_committed_bytes == 536_870_912
     assert metrics.heap_max_bytes == 1_073_741_824
     assert metrics.process_cpu_load_ratio == 0.125
-    assert metrics.garbage_collection_count == 9
-    assert metrics.garbage_collection_seconds == 1.0
+    assert metrics.garbage_collection_count == 42
+    assert metrics.garbage_collection_seconds == pytest.approx(0.361)
     assert metrics.live_threads == 42
     assert metrics.uptime_seconds == 3600.5
 
@@ -68,23 +70,23 @@ def test_parse_jmx_metrics_accepts_only_the_owned_metric_contract() -> None:
             "eolab_jvm_heap_max_bytes 0",
         ),
         VALID_METRICS.replace(
-            'eolab_jvm_gc_collection_count_total{collector="G1 Old Generation"} 2.0\n',
+            'jvm_gc_collection_seconds_count{gc="G1 Old Generation"} 0\n',
             "",
         ),
         VALID_METRICS.replace(
-            'eolab_jvm_gc_collection_count_total{collector="G1 Young Generation"} 7',
-            'eolab_jvm_gc_collection_count_total{collector="G1 Young Generation",path="/secret"} 7',
+            'jvm_gc_collection_seconds_count{gc="G1 Young Generation"} 32',
+            'jvm_gc_collection_seconds_count{gc="G1 Young Generation",path="/secret"} 32',
         ),
         VALID_METRICS.replace(
-            'eolab_jvm_gc_collection_count_total{collector="G1 Young Generation"} 7',
-            'eolab_jvm_gc_collection_count_total{collector="G1 Young Generation"} 7.5',
+            'jvm_gc_collection_seconds_count{gc="G1 Young Generation"} 32',
+            'jvm_gc_collection_seconds_count{gc="G1 Young Generation"} 7.5',
         ),
         VALID_METRICS.replace(
-            'eolab_jvm_gc_collection_time_seconds_total{collector="G1 Young Generation"} 0.75',
-            'eolab_jvm_gc_collection_time_seconds_total{collector="G1 Young Generation"} 1e308',
+            'jvm_gc_collection_seconds_sum{gc="G1 Young Generation"} 0.305',
+            'jvm_gc_collection_seconds_sum{gc="G1 Young Generation"} 1e308',
         ).replace(
-            'eolab_jvm_gc_collection_time_seconds_total{collector="G1 Old Generation"} 0.25',
-            'eolab_jvm_gc_collection_time_seconds_total{collector="G1 Old Generation"} 1e308',
+            'jvm_gc_collection_seconds_sum{gc="G1 Old Generation"} 0.0',
+            'jvm_gc_collection_seconds_sum{gc="G1 Old Generation"} 1e308',
         ),
     ),
     ids=(
