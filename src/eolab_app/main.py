@@ -13,10 +13,8 @@ from eolab_app.catalog.reconciliation import MissingItemReconciler
 from eolab_app.catalog.scanner import ScanManager
 from eolab_app.catalog.search_counts import number_matched_is_estimated
 from eolab_app.catalog.stac_api import StacApiWriter
-from eolab_app.diagnostics import (
-    GetMapRequestTracker,
-    RenderingDiagnosticsService,
-)
+from eolab_app.diagnostics.service import RenderingDiagnosticsService
+from eolab_app.diagnostics.tracker import GetMapRequestTracker
 from eolab_app.raster.assessment import RasterAssessmentService
 from eolab_app.raster.catalog import StacRasterCatalog
 from eolab_app.raster.geoserver import GeoServerRasterPublisher

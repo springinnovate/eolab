@@ -4,7 +4,7 @@ from typing import Protocol
 
 from fastapi import APIRouter, Response
 
-from eolab_app.diagnostics import RenderingDiagnostics
+from eolab_app.diagnostics.models import RenderingDiagnostics
 
 
 class RenderingDiagnosticsProvider(Protocol):
