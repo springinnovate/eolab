@@ -13,7 +13,11 @@ const CATALOG_DATA_ASSET_RENDERING_ELIGIBLE_PROPERTY =
 const COG_MEDIA_TYPE =
     "image/tiff; application=geotiff; profile=cloud-optimized";
 const CATALOG_FILTER_FIELD_PATTERN = /^[a-z][a-z0-9_-]*$/i;
-const CATALOG_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+const CATALOG_DATE_PERIOD_PATTERN =
+    /^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?$/;
+const CATALOG_DATE_SYNTAX_ERROR =
+    "Use date:YYYY, date:YYYY-MM, date:YYYY-MM-DD, or a range " +
+    "between two of these values.";
 export const MOUNTED_GEOTIFF_COLLECTION_ID = "eolab-mounted-geotiffs";
 const RASTER_RENDERING_POLICY = "raster-v2";
 export const MOUNTED_DATASET_TYPES = new Map([
@@ -245,23 +249,22 @@ export class CatalogSearchSyntaxError extends Error {
 }
 
 /**
- * Validate one UTC calendar date used by the Catalog date field.
+ * Expand one UTC calendar date or shortened period to inclusive dates.
  *
- * @param {string} dateText Candidate date in YYYY-MM-DD form.
- * @return {string} Validated date text.
- * @throws {CatalogSearchSyntaxError} If the value is not a real calendar date.
+ * @param {string} dateText Candidate YYYY, YYYY-MM, or YYYY-MM-DD value.
+ * @return {{startDate: string, endDate: string}} First and final dates in the
+ * represented calendar period.
+ * @throws {CatalogSearchSyntaxError} If the value is not a real UTC calendar
+ * date or period.
  */
-function parseCatalogDate(dateText) {
-    const match = CATALOG_DATE_PATTERN.exec(dateText);
+function parseCatalogDatePeriod(dateText) {
+    const match = CATALOG_DATE_PERIOD_PATTERN.exec(dateText);
     if (match === null) {
-        throw new CatalogSearchSyntaxError(
-            "Use date:YYYY-MM-DD or " +
-            "date:YYYY-MM-DD..YYYY-MM-DD."
-        );
+        throw new CatalogSearchSyntaxError(CATALOG_DATE_SYNTAX_ERROR);
     }
     const year = Number(match[1]);
-    const month = Number(match[2]);
-    const day = Number(match[3]);
+    const month = match[2] === undefined ? null : Number(match[2]);
+    const day = match[3] === undefined ? null : Number(match[3]);
     const daysInMonth = [
         31,
         year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)
@@ -280,16 +283,28 @@ function parseCatalogDate(dateText) {
     ];
     if (
         year === 0 ||
-        month < 1 ||
-        month > 12 ||
-        day < 1 ||
-        day > daysInMonth[month - 1]
+        (month !== null && (month < 1 || month > 12)) ||
+        (day !== null && (day < 1 || day > daysInMonth[month - 1]))
     ) {
         throw new CatalogSearchSyntaxError(
             `${dateText} is not a valid UTC calendar date.`
         );
     }
-    return dateText;
+    if (month === null) {
+        return {
+            startDate: `${match[1]}-01-01`,
+            endDate: `${match[1]}-12-31`
+        };
+    }
+    if (day === null) {
+        return {
+            startDate: `${match[1]}-${match[2]}-01`,
+            endDate:
+                `${match[1]}-${match[2]}-` +
+                String(daysInMonth[month - 1]).padStart(2, "0")
+        };
+    }
+    return { startDate: dateText, endDate: dateText };
 }
 
 /**
@@ -345,13 +360,10 @@ export function buildCatalogSearch(searchText) {
                 dateParts.length > 2 ||
                 dateParts.some((datePart) => datePart === "")
             ) {
-                throw new CatalogSearchSyntaxError(
-                    "Use date:YYYY-MM-DD or " +
-                    "date:YYYY-MM-DD..YYYY-MM-DD."
-                );
+                throw new CatalogSearchSyntaxError(CATALOG_DATE_SYNTAX_ERROR);
             }
-            const startDate = parseCatalogDate(dateParts[0]);
-            const endDate = parseCatalogDate(dateParts.at(-1));
+            const { startDate } = parseCatalogDatePeriod(dateParts[0]);
+            const { endDate } = parseCatalogDatePeriod(dateParts.at(-1));
             if (startDate > endDate) {
                 throw new CatalogSearchSyntaxError(
                     "The date range start must not be after its end."
