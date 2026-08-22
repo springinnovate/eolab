@@ -211,6 +211,11 @@ def _validate_end_of_central_directory(
 ) -> None:
     """Bound central-directory parsing before constructing ``ZipFile``.
 
+    ``ZipFile`` remains the authoritative ZIP parser, but its constructor must
+    load the complete central directory before callers can inspect entry count
+    or size. This fixed-size preflight reads only the standard end record so an
+    attacker cannot make that library allocation unbounded.
+
     Args:
         archive_path: Mounted ZIP archive to preflight.
         limits: Resource ceilings for entry count and directory bytes.
@@ -373,6 +378,12 @@ def _validated_shapefiles(
 
 def _validated_member_path(member: ZipInfo) -> PurePosixPath:
     """Return one safe, deterministic archive member path.
+
+    Python's ``ZipFile`` supplies the decoded central-directory name, while its
+    non-extracting path interface deliberately leaves sanitization to callers.
+    This handler passes names directly to GDAL instead of using ``extract()``,
+    so it rejects unsafe aliases rather than normalizing them into a different
+    internal-path identity.
 
     Args:
         member: ZIP central-directory entry to validate.
