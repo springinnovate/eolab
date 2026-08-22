@@ -128,10 +128,12 @@ def build_stac_items(
 ) -> tuple[dict[str, Any], ...]:
     """Build one STAC Item for each valid Shapefile in a mounted ZIP.
 
-    Direct GDAL `/vsizip/` paths avoid temporary extraction. Invalid internal
-    Shapefiles are logged independently so a valid sibling can still be
-    returned. When every discovered Shapefile is invalid, the aggregate error
-    is raised for capture by the scanner's existing per-source error boundary.
+    Direct GDAL `/vsizip/` paths avoid temporary extraction. A valid ZIP with
+    no `.shp` member is an unrelated archive and returns no Items without an
+    error. Invalid internal Shapefiles are logged independently so a valid
+    sibling can still be returned. When every discovered Shapefile is invalid,
+    the aggregate error is raised for capture by the scanner's existing
+    per-source error boundary.
 
     Args:
         source_root: Root directory mounted for scanning.
@@ -139,7 +141,8 @@ def build_stac_items(
         limits: Resource ceilings enforced before GDAL reads archive members.
 
     Returns:
-        Deterministically ordered STAC Items for valid internal Shapefiles.
+        Deterministically ordered STAC Items for valid internal Shapefiles, or
+        an empty tuple when the ZIP contains no Shapefile candidate.
 
     Raises:
         ValueError: If the archive path, structure, entries, resource use, or
@@ -167,7 +170,9 @@ def build_stac_items(
         archived_shapefiles = _validated_shapefiles(archive, limits)
 
     if not archived_shapefiles:
-        raise ValueError("ZIP archive contains no Shapefile datasets")
+        if _archive_signature(archive_path) != archive_signature:
+            raise OSError("ZIP archive changed while metadata was being read")
+        return ()
 
     archive_modified_at = datetime.fromtimestamp(
         archive_signature.modified_nanoseconds / 1_000_000_000,
@@ -300,13 +305,16 @@ def _validated_shapefiles(
         limits: Resource ceilings applied to declared member sizes.
 
     Returns:
-        Internal Shapefiles ordered by their normalized POSIX `.shp` paths.
+        Internal Shapefiles ordered by their normalized POSIX `.shp` paths, or
+        an empty tuple when the archive has no `.shp` member.
 
     Raises:
         ValueError: If an entry is unsafe, ambiguous, encrypted, unsupported,
             or exceeds a resource ceiling.
     """
     members = archive.infolist()
+    if not any(_is_shapefile_candidate(member) for member in members):
+        return ()
     if len(members) > limits.member_count:
         raise ValueError(
             f"ZIP archive contains {len(members)} entries; limit is "
@@ -374,6 +382,27 @@ def _validated_shapefiles(
         shapefiles,
         key=lambda dataset: dataset.shapefile_path.as_posix(),
     ))
+
+
+def _is_shapefile_candidate(member: ZipInfo) -> bool:
+    """Return whether a central-directory entry claims to be a `.shp` file.
+
+    This check deliberately precedes Shapefile-specific member validation so a
+    valid, unrelated ZIP is a successful zero-Item source. Candidate paths are
+    not normalized here: unsafe or ambiguous `.shp` names must proceed to the
+    strict validation path and produce a dataset error.
+
+    Args:
+        member: ZIP central-directory entry to classify.
+
+    Returns:
+        ``True`` when the entry is not a directory and its original name ends
+        in `.shp`, compared case-insensitively.
+    """
+    return (
+        not member.is_dir()
+        and member.orig_filename.casefold().endswith(".shp")
+    )
 
 
 def _validated_member_path(member: ZipInfo) -> PurePosixPath:

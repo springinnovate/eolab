@@ -262,6 +262,32 @@ def test_archive_with_only_invalid_shapefile_reports_dataset_error(
     )
 
 
+def test_archive_without_shapefile_is_successful_zero_item_source(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Skip an unrelated valid ZIP without recording a scanner error.
+
+    Args:
+        tmp_path: Isolated mounted source directory.
+        caplog: Captured logging records used to verify the quiet outcome.
+    """
+    archive_path = tmp_path / "documents.zip"
+    with ZipFile(archive_path, mode="w", compression=ZIP_DEFLATED) as archive:
+        archive.writestr("notes/readme.txt", b"ordinary archive contents")
+
+    with caplog.at_level(logging.WARNING):
+        result = build_dataset_metadata(
+            tmp_path,
+            DatasetCandidate(archive_path, "zipped-shapefile"),
+            create_default_dataset_handler_registry(),
+        )
+
+    assert result.items == ()
+    assert result.error is None
+    assert not caplog.records
+
+
 @pytest.mark.parametrize(
     ("entry_name", "expected_error"),
     (
@@ -304,7 +330,7 @@ def test_archive_rejects_suspicious_compression_ratio(tmp_path: Path) -> None:
     """
     archive_path = tmp_path / "bomb.zip"
     with ZipFile(archive_path, mode="w", compression=ZIP_DEFLATED) as archive:
-        archive.writestr("payload.bin", b"0" * 100_000)
+        archive.writestr("roads.shp", b"0" * 100_000)
     limits = ZipResourceLimits(compression_ratio=2.0)
 
     with pytest.raises(ValueError, match="compression ratio .* exceeds"):
