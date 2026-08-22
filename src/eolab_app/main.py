@@ -1,29 +1,24 @@
-"""Create the EOLab FastAPI application and serve its browser assets."""
+"""Compose the EOLab application, shared clients, and feature routers."""
 
-import asyncio
-import math
-import re
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 
 import httpx2
-import psycopg
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from eolab_app.catalog.pgstac import PgStacCatalogDatabase
 from eolab_app.catalog.reconciliation import MissingItemReconciler
 from eolab_app.catalog.scanner import ScanManager
+from eolab_app.catalog.search_counts import number_matched_is_estimated
 from eolab_app.catalog.stac_api import StacApiWriter
 from eolab_app.diagnostics import (
     GetMapRequestTracker,
-    RenderingDiagnostics,
     RenderingDiagnosticsService,
 )
 from eolab_app.raster.assessment import RasterAssessmentService
 from eolab_app.raster.catalog import StacRasterCatalog
-from eolab_app.raster.errors import RasterFeatureError
 from eolab_app.raster.geoserver import GeoServerRasterPublisher
 from eolab_app.raster.pixel_service import RasterPixelService
 from eolab_app.raster.publication import RasterPublicationService
@@ -32,264 +27,16 @@ from eolab_app.raster.sources import (
     PublishedRasterRegistry,
 )
 from eolab_app.raster.statistics_service import RasterStatisticsService
-from eolab_app.routes.rasters import (
-    create_raster_feature,
-    raster_http_exception,
-)
+from eolab_app.routes.diagnostics import create_diagnostics_router
+from eolab_app.routes.rasters import create_raster_feature
 from eolab_app.routes.scans import create_scan_router
+from eolab_app.routes.stac_proxy import (
+    NumberMatchedEstimateLookup,
+    create_stac_proxy_router,
+)
+from eolab_app.routes.system import create_system_router
+from eolab_app.routes.wms_proxy import create_wms_proxy_router
 from eolab_app.settings import APPLICATION_VERSION_PATH, load_settings
-
-
-PUBLIC_WMS_COMMON_QUERY_PARAMETERS = frozenset(
-    {"request", "service", "version"}
-)
-PUBLIC_WMS_MAP_QUERY_PARAMETERS = PUBLIC_WMS_COMMON_QUERY_PARAMETERS | {
-    "bbox",
-    "bgcolor",
-    "crs",
-    "elevation",
-    "env",
-    "exceptions",
-    "format",
-    "height",
-    "layers",
-    "srs",
-    "styles",
-    "time",
-    "transparent",
-    "width",
-}
-PUBLIC_WMS_QUERY_PARAMETERS = {
-    "getcapabilities": PUBLIC_WMS_COMMON_QUERY_PARAMETERS
-    | {"acceptformats", "acceptversions", "sections", "updatesequence"},
-    "getmap": PUBLIC_WMS_MAP_QUERY_PARAMETERS | {"tiled", "tilesorigin"},
-    "getfeatureinfo": PUBLIC_WMS_MAP_QUERY_PARAMETERS
-    | {
-        "buffer",
-        "feature_count",
-        "i",
-        "info_format",
-        "j",
-        "propertyname",
-        "query_layers",
-        "x",
-        "y",
-    },
-    "getlegendgraphic": PUBLIC_WMS_COMMON_QUERY_PARAMETERS
-    | {
-        "bgcolor",
-        "env",
-        "format",
-        "height",
-        "layer",
-        "legend_options",
-        "rule",
-        "scale",
-        "style",
-        "transparent",
-        "width",
-    },
-}
-RASTER_STYLE_ENVIRONMENT_KEYS = frozenset(
-    {"min", "med", "max", "cmin", "cmed", "cmax"}
-)
-RASTER_STYLE_COLOR_PATTERN = re.compile(r"#[0-9a-fA-F]{6}")
-RASTER_STYLE_ENVIRONMENT_ERROR = (
-    "env must define ordered finite min, med, and max values plus cmin, "
-    "cmed, and cmax six-digit hex colors"
-)
-
-
-def _validate_raster_style_environment(environment: str) -> None:
-    """Validate the six substitutions consumed by the dynamic raster SLD.
-
-    Args:
-        environment: Untrusted WMS ``env`` query value.
-
-    Raises:
-        HTTPException: If the value is not exactly the six finite, ordered
-            threshold and color assignments used by EOLab's raster style.
-    """
-    invalid_environment = HTTPException(
-        status_code=400,
-        detail=RASTER_STYLE_ENVIRONMENT_ERROR,
-    )
-    fields = environment.split(";")
-    if len(environment) > 256 or len(fields) != 6:
-        raise invalid_environment
-
-    assignments = {}
-    for field in fields:
-        name, separator, value = field.partition(":")
-        if separator == "" or name in assignments:
-            raise invalid_environment
-        assignments[name] = value
-    if assignments.keys() != RASTER_STYLE_ENVIRONMENT_KEYS:
-        raise invalid_environment
-
-    try:
-        thresholds = tuple(
-            float(assignments[name]) for name in ("min", "med", "max")
-        )
-    except ValueError as error:
-        raise invalid_environment from error
-    if not (
-        all(math.isfinite(value) for value in thresholds)
-        and thresholds[0] < thresholds[1] < thresholds[2]
-        and all(
-            RASTER_STYLE_COLOR_PATTERN.fullmatch(assignments[name])
-            for name in ("cmin", "cmed", "cmax")
-        )
-    ):
-        raise invalid_environment
-
-
-def _validated_public_wms_query(
-    request: Request,
-) -> tuple[list[tuple[str, str]], str | None, str]:
-    """Validate an untrusted request against the public WMS contract.
-
-    Args:
-        request: Incoming WMS request.
-
-    Returns:
-        Query entries accepted by EOLab's public WMS contract, the one
-        requested data layer or None for GetCapabilities, and the normalized
-        operation established by validation.
-
-    Raises:
-        HTTPException: If the request is not an allowed WMS operation or uses
-            an unsupported or repeated parameter.
-    """
-    query_entries = list(request.query_params.multi_items())
-    normalized_query = {key.lower(): value for key, value in query_entries}
-    if len(normalized_query) != len(query_entries):
-        raise HTTPException(status_code=400, detail="WMS parameters must not repeat")
-    if normalized_query.get("service", "").lower() != "wms":
-        raise HTTPException(status_code=400, detail="service must be WMS")
-
-    operation = normalized_query.get("request", "").lower()
-    allowed_parameters = PUBLIC_WMS_QUERY_PARAMETERS.get(operation)
-    if allowed_parameters is None:
-        raise HTTPException(status_code=400, detail="Unsupported WMS operation")
-    unsupported_parameters = normalized_query.keys() - allowed_parameters
-    if unsupported_parameters:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Unsupported WMS parameter: "
-                f"{sorted(unsupported_parameters)[0]}"
-            ),
-        )
-
-    for dimension_name in ("width", "height"):
-        if dimension_name not in normalized_query:
-            continue
-        try:
-            dimension = int(normalized_query[dimension_name])
-        except ValueError as error:
-            raise HTTPException(
-                status_code=400,
-                detail=f"{dimension_name} must be an integer",
-            ) from error
-        if not 1 <= dimension <= 2048:
-            raise HTTPException(
-                status_code=400,
-                detail=f"{dimension_name} must be between 1 and 2048",
-            )
-    if operation in {"getmap", "getlegendgraphic"}:
-        if normalized_query.get("format", "").lower() != "image/png":
-            raise HTTPException(
-                status_code=400,
-                detail="WMS map and legend format must be image/png",
-            )
-    elif operation == "getfeatureinfo":
-        if normalized_query.get("format", "image/png").lower() != "image/png":
-            raise HTTPException(
-                status_code=400,
-                detail="WMS map format must be image/png",
-            )
-        if normalized_query.get("info_format", "").lower() not in {
-            "application/json",
-            "text/plain",
-        }:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "WMS feature information format must be application/json "
-                    "or text/plain"
-                ),
-            )
-    if "env" in normalized_query:
-        _validate_raster_style_environment(normalized_query["env"])
-    layer_name = None
-    if operation == "getmap":
-        layer_name = normalized_query.get("layers")
-    elif operation == "getfeatureinfo":
-        layer_name = normalized_query.get("layers")
-        if normalized_query.get("query_layers") != layer_name:
-            raise HTTPException(
-                status_code=400,
-                detail="query_layers must match layers",
-            )
-    elif operation == "getlegendgraphic":
-        layer_name = normalized_query.get("layer")
-    style_parameter = "style" if operation == "getlegendgraphic" else "styles"
-    if normalized_query.get(style_parameter, "") not in {
-        "",
-        "dynamic-raster",
-        "eolab:dynamic-raster",
-    }:
-        raise HTTPException(
-            status_code=400,
-            detail="WMS style must be dynamic-raster",
-        )
-    if operation != "getcapabilities" and (
-        not layer_name or "," in layer_name
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail="Exactly one WMS layer must be requested",
-        )
-    return query_entries, layer_name, operation
-
-
-async def _number_matched_is_estimated(
-    search_request_body: bytes,
-    number_matched: int,
-) -> bool:
-    """Report whether pgSTAC supplied its estimate for an Item Search count.
-
-    Args:
-        search_request_body: Original STAC Item Search JSON body.
-        number_matched: Count returned by pgSTAC for that search.
-
-    Returns:
-        Whether the returned count came from pgSTAC's estimate.
-
-    Raises:
-        RuntimeError: If pgSTAC did not retain statistics for the search.
-        UnicodeDecodeError: If the request body is not valid UTF-8.
-        psycopg.Error: If the catalog database query fails.
-    """
-    async with await psycopg.AsyncConnection.connect(
-        options="-c search_path=pgstac,public"
-    ) as connection:
-        cursor = await connection.execute(
-            """
-            SELECT total_count IS NULL
-            FROM pgstac.search_wheres
-            WHERE md5(_where) = md5(
-                pgstac.stac_search_to_where(%s::jsonb)
-            )
-            AND COALESCE(total_count, estimated_count) = %s
-            """,
-            (search_request_body.decode(), number_matched),
-        )
-        result = await cursor.fetchone()
-    if result is None:
-        raise RuntimeError("pgSTAC did not record Item Search count statistics")
-    return result[0]
 
 
 def create_app(
@@ -297,8 +44,8 @@ def create_app(
     catalog_transport: httpx2.AsyncBaseTransport | None = None,
     geoserver_transport: httpx2.AsyncBaseTransport | None = None,
     geoserver_diagnostics_transport: httpx2.AsyncBaseTransport | None = None,
-    number_matched_estimate_lookup: Callable[[bytes, int], Awaitable[bool]] = (
-        _number_matched_is_estimated
+    number_matched_estimate_lookup: NumberMatchedEstimateLookup = (
+        number_matched_is_estimated
     ),
 ) -> FastAPI:
     """Create an application from the deployment environment.
@@ -457,230 +204,28 @@ def create_app(
         error_detail_limit=app_global_configuration.scan_error_detail_limit,
     )
     application.include_router(create_scan_router(scan_manager))
-
-    @application.get("/healthz", tags=["system"])
-    def healthz() -> dict[str, str]:
-        """Report application liveness and the configured release version.
-
-        Returns:
-            The current liveness status.
-        """
-        return {
-            "status": "ok",
-            "service": "eolab",
-            "version": app_global_configuration.app_version,
-        }
-
-    @application.get("/api/config", tags=["system"])
-    def public_configuration() -> dict[str, object]:
-        """Return the browser-safe application configuration.
-
-        Returns:
-            The public application configuration.
-        """
-        return app_global_configuration.as_public_dict()
-
-    @application.get(
-        "/api/rendering/diagnostics",
-        response_model=RenderingDiagnostics,
-        tags=["rendering"],
-    )
-    async def rendering_diagnostics_summary(
-        response: Response,
-    ) -> RenderingDiagnostics:
-        """Return a browser-safe summary of internal rendering state.
-
-        Args:
-            response: Outgoing response whose cache policy is set here.
-
-        Returns:
-            Current allowlisted metrics, or the stable unavailable variant.
-        """
-        response.headers["cache-control"] = "no-store"
-        return await rendering_diagnostics.get()
-
-    @application.api_route(
-        "/stac",
-        methods=["GET", "POST"],
-        include_in_schema=False,
-    )
-    @application.api_route(
-        "/stac/{catalog_path:path}",
-        methods=["GET", "POST"],
-        include_in_schema=False,
-    )
-    async def stac_catalog(
-        request: Request,
-        catalog_path: str = "",
-    ) -> Response:
-        """Expose the internal read-only STAC API at the public ``/stac`` path.
-
-        Args:
-            request: Incoming catalog request.
-            catalog_path: Path below the STAC landing page.
-
-        Returns:
-            The unmodified STAC response body, status, and content type.
-
-        Raises:
-            HTTPException: If a write request is attempted or the catalog
-                service cannot be reached.
-        """
-        if request.method == "POST" and catalog_path.strip("/") != "search":
-            raise HTTPException(
-                status_code=405,
-                detail="Only STAC Item Search accepts POST requests",
-            )
-
-        internal_catalog_url = app_global_configuration.catalog_internal_url.rstrip("/")
-        upstream_url = f"{internal_catalog_url}/{catalog_path}"
-        forwarded_headers = {
-            "accept": request.headers.get("accept", "application/json"),
-            "x-forwarded-host": request.headers.get(
-                "x-forwarded-host",
-                request.headers["host"],
-            ),
-            "x-forwarded-proto": request.headers.get(
-                "x-forwarded-proto",
-                request.url.scheme,
-            ),
-        }
-        if content_type := request.headers.get("content-type"):
-            forwarded_headers["content-type"] = content_type
-        if forwarded_port := request.headers.get("x-forwarded-port"):
-            forwarded_headers["x-forwarded-port"] = forwarded_port
-
-        request_body = await request.body()
-        try:
-            catalog_response = await catalog_client.request(
-                request.method,
-                upstream_url,
-                params=request.query_params,
-                content=request_body,
-                headers=forwarded_headers,
-            )
-        except httpx2.RequestError as error:
-            raise HTTPException(
-                status_code=502,
-                detail="The STAC catalog service is unavailable",
-            ) from error
-
-        response_headers = {}
-        if response_content_type := catalog_response.headers.get("content-type"):
-            response_headers["content-type"] = response_content_type
-        if (
-            catalog_response.is_success
-            and request.method == "POST"
-            and catalog_path.strip("/") == "search"
-        ):
-            number_matched = catalog_response.json()["numberMatched"]
-            response_headers["x-eolab-number-matched-estimated"] = str(
-                await number_matched_estimate_lookup(
-                    request_body,
-                    number_matched,
-                )
-            ).lower()
-        return Response(
-            content=catalog_response.content,
-            status_code=catalog_response.status_code,
-            headers=response_headers,
+    application.include_router(
+        create_system_router(
+            app_global_configuration.app_version,
+            app_global_configuration.as_public_dict(),
         )
-
-    # Claim non-GET methods before the catch-all static mount so they receive
-    # the WMS contract's 405 response instead of being treated as asset paths.
-    @application.api_route(
-        "/geoserver/eolab/wms",
-        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        include_in_schema=False,
     )
-    async def wms(request: Request) -> Response:
-        """Expose supported read-only WMS operations for the EOLab workspace.
-
-        Args:
-            request: Incoming WMS request.
-
-        Returns:
-            GeoServer's response body, status, and safe response headers.
-
-        Raises:
-            HTTPException: If the query is outside the public WMS contract or
-                GeoServer cannot be reached.
-        """
-        if request.method != "GET":
-            raise HTTPException(
-                status_code=405,
-                detail="The public WMS endpoint accepts only GET requests",
-            )
-        query_entries, layer_name, operation = _validated_public_wms_query(request)
-        if layer_name is not None:
-            try:
-                await asyncio.to_thread(
-                    raster_feature.registry.require_current,
-                    layer_name,
-                )
-            except RasterFeatureError as error:
-                raise raster_http_exception(error) from error
-        internal_geoserver_url = (
-            app_global_configuration.geoserver_internal_url.rstrip("/")
+    application.include_router(create_diagnostics_router(rendering_diagnostics))
+    application.include_router(
+        create_stac_proxy_router(
+            catalog_client,
+            app_global_configuration.catalog_internal_url,
+            number_matched_estimate_lookup,
         )
-        forwarded_headers = {
-            "accept": request.headers.get("accept", "*/*"),
-            "x-forwarded-host": request.headers.get(
-                "x-forwarded-host",
-                request.headers["host"],
-            ),
-            "x-forwarded-proto": request.headers.get(
-                "x-forwarded-proto",
-                request.url.scheme,
-            ),
-        }
-        if forwarded_port := request.headers.get("x-forwarded-port"):
-            forwarded_headers["x-forwarded-port"] = forwarded_port
-        try:
-            if operation == "getmap":
-                with get_map_request_tracker.track() as tracked_request:
-                    geoserver_response = await geoserver_wms_client.get(
-                        f"{internal_geoserver_url}/eolab/wms",
-                        params=query_entries,
-                        headers=forwarded_headers,
-                    )
-                    response_media_type = geoserver_response.headers.get(
-                        "content-type",
-                        "",
-                    ).partition(";")[0].lower()
-                    tracked_request.succeeded = (
-                        geoserver_response.is_success
-                        and response_media_type == "image/png"
-                    )
-            else:
-                geoserver_response = await geoserver_wms_client.get(
-                    f"{internal_geoserver_url}/eolab/wms",
-                    params=query_entries,
-                    headers=forwarded_headers,
-                )
-        except httpx2.RequestError as error:
-            raise HTTPException(
-                status_code=502,
-                detail="The rendering service is unavailable",
-            ) from error
-
-        response_headers = {
-            header_name: header_value
-            for header_name in (
-                "cache-control",
-                "content-disposition",
-                "content-type",
-                "etag",
-                "last-modified",
-            )
-            if (header_value := geoserver_response.headers.get(header_name))
-        }
-        response_headers["x-content-type-options"] = "nosniff"
-        return Response(
-            content=geoserver_response.content,
-            status_code=geoserver_response.status_code,
-            headers=response_headers,
+    )
+    application.include_router(
+        create_wms_proxy_router(
+            geoserver_wms_client,
+            app_global_configuration.geoserver_internal_url,
+            raster_feature.registry,
+            get_map_request_tracker,
         )
+    )
 
     static_directory = Path(__file__).parent / "static"
     application.mount(
