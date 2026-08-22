@@ -21,7 +21,7 @@ test("assessCatalogRaster sends only the STAC Item identity", async () => {
     ...MOUNTED_GEOTIFF_ITEM,
     assets: {
       data: {
-        "eolab:rendering": { policy: "raster-v2", eligible: true },
+        "eolab:rendering": { policy: "raster-v3", eligible: true },
       },
     },
   };

@@ -2,10 +2,15 @@
 
 from collections.abc import Callable
 from pathlib import Path
+from urllib.parse import urlsplit
+from urllib.request import url2pathname
 
 import httpx2
 import rasterio
 from rasterio.transform import from_origin
+
+from eolab_app.raster.models import GEOSERVER_READER_CONTRACT
+from eolab_app.raster.sources import source_signature
 
 
 TEST_GEOTIFF_ITEM_ID = "geotiff-0123456789abcdef01234567"
@@ -114,6 +119,17 @@ def mounted_geotiff_item(
     Returns:
         A minimal mounted-GeoTIFF STAC Item.
     """
+    source_uri = urlsplit(asset_href)
+    source_path = (
+        Path(url2pathname(source_uri.path))
+        if source_uri.scheme == "file"
+        else None
+    )
+    assessed_signature = (
+        list(source_signature(source_path))
+        if source_path is not None and source_path.is_file()
+        else [0, 0, 0, 0, 0]
+    )
     return {
         "type": "Feature",
         "id": TEST_GEOTIFF_ITEM_ID,
@@ -138,8 +154,11 @@ def mounted_geotiff_item(
                 "type": asset_media_type,
                 "roles": ["data"],
                 "eolab:rendering": {
-                    "policy": "raster-v2",
+                    "policy": "raster-v3",
                     "eligible": True,
+                    "reader_contract": GEOSERVER_READER_CONTRACT,
+                    "reader_compatible": True,
+                    "source_signature": assessed_signature,
                     "bounded_blocks": True,
                     "block_shapes": [[1, 1]],
                     "overview_factors": [[]],

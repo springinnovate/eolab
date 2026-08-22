@@ -3,19 +3,16 @@
 import asyncio
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
-
-import rasterio
 
 from eolab_app.raster.eligibility import (
     RENDERING_METADATA_KEY,
     RENDERING_POLICY,
-    inspect_raster_renderability,
 )
 from eolab_app.raster.errors import RasterConflictError
 from eolab_app.raster.geoserver import GEOSERVER_WORKSPACE_NAME
 from eolab_app.raster.models import (
     CatalogRasterRequest,
+    GEOSERVER_READER_CONTRACT,
     PublishedRaster,
     SourceSignature,
 )
@@ -37,7 +34,6 @@ class RasterPublicationService:
         publisher: RasterPublisher,
         raster_registry: PublishedRasterRegistry,
         signature_reader: Callable[[Path], SourceSignature] | None = None,
-        eligibility_inspector: Callable[[Path], dict[str, Any]] | None = None,
     ) -> None:
         """Create a serialized publication use case.
 
@@ -47,17 +43,12 @@ class RasterPublicationService:
             publisher: Concrete raster rendering adapter.
             raster_registry: Process-local WMS authorization registry.
             signature_reader: Optional synchronous source identity boundary.
-            eligibility_inspector: Optional synchronous structural inspection
-                boundary.
         """
         self._catalog = catalog
         self._source_resolver = source_resolver
         self._publisher = publisher
         self._raster_registry = raster_registry
         self._signature_reader = signature_reader or source_signature
-        self._eligibility_inspector = (
-            eligibility_inspector or inspect_raster_renderability
-        )
         self._publish_lock = asyncio.Lock()
 
     async def publish(
@@ -92,23 +83,33 @@ class RasterPublicationService:
                 )
             if not rendering_metadata["eligible"]:
                 raise RasterConflictError(rendering_metadata["reason"])
+            if (
+                rendering_metadata.get("reader_contract")
+                != GEOSERVER_READER_CONTRACT
+                or rendering_metadata.get("reader_compatible") is not True
+            ):
+                raise RasterConflictError(
+                    "Visualization unavailable: reassess this raster for the "
+                    "current GeoServer reader."
+                )
 
             try:
                 inspected_signature = await asyncio.to_thread(
                     self._signature_reader,
                     source_path,
                 )
-                current_metadata = await asyncio.to_thread(
-                    self._eligibility_inspector,
-                    source_path,
-                )
-            except (OSError, rasterio.errors.RasterioError) as error:
+            except OSError as error:
                 raise RasterConflictError(
                     "Visualization unavailable: the raster metadata can no "
                     "longer be read."
                 ) from error
-            if not current_metadata["eligible"]:
-                raise RasterConflictError(current_metadata["reason"])
+            if list(inspected_signature) != rendering_metadata.get(
+                "source_signature"
+            ):
+                raise RasterConflictError(
+                    "Visualization unavailable: the raster changed; reassess "
+                    "it before publication."
+                )
 
             resource_name = request.item_id
             await self._publisher.publish(resource_name, source_path)

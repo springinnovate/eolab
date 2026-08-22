@@ -62,8 +62,11 @@ from eolab_app.raster.eligibility import (
     COG_MEDIA_TYPE,
     GEOTIFF_MEDIA_TYPE,
     RENDERING_METADATA_KEY,
+    apply_reader_assessment,
     assess_raster_renderability,
 )
+from eolab_app.raster.models import GEOSERVER_READER_CONTRACT
+from eolab_app.raster.sources import source_signature
 
 
 DATASET_ITEM_BUILDERS = {
@@ -71,6 +74,43 @@ DATASET_ITEM_BUILDERS = {
     ".tiff": build_geotiff_stac_item,
     ".shp": build_shapefile_stac_item,
 }
+
+
+def test_geoserver_crs_regression_fixture_is_rasterio_readable() -> None:
+    """Keep the GeoTools-incompatible regression source valid for Rasterio."""
+    fixture_path = Path(
+        "tests/fixtures/rasters/geoserver-incompatible-eckert-iv.tif"
+    )
+    source_before_assessment = fixture_path.read_bytes()
+
+    with rasterio.open(fixture_path) as dataset:
+        assessment = assess_raster_renderability(dataset)
+
+    assert assessment["eligible"] is True
+    assert fixture_path.read_bytes() == source_before_assessment
+
+
+def test_reader_crs_incompatibility_has_a_stable_specific_reason() -> None:
+    """Distinguish GeoServer CRS encoding from structural policy failures."""
+    assessment = apply_reader_assessment(
+        {
+            "policy": "raster-v3",
+            "eligible": True,
+            "bounded_blocks": True,
+        },
+        reader_contract=GEOSERVER_READER_CONTRACT,
+        reader_compatible=False,
+        reader_reason_code="geoserver_crs_metadata_incompatible",
+    )
+
+    assert assessment["eligible"] is False
+    assert assessment["reason_code"] == (
+        "geoserver_crs_metadata_incompatible"
+    )
+    assert assessment["reason"] == (
+        "Visualization unavailable: GeoServer cannot interpret this "
+        "raster's coordinate-system metadata."
+    )
 
 
 def build_test_registry_items(
@@ -257,7 +297,7 @@ def test_geotiff_uses_embedded_acquisition_datetime(tmp_path: Path) -> None:
     assert FILE_EXTENSION in item["stac_extensions"]
     assert item["assets"]["data"]["file:size"] > 0
     assert item["assets"]["data"][RENDERING_METADATA_KEY] == {
-        "policy": "raster-v2",
+        "policy": "raster-v3",
         "eligible": True,
         "bounded_blocks": True,
         "block_shapes": [[2, 3]],
@@ -265,6 +305,7 @@ def test_geotiff_uses_embedded_acquisition_datetime(tmp_path: Path) -> None:
         "overview_storage": "none",
         "compression": None,
         "estimated_uncompressed_bytes": 6,
+        "source_signature": list(source_signature(geotiff_path)),
     }
     json.dumps(item)
 
@@ -316,7 +357,7 @@ def test_external_geotiff_overviews_are_recorded(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("layout", "eligible", "reason_fragment"),
+    ("layout", "eligible", "reason_code", "reason_fragment"),
     (
         (
             RasterLayout(
@@ -326,6 +367,7 @@ def test_external_geotiff_overviews_are_recorded(tmp_path: Path) -> None:
             ),
             True,
             None,
+            None,
         ),
         (
             RasterLayout(
@@ -334,6 +376,7 @@ def test_external_geotiff_overviews_are_recorded(tmp_path: Path) -> None:
                 block_shapes=((1, 10_000),),
             ),
             False,
+            "blocks_too_large",
             "needs smaller internal blocks",
         ),
         (
@@ -347,6 +390,7 @@ def test_external_geotiff_overviews_are_recorded(tmp_path: Path) -> None:
             ),
             True,
             None,
+            None,
         ),
         (
             RasterLayout(
@@ -358,6 +402,7 @@ def test_external_geotiff_overviews_are_recorded(tmp_path: Path) -> None:
                 compression="DEFLATE",
             ),
             False,
+            "coarsest_overview_decoded_size_exceeded",
             "exceeds 64 MiB of decoded pixel data",
         ),
         (
@@ -370,6 +415,7 @@ def test_external_geotiff_overviews_are_recorded(tmp_path: Path) -> None:
                 compression="DEFLATE",
             ),
             False,
+            "incomplete_overview_pyramid",
             "beginning at 2x without skipped levels",
         ),
         (
@@ -383,6 +429,7 @@ def test_external_geotiff_overviews_are_recorded(tmp_path: Path) -> None:
             ),
             True,
             None,
+            None,
         ),
         (
             RasterLayout(
@@ -393,6 +440,7 @@ def test_external_geotiff_overviews_are_recorded(tmp_path: Path) -> None:
                 overview_factors=((2, 4, 8, 16, 32),),
             ),
             False,
+            "coarsest_overview_dimension_exceeded",
             "wider or taller than 8192 pixels",
         ),
         (
@@ -404,6 +452,7 @@ def test_external_geotiff_overviews_are_recorded(tmp_path: Path) -> None:
                 overview_factors=((2, 4, 8, 16, 32),),
             ),
             False,
+            "blocks_too_large",
             "needs smaller internal blocks",
         ),
         (
@@ -415,6 +464,7 @@ def test_external_geotiff_overviews_are_recorded(tmp_path: Path) -> None:
                 overview_factors=((),) * 3,
             ),
             False,
+            "unsupported_band_count",
             "supports one-band rasters",
         ),
         (
@@ -425,6 +475,7 @@ def test_external_geotiff_overviews_are_recorded(tmp_path: Path) -> None:
                 block_shapes=((10, 10),),
             ),
             False,
+            "unsupported_pixel_type",
             "does not support uint32 pixels",
         ),
     ),
@@ -444,15 +495,25 @@ def test_external_geotiff_overviews_are_recorded(tmp_path: Path) -> None:
 def test_raster_renderability_policy(
     layout: RasterLayout,
     eligible: bool,
+    reason_code: str | None,
     reason_fragment: str | None,
 ) -> None:
-    """Apply one conservative policy to synthetic raster structures."""
+    """Apply one conservative policy to synthetic raster structures.
+
+    Args:
+        layout: Synthetic raster structure under assessment.
+        eligible: Expected structural eligibility decision.
+        reason_code: Expected stable rejection code, or ``None``.
+        reason_fragment: Expected explanatory text fragment, or ``None``.
+    """
     assessment = assess_raster_renderability(layout)
 
     assert assessment["eligible"] is eligible
     if reason_fragment is None:
+        assert "reason_code" not in assessment
         assert "reason" not in assessment
     else:
+        assert assessment["reason_code"] == reason_code
         assert reason_fragment in assessment["reason"]
 
 
@@ -473,6 +534,7 @@ def test_large_raster_requires_internal_overviews(
     )
 
     assert assessment["eligible"] is False
+    assert assessment["reason_code"] == "internal_overviews_required"
     assert assessment["overview_storage"] == "external"
     assert "needs an internal overview pyramid" in assessment["reason"]
 

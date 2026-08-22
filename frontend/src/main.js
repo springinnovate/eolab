@@ -556,7 +556,12 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
         onTileError: reportRasterTileError,
         onLayersChange: refreshCatalogMapAction,
     });
-    /** Apply the scanner-owned visualization decision to the map action. */
+    /**
+     * Apply the scanner-owned visualization decision to the map action.
+     *
+     * @param {Object|null} item Selected Catalog Item.
+     * @return {void}
+     */
     function updateCatalogMapAction(item) {
         const visualization = getRasterVisualization(item);
         const isRetained = item !== null && rasterVisualization.contains(item);
@@ -569,13 +574,15 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
             String(pendingAction !== null)
         );
         catalogLayerToggle.disabled = pendingAction !== null;
-        catalogLayerToggle.hidden = visualization?.eligible === false;
+        catalogLayerToggle.hidden = false;
         catalogLayerToggle.textContent = pendingAction?.buttonText ?? (
             visualization === undefined
                 ? "Assess for visualization"
-                : isRetained
-                    ? "Remove from map layers"
-                    : "Add to map layers"
+                : visualization?.eligible === false
+                    ? "Reassess visualization"
+                    : isRetained
+                        ? "Remove from map layers"
+                        : "Add to map layers"
         );
         catalogLayerStatus.textContent = pendingAction?.statusText ?? (
             isRetained
@@ -951,9 +958,18 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
         loadCatalog.bind(null, true)
     );
     retryPageButton.addEventListener("click", prefetchNextCatalogPage);
-    catalogLayerToggle.addEventListener("click", async () => {
+    /**
+     * Assess, reassess, add, or remove the selected Catalog raster.
+     *
+     * @return {Promise<void>} Completion after the selected action settles.
+     */
+    async function toggleCatalogRaster() {
         const selectedItem = catalogState.selectedItem;
-        if (getRasterVisualization(selectedItem) === undefined) {
+        const visualization = getRasterVisualization(selectedItem);
+        if (
+            visualization === undefined ||
+            visualization?.eligible === false
+        ) {
             const pendingAction = beginCatalogMapAction(
                 selectedItem,
                 "Assessing...",
@@ -987,7 +1003,9 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
                 )) {
                     finishCatalogMapAction(pendingAction);
                     catalogLayerToggle.textContent =
-                        "Assess for visualization";
+                        visualization === undefined
+                            ? "Assess for visualization"
+                            : "Reassess visualization";
                     catalogLayerStatus.textContent = assessmentError.message;
                 }
             } finally {
@@ -1033,7 +1051,8 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
         } finally {
             finishCatalogMapAction(pendingAction);
         }
-    });
+    }
+    catalogLayerToggle.addEventListener("click", toggleCatalogRaster);
 
     await loadCatalog(true);
     return loadCatalog.bind(null, true);

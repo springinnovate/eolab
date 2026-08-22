@@ -15,6 +15,8 @@ from rasterio.transform import from_origin
 
 from eolab_app.catalog.geotiff import build_stac_item as build_geotiff_stac_item
 from eolab_app.main import create_app
+from eolab_app.raster.models import GEOSERVER_READER_CONTRACT
+from eolab_app.raster.sources import source_signature
 from eolab_app.settings import load_settings
 from tests.app_support import (
     GeoServerPublicationMock,
@@ -386,10 +388,31 @@ def test_one_outdated_raster_is_assessed_and_updated(
             return httpx2.Response(200, json="Successfully upserted 1 item.")
         raise AssertionError(f"Unexpected catalog request: {request}")
 
+    def geoserver_response(request: httpx2.Request) -> httpx2.Response:
+        """Return one compatible deployed-reader assessment.
+
+        Args:
+            request: Captured authenticated GeoServer assessment request.
+
+        Returns:
+            Controlled compatible reader response.
+        """
+        assert request.url.path == (
+            "/geoserver/rest/eolab/reader-assessments"
+        )
+        assert request.method == "POST"
+        assert request.content.decode() == source_path.resolve().as_uri()
+        return httpx2.Response(200, json={
+            "contract": GEOSERVER_READER_CONTRACT,
+            "compatible": True,
+            "reasonCode": None,
+        })
+
     with TestClient(
         create_app(
             version_file_path,
             catalog_transport=httpx2.MockTransport(catalog_response),
+            geoserver_transport=httpx2.MockTransport(geoserver_response),
         )
     ) as client:
         request_body = {
@@ -407,8 +430,11 @@ def test_one_outdated_raster_is_assessed_and_updated(
 
     assert first_response.status_code == 200
     assert first_response.json()["assets"]["data"]["eolab:rendering"] == {
-        "policy": "raster-v2",
+        "policy": "raster-v3",
         "eligible": True,
+        "reader_contract": GEOSERVER_READER_CONTRACT,
+        "reader_compatible": True,
+        "source_signature": list(source_signature(source_path)),
         "bounded_blocks": True,
         "block_shapes": [[1, 1]],
         "overview_factors": [[]],
@@ -421,6 +447,7 @@ def test_one_outdated_raster_is_assessed_and_updated(
         "GET",
         "POST",
         "GET",
+        "POST",
     ]
 
 
@@ -433,8 +460,9 @@ def test_one_outdated_raster_is_assessed_and_updated(
         ),
         (
             {
-                "policy": "raster-v2",
+                "policy": "raster-v3",
                 "eligible": False,
+                "reason_code": "blocks_too_large",
                 "reason": (
                     "Visualization unavailable: this raster needs smaller "
                     "internal blocks."
@@ -500,23 +528,14 @@ def test_raster_publication_reassesses_a_changed_source(
     tmp_path: Path,
     version_file_path: Path,
 ) -> None:
-    """Refuse a source that became unsuitable after its catalog scan."""
+    """Require reassessment when source identity changed after assessment."""
     source_path = tmp_path / "raster.tif"
     _write_geotiff(source_path)
     monkeypatch.setenv("SCAN_MOUNT_PATH", str(tmp_path))
     monkeypatch.setenv("SCAN_PATHS_WITHIN_MOUNT", '["."]')
     item = _mounted_geotiff_item(source_path.as_uri())
     geoserver_requests = []
-    monkeypatch.setattr(
-        "eolab_app.raster.publication.inspect_raster_renderability",
-        lambda _: {
-            "eligible": False,
-            "reason": (
-                "Visualization unavailable: the coarsest internal overview "
-                "exceeds 64 MiB of decoded pixel data."
-            ),
-        },
-    )
+    source_path.write_bytes(b"changed after assessment")
 
     def catalog_response(_: httpx2.Request) -> httpx2.Response:
         return httpx2.Response(200, json=item)
@@ -542,8 +561,8 @@ def test_raster_publication_reassesses_a_changed_source(
     assert response.status_code == 409
     assert response.json() == {
         "detail": (
-            "Visualization unavailable: the coarsest internal overview "
-            "exceeds 64 MiB of decoded pixel data."
+            "Visualization unavailable: the raster changed; reassess it "
+            "before publication."
         )
     }
     assert geoserver_requests == []

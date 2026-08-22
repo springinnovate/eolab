@@ -70,6 +70,7 @@ def build_stac_item(source_root: Path, geotiff_path: Path) -> dict[str, Any]:
         A STAC Item containing the raster footprint and spatial metadata.
 
     Raises:
+        OSError: If filesystem metadata for the GeoTIFF cannot be read.
         ValueError: If the path escapes the source root, raster spatial metadata
             is incomplete, or an embedded acquisition time is malformed.
         rasterio.errors.RasterioError: If GDAL cannot read the file.
@@ -141,6 +142,13 @@ def build_stac_item(source_root: Path, geotiff_path: Path) -> dict[str, Any]:
                 band["nodata"] = _serialize_nodata(nodata_value)
             raster_bands.append(band)
         rendering_metadata = assess_raster_renderability(dataset)
+        rendering_metadata["source_signature"] = [
+            file_status.st_dev,
+            file_status.st_ino,
+            file_status.st_size,
+            file_status.st_mtime_ns,
+            file_status.st_ctime_ns,
+        ]
         media_type = (
             COG_MEDIA_TYPE
             if dataset.tags(ns="IMAGE_STRUCTURE").get("LAYOUT") == "COG"

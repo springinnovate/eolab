@@ -3,7 +3,10 @@
 from pathlib import Path
 from typing import Any, Protocol
 
-from eolab_app.raster.models import CatalogRasterRequest
+from eolab_app.raster.models import (
+    CatalogRasterRequest,
+    RasterReaderAssessment,
+)
 
 
 class RasterCatalog(Protocol):
@@ -52,5 +55,28 @@ class RasterPublisher(Protocol):
 
         Raises:
             RasterUpstreamError: If publication or styling fails.
+        """
+        ...
+
+
+class RasterReaderAssessor(Protocol):
+    """Read-only deployed-reader boundary required by raster assessment.
+
+    Implementations acquire source metadata without publishing or modifying a
+    GeoServer catalog resource.
+    """
+
+    async def assess(self, source_path: Path) -> RasterReaderAssessment:
+        """Ask the deployed reader to acquire one mounted GeoTIFF.
+
+        Args:
+            source_path: Canonical mounted GeoTIFF path.
+
+        Returns:
+            Stable reader compatibility result.
+
+        Raises:
+            RasterUpstreamError: If the reader assessment service is
+                unavailable or violates its response contract.
         """
         ...
