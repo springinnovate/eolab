@@ -5,8 +5,8 @@ from typing import Any, NoReturn
 import httpx2
 
 
-CATALOG_WRITE_TIMEOUT_SECONDS = 120
-CATALOG_ERROR_DETAIL_LIMIT = 500
+DEFAULT_CATALOG_WRITE_TIMEOUT_SECONDS = 120
+DEFAULT_CATALOG_ERROR_DETAIL_LIMIT = 500
 
 
 class StacApiWriter:
@@ -16,15 +16,23 @@ class StacApiWriter:
         self,
         catalog_internal_url: str,
         transport: httpx2.AsyncBaseTransport | None = None,
+        *,
+        write_timeout_seconds: float = DEFAULT_CATALOG_WRITE_TIMEOUT_SECONDS,
+        error_detail_limit: int = DEFAULT_CATALOG_ERROR_DETAIL_LIMIT,
     ) -> None:
         """Configure the internal catalog client.
 
         Args:
             catalog_internal_url: Internal STAC API base URL.
             transport: Optional HTTP transport used by tests.
+            write_timeout_seconds: Per-operation upstream HTTP timeout.
+            error_detail_limit: Maximum upstream response characters retained
+                in a raised catalog error.
         """
         self.catalog_internal_url = catalog_internal_url.rstrip("/")
         self.transport = transport
+        self.write_timeout_seconds = write_timeout_seconds
+        self.error_detail_limit = error_detail_limit
 
     def session(self) -> "StacApiWriteSession":
         """Create an unopened write session for one scan.
@@ -32,7 +40,12 @@ class StacApiWriter:
         Returns:
             Scan-scoped STAC Transactions session.
         """
-        return StacApiWriteSession(self.catalog_internal_url, self.transport)
+        return StacApiWriteSession(
+            self.catalog_internal_url,
+            self.transport,
+            self.write_timeout_seconds,
+            self.error_detail_limit,
+        )
 
 
 class StacApiWriteSession:
@@ -42,15 +55,22 @@ class StacApiWriteSession:
         self,
         catalog_internal_url: str,
         transport: httpx2.AsyncBaseTransport | None,
+        write_timeout_seconds: float,
+        error_detail_limit: int,
     ) -> None:
         """Configure a scan-scoped write session.
 
         Args:
             catalog_internal_url: Internal STAC API base URL.
             transport: Optional HTTP transport used by tests.
+            write_timeout_seconds: Per-operation upstream HTTP timeout.
+            error_detail_limit: Maximum upstream response characters retained
+                in a raised catalog error.
         """
         self.catalog_internal_url = catalog_internal_url
         self.transport = transport
+        self.write_timeout_seconds = write_timeout_seconds
+        self.error_detail_limit = error_detail_limit
         self.client: httpx2.AsyncClient | None = None
 
     async def __aenter__(self) -> "StacApiWriteSession":
@@ -62,7 +82,7 @@ class StacApiWriteSession:
         self.client = httpx2.AsyncClient(
             base_url=self.catalog_internal_url,
             transport=self.transport,
-            timeout=CATALOG_WRITE_TIMEOUT_SECONDS,
+            timeout=self.write_timeout_seconds,
         )
         return self
 
@@ -98,10 +118,10 @@ class StacApiWriteSession:
         elif existing_response.is_success:
             write_response = await self.client.put(resource_path, json=collection)
         else:
-            raise_catalog_error(existing_response)
+            raise_catalog_error(existing_response, self.error_detail_limit)
 
         if not write_response.is_success:
-            raise_catalog_error(write_response)
+            raise_catalog_error(write_response, self.error_detail_limit)
 
     async def upsert_items(self, items: list[dict[str, Any]]) -> None:
         """Create or replace one nonempty, single-Collection Item batch.
@@ -126,19 +146,23 @@ class StacApiWriteSession:
             },
         )
         if not write_response.is_success:
-            raise_catalog_error(write_response)
+            raise_catalog_error(write_response, self.error_detail_limit)
 
 
-def raise_catalog_error(response: httpx2.Response) -> NoReturn:
+def raise_catalog_error(
+    response: httpx2.Response,
+    detail_limit: int,
+) -> NoReturn:
     """Raise a bounded error for an unsuccessful STAC API response.
 
     Args:
         response: Unsuccessful STAC API response.
+        detail_limit: Maximum upstream response characters retained.
 
     Raises:
         RuntimeError: Always, with bounded upstream response text.
     """
-    detail = response.text[:CATALOG_ERROR_DETAIL_LIMIT]
+    detail = response.text[:detail_limit]
     raise RuntimeError(
         f"STAC API returned {response.status_code} for {response.request.method} "
         f"{response.request.url.path}: {detail}"

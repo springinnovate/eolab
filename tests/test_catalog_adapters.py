@@ -22,13 +22,18 @@ def test_pgstac_inventory_requires_scanner_owned_source_assets() -> None:
 
 def test_stac_api_writer_bounds_upstream_error_detail() -> None:
     """Expose status and path without retaining an unbounded response."""
+    request_timeouts: list[float] = []
+
     async def handler(request: httpx2.Request) -> httpx2.Response:
+        request_timeouts.append(request.extensions["timeout"]["read"])
         return httpx2.Response(503, text="x" * 1000, request=request)
 
     async def write_collection() -> None:
         writer = StacApiWriter(
             "http://catalog:8080",
             httpx2.MockTransport(handler),
+            write_timeout_seconds=17,
+            error_detail_limit=23,
         )
         async with writer.session() as session:
             await session.upsert_collection({"id": "test"})
@@ -39,6 +44,7 @@ def test_stac_api_writer_bounds_upstream_error_detail() -> None:
         assert str(error).startswith(
             "STAC API returned 503 for GET /collections/test: "
         )
-        assert len(str(error).rsplit(": ", 1)[1]) == 500
+        assert len(str(error).rsplit(": ", 1)[1]) == 23
+        assert request_timeouts == [17]
     else:
         raise AssertionError("upstream rejection was accepted")

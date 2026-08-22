@@ -39,7 +39,10 @@ from eolab_app.catalog.pgstac import (
     PgStacCatalogDatabase,
     catalog_item_source,
 )
-from eolab_app.catalog.reconciliation import catalog_item_is_missing
+from eolab_app.catalog.reconciliation import (
+    MissingItemReconciler,
+    catalog_item_is_missing,
+)
 from eolab_app.catalog.scanner import ScanManager
 from eolab_app.catalog.shapefile import (
     FALLBACK_DATETIME_DESCRIPTION as SHAPEFILE_DATETIME_DESCRIPTION,
@@ -1500,6 +1503,14 @@ def test_reconciliation_checks_and_deletes_in_bounded_batches(
         2,
         2,
         40,
+        reconciler=MissingItemReconciler(
+            tmp_path,
+            catalog_database,
+            40,
+            page_size=37,
+            concurrency=3,
+            spool_memory_bytes=128,
+        ),
     )
 
     async def run_scan() -> dict[str, Any]:
@@ -1513,7 +1524,7 @@ def test_reconciliation_checks_and_deletes_in_bounded_batches(
     assert status["reconciliation"]["checked"] == 205
     assert status["reconciliation"]["missing"] == 205
     assert status["reconciliation"]["removed"] == 205
-    assert catalog_database.requested_page_sizes == [500]
+    assert catalog_database.requested_page_sizes == [37]
     assert list(map(len, catalog_database.deleted_batches)) == [40] * 5 + [5]
 
 
@@ -1982,6 +1993,7 @@ def test_scan_caps_error_details_without_losing_failure_count(
         8,
         2,
         100,
+        error_detail_limit=7,
     )
 
     async def run_scan() -> dict[str, Any]:
@@ -1995,7 +2007,7 @@ def test_scan_caps_error_details_without_losing_failure_count(
     assert status["state"] == "completed"
     assert status["processed"] == 105
     assert status["failed"] == 105
-    assert len(status["errors"]) == 100
+    assert len(status["errors"]) == 7
     assert status["errorsTruncated"] is True
 
 

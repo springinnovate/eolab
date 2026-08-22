@@ -36,6 +36,12 @@ DEFAULT_ENVIRONMENT = {
     "SCAN_WORKER_COUNT": "8",
     "SCAN_WRITER_COUNT": "4",
     "SCAN_BATCH_SIZE": "100",
+    "SCAN_ERROR_DETAIL_LIMIT": "100",
+    "SCAN_RECONCILIATION_PAGE_SIZE": "500",
+    "SCAN_RECONCILIATION_CONCURRENCY": "8",
+    "SCAN_RECONCILIATION_SPOOL_MEMORY_BYTES": "1048576",
+    "SCAN_CATALOG_WRITE_TIMEOUT_SECONDS": "120",
+    "SCAN_CATALOG_ERROR_DETAIL_LIMIT": "500",
     "BASEMAP_URL": "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
     "BASEMAP_ATTRIBUTION": "&copy; OpenStreetMap contributors",
     "INITIAL_LATITUDE": "20",
@@ -185,6 +191,34 @@ def test_configuration_endpoint_reads_environment(
     assert "valid-admin-password" not in repr(load_settings(version_file_path))
     assert "http://geoserver:8080" not in response.text
     assert "http://geoserver:9404" not in response.text
+
+
+def test_load_settings_reads_scan_operational_limits(
+    configured_environment: None,
+    monkeypatch: pytest.MonkeyPatch,
+    version_file_path: Path,
+) -> None:
+    """Load deployer-controlled scan bounds without exposing them publicly."""
+    configured_limits = {
+        "SCAN_ERROR_DETAIL_LIMIT": "17",
+        "SCAN_RECONCILIATION_PAGE_SIZE": "211",
+        "SCAN_RECONCILIATION_CONCURRENCY": "3",
+        "SCAN_RECONCILIATION_SPOOL_MEMORY_BYTES": "4096",
+        "SCAN_CATALOG_WRITE_TIMEOUT_SECONDS": "45.5",
+        "SCAN_CATALOG_ERROR_DETAIL_LIMIT": "73",
+    }
+    for environment_variable_name, value in configured_limits.items():
+        monkeypatch.setenv(environment_variable_name, value)
+
+    settings = load_settings(version_file_path)
+
+    assert settings.scan_error_detail_limit == 17
+    assert settings.scan_reconciliation_page_size == 211
+    assert settings.scan_reconciliation_concurrency == 3
+    assert settings.scan_reconciliation_spool_memory_bytes == 4096
+    assert settings.scan_catalog_write_timeout_seconds == 45.5
+    assert settings.scan_catalog_error_detail_limit == 73
+    assert not set(configured_limits).intersection(settings.as_public_dict())
 
 
 def test_rendering_diagnostics_exposes_only_the_safe_summary(
@@ -1904,6 +1938,11 @@ def test_load_settings_rejects_blank_version(
         ("SCAN_WORKER_COUNT", "1.5"),
         ("SCAN_WRITER_COUNT", "1.5"),
         ("SCAN_BATCH_SIZE", "1.5"),
+        ("SCAN_ERROR_DETAIL_LIMIT", "1.5"),
+        ("SCAN_RECONCILIATION_PAGE_SIZE", "1.5"),
+        ("SCAN_RECONCILIATION_CONCURRENCY", "1.5"),
+        ("SCAN_RECONCILIATION_SPOOL_MEMORY_BYTES", "1.5"),
+        ("SCAN_CATALOG_ERROR_DETAIL_LIMIT", "1.5"),
         ("GEOSERVER_WMS_RENDER_COUNT", "1.5"),
     ),
 )
@@ -1977,6 +2016,13 @@ def test_load_settings_rejects_invalid_scan_path_lists(
         ("SCAN_WORKER_COUNT", "0"),
         ("SCAN_WRITER_COUNT", "0"),
         ("SCAN_BATCH_SIZE", "0"),
+        ("SCAN_ERROR_DETAIL_LIMIT", "0"),
+        ("SCAN_RECONCILIATION_PAGE_SIZE", "0"),
+        ("SCAN_RECONCILIATION_CONCURRENCY", "0"),
+        ("SCAN_RECONCILIATION_SPOOL_MEMORY_BYTES", "0"),
+        ("SCAN_CATALOG_WRITE_TIMEOUT_SECONDS", "0"),
+        ("SCAN_CATALOG_WRITE_TIMEOUT_SECONDS", "nan"),
+        ("SCAN_CATALOG_ERROR_DETAIL_LIMIT", "0"),
         ("GEOSERVER_WMS_RENDER_COUNT", "0"),
     ),
 )

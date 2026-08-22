@@ -13,9 +13,9 @@ from eolab_app.catalog.models import CatalogItemSource, ReconciliationStatus
 from eolab_app.catalog.ports import CatalogDatabase
 
 
-RECONCILIATION_PAGE_SIZE = 500
-RECONCILIATION_CHECK_CONCURRENCY = 8
-RECONCILIATION_MEMORY_LIMIT_BYTES = 1024 * 1024
+DEFAULT_RECONCILIATION_PAGE_SIZE = 500
+DEFAULT_RECONCILIATION_CONCURRENCY = 8
+DEFAULT_RECONCILIATION_SPOOL_MEMORY_BYTES = 1024 * 1024
 
 
 class MissingItemReconciler:
@@ -26,6 +26,10 @@ class MissingItemReconciler:
         source_root: Path,
         catalog_database: CatalogDatabase,
         item_batch_size: int,
+        *,
+        page_size: int = DEFAULT_RECONCILIATION_PAGE_SIZE,
+        concurrency: int = DEFAULT_RECONCILIATION_CONCURRENCY,
+        spool_memory_bytes: int = DEFAULT_RECONCILIATION_SPOOL_MEMORY_BYTES,
     ) -> None:
         """Configure missing-Item reconciliation.
 
@@ -33,11 +37,18 @@ class MissingItemReconciler:
             source_root: Root of the mounted scan source.
             catalog_database: Catalog inventory and transactional deletion port.
             item_batch_size: Maximum keys in each database delete batch.
+            page_size: Maximum catalog Items loaded for each inventory page.
+            concurrency: Maximum simultaneous mounted-file checks.
+            spool_memory_bytes: Missing-key bytes retained in memory before
+                spilling to a temporary file.
 
         """
         self.source_root = source_root
         self.catalog_database = catalog_database
         self.item_batch_size = item_batch_size
+        self.page_size = page_size
+        self.concurrency = concurrency
+        self.spool_memory_bytes = spool_memory_bytes
 
     async def reconcile(self, status: ReconciliationStatus) -> int:
         """Verify source Assets and delete only proven stale Items.
@@ -56,17 +67,17 @@ class MissingItemReconciler:
                 self.source_root,
             )
             with tempfile.SpooledTemporaryFile(
-                max_size=RECONCILIATION_MEMORY_LIMIT_BYTES,
+                max_size=self.spool_memory_bytes,
                 mode="w+t",
                 encoding="utf-8",
             ) as missing_items:
                 async for item_page in self.catalog_database.scanner_item_pages(
                     SCAN_COLLECTION_IDENTIFIERS,
-                    RECONCILIATION_PAGE_SIZE,
+                    self.page_size,
                 ):
                     for item_group in batched(
                         item_page,
-                        RECONCILIATION_CHECK_CONCURRENCY,
+                        self.concurrency,
                     ):
                         availability = await asyncio.gather(*(
                             asyncio.to_thread(

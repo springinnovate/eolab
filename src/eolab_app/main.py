@@ -13,6 +13,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.staticfiles import StaticFiles
 
 from eolab_app.catalog.pgstac import PgStacCatalogDatabase
+from eolab_app.catalog.reconciliation import MissingItemReconciler
 from eolab_app.catalog.scanner import ScanManager
 from eolab_app.catalog.stac_api import StacApiWriter
 from eolab_app.diagnostics import (
@@ -396,6 +397,7 @@ def create_app(
         version=app_global_configuration.app_version,
         lifespan=lifespan,
     )
+    catalog_database = PgStacCatalogDatabase()
     scan_manager = ScanManager(
         app_global_configuration.scan_mount_path,
         tuple(
@@ -405,11 +407,30 @@ def create_app(
         StacApiWriter(
             app_global_configuration.catalog_internal_url,
             catalog_transport,
+            write_timeout_seconds=(
+                app_global_configuration.scan_catalog_write_timeout_seconds
+            ),
+            error_detail_limit=(
+                app_global_configuration.scan_catalog_error_detail_limit
+            ),
         ),
-        PgStacCatalogDatabase(),
+        catalog_database,
         app_global_configuration.scan_worker_count,
         app_global_configuration.scan_writer_count,
         app_global_configuration.scan_batch_size,
+        reconciler=MissingItemReconciler(
+            app_global_configuration.scan_mount_path,
+            catalog_database,
+            app_global_configuration.scan_batch_size,
+            page_size=app_global_configuration.scan_reconciliation_page_size,
+            concurrency=(
+                app_global_configuration.scan_reconciliation_concurrency
+            ),
+            spool_memory_bytes=(
+                app_global_configuration.scan_reconciliation_spool_memory_bytes
+            ),
+        ),
+        error_detail_limit=app_global_configuration.scan_error_detail_limit,
     )
     application.include_router(create_scan_router(scan_manager))
 

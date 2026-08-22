@@ -30,7 +30,7 @@ from eolab_app.catalog.ports import (
 from eolab_app.catalog.reconciliation import MissingItemReconciler
 
 
-MAX_SCAN_ERROR_DETAILS = 100
+DEFAULT_SCAN_ERROR_DETAIL_LIMIT = 100
 
 
 class ScanManager:
@@ -49,6 +49,7 @@ class ScanManager:
         discovery: DatasetDiscovery | None = None,
         metadata_pipeline: DatasetMetadataReader | None = None,
         reconciler: CatalogReconciler | None = None,
+        error_detail_limit: int = DEFAULT_SCAN_ERROR_DETAIL_LIMIT,
     ) -> None:
         """Configure the scanner and its bounded phase collaborators.
 
@@ -63,6 +64,8 @@ class ScanManager:
             discovery: Optional filesystem discovery collaborator.
             metadata_pipeline: Optional metadata extraction collaborator.
             reconciler: Optional destructive reconciliation collaborator.
+            error_detail_limit: Maximum individual failure details retained in
+                the public scan status.
 
         """
         self.source_root = source_root
@@ -71,6 +74,7 @@ class ScanManager:
         self.metadata_worker_count = metadata_worker_count
         self.catalog_writer_count = catalog_writer_count
         self.item_batch_size = item_batch_size
+        self.error_detail_limit = error_detail_limit
         self.discovery = discovery or FilesystemDatasetDiscovery(
             source_root,
             source_paths,
@@ -205,9 +209,9 @@ class ScanManager:
         """
         self._status.discovered = len(dataset_candidates)
         self._status.failed = len(discovery_errors)
-        self._status.errors.extend(discovery_errors[:MAX_SCAN_ERROR_DETAILS])
+        self._status.errors.extend(discovery_errors[: self.error_detail_limit])
         self._status.errors_truncated = (
-            len(discovery_errors) > MAX_SCAN_ERROR_DETAILS
+            len(discovery_errors) > self.error_detail_limit
         )
         self._status.state = "scanning"
 
@@ -337,7 +341,7 @@ class ScanManager:
         if metadata_result.error is None:
             return
         self._status.failed += 1
-        if len(self._status.errors) < MAX_SCAN_ERROR_DETAILS:
+        if len(self._status.errors) < self.error_detail_limit:
             self._status.errors.append({
                 "path": relative_path,
                 "error": metadata_result.error,
