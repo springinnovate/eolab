@@ -13,6 +13,7 @@ import ijson
 from eolab_app.catalog.vector import (
     MOUNTED_VECTOR_COLLECTION_ID,
     TABLE_EXTENSION,
+    build_bbox_polygon,
     build_vector_table_properties,
 )
 
@@ -332,17 +333,7 @@ def build_stac_item(source_root: Path, geojson_path: Path) -> dict[str, Any]:
             field_columns,
         ),
     }
-    west, south, east, north = bbox
-    footprint = {
-        "type": "Polygon",
-        "coordinates": [[
-            [west, south],
-            [east, south],
-            [east, north],
-            [west, north],
-            [west, south],
-        ]],
-    }
+    footprint = build_bbox_polygon(bbox)
     item_identifier = hashlib.sha256(
         relative_path_text.encode("utf-8")
     ).hexdigest()

@@ -2,7 +2,24 @@
 
 import pytest
 
-from eolab_app.catalog.vector import build_vector_table_properties
+from eolab_app.catalog.vector import (
+    build_bbox_polygon,
+    build_vector_table_properties,
+)
+
+
+def test_bbox_polygon_closes_wgs84_extent() -> None:
+    """Build the shared vector footprint without changing coordinate order."""
+    assert build_bbox_polygon([-123.0, 45.0, -122.0, 46.0]) == {
+        "type": "Polygon",
+        "coordinates": [[
+            [-123.0, 45.0],
+            [-122.0, 45.0],
+            [-122.0, 46.0],
+            [-123.0, 46.0],
+            [-123.0, 45.0],
+        ]],
+    }
 
 
 def test_vector_table_properties_are_format_neutral_and_data_driven() -> None:

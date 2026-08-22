@@ -19,6 +19,9 @@ from eolab_app.catalog.shapefile import (
     build_stac_item as build_shapefile_stac_item,
     discover_shapefile_datasets,
 )
+from eolab_app.catalog.zipped_shapefile import (
+    build_stac_items as build_zipped_shapefile_stac_items,
+)
 
 
 DatasetItem = dict[str, Any]
@@ -312,6 +315,48 @@ def build_shapefile_items(
     ),)
 
 
+def discover_zipped_shapefiles(
+    directory_path: Path,
+    directory_names: tuple[str, ...],
+    file_names: tuple[str, ...],
+) -> HandlerDiscovery:
+    """Recognize ZIP archives as Shapefile container datasets.
+
+    Args:
+        directory_path: Directory containing the listed entries.
+        directory_names: Sorted child directory names, unused by this handler.
+        file_names: Sorted child file names.
+
+    Returns:
+        ZIP file matches without directory pruning.
+    """
+    del directory_names
+    return HandlerDiscovery(matches=tuple(
+        DatasetMatch(directory_path / file_name)
+        for file_name in file_names
+        if Path(file_name).suffix.lower() == ".zip"
+    ))
+
+
+def build_zipped_shapefile_items(
+    source_root: Path,
+    candidate: DatasetCandidate,
+) -> tuple[DatasetItem, ...]:
+    """Build Items represented by Shapefiles inside one mounted ZIP.
+
+    Args:
+        source_root: Root directory mounted for scanning.
+        candidate: ZIP container selected during discovery.
+
+    Returns:
+        Zero or more Items, one for each valid internal Shapefile.
+
+    Raises:
+        Exception: Propagates ZIP validation and metadata failures.
+    """
+    return build_zipped_shapefile_stac_items(source_root, candidate.path)
+
+
 def discover_geojson_feature_collections(
     directory_path: Path,
     directory_names: tuple[str, ...],
@@ -360,8 +405,8 @@ def create_default_dataset_handler_registry() -> DatasetHandlerRegistry:
     """Create the explicit registry for supported mounted formats.
 
     Returns:
-        Registry containing GeoTIFF, GeoPackage, mounted Shapefile, and
-        GeoJSON handlers.
+        Registry containing GeoTIFF, GeoPackage, mounted Shapefile,
+        ZIP/Shapefile, and GeoJSON handlers.
     """
     return DatasetHandlerRegistry(handlers=(
         DatasetHandler(
@@ -378,6 +423,11 @@ def create_default_dataset_handler_registry() -> DatasetHandlerRegistry:
             name="shapefile",
             discover=discover_mounted_shapefiles,
             build_items=build_shapefile_items,
+        ),
+        DatasetHandler(
+            name="zipped-shapefile",
+            discover=discover_zipped_shapefiles,
+            build_items=build_zipped_shapefile_items,
         ),
         DatasetHandler(
             name="geojson",
