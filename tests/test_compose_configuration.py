@@ -100,8 +100,9 @@ def test_geoserver_has_bounded_tunable_rendering_resources() -> None:
         "ea5bf25025a1d"
         in geoserver_dockerfile
     )
-    assert 'export EXTRA_JAVA_OPTS="-Xms256m -Xmx${GEOSERVER_MAX_HEAP_SIZE}"' in (
-        startup
+    assert (
+        'export EXTRA_JAVA_OPTS="-Xms256m -Xmx${GEOSERVER_MAX_HEAP_SIZE} '
+        in startup
     )
     assert "'^[1-9][0-9]*$'" in startup
     assert "'^[1-9][0-9]*[mMgG]$'" in startup
@@ -109,6 +110,59 @@ def test_geoserver_has_bounded_tunable_rendering_resources() -> None:
     assert "printf 'ows.wms.getmap=%s\\n'" in startup
     assert "ActiveProcessorCount" not in compose
     assert "ActiveProcessorCount" not in geoserver_dockerfile
+
+
+def test_geoserver_exports_only_allowlisted_jvm_metrics_internally() -> None:
+    """Pin JVM instrumentation without publishing its raw Prometheus endpoint."""
+    repository_root = COMPOSE_PATH.parent
+    compose = COMPOSE_PATH.read_text(encoding="utf-8")
+    geoserver_dockerfile = (repository_root / "Dockerfile.geoserver").read_text(
+        encoding="utf-8"
+    )
+    startup = (
+        repository_root / "deployment" / "start-geoserver.sh"
+    ).read_text(encoding="utf-8")
+    exporter_configuration = (
+        repository_root / "geoserver" / "jmx-exporter.yml"
+    ).read_text(encoding="utf-8")
+    geoserver_service = compose.split("  geoserver:\n", 1)[1].split(
+        "  geoserver-init:\n", 1
+    )[0]
+    app_service = compose.split("  app:\n", 1)[1].split("\nvolumes:\n", 1)[0]
+
+    assert "jmx_prometheus_javaagent-1.6.0.jar" in geoserver_dockerfile
+    assert (
+        "sha256:a95983fd96e865d2bcdf911cc500e7c82808c27ab9fd226bf96732b6c3d8c46e"
+        in geoserver_dockerfile
+    )
+    assert "COPY --chmod=0444 geoserver/jmx-exporter.yml" in geoserver_dockerfile
+    assert (
+        "-javaagent:/opt/eolab-jmx/jmx_prometheus_javaagent-1.6.0.jar="
+        "0.0.0.0:9404:/opt/eolab-jmx/jmx-exporter.yml"
+        in startup
+    )
+    assert '"9404"' in geoserver_service
+    assert "ports:" not in geoserver_service
+    assert (
+        '"GEOSERVER_METRICS_INTERNAL_URL=http://geoserver:9404/metrics"'
+        in app_service
+    )
+    assert "/var/run/docker.sock" not in compose
+
+    assert "includeObjectNames:" in exporter_configuration
+    assert "excludeJvmMetrics: true" not in exporter_configuration
+    assert 'pattern: ".*"' not in exporter_configuration
+    for metric_name in (
+        "eolab_jvm_heap_used_bytes",
+        "eolab_jvm_heap_committed_bytes",
+        "eolab_jvm_heap_max_bytes",
+        "eolab_jvm_process_cpu_load_ratio",
+        "eolab_jvm_live_threads",
+        "eolab_jvm_uptime_seconds",
+    ):
+        assert metric_name in exporter_configuration
+    assert "GarbageCollector" not in exporter_configuration
+    assert "eolab_jvm_gc_" not in exporter_configuration
 
 
 def test_geoserver_rejects_invalid_runtime_limits() -> None:

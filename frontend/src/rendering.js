@@ -755,6 +755,7 @@ export async function loadWmsCapabilities(
  * @return {Promise<Object>} Parsed JSON response document.
  * @throws {Error} If the request fails or the endpoint rejects it.
  */
+
 async function postCatalogRasterAction(
     endpoint,
     item,

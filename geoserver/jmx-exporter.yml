@@ -1,0 +1,45 @@
+# Dockerfile.geoserver copies this allowlist into the GeoServer image.
+# deployment/start-geoserver.sh passes it to the JMX Exporter Java agent,
+# which serves these JVM measurements on the internal port read by EOLab.
+startDelaySeconds: 0
+lowercaseOutputName: true
+lowercaseOutputLabelNames: true
+# excludeJvmMetrics would blacklist java.lang before these owned rules run.
+includeObjectNames:
+  - "java.lang:type=Memory"
+  - "java.lang:type=OperatingSystem"
+  - "java.lang:type=Threading"
+  - "java.lang:type=Runtime"
+httpServer:
+  metrics:
+    path: /metrics
+  threads:
+    minimum: 1
+    maximum: 2
+    keepAliveTime: 30
+rules:
+  - pattern: 'java.lang<type=Memory><HeapMemoryUsage>used: (.*)'
+    name: eolab_jvm_heap_used_bytes
+    value: '$1'
+    type: GAUGE
+  - pattern: 'java.lang<type=Memory><HeapMemoryUsage>committed: (.*)'
+    name: eolab_jvm_heap_committed_bytes
+    value: '$1'
+    type: GAUGE
+  - pattern: 'java.lang<type=Memory><HeapMemoryUsage>max: (.*)'
+    name: eolab_jvm_heap_max_bytes
+    value: '$1'
+    type: GAUGE
+  - pattern: 'java.lang<type=OperatingSystem><>ProcessCpuLoad: (.*)'
+    name: eolab_jvm_process_cpu_load_ratio
+    value: '$1'
+    type: GAUGE
+  - pattern: 'java.lang<type=Threading><>ThreadCount: (.*)'
+    name: eolab_jvm_live_threads
+    value: '$1'
+    type: GAUGE
+  - pattern: 'java.lang<type=Runtime><>Uptime: (.*)'
+    name: eolab_jvm_uptime_seconds
+    value: '$1'
+    valueFactor: 0.001
+    type: GAUGE

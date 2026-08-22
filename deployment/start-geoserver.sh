@@ -22,7 +22,10 @@ if [ "$heap_megabytes" -lt 256 ]; then
     exit 1
 fi
 
-export EXTRA_JAVA_OPTS="-Xms256m -Xmx${GEOSERVER_MAX_HEAP_SIZE}"
+# The Java agent exposes the allowlisted JVM metrics from jmx-exporter.yml on
+# port 9404. Compose keeps that HTTP endpoint internal for the EOLab app.
+export EXTRA_JAVA_OPTS="-Xms256m -Xmx${GEOSERVER_MAX_HEAP_SIZE} \
+-javaagent:/opt/eolab-jmx/jmx_prometheus_javaagent-1.6.0.jar=0.0.0.0:9404:/opt/eolab-jmx/jmx-exporter.yml"
 printf 'ows.wms.getmap=%s\n' "$GEOSERVER_WMS_RENDER_COUNT" \
     > "${GEOSERVER_DATA_DIR%/}/controlflow.properties"
 

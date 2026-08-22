@@ -86,6 +86,18 @@ redeploy to tune the service; Java detects the Docker CPU limit without an
 count must be a positive integer, and the heap must be at least `256m` with an
 `m` or `g` suffix.
 
+Open **Rendering diagnostics** in the application header to inspect the JVM
+heap used and maximum, GeoServer process CPU, garbage collection, live threads,
+uptime, active and completed WMS GetMap requests, latest GetMap duration, and
+recent failures. Values refresh quickly only while the disclosure is open and
+stop while the browser tab is hidden. The raw JMX Exporter and GeoServer
+administrative endpoints remain internal; the browser receives only a fixed
+numeric summary. Heap maximum is the configured Java `-Xmx`, not host RAM, and
+GetMap duration is measured end to end at EOLab's WMS proxy, including any
+control-flow queue time. The exporter endpoint is not published outside the
+Compose network, and the diagnostics panel never exposes metric labels,
+internal URLs, request parameters, or upstream error text.
+
 The scanner assesses mounted GeoTIFFs before offering **View on map**. The initial policy accepts supported one-band rasters that are small enough for direct rendering, or larger rasters with bounded base-resolution blocks and a complete internal overview pyramid. Other rasters remain fully searchable and inspectable with an explanation of why visualization is unavailable. For existing Items created before this policy, **Assess for visualization** inspects and updates only the selected raster.
 
 While a raster is displayed, **Raster appearance** shows an approximate

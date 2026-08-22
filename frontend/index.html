@@ -35,11 +35,64 @@
           <span class="status-dot" aria-hidden="true"></span>
           <span id="system-state-text">Loading runtime configuration</span>
         </div>
-        <div class="system-state" id="rendering-state" role="status">
-          <span class="status-dot" aria-hidden="true"></span>
-          <span id="rendering-state-text">Checking rendering service</span>
-          <a id="wms-capabilities-link" target="_blank" rel="noreferrer" hidden>Capabilities</a>
-        </div>
+        <details class="system-state rendering-diagnostics" id="rendering-diagnostics">
+          <summary>
+            <span class="status-dot" aria-hidden="true"></span>
+            <span id="rendering-state-text">Rendering: Checking</span>
+          </summary>
+          <div
+            class="rendering-diagnostics-body"
+            role="region"
+            aria-label="GeoServer rendering metrics"
+            tabindex="0"
+          >
+            <dl class="rendering-diagnostics-grid">
+              <div>
+                <dt>Java heap</dt>
+                <dd id="rendering-heap">Not available</dd>
+              </div>
+              <div>
+                <dt>GeoServer process CPU</dt>
+                <dd id="rendering-cpu">Not available</dd>
+              </div>
+              <div>
+                <dt>WMS GetMap requests</dt>
+                <dd id="rendering-requests">Not available</dd>
+              </div>
+              <div>
+                <dt>Latest WMS GetMap</dt>
+                <dd id="rendering-latest-get-map">Not available</dd>
+              </div>
+              <div>
+                <dt>Recent GetMap failures</dt>
+                <dd id="rendering-failures">Not available</dd>
+              </div>
+              <div>
+                <dt>Garbage collection</dt>
+                <dd id="rendering-garbage-collection">Not available</dd>
+              </div>
+              <div>
+                <dt>Java threads</dt>
+                <dd id="rendering-threads">Not available</dd>
+              </div>
+              <div>
+                <dt>GeoServer uptime</dt>
+                <dd id="rendering-uptime">Not available</dd>
+              </div>
+            </dl>
+            <p id="rendering-observed" class="rendering-observed" hidden>
+              <span id="rendering-observed-verb">Sampled</span>
+              <time id="rendering-observed-at"></time>
+            </p>
+          </div>
+        </details>
+        <p
+          class="visually-hidden"
+          id="rendering-state-announcement"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        ></p>
 
         <div class="panel-content">
           <section class="catalog-panel">

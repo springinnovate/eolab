@@ -1,12 +1,20 @@
 FROM docker.osgeo.org/geoserver:3.0.1@sha256:7cb827ba3f6d9fc04a6647fc0cfa6c254fc642407f0d99281fdf026d2540b558
 
+ADD --checksum=sha256:a95983fd96e865d2bcdf911cc500e7c82808c27ab9fd226bf96732b6c3d8c46e \
+    https://github.com/prometheus/jmx_exporter/releases/download/1.6.0/jmx_prometheus_javaagent-1.6.0.jar \
+    /opt/eolab-jmx/jmx_prometheus_javaagent-1.6.0.jar
+
 ADD --checksum=sha256:08e1c95e0f753fa6b63f815d3314764d891d9cf1bee418dcae6ea5bf25025a1d \
     https://downloads.sourceforge.net/project/geoserver/GeoServer/3.0.1/extensions/geoserver-3.0.1-control-flow-plugin.zip \
     /tmp/control-flow.zip
 
 RUN unzip -q /tmp/control-flow.zip "*.jar" \
         -d /usr/local/tomcat/webapps/geoserver/WEB-INF/lib \
-    && rm /tmp/control-flow.zip
+    && rm /tmp/control-flow.zip \
+    && chmod 0444 /opt/eolab-jmx/jmx_prometheus_javaagent-1.6.0.jar
+
+COPY --chmod=0444 geoserver/jmx-exporter.yml \
+    /opt/eolab-jmx/jmx-exporter.yml
 
 COPY --chmod=0555 deployment/require-read-only-scan-source.sh \
     /usr/local/bin/require-read-only-scan-source
