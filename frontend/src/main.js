@@ -925,15 +925,7 @@ function initializeRasterVisualization(
     }
 
     function renderSelectedRasterStatistics(statistics) {
-        rasterStyleRevision += 1;
-        rasterStyle = deriveRasterStyleFromStatistics(
-            rasterStyle,
-            statistics,
-            DEFAULT_RASTER_PERCENTILES
-        );
-        setRasterStyleControls(rasterStyle, rasterPalette.value);
-        commitRasterStyle();
-        renderRasterStatistics(statistics, true);
+        renderRasterStatistics(statistics);
     }
 
     function renderSelectedRasterStatisticsError(error) {
@@ -1209,8 +1201,8 @@ function initializeRasterVisualization(
         setRasterStyleControls(rasterStyle, rasterPalette.value);
         commitRasterStyle();
         rasterHistogramStatus.textContent =
-            "Applied the selected approximate percentile values to the " +
-            "display range.";
+            "Rescaled the colors to the selected approximate percentile " +
+            "range.";
     });
     retryRasterStatisticsButton.addEventListener("click", () => {
         if (selectedRasterBounds !== null) {

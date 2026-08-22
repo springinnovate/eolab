@@ -578,7 +578,7 @@ test("raster histogram rendering displays all 64 SVG bars", () => {
   assert.equal(chart.children.length, 0);
 });
 
-test("selected histogram percentiles replace the whole-raster display range", () => {
+test("selected histogram percentiles provide a rescaling range", () => {
   const selectedStatistics = {
     ...SELECTED_RASTER_STATISTICS,
     percentiles: { p05: 0.002, p50: 0.015, p95: 0.4 },
