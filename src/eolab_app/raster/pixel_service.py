@@ -13,7 +13,6 @@ from eolab_app.raster.sources import PublishedRasterRegistry
 
 
 GEOSERVER_WORKSPACE_NAME = "eolab"
-RASTER_PIXEL_READ_CONCURRENCY = 2
 
 
 class RasterPixelService:
@@ -22,7 +21,7 @@ class RasterPixelService:
     def __init__(
         self,
         raster_registry: PublishedRasterRegistry,
-        read_concurrency: int = RASTER_PIXEL_READ_CONCURRENCY,
+        read_concurrency: int,
         pixel_reader: Callable[[Path, float, float], RasterPixel] = (
             read_raster_pixel
         ),

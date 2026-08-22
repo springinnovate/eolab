@@ -369,8 +369,15 @@ def create_app(
             ),
             published_rasters,
         ),
-        RasterPixelService(published_rasters),
-        RasterStatisticsService(published_rasters),
+        RasterPixelService(
+            published_rasters,
+            app_global_configuration.raster_pixel_read_concurrency,
+        ),
+        RasterStatisticsService(
+            published_rasters,
+            app_global_configuration.raster_statistics_read_concurrency,
+            app_global_configuration.raster_statistics_cache_entries,
+        ),
         published_rasters,
     )
     get_map_request_tracker = GetMapRequestTracker(

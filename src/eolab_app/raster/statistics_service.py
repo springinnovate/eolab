@@ -27,8 +27,6 @@ from eolab_app.raster.statistics import (
 
 
 GEOSERVER_WORKSPACE_NAME = "eolab"
-RASTER_STATISTICS_CACHE_ENTRIES = 32
-RASTER_STATISTICS_READ_CONCURRENCY = 1
 
 
 @dataclass
@@ -50,8 +48,8 @@ class RasterStatisticsService:
     def __init__(
         self,
         raster_registry: PublishedRasterRegistry,
-        read_concurrency: int = RASTER_STATISTICS_READ_CONCURRENCY,
-        cache_entries: int = RASTER_STATISTICS_CACHE_ENTRIES,
+        read_concurrency: int,
+        cache_entries: int,
         statistics_reader: Callable[
             [Path, CanonicalWgs84Bounds | None], RasterStatistics
         ] = read_raster_statistics,

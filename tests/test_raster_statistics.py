@@ -565,7 +565,7 @@ def test_statistics_service_returns_stable_selection_conflicts(
         source_path,
         source_signature(source_path),
     )
-    service = RasterStatisticsService(registry)
+    service = RasterStatisticsService(registry, 1, 32)
     request = CatalogRasterStatisticsRequest.model_validate(
         {
             "collectionId": "eolab-mounted-geotiffs",
@@ -732,7 +732,7 @@ def test_statistics_service_coalesces_caches_and_invalidates_by_signature(
     layer_name = "eolab:geotiff-0123456789abcdef01234567"
     registry = PublishedRasterRegistry()
     registry.authorize(layer_name, source_path, source_signature(source_path))
-    service = RasterStatisticsService(registry)
+    service = RasterStatisticsService(registry, 1, 32)
     request = CatalogRasterStatisticsRequest.model_validate(
         {
             "collectionId": "eolab-mounted-geotiffs",
@@ -799,7 +799,7 @@ def test_statistics_service_caches_each_canonical_selected_area_separately(
         source_path,
         source_signature(source_path),
     )
-    service = RasterStatisticsService(registry)
+    service = RasterStatisticsService(registry, 1, 32)
     identity = {
         "collectionId": "eolab-mounted-geotiffs",
         "itemId": item_id,
@@ -881,7 +881,7 @@ def test_statistics_service_rejects_a_source_changed_during_read(
     layer_name = f"eolab:{item_id}"
     registry = PublishedRasterRegistry()
     registry.authorize(layer_name, source_path, source_signature(source_path))
-    service = RasterStatisticsService(registry)
+    service = RasterStatisticsService(registry, 1, 32)
     request = CatalogRasterStatisticsRequest.model_validate(
         {
             "collectionId": "eolab-mounted-geotiffs",
@@ -950,7 +950,11 @@ def test_cancelled_statistics_request_retains_its_capacity_slot(
             )
         )
 
-    service = RasterStatisticsService(registry, read_concurrency=1)
+    service = RasterStatisticsService(
+        registry,
+        read_concurrency=1,
+        cache_entries=32,
+    )
     active_reads = 0
     maximum_active_reads = 0
     started_reads = 0
@@ -1020,7 +1024,11 @@ def test_cancelled_queued_statistics_do_not_delay_the_current_request(
             )
         )
 
-    service = RasterStatisticsService(registry, read_concurrency=1)
+    service = RasterStatisticsService(
+        registry,
+        read_concurrency=1,
+        cache_entries=32,
+    )
     read_order = []
     active_read_started = asyncio.Event()
     release_active_read = asyncio.Event()

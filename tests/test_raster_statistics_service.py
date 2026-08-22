@@ -66,7 +66,12 @@ def test_statistics_service_caches_by_approved_source_signature(
         read_count += 1
         return _statistics(float(read_count))
 
-    service = RasterStatisticsService(registry, statistics_reader=reader)
+    service = RasterStatisticsService(
+        registry,
+        read_concurrency=1,
+        cache_entries=32,
+        statistics_reader=reader,
+    )
     request = CatalogRasterStatisticsRequest.model_validate(
         {
             "collectionId": "eolab-mounted-geotiffs",

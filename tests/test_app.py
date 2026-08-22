@@ -28,6 +28,9 @@ DEFAULT_ENVIRONMENT = {
     "GEOSERVER_INTERNAL_URL": "http://geoserver:8080/geoserver",
     "GEOSERVER_METRICS_INTERNAL_URL": "http://geoserver:9404/metrics",
     "GEOSERVER_WMS_RENDER_COUNT": "2",
+    "RASTER_PIXEL_READ_CONCURRENCY": "2",
+    "RASTER_STATISTICS_READ_CONCURRENCY": "1",
+    "RASTER_STATISTICS_CACHE_ENTRIES": "32",
     "GEOSERVER_ADMIN_USER": "eolab",
     "GEOSERVER_ADMIN_PASSWORD": "valid-admin-password",
     "SCAN_MOUNT_PATH": str(Path.cwd()),
@@ -182,7 +185,13 @@ def test_configuration_endpoint_reads_environment(
             "zoom": 2,
         },
     }
-    assert "valid-admin-password" not in repr(load_settings(version_file_path))
+    settings = load_settings(version_file_path)
+    assert (
+        settings.raster_pixel_read_concurrency,
+        settings.raster_statistics_read_concurrency,
+        settings.raster_statistics_cache_entries,
+    ) == (2, 1, 32)
+    assert "valid-admin-password" not in repr(settings)
     assert "http://geoserver:8080" not in response.text
     assert "http://geoserver:9404" not in response.text
 
@@ -1493,7 +1502,7 @@ def test_raster_statistics_disconnect_cancels_the_service_waiter(
     statistics_service = BlockingStatisticsService()
     monkeypatch.setattr(
         "eolab_app.main.RasterStatisticsService",
-        lambda _registry: statistics_service,
+        lambda _registry, _read_concurrency, _cache_entries: statistics_service,
     )
     application = create_app(version_file_path)
     request_body = json.dumps(
@@ -1905,6 +1914,9 @@ def test_load_settings_rejects_blank_version(
         ("SCAN_WRITER_COUNT", "1.5"),
         ("SCAN_BATCH_SIZE", "1.5"),
         ("GEOSERVER_WMS_RENDER_COUNT", "1.5"),
+        ("RASTER_PIXEL_READ_CONCURRENCY", "1.5"),
+        ("RASTER_STATISTICS_READ_CONCURRENCY", "1.5"),
+        ("RASTER_STATISTICS_CACHE_ENTRIES", "1.5"),
     ),
 )
 def test_load_settings_rejects_malformed_number(
@@ -1978,6 +1990,9 @@ def test_load_settings_rejects_invalid_scan_path_lists(
         ("SCAN_WRITER_COUNT", "0"),
         ("SCAN_BATCH_SIZE", "0"),
         ("GEOSERVER_WMS_RENDER_COUNT", "0"),
+        ("RASTER_PIXEL_READ_CONCURRENCY", "0"),
+        ("RASTER_STATISTICS_READ_CONCURRENCY", "0"),
+        ("RASTER_STATISTICS_CACHE_ENTRIES", "0"),
     ),
 )
 def test_load_settings_rejects_out_of_range_number(
