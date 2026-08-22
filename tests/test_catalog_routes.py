@@ -2,6 +2,7 @@
 
 from typing import Any
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -109,8 +110,10 @@ def test_surprise_route_rejects_fields_outside_current_search_contract() -> None
     assert "Unsupported Catalog search field: collections" in response.text
 
 
-def test_surprise_route_reports_database_failure() -> None:
-    """Convert an unavailable Catalog database into an actionable response."""
+def test_surprise_route_logs_and_reports_database_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Log the cause while returning a safe unavailable response."""
 
     async def unavailable_lookup(
         search: dict[str, Any],
@@ -118,12 +121,15 @@ def test_surprise_route_reports_database_failure() -> None:
     ) -> None:
         raise RuntimeError("database unavailable")
 
-    response = catalog_client(unavailable_lookup).post(
-        "/api/catalog/surprise",
-        json={"search": {}},
-    )
+    with caplog.at_level("ERROR", logger="eolab_app.routes.catalog"):
+        response = catalog_client(unavailable_lookup).post(
+            "/api/catalog/surprise",
+            json={"search": {}},
+        )
 
     assert response.status_code == 503
     assert response.json() == {
         "detail": "Random Catalog discovery is unavailable"
     }
+    assert "Random Catalog discovery failed" in caplog.text
+    assert "database unavailable" in caplog.text

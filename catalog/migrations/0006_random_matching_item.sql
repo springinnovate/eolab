@@ -24,6 +24,7 @@ CREATE OR REPLACE FUNCTION pgstac.eolab_random_matching_item(
 RETURNS jsonb
 LANGUAGE plpgsql
 VOLATILE
+SET search_path TO pgstac, public
 AS $function$
 DECLARE
     item_where text;
@@ -58,7 +59,7 @@ BEGIN
 
     random_offset := floor(random() * matching_count)::bigint;
     EXECUTE format(
-        'SELECT content FROM pgstac.items
+        'SELECT pgstac.content_hydrate(item) FROM pgstac.items AS item
          WHERE (%s)
            AND ($1 IS NULL OR collection <> $1 OR id <> $2)
          OFFSET $3 LIMIT 1',

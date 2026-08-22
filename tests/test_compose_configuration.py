@@ -465,6 +465,8 @@ def test_catalog_random_selection_avoids_a_full_result_sort() -> None:
 
     assert "pgstac.get_version() <> '0.9.12'" in migration
     assert "pgstac.stac_search_to_where(search_request)" in migration
+    assert "SET search_path TO pgstac, public" in migration
+    assert "pgstac.content_hydrate(item)" in migration
     assert "random_offset := floor(random() * matching_count)" in migration
     assert "OFFSET $3 LIMIT 1" in migration
     assert "ORDER BY random()" not in migration

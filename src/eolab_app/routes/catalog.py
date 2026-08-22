@@ -1,11 +1,15 @@
 """Application Catalog discovery routes."""
 
+import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 import psycopg
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 RandomCatalogItemLookup = Callable[
@@ -67,6 +71,7 @@ def create_catalog_router(
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         except (psycopg.Error, RuntimeError) as error:
+            LOGGER.exception("Random Catalog discovery failed")
             raise HTTPException(
                 status_code=503,
                 detail="Random Catalog discovery is unavailable",
