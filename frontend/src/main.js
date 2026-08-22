@@ -30,6 +30,10 @@ import {
     renderScanLocations,
     synchronizeScanDisclosureState,
 } from "./catalog-system-state.js";
+import {
+    createSingleWorldMap,
+    formatSingleWorldPosition
+} from "./map.js";
 import { assessCatalogRaster } from "./raster/api.js";
 import { initializeRasterViewer } from "./raster/raster-viewer.js";
 import {
@@ -89,23 +93,7 @@ async function loadAppGlobalConfiguration() {
  * @return {L.Map} The initialized Leaflet map.
  */
 function initializeMap(appGlobalConfiguration) {
-    const leafletMap = L.map("map", {
-        zoomControl: false,
-        minZoom: 0,
-        maxZoom: 22
-    }).setView(
-        [
-            appGlobalConfiguration.initialView.latitude,
-            appGlobalConfiguration.initialView.longitude
-        ],
-        appGlobalConfiguration.initialView.zoom
-    );
-
-    L.control.zoom({ position: "bottomleft" }).addTo(leafletMap);
-    L.tileLayer(appGlobalConfiguration.basemap.url, {
-        attribution: appGlobalConfiguration.basemap.attribution,
-        maxZoom: 22
-    }).addTo(leafletMap);
+    const leafletMap = createSingleWorldMap(L, appGlobalConfiguration);
 
     const mapPositionElement = document.querySelector("#map-position");
 
@@ -116,9 +104,9 @@ function initializeMap(appGlobalConfiguration) {
      * @return {void}
      */
     function updateMapPosition(mapPositionEvent) {
-        mapPositionElement.textContent =
-            `${mapPositionEvent.latlng.lat.toFixed(3)}, ` +
-            mapPositionEvent.latlng.lng.toFixed(3);
+        mapPositionElement.textContent = formatSingleWorldPosition(
+            mapPositionEvent.latlng
+        );
     }
 
     updateMapPosition({ latlng: leafletMap.getCenter() });
