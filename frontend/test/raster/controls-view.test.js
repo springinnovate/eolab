@@ -25,7 +25,17 @@ class FakeControlElement extends EventTarget {
         this.attributes = new Map();
         this.classNames = [];
         this.classList = {
-            add: (className) => this.classNames.push(className),
+            add: (className) => {
+                if (!this.classNames.includes(className)) {
+                    this.classNames.push(className);
+                }
+            },
+            contains: (className) => this.classNames.includes(className),
+            remove: (className) => {
+                this.classNames = this.classNames.filter(
+                    (candidate) => candidate !== className
+                );
+            },
         };
     }
 
@@ -231,7 +241,18 @@ test("RasterControlsView reveals a successful histogram presentation", () => {
     );
 
     assert.equal(chart.getAttribute("hidden"), null);
-    assert.equal(chart.children.length, 65);
+    assert.equal(
+        chart.children.filter(
+            (child) => child.classNames.includes("raster-histogram-bar")
+        ).length,
+        64
+    );
+    assert.equal(
+        chart.children.filter(
+            (child) => child.classNames.includes("raster-histogram-tooltip")
+        ).length,
+        1
+    );
     assert.equal(
         documentContext.querySelector("#raster-histogram-axis").hidden,
         false

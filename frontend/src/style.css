@@ -710,6 +710,34 @@ h5 {
 
 .raster-histogram-bar {
   opacity: 0.78;
+  transition: opacity 80ms ease;
+}
+
+.raster-histogram-bar.is-hovered {
+  opacity: 1;
+  stroke: var(--brand-hover);
+  stroke-width: 2px;
+  vector-effect: non-scaling-stroke;
+}
+
+.raster-histogram-tooltip {
+  pointer-events: none;
+}
+
+.raster-histogram-tooltip[hidden] {
+  display: none;
+}
+
+.raster-histogram-tooltip rect {
+  fill: rgb(20 20 20 / 92%);
+  stroke: var(--surface-2);
+  stroke-width: 1px;
+  vector-effect: non-scaling-stroke;
+}
+
+.raster-histogram-tooltip text {
+  fill: var(--surface-2);
+  font: 9px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 .raster-histogram-axis {
