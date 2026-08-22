@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from eolab_app.main import create_app
 from tests.app_support import (
+    GeoServerPublicationMock,
     RASTER_STYLE_ENVIRONMENT_ERROR,
     TEST_GEOTIFF_ITEM_ID,
     VALID_GEOSERVER_METRICS,
@@ -63,7 +64,17 @@ def test_wms_proxy_allows_bounded_png_rendering(
     tmp_path: Path,
     version_file_path: Path,
 ) -> None:
-    """Allow tiles only after this app process approves the current source."""
+    """Allow tiles only after this app process approves the current source.
+
+    Args:
+        configured_environment: Applied baseline application environment.
+        monkeypatch: Environment mutation fixture for the scan mount.
+        tmp_path: Temporary directory containing the controlled raster.
+        version_file_path: Baked application-version fixture path.
+
+    Returns:
+        None.
+    """
 
     source_path = tmp_path / "raster.tif"
     _write_geotiff(source_path)
@@ -71,14 +82,24 @@ def test_wms_proxy_allows_bounded_png_rendering(
     monkeypatch.setenv("SCAN_PATHS_WITHIN_MOUNT", '["."]')
     item = _mounted_geotiff_item(source_path.as_uri())
     wms_requests = []
+    publication_mock = GeoServerPublicationMock()
 
     def upstream_response(request: httpx2.Request) -> httpx2.Response:
+        """Return the controlled catalog, publication, or WMS response.
+
+        Args:
+            request: Upstream request issued by the application.
+
+        Returns:
+            Catalog Item, publication state response, or WMS image response.
+
+        Raises:
+            AssertionError: If the proxied WMS request exceeds its contract.
+        """
         if request.url.host == "stac-api":
             return httpx2.Response(200, json=item)
-        if request.url.path.endswith("/external.geotiff"):
-            return httpx2.Response(201)
-        if request.url.path.endswith(f"/{TEST_GEOTIFF_ITEM_ID}.xml"):
-            return httpx2.Response(200)
+        if request.url.path.startswith("/geoserver/rest/"):
+            return publication_mock(request)
         wms_requests.append(request)
         assert request.url.params["request"] == "GetMap"
         assert request.url.params["format"] == "image/png"
