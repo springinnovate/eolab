@@ -113,12 +113,29 @@
             </div>
             <p class="section-copy" id="catalog-message">Checking catalog configuration.</p>
             <div class="catalog-layout" id="catalog-layout">
-              <div class="catalog-browser">
-                <div class="catalog-toolbar">
-                  <strong id="catalog-summary">Connecting to the STAC API</strong>
-                  <button class="secondary-button" id="refresh-catalog" type="button">Refresh</button>
+              <section
+                class="catalog-browser catalog-pane"
+                id="catalog-results-pane"
+                aria-labelledby="catalog-results-heading"
+              >
+                <div class="catalog-pane-heading">
+                  <h3 id="catalog-results-heading">Catalog results</h3>
+                  <button
+                    class="secondary-button catalog-pane-toggle"
+                    id="toggle-catalog-results"
+                    type="button"
+                    aria-controls="catalog-results-body"
+                    aria-expanded="true"
+                  >
+                    Collapse Catalog results
+                  </button>
                 </div>
-                <label class="catalog-search" for="catalog-search">
+                <div class="catalog-pane-body catalog-browser-body" id="catalog-results-body">
+                  <div class="catalog-toolbar">
+                    <strong id="catalog-summary">Connecting to the STAC API</strong>
+                    <button class="secondary-button" id="refresh-catalog" type="button">Refresh</button>
+                  </div>
+                  <label class="catalog-search" for="catalog-search">
                   <span>Search catalog</span>
                   <input
                     id="catalog-search"
@@ -133,8 +150,8 @@
                     id="catalog-search-error"
                     role="status"
                   ></span>
-                </label>
-                <section class="scan-card" aria-labelledby="scan-heading">
+                  </label>
+                  <section class="scan-card" aria-labelledby="scan-heading">
                   <div class="catalog-toolbar">
                     <strong id="scan-heading">Mounted datasets</strong>
                     <button class="secondary-button" id="start-scan" type="button">Scan directories</button>
@@ -157,27 +174,42 @@
                       </details>
                     </div>
                   </details>
-                </section>
-                <div class="catalog-results-scroll" id="catalog-results-scroll">
-                  <div class="catalog-results" id="catalog-results"></div>
-                  <div class="catalog-stream-status">
-                    <span id="catalog-stream-status">Loading Catalog Items</span>
-                    <button class="secondary-button" id="retry-catalog-page" type="button" hidden>Retry</button>
+                  </section>
+                  <div class="catalog-results-scroll" id="catalog-results-scroll">
+                    <div class="catalog-results" id="catalog-results"></div>
+                    <div class="catalog-stream-status">
+                      <span id="catalog-stream-status">Loading Catalog Items</span>
+                      <button class="secondary-button" id="retry-catalog-page" type="button" hidden>Retry</button>
+                    </div>
+                    <div class="catalog-load-sentinel" id="catalog-load-sentinel" aria-hidden="true"></div>
+                    <a class="catalog-link" id="catalog-link" target="_blank" rel="noreferrer">Open STAC API</a>
                   </div>
-                  <div class="catalog-load-sentinel" id="catalog-load-sentinel" aria-hidden="true"></div>
-                  <a class="catalog-link" id="catalog-link" target="_blank" rel="noreferrer">Open STAC API</a>
+                  <p class="visually-hidden" id="catalog-stream-announcement" role="status" aria-live="polite"></p>
                 </div>
-                <p class="visually-hidden" id="catalog-stream-announcement" role="status" aria-live="polite"></p>
-              </div>
+              </section>
               <aside
-                class="catalog-inspector"
+                class="catalog-inspector catalog-pane"
                 id="catalog-item-inspector"
                 aria-hidden="false"
                 aria-labelledby="catalog-inspector-heading"
               >
-                <p class="section-label">Selected record</p>
-                <h3 id="catalog-inspector-heading">Item inspector</h3>
-                <div class="catalog-map-actions" id="catalog-map-actions" hidden>
+                <div class="catalog-pane-heading">
+                  <div>
+                    <p class="section-label">Selected record</p>
+                    <h3 id="catalog-inspector-heading">Item inspector</h3>
+                  </div>
+                  <button
+                    class="secondary-button catalog-pane-toggle"
+                    id="toggle-catalog-inspector"
+                    type="button"
+                    aria-controls="catalog-inspector-body"
+                    aria-expanded="true"
+                  >
+                    Collapse Selected record
+                  </button>
+                </div>
+                <div class="catalog-pane-body catalog-inspector-body" id="catalog-inspector-body">
+                  <div class="catalog-map-actions" id="catalog-map-actions" hidden>
                   <button
                     class="secondary-button"
                     id="toggle-catalog-layer"
@@ -442,13 +474,14 @@
                     <strong>No item selected</strong>
                     <p>Select a Catalog result to inspect its metadata.</p>
                   </div>
+                  </div>
+                  <p
+                    class="visually-hidden"
+                    id="catalog-inspector-status"
+                    role="status"
+                    aria-live="polite"
+                  ></p>
                 </div>
-                <p
-                  class="visually-hidden"
-                  id="catalog-inspector-status"
-                  role="status"
-                  aria-live="polite"
-                ></p>
               </aside>
             </div>
           </section>
