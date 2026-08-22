@@ -454,8 +454,8 @@ def test_stac_api_uses_the_pinned_upstream_image() -> None:
     assert "dockerfile: Dockerfile.stac-api" not in compose
 
 
-def test_catalog_random_selection_avoids_a_full_result_sort() -> None:
-    """Select a uniform filtered ordinal without ORDER BY random()."""
+def test_catalog_random_selection_uses_an_indexed_key_seek() -> None:
+    """Seek from a random key without counting, sorting, or skipping rows."""
     migration = (
         COMPOSE_PATH.parent
         / "catalog"
@@ -467,6 +467,9 @@ def test_catalog_random_selection_avoids_a_full_result_sort() -> None:
     assert "pgstac.stac_search_to_where(search_request)" in migration
     assert "SET search_path TO pgstac, public" in migration
     assert "pgstac.content_hydrate(item)" in migration
-    assert "random_offset := floor(random() * matching_count)" in migration
-    assert "OFFSET $3 LIMIT 1" in migration
+    assert "CREATE INDEX IF NOT EXISTS eolab_items_random_key_idx" in migration
+    assert "md5(collection || ':' || id) >= $3" in migration
+    assert "md5(collection || ':' || id) < $3" in migration
+    assert "count(*)" not in migration
+    assert "OFFSET" not in migration
     assert "ORDER BY random()" not in migration
