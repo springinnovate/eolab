@@ -1,10 +1,14 @@
 """Test catalog database and STAC Transactions adapters."""
 
 import asyncio
+from unittest.mock import AsyncMock
 
 import httpx2
+import psycopg
+import pytest
 
 from eolab_app.catalog.pgstac import catalog_item_source
+from eolab_app.catalog.search_counts import number_matched_is_estimated
 from eolab_app.catalog.stac_api import StacApiWriter
 
 
@@ -18,6 +22,24 @@ def test_pgstac_inventory_requires_scanner_owned_source_assets() -> None:
         )
     else:
         raise AssertionError("missing data Asset was accepted")
+
+
+def test_count_estimate_lookup_uses_pgstac_search_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Resolve pgSTAC functions called without schema-qualified names."""
+    cursor = AsyncMock()
+    cursor.fetchone.return_value = (True,)
+    connection = AsyncMock()
+    connection.__aenter__.return_value = connection
+    connection.execute.return_value = cursor
+    connect = AsyncMock(return_value=connection)
+    monkeypatch.setattr(psycopg.AsyncConnection, "connect", connect)
+
+    assert asyncio.run(
+        number_matched_is_estimated(b'{"limit": 20}', 106967)
+    )
+    connect.assert_awaited_once_with(options="-c search_path=pgstac,public")
 
 
 def test_stac_api_writer_bounds_upstream_error_detail() -> None:

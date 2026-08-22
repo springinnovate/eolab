@@ -27,7 +27,7 @@ def imported_modules(source_path: Path) -> set[str]:
 
 
 def test_catalog_infrastructure_dependencies_stay_at_explicit_boundaries() -> None:
-    """Keep HTTP, database, and FastAPI concerns out of domain phases."""
+    """Keep infrastructure concerns in their focused catalog adapters."""
     module_imports = {
         source_path.stem: imported_modules(source_path)
         for source_path in CATALOG_SOURCE.glob("*.py")
@@ -37,7 +37,7 @@ def test_catalog_infrastructure_dependencies_stay_at_explicit_boundaries() -> No
         name
         for name, imports in module_imports.items()
         if "psycopg" in imports
-    } == {"pgstac"}
+    } == {"pgstac", "search_counts"}
     assert {
         name
         for name, imports in module_imports.items()
