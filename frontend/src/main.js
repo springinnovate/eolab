@@ -686,6 +686,13 @@ function initializeRasterVisualization(
         }
         rasterStyle = candidate.style;
         renderRasterStyleLegend(rasterStyle);
+        if (rasterStatistics !== null) {
+            renderRasterHistogramChart(
+                rasterHistogramChart,
+                rasterStatistics,
+                rasterStyle
+            );
+        }
         rasterLayerController.activeLayer.setParams({
             styles: "dynamic-raster",
             env: candidate.environment
@@ -827,7 +834,11 @@ function initializeRasterVisualization(
             rasterStatisticsMatchesSelection(statistics, selectedRasterBounds);
         rasterHistogram.setAttribute("aria-busy", "false");
         retryRasterStatisticsButton.hidden = true;
-        renderRasterHistogramChart(rasterHistogramChart, statistics);
+        renderRasterHistogramChart(
+            rasterHistogramChart,
+            statistics,
+            rasterStyle
+        );
         rasterHistogramMinimum.textContent =
             `≈ ${formatRasterPixelValue(statistics.sampleMinimum)}`;
         rasterHistogramMaximum.textContent =

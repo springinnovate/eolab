@@ -566,7 +566,6 @@ h5 {
 }
 
 .raster-histogram-bar {
-  fill: var(--brand);
   opacity: 0.78;
 }
 

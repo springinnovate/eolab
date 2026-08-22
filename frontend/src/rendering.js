@@ -882,6 +882,40 @@ export function formatRasterPixelValue(value) {
     return value === 0 ? "0" : value.toExponential(3);
 }
 
+function interpolateRasterColor(startColor, endColor, position) {
+    const start = Number.parseInt(startColor.slice(1), 16);
+    const end = Number.parseInt(endColor.slice(1), 16);
+    const channels = [16, 8, 0].map((shift) => Math.round(
+        ((start >> shift) & 0xff) * (1 - position) +
+        ((end >> shift) & 0xff) * position
+    ));
+    return `#${channels.map((channel) =>
+        channel.toString(16).padStart(2, "0")
+    ).join("")}`;
+}
+
+/** Return the active three-stop raster-ramp color for one pixel value. */
+export function getRasterStyleColor(style, value) {
+    if (value <= style.minimum) {
+        return style.minimumColor;
+    }
+    if (value <= style.midpoint) {
+        return interpolateRasterColor(
+            style.minimumColor,
+            style.midpointColor,
+            (value - style.minimum) / (style.midpoint - style.minimum)
+        );
+    }
+    if (value < style.maximum) {
+        return interpolateRasterColor(
+            style.midpointColor,
+            style.maximumColor,
+            (value - style.midpoint) / (style.maximum - style.midpoint)
+        );
+    }
+    return style.maximumColor;
+}
+
 /**
  * Render the validated fixed-bin distribution into its SVG chart.
  *
@@ -890,12 +924,14 @@ export function formatRasterPixelValue(value) {
  *
  * @param {SVGSVGElement} chart Histogram chart element.
  * @param {Object} statistics Validated raster statistics.
+ * @param {Object} style Committed raster color-map style.
  * @param {Document} [documentContext] DOM document; injectable for tests.
  * @return {void}
  */
 export function renderRasterHistogramChart(
     chart,
     statistics,
+    style,
     documentContext = globalThis.document
 ) {
     const svgNamespace = "http://www.w3.org/2000/svg";
@@ -925,11 +961,12 @@ export function renderRasterHistogramChart(
         bar.setAttribute("y", String(chartHeight - barHeight));
         bar.setAttribute("width", String(barWidth - 1));
         bar.setAttribute("height", String(barHeight));
+        const binMidpoint = (edges[binIndex] + edges[binIndex + 1]) / 2;
+        bar.style.fill = getRasterStyleColor(style, binMidpoint);
         const binTitle = documentContext.createElementNS(
             svgNamespace,
             "title"
         );
-        const binMidpoint = (edges[binIndex] + edges[binIndex + 1]) / 2;
         const samplePercent = count / statistics.validSampleCount * 100;
         binTitle.textContent =
             `Bin midpoint ${formatRasterPixelValue(binMidpoint)}; ` +

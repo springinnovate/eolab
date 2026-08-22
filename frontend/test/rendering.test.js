@@ -15,6 +15,7 @@ import {
   deriveRasterStyleFromStatistics,
   estimateRasterHistogramPercentile,
   formatRasterPixelValue,
+  getRasterStyleColor,
   getCatalogRasterBasename,
   getRasterPixelProbePosition,
   loadCatalogRasterStatistics,
@@ -84,6 +85,7 @@ class FakeSvgElement {
     this.children = [];
     this.classNames = [];
     this.classList = { add: (name) => this.classNames.push(name) };
+    this.style = {};
     this.textContent = "";
   }
 
@@ -563,7 +565,12 @@ test("raster histogram rendering displays all 64 SVG bars", () => {
   const chart = new FakeSvgElement("svg");
   chart.setAttribute("hidden", "");
 
-  renderRasterHistogramChart(chart, RASTER_STATISTICS, FAKE_SVG_DOCUMENT);
+  renderRasterHistogramChart(
+    chart,
+    RASTER_STATISTICS,
+    DEFAULT_RASTER_STYLE,
+    FAKE_SVG_DOCUMENT,
+  );
 
   assert.equal(chart.hasAttribute("hidden"), false);
   assert.equal(chart.children[0].tagName, "title");
@@ -573,12 +580,22 @@ test("raster histogram rendering displays all 64 SVG bars", () => {
       bar.classNames.includes("raster-histogram-bar") &&
       bar.children[0].tagName === "title" &&
       bar.children[0].textContent.includes("Bin midpoint") &&
-      bar.children[0].textContent.includes("1.56% of the valid sample"),
+      bar.children[0].textContent.includes("1.56% of the valid sample") &&
+      /^#[0-9a-f]{6}$/.test(bar.style.fill),
   ));
 
   clearRasterHistogramChart(chart);
   assert.equal(chart.hasAttribute("hidden"), true);
   assert.equal(chart.children.length, 0);
+});
+
+test("histogram colors follow the committed three-stop raster ramp", () => {
+  assert.equal(getRasterStyleColor(DEFAULT_RASTER_STYLE, -1), "#2b83ba");
+  assert.equal(getRasterStyleColor(DEFAULT_RASTER_STYLE, 0), "#2b83ba");
+  assert.equal(getRasterStyleColor(DEFAULT_RASTER_STYLE, 50), "#ffffbf");
+  assert.equal(getRasterStyleColor(DEFAULT_RASTER_STYLE, 100), "#d7191c");
+  assert.equal(getRasterStyleColor(DEFAULT_RASTER_STYLE, 101), "#d7191c");
+  assert.equal(getRasterStyleColor(DEFAULT_RASTER_STYLE, 25), "#95c1bd");
 });
 
 test("selected histogram percentiles provide a rescaling range", () => {
