@@ -73,6 +73,27 @@ def test_scan_paths_share_one_read_only_deployment_mount() -> None:
     assert '"EOLAB_SCAN_MOUNT_PATH=${EOLAB_SCAN_MOUNT_PATH' not in compose
 
 
+def test_raster_capacity_is_deployer_configurable() -> None:
+    """Expose safe defaults while allowing explicit deployment overrides."""
+    compose = COMPOSE_PATH.read_text(encoding="utf-8")
+
+    assert (
+        '"RASTER_PIXEL_READ_CONCURRENCY='
+        '${EOLAB_RASTER_PIXEL_READ_CONCURRENCY:-2}"'
+        in compose
+    )
+    assert (
+        '"RASTER_STATISTICS_READ_CONCURRENCY='
+        '${EOLAB_RASTER_STATISTICS_READ_CONCURRENCY:-1}"'
+        in compose
+    )
+    assert (
+        '"RASTER_STATISTICS_CACHE_ENTRIES='
+        '${EOLAB_RASTER_STATISTICS_CACHE_ENTRIES:-32}"'
+        in compose
+    )
+
+
 def test_app_and_geoserver_refuse_a_writable_scan_mount() -> None:
     """Verify the effective kernel mode before either long-running service starts."""
     repository_root = COMPOSE_PATH.parent

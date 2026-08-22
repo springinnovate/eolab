@@ -1,1 +1,1 @@
-"""FastAPI route adapters for EOLab feature packages."""
+"""HTTP route adapters for EOLab feature packages."""

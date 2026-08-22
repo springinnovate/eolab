@@ -58,6 +58,9 @@ EOLab no longer loads a sample Collection during deployment. Upgrading does not 
 | `EOLAB_GEOSERVER_CPU_LIMIT`        | `4`                                               | GeoServer container CPU limit                        |
 | `EOLAB_GEOSERVER_MAX_HEAP_SIZE`    | `4g`                                              | Maximum GeoServer Java heap (`m` or `g`)             |
 | `EOLAB_GEOSERVER_WMS_RENDER_COUNT` | `2`                                               | Concurrent GeoServer WMS map renders                 |
+| `EOLAB_RASTER_PIXEL_READ_CONCURRENCY` | `2`                                            | Concurrent Rasterio pixel reads                      |
+| `EOLAB_RASTER_STATISTICS_READ_CONCURRENCY` | `1`                                       | Concurrent Rasterio statistics reads                 |
+| `EOLAB_RASTER_STATISTICS_CACHE_ENTRIES` | `32`                                          | Completed statistics documents cached per app process |
 | `EOLAB_SCAN_MOUNT_PATH`            | none                                              | Required absolute host directory mounted read-only  |
 | `EOLAB_SCAN_PATHS_WITHIN_MOUNT`    | none                                              | Required JSON array of relative directories to scan |
 | `EOLAB_SCAN_DISPLAY_PATH_PREFIX`   | none                                              | Required user-facing root shown for mounted files   |
@@ -91,6 +94,16 @@ redeploy to tune the service; Java detects the Docker CPU limit without an
 `ActiveProcessorCount` override. The CPU limit must be positive, the render
 count must be a positive integer, and the heap must be at least `256m` with an
 `m` or `g` suffix.
+
+The application also bounds its own Rasterio work. Keep
+`EOLAB_RASTER_STATISTICS_READ_CONCURRENCY` at `1` unless storage benchmarks
+show that overlapping bounded statistics reads improves throughput without
+hurting map rendering. `EOLAB_RASTER_PIXEL_READ_CONCURRENCY` controls small
+interactive band-one reads; canceled requests retain their slot until the
+underlying GDAL thread finishes. `EOLAB_RASTER_STATISTICS_CACHE_ENTRIES`
+controls how many completed statistics documents each app process retains;
+the cache does not retain raster pixels. All three values must be positive
+integers, and changing them requires a redeploy.
 
 Open **Rendering diagnostics** in the application header to inspect the JVM
 heap used and maximum, GeoServer process CPU, garbage collection, live threads,

@@ -14,7 +14,7 @@ import rasterio
 from fastapi.testclient import TestClient
 from rasterio.transform import from_origin
 
-from eolab_app.geotiff import build_stac_item as build_geotiff_stac_item
+from eolab_app.catalog.geotiff import build_stac_item as build_geotiff_stac_item
 from eolab_app.main import _number_matched_is_estimated, create_app
 from eolab_app.settings import load_settings
 
@@ -28,6 +28,9 @@ DEFAULT_ENVIRONMENT = {
     "GEOSERVER_INTERNAL_URL": "http://geoserver:8080/geoserver",
     "GEOSERVER_METRICS_INTERNAL_URL": "http://geoserver:9404/metrics",
     "GEOSERVER_WMS_RENDER_COUNT": "2",
+    "RASTER_PIXEL_READ_CONCURRENCY": "2",
+    "RASTER_STATISTICS_READ_CONCURRENCY": "1",
+    "RASTER_STATISTICS_CACHE_ENTRIES": "32",
     "GEOSERVER_ADMIN_USER": "eolab",
     "GEOSERVER_ADMIN_PASSWORD": "valid-admin-password",
     "SCAN_MOUNT_PATH": str(Path.cwd()),
@@ -188,7 +191,13 @@ def test_configuration_endpoint_reads_environment(
             "zoom": 2,
         },
     }
-    assert "valid-admin-password" not in repr(load_settings(version_file_path))
+    settings = load_settings(version_file_path)
+    assert (
+        settings.raster_pixel_read_concurrency,
+        settings.raster_statistics_read_concurrency,
+        settings.raster_statistics_cache_entries,
+    ) == (2, 1, 32)
+    assert "valid-admin-password" not in repr(settings)
     assert "http://geoserver:8080" not in response.text
     assert "http://geoserver:9404" not in response.text
 
@@ -721,7 +730,7 @@ def test_raster_publication_reassesses_a_changed_source(
     item = _mounted_geotiff_item(source_path.as_uri())
     geoserver_requests = []
     monkeypatch.setattr(
-        "eolab_app.rendering.inspect_geotiff_renderability",
+        "eolab_app.raster.publication.inspect_raster_renderability",
         lambda _: {
             "eligible": False,
             "reason": (
@@ -1527,7 +1536,7 @@ def test_raster_statistics_disconnect_cancels_the_service_waiter(
     statistics_service = BlockingStatisticsService()
     monkeypatch.setattr(
         "eolab_app.main.RasterStatisticsService",
-        lambda _registry: statistics_service,
+        lambda _registry, _read_concurrency, _cache_entries: statistics_service,
     )
     application = create_app(version_file_path)
     request_body = json.dumps(
@@ -1944,6 +1953,9 @@ def test_load_settings_rejects_blank_version(
         ("SCAN_RECONCILIATION_SPOOL_MEMORY_BYTES", "1.5"),
         ("SCAN_CATALOG_ERROR_DETAIL_LIMIT", "1.5"),
         ("GEOSERVER_WMS_RENDER_COUNT", "1.5"),
+        ("RASTER_PIXEL_READ_CONCURRENCY", "1.5"),
+        ("RASTER_STATISTICS_READ_CONCURRENCY", "1.5"),
+        ("RASTER_STATISTICS_CACHE_ENTRIES", "1.5"),
     ),
 )
 def test_load_settings_rejects_malformed_number(
@@ -2024,6 +2036,9 @@ def test_load_settings_rejects_invalid_scan_path_lists(
         ("SCAN_CATALOG_WRITE_TIMEOUT_SECONDS", "nan"),
         ("SCAN_CATALOG_ERROR_DETAIL_LIMIT", "0"),
         ("GEOSERVER_WMS_RENDER_COUNT", "0"),
+        ("RASTER_PIXEL_READ_CONCURRENCY", "0"),
+        ("RASTER_STATISTICS_READ_CONCURRENCY", "0"),
+        ("RASTER_STATISTICS_CACHE_ENTRIES", "0"),
     ),
 )
 def test_load_settings_rejects_out_of_range_number(

@@ -50,16 +50,18 @@ from eolab_app.catalog.shapefile import (
     discover_shapefile_datasets,
 )
 from eolab_app.catalog.stac_api import StacApiWriter
-from eolab_app.geotiff import (
+from eolab_app.catalog.geotiff import (
     ACQUISITION_DATETIME_DESCRIPTION,
-    COG_MEDIA_TYPE,
     FALLBACK_DATETIME_DESCRIPTION,
     FILE_EXTENSION,
+    SUGGESTED_WARP_BOUNDS_DESCRIPTION,
+    build_stac_item as build_geotiff_stac_item,
+)
+from eolab_app.raster.eligibility import (
+    COG_MEDIA_TYPE,
     GEOTIFF_MEDIA_TYPE,
     RENDERING_METADATA_KEY,
-    SUGGESTED_WARP_BOUNDS_DESCRIPTION,
     assess_raster_renderability,
-    build_stac_item as build_geotiff_stac_item,
 )
 
 
@@ -509,7 +511,7 @@ def test_geotiff_transforms_bounds_with_an_invalid_projected_corner(
 ) -> None:
     """Catalog a valid raster whose rectangular extent exceeds its CRS domain."""
     monkeypatch.setattr(
-        "eolab_app.geotiff.calculate_default_transform",
+        "eolab_app.catalog.geotiff.calculate_default_transform",
         lambda *args, **kwargs: pytest.fail("Suggested warp fallback was called"),
     )
     geotiff_path = tmp_path / "partial-eckert-iv.tif"
@@ -626,11 +628,11 @@ def test_geotiff_rejects_invalid_suggested_warp_output(
     geotiff_path = tmp_path / "invalid-suggested-grid.tif"
     write_geotiff(geotiff_path)
     monkeypatch.setattr(
-        "eolab_app.geotiff.transform_bounds",
+        "eolab_app.catalog.geotiff.transform_bounds",
         lambda *args, **kwargs: (float("inf"),) * 4,
     )
     monkeypatch.setattr(
-        "eolab_app.geotiff.calculate_default_transform",
+        "eolab_app.catalog.geotiff.calculate_default_transform",
         lambda *args, **kwargs: suggested_output,
     )
 

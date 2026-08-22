@@ -23,6 +23,9 @@ class Settings:
     geoserver_internal_url: str
     geoserver_metrics_internal_url: str
     geoserver_wms_render_count: int
+    raster_pixel_read_concurrency: int
+    raster_statistics_read_concurrency: int
+    raster_statistics_cache_entries: int
     geoserver_admin_user: str
     geoserver_admin_password: str = field(repr=False)
     scan_mount_path: Path
@@ -79,6 +82,18 @@ class Settings:
             raise ValueError("SCAN_WORKER_COUNT must be greater than zero")
         if self.geoserver_wms_render_count < 1:
             raise ValueError("GEOSERVER_WMS_RENDER_COUNT must be greater than zero")
+        if self.raster_pixel_read_concurrency < 1:
+            raise ValueError(
+                "RASTER_PIXEL_READ_CONCURRENCY must be greater than zero"
+            )
+        if self.raster_statistics_read_concurrency < 1:
+            raise ValueError(
+                "RASTER_STATISTICS_READ_CONCURRENCY must be greater than zero"
+            )
+        if self.raster_statistics_cache_entries < 1:
+            raise ValueError(
+                "RASTER_STATISTICS_CACHE_ENTRIES must be greater than zero"
+            )
         if self.scan_writer_count < 1:
             raise ValueError("SCAN_WRITER_COUNT must be greater than zero")
         if self.scan_batch_size < 1:
@@ -203,6 +218,15 @@ def load_settings(
             "GEOSERVER_METRICS_INTERNAL_URL"
         ].strip(),
         geoserver_wms_render_count=int(os.environ["GEOSERVER_WMS_RENDER_COUNT"]),
+        raster_pixel_read_concurrency=int(
+            os.environ["RASTER_PIXEL_READ_CONCURRENCY"]
+        ),
+        raster_statistics_read_concurrency=int(
+            os.environ["RASTER_STATISTICS_READ_CONCURRENCY"]
+        ),
+        raster_statistics_cache_entries=int(
+            os.environ["RASTER_STATISTICS_CACHE_ENTRIES"]
+        ),
         geoserver_admin_user=os.environ["GEOSERVER_ADMIN_USER"].strip(),
         geoserver_admin_password=os.environ["GEOSERVER_ADMIN_PASSWORD"],
         scan_mount_path=Path(os.environ["SCAN_MOUNT_PATH"]),
