@@ -6,6 +6,10 @@ const CATALOG_SUBSTRING_PROPERTIES = [
     "eolab_end_datetime_text"
 ];
 const CATALOG_DATA_ASSET_MEDIA_TYPE_PROPERTY = "assets.data.type";
+const CATALOG_DATA_ASSET_RENDERING_POLICY_PROPERTY =
+    "assets.data.eolab:rendering.policy";
+const CATALOG_DATA_ASSET_RENDERING_ELIGIBLE_PROPERTY =
+    "assets.data.eolab:rendering.eligible";
 const COG_MEDIA_TYPE =
     "image/tiff; application=geotiff; profile=cloud-optimized";
 const CATALOG_FILTER_FIELD_PATTERN = /^[a-z][a-z0-9_-]*$/i;
@@ -322,6 +326,7 @@ export function buildCatalogSearch(searchText) {
 
     const literalTokens = [];
     let hasCogFormatFilter = false;
+    let hasViewableFilter = false;
     let datetime = null;
     for (const token of normalizedSearchText.split(/\s+/)) {
         if (token === "&") {
@@ -343,6 +348,7 @@ export function buildCatalogSearch(searchText) {
         }
 
         const normalizedFieldName = fieldName.toLowerCase();
+        const normalizedFieldValue = fieldValue.toLowerCase();
         if (normalizedFieldName === "date") {
             if (datetime !== null) {
                 throw new CatalogSearchSyntaxError(
@@ -368,22 +374,37 @@ export function buildCatalogSearch(searchText) {
                 `${endDate}T23:59:59.999999Z`;
             continue;
         }
-        if (normalizedFieldName !== "format") {
-            throw new CatalogSearchSyntaxError(
-                `Unsupported Catalog filter: ${fieldName}`
-            );
+        if (normalizedFieldName === "format") {
+            if (normalizedFieldValue !== "cog") {
+                throw new CatalogSearchSyntaxError(
+                    "The supported format filter is format:cog."
+                );
+            }
+            if (hasCogFormatFilter) {
+                throw new CatalogSearchSyntaxError(
+                    "The format filter may appear only once."
+                );
+            }
+            hasCogFormatFilter = true;
+            continue;
         }
-        if (fieldValue.toLowerCase() !== "cog") {
-            throw new CatalogSearchSyntaxError(
-                "The supported format filter is format:cog."
-            );
+        if (normalizedFieldName === "viewable") {
+            if (normalizedFieldValue !== "true") {
+                throw new CatalogSearchSyntaxError(
+                    "The supported viewable filter is viewable:true."
+                );
+            }
+            if (hasViewableFilter) {
+                throw new CatalogSearchSyntaxError(
+                    "The viewable filter may appear only once."
+                );
+            }
+            hasViewableFilter = true;
+            continue;
         }
-        if (hasCogFormatFilter) {
-            throw new CatalogSearchSyntaxError(
-                "The format filter may appear only once."
-            );
-        }
-        hasCogFormatFilter = true;
+        throw new CatalogSearchSyntaxError(
+            `Unsupported Catalog filter: ${fieldName}`
+        );
     }
 
     const filters = literalTokens.map((token) => buildSubstringFilter(token));
@@ -395,6 +416,27 @@ export function buildCatalogSearch(searchText) {
                 COG_MEDIA_TYPE
             ]
         });
+    }
+    if (hasViewableFilter) {
+        filters.push(
+            {
+                op: "=",
+                args: [
+                    { property: CATALOG_DATA_ASSET_RENDERING_POLICY_PROPERTY },
+                    RASTER_RENDERING_POLICY
+                ]
+            },
+            {
+                op: "=",
+                args: [
+                    {
+                        property:
+                            CATALOG_DATA_ASSET_RENDERING_ELIGIBLE_PROPERTY
+                    },
+                    true
+                ]
+            }
+        );
     }
     const filter = filters.length === 0
         ? null
