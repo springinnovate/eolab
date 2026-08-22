@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -32,6 +33,25 @@ const expectedSubstringProperties = [
 ];
 const cogMediaType =
   "image/tiff; application=geotiff; profile=cloud-optimized";
+const viewableFilter = {
+  op: "and",
+  args: [
+    {
+      op: "=",
+      args: [
+        { property: "assets.data.eolab:rendering.policy" },
+        "raster-v2",
+      ],
+    },
+    {
+      op: "=",
+      args: [
+        { property: "assets.data.eolab:rendering.eligible" },
+        true,
+      ],
+    },
+  ],
+};
 
 function expectedSubstringFilter(searchText) {
   return {
@@ -158,6 +178,33 @@ test("buildCatalogSearch combines each literal search term with AND", () => {
   });
 });
 
+test("buildCatalogSearch returns only currently viewable rasters", () => {
+  assert.deepEqual(catalogFilter(" VIEWABLE:TRUE "), viewableFilter);
+  assert.deepEqual(
+    buildCatalogSearch(
+      "barley viewable:true format:cog " +
+        "date:2020-01-01..2020-03-31",
+    ),
+    {
+      filter: {
+        op: "and",
+        args: [
+          expectedSubstringFilter("barley"),
+          {
+            op: "=",
+            args: [
+              { property: "assets.data.type" },
+              cogMediaType,
+            ],
+          },
+          ...viewableFilter.args,
+        ],
+      },
+      datetime: "2020-01-01T00:00:00Z/2020-03-31T23:59:59.999999Z",
+    },
+  );
+});
+
 test("buildCatalogSearch builds inclusive UTC day and date-range searches", () => {
   assert.deepEqual(buildCatalogSearch("date:2025-01-15"), {
     filter: null,
@@ -223,6 +270,9 @@ test("buildCatalogSearch rejects syntax outside the field contract", () => {
     "format:",
     "format:geotiff",
     "format:cog format:cog",
+    "viewable:",
+    "viewable:false",
+    "viewable:true viewable:true",
     "datatype:cog",
     "collection:rasters",
     "barley & format:cog",
@@ -233,6 +283,22 @@ test("buildCatalogSearch rejects syntax outside the field contract", () => {
       CatalogSearchSyntaxError,
     );
   }
+});
+
+test("Catalog search help presents the viewable filter", () => {
+  const catalogMarkup = readFileSync(
+    new URL("../index.html", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(
+    catalogMarkup,
+    /format:cog, viewable:true, or date:YYYY-MM-DD/,
+  );
+  assert.match(
+    catalogMarkup,
+    /ESA format:cog viewable:true date:2020-01-01\.\.2020-12-31/,
+  );
 });
 
 test("CatalogSearchClient sends a standard STAC CQL2 substring search", async () => {
@@ -288,6 +354,22 @@ test("CatalogSearchClient sends the parsed COG filter", async () => {
       },
     ],
   });
+});
+
+test("CatalogSearchClient sends the current viewable assessment filter", async () => {
+  let capturedRequest;
+  const client = new CatalogSearchClient("/stac", async (url, options) => {
+    capturedRequest = { url, options };
+    return itemCollectionResponse();
+  });
+
+  await client.search("viewable:true");
+
+  assert.equal(capturedRequest.url, "/stac/search");
+  assert.deepEqual(
+    JSON.parse(capturedRequest.options.body).filter,
+    viewableFilter,
+  );
 });
 
 test("CatalogSearchClient combines STAC datetime with text and format", async () => {
