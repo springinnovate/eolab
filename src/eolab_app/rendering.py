@@ -87,7 +87,15 @@ class Wgs84Bounds(BaseModel):
 
     @model_validator(mode="after")
     def require_ordered_non_wrapping_bounds(self) -> "Wgs84Bounds":
-        """Reject empty and antimeridian-crossing rectangles."""
+        """Reject empty and antimeridian-crossing rectangles.
+
+        Returns:
+            The validated bounds model.
+
+        Raises:
+            ValueError: If either axis is empty, reversed, or wraps across the
+                antimeridian.
+        """
         if self.west >= self.east:
             raise ValueError(
                 "west must be less than east; antimeridian-crossing bounds "
@@ -98,7 +106,11 @@ class Wgs84Bounds(BaseModel):
         return self
 
     def canonical_tuple(self) -> CanonicalWgs84Bounds:
-        """Return the stable tuple used for sampling and cache identity."""
+        """Return the stable tuple used for sampling and cache identity.
+
+        Returns:
+            West, south, east, and north in canonical order.
+        """
         return (self.west, self.south, self.east, self.north)
 
 
@@ -191,7 +203,14 @@ class RasterStatistics(BaseModel):
 
     @model_validator(mode="after")
     def require_scope_provenance(self) -> "RasterStatistics":
-        """Keep whole-raster and selected-area provenance unambiguous."""
+        """Keep whole-raster and selected-area provenance unambiguous.
+
+        Returns:
+            The validated statistics model.
+
+        Raises:
+            ValueError: If selected bounds do not match the declared scope.
+        """
         if self.scope == "wholeRaster" and self.selected_bounds is not None:
             raise ValueError("wholeRaster statistics cannot have selected bounds")
         if self.scope == "selectedArea" and self.selected_bounds is None:
@@ -249,6 +268,7 @@ class PublishedRasterRegistry:
     """Allow WMS access only to current files approved by this app process."""
 
     def __init__(self) -> None:
+        """Create an empty process-local raster authorization registry."""
         self._sources: dict[str, tuple[Path, SourceSignature]] = {}
 
     def authorize(
@@ -440,7 +460,14 @@ def _strict_raster_value_range(
 def _densified_wgs84_bounds_ring(
     selected_bounds: CanonicalWgs84Bounds,
 ) -> tuple[tuple[float, float], ...]:
-    """Trace all four selection edges with intermediate WGS 84 vertices."""
+    """Trace all four selection edges with intermediate WGS 84 vertices.
+
+    Args:
+        selected_bounds: Canonical west, south, east, and north bounds.
+
+    Returns:
+        Closed WGS 84 polygon ring with each edge evenly densified.
+    """
     west, south, east, north = selected_bounds
     edge_endpoints = (
         ((west, south), (east, south)),
@@ -545,6 +572,8 @@ def _read_raster_statistics(
         Finite sample distribution and a suggested display range.
 
     Raises:
+        NoRasterBoundsOverlapError: If the selected geometry does not overlap
+            the raster.
         NoValidRasterSamplesError: If the sample has no finite data values.
         OSError: If the source cannot be read.
         rasterio.errors.RasterioError: If GDAL cannot open or sample it.
@@ -808,6 +837,11 @@ async def sample_catalog_raster_pixel(
     # HTTP cancellation cannot stop a GDAL thread. Keep its slot occupied until
     # the actual read ends, and retrieve any exception from a detached task.
     def release_read_slot(completed_task: asyncio.Task[RasterPixel]) -> None:
+        """Release one slot after its worker thread actually completes.
+
+        Args:
+            completed_task: Finished pixel-read task.
+        """
         read_semaphore.release()
         if not completed_task.cancelled():
             completed_task.exception()
@@ -831,6 +865,13 @@ class RasterStatisticsService:
         read_concurrency: int = RASTER_STATISTICS_READ_CONCURRENCY,
         cache_entries: int = RASTER_STATISTICS_CACHE_ENTRIES,
     ) -> None:
+        """Create a bounded, coalescing raster statistics service.
+
+        Args:
+            raster_registry: Current-process publication authorizations.
+            read_concurrency: Maximum simultaneous Rasterio statistics reads.
+            cache_entries: Maximum completed statistics documents retained.
+        """
         self._raster_registry = raster_registry
         self._read_semaphore = asyncio.Semaphore(read_concurrency)
         self._cache_entries = cache_entries
@@ -852,7 +893,7 @@ class RasterStatisticsService:
         """Return current statistics, coalescing identical source reads.
 
         Args:
-            request: Validated Item identity for one published raster.
+            request: Validated Item identity and optional selected WGS 84 area.
 
         Returns:
             Cached or newly computed bounded raster statistics.
@@ -927,7 +968,12 @@ class RasterStatisticsService:
         cache_key: RasterStatisticsCacheKey,
         work: _RasterStatisticsWork,
     ) -> None:
-        """Cancel abandoned work only while it remains queued for capacity."""
+        """Cancel abandoned work only while it remains queued for capacity.
+
+        Args:
+            cache_key: Identity of the coalesced statistics work.
+            work: Work whose HTTP waiter has completed or been canceled.
+        """
         async with self._state_lock:
             work.waiter_count -= 1
             if (
@@ -945,7 +991,26 @@ class RasterStatisticsService:
         cache_key: RasterStatisticsCacheKey,
         selected_bounds: CanonicalWgs84Bounds | None,
     ) -> RasterStatistics:
-        """Compute one source signature while retaining its capacity slot."""
+        """Compute one source signature while retaining its capacity slot.
+
+        Args:
+            layer_name: Workspace-qualified approved WMS layer.
+            authorized_raster: Source path and signature approved at request
+                start.
+            cache_key: Stable cache identity for the requested statistics.
+            selected_bounds: Optional canonical selected WGS 84 rectangle.
+
+        Returns:
+            Newly computed bounded raster statistics.
+
+        Raises:
+            HTTPException: If the source changes before or during the read.
+            NoRasterBoundsOverlapError: If selected bounds miss the raster.
+            NoValidRasterSamplesError: If no finite sample values exist.
+            OSError: If the mounted source cannot be read.
+            rasterio.errors.RasterioError: If GDAL cannot sample the source.
+            ValueError: If coordinate transformation or statistics fail.
+        """
         read_task = cast(
             asyncio.Task[RasterStatistics],
             asyncio.current_task(),
@@ -995,7 +1060,11 @@ class RasterStatisticsService:
     def _retrieve_task_exception(
         completed_task: asyncio.Task[RasterStatistics],
     ) -> None:
-        """Retrieve failures from work that outlived a canceled HTTP request."""
+        """Retrieve failures from work that outlived a canceled HTTP request.
+
+        Args:
+            completed_task: Finished or canceled coalesced statistics task.
+        """
         if not completed_task.cancelled():
             completed_task.exception()
 

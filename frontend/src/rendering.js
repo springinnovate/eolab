@@ -70,15 +70,34 @@ const WGS84_MEAN_RADIUS_KM = 6371.0088;
 
 class RasterSampleWindowBoundaryError extends RangeError {}
 
+/**
+ * Build a style-validation error with the affected control group.
+ *
+ * @param {string} message User-facing validation message.
+ * @param {string} fieldGroup Style control group that failed validation.
+ * @return {Error & {fieldGroup: string}} Annotated validation error.
+ */
 function rasterStyleContractError(message, fieldGroup) {
     return Object.assign(new Error(message), { fieldGroup });
 }
 
+/**
+ * Build a stable error for a malformed statistics response.
+ *
+ * @param {string} detail Name of the response contract that failed.
+ * @return {Error} User-safe response validation error.
+ */
 function rasterStatisticsContractError(detail) {
     return new Error(`Raster statistics returned invalid ${detail}.`);
 }
 
-/** Return a user-safe rendering error from FastAPI or an upstream proxy. */
+/**
+ * Return a user-safe rendering error from FastAPI or an upstream proxy.
+ *
+ * @param {Response} response Failed rendering response.
+ * @param {string} action User-facing description of the request.
+ * @return {Promise<Error>} Structured FastAPI detail or a status fallback.
+ */
 async function renderingRequestError(response, action) {
     const fallbackMessage = `${action} failed (${response.status})`;
     if (!response.headers.get("content-type")?.toLowerCase().includes(
@@ -99,11 +118,23 @@ async function renderingRequestError(response, action) {
     }
 }
 
+/**
+ * Test whether a value is a positive integer.
+ *
+ * @param {*} value Candidate value.
+ * @return {boolean} Whether value is an integer greater than zero.
+ */
 function isPositiveInteger(value) {
     return Number.isInteger(value) && value > 0;
 }
 
-/** Enforce the fixed user-facing sample-size contract. */
+/**
+ * Enforce the fixed user-facing sample-size contract.
+ *
+ * @param {number} sideLengthKm Requested square side length in kilometers.
+ * @return {number} The validated side length.
+ * @throws {RangeError} If the side length is nonintegral or outside 1-300 km.
+ */
 export function validateRasterSampleWindowSize(sideLengthKm) {
     if (
         !Number.isFinite(sideLengthKm) ||
@@ -120,7 +151,13 @@ export function validateRasterSampleWindowSize(sideLengthKm) {
     return sideLengthKm;
 }
 
-/** Validate one server-compatible WGS 84 statistics rectangle. */
+/**
+ * Validate one server-compatible WGS 84 statistics rectangle.
+ *
+ * @param {Object} bounds Candidate west, south, east, and north coordinates.
+ * @return {Object} The validated non-wrapping WGS 84 bounds.
+ * @throws {Error} If fields, ranges, or coordinate ordering are invalid.
+ */
 export function validateRasterSelectedBounds(bounds) {
     if (bounds === null || typeof bounds !== "object") {
         throw rasterStatisticsContractError("selected bounds");
@@ -259,7 +296,13 @@ export function validateRasterStatistics(statistics) {
     return statistics;
 }
 
-/** Return whether one distribution belongs to the active histogram scope. */
+/**
+ * Return whether one distribution belongs to the active histogram scope.
+ *
+ * @param {Object} statistics Validated raster statistics.
+ * @param {Object|null} selectedBounds Active selected-area bounds, if any.
+ * @return {boolean} Whether statistics describe the active scope exactly.
+ */
 export function rasterStatisticsMatchesSelection(statistics, selectedBounds) {
     if (selectedBounds === null) {
         return statistics.scope === "wholeRaster";
@@ -274,7 +317,14 @@ export function rasterStatisticsMatchesSelection(statistics, selectedBounds) {
     );
 }
 
-/** Return a destination reached along a spherical WGS 84 geodesic. */
+/**
+ * Return a destination reached along a spherical WGS 84 geodesic.
+ *
+ * @param {{longitude: number, latitude: number}} center Starting position.
+ * @param {number} distanceKm Distance from the center in kilometers.
+ * @param {number} bearingDegrees Clockwise bearing from north in degrees.
+ * @return {{longitude: number, latitude: number}} Destination in WGS 84.
+ */
 function rasterSampleDestination(center, distanceKm, bearingDegrees) {
     const latitude = center.latitude * Math.PI / 180;
     const longitude = center.longitude * Math.PI / 180;
@@ -302,6 +352,13 @@ function rasterSampleDestination(center, distanceKm, bearingDegrees) {
  * Build an axis-aligned WGS 84 square whose ground dimensions approximate the
  * requested side length. A date-line or polar crossing is deliberately not
  * represented by the selected-bounds API contract.
+ *
+ * @param {{longitude: number, latitude: number}} center Window center.
+ * @param {number} sideLengthKm Approximate ground side length in kilometers.
+ * @return {Object} Canonical west, south, east, and north WGS 84 bounds.
+ * @throws {RangeError} If the center or size violates the selection contract.
+ * @throws {RasterSampleWindowBoundaryError} If the window crosses a pole or
+ * date line.
  */
 export function buildRasterSampleWindowBounds(center, sideLengthKm) {
     if (
@@ -342,7 +399,14 @@ export function buildRasterSampleWindowBounds(center, sideLengthKm) {
     });
 }
 
-/** Convert canonical bounds to Leaflet corners in one visible world copy. */
+/**
+ * Convert canonical bounds to Leaflet corners in one visible world copy.
+ *
+ * @param {Object} bounds Canonical WGS 84 selected bounds.
+ * @param {number} [longitudeOffset] World-copy longitude offset in degrees.
+ * @return {Array<Array<number>>} Southwest and northeast Leaflet corners.
+ * @throws {Error} If bounds or longitudeOffset violate their contracts.
+ */
 export function rasterSampleBoundsToLeaflet(bounds, longitudeOffset = 0) {
     validateRasterSelectedBounds(bounds);
     if (!Number.isFinite(longitudeOffset)) {
@@ -363,6 +427,7 @@ export function rasterSampleBoundsToLeaflet(bounds, longitudeOffset = 0) {
  * @param {Object} statistics Validated raster statistics.
  * @param {number} percentile Percentile from 0 through 100.
  * @return {number} Approximate sampled raster value.
+ * @throws {Error} If percentile is nonfinite or outside 0-100.
  */
 export function estimateRasterHistogramPercentile(statistics, percentile) {
     if (!Number.isFinite(percentile) || percentile < 0 || percentile > 100) {
@@ -415,6 +480,12 @@ export function estimateRasterHistogramPercentile(statistics, percentile) {
     return statistics.sampleMaximum;
 }
 
+/**
+ * Calculate scale-relative padding for repeated raster values.
+ *
+ * @param {number[]} values Finite raster values.
+ * @return {number} Positive padding suitable for a strict range.
+ */
 function rasterRangePadding(values) {
     const magnitude = Math.max(...values.map(Math.abs));
     if (magnitude === 0) {
@@ -423,7 +494,15 @@ function rasterRangePadding(values) {
     return Math.max(magnitude * 1e-6, Number.MIN_VALUE);
 }
 
-/** Expand repeated quantiles just enough to satisfy the strict style range. */
+/**
+ * Expand repeated quantiles just enough to satisfy the strict style range.
+ *
+ * @param {number} minimum Approximate lower percentile value.
+ * @param {number} midpoint Approximate middle percentile value.
+ * @param {number} maximum Approximate upper percentile value.
+ * @return {{minimum:number,midpoint:number,maximum:number}} Strict range.
+ * @throws {Error} If finite inputs cannot form a strictly ordered range.
+ */
 function makeRasterRangeStrict(minimum, midpoint, maximum) {
     if (minimum < midpoint && midpoint < maximum) {
         return { minimum, midpoint, maximum };
@@ -480,6 +559,7 @@ function makeRasterRangeStrict(minimum, midpoint, maximum) {
  * @param {Object} statistics Validated raster statistics.
  * @param {{lower:number,middle:number,upper:number}} percentiles Selection.
  * @return {RasterStyle} Style with approximate histogram-derived thresholds.
+ * @throws {Error} If percentiles are nonfinite, unordered, or out of range.
  */
 export function deriveRasterStyleFromStatistics(
     style,
@@ -523,14 +603,21 @@ export function deriveRasterStyleFromStatistics(
     };
 }
 
-/** Return an initial style only if no manual edit superseded its request. */
+/**
+ * Return an initial style only when the user has not edited the appearance.
+ *
+ * @param {RasterStyle} style Current colors and thresholds.
+ * @param {Object} statistics Validated whole-raster statistics.
+ * @param {boolean} styleWasEdited Whether the user changed the appearance.
+ * @return {RasterStyle|null} Histogram-derived style, or null after an edit.
+ * @throws {Error} If the statistics cannot form a strict raster style.
+ */
 export function deriveInitialRasterStyleFromStatistics(
     style,
     statistics,
-    requestedStyleRevision,
-    currentStyleRevision
+    styleWasEdited
 ) {
-    if (requestedStyleRevision !== currentStyleRevision) {
+    if (styleWasEdited) {
         return null;
     }
     return deriveRasterStyleFromStatistics(style, statistics);
@@ -659,7 +746,15 @@ export async function loadWmsCapabilities(
     return capabilitiesUrl;
 }
 
-/** Send one selected STAC Item identity to a rendering endpoint. */
+/**
+ * Send one selected STAC Item identity to a rendering endpoint.
+ *
+ * @param {string} endpoint Same-origin rendering API endpoint.
+ * @param {Object} item Selected STAC Item.
+ * @param {Function} fetchImplementation Browser fetch implementation.
+ * @return {Promise<Object>} Parsed JSON response document.
+ * @throws {Error} If the request fails or the endpoint rejects it.
+ */
 async function postCatalogRasterAction(
     endpoint,
     item,
@@ -687,7 +782,14 @@ async function postCatalogRasterAction(
     return response.json();
 }
 
-/** Assess and update one selected legacy raster Item. */
+/**
+ * Assess and update one selected legacy raster Item.
+ *
+ * @param {Object} item Selected STAC Item.
+ * @param {Function} fetchImplementation Browser fetch implementation.
+ * @return {Promise<Object>} Updated authoritative STAC Item.
+ * @throws {Error} If assessment or catalog persistence fails.
+ */
 export function assessCatalogRaster(
     item,
     fetchImplementation = globalThis.fetch
@@ -699,7 +801,14 @@ export function assessCatalogRaster(
     );
 }
 
-/** Ask EOLab to publish the authoritative STAC Item as a WMS layer. */
+/**
+ * Ask EOLab to publish the authoritative STAC Item as a WMS layer.
+ *
+ * @param {Object} item Selected STAC Item.
+ * @param {Function} fetchImplementation Browser fetch implementation.
+ * @return {Promise<Object>} Published layer identity and bounds.
+ * @throws {Error} If publication fails or the raster is not eligible.
+ */
 export function publishCatalogRaster(
     item,
     fetchImplementation = globalThis.fetch
@@ -819,6 +928,7 @@ export async function sampleCatalogRasterPixel(
  *
  * @param {Object} item Selected mounted GeoTIFF STAC Item.
  * @return {string} Decoded raster filename, including its extension.
+ * @throws {TypeError} If the scanner-owned Asset URL is invalid.
  */
 export function getCatalogRasterBasename(item) {
     const pathname = new URL(item.assets.data.href).pathname;
@@ -882,6 +992,14 @@ export function formatRasterPixelValue(value) {
     return value === 0 ? "0" : value.toExponential(3);
 }
 
+/**
+ * Interpolate a six-digit RGB color between two ramp stops.
+ *
+ * @param {string} startColor Lower six-digit hex color.
+ * @param {string} endColor Upper six-digit hex color.
+ * @param {number} position Interpolation fraction from zero through one.
+ * @return {string} Interpolated six-digit hex color.
+ */
 function interpolateRasterColor(startColor, endColor, position) {
     const start = Number.parseInt(startColor.slice(1), 16);
     const end = Number.parseInt(endColor.slice(1), 16);
@@ -894,7 +1012,13 @@ function interpolateRasterColor(startColor, endColor, position) {
     ).join("")}`;
 }
 
-/** Return the active three-stop raster-ramp color for one pixel value. */
+/**
+ * Return the active three-stop raster-ramp color for one pixel value.
+ *
+ * @param {RasterStyle} style Committed raster style.
+ * @param {number} value Raster value to color.
+ * @return {string} Interpolated six-digit hex color.
+ */
 export function getRasterStyleColor(style, value) {
     if (value <= style.minimum) {
         return style.minimumColor;
@@ -981,7 +1105,12 @@ export function renderRasterHistogramChart(
     chart.removeAttribute("hidden");
 }
 
-/** Remove a histogram and hide its SVG through the SVG attribute contract. */
+/**
+ * Remove a histogram and hide its SVG through the SVG attribute contract.
+ *
+ * @param {SVGSVGElement} chart Histogram chart element.
+ * @return {void}
+ */
 export function clearRasterHistogramChart(chart) {
     chart.replaceChildren();
     chart.setAttribute("hidden", "");
@@ -996,6 +1125,7 @@ export class RasterPixelProbeController {
      * @param {Object} [timing] Injectable clock used by deterministic tests.
      * @param {Object} [timing.clock] setTimeout/clearTimeout implementation.
      * @param {Function} [timing.now] Current time in milliseconds.
+     * @throws {TypeError} If collaborators are not callable when invoked.
      */
     constructor(
         probePixel,
@@ -1041,7 +1171,11 @@ export class RasterPixelProbeController {
         this.#schedule();
     }
 
-    /** Cancel pending work while retaining the active Item. */
+    /**
+     * Cancel pending work while retaining the active Item.
+     *
+     * @return {void}
+     */
     cancel() {
         this.requestSequence += 1;
         this.pendingPoint = null;
@@ -1054,12 +1188,21 @@ export class RasterPixelProbeController {
         this.abortController = null;
     }
 
-    /** Cancel pending work and remove the active Item. */
+    /**
+     * Cancel pending work and remove the active Item.
+     *
+     * @return {void}
+     */
     clear() {
         this.cancel();
         this.item = null;
     }
 
+    /**
+     * Schedule the retained position at the next allowed request time.
+     *
+     * @return {void}
+     */
     #schedule() {
         if (
             this.timeoutId !== null ||
@@ -1079,6 +1222,11 @@ export class RasterPixelProbeController {
         }, delay);
     }
 
+    /**
+     * Sample the retained position and deliver only a current result.
+     *
+     * @return {Promise<void>}
+     */
     async #sample() {
         const point = this.pendingPoint;
         const item = this.item;
@@ -1125,6 +1273,7 @@ export class RasterSampleWindowController {
      * @param {Function} layerFactory Creates preview or selection rectangles.
      * @param {Function} onSelect Receives committed WGS 84 bounds.
      * @param {Function} onGuidance Receives user-safe selection guidance.
+     * @throws {TypeError} If collaborators do not implement their contracts.
      */
     constructor(leafletMap, layerFactory, onSelect, onGuidance) {
         this.leafletMap = leafletMap;
@@ -1148,7 +1297,11 @@ export class RasterSampleWindowController {
         this.onClick = (event) => this.#selectAt(event.latlng);
     }
 
-    /** Start selection handlers without issuing a statistics request. */
+    /**
+     * Start selection handlers without issuing a statistics request.
+     *
+     * @return {void}
+     */
     enable() {
         if (this.enabled) {
             return;
@@ -1161,7 +1314,11 @@ export class RasterSampleWindowController {
         this.#previewAt(this.leafletMap.getCenter());
     }
 
-    /** Stop selection handlers while retaining the committed rectangle. */
+    /**
+     * Stop selection handlers while retaining the committed rectangle.
+     *
+     * @return {void}
+     */
     disable() {
         if (!this.enabled) {
             return;
@@ -1174,7 +1331,13 @@ export class RasterSampleWindowController {
         this.#removePreview();
     }
 
-    /** Change the ground-distance side length used by later previews/clicks. */
+    /**
+     * Change the ground-distance side length used by later previews/clicks.
+     *
+     * @param {number} sideLengthKm Integer side length from 1 through 300 km.
+     * @return {void}
+     * @throws {RangeError} If the side length violates the window contract.
+     */
     setWindowSize(sideLengthKm) {
         this.windowSizeKm = validateRasterSampleWindowSize(sideLengthKm);
         if (this.enabled && this.lastPosition !== null) {
@@ -1182,12 +1345,20 @@ export class RasterSampleWindowController {
         }
     }
 
-    /** Commit a selection at the current map center for keyboard/touch access. */
+    /**
+     * Commit a selection at the current map center for keyboard/touch access.
+     *
+     * @return {Object|null} Canonical selected bounds, or null near an edge.
+     */
     sampleMapCenter() {
         return this.#selectAt(this.leafletMap.getCenter());
     }
 
-    /** Remove only the committed area, retaining the hover interaction. */
+    /**
+     * Remove only the committed area, retaining the hover interaction.
+     *
+     * @return {void}
+     */
     clearSelection() {
         if (this.selectionLayer !== null) {
             this.leafletMap.removeLayer(this.selectionLayer);
@@ -1196,7 +1367,11 @@ export class RasterSampleWindowController {
         this.selectionBounds = null;
     }
 
-    /** Remove all layers, handlers, and pointer state for the active Item. */
+    /**
+     * Remove all layers, handlers, and pointer state for the active Item.
+     *
+     * @return {void}
+     */
     clear() {
         this.disable();
         this.clearSelection();
@@ -1204,14 +1379,24 @@ export class RasterSampleWindowController {
         this.onGuidance("");
     }
 
+    /** @return {boolean} Whether hover-and-click selection is active. */
     get isEnabled() {
         return this.enabled;
     }
 
+    /** @return {Object|null} Last committed canonical WGS 84 bounds. */
     get selectedBounds() {
         return this.selectionBounds;
     }
 
+    /**
+     * Build API and visible-world bounds at one Leaflet position.
+     *
+     * @param {{lng: number, lat: number}} position Leaflet map position.
+     * @return {{bounds:Object,leafletBounds:Array}|null} Sampling window, or
+     * null when it crosses a pole or date line.
+     * @throws {RangeError} If the position or configured size is invalid.
+     */
     #boundsAt(position) {
         const normalizedPosition = this.#normalizePosition(position);
         try {
@@ -1240,6 +1425,13 @@ export class RasterSampleWindowController {
         }
     }
 
+    /**
+     * Move or create the transient preview at one map position.
+     *
+     * @param {{lng: number, lat: number}} position Leaflet map position.
+     * @return {void}
+     * @throws {RangeError} If the position or configured size is invalid.
+     */
     #previewAt(position) {
         this.lastPosition = position;
         const sampleWindow = this.#boundsAt(position);
@@ -1256,6 +1448,13 @@ export class RasterSampleWindowController {
         }
     }
 
+    /**
+     * Commit and report one sample window at a map position.
+     *
+     * @param {{lng: number, lat: number}} position Leaflet map position.
+     * @return {Object|null} Canonical bounds, or null near a pole/date line.
+     * @throws {RangeError} If the position or configured size is invalid.
+     */
     #selectAt(position) {
         this.lastPosition = position;
         const sampleWindow = this.#boundsAt(position);
@@ -1275,11 +1474,22 @@ export class RasterSampleWindowController {
         return sampleWindow.bounds;
     }
 
+    /**
+     * Normalize a Leaflet world-copy position to canonical WGS 84 longitude.
+     *
+     * @param {{lng: number, lat: number}} position Leaflet map position.
+     * @return {{lng: number, lat: number}} Canonical longitude and latitude.
+     */
     #normalizePosition(position) {
         const longitude = ((position.lng + 180) % 360 + 360) % 360 - 180;
         return { lng: longitude, lat: position.lat };
     }
 
+    /**
+     * Remove the transient preview layer if present.
+     *
+     * @return {void}
+     */
     #removePreview() {
         if (this.previewLayer !== null) {
             this.leafletMap.removeLayer(this.previewLayer);
@@ -1295,6 +1505,7 @@ export class RasterStatisticsController {
      * @param {Function} onLoading Receives the active Item and request context.
      * @param {Function} onResult Receives current statistics, Item, and context.
      * @param {Function} onError Receives the current failure, Item, and context.
+     * @throws {TypeError} If collaborators are not callable when invoked.
      */
     constructor(loadStatistics, onLoading, onResult, onError) {
         this.loadStatistics = loadStatistics;
@@ -1307,7 +1518,15 @@ export class RasterStatisticsController {
         this.requestSequence = 0;
     }
 
-    /** Start a new statistics request for the active rendered Item. */
+    /**
+     * Start a new statistics request for the active rendered Item.
+     *
+     * @param {Object} item Selected STAC Item.
+     * @param {*} [context] Opaque request context returned to callbacks.
+     * @param {Object|null} [selectedBounds] Optional WGS 84 selection.
+     * @return {Promise<Object|null>} Current statistics, or null after failure
+     * or invalidation.
+     */
     async activate(item, context = undefined, selectedBounds = null) {
         this.clear();
         this.item = item;
@@ -1343,7 +1562,12 @@ export class RasterStatisticsController {
         return statistics;
     }
 
-    /** Repeat the active Item's request after a recoverable failure. */
+    /**
+     * Repeat the active Item's request after a recoverable failure.
+     *
+     * @param {*} [context] Opaque request context returned to callbacks.
+     * @return {Promise<Object|null>} Retried statistics or null without an Item.
+     */
     retry(context = undefined) {
         const item = this.item;
         const selectedBounds = this.selectedBounds;
@@ -1352,7 +1576,11 @@ export class RasterStatisticsController {
             : this.activate(item, context, selectedBounds);
     }
 
-    /** Abort and invalidate pending work and forget the active Item. */
+    /**
+     * Abort and invalidate pending work and forget the active Item.
+     *
+     * @return {void}
+     */
     clear() {
         this.requestSequence += 1;
         this.abortController?.abort();
@@ -1368,6 +1596,7 @@ export class CatalogRasterLayerController {
      * @param {Object} leafletMap Leaflet-compatible map.
      * @param {Function} publishRaster Publishes one selected STAC Item.
      * @param {Function} layerFactory Creates a Leaflet layer from publication.
+     * @throws {TypeError} If collaborators do not implement their contracts.
      */
     constructor(leafletMap, publishRaster, layerFactory) {
         this.leafletMap = leafletMap;
@@ -1397,7 +1626,11 @@ export class CatalogRasterLayerController {
         return publishedRaster;
     }
 
-    /** Invalidate pending publication and remove a displayed layer, if any. */
+    /**
+     * Invalidate pending publication and remove a displayed layer, if any.
+     *
+     * @return {void}
+     */
     clear() {
         this.requestSequence += 1;
         if (this.activeLayer !== null) {

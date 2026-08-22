@@ -508,7 +508,7 @@ function initializeRasterVisualization(
     let pixelProbeClientPosition = null;
     let pixelProbeSize = { width: 0, height: 0 };
     let rasterStyleCommitTimeout = null;
-    let rasterStyleRevision = 0;
+    let rasterStyleWasEdited = false;
     let rasterStatistics = null;
     let rasterStatisticsIsApplicable = false;
     let wholeRasterStatistics = null;
@@ -798,20 +798,16 @@ function initializeRasterVisualization(
         rasterHistogram.setAttribute("aria-busy", "true");
         rasterHistogramStatus.textContent =
             scope === "selectedArea"
-                ? "Calculating an approximate distribution for the selected area…"
-                : "Calculating an approximate whole-raster distribution…";
+                ? "Calculating an approximate distribution for the selected area..."
+                : "Calculating an approximate whole-raster distribution...";
     }
 
     /** Apply the initial whole-raster range if no manual edit superseded it. */
-    function applyInitialWholeRasterStyle(statistics, requestContext) {
-        if (requestContext?.autoApply !== true) {
-            return false;
-        }
+    function applyInitialWholeRasterStyle(statistics) {
         const initialStyle = deriveInitialRasterStyleFromStatistics(
             rasterStyle,
             statistics,
-            requestContext.styleRevision,
-            rasterStyleRevision
+            rasterStyleWasEdited
         );
         if (initialStyle === null) {
             return false;
@@ -902,13 +898,12 @@ function initializeRasterVisualization(
         }
     }
 
-    function renderWholeRasterStatistics(statistics, _item, requestContext) {
+    function renderWholeRasterStatistics(statistics) {
         wholeRasterStatistics = statistics;
         wholeRasterStatisticsState = "ready";
         wholeRasterStatisticsError = null;
         const initialRangeApplied = applyInitialWholeRasterStyle(
-            statistics,
-            requestContext
+            statistics
         );
         if (selectedRasterBounds === null) {
             renderRasterStatistics(statistics, initialRangeApplied);
@@ -929,8 +924,8 @@ function initializeRasterVisualization(
         retryRasterStatisticsButton.hidden = true;
         applyRasterPercentilesButton.disabled = true;
         rasterHistogramStatus.textContent = rasterStatistics === null
-            ? "Calculating an approximate distribution for the selected area…"
-            : "Calculating an approximate distribution for the selected area… " +
+            ? "Calculating an approximate distribution for the selected area..."
+            : "Calculating an approximate distribution for the selected area... " +
               "The previous distribution remains visible for reference and " +
               "cannot be applied to this selection.";
     }
@@ -1125,7 +1120,7 @@ function initializeRasterVisualization(
     /** Remove the active raster and restore the default appearance. */
     function reset() {
         clear();
-        rasterStyleRevision = 0;
+        rasterStyleWasEdited = false;
         resetRasterStyle();
     }
 
@@ -1139,17 +1134,14 @@ function initializeRasterVisualization(
             pixelProbeController.activate(item);
             rasterSampleWindowController.enable();
             renderRasterSampleWindowGuidance("");
-            void wholeRasterStatisticsController.activate(item, {
-                styleRevision: rasterStyleRevision,
-                autoApply: rasterStyleRevision === 0
-            });
+            void wholeRasterStatisticsController.activate(item);
         }
         return publishedRaster;
     }
 
     for (const input of Object.values(rasterStyleInputs)) {
         input.addEventListener("input", () => {
-            rasterStyleRevision += 1;
+            rasterStyleWasEdited = true;
             if (input.type === "color") {
                 rasterPalette.value = "custom";
             }
@@ -1161,7 +1153,7 @@ function initializeRasterVisualization(
         if (rasterPalette.value === "custom") {
             return;
         }
-        rasterStyleRevision += 1;
+        rasterStyleWasEdited = true;
         const candidate = validateRasterStyleControls();
         if (candidate === null) {
             rasterPalette.value = "custom";
@@ -1177,7 +1169,7 @@ function initializeRasterVisualization(
         commitRasterStyle();
     });
     resetRasterStyleButton.addEventListener("click", () => {
-        rasterStyleRevision += 1;
+        rasterStyleWasEdited = true;
         resetRasterStyle();
         commitRasterStyle();
         if (wholeRasterStatistics !== null) {
@@ -1207,7 +1199,7 @@ function initializeRasterVisualization(
             rasterStatistics,
             percentiles
         );
-        rasterStyleRevision += 1;
+        rasterStyleWasEdited = true;
         rasterStyle = histogramStyle;
         setRasterStyleControls(rasterStyle, rasterPalette.value);
         commitRasterStyle();
@@ -1219,10 +1211,7 @@ function initializeRasterVisualization(
         if (selectedRasterBounds !== null) {
             void selectedRasterStatisticsController.retry();
         } else {
-            void wholeRasterStatisticsController.retry({
-                styleRevision: rasterStyleRevision,
-                autoApply: rasterStyleRevision === 0
-            });
+            void wholeRasterStatisticsController.retry();
         }
     });
     rasterSampleWindowRange.addEventListener("input", () => {

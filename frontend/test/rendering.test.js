@@ -364,13 +364,12 @@ test("constant and tiny raster suggestions preserve strict style ordering", () =
   );
 });
 
-test("late statistics never replace a manually revised style", () => {
+test("late statistics never replace a manually edited style", () => {
   assert.deepEqual(
     deriveInitialRasterStyleFromStatistics(
       DEFAULT_RASTER_STYLE,
       RASTER_STATISTICS,
-      2,
-      3,
+      true,
     ),
     null,
   );
@@ -378,8 +377,7 @@ test("late statistics never replace a manually revised style", () => {
     deriveInitialRasterStyleFromStatistics(
       DEFAULT_RASTER_STYLE,
       RASTER_STATISTICS,
-      3,
-      3,
+      false,
     ).minimum,
     -4,
   );
