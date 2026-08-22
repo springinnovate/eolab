@@ -17,6 +17,7 @@ from eolab_app.catalog.geotiff import build_stac_item as build_geotiff_stac_item
 from eolab_app.main import create_app
 from eolab_app.settings import load_settings
 from tests.app_support import (
+    GeoServerPublicationMock,
     TEST_GEOTIFF_ITEM_ID,
     mounted_geotiff_item as _mounted_geotiff_item,
     write_geotiff as _write_geotiff,
@@ -238,7 +239,18 @@ def test_catalog_geotiff_is_published_idempotently(
     version_file_path: Path,
     asset_media_type: str,
 ) -> None:
-    """Resolve STAC server-side and reuse one deterministic GeoServer layer."""
+    """Resolve STAC server-side and reuse one deterministic GeoServer layer.
+
+    Args:
+        configured_environment: Applied baseline application environment.
+        monkeypatch: Environment mutation fixture for the scan mount.
+        tmp_path: Temporary directory containing the controlled raster.
+        version_file_path: Baked application-version fixture path.
+        asset_media_type: GeoTIFF or COG Asset media type under test.
+
+    Returns:
+        None.
+    """
     source_path = tmp_path / "nested" / "raster with spaces.tif"
     _write_geotiff(source_path)
     monkeypatch.setenv("SCAN_MOUNT_PATH", str(tmp_path))
@@ -251,9 +263,20 @@ def test_catalog_geotiff_is_published_idempotently(
         90.0004116853666,
     ]
     resource_name = TEST_GEOTIFF_ITEM_ID
-    geoserver_requests: list[httpx2.Request] = []
+    publication_mock = GeoServerPublicationMock(resource_name)
 
     def upstream_response(request: httpx2.Request) -> httpx2.Response:
+        """Return the controlled catalog or GeoServer response.
+
+        Args:
+            request: Upstream request issued by the application.
+
+        Returns:
+            Catalog Item or stateful GeoServer publication response.
+
+        Raises:
+            AssertionError: If authorization or a mutation contract differs.
+        """
         if request.url.host == "stac-api":
             assert request.url.path == (
                 "/collections/eolab-mounted-geotiffs/items/"
@@ -262,7 +285,6 @@ def test_catalog_geotiff_is_published_idempotently(
             assert "authorization" not in request.headers
             return httpx2.Response(200, json=item)
 
-        geoserver_requests.append(request)
         expected_authorization = "Basic " + base64.b64encode(
             b"eolab:valid-admin-password"
         ).decode()
@@ -272,6 +294,7 @@ def test_catalog_geotiff_is_published_idempotently(
             f"{resource_name}/external.geotiff"
         )
         layer_path = f"/geoserver/rest/workspaces/eolab/layers/{resource_name}"
+        response = publication_mock(request)
         if request.url.path == external_geotiff_path:
             assert request.method == "PUT"
             assert request.headers["accept"] == "application/json"
@@ -279,14 +302,12 @@ def test_catalog_geotiff_is_published_idempotently(
             assert request.url.params["configure"] == "first"
             assert request.url.params["coverageName"] == resource_name
             assert request.content.decode() == source_path.resolve().as_uri()
-            return httpx2.Response(201)
         if request.url.path == f"{layer_path}.xml":
             assert request.method == "PUT"
             assert request.headers["content-type"] == "application/xml"
             assert b"<name>dynamic-raster</name>" in request.content
             assert b"<workspace>eolab</workspace>" in request.content
-            return httpx2.Response(200)
-        raise AssertionError(f"Unexpected GeoServer request: {request}")
+        return response
 
     with TestClient(
         create_app(
@@ -317,8 +338,13 @@ def test_catalog_geotiff_is_published_idempotently(
     assert first_response.status_code == 200
     assert first_response.json() == expected_response
     assert repeated_response.json() == expected_response
-    assert [request.method for request in geoserver_requests] == ["PUT"] * 4
-    assert len({request.url.path for request in geoserver_requests}) == 2
+    mutation_requests = [
+        request
+        for request in publication_mock.requests
+        if request.method != "GET"
+    ]
+    assert [request.method for request in mutation_requests] == ["PUT"] * 3
+    assert len({request.url.path for request in mutation_requests}) == 2
 
 
 def test_one_outdated_raster_is_assessed_and_updated(
@@ -529,24 +555,44 @@ def test_raster_changed_during_publication_is_not_authorized(
     tmp_path: Path,
     version_file_path: Path,
 ) -> None:
-    """Keep a source replacement out of WMS after GeoServer REST succeeds."""
+    """Keep a source replacement out of WMS after GeoServer REST succeeds.
+
+    Args:
+        configured_environment: Applied baseline application environment.
+        monkeypatch: Environment mutation fixture for the scan mount.
+        tmp_path: Temporary directory containing the controlled raster.
+        version_file_path: Baked application-version fixture path.
+
+    Returns:
+        None.
+    """
     source_path = tmp_path / "raster.tif"
     _write_geotiff(source_path)
     monkeypatch.setenv("SCAN_MOUNT_PATH", str(tmp_path))
     monkeypatch.setenv("SCAN_PATHS_WITHIN_MOUNT", '["."]')
     item = _mounted_geotiff_item(source_path.as_uri())
-    geoserver_requests = []
+    def replace_source() -> None:
+        """Replace the source while GeoServer creates its publication.
+
+        Returns:
+            None.
+        """
+        source_path.write_bytes(b"replacement")
+
+    publication_mock = GeoServerPublicationMock(on_create=replace_source)
 
     def upstream_response(request: httpx2.Request) -> httpx2.Response:
+        """Return the controlled catalog or GeoServer response.
+
+        Args:
+            request: Upstream request issued by the application.
+
+        Returns:
+            Catalog Item or stateful GeoServer publication response.
+        """
         if request.url.host == "stac-api":
             return httpx2.Response(200, json=item)
-        geoserver_requests.append(request)
-        if request.url.path.endswith("/external.geotiff"):
-            source_path.write_bytes(b"replacement")
-            return httpx2.Response(201)
-        if request.url.path.endswith(f"/{TEST_GEOTIFF_ITEM_ID}.xml"):
-            return httpx2.Response(200)
-        raise AssertionError(f"Unexpected GeoServer request: {request}")
+        return publication_mock(request)
 
     with TestClient(
         create_app(
@@ -573,7 +619,9 @@ def test_raster_changed_during_publication_is_not_authorized(
         "detail": "The GeoTIFF changed while it was being published"
     }
     assert tile_response.status_code == 400
-    assert len(geoserver_requests) == 2
+    assert sum(
+        request.method == "PUT" for request in publication_mock.requests
+    ) == 2
 
 
 @pytest.mark.parametrize(
@@ -727,7 +775,17 @@ def test_pixel_probe_samples_nodata_and_outside_the_published_raster(
     tmp_path: Path,
     version_file_path: Path,
 ) -> None:
-    """Read one band-1 cell and distinguish nodata from out-of-bounds."""
+    """Read one band-1 cell and distinguish nodata from out-of-bounds.
+
+    Args:
+        configured_environment: Applied baseline application environment.
+        monkeypatch: Environment mutation fixture for the scan mount.
+        tmp_path: Temporary directory containing the controlled raster.
+        version_file_path: Baked application-version fixture path.
+
+    Returns:
+        None.
+    """
     source_path = tmp_path / "raster.tif"
     with rasterio.open(
         source_path,
@@ -748,15 +806,20 @@ def test_pixel_probe_samples_nodata_and_outside_the_published_raster(
     monkeypatch.setenv("SCAN_MOUNT_PATH", str(tmp_path))
     monkeypatch.setenv("SCAN_PATHS_WITHIN_MOUNT", '["."]')
     item = _mounted_geotiff_item(source_path.as_uri())
+    publication_mock = GeoServerPublicationMock()
 
     def upstream_response(request: httpx2.Request) -> httpx2.Response:
+        """Return the controlled catalog or GeoServer response.
+
+        Args:
+            request: Upstream request issued by the application.
+
+        Returns:
+            Catalog Item or stateful GeoServer publication response.
+        """
         if request.url.host == "stac-api":
             return httpx2.Response(200, json=item)
-        if request.url.path.endswith("/external.geotiff"):
-            return httpx2.Response(201)
-        if request.url.path.endswith(f"/{TEST_GEOTIFF_ITEM_ID}.xml"):
-            return httpx2.Response(200)
-        raise AssertionError(f"Unexpected upstream request: {request}")
+        return publication_mock(request)
 
     request_identity = {
         "collectionId": "eolab-mounted-geotiffs",
@@ -819,7 +882,17 @@ def test_raster_statistics_sample_a_published_projected_raster(
     tmp_path: Path,
     version_file_path: Path,
 ) -> None:
-    """Transform, clip, and summarize a WGS 84 area in a projected raster."""
+    """Transform, clip, and summarize a WGS 84 area in a projected raster.
+
+    Args:
+        configured_environment: Applied baseline application environment.
+        monkeypatch: Environment mutation fixture for the scan mount.
+        tmp_path: Temporary directory containing the controlled raster.
+        version_file_path: Baked application-version fixture path.
+
+    Returns:
+        None.
+    """
     source_path = tmp_path / "projected.tif"
     with rasterio.open(
         source_path,
@@ -839,15 +912,20 @@ def test_raster_statistics_sample_a_published_projected_raster(
     monkeypatch.setenv("SCAN_MOUNT_PATH", str(tmp_path))
     monkeypatch.setenv("SCAN_PATHS_WITHIN_MOUNT", '["."]')
     item = _mounted_geotiff_item(source_path.as_uri())
+    publication_mock = GeoServerPublicationMock()
 
     def upstream_response(request: httpx2.Request) -> httpx2.Response:
+        """Return the controlled catalog or GeoServer response.
+
+        Args:
+            request: Upstream request issued by the application.
+
+        Returns:
+            Catalog Item or stateful GeoServer publication response.
+        """
         if request.url.host == "stac-api":
             return httpx2.Response(200, json=item)
-        if request.url.path.endswith("/external.geotiff"):
-            return httpx2.Response(201)
-        if request.url.path.endswith(f"/{TEST_GEOTIFF_ITEM_ID}.xml"):
-            return httpx2.Response(200)
-        raise AssertionError(f"Unexpected upstream request: {request}")
+        return publication_mock(request)
 
     request_identity = {
         "collectionId": "eolab-mounted-geotiffs",

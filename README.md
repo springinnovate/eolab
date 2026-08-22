@@ -119,6 +119,16 @@ internal URLs, request parameters, or upstream error text.
 
 The scanner assesses mounted GeoTIFFs before offering **View on map**. The initial policy accepts supported one-band rasters that are small enough for direct rendering, or larger rasters with bounded base-resolution blocks and a complete internal overview pyramid. Other rasters remain fully searchable and inspectable with an explanation of why visualization is unavailable. For existing Items created before this policy, **Assess for visualization** inspects and updates only the selected raster.
 
+Raster publication is a recoverable state transition rather than a blind
+GeoServer create. EOLab preserves complete existing publications, removes and
+retries only coverage-store-only orphans, and retains healthy resources when a
+later style operation fails. A restarted app reauthorizes existing layers
+without recreating them. Runtime failures appear beside **View on map** with a
+stable category and actionable message, while the application log retains only
+a bounded sanitized GeoServer response excerpt. The exact state, rollback,
+REST response, and error contracts are documented in
+[Raster publication recovery contract](docs/raster-publication.md).
+
 While a raster is displayed, **Raster appearance** shows an approximate
 band-1 distribution from a fixed, bounded sample. EOLab initially applies the
 sample's 5th, 50th, and 95th percentiles, and the user can apply other ordered
