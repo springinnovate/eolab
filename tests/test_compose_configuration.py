@@ -452,3 +452,19 @@ def test_stac_api_uses_the_pinned_upstream_image() -> None:
 
     assert "stac-fastapi-pgstac:6.3.1@sha256:" in compose
     assert "dockerfile: Dockerfile.stac-api" not in compose
+
+
+def test_catalog_random_selection_avoids_a_full_result_sort() -> None:
+    """Select a uniform filtered ordinal without ORDER BY random()."""
+    migration = (
+        COMPOSE_PATH.parent
+        / "catalog"
+        / "migrations"
+        / "0006_random_matching_item.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "pgstac.get_version() <> '0.9.12'" in migration
+    assert "pgstac.stac_search_to_where(search_request)" in migration
+    assert "random_offset := floor(random() * matching_count)" in migration
+    assert "OFFSET $3 LIMIT 1" in migration
+    assert "ORDER BY random()" not in migration

@@ -25,6 +25,7 @@ from eolab_app.raster.sources import (
     PublishedRasterRegistry,
 )
 from eolab_app.raster.statistics_service import RasterStatisticsService
+from eolab_app.routes.catalog import create_catalog_router
 from eolab_app.routes.diagnostics import create_diagnostics_router
 from eolab_app.routes.rasters import create_raster_feature
 from eolab_app.routes.scans import create_scan_router
@@ -166,6 +167,9 @@ def create_app(
         lifespan=lifespan,
     )
     catalog_database = PgStacCatalogDatabase()
+    application.include_router(
+        create_catalog_router(catalog_database.random_matching_item)
+    )
     application.include_router(raster_feature.router)
     scan_manager = ScanManager(
         app_global_configuration.scan_mount_path,
