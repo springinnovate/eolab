@@ -15,7 +15,7 @@ GEOTIFF_MEDIA_TYPES = frozenset({GEOTIFF_MEDIA_TYPE, COG_MEDIA_TYPE})
 MOUNTED_GEOTIFF_COLLECTION_ID = "eolab-mounted-geotiffs"
 MOUNTED_GEOTIFF_ITEM_ID_PATTERN = r"^geotiff-[0-9a-f]{24}$"
 RENDERING_METADATA_KEY = "eolab:rendering"
-RENDERING_POLICY = "raster-v2"
+RENDERING_POLICY = "raster-v3"
 DIRECT_RENDERING_MAX_BYTES = 64 * 1024 * 1024
 OVERVIEW_RENDERING_MAX_BYTES = 64 * 1024 * 1024
 OVERVIEW_RENDERING_MAX_DIMENSION = 8192
@@ -44,7 +44,7 @@ RASTER_DATA_TYPE_BYTES = {
 def assess_raster_renderability(
     dataset: rasterio.io.DatasetReader,
 ) -> dict[str, Any]:
-    """Assess a raster's eligibility under the raster-v2 policy.
+    """Assess a raster's structural eligibility under the raster-v3 policy.
 
     The assessment reads only dataset structure and overview metadata. It does
     not sample or decode raster pixels.
@@ -53,7 +53,7 @@ def assess_raster_renderability(
         dataset: Open raster dataset.
 
     Returns:
-        Versioned EOLab rendering metadata for the STAC data Asset.
+        Versioned structural rendering metadata for the STAC data Asset.
     """
     data_types = tuple(dataset.dtypes)
     bytes_per_pixel = sum(
@@ -90,27 +90,32 @@ def assess_raster_renderability(
 
     if dataset.count != 1:
         eligible = False
+        reason_code = "unsupported_band_count"
         reason = (
             "Visualization unavailable: the current raster style supports "
             "one-band rasters."
         )
     elif data_types[0] not in SUPPORTED_RENDERING_DATA_TYPES:
         eligible = False
+        reason_code = "unsupported_pixel_type"
         reason = (
             "Visualization unavailable: the current rendering path does not "
             f"support {data_types[0]} pixels."
         )
     elif estimated_uncompressed_bytes <= DIRECT_RENDERING_MAX_BYTES:
         eligible = True
+        reason_code = None
         reason = None
     elif not bounded_blocks:
         eligible = False
+        reason_code = "blocks_too_large"
         reason = (
             "Visualization unavailable: this raster needs smaller internal "
             "blocks."
         )
     elif overview_storage != "internal":
         eligible = False
+        reason_code = "internal_overviews_required"
         reason = (
             "Visualization unavailable: this raster needs an internal "
             "overview pyramid."
@@ -130,6 +135,7 @@ def assess_raster_renderability(
         )
         if not complete_overview_pyramid:
             eligible = False
+            reason_code = "incomplete_overview_pyramid"
             reason = (
                 "Visualization unavailable: this raster needs an internal "
                 "overview pyramid beginning at 2x without skipped levels."
@@ -146,6 +152,7 @@ def assess_raster_renderability(
                 > OVERVIEW_RENDERING_MAX_DIMENSION
             ):
                 eligible = False
+                reason_code = "coarsest_overview_dimension_exceeded"
                 reason = (
                     "Visualization unavailable: the coarsest internal "
                     "overview is wider or taller than "
@@ -153,6 +160,7 @@ def assess_raster_renderability(
                 )
             elif coarsest_bytes > OVERVIEW_RENDERING_MAX_BYTES:
                 eligible = False
+                reason_code = "coarsest_overview_decoded_size_exceeded"
                 reason = (
                     "Visualization unavailable: the coarsest internal "
                     "overview exceeds "
@@ -161,6 +169,7 @@ def assess_raster_renderability(
                 )
             else:
                 eligible = True
+                reason_code = None
                 reason = None
 
     rendering_metadata = {
@@ -174,8 +183,58 @@ def assess_raster_renderability(
         "estimated_uncompressed_bytes": estimated_uncompressed_bytes,
     }
     if reason is not None:
+        rendering_metadata["reason_code"] = reason_code
         rendering_metadata["reason"] = reason
     return rendering_metadata
+
+
+def apply_reader_assessment(
+    rendering_metadata: dict[str, Any],
+    *,
+    reader_contract: str,
+    reader_compatible: bool,
+    reader_reason_code: str | None,
+) -> dict[str, Any]:
+    """Add the deployed GeoServer reader decision to structural metadata.
+
+    Args:
+        rendering_metadata: Current-policy structural raster assessment.
+        reader_contract: Stable identity of the deployed reader contract.
+        reader_compatible: Whether that reader acquired the raster.
+        reader_reason_code: Stable incompatibility classification, or ``None``
+            for a compatible raster.
+
+    Returns:
+        A copied, complete rendering assessment suitable for persistence.
+
+    Raises:
+        ValueError: If the structural metadata or reader result violates the
+            assessment contract.
+    """
+    if rendering_metadata.get("policy") != RENDERING_POLICY:
+        raise ValueError("Reader assessment requires current structural metadata")
+    if not rendering_metadata.get("eligible"):
+        raise ValueError("Reader assessment requires structural eligibility")
+    if reader_compatible == (reader_reason_code is not None):
+        raise ValueError("Reader compatibility and reason code are inconsistent")
+
+    completed_metadata = dict(rendering_metadata)
+    completed_metadata["reader_contract"] = reader_contract
+    completed_metadata["reader_compatible"] = reader_compatible
+    if reader_compatible:
+        return completed_metadata
+
+    completed_metadata.update({
+        "eligible": False,
+        "reason_code": reader_reason_code,
+        "reason": (
+            "Visualization unavailable: GeoServer cannot interpret this "
+            "raster's coordinate-system metadata."
+            if reader_reason_code == "geoserver_crs_metadata_incompatible"
+            else "Visualization unavailable: GeoServer cannot acquire this raster."
+        ),
+    })
+    return completed_metadata
 
 
 def inspect_raster_renderability(geotiff_path: Path) -> dict[str, Any]:

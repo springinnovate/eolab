@@ -19,7 +19,7 @@ const CATALOG_DATE_SYNTAX_ERROR =
     "Use date:YYYY, date:YYYY-MM, date:YYYY-MM-DD, or a range " +
     "between two of these values.";
 export const MOUNTED_GEOTIFF_COLLECTION_ID = "eolab-mounted-geotiffs";
-const RASTER_RENDERING_POLICY = "raster-v2";
+const RASTER_RENDERING_POLICY = "raster-v3";
 export const MOUNTED_DATASET_TYPES = new Map([
     [MOUNTED_GEOTIFF_COLLECTION_ID, "Raster"],
     ["eolab-mounted-vectors", "Vector"]

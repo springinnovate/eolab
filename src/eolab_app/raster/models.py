@@ -14,6 +14,7 @@ from eolab_app.raster.eligibility import (
 
 
 SourceSignature = tuple[int, int, int, int, int]
+GEOSERVER_READER_CONTRACT = "geoserver-3.0.1-geotools-35.1-geotiff-v1"
 CanonicalWgs84Bounds = tuple[float, float, float, float]
 RasterStatisticsCacheKey = tuple[
     str,
@@ -62,6 +63,43 @@ class CatalogRasterRequest(BaseModel):
         pattern=MOUNTED_GEOTIFF_ITEM_ID_PATTERN,
         strict=True,
     )
+
+
+class RasterReaderAssessment(BaseModel):
+    """Machine-readable result from the deployed GeoServer reader probe.
+
+    Attributes:
+        contract: Stable deployed-reader contract identifier.
+        compatible: Whether GeoTools acquired the mounted GeoTIFF.
+        reason_code: Stable incompatibility classification, or ``None`` for a
+            compatible reader result.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    contract: Literal[GEOSERVER_READER_CONTRACT]
+    compatible: bool
+    reason_code: Literal[
+        "geoserver_crs_metadata_incompatible",
+        "geoserver_reader_incompatible",
+    ] | None = Field(default=None, alias="reasonCode")
+
+    @model_validator(mode="after")
+    def require_reason_for_incompatibility(self) -> "RasterReaderAssessment":
+        """Require exactly one reason for an incompatible reader result.
+
+        Returns:
+            The validated reader assessment.
+
+        Raises:
+            ValueError: If compatibility and reason presence disagree.
+        """
+        if self.compatible == (self.reason_code is not None):
+            raise ValueError(
+                "A reader incompatibility reason is required exactly when "
+                "compatible is false"
+            )
+        return self
 
 
 class Wgs84Bounds(BaseModel):

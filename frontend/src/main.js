@@ -499,16 +499,24 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
         // Surprise responses so they cannot select an Item from stale criteria.
         surpriseRequestGeneration: 0
     };
-    /** Apply the scanner-owned visualization decision to the map action. */
+    /**
+     * Apply the scanner-owned visualization decision to the map action.
+     *
+     * @param {Object|null} item Selected catalog Item.
+     * @return {void}
+     */
     function updateCatalogMapAction(item) {
         const visualization = getRasterVisualization(item);
         catalogMapActionsElement.hidden = visualization === null;
         catalogMapActionsElement.setAttribute("aria-busy", "false");
         catalogLayerToggle.disabled = false;
-        catalogLayerToggle.hidden = visualization?.eligible === false;
-        catalogLayerToggle.textContent = visualization === undefined
-            ? "Assess for visualization"
-            : "View on map";
+        catalogLayerToggle.hidden = false;
+        catalogLayerToggle.textContent =
+            visualization === undefined
+                ? "Assess for visualization"
+                : visualization?.eligible === false
+                    ? "Reassess visualization"
+                    : "View on map";
         catalogLayerStatus.textContent = visualization?.reason ?? "";
     }
 
@@ -884,9 +892,18 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
         loadCatalog.bind(null, true)
     );
     retryPageButton.addEventListener("click", prefetchNextCatalogPage);
-    catalogLayerToggle.addEventListener("click", async () => {
+    /**
+     * Assess, reassess, display, or remove the selected catalog raster.
+     *
+     * @return {Promise<void>} Completion after the selected action settles.
+     */
+    async function toggleCatalogRaster() {
         const selectedItem = catalogState.selectedItem;
-        if (getRasterVisualization(selectedItem) === undefined) {
+        const visualization = getRasterVisualization(selectedItem);
+        if (
+            visualization === undefined ||
+            visualization?.eligible === false
+        ) {
             catalogMapActionsElement.setAttribute("aria-busy", "true");
             catalogLayerToggle.disabled = true;
             catalogLayerToggle.textContent = "Assessing...";
@@ -907,7 +924,9 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
             } catch (assessmentError) {
                 if (catalogState.selectedItem === selectedItem) {
                     catalogLayerToggle.textContent =
-                        "Assess for visualization";
+                        visualization === undefined
+                            ? "Assess for visualization"
+                            : "Reassess visualization";
                     catalogLayerStatus.textContent = assessmentError.message;
                 }
             } finally {
@@ -954,7 +973,8 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
                 catalogLayerToggle.disabled = false;
             }
         }
-    });
+    }
+    catalogLayerToggle.addEventListener("click", toggleCatalogRaster);
 
     await loadCatalog(true);
     return loadCatalog.bind(null, true);

@@ -15,9 +15,15 @@ from eolab_app.catalog.search_counts import number_matched_is_estimated
 from eolab_app.catalog.stac_api import StacApiWriter
 from eolab_app.diagnostics.service import RenderingDiagnosticsService
 from eolab_app.diagnostics.tracker import GetMapRequestTracker
-from eolab_app.raster.assessment import RasterAssessmentService
+from eolab_app.raster.assessment import (
+    RasterAssessmentFinalizer,
+    RasterAssessmentService,
+)
 from eolab_app.raster.catalog import StacRasterCatalog
-from eolab_app.raster.geoserver import GeoServerRasterPublisher
+from eolab_app.raster.geoserver import (
+    GeoServerRasterPublisher,
+    GeoServerRasterReaderAssessor,
+)
 from eolab_app.raster.pixel_service import RasterPixelService
 from eolab_app.raster.publication import RasterPublicationService
 from eolab_app.raster.sources import (
@@ -103,12 +109,21 @@ def create_app(
     raster_source_resolver = MountedRasterResolver(
         app_global_configuration.scan_mount_path
     )
+    raster_reader_assessor = GeoServerRasterReaderAssessor(
+        geoserver_rest_client,
+        app_global_configuration.geoserver_internal_url,
+    )
+    raster_assessment_finalizer = RasterAssessmentFinalizer(
+        raster_source_resolver,
+        raster_reader_assessor,
+    )
     published_rasters = PublishedRasterRegistry()
     raster_feature = create_raster_feature(
         RasterAssessmentService(
             app_global_configuration.scan_mount_path,
             raster_catalog,
             raster_source_resolver,
+            raster_reader_assessor,
         ),
         RasterPublicationService(
             raster_catalog,
@@ -191,6 +206,7 @@ def create_app(
         app_global_configuration.scan_worker_count,
         app_global_configuration.scan_writer_count,
         app_global_configuration.scan_batch_size,
+        item_finalizer=raster_assessment_finalizer,
         reconciler=MissingItemReconciler(
             app_global_configuration.scan_mount_path,
             catalog_database,

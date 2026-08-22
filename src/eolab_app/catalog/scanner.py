@@ -29,6 +29,7 @@ from eolab_app.catalog.ports import (
     CatalogWriter,
     CatalogWriteSession,
     DatasetDiscovery,
+    DatasetItemFinalizer,
     DatasetMetadataReader,
 )
 from eolab_app.catalog.reconciliation import MissingItemReconciler
@@ -53,6 +54,7 @@ class ScanManager:
         dataset_handlers: DatasetHandlerRegistry | None = None,
         discovery: DatasetDiscovery | None = None,
         metadata_pipeline: DatasetMetadataReader | None = None,
+        item_finalizer: DatasetItemFinalizer | None = None,
         reconciler: CatalogReconciler | None = None,
         error_detail_limit: int = DEFAULT_SCAN_ERROR_DETAIL_LIMIT,
     ) -> None:
@@ -70,6 +72,8 @@ class ScanManager:
                 default discovery and metadata extraction.
             discovery: Optional filesystem discovery collaborator.
             metadata_pipeline: Optional metadata extraction collaborator.
+            item_finalizer: Optional external assessment collaborator applied
+                after extraction and before persistence.
             reconciler: Optional destructive reconciliation collaborator.
             error_detail_limit: Maximum individual failure details retained in
                 the public scan status.
@@ -96,6 +100,7 @@ class ScanManager:
             item_batch_size * 2,
             active_dataset_handlers,
         )
+        self.item_finalizer = item_finalizer
         self.reconciler = reconciler or MissingItemReconciler(
             source_root,
             catalog_database,
@@ -291,7 +296,12 @@ class ScanManager:
                 if metadata_result.error is not None:
                     continue
 
-                for item in metadata_result.items:
+                for extracted_item in metadata_result.items:
+                    item = (
+                        await self.item_finalizer.finalize(extracted_item)
+                        if self.item_finalizer is not None
+                        else extracted_item
+                    )
                     pending_items = pending_items_by_collection[
                         item["collection"]
                     ]
