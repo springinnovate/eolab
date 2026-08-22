@@ -92,13 +92,16 @@ function createFakeMap() {
 /**
  * Create one Leaflet-compatible layer owned by a fake map.
  *
+ * @param {Object} [details={}] Inspectable layer construction details.
  * @return {Object} Fake WMS or rectangle layer.
  */
-function createFakeLayer() {
+function createFakeLayer(details = {}) {
     return {
+        ...details,
         eventHandlers: new Map(),
         parameters: null,
         parameterUpdates: [],
+        boundsHistory: details.bounds === undefined ? [] : [details.bounds],
         addTo(map) {
             map.layers.add(this);
             return this;
@@ -106,10 +109,18 @@ function createFakeLayer() {
         once(type, handler) {
             this.eventHandlers.set(type, handler);
         },
-        setBounds() {},
+        setBounds(bounds) {
+            this.boundsHistory.push(bounds);
+        },
         setParams(parameters) {
             this.parameters = parameters;
             this.parameterUpdates.push(parameters);
+        },
+        setOpacity(opacity) {
+            this.opacity = opacity;
+        },
+        setZIndex(zIndex) {
+            this.zIndex = zIndex;
         },
     };
 }
@@ -117,22 +128,35 @@ function createFakeLayer() {
 /**
  * Create the Leaflet namespace used by the raster viewer.
  *
- * @return {{leaflet: Object, wmsLayers: Object[]}} Namespace and WMS layers.
+ * @return {{leaflet: Object, wmsLayers: Object[], rectangleLayers: Object[]}}
+ * Namespace and created layers.
  */
 function createFakeLeaflet() {
     const wmsLayers = [];
+    const rectangleLayers = [];
     return {
         wmsLayers,
+        rectangleLayers,
         leaflet: {
             tileLayer: {
-                wms() {
-                    const layer = createFakeLayer();
+                wms(url, options) {
+                    const layer = createFakeLayer({
+                        kind: "wms",
+                        url,
+                        wmsOptions: options,
+                    });
                     wmsLayers.push(layer);
                     return layer;
                 },
             },
-            rectangle() {
-                return createFakeLayer();
+            rectangle(bounds, options) {
+                const layer = createFakeLayer({
+                    bounds,
+                    kind: options.fill === false ? "preview" : "selection",
+                    rectangleOptions: options,
+                });
+                rectangleLayers.push(layer);
+                return layer;
             },
         },
     };
@@ -176,7 +200,9 @@ function createFakeControlsView() {
             this.paletteName = paletteName;
         },
         renderStyleError() {},
-        renderLegend() {},
+        renderLegend(style) {
+            this.legendStyle = { ...style };
+        },
         resetPercentiles() {},
         readPercentiles() {
             return { lower: 5, middle: 50, upper: 95 };
@@ -212,21 +238,34 @@ function createFakeControlsView() {
         showHistogramAxis() {},
         hideHistogramAxis() {},
         setPercentileControlsVisible() {},
-        setStatisticsRetryVisible() {},
+        setStatisticsRetryVisible(isVisible) {
+            this.statisticsRetryVisible = isVisible;
+        },
         setApplyPercentilesEnabled(isEnabled) {
             this.applyPercentilesEnabled = isEnabled;
         },
-        setSampleWindowSize() {},
+        setSampleWindowSize(sizeKm) {
+            this.sampleWindowSizeKm = sizeKm;
+        },
         setSampleWindowInvalid() {},
-        setSampleWindowStatus() {},
-        setClearSampleWindowEnabled() {},
+        setSampleWindowStatus(message) {
+            this.sampleWindowStatus = message;
+        },
+        setClearSampleWindowEnabled(isEnabled) {
+            this.clearSampleWindowEnabled = isEnabled;
+        },
         setControlsVisible(isVisible) {
             this.controlsVisible = isVisible;
+        },
+        setActiveLayer(label, visible) {
+            this.activeLayer = { label, visible };
         },
         isPixelProbeVisible() {
             return this.probeVisible;
         },
-        setPixelProbeContent() {},
+        setPixelProbeContent(label, detail) {
+            this.pixelProbeContent = { label, detail };
+        },
         showPixelProbe() {
             this.probeVisible = true;
             return { width: 100, height: 40 };
@@ -234,6 +273,33 @@ function createFakeControlsView() {
         positionPixelProbe() {},
         hidePixelProbe() {
             this.probeVisible = false;
+        },
+    };
+}
+
+/**
+ * Create a semantic layer-stack adapter for coordinator tests.
+ *
+ * @return {Object} Fake stack view with retained snapshots and handlers.
+ */
+function createFakeLayerStackView() {
+    return {
+        handlers: null,
+        layers: [],
+        activeKey: null,
+        status: "",
+        bind(handlers) {
+            this.handlers = handlers;
+        },
+        unbind() {
+            this.handlers = null;
+        },
+        render(layers, activeKey) {
+            this.layers = layers;
+            this.activeKey = activeKey;
+        },
+        setStatus(message) {
+            this.status = message;
         },
     };
 }
@@ -255,6 +321,40 @@ function createDeferred() {
 }
 
 /**
+ * Build a distinct mounted GeoTIFF Item for layer-stack tests.
+ *
+ * @param {string} suffix Stable Item and filename suffix.
+ * @return {Object} Catalog Item with valid composite identity and Asset URL.
+ */
+function createRasterItem(suffix) {
+    return {
+        collection: "eolab-mounted-geotiffs",
+        id: `geotiff-${suffix}`,
+        assets: {
+            data: {
+                href: `file:///scan-source/folder/${suffix}.tif`,
+            },
+        },
+    };
+}
+
+/**
+ * Build recognizable statistics for one layer and optional selected area.
+ *
+ * @param {Object} item Catalog Item owning the statistics.
+ * @param {Object|null} [selectedBounds=null] Optional selected-area bounds.
+ * @return {Object} Valid statistics with test-only layer identity.
+ */
+function createLayerStatistics(item, selectedBounds = null) {
+    return {
+        ...RASTER_STATISTICS,
+        itemId: item.id,
+        scope: selectedBounds === null ? "wholeRaster" : "selectedArea",
+        selectedBounds,
+    };
+}
+
+/**
  * Allow pending async controller continuations to update their views.
  *
  * @return {Promise<void>} Resolves on the next event-loop turn.
@@ -267,6 +367,7 @@ test("raster viewer owns the displayed layer lifecycle and detaches cleanly", as
     const leafletMap = createFakeMap();
     const { leaflet, wmsLayers } = createFakeLeaflet();
     const controlsView = createFakeControlsView();
+    const layerStackView = createFakeLayerStackView();
     const viewer = initializeRasterViewer(
         {
             wmsUrl: "/geoserver/eolab/wms",
@@ -276,6 +377,7 @@ test("raster viewer owns the displayed layer lifecycle and detaches cleanly", as
         },
         {
             controlsView,
+            layerStackView,
             publishRaster: async () => ({
                 layerName: "eolab:test-raster",
                 bbox: [-180, -90, 180, 90],
@@ -295,9 +397,11 @@ test("raster viewer owns the displayed layer lifecycle and detaches cleanly", as
     assert.equal(wmsLayers.length, 1);
     assert.equal(leafletMap.layers.has(wmsLayers[0]), true);
 
+    layerStackView.setStatus("Previous layer message");
     viewer.clear();
     assert.equal(viewer.isDisplayed, false);
     assert.equal(controlsView.controlsVisible, false);
+    assert.equal(layerStackView.status, "");
     assert.equal(leafletMap.layers.has(wmsLayers[0]), false);
     assert.equal(leafletMap.handlers.get("mousemove").size, 1);
 
@@ -305,6 +409,49 @@ test("raster viewer owns the displayed layer lifecycle and detaches cleanly", as
     assert.equal(controlsView.handlers, null);
     assert.equal(leafletMap.container.listenerCount("pointermove"), 0);
     assert.equal(leafletMap.handlers.get("mousemove").size, 0);
+});
+
+test("raster viewer samples pixels only inside the single map world", async () => {
+    const leafletMap = createFakeMap();
+    const { leaflet } = createFakeLeaflet();
+    const controlsView = createFakeControlsView();
+    const pixelRequests = [];
+    const viewer = initializeRasterViewer(
+        {
+            wmsUrl: "/geoserver/eolab/wms",
+            leafletMap,
+            leaflet,
+            onTileError() {},
+        },
+        {
+            controlsView,
+            layerStackView: createFakeLayerStackView(),
+            publishRaster: async () => ({
+                layerName: "eolab:test-raster",
+                bbox: [-180, -90, 180, 90],
+            }),
+            loadStatistics: () => new Promise(() => {}),
+            samplePixel: async (item, point) => {
+                pixelRequests.push({ item, point });
+                return { inBounds: true, value: 1 };
+            },
+            viewport: { innerWidth: 1280, innerHeight: 720 },
+        }
+    );
+
+    await viewer.show(MOUNTED_GEOTIFF_ITEM);
+    leafletMap.emit("mousemove", { latlng: { lng: 238, lat: 48 } });
+    assert.equal(pixelRequests.length, 0);
+    assert.equal(controlsView.probeVisible, false);
+
+    leafletMap.emit("mousemove", { latlng: { lng: -122, lat: 48 } });
+    assert.deepEqual(pixelRequests, [{
+        item: MOUNTED_GEOTIFF_ITEM,
+        point: { longitude: -122, latitude: 48 },
+    }]);
+    await flushPromises();
+    assert.equal(controlsView.probeVisible, true);
+    viewer.destroy();
 });
 
 test("raster viewer ignores publication completed after a reset", async () => {
@@ -321,6 +468,7 @@ test("raster viewer ignores publication completed after a reset", async () => {
         },
         {
             controlsView,
+            layerStackView: createFakeLayerStackView(),
             publishRaster: () => publication.promise,
             loadStatistics: () => new Promise(() => {}),
             samplePixel: async () => ({ inBounds: true, value: 1 }),
@@ -357,6 +505,7 @@ test("selected statistics remain draft-only until the user applies them", async 
         },
         {
             controlsView,
+            layerStackView: createFakeLayerStackView(),
             publishRaster: async () => ({
                 layerName: "eolab:test-raster",
                 bbox: [-180, -90, 180, 90],
@@ -424,6 +573,7 @@ test("manual style edits prevent late whole-raster automatic rescaling", async (
         },
         {
             controlsView,
+            layerStackView: createFakeLayerStackView(),
             publishRaster: async () => ({
                 layerName: "eolab:test-raster",
                 bbox: [-180, -90, 180, 90],
@@ -447,6 +597,779 @@ test("manual style edits prevent late whole-raster automatic rescaling", async (
     assert.match(
         controlsView.statisticsStatus,
         /current appearance was preserved/
+    );
+    viewer.destroy();
+});
+
+test("raster viewer retains candidates while enforcing two visible layers", async () => {
+    const leafletMap = createFakeMap();
+    const { leaflet, wmsLayers } = createFakeLeaflet();
+    const controlsView = createFakeControlsView();
+    const layerStackView = createFakeLayerStackView();
+    const publicationCounts = new Map();
+    const viewer = initializeRasterViewer(
+        {
+            wmsUrl: "/geoserver/eolab/wms",
+            leafletMap,
+            leaflet,
+            onTileError() {},
+        },
+        {
+            controlsView,
+            layerStackView,
+            publishRaster: async (item) => {
+                publicationCounts.set(
+                    item.id,
+                    (publicationCounts.get(item.id) ?? 0) + 1
+                );
+                return {
+                    layerName: `eolab:${item.id}`,
+                    bbox: [-180, -90, 180, 90],
+                };
+            },
+            loadStatistics: () => new Promise(() => {}),
+            samplePixel: async () => ({ inBounds: true, value: 1 }),
+            viewport: { innerWidth: 1280, innerHeight: 720 },
+        }
+    );
+    const first = createRasterItem("first");
+    const second = createRasterItem("second");
+    const third = createRasterItem("third");
+
+    await viewer.show(first);
+    await viewer.show(second);
+    await viewer.show(third);
+
+    assert.equal(layerStackView.layers.length, 3);
+    assert.deepEqual(
+        layerStackView.layers.map((layer) => [layer.item.id, layer.visible]),
+        [
+            [third.id, false],
+            [second.id, true],
+            [first.id, true],
+        ]
+    );
+    assert.equal(
+        wmsLayers.filter((layer) => leafletMap.layers.has(layer)).length,
+        2
+    );
+    assert.deepEqual(controlsView.activeLayer, {
+        label: "third.tif",
+        visible: false,
+    });
+
+    const thirdKey = layerStackView.layers[0].key;
+    const firstKey = layerStackView.layers[2].key;
+    layerStackView.handlers.onVisibility(thirdKey, true);
+    assert.equal(layerStackView.layers[0].visible, false);
+    assert.match(layerStackView.status, /Only 2 raster layers/);
+
+    layerStackView.handlers.onVisibility(firstKey, false);
+    layerStackView.handlers.onVisibility(thirdKey, true);
+    assert.equal(
+        wmsLayers.filter((layer) => leafletMap.layers.has(layer)).length,
+        2
+    );
+    assert.equal(wmsLayers[2].opacity, 1);
+    layerStackView.handlers.onOpacity(thirdKey, 0.4);
+    assert.equal(wmsLayers[2].opacity, 0.4);
+    assert.deepEqual(
+        [...publicationCounts.values()],
+        [1, 1, 1]
+    );
+
+    await viewer.show(third);
+    assert.equal(publicationCounts.get(third.id), 1);
+    assert.equal(viewer.contains(third), true);
+    viewer.destroy();
+});
+
+test("active layers restore isolated styles and completed statistics", async () => {
+    const leafletMap = createFakeMap();
+    const { leaflet, wmsLayers } = createFakeLeaflet();
+    const controlsView = createFakeControlsView();
+    const layerStackView = createFakeLayerStackView();
+    const first = createRasterItem("first-state");
+    const second = createRasterItem("second-state");
+    const statisticsById = new Map([
+        [first.id, RASTER_STATISTICS],
+        [
+            second.id,
+            {
+                ...RASTER_STATISTICS,
+                sampleMinimum: 100,
+                sampleMaximum: 200,
+                histogram: {
+                    counts: [...RASTER_STATISTICS.histogram.counts],
+                    edges: Array.from(
+                        { length: 65 },
+                        (_, index) => 100 + index * 100 / 64
+                    ),
+                },
+            },
+        ],
+    ]);
+    const statisticsCounts = new Map();
+    const viewer = initializeRasterViewer(
+        {
+            wmsUrl: "/geoserver/eolab/wms",
+            leafletMap,
+            leaflet,
+            onTileError() {},
+        },
+        {
+            controlsView,
+            layerStackView,
+            publishRaster: async (item) => ({
+                layerName: `eolab:${item.id}`,
+                bbox: [-180, -90, 180, 90],
+            }),
+            loadStatistics: async (item) => {
+                statisticsCounts.set(
+                    item.id,
+                    (statisticsCounts.get(item.id) ?? 0) + 1
+                );
+                return statisticsById.get(item.id);
+            },
+            samplePixel: async () => ({ inBounds: true, value: 1 }),
+            viewport: { innerWidth: 1280, innerHeight: 720 },
+        }
+    );
+
+    await viewer.show(first);
+    await flushPromises();
+    const firstKey = layerStackView.activeKey;
+    assert.equal(controlsView.displayedStatistics, RASTER_STATISTICS);
+    controlsView.style = {
+        ...controlsView.style,
+        minimum: -5,
+        midpoint: 5,
+        maximum: 15,
+    };
+    controlsView.handlers.onStyleChange();
+    const firstStyle = { ...controlsView.style };
+
+    await viewer.show(second);
+    await flushPromises();
+    const secondKey = layerStackView.activeKey;
+    assert.notEqual(secondKey, firstKey);
+    assert.equal(controlsView.displayedStatistics, statisticsById.get(second.id));
+    assert.notDeepEqual(controlsView.style, firstStyle);
+
+    layerStackView.handlers.onActivate(firstKey);
+    assert.deepEqual(controlsView.style, firstStyle);
+    assert.equal(controlsView.displayedStatistics, RASTER_STATISTICS);
+    assert.equal(statisticsCounts.get(first.id), 1);
+    assert.equal(statisticsCounts.get(second.id), 1);
+    assert.ok(wmsLayers[0].parameterUpdates.length > 0);
+    viewer.destroy();
+});
+
+test("a restored whole-raster statistics error retries the active layer", async () => {
+    const leafletMap = createFakeMap();
+    const { leaflet } = createFakeLeaflet();
+    const controlsView = createFakeControlsView();
+    const layerStackView = createFakeLayerStackView();
+    const first = createRasterItem("retry-error-first");
+    const second = createRasterItem("retry-error-second");
+    const statisticsRequests = [];
+    const viewer = initializeRasterViewer(
+        {
+            wmsUrl: "/geoserver/eolab/wms",
+            leafletMap,
+            leaflet,
+            onTileError() {},
+        },
+        {
+            controlsView,
+            layerStackView,
+            publishRaster: async (item) => ({
+                layerName: `eolab:${item.id}`,
+                bbox: [-180, -90, 180, 90],
+            }),
+            loadStatistics: async (item, signal, selectedBounds) => {
+                statisticsRequests.push({ item, selectedBounds, signal });
+                const firstAttemptCount = statisticsRequests.filter(
+                    (request) => request.item === first
+                ).length;
+                if (item === first && firstAttemptCount === 1) {
+                    throw new Error("First distribution failed");
+                }
+                return createLayerStatistics(item, selectedBounds);
+            },
+            samplePixel: async () => ({ inBounds: true, value: 1 }),
+            viewport: { innerWidth: 1280, innerHeight: 720 },
+        }
+    );
+
+    await viewer.show(first);
+    await flushPromises();
+    const firstKey = layerStackView.activeKey;
+    assert.match(controlsView.statisticsStatus, /First distribution failed/);
+    assert.equal(controlsView.statisticsRetryVisible, true);
+
+    await viewer.show(second);
+    await flushPromises();
+    assert.equal(controlsView.displayedStatistics.itemId, second.id);
+    layerStackView.handlers.onActivate(firstKey);
+    assert.match(controlsView.statisticsStatus, /First distribution failed/);
+    assert.equal(controlsView.statisticsRetryVisible, true);
+
+    controlsView.handlers.onRetryStatistics();
+    await flushPromises();
+    const firstRequests = statisticsRequests.filter(
+        ({ item }) => item === first
+    );
+    assert.equal(firstRequests.length, 2);
+    assert.equal(firstRequests[1].selectedBounds, null);
+    assert.equal(firstRequests[1].signal.aborted, false);
+    assert.equal(controlsView.displayedStatistics.itemId, first.id);
+    assert.equal(controlsView.displayedStatistics.scope, "wholeRaster");
+    assert.equal(controlsView.statisticsRetryVisible, false);
+    viewer.destroy();
+});
+
+test("out-of-order publications do not steal the latest active selection", async () => {
+    const leafletMap = createFakeMap();
+    const { leaflet } = createFakeLeaflet();
+    const controlsView = createFakeControlsView();
+    const layerStackView = createFakeLayerStackView();
+    const first = createRasterItem("slow-first");
+    const second = createRasterItem("fast-second");
+    const publications = new Map([
+        [first.id, createDeferred()],
+        [second.id, createDeferred()],
+    ]);
+    const viewer = initializeRasterViewer(
+        {
+            wmsUrl: "/geoserver/eolab/wms",
+            leafletMap,
+            leaflet,
+            onTileError() {},
+        },
+        {
+            controlsView,
+            layerStackView,
+            publishRaster: (item) => publications.get(item.id).promise,
+            loadStatistics: () => new Promise(() => {}),
+            samplePixel: async () => ({ inBounds: true, value: 1 }),
+            viewport: { innerWidth: 1280, innerHeight: 720 },
+        }
+    );
+
+    const firstRequest = viewer.show(first);
+    const secondRequest = viewer.show(second);
+    publications.get(second.id).resolve({
+        layerName: `eolab:${second.id}`,
+        bbox: [-180, -90, 180, 90],
+    });
+    await secondRequest;
+    const expectedActiveKey = layerStackView.activeKey;
+    publications.get(first.id).resolve({
+        layerName: `eolab:${first.id}`,
+        bbox: [-180, -90, 180, 90],
+    });
+    await firstRequest;
+
+    assert.equal(layerStackView.layers.length, 2);
+    assert.equal(layerStackView.activeKey, expectedActiveKey);
+    assert.deepEqual(
+        layerStackView.layers.map((layer) => layer.item.id),
+        [second.id, first.id]
+    );
+    assert.equal(
+        layerStackView.layers.find((layer) => layer.key === expectedActiveKey)
+            .item.id,
+        second.id
+    );
+    viewer.destroy();
+});
+
+test("manual activation outranks an earlier deferred publication", async () => {
+    const leafletMap = createFakeMap();
+    const { leaflet, wmsLayers } = createFakeLeaflet();
+    const controlsView = createFakeControlsView();
+    const layerStackView = createFakeLayerStackView();
+    const slowPublication = createDeferred();
+    const statisticsRequests = [];
+    const retained = createRasterItem("manual-activation-retained");
+    const slow = createRasterItem("manual-activation-slow");
+    const viewer = initializeRasterViewer(
+        {
+            wmsUrl: "/geoserver/eolab/wms",
+            leafletMap,
+            leaflet,
+            onTileError() {},
+        },
+        {
+            controlsView,
+            layerStackView,
+            publishRaster: async (item) => {
+                if (item === slow) {
+                    return slowPublication.promise;
+                }
+                return {
+                    layerName: `eolab:${item.id}`,
+                    bbox: [-180, -90, 180, 90],
+                };
+            },
+            loadStatistics: async (item, signal, selectedBounds) => {
+                statisticsRequests.push({ item, signal, selectedBounds });
+                return createLayerStatistics(item, selectedBounds);
+            },
+            samplePixel: async () => ({ inBounds: true, value: 1 }),
+            viewport: { innerWidth: 1280, innerHeight: 720 },
+        }
+    );
+
+    await viewer.show(retained);
+    await flushPromises();
+    const retainedKey = layerStackView.activeKey;
+    const slowRequest = viewer.show(slow);
+    layerStackView.handlers.onActivate(retainedKey);
+    slowPublication.resolve({
+        layerName: `eolab:${slow.id}`,
+        bbox: [-180, -90, 180, 90],
+    });
+    await slowRequest;
+
+    assert.equal(viewer.contains(slow), true);
+    assert.equal(layerStackView.layers.length, 2);
+    assert.equal(layerStackView.activeKey, retainedKey);
+    assert.deepEqual(controlsView.activeLayer, {
+        label: "manual-activation-retained.tif",
+        visible: true,
+    });
+    assert.equal(controlsView.displayedStatistics.itemId, retained.id);
+    assert.equal(
+        statisticsRequests.filter(({ item }) => item === slow).length,
+        0
+    );
+    assert.equal(
+        wmsLayers.filter((layer) => leafletMap.layers.has(layer)).length,
+        2
+    );
+    viewer.destroy();
+});
+
+test("hidden active layers defer work, abort stale statistics, and restart when shown", async () => {
+    const leafletMap = createFakeMap();
+    const { leaflet } = createFakeLeaflet();
+    const controlsView = createFakeControlsView();
+    const layerStackView = createFakeLayerStackView();
+    const statisticsRequests = [];
+    const pixelRequests = [];
+    const viewer = initializeRasterViewer(
+        {
+            wmsUrl: "/geoserver/eolab/wms",
+            leafletMap,
+            leaflet,
+            onTileError() {},
+        },
+        {
+            controlsView,
+            layerStackView,
+            publishRaster: async (item) => ({
+                layerName: `eolab:${item.id}`,
+                bbox: [-180, -90, 180, 90],
+            }),
+            loadStatistics: (item, signal, selectedBounds) => {
+                const deferred = createDeferred();
+                statisticsRequests.push({
+                    deferred,
+                    item,
+                    selectedBounds,
+                    signal,
+                });
+                return deferred.promise;
+            },
+            samplePixel: async (item, point) => {
+                pixelRequests.push({ item, point });
+                return { inBounds: true, value: 1 };
+            },
+            viewport: { innerWidth: 1280, innerHeight: 720 },
+        }
+    );
+    const first = createRasterItem("hidden-work-first");
+    const second = createRasterItem("hidden-work-second");
+    const third = createRasterItem("hidden-work-third");
+
+    await viewer.show(first);
+    await viewer.show(second);
+    await viewer.show(third);
+
+    assert.equal(
+        statisticsRequests.filter(({ item }) => item === third).length,
+        0
+    );
+    assert.deepEqual(controlsView.activeLayer, {
+        label: "hidden-work-third.tif",
+        visible: false,
+    });
+
+    const firstKey = layerStackView.layers.find(
+        ({ item }) => item === first
+    ).key;
+    const thirdKey = layerStackView.layers.find(
+        ({ item }) => item === third
+    ).key;
+    layerStackView.handlers.onVisibility(firstKey, false);
+    layerStackView.handlers.onVisibility(thirdKey, true);
+    const firstThirdRequest = statisticsRequests.find(
+        ({ item }) => item === third
+    );
+    assert.ok(firstThirdRequest);
+    assert.equal(firstThirdRequest.signal.aborted, false);
+
+    layerStackView.handlers.onVisibility(thirdKey, false);
+    assert.equal(firstThirdRequest.signal.aborted, true);
+    leafletMap.emit("click", { latlng: { lng: -74, lat: 41 } });
+    leafletMap.emit("mousemove", {
+        latlng: { lng: -74, lat: 41 },
+    });
+    assert.equal(
+        statisticsRequests.filter(
+            ({ item, selectedBounds }) =>
+                item === third && selectedBounds !== null
+        ).length,
+        0
+    );
+    assert.equal(pixelRequests.length, 0);
+
+    firstThirdRequest.deferred.resolve(createLayerStatistics(third));
+    await flushPromises();
+    assert.notEqual(controlsView.displayedStatistics?.itemId, third.id);
+
+    layerStackView.handlers.onVisibility(thirdKey, true);
+    const thirdRequests = statisticsRequests.filter(
+        ({ item }) => item === third
+    );
+    assert.equal(thirdRequests.length, 2);
+    thirdRequests[1].deferred.resolve(createLayerStatistics(third));
+    await flushPromises();
+    assert.equal(controlsView.displayedStatistics.itemId, third.id);
+    viewer.destroy();
+});
+
+test("active layers restore their selected-area statistics, size, and rectangle", async () => {
+    const leafletMap = createFakeMap();
+    const { leaflet, rectangleLayers } = createFakeLeaflet();
+    const controlsView = createFakeControlsView();
+    const layerStackView = createFakeLayerStackView();
+    const statisticsRequests = [];
+    const viewer = initializeRasterViewer(
+        {
+            wmsUrl: "/geoserver/eolab/wms",
+            leafletMap,
+            leaflet,
+            onTileError() {},
+        },
+        {
+            controlsView,
+            layerStackView,
+            publishRaster: async (item) => ({
+                layerName: `eolab:${item.id}`,
+                bbox: [-180, -90, 180, 90],
+            }),
+            loadStatistics: async (item, signal, selectedBounds) => {
+                statisticsRequests.push({ item, selectedBounds, signal });
+                return createLayerStatistics(item, selectedBounds);
+            },
+            samplePixel: async () => ({ inBounds: true, value: 1 }),
+            viewport: { innerWidth: 1280, innerHeight: 720 },
+        }
+    );
+    const first = createRasterItem("selection-first");
+    const second = createRasterItem("selection-second");
+
+    await viewer.show(first);
+    await flushPromises();
+    const firstKey = layerStackView.activeKey;
+    controlsView.handlers.onSampleWindowNumberInput("42");
+    leafletMap.emit("click", { latlng: { lng: -74, lat: 41 } });
+    await flushPromises();
+    const firstSelectedRequest = statisticsRequests.find(
+        ({ item, selectedBounds }) =>
+            item === first && selectedBounds !== null
+    );
+    assert.ok(firstSelectedRequest);
+    const firstSelectionLayer = rectangleLayers.find(
+        (layer) => layer.kind === "selection" &&
+            leafletMap.layers.has(layer)
+    );
+    assert.ok(firstSelectionLayer);
+    const firstLeafletBounds = firstSelectionLayer.boundsHistory.at(-1);
+    assert.equal(controlsView.displayedStatistics.itemId, first.id);
+    assert.equal(controlsView.displayedStatistics.scope, "selectedArea");
+
+    await viewer.show(second);
+    await flushPromises();
+    controlsView.handlers.onSampleWindowNumberInput("80");
+    leafletMap.emit("click", { latlng: { lng: 12, lat: 34 } });
+    await flushPromises();
+    assert.equal(controlsView.displayedStatistics.itemId, second.id);
+    assert.equal(controlsView.sampleWindowSizeKm, 80);
+
+    const firstSelectedRequestCount = statisticsRequests.filter(
+        ({ item, selectedBounds }) =>
+            item === first && selectedBounds !== null
+    ).length;
+    layerStackView.handlers.onActivate(firstKey);
+
+    assert.equal(controlsView.sampleWindowSizeKm, 42);
+    assert.equal(controlsView.displayedStatistics.itemId, first.id);
+    assert.equal(controlsView.displayedStatistics.scope, "selectedArea");
+    assert.deepEqual(
+        controlsView.displayedStatistics.selectedBounds,
+        firstSelectedRequest.selectedBounds
+    );
+    assert.equal(
+        statisticsRequests.filter(
+            ({ item, selectedBounds }) =>
+                item === first && selectedBounds !== null
+        ).length,
+        firstSelectedRequestCount
+    );
+    const attachedSelections = rectangleLayers.filter(
+        (layer) => layer.kind === "selection" && leafletMap.layers.has(layer)
+    );
+    assert.equal(attachedSelections.length, 1);
+    assert.deepEqual(
+        attachedSelections[0].boundsHistory.at(-1),
+        firstLeafletBounds
+    );
+    assert.equal(leafletMap.layers.has(firstSelectionLayer), false);
+    viewer.destroy();
+});
+
+test("removing active layers restores the deterministic adjacent session", async () => {
+    const leafletMap = createFakeMap();
+    const { leaflet, wmsLayers } = createFakeLeaflet();
+    const controlsView = createFakeControlsView();
+    const layerStackView = createFakeLayerStackView();
+    const viewer = initializeRasterViewer(
+        {
+            wmsUrl: "/geoserver/eolab/wms",
+            leafletMap,
+            leaflet,
+            onTileError() {},
+        },
+        {
+            controlsView,
+            layerStackView,
+            publishRaster: async (item) => ({
+                layerName: `eolab:${item.id}`,
+                bbox: [-180, -90, 180, 90],
+            }),
+            loadStatistics: async (item, signal, selectedBounds) =>
+                createLayerStatistics(item, selectedBounds),
+            samplePixel: async () => ({ inBounds: true, value: 1 }),
+            viewport: { innerWidth: 1280, innerHeight: 720 },
+        }
+    );
+    const first = createRasterItem("remove-first");
+    const second = createRasterItem("remove-second");
+    const third = createRasterItem("remove-third");
+
+    await viewer.show(first);
+    await flushPromises();
+    await viewer.show(second);
+    await flushPromises();
+    await viewer.show(third);
+    const keys = new Map(
+        layerStackView.layers.map(({ item, key }) => [item, key])
+    );
+
+    layerStackView.handlers.onRemove(keys.get(third));
+    assert.equal(layerStackView.activeKey, keys.get(second));
+    assert.deepEqual(controlsView.activeLayer, {
+        label: "remove-second.tif",
+        visible: true,
+    });
+    assert.equal(controlsView.displayedStatistics.itemId, second.id);
+    assert.equal(
+        wmsLayers.some(
+            (layer) =>
+                layer.wmsOptions.layers === `eolab:${third.id}` &&
+                leafletMap.layers.has(layer)
+        ),
+        false
+    );
+
+    layerStackView.handlers.onRemove(keys.get(second));
+    assert.equal(layerStackView.activeKey, keys.get(first));
+    assert.equal(controlsView.displayedStatistics.itemId, first.id);
+    layerStackView.handlers.onRemove(keys.get(first));
+    assert.equal(layerStackView.layers.length, 0);
+    assert.equal(controlsView.controlsVisible, false);
+    assert.equal(
+        wmsLayers.some((layer) => leafletMap.layers.has(layer)),
+        false
+    );
+    viewer.destroy();
+});
+
+test("tile failures remain associated with their owning raster layer", async () => {
+    const leafletMap = createFakeMap();
+    const { leaflet, wmsLayers } = createFakeLeaflet();
+    const controlsView = createFakeControlsView();
+    const layerStackView = createFakeLayerStackView();
+    const tileErrors = [];
+    const viewer = initializeRasterViewer(
+        {
+            wmsUrl: "/geoserver/eolab/wms",
+            leafletMap,
+            leaflet,
+            onTileError: (message, item) => tileErrors.push({ message, item }),
+        },
+        {
+            controlsView,
+            layerStackView,
+            publishRaster: async (item) => ({
+                layerName: `eolab:${item.id}`,
+                bbox: [-180, -90, 180, 90],
+            }),
+            loadStatistics: async (item, signal, selectedBounds) =>
+                createLayerStatistics(item, selectedBounds),
+            samplePixel: async () => ({ inBounds: true, value: 1 }),
+            viewport: { innerWidth: 1280, innerHeight: 720 },
+        }
+    );
+    const first = createRasterItem("tile-error-first");
+    const second = createRasterItem("tile-error-second");
+
+    await viewer.show(first);
+    await flushPromises();
+    await viewer.show(second);
+    await flushPromises();
+    const firstLayer = wmsLayers.find(
+        (layer) => layer.wmsOptions.layers === `eolab:${first.id}`
+    );
+    firstLayer.eventHandlers.get("tileerror")();
+
+    assert.deepEqual(tileErrors, [{
+        message: "Map tiles could not be rendered.",
+        item: first,
+    }]);
+    assert.equal(
+        layerStackView.layers.find(({ item }) => item === first).error,
+        "Map tiles could not be rendered."
+    );
+    assert.equal(
+        layerStackView.layers.find(({ item }) => item === second).error,
+        null
+    );
+    assert.equal(layerStackView.activeKey,
+        layerStackView.layers.find(({ item }) => item === second).key);
+    assert.equal(controlsView.displayedStatistics.itemId, second.id);
+    viewer.destroy();
+});
+
+test("a removed layer's late tile failure cannot mark its replacement", async () => {
+    const leafletMap = createFakeMap();
+    const { leaflet, wmsLayers } = createFakeLeaflet();
+    const controlsView = createFakeControlsView();
+    const layerStackView = createFakeLayerStackView();
+    const tileErrors = [];
+    const item = createRasterItem("tile-error-replacement");
+    const viewer = initializeRasterViewer(
+        {
+            wmsUrl: "/geoserver/eolab/wms",
+            leafletMap,
+            leaflet,
+            onTileError: (message, failedItem) =>
+                tileErrors.push({ message, item: failedItem }),
+        },
+        {
+            controlsView,
+            layerStackView,
+            publishRaster: async () => ({
+                layerName: `eolab:${item.id}`,
+                bbox: [-180, -90, 180, 90],
+            }),
+            loadStatistics: async (requestedItem, signal, selectedBounds) =>
+                createLayerStatistics(requestedItem, selectedBounds),
+            samplePixel: async () => ({ inBounds: true, value: 1 }),
+            viewport: { innerWidth: 1280, innerHeight: 720 },
+        }
+    );
+
+    await viewer.show(item);
+    await flushPromises();
+    const removedLayer = wmsLayers[0];
+    viewer.remove(item);
+    await viewer.show(item);
+    await flushPromises();
+    assert.equal(wmsLayers.length, 2);
+
+    removedLayer.eventHandlers.get("tileerror")();
+
+    assert.deepEqual(tileErrors, []);
+    assert.equal(layerStackView.layers[0].error, null);
+    assert.equal(controlsView.displayedStatistics.itemId, item.id);
+    viewer.destroy();
+});
+
+test("a failed publication preserves existing layers and can be retried", async () => {
+    const leafletMap = createFakeMap();
+    const { leaflet, wmsLayers } = createFakeLeaflet();
+    const controlsView = createFakeControlsView();
+    const layerStackView = createFakeLayerStackView();
+    const publicationCounts = new Map();
+    const viewer = initializeRasterViewer(
+        {
+            wmsUrl: "/geoserver/eolab/wms",
+            leafletMap,
+            leaflet,
+            onTileError() {},
+        },
+        {
+            controlsView,
+            layerStackView,
+            publishRaster: async (item) => {
+                const count = (publicationCounts.get(item.id) ?? 0) + 1;
+                publicationCounts.set(item.id, count);
+                if (item.id.endsWith("publication-second") && count === 1) {
+                    throw new Error("GeoServer publication failed");
+                }
+                return {
+                    layerName: `eolab:${item.id}`,
+                    bbox: [-180, -90, 180, 90],
+                };
+            },
+            loadStatistics: async (item, signal, selectedBounds) =>
+                createLayerStatistics(item, selectedBounds),
+            samplePixel: async () => ({ inBounds: true, value: 1 }),
+            viewport: { innerWidth: 1280, innerHeight: 720 },
+        }
+    );
+    const first = createRasterItem("publication-first");
+    const second = createRasterItem("publication-second");
+
+    await viewer.show(first);
+    await flushPromises();
+    const firstKey = layerStackView.activeKey;
+    await assert.rejects(
+        viewer.show(second),
+        /GeoServer publication failed/
+    );
+    assert.equal(viewer.contains(first), true);
+    assert.equal(viewer.contains(second), false);
+    assert.equal(layerStackView.activeKey, firstKey);
+    assert.equal(controlsView.displayedStatistics.itemId, first.id);
+    assert.equal(
+        wmsLayers.filter((layer) => leafletMap.layers.has(layer)).length,
+        1
+    );
+
+    await viewer.show(second);
+    await flushPromises();
+    assert.equal(publicationCounts.get(second.id), 2);
+    assert.equal(viewer.contains(second), true);
+    assert.equal(layerStackView.layers.length, 2);
+    assert.equal(
+        wmsLayers.filter((layer) => leafletMap.layers.has(layer)).length,
+        2
     );
     viewer.destroy();
 });

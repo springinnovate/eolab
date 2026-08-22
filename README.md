@@ -117,9 +117,17 @@ control-flow queue time. The exporter endpoint is not published outside the
 Compose network, and the diagnostics panel never exposes metric labels,
 internal URLs, request parameters, or upstream error text.
 
-The scanner assesses mounted GeoTIFFs before offering **View on map**. The initial policy accepts supported one-band rasters that are small enough for direct rendering, or larger rasters with bounded base-resolution blocks and a complete internal overview pyramid. Other rasters remain fully searchable and inspectable with an explanation of why visualization is unavailable. For existing Items created before this policy, **Assess for visualization** inspects and updates only the selected raster.
+The scanner assesses mounted GeoTIFFs before offering **Add to map layers**. The initial policy accepts supported one-band rasters that are small enough for direct rendering, or larger rasters with bounded base-resolution blocks and a complete internal overview pyramid. Other rasters remain fully searchable and inspectable with an explanation of why visualization is unavailable. For existing Items created before this policy, **Assess for visualization** inspects and updates only the selected raster.
 
-While a raster is displayed, **Raster appearance** shows an approximate
+Eligible rasters remain in a session-only layer stack until removed. At most two
+may be visible at once; additional candidates are retained hidden without making
+WMS tile requests. Each layer has independent visibility, opacity, drawing
+order, appearance, statistics, sampling selection, and legend. Selecting the
+active layer chooses which raster the shared appearance, histogram, sampling,
+and pixel-probe controls edit. Visibility and active selection are independent,
+and showing a hidden layer reuses its existing GeoServer publication.
+
+For the active raster, **Raster appearance** shows an approximate
 band-1 distribution from a fixed, bounded sample. EOLab initially applies the
 sample's 5th, 50th, and 95th percentiles, and the user can apply other ordered
 percentiles or directly edit the color palette and minimum, midpoint, and
@@ -167,7 +175,7 @@ The scanner's typed handler, container-pruning, multi-Item, progress, and shared
 
 ## Search the catalog
 
-The Catalog search finds case-insensitive matches in Item filenames, relative paths, descriptions, and standard STAC datetime values. Enter any part of the text; for example, `2002` matches both `grassland_2002.tif` and a description containing `2002`, while `2025-01` remains a literal datetime-text match. Separate terms are combined automatically, so `ESA 2020` requires both terms but permits them to match different searchable fields. Add `format:cog` to return only Cloud Optimized GeoTIFFs. Add `viewable:true` to return only rasters whose current recorded assessment makes **View on map** available; unassessed and unavailable rasters are excluded without being assessed during the search. Search terms and filters do not require an `&`.
+The Catalog search finds case-insensitive matches in Item filenames, relative paths, descriptions, and standard STAC datetime values. Enter any part of the text; for example, `2002` matches both `grassland_2002.tif` and a description containing `2002`, while `2025-01` remains a literal datetime-text match. Separate terms are combined automatically, so `ESA 2020` requires both terms but permits them to match different searchable fields. Add `format:cog` to return only Cloud Optimized GeoTIFFs. Add `viewable:true` to return only rasters whose current recorded assessment makes **Add to map layers** available; unassessed and unavailable rasters are excluded without being assessed during the search. Search terms and filters do not require an `&`.
 
 Use `date:YYYY` for a whole UTC calendar year, `date:YYYY-MM` for a whole month, or `date:YYYY-MM-DD` for one day. Two values separated by `..` form an inclusive range; each endpoint may use any of those precisions. The start expands to the beginning of its calendar period and the end expands to the final day of its period, so `date:2020-01..2020-03` covers January 1 through March 31. The range uses standard STAC Item Search temporal-intersection semantics, so it includes instant Items within the period and interval Items that are contained by, partially overlap, or span the requested range. An Item touching either boundary is included. For example, `ESA format:cog viewable:true date:2020` combines text, COG format, current viewability, and calendar-year constraints. Open-ended ranges and timestamps are not accepted; invalid dates and reversed ranges are reported beside the search field. Clear the field to show the complete catalog.
 

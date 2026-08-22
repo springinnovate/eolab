@@ -28,11 +28,29 @@ const MAXIMUM_RASTER_SAMPLE_WINDOW_SIZE_KM = 300;
 export const RASTER_SAMPLE_WINDOW_EDGE_GUIDANCE =
     "Move the sample window away from the pole or date line.";
 
+/** Guidance shown when the pointer is outside the canonical map world. */
+export const RASTER_SAMPLE_WINDOW_MAP_BOUNDS_GUIDANCE =
+    "Move the sample window inside the map bounds.";
+
 /** Mean Earth radius used for spherical WGS 84 sample-window calculations. */
 const WGS84_MEAN_RADIUS_KM = 6371.0088;
 
 /** Identify a valid sample window that crosses an unsupported world boundary. */
 export class RasterSampleWindowBoundaryError extends RangeError {}
+
+/**
+ * Return whether a position belongs to the canonical non-wrapping WGS 84 world.
+ *
+ * @param {{longitude: number, latitude: number}|null|undefined} position
+ * Candidate WGS 84 position.
+ * @return {boolean} Whether both coordinates are finite and within bounds.
+ */
+export function isCanonicalWgs84Position(position) {
+    return Number.isFinite(position?.longitude) &&
+        Number.isFinite(position?.latitude) &&
+        position.longitude >= -180 && position.longitude <= 180 &&
+        position.latitude >= -90 && position.latitude <= 90;
+}
 
 /**
  * Build the stable validation error used for malformed selected bounds.
@@ -139,12 +157,7 @@ function rasterSampleDestination(center, distanceKm, bearingDegrees) {
  * date line.
  */
 export function buildRasterSampleWindowBounds(center, sideLengthKm) {
-    if (
-        !Number.isFinite(center?.longitude) ||
-        !Number.isFinite(center?.latitude) ||
-        center.longitude < -180 || center.longitude > 180 ||
-        center.latitude < -90 || center.latitude > 90
-    ) {
+    if (!isCanonicalWgs84Position(center)) {
         throw new RangeError("Raster sample center must be a WGS 84 position.");
     }
     validateRasterSampleWindowSize(sideLengthKm);
