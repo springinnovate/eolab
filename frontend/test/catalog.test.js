@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -184,10 +185,37 @@ test("buildCatalogSearch builds inclusive UTC day and date-range searches", () =
   );
 });
 
+test("buildCatalogSearch expands shortened calendar date periods", () => {
+  assert.deepEqual(buildCatalogSearch("date:2020"), {
+    filter: null,
+    datetime: "2020-01-01T00:00:00Z/2020-12-31T23:59:59.999999Z",
+  });
+  assert.deepEqual(buildCatalogSearch("date:2020-01"), {
+    filter: null,
+    datetime: "2020-01-01T00:00:00Z/2020-01-31T23:59:59.999999Z",
+  });
+  assert.deepEqual(buildCatalogSearch("date:2024-02"), {
+    filter: null,
+    datetime: "2024-02-01T00:00:00Z/2024-02-29T23:59:59.999999Z",
+  });
+  assert.deepEqual(buildCatalogSearch("date:2020-01..2020-03"), {
+    filter: null,
+    datetime: "2020-01-01T00:00:00Z/2020-03-31T23:59:59.999999Z",
+  });
+  assert.deepEqual(buildCatalogSearch("date:2020..2020-03-15"), {
+    filter: null,
+    datetime: "2020-01-01T00:00:00Z/2020-03-15T23:59:59.999999Z",
+  });
+});
+
 test("buildCatalogSearch rejects ambiguous or invalid date filters", () => {
   const invalidSearches = [
     "date:",
-    "date:2025-01",
+    "date:20",
+    "date:2025-1",
+    "date:2025-01-1",
+    "date:2025-00",
+    "date:2025-13",
     "date:2025-02-29",
     "date:0000-01-01",
     "date:2025-01-01..",
@@ -216,6 +244,16 @@ test("buildCatalogSearch rejects ambiguous or invalid date filters", () => {
       message: "2025-02-29 is not a valid UTC calendar date.",
     },
   );
+});
+
+test("Catalog search help presents shortened date periods", () => {
+  const catalogMarkup = readFileSync(
+    new URL("../index.html", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(catalogMarkup, /date:2020-01/);
+  assert.match(catalogMarkup, /date:2020-01\.\.2020-03/);
 });
 
 test("buildCatalogSearch rejects syntax outside the field contract", () => {
@@ -297,7 +335,7 @@ test("CatalogSearchClient combines STAC datetime with text and format", async ()
     return itemCollectionResponse();
   });
 
-  await client.search("barley format:cog date:2020-01-01..2020-12-31");
+  await client.search("barley format:cog date:2020-01..2020-03");
 
   assert.deepEqual(JSON.parse(capturedRequest.options.body), {
     limit: 20,
@@ -315,7 +353,7 @@ test("CatalogSearchClient combines STAC datetime with text and format", async ()
         },
       ],
     },
-    datetime: "2020-01-01T00:00:00Z/2020-12-31T23:59:59.999999Z",
+    datetime: "2020-01-01T00:00:00Z/2020-03-31T23:59:59.999999Z",
   });
 });
 
