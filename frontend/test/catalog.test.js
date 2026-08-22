@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -32,6 +33,25 @@ const expectedSubstringProperties = [
 ];
 const cogMediaType =
   "image/tiff; application=geotiff; profile=cloud-optimized";
+const viewableFilter = {
+  op: "and",
+  args: [
+    {
+      op: "=",
+      args: [
+        { property: "assets.data.eolab:rendering.policy" },
+        "raster-v2",
+      ],
+    },
+    {
+      op: "=",
+      args: [
+        { property: "assets.data.eolab:rendering.eligible" },
+        true,
+      ],
+    },
+  ],
+};
 
 function expectedSubstringFilter(searchText) {
   return {
@@ -154,11 +174,35 @@ test("buildCatalogFilter combines each literal search term with AND", () => {
   });
 });
 
+test("buildCatalogFilter returns only currently viewable rasters", () => {
+  assert.deepEqual(buildCatalogFilter(" VIEWABLE:TRUE "), viewableFilter);
+  assert.deepEqual(
+    buildCatalogFilter("barley viewable:true format:cog"),
+    {
+      op: "and",
+      args: [
+        expectedSubstringFilter("barley"),
+        {
+          op: "=",
+          args: [
+            { property: "assets.data.type" },
+            cogMediaType,
+          ],
+        },
+        ...viewableFilter.args,
+      ],
+    },
+  );
+});
+
 test("buildCatalogFilter rejects syntax outside the field contract", () => {
   const invalidSearches = [
     "format:",
     "format:geotiff",
     "format:cog format:cog",
+    "viewable:",
+    "viewable:false",
+    "viewable:true viewable:true",
     "datatype:cog",
     "collection:rasters",
     "barley & format:cog",
@@ -169,6 +213,16 @@ test("buildCatalogFilter rejects syntax outside the field contract", () => {
       CatalogSearchSyntaxError,
     );
   }
+});
+
+test("Catalog search help presents the viewable filter", () => {
+  const catalogMarkup = readFileSync(
+    new URL("../index.html", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(catalogMarkup, /viewable:true/);
+  assert.match(catalogMarkup, /ESA 2020 format:cog viewable:true/);
 });
 
 test("CatalogSearchClient sends a standard STAC CQL2 substring search", async () => {
@@ -224,6 +278,22 @@ test("CatalogSearchClient sends the parsed COG filter", async () => {
       },
     ],
   });
+});
+
+test("CatalogSearchClient sends the current viewable assessment filter", async () => {
+  let capturedRequest;
+  const client = new CatalogSearchClient("/stac", async (url, options) => {
+    capturedRequest = { url, options };
+    return itemCollectionResponse();
+  });
+
+  await client.search("viewable:true");
+
+  assert.equal(capturedRequest.url, "/stac/search");
+  assert.deepEqual(
+    JSON.parse(capturedRequest.options.body).filter,
+    viewableFilter,
+  );
 });
 
 test("CatalogSearchClient rejects invalid syntax without a request", () => {
