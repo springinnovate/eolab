@@ -7,7 +7,7 @@ from typing import Any
 
 import rasterio
 
-from eolab_app.geotiff import build_stac_item
+from eolab_app.catalog.geotiff import build_stac_item
 from eolab_app.raster.eligibility import (
     RENDERING_METADATA_KEY,
     RENDERING_POLICY,

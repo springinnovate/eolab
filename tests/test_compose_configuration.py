@@ -46,6 +46,30 @@ def test_scan_paths_share_one_read_only_deployment_mount() -> None:
     assert '"SCAN_WORKER_COUNT=${EOLAB_SCAN_WORKER_COUNT:-8}"' in compose
     assert '"SCAN_WRITER_COUNT=${EOLAB_SCAN_WRITER_COUNT:-4}"' in compose
     assert '"SCAN_BATCH_SIZE=${EOLAB_SCAN_BATCH_SIZE:-100}"' in compose
+    assert (
+        '"SCAN_ERROR_DETAIL_LIMIT=${EOLAB_SCAN_ERROR_DETAIL_LIMIT:-100}"'
+        in compose
+    )
+    assert (
+        '"SCAN_RECONCILIATION_PAGE_SIZE='
+        '${EOLAB_SCAN_RECONCILIATION_PAGE_SIZE:-500}"' in compose
+    )
+    assert (
+        '"SCAN_RECONCILIATION_CONCURRENCY='
+        '${EOLAB_SCAN_RECONCILIATION_CONCURRENCY:-8}"' in compose
+    )
+    assert (
+        '"SCAN_RECONCILIATION_SPOOL_MEMORY_BYTES='
+        '${EOLAB_SCAN_RECONCILIATION_SPOOL_MEMORY_BYTES:-1048576}"' in compose
+    )
+    assert (
+        '"SCAN_CATALOG_WRITE_TIMEOUT_SECONDS='
+        '${EOLAB_SCAN_CATALOG_WRITE_TIMEOUT_SECONDS:-120}"' in compose
+    )
+    assert (
+        '"SCAN_CATALOG_ERROR_DETAIL_LIMIT='
+        '${EOLAB_SCAN_CATALOG_ERROR_DETAIL_LIMIT:-500}"' in compose
+    )
     assert '"EOLAB_SCAN_MOUNT_PATH=${EOLAB_SCAN_MOUNT_PATH' not in compose
 
 

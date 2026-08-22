@@ -1,6 +1,7 @@
 """Load and validate EOLab application settings from the environment."""
 
 import json
+import math
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -33,6 +34,12 @@ class Settings:
     scan_worker_count: int
     scan_writer_count: int
     scan_batch_size: int
+    scan_error_detail_limit: int
+    scan_reconciliation_page_size: int
+    scan_reconciliation_concurrency: int
+    scan_reconciliation_spool_memory_bytes: int
+    scan_catalog_write_timeout_seconds: float
+    scan_catalog_error_detail_limit: int
     basemap_url: str
     basemap_attribution: str
     initial_latitude: float
@@ -91,6 +98,27 @@ class Settings:
             raise ValueError("SCAN_WRITER_COUNT must be greater than zero")
         if self.scan_batch_size < 1:
             raise ValueError("SCAN_BATCH_SIZE must be greater than zero")
+        positive_scan_settings = {
+            "SCAN_ERROR_DETAIL_LIMIT": self.scan_error_detail_limit,
+            "SCAN_RECONCILIATION_PAGE_SIZE": self.scan_reconciliation_page_size,
+            "SCAN_RECONCILIATION_CONCURRENCY": (
+                self.scan_reconciliation_concurrency
+            ),
+            "SCAN_RECONCILIATION_SPOOL_MEMORY_BYTES": (
+                self.scan_reconciliation_spool_memory_bytes
+            ),
+            "SCAN_CATALOG_WRITE_TIMEOUT_SECONDS": (
+                self.scan_catalog_write_timeout_seconds
+            ),
+            "SCAN_CATALOG_ERROR_DETAIL_LIMIT": (
+                self.scan_catalog_error_detail_limit
+            ),
+        }
+        for environment_variable_name, setting_value in positive_scan_settings.items():
+            if not math.isfinite(setting_value) or setting_value <= 0:
+                raise ValueError(
+                    f"{environment_variable_name} must be greater than zero"
+                )
         if not self.scan_mount_path.is_absolute():
             raise ValueError("SCAN_MOUNT_PATH must be an absolute path")
         if not self.scan_mount_path.is_dir():
@@ -207,6 +235,22 @@ def load_settings(
         scan_worker_count=int(os.environ["SCAN_WORKER_COUNT"]),
         scan_writer_count=int(os.environ["SCAN_WRITER_COUNT"]),
         scan_batch_size=int(os.environ["SCAN_BATCH_SIZE"]),
+        scan_error_detail_limit=int(os.environ["SCAN_ERROR_DETAIL_LIMIT"]),
+        scan_reconciliation_page_size=int(
+            os.environ["SCAN_RECONCILIATION_PAGE_SIZE"]
+        ),
+        scan_reconciliation_concurrency=int(
+            os.environ["SCAN_RECONCILIATION_CONCURRENCY"]
+        ),
+        scan_reconciliation_spool_memory_bytes=int(
+            os.environ["SCAN_RECONCILIATION_SPOOL_MEMORY_BYTES"]
+        ),
+        scan_catalog_write_timeout_seconds=float(
+            os.environ["SCAN_CATALOG_WRITE_TIMEOUT_SECONDS"]
+        ),
+        scan_catalog_error_detail_limit=int(
+            os.environ["SCAN_CATALOG_ERROR_DETAIL_LIMIT"]
+        ),
         basemap_url=os.environ["BASEMAP_URL"].strip(),
         basemap_attribution=os.environ["BASEMAP_ATTRIBUTION"].strip(),
         initial_latitude=float(os.environ["INITIAL_LATITUDE"]),

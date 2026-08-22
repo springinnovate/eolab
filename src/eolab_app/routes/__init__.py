@@ -1,1 +1,1 @@
-"""HTTP delivery adapters for EOLab application features."""
+"""HTTP route adapters for EOLab feature packages."""

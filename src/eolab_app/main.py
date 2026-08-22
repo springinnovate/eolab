@@ -12,6 +12,10 @@ import psycopg
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.staticfiles import StaticFiles
 
+from eolab_app.catalog.pgstac import PgStacCatalogDatabase
+from eolab_app.catalog.reconciliation import MissingItemReconciler
+from eolab_app.catalog.scanner import ScanManager
+from eolab_app.catalog.stac_api import StacApiWriter
 from eolab_app.diagnostics import (
     GetMapRequestTracker,
     RenderingDiagnostics,
@@ -32,8 +36,8 @@ from eolab_app.routes.rasters import (
     create_raster_feature,
     raster_http_exception,
 )
+from eolab_app.routes.scans import create_scan_router
 from eolab_app.settings import APPLICATION_VERSION_PATH, load_settings
-from eolab_app.scanning import PgStacCatalogDatabase, ScanManager, StacApiWriter
 
 
 PUBLIC_WMS_COMMON_QUERY_PARAMETERS = frozenset(
@@ -416,6 +420,7 @@ def create_app(
         version=app_global_configuration.app_version,
         lifespan=lifespan,
     )
+    catalog_database = PgStacCatalogDatabase()
     application.include_router(raster_feature.router)
     scan_manager = ScanManager(
         app_global_configuration.scan_mount_path,
@@ -426,12 +431,32 @@ def create_app(
         StacApiWriter(
             app_global_configuration.catalog_internal_url,
             catalog_transport,
+            write_timeout_seconds=(
+                app_global_configuration.scan_catalog_write_timeout_seconds
+            ),
+            error_detail_limit=(
+                app_global_configuration.scan_catalog_error_detail_limit
+            ),
         ),
-        PgStacCatalogDatabase(),
+        catalog_database,
         app_global_configuration.scan_worker_count,
         app_global_configuration.scan_writer_count,
         app_global_configuration.scan_batch_size,
+        reconciler=MissingItemReconciler(
+            app_global_configuration.scan_mount_path,
+            catalog_database,
+            app_global_configuration.scan_batch_size,
+            page_size=app_global_configuration.scan_reconciliation_page_size,
+            concurrency=(
+                app_global_configuration.scan_reconciliation_concurrency
+            ),
+            spool_memory_bytes=(
+                app_global_configuration.scan_reconciliation_spool_memory_bytes
+            ),
+        ),
+        error_detail_limit=app_global_configuration.scan_error_detail_limit,
     )
+    application.include_router(create_scan_router(scan_manager))
 
     @application.get("/healthz", tags=["system"])
     def healthz() -> dict[str, str]:
@@ -473,30 +498,6 @@ def create_app(
         """
         response.headers["cache-control"] = "no-store"
         return await rendering_diagnostics.get()
-
-    @application.get("/api/scans/current", tags=["catalog"])
-    async def current_scan() -> dict[str, object]:
-        """Return current mounted-dataset scan progress.
-
-        Returns:
-            A snapshot of the active or most recently completed scan.
-        """
-        return scan_manager.status()
-
-    @application.post("/api/scans", status_code=202, tags=["catalog"])
-    async def start_scan() -> dict[str, object]:
-        """Start a recursive scan of the configured read-only source.
-
-        Returns:
-            Initial progress for the new scan.
-
-        Raises:
-            HTTPException: If another scan is still running.
-        """
-        try:
-            return await scan_manager.start()
-        except RuntimeError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
 
     @application.api_route(
         "/stac",

@@ -1,4 +1,4 @@
-"""Extract STAC metadata from ESRI Shapefile datasets."""
+"""Discover and extract STAC metadata from ESRI Shapefile datasets."""
 
 import hashlib
 import math
@@ -240,7 +240,14 @@ def build_stac_item(
 
 
 def _component_extension(file_name: str) -> str | None:
-    """Return a recognized Shapefile component extension."""
+    """Return a recognized Shapefile component extension.
+
+    Args:
+        file_name: Candidate companion-file name.
+
+    Returns:
+        Canonical lower-case component extension, or ``None`` when unsupported.
+    """
     lower_file_name = file_name.lower()
     for extension in SHAPEFILE_COMPONENT_TYPES:
         if lower_file_name.endswith(extension):
