@@ -1,3 +1,11 @@
+/**
+ * Application coordinator for one interactive Catalog raster viewer.
+ *
+ * This module connects publication, Leaflet layers, raster controls,
+ * statistics, selected-area sampling, styling, and the pixel probe. It owns
+ * their shared lifecycle and stale-work rules while delegating domain logic,
+ * HTTP access, DOM presentation, and Leaflet construction to focused modules.
+ */
 import {
     loadCatalogRasterStatistics,
     publishCatalogRaster,

@@ -1,3 +1,10 @@
+/**
+ * Domain rules for bounded raster statistics and histogram percentiles.
+ *
+ * This module validates the rendering API's statistics contract, determines
+ * whether results match the active whole-raster or selected-area scope, and
+ * estimates values from histogram percentiles. It performs no I/O or rendering.
+ */
 import { validateRasterSelectedBounds } from "./geometry.js";
 
 /** Default histogram percentiles used to derive raster color thresholds. */

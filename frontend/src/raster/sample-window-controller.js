@@ -1,3 +1,10 @@
+/**
+ * Interaction controller for the map's raster sample window.
+ *
+ * This module owns enablement, pointer preview, click/center selection, and
+ * preview/selection layer cleanup. Geometry and Leaflet conversion are
+ * delegated, and selecting a window only emits validated bounds to its caller.
+ */
 import {
     buildRasterSampleWindowBounds,
     DEFAULT_RASTER_SAMPLE_WINDOW_SIZE_KM,

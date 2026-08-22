@@ -1,3 +1,10 @@
+/**
+ * Domain model and calculations for continuous raster appearance.
+ *
+ * This module validates the canonical three-stop style, derives thresholds
+ * from statistics, applies palettes, and builds legend/color values. WMS
+ * serialization, control elements, and layer updates are intentionally separate.
+ */
 import {
     DEFAULT_RASTER_PERCENTILES,
     estimateRasterHistogramPercentile

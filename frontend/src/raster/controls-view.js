@@ -1,3 +1,10 @@
+/**
+ * DOM adapter for the raster viewer's controls and readouts.
+ *
+ * This module owns required element lookup, control event binding, and visual
+ * presentation of styles, histograms, sample-window status, and pixel values.
+ * It contains no fetch, Leaflet, or raster lifecycle decisions.
+ */
 import { buildRasterLegend } from "./style.js";
 import {
     clearRasterHistogramChart,

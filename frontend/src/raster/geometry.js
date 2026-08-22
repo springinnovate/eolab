@@ -1,4 +1,11 @@
 /**
+ * Raster sampling geometry expressed in domain-level WGS 84 values.
+ *
+ * This module validates selected bounds and sample-window sizes and constructs
+ * ground-distance sampling windows. It deliberately has no dependency on
+ * Leaflet, browser APIs, rendering services, or the DOM.
+ */
+/**
  * Canonical non-wrapping WGS 84 raster bounds.
  *
  * @typedef {Object} RasterSelectedBounds

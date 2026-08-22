@@ -1,3 +1,10 @@
+/**
+ * Domain formatting and request scheduling for the hover pixel probe.
+ *
+ * This module formats sampled values, places the floating readout within the
+ * viewport, and limits asynchronous sampling to one request plus the latest
+ * queued position. API access and DOM updates are supplied as collaborators.
+ */
 /** Minimum interval between raster pixel requests. */
 const PIXEL_PROBE_INTERVAL_MILLISECONDS = 100;
 

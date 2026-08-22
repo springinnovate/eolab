@@ -1,4 +1,11 @@
 /**
+ * Asynchronous request lifecycle for raster statistics.
+ *
+ * This module owns activation, retry, cancellation, and stale-response
+ * suppression for one statistics scope. Loading the data and presenting its
+ * results are injected; histogram math and DOM rendering are out of scope.
+ */
+/**
  * Load statistics for one raster scope.
  *
  * @callback LoadRasterStatistics

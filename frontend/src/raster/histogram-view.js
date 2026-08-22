@@ -1,3 +1,10 @@
+/**
+ * SVG presentation adapter for raster histograms.
+ *
+ * This module renders and clears the fixed-bin histogram from already
+ * validated statistics and a committed raster style. Statistics loading,
+ * percentile decisions, and broader controls visibility remain outside it.
+ */
 import {
     formatRasterPixelValue
 } from "./pixel-probe.js";

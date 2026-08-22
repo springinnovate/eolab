@@ -1,3 +1,10 @@
+/**
+ * WMS protocol adapter for dynamic raster styling and service readiness.
+ *
+ * This module serializes a validated raster style into GeoServer's ENV
+ * parameter and validates GetCapabilities responses. It does not publish
+ * Catalog rasters, manage Leaflet layers, or own style-editing state.
+ */
 import { validateRasterStyle } from "./style.js";
 
 /**

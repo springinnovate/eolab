@@ -1,3 +1,10 @@
+/**
+ * Leaflet adapter for raster layers, bounds, and layer lifecycle.
+ *
+ * This module converts raster domain bounds to Leaflet coordinates, creates
+ * WMS and sample-window layers, and ensures only the latest published Catalog
+ * raster remains on the map. It does not fetch publication or statistics data.
+ */
 import { validateRasterSelectedBounds } from "./geometry.js";
 
 

@@ -1,3 +1,11 @@
+/**
+ * Browser entry point and application composition root for EOLab.
+ *
+ * This module initializes the map, Catalog explorer, scanner controls, and
+ * rendering diagnostics, then connects those features to the page. Raster
+ * domain rules and raster-viewer behavior live under `raster/`; this file only
+ * coordinates them with the rest of the application.
+ */
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import {

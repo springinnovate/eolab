@@ -1,3 +1,10 @@
+/**
+ * Same-origin HTTP adapter for EOLab's raster-rendering API.
+ *
+ * This module builds requests from Catalog Item identity, validates API
+ * responses at the network boundary, and converts failures to user-safe
+ * errors. It does not own raster domain calculations, UI state, or Leaflet.
+ */
 import { validateRasterSelectedBounds } from "./geometry.js";
 import { validateRasterStatisticsForSelection } from "./statistics.js";
 
