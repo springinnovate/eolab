@@ -1003,6 +1003,42 @@ h5 {
   display: none;
 }
 
+.catalog-surprise-action {
+  display: flex;
+  min-height: 27px;
+  align-items: center;
+  gap: 9px;
+  margin: -8px 0 16px;
+  color: var(--text-3);
+  font-size: 0.72rem;
+}
+
+.catalog-surprise-button {
+  cursor: pointer;
+  border: 1px solid var(--border-1);
+  border-radius: 999px;
+  background: transparent;
+  padding: 4px 9px;
+  color: var(--text-2);
+  font: inherit;
+  font-weight: 650;
+}
+
+.catalog-surprise-button:hover:not(:disabled) {
+  border-color: var(--brand);
+  background: var(--surface-2);
+  color: var(--brand-hover);
+}
+
+.catalog-surprise-button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+#catalog-surprise-status:empty {
+  display: none;
+}
+
 .catalog-stream-status {
   display: flex;
   align-items: center;

@@ -14,6 +14,7 @@ import {
     CatalogResultStream,
     CatalogSearchClient,
     CatalogSearchSyntaxError,
+    CatalogSurpriseClient,
     createDebouncedAction,
     formatCatalogItemCount,
     formatScanReconciliation,
@@ -442,6 +443,12 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
     );
     const catalogSearchInput = document.querySelector("#catalog-search");
     const catalogSearchError = document.querySelector("#catalog-search-error");
+    const surpriseCatalogButton = document.querySelector(
+        "#surprise-catalog"
+    );
+    const catalogSurpriseStatus = document.querySelector(
+        "#catalog-surprise-status"
+    );
     const refreshCatalogButton = document.querySelector("#refresh-catalog");
     const streamStatusElement = document.querySelector(
         "#catalog-stream-status"
@@ -466,6 +473,7 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
     const resultStream = new CatalogResultStream(
         new CatalogSearchClient(catalogUrl)
     );
+    const surpriseClient = new CatalogSurpriseClient();
     const footprintController = new CatalogFootprintController(
         leafletMap,
         createCatalogFootprintLayer
@@ -488,10 +496,14 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
     });
     const catalogState = {
         collectionsDocument: null,
+        resultButtons: new Map(),
         searchSequence: 0,
         searchText: "",
         selectedButton: null,
-        selectedItem: null
+        selectedItem: null,
+        // Generation token: filter/search changes invalidate older async
+        // Surprise responses so they cannot select an Item from stale criteria.
+        surpriseRequestGeneration: 0
     };
     /** Apply the scanner-owned visualization decision to the map action. */
     function updateCatalogMapAction(item) {
@@ -508,6 +520,8 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
 
     /** Clears the selected result, footprint, and inspector together. */
     function clearCatalogSelection() {
+        catalogState.selectedButton?.classList.remove("is-selected");
+        catalogState.selectedButton?.setAttribute("aria-pressed", "false");
         footprintController.clear();
         rasterVisualization.reset();
         catalogState.selectedButton = null;
@@ -518,6 +532,39 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
             catalogState.collectionsDocument?.collections ?? [],
             appGlobalConfiguration.scanDisplayPathPrefix
         );
+    }
+
+    /** Return the stable identity used to pair result buttons with Items. */
+    function catalogItemKey(item) {
+        return JSON.stringify([item.collection, item.id]);
+    }
+
+    /** Select one result or remotely discovered Item without changing search. */
+    function selectCatalogItem(item, requestedButton = null) {
+        const itemButton = requestedButton ??
+            catalogState.resultButtons.get(catalogItemKey(item)) ?? null;
+        const selectionChanged = catalogState.selectedItem === null ||
+            catalogItemKey(catalogState.selectedItem) !== catalogItemKey(item);
+        if (catalogState.selectedButton !== null) {
+            catalogState.selectedButton.classList.remove("is-selected");
+            catalogState.selectedButton.setAttribute("aria-pressed", "false");
+        }
+        if (selectionChanged) {
+            rasterVisualization.reset();
+        }
+        catalogState.selectedButton = itemButton;
+        catalogState.selectedItem = item;
+        itemButton?.classList.add("is-selected");
+        itemButton?.setAttribute("aria-pressed", "true");
+        footprintController.select(item);
+        renderCatalogItemInspector(
+            item,
+            catalogState.collectionsDocument.collections,
+            appGlobalConfiguration.scanDisplayPathPrefix
+        );
+        if (selectionChanged) {
+            updateCatalogMapAction(item);
+        }
     }
 
     /**
@@ -578,30 +625,7 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
 
             itemButton.append(itemTitle, itemDescription, itemSummary);
             itemButton.addEventListener("click", () => {
-                const selectionChanged = catalogState.selectedItem !== item;
-                if (catalogState.selectedButton !== null) {
-                    catalogState.selectedButton.classList.remove("is-selected");
-                    catalogState.selectedButton.setAttribute(
-                        "aria-pressed",
-                        "false"
-                    );
-                }
-                if (selectionChanged) {
-                    rasterVisualization.reset();
-                }
-                catalogState.selectedButton = itemButton;
-                catalogState.selectedItem = item;
-                itemButton.classList.add("is-selected");
-                itemButton.setAttribute("aria-pressed", "true");
-                footprintController.select(item);
-                renderCatalogItemInspector(
-                    item,
-                    catalogState.collectionsDocument.collections,
-                    appGlobalConfiguration.scanDisplayPathPrefix
-                );
-                if (selectionChanged) {
-                    updateCatalogMapAction(item);
-                }
+                selectCatalogItem(item, itemButton);
             });
             itemButton.addEventListener("pointerenter", () => {
                 footprintController.preview(item);
@@ -615,6 +639,16 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
             itemButton.addEventListener("blur", () => {
                 footprintController.clearPreview();
             });
+            catalogState.resultButtons.set(catalogItemKey(item), itemButton);
+            if (
+                catalogState.selectedItem !== null &&
+                catalogItemKey(catalogState.selectedItem) ===
+                    catalogItemKey(item)
+            ) {
+                catalogState.selectedButton = itemButton;
+                itemButton.classList.add("is-selected");
+                itemButton.setAttribute("aria-pressed", "true");
+            }
             catalogResultsElement.append(itemButton);
         }
 
@@ -676,12 +710,14 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
     /** Start a new search and replace every result from the previous stream. */
     async function loadCatalog(reloadCollections = false) {
         const searchSequence = ++catalogState.searchSequence;
+        catalogState.surpriseRequestGeneration += 1;
         catalogState.searchText = catalogSearchInput.value;
         catalogSearchInput.removeAttribute("aria-invalid");
         catalogSearchError.textContent = "";
         pageObserver.unobserve(loadSentinelElement);
         retryPageButton.hidden = true;
         clearCatalogSelection();
+        catalogState.resultButtons.clear();
         catalogResultsElement.replaceChildren();
         catalogResultsElement.setAttribute("aria-busy", "true");
         applyCatalogSystemState(
@@ -693,6 +729,9 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
         catalogSummaryElement.textContent = "Loading catalog contents";
         streamStatusElement.textContent = "Loading Catalog Items…";
         refreshCatalogButton.disabled = true;
+        surpriseCatalogButton.disabled = true;
+        surpriseCatalogButton.setAttribute("aria-busy", "false");
+        catalogSurpriseStatus.textContent = "";
 
         try {
             const collectionsRequest =
@@ -742,6 +781,7 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
             if (searchSequence === catalogState.searchSequence) {
                 catalogResultsElement.setAttribute("aria-busy", "false");
                 refreshCatalogButton.disabled = false;
+                surpriseCatalogButton.disabled = false;
             }
         }
     }
@@ -798,7 +838,53 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
         CATALOG_SEARCH_DEBOUNCE_MILLISECONDS,
         window
     );
-    catalogSearchInput.addEventListener("input", scheduleCatalogSearch);
+    catalogSearchInput.addEventListener("input", () => {
+        // Invalidate immediately rather than waiting for the debounced search.
+        catalogState.surpriseRequestGeneration += 1;
+        surpriseCatalogButton.disabled = true;
+        catalogSurpriseStatus.textContent = "";
+        scheduleCatalogSearch();
+    });
+    surpriseCatalogButton.addEventListener("click", async () => {
+        const requestGeneration = ++catalogState.surpriseRequestGeneration;
+        surpriseCatalogButton.disabled = true;
+        surpriseCatalogButton.setAttribute("aria-busy", "true");
+        catalogSurpriseStatus.textContent = "Finding a random match…";
+        catalogSearchInput.removeAttribute("aria-invalid");
+        catalogSearchError.textContent = "";
+        try {
+            const item = await surpriseClient.surprise(
+                catalogState.searchText,
+                catalogState.selectedItem
+            );
+            if (
+                requestGeneration !== catalogState.surpriseRequestGeneration ||
+                item === null
+            ) {
+                return;
+            }
+            selectCatalogItem(item);
+            const itemTitle = item.properties?.title ?? item.id;
+            catalogSurpriseStatus.textContent = `Selected ${itemTitle}.`;
+        } catch (catalogError) {
+            if (requestGeneration !== catalogState.surpriseRequestGeneration) {
+                return;
+            }
+            if (catalogError instanceof CatalogSearchSyntaxError) {
+                catalogSearchInput.setAttribute("aria-invalid", "true");
+                catalogSearchError.textContent = catalogError.message;
+                catalogSurpriseStatus.textContent =
+                    "Correct the Catalog search before trying again.";
+                return;
+            }
+            catalogSurpriseStatus.textContent = catalogError.message;
+        } finally {
+            if (requestGeneration === catalogState.surpriseRequestGeneration) {
+                surpriseCatalogButton.disabled = false;
+                surpriseCatalogButton.setAttribute("aria-busy", "false");
+            }
+        }
+    });
     refreshCatalogButton.addEventListener(
         "click",
         loadCatalog.bind(null, true)
