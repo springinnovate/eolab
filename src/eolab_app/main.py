@@ -250,7 +250,20 @@ async def _number_matched_is_estimated(
     search_request_body: bytes,
     number_matched: int,
 ) -> bool:
-    """Report whether pgSTAC supplied its estimate for an Item Search count."""
+    """Report whether pgSTAC supplied its estimate for an Item Search count.
+
+    Args:
+        search_request_body: Original STAC Item Search JSON body.
+        number_matched: Count returned by pgSTAC for that search.
+
+    Returns:
+        Whether the returned count came from pgSTAC's estimate.
+
+    Raises:
+        RuntimeError: If pgSTAC did not retain statistics for the search.
+        UnicodeDecodeError: If the request body is not valid UTF-8.
+        psycopg.Error: If the catalog database query fails.
+    """
     async with await psycopg.AsyncConnection.connect(
         options="-c search_path=pgstac,public"
     ) as connection:
@@ -346,7 +359,14 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        """Close shared upstream connection pools at application shutdown."""
+        """Own and close all shared upstream connection pools.
+
+        Args:
+            _: FastAPI application supplied by the lifespan protocol.
+
+        Yields:
+            Control while the application serves requests.
+        """
         async with AsyncExitStack() as client_stack:
             for client in (
                 catalog_client,
@@ -409,7 +429,14 @@ def create_app(
     async def rendering_diagnostics_summary(
         response: Response,
     ) -> RenderingDiagnostics:
-        """Return a fresh browser-safe summary of internal rendering state."""
+        """Return a browser-safe summary of internal rendering state.
+
+        Args:
+            response: Outgoing response whose cache policy is set here.
+
+        Returns:
+            Current allowlisted metrics, or the stable unavailable variant.
+        """
         response.headers["cache-control"] = "no-store"
         return await rendering_diagnostics.get()
 
@@ -445,7 +472,17 @@ def create_app(
     async def assess_raster(
         request: CatalogRasterRequest,
     ) -> dict[str, object]:
-        """Assess and update one selected legacy raster Item."""
+        """Assess and update one selected legacy raster Item.
+
+        Args:
+            request: Authoritative Collection and Item identity.
+
+        Returns:
+            Updated browser-safe raster visualization assessment.
+
+        Raises:
+            HTTPException: If the Item or mounted raster cannot be assessed.
+        """
         return await update_catalog_raster_assessment(
             request,
             app_global_configuration.scan_mount_path,
@@ -459,7 +496,18 @@ def create_app(
         tags=["rendering"],
     )
     async def publish_raster(request: CatalogRasterRequest) -> PublishedRaster:
-        """Publish one authoritative mounted GeoTIFF as a WMS layer."""
+        """Publish one authoritative mounted GeoTIFF as a WMS layer.
+
+        Args:
+            request: Authoritative Collection and Item identity.
+
+        Returns:
+            Published WMS layer identity and raster bounds.
+
+        Raises:
+            HTTPException: If the catalog, source, or GeoServer publication
+                contract fails.
+        """
         async with raster_publish_lock:
             return await publish_catalog_raster(
                 request,
@@ -479,7 +527,18 @@ def create_app(
     async def sample_raster_pixel(
         request: CatalogPixelRequest,
     ) -> RasterPixel:
-        """Read one pixel from the selected published raster."""
+        """Read one pixel from the selected published raster.
+
+        Args:
+            request: Published layer identity and WGS84 coordinate.
+
+        Returns:
+            Band-one pixel position and value or out-of-bounds result.
+
+        Raises:
+            HTTPException: If the layer is not current or the raster read
+                cannot satisfy the pixel-sampling contract.
+        """
         return await sample_catalog_raster_pixel(
             request,
             published_rasters,

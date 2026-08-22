@@ -4,6 +4,7 @@ import asyncio
 import math
 import re
 import time
+from collections.abc import Iterator
 from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -185,6 +186,15 @@ class GetMapRequestTracker:
     """Track the bounded GetMap facts available at EOLab's proxy boundary."""
 
     def __init__(self, concurrency_limit: int) -> None:
+        """Initialize a tracker with the effective GeoServer request limit.
+
+        Args:
+            concurrency_limit: Maximum simultaneous GetMap renders configured
+                for GeoServer.
+
+        Raises:
+            ValueError: If the configured concurrency limit is not positive.
+        """
         if concurrency_limit < 1:
             raise ValueError("GetMap concurrency limit must be greater than zero")
         self._concurrency_limit = concurrency_limit
@@ -194,8 +204,12 @@ class GetMapRequestTracker:
         self._recent_successes: deque[bool] = deque(maxlen=RECENT_GET_MAP_LIMIT)
 
     @contextmanager
-    def track(self):
-        """Record one valid GetMap request through completion or cancellation."""
+    def track(self) -> Iterator[_TrackedGetMap]:
+        """Record one valid GetMap request through completion or cancellation.
+
+        Yields:
+            Mutable request outcome for the WMS proxy to mark successful.
+        """
         started_at = time.perf_counter()
         outcome = _TrackedGetMap()
         self._active += 1
@@ -208,7 +222,12 @@ class GetMapRequestTracker:
             self._recent_successes.append(outcome.succeeded)
 
     def snapshot(self) -> GetMapSnapshot:
-        """Return the current request state without exposing request details."""
+        """Return the current request state without exposing request details.
+
+        Returns:
+            A consistent snapshot of active, completed, recent, and latest
+            GetMap observations.
+        """
         recent_window_size = len(self._recent_successes)
         return GetMapSnapshot(
             active=self._active,
@@ -224,7 +243,18 @@ class GetMapRequestTracker:
 
 
 def _parse_metric_value(value_text: str) -> float:
-    """Parse one finite Prometheus numeric sample."""
+    """Parse one finite numeric sample from the JVM metrics document.
+
+    Args:
+        value_text: Text representation captured from one metric line.
+
+    Returns:
+        The parsed finite floating-point value.
+
+    Raises:
+        ValueError: If the text is not numeric.
+        RenderingDiagnosticsError: If the parsed value is not finite.
+    """
     value = float(value_text)
     if not math.isfinite(value):
         raise RenderingDiagnosticsError("Metric values must be finite")
@@ -232,7 +262,18 @@ def _parse_metric_value(value_text: str) -> float:
 
 
 def _as_nonnegative_integer(value: float, metric_name: str) -> int:
-    """Validate one integer-valued counter or byte quantity."""
+    """Validate one integer-valued counter or byte quantity.
+
+    Args:
+        value: Parsed finite metric value.
+        metric_name: Metric description used in contract errors.
+
+    Returns:
+        The validated nonnegative integer.
+
+    Raises:
+        RenderingDiagnosticsError: If the value is negative or fractional.
+    """
     if value < 0 or not value.is_integer():
         raise RenderingDiagnosticsError(
             f"{metric_name} must be a nonnegative integer"
@@ -246,6 +287,17 @@ def parse_jmx_metrics(document: str) -> JvmMetrics:
     Unknown exporter self-metrics are ignored. Every EOLab singleton must
     appear exactly once, and garbage-collector samples must use only the owned
     ``collector`` label so no upstream label can enter the browser contract.
+
+    Args:
+        document: Complete bounded UTF-8 JVM metrics document.
+
+    Returns:
+        Validated allowlisted JVM measurements.
+
+    Raises:
+        RenderingDiagnosticsError: If a required metric is missing, repeated,
+            malformed, nonfinite, mislabeled, or outside its numeric contract.
+        ValueError: If a matched numeric sample cannot be converted to float.
     """
     singleton_values: dict[str, float] = {}
     garbage_collection_counts: dict[str, int] = {}
@@ -364,7 +416,20 @@ async def _read_bounded_response(
     response: httpx2.Response,
     maximum_bytes: int = DIAGNOSTICS_RESPONSE_LIMIT_BYTES,
 ) -> bytes:
-    """Read an internal response without trusting its declared body size."""
+    """Read an internal response without trusting its declared body size.
+
+    Args:
+        response: Streaming internal HTTP response.
+        maximum_bytes: Maximum response bytes accepted into memory.
+
+    Returns:
+        Complete response body within the configured bound.
+
+    Raises:
+        RenderingDiagnosticsError: If the declared or streamed body exceeds
+            the limit or declares a malformed content length.
+        httpx2.RequestError: If reading the response stream fails.
+    """
     content_length = response.headers.get("content-length")
     if content_length is not None:
         try:
@@ -400,6 +465,14 @@ class RenderingDiagnosticsService:
         geoserver_url: str,
         request_tracker: GetMapRequestTracker,
     ) -> None:
+        """Initialize the diagnostics sampler and its short-lived cache.
+
+        Args:
+            client: Internal-only HTTP client for metrics and WMS probes.
+            metrics_url: Internal JVM metrics endpoint.
+            geoserver_url: Internal GeoServer root URL.
+            request_tracker: EOLab proxy's bounded GetMap observation tracker.
+        """
         self._client = client
         self._metrics_url = metrics_url
         self._capabilities_url = f"{geoserver_url.rstrip('/')}/eolab/wms"
@@ -409,7 +482,11 @@ class RenderingDiagnosticsService:
         self._cache_expires_at = 0.0
 
     async def get(self) -> RenderingDiagnostics:
-        """Return a complete current sample or the stable unavailable variant."""
+        """Return a complete current sample or the stable unavailable variant.
+
+        Returns:
+            Browser-safe rendering diagnostics classified by the server.
+        """
         observation = await self._get_jvm_observation()
         if observation.metrics is None:
             return UnavailableRenderingDiagnostics(
@@ -464,7 +541,12 @@ class RenderingDiagnosticsService:
         )
 
     async def _get_jvm_observation(self) -> _CachedJvmObservation:
-        """Coalesce and briefly cache internal probes across browser clients."""
+        """Coalesce and briefly cache internal probes across browser clients.
+
+        Returns:
+            Current validated JVM values, or an explicit unavailable
+            observation when either internal probe fails its contract.
+        """
         current_time = time.monotonic()
         if (
             self._cached_observation is not None
@@ -506,7 +588,17 @@ class RenderingDiagnosticsService:
             return observation
 
     async def _load_metrics_document(self) -> str:
-        """Load the complete bounded JMX exporter document as strict UTF-8."""
+        """Load the complete bounded JMX exporter document as strict UTF-8.
+
+        Returns:
+            Complete metrics document within the response-size bound.
+
+        Raises:
+            RenderingDiagnosticsError: If the response status, media type, or
+                body size violates the internal endpoint contract.
+            UnicodeDecodeError: If the response is not valid UTF-8.
+            httpx2.RequestError: If the internal request fails.
+        """
         async with self._client.stream(
             "GET",
             self._metrics_url,
@@ -528,7 +620,13 @@ class RenderingDiagnosticsService:
         return response_body.decode("utf-8")
 
     async def _probe_wms_readiness(self) -> None:
-        """Confirm WMS readiness from its bounded XML document prefix."""
+        """Confirm WMS readiness from its bounded XML document prefix.
+
+        Raises:
+            RenderingDiagnosticsError: If WMS does not return a successful
+                capabilities document within the response-size bound.
+            httpx2.RequestError: If the internal request fails.
+        """
         async with self._client.stream(
             "GET",
             self._capabilities_url,

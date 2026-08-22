@@ -28,6 +28,14 @@ const STATE_CLASSES = Object.freeze([
  * diagnostics are unavailable.
  */
 
+/**
+ * Require a plain object at one diagnostics response field.
+ *
+ * @param {unknown} value Untrusted response value.
+ * @param {string} fieldName Field name used in contract errors.
+ * @return {Object} The validated object.
+ * @throws {Error} If the value is null, an array, or not an object.
+ */
 function requireObject(value, fieldName) {
     if (value === null || typeof value !== "object" || Array.isArray(value)) {
         throw new Error(`${fieldName} must be an object.`);
@@ -35,6 +43,16 @@ function requireObject(value, fieldName) {
     return value;
 }
 
+/**
+ * Require a finite number inside an inclusive range.
+ *
+ * @param {unknown} value Untrusted response value.
+ * @param {string} fieldName Field name used in contract errors.
+ * @param {number} minimum Inclusive lower bound.
+ * @param {number} maximum Inclusive upper bound.
+ * @return {number} The validated finite number.
+ * @throws {Error} If the value is not finite or is outside the range.
+ */
 function requireFiniteNumber(value, fieldName, minimum = 0, maximum = Infinity) {
     if (
         !Number.isFinite(value) ||
@@ -46,6 +64,16 @@ function requireFiniteNumber(value, fieldName, minimum = 0, maximum = Infinity) 
     return value;
 }
 
+/**
+ * Require a safe integer inside an inclusive range.
+ *
+ * @param {unknown} value Untrusted response value.
+ * @param {string} fieldName Field name used in contract errors.
+ * @param {number} minimum Inclusive lower bound.
+ * @param {number} maximum Inclusive upper bound.
+ * @return {number} The validated safe integer.
+ * @throws {Error} If the value is not a safe integer or is outside the range.
+ */
 function requireInteger(value, fieldName, minimum = 0, maximum = Infinity) {
     if (
         !Number.isSafeInteger(value) ||
@@ -57,6 +85,13 @@ function requireInteger(value, fieldName, minimum = 0, maximum = Infinity) {
     return value;
 }
 
+/**
+ * Require an ISO timestamp with an explicit zero UTC offset.
+ *
+ * @param {unknown} value Untrusted response value.
+ * @return {string} The validated UTC timestamp.
+ * @throws {Error} If the value is not a parseable UTC timestamp.
+ */
 function requireUtcTimestamp(value) {
     const hasUtcOffset =
         typeof value === "string" && /(?:Z|[+-]00:00)$/.test(value);
@@ -200,7 +235,14 @@ export function parseRenderingDiagnostics(document) {
     };
 }
 
-/** Load and validate EOLab's browser-safe rendering summary. */
+/**
+ * Load and validate EOLab's browser-safe rendering summary.
+ *
+ * @param {AbortSignal} signal Signal used to cancel the request.
+ * @param {Function} fetchImplementation Fetch-compatible request function.
+ * @return {Promise<RenderingDiagnostics>} Validated current diagnostics.
+ * @throws {Error} If the HTTP request fails or its JSON violates the contract.
+ */
 export async function loadRenderingDiagnostics(
     signal,
     fetchImplementation = globalThis.fetch
@@ -219,11 +261,23 @@ export async function loadRenderingDiagnostics(
     return parseRenderingDiagnostics(await response.json());
 }
 
+/**
+ * Format a validated number for the diagnostics panel.
+ *
+ * @param {number} value Finite numeric value.
+ * @param {number} maximumFractionDigits Maximum displayed decimal places.
+ * @return {string} Locale-formatted number.
+ */
 function formatNumber(value, maximumFractionDigits = 2) {
     return value.toLocaleString("en-US", { maximumFractionDigits });
 }
 
-/** Format bytes using explicit IEC units. */
+/**
+ * Format bytes using explicit IEC units.
+ *
+ * @param {number} bytes Validated nonnegative byte count.
+ * @return {string} Compact quantity with an IEC unit.
+ */
 export function formatDiagnosticBytes(bytes) {
     const units = ["B", "KiB", "MiB", "GiB", "TiB"];
     let unitIndex = 0;
@@ -237,7 +291,12 @@ export function formatDiagnosticBytes(bytes) {
     return `${formatNumber(quantity, maximumFractionDigits)} ${units[unitIndex]}`;
 }
 
-/** Format a metric duration while keeping its displayed unit explicit. */
+/**
+ * Format a metric duration while keeping its displayed unit explicit.
+ *
+ * @param {number} seconds Validated nonnegative duration in seconds.
+ * @return {string} Compact duration with an explicit unit.
+ */
 export function formatDiagnosticSeconds(seconds) {
     if (seconds < 1) {
         const milliseconds = seconds * 1000;
@@ -255,7 +314,12 @@ export function formatDiagnosticSeconds(seconds) {
         : `${formatNumber(wholeMinutes, 0)} min ${formatNumber(remainingSeconds, 2)} s`;
 }
 
-/** Format JVM uptime without implying sub-second precision. */
+/**
+ * Format JVM uptime without implying sub-second precision.
+ *
+ * @param {number} seconds Validated nonnegative JVM uptime in seconds.
+ * @return {string} Whole-second, minute, hour, or day duration.
+ */
 export function formatDiagnosticUptime(seconds) {
     const wholeSeconds = Math.floor(seconds);
     if (wholeSeconds < 60) {
@@ -273,11 +337,22 @@ export function formatDiagnosticUptime(seconds) {
     return `${wholeDays} d ${wholeHours % 24} h`;
 }
 
+/**
+ * Format a validated observation timestamp for visible UTC display.
+ *
+ * @param {string} observedAt Validated UTC timestamp.
+ * @return {string} Timestamp rendered to whole UTC seconds.
+ */
 function formatObservedAt(observedAt) {
     const isoTimestamp = new Date(observedAt).toISOString();
     return `${isoTimestamp.slice(0, 10)} ${isoTimestamp.slice(11, 19)} UTC`;
 }
 
+/**
+ * Build the fixed metric copy used when diagnostics are unavailable.
+ *
+ * @return {Object<string, string>} Display value for every metric field.
+ */
 function unavailableMetricValues() {
     return {
         heap: "Not available",
@@ -291,7 +366,12 @@ function unavailableMetricValues() {
     };
 }
 
-/** Build fixed display copy from one validated diagnostics document. */
+/**
+ * Build fixed display copy from one validated diagnostics document.
+ *
+ * @param {RenderingDiagnostics} diagnostics Validated server diagnostics.
+ * @return {Object} Complete browser-safe diagnostics view model.
+ */
 export function buildRenderingDiagnosticsViewModel(diagnostics) {
     const baseViewModel = {
         state: diagnostics.state,
@@ -337,7 +417,11 @@ export function buildRenderingDiagnosticsViewModel(diagnostics) {
     };
 }
 
-/** Build the generic state used when EOLab's summary endpoint cannot be read. */
+/**
+ * Build the generic state used when EOLab's summary endpoint cannot be read.
+ *
+ * @return {Object} Complete unavailable diagnostics view model.
+ */
 export function buildUnavailableRenderingDiagnosticsViewModel() {
     return {
         state: "unavailable",
@@ -385,6 +469,15 @@ export function applyRenderingDiagnosticsViewModel(elements, viewModel) {
  * Page visibility and disclosure state are supplied by the DOM owner.
  */
 export class RenderingDiagnosticsPoller {
+    /**
+     * Create a visibility-aware, non-overlapping diagnostics poller.
+     *
+     * @param {Function} loadDiagnostics Async loader accepting an AbortSignal.
+     * @param {Function} onDiagnostics Receives each current valid sample.
+     * @param {Function} onUnavailable Receives request or contract failures.
+     * @param {Object} options Injectable timing implementation.
+     * @param {Object} options.clock Object providing setTimeout and clearTimeout.
+     */
     constructor(
         loadDiagnostics,
         onDiagnostics,
@@ -405,7 +498,14 @@ export class RenderingDiagnosticsPoller {
         this.stopped = false;
     }
 
-    /** Apply the current browser visibility and disclosure state. */
+    /**
+     * Apply the current browser visibility and disclosure state.
+     *
+     * @param {Object} mode Current polling mode.
+     * @param {boolean} mode.pageVisible Whether the document is visible.
+     * @param {boolean} mode.expanded Whether diagnostics details are expanded.
+     * @return {void}
+     */
     setMode({ pageVisible, expanded }) {
         if (
             this.stopped ||
@@ -439,7 +539,11 @@ export class RenderingDiagnosticsPoller {
         this.#schedule();
     }
 
-    /** Permanently cancel diagnostics work. */
+    /**
+     * Permanently cancel diagnostics work.
+     *
+     * @return {void}
+     */
     stop() {
         this.stopped = true;
         this.pageVisible = false;
@@ -449,6 +553,11 @@ export class RenderingDiagnosticsPoller {
         this.abortController?.abort();
     }
 
+    /**
+     * Cancel the currently scheduled poll, if one exists.
+     *
+     * @return {void}
+     */
     #clearTimeout() {
         if (this.timeoutId !== null) {
             this.clock.clearTimeout(this.timeoutId);
@@ -456,6 +565,11 @@ export class RenderingDiagnosticsPoller {
         }
     }
 
+    /**
+     * Schedule the next poll for the active disclosure mode.
+     *
+     * @return {void}
+     */
     #schedule() {
         if (
             this.stopped ||
@@ -474,6 +588,11 @@ export class RenderingDiagnosticsPoller {
         }, delay);
     }
 
+    /**
+     * Run one diagnostics request and schedule its successor after settlement.
+     *
+     * @return {Promise<void>} Completion of the current polling cycle.
+     */
     async #poll() {
         if (this.stopped || !this.pageVisible || this.abortController !== null) {
             return;

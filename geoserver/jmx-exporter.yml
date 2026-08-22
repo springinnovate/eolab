@@ -1,3 +1,6 @@
+# Dockerfile.geoserver copies this allowlist into the GeoServer image.
+# deployment/start-geoserver.sh passes it to the JMX Exporter Java agent,
+# which serves these JVM measurements on the internal port read by EOLab.
 startDelaySeconds: 0
 lowercaseOutputName: true
 lowercaseOutputLabelNames: true

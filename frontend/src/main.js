@@ -162,7 +162,11 @@ function applyAppGlobalConfiguration(appGlobalConfiguration) {
     catalogLinkElement.href = appGlobalConfiguration.catalogUrl;
 }
 
-/** Display safe GeoServer diagnostics independently from application health. */
+/**
+ * Bind the rendering diagnostics disclosure and visibility-aware poller.
+ *
+ * @return {void}
+ */
 function initializeRenderingDiagnostics() {
     const disclosureElement = document.querySelector(
         "#rendering-diagnostics"
@@ -217,7 +221,11 @@ function initializeRenderingDiagnostics() {
         }
     );
 
-    /** Match polling frequency to whether the user can see the details. */
+    /**
+     * Match polling frequency to page visibility and disclosure state.
+     *
+     * @return {void}
+     */
     function synchronizePollingMode() {
         poller.setMode({
             pageVisible: document.visibilityState === "visible",

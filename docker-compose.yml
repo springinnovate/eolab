@@ -104,7 +104,7 @@ services:
       - "GEOSERVER_ADMIN_PASSWORD=${EOLAB_GEOSERVER_ADMIN_PASSWORD:?EOLAB_GEOSERVER_ADMIN_PASSWORD must be set}"
     expose:
       - "8080"
-      # Prometheus text is available only to services on this Compose network.
+      # The JVM metrics endpoint is available only on this Compose network.
       - "9404"
     volumes:
       - geoserver-data:/opt/geoserver_data
