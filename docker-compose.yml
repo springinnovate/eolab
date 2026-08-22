@@ -161,7 +161,7 @@ services:
     restart: unless-stopped
     environment:
       - "APP_TITLE=${EOLAB_APP_TITLE:-EOLab}"
-      - "APP_SUBTITLE=${EOLAB_APP_SUBTITLE:-Explore, process, and visualize geospatial data}"
+      - "APP_SUBTITLE=${EOLAB_APP_SUBTITLE:-Explore, visualize, and analyze Earth observation data}"
       - "CATALOG_URL=${EOLAB_CATALOG_URL:-/stac}"
       - "CATALOG_INTERNAL_URL=http://stac-api:8080"
       - "WMS_URL=/geoserver/eolab/wms"

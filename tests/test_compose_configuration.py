@@ -26,6 +26,12 @@ def test_public_app_variables_are_not_self_referential() -> None:
         assert f'"{container_variable}=${{{deployment_variable}' in compose
         assert f'"{deployment_variable}=${{{deployment_variable}' not in compose
 
+    assert (
+        '"APP_SUBTITLE=${EOLAB_APP_SUBTITLE:-Explore, visualize, and analyze '
+        'Earth observation data}"'
+        in compose
+    )
+
 
 def test_scan_paths_share_one_read_only_deployment_mount() -> None:
     """Keep the host mount separate from container-relative scan paths."""

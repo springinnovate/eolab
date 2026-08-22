@@ -65,7 +65,7 @@ EOLab no longer loads a sample Collection during deployment. Upgrading does not 
 | `EOLAB_SCAN_WRITER_COUNT`          | `4`                                               | Concurrent catalog bulk upserts                     |
 | `EOLAB_SCAN_BATCH_SIZE`            | `100`                                             | Maximum Items per catalog bulk upsert               |
 | `EOLAB_APP_TITLE`                  | `EOLab`                                           | Browser and panel title                             |
-| `EOLAB_APP_SUBTITLE`               | `Explore, process, and visualize geospatial data` | Short panel description                             |
+| `EOLAB_APP_SUBTITLE`               | `Explore, visualize, and analyze Earth observation data` | Short panel description                     |
 | `EOLAB_CATALOG_URL`                | `/stac`                                           | Browser-facing STAC API path                        |
 | `EOLAB_BASEMAP_URL`                | OpenStreetMap tiles                               | Leaflet tile URL template                           |
 | `EOLAB_BASEMAP_ATTRIBUTION`        | OpenStreetMap attribution                         | Basemap attribution text                            |
