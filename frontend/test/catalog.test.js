@@ -3,7 +3,7 @@ import test from "node:test";
 
 import {
   buildCatalogItemDetails,
-  buildCatalogFilter,
+  buildCatalogSearch,
   buildSubstringFilter,
   CatalogFootprintController,
   CatalogResultStream,
@@ -44,6 +44,10 @@ function expectedSubstringFilter(searchText) {
       ],
     })),
   };
+}
+
+function catalogFilter(searchText) {
+  return buildCatalogSearch(searchText).filter;
 }
 
 function itemCollectionResponse(
@@ -92,7 +96,7 @@ test("buildSubstringFilter treats partial and invalid dates as literal text", ()
   );
 });
 
-test("buildCatalogFilter combines literal text and COG metadata", () => {
+test("buildCatalogSearch combines literal text and COG metadata", () => {
   const combinedFilter = {
     op: "and",
     args: [
@@ -106,9 +110,9 @@ test("buildCatalogFilter combines literal text and COG metadata", () => {
       },
     ],
   };
-  assert.deepEqual(buildCatalogFilter(" barley FORMAT:COG "), combinedFilter);
-  assert.deepEqual(buildCatalogFilter("format:cog barley"), combinedFilter);
-  assert.deepEqual(buildCatalogFilter("format:cog"), {
+  assert.deepEqual(catalogFilter(" barley FORMAT:COG "), combinedFilter);
+  assert.deepEqual(catalogFilter("format:cog barley"), combinedFilter);
+  assert.deepEqual(catalogFilter("format:cog"), {
     op: "=",
     args: [
       { property: "assets.data.type" },
@@ -116,29 +120,29 @@ test("buildCatalogFilter combines literal text and COG metadata", () => {
     ],
   });
   assert.deepEqual(
-    buildCatalogFilter("my_cog_filename.tif"),
+    catalogFilter("my_cog_filename.tif"),
     expectedSubstringFilter("my\\_cog\\_filename.tif"),
   );
   assert.deepEqual(
-    buildCatalogFilter("2025-01-01T12:30"),
+    catalogFilter("2025-01-01T12:30"),
     expectedSubstringFilter("2025-01-01T12:30"),
   );
   assert.deepEqual(
-    buildCatalogFilter("Z:\\bigbucket\\barley.tif"),
+    catalogFilter("Z:\\bigbucket\\barley.tif"),
     expectedSubstringFilter("Z:\\\\bigbucket\\\\barley.tif"),
   );
-  assert.equal(buildCatalogFilter("  "), null);
+  assert.equal(catalogFilter("  "), null);
 });
 
-test("buildCatalogFilter combines each literal search term with AND", () => {
-  assert.deepEqual(buildCatalogFilter("ESA 2020"), {
+test("buildCatalogSearch combines each literal search term with AND", () => {
+  assert.deepEqual(catalogFilter("ESA 2020"), {
     op: "and",
     args: [
       expectedSubstringFilter("ESA"),
       expectedSubstringFilter("2020"),
     ],
   });
-  assert.deepEqual(buildCatalogFilter("ESA 2020 format:cog"), {
+  assert.deepEqual(catalogFilter("ESA 2020 format:cog"), {
     op: "and",
     args: [
       expectedSubstringFilter("ESA"),
@@ -154,7 +158,67 @@ test("buildCatalogFilter combines each literal search term with AND", () => {
   });
 });
 
-test("buildCatalogFilter rejects syntax outside the field contract", () => {
+test("buildCatalogSearch builds inclusive UTC day and date-range searches", () => {
+  assert.deepEqual(buildCatalogSearch("date:2025-01-15"), {
+    filter: null,
+    datetime: "2025-01-15T00:00:00Z/2025-01-15T23:59:59.999999Z",
+  });
+  assert.deepEqual(
+    buildCatalogSearch("ESA date:2024-02-29..2025-01-15 format:cog"),
+    {
+      filter: {
+        op: "and",
+        args: [
+          expectedSubstringFilter("ESA"),
+          {
+            op: "=",
+            args: [
+              { property: "assets.data.type" },
+              cogMediaType,
+            ],
+          },
+        ],
+      },
+      datetime: "2024-02-29T00:00:00Z/2025-01-15T23:59:59.999999Z",
+    },
+  );
+});
+
+test("buildCatalogSearch rejects ambiguous or invalid date filters", () => {
+  const invalidSearches = [
+    "date:",
+    "date:2025-01",
+    "date:2025-02-29",
+    "date:0000-01-01",
+    "date:2025-01-01..",
+    "date:..2025-01-01",
+    "date:2025-01-01...2025-02-01",
+    "date:2025-02-01..2025-01-01",
+    "date:2025-01-01 date:2025-02-01",
+  ];
+  for (const invalidSearch of invalidSearches) {
+    assert.throws(
+      () => buildCatalogSearch(invalidSearch),
+      CatalogSearchSyntaxError,
+    );
+  }
+  assert.throws(
+    () => buildCatalogSearch("date:2025-02-01..2025-01-01"),
+    {
+      name: "CatalogSearchSyntaxError",
+      message: "The date range start must not be after its end.",
+    },
+  );
+  assert.throws(
+    () => buildCatalogSearch("date:2025-02-29"),
+    {
+      name: "CatalogSearchSyntaxError",
+      message: "2025-02-29 is not a valid UTC calendar date.",
+    },
+  );
+});
+
+test("buildCatalogSearch rejects syntax outside the field contract", () => {
   const invalidSearches = [
     "format:",
     "format:geotiff",
@@ -165,7 +229,7 @@ test("buildCatalogFilter rejects syntax outside the field contract", () => {
   ];
   for (const invalidSearch of invalidSearches) {
     assert.throws(
-      () => buildCatalogFilter(invalidSearch),
+      () => buildCatalogSearch(invalidSearch),
       CatalogSearchSyntaxError,
     );
   }
@@ -226,6 +290,35 @@ test("CatalogSearchClient sends the parsed COG filter", async () => {
   });
 });
 
+test("CatalogSearchClient combines STAC datetime with text and format", async () => {
+  let capturedRequest;
+  const client = new CatalogSearchClient("/stac", async (url, options) => {
+    capturedRequest = { url, options };
+    return itemCollectionResponse();
+  });
+
+  await client.search("barley format:cog date:2020-01-01..2020-12-31");
+
+  assert.deepEqual(JSON.parse(capturedRequest.options.body), {
+    limit: 20,
+    "filter-lang": "cql2-json",
+    filter: {
+      op: "and",
+      args: [
+        expectedSubstringFilter("barley"),
+        {
+          op: "=",
+          args: [
+            { property: "assets.data.type" },
+            cogMediaType,
+          ],
+        },
+      ],
+    },
+    datetime: "2020-01-01T00:00:00Z/2020-12-31T23:59:59.999999Z",
+  });
+});
+
 test("CatalogSearchClient rejects invalid syntax without a request", () => {
   let requestCount = 0;
   const client = new CatalogSearchClient("/stac", async () => {
@@ -235,6 +328,10 @@ test("CatalogSearchClient rejects invalid syntax without a request", () => {
 
   assert.throws(
     () => client.search("format:geotiff"),
+    CatalogSearchSyntaxError,
+  );
+  assert.throws(
+    () => client.search("date:2025-02-29"),
     CatalogSearchSyntaxError,
   );
   assert.equal(requestCount, 0);

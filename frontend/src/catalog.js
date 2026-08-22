@@ -9,6 +9,7 @@ const CATALOG_DATA_ASSET_MEDIA_TYPE_PROPERTY = "assets.data.type";
 const COG_MEDIA_TYPE =
     "image/tiff; application=geotiff; profile=cloud-optimized";
 const CATALOG_FILTER_FIELD_PATTERN = /^[a-z][a-z0-9_-]*$/i;
+const CATALOG_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 export const MOUNTED_GEOTIFF_COLLECTION_ID = "eolab-mounted-geotiffs";
 const RASTER_RENDERING_POLICY = "raster-v2";
 export const MOUNTED_DATASET_TYPES = new Map([
@@ -240,22 +241,73 @@ export class CatalogSearchSyntaxError extends Error {
 }
 
 /**
- * Build the application-owned CQL2 filter for Catalog text and field syntax.
- * Whitespace-separated text terms match independently and are combined with
- * field filters using AND.
+ * Validate one UTC calendar date used by the Catalog date field.
+ *
+ * @param {string} dateText Candidate date in YYYY-MM-DD form.
+ * @return {string} Validated date text.
+ * @throws {CatalogSearchSyntaxError} If the value is not a real calendar date.
+ */
+function parseCatalogDate(dateText) {
+    const match = CATALOG_DATE_PATTERN.exec(dateText);
+    if (match === null) {
+        throw new CatalogSearchSyntaxError(
+            "Use date:YYYY-MM-DD or " +
+            "date:YYYY-MM-DD..YYYY-MM-DD."
+        );
+    }
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const daysInMonth = [
+        31,
+        year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)
+            ? 29
+            : 28,
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31
+    ];
+    if (
+        year === 0 ||
+        month < 1 ||
+        month > 12 ||
+        day < 1 ||
+        day > daysInMonth[month - 1]
+    ) {
+        throw new CatalogSearchSyntaxError(
+            `${dateText} is not a valid UTC calendar date.`
+        );
+    }
+    return dateText;
+}
+
+/**
+ * Parse text and field syntax into one standard STAC Item Search request.
+ *
+ * A date field becomes an inclusive UTC Item Search datetime interval. The
+ * provider applies temporal-intersection semantics to instant and interval
+ * Items. Literal terms remain CQL2 substring filters.
  *
  * @param {string} searchText Text and field filters entered by the user.
- * @return {Object|null} CQL2 JSON filter, or null for an empty search.
+ * @return {{filter: Object|null, datetime: string|null}} Parsed search fields.
  * @throws {CatalogSearchSyntaxError} If a field filter is unsupported.
  */
-export function buildCatalogFilter(searchText) {
+export function buildCatalogSearch(searchText) {
     const normalizedSearchText = searchText.normalize("NFKC").trim();
     if (normalizedSearchText === "") {
-        return null;
+        return { filter: null, datetime: null };
     }
 
     const literalTokens = [];
     let hasCogFormatFilter = false;
+    let datetime = null;
     for (const token of normalizedSearchText.split(/\s+/)) {
         if (token === "&") {
             throw new CatalogSearchSyntaxError(
@@ -276,13 +328,40 @@ export function buildCatalogFilter(searchText) {
         }
 
         const normalizedFieldName = fieldName.toLowerCase();
-        const normalizedFieldValue = fieldValue.toLowerCase();
+        if (normalizedFieldName === "date") {
+            if (datetime !== null) {
+                throw new CatalogSearchSyntaxError(
+                    "The date filter may appear only once."
+                );
+            }
+            const dateParts = fieldValue.split("..");
+            if (
+                dateParts.length > 2 ||
+                dateParts.some((datePart) => datePart === "")
+            ) {
+                throw new CatalogSearchSyntaxError(
+                    "Use date:YYYY-MM-DD or " +
+                    "date:YYYY-MM-DD..YYYY-MM-DD."
+                );
+            }
+            const startDate = parseCatalogDate(dateParts[0]);
+            const endDate = parseCatalogDate(dateParts.at(-1));
+            if (startDate > endDate) {
+                throw new CatalogSearchSyntaxError(
+                    "The date range start must not be after its end."
+                );
+            }
+            datetime =
+                `${startDate}T00:00:00Z/` +
+                `${endDate}T23:59:59.999999Z`;
+            continue;
+        }
         if (normalizedFieldName !== "format") {
             throw new CatalogSearchSyntaxError(
                 `Unsupported Catalog filter: ${fieldName}`
             );
         }
-        if (normalizedFieldValue !== "cog") {
+        if (fieldValue.toLowerCase() !== "cog") {
             throw new CatalogSearchSyntaxError(
                 "The supported format filter is format:cog."
             );
@@ -305,9 +384,12 @@ export function buildCatalogFilter(searchText) {
             ]
         });
     }
-    return filters.length === 1
-        ? filters[0]
-        : { op: "and", args: filters };
+    const filter = filters.length === 0
+        ? null
+        : filters.length === 1
+            ? filters[0]
+            : { op: "and", args: filters };
+    return { filter, datetime };
 }
 
 /**
@@ -586,7 +668,7 @@ export class CatalogSearchClient {
     }
 
     /**
-     * Starts the first page of a standard STAC CQL2 substring search.
+     * Starts the first page of a standard STAC text and datetime search.
      *
      * @param {string} searchText User-entered search text.
      * @return {Promise<Object|null>} ItemCollection, or null when superseded.
@@ -594,10 +676,13 @@ export class CatalogSearchClient {
     search(searchText) {
         this.numberMatchedEstimated = null;
         const searchBody = { limit: CATALOG_PAGE_SIZE };
-        const catalogFilter = buildCatalogFilter(searchText);
-        if (catalogFilter !== null) {
+        const catalogSearch = buildCatalogSearch(searchText);
+        if (catalogSearch.filter !== null) {
             searchBody["filter-lang"] = "cql2-json";
-            searchBody.filter = catalogFilter;
+            searchBody.filter = catalogSearch.filter;
+        }
+        if (catalogSearch.datetime !== null) {
+            searchBody.datetime = catalogSearch.datetime;
         }
         return this.request({
             href: `${this.catalogUrl}/search`,
