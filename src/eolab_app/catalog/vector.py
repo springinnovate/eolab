@@ -1,12 +1,37 @@
 """Shared STAC metadata conventions for mounted vector datasets."""
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from typing import Any
 
 
 MOUNTED_VECTOR_COLLECTION_ID = "eolab-mounted-vectors"
 TABLE_EXTENSION = "https://stac-extensions.github.io/table/v1.2.0/schema.json"
 PRIMARY_GEOMETRY_COLUMN = "geometry"
+
+
+def build_bbox_polygon(bbox: Sequence[float]) -> dict[str, Any]:
+    """Represent a WGS 84 bounding box as a GeoJSON Polygon.
+
+    Args:
+        bbox: West, south, east, and north coordinates in WGS 84.
+
+    Returns:
+        Closed counterclockwise polygon following the bounding-box edges.
+
+    Raises:
+        ValueError: If the bounding box does not contain exactly four values.
+    """
+    west, south, east, north = bbox
+    return {
+        "type": "Polygon",
+        "coordinates": [[
+            [west, south],
+            [east, south],
+            [east, north],
+            [west, north],
+            [west, south],
+        ]],
+    }
 
 
 def build_vector_table_properties(

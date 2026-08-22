@@ -31,6 +31,7 @@ from eolab_app.catalog.shapefile import (
 from eolab_app.catalog.vector import (
     MOUNTED_VECTOR_COLLECTION_ID,
     TABLE_EXTENSION,
+    build_bbox_polygon,
     build_vector_table_properties,
 )
 
@@ -544,19 +545,7 @@ def _build_stac_item(
                 )
             properties["proj:bbox"] = native_bbox
 
-    footprint = None
-    if bbox is not None:
-        west, south, east, north = bbox
-        footprint = {
-            "type": "Polygon",
-            "coordinates": [[
-                [west, south],
-                [east, south],
-                [east, north],
-                [west, north],
-                [west, south],
-            ]],
-        }
+    footprint = build_bbox_polygon(bbox) if bbox is not None else None
     identity_text = (
         f"{relative_archive_path.as_posix()}\x00"
         f"{archived_shapefile.shapefile_path.as_posix()}"
