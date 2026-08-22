@@ -5,6 +5,7 @@ import {
   assessCatalogRaster,
   loadCatalogRasterStatistics,
   publishCatalogRaster,
+  RenderingRequestError,
   sampleCatalogRasterPixel,
 } from "../../src/raster/api.js";
 import {
@@ -102,6 +103,29 @@ test("publishCatalogRaster reports the backend detail", async () => {
     ),
     /Catalog Item not found/,
   );
+});
+
+test("publishCatalogRaster preserves an actionable failure category", async () => {
+  const publication = publishCatalogRaster(
+    MOUNTED_GEOTIFF_ITEM,
+    async () => new Response(
+      JSON.stringify({
+        detail: {
+          category: "reader_rejection",
+          message: "GeoServer could not read this raster.",
+        },
+      }),
+      { status: 422, headers: { "Content-Type": "application/json" } },
+    ),
+  );
+
+  await assert.rejects(publication, (error) => {
+    assert.equal(error instanceof RenderingRequestError, true);
+    assert.equal(error.category, "reader_rejection");
+    assert.equal(error.status, 422);
+    assert.equal(error.message, "GeoServer could not read this raster.");
+    return true;
+  });
 });
 
 test("loadCatalogRasterStatistics sends only Item identity and validates data", async () => {
