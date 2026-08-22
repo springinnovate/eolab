@@ -69,6 +69,7 @@ export function createRasterWmsLayer(
         format: "image/png",
         transparent: true,
         version: "1.3.0",
+        noWrap: true,
         bounds: [
             [south, west],
             [north, east]

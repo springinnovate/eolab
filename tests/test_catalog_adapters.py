@@ -7,7 +7,7 @@ import httpx2
 import psycopg
 import pytest
 
-from eolab_app.catalog.pgstac import catalog_item_source
+from eolab_app.catalog.pgstac import PgStacCatalogDatabase, catalog_item_source
 from eolab_app.catalog.search_counts import number_matched_is_estimated
 from eolab_app.catalog.stac_api import StacApiWriter
 
@@ -22,6 +22,56 @@ def test_pgstac_inventory_requires_scanner_owned_source_assets() -> None:
         )
     else:
         raise AssertionError("missing data Asset was accepted")
+
+
+@pytest.mark.parametrize("item_id", ("geopackage-layer", "geojson-file"))
+def test_pgstac_inventory_tracks_single_file_vector_assets(item_id: str) -> None:
+    """Use the data Asset for each supported single-file vector format.
+
+    Args:
+        item_id: Format-specific Item identity prefix under test.
+    """
+    source = catalog_item_source(
+        "eolab-mounted-vectors",
+        item_id,
+        {"data": {"href": "file:///scan-source/vector-data"}},
+    )
+
+    assert source.asset_hrefs == ("file:///scan-source/vector-data",)
+
+
+def test_pgstac_random_item_uses_filtered_selection_function(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pass filters and repeat avoidance to the database-owned query."""
+    item = {
+        "type": "Feature",
+        "collection": "collection-a",
+        "id": "item-b",
+    }
+    cursor = AsyncMock()
+    cursor.fetchone.return_value = (item,)
+    connection = AsyncMock()
+    connection.__aenter__.return_value = connection
+    connection.execute.return_value = cursor
+    connect = AsyncMock(return_value=connection)
+    monkeypatch.setattr(psycopg.AsyncConnection, "connect", connect)
+
+    selected = asyncio.run(
+        PgStacCatalogDatabase().random_matching_item(
+            {"datetime": "2025-01-01T00:00:00Z/2025-12-31T23:59:59Z"},
+            ("collection-a", "item-a"),
+        )
+    )
+
+    assert selected == item
+    query, parameters = connection.execute.await_args.args
+    assert "pgstac.eolab_random_matching_item" in query
+    assert parameters == (
+        '{"datetime": "2025-01-01T00:00:00Z/2025-12-31T23:59:59Z"}',
+        "collection-a",
+        "item-a",
+    )
 
 
 def test_count_estimate_lookup_uses_pgstac_search_path(

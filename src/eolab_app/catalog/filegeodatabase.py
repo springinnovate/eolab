@@ -15,6 +15,7 @@ from rasterio.warp import transform_bounds
 from eolab_app.catalog.vector import (
     MOUNTED_VECTOR_COLLECTION_ID,
     TABLE_EXTENSION,
+    build_bbox_polygon,
     build_vector_table_properties,
 )
 
@@ -240,18 +241,6 @@ def build_layer_stac_item(
             )
         properties["proj:bbox"] = native_bbox
 
-    west, south, east, north = bbox
-    footprint = {
-        "type": "Polygon",
-        "coordinates": [[
-            [west, south],
-            [east, south],
-            [east, north],
-            [west, north],
-            [west, south],
-        ]],
-    }
-
     identity = f"{relative_path_text}\0{layer_name}"
     item_identifier = hashlib.sha256(identity.encode("utf-8")).hexdigest()
     item: dict[str, Any] = {
@@ -260,7 +249,7 @@ def build_layer_stac_item(
         "stac_extensions": [PROJECTION_EXTENSION, TABLE_EXTENSION],
         "id": f"file-geodatabase-{item_identifier[:24]}",
         "collection": MOUNTED_VECTOR_COLLECTION_ID,
-        "geometry": footprint,
+        "geometry": build_bbox_polygon(bbox),
         "properties": properties,
         "links": [],
         "assets": {

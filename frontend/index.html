@@ -31,17 +31,61 @@
           </button>
         </header>
 
-        <div class="system-state" id="system-state" role="status">
-          <span class="status-dot" aria-hidden="true"></span>
-          <span id="system-state-text">Loading runtime configuration</span>
-        </div>
+        <details class="system-state catalog-system-state" id="system-state">
+          <summary>
+            <span class="status-dot" aria-hidden="true"></span>
+            <span id="system-state-text">Catalog: loading configuration</span>
+          </summary>
+          <div
+            class="system-state-details-body catalog-system-state-body"
+            role="region"
+            aria-label="Catalog scanning controls"
+            tabindex="0"
+          >
+            <section class="scan-card" aria-labelledby="scan-heading">
+              <div class="catalog-toolbar">
+                <strong id="scan-heading">Scan locations</strong>
+                <button class="secondary-button" id="start-scan" type="button">Scan directories</button>
+              </div>
+              <p class="scan-locations-description">Directories searched recursively:</p>
+              <ul id="scan-locations" class="scan-locations">
+                <li>Loading configured paths…</li>
+              </ul>
+              <details id="scan-status-disclosure" class="scan-status-disclosure">
+                <summary id="scan-status-summary">No scan has run since startup</summary>
+                <div class="scan-status-details">
+                  <p id="scan-status" class="scan-status" role="status">No scan has run since EOLab started.</p>
+                  <progress id="scan-progress" max="1" value="0" hidden></progress>
+                  <p id="scan-counts" class="scan-counts"></p>
+                  <p id="scan-reconciliation" class="scan-reconciliation" hidden></p>
+                  <section id="scan-timing" class="scan-timing" aria-labelledby="scan-timing-heading" hidden>
+                    <h4 id="scan-timing-heading">Performance timing</h4>
+                    <dl id="scan-timing-values"></dl>
+                    <p>Cumulative worker clocks overlap across workers and can exceed elapsed time. Metadata I/O wait is estimated from worker wall time minus worker CPU time.</p>
+                  </section>
+                  <details id="scan-errors-disclosure" class="scan-errors-disclosure" hidden>
+                    <summary id="scan-errors-summary">Error details</summary>
+                    <ul id="scan-errors" class="scan-errors"></ul>
+                  </details>
+                </div>
+              </details>
+            </section>
+          </div>
+        </details>
+        <p
+          class="visually-hidden"
+          id="catalog-state-announcement"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        ></p>
         <details class="system-state rendering-diagnostics" id="rendering-diagnostics">
           <summary>
             <span class="status-dot" aria-hidden="true"></span>
             <span id="rendering-state-text">Rendering: Checking</span>
           </summary>
           <div
-            class="rendering-diagnostics-body"
+            class="system-state-details-body rendering-diagnostics-body"
             role="region"
             aria-label="GeoServer rendering metrics"
             tabindex="0"
@@ -151,30 +195,19 @@
                     role="status"
                   ></span>
                   </label>
-                  <section class="scan-card" aria-labelledby="scan-heading">
-                  <div class="catalog-toolbar">
-                    <strong id="scan-heading">Mounted datasets</strong>
-                    <button class="secondary-button" id="start-scan" type="button">Scan directories</button>
+                  <div class="catalog-surprise-action">
+                    <button
+                      class="catalog-surprise-button"
+                      id="surprise-catalog"
+                      type="button"
+                      aria-label="Surprise me with a matching Catalog Item"
+                      aria-describedby="catalog-surprise-status"
+                      disabled
+                    >
+                      Surprise me
+                    </button>
+                    <span id="catalog-surprise-status" role="status" aria-live="polite"></span>
                   </div>
-                  <details id="scan-status-disclosure" class="scan-status-disclosure">
-                    <summary id="scan-status-summary">Scan status — Not started</summary>
-                    <div class="scan-status-details">
-                      <p id="scan-status" class="scan-status" role="status">No scan has been started.</p>
-                      <progress id="scan-progress" max="1" value="0" hidden></progress>
-                      <p id="scan-counts" class="scan-counts"></p>
-                      <p id="scan-reconciliation" class="scan-reconciliation" hidden></p>
-                      <section id="scan-timing" class="scan-timing" aria-labelledby="scan-timing-heading" hidden>
-                        <h4 id="scan-timing-heading">Performance timing</h4>
-                        <dl id="scan-timing-values"></dl>
-                        <p>Cumulative worker clocks overlap across workers and can exceed elapsed time. Metadata I/O wait is estimated from worker wall time minus worker CPU time.</p>
-                      </section>
-                      <details id="scan-errors-disclosure" class="scan-errors-disclosure" hidden>
-                        <summary id="scan-errors-summary">Error details</summary>
-                        <ul id="scan-errors" class="scan-errors"></ul>
-                      </details>
-                    </div>
-                  </details>
-                  </section>
                   <div class="catalog-results-scroll" id="catalog-results-scroll">
                     <div class="catalog-results" id="catalog-results"></div>
                     <div class="catalog-stream-status">

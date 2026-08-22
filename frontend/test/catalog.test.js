@@ -5,11 +5,13 @@ import test from "node:test";
 import {
   buildCatalogItemDetails,
   buildCatalogSearch,
+  buildCatalogSearchRequest,
   buildSubstringFilter,
   CatalogFootprintController,
   CatalogResultStream,
   CatalogSearchClient,
   CatalogSearchSyntaxError,
+  CatalogSurpriseClient,
   createDebouncedAction,
   findPaginationLink,
   formatCatalogItemCount,
@@ -339,6 +341,110 @@ test("Catalog search help presents the viewable filter", () => {
   );
 });
 
+/**
+ * Verify the surprise action remains between Catalog search and its results.
+ *
+ * @returns {void}
+ */
+function testSurpriseActionOrder() {
+  const catalogMarkup = readFileSync(
+    new URL("../index.html", import.meta.url),
+    "utf8",
+  );
+  const searchEnd = catalogMarkup.indexOf(
+    "</label>",
+    catalogMarkup.indexOf('id="catalog-search"'),
+  );
+  const surpriseButton = catalogMarkup.indexOf('id="surprise-catalog"');
+  const catalogResults = catalogMarkup.indexOf('id="catalog-results-scroll"');
+
+  assert.ok(searchEnd < surpriseButton);
+  assert.ok(surpriseButton < catalogResults);
+  assert.match(
+    catalogMarkup,
+    /<button[\s\S]*id="surprise-catalog"[\s\S]*type="button"/,
+  );
+  assert.match(catalogMarkup, /id="catalog-surprise-status" role="status"/);
+}
+
+test("Surprise me appears immediately after Catalog search", testSurpriseActionOrder);
+
+test("CatalogSurpriseClient sends active filters and prior Item identity", async () => {
+  let capturedRequest;
+  const selectedItem = {
+    type: "Feature",
+    id: "item-random",
+    collection: "collection-a",
+    properties: { title: "Random Item" },
+  };
+  const client = new CatalogSurpriseClient(
+    "/api/catalog/surprise",
+    async (url, options) => {
+      capturedRequest = { url, options };
+      return new Response(JSON.stringify({ item: selectedItem }), {
+        status: 200,
+      });
+    },
+  );
+
+  assert.deepEqual(
+    await client.surprise(
+      "barley format:cog viewable:true date:2020-01..2020-03",
+      { collection: "collection-a", id: "item-previous" },
+    ),
+    selectedItem,
+  );
+
+  assert.equal(capturedRequest.url, "/api/catalog/surprise");
+  assert.equal(capturedRequest.options.method, "POST");
+  assert.deepEqual(JSON.parse(capturedRequest.options.body), {
+    search: buildCatalogSearchRequest(
+      "barley format:cog viewable:true date:2020-01..2020-03",
+    ),
+    exclude: { collection: "collection-a", id: "item-previous" },
+  });
+  assert.equal(
+    "limit" in JSON.parse(capturedRequest.options.body).search,
+    false,
+  );
+});
+
+test("CatalogSurpriseClient reports no-match detail", async () => {
+  const client = new CatalogSurpriseClient(
+    "/api/catalog/surprise",
+    async () => new Response(
+      JSON.stringify({ detail: "No Catalog Items match the active filters" }),
+      { status: 404 },
+    ),
+  );
+
+  await assert.rejects(
+    client.surprise("date:1900"),
+    /No Catalog Items match the active filters/,
+  );
+});
+
+test("Surprise selection preserves the result-loading path", () => {
+  const mainSource = readFileSync(
+    new URL("../src/main.js", import.meta.url),
+    "utf8",
+  );
+  const handlerStart = mainSource.indexOf(
+    'surpriseCatalogButton.addEventListener("click"',
+  );
+  const handlerEnd = mainSource.indexOf(
+    "refreshCatalogButton.addEventListener",
+    handlerStart,
+  );
+  const surpriseHandler = mainSource.slice(handlerStart, handlerEnd);
+
+  assert.match(surpriseHandler, /selectCatalogItem\(item\)/);
+  assert.match(surpriseHandler, /catalogState\.searchText/);
+  assert.doesNotMatch(surpriseHandler, /catalogSearchInput\.value/);
+  assert.doesNotMatch(surpriseHandler, /loadCatalog\(/);
+  assert.doesNotMatch(surpriseHandler, /replaceChildren\(/);
+});
+
 test("CatalogSearchClient sends a standard STAC CQL2 substring search", async () => {
   let capturedRequest;
   const client = new CatalogSearchClient(
@@ -573,34 +679,72 @@ test("formatCatalogItemCount handles empty, singular, and filtered results", () 
   );
 });
 
-test("formatScanStatusSummary distinguishes scan and dataset failures", () => {
+test("formatScanStatusSummary shows recency, live progress, and failures", () => {
   assert.equal(
-    formatScanStatusSummary({ state: "not_started", failed: 0 }),
-    "Scan status: Not started",
+    formatScanStatusSummary({
+      state: "not_started",
+      failed: 0,
+      finishedAt: null,
+    }),
+    "No scan has run since startup",
   );
   assert.equal(
-    formatScanStatusSummary({ state: "discovering", failed: 0 }),
-    "Scan status: In progress",
+    formatScanStatusSummary({
+      state: "discovering",
+      failed: 0,
+      finishedAt: null,
+    }),
+    "Scanning now · Discovering datasets",
   );
   assert.equal(
-    formatScanStatusSummary({ state: "scanning", failed: 12 }),
-    "Scan status: In progress",
+    formatScanStatusSummary({
+      state: "scanning",
+      sourceDatasetsDiscovered: 2487,
+      sourceDatasetsProcessed: 1200,
+      failed: 12,
+      finishedAt: null,
+    }),
+    "Scanning now · 1,200 of 2,487 datasets processed",
   );
   assert.equal(
-    formatScanStatusSummary({ state: "completed", failed: 0 }),
-    "Scan status: Complete",
+    formatScanStatusSummary({
+      state: "completed",
+      failed: 0,
+      finishedAt: "2026-08-22T21:05:34.123456Z",
+    }),
+    "Last scanned at 2026-08-22 21:05:34 UTC",
   );
   assert.equal(
-    formatScanStatusSummary({ state: "completed", failed: 1 }),
-    "Scan status: Complete · 1 dataset error",
+    formatScanStatusSummary({
+      state: "completed",
+      failed: 1,
+      finishedAt: "2026-08-22T21:05:34Z",
+    }),
+    "Last scanned at 2026-08-22 21:05:34 UTC · 1 dataset error",
   );
   assert.equal(
-    formatScanStatusSummary({ state: "completed", failed: 2487 }),
-    "Scan status: Complete · 2,487 dataset errors",
+    formatScanStatusSummary({
+      state: "completed",
+      failed: 2487,
+      finishedAt: "2026-08-22T21:05:34Z",
+    }),
+    "Last scanned at 2026-08-22 21:05:34 UTC · 2,487 dataset errors",
   );
   assert.equal(
-    formatScanStatusSummary({ state: "failed", failed: 0 }),
-    "Scan status: Failed",
+    formatScanStatusSummary({
+      state: "failed",
+      failed: 0,
+      finishedAt: "2026-08-22T21:06:03Z",
+    }),
+    "Last scan failed at 2026-08-22 21:06:03 UTC",
+  );
+  assert.equal(
+    formatScanStatusSummary({
+      state: "failed",
+      failed: 0,
+      finishedAt: null,
+    }),
+    "Last scan failed at time unavailable",
   );
   assert.throws(
     () => formatScanStatusSummary({ state: "complete", failed: 0 }),

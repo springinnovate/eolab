@@ -1,5 +1,6 @@
 """Direct pgSTAC inventory, deletion, and count-cache adapter."""
 
+import json
 from collections.abc import AsyncIterator, Iterable
 from typing import Any
 
@@ -35,6 +36,47 @@ class PgStacCatalogDatabase:
                 (list(collection_identifiers),),
             )
             return {(row[0], row[1]) async for row in cursor}
+
+    async def random_matching_item(
+        self,
+        search_request: dict[str, Any],
+        excluded_item: tuple[str, str] | None,
+    ) -> dict[str, Any] | None:
+        """Return one random Item matching a standard STAC search.
+
+        Args:
+            search_request: Filter and datetime fields from Item Search.
+            excluded_item: Collection and Item identifiers to avoid when
+                another match exists.
+
+        Returns:
+            One complete STAC Item, or ``None`` when nothing matches.
+
+        Raises:
+            psycopg.Error: If pgSTAC rejects the search or is unavailable.
+        """
+        excluded_collection, excluded_item_id = (
+            excluded_item if excluded_item is not None else (None, None)
+        )
+        async with await psycopg.AsyncConnection.connect() as connection:
+            cursor = await connection.execute(
+                """
+                SELECT pgstac.eolab_random_matching_item(
+                    %s::jsonb,
+                    %s,
+                    %s
+                )
+                """,
+                (
+                    json.dumps(search_request),
+                    excluded_collection,
+                    excluded_item_id,
+                ),
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            raise RuntimeError("pgSTAC returned no random-selection row")
+        return row[0]
 
     async def scanner_item_pages(
         self,
@@ -156,11 +198,15 @@ def catalog_item_source(
     Raises:
         ValueError: If a required source Asset is missing.
     """
-    required_asset_keys = (
-        ("data",)
-        if collection == MOUNTED_GEOTIFF_COLLECTION_ID
-        else ("shp", "shx", "dbf", "prj")
-    )
+    if (
+        collection == MOUNTED_GEOTIFF_COLLECTION_ID
+        or item_id.startswith(("geopackage-", "geojson-"))
+    ):
+        required_asset_keys = ("data",)
+    elif item_id.startswith("zipped-shapefile-"):
+        required_asset_keys = ("archive",)
+    else:
+        required_asset_keys = ("shp", "shx", "dbf", "prj")
     try:
         asset_hrefs = tuple(assets[key]["href"] for key in required_asset_keys)
     except KeyError as error:

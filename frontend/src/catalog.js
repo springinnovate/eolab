@@ -80,7 +80,25 @@ function formatDuration(seconds) {
 }
 
 /**
- * Formats the compact mounted-directory scan state.
+ * Formats a scanner timestamp for compact visible UTC display.
+ *
+ * @param {string|null} timestamp Scanner-provided UTC timestamp.
+ * @return {string} Timestamp rendered to whole UTC seconds, or a fallback.
+ */
+function formatScanTimestamp(timestamp) {
+    if (timestamp === null) {
+        return "time unavailable";
+    }
+    const parsedTimestamp = new Date(timestamp);
+    if (Number.isNaN(parsedTimestamp.getTime())) {
+        return "time unavailable";
+    }
+    const isoTimestamp = parsedTimestamp.toISOString();
+    return `${isoTimestamp.slice(0, 10)} ${isoTimestamp.slice(11, 19)} UTC`;
+}
+
+/**
+ * Formats the compact mounted-directory scan recency or live progress.
  *
  * @param {Object} scanStatus Scan progress returned by the backend.
  * @return {string} Human-readable scan summary.
@@ -88,19 +106,33 @@ function formatDuration(seconds) {
 export function formatScanStatusSummary(scanStatus) {
     switch (scanStatus.state) {
         case "not_started":
-            return "Scan status: Not started";
+            return "No scan has run since startup";
         case "discovering":
+            return "Scanning now · Discovering datasets";
         case "scanning":
-            return "Scan status: In progress";
+            return (
+                "Scanning now · " +
+                `${scanStatus.sourceDatasetsProcessed.toLocaleString()} of ` +
+                `${scanStatus.sourceDatasetsDiscovered.toLocaleString()} ` +
+                "datasets processed"
+            );
         case "completed": {
+            const lastScanned =
+                `Last scanned at ${formatScanTimestamp(scanStatus.finishedAt)}`;
             if (scanStatus.failed === 0) {
-                return "Scan status: Complete";
+                return lastScanned;
             }
             const errorNoun = scanStatus.failed === 1 ? "error" : "errors";
-            return `Scan status: Complete · ${scanStatus.failed.toLocaleString()} dataset ${errorNoun}`;
+            return (
+                `${lastScanned} · ${scanStatus.failed.toLocaleString()} ` +
+                `dataset ${errorNoun}`
+            );
         }
         case "failed":
-            return "Scan status: Failed";
+            return (
+                "Last scan failed at " +
+                formatScanTimestamp(scanStatus.finishedAt)
+            );
         default:
             throw new Error(`Unknown scan state: ${scanStatus.state}`);
     }
@@ -471,6 +503,29 @@ export function buildCatalogSearch(searchText) {
 }
 
 /**
+ * Build the shared STAC fields used by result and random-discovery requests.
+ *
+ * @param {string} searchText Text and field filters entered by the user.
+ * @param {number|null} limit Optional Item Search page size.
+ * @return {Object} Standard STAC Item Search fields.
+ */
+export function buildCatalogSearchRequest(searchText, limit = null) {
+    const searchRequest = {};
+    if (limit !== null) {
+        searchRequest.limit = limit;
+    }
+    const catalogSearch = buildCatalogSearch(searchText);
+    if (catalogSearch.filter !== null) {
+        searchRequest["filter-lang"] = "cql2-json";
+        searchRequest.filter = catalogSearch.filter;
+    }
+    if (catalogSearch.datetime !== null) {
+        searchRequest.datetime = catalogSearch.datetime;
+    }
+    return searchRequest;
+}
+
+/**
  * Creates a restartable delayed action for server-backed search. Native search
  * inputs emit each change immediately and do not provide this delay.
  *
@@ -780,15 +835,10 @@ export class CatalogSearchClient {
      */
     search(searchText) {
         this.numberMatchedEstimated = null;
-        const searchBody = { limit: CATALOG_PAGE_SIZE };
-        const catalogSearch = buildCatalogSearch(searchText);
-        if (catalogSearch.filter !== null) {
-            searchBody["filter-lang"] = "cql2-json";
-            searchBody.filter = catalogSearch.filter;
-        }
-        if (catalogSearch.datetime !== null) {
-            searchBody.datetime = catalogSearch.datetime;
-        }
+        const searchBody = buildCatalogSearchRequest(
+            searchText,
+            CATALOG_PAGE_SIZE
+        );
         return this.request({
             href: `${this.catalogUrl}/search`,
             method: "POST",
@@ -891,6 +941,94 @@ export class CatalogSearchClient {
         }
         itemCollection.numberMatchedEstimated = this.numberMatchedEstimated;
         return itemCollection;
+    }
+}
+
+/**
+ * Selects a random Item through the application Catalog discovery endpoint.
+ */
+export class CatalogSurpriseClient {
+    /**
+     * @param {string} endpoint Random Catalog discovery endpoint.
+     * @param {Function} fetchImplementation Fetch-compatible request function.
+     */
+    constructor(
+        endpoint = "/api/catalog/surprise",
+        fetchImplementation = globalThis.fetch
+    ) {
+        this.endpoint = endpoint;
+        this.fetchImplementation = fetchImplementation.bind(globalThis);
+        this.activeAbortController = null;
+        this.requestSequence = 0;
+    }
+
+    /**
+     * Return one Item matching the current search and avoid the prior Item.
+     *
+     * @param {string} searchText Current Catalog search text.
+     * @param {Object|null} excludedItem Most recently selected STAC Item.
+     * @return {Promise<Object|null>} Item, or null when superseded.
+     */
+    async surprise(searchText, excludedItem = null) {
+        const requestBody = {
+            search: buildCatalogSearchRequest(searchText)
+        };
+        if (excludedItem !== null) {
+            requestBody.exclude = {
+                collection: excludedItem.collection,
+                id: excludedItem.id
+            };
+        }
+
+        this.activeAbortController?.abort();
+        const abortController = new AbortController();
+        this.activeAbortController = abortController;
+        const requestSequence = ++this.requestSequence;
+        let response;
+        try {
+            response = await this.fetchImplementation(this.endpoint, {
+                method: "POST",
+                headers: {
+                    Accept: "application/json",
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify(requestBody),
+                signal: abortController.signal
+            });
+        } catch (requestError) {
+            if (abortController.signal.aborted) {
+                return null;
+            }
+            throw requestError;
+        }
+        if (requestSequence !== this.requestSequence) {
+            return null;
+        }
+        if (!response.ok) {
+            let errorDetail = `Random Catalog discovery returned ${response.status}`;
+            try {
+                const errorBody = await response.json();
+                if (typeof errorBody.detail === "string") {
+                    errorDetail = errorBody.detail;
+                }
+            } catch {
+                // Preserve the status-based fallback for a non-JSON response.
+            }
+            throw new Error(errorDetail);
+        }
+        const responseBody = await response.json();
+        if (requestSequence !== this.requestSequence) {
+            return null;
+        }
+        const item = responseBody.item;
+        if (
+            item?.type !== "Feature" ||
+            typeof item.id !== "string" ||
+            typeof item.collection !== "string"
+        ) {
+            throw new Error("Random Catalog discovery returned no valid Item");
+        }
+        return item;
     }
 }
 

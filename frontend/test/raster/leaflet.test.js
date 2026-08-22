@@ -65,6 +65,7 @@ test("Leaflet adapters own WMS and sample-window presentation options", () => {
       format: "image/png",
       transparent: true,
       version: "1.3.0",
+      noWrap: true,
       bounds: [[-5, -10], [15, 20]],
     },
   });

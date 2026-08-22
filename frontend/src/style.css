@@ -213,13 +213,23 @@ h5 {
 }
 
 .system-state {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 11px 24px;
+  display: block;
+  padding: 0;
   border-bottom: 1px solid var(--border-3);
   color: var(--text-2);
   font-size: 0.78rem;
+}
+
+.system-state > summary {
+  cursor: pointer;
+  padding: 11px 24px;
+  user-select: none;
+}
+
+.system-state > summary .status-dot {
+  display: inline-block;
+  margin: 0 9px 1px 7px;
+  vertical-align: middle;
 }
 
 .status-dot {
@@ -240,26 +250,9 @@ h5 {
   box-shadow: 0 0 0 4px rgb(218 124 11 / 12%);
 }
 
-.rendering-diagnostics-body:focus-visible {
+.system-state-details-body:focus-visible {
   outline: 2px solid var(--brand);
   outline-offset: -2px;
-}
-
-.rendering-diagnostics {
-  display: block;
-  padding: 0;
-}
-
-.rendering-diagnostics summary {
-  cursor: pointer;
-  padding: 11px 24px;
-  user-select: none;
-}
-
-.rendering-diagnostics summary .status-dot {
-  display: inline-block;
-  margin: 0 9px 1px 7px;
-  vertical-align: middle;
 }
 
 .rendering-diagnostics.is-ready .status-dot {
@@ -278,12 +271,16 @@ h5 {
   box-shadow: 0 0 0 4px rgb(216 48 32 / 12%);
 }
 
-.rendering-diagnostics-body {
+.system-state-details-body {
   border-top: 1px solid var(--border-3);
   max-height: min(55vh, 520px);
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 12px 24px 14px;
+}
+
+.catalog-system-state-body .scan-card {
+  margin-bottom: 0;
 }
 
 .rendering-diagnostics-grid {
@@ -1006,6 +1003,42 @@ h5 {
   display: none;
 }
 
+.catalog-surprise-action {
+  display: flex;
+  min-height: 27px;
+  align-items: center;
+  gap: 9px;
+  margin: -8px 0 16px;
+  color: var(--text-3);
+  font-size: 0.72rem;
+}
+
+.catalog-surprise-button {
+  cursor: pointer;
+  border: 1px solid var(--border-1);
+  border-radius: 999px;
+  background: transparent;
+  padding: 4px 9px;
+  color: var(--text-2);
+  font: inherit;
+  font-weight: 650;
+}
+
+.catalog-surprise-button:hover:not(:disabled) {
+  border-color: var(--brand);
+  background: var(--surface-2);
+  color: var(--brand-hover);
+}
+
+.catalog-surprise-button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+#catalog-surprise-status:empty {
+  display: none;
+}
+
 .catalog-stream-status {
   display: flex;
   align-items: center;
@@ -1030,6 +1063,22 @@ h5 {
 
 .scan-card .catalog-toolbar {
   margin-bottom: 9px;
+}
+
+.scan-locations-description {
+  margin: 0 0 5px;
+  color: var(--text-3);
+  font-size: 0.72rem;
+}
+
+.scan-locations {
+  display: grid;
+  gap: 3px;
+  margin: 0 0 11px;
+  padding-left: 18px;
+  color: var(--text-2);
+  font: 0.72rem/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow-wrap: anywhere;
 }
 
 .scan-status-disclosure summary {
@@ -1323,20 +1372,14 @@ h5 {
     padding: 19px 20px 15px;
   }
 
-  .system-state,
   .panel-content,
   .panel-footer {
     padding-right: 20px;
     padding-left: 20px;
   }
 
-  .rendering-diagnostics {
-    padding-right: 0;
-    padding-left: 0;
-  }
-
-  .rendering-diagnostics summary,
-  .rendering-diagnostics-body {
+  .system-state > summary,
+  .system-state-details-body {
     padding-right: 20px;
     padding-left: 20px;
   }

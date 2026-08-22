@@ -9,11 +9,22 @@ from eolab_app.catalog.filegeodatabase import (
     build_stac_items as build_file_geodatabase_stac_items,
     discover_file_geodatabases,
 )
+from eolab_app.catalog.geopackage import (
+    build_stac_items as build_geopackage_stac_items,
+    discover_geopackage_files,
+)
+from eolab_app.catalog.geojson import (
+    build_stac_item as build_geojson_stac_item,
+    discover_geojson_datasets,
+)
 from eolab_app.catalog.geotiff import build_stac_item as build_geotiff_stac_item
 from eolab_app.catalog.models import DatasetCandidate
 from eolab_app.catalog.shapefile import (
     build_stac_item as build_shapefile_stac_item,
     discover_shapefile_datasets,
+)
+from eolab_app.catalog.zipped_shapefile import (
+    build_stac_items as build_zipped_shapefile_stac_items,
 )
 
 
@@ -216,6 +227,50 @@ def build_geotiff_items(
     return (build_geotiff_stac_item(source_root, candidate.path),)
 
 
+def discover_mounted_geopackages(
+    directory_path: Path,
+    directory_names: tuple[str, ...],
+    file_names: tuple[str, ...],
+) -> HandlerDiscovery:
+    """Recognize single-file GeoPackage containers in one directory.
+
+    Args:
+        directory_path: Directory containing the listed entries.
+        directory_names: Sorted child directory names, unused by this handler.
+        file_names: Sorted child file names.
+
+    Returns:
+        One match per case-insensitive `.gpkg` file without directory pruning.
+    """
+    del directory_names
+    return HandlerDiscovery(matches=tuple(
+        DatasetMatch(geopackage_path)
+        for geopackage_path in discover_geopackage_files(
+            directory_path,
+            file_names,
+        )
+    ))
+
+
+def build_geopackage_items(
+    source_root: Path,
+    candidate: DatasetCandidate,
+) -> tuple[DatasetItem, ...]:
+    """Build one Item per spatial vector layer in a GeoPackage.
+
+    Args:
+        source_root: Root directory mounted for scanning.
+        candidate: GeoPackage container selected during discovery.
+
+    Returns:
+        Zero or more Items representing catalogable spatial vector layers.
+
+    Raises:
+        Exception: Propagates container-level GeoPackage metadata failures.
+    """
+    return build_geopackage_stac_items(source_root, candidate.path)
+
+
 def discover_mounted_shapefiles(
     directory_path: Path,
     directory_names: tuple[str, ...],
@@ -316,12 +371,98 @@ def build_file_geodatabase_items(
     return build_file_geodatabase_stac_items(source_root, candidate.path)
 
 
-def create_default_dataset_handler_registry() -> DatasetHandlerRegistry:
-    """Create the explicit registry for currently supported mounted formats.
+def discover_zipped_shapefiles(
+    directory_path: Path,
+    directory_names: tuple[str, ...],
+    file_names: tuple[str, ...],
+) -> HandlerDiscovery:
+    """Recognize ZIP archives as Shapefile container datasets.
+
+    Args:
+        directory_path: Directory containing the listed entries.
+        directory_names: Sorted child directory names, unused by this handler.
+        file_names: Sorted child file names.
 
     Returns:
-        Registry containing GeoTIFF, mounted Shapefile, and File Geodatabase
-        handlers.
+        ZIP file matches without directory pruning.
+    """
+    del directory_names
+    return HandlerDiscovery(matches=tuple(
+        DatasetMatch(directory_path / file_name)
+        for file_name in file_names
+        if Path(file_name).suffix.lower() == ".zip"
+    ))
+
+
+def build_zipped_shapefile_items(
+    source_root: Path,
+    candidate: DatasetCandidate,
+) -> tuple[DatasetItem, ...]:
+    """Build Items represented by Shapefiles inside one mounted ZIP.
+
+    Args:
+        source_root: Root directory mounted for scanning.
+        candidate: ZIP container selected during discovery.
+
+    Returns:
+        Zero or more Items, one for each valid internal Shapefile.
+
+    Raises:
+        Exception: Propagates ZIP validation and metadata failures.
+    """
+    return build_zipped_shapefile_stac_items(source_root, candidate.path)
+
+
+def discover_geojson_feature_collections(
+    directory_path: Path,
+    directory_names: tuple[str, ...],
+    file_names: tuple[str, ...],
+) -> HandlerDiscovery:
+    """Recognize GeoJSON FeatureCollection candidates in one directory.
+
+    Args:
+        directory_path: Directory containing the listed entries.
+        directory_names: Sorted child directory names, unused by this handler.
+        file_names: Sorted child file names.
+
+    Returns:
+        GeoJSON file matches without directory pruning.
+    """
+    del directory_names
+    return HandlerDiscovery(matches=tuple(
+        DatasetMatch(geojson_path)
+        for geojson_path in discover_geojson_datasets(
+            directory_path,
+            file_names,
+        )
+    ))
+
+
+def build_geojson_items(
+    source_root: Path,
+    candidate: DatasetCandidate,
+) -> tuple[DatasetItem, ...]:
+    """Build the single Item represented by a GeoJSON FeatureCollection.
+
+    Args:
+        source_root: Root directory mounted for scanning.
+        candidate: GeoJSON candidate selected during discovery.
+
+    Returns:
+        A one-Item tuple containing streamed GeoJSON metadata.
+
+    Raises:
+        Exception: Propagates GeoJSON parsing and metadata failures.
+    """
+    return (build_geojson_stac_item(source_root, candidate.path),)
+
+
+def create_default_dataset_handler_registry() -> DatasetHandlerRegistry:
+    """Create the explicit registry for supported mounted formats.
+
+    Returns:
+        Registry containing GeoTIFF, GeoPackage, mounted Shapefile,
+        ZIP/Shapefile, GeoJSON, and File Geodatabase handlers.
     """
     return DatasetHandlerRegistry(handlers=(
         DatasetHandler(
@@ -330,9 +471,24 @@ def create_default_dataset_handler_registry() -> DatasetHandlerRegistry:
             build_items=build_geotiff_items,
         ),
         DatasetHandler(
+            name="geopackage",
+            discover=discover_mounted_geopackages,
+            build_items=build_geopackage_items,
+        ),
+        DatasetHandler(
             name="shapefile",
             discover=discover_mounted_shapefiles,
             build_items=build_shapefile_items,
+        ),
+        DatasetHandler(
+            name="zipped-shapefile",
+            discover=discover_zipped_shapefiles,
+            build_items=build_zipped_shapefile_items,
+        ),
+        DatasetHandler(
+            name="geojson",
+            discover=discover_geojson_feature_collections,
+            build_items=build_geojson_items,
         ),
         DatasetHandler(
             name="file-geodatabase",
