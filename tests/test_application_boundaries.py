@@ -1,4 +1,4 @@
-"""Protect application configuration and standalone tooling boundaries."""
+"""Protect application boundaries against architectural drift."""
 
 import ast
 from pathlib import Path
