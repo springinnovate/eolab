@@ -224,6 +224,37 @@ test("RasterControlsView clears histogram visibility through its DOM contract", 
     assert.equal(documentContext.querySelector("#retry-raster-statistics").hidden, true);
 });
 
+test("RasterControlsView identifies the active layer and disables map reads while hidden", () => {
+    const documentContext = new FakeRasterDocument();
+    const view = new RasterControlsView(documentContext);
+
+    view.setActiveLayer("global-temperature.tif", false);
+
+    assert.match(
+        documentContext.querySelector("#raster-active-layer-label").textContent,
+        /global-temperature\.tif; this layer is hidden/
+    );
+    assert.equal(
+        documentContext.querySelector("#sample-raster-map-center").disabled,
+        true
+    );
+    assert.equal(
+        documentContext.querySelector("#retry-raster-statistics").disabled,
+        true
+    );
+
+    view.setActiveLayer("global-temperature.tif", true);
+
+    assert.equal(
+        documentContext.querySelector("#sample-raster-map-center").disabled,
+        false
+    );
+    assert.equal(
+        documentContext.querySelector("#retry-raster-statistics").disabled,
+        false
+    );
+});
+
 test("RasterControlsView reveals a successful histogram presentation", () => {
     const documentContext = new FakeRasterDocument();
     const view = new RasterControlsView(documentContext);

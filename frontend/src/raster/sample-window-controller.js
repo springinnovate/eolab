@@ -8,7 +8,9 @@
 import {
     buildRasterSampleWindowBounds,
     DEFAULT_RASTER_SAMPLE_WINDOW_SIZE_KM,
+    isCanonicalWgs84Position,
     RASTER_SAMPLE_WINDOW_EDGE_GUIDANCE,
+    RASTER_SAMPLE_WINDOW_MAP_BOUNDS_GUIDANCE,
     RasterSampleWindowBoundaryError,
     validateRasterSampleWindowSize
 } from "./geometry.js";
@@ -143,6 +145,21 @@ export class RasterSampleWindowController {
     }
 
     /**
+     * Restore a retained selection without issuing another statistics request.
+     *
+     * @param {Object} bounds Canonical WGS 84 selected bounds.
+     * @return {void}
+     */
+    restoreSelection(bounds) {
+        this.clearSelection();
+        this.selectionLayer = this.layerFactory(
+            rasterSampleBoundsToLeaflet(bounds),
+            "selection"
+        ).addTo(this.leafletMap);
+        this.selectionBounds = bounds;
+    }
+
+    /**
      * Remove all layers, handlers, and pointer state for the active Item.
      *
      * @return {void}
@@ -165,30 +182,32 @@ export class RasterSampleWindowController {
     }
 
     /**
-     * Build API and visible-world bounds at one Leaflet position.
+     * Build API and single-world bounds at one Leaflet position.
      *
      * @param {{lng: number, lat: number}} position Leaflet map position.
      * @return {{bounds:Object,leafletBounds:Array}|null} Sampling window, or
-     * null when it crosses a pole or date line.
-     * @throws {RangeError} If the position or configured size is invalid.
+     * null outside the map or when the window crosses a pole or date line.
+     * @throws {RangeError} If the configured size is invalid.
      */
     #boundsAt(position) {
-        const normalizedPosition = this.#normalizePosition(position);
+        const center = {
+            longitude: position.lng,
+            latitude: position.lat
+        };
+        if (!isCanonicalWgs84Position(center)) {
+            this.#removePreview();
+            this.onGuidance(RASTER_SAMPLE_WINDOW_MAP_BOUNDS_GUIDANCE);
+            return null;
+        }
         try {
             const bounds = buildRasterSampleWindowBounds(
-                {
-                    longitude: normalizedPosition.lng,
-                    latitude: normalizedPosition.lat
-                },
+                center,
                 this.windowSizeKm
             );
             this.onGuidance("");
             return {
                 bounds,
-                leafletBounds: rasterSampleBoundsToLeaflet(
-                    bounds,
-                    position.lng - normalizedPosition.lng
-                )
+                leafletBounds: rasterSampleBoundsToLeaflet(bounds),
             };
         } catch (error) {
             if (!(error instanceof RasterSampleWindowBoundaryError)) {
@@ -247,17 +266,6 @@ export class RasterSampleWindowController {
         this.selectionBounds = sampleWindow.bounds;
         this.onSelect(sampleWindow.bounds);
         return sampleWindow.bounds;
-    }
-
-    /**
-     * Normalize a Leaflet world-copy position to canonical WGS 84 longitude.
-     *
-     * @param {{lng: number, lat: number}} position Leaflet map position.
-     * @return {{lng: number, lat: number}} Canonical longitude and latitude.
-     */
-    #normalizePosition(position) {
-        const longitude = ((position.lng + 180) % 360 + 360) % 360 - 180;
-        return { lng: longitude, lat: position.lat };
     }
 
     /**

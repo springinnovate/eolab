@@ -4,9 +4,34 @@ import test from "node:test";
 import {
   buildRasterSampleWindowBounds,
   DEFAULT_RASTER_SAMPLE_WINDOW_SIZE_KM,
+  isCanonicalWgs84Position,
   validateRasterSampleWindowSize,
   validateRasterSelectedBounds,
 } from "../../src/raster/geometry.js";
+
+test("canonical WGS 84 positions stay inside the single map world", () => {
+  assert.equal(
+    isCanonicalWgs84Position({ longitude: -180, latitude: -90 }),
+    true,
+  );
+  assert.equal(
+    isCanonicalWgs84Position({ longitude: 180, latitude: 90 }),
+    true,
+  );
+  assert.equal(
+    isCanonicalWgs84Position({ longitude: 180.001, latitude: 0 }),
+    false,
+  );
+  assert.equal(
+    isCanonicalWgs84Position({ longitude: 0, latitude: -90.001 }),
+    false,
+  );
+  assert.equal(
+    isCanonicalWgs84Position({ longitude: Number.NaN, latitude: 0 }),
+    false,
+  );
+  assert.equal(isCanonicalWgs84Position(null), false);
+});
 
 test("sample windows use ground distance instead of projected map metres", () => {
   const equatorial = buildRasterSampleWindowBounds(
