@@ -1053,6 +1053,308 @@ def test_pixel_probe_samples_nodata_and_outside_the_published_raster(
     }
 
 
+def test_raster_statistics_sample_a_published_projected_raster(
+    configured_environment: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    version_file_path: Path,
+) -> None:
+    """Transform, clip, and summarize a WGS 84 area in a projected raster."""
+    source_path = tmp_path / "projected.tif"
+    with rasterio.open(
+        source_path,
+        "w",
+        driver="GTiff",
+        width=2,
+        height=2,
+        count=1,
+        dtype="int16",
+        crs="EPSG:3857",
+        transform=from_origin(-100_000, 100_000, 100_000, 100_000),
+    ) as dataset:
+        dataset.write(
+            numpy.array([[10, 20], [30, 40]], dtype="int16"),
+            1,
+        )
+    monkeypatch.setenv("SCAN_MOUNT_PATH", str(tmp_path))
+    monkeypatch.setenv("SCAN_PATHS_WITHIN_MOUNT", '["."]')
+    item = _mounted_geotiff_item(source_path.as_uri())
+
+    def upstream_response(request: httpx2.Request) -> httpx2.Response:
+        if request.url.host == "stac-api":
+            return httpx2.Response(200, json=item)
+        if request.url.path.endswith("/external.geotiff"):
+            return httpx2.Response(201)
+        if request.url.path.endswith(f"/{TEST_GEOTIFF_ITEM_ID}.xml"):
+            return httpx2.Response(200)
+        raise AssertionError(f"Unexpected upstream request: {request}")
+
+    request_identity = {
+        "collectionId": "eolab-mounted-geotiffs",
+        "itemId": TEST_GEOTIFF_ITEM_ID,
+    }
+    with TestClient(
+        create_app(
+            version_file_path,
+            catalog_transport=httpx2.MockTransport(upstream_response),
+            geoserver_transport=httpx2.MockTransport(upstream_response),
+        )
+    ) as client:
+        assert client.post(
+            "/api/rendering/layers",
+            json=request_identity,
+        ).status_code == 200
+        response = client.post(
+            "/api/rendering/statistics",
+            json=request_identity,
+        )
+        selected_response = client.post(
+            "/api/rendering/statistics",
+            json={
+                **request_identity,
+                "selectedBounds": {
+                    "west": -2,
+                    "south": -2,
+                    "east": 0,
+                    "north": 2,
+                },
+            },
+        )
+        outside_response = client.post(
+            "/api/rendering/statistics",
+            json={
+                **request_identity,
+                "selectedBounds": {
+                    "west": 10,
+                    "south": 10,
+                    "east": 11,
+                    "north": 11,
+                },
+            },
+        )
+
+    assert response.status_code == 200
+    response_document = response.json()
+    assert response_document == {
+        "band": 1,
+        "scope": "wholeRaster",
+        "selectedBounds": None,
+        "sourceWidth": 2,
+        "sourceHeight": 2,
+        "sourcePixelCount": 4,
+        "sampleWidth": 2,
+        "sampleHeight": 2,
+        "sampledPixelCount": 4,
+        "validSampleCount": 4,
+        "estimated": False,
+        "sampleMinimum": 10.0,
+        "sampleMaximum": 40.0,
+        "percentiles": {"p05": 11.5, "p50": 25.0, "p95": 38.5},
+        "histogram": response_document["histogram"],
+        "suggestedRange": {
+            "minimum": 11.5,
+            "midpoint": 25.0,
+            "maximum": 38.5,
+        },
+    }
+    assert len(response_document["histogram"]["counts"]) == 64
+    assert len(response_document["histogram"]["edges"]) == 65
+    assert sum(response_document["histogram"]["counts"]) == 4
+
+    assert selected_response.status_code == 200
+    selected_document = selected_response.json()
+    assert selected_document == {
+        "band": 1,
+        "scope": "selectedArea",
+        "selectedBounds": {
+            "west": -2.0,
+            "south": -2.0,
+            "east": 0.0,
+            "north": 2.0,
+        },
+        "sourceWidth": 1,
+        "sourceHeight": 2,
+        "sourcePixelCount": 2,
+        "sampleWidth": 1,
+        "sampleHeight": 2,
+        "sampledPixelCount": 2,
+        "validSampleCount": 2,
+        "estimated": False,
+        "sampleMinimum": 10.0,
+        "sampleMaximum": 30.0,
+        "percentiles": {"p05": 11.0, "p50": 20.0, "p95": 29.0},
+        "histogram": selected_document["histogram"],
+        "suggestedRange": {
+            "minimum": 11.0,
+            "midpoint": 20.0,
+            "maximum": 29.0,
+        },
+    }
+    assert sum(selected_document["histogram"]["counts"]) == 2
+
+    assert outside_response.status_code == 409
+    assert outside_response.json() == {
+        "detail": "The selected area does not overlap the raster"
+    }
+
+
+def test_raster_statistics_disconnect_cancels_the_service_waiter(
+    configured_environment: None,
+    monkeypatch: pytest.MonkeyPatch,
+    version_file_path: Path,
+) -> None:
+    """Discard queued statistics work when an aborted fetch disconnects."""
+
+    class BlockingStatisticsService:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.canceled = asyncio.Event()
+
+        async def get(self, _request: object) -> None:
+            self.started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.canceled.set()
+                raise
+
+    statistics_service = BlockingStatisticsService()
+    monkeypatch.setattr(
+        "eolab_app.main.RasterStatisticsService",
+        lambda _registry: statistics_service,
+    )
+    application = create_app(version_file_path)
+    request_body = json.dumps(
+        {
+            "collectionId": "eolab-mounted-geotiffs",
+            "itemId": TEST_GEOTIFF_ITEM_ID,
+        }
+    ).encode()
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/api/rendering/statistics",
+        "raw_path": b"/api/rendering/statistics",
+        "query_string": b"",
+        "headers": [
+            (b"host", b"testserver"),
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(request_body)).encode()),
+        ],
+        "client": ("127.0.0.1", 12345),
+        "server": ("testserver", 80),
+        "root_path": "",
+        "state": {},
+    }
+
+    async def exercise_disconnect() -> list[dict[str, object]]:
+        request_messages: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+        await request_messages.put(
+            {
+                "type": "http.request",
+                "body": request_body,
+                "more_body": False,
+            }
+        )
+        response_messages: list[dict[str, object]] = []
+
+        async def receive() -> dict[str, object]:
+            return await request_messages.get()
+
+        async def send(message: dict[str, object]) -> None:
+            response_messages.append(message)
+
+        async with application.router.lifespan_context(application):
+            request_task = asyncio.create_task(
+                application(scope, receive, send)
+            )
+            await asyncio.wait_for(statistics_service.started.wait(), 1)
+            await request_messages.put({"type": "http.disconnect"})
+            await asyncio.wait_for(request_task, 1)
+        return response_messages
+
+    response_messages = asyncio.run(exercise_disconnect())
+
+    assert statistics_service.canceled.is_set()
+    assert next(
+        message["status"]
+        for message in response_messages
+        if message["type"] == "http.response.start"
+    ) == 499
+
+
+@pytest.mark.parametrize(
+    ("request_body", "expected_status"),
+    (
+        (
+            {
+                "collectionId": "eolab-mounted-geotiffs",
+                "itemId": TEST_GEOTIFF_ITEM_ID,
+            },
+            400,
+        ),
+        (
+            {
+                "collectionId": "eolab-mounted-geotiffs",
+                "itemId": TEST_GEOTIFF_ITEM_ID,
+                "href": "file:///etc/passwd",
+            },
+            422,
+        ),
+        (
+            {
+                "collectionId": "eolab-mounted-geotiffs",
+                "itemId": TEST_GEOTIFF_ITEM_ID,
+                "selectedBounds": {
+                    "west": 170,
+                    "south": -10,
+                    "east": -170,
+                    "north": 10,
+                },
+            },
+            422,
+        ),
+        (
+            {
+                "collectionId": "eolab-mounted-geotiffs",
+                "itemId": TEST_GEOTIFF_ITEM_ID,
+                "selectedBounds": {
+                    "west": -10,
+                    "south": 5,
+                    "east": 10,
+                    "north": 5,
+                },
+            },
+            422,
+        ),
+        (
+            {
+                "collectionId": "eolab-mounted-geotiffs",
+                "itemId": TEST_GEOTIFF_ITEM_ID,
+                "histogramBins": 1_000_000,
+            },
+            422,
+        ),
+    ),
+)
+def test_raster_statistics_require_the_published_identity_contract(
+    configured_environment: None,
+    version_file_path: Path,
+    request_body: dict[str, object],
+    expected_status: int,
+) -> None:
+    """Reject unpublished raster identities and every browser-supplied path."""
+    response = TestClient(create_app(version_file_path)).post(
+        "/api/rendering/statistics",
+        json=request_body,
+    )
+
+    assert response.status_code == expected_status
+
+
 def test_pixel_probe_requires_an_approved_current_raster(
     configured_environment: None,
     version_file_path: Path,

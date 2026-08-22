@@ -2,16 +2,21 @@
 
 import asyncio
 import math
+from collections import OrderedDict
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from urllib.parse import unquote, urlsplit
 
 import httpx2
+import numpy
 import rasterio
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, model_validator
+from rasterio.enums import Resampling
+from rasterio.features import geometry_mask
 from rasterio.warp import transform
-from rasterio.windows import Window
+from rasterio.windows import Window, transform as window_transform
 
 from eolab_app.geotiff import (
     GEOTIFF_MEDIA_TYPES,
@@ -27,7 +32,32 @@ from eolab_app.geotiff import (
 GEOSERVER_WORKSPACE_NAME = "eolab"
 GEOSERVER_RASTER_STYLE_NAME = "dynamic-raster"
 RASTER_PIXEL_READ_CONCURRENCY = 2
+RASTER_STATISTICS_ALGORITHM = "bounded-selected-area-v3"
+RASTER_STATISTICS_BIN_COUNT = 64
+RASTER_STATISTICS_BOUNDS_DENSIFY_POINTS = 21
+RASTER_STATISTICS_CACHE_ENTRIES = 32
+RASTER_STATISTICS_MAX_SAMPLE_DIMENSION = 512
+RASTER_STATISTICS_READ_CONCURRENCY = 1
+# Match the ESOS-C AOI contract: a resampled cell contributes when the
+# transformed selection touches it, including cells crossed only at an edge.
+# This keeps narrow selections from disappearing between sampled cell centers.
+RASTER_STATISTICS_SELECTION_ALL_TOUCHED = True
 SourceSignature = tuple[int, int, int, int, int]
+CanonicalWgs84Bounds = tuple[float, float, float, float]
+RasterStatisticsCacheKey = tuple[
+    str,
+    SourceSignature,
+    str,
+    CanonicalWgs84Bounds | None,
+]
+
+
+@dataclass(frozen=True)
+class AuthorizedRaster:
+    """Current mounted source approved for public rendering operations."""
+
+    source_path: Path
+    source_signature: SourceSignature
 
 
 class CatalogRasterRequest(BaseModel):
@@ -42,6 +72,54 @@ class CatalogRasterRequest(BaseModel):
         alias="itemId",
         pattern=MOUNTED_GEOTIFF_ITEM_ID_PATTERN,
         strict=True,
+    )
+
+
+class Wgs84Bounds(BaseModel):
+    """One non-wrapping longitude/latitude rectangle selected by the user."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    west: float = Field(strict=True, ge=-180, le=180, allow_inf_nan=False)
+    south: float = Field(strict=True, ge=-90, le=90, allow_inf_nan=False)
+    east: float = Field(strict=True, ge=-180, le=180, allow_inf_nan=False)
+    north: float = Field(strict=True, ge=-90, le=90, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def require_ordered_non_wrapping_bounds(self) -> "Wgs84Bounds":
+        """Reject empty and antimeridian-crossing rectangles.
+
+        Returns:
+            The validated bounds model.
+
+        Raises:
+            ValueError: If either axis is empty, reversed, or wraps across the
+                antimeridian.
+        """
+        if self.west >= self.east:
+            raise ValueError(
+                "west must be less than east; antimeridian-crossing bounds "
+                "are not supported"
+            )
+        if self.south >= self.north:
+            raise ValueError("south must be less than north")
+        return self
+
+    def canonical_tuple(self) -> CanonicalWgs84Bounds:
+        """Return the stable tuple used for sampling and cache identity.
+
+        Returns:
+            West, south, east, and north in canonical order.
+        """
+        return (self.west, self.south, self.east, self.north)
+
+
+class CatalogRasterStatisticsRequest(CatalogRasterRequest):
+    """Identify a published raster and an optional selected WGS 84 area."""
+
+    selected_bounds: Wgs84Bounds | None = Field(
+        default=None,
+        alias="selectedBounds",
     )
 
 
@@ -80,6 +158,90 @@ class RasterPixel(BaseModel):
     value: float | None
 
 
+class RasterPercentiles(BaseModel):
+    """Percentiles calculated from finite, non-nodata sample values."""
+
+    p05: FiniteFloat
+    p50: FiniteFloat
+    p95: FiniteFloat
+
+
+class RasterValueRange(BaseModel):
+    """Three strictly ordered values accepted by the dynamic raster style."""
+
+    minimum: FiniteFloat
+    midpoint: FiniteFloat
+    maximum: FiniteFloat
+
+
+class RasterHistogram(BaseModel):
+    """Fixed-bin histogram calculated from the bounded raster sample."""
+
+    counts: list[int]
+    edges: list[FiniteFloat]
+
+
+class RasterStatistics(BaseModel):
+    """Bounded raster sample used for display-range selection."""
+
+    band: Literal[1] = 1
+    scope: Literal["wholeRaster", "selectedArea"]
+    selected_bounds: Wgs84Bounds | None = Field(alias="selectedBounds")
+    source_width: int = Field(alias="sourceWidth")
+    source_height: int = Field(alias="sourceHeight")
+    source_pixel_count: int = Field(alias="sourcePixelCount")
+    sample_width: int = Field(alias="sampleWidth")
+    sample_height: int = Field(alias="sampleHeight")
+    sampled_pixel_count: int = Field(alias="sampledPixelCount")
+    valid_sample_count: int = Field(alias="validSampleCount")
+    estimated: bool
+    sample_minimum: FiniteFloat = Field(alias="sampleMinimum")
+    sample_maximum: FiniteFloat = Field(alias="sampleMaximum")
+    percentiles: RasterPercentiles
+    histogram: RasterHistogram
+    suggested_range: RasterValueRange = Field(alias="suggestedRange")
+
+    @model_validator(mode="after")
+    def require_scope_provenance(self) -> "RasterStatistics":
+        """Keep whole-raster and selected-area provenance unambiguous.
+
+        Returns:
+            The validated statistics model.
+
+        Raises:
+            ValueError: If selected bounds do not match the declared scope.
+        """
+        if self.scope == "wholeRaster" and self.selected_bounds is not None:
+            raise ValueError("wholeRaster statistics cannot have selected bounds")
+        if self.scope == "selectedArea" and self.selected_bounds is None:
+            raise ValueError("selectedArea statistics require selected bounds")
+        return self
+
+
+class NoValidRasterSamplesError(ValueError):
+    """Raised when a bounded sample contains no finite data values."""
+
+
+class NoRasterBoundsOverlapError(ValueError):
+    """Raised when a selected WGS 84 area does not overlap the raster."""
+
+
+@dataclass(frozen=True)
+class _SelectedRasterArea:
+    """Projected selection geometry and its clipped source-pixel envelope."""
+
+    source_window: Window
+    projected_geometry: dict[str, object]
+
+
+@dataclass
+class _RasterStatisticsWork:
+    """One coalesced statistics task and its active HTTP waiters."""
+
+    task: asyncio.Task[RasterStatistics]
+    waiter_count: int = 0
+
+
 def _source_signature(source_path: Path) -> SourceSignature:
     """Identify the mounted file inspected before GeoServer publication.
 
@@ -106,6 +268,7 @@ class PublishedRasterRegistry:
     """Allow WMS access only to current files approved by this app process."""
 
     def __init__(self) -> None:
+        """Create an empty process-local raster authorization registry."""
         self._sources: dict[str, tuple[Path, SourceSignature]] = {}
 
     def authorize(
@@ -136,14 +299,14 @@ class PublishedRasterRegistry:
             )
         self._sources[layer_name] = (source_path, inspected_signature)
 
-    def require_current(self, layer_name: str) -> Path:
+    def require_current(self, layer_name: str) -> AuthorizedRaster:
         """Require a layer authorized from a source that has not changed.
 
         Args:
             layer_name: Workspace-qualified GeoServer layer name.
 
         Returns:
-            Canonical path to the authorized mounted GeoTIFF.
+            Canonical path and approved signature for the mounted GeoTIFF.
 
         Raises:
             HTTPException: If the layer is not authorized or its source has
@@ -161,12 +324,389 @@ class PublishedRasterRegistry:
         except OSError:
             current_signature = None
         if current_signature != approved_signature:
-            self._sources.pop(layer_name, None)
             raise HTTPException(
                 status_code=409,
                 detail="The visualized GeoTIFF changed; select it again",
             )
-        return source_path
+        return AuthorizedRaster(source_path, approved_signature)
+
+
+def _bounded_raster_sample_shape(
+    source_width: int,
+    source_height: int,
+    maximum_sample_dimension: int = RASTER_STATISTICS_MAX_SAMPLE_DIMENSION,
+) -> tuple[int, int]:
+    """Return an aspect-preserving sample size within a square bound.
+
+    Args:
+        source_width: Raster width in source pixels.
+        source_height: Raster height in source pixels.
+        maximum_sample_dimension: Maximum height or width of the sample.
+
+    Returns:
+        Sample height and width.
+    """
+    if max(source_width, source_height) <= maximum_sample_dimension:
+        return source_height, source_width
+
+    scale = maximum_sample_dimension / max(source_width, source_height)
+    sample_height = max(1, math.floor(source_height * scale))
+    sample_width = max(1, math.floor(source_width * scale))
+    return sample_height, sample_width
+
+
+def _strict_raster_value_range(
+    sample_minimum: float,
+    sample_maximum: float,
+    p05: float,
+    p50: float,
+    p95: float,
+) -> RasterValueRange:
+    """Derive a finite, strictly ordered style range from sample values.
+
+    Args:
+        sample_minimum: Lowest sampled value.
+        sample_maximum: Highest sampled value.
+        p05: Fifth sample percentile.
+        p50: Median sample value.
+        p95: Ninety-fifth sample percentile.
+
+    Returns:
+        Strict range accepted by the WMS style contract.
+    """
+    if p05 < p50 < p95:
+        return RasterValueRange(minimum=p05, midpoint=p50, maximum=p95)
+
+    percentile_padding = max(
+        max(abs(value) for value in (p05, p50, p95)) * 1e-6,
+        1e-12,
+    )
+    padded_minimum = p05 - percentile_padding if p05 == p50 else p05
+    padded_maximum = p95 + percentile_padding if p50 == p95 else p95
+    if (
+        all(
+            math.isfinite(value)
+            for value in (padded_minimum, p50, padded_maximum)
+        )
+        and padded_minimum < p50 < padded_maximum
+    ):
+        return RasterValueRange(
+            minimum=padded_minimum,
+            midpoint=p50,
+            maximum=padded_maximum,
+        )
+
+    if sample_minimum < sample_maximum:
+        midpoint = sample_minimum / 2 + sample_maximum / 2
+        if sample_minimum < midpoint < sample_maximum:
+            return RasterValueRange(
+                minimum=sample_minimum,
+                midpoint=midpoint,
+                maximum=sample_maximum,
+            )
+
+        lower_value = math.nextafter(sample_minimum, -math.inf)
+        if math.isfinite(lower_value):
+            return RasterValueRange(
+                minimum=lower_value,
+                midpoint=sample_minimum,
+                maximum=sample_maximum,
+            )
+        upper_value = math.nextafter(sample_maximum, math.inf)
+        return RasterValueRange(
+            minimum=sample_minimum,
+            midpoint=sample_maximum,
+            maximum=upper_value,
+        )
+
+    constant_value = sample_minimum
+    scale_relative_padding = max(abs(constant_value) * 1e-6, 1e-12)
+    lower_value = constant_value - scale_relative_padding
+    upper_value = constant_value + scale_relative_padding
+    if (
+        all(
+            math.isfinite(value)
+            for value in (lower_value, constant_value, upper_value)
+        )
+        and lower_value < constant_value < upper_value
+    ):
+        return RasterValueRange(
+            minimum=lower_value,
+            midpoint=constant_value,
+            maximum=upper_value,
+        )
+
+    lower_value = math.nextafter(constant_value, -math.inf)
+    upper_value = math.nextafter(constant_value, math.inf)
+    if math.isfinite(lower_value) and math.isfinite(upper_value):
+        return RasterValueRange(
+            minimum=lower_value,
+            midpoint=constant_value,
+            maximum=upper_value,
+        )
+    if math.isfinite(lower_value):
+        return RasterValueRange(
+            minimum=math.nextafter(lower_value, -math.inf),
+            midpoint=lower_value,
+            maximum=constant_value,
+        )
+    return RasterValueRange(
+        minimum=constant_value,
+        midpoint=upper_value,
+        maximum=math.nextafter(upper_value, math.inf),
+    )
+
+
+def _densified_wgs84_bounds_ring(
+    selected_bounds: CanonicalWgs84Bounds,
+) -> tuple[tuple[float, float], ...]:
+    """Trace all four selection edges with intermediate WGS 84 vertices.
+
+    Args:
+        selected_bounds: Canonical west, south, east, and north bounds.
+
+    Returns:
+        Closed WGS 84 polygon ring with each edge evenly densified.
+    """
+    west, south, east, north = selected_bounds
+    edge_endpoints = (
+        ((west, south), (east, south)),
+        ((east, south), (east, north)),
+        ((east, north), (west, north)),
+        ((west, north), (west, south)),
+    )
+    denominator = RASTER_STATISTICS_BOUNDS_DENSIFY_POINTS + 1
+    ring: list[tuple[float, float]] = []
+    for edge_index, (start, end) in enumerate(edge_endpoints):
+        first_step = 0 if edge_index == 0 else 1
+        for step in range(first_step, denominator + 1):
+            fraction = step / denominator
+            ring.append(
+                (
+                    start[0] + (end[0] - start[0]) * fraction,
+                    start[1] + (end[1] - start[1]) * fraction,
+                )
+            )
+    return tuple(ring)
+
+
+def _selected_raster_area_for_wgs84_bounds(
+    dataset: rasterio.io.DatasetReader,
+    selected_bounds: CanonicalWgs84Bounds,
+) -> _SelectedRasterArea:
+    """Project a WGS 84 rectangle and bound it in source-pixel space.
+
+    All four edges are densified before transformation. The actual transformed
+    polygon is retained for masking, while its envelope in inverse-affine pixel
+    coordinates supplies a bounded window for north-up, rotated, or skewed
+    rasters. The window always stays within the source raster.
+
+    Args:
+        dataset: Open source raster with a coordinate reference system.
+        selected_bounds: Canonical west, south, east, north WGS 84 bounds.
+
+    Returns:
+        Projected selection polygon and its integer source-pixel envelope.
+
+    Raises:
+        NoRasterBoundsOverlapError: If the selection misses the raster.
+        ValueError: If the bounds cannot be transformed to the raster CRS.
+    """
+    wgs84_ring = _densified_wgs84_bounds_ring(selected_bounds)
+    projected_x, projected_y = transform(
+        "EPSG:4326",
+        dataset.crs,
+        [coordinate[0] for coordinate in wgs84_ring],
+        [coordinate[1] for coordinate in wgs84_ring],
+    )
+    projected_ring = tuple(zip(projected_x, projected_y, strict=True))
+    if not all(
+        math.isfinite(coordinate)
+        for point in projected_ring
+        for coordinate in point
+    ):
+        raise ValueError("Selected bounds could not be projected")
+
+    inverse_transform = ~dataset.transform
+    pixel_ring = tuple(
+        inverse_transform * projected_coordinate
+        for projected_coordinate in projected_ring
+    )
+    column_start = max(0, math.floor(min(point[0] for point in pixel_ring)))
+    row_start = max(0, math.floor(min(point[1] for point in pixel_ring)))
+    column_stop = min(
+        dataset.width,
+        math.ceil(max(point[0] for point in pixel_ring)),
+    )
+    row_stop = min(
+        dataset.height,
+        math.ceil(max(point[1] for point in pixel_ring)),
+    )
+    if column_start >= column_stop or row_start >= row_stop:
+        raise NoRasterBoundsOverlapError
+    return _SelectedRasterArea(
+        source_window=Window(
+            column_start,
+            row_start,
+            column_stop - column_start,
+            row_stop - row_start,
+        ),
+        projected_geometry={
+            "type": "Polygon",
+            "coordinates": [projected_ring],
+        },
+    )
+
+
+def _read_raster_statistics(
+    source_path: Path,
+    selected_bounds: CanonicalWgs84Bounds | None = None,
+) -> RasterStatistics:
+    """Read a fixed-size raster sample and summarize band 1.
+
+    Args:
+        source_path: Authorized mounted GeoTIFF.
+        selected_bounds: Optional west, south, east, north selection in WGS 84.
+
+    Returns:
+        Finite sample distribution and a suggested display range.
+
+    Raises:
+        NoRasterBoundsOverlapError: If the selected geometry does not overlap
+            the raster.
+        NoValidRasterSamplesError: If the sample has no finite data values.
+        OSError: If the source cannot be read.
+        rasterio.errors.RasterioError: If GDAL cannot open or sample it.
+    """
+    with rasterio.open(source_path) as dataset:
+        selected_area = (
+            _selected_raster_area_for_wgs84_bounds(dataset, selected_bounds)
+            if selected_bounds is not None
+            else None
+        )
+        source_window = (
+            selected_area.source_window
+            if selected_area is not None
+            else None
+        )
+        source_width = (
+            int(source_window.width)
+            if source_window is not None
+            else dataset.width
+        )
+        source_height = (
+            int(source_window.height)
+            if source_window is not None
+            else dataset.height
+        )
+        sample_height, sample_width = _bounded_raster_sample_shape(
+            source_width,
+            source_height,
+        )
+        read_options: dict[str, object] = {
+            "out_shape": (sample_height, sample_width),
+            "masked": True,
+            "resampling": Resampling.nearest,
+        }
+        if source_window is not None:
+            read_options["window"] = source_window
+        sample = dataset.read(1, **read_options)
+        if selected_area is not None:
+            source_sample_transform = window_transform(
+                source_window,
+                dataset.transform,
+            ) * rasterio.Affine.scale(
+                source_width / sample_width,
+                source_height / sample_height,
+            )
+            outside_selection = geometry_mask(
+                [selected_area.projected_geometry],
+                out_shape=(sample_height, sample_width),
+                transform=source_sample_transform,
+                all_touched=RASTER_STATISTICS_SELECTION_ALL_TOUCHED,
+            )
+            if numpy.all(outside_selection):
+                raise NoRasterBoundsOverlapError
+            sample = numpy.ma.array(
+                numpy.ma.getdata(sample),
+                mask=numpy.logical_or(
+                    numpy.ma.getmaskarray(sample),
+                    outside_selection,
+                ),
+            )
+
+    sample_values = numpy.asarray(
+        sample.compressed(),
+        dtype=numpy.float64,
+    )
+    sample_values = sample_values[numpy.isfinite(sample_values)]
+    if sample_values.size == 0:
+        raise NoValidRasterSamplesError
+
+    sample_minimum = float(numpy.min(sample_values))
+    sample_maximum = float(numpy.max(sample_values))
+    p05, p50, p95 = (
+        float(value)
+        for value in numpy.percentile(sample_values, (5, 50, 95))
+    )
+    suggested_range = _strict_raster_value_range(
+        sample_minimum,
+        sample_maximum,
+        p05,
+        p50,
+        p95,
+    )
+    histogram_minimum = (
+        sample_minimum
+        if sample_minimum < sample_maximum
+        else suggested_range.minimum
+    )
+    histogram_maximum = (
+        sample_maximum
+        if sample_minimum < sample_maximum
+        else suggested_range.maximum
+    )
+    counts, edges = numpy.histogram(
+        sample_values,
+        bins=RASTER_STATISTICS_BIN_COUNT,
+        range=(histogram_minimum, histogram_maximum),
+    )
+    source_pixel_count = source_width * source_height
+    sampled_pixel_count = sample_width * sample_height
+    selected_bounds_model = (
+        Wgs84Bounds(
+            west=selected_bounds[0],
+            south=selected_bounds[1],
+            east=selected_bounds[2],
+            north=selected_bounds[3],
+        )
+        if selected_bounds is not None
+        else None
+    )
+    return RasterStatistics(
+        scope=(
+            "selectedArea"
+            if selected_bounds is not None
+            else "wholeRaster"
+        ),
+        selectedBounds=selected_bounds_model,
+        sourceWidth=source_width,
+        sourceHeight=source_height,
+        sourcePixelCount=source_pixel_count,
+        sampleWidth=sample_width,
+        sampleHeight=sample_height,
+        sampledPixelCount=sampled_pixel_count,
+        validSampleCount=int(sample_values.size),
+        estimated=sampled_pixel_count < source_pixel_count,
+        sampleMinimum=sample_minimum,
+        sampleMaximum=sample_maximum,
+        percentiles=RasterPercentiles(p05=p05, p50=p50, p95=p95),
+        histogram=RasterHistogram(
+            counts=[int(count) for count in counts],
+            edges=[float(edge) for edge in edges],
+        ),
+        suggestedRange=suggested_range,
+    )
 
 
 def _read_raster_pixel(
@@ -259,9 +799,9 @@ def _read_current_raster_pixel(
             requested position.
     """
     layer_name = f"{GEOSERVER_WORKSPACE_NAME}:{request.item_id}"
-    source_path = raster_registry.require_current(layer_name)
+    authorized_raster = raster_registry.require_current(layer_name)
     return _read_raster_pixel(
-        source_path,
+        authorized_raster.source_path,
         request.longitude,
         request.latitude,
     )
@@ -297,6 +837,11 @@ async def sample_catalog_raster_pixel(
     # HTTP cancellation cannot stop a GDAL thread. Keep its slot occupied until
     # the actual read ends, and retrieve any exception from a detached task.
     def release_read_slot(completed_task: asyncio.Task[RasterPixel]) -> None:
+        """Release one slot after its worker thread actually completes.
+
+        Args:
+            completed_task: Finished pixel-read task.
+        """
         read_semaphore.release()
         if not completed_task.cancelled():
             completed_task.exception()
@@ -309,6 +854,219 @@ async def sample_catalog_raster_pixel(
             status_code=409,
             detail="The selected raster could not be sampled",
         ) from error
+
+
+class RasterStatisticsService:
+    """Cache and serialize bounded statistics reads for published rasters."""
+
+    def __init__(
+        self,
+        raster_registry: PublishedRasterRegistry,
+        read_concurrency: int = RASTER_STATISTICS_READ_CONCURRENCY,
+        cache_entries: int = RASTER_STATISTICS_CACHE_ENTRIES,
+    ) -> None:
+        """Create a bounded, coalescing raster statistics service.
+
+        Args:
+            raster_registry: Current-process publication authorizations.
+            read_concurrency: Maximum simultaneous Rasterio statistics reads.
+            cache_entries: Maximum completed statistics documents retained.
+        """
+        self._raster_registry = raster_registry
+        self._read_semaphore = asyncio.Semaphore(read_concurrency)
+        self._cache_entries = cache_entries
+        self._cache: OrderedDict[
+            RasterStatisticsCacheKey,
+            RasterStatistics,
+        ] = OrderedDict()
+        self._inflight: dict[
+            RasterStatisticsCacheKey,
+            _RasterStatisticsWork,
+        ] = {}
+        self._active_read_tasks: set[asyncio.Task[RasterStatistics]] = set()
+        self._state_lock = asyncio.Lock()
+
+    async def get(
+        self,
+        request: CatalogRasterStatisticsRequest,
+    ) -> RasterStatistics:
+        """Return current statistics, coalescing identical source reads.
+
+        Args:
+            request: Validated Item identity and optional selected WGS 84 area.
+
+        Returns:
+            Cached or newly computed bounded raster statistics.
+
+        Raises:
+            HTTPException: If the raster is not current or cannot be sampled.
+        """
+        layer_name = f"{GEOSERVER_WORKSPACE_NAME}:{request.item_id}"
+        authorized_raster = await asyncio.to_thread(
+            self._raster_registry.require_current,
+            layer_name,
+        )
+        selected_bounds = (
+            request.selected_bounds.canonical_tuple()
+            if request.selected_bounds is not None
+            else None
+        )
+        cache_key = (
+            layer_name,
+            authorized_raster.source_signature,
+            RASTER_STATISTICS_ALGORITHM,
+            selected_bounds,
+        )
+        async with self._state_lock:
+            cached_statistics = self._cache.get(cache_key)
+            if cached_statistics is not None:
+                self._cache.move_to_end(cache_key)
+                return cached_statistics
+
+            work = self._inflight.get(cache_key)
+            if work is None:
+                read_task = asyncio.create_task(
+                    self._compute(
+                        layer_name,
+                        authorized_raster,
+                        cache_key,
+                        selected_bounds,
+                    )
+                )
+                read_task.add_done_callback(self._retrieve_task_exception)
+                work = _RasterStatisticsWork(read_task)
+                self._inflight[cache_key] = work
+            work.waiter_count += 1
+
+        try:
+            return await asyncio.shield(work.task)
+        except HTTPException:
+            raise
+        except NoRasterBoundsOverlapError as error:
+            raise HTTPException(
+                status_code=409,
+                detail="The selected area does not overlap the raster",
+            ) from error
+        except NoValidRasterSamplesError as error:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "No finite, non-nodata pixels were found in the bounded "
+                    "raster sample"
+                ),
+            ) from error
+        except (OSError, ValueError, rasterio.errors.RasterioError) as error:
+            raise HTTPException(
+                status_code=409,
+                detail="The selected raster statistics could not be read",
+            ) from error
+        finally:
+            await self._release_waiter(cache_key, work)
+
+    async def _release_waiter(
+        self,
+        cache_key: RasterStatisticsCacheKey,
+        work: _RasterStatisticsWork,
+    ) -> None:
+        """Cancel abandoned work only while it remains queued for capacity.
+
+        Args:
+            cache_key: Identity of the coalesced statistics work.
+            work: Work whose HTTP waiter has completed or been canceled.
+        """
+        async with self._state_lock:
+            work.waiter_count -= 1
+            if (
+                work.waiter_count == 0
+                and self._inflight.get(cache_key) is work
+                and work.task not in self._active_read_tasks
+            ):
+                self._inflight.pop(cache_key)
+                work.task.cancel()
+
+    async def _compute(
+        self,
+        layer_name: str,
+        authorized_raster: AuthorizedRaster,
+        cache_key: RasterStatisticsCacheKey,
+        selected_bounds: CanonicalWgs84Bounds | None,
+    ) -> RasterStatistics:
+        """Compute one source signature while retaining its capacity slot.
+
+        Args:
+            layer_name: Workspace-qualified approved WMS layer.
+            authorized_raster: Source path and signature approved at request
+                start.
+            cache_key: Stable cache identity for the requested statistics.
+            selected_bounds: Optional canonical selected WGS 84 rectangle.
+
+        Returns:
+            Newly computed bounded raster statistics.
+
+        Raises:
+            HTTPException: If the source changes before or during the read.
+            NoRasterBoundsOverlapError: If selected bounds miss the raster.
+            NoValidRasterSamplesError: If no finite sample values exist.
+            OSError: If the mounted source cannot be read.
+            rasterio.errors.RasterioError: If GDAL cannot sample the source.
+            ValueError: If coordinate transformation or statistics fail.
+        """
+        read_task = cast(
+            asyncio.Task[RasterStatistics],
+            asyncio.current_task(),
+        )
+        try:
+            async with self._read_semaphore:
+                async with self._state_lock:
+                    self._active_read_tasks.add(read_task)
+                current_raster = await asyncio.to_thread(
+                    self._raster_registry.require_current,
+                    layer_name,
+                )
+                if current_raster != authorized_raster:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="The visualized GeoTIFF changed; select it again",
+                    )
+                statistics = await asyncio.to_thread(
+                    _read_raster_statistics,
+                    authorized_raster.source_path,
+                    selected_bounds,
+                )
+                current_raster = await asyncio.to_thread(
+                    self._raster_registry.require_current,
+                    layer_name,
+                )
+                if current_raster != authorized_raster:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="The visualized GeoTIFF changed; select it again",
+                    )
+
+                async with self._state_lock:
+                    self._cache[cache_key] = statistics
+                    self._cache.move_to_end(cache_key)
+                    while len(self._cache) > self._cache_entries:
+                        self._cache.popitem(last=False)
+                return statistics
+        finally:
+            async with self._state_lock:
+                self._active_read_tasks.discard(read_task)
+                work = self._inflight.get(cache_key)
+                if work is not None and work.task is read_task:
+                    self._inflight.pop(cache_key)
+
+    @staticmethod
+    def _retrieve_task_exception(
+        completed_task: asyncio.Task[RasterStatistics],
+    ) -> None:
+        """Retrieve failures from work that outlived a canceled HTTP request.
+
+        Args:
+            completed_task: Finished or canceled coalesced statistics task.
+        """
+        if not completed_task.cancelled():
+            completed_task.exception()
 
 
 def _mounted_geotiff_path(item: dict[str, Any], scan_mount_path: Path) -> Path:

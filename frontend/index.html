@@ -206,6 +206,171 @@
                     <span id="raster-legend-midpoint"></span>
                     <span id="raster-legend-maximum"></span>
                   </div>
+                  <section
+                    class="raster-sample-window"
+                    aria-labelledby="raster-sample-window-heading"
+                  >
+                    <strong id="raster-sample-window-heading">Histogram area</strong>
+                    <p id="raster-sample-window-description">
+                      Move over the map to position the window, then click or tap to display its histogram.
+                    </p>
+                    <div class="raster-sample-window-size">
+                      <label for="raster-sample-window-range">
+                        <span>Window size</span>
+                        <input
+                          id="raster-sample-window-range"
+                          type="range"
+                          min="1"
+                          max="300"
+                          step="1"
+                          value="200"
+                          aria-describedby="raster-sample-window-description raster-sample-window-status"
+                        />
+                      </label>
+                      <label for="raster-sample-window-number">
+                        <span>km</span>
+                        <input
+                          id="raster-sample-window-number"
+                          type="number"
+                          min="1"
+                          max="300"
+                          step="1"
+                          value="200"
+                          inputmode="numeric"
+                          aria-label="Window size in kilometers"
+                          aria-describedby="raster-sample-window-description raster-sample-window-status"
+                        />
+                      </label>
+                    </div>
+                    <div class="raster-sample-window-actions">
+                      <button
+                        class="secondary-button"
+                        id="sample-raster-map-center"
+                        type="button"
+                      >
+                        Sample map center
+                      </button>
+                      <button
+                        class="secondary-button"
+                        id="clear-raster-sample-window"
+                        type="button"
+                        disabled
+                      >
+                        Use whole raster
+                      </button>
+                    </div>
+                    <p
+                      class="raster-sample-window-status"
+                      id="raster-sample-window-status"
+                      role="status"
+                      aria-live="polite"
+                      aria-atomic="true"
+                    >
+                      Move over the map and click to display this window's histogram.
+                    </p>
+                  </section>
+                  <section
+                    class="raster-histogram"
+                    id="raster-histogram"
+                    aria-labelledby="raster-histogram-heading"
+                  >
+                    <div class="raster-histogram-heading">
+                      <strong id="raster-histogram-heading">Approximate distribution</strong>
+                      <button
+                        class="secondary-button"
+                        id="retry-raster-statistics"
+                        type="button"
+                        hidden
+                      >
+                        Retry
+                      </button>
+                    </div>
+                    <p
+                      class="raster-histogram-status"
+                      id="raster-histogram-status"
+                      role="status"
+                      aria-live="polite"
+                      aria-atomic="true"
+                    ></p>
+                    <svg
+                      class="raster-histogram-chart"
+                      id="raster-histogram-chart"
+                      viewBox="0 0 640 112"
+                      preserveAspectRatio="none"
+                      role="img"
+                      hidden
+                    ></svg>
+                    <div
+                      class="raster-histogram-axis"
+                      id="raster-histogram-axis"
+                      aria-hidden="true"
+                      hidden
+                    >
+                      <span id="raster-histogram-minimum"></span>
+                      <span id="raster-histogram-maximum"></span>
+                    </div>
+                    <div
+                      class="raster-percentile-controls"
+                      id="raster-percentile-controls"
+                      role="group"
+                      aria-labelledby="raster-percentile-heading"
+                      hidden
+                    >
+                      <strong id="raster-percentile-heading">Display percentiles</strong>
+                      <p>Choose three ordered positions in the sampled distribution.</p>
+                      <label for="raster-lower-percentile">
+                        <span>Lower</span>
+                        <input
+                          id="raster-lower-percentile"
+                          type="range"
+                          min="0"
+                          max="100"
+                          step="1"
+                          value="5"
+                          aria-describedby="raster-lower-percentile-value raster-percentile-error"
+                        />
+                        <output id="raster-lower-percentile-value" for="raster-lower-percentile"></output>
+                      </label>
+                      <label for="raster-middle-percentile">
+                        <span>Middle</span>
+                        <input
+                          id="raster-middle-percentile"
+                          type="range"
+                          min="0"
+                          max="100"
+                          step="1"
+                          value="50"
+                          aria-describedby="raster-middle-percentile-value raster-percentile-error"
+                        />
+                        <output id="raster-middle-percentile-value" for="raster-middle-percentile"></output>
+                      </label>
+                      <label for="raster-upper-percentile">
+                        <span>Upper</span>
+                        <input
+                          id="raster-upper-percentile"
+                          type="range"
+                          min="0"
+                          max="100"
+                          step="1"
+                          value="95"
+                          aria-describedby="raster-upper-percentile-value raster-percentile-error"
+                        />
+                        <output id="raster-upper-percentile-value" for="raster-upper-percentile"></output>
+                      </label>
+                      <p
+                        class="raster-style-error"
+                        id="raster-percentile-error"
+                        role="status"
+                      ></p>
+                      <button
+                        class="secondary-button"
+                        id="apply-raster-percentiles"
+                        type="button"
+                      >
+                        Rescale colors to this range
+                      </button>
+                    </div>
+                  </section>
                   <p
                     class="raster-style-error"
                     id="raster-style-error"
