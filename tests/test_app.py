@@ -21,7 +21,7 @@ from eolab_app.settings import load_settings
 
 DEFAULT_ENVIRONMENT = {
     "APP_TITLE": "EOLab",
-    "APP_SUBTITLE": "Explore, process, and visualize geospatial data",
+    "APP_SUBTITLE": "Explore, visualize, and analyze Earth observation data",
     "CATALOG_URL": "/stac",
     "CATALOG_INTERNAL_URL": "http://stac-api:8080",
     "WMS_URL": "/geoserver/eolab/wms",
@@ -167,7 +167,7 @@ def test_configuration_endpoint_reads_environment(
     assert response.status_code == 200
     assert response.json() == {
         "appTitle": "WWF EOLab",
-        "appSubtitle": "Explore, process, and visualize geospatial data",
+        "appSubtitle": "Explore, visualize, and analyze Earth observation data",
         "appVersion": "0.1.0-2-gabcdef0",
         "catalogUrl": "https://catalog.example.test",
         "wmsUrl": "/geoserver/eolab/wms",
