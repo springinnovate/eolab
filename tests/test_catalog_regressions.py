@@ -29,11 +29,12 @@ from tests.catalog_support import (
     RecordingCatalogWriter,
 )
 
-from eolab_app.catalog.metadata import (
-    DATASET_ITEM_BUILDERS,
-    build_dataset_metadata,
-    create_metadata_executor,
+from eolab_app.catalog.handlers import (
+    DatasetHandler,
+    DatasetHandlerRegistry,
+    create_default_dataset_handler_registry,
 )
+from eolab_app.catalog.metadata import build_dataset_metadata, create_metadata_executor
 from eolab_app.catalog.models import CatalogItemSource, DatasetCandidate
 from eolab_app.catalog.pgstac import (
     PgStacCatalogDatabase,
@@ -65,6 +66,53 @@ from eolab_app.raster.eligibility import (
 )
 
 
+DATASET_ITEM_BUILDERS = {
+    ".tif": build_geotiff_stac_item,
+    ".tiff": build_geotiff_stac_item,
+    ".shp": build_shapefile_stac_item,
+}
+
+
+def build_test_registry_items(
+    source_root: Path,
+    candidate: DatasetCandidate,
+) -> tuple[dict[str, Any], ...]:
+    """Adapt historical single-Item test doubles to the handler contract.
+
+    Args:
+        source_root: Root directory mounted for scanning.
+        candidate: Dataset and grouped components selected by discovery.
+
+    Returns:
+        One Item built by the active per-extension regression double.
+
+    Raises:
+        Exception: Propagates the configured builder's failure.
+    """
+    builder_arguments: list[Any] = [source_root, candidate.path]
+    if candidate.component_paths:
+        builder_arguments.append(candidate.component_paths)
+    return (
+        DATASET_ITEM_BUILDERS[candidate.path.suffix.lower()](*builder_arguments),
+    )
+
+
+def create_test_dataset_handler_registry() -> DatasetHandlerRegistry:
+    """Create production discovery handlers with test-controlled builders.
+
+    Returns:
+        Explicit registry whose builders remain visible to thread workers.
+    """
+    return DatasetHandlerRegistry(handlers=tuple(
+        DatasetHandler(
+            name=handler.name,
+            discover=handler.discover,
+            build_items=build_test_registry_items,
+        )
+        for handler in create_default_dataset_handler_registry().handlers
+    ))
+
+
 @pytest.fixture(autouse=True)
 def use_thread_executor_for_scan_unit_tests(
     monkeypatch: pytest.MonkeyPatch,
@@ -73,6 +121,10 @@ def use_thread_executor_for_scan_unit_tests(
     monkeypatch.setattr(
         "eolab_app.catalog.metadata.create_metadata_executor",
         ThreadPoolExecutor,
+    )
+    monkeypatch.setattr(
+        "eolab_app.catalog.scanner.create_default_dataset_handler_registry",
+        create_test_dataset_handler_registry,
     )
 
 
@@ -1035,13 +1087,17 @@ def test_spawned_metadata_process_builds_dataset_items(
                 dataset_candidate,
             ).result(timeout=15)
             for dataset_candidate in (
-                DatasetCandidate(geotiff_path),
-                DatasetCandidate(shapefile_path, component_paths),
+                DatasetCandidate(geotiff_path, "geotiff"),
+                DatasetCandidate(
+                    shapefile_path,
+                    "shapefile",
+                    component_paths,
+                ),
             )
         ]
 
     assert all(result.error is None for result in results)
-    assert [result.item["properties"]["title"] for result in results] == [
+    assert [result.items[0]["properties"]["title"] for result in results] == [
         "spawned.tif",
         "spawned.shp",
     ]
@@ -1967,7 +2023,8 @@ def test_dataset_metadata_timing_separates_cpu_from_wait(
 
     result = build_dataset_metadata(
         tmp_path,
-        DatasetCandidate(dataset_path),
+        DatasetCandidate(dataset_path, "geotiff"),
+        create_test_dataset_handler_registry(),
     )
 
     assert result.elapsed_seconds == 2.5

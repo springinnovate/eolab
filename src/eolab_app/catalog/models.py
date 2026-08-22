@@ -36,11 +36,22 @@ class DatasetCandidate:
 
     Attributes:
         path: Primary dataset path.
+        handler_name: Stable key of the handler that recognized the dataset.
         component_paths: Companion files belonging to a multipart dataset.
     """
 
     path: Path
+    handler_name: str
     component_paths: tuple[Path, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Validate explicit handler dispatch metadata.
+
+        Raises:
+            ValueError: If the handler name is blank.
+        """
+        if not self.handler_name:
+            raise ValueError("Dataset candidate handler name cannot be blank")
 
 
 @dataclass(frozen=True)
@@ -49,17 +60,26 @@ class DatasetMetadataResult:
 
     Attributes:
         path: Primary dataset path.
-        item: Built STAC Item, or ``None`` when metadata extraction failed.
+        items: Zero or more built STAC Items. Failures always contain none.
         error: Failure text, or ``None`` when metadata extraction succeeded.
         elapsed_seconds: Worker wall time.
         processing_seconds: Worker CPU time.
     """
 
     path: Path
-    item: dict[str, Any] | None
+    items: tuple[dict[str, Any], ...]
     error: str | None
     elapsed_seconds: float
     processing_seconds: float
+
+    def __post_init__(self) -> None:
+        """Keep successful Items and captured failures mutually exclusive.
+
+        Raises:
+            ValueError: If a failed result also contains Items.
+        """
+        if self.error is not None and self.items:
+            raise ValueError("Failed dataset metadata result cannot contain Items")
 
 
 @dataclass(frozen=True)
@@ -170,6 +190,7 @@ class ScanStatus:
         id: Unique identifier for this run.
         discovered: Supported datasets found during traversal.
         processed: Dataset metadata results consumed.
+        items_produced: STAC Items emitted by successful metadata results.
         indexed: Items successfully written in this run.
         already_in_catalog: Written Items present before this run.
         failed: Discovery and per-dataset failures encountered.
@@ -189,6 +210,7 @@ class ScanStatus:
     id: str = field(default_factory=lambda: str(uuid4()))
     discovered: int = 0
     processed: int = 0
+    items_produced: int = 0
     indexed: int = 0
     already_in_catalog: int = 0
     failed: int = 0
@@ -203,16 +225,23 @@ class ScanStatus:
     timing: ScanTiming = field(default_factory=ScanTiming)
 
     def as_public_dict(self) -> dict[str, Any]:
-        """Return an isolated snapshot in the existing scan JSON shape.
+        """Return an isolated snapshot with explicit progress and aliases.
 
         Returns:
-            Deeply independent browser-safe scan status.
+            Deeply independent browser-safe scan status. The source-dataset
+            and catalog-Item fields are unambiguous; legacy count names remain
+            compatibility aliases.
         """
         return {
             "id": self.id,
             "state": self.state,
             "discovered": self.discovered,
             "processed": self.processed,
+            "sourceDatasetsDiscovered": self.discovered,
+            "sourceDatasetsProcessed": self.processed,
+            "catalogItemsProduced": self.items_produced,
+            "catalogItemsWritten": self.indexed,
+            "catalogItemsAlreadyPresent": self.already_in_catalog,
             "indexed": self.indexed,
             "alreadyInCatalog": self.already_in_catalog,
             "failed": self.failed,

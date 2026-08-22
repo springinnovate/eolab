@@ -6,21 +6,12 @@ from concurrent.futures import Executor, ProcessPoolExecutor
 from multiprocessing import get_context
 from pathlib import Path
 from time import perf_counter, process_time
-from typing import Any
-
-from eolab_app.catalog.geotiff import build_stac_item as build_geotiff_stac_item
+from eolab_app.catalog.handlers import (
+    DatasetHandlerRegistry,
+    create_default_dataset_handler_registry,
+)
 from eolab_app.catalog.models import DatasetCandidate, DatasetMetadataResult
-from eolab_app.catalog.shapefile import build_stac_item as build_shapefile_stac_item
-
-
-DatasetItemBuilder = Callable[..., dict[str, Any]]
 MetadataExecutorFactory = Callable[[int], Executor]
-
-DATASET_ITEM_BUILDERS: dict[str, DatasetItemBuilder] = {
-    ".tif": build_geotiff_stac_item,
-    ".tiff": build_geotiff_stac_item,
-    ".shp": build_shapefile_stac_item,
-}
 
 
 class MetadataPipeline:
@@ -31,6 +22,7 @@ class MetadataPipeline:
         source_root: Path,
         worker_count: int,
         result_queue_size: int,
+        dataset_handlers: DatasetHandlerRegistry,
         executor_factory: MetadataExecutorFactory | None = None,
     ) -> None:
         """Configure metadata extraction.
@@ -39,6 +31,7 @@ class MetadataPipeline:
             source_root: Root of the mounted source tree.
             worker_count: Number of concurrent metadata workers.
             result_queue_size: Maximum completed results awaiting consumption.
+            dataset_handlers: Explicit registry used for candidate dispatch.
             executor_factory: Creates the worker executor. The default uses
                 isolated spawned processes; tests may inject threads.
 
@@ -46,6 +39,7 @@ class MetadataPipeline:
         self.source_root = source_root
         self.worker_count = worker_count
         self.result_queue_size = result_queue_size
+        self.dataset_handlers = dataset_handlers
         self.executor_factory = executor_factory or create_metadata_executor
 
     async def results(
@@ -85,6 +79,7 @@ class MetadataPipeline:
                     path_queue,
                     result_queue,
                     metadata_executor,
+                    self.dataset_handlers,
                 )
             )
             for _ in range(self.worker_count)
@@ -136,6 +131,7 @@ async def read_dataset_metadata(
     path_queue: asyncio.Queue[DatasetCandidate | None],
     result_queue: asyncio.Queue[DatasetMetadataResult | None],
     metadata_executor: Executor,
+    dataset_handlers: DatasetHandlerRegistry,
 ) -> None:
     """Read dataset metadata until the producer signals completion.
 
@@ -144,6 +140,7 @@ async def read_dataset_metadata(
         path_queue: Bounded worker input queue.
         result_queue: Bounded metadata result queue.
         metadata_executor: Executor running metadata extraction.
+        dataset_handlers: Explicit registry used for candidate dispatch.
     """
     event_loop = asyncio.get_running_loop()
     while (dataset_candidate := await path_queue.get()) is not None:
@@ -152,6 +149,7 @@ async def read_dataset_metadata(
             build_dataset_metadata,
             source_root,
             dataset_candidate,
+            dataset_handlers,
         )
         await result_queue.put(metadata_result)
     await result_queue.put(None)
@@ -160,36 +158,41 @@ async def read_dataset_metadata(
 def build_dataset_metadata(
     source_root: Path,
     dataset_candidate: DatasetCandidate,
+    dataset_handlers: DatasetHandlerRegistry | None = None,
 ) -> DatasetMetadataResult:
-    """Build one Item while separating worker CPU from elapsed time.
+    """Build zero or more Items while measuring worker CPU and elapsed time.
 
     Args:
         source_root: Root of the mounted source tree.
         dataset_candidate: Dataset and any companion files to inspect.
+        dataset_handlers: Explicit registry used for dispatch. The default is
+            created for direct production calls and process-boundary tests.
 
     Returns:
-        Item or per-dataset failure with worker timing.
+        Items or per-dataset failure with worker timing.
     """
     elapsed_started = perf_counter()
     processing_started = process_time()
     dataset_path = dataset_candidate.path
-    builder_arguments: list[Any] = [source_root, dataset_path]
-    if dataset_candidate.component_paths:
-        builder_arguments.append(dataset_candidate.component_paths)
+    active_handlers = (
+        dataset_handlers or create_default_dataset_handler_registry()
+    )
     try:
-        item = DATASET_ITEM_BUILDERS[dataset_path.suffix.lower()](*builder_arguments)
-        if item["geometry"] is None:
-            raise ValueError(
-                "Dataset has no spatial footprint; pgSTAC requires Item geometry"
-            )
+        items = active_handlers.build_items(source_root, dataset_candidate)
+        for item in items:
+            if item["geometry"] is None:
+                raise ValueError(
+                    "Dataset has no spatial footprint; pgSTAC requires Item "
+                    "geometry"
+                )
         error_message = None
     except Exception as error:
-        item = None
+        items = ()
         error_message = str(error)
     elapsed_seconds = perf_counter() - elapsed_started
     return DatasetMetadataResult(
         path=dataset_path,
-        item=item,
+        items=items,
         error=error_message,
         elapsed_seconds=elapsed_seconds,
         processing_seconds=min(

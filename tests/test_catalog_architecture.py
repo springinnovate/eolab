@@ -82,3 +82,14 @@ def test_catalog_module_import_graph_is_acyclic() -> None:
 
     for module_name in graph:
         visit(module_name)
+
+
+def test_metadata_dispatch_depends_only_on_the_explicit_handler_registry() -> None:
+    """Keep format selection out of the metadata worker pipeline."""
+    metadata_source = (CATALOG_SOURCE / "metadata.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "DATASET_ITEM_BUILDERS" not in metadata_source
+    assert ".suffix" not in metadata_source
+    assert "DatasetHandlerRegistry" in metadata_source

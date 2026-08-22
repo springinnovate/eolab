@@ -37,7 +37,7 @@ class DatasetMetadataReader(Protocol):
             dataset_candidates: Datasets awaiting metadata extraction.
 
         Yields:
-            Successful Items and captured per-dataset failures.
+            Per-source zero-or-more Item successes and captured failures.
         """
 
 

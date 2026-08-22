@@ -4,13 +4,17 @@ import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
-from typing import Any, cast
+from typing import Any
 
 from eolab_app.catalog.collections import (
     SCAN_COLLECTION_IDENTIFIERS,
     SCAN_COLLECTIONS,
 )
 from eolab_app.catalog.discovery import FilesystemDatasetDiscovery
+from eolab_app.catalog.handlers import (
+    DatasetHandlerRegistry,
+    create_default_dataset_handler_registry,
+)
 from eolab_app.catalog.metadata import MetadataPipeline
 from eolab_app.catalog.models import (
     DatasetCandidate,
@@ -46,6 +50,7 @@ class ScanManager:
         catalog_writer_count: int,
         item_batch_size: int,
         *,
+        dataset_handlers: DatasetHandlerRegistry | None = None,
         discovery: DatasetDiscovery | None = None,
         metadata_pipeline: DatasetMetadataReader | None = None,
         reconciler: CatalogReconciler | None = None,
@@ -61,6 +66,8 @@ class ScanManager:
             metadata_worker_count: Concurrent metadata worker processes.
             catalog_writer_count: Concurrent catalog writes.
             item_batch_size: Maximum Items per bulk write or delete batch.
+            dataset_handlers: Optional explicit handler registry shared by
+                default discovery and metadata extraction.
             discovery: Optional filesystem discovery collaborator.
             metadata_pipeline: Optional metadata extraction collaborator.
             reconciler: Optional destructive reconciliation collaborator.
@@ -75,14 +82,19 @@ class ScanManager:
         self.catalog_writer_count = catalog_writer_count
         self.item_batch_size = item_batch_size
         self.error_detail_limit = error_detail_limit
+        active_dataset_handlers = (
+            dataset_handlers or create_default_dataset_handler_registry()
+        )
         self.discovery = discovery or FilesystemDatasetDiscovery(
             source_root,
             source_paths,
+            active_dataset_handlers,
         )
         self.metadata_pipeline = metadata_pipeline or MetadataPipeline(
             source_root,
             metadata_worker_count,
             item_batch_size * 2,
+            active_dataset_handlers,
         )
         self.reconciler = reconciler or MissingItemReconciler(
             source_root,
@@ -279,18 +291,22 @@ class ScanManager:
                 if metadata_result.error is not None:
                     continue
 
-                item = cast(dict[str, Any], metadata_result.item)
-                pending_items = pending_items_by_collection[item["collection"]]
-                pending_items.append(item)
-                if len(pending_items) == self.item_batch_size:
-                    self._schedule_item_write(
-                        catalog_write_tasks,
-                        catalog_session,
-                        pending_items,
-                        existing_item_keys,
-                    )
-                    pending_items_by_collection[item["collection"]] = []
-                    await self._enforce_catalog_writer_limit(catalog_write_tasks)
+                for item in metadata_result.items:
+                    pending_items = pending_items_by_collection[
+                        item["collection"]
+                    ]
+                    pending_items.append(item)
+                    if len(pending_items) == self.item_batch_size:
+                        self._schedule_item_write(
+                            catalog_write_tasks,
+                            catalog_session,
+                            pending_items,
+                            existing_item_keys,
+                        )
+                        pending_items_by_collection[item["collection"]] = []
+                        await self._enforce_catalog_writer_limit(
+                            catalog_write_tasks
+                        )
 
             for pending_items in pending_items_by_collection.values():
                 if pending_items:
@@ -338,6 +354,7 @@ class ScanManager:
         ).as_posix()
         self._status.current_file = relative_path
         self._status.processed += 1
+        self._status.items_produced += len(metadata_result.items)
         if metadata_result.error is None:
             return
         self._status.failed += 1
