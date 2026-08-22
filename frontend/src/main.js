@@ -36,6 +36,7 @@ import {
 } from "./map.js";
 import { assessCatalogRaster } from "./raster/api.js";
 import { initializeRasterViewer } from "./raster/raster-viewer.js";
+import { initializeTemporaryAoi } from "./temporary-aoi/temporary-aoi.js";
 import {
     applyRenderingDiagnosticsViewModel,
     buildRenderingDiagnosticsViewModel,
@@ -1243,6 +1244,7 @@ async function startApplication() {
     initializeRenderingDiagnostics();
     const leafletMap = initializeMap(appGlobalConfiguration);
     initializeControlPanel(leafletMap);
+    initializeTemporaryAoi(leafletMap, L);
     const refreshCatalog = await initializeCatalog(
         appGlobalConfiguration,
         leafletMap
