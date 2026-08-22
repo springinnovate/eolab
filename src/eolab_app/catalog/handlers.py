@@ -5,6 +5,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from eolab_app.catalog.geopackage import (
+    build_stac_items as build_geopackage_stac_items,
+    discover_geopackage_files,
+)
 from eolab_app.catalog.geotiff import build_stac_item as build_geotiff_stac_item
 from eolab_app.catalog.models import DatasetCandidate
 from eolab_app.catalog.shapefile import (
@@ -212,6 +216,50 @@ def build_geotiff_items(
     return (build_geotiff_stac_item(source_root, candidate.path),)
 
 
+def discover_mounted_geopackages(
+    directory_path: Path,
+    directory_names: tuple[str, ...],
+    file_names: tuple[str, ...],
+) -> HandlerDiscovery:
+    """Recognize single-file GeoPackage containers in one directory.
+
+    Args:
+        directory_path: Directory containing the listed entries.
+        directory_names: Sorted child directory names, unused by this handler.
+        file_names: Sorted child file names.
+
+    Returns:
+        One match per case-insensitive `.gpkg` file without directory pruning.
+    """
+    del directory_names
+    return HandlerDiscovery(matches=tuple(
+        DatasetMatch(geopackage_path)
+        for geopackage_path in discover_geopackage_files(
+            directory_path,
+            file_names,
+        )
+    ))
+
+
+def build_geopackage_items(
+    source_root: Path,
+    candidate: DatasetCandidate,
+) -> tuple[DatasetItem, ...]:
+    """Build one Item per spatial vector layer in a GeoPackage.
+
+    Args:
+        source_root: Root directory mounted for scanning.
+        candidate: GeoPackage container selected during discovery.
+
+    Returns:
+        Zero or more Items representing catalogable spatial vector layers.
+
+    Raises:
+        Exception: Propagates container-level GeoPackage metadata failures.
+    """
+    return build_geopackage_stac_items(source_root, candidate.path)
+
+
 def discover_mounted_shapefiles(
     directory_path: Path,
     directory_names: tuple[str, ...],
@@ -261,16 +309,21 @@ def build_shapefile_items(
 
 
 def create_default_dataset_handler_registry() -> DatasetHandlerRegistry:
-    """Create the explicit registry for currently supported mounted formats.
+    """Create the explicit registry for supported mounted formats.
 
     Returns:
-        Registry containing only GeoTIFF and mounted Shapefile handlers.
+        Registry containing GeoTIFF, GeoPackage, and mounted Shapefile handlers.
     """
     return DatasetHandlerRegistry(handlers=(
         DatasetHandler(
             name="geotiff",
             discover=discover_geotiff_datasets,
             build_items=build_geotiff_items,
+        ),
+        DatasetHandler(
+            name="geopackage",
+            discover=discover_mounted_geopackages,
+            build_items=build_geopackage_items,
         ),
         DatasetHandler(
             name="shapefile",

@@ -2,7 +2,7 @@
 
 EOLab's mounted-source scanner treats a source dataset and a STAC Item as different units. One discovered source is processed exactly once, but its handler may emit zero, one, or several Items. The coordinator batches every emitted Item by Collection and writes it through the existing bounded bulk-upsert path.
 
-The currently registered formats are GeoTIFF and mounted Shapefile. GeoPackage, zipped Shapefile, GeoJSON, and File Geodatabase are intentionally not registered or implemented by this contract.
+The currently registered formats are GeoTIFF, GeoPackage, and mounted Shapefile. Zipped Shapefile, GeoJSON, and File Geodatabase are intentionally not registered or implemented by this contract.
 
 ## Registry composition
 
@@ -37,6 +37,8 @@ File Geodatabase is the expected directory-container example, but this refactor 
 
 If a builder raises, the worker captures one source-dataset error and returns no Items. If any emitted Item has no geometry, the whole source result fails because pgSTAC requires geometry. A failed source does not stop unrelated candidates. A catalog inventory or bulk-write failure remains systemic and stops the scan while cancelling sibling work as before.
 
+The GeoPackage handler performs narrower isolation inside its multi-layer source: expected open or spatial-metadata failures for one named layer are logged and skipped, so valid sibling layers can still produce Items. If no spatial vector layer remains catalogable, the handler raises and the worker reports the normal source-dataset error. Nonspatial attribute tables are a successful zero-Item condition, not a layer failure. This behavior stays inside the focused handler because the shared result contract intentionally has no partially successful error shape.
+
 Each emitted Item must use a Collection from `SCAN_COLLECTION_IDENTIFIERS`. A future vector handler should normally use `eolab-mounted-vectors`; adding a new Collection requires an explicit catalog ownership and reconciliation decision rather than an implicit handler side effect. Item IDs must be stable functions of the mount-relative source identity and, for multi-Item datasets, the layer identity. Existing GeoTIFF and Shapefile ID functions must not change.
 
 ## Progress and batching
@@ -62,7 +64,7 @@ Vector handlers should use `build_vector_table_properties()` from `src/eolab_app
 
 Handlers should include the published STAC Table Extension URL and Projection Extension metadata that the source can actually provide. They must not emit empty format-specific properties for unavailable values. The Catalog inspector reads these Table and Projection Extension fields data-first: feature count, declared geometry type, and attribute rows appear only when present. This preserves current Shapefile presentation while allowing another vector handler to reuse the same inspector without format checks.
 
-Format-specific Assets, media types, timestamps, layer selection, and ID rules remain in the focused handler. Shared vector conventions are not permission to flatten distinct container or multi-layer semantics into a broad utility.
+Format-specific Assets, media types, timestamps, layer selection, and ID rules remain in the focused handler. The GeoPackage handler records the exact layer name as `eolab:geopackage_layer` on both the Item and its container Asset; its Item title combines the mount-relative container path and layer name so existing text search and inspector presentation identify both. Shared vector conventions are not permission to flatten distinct container or multi-layer semantics into a broad utility.
 
 ## Required tests for a new handler
 
