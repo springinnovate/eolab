@@ -485,7 +485,9 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
         searchText: "",
         selectedButton: null,
         selectedItem: null,
-        surpriseSequence: 0
+        // Generation token: filter/search changes invalidate older async
+        // Surprise responses so they cannot select an Item from stale criteria.
+        surpriseRequestGeneration: 0
     };
     /** Apply the scanner-owned visualization decision to the map action. */
     function updateCatalogMapAction(item) {
@@ -690,7 +692,7 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
     /** Start a new search and replace every result from the previous stream. */
     async function loadCatalog(reloadCollections = false) {
         const searchSequence = ++catalogState.searchSequence;
-        catalogState.surpriseSequence += 1;
+        catalogState.surpriseRequestGeneration += 1;
         catalogState.searchText = catalogSearchInput.value;
         catalogSearchInput.removeAttribute("aria-invalid");
         catalogSearchError.textContent = "";
@@ -812,13 +814,14 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
         window
     );
     catalogSearchInput.addEventListener("input", () => {
-        catalogState.surpriseSequence += 1;
+        // Invalidate immediately rather than waiting for the debounced search.
+        catalogState.surpriseRequestGeneration += 1;
         surpriseCatalogButton.disabled = true;
         catalogSurpriseStatus.textContent = "";
         scheduleCatalogSearch();
     });
     surpriseCatalogButton.addEventListener("click", async () => {
-        const surpriseSequence = ++catalogState.surpriseSequence;
+        const requestGeneration = ++catalogState.surpriseRequestGeneration;
         surpriseCatalogButton.disabled = true;
         surpriseCatalogButton.setAttribute("aria-busy", "true");
         catalogSurpriseStatus.textContent = "Finding a random match…";
@@ -830,7 +833,7 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
                 catalogState.selectedItem
             );
             if (
-                surpriseSequence !== catalogState.surpriseSequence ||
+                requestGeneration !== catalogState.surpriseRequestGeneration ||
                 item === null
             ) {
                 return;
@@ -839,7 +842,7 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
             const itemTitle = item.properties?.title ?? item.id;
             catalogSurpriseStatus.textContent = `Selected ${itemTitle}.`;
         } catch (catalogError) {
-            if (surpriseSequence !== catalogState.surpriseSequence) {
+            if (requestGeneration !== catalogState.surpriseRequestGeneration) {
                 return;
             }
             if (catalogError instanceof CatalogSearchSyntaxError) {
@@ -851,7 +854,7 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
             }
             catalogSurpriseStatus.textContent = catalogError.message;
         } finally {
-            if (surpriseSequence === catalogState.surpriseSequence) {
+            if (requestGeneration === catalogState.surpriseRequestGeneration) {
                 surpriseCatalogButton.disabled = false;
                 surpriseCatalogButton.setAttribute("aria-busy", "false");
             }
