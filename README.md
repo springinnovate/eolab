@@ -86,6 +86,18 @@ redeploy to tune the service; Java detects the Docker CPU limit without an
 count must be a positive integer, and the heap must be at least `256m` with an
 `m` or `g` suffix.
 
+Open **Rendering diagnostics** in the application header to inspect the JVM
+heap used and maximum, GeoServer process CPU, garbage collection, live threads,
+uptime, active and completed WMS GetMap requests, latest GetMap duration, and
+recent failures. Values refresh quickly only while the disclosure is open and
+stop while the browser tab is hidden. The raw JMX Exporter and GeoServer
+administrative endpoints remain internal; the browser receives only a fixed
+numeric summary. Heap maximum is the configured Java `-Xmx`, not host RAM, and
+GetMap duration is measured end to end at EOLab's WMS proxy, including any
+control-flow queue time. The exporter endpoint is not published outside the
+Compose network, and the diagnostics panel never exposes metric labels,
+internal URLs, request parameters, or upstream error text.
+
 The scanner assesses mounted GeoTIFFs before offering **View on map**. The initial policy accepts supported one-band rasters that are small enough for direct rendering, or larger rasters with bounded base-resolution blocks and a complete internal overview pyramid. Other rasters remain fully searchable and inspectable with an explanation of why visualization is unavailable. For existing Items created before this policy, **Assess for visualization** inspects and updates only the selected raster.
 
 While a raster is displayed, **Raster appearance** shows an approximate
@@ -128,7 +140,9 @@ GeoTIFFs without a coordinate reference system are reported as individual datase
 
 ## Search the catalog
 
-The Catalog search finds case-insensitive matches in Item filenames, relative paths, descriptions, and standard STAC datetime values. Enter any part of the text; for example, `2002` matches both `grassland_2002.tif` and a description containing `2002`, while `2025-01` matches a datetime containing that year and month. Separate terms are combined automatically, so `ESA 2020` requires both terms but permits them to match different searchable fields. Add `format:cog` to return only Cloud Optimized GeoTIFFs. Add `viewable:true` to return only rasters whose current recorded assessment makes **View on map** available; unassessed and unavailable rasters are excluded without being assessed during the search. For example, `barley format:cog viewable:true` combines all three constraints. Search terms and filters do not require an `&`. Dates use the same literal substring search as other text; date-range searches are a separate feature. Clear the search field to show the complete catalog.
+The Catalog search finds case-insensitive matches in Item filenames, relative paths, descriptions, and standard STAC datetime values. Enter any part of the text; for example, `2002` matches both `grassland_2002.tif` and a description containing `2002`, while `2025-01` remains a literal datetime-text match. Separate terms are combined automatically, so `ESA 2020` requires both terms but permits them to match different searchable fields. Add `format:cog` to return only Cloud Optimized GeoTIFFs. Add `viewable:true` to return only rasters whose current recorded assessment makes **View on map** available; unassessed and unavailable rasters are excluded without being assessed during the search. Search terms and filters do not require an `&`.
+
+Use `date:YYYY-MM-DD` for one UTC calendar day or `date:YYYY-MM-DD..YYYY-MM-DD` for an inclusive UTC date range. The range uses standard STAC Item Search temporal-intersection semantics, so it includes instant Items within the period and interval Items that are contained by, partially overlap, or span the requested range. An Item touching either boundary is included. For example, `ESA format:cog viewable:true date:2020-01-01..2020-12-31` combines text and all three field filters. Open-ended ranges and timestamps are not accepted; invalid dates and reversed ranges are reported beside the search field. Clear the field to show the complete catalog.
 
 ## How to reset the database
 

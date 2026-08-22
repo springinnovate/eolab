@@ -26,6 +26,8 @@ DEFAULT_ENVIRONMENT = {
     "CATALOG_INTERNAL_URL": "http://stac-api:8080",
     "WMS_URL": "/geoserver/eolab/wms",
     "GEOSERVER_INTERNAL_URL": "http://geoserver:8080/geoserver",
+    "GEOSERVER_METRICS_INTERNAL_URL": "http://geoserver:9404/metrics",
+    "GEOSERVER_WMS_RENDER_COUNT": "2",
     "GEOSERVER_ADMIN_USER": "eolab",
     "GEOSERVER_ADMIN_PASSWORD": "valid-admin-password",
     "SCAN_MOUNT_PATH": str(Path.cwd()),
@@ -45,6 +47,20 @@ RASTER_STYLE_ENVIRONMENT_ERROR = (
     "env must define ordered finite min, med, and max values plus cmin, "
     "cmed, and cmax six-digit hex colors"
 )
+VALID_GEOSERVER_METRICS = """
+eolab_jvm_heap_used_bytes 268435456
+eolab_jvm_heap_committed_bytes 536870912
+eolab_jvm_heap_max_bytes 1073741824
+eolab_jvm_process_cpu_load_ratio 0.125
+jvm_gc_collection_seconds_count{gc="G1 Concurrent GC"} 10
+jvm_gc_collection_seconds_sum{gc="G1 Concurrent GC"} 0.056
+jvm_gc_collection_seconds_count{gc="G1 Old Generation"} 0
+jvm_gc_collection_seconds_sum{gc="G1 Old Generation"} 0.0
+jvm_gc_collection_seconds_count{gc="G1 Young Generation"} 32
+jvm_gc_collection_seconds_sum{gc="G1 Young Generation"} 0.305
+eolab_jvm_live_threads 42
+eolab_jvm_uptime_seconds 3600.5
+""".strip()
 
 
 def _mounted_geotiff_item(
@@ -167,6 +183,213 @@ def test_configuration_endpoint_reads_environment(
         },
     }
     assert "valid-admin-password" not in repr(load_settings(version_file_path))
+    assert "http://geoserver:8080" not in response.text
+    assert "http://geoserver:9404" not in response.text
+
+
+def test_rendering_diagnostics_exposes_only_the_safe_summary(
+    configured_environment: None,
+    version_file_path: Path,
+) -> None:
+    """Convert internal probes into explicit browser-safe values and units."""
+    requests: list[httpx2.Request] = []
+
+    def diagnostics_response(request: httpx2.Request) -> httpx2.Response:
+        requests.append(request)
+        if request.url.port == 9404 and request.url.path == "/metrics":
+            return httpx2.Response(
+                200,
+                text=VALID_GEOSERVER_METRICS,
+                headers={"content-type": "text/plain; version=0.0.4"},
+            )
+        if request.url.path == "/geoserver/eolab/wms":
+            assert request.url.params["request"] == "GetCapabilities"
+            return httpx2.Response(
+                200,
+                text='<WMS_Capabilities version="1.3.0"/>',
+                headers={"content-type": "application/xml"},
+            )
+        raise AssertionError(f"Unexpected diagnostics request: {request.url}")
+
+    with TestClient(
+        create_app(
+            version_file_path,
+            geoserver_diagnostics_transport=httpx2.MockTransport(
+                diagnostics_response
+            ),
+        )
+    ) as client:
+        first_response = client.get("/api/rendering/diagnostics")
+        second_response = client.get("/api/rendering/diagnostics")
+
+    assert first_response.status_code == 200
+    assert first_response.headers["cache-control"] == "no-store"
+    response_document = first_response.json()
+    assert response_document["state"] == "ready"
+    assert response_document["observedAt"].endswith("Z")
+    assert response_document["metrics"] == {
+        "heap": {
+            "usedBytes": 268_435_456,
+            "committedBytes": 536_870_912,
+            "maxBytes": 1_073_741_824,
+            "usedPercent": 25.0,
+        },
+        "cpu": {"processLoadPercent": 12.5},
+        "garbageCollection": {"count": 42, "seconds": 0.361},
+        "threads": {"live": 42},
+        "uptimeSeconds": 3600.5,
+        "requests": {
+            "activeGetMap": 0,
+            "concurrencyLimit": 2,
+            "completedGetMap": 0,
+            "latestGetMapSeconds": None,
+            "recentGetMapFailures": 0,
+            "recentWindowSize": 0,
+        },
+    }
+    assert second_response.json() == response_document
+    assert len(requests) == 2
+
+
+@pytest.mark.parametrize(
+    ("metrics_document", "expected_state"),
+    (
+        (
+            VALID_GEOSERVER_METRICS.replace(
+                "eolab_jvm_process_cpu_load_ratio 0.125",
+                "eolab_jvm_process_cpu_load_ratio 0.9",
+            ),
+            "busy",
+        ),
+        (
+            VALID_GEOSERVER_METRICS.replace(
+                "eolab_jvm_heap_used_bytes 268435456",
+                "eolab_jvm_heap_used_bytes 1020054733",
+            ).replace(
+                "eolab_jvm_heap_committed_bytes 536870912",
+                "eolab_jvm_heap_committed_bytes 1073741824",
+            ),
+            "degraded",
+        ),
+    ),
+    ids=("high-cpu", "high-heap"),
+)
+def test_rendering_diagnostics_classifies_resource_pressure(
+    configured_environment: None,
+    expected_state: str,
+    metrics_document: str,
+    version_file_path: Path,
+) -> None:
+    """Distinguish a responsive but busy or degraded renderer from downtime."""
+
+    def diagnostics_response(request: httpx2.Request) -> httpx2.Response:
+        if request.url.port == 9404:
+            return httpx2.Response(
+                200,
+                text=metrics_document,
+                headers={"content-type": "text/plain"},
+            )
+        return httpx2.Response(200, text="<WMS_Capabilities/>")
+
+    with TestClient(
+        create_app(
+            version_file_path,
+            geoserver_diagnostics_transport=httpx2.MockTransport(
+                diagnostics_response
+            ),
+        )
+    ) as client:
+        response = client.get("/api/rendering/diagnostics")
+
+    assert response.status_code == 200
+    assert response.json()["state"] == expected_state
+    assert response.json()["metrics"] is not None
+
+
+@pytest.mark.parametrize("failure_kind", ("unavailable", "malformed", "oversized"))
+def test_rendering_diagnostics_failure_is_stable_and_does_not_change_health(
+    configured_environment: None,
+    failure_kind: str,
+    version_file_path: Path,
+) -> None:
+    """Hide upstream errors and keep application liveness independent."""
+    secret = "internal-secret-path-and-password"
+
+    def diagnostics_response(request: httpx2.Request) -> httpx2.Response:
+        if request.url.path == "/geoserver/eolab/wms":
+            return httpx2.Response(
+                200,
+                text="<WMS_Capabilities/>",
+                headers={"content-type": "application/xml"},
+            )
+        if failure_kind == "unavailable":
+            raise httpx2.ConnectError(secret, request=request)
+        if failure_kind == "malformed":
+            return httpx2.Response(
+                200,
+                text=f"eolab_jvm_heap_used_bytes {secret}",
+                headers={"content-type": "text/plain"},
+            )
+        return httpx2.Response(
+            200,
+            content=b"x" * 65_537,
+            headers={"content-type": "text/plain"},
+        )
+
+    with TestClient(
+        create_app(
+            version_file_path,
+            geoserver_diagnostics_transport=httpx2.MockTransport(
+                diagnostics_response
+            ),
+        )
+    ) as client:
+        diagnostics_response_value = client.get("/api/rendering/diagnostics")
+        health_response = client.get("/healthz")
+
+    assert diagnostics_response_value.status_code == 200
+    assert diagnostics_response_value.json()["state"] == "unavailable"
+    assert diagnostics_response_value.json()["metrics"] is None
+    assert secret not in diagnostics_response_value.text
+    assert health_response.status_code == 200
+
+
+def test_app_closes_every_http_pool_when_lifespan_exits_with_an_error(
+    configured_environment: None,
+    version_file_path: Path,
+) -> None:
+    """Keep connection-pool cleanup unconditional during abnormal shutdown."""
+
+    class ClosingTransport(httpx2.AsyncBaseTransport):
+        def __init__(self) -> None:
+            self.close_count = 0
+
+        async def handle_async_request(
+            self,
+            request: httpx2.Request,
+        ) -> httpx2.Response:
+            raise AssertionError(f"Unexpected request: {request.url}")
+
+        async def aclose(self) -> None:
+            self.close_count += 1
+
+    catalog_transport = ClosingTransport()
+    geoserver_transport = ClosingTransport()
+    diagnostics_transport = ClosingTransport()
+    application = create_app(
+        version_file_path,
+        catalog_transport=catalog_transport,
+        geoserver_transport=geoserver_transport,
+        geoserver_diagnostics_transport=diagnostics_transport,
+    )
+
+    with pytest.raises(RuntimeError, match="lifespan failed"):
+        with TestClient(application):
+            raise RuntimeError("lifespan failed")
+
+    assert catalog_transport.close_count == 1
+    assert geoserver_transport.close_count == 2
+    assert diagnostics_transport.close_count == 1
 
 
 def test_scan_status_is_available_before_first_scan(
@@ -915,10 +1138,29 @@ def test_wms_proxy_allows_bounded_png_rendering(
             "min:0;med:50;max:100;cmin:#2b83ba;"
             "cmed:#ffffbf;cmax:#d7191c"
         )
+        if len(wms_requests) == 2:
+            return httpx2.Response(
+                200,
+                content=b"<ServiceException>render failed</ServiceException>",
+                headers={"Content-Type": "application/xml"},
+            )
         return httpx2.Response(
             200,
             content=b"png bytes",
             headers={"Content-Type": "image/png"},
+        )
+
+    def diagnostics_response(request: httpx2.Request) -> httpx2.Response:
+        if request.url.port == 9404:
+            return httpx2.Response(
+                200,
+                text=VALID_GEOSERVER_METRICS,
+                headers={"content-type": "text/plain"},
+            )
+        return httpx2.Response(
+            200,
+            text="<WMS_Capabilities/>",
+            headers={"content-type": "application/xml"},
         )
 
     with TestClient(
@@ -926,6 +1168,9 @@ def test_wms_proxy_allows_bounded_png_rendering(
             version_file_path,
             catalog_transport=httpx2.MockTransport(upstream_response),
             geoserver_transport=httpx2.MockTransport(upstream_response),
+            geoserver_diagnostics_transport=httpx2.MockTransport(
+                diagnostics_response
+            ),
         )
     ) as client:
         publication_response = client.post(
@@ -946,6 +1191,9 @@ def test_wms_proxy_allows_bounded_png_rendering(
             "cmin%3A%232b83ba%3Bcmed%3A%23ffffbf%3Bcmax%3A%23d7191c"
         )
         response = client.get(tile_url)
+        diagnostics = client.get("/api/rendering/diagnostics")
+        exception_response = client.get(tile_url)
+        failure_diagnostics = client.get("/api/rendering/diagnostics")
         source_path.write_bytes(b"replacement")
         changed_source_response = client.get(tile_url)
 
@@ -954,7 +1202,31 @@ def test_wms_proxy_allows_bounded_png_rendering(
     assert response.headers["content-type"] == "image/png"
     assert response.headers["x-content-type-options"] == "nosniff"
     assert response.content == b"png bytes"
-    assert len(wms_requests) == 1
+    assert len(wms_requests) == 2
+    request_diagnostics = diagnostics.json()["metrics"]["requests"]
+    assert request_diagnostics["latestGetMapSeconds"] >= 0
+    assert request_diagnostics | {"latestGetMapSeconds": None} == {
+        "activeGetMap": 0,
+        "concurrencyLimit": 2,
+        "completedGetMap": 1,
+        "latestGetMapSeconds": None,
+        "recentGetMapFailures": 0,
+        "recentWindowSize": 1,
+    }
+    assert exception_response.status_code == 200
+    assert exception_response.headers["content-type"] == "application/xml"
+    failure_document = failure_diagnostics.json()
+    assert failure_document["state"] == "degraded"
+    assert failure_document["metrics"]["requests"] | {
+        "latestGetMapSeconds": None
+    } == {
+        "activeGetMap": 0,
+        "concurrencyLimit": 2,
+        "completedGetMap": 2,
+        "latestGetMapSeconds": None,
+        "recentGetMapFailures": 1,
+        "recentWindowSize": 2,
+    }
     assert changed_source_response.status_code == 409
     assert changed_source_response.json() == {
         "detail": "The visualized GeoTIFF changed; select it again"
@@ -1632,6 +1904,7 @@ def test_load_settings_rejects_blank_version(
         ("SCAN_WORKER_COUNT", "1.5"),
         ("SCAN_WRITER_COUNT", "1.5"),
         ("SCAN_BATCH_SIZE", "1.5"),
+        ("GEOSERVER_WMS_RENDER_COUNT", "1.5"),
     ),
 )
 def test_load_settings_rejects_malformed_number(
@@ -1704,6 +1977,7 @@ def test_load_settings_rejects_invalid_scan_path_lists(
         ("SCAN_WORKER_COUNT", "0"),
         ("SCAN_WRITER_COUNT", "0"),
         ("SCAN_BATCH_SIZE", "0"),
+        ("GEOSERVER_WMS_RENDER_COUNT", "0"),
     ),
 )
 def test_load_settings_rejects_out_of_range_number(
