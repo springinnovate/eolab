@@ -777,7 +777,7 @@ function initializeRasterVisualization(
         rasterHistogram.setAttribute("aria-busy", "false");
         rasterHistogramStatus.textContent = "";
         rasterHistogramChart.replaceChildren();
-        rasterHistogramChart.hidden = true;
+        rasterHistogramChart.setAttribute("hidden", "");
         rasterHistogramAxis.hidden = true;
         rasterPercentileControls.hidden = true;
         retryRasterStatisticsButton.hidden = true;
@@ -826,7 +826,7 @@ function initializeRasterVisualization(
             rasterHistogramChart.append(bar);
         }
         rasterHistogramChart.setAttribute("aria-label", title.textContent);
-        rasterHistogramChart.hidden = false;
+        rasterHistogramChart.removeAttribute("hidden");
     }
 
     /** Apply the initial whole-raster range if no manual edit superseded it. */
@@ -908,7 +908,7 @@ function initializeRasterVisualization(
         rasterStatisticsIsApplicable = false;
         rasterHistogram.setAttribute("aria-busy", "false");
         rasterHistogramChart.replaceChildren();
-        rasterHistogramChart.hidden = true;
+        rasterHistogramChart.setAttribute("hidden", "");
         rasterHistogramAxis.hidden = true;
         rasterPercentileControls.hidden = true;
         retryRasterStatisticsButton.hidden = false;
