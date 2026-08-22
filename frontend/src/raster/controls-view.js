@@ -63,6 +63,10 @@ export class RasterControlsView {
             documentContext,
             "#raster-style-controls"
         );
+        this.activeLayerLabel = requireRasterControl(
+            documentContext,
+            "#raster-active-layer-label"
+        );
         this.palette = requireRasterControl(
             documentContext,
             "#raster-palette"
@@ -243,6 +247,21 @@ export class RasterControlsView {
         customOption.value = "custom";
         customOption.textContent = "Custom";
         this.palette.append(customOption);
+    }
+
+    /**
+     * Identify the retained layer edited by these shared controls.
+     *
+     * @param {string} label Readable raster basename.
+     * @param {boolean} visible Whether the active raster is attached to map.
+     * @return {void}
+     */
+    setActiveLayer(label, visible) {
+        this.activeLayerLabel.textContent = visible
+            ? `Editing ${label}.`
+            : `Editing ${label}; this layer is hidden from the map.`;
+        this.sampleMapCenterButton.disabled = !visible;
+        this.retryStatisticsButton.disabled = !visible;
     }
 
     /**

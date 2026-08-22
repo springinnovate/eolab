@@ -243,26 +243,53 @@
                 </div>
                 <div class="catalog-pane-body catalog-inspector-body" id="catalog-inspector-body">
                   <div class="catalog-map-actions" id="catalog-map-actions" hidden>
-                  <button
-                    class="secondary-button"
-                    id="toggle-catalog-layer"
-                    type="button"
+                    <button
+                      class="secondary-button"
+                      id="toggle-catalog-layer"
+                      type="button"
+                    >
+                      Add to map layers
+                    </button>
+                    <p
+                      id="catalog-layer-status"
+                      role="status"
+                      aria-live="polite"
+                      aria-atomic="true"
+                    ></p>
+                  </div>
+                  <section
+                    class="raster-layer-stack"
+                    id="raster-layer-stack"
+                    aria-labelledby="raster-layer-stack-heading"
+                    hidden
                   >
-                    View on map
-                  </button>
+                    <div class="raster-layer-stack-heading">
+                      <div>
+                        <p class="section-label">Map display</p>
+                        <h4 id="raster-layer-stack-heading">Raster layers</h4>
+                      </div>
+                      <p id="raster-layer-stack-limit"></p>
+                    </div>
+                    <ol class="raster-layer-list" id="raster-layer-list"></ol>
+                  </section>
                   <p
-                    id="catalog-layer-status"
+                    class="raster-layer-stack-status"
+                    id="raster-layer-stack-status"
                     role="status"
                     aria-live="polite"
                     aria-atomic="true"
+                    tabindex="-1"
                   ></p>
-                </div>
                 <fieldset
                   class="raster-style-controls"
                   id="raster-style-controls"
                   hidden
                 >
                   <legend>Raster appearance</legend>
+                  <p
+                    class="raster-active-layer-label"
+                    id="raster-active-layer-label"
+                  ></p>
                   <label class="raster-palette" for="raster-palette">
                     <span>Color palette</span>
                     <select id="raster-palette"></select>

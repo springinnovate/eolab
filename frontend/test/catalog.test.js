@@ -1226,6 +1226,35 @@ test("buildCatalogItemDetails presents mounted Shapefile metadata", () => {
   );
 });
 
+test("buildCatalogItemDetails presents File Geodatabase layer metadata", () => {
+  const inspector = buildCatalogItemDetails(
+    {
+      id: "file-geodatabase-stable-id",
+      collection: "eolab-mounted-vectors",
+      geometry: { type: "Polygon", coordinates: [] },
+      properties: {
+        datetime: "2025-05-06T07:08:09Z",
+        title: "Data/Habitat.gdb/habitat",
+        "eolab:layer_name": "habitat",
+        "eolab:layer_alias": "Priority habitat",
+        "table:row_count": 1,
+        "table:columns": [{ name: "geometry", type: "Polygon" }],
+        "table:primary_geometry": "geometry",
+      },
+      assets: {},
+    },
+    [],
+    "/mounted",
+  );
+
+  assert.deepEqual(inspector.metadata.slice(-4), [
+    { label: "Layer name", value: "habitat" },
+    { label: "Layer alias", value: "Priority habitat" },
+    { label: "Feature count", value: "1" },
+    { label: "Declared feature geometry type", value: "Polygon" },
+  ]);
+});
+
 test("buildCatalogItemDetails omits unavailable vector conventions", () => {
   const inspector = buildCatalogItemDetails(
     {

@@ -5,6 +5,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from eolab_app.catalog.filegeodatabase import (
+    build_stac_items as build_file_geodatabase_stac_items,
+    discover_file_geodatabases,
+)
 from eolab_app.catalog.geopackage import (
     build_stac_items as build_geopackage_stac_items,
     discover_geopackage_files,
@@ -315,6 +319,58 @@ def build_shapefile_items(
     ),)
 
 
+def discover_mounted_file_geodatabases(
+    directory_path: Path,
+    directory_names: tuple[str, ...],
+    file_names: tuple[str, ...],
+) -> HandlerDiscovery:
+    """Recognize File Geodatabase containers and prune their descendants.
+
+    Args:
+        directory_path: Directory containing the listed entries.
+        directory_names: Sorted child directory names.
+        file_names: Sorted child file names, unused by this handler.
+
+    Returns:
+        One match per `.gdb` container and matching pruning decisions.
+    """
+    del file_names
+    geodatabase_paths = discover_file_geodatabases(
+        directory_path,
+        directory_names,
+    )
+    geodatabase_names = frozenset(
+        geodatabase_path.name for geodatabase_path in geodatabase_paths
+    )
+    return HandlerDiscovery(
+        matches=tuple(
+            DatasetMatch(geodatabase_path)
+            for geodatabase_path in geodatabase_paths
+        ),
+        pruned_directory_names=geodatabase_names,
+    )
+
+
+def build_file_geodatabase_items(
+    source_root: Path,
+    candidate: DatasetCandidate,
+) -> tuple[DatasetItem, ...]:
+    """Build one Item per readable spatial layer in a File Geodatabase.
+
+    Args:
+        source_root: Root directory mounted for scanning.
+        candidate: File Geodatabase container selected during discovery.
+
+    Returns:
+        Zero or more spatial feature-class Items.
+
+    Raises:
+        Exception: Propagates geodatabase-level metadata failures and the first
+            layer failure when no layer can produce an Item.
+    """
+    return build_file_geodatabase_stac_items(source_root, candidate.path)
+
+
 def discover_zipped_shapefiles(
     directory_path: Path,
     directory_names: tuple[str, ...],
@@ -406,7 +462,7 @@ def create_default_dataset_handler_registry() -> DatasetHandlerRegistry:
 
     Returns:
         Registry containing GeoTIFF, GeoPackage, mounted Shapefile,
-        ZIP/Shapefile, and GeoJSON handlers.
+        ZIP/Shapefile, GeoJSON, and File Geodatabase handlers.
     """
     return DatasetHandlerRegistry(handlers=(
         DatasetHandler(
@@ -433,5 +489,10 @@ def create_default_dataset_handler_registry() -> DatasetHandlerRegistry:
             name="geojson",
             discover=discover_geojson_feature_collections,
             build_items=build_geojson_items,
+        ),
+        DatasetHandler(
+            name="file-geodatabase",
+            discover=discover_mounted_file_geodatabases,
+            build_items=build_file_geodatabase_items,
         ),
     ))
