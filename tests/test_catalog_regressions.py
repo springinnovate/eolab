@@ -1,10 +1,9 @@
-"""Test mounted-dataset metadata extraction and scan orchestration."""
+"""Preserve end-to-end mounted-catalog scan regression coverage."""
 
 import asyncio
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import AbstractAsyncContextManager
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Barrier, Event, Lock
@@ -24,6 +23,30 @@ from rasterio.enums import Resampling
 from rasterio.shutil import copy as copy_raster
 from rasterio.transform import from_bounds, from_origin
 
+from tests.catalog_support import (
+    RecordingCatalogDatabase,
+    RecordingCatalogSession,
+    RecordingCatalogWriter,
+)
+
+from eolab_app.catalog.metadata import (
+    DATASET_ITEM_BUILDERS,
+    build_dataset_metadata,
+    create_metadata_executor,
+)
+from eolab_app.catalog.models import CatalogItemSource, DatasetCandidate
+from eolab_app.catalog.pgstac import (
+    PgStacCatalogDatabase,
+    catalog_item_source,
+)
+from eolab_app.catalog.reconciliation import catalog_item_is_missing
+from eolab_app.catalog.scanner import ScanManager
+from eolab_app.catalog.shapefile import (
+    FALLBACK_DATETIME_DESCRIPTION as SHAPEFILE_DATETIME_DESCRIPTION,
+    build_stac_item as build_shapefile_stac_item,
+    discover_shapefile_datasets,
+)
+from eolab_app.catalog.stac_api import StacApiWriter
 from eolab_app.geotiff import (
     ACQUISITION_DATETIME_DESCRIPTION,
     COG_MEDIA_TYPE,
@@ -35,23 +58,6 @@ from eolab_app.geotiff import (
     assess_raster_renderability,
     build_stac_item as build_geotiff_stac_item,
 )
-from eolab_app.scanning import (
-    CatalogItemSource,
-    DATASET_ITEM_BUILDERS,
-    DatasetCandidate,
-    PgStacCatalogDatabase,
-    ScanManager,
-    StacApiWriter,
-    _build_dataset_metadata,
-    _catalog_item_is_missing,
-    _catalog_item_source,
-    _create_metadata_executor,
-)
-from eolab_app.shapefile import (
-    FALLBACK_DATETIME_DESCRIPTION as SHAPEFILE_DATETIME_DESCRIPTION,
-    build_stac_item as build_shapefile_stac_item,
-    discover_shapefile_datasets,
-)
 
 
 @pytest.fixture(autouse=True)
@@ -60,7 +66,7 @@ def use_thread_executor_for_scan_unit_tests(
 ) -> None:
     """Keep parent-process test doubles visible to scan workers."""
     monkeypatch.setattr(
-        "eolab_app.scanning._create_metadata_executor",
+        "eolab_app.catalog.metadata.create_metadata_executor",
         ThreadPoolExecutor,
     )
 
@@ -837,33 +843,6 @@ def test_shapefile_serializes_non_epsg_projection_as_wkt2(tmp_path: Path) -> Non
     assert item["properties"]["proj:wkt2"].startswith("PROJCRS[")
 
 
-class RecordingCatalogSession:
-    """Record catalog writes while providing an async context manager."""
-
-    def __init__(self, item_error: Exception | None = None) -> None:
-        self.collections: dict[str, dict[str, Any]] = {}
-        self.items: dict[tuple[str, str], dict[str, Any]] = {}
-        self.item_batches: list[list[dict[str, Any]]] = []
-        self.item_error = item_error
-
-    async def __aenter__(self) -> "RecordingCatalogSession":
-        return self
-
-    async def __aexit__(self, *exception_details: object) -> None:
-        return None
-
-    async def upsert_collection(self, collection: dict[str, Any]) -> None:
-        self.collections[collection["id"]] = collection
-
-    async def upsert_items(self, items: list[dict[str, Any]]) -> None:
-        self.item_batches.append(items)
-        if self.item_error is not None:
-            raise self.item_error
-        self.items.update(
-            ((item["collection"], item["id"]), item) for item in items
-        )
-
-
 class ConcurrentRecordingCatalogSession(RecordingCatalogSession):
     """Hold writes until the configured concurrency has been observed."""
 
@@ -923,76 +902,6 @@ class FailingConcurrentCatalogSession(RecordingCatalogSession):
             self.active_writes -= 1
 
 
-class RecordingCatalogWriter:
-    """Return the same in-memory write session for every scan."""
-
-    def __init__(self, item_error: Exception | None = None) -> None:
-        self.write_session = RecordingCatalogSession(item_error)
-
-    def session(self) -> AbstractAsyncContextManager[RecordingCatalogSession]:
-        return self.write_session
-
-
-class RecordingCatalogDatabase:
-    """Record direct database operations requested by the scanner."""
-
-    def __init__(self, catalog_writer: RecordingCatalogWriter) -> None:
-        self.catalog_writer = catalog_writer
-        self.search_count_cache_invalidations = 0
-        self.deleted_batches: list[list[tuple[str, str]]] = []
-        self.requested_page_sizes: list[int] = []
-
-    async def existing_item_keys(
-        self,
-        collection_identifiers: tuple[str, ...],
-    ) -> set[tuple[str, str]]:
-        assert collection_identifiers == (
-            "eolab-mounted-geotiffs",
-            "eolab-mounted-vectors",
-        )
-        return set(self.catalog_writer.write_session.items)
-
-    async def scanner_item_pages(
-        self,
-        collection_identifiers: tuple[str, ...],
-        page_size: int,
-    ):
-        self.requested_page_sizes.append(page_size)
-        scanner_items = [
-            _catalog_item_source(
-                collection,
-                item_id,
-                item["assets"],
-            )
-            for (collection, item_id), item in sorted(
-                self.catalog_writer.write_session.items.items()
-            )
-            if collection in collection_identifiers and item.get("assets")
-        ]
-        for page_start in range(0, len(scanner_items), page_size):
-            yield scanner_items[page_start : page_start + page_size]
-
-    async def delete_item_batches(
-        self,
-        item_batches,
-    ) -> int:
-        batches = list(item_batches)
-        self.deleted_batches.extend(batches)
-        item_keys = [
-            item_key
-            for item_batch in batches
-            for item_key in item_batch
-        ]
-        removed = 0
-        for item_key in item_keys:
-            if self.catalog_writer.write_session.items.pop(item_key, None):
-                removed += 1
-        return removed
-
-    async def invalidate_search_count_cache(self) -> None:
-        self.search_count_cache_invalidations += 1
-
-
 def test_scan_status_reports_worker_count_before_start(tmp_path: Path) -> None:
     """Construct the initial status from the configured worker count."""
     catalog_writer = RecordingCatalogWriter()
@@ -1021,11 +930,11 @@ def test_metadata_executor_uses_spawned_processes(
             executor_arguments.update(arguments)
 
     monkeypatch.setattr(
-        "eolab_app.scanning.ProcessPoolExecutor",
+        "eolab_app.catalog.metadata.ProcessPoolExecutor",
         RecordingProcessPoolExecutor,
     )
 
-    executor = _create_metadata_executor(8)
+    executor = create_metadata_executor(8)
 
     assert isinstance(executor, RecordingProcessPoolExecutor)
     assert executor_arguments["max_workers"] == 8
@@ -1113,10 +1022,10 @@ def test_spawned_metadata_process_builds_dataset_items(
     shapefile_path, component_paths = write_shapefile(tmp_path / "spawned.shp")
     monkeypatch.setenv("GDAL_DISABLE_READDIR_ON_OPEN", "TRUE")
 
-    with _create_metadata_executor(1) as executor:
+    with create_metadata_executor(1) as executor:
         results = [
             executor.submit(
-                _build_dataset_metadata,
+                build_dataset_metadata,
                 tmp_path,
                 dataset_candidate,
             ).result(timeout=15)
@@ -1471,7 +1380,7 @@ def test_reconciliation_failure_never_deletes_candidates(
     }
     catalog_database = RecordingCatalogDatabase(catalog_writer)
     monkeypatch.setattr(
-        "eolab_app.scanning._catalog_item_is_missing",
+        "eolab_app.catalog.reconciliation.catalog_item_is_missing",
         lambda *_: (_ for _ in ()).throw(PermissionError("NFS unavailable")),
     )
     scan_manager = ScanManager(
@@ -1514,7 +1423,7 @@ def test_missing_asset_does_not_hide_a_later_access_error(tmp_path: Path) -> Non
     )
 
     with pytest.raises(OSError, match="not a mounted file"):
-        _catalog_item_is_missing(item, tmp_path)
+        catalog_item_is_missing(item, tmp_path)
 
 
 def test_changed_mount_aborts_reconciliation_before_delete(
@@ -1534,7 +1443,7 @@ def test_changed_mount_aborts_reconciliation_before_delete(
     catalog_database = RecordingCatalogDatabase(catalog_writer)
     signatures = iter([(1, 2), (3, 4)])
     monkeypatch.setattr(
-        "eolab_app.scanning._source_signature",
+        "eolab_app.catalog.reconciliation.source_signature",
         lambda *_: next(signatures),
     )
     scan_manager = ScanManager(
@@ -1634,7 +1543,7 @@ def test_reconciliation_overlaps_metadata_extraction(
 
     monkeypatch.setitem(DATASET_ITEM_BUILDERS, ".tif", build_item)
     monkeypatch.setattr(
-        "eolab_app.scanning._catalog_item_is_missing",
+        "eolab_app.catalog.reconciliation.catalog_item_is_missing",
         check_item,
     )
     catalog_writer = RecordingCatalogWriter()
@@ -2035,15 +1944,15 @@ def test_dataset_metadata_timing_separates_cpu_from_wait(
     processing_clock = iter([3.0, 3.4])
     monkeypatch.setitem(DATASET_ITEM_BUILDERS, ".tif", build_item)
     monkeypatch.setattr(
-        "eolab_app.scanning.perf_counter",
+        "eolab_app.catalog.metadata.perf_counter",
         lambda: next(elapsed_clock),
     )
     monkeypatch.setattr(
-        "eolab_app.scanning.process_time",
+        "eolab_app.catalog.metadata.process_time",
         lambda: next(processing_clock),
     )
 
-    result = _build_dataset_metadata(
+    result = build_dataset_metadata(
         tmp_path,
         DatasetCandidate(dataset_path),
     )

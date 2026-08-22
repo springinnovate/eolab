@@ -12,6 +12,9 @@ import psycopg
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.staticfiles import StaticFiles
 
+from eolab_app.catalog.pgstac import PgStacCatalogDatabase
+from eolab_app.catalog.scanner import ScanManager
+from eolab_app.catalog.stac_api import StacApiWriter
 from eolab_app.diagnostics import (
     GetMapRequestTracker,
     RenderingDiagnostics,
@@ -31,8 +34,8 @@ from eolab_app.rendering import (
     sample_catalog_raster_pixel,
     update_catalog_raster_assessment,
 )
+from eolab_app.routes.scans import create_scan_router
 from eolab_app.settings import APPLICATION_VERSION_PATH, load_settings
-from eolab_app.scanning import PgStacCatalogDatabase, ScanManager, StacApiWriter
 
 
 PUBLIC_WMS_COMMON_QUERY_PARAMETERS = frozenset(
@@ -408,6 +411,7 @@ def create_app(
         app_global_configuration.scan_writer_count,
         app_global_configuration.scan_batch_size,
     )
+    application.include_router(create_scan_router(scan_manager))
 
     @application.get("/healthz", tags=["system"])
     def healthz() -> dict[str, str]:
@@ -449,30 +453,6 @@ def create_app(
         """
         response.headers["cache-control"] = "no-store"
         return await rendering_diagnostics.get()
-
-    @application.get("/api/scans/current", tags=["catalog"])
-    async def current_scan() -> dict[str, object]:
-        """Return current mounted-dataset scan progress.
-
-        Returns:
-            A snapshot of the active or most recently completed scan.
-        """
-        return scan_manager.status()
-
-    @application.post("/api/scans", status_code=202, tags=["catalog"])
-    async def start_scan() -> dict[str, object]:
-        """Start a recursive scan of the configured read-only source.
-
-        Returns:
-            Initial progress for the new scan.
-
-        Raises:
-            HTTPException: If another scan is still running.
-        """
-        try:
-            return await scan_manager.start()
-        except RuntimeError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
 
     @application.post(
         "/api/rendering/assessments",
