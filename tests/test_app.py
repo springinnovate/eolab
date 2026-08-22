@@ -687,7 +687,7 @@ def test_raster_publication_reassesses_a_changed_source(
     item = _mounted_geotiff_item(source_path.as_uri())
     geoserver_requests = []
     monkeypatch.setattr(
-        "eolab_app.rendering.inspect_geotiff_renderability",
+        "eolab_app.raster.publication.inspect_raster_renderability",
         lambda _: {
             "eligible": False,
             "reason": (

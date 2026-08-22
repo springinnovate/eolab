@@ -17,19 +17,20 @@ from eolab_app.diagnostics import (
     RenderingDiagnostics,
     RenderingDiagnosticsService,
 )
-from eolab_app.rendering import (
-    CatalogPixelRequest,
-    CatalogRasterRequest,
-    CatalogRasterStatisticsRequest,
-    PublishedRaster,
+from eolab_app.raster.assessment import RasterAssessmentService
+from eolab_app.raster.catalog import StacRasterCatalog
+from eolab_app.raster.errors import RasterFeatureError
+from eolab_app.raster.geoserver import GeoServerRasterPublisher
+from eolab_app.raster.pixel_service import RasterPixelService
+from eolab_app.raster.publication import RasterPublicationService
+from eolab_app.raster.sources import (
+    MountedRasterResolver,
     PublishedRasterRegistry,
-    RASTER_PIXEL_READ_CONCURRENCY,
-    RasterPixel,
-    RasterStatistics,
-    RasterStatisticsService,
-    publish_catalog_raster,
-    sample_catalog_raster_pixel,
-    update_catalog_raster_assessment,
+)
+from eolab_app.raster.statistics_service import RasterStatisticsService
+from eolab_app.routes.rasters import (
+    create_raster_feature,
+    raster_http_exception,
 )
 from eolab_app.settings import APPLICATION_VERSION_PATH, load_settings
 from eolab_app.scanning import PgStacCatalogDatabase, ScanManager, StacApiWriter
@@ -287,12 +288,6 @@ async def _number_matched_is_estimated(
     return result[0]
 
 
-async def _wait_for_http_disconnect(request: Request) -> None:
-    """Wait until the ASGI server reports that the browser disconnected."""
-    while (message := await request.receive())["type"] != "http.disconnect":
-        pass
-
-
 def create_app(
     version_file_path: Path = APPLICATION_VERSION_PATH,
     catalog_transport: httpx2.AsyncBaseTransport | None = None,
@@ -351,12 +346,33 @@ def create_app(
         transport=geoserver_diagnostics_transport,
         timeout=3,
     )
-    raster_publish_lock = asyncio.Lock()
-    raster_pixel_read_semaphore = asyncio.Semaphore(
-        RASTER_PIXEL_READ_CONCURRENCY
+    raster_catalog = StacRasterCatalog(
+        catalog_client,
+        app_global_configuration.catalog_internal_url,
+    )
+    raster_source_resolver = MountedRasterResolver(
+        app_global_configuration.scan_mount_path
     )
     published_rasters = PublishedRasterRegistry()
-    raster_statistics_service = RasterStatisticsService(published_rasters)
+    raster_feature = create_raster_feature(
+        RasterAssessmentService(
+            app_global_configuration.scan_mount_path,
+            raster_catalog,
+            raster_source_resolver,
+        ),
+        RasterPublicationService(
+            raster_catalog,
+            raster_source_resolver,
+            GeoServerRasterPublisher(
+                geoserver_rest_client,
+                app_global_configuration.geoserver_internal_url,
+            ),
+            published_rasters,
+        ),
+        RasterPixelService(published_rasters),
+        RasterStatisticsService(published_rasters),
+        published_rasters,
+    )
     get_map_request_tracker = GetMapRequestTracker(
         app_global_configuration.geoserver_wms_render_count
     )
@@ -393,6 +409,7 @@ def create_app(
         version=app_global_configuration.app_version,
         lifespan=lifespan,
     )
+    application.include_router(raster_feature.router)
     scan_manager = ScanManager(
         app_global_configuration.scan_mount_path,
         tuple(
@@ -473,124 +490,6 @@ def create_app(
             return await scan_manager.start()
         except RuntimeError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
-
-    @application.post(
-        "/api/rendering/assessments",
-        response_model=dict[str, object],
-        tags=["rendering"],
-    )
-    async def assess_raster(
-        request: CatalogRasterRequest,
-    ) -> dict[str, object]:
-        """Assess and update one selected legacy raster Item.
-
-        Args:
-            request: Authoritative Collection and Item identity.
-
-        Returns:
-            Updated browser-safe raster visualization assessment.
-
-        Raises:
-            HTTPException: If the Item or mounted raster cannot be assessed.
-        """
-        return await update_catalog_raster_assessment(
-            request,
-            app_global_configuration.scan_mount_path,
-            catalog_client,
-            app_global_configuration.catalog_internal_url,
-        )
-
-    @application.post(
-        "/api/rendering/layers",
-        response_model=PublishedRaster,
-        tags=["rendering"],
-    )
-    async def publish_raster(request: CatalogRasterRequest) -> PublishedRaster:
-        """Publish one authoritative mounted GeoTIFF as a WMS layer.
-
-        Args:
-            request: Authoritative Collection and Item identity.
-
-        Returns:
-            Published WMS layer identity and raster bounds.
-
-        Raises:
-            HTTPException: If the catalog, source, or GeoServer publication
-                contract fails.
-        """
-        async with raster_publish_lock:
-            return await publish_catalog_raster(
-                request,
-                app_global_configuration.scan_mount_path,
-                catalog_client,
-                geoserver_rest_client,
-                app_global_configuration.catalog_internal_url,
-                app_global_configuration.geoserver_internal_url,
-                published_rasters,
-            )
-
-    @application.post(
-        "/api/rendering/pixels",
-        response_model=RasterPixel,
-        tags=["rendering"],
-    )
-    async def sample_raster_pixel(
-        request: CatalogPixelRequest,
-    ) -> RasterPixel:
-        """Read one pixel from the selected published raster.
-
-        Args:
-            request: Published layer identity and WGS84 coordinate.
-
-        Returns:
-            Band-one pixel position and value or out-of-bounds result.
-
-        Raises:
-            HTTPException: If the layer is not current or the raster read
-                cannot satisfy the pixel-sampling contract.
-        """
-        return await sample_catalog_raster_pixel(
-            request,
-            published_rasters,
-            raster_pixel_read_semaphore,
-        )
-
-    @application.post(
-        "/api/rendering/statistics",
-        response_model=RasterStatistics,
-        tags=["rendering"],
-    )
-    async def raster_statistics(
-        request: CatalogRasterStatisticsRequest,
-        http_request: Request,
-    ) -> RasterStatistics:
-        """Summarize a whole raster or selected area through a bounded sample."""
-        statistics_task = asyncio.create_task(
-            raster_statistics_service.get(request)
-        )
-        disconnect_task = asyncio.create_task(
-            _wait_for_http_disconnect(http_request)
-        )
-        try:
-            completed_tasks, _ = await asyncio.wait(
-                (statistics_task, disconnect_task),
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            if statistics_task in completed_tasks:
-                return statistics_task.result()
-
-            raise HTTPException(
-                status_code=499,
-                detail="The raster statistics request was canceled",
-            )
-        finally:
-            disconnect_task.cancel()
-            statistics_task.cancel()
-            await asyncio.gather(
-                statistics_task,
-                disconnect_task,
-                return_exceptions=True,
-            )
 
     @application.api_route(
         "/stac",
@@ -706,10 +605,13 @@ def create_app(
             )
         query_entries, layer_name, operation = _validated_public_wms_query(request)
         if layer_name is not None:
-            await asyncio.to_thread(
-                published_rasters.require_current,
-                layer_name,
-            )
+            try:
+                await asyncio.to_thread(
+                    raster_feature.registry.require_current,
+                    layer_name,
+                )
+            except RasterFeatureError as error:
+                raise raster_http_exception(error) from error
         internal_geoserver_url = (
             app_global_configuration.geoserver_internal_url.rstrip("/")
         )
