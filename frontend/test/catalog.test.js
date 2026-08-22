@@ -351,10 +351,10 @@ test("Surprise me appears immediately after Catalog search", () => {
     catalogMarkup.indexOf('id="catalog-search"'),
   );
   const surpriseButton = catalogMarkup.indexOf('id="surprise-catalog"');
-  const scanControls = catalogMarkup.indexOf('class="scan-card"');
+  const catalogResults = catalogMarkup.indexOf('id="catalog-results-scroll"');
 
   assert.ok(searchEnd < surpriseButton);
-  assert.ok(surpriseButton < scanControls);
+  assert.ok(surpriseButton < catalogResults);
   assert.match(
     catalogMarkup,
     /<button[\s\S]*id="surprise-catalog"[\s\S]*type="button"/,
