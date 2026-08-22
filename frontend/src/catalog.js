@@ -80,7 +80,25 @@ function formatDuration(seconds) {
 }
 
 /**
- * Formats the compact mounted-directory scan state.
+ * Formats a scanner timestamp for compact visible UTC display.
+ *
+ * @param {string|null} timestamp Scanner-provided UTC timestamp.
+ * @return {string} Timestamp rendered to whole UTC seconds, or a fallback.
+ */
+function formatScanTimestamp(timestamp) {
+    if (timestamp === null) {
+        return "time unavailable";
+    }
+    const parsedTimestamp = new Date(timestamp);
+    if (Number.isNaN(parsedTimestamp.getTime())) {
+        return "time unavailable";
+    }
+    const isoTimestamp = parsedTimestamp.toISOString();
+    return `${isoTimestamp.slice(0, 10)} ${isoTimestamp.slice(11, 19)} UTC`;
+}
+
+/**
+ * Formats the compact mounted-directory scan recency or live progress.
  *
  * @param {Object} scanStatus Scan progress returned by the backend.
  * @return {string} Human-readable scan summary.
@@ -88,19 +106,33 @@ function formatDuration(seconds) {
 export function formatScanStatusSummary(scanStatus) {
     switch (scanStatus.state) {
         case "not_started":
-            return "Scan status: Not started";
+            return "No scan has run since startup";
         case "discovering":
+            return "Scanning now · Discovering datasets";
         case "scanning":
-            return "Scan status: In progress";
+            return (
+                "Scanning now · " +
+                `${scanStatus.sourceDatasetsProcessed.toLocaleString()} of ` +
+                `${scanStatus.sourceDatasetsDiscovered.toLocaleString()} ` +
+                "datasets processed"
+            );
         case "completed": {
+            const lastScanned =
+                `Last scanned at ${formatScanTimestamp(scanStatus.finishedAt)}`;
             if (scanStatus.failed === 0) {
-                return "Scan status: Complete";
+                return lastScanned;
             }
             const errorNoun = scanStatus.failed === 1 ? "error" : "errors";
-            return `Scan status: Complete · ${scanStatus.failed.toLocaleString()} dataset ${errorNoun}`;
+            return (
+                `${lastScanned} · ${scanStatus.failed.toLocaleString()} ` +
+                `dataset ${errorNoun}`
+            );
         }
         case "failed":
-            return "Scan status: Failed";
+            return (
+                "Last scan failed at " +
+                formatScanTimestamp(scanStatus.finishedAt)
+            );
         default:
             throw new Error(`Unknown scan state: ${scanStatus.state}`);
     }
