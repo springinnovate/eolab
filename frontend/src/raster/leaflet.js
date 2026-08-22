@@ -2,44 +2,23 @@
  * Leaflet adapter for raster layers, bounds, and layer lifecycle.
  *
  * This module converts raster domain bounds to Leaflet coordinates, creates
- * WMS and sample-window layers, and ensures only the latest published Catalog
- * raster remains on the map. It does not fetch publication or statistics data.
+ * WMS and sample-window layers, and manages keyed raster attachment, opacity,
+ * and drawing order. It does not fetch publication or statistics data.
  */
 import { validateRasterSelectedBounds } from "./geometry.js";
 
-
 /**
- * Publish a Catalog Item for rendering.
- *
- * @callback PublishCatalogRaster
- * @param {Object} item Selected STAC Item.
- * @return {Promise<Object>} Published layer details.
- */
-
-/**
- * Create a map layer for one published raster.
- *
- * @callback CatalogRasterLayerFactory
- * @param {Object} publishedRaster Published layer details.
- * @return {{addTo: (map: Object) => Object}} Leaflet-compatible layer.
- */
-
-/**
- * Convert canonical bounds to Leaflet corners in one visible world copy.
+ * Convert canonical bounds to Leaflet corners in the single visible world.
  *
  * @param {Object} bounds Canonical WGS 84 selected bounds.
- * @param {number} [longitudeOffset=0] World-copy longitude offset in degrees.
  * @return {Array<Array<number>>} Southwest and northeast Leaflet corners.
- * @throws {Error} If bounds or longitudeOffset violate their contracts.
+ * @throws {Error} If bounds violate the selected-bounds contract.
  */
-export function rasterSampleBoundsToLeaflet(bounds, longitudeOffset = 0) {
+export function rasterSampleBoundsToLeaflet(bounds) {
     validateRasterSelectedBounds(bounds);
-    if (!Number.isFinite(longitudeOffset)) {
-        throw new RangeError("Raster sample longitude offset must be finite.");
-    }
     return [
-        [bounds.south, bounds.west + longitudeOffset],
-        [bounds.north, bounds.east + longitudeOffset]
+        [bounds.south, bounds.west],
+        [bounds.north, bounds.east]
     ];
 }
 
@@ -104,55 +83,159 @@ export function createRasterSampleWindowLayer(leaflet, bounds, layerKind) {
         });
 }
 
-/** Manage one WMS layer while ignoring publication results for stale selections. */
-export class CatalogRasterLayerController {
+/** Manage independent keyed Leaflet raster layers without publication logic. */
+export class RasterLeafletLayerSet {
     /**
-     * Create a raster layer lifecycle controller.
+     * Create an empty keyed layer set.
      *
      * @param {{removeLayer: (layer: Object) => void}} leafletMap
      * Leaflet-compatible map.
-     * @param {PublishCatalogRaster} publishRaster Publishes one selected Item.
-     * @param {CatalogRasterLayerFactory} layerFactory Creates its map layer.
      */
-    constructor(leafletMap, publishRaster, layerFactory) {
+    constructor(leafletMap) {
         this.leafletMap = leafletMap;
-        this.publishRaster = publishRaster;
-        this.layerFactory = layerFactory;
-        this.activeLayer = null;
-        this.requestSequence = 0;
+        this.layers = new Map();
     }
 
     /**
-     * Publish and display one Item unless selection changed while awaiting it.
+     * Retain one newly created layer and optionally attach it to the map.
      *
-     * @param {Object} item Selected STAC Item.
-     * @return {Promise<Object|null>} Published layer details, or null after a
-     * selection change.
-     * @throws {Error} If publication or layer construction fails.
+     * @param {string} key Stable raster layer key.
+     * @param {Object} layer Leaflet-compatible layer.
+     * @param {{visible:boolean,opacity:number}} presentation Initial local
+     * presentation.
+     * @return {Object} Retained Leaflet layer.
+     * @throws {Error} If key is already retained.
      */
-    async show(item) {
-        const requestSequence = ++this.requestSequence;
-        const publishedRaster = await this.publishRaster(item);
-        if (requestSequence !== this.requestSequence) {
-            return null;
+    add(key, layer, { visible, opacity }) {
+        if (this.layers.has(key)) {
+            throw new Error(`Raster Leaflet layer already exists: ${key}`);
         }
-        this.clear();
-        this.activeLayer = this.layerFactory(publishedRaster).addTo(
-            this.leafletMap
-        );
-        return publishedRaster;
+        layer.setOpacity(opacity);
+        const record = { layer, attached: false };
+        this.layers.set(key, record);
+        if (visible) {
+            layer.addTo(this.leafletMap);
+            record.attached = true;
+        }
+        return layer;
     }
 
     /**
-     * Invalidate pending publication and remove a displayed layer, if any.
+     * Attach or detach one retained layer without recreating it.
      *
+     * @param {string} key Stable raster layer key.
+     * @param {boolean} visible Requested map visibility.
      * @return {void}
      */
-    clear() {
-        this.requestSequence += 1;
-        if (this.activeLayer !== null) {
-            this.leafletMap.removeLayer(this.activeLayer);
-            this.activeLayer = null;
+    setVisible(key, visible) {
+        const record = this.#require(key);
+        if (record.attached === visible) {
+            return;
         }
+        if (visible) {
+            record.layer.addTo(this.leafletMap);
+        } else {
+            this.leafletMap.removeLayer(record.layer);
+        }
+        record.attached = visible;
+    }
+
+    /**
+     * Apply ordinary-overlay opacity locally.
+     *
+     * @param {string} key Stable raster layer key.
+     * @param {number} opacity Opacity from zero through one.
+     * @return {void}
+     */
+    setOpacity(key, opacity) {
+        this.#require(key).layer.setOpacity(opacity);
+    }
+
+    /**
+     * Apply deterministic top-first drawing order to every retained layer.
+     *
+     * @param {string[]} orderedKeys Stable keys from topmost to bottommost.
+     * @return {void}
+     * @throws {Error} If orderedKeys do not identify the complete layer set.
+     */
+    setOrder(orderedKeys) {
+        if (
+            orderedKeys.length !== this.layers.size ||
+            orderedKeys.some((key) => !this.layers.has(key))
+        ) {
+            throw new Error(
+                "Raster Leaflet order must contain every retained layer once."
+            );
+        }
+        const uniqueKeys = new Set(orderedKeys);
+        if (uniqueKeys.size !== orderedKeys.length) {
+            throw new Error("Raster Leaflet order cannot contain duplicate keys.");
+        }
+        const baseZIndex = 200;
+        orderedKeys.forEach((key, index) => {
+            this.#require(key).layer.setZIndex(
+                baseZIndex + orderedKeys.length - index
+            );
+        });
+    }
+
+    /**
+     * Return one retained Leaflet layer.
+     *
+     * @param {string} key Stable raster layer key.
+     * @return {Object|null} Matching layer or null.
+     */
+    get(key) {
+        return this.layers.get(key)?.layer ?? null;
+    }
+
+    /**
+     * Return whether one retained layer is attached to the map.
+     *
+     * @param {string} key Stable raster layer key.
+     * @return {boolean} Whether the layer currently generates map tiles.
+     */
+    isAttached(key) {
+        return this.layers.get(key)?.attached ?? false;
+    }
+
+    /**
+     * Remove one retained layer from the map and keyed set.
+     *
+     * @param {string} key Stable raster layer key.
+     * @return {Object|null} Removed Leaflet layer or null when unknown.
+     */
+    remove(key) {
+        const record = this.layers.get(key);
+        if (record === undefined) {
+            return null;
+        }
+        if (record.attached) {
+            this.leafletMap.removeLayer(record.layer);
+        }
+        this.layers.delete(key);
+        return record.layer;
+    }
+
+    /** Remove every retained layer, preserving no map attachments. */
+    clear() {
+        for (const key of [...this.layers.keys()]) {
+            this.remove(key);
+        }
+    }
+
+    /**
+     * Require one retained record.
+     *
+     * @param {string} key Stable raster layer key.
+     * @return {{layer:Object,attached:boolean}} Retained record.
+     * @throws {RangeError} If key is unknown.
+     */
+    #require(key) {
+        const record = this.layers.get(key);
+        if (record === undefined) {
+            throw new RangeError(`Unknown Raster Leaflet layer: ${key}`);
+        }
+        return record;
     }
 }

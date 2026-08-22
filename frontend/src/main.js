@@ -34,6 +34,11 @@ import {
     createSingleWorldMap,
     formatSingleWorldPosition
 } from "./map.js";
+import {
+    catalogItemsMatch,
+    CatalogMapActionRegistry,
+    CatalogRasterAssessmentCache,
+} from "./catalog-map-actions.js";
 import { assessCatalogRaster } from "./raster/api.js";
 import { initializeRasterViewer } from "./raster/raster-viewer.js";
 import {
@@ -472,22 +477,6 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
         leafletMap,
         createCatalogFootprintLayer
     );
-    /**
-     * Report one active raster tile failure in the Catalog map action.
-     *
-     * @param {string} message User-facing raster tile failure.
-     * @return {void}
-     */
-    function reportRasterTileError(message) {
-        catalogLayerStatus.textContent = message;
-    }
-
-    const rasterVisualization = initializeRasterViewer({
-        wmsUrl: appGlobalConfiguration.wmsUrl,
-        leafletMap,
-        leaflet: L,
-        onTileError: reportRasterTileError,
-    });
     const catalogState = {
         collectionsDocument: null,
         resultButtons: new Map(),
@@ -495,29 +484,111 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
         searchText: "",
         selectedButton: null,
         selectedItem: null,
+        pendingMapActions: new CatalogMapActionRegistry(),
+        rasterAssessments: new CatalogRasterAssessmentCache(),
         // Generation token: filter/search changes invalidate older async
         // Surprise responses so they cannot select an Item from stale criteria.
-        surpriseRequestGeneration: 0
+        surpriseRequestGeneration: 0,
     };
+
+    /**
+     * Report one layer-specific raster tile failure in the Catalog action.
+     *
+     * @param {string} message User-facing raster tile failure.
+     * @param {Object} item Affected Catalog Item.
+     * @return {void}
+     */
+    function reportRasterTileError(message, item) {
+        if (catalogItemsMatch(catalogState.selectedItem, item)) {
+            catalogLayerStatus.textContent = message;
+        }
+    }
+
+    /**
+     * Refresh the selected Item action from retained and pending state.
+     *
+     * @return {void}
+     */
+    function refreshCatalogMapAction() {
+        updateCatalogMapAction(catalogState.selectedItem);
+    }
+
+    /**
+     * Begin one assessment or publication action for a selected Item.
+     *
+     * @param {Object} item Selected Catalog Item.
+     * @param {string} buttonText In-progress action label.
+     * @param {string} statusText In-progress status explanation.
+     * @return {{item:Object,key:string,buttonText:string,statusText:string}}
+     * Identity token for matching completion.
+     * @throws {Error} If the Item already owns an in-flight action.
+     */
+    function beginCatalogMapAction(item, buttonText, statusText) {
+        const pendingAction = catalogState.pendingMapActions.begin(
+            item,
+            buttonText,
+            statusText
+        );
+        updateCatalogMapAction(item);
+        return pendingAction;
+    }
+
+    /**
+     * Finish only the action that still owns the selected Item controls.
+     *
+     * @param {{item:Object,key:string}} pendingAction Action identity returned
+     * at start.
+     * @return {void}
+     */
+    function finishCatalogMapAction(pendingAction) {
+        if (!catalogState.pendingMapActions.finish(pendingAction)) {
+            return;
+        }
+        if (catalogItemsMatch(catalogState.selectedItem, pendingAction.item)) {
+            updateCatalogMapAction(catalogState.selectedItem);
+        }
+    }
+
+    const rasterVisualization = initializeRasterViewer({
+        wmsUrl: appGlobalConfiguration.wmsUrl,
+        leafletMap,
+        leaflet: L,
+        onTileError: reportRasterTileError,
+        onLayersChange: refreshCatalogMapAction,
+    });
     /**
      * Apply the scanner-owned visualization decision to the map action.
      *
-     * @param {Object|null} item Selected catalog Item.
+     * @param {Object|null} item Selected Catalog Item.
      * @return {void}
      */
     function updateCatalogMapAction(item) {
         const visualization = getRasterVisualization(item);
+        const isRetained = item !== null && rasterVisualization.contains(item);
+        const pendingAction = item === null
+            ? null
+            : catalogState.pendingMapActions.get(item);
         catalogMapActionsElement.hidden = visualization === null;
-        catalogMapActionsElement.setAttribute("aria-busy", "false");
-        catalogLayerToggle.disabled = false;
+        catalogMapActionsElement.setAttribute(
+            "aria-busy",
+            String(pendingAction !== null)
+        );
+        catalogLayerToggle.disabled = pendingAction !== null;
         catalogLayerToggle.hidden = false;
-        catalogLayerToggle.textContent =
+        catalogLayerToggle.textContent = pendingAction?.buttonText ?? (
             visualization === undefined
                 ? "Assess for visualization"
                 : visualization?.eligible === false
                     ? "Reassess visualization"
-                    : "View on map";
-        catalogLayerStatus.textContent = visualization?.reason ?? "";
+                    : isRetained
+                        ? "Remove from map layers"
+                        : "Add to map layers"
+        );
+        catalogLayerStatus.textContent = pendingAction?.statusText ?? (
+            isRetained
+                ? "This raster is retained in the map layer stack."
+                : visualization?.reason ?? ""
+        );
     }
 
     /** Clears the selected result, footprint, and inspector together. */
@@ -525,7 +596,6 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
         catalogState.selectedButton?.classList.remove("is-selected");
         catalogState.selectedButton?.setAttribute("aria-pressed", "false");
         footprintController.clear();
-        rasterVisualization.reset();
         catalogState.selectedButton = null;
         catalogState.selectedItem = null;
         updateCatalogMapAction(null);
@@ -543,16 +613,12 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
 
     /** Select one result or remotely discovered Item without changing search. */
     function selectCatalogItem(item, requestedButton = null) {
+        catalogState.rasterAssessments.apply(item);
         const itemButton = requestedButton ??
             catalogState.resultButtons.get(catalogItemKey(item)) ?? null;
-        const selectionChanged = catalogState.selectedItem === null ||
-            catalogItemKey(catalogState.selectedItem) !== catalogItemKey(item);
         if (catalogState.selectedButton !== null) {
             catalogState.selectedButton.classList.remove("is-selected");
             catalogState.selectedButton.setAttribute("aria-pressed", "false");
-        }
-        if (selectionChanged) {
-            rasterVisualization.reset();
         }
         catalogState.selectedButton = itemButton;
         catalogState.selectedItem = item;
@@ -564,9 +630,7 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
             catalogState.collectionsDocument.collections,
             appGlobalConfiguration.scanDisplayPathPrefix
         );
-        if (selectionChanged) {
-            updateCatalogMapAction(item);
-        }
+        updateCatalogMapAction(item);
     }
 
     /**
@@ -607,6 +671,7 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
         }
 
         for (const item of itemCollection.features) {
+            catalogState.rasterAssessments.apply(item);
             const itemButton = document.createElement("button");
             itemButton.className = "catalog-result";
             itemButton.type = "button";
@@ -712,6 +777,7 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
     /** Start a new search and replace every result from the previous stream. */
     async function loadCatalog(reloadCollections = false) {
         const searchSequence = ++catalogState.searchSequence;
+        catalogState.rasterAssessments.clear();
         catalogState.surpriseRequestGeneration += 1;
         catalogState.searchText = catalogSearchInput.value;
         catalogSearchInput.removeAttribute("aria-invalid");
@@ -893,7 +959,7 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
     );
     retryPageButton.addEventListener("click", prefetchNextCatalogPage);
     /**
-     * Assess, reassess, display, or remove the selected catalog raster.
+     * Assess, reassess, add, or remove the selected Catalog raster.
      *
      * @return {Promise<void>} Completion after the selected action settles.
      */
@@ -904,25 +970,38 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
             visualization === undefined ||
             visualization?.eligible === false
         ) {
-            catalogMapActionsElement.setAttribute("aria-busy", "true");
-            catalogLayerToggle.disabled = true;
-            catalogLayerToggle.textContent = "Assessing...";
-            catalogLayerStatus.textContent =
-                "Inspecting the selected raster.";
+            const pendingAction = beginCatalogMapAction(
+                selectedItem,
+                "Assessing...",
+                "Inspecting the selected raster."
+            );
             try {
                 const assessedItem = await assessCatalogRaster(selectedItem);
-                if (catalogState.selectedItem !== selectedItem) {
+                catalogState.rasterAssessments.record(
+                    selectedItem,
+                    assessedItem
+                );
+                if (!catalogItemsMatch(
+                    catalogState.selectedItem,
+                    selectedItem
+                )) {
                     return;
                 }
-                Object.assign(selectedItem, assessedItem);
+                catalogState.rasterAssessments.apply(
+                    catalogState.selectedItem
+                );
                 renderCatalogItemInspector(
-                    selectedItem,
+                    catalogState.selectedItem,
                     catalogState.collectionsDocument.collections,
                     appGlobalConfiguration.scanDisplayPathPrefix
                 );
-                updateCatalogMapAction(selectedItem);
+                finishCatalogMapAction(pendingAction);
             } catch (assessmentError) {
-                if (catalogState.selectedItem === selectedItem) {
+                if (catalogItemsMatch(
+                    catalogState.selectedItem,
+                    selectedItem
+                )) {
+                    finishCatalogMapAction(pendingAction);
                     catalogLayerToggle.textContent =
                         visualization === undefined
                             ? "Assess for visualization"
@@ -930,48 +1009,47 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
                     catalogLayerStatus.textContent = assessmentError.message;
                 }
             } finally {
-                if (catalogState.selectedItem === selectedItem) {
-                    catalogMapActionsElement.setAttribute("aria-busy", "false");
-                    catalogLayerToggle.disabled = false;
-                }
+                finishCatalogMapAction(pendingAction);
             }
             return;
         }
 
-        if (rasterVisualization.isDisplayed) {
-            rasterVisualization.clear();
-            catalogLayerToggle.textContent = "View on map";
-            catalogLayerStatus.textContent = "Raster removed from the map.";
+        if (rasterVisualization.contains(selectedItem)) {
+            rasterVisualization.remove(selectedItem);
+            catalogLayerToggle.textContent = "Add to map layers";
+            catalogLayerStatus.textContent =
+                "Raster removed from the map layer stack.";
             return;
         }
 
-        catalogMapActionsElement.setAttribute("aria-busy", "true");
-        catalogLayerToggle.disabled = true;
-        catalogLayerToggle.textContent = "Adding to map…";
-        catalogLayerStatus.textContent = "Preparing the selected raster.";
+        const pendingAction = beginCatalogMapAction(
+            selectedItem,
+            "Adding to map…",
+            "Preparing the selected raster."
+        );
         try {
             const publishedRaster = await rasterVisualization.show(
                 selectedItem
             );
             if (
                 publishedRaster === null ||
-                catalogState.selectedItem !== selectedItem
+                !catalogItemsMatch(catalogState.selectedItem, selectedItem)
             ) {
                 return;
             }
-            catalogLayerToggle.textContent = "Remove from map";
+            finishCatalogMapAction(pendingAction);
+            catalogLayerToggle.textContent = "Remove from map layers";
             catalogLayerStatus.textContent =
-                "Raster displayed. Hover over the map to inspect pixels.";
+                "Raster retained in map layers. Hover over the map to " +
+                "inspect the active visible layer.";
         } catch (renderingError) {
-            if (catalogState.selectedItem === selectedItem) {
-                catalogLayerToggle.textContent = "View on map";
+            if (catalogItemsMatch(catalogState.selectedItem, selectedItem)) {
+                finishCatalogMapAction(pendingAction);
+                catalogLayerToggle.textContent = "Add to map layers";
                 catalogLayerStatus.textContent = renderingError.message;
             }
         } finally {
-            if (catalogState.selectedItem === selectedItem) {
-                catalogMapActionsElement.setAttribute("aria-busy", "false");
-                catalogLayerToggle.disabled = false;
-            }
+            finishCatalogMapAction(pendingAction);
         }
     }
     catalogLayerToggle.addEventListener("click", toggleCatalogRaster);

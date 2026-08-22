@@ -1,9 +1,11 @@
 """Shared data builders for application integration tests."""
 
+from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlsplit
 from urllib.request import url2pathname
 
+import httpx2
 import rasterio
 from rasterio.transform import from_origin
 
@@ -30,6 +32,78 @@ jvm_gc_collection_seconds_sum{gc="G1 Young Generation"} 0.305
 eolab_jvm_live_threads 42
 eolab_jvm_uptime_seconds 3600.5
 """.strip()
+
+
+class GeoServerPublicationMock:
+    """Model clean creation and complete publication reconciliation.
+
+    Args:
+        resource_name: Stable GeoServer store, coverage, and layer name.
+        on_create: Optional callback invoked during the external GeoTIFF PUT.
+
+    Attributes:
+        requests: Ordered GeoServer REST requests handled by the mock.
+        complete: Whether the store, coverage, and layer currently exist.
+    """
+
+    def __init__(
+        self,
+        resource_name: str = TEST_GEOTIFF_ITEM_ID,
+        on_create: Callable[[], None] | None = None,
+    ) -> None:
+        """Create an initially clean GeoServer publication mock.
+
+        Args:
+            resource_name: Stable GeoServer store, coverage, and layer name.
+            on_create: Optional callback invoked during external publication.
+
+        Returns:
+            None.
+        """
+        self.resource_name = resource_name
+        self.on_create = on_create
+        self.requests: list[httpx2.Request] = []
+        self.complete = False
+
+    def __call__(self, request: httpx2.Request) -> httpx2.Response:
+        """Handle one publication REST request through the state contract.
+
+        Args:
+            request: GeoServer REST request issued by the application.
+
+        Returns:
+            Exact response for clean creation or complete reconciliation.
+
+        Raises:
+            AssertionError: If the application issues an unsupported request.
+        """
+        self.requests.append(request)
+        path = request.url.path
+        if request.method == "GET":
+            if path.endswith("/workspaces/eolab.json"):
+                return httpx2.Response(200)
+            if path.endswith("/styles/dynamic-raster.sld"):
+                return httpx2.Response(200)
+            if path.endswith(
+                f"/coveragestores/{self.resource_name}.json"
+            ):
+                return httpx2.Response(200 if self.complete else 404)
+            if path.endswith(
+                f"/coverages/{self.resource_name}.json"
+            ):
+                return httpx2.Response(200 if self.complete else 404)
+            if path.endswith(f"/layers/{self.resource_name}.json"):
+                return httpx2.Response(200 if self.complete else 404)
+        if request.method == "PUT" and path.endswith("/external.geotiff"):
+            if self.on_create is not None:
+                self.on_create()
+            self.complete = True
+            return httpx2.Response(201)
+        if request.method == "PUT" and path.endswith(
+            f"/layers/{self.resource_name}.xml"
+        ):
+            return httpx2.Response(200)
+        raise AssertionError(f"Unexpected GeoServer request: {request}")
 
 
 def mounted_geotiff_item(
@@ -102,6 +176,9 @@ def write_geotiff(path: Path) -> None:
 
     Args:
         path: Destination path for the GeoTIFF.
+
+    Returns:
+        None.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     with rasterio.open(

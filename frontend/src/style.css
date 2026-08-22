@@ -497,6 +497,185 @@ h5 {
   font-size: 0.76rem;
 }
 
+.raster-layer-stack {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 18px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius);
+  background: var(--surface-3);
+  padding: 12px;
+}
+
+.raster-layer-stack[hidden] {
+  display: none;
+}
+
+.raster-layer-stack-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.raster-layer-stack-heading h4,
+.raster-layer-stack-heading .section-label,
+.raster-layer-stack-heading > p {
+  margin: 0;
+}
+
+.raster-layer-stack-heading > p {
+  max-width: 190px;
+  color: var(--text-3);
+  font-size: 0.68rem;
+  line-height: 1.4;
+  text-align: right;
+}
+
+.raster-layer-list {
+  display: grid;
+  gap: 9px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.raster-layer-row {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid var(--border-3);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  padding: 9px;
+}
+
+.raster-layer-row.is-active {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--brand) 30%, transparent);
+}
+
+.raster-layer-row.is-hidden {
+  opacity: 0.78;
+}
+
+.raster-layer-heading {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  gap: 7px;
+  align-items: center;
+}
+
+.raster-layer-name {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.raster-layer-name-block {
+  display: grid;
+  min-width: 0;
+}
+
+.raster-layer-identity {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: 0.62rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.raster-layer-state {
+  color: var(--text-3);
+  font-size: 0.65rem;
+  font-weight: 650;
+  text-transform: uppercase;
+}
+
+.raster-layer-heading .secondary-button,
+.raster-layer-order .secondary-button {
+  padding: 5px 7px;
+  font-size: 0.65rem;
+}
+
+.raster-layer-presentation {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(120px, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.raster-layer-visibility,
+.raster-layer-opacity {
+  color: var(--text-2);
+  font-size: 0.68rem;
+}
+
+.raster-layer-visibility {
+  white-space: nowrap;
+}
+
+.raster-layer-opacity {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(55px, 1fr) 34px;
+  gap: 6px;
+  align-items: center;
+}
+
+.raster-layer-opacity input {
+  min-width: 0;
+}
+
+.raster-layer-opacity output {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.raster-layer-order {
+  display: flex;
+  gap: 4px;
+}
+
+.raster-layer-legend {
+  height: 9px;
+  border: 1px solid rgb(0 0 0 / 24%);
+  border-radius: 2px;
+}
+
+.raster-layer-legend-labels {
+  display: flex;
+  justify-content: space-between;
+  margin-top: -5px;
+  color: var(--text-3);
+  font: 0.62rem/1.3 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.raster-layer-error,
+.raster-layer-stack-status {
+  margin: 0;
+  font-size: 0.68rem;
+  line-height: 1.4;
+}
+
+.raster-layer-error {
+  color: var(--status-danger);
+}
+
+.raster-layer-stack-status {
+  color: var(--text-3);
+}
+
+.raster-layer-stack-status:empty {
+  display: none;
+}
+
 .raster-style-controls {
   margin: 0 0 18px;
   border: 1px solid var(--border-2);
@@ -513,6 +692,13 @@ h5 {
   padding: 0 5px;
   font-size: 0.78rem;
   font-weight: 700;
+}
+
+.raster-active-layer-label {
+  margin: 0 0 10px;
+  color: var(--text-2);
+  font-size: 0.72rem;
+  font-weight: 650;
 }
 
 .raster-palette,
