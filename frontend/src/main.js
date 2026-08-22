@@ -19,6 +19,7 @@ import {
     assessCatalogRaster,
     buildRasterLegend,
     CatalogRasterLayerController,
+    clearRasterHistogramChart,
     DEFAULT_RASTER_SAMPLE_WINDOW_SIZE_KM,
     DEFAULT_RASTER_PERCENTILES,
     DEFAULT_RASTER_STYLE,
@@ -32,6 +33,7 @@ import {
     loadWmsCapabilities,
     RASTER_COLOR_PALETTES,
     RasterPixelProbeController,
+    renderRasterHistogramChart,
     RasterSampleWindowController,
     RasterStatisticsController,
     publishCatalogRaster,
@@ -776,8 +778,7 @@ function initializeRasterVisualization(
         rasterStatisticsIsApplicable = false;
         rasterHistogram.setAttribute("aria-busy", "false");
         rasterHistogramStatus.textContent = "";
-        rasterHistogramChart.replaceChildren();
-        rasterHistogramChart.setAttribute("hidden", "");
+        clearRasterHistogramChart(rasterHistogramChart);
         rasterHistogramAxis.hidden = true;
         rasterPercentileControls.hidden = true;
         retryRasterStatisticsButton.hidden = true;
@@ -792,41 +793,6 @@ function initializeRasterVisualization(
             scope === "selectedArea"
                 ? "Calculating an approximate distribution for the selected area…"
                 : "Calculating an approximate whole-raster distribution…";
-    }
-
-    /** Build the fixed 64-bar SVG from validated histogram counts. */
-    function renderRasterHistogramChart(statistics) {
-        const svgNamespace = "http://www.w3.org/2000/svg";
-        const chartWidth = 640;
-        const chartHeight = 112;
-        const plotHeight = 100;
-        const { counts } = statistics.histogram;
-        const maximumCount = Math.max(...counts);
-        const barWidth = chartWidth / counts.length;
-        const title = document.createElementNS(svgNamespace, "title");
-        title.textContent =
-            `Approximate band 1 histogram with ${counts.length} bins from ` +
-            `${statistics.validSampleCount.toLocaleString()} valid sampled ` +
-            `pixels. Values range from ${formatRasterPixelValue(
-                statistics.sampleMinimum
-            )} to ${formatRasterPixelValue(statistics.sampleMaximum)}; ` +
-            `the 5th, 50th, and 95th percentiles are ${formatRasterPixelValue(
-                statistics.percentiles.p05
-            )}, ${formatRasterPixelValue(statistics.percentiles.p50)}, and ` +
-            `${formatRasterPixelValue(statistics.percentiles.p95)}.`;
-        rasterHistogramChart.replaceChildren(title);
-        for (const [binIndex, count] of counts.entries()) {
-            const barHeight = count / maximumCount * plotHeight;
-            const bar = document.createElementNS(svgNamespace, "rect");
-            bar.classList.add("raster-histogram-bar");
-            bar.setAttribute("x", String(binIndex * barWidth));
-            bar.setAttribute("y", String(chartHeight - barHeight));
-            bar.setAttribute("width", String(barWidth - 1));
-            bar.setAttribute("height", String(barHeight));
-            rasterHistogramChart.append(bar);
-        }
-        rasterHistogramChart.setAttribute("aria-label", title.textContent);
-        rasterHistogramChart.removeAttribute("hidden");
     }
 
     /** Apply the initial whole-raster range if no manual edit superseded it. */
@@ -861,7 +827,7 @@ function initializeRasterVisualization(
             rasterStatisticsMatchesSelection(statistics, selectedRasterBounds);
         rasterHistogram.setAttribute("aria-busy", "false");
         retryRasterStatisticsButton.hidden = true;
-        renderRasterHistogramChart(statistics);
+        renderRasterHistogramChart(rasterHistogramChart, statistics);
         rasterHistogramMinimum.textContent =
             `≈ ${formatRasterPixelValue(statistics.sampleMinimum)}`;
         rasterHistogramMaximum.textContent =
@@ -907,8 +873,7 @@ function initializeRasterVisualization(
         rasterStatistics = null;
         rasterStatisticsIsApplicable = false;
         rasterHistogram.setAttribute("aria-busy", "false");
-        rasterHistogramChart.replaceChildren();
-        rasterHistogramChart.setAttribute("hidden", "");
+        clearRasterHistogramChart(rasterHistogramChart);
         rasterHistogramAxis.hidden = true;
         rasterPercentileControls.hidden = true;
         retryRasterStatisticsButton.hidden = false;
@@ -960,7 +925,15 @@ function initializeRasterVisualization(
     }
 
     function renderSelectedRasterStatistics(statistics) {
-        renderRasterStatistics(statistics);
+        rasterStyleRevision += 1;
+        rasterStyle = deriveRasterStyleFromStatistics(
+            rasterStyle,
+            statistics,
+            DEFAULT_RASTER_PERCENTILES
+        );
+        setRasterStyleControls(rasterStyle, rasterPalette.value);
+        commitRasterStyle();
+        renderRasterStatistics(statistics, true);
     }
 
     function renderSelectedRasterStatisticsError(error) {

@@ -882,6 +882,61 @@ export function formatRasterPixelValue(value) {
     return value === 0 ? "0" : value.toExponential(3);
 }
 
+/**
+ * Render the validated fixed-bin distribution into its SVG chart.
+ *
+ * SVG elements do not implement HTMLElement.hidden, so visibility is changed
+ * through the actual attribute that the stylesheet consumes.
+ *
+ * @param {SVGSVGElement} chart Histogram chart element.
+ * @param {Object} statistics Validated raster statistics.
+ * @param {Document} [documentContext] DOM document; injectable for tests.
+ * @return {void}
+ */
+export function renderRasterHistogramChart(
+    chart,
+    statistics,
+    documentContext = globalThis.document
+) {
+    const svgNamespace = "http://www.w3.org/2000/svg";
+    const chartWidth = 640;
+    const chartHeight = 112;
+    const plotHeight = 100;
+    const { counts } = statistics.histogram;
+    const maximumCount = Math.max(...counts);
+    const barWidth = chartWidth / counts.length;
+    const title = documentContext.createElementNS(svgNamespace, "title");
+    title.textContent =
+        `Approximate band 1 histogram with ${counts.length} bins from ` +
+        `${statistics.validSampleCount.toLocaleString()} valid sampled ` +
+        `pixels. Values range from ${formatRasterPixelValue(
+            statistics.sampleMinimum
+        )} to ${formatRasterPixelValue(statistics.sampleMaximum)}; ` +
+        `the 5th, 50th, and 95th percentiles are ${formatRasterPixelValue(
+            statistics.percentiles.p05
+        )}, ${formatRasterPixelValue(statistics.percentiles.p50)}, and ` +
+        `${formatRasterPixelValue(statistics.percentiles.p95)}.`;
+    chart.replaceChildren(title);
+    for (const [binIndex, count] of counts.entries()) {
+        const barHeight = count / maximumCount * plotHeight;
+        const bar = documentContext.createElementNS(svgNamespace, "rect");
+        bar.classList.add("raster-histogram-bar");
+        bar.setAttribute("x", String(binIndex * barWidth));
+        bar.setAttribute("y", String(chartHeight - barHeight));
+        bar.setAttribute("width", String(barWidth - 1));
+        bar.setAttribute("height", String(barHeight));
+        chart.append(bar);
+    }
+    chart.setAttribute("aria-label", title.textContent);
+    chart.removeAttribute("hidden");
+}
+
+/** Remove a histogram and hide its SVG through the SVG attribute contract. */
+export function clearRasterHistogramChart(chart) {
+    chart.replaceChildren();
+    chart.setAttribute("hidden", "");
+}
+
 /** Sample the latest hover position at most every 100 milliseconds. */
 export class RasterPixelProbeController {
     /**

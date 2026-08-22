@@ -7,6 +7,7 @@ import {
   buildRasterLegend,
   buildRasterSampleWindowBounds,
   CatalogRasterLayerController,
+  clearRasterHistogramChart,
   DEFAULT_RASTER_SAMPLE_WINDOW_SIZE_KM,
   DEFAULT_RASTER_PERCENTILES,
   DEFAULT_RASTER_STYLE,
@@ -19,6 +20,7 @@ import {
   loadCatalogRasterStatistics,
   loadWmsCapabilities,
   RasterPixelProbeController,
+  renderRasterHistogramChart,
   RasterSampleWindowController,
   RasterStatisticsController,
   publishCatalogRaster,
@@ -73,6 +75,41 @@ const SELECTED_RASTER_STATISTICS = Object.freeze({
   ...RASTER_STATISTICS,
   scope: "selectedArea",
   selectedBounds: SELECTED_BOUNDS,
+});
+
+class FakeSvgElement {
+  constructor(tagName) {
+    this.tagName = tagName;
+    this.attributes = new Map();
+    this.children = [];
+    this.classNames = [];
+    this.classList = { add: (name) => this.classNames.push(name) };
+    this.textContent = "";
+  }
+
+  append(child) {
+    this.children.push(child);
+  }
+
+  replaceChildren(...children) {
+    this.children = children;
+  }
+
+  setAttribute(name, value) {
+    this.attributes.set(name, value);
+  }
+
+  removeAttribute(name) {
+    this.attributes.delete(name);
+  }
+
+  hasAttribute(name) {
+    return this.attributes.has(name);
+  }
+}
+
+const FAKE_SVG_DOCUMENT = Object.freeze({
+  createElementNS: (_namespace, tagName) => new FakeSvgElement(tagName),
 });
 
 test("raster style serializes the dynamic SLD contract", () => {
@@ -520,6 +557,47 @@ test("loadCatalogRasterStatistics sends only Item identity and validates data", 
       },
     },
   ]);
+});
+
+test("raster histogram rendering displays all 64 SVG bars", () => {
+  const chart = new FakeSvgElement("svg");
+  chart.setAttribute("hidden", "");
+
+  renderRasterHistogramChart(chart, RASTER_STATISTICS, FAKE_SVG_DOCUMENT);
+
+  assert.equal(chart.hasAttribute("hidden"), false);
+  assert.equal(chart.children[0].tagName, "title");
+  assert.equal(chart.children.slice(1).length, 64);
+  assert.ok(chart.children.slice(1).every(
+    (bar) => bar.tagName === "rect" &&
+      bar.classNames.includes("raster-histogram-bar"),
+  ));
+
+  clearRasterHistogramChart(chart);
+  assert.equal(chart.hasAttribute("hidden"), true);
+  assert.equal(chart.children.length, 0);
+});
+
+test("selected histogram percentiles replace the whole-raster display range", () => {
+  const selectedStatistics = {
+    ...SELECTED_RASTER_STATISTICS,
+    percentiles: { p05: 0.002, p50: 0.015, p95: 0.4 },
+    suggestedRange: { minimum: 0.002, midpoint: 0.015, maximum: 0.4 },
+  };
+
+  assert.deepEqual(
+    deriveRasterStyleFromStatistics(
+      DEFAULT_RASTER_STYLE,
+      selectedStatistics,
+      DEFAULT_RASTER_PERCENTILES,
+    ),
+    {
+      ...DEFAULT_RASTER_STYLE,
+      minimum: 0.002,
+      midpoint: 0.015,
+      maximum: 0.4,
+    },
+  );
 });
 
 test("loadCatalogRasterStatistics adds only validated selected bounds", async () => {
