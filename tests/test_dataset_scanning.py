@@ -26,14 +26,16 @@ from rasterio.transform import from_bounds, from_origin
 
 from eolab_app.geotiff import (
     ACQUISITION_DATETIME_DESCRIPTION,
-    COG_MEDIA_TYPE,
     FALLBACK_DATETIME_DESCRIPTION,
     FILE_EXTENSION,
+    SUGGESTED_WARP_BOUNDS_DESCRIPTION,
+    build_stac_item as build_geotiff_stac_item,
+)
+from eolab_app.raster.eligibility import (
+    COG_MEDIA_TYPE,
     GEOTIFF_MEDIA_TYPE,
     RENDERING_METADATA_KEY,
-    SUGGESTED_WARP_BOUNDS_DESCRIPTION,
     assess_raster_renderability,
-    build_stac_item as build_geotiff_stac_item,
 )
 from eolab_app.scanning import (
     CatalogItemSource,

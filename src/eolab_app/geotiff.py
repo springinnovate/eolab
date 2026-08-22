@@ -11,39 +11,25 @@ import rasterio
 from rasterio.transform import array_bounds
 from rasterio.warp import calculate_default_transform, transform_bounds
 
+from eolab_app.raster.eligibility import (
+    COG_MEDIA_TYPE,
+    DIRECT_RENDERING_MAX_BYTES,
+    GEOTIFF_MEDIA_TYPE,
+    GEOTIFF_MEDIA_TYPES,
+    MOUNTED_GEOTIFF_COLLECTION_ID,
+    MOUNTED_GEOTIFF_ITEM_ID_PATTERN,
+    OVERVIEW_RENDERING_MAX_BYTES,
+    OVERVIEW_RENDERING_MAX_DIMENSION,
+    RASTER_DATA_TYPE_BYTES,
+    RENDERING_MAX_BLOCK_EDGE,
+    RENDERING_METADATA_KEY,
+    RENDERING_POLICY,
+    SUPPORTED_RENDERING_DATA_TYPES,
+    assess_raster_renderability,
+    inspect_raster_renderability as inspect_geotiff_renderability,
+)
 
-GEOTIFF_MEDIA_TYPE = "image/tiff; application=geotiff"
-COG_MEDIA_TYPE = (
-    "image/tiff; application=geotiff; profile=cloud-optimized"
-)
-GEOTIFF_MEDIA_TYPES = frozenset({GEOTIFF_MEDIA_TYPE, COG_MEDIA_TYPE})
-MOUNTED_GEOTIFF_COLLECTION_ID = "eolab-mounted-geotiffs"
-MOUNTED_GEOTIFF_ITEM_ID_PATTERN = r"^geotiff-[0-9a-f]{24}$"
-RENDERING_METADATA_KEY = "eolab:rendering"
-RENDERING_POLICY = "raster-v2"
-DIRECT_RENDERING_MAX_BYTES = 64 * 1024 * 1024
-OVERVIEW_RENDERING_MAX_BYTES = 64 * 1024 * 1024
-OVERVIEW_RENDERING_MAX_DIMENSION = 8192
-RENDERING_MAX_BLOCK_EDGE = 1024
-SUPPORTED_RENDERING_DATA_TYPES = frozenset(
-    {"uint8", "uint16", "int16", "int32", "float32", "float64"}
-)
-RASTER_DATA_TYPE_BYTES = {
-    "int8": 1,
-    "uint8": 1,
-    "float16": 2,
-    "int16": 2,
-    "uint16": 2,
-    "complex_int16": 4,
-    "float32": 4,
-    "int32": 4,
-    "uint32": 4,
-    "complex64": 8,
-    "float64": 8,
-    "int64": 8,
-    "uint64": 8,
-    "complex128": 16,
-}
+
 STAC_RASTER_DATA_TYPES = {
     "complex_int16": "cint16",
     # Rasterio combines GDAL CInt32, CFloat16, and CFloat32 under this name.
@@ -71,149 +57,6 @@ SUGGESTED_WARP_BOUNDS_DESCRIPTION = (
 RFC3339_TIMESTAMP = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$"
 )
-
-
-def assess_raster_renderability(
-    dataset: rasterio.io.DatasetReader,
-) -> dict[str, Any]:
-    """Assess a raster's eligibility under the raster-v2 policy.
-
-    The assessment reads only dataset structure and overview metadata. It does
-    not sample or decode raster pixels.
-
-    Args:
-        dataset: Open raster dataset.
-
-    Returns:
-        Versioned EOLab rendering metadata for the STAC data Asset.
-    """
-    data_types = tuple(dataset.dtypes)
-    bytes_per_pixel = sum(
-        RASTER_DATA_TYPE_BYTES[data_type] for data_type in data_types
-    )
-    estimated_uncompressed_bytes = (
-        dataset.width * dataset.height * bytes_per_pixel
-    )
-    block_shapes = [list(block_shape) for block_shape in dataset.block_shapes]
-    overview_factors = [
-        dataset.overviews(band_index) for band_index in dataset.indexes
-    ]
-    has_overviews = any(overview_factors)
-    external_overviews = any(
-        str(dataset_file).lower().endswith((".ovr", ".aux", ".rrd"))
-        for dataset_file in dataset.files
-    )
-    if not has_overviews:
-        overview_storage = "none"
-    elif external_overviews:
-        overview_storage = "external"
-    else:
-        overview_storage = "internal"
-    compression = (
-        dataset.compression.value
-        if dataset.compression is not None
-        else None
-    )
-
-    bounded_blocks = all(
-        max(block_height, block_width) <= RENDERING_MAX_BLOCK_EDGE
-        for block_height, block_width in block_shapes
-    )
-
-    if dataset.count != 1:
-        eligible = False
-        reason = (
-            "Visualization unavailable: the current raster style supports "
-            "one-band rasters."
-        )
-    elif data_types[0] not in SUPPORTED_RENDERING_DATA_TYPES:
-        eligible = False
-        reason = (
-            "Visualization unavailable: the current rendering path does not "
-            f"support {data_types[0]} pixels."
-        )
-    elif estimated_uncompressed_bytes <= DIRECT_RENDERING_MAX_BYTES:
-        eligible = True
-        reason = None
-    elif not bounded_blocks:
-        eligible = False
-        reason = (
-            "Visualization unavailable: this raster needs smaller internal "
-            "blocks."
-        )
-    elif overview_storage != "internal":
-        eligible = False
-        reason = (
-            "Visualization unavailable: this raster needs an internal "
-            "overview pyramid."
-        )
-    else:
-        factors = overview_factors[0]
-        complete_overview_pyramid = (
-            bool(factors)
-            and factors[0] == 2
-            and all(
-                previous_factor < current_factor <= previous_factor * 2
-                for previous_factor, current_factor in zip(
-                    factors,
-                    factors[1:],
-                )
-            )
-        )
-        if not complete_overview_pyramid:
-            eligible = False
-            reason = (
-                "Visualization unavailable: this raster needs an internal "
-                "overview pyramid beginning at 2x without skipped levels."
-            )
-        else:
-            coarsest_factor = factors[-1]
-            coarsest_width = math.ceil(dataset.width / coarsest_factor)
-            coarsest_height = math.ceil(dataset.height / coarsest_factor)
-            coarsest_bytes = (
-                coarsest_width * coarsest_height * bytes_per_pixel
-            )
-            if (
-                max(coarsest_width, coarsest_height)
-                > OVERVIEW_RENDERING_MAX_DIMENSION
-            ):
-                eligible = False
-                reason = (
-                    "Visualization unavailable: the coarsest internal "
-                    "overview is wider or taller than "
-                    f"{OVERVIEW_RENDERING_MAX_DIMENSION} pixels."
-                )
-            elif coarsest_bytes > OVERVIEW_RENDERING_MAX_BYTES:
-                eligible = False
-                reason = (
-                    "Visualization unavailable: the coarsest internal "
-                    "overview exceeds "
-                    f"{OVERVIEW_RENDERING_MAX_BYTES // (1024 * 1024)} MiB "
-                    "of decoded pixel data."
-                )
-            else:
-                eligible = True
-                reason = None
-
-    rendering_metadata = {
-        "policy": RENDERING_POLICY,
-        "eligible": eligible,
-        "bounded_blocks": bounded_blocks,
-        "block_shapes": block_shapes,
-        "overview_factors": overview_factors,
-        "overview_storage": overview_storage,
-        "compression": compression,
-        "estimated_uncompressed_bytes": estimated_uncompressed_bytes,
-    }
-    if reason is not None:
-        rendering_metadata["reason"] = reason
-    return rendering_metadata
-
-
-def inspect_geotiff_renderability(geotiff_path: Path) -> dict[str, Any]:
-    """Open one GeoTIFF at the synchronous metadata-inspection boundary."""
-    with rasterio.open(geotiff_path) as dataset:
-        return assess_raster_renderability(dataset)
 
 
 def build_stac_item(source_root: Path, geotiff_path: Path) -> dict[str, Any]:
