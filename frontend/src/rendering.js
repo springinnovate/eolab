@@ -902,7 +902,7 @@ export function renderRasterHistogramChart(
     const chartWidth = 640;
     const chartHeight = 112;
     const plotHeight = 100;
-    const { counts } = statistics.histogram;
+    const { counts, edges } = statistics.histogram;
     const maximumCount = Math.max(...counts);
     const barWidth = chartWidth / counts.length;
     const title = documentContext.createElementNS(svgNamespace, "title");
@@ -925,6 +925,19 @@ export function renderRasterHistogramChart(
         bar.setAttribute("y", String(chartHeight - barHeight));
         bar.setAttribute("width", String(barWidth - 1));
         bar.setAttribute("height", String(barHeight));
+        const binTitle = documentContext.createElementNS(
+            svgNamespace,
+            "title"
+        );
+        const binMidpoint = (edges[binIndex] + edges[binIndex + 1]) / 2;
+        const samplePercent = count / statistics.validSampleCount * 100;
+        binTitle.textContent =
+            `Bin midpoint ${formatRasterPixelValue(binMidpoint)}; ` +
+            `${samplePercent.toFixed(2)}% of the valid sample ` +
+            `(${count.toLocaleString()} pixels). Value range ` +
+            `${formatRasterPixelValue(edges[binIndex])} to ` +
+            `${formatRasterPixelValue(edges[binIndex + 1])}.`;
+        bar.append(binTitle);
         chart.append(bar);
     }
     chart.setAttribute("aria-label", title.textContent);

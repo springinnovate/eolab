@@ -98,6 +98,8 @@ window and displays its bounded histogram. The percentile controls immediately
 show the selected distribution's approximate 5th, 50th, and 95th percentile
 values without changing the rendered colors. **Rescale colors to this range**
 applies those values, or other selected percentiles, when the user chooses.
+Hovering a histogram bar reports its bin midpoint, its percentage of the valid
+sample, its sampled-pixel count, and its value range.
 **Sample map center** provides the same action for keyboard users, and **Use
 whole raster** restores the retained dataset distribution while leaving the
 hover window active. Masked, nodata, and non-finite samples are excluded. A

@@ -570,7 +570,10 @@ test("raster histogram rendering displays all 64 SVG bars", () => {
   assert.equal(chart.children.slice(1).length, 64);
   assert.ok(chart.children.slice(1).every(
     (bar) => bar.tagName === "rect" &&
-      bar.classNames.includes("raster-histogram-bar"),
+      bar.classNames.includes("raster-histogram-bar") &&
+      bar.children[0].tagName === "title" &&
+      bar.children[0].textContent.includes("Bin midpoint") &&
+      bar.children[0].textContent.includes("1.56% of the valid sample"),
   ));
 
   clearRasterHistogramChart(chart);
