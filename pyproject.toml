@@ -16,6 +16,7 @@ dependencies = [
     "ijson>=3.5,<4",
     "numpy>=1.26,<3",
     "psycopg[binary]>=3.2,<4",
+    "python-multipart>=0.0.20,<1",
     "rasterio>=1.5,<2",
     "uvicorn[standard]>=0.30,<1",
 ]
