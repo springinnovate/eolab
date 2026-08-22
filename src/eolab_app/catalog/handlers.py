@@ -5,6 +5,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from eolab_app.catalog.geojson import (
+    build_stac_item as build_geojson_stac_item,
+    discover_geojson_datasets,
+)
 from eolab_app.catalog.geotiff import build_stac_item as build_geotiff_stac_item
 from eolab_app.catalog.models import DatasetCandidate
 from eolab_app.catalog.shapefile import (
@@ -260,11 +264,55 @@ def build_shapefile_items(
     ),)
 
 
+def discover_geojson_feature_collections(
+    directory_path: Path,
+    directory_names: tuple[str, ...],
+    file_names: tuple[str, ...],
+) -> HandlerDiscovery:
+    """Recognize GeoJSON FeatureCollection candidates in one directory.
+
+    Args:
+        directory_path: Directory containing the listed entries.
+        directory_names: Sorted child directory names, unused by this handler.
+        file_names: Sorted child file names.
+
+    Returns:
+        GeoJSON file matches without directory pruning.
+    """
+    del directory_names
+    return HandlerDiscovery(matches=tuple(
+        DatasetMatch(geojson_path)
+        for geojson_path in discover_geojson_datasets(
+            directory_path,
+            file_names,
+        )
+    ))
+
+
+def build_geojson_items(
+    source_root: Path,
+    candidate: DatasetCandidate,
+) -> tuple[DatasetItem, ...]:
+    """Build the single Item represented by a GeoJSON FeatureCollection.
+
+    Args:
+        source_root: Root directory mounted for scanning.
+        candidate: GeoJSON candidate selected during discovery.
+
+    Returns:
+        A one-Item tuple containing streamed GeoJSON metadata.
+
+    Raises:
+        Exception: Propagates GeoJSON parsing and metadata failures.
+    """
+    return (build_geojson_stac_item(source_root, candidate.path),)
+
+
 def create_default_dataset_handler_registry() -> DatasetHandlerRegistry:
     """Create the explicit registry for currently supported mounted formats.
 
     Returns:
-        Registry containing only GeoTIFF and mounted Shapefile handlers.
+        Registry containing GeoTIFF, mounted Shapefile, and GeoJSON handlers.
     """
     return DatasetHandlerRegistry(handlers=(
         DatasetHandler(
@@ -276,5 +324,10 @@ def create_default_dataset_handler_registry() -> DatasetHandlerRegistry:
             name="shapefile",
             discover=discover_mounted_shapefiles,
             build_items=build_shapefile_items,
+        ),
+        DatasetHandler(
+            name="geojson",
+            discover=discover_geojson_feature_collections,
+            build_items=build_geojson_items,
         ),
     ))
