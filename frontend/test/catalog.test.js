@@ -341,7 +341,12 @@ test("Catalog search help presents the viewable filter", () => {
   );
 });
 
-test("Surprise me appears immediately after Catalog search", () => {
+/**
+ * Verify the surprise action remains between Catalog search and its results.
+ *
+ * @returns {void}
+ */
+function testSurpriseActionOrder() {
   const catalogMarkup = readFileSync(
     new URL("../index.html", import.meta.url),
     "utf8",
@@ -351,16 +356,18 @@ test("Surprise me appears immediately after Catalog search", () => {
     catalogMarkup.indexOf('id="catalog-search"'),
   );
   const surpriseButton = catalogMarkup.indexOf('id="surprise-catalog"');
-  const scanControls = catalogMarkup.indexOf('class="scan-card"');
+  const catalogResults = catalogMarkup.indexOf('id="catalog-results-scroll"');
 
   assert.ok(searchEnd < surpriseButton);
-  assert.ok(surpriseButton < scanControls);
+  assert.ok(surpriseButton < catalogResults);
   assert.match(
     catalogMarkup,
     /<button[\s\S]*id="surprise-catalog"[\s\S]*type="button"/,
   );
   assert.match(catalogMarkup, /id="catalog-surprise-status" role="status"/);
-});
+}
+
+test("Surprise me appears immediately after Catalog search", testSurpriseActionOrder);
 
 test("CatalogSurpriseClient sends active filters and prior Item identity", async () => {
   let capturedRequest;
