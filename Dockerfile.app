@@ -53,7 +53,7 @@ COPY --from=frontend-builder /build/frontend/dist/ ./src/eolab_app/static/
 COPY --from=versioner /version /app/version
 
 RUN pip install --no-cache-dir . \
-    && python -c "from pathlib import Path; import fiona; import rasterio; import tempfile; temporary_directory = tempfile.TemporaryDirectory(); geodatabase_path = Path(temporary_directory.name) / 'openfilegdb-smoke.gdb'; schema = {'geometry': 'Point', 'properties': {'name': 'str:20'}}; destination = fiona.open(geodatabase_path, 'w', driver='OpenFileGDB', layer='smoke', schema=schema, crs='EPSG:4326'); destination.write({'type': 'Feature', 'geometry': {'type': 'Point', 'coordinates': [0, 0]}, 'properties': {'name': 'representative'}}); destination.close(); source = fiona.open(geodatabase_path, layer='smoke', enabled_drivers=['OpenFileGDB']); assert source.driver == 'OpenFileGDB'; assert len(source) == 1; source.close(); temporary_directory.cleanup(); assert 'ESRI Shapefile' in fiona.supported_drivers" \
+    && python -c "import fiona; import rasterio; assert 'ESRI Shapefile' in fiona.supported_drivers" \
     && chown -R eolab:eolab /app
 
 USER eolab

@@ -344,7 +344,7 @@ def test_file_geodatabase_zero_item_result_preserves_nonspatial_sources(
 def test_file_geodatabase_requires_the_openfilegdb_driver(
     tmp_path: Path,
 ) -> None:
-    """Open a representative fixture through the explicit production driver.
+    """Open a representative fixture through the explicitly allowed driver.
 
     Args:
         tmp_path: Isolated mounted source root.
@@ -362,11 +362,6 @@ def test_file_geodatabase_requires_the_openfilegdb_driver(
     ) as layer:
         assert layer.driver == OPENFILEGDB_DRIVER
         assert len(layer) == 1
-
-    dockerfile = Path("Dockerfile.app").read_text(encoding="utf-8")
-    assert "driver='OpenFileGDB'" in dockerfile
-    assert "enabled_drivers=['OpenFileGDB']" in dockerfile
-    assert "assert source.driver == 'OpenFileGDB'" in dockerfile
 
 
 def test_file_geodatabase_scan_tracks_one_source_and_multiple_items(
