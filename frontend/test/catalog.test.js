@@ -14,6 +14,7 @@ import {
   findPaginationLink,
   formatCatalogItemCount,
   formatScanReconciliation,
+  formatScanProgressCounts,
   formatScanTiming,
   formatScanStatusSummary,
   getRasterVisualization,
@@ -607,6 +608,22 @@ test("formatScanStatusSummary distinguishes scan and dataset failures", () => {
   );
 });
 
+test("formatScanProgressCounts separates source datasets from catalog Items", () => {
+  assert.equal(
+    formatScanProgressCounts({
+      sourceDatasetsDiscovered: 4,
+      sourceDatasetsProcessed: 3,
+      catalogItemsProduced: 5,
+      catalogItemsWritten: 2,
+      catalogItemsAlreadyPresent: 1,
+      failed: 1,
+    }),
+    "4 source datasets discovered · 3 source datasets processed · " +
+      "5 catalog Items produced · 2 catalog Items written (1 new, " +
+      "1 existing) · 1 failed",
+  );
+});
+
 test("formatScanReconciliation reports cleanup progress and failures", () => {
   assert.equal(
     formatScanReconciliation({
@@ -1063,6 +1080,35 @@ test("buildCatalogItemDetails presents mounted Shapefile metadata", () => {
       },
     ],
   );
+});
+
+test("buildCatalogItemDetails omits unavailable vector conventions", () => {
+  const inspector = buildCatalogItemDetails(
+    {
+      id: "vector-without-table-metadata",
+      collection: "eolab-mounted-vectors",
+      geometry: { type: "Point", coordinates: [0, 0] },
+      properties: {
+        datetime: "2026-08-22T00:00:00Z",
+        title: "Vectors/minimal.vector",
+      },
+      assets: {},
+    },
+    [],
+    "/mounted",
+  );
+
+  assert.equal(
+    inspector.metadata.some(({ label }) => label === "Feature count"),
+    false,
+  );
+  assert.equal(
+    inspector.metadata.some(
+      ({ label }) => label === "Declared feature geometry type",
+    ),
+    false,
+  );
+  assert.deepEqual(inspector.fields, []);
 });
 
 test("buildCatalogItemDetails omits unavailable optional metadata", () => {

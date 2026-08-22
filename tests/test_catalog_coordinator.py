@@ -29,4 +29,9 @@ def test_initial_scan_status_is_typed_but_preserves_public_shape(
     assert second["workerCount"] == 3
     assert second["writerCount"] == 2
     assert second["batchSize"] == 25
+    assert second["sourceDatasetsDiscovered"] == 0
+    assert second["sourceDatasetsProcessed"] == 0
+    assert second["catalogItemsProduced"] == 0
+    assert second["catalogItemsWritten"] == 0
+    assert second["catalogItemsAlreadyPresent"] == 0
     assert second["reconciliation"]["state"] == "not_started"

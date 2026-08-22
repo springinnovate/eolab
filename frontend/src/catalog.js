@@ -107,6 +107,30 @@ export function formatScanStatusSummary(scanStatus) {
 }
 
 /**
+ * Formats distinct source-dataset and catalog-Item progress counts.
+ *
+ * @param {Object} scanStatus Scan progress returned by the backend.
+ * @return {string} Human-readable source and output counts.
+ */
+export function formatScanProgressCounts(scanStatus) {
+    const newlyWritten =
+        scanStatus.catalogItemsWritten -
+        scanStatus.catalogItemsAlreadyPresent;
+    return (
+        `${scanStatus.sourceDatasetsDiscovered.toLocaleString()} source ` +
+        "datasets discovered · " +
+        `${scanStatus.sourceDatasetsProcessed.toLocaleString()} source ` +
+        "datasets processed · " +
+        `${scanStatus.catalogItemsProduced.toLocaleString()} catalog Items ` +
+        "produced · " +
+        `${scanStatus.catalogItemsWritten.toLocaleString()} catalog Items ` +
+        `written (${newlyWritten.toLocaleString()} new, ` +
+        `${scanStatus.catalogItemsAlreadyPresent.toLocaleString()} existing) · ` +
+        `${scanStatus.failed.toLocaleString()} failed`
+    );
+}
+
+/**
  * Formats scanner-owned catalog reconciliation progress.
  *
  * @param {Object} reconciliation Reconciliation state from scan status.
@@ -554,30 +578,9 @@ export function buildCatalogItemDetails(
             value: `${width} × ${height} pixels`
         });
     }
-    if (properties["table:row_count"] !== undefined) {
-        metadata.push({
-            label: "Feature count",
-            value: properties["table:row_count"].toLocaleString()
-        });
-    }
-    const primaryGeometryColumn = (properties["table:columns"] ?? []).find(
-        (column) => column.name === properties["table:primary_geometry"]
-    );
-    if (primaryGeometryColumn !== undefined) {
-        metadata.push({
-            label: "Declared feature geometry type",
-            value: primaryGeometryColumn.type
-        });
-    }
-
-    const fields = (properties["table:columns"] ?? [])
-        .filter(
-            (column) => column.name !== properties["table:primary_geometry"]
-        )
-        .map((column) => ({
-            label: column.name,
-            value: column.type ?? "Not provided"
-        }));
+    const vectorDetails = buildVectorInspectorDetails(properties);
+    metadata.push(...vectorDetails.metadata);
+    const fields = vectorDetails.fields;
 
     const assets = Object.entries(item.assets).map(([assetKey, asset]) => {
         const isMountedFile =
@@ -703,6 +706,42 @@ export function buildCatalogItemDetails(
         fields,
         assets
     };
+}
+
+/**
+ * Builds format-neutral vector details from STAC Table Extension properties.
+ * Missing properties add no empty format-specific inspector rows.
+ *
+ * @param {Object} properties STAC Item properties.
+ * @return {{metadata: Object[], fields: Object[]}} Vector summary rows and
+ * attribute fields.
+ */
+function buildVectorInspectorDetails(properties) {
+    const metadata = [];
+    if (properties["table:row_count"] !== undefined) {
+        metadata.push({
+            label: "Feature count",
+            value: properties["table:row_count"].toLocaleString()
+        });
+    }
+    const columns = properties["table:columns"] ?? [];
+    const primaryGeometryName = properties["table:primary_geometry"];
+    const primaryGeometryColumn = columns.find(
+        (column) => column.name === primaryGeometryName
+    );
+    if (primaryGeometryColumn?.type !== undefined) {
+        metadata.push({
+            label: "Declared feature geometry type",
+            value: primaryGeometryColumn.type
+        });
+    }
+    const fields = columns
+        .filter((column) => column.name !== primaryGeometryName)
+        .map((column) => ({
+            label: column.name,
+            value: column.type ?? "Not provided"
+        }));
+    return { metadata, fields };
 }
 
 /**

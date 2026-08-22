@@ -17,6 +17,7 @@ import {
     createDebouncedAction,
     formatCatalogItemCount,
     formatScanReconciliation,
+    formatScanProgressCounts,
     formatScanTiming,
     formatScanStatusSummary,
     getRasterVisualization,
@@ -899,18 +900,15 @@ function renderScanStatus(scanStatus) {
     }
     scanStatusDisclosureElement.dataset.running = String(isRunning);
     scanProgressElement.hidden = scanStatus.state === "not_started";
-    scanProgressElement.max = Math.max(scanStatus.discovered, 1);
-    scanProgressElement.value = scanStatus.processed;
-    const newlyCataloged = scanStatus.indexed - scanStatus.alreadyInCatalog;
+    scanProgressElement.max = Math.max(
+        scanStatus.sourceDatasetsDiscovered,
+        1
+    );
+    scanProgressElement.value = scanStatus.sourceDatasetsProcessed;
     scanCountsElement.textContent =
         scanStatus.state === "not_started"
             ? ""
-            : `${scanStatus.discovered.toLocaleString()} discovered · ` +
-              `${scanStatus.processed.toLocaleString()} processed · ` +
-              `${newlyCataloged.toLocaleString()} newly cataloged · ` +
-              `${scanStatus.alreadyInCatalog.toLocaleString()} ` +
-              `already in catalog · ` +
-              `${scanStatus.failed.toLocaleString()} failed`;
+            : formatScanProgressCounts(scanStatus);
     scanReconciliationElement.hidden = scanStatus.state === "not_started";
     scanReconciliationElement.textContent = formatScanReconciliation(
         scanStatus.reconciliation

@@ -10,11 +10,16 @@ import fiona
 from rasterio.crs import CRS
 from rasterio.warp import transform_bounds
 
+from eolab_app.catalog.vector import (
+    MOUNTED_VECTOR_COLLECTION_ID,
+    TABLE_EXTENSION,
+    build_vector_table_properties,
+)
+
 
 PROJECTION_EXTENSION = (
     "https://stac-extensions.github.io/projection/v1.1.0/schema.json"
 )
-TABLE_EXTENSION = "https://stac-extensions.github.io/table/v1.2.0/schema.json"
 SHAPEFILE_COMPONENT_TYPES = {
     ".shp": "application/vnd.shp",
     ".shx": "application/vnd.shx",
@@ -148,15 +153,14 @@ def build_stac_item(
         properties: dict[str, Any] = {
             "title": relative_path_text,
             "description": FALLBACK_DATETIME_DESCRIPTION,
-            "table:row_count": feature_count,
-            "table:columns": [
-                {"name": "geometry", "type": geometry_type},
-                *(
-                    {"name": field_name, "type": str(field_type)}
+            **build_vector_table_properties(
+                feature_count,
+                geometry_type,
+                (
+                    (field_name, str(field_type))
                     for field_name, field_type in attribute_fields.items()
                 ),
-            ],
-            "table:primary_geometry": "geometry",
+            ),
         }
         if epsg_code := dataset.crs.to_epsg():
             properties["proj:epsg"] = epsg_code
@@ -228,7 +232,7 @@ def build_stac_item(
             TABLE_EXTENSION,
         ],
         "id": f"shapefile-{item_identifier[:24]}",
-        "collection": "eolab-mounted-vectors",
+        "collection": MOUNTED_VECTOR_COLLECTION_ID,
         "geometry": footprint,
         "properties": properties,
         "links": [],

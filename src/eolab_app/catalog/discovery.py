@@ -3,25 +3,30 @@
 import os
 from pathlib import Path
 
+from eolab_app.catalog.handlers import DatasetHandlerRegistry
 from eolab_app.catalog.models import DatasetCandidate, ScanError
-from eolab_app.catalog.shapefile import discover_shapefile_datasets
-
-
-SINGLE_FILE_DATASET_EXTENSIONS = frozenset({".tif", ".tiff"})
 
 
 class FilesystemDatasetDiscovery:
     """Find supported datasets below configured scan directories."""
 
-    def __init__(self, source_root: Path, source_paths: tuple[Path, ...]) -> None:
+    def __init__(
+        self,
+        source_root: Path,
+        source_paths: tuple[Path, ...],
+        dataset_handlers: DatasetHandlerRegistry,
+    ) -> None:
         """Configure filesystem discovery.
 
         Args:
             source_root: Root of the mounted scan source.
             source_paths: Directories below the mount to scan recursively.
+            dataset_handlers: Explicit handlers used for recognition and
+                container pruning.
         """
         self.source_root = source_root
         self.source_paths = source_paths
+        self.dataset_handlers = dataset_handlers
 
     def discover(self) -> tuple[list[DatasetCandidate], list[ScanError]]:
         """Find datasets without stopping on unreadable directories.
@@ -56,23 +61,21 @@ class FilesystemDatasetDiscovery:
                 source_path,
                 onerror=record_walk_error,
             ):
-                directory_names.sort()
-                for file_name in sorted(file_names):
-                    if (
-                        Path(file_name).suffix.lower()
-                        in SINGLE_FILE_DATASET_EXTENSIONS
-                    ):
-                        dataset_candidates.append(
-                            DatasetCandidate(Path(directory_path) / file_name)
-                        )
-                dataset_candidates.extend(
-                    DatasetCandidate(shapefile_path, component_paths)
-                    for shapefile_path, component_paths
-                    in discover_shapefile_datasets(
+                sorted_directory_names = tuple(sorted(directory_names))
+                sorted_file_names = tuple(sorted(file_names))
+                directory_candidates, pruned_directory_names = (
+                    self.dataset_handlers.discover_directory(
                         Path(directory_path),
-                        file_names,
+                        sorted_directory_names,
+                        sorted_file_names,
                     )
                 )
+                dataset_candidates.extend(directory_candidates)
+                directory_names[:] = [
+                    directory_name
+                    for directory_name in sorted_directory_names
+                    if directory_name not in pruned_directory_names
+                ]
         dataset_candidates.sort(
             key=lambda candidate: candidate.path.relative_to(
                 self.source_root
