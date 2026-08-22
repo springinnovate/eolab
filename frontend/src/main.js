@@ -25,6 +25,10 @@ import {
     MOUNTED_DATASET_TYPES,
 } from "./catalog.js";
 import { initializeCatalogPaneControls } from "./catalog-pane-controller.js";
+import {
+    applyCatalogSystemState,
+    synchronizeScanDisclosureState,
+} from "./catalog-system-state.js";
 import { assessCatalogRaster } from "./raster/api.js";
 import { initializeRasterViewer } from "./raster/raster-viewer.js";
 import {
@@ -150,12 +154,18 @@ function applyAppGlobalConfiguration(appGlobalConfiguration) {
     document.querySelector("#open-panel").textContent =
         `Open ${appGlobalConfiguration.appTitle}`;
 
-    const systemStateElement = document.querySelector("#system-state");
-    const systemStateTextElement = document.querySelector("#system-state-text");
     const catalogLinkElement = document.querySelector("#catalog-link");
 
-    systemStateElement.classList.remove("is-connected", "is-warning");
-    systemStateTextElement.textContent = "Connecting to catalog";
+    applyCatalogSystemState(
+        {
+            disclosure: document.querySelector("#system-state"),
+            stateText: document.querySelector("#system-state-text"),
+            stateAnnouncement: document.querySelector(
+                "#catalog-state-announcement"
+            )
+        },
+        "Catalog: connecting"
+    );
     catalogLinkElement.href = appGlobalConfiguration.catalogUrl;
 }
 
@@ -418,8 +428,13 @@ function renderCatalogItemInspector(
  * @return {Promise<Function>} Function that reloads the active catalog search.
  */
 async function initializeCatalog(appGlobalConfiguration, leafletMap) {
-    const systemStateElement = document.querySelector("#system-state");
-    const systemStateTextElement = document.querySelector("#system-state-text");
+    const catalogSystemStateElements = {
+        disclosure: document.querySelector("#system-state"),
+        stateText: document.querySelector("#system-state-text"),
+        stateAnnouncement: document.querySelector(
+            "#catalog-state-announcement"
+        )
+    };
     const catalogMessageElement = document.querySelector("#catalog-message");
     const catalogSummaryElement = document.querySelector("#catalog-summary");
     const catalogResultsElement = document.querySelector("#catalog-results");
@@ -572,9 +587,11 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
                 collections.length === 1
                     ? (collections[0].title ?? collections[0].id)
                     : `${collections.length} collections`;
-            systemStateElement.classList.add("is-connected");
-            systemStateTextElement.textContent =
-                `Catalog connected · ${itemCountLabel}`;
+            applyCatalogSystemState(
+                catalogSystemStateElements,
+                `Catalog: connected · ${itemCountLabel}`,
+                "is-connected"
+            );
             catalogMessageElement.textContent = isFiltered
                 ? "Matching records were returned from the complete STAC catalog."
                 : "Records were returned from the deployed STAC catalog.";
@@ -703,8 +720,10 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
         catalogState.resultButtons.clear();
         catalogResultsElement.replaceChildren();
         catalogResultsElement.setAttribute("aria-busy", "true");
-        systemStateElement.classList.remove("is-connected", "is-warning");
-        systemStateTextElement.textContent = "Searching catalog";
+        applyCatalogSystemState(
+            catalogSystemStateElements,
+            "Catalog: searching"
+        );
         catalogMessageElement.textContent =
             "Requesting Collections and Items from the STAC API.";
         catalogSummaryElement.textContent = "Loading catalog contents";
@@ -739,16 +758,21 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
             if (catalogError instanceof CatalogSearchSyntaxError) {
                 catalogSearchInput.setAttribute("aria-invalid", "true");
                 catalogSearchError.textContent = catalogError.message;
-                systemStateTextElement.textContent =
-                    "Catalog search needs correction";
+                applyCatalogSystemState(
+                    catalogSystemStateElements,
+                    "Catalog: search needs correction"
+                );
                 catalogMessageElement.textContent =
                     "Correct the field filter and try again.";
                 catalogSummaryElement.textContent = catalogError.message;
                 streamStatusElement.textContent = "Catalog search was not sent.";
                 return;
             }
-            systemStateElement.classList.add("is-warning");
-            systemStateTextElement.textContent = "Catalog unavailable";
+            applyCatalogSystemState(
+                catalogSystemStateElements,
+                "Catalog: unavailable",
+                "is-warning"
+            );
             catalogMessageElement.textContent =
                 "Check the catalog services and try again.";
             catalogSummaryElement.textContent = catalogError.message;
@@ -950,6 +974,9 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
  */
 function renderScanStatus(scanStatus) {
     const startScanButton = document.querySelector("#start-scan");
+    const catalogStateDisclosureElement = document.querySelector(
+        "#system-state"
+    );
     const scanStatusDisclosureElement = document.querySelector(
         "#scan-status-disclosure"
     );
@@ -979,11 +1006,16 @@ function renderScanStatus(scanStatus) {
     startScanButton.disabled = isRunning;
     startScanButton.textContent = isRunning ? "Scanning…" : "Scan directories";
     scanStatusSummaryElement.textContent = formatScanStatusSummary(scanStatus);
-    // Set the default only when a scan starts or stops so polling does not
-    // override a user's disclosure choice during the same run.
-    if (isRunning !== wasRunning) {
-        scanStatusDisclosureElement.open = isRunning;
-    }
+    // Set defaults only when a scan starts or stops so polling does not
+    // override a user's disclosure choices during the same run.
+    synchronizeScanDisclosureState(
+        {
+            catalogState: catalogStateDisclosureElement,
+            scanStatus: scanStatusDisclosureElement
+        },
+        isRunning,
+        wasRunning
+    );
     scanStatusDisclosureElement.dataset.running = String(isRunning);
     scanProgressElement.hidden = scanStatus.state === "not_started";
     scanProgressElement.max = Math.max(
