@@ -679,34 +679,72 @@ test("formatCatalogItemCount handles empty, singular, and filtered results", () 
   );
 });
 
-test("formatScanStatusSummary distinguishes scan and dataset failures", () => {
+test("formatScanStatusSummary shows recency, live progress, and failures", () => {
   assert.equal(
-    formatScanStatusSummary({ state: "not_started", failed: 0 }),
-    "Scan status: Not started",
+    formatScanStatusSummary({
+      state: "not_started",
+      failed: 0,
+      finishedAt: null,
+    }),
+    "No scan has run since startup",
   );
   assert.equal(
-    formatScanStatusSummary({ state: "discovering", failed: 0 }),
-    "Scan status: In progress",
+    formatScanStatusSummary({
+      state: "discovering",
+      failed: 0,
+      finishedAt: null,
+    }),
+    "Scanning now · Discovering datasets",
   );
   assert.equal(
-    formatScanStatusSummary({ state: "scanning", failed: 12 }),
-    "Scan status: In progress",
+    formatScanStatusSummary({
+      state: "scanning",
+      sourceDatasetsDiscovered: 2487,
+      sourceDatasetsProcessed: 1200,
+      failed: 12,
+      finishedAt: null,
+    }),
+    "Scanning now · 1,200 of 2,487 datasets processed",
   );
   assert.equal(
-    formatScanStatusSummary({ state: "completed", failed: 0 }),
-    "Scan status: Complete",
+    formatScanStatusSummary({
+      state: "completed",
+      failed: 0,
+      finishedAt: "2026-08-22T21:05:34.123456Z",
+    }),
+    "Last scanned at 2026-08-22 21:05:34 UTC",
   );
   assert.equal(
-    formatScanStatusSummary({ state: "completed", failed: 1 }),
-    "Scan status: Complete · 1 dataset error",
+    formatScanStatusSummary({
+      state: "completed",
+      failed: 1,
+      finishedAt: "2026-08-22T21:05:34Z",
+    }),
+    "Last scanned at 2026-08-22 21:05:34 UTC · 1 dataset error",
   );
   assert.equal(
-    formatScanStatusSummary({ state: "completed", failed: 2487 }),
-    "Scan status: Complete · 2,487 dataset errors",
+    formatScanStatusSummary({
+      state: "completed",
+      failed: 2487,
+      finishedAt: "2026-08-22T21:05:34Z",
+    }),
+    "Last scanned at 2026-08-22 21:05:34 UTC · 2,487 dataset errors",
   );
   assert.equal(
-    formatScanStatusSummary({ state: "failed", failed: 0 }),
-    "Scan status: Failed",
+    formatScanStatusSummary({
+      state: "failed",
+      failed: 0,
+      finishedAt: "2026-08-22T21:06:03Z",
+    }),
+    "Last scan failed at 2026-08-22 21:06:03 UTC",
+  );
+  assert.equal(
+    formatScanStatusSummary({
+      state: "failed",
+      failed: 0,
+      finishedAt: null,
+    }),
+    "Last scan failed at time unavailable",
   );
   assert.throws(
     () => formatScanStatusSummary({ state: "complete", failed: 0 }),

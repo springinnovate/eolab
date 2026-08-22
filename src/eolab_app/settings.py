@@ -159,9 +159,10 @@ class Settings:
 
         Returns:
             Browser configuration containing application identity strings,
-            the browser-facing catalog and WMS URLs, basemap URL and
-            attribution strings, and numeric initial-view latitude,
-            longitude, and zoom values. Internal service URLs are not exposed.
+            the browser-facing catalog and WMS URLs, user-facing scan paths,
+            basemap URL and attribution strings, and numeric initial-view
+            latitude, longitude, and zoom values. Internal service URLs are
+            not exposed.
         """
         return {
             "appTitle": self.app_title,
@@ -170,6 +171,7 @@ class Settings:
             "catalogUrl": self.catalog_url,
             "wmsUrl": self.wms_url,
             "scanDisplayPathPrefix": self.scan_display_path_prefix,
+            "scanDisplayPaths": list(self.scan_display_paths()),
             "basemap": {
                 "url": self.basemap_url,
                 "attribution": self.basemap_attribution,
@@ -180,6 +182,33 @@ class Settings:
                 "zoom": self.initial_zoom,
             },
         }
+
+    def scan_display_paths(self) -> tuple[str, ...]:
+        """Build user-facing locations for the configured scan directories.
+
+        Returns:
+            Display prefix joined to each mount-relative scan directory using
+            the path separator implied by the configured display prefix. A
+            root scan path is represented by the display prefix alone.
+        """
+        separator = "\\" if "\\" in self.scan_display_path_prefix else "/"
+        display_paths: list[str] = []
+        for relative_path in self.scan_paths_within_mount:
+            relative_path_text = relative_path.as_posix()
+            if relative_path_text == ".":
+                display_paths.append(self.scan_display_path_prefix)
+                continue
+            normalized_relative_path = relative_path_text.replace("/", separator)
+            joiner = (
+                ""
+                if self.scan_display_path_prefix.endswith(("/", "\\"))
+                else separator
+            )
+            display_paths.append(
+                f"{self.scan_display_path_prefix}{joiner}"
+                f"{normalized_relative_path}"
+            )
+        return tuple(display_paths)
 
 
 def load_settings(

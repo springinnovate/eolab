@@ -27,6 +27,7 @@ import {
 import { initializeCatalogPaneControls } from "./catalog-pane-controller.js";
 import {
     applyCatalogSystemState,
+    renderScanLocations,
     synchronizeScanDisclosureState,
 } from "./catalog-system-state.js";
 import {
@@ -60,6 +61,7 @@ let scanPollTimeout = null;
  * @property {string} catalogUrl Browser-facing STAC catalog URL.
  * @property {string} wmsUrl Browser-facing WMS endpoint.
  * @property {string} scanDisplayPathPrefix User-facing root for mounted files.
+ * @property {string[]} scanDisplayPaths User-facing directories scanned recursively.
  * @property {{url: string, attribution: string}} basemap Basemap settings.
  * @property {{latitude: number, longitude: number, zoom: number}} initialView Initial map view.
  */
@@ -153,6 +155,10 @@ function applyAppGlobalConfiguration(appGlobalConfiguration) {
             )
         },
         "Catalog: connecting"
+    );
+    renderScanLocations(
+        document.querySelector("#scan-locations"),
+        appGlobalConfiguration.scanDisplayPaths
     );
     catalogLinkElement.href = appGlobalConfiguration.catalogUrl;
 }
@@ -1040,7 +1046,7 @@ function renderScanStatus(scanStatus) {
     }
 
     const statusMessages = {
-        not_started: "No scan has been started.",
+        not_started: "No scan has run since EOLab started.",
         discovering:
             "Discovering geospatial datasets in the mounted directories.",
         scanning: scanStatus.currentFile

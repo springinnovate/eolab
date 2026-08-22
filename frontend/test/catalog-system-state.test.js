@@ -4,6 +4,7 @@ import test from "node:test";
 
 import {
   applyCatalogSystemState,
+  renderScanLocations,
   synchronizeScanDisclosureState,
 } from "../src/catalog-system-state.js";
 
@@ -80,6 +81,8 @@ test("Catalog scan controls use a native system-state disclosure", () => {
     /class="system-state-details-body catalog-system-state-body"\s*role="region"\s*aria-label="Catalog scanning controls"\s*tabindex="0"/,
   );
   assert.match(catalogDisclosureMarkup, /id="start-scan"/);
+  assert.match(catalogDisclosureMarkup, />Scan locations<\/strong>/);
+  assert.match(catalogDisclosureMarkup, /id="scan-locations"/);
   assert.match(catalogDisclosureMarkup, /id="scan-status-disclosure"/);
   assert.match(catalogDisclosureMarkup, /id="scan-errors-disclosure"/);
   assert.doesNotMatch(
@@ -126,4 +129,31 @@ test("A running scan reveals the outer Catalog menu only on state transition", (
   synchronizeScanDisclosureState(elements, false, true);
   assert.equal(elements.catalogState.open, true);
   assert.equal(elements.scanStatus.open, false);
+});
+
+test("Scan locations replace the loading state with configured paths", () => {
+  const children = [];
+  const listElement = {
+    ownerDocument: {
+      createElement(tagName) {
+        return { tagName, textContent: "" };
+      },
+    },
+    replaceChildren(...newChildren) {
+      children.splice(0, children.length, ...newChildren);
+    },
+  };
+
+  renderScanLocations(listElement, [
+    "bigboi -- Z:\\bigbucket\\incoming",
+    "bigboi -- Z:\\bigbucket\\archive\\2025",
+  ]);
+
+  assert.deepEqual(children, [
+    { tagName: "li", textContent: "bigboi -- Z:\\bigbucket\\incoming" },
+    {
+      tagName: "li",
+      textContent: "bigboi -- Z:\\bigbucket\\archive\\2025",
+    },
+  ]);
 });

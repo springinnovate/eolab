@@ -57,6 +57,7 @@ def test_configuration_endpoint_reads_environment(
         "catalogUrl": "https://catalog.example.test",
         "wmsUrl": "/geoserver/eolab/wms",
         "scanDisplayPathPrefix": "bigboi -- Z:\\bigbucket",
+        "scanDisplayPaths": ["bigboi -- Z:\\bigbucket"],
         "basemap": {
             "url": "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
             "attribution": "&copy; OpenStreetMap contributors",
@@ -76,6 +77,42 @@ def test_configuration_endpoint_reads_environment(
     assert "valid-admin-password" not in repr(settings)
     assert "http://geoserver:8080" not in response.text
     assert "http://geoserver:9404" not in response.text
+
+
+def test_public_scan_paths_use_the_user_facing_prefix(
+    configured_environment: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    version_file_path: Path,
+) -> None:
+    """Expose configured scan directories without leaking the container mount.
+
+    Args:
+        configured_environment: Complete baseline environment fixture.
+        monkeypatch: Pytest environment mutation fixture.
+        tmp_path: Isolated mounted-directory fixture root.
+        version_file_path: File containing the test application version.
+    """
+    scan_mount = tmp_path / "scan-source"
+    (scan_mount / "incoming").mkdir(parents=True)
+    (scan_mount / "archive" / "2025").mkdir(parents=True)
+    monkeypatch.setenv("SCAN_MOUNT_PATH", str(scan_mount))
+    monkeypatch.setenv(
+        "SCAN_PATHS_WITHIN_MOUNT",
+        '["incoming", "archive/2025"]',
+    )
+
+    settings = load_settings(version_file_path)
+
+    assert settings.scan_display_paths() == (
+        "bigboi -- Z:\\bigbucket\\incoming",
+        "bigboi -- Z:\\bigbucket\\archive\\2025",
+    )
+    assert settings.as_public_dict()["scanDisplayPaths"] == [
+        "bigboi -- Z:\\bigbucket\\incoming",
+        "bigboi -- Z:\\bigbucket\\archive\\2025",
+    ]
+    assert str(scan_mount) not in str(settings.as_public_dict())
 
 
 def test_load_settings_reads_scan_operational_limits(

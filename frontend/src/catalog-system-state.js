@@ -71,3 +71,19 @@ export function synchronizeScanDisclosureState(
         elements.catalogState.open = true;
     }
 }
+
+/**
+ * Renders the configured user-facing scan directories.
+ *
+ * @param {HTMLElement} listElement List that owns the scan locations.
+ * @param {string[]} scanDisplayPaths User-facing directories scanned recursively.
+ * @return {void}
+ */
+export function renderScanLocations(listElement, scanDisplayPaths) {
+    const locationElements = scanDisplayPaths.map((scanDisplayPath) => {
+        const locationElement = listElement.ownerDocument.createElement("li");
+        locationElement.textContent = scanDisplayPath;
+        return locationElement;
+    });
+    listElement.replaceChildren(...locationElements);
+}
