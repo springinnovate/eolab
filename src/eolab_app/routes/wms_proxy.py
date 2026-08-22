@@ -7,7 +7,7 @@ import re
 import httpx2
 from fastapi import APIRouter, HTTPException, Request, Response
 
-from eolab_app.diagnostics import GetMapRequestTracker
+from eolab_app.diagnostics.tracker import GetMapRequestTracker
 from eolab_app.raster.errors import RasterFeatureError
 from eolab_app.raster.sources import PublishedRasterRegistry
 from eolab_app.routes.rasters import raster_http_exception
