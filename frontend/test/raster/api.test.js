@@ -225,7 +225,7 @@ test("detail preview rejects arbitrary modes before sending a request", async ()
   );
 });
 
-test("detail preview strictly validates v4 exact-grid identity and shape", () => {
+test("detail preview strictly validates v5 exact-grid identity and shape", () => {
   const invalidPreviews = [
     ["mismatched mode", {
       ...CENTER_SAMPLE_DETAIL_PREVIEW,
@@ -273,7 +273,7 @@ test("detail preview strictly validates v4 exact-grid identity and shape", () =>
       ...CENTER_SAMPLE_DETAIL_PREVIEW,
       limits: {
         ...CENTER_SAMPLE_DETAIL_PREVIEW.limits,
-        maximumSourceBlockReads: 1025,
+        maximumSourceBlockReads: 16130,
       },
     }],
     ["changed transformed-position contract", {
@@ -287,7 +287,7 @@ test("detail preview strictly validates v4 exact-grid identity and shape", () =>
       ...CENTER_SAMPLE_DETAIL_PREVIEW,
       actual: {
         ...CENTER_SAMPLE_DETAIL_PREVIEW.actual,
-        sourceBlockReadCount: 1025,
+        sourceBlockReadCount: 16130,
       },
     }],
     ["over-limit actual decoded bytes", {

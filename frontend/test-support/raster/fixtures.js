@@ -12,7 +12,7 @@ export const MOUNTED_GEOTIFF_ITEM = Object.freeze({
 /** @type {Readonly<Object>} Fixed public bounds for sampled raster previews. */
 export const RASTER_DETAIL_PREVIEW_LIMITS = Object.freeze({
   maximumProxyDimension: 127,
-  maximumSourceBlockReads: 1024,
+  maximumSourceBlockReads: 16129,
   maximumDecodedSourceBytes: 9663676416,
   maximumTransformedPositions: 80645,
   maximumPointsPerCell: 5,
@@ -31,7 +31,7 @@ export const CENTER_SAMPLE_DETAIL_PREVIEW = Object.freeze({
   mode: "centerSample",
   scope: "rasterExtent",
   density: "coarse",
-  policyVersion: "bounded-sampled-raster-v4",
+  policyVersion: "bounded-sampled-raster-v5",
   approximate: true,
   label: "Approximate full-extent proxy using each preview cell's center",
   rasterExtent: [-123, 48, -121, 50],

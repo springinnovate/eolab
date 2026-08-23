@@ -36,7 +36,7 @@ from eolab_app.raster.models import (
 from eolab_app.raster.statistics import strict_raster_value_range
 
 
-DETAIL_PREVIEW_POLICY_VERSION = "bounded-sampled-raster-v4"
+DETAIL_PREVIEW_POLICY_VERSION = "bounded-sampled-raster-v5"
 DETAIL_PREVIEW_PATCH_DIMENSION = 128
 DETAIL_PREVIEW_CANDIDATE_FRACTIONS = (0.2, 0.5, 0.8)
 DETAIL_PREVIEW_MAX_PATCH_CANDIDATES = (
@@ -486,7 +486,7 @@ def _representative_patch(
 
 
 def _limits(mode: RasterDetailPreviewMode) -> RasterDetailPreviewLimits:
-    """Return the fixed public work limits for one policy-v4 mode.
+    """Return the fixed public work limits for one policy-v5 mode.
 
     Sampled grids stream as many structurally bounded blocks as their exact
     selected resolution requires, up to the fixed block-count ceiling. Detail

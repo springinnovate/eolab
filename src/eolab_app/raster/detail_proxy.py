@@ -23,14 +23,18 @@ DETAIL_PROXY_DENSITY_MAXIMUM_DIMENSIONS: dict[
     "medium": 63,
     "fine": DETAIL_PROXY_MAX_DIMENSION,
 }
-DETAIL_PROXY_MAX_SOURCE_BLOCK_READS = 1024
-# The reader streams one structurally bounded native block at a time. This
-# total-work ceiling is the worst case for 1,024 1024-by-1024 float64 blocks,
-# including one validity byte per source value; it is not a simultaneous-memory
-# allocation.
-DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES = (
-    DETAIL_PROXY_MAX_SOURCE_BLOCK_READS * 1024 * 1024 * (8 + 1)
+# One exact center-sample grid can require one distinct native block per cell.
+# The independent decoded-work ceiling below remains the controlling bound for
+# large blocks and prevents this count from authorizing unbounded source work.
+DETAIL_PROXY_MAX_SOURCE_BLOCK_READS = (
+    DETAIL_PROXY_MAX_DIMENSION * DETAIL_PROXY_MAX_DIMENSION
 )
+# The reader streams one structurally bounded native block at a time. This
+# cumulative-work ceiling is 9 GiB and is not a simultaneous-memory allocation.
+# It accommodates all 16,129 center samples for common 256-by-256 float64
+# blocks while retaining an explicit byte bound for larger native blocks and
+# representative sampling.
+DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES = 9 * 1024 * 1024 * 1024
 DETAIL_PATCH_MAX_DECODED_SOURCE_BYTES = 64 * 1024 * 1024
 DETAIL_PROXY_CENTER_OFFSETS = ((0.5, 0.5),)
 DETAIL_PROXY_REPRESENTATIVE_OFFSETS = (

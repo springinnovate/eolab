@@ -549,11 +549,16 @@ async function initializeCatalog(
      * Render exact backend-reported sampled-grid dimensions.
      *
      * @param {Object|null} previewState Current sampled-raster session state.
+     * @param {"idle"|"loading"|"error"} [baseStatus="idle"] Initial base
+     * request lifecycle when no displayed preview exists.
      * @return {void}
      */
-    function renderRasterDetailPreviewResolution(previewState) {
+    function renderRasterDetailPreviewResolution(
+        previewState,
+        baseStatus = "idle"
+    ) {
         rasterDetailPreviewResolution.textContent =
-            formatRasterDetailPreviewResolution(previewState);
+            formatRasterDetailPreviewResolution(previewState, baseStatus);
     }
 
     /**
@@ -1173,6 +1178,9 @@ async function initializeCatalog(
             "Sampling raster…",
             "Reading a strictly bounded approximate raster proxy."
         );
+        if (!rasterDetailPreview.contains(selectedItem)) {
+            renderRasterDetailPreviewResolution(null, "loading");
+        }
         try {
             const preview = await rasterDetailPreview.show(
                 selectedItem,
@@ -1196,6 +1204,9 @@ async function initializeCatalog(
             ) {
                 finishCatalogMapAction(pendingAction);
                 catalogLayerStatus.textContent = previewError.message;
+                if (!rasterDetailPreview.contains(selectedItem)) {
+                    renderRasterDetailPreviewResolution(null, "error");
+                }
             }
         } finally {
             finishCatalogMapAction(pendingAction);

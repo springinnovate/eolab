@@ -318,7 +318,7 @@ class RasterDetailPreviewLimits(BaseModel):
     """
 
     maximum_proxy_dimension: Literal[127] = Field(alias="maximumProxyDimension")
-    maximum_source_block_reads: Literal[1024] = Field(
+    maximum_source_block_reads: Literal[16_129] = Field(
         alias="maximumSourceBlockReads"
     )
     maximum_decoded_source_bytes: Literal[67_108_864, 9_663_676_416] = Field(
@@ -383,7 +383,7 @@ class RasterDetailPreview(BaseModel):
     mode: RasterDetailPreviewMode
     scope: RasterDetailPreviewScope
     density: RasterDetailPreviewDensity | None
-    policy_version: Literal["bounded-sampled-raster-v4"] = Field(
+    policy_version: Literal["bounded-sampled-raster-v5"] = Field(
         alias="policyVersion"
     )
     approximate: Literal[True] = True

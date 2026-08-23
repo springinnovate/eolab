@@ -164,7 +164,7 @@ def _valid_sampled_preview_document() -> dict[str, object]:
         },
         "limits": {
             "maximumProxyDimension": 127,
-            "maximumSourceBlockReads": 1024,
+            "maximumSourceBlockReads": DETAIL_PROXY_MAX_SOURCE_BLOCK_READS,
             "maximumDecodedSourceBytes": DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES,
             "maximumTransformedPositions": (
                 DETAIL_PROXY_MAX_TRANSFORMED_POSITIONS
@@ -820,10 +820,10 @@ def test_expensive_native_blocks_do_not_reduce_the_selected_grid(
     assert first_plan.decoded_source_bytes <= DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES
 
 
-def test_exact_grid_reports_block_limit_instead_of_silent_coarsening(
+def test_exact_center_grid_allows_one_unique_native_block_per_cell(
     tmp_path: Path,
 ) -> None:
-    """Reject an unaffordable exact grid before reading any source pixels.
+    """Admit the inherent worst-case center grid without silent coarsening.
 
     Args:
         tmp_path: Temporary raster directory.
@@ -837,14 +837,46 @@ def test_exact_grid_reports_block_limit_instead_of_silent_coarsening(
         transform=from_origin(0, 20_000, 1, 1),
     )
     with rasterio.open(source_path) as dataset:
+        plan = plan_detail_proxy(
+            dataset,
+            "centerSample",
+            127,
+            (0.0, 0.0, 20_000.0, 20_000.0),
+        )
+
+    assert (plan.width, plan.height) == (127, 127)
+    assert len(plan.block_indexes) == DETAIL_PROXY_MAX_SOURCE_BLOCK_READS
+    assert plan.decoded_source_bytes <= DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES
+
+
+def test_exact_representative_grid_reports_block_limit_before_pixel_reads(
+    tmp_path: Path,
+) -> None:
+    """Reject excessive representative work without changing grid size.
+
+    Args:
+        tmp_path: Temporary raster directory.
+    """
+    source_path = tmp_path / "too-many-representative-blocks.tif"
+    _write_raster(
+        source_path,
+        20_000,
+        20_000,
+        crs="EPSG:3857",
+        transform=from_origin(0, 20_000, 1, 1),
+    )
+    with rasterio.open(source_path) as dataset:
         tracked = _TrackingDataset(dataset)
         with pytest.raises(
             ValueError,
-            match=r"selected 127 by 127 sample grid requires .* fixed limit is 1024",
+            match=(
+                r"selected 127 by 127 sample grid requires .* "
+                r"fixed limit is 16129"
+            ),
         ):
             read_detail_proxy(
                 tracked,
-                "centerSample",
+                "representativeSample",
                 127,
                 (0.0, 0.0, 20_000.0, 20_000.0),
             )

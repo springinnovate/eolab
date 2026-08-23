@@ -5,10 +5,21 @@
  *
  * @param {Object|null} previewState Current sampled-raster session state, or
  * null when no detail-only preview is displayed.
+ * @param {"idle"|"loading"|"error"} [baseStatus="idle"] Lifecycle of an
+ * initial base request when no preview state exists yet.
  * @return {string} User-facing base/detail dimensions and lifecycle status.
  */
-export function formatRasterDetailPreviewResolution(previewState) {
+export function formatRasterDetailPreviewResolution(
+    previewState,
+    baseStatus = "idle"
+) {
     if (previewState === null) {
+        if (baseStatus === "loading") {
+            return "Base sample grid: loading…; current-view detail: —";
+        }
+        if (baseStatus === "error") {
+            return "Base sample grid: request failed; current-view detail: —";
+        }
         return "Base sample grid: —; current-view detail: —";
     }
     const base = previewState.basePreview.actual;

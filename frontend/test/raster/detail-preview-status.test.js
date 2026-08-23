@@ -14,6 +14,14 @@ test("detail preview resolution distinguishes patches from adaptive grids", () =
     "Base sample grid: —; current-view detail: —",
   );
   assert.equal(
+    formatRasterDetailPreviewResolution(null, "loading"),
+    "Base sample grid: loading…; current-view detail: —",
+  );
+  assert.equal(
+    formatRasterDetailPreviewResolution(null, "error"),
+    "Base sample grid: request failed; current-view detail: —",
+  );
+  assert.equal(
     formatRasterDetailPreviewResolution({
       mode: "representativePatch",
       basePreview: PATCH_DETAIL_PREVIEW,

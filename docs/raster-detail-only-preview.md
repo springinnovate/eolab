@@ -92,7 +92,7 @@ base/detail seams. Nodata remains alpha-transparent.
 
 ## Source-read proof and output bounds
 
-Policy `bounded-sampled-raster-v4` constructs its exact square target grid
+Policy `bounded-sampled-raster-v5` constructs its exact square target grid
 directly in EPSG:3857. For each cell it transforms only the fixed center or five
 representative positions into the raster CRS, applies the inverse source affine
 transform (including rotated or skewed grids), and discards positions outside
@@ -100,8 +100,9 @@ the source. It never reads the potentially enormous source-pixel envelope of a
 view.
 
 Valid source positions are deduplicated and grouped by their native TIFF block.
-The exact grid is admitted only when it needs at most 1,024 unique native
-blocks. Each required band-one block is then read exactly once at base
+The exact grid is admitted only when it needs at most 16,129 unique native
+blocks: one distinct block for every cell in the largest center-sample grid.
+Each required band-one block is then read exactly once at base
 resolution with no `out_shape`, resampling, or boundless read. Only requested
 values are retained; the block array is discarded before the next block is
 read. If the exact grid exceeds the block ceiling, the response fails rather
@@ -110,10 +111,11 @@ than changing resolution.
 The exact fixed bounds are:
 
 - at most 127 × 127 × 5 = 80,645 transformed positions;
-- at most 1,024 unique native-block reads; and
+- at most 16,129 unique native-block reads; and
 - at most 9,663,676,416 cumulative decoded band-one and validity bytes. This
-  last worst case is derived from 1,024 structurally authorized 1024 × 1024
-  float64 blocks at nine bytes per source value. It bounds total decode work;
+  independent 9 GiB ceiling accommodates 16,129 common 256 × 256 float64
+  blocks at nine bytes per source value while still rejecting larger-block or
+  multi-probe work that exceeds the fixed total. It bounds total decode work;
   the blocks are streamed and are not retained together.
 
 The representative patch retains its smaller 64 MiB cumulative decoded-work
@@ -127,7 +129,7 @@ Identical work is coalesced. The number of admitted distinct in-flight cache
 identities is capped at the same configured concurrency; excess distinct work
 receives an actionable busy conflict instead of accumulating a viewport-request
 backlog. Cache identity includes Collection and Item, assessed source signature,
-cataloged raster extent, policy v4, preview mode, density, exact effective view
+cataloged raster extent, policy v5, preview mode, density, exact effective view
 bounds, transformed-position, native-block, and mode-specific byte ceilings,
 fixed probe offsets, and patch selection parameters. The source signature is
 checked before and after pixel work; changed files are neither returned nor

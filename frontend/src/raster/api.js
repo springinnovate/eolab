@@ -287,7 +287,7 @@ export function validateRasterDetailPreview(preview, options) {
             : request.viewBounds === null ? "rasterExtent" : "currentView") ||
         preview?.density !== request.density ||
         preview?.approximate !== true ||
-        preview?.policyVersion !== "bounded-sampled-raster-v4" ||
+        preview?.policyVersion !== "bounded-sampled-raster-v5" ||
         typeof preview?.label !== "string" || preview.label.trim() === "" ||
         !isCanonicalBounds(preview?.rasterExtent) ||
         !isCanonicalBounds(preview?.imageBounds) ||
@@ -301,7 +301,7 @@ export function validateRasterDetailPreview(preview, options) {
             !(value === null || Number.isFinite(value))
         ) ||
         preview?.limits?.maximumProxyDimension !== 127 ||
-        preview?.limits?.maximumSourceBlockReads !== 1024 ||
+        preview?.limits?.maximumSourceBlockReads !== 16129 ||
         preview?.limits?.maximumDecodedSourceBytes !==
             expectedDecodedSourceBytes ||
         preview?.limits?.maximumTransformedPositions !== 80645 ||
