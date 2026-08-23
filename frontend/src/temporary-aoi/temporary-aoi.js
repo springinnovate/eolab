@@ -220,13 +220,18 @@ export class TemporaryAoiCoordinator {
             this.layerController.hide();
             this.controlsView.renderVisibility(false);
             this.controlsView.renderStatus(
-                "Temporary AOI hidden. It remains available until expiration."
+                "Temporary AOI hidden. Raster histogram sampling returned " +
+                "to the map window."
             );
         } else {
             this.layerController.show();
             this.controlsView.renderVisibility(true);
-            this.controlsView.renderStatus("Temporary AOI shown on the map.");
+            this.controlsView.renderStatus(
+                "Temporary AOI shown. Raster histogram sampling restored " +
+                "the uploaded AOI."
+            );
         }
+        this.notifySamplingAreaChange();
     }
 
     /**
@@ -392,13 +397,14 @@ export class TemporaryAoiCoordinator {
     }
 
     /**
-     * Subscribe to ready-AOI lifecycle changes through the public boundary.
+     * Subscribe to ready and visible AOI changes through the public boundary.
      *
-     * Visibility toggles do not publish because overlay presentation and
-     * histogram inclusion are deliberately independent.
+     * A hidden, removed, or expired AOI publishes null so raster sampling can
+     * restore its mouse-hover map window. Showing retained geometry publishes
+     * the same opaque lifecycle again so sampling returns to the AOI.
      *
      * @param {(temporaryAoi: Readonly<Object>|null) => void} listener Receives
-     * opaque lifecycle/display snapshots and removal or expiration as null.
+     * opaque lifecycle/display snapshots and hidden or unavailable state as null.
      * @return {() => void} Idempotent function that removes the subscription.
      */
     subscribeSamplingArea(listener) {
@@ -407,7 +413,7 @@ export class TemporaryAoiCoordinator {
         }
         this.samplingAreaListeners.add(listener);
         listener(
-            this.activeAoi === null
+            this.activeAoi === null || !this.layerController.isVisible
                 ? null
                 : temporaryAoiSamplingSnapshot(this.activeAoi)
         );
@@ -417,14 +423,15 @@ export class TemporaryAoiCoordinator {
     }
 
     /**
-     * Publish the current ready lifecycle without exposing overlay geometry.
+     * Publish the current visible lifecycle without exposing overlay geometry.
      *
      * @return {void}
      */
     notifySamplingAreaChange() {
-        const snapshot = this.activeAoi === null
-            ? null
-            : temporaryAoiSamplingSnapshot(this.activeAoi);
+        const snapshot =
+            this.activeAoi === null || !this.layerController.isVisible
+                ? null
+                : temporaryAoiSamplingSnapshot(this.activeAoi);
         for (const listener of this.samplingAreaListeners) {
             listener(snapshot);
         }

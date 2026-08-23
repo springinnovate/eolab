@@ -1001,8 +1001,8 @@ export function initializeRasterViewer(
         } else if (selectedTemporaryAoi !== null) {
             nextStatus =
                 `Uploaded AOI selected: ${selectedTemporaryAoi.filename}, ` +
-                `layer ${selectedTemporaryAoi.selectedDataset}. Hiding its ` +
-                "map overlay does not change this histogram area.";
+                `layer ${selectedTemporaryAoi.selectedDataset}. Hide the AOI ` +
+                "to return histogram sampling to the mouse-hover map window.";
         } else {
             nextStatus =
                 "Whole-raster distribution selected. Move over the map " +
@@ -1753,15 +1753,16 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Receive one ready-AOI lifecycle change through the public integration.
+     * Receive one sampleable-AOI change through the public integration.
      *
      * First readiness automatically selects the AOI for retained rasters.
      * Replacement migrates only sessions actively using the previous AOI;
-     * removal and expiration restore those sessions to whole-raster sampling.
-     * Overlay geometry and visibility never cross this boundary.
+     * hiding, removal, and expiration restore those sessions to mouse-hover
+     * map-window sampling. Showing retained geometry selects its AOI again.
+     * Overlay geometry never crosses this boundary.
      *
      * @param {Readonly<Object>|null} temporaryAoi Ready lifecycle snapshot or
-     * null after removal or expiration.
+     * null while hidden or after removal or expiration.
      * @return {void}
      * @throws {TypeError} If the public snapshot violates its contract.
      */

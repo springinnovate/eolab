@@ -1382,9 +1382,9 @@ test("a failed publication preserves existing layers and can be retried", async 
     viewer.destroy();
 });
 
-test("ready AOIs auto-select, replace stale work, and remain independent of windows", async () => {
+test("AOI hide restores hover windows and show restores AOI sampling", async () => {
     const leafletMap = createFakeMap();
-    const { leaflet } = createFakeLeaflet();
+    const { leaflet, rectangleLayers } = createFakeLeaflet();
     const controlsView = createFakeControlsView();
     const aoiRequests = [];
     const replacementId = "R".repeat(32);
@@ -1475,4 +1475,17 @@ test("ready AOIs auto-select, replace stale work, and remain independent of wind
     assert.equal(controlsView.samplingAreaMode, "wholeRaster");
     assert.equal(controlsView.availableTemporaryAoi, null);
     assert.equal(controlsView.displayedStatistics.scope, "wholeRaster");
+
+    leafletMap.emit("mousemove", { latlng: { lng: 2, lat: 2 } });
+    const hoverWindow = rectangleLayers.at(-1);
+    assert.equal(hoverWindow.kind, "preview");
+    assert.equal(leafletMap.layers.has(hoverWindow), true);
+
+    viewer.setTemporaryAoi(replacementAoi);
+
+    assert.equal(aoiRequests.length, 4);
+    assert.equal(aoiRequests[3].temporaryAoiId, replacementId);
+    assert.equal(controlsView.samplingAreaMode, "temporaryAoi");
+    assert.equal(controlsView.availableTemporaryAoi.id, replacementId);
+    assert.equal(leafletMap.layers.has(hoverWindow), false);
 });
