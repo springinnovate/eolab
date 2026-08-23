@@ -7,6 +7,9 @@ from fastapi import APIRouter, HTTPException, Request
 
 from eolab_app.raster.assessment import RasterAssessmentService
 from eolab_app.raster.detail_preview_service import RasterDetailPreviewService
+from eolab_app.raster.detail_statistics_service import (
+    RasterDetailStatisticsService,
+)
 from eolab_app.raster.errors import (
     RasterAssetError,
     RasterConflictError,
@@ -19,6 +22,7 @@ from eolab_app.raster.errors import (
 from eolab_app.raster.models import (
     CatalogPixelRequest,
     CatalogRasterDetailPreviewRequest,
+    CatalogRasterDetailStatisticsRequest,
     CatalogRasterRequest,
     CatalogRasterStatisticsRequest,
     PublishedRaster,
@@ -103,6 +107,7 @@ def create_raster_feature(
     pixel_service: RasterPixelService,
     statistics_service: RasterStatisticsService,
     detail_preview_service: RasterDetailPreviewService,
+    detail_statistics_service: RasterDetailStatisticsService,
     registry: PublishedRasterRegistry,
 ) -> RasterFeature:
     """Create the raster router around fully constructed services.
@@ -113,6 +118,7 @@ def create_raster_feature(
         pixel_service: Capacity-limited pixel-read workflow.
         statistics_service: Coalescing statistics workflow.
         detail_preview_service: Coalescing bounded detail-preview workflow.
+        detail_statistics_service: Selected-window sampled-grid statistics.
         registry: Process-local layer authorization shared with WMS.
 
     Returns:
@@ -260,5 +266,28 @@ def create_raster_feature(
                 disconnect_task,
                 return_exceptions=True,
             )
+
+    @router.post(
+        "/detail-statistics",
+        response_model=RasterStatistics,
+    )
+    async def raster_detail_statistics(
+        request: CatalogRasterDetailStatisticsRequest,
+    ) -> RasterStatistics:
+        """Summarize one clicked window on an overview-limited raster.
+
+        Args:
+            request: Catalog identity and required WGS 84 selected bounds.
+
+        Returns:
+            Fixed-bin histogram over a bounded 127 by 127 point grid.
+
+        Raises:
+            HTTPException: If authorization or bounded sampling fails.
+        """
+        try:
+            return await detail_statistics_service.get(request)
+        except RasterFeatureError as error:
+            raise raster_http_exception(error) from error
 
     return RasterFeature(router=router, registry=registry)

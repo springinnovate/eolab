@@ -26,6 +26,9 @@ from eolab_app.raster.geoserver import (
     GeoServerRasterReaderAssessor,
 )
 from eolab_app.raster.detail_preview_service import RasterDetailPreviewService
+from eolab_app.raster.detail_statistics_service import (
+    RasterDetailStatisticsService,
+)
 from eolab_app.raster.pixel_service import RasterPixelService
 from eolab_app.raster.publication import RasterPublicationService
 from eolab_app.raster.sources import (
@@ -134,6 +137,12 @@ def create_app(
             app_global_configuration.scan_mount_path,
         )
     )
+    detail_preview_service = RasterDetailPreviewService(
+        raster_catalog,
+        raster_source_resolver,
+        app_global_configuration.raster_pixel_read_concurrency,
+        app_global_configuration.raster_statistics_cache_entries,
+    )
     raster_feature = create_raster_feature(
         RasterAssessmentService(
             app_global_configuration.scan_mount_path,
@@ -160,12 +169,8 @@ def create_app(
             app_global_configuration.raster_statistics_cache_entries,
             temporary_aoi_reader=temporary_aoi_service,
         ),
-        RasterDetailPreviewService(
-            raster_catalog,
-            raster_source_resolver,
-            app_global_configuration.raster_pixel_read_concurrency,
-            app_global_configuration.raster_statistics_cache_entries,
-        ),
+        detail_preview_service,
+        RasterDetailStatisticsService(detail_preview_service),
         published_rasters,
     )
     get_map_request_tracker = GetMapRequestTracker(

@@ -393,26 +393,28 @@ def _projected_sampling_bounds(
 def _suggested_range(
     values: numpy.ma.MaskedArray,
 ) -> RasterValueRange | None:
-    """Derive the normal strict three-stop range from bounded preview values.
+    """Derive a strict minimum/median/maximum bounded-preview range.
 
     Args:
         values: Bounded masked numeric image.
 
     Returns:
-        Strict approximate fifth/median/ninety-fifth percentile range, or
-        ``None`` when the bounded sample contains no finite values.
+        Strict approximate minimum/median/maximum range, or ``None`` when the
+        bounded sample contains no finite values.
     """
     finite_values = numpy.asarray(values.compressed(), dtype=numpy.float64)
     finite_values = finite_values[numpy.isfinite(finite_values)]
     if finite_values.size == 0:
         return None
-    p05, p50, p95 = numpy.percentile(finite_values, (5, 50, 95))
+    sample_minimum = float(numpy.min(finite_values))
+    sample_maximum = float(numpy.max(finite_values))
+    sample_median = float(numpy.median(finite_values))
     return strict_raster_value_range(
-        float(numpy.min(finite_values)),
-        float(numpy.max(finite_values)),
-        float(p05),
-        float(p50),
-        float(p95),
+        sample_minimum,
+        sample_maximum,
+        sample_minimum,
+        sample_median,
+        sample_maximum,
     )
 
 

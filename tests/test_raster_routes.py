@@ -57,6 +57,7 @@ def test_raster_routes_translate_application_errors_at_http_boundary() -> None:
         service,
         service,
         service,
+        service,
         registry,
     )
     application = FastAPI()
@@ -91,6 +92,24 @@ def test_raster_routes_translate_application_errors_at_http_boundary() -> None:
     )
     assert detail_response.status_code == 409
     assert detail_response.json() == {"detail": "controlled raster conflict"}
+
+    statistics_response = TestClient(application).post(
+        "/api/rendering/detail-statistics",
+        json={
+            "collectionId": "eolab-mounted-geotiffs",
+            "itemId": "geotiff-0123456789abcdef01234567",
+            "selectedBounds": {
+                "west": -123.0,
+                "south": 37.0,
+                "east": -122.0,
+                "north": 38.0,
+            },
+        },
+    )
+    assert statistics_response.status_code == 409
+    assert statistics_response.json() == {
+        "detail": "controlled raster conflict"
+    }
 
 
 @pytest.mark.parametrize(
@@ -153,6 +172,7 @@ def test_detail_preview_route_rejects_unowned_sampling_parameters(
         service,
         service,
         service,
+        service,
         PublishedRasterRegistry(),
     )
     application = FastAPI()
@@ -173,6 +193,60 @@ def test_detail_preview_route_rejects_unowned_sampling_parameters(
     assert response.status_code == 422
 
 
+@pytest.mark.parametrize(
+    "request_overrides",
+    [
+        {},
+        {"path": "/browser-controlled/source.tif"},
+        {
+            "selectedBounds": {
+                "west": -123.0,
+                "south": 37.0,
+                "east": -122.0,
+                "north": 38.0,
+                "sourceWindow": [0, 0, 127, 127],
+            }
+        },
+    ],
+    ids=["missing-bounds", "browser-path", "nested-source-window"],
+)
+def test_detail_statistics_route_requires_only_selected_bounds(
+    request_overrides: dict[str, object],
+) -> None:
+    """Reject whole-raster and browser-controlled detail histogram reads.
+
+    Args:
+        request_overrides: Missing or unsafe fields applied to base identity.
+
+    Returns:
+        None.
+    """
+    service = _ConflictService()
+    feature = create_raster_feature(
+        service,
+        service,
+        service,
+        service,
+        service,
+        service,
+        PublishedRasterRegistry(),
+    )
+    application = FastAPI()
+    application.include_router(feature.router)
+    request_body: dict[str, object] = {
+        "collectionId": "eolab-mounted-geotiffs",
+        "itemId": "geotiff-0123456789abcdef01234567",
+    }
+    request_body.update(request_overrides)
+
+    response = TestClient(application).post(
+        "/api/rendering/detail-statistics",
+        json=request_body,
+    )
+
+    assert response.status_code == 422
+
+
 def test_publication_route_returns_actionable_category_document() -> None:
     """Serialize the reader category and guidance through FastAPI.
 
@@ -182,6 +256,7 @@ def test_publication_route_returns_actionable_category_document() -> None:
     service = _PublicationFailureService()
     registry = PublishedRasterRegistry()
     feature = create_raster_feature(
+        service,
         service,
         service,
         service,

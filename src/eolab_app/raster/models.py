@@ -212,6 +212,16 @@ class CatalogRasterStatisticsRequest(CatalogRasterRequest):
         return self
 
 
+class CatalogRasterDetailStatisticsRequest(CatalogRasterRequest):
+    """Identify one required map window on an overview-limited raster.
+
+    Attributes:
+        selected_bounds: Canonical WGS 84 click-centered histogram window.
+    """
+
+    selected_bounds: Wgs84Bounds = Field(alias="selectedBounds")
+
+
 class CatalogRasterDetailPreviewRequest(CatalogRasterRequest):
     """Select one fixed, bounded preview for an overview-limited raster.
 
