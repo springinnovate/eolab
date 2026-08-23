@@ -79,7 +79,7 @@ def test_raster_routes_translate_application_errors_at_http_boundary() -> None:
         json={
             "collectionId": "eolab-mounted-geotiffs",
             "itemId": "geotiff-0123456789abcdef01234567",
-            "mode": "samplingGrid",
+            "mode": "representativeSample",
         },
     )
     assert detail_response.status_code == 409

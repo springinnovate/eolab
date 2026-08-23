@@ -10,11 +10,17 @@ import rasterio
 
 from eolab_app.raster.detail_preview import (
     DETAIL_PREVIEW_CANDIDATE_FRACTIONS,
-    DETAIL_PREVIEW_GRID_EDGE,
     DETAIL_PREVIEW_PATCH_DIMENSION,
     DETAIL_PREVIEW_POLICY_VERSION,
     NoUsefulDetailPatchError,
     read_raster_detail_preview,
+)
+from eolab_app.raster.detail_proxy import (
+    DETAIL_PROXY_CENTER_OFFSETS,
+    DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES,
+    DETAIL_PROXY_MAX_DIMENSION,
+    DETAIL_PROXY_MAX_SOURCE_BLOCK_READS,
+    DETAIL_PROXY_REPRESENTATIVE_OFFSETS,
 )
 from eolab_app.raster.eligibility import (
     DETAIL_ONLY_PREVIEW_REASON_CODES,
@@ -31,6 +37,7 @@ from eolab_app.raster.models import (
     RasterDetailPreviewCacheKey,
     RasterDetailPreviewMode,
     SourceSignature,
+    Wgs84Bounds,
 )
 from eolab_app.raster.ports import RasterCatalog
 from eolab_app.raster.sources import MountedRasterResolver, source_signature
@@ -95,12 +102,22 @@ class RasterDetailPreviewService:
             Mode-specific sampling limits and location-policy inputs.
         """
         # Deterministic fractional locations are encoded in thousandths.
-        if mode == "centerPixel":
-            return (500, 500, 1, 1)
-        if mode == "samplingGrid":
-            return (DETAIL_PREVIEW_GRID_EDGE, 0, 1000, 1, 1)
+        if mode in {"centerSample", "representativeSample"}:
+            offsets = (
+                DETAIL_PROXY_CENTER_OFFSETS
+                if mode == "centerSample"
+                else DETAIL_PROXY_REPRESENTATIVE_OFFSETS
+            )
+            return (
+                DETAIL_PROXY_MAX_DIMENSION,
+                DETAIL_PROXY_MAX_SOURCE_BLOCK_READS,
+                DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES,
+                *(round(value * 1000) for offset in offsets for value in offset),
+            )
         return (
             DETAIL_PREVIEW_PATCH_DIMENSION,
+            DETAIL_PROXY_MAX_SOURCE_BLOCK_READS,
+            DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES,
             *(round(value * 1000) for value in DETAIL_PREVIEW_CANDIDATE_FRACTIONS),
         )
 
@@ -148,6 +165,11 @@ class RasterDetailPreviewService:
                 if isinstance(reason, str) and reason
                 else "This raster is not eligible for detail-only preview."
             )
+        if rendering_metadata.get("bounded_blocks") is not True:
+            raise RasterConflictError(
+                "Detail-only preview unavailable: the raster does not have "
+                "safe bounded source blocks."
+            )
         if (
             not supports_detail_only_preview(rendering_metadata)
             or rendering_metadata.get("reader_contract")
@@ -175,24 +197,31 @@ class RasterDetailPreviewService:
                 "reassess it first."
             )
         bbox = item.get("bbox")
-        if (
-            not isinstance(bbox, list)
-            or len(bbox) != 4
-            or any(
-                isinstance(value, bool)
-                or not isinstance(value, (int, float))
-                or not math.isfinite(value)
-                for value in bbox
-            )
-            or bbox[0] >= bbox[2]
-            or bbox[1] >= bbox[3]
-        ):
+        try:
+            if (
+                not isinstance(bbox, list)
+                or len(bbox) != 4
+                or any(
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(value)
+                    for value in bbox
+                )
+            ):
+                raise ValueError
+            raster_extent = Wgs84Bounds(
+                west=float(bbox[0]),
+                south=float(bbox[1]),
+                east=float(bbox[2]),
+                north=float(bbox[3]),
+            ).canonical_tuple()
+        except (TypeError, ValueError):
             raise RasterConflictError(
                 "Detail-only preview unavailable: the raster extent is invalid."
-            )
+            ) from None
         return (
             AuthorizedRaster(source_path, current_signature),
-            tuple(float(value) for value in bbox),
+            raster_extent,
         )
 
     async def get(
@@ -245,7 +274,9 @@ class RasterDetailPreviewService:
                 "No finite, non-nodata pixels were found in the bounded "
                 "representative-patch candidates."
             ) from error
-        except (OSError, ValueError, rasterio.errors.RasterioError) as error:
+        except ValueError as error:
+            raise RasterConflictError(str(error)) from error
+        except (OSError, rasterio.errors.RasterioError) as error:
             raise RasterConflictError(
                 "The bounded detail-only preview could not be read."
             ) from error

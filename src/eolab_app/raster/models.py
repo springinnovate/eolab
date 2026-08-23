@@ -23,8 +23,8 @@ RasterStatisticsCacheKey = tuple[
     tuple[object, ...],
 ]
 RasterDetailPreviewMode = Literal[
-    "centerPixel",
-    "samplingGrid",
+    "centerSample",
+    "representativeSample",
     "representativePatch",
 ]
 RasterDetailPreviewCacheKey = tuple[
@@ -206,7 +206,8 @@ class CatalogRasterDetailPreviewRequest(CatalogRasterRequest):
     """Select one fixed, bounded preview for an overview-limited raster.
 
     Attributes:
-        mode: Explicit center, grid, or representative-patch choice.
+        mode: Explicit per-cell center, per-cell representative, or local
+            representative-patch choice.
     """
 
     mode: RasterDetailPreviewMode
@@ -247,36 +248,70 @@ class RasterPixel(BaseModel):
     value: float | None
 
 
-class RasterDetailSample(BaseModel):
-    """One georeferenced band-1 sample in a detail-only preview.
+class RasterValueRange(BaseModel):
+    """Three values accepted by the shared dynamic raster style.
+
+    Ordering is enforced by the owning response or style contract.
 
     Attributes:
-        row: Zero-based source raster row.
-        column: Zero-based source raster column.
-        longitude: WGS 84 cell-center longitude.
-        latitude: WGS 84 cell-center latitude.
-        value: Finite band-1 value, or ``None`` for nodata/non-finite data.
+        minimum: Low color-stop value.
+        midpoint: Middle color-stop value.
+        maximum: High color-stop value.
     """
 
-    row: int
-    column: int
-    longitude: FiniteFloat
-    latitude: FiniteFloat
-    value: FiniteFloat | None
+    minimum: FiniteFloat
+    midpoint: FiniteFloat
+    maximum: FiniteFloat
 
 
 class RasterDetailPreviewLimits(BaseModel):
     """Public resource bounds applied to one detail-only preview.
 
     Attributes:
-        maximum_grid_samples: Maximum one-pixel reads in grid mode.
+        maximum_proxy_dimension: Maximum source/output proxy-grid edge.
+        maximum_source_block_reads: Maximum unique native blocks read.
+        maximum_decoded_source_bytes: Maximum decoded band-one values plus
+            their in-memory validity bytes.
+        maximum_points_per_cell: Maximum deterministic probes in a proxy cell.
         maximum_patch_dimension: Maximum source/output patch edge.
         maximum_patch_candidates: Maximum candidate windows examined.
     """
 
-    maximum_grid_samples: int = Field(alias="maximumGridSamples")
-    maximum_patch_dimension: int = Field(alias="maximumPatchDimension")
-    maximum_patch_candidates: int = Field(alias="maximumPatchCandidates")
+    maximum_proxy_dimension: Literal[127] = Field(alias="maximumProxyDimension")
+    maximum_source_block_reads: Literal[1024] = Field(
+        alias="maximumSourceBlockReads"
+    )
+    maximum_decoded_source_bytes: Literal[67_108_864] = Field(
+        alias="maximumDecodedSourceBytes"
+    )
+    maximum_points_per_cell: Literal[5] = Field(alias="maximumPointsPerCell")
+    maximum_patch_dimension: Literal[128] = Field(
+        alias="maximumPatchDimension"
+    )
+    maximum_patch_candidates: Literal[9] = Field(
+        alias="maximumPatchCandidates"
+    )
+
+
+class RasterDetailPreviewWork(BaseModel):
+    """Actual bounded work and source-grid resolution for one preview.
+
+    Attributes:
+        sample_grid_width: Width of the bounded source numeric grid.
+        sample_grid_height: Height of the bounded source numeric grid.
+        source_block_read_count: Unique native source blocks read once.
+        decoded_source_bytes: Conservative band-plus-validity decoded bytes.
+        points_per_cell: Maximum positions inspected for each proxy cell.
+        candidate_window_count: Detail-patch candidates admitted by the shared
+            native-block budget, or zero for full-extent proxy modes.
+    """
+
+    sample_grid_width: int = Field(alias="sampleGridWidth", ge=1)
+    sample_grid_height: int = Field(alias="sampleGridHeight", ge=1)
+    source_block_read_count: int = Field(alias="sourceBlockReadCount", ge=1)
+    decoded_source_bytes: int = Field(alias="decodedSourceBytes", ge=1)
+    points_per_cell: int = Field(alias="pointsPerCell", ge=0)
+    candidate_window_count: int = Field(alias="candidateWindowCount", ge=0)
 
 
 class RasterDetailPreview(BaseModel):
@@ -288,47 +323,109 @@ class RasterDetailPreview(BaseModel):
         approximate: Literal marker preventing full-render interpretation.
         label: User-facing approximation label.
         raster_extent: Cataloged WGS 84 raster extent, not a data footprint.
-        samples: Georeferenced point samples for center/grid modes.
-        detail_bounds: WGS 84 bounds of a representative patch.
-        image_data_url: Fixed-size transparent PNG for patch mode.
+        image_bounds: WGS 84 placement of the sampled image in Leaflet.
+        image_width: Width of the numeric image in pixels.
+        image_height: Height of the numeric image in pixels.
+        pixel_values: Row-major finite band-one values or honest nodata.
+        suggested_range: Approximate shared color-ramp thresholds, or ``None``
+            when every bounded sampled position is nodata/non-finite.
         limits: Resource bounds used to produce the response.
+        actual: Source-grid resolution and actual bounded source work.
     """
 
     mode: RasterDetailPreviewMode
-    policy_version: str = Field(alias="policyVersion")
+    policy_version: Literal["bounded-sampled-raster-v2"] = Field(
+        alias="policyVersion"
+    )
     approximate: Literal[True] = True
     label: str
     raster_extent: tuple[FiniteFloat, FiniteFloat, FiniteFloat, FiniteFloat] = (
         Field(alias="rasterExtent")
     )
-    samples: list[RasterDetailSample]
-    detail_bounds: (
-        tuple[FiniteFloat, FiniteFloat, FiniteFloat, FiniteFloat] | None
-    ) = Field(default=None, alias="detailBounds")
-    image_data_url: str | None = Field(default=None, alias="imageDataUrl")
+    image_bounds: tuple[FiniteFloat, FiniteFloat, FiniteFloat, FiniteFloat] = (
+        Field(alias="imageBounds")
+    )
+    image_width: int = Field(alias="imageWidth", ge=1)
+    image_height: int = Field(alias="imageHeight", ge=1)
+    pixel_values: list[FiniteFloat | None] = Field(alias="pixelValues")
+    suggested_range: RasterValueRange | None = Field(alias="suggestedRange")
     limits: RasterDetailPreviewLimits
+    actual: RasterDetailPreviewWork
 
     @model_validator(mode="after")
-    def require_mode_payload(self) -> "RasterDetailPreview":
-        """Require samples or a bounded image according to preview mode.
+    def require_numeric_image_payload(self) -> "RasterDetailPreview":
+        """Require one bounded row-major numeric image and ordered bounds.
 
         Returns:
             The validated detail preview.
 
         Raises:
-            ValueError: If the payload does not match its declared mode.
+            ValueError: If dimensions, values, bounds, or range are inconsistent.
         """
-        is_patch = self.mode == "representativePatch"
-        if is_patch != (
-            self.detail_bounds is not None and self.image_data_url is not None
+        if len(self.pixel_values) != self.image_width * self.image_height:
+            raise ValueError("Detail preview values must fill its numeric image")
+        if not self.label.strip():
+            raise ValueError("Detail preview label must not be blank")
+        maximum_image_dimension = (
+            self.limits.maximum_patch_dimension
+            if self.mode == "representativePatch"
+            else self.limits.maximum_proxy_dimension
+        )
+        if (
+            self.image_width > maximum_image_dimension
+            or self.image_height > maximum_image_dimension
+            or self.actual.sample_grid_width > maximum_image_dimension
+            or self.actual.sample_grid_height > maximum_image_dimension
+            or self.actual.sample_grid_width != self.image_width
+            or self.actual.sample_grid_height != self.image_height
         ):
-            raise ValueError(
-                "Representative patches require one image and detail bounds"
-            )
-        if is_patch and self.samples:
-            raise ValueError("Representative patches cannot include samples")
-        if not is_patch and not self.samples:
-            raise ValueError("Point previews require georeferenced samples")
+            raise ValueError("Detail preview dimensions exceed fixed limits")
+        if (
+            self.actual.source_block_read_count
+            > self.limits.maximum_source_block_reads
+            or self.actual.decoded_source_bytes
+            > self.limits.maximum_decoded_source_bytes
+            or self.actual.points_per_cell
+            > self.limits.maximum_points_per_cell
+            or self.actual.candidate_window_count
+            > self.limits.maximum_patch_candidates
+        ):
+            raise ValueError("Detail preview work exceeds fixed limits")
+        is_patch = self.mode == "representativePatch"
+        if is_patch != (self.actual.candidate_window_count > 0):
+            raise ValueError("Only detail patches declare candidate windows")
+        expected_points_per_cell = {
+            "centerSample": 1,
+            "representativeSample": self.limits.maximum_points_per_cell,
+            "representativePatch": 0,
+        }[self.mode]
+        if self.actual.points_per_cell != expected_points_per_cell:
+            raise ValueError("Detail preview cell-probe count is inconsistent")
+        if not (
+            self.raster_extent[0] < self.raster_extent[2]
+            and self.raster_extent[1] < self.raster_extent[3]
+            and self.image_bounds[0] < self.image_bounds[2]
+            and self.image_bounds[1] < self.image_bounds[3]
+        ):
+            raise ValueError("Detail preview bounds must be strictly ordered")
+        if any(
+            bounds[0] < -180
+            or bounds[2] > 180
+            or bounds[1] < -90
+            or bounds[3] > 90
+            for bounds in (self.raster_extent, self.image_bounds)
+        ):
+            raise ValueError("Detail preview bounds must be canonical WGS 84")
+        has_finite_value = any(value is not None for value in self.pixel_values)
+        if self.suggested_range is None and has_finite_value:
+            raise ValueError("Finite preview values require a suggested range")
+        if self.suggested_range is not None and not has_finite_value:
+            raise ValueError("An empty preview cannot declare a suggested range")
+        if self.suggested_range is not None and not (
+            self.suggested_range.minimum < self.suggested_range.midpoint
+            < self.suggested_range.maximum
+        ):
+            raise ValueError("Detail preview range must be strictly ordered")
         return self
 
 
@@ -338,14 +435,6 @@ class RasterPercentiles(BaseModel):
     p05: FiniteFloat
     p50: FiniteFloat
     p95: FiniteFloat
-
-
-class RasterValueRange(BaseModel):
-    """Three strictly ordered values accepted by the dynamic raster style."""
-
-    minimum: FiniteFloat
-    midpoint: FiniteFloat
-    maximum: FiniteFloat
 
 
 class RasterHistogram(BaseModel):

@@ -196,13 +196,14 @@ def create_raster_feature(
     async def raster_detail_preview(
         request: CatalogRasterDetailPreviewRequest,
     ) -> RasterDetailPreview:
-        """Return an explicitly selected bounded detail-only preview.
+        """Return an explicitly selected bounded sampled-raster preview.
 
         Args:
             request: Catalog identity and one of the three fixed preview modes.
 
         Returns:
-            Georeferenced point samples or one bounded WGS 84 patch image.
+            Georeferenced numeric image colored by the browser's shared raster
+            ramp without any arbitrary full-source read.
 
         Raises:
             HTTPException: If the raster or preview contract is inapplicable.

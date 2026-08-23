@@ -253,8 +253,9 @@ def apply_reader_assessment(
 def supports_detail_only_preview(rendering_metadata: dict[str, Any]) -> bool:
     """Return whether an assessment permits bounded detail-only previews.
 
-    The structural rejection must be exclusively overview/scale related, and
-    the current deployed reader must have accepted the raster and its CRS.
+    The structural rejection must be exclusively overview/scale related,
+    native source blocks must be bounded, and the current deployed reader must
+    have accepted the raster and its CRS.
 
     Args:
         rendering_metadata: Complete current-policy rendering assessment.
@@ -267,6 +268,7 @@ def supports_detail_only_preview(rendering_metadata: dict[str, Any]) -> bool:
         and rendering_metadata.get("eligible") is False
         and rendering_metadata.get("reason_code")
         in DETAIL_ONLY_PREVIEW_REASON_CODES
+        and rendering_metadata.get("bounded_blocks") is True
         and rendering_metadata.get("reader_compatible") is True
     )
 
