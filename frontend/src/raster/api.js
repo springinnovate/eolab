@@ -168,6 +168,118 @@ export function publishCatalogRaster(
     );
 }
 
+/** Fixed user-selectable bounded preview modes. */
+const RASTER_DETAIL_PREVIEW_MODES = new Set([
+    "centerPixel",
+    "samplingGrid",
+    "representativePatch"
+]);
+
+/**
+ * Validate one browser-safe detail-only preview at the network boundary.
+ *
+ * @param {Object} preview Parsed response document.
+ * @param {string} requestedMode Mode sent by the current UI request.
+ * @return {Object} The validated response document.
+ * @throws {Error} If the response violates the fixed preview contract.
+ */
+export function validateRasterDetailPreview(preview, requestedMode) {
+    const isFiniteBounds = (bounds) =>
+        Array.isArray(bounds) && bounds.length === 4 &&
+        bounds.every(Number.isFinite) &&
+        bounds[0] < bounds[2] && bounds[1] < bounds[3];
+    if (
+        !RASTER_DETAIL_PREVIEW_MODES.has(requestedMode) ||
+        preview?.mode !== requestedMode ||
+        preview?.approximate !== true ||
+        typeof preview?.policyVersion !== "string" ||
+        typeof preview?.label !== "string" ||
+        !isFiniteBounds(preview?.rasterExtent) ||
+        !Array.isArray(preview?.samples) ||
+        preview?.limits?.maximumGridSamples !== 25 ||
+        preview?.limits?.maximumPatchDimension !== 128 ||
+        preview?.limits?.maximumPatchCandidates !== 9
+    ) {
+        throw new Error("Detail-only preview response is invalid");
+    }
+    if (requestedMode === "representativePatch") {
+        if (
+            preview.samples.length !== 0 ||
+            !isFiniteBounds(preview.detailBounds) ||
+            typeof preview.imageDataUrl !== "string" ||
+            !preview.imageDataUrl.startsWith("data:image/png;base64,")
+        ) {
+            throw new Error("Representative detail patch response is invalid");
+        }
+        return preview;
+    }
+    if (
+        preview.detailBounds !== null ||
+        preview.imageDataUrl !== null ||
+        preview.samples.length < 1 ||
+        preview.samples.length > preview.limits.maximumGridSamples ||
+        preview.samples.some((sample) =>
+            !Number.isSafeInteger(sample?.row) ||
+            !Number.isSafeInteger(sample?.column) ||
+            !Number.isFinite(sample?.longitude) ||
+            !Number.isFinite(sample?.latitude) ||
+            !(sample?.value === null || Number.isFinite(sample?.value))
+        )
+    ) {
+        throw new Error("Detail sample preview response is invalid");
+    }
+    if (requestedMode === "centerPixel" && preview.samples.length !== 1) {
+        throw new Error("Center-pixel preview must contain one sample");
+    }
+    return preview;
+}
+
+/**
+ * Load one explicitly selected bounded preview for an overview-limited raster.
+ *
+ * @param {Object} item Selected scanner-owned STAC Item.
+ * @param {string} mode One fixed detail preview mode.
+ * @param {AbortSignal} signal Cancellation signal for stale UI intent.
+ * @param {typeof globalThis.fetch} [fetchImplementation=globalThis.fetch]
+ * Browser fetch implementation.
+ * @return {Promise<Object>} Validated georeferenced detail preview.
+ * @throws {Error} If the request or response violates the preview contract.
+ */
+export async function loadCatalogRasterDetailPreview(
+    item,
+    mode,
+    signal,
+    fetchImplementation = globalThis.fetch
+) {
+    if (!RASTER_DETAIL_PREVIEW_MODES.has(mode)) {
+        throw new TypeError(`Unsupported raster detail preview mode: ${mode}`);
+    }
+    const response = await fetchImplementation.call(
+        globalThis,
+        "/api/rendering/detail-previews",
+        {
+            method: "POST",
+            headers: {
+                Accept: "application/json",
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                collectionId: item.collection,
+                itemId: item.id,
+                mode
+            }),
+            signal
+        }
+    );
+    if (!response.ok) {
+        throw await renderingRequestError(
+            response,
+            "Detail-only preview request"
+        );
+    }
+    return validateRasterDetailPreview(await response.json(), mode);
+}
+
 /**
  * Load the bounded band-1 sample statistics for one published Catalog raster.
  *

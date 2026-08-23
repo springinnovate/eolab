@@ -375,6 +375,48 @@
                     >
                       Add to map layers
                     </button>
+                    <div
+                      class="raster-detail-preview-controls"
+                      id="raster-detail-preview-controls"
+                      hidden
+                    >
+                      <p>
+                        <strong>Detail-only visualization</strong>
+                        <span>This approximate preview does not render the whole raster.</span>
+                      </p>
+                      <label for="raster-detail-preview-mode">
+                        <span>Preview choice</span>
+                        <select id="raster-detail-preview-mode">
+                          <option value="centerPixel">Center-pixel sample</option>
+                          <option value="samplingGrid">Small, bounded sampling grid</option>
+                          <option value="representativePatch">Representative, bounded detail patch</option>
+                        </select>
+                      </label>
+                      <div class="raster-detail-preview-actions">
+                        <button
+                          class="secondary-button"
+                          id="show-raster-detail-preview"
+                          type="button"
+                        >
+                          Show detail-only preview
+                        </button>
+                        <button
+                          class="secondary-button"
+                          id="remove-raster-detail-preview"
+                          type="button"
+                          hidden
+                        >
+                          Remove detail-only preview
+                        </button>
+                        <button
+                          class="secondary-button"
+                          id="reassess-detail-raster"
+                          type="button"
+                        >
+                          Check for full visualization
+                        </button>
+                      </div>
+                    </div>
                     <p
                       id="catalog-layer-status"
                       role="status"

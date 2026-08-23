@@ -22,6 +22,7 @@ import {
     formatScanTiming,
     formatScanStatusSummary,
     getRasterVisualization,
+    supportsRasterDetailOnlyPreview,
     MOUNTED_DATASET_TYPES,
 } from "./catalog.js";
 import { initializeCatalogPaneControls } from "./catalog-pane-controller.js";
@@ -40,6 +41,7 @@ import {
     CatalogRasterAssessmentCache,
 } from "./catalog-map-actions.js";
 import { assessCatalogRaster } from "./raster/api.js";
+import { initializeRasterDetailPreview } from "./raster/detail-preview-controller.js";
 import { initializeRasterViewer } from "./raster/raster-viewer.js";
 import { initializeTemporaryAoi } from "./temporary-aoi/temporary-aoi.js";
 import {
@@ -469,6 +471,21 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
     const catalogLayerStatus = document.querySelector(
         "#catalog-layer-status"
     );
+    const rasterDetailPreviewControls = document.querySelector(
+        "#raster-detail-preview-controls"
+    );
+    const rasterDetailPreviewMode = document.querySelector(
+        "#raster-detail-preview-mode"
+    );
+    const showRasterDetailPreview = document.querySelector(
+        "#show-raster-detail-preview"
+    );
+    const removeRasterDetailPreview = document.querySelector(
+        "#remove-raster-detail-preview"
+    );
+    const reassessDetailRaster = document.querySelector(
+        "#reassess-detail-raster"
+    );
     const catalogUrl = appGlobalConfiguration.catalogUrl.replace(/\/$/, "");
     const resultStream = new CatalogResultStream(
         new CatalogSearchClient(catalogUrl)
@@ -557,6 +574,11 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
         onTileError: reportRasterTileError,
         onLayersChange: refreshCatalogMapAction,
     });
+    const rasterDetailPreview = initializeRasterDetailPreview({
+        leafletMap,
+        leaflet: L,
+        onChange: refreshCatalogMapAction,
+    });
     /**
      * Apply the scanner-owned visualization decision to the map action.
      *
@@ -565,7 +587,11 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
      */
     function updateCatalogMapAction(item) {
         const visualization = getRasterVisualization(item);
+        const supportsDetailPreview =
+            supportsRasterDetailOnlyPreview(item);
         const isRetained = item !== null && rasterVisualization.contains(item);
+        const hasDetailPreview = item !== null &&
+            rasterDetailPreview.contains(item);
         const pendingAction = item === null
             ? null
             : catalogState.pendingMapActions.get(item);
@@ -575,7 +601,17 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
             String(pendingAction !== null)
         );
         catalogLayerToggle.disabled = pendingAction !== null;
-        catalogLayerToggle.hidden = false;
+        catalogLayerToggle.hidden = supportsDetailPreview;
+        rasterDetailPreviewControls.hidden = !supportsDetailPreview;
+        rasterDetailPreviewMode.disabled = pendingAction !== null;
+        showRasterDetailPreview.disabled = pendingAction !== null;
+        reassessDetailRaster.disabled = pendingAction !== null;
+        showRasterDetailPreview.textContent = pendingAction?.buttonText ??
+            (hasDetailPreview
+                ? "Update detail-only preview"
+                : "Show detail-only preview");
+        removeRasterDetailPreview.hidden = !hasDetailPreview;
+        removeRasterDetailPreview.disabled = pendingAction !== null;
         catalogLayerToggle.textContent = pendingAction?.buttonText ?? (
             visualization === undefined
                 ? "Assess for visualization"
@@ -585,15 +621,27 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
                         ? "Remove from map layers"
                         : "Add to map layers"
         );
-        catalogLayerStatus.textContent = pendingAction?.statusText ?? (
-            isRetained
-                ? "This raster is retained in the map layer stack."
-                : visualization?.reason ?? ""
-        );
+        let defaultStatus = visualization?.reason ?? "";
+        if (isRetained) {
+            defaultStatus = "This raster is retained in the map layer stack.";
+        }
+        if (supportsDetailPreview) {
+            defaultStatus =
+                "Normal full visualization is unavailable. Choose one " +
+                "bounded approximate preview; none represents the whole raster.";
+        }
+        if (hasDetailPreview) {
+            defaultStatus =
+                "An approximate detail-only preview is displayed at its " +
+                "spatial location; the dashed outline is the raster extent.";
+        }
+        catalogLayerStatus.textContent =
+            pendingAction?.statusText ?? defaultStatus;
     }
 
     /** Clears the selected result, footprint, and inspector together. */
     function clearCatalogSelection() {
+        rasterDetailPreview.invalidate();
         catalogState.selectedButton?.classList.remove("is-selected");
         catalogState.selectedButton?.setAttribute("aria-pressed", "false");
         footprintController.clear();
@@ -614,6 +662,7 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
 
     /** Select one result or remotely discovered Item without changing search. */
     function selectCatalogItem(item, requestedButton = null) {
+        rasterDetailPreview.invalidate();
         catalogState.rasterAssessments.apply(item);
         const itemButton = requestedButton ??
             catalogState.resultButtons.get(catalogItemKey(item)) ?? null;
@@ -982,6 +1031,7 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
                     selectedItem,
                     assessedItem
                 );
+                rasterDetailPreview.remove(selectedItem);
                 if (!catalogItemsMatch(
                     catalogState.selectedItem,
                     selectedItem
@@ -1054,6 +1104,46 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
         }
     }
     catalogLayerToggle.addEventListener("click", toggleCatalogRaster);
+    reassessDetailRaster.addEventListener("click", toggleCatalogRaster);
+    showRasterDetailPreview.addEventListener("click", async () => {
+        const selectedItem = catalogState.selectedItem;
+        const pendingAction = beginCatalogMapAction(
+            selectedItem,
+            "Loading detail…",
+            "Reading a strictly bounded approximate raster preview."
+        );
+        try {
+            const preview = await rasterDetailPreview.show(
+                selectedItem,
+                rasterDetailPreviewMode.value
+            );
+            if (
+                preview === null ||
+                !catalogItemsMatch(catalogState.selectedItem, selectedItem)
+            ) {
+                return;
+            }
+            finishCatalogMapAction(pendingAction);
+            catalogLayerStatus.textContent = `${preview.label}. The dashed ` +
+                "outline is the raster extent, not a valid-data footprint.";
+        } catch (previewError) {
+            if (
+                previewError.name !== "AbortError" &&
+                catalogItemsMatch(catalogState.selectedItem, selectedItem)
+            ) {
+                finishCatalogMapAction(pendingAction);
+                catalogLayerStatus.textContent = previewError.message;
+            }
+        } finally {
+            finishCatalogMapAction(pendingAction);
+        }
+    });
+    removeRasterDetailPreview.addEventListener("click", () => {
+        const selectedItem = catalogState.selectedItem;
+        rasterDetailPreview.remove(selectedItem);
+        catalogLayerStatus.textContent =
+            "Detail-only preview removed from the map.";
+    });
 
     await loadCatalog(true);
     return loadCatalog.bind(null, true);

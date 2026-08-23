@@ -9,6 +9,39 @@ export const MOUNTED_GEOTIFF_ITEM = Object.freeze({
   },
 });
 
+/** @type {Readonly<Object>} Center-pixel detail-only preview. */
+export const CENTER_PIXEL_DETAIL_PREVIEW = Object.freeze({
+  mode: "centerPixel",
+  policyVersion: "bounded-detail-preview-v1",
+  approximate: true,
+  label: "Approximate detail-only center-pixel preview",
+  rasterExtent: [-123, 48, -121, 50],
+  samples: [{
+    row: 500000,
+    column: 750000,
+    longitude: -122,
+    latitude: 49,
+    value: null,
+  }],
+  detailBounds: null,
+  imageDataUrl: null,
+  limits: {
+    maximumGridSamples: 25,
+    maximumPatchDimension: 128,
+    maximumPatchCandidates: 9,
+  },
+});
+
+/** @type {Readonly<Object>} Representative detail-patch preview. */
+export const PATCH_DETAIL_PREVIEW = Object.freeze({
+  ...CENTER_PIXEL_DETAIL_PREVIEW,
+  mode: "representativePatch",
+  label: "Approximate representative detail patch",
+  samples: [],
+  detailBounds: [-122.1, 48.9, -121.9, 49.1],
+  imageDataUrl: "data:image/png;base64,iVBORw0KGgo=",
+});
+
 /** @type {Readonly<Object>} Representative validated whole-raster statistics. */
 export const RASTER_STATISTICS = Object.freeze({
   band: 1,

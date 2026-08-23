@@ -677,6 +677,7 @@ h5 {
 
 .catalog-map-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   margin-bottom: 18px;
@@ -684,6 +685,42 @@ h5 {
   border-radius: var(--radius);
   background: var(--surface-3);
   padding: 12px;
+}
+
+.raster-detail-preview-controls {
+  display: grid;
+  flex: 1 1 100%;
+  gap: 0.65rem;
+  padding: 0.75rem;
+  border: 1px solid color-mix(in srgb, #f97316 45%, var(--border-2));
+  border-radius: 0.65rem;
+  background: color-mix(in srgb, #f97316 8%, transparent);
+}
+
+.raster-detail-preview-controls[hidden] {
+  display: none;
+}
+
+.raster-detail-preview-controls p,
+.raster-detail-preview-controls label {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0;
+}
+
+.raster-detail-preview-controls select {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.raster-detail-preview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.raster-detail-extent {
+  vector-effect: non-scaling-stroke;
 }
 
 .catalog-map-actions[hidden] {

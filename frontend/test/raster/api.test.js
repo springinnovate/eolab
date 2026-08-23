@@ -4,16 +4,82 @@ import test from "node:test";
 import {
   assessCatalogRaster,
   loadCatalogRasterStatistics,
+  loadCatalogRasterDetailPreview,
   publishCatalogRaster,
   RenderingRequestError,
   sampleCatalogRasterPixel,
 } from "../../src/raster/api.js";
 import {
   MOUNTED_GEOTIFF_ITEM,
+  CENTER_PIXEL_DETAIL_PREVIEW,
   RASTER_STATISTICS,
   SELECTED_BOUNDS,
   SELECTED_RASTER_STATISTICS,
 } from "../../test-support/raster/fixtures.js";
+
+test("detail preview sends only Item identity and selected fixed mode", async () => {
+  const requests = [];
+  const abortController = new AbortController();
+
+  assert.deepEqual(
+    await loadCatalogRasterDetailPreview(
+      MOUNTED_GEOTIFF_ITEM,
+      "centerPixel",
+      abortController.signal,
+      async (url, options) => {
+        requests.push({ url, options });
+        return new Response(JSON.stringify(CENTER_PIXEL_DETAIL_PREVIEW), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      },
+    ),
+    CENTER_PIXEL_DETAIL_PREVIEW,
+  );
+  assert.deepEqual(requests, [{
+    url: "/api/rendering/detail-previews",
+    options: {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        collectionId: MOUNTED_GEOTIFF_ITEM.collection,
+        itemId: MOUNTED_GEOTIFF_ITEM.id,
+        mode: "centerPixel",
+      }),
+      signal: abortController.signal,
+    },
+  }]);
+  assert.equal(CENTER_PIXEL_DETAIL_PREVIEW.samples[0].value, null);
+});
+
+test("detail preview rejects arbitrary modes and malformed patch images", async () => {
+  await assert.rejects(
+    loadCatalogRasterDetailPreview(
+      MOUNTED_GEOTIFF_ITEM,
+      "fullExtent",
+      new AbortController().signal,
+      async () => {
+        throw new Error("request should not be sent");
+      },
+    ),
+    /Unsupported raster detail preview mode/,
+  );
+  await assert.rejects(
+    loadCatalogRasterDetailPreview(
+      MOUNTED_GEOTIFF_ITEM,
+      "representativePatch",
+      new AbortController().signal,
+      async () => new Response(JSON.stringify({
+        ...CENTER_PIXEL_DETAIL_PREVIEW,
+        mode: "representativePatch",
+      }), { status: 200, headers: { "Content-Type": "application/json" } }),
+    ),
+    /Representative detail patch response is invalid/,
+  );
+});
 
 test("assessCatalogRaster sends only the STAC Item identity", async () => {
   const requests = [];
