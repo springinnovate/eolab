@@ -67,8 +67,9 @@ the repository and mounted scan source. Server paths are never returned. A
 pending multi-dataset upload retains its files until selection, removal,
 replacement, expiration, or application shutdown.
 
-One temporary AOI expires 30 minutes after upload. The application periodically
-removes expired records and also purges expiration before lifecycle operations.
+One temporary AOI expires after `EOLAB_TEMPORARY_AOI_TTL_SECONDS`, which
+defaults to 1,800 seconds (30 minutes). The application periodically removes
+expired records and also purges expiration before lifecycle operations.
 Removal deletes both browser state and server files. Replacement is
 transactional: the current AOI remains available if the new upload or selection
 fails, and its files are deleted only after the replacement becomes ready.

@@ -2,6 +2,7 @@
 
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
+from datetime import timedelta
 from pathlib import Path
 
 import httpx2
@@ -142,6 +143,9 @@ def create_app(
         get_map_request_tracker,
     )
     temporary_aoi_service = TemporaryAoiService(
+        ttl=timedelta(
+            seconds=app_global_configuration.temporary_aoi_ttl_seconds
+        ),
         forbidden_roots=(
             Path.cwd(),
             app_global_configuration.scan_mount_path,

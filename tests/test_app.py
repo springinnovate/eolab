@@ -1243,6 +1243,7 @@ def test_load_settings_rejects_blank_version(
         ("RASTER_PIXEL_READ_CONCURRENCY", "1.5"),
         ("RASTER_STATISTICS_READ_CONCURRENCY", "1.5"),
         ("RASTER_STATISTICS_CACHE_ENTRIES", "1.5"),
+        ("TEMPORARY_AOI_TTL_SECONDS", "not-a-number"),
     ),
 )
 def test_load_settings_rejects_malformed_number(
@@ -1326,6 +1327,8 @@ def test_load_settings_rejects_invalid_scan_path_lists(
         ("RASTER_PIXEL_READ_CONCURRENCY", "0"),
         ("RASTER_STATISTICS_READ_CONCURRENCY", "0"),
         ("RASTER_STATISTICS_CACHE_ENTRIES", "0"),
+        ("TEMPORARY_AOI_TTL_SECONDS", "0"),
+        ("TEMPORARY_AOI_TTL_SECONDS", "nan"),
     ),
 )
 def test_load_settings_rejects_out_of_range_number(

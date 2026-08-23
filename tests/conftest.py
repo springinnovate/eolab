@@ -31,6 +31,7 @@ DEFAULT_ENVIRONMENT = {
     "SCAN_RECONCILIATION_SPOOL_MEMORY_BYTES": "1048576",
     "SCAN_CATALOG_WRITE_TIMEOUT_SECONDS": "120",
     "SCAN_CATALOG_ERROR_DETAIL_LIMIT": "500",
+    "TEMPORARY_AOI_TTL_SECONDS": "1800",
     "BASEMAP_URL": "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
     "BASEMAP_ATTRIBUTION": "&copy; OpenStreetMap contributors",
     "INITIAL_LATITUDE": "20",
