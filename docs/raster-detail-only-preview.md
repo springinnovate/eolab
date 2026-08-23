@@ -84,11 +84,42 @@ The new overlay is attached before the prior one is removed. Zooming back to
 the fitted scale removes only the detail overlay and retains the base grid.
 The representative patch remains explicit and does not auto-refine.
 
-The first grid in the session that contains finite observations establishes one
-immutable color range. Usually that is the base grid; when the base is entirely
-nodata, the first finite current-view grid establishes it instead. Later grids
-reuse that range, so an equal numeric value keeps the same color across
-base/detail seams. Nodata remains alpha-transparent.
+The first grid in the session that contains finite observations initializes the
+shared color range from that bounded sample's approximate minimum, median, and
+maximum. Usually that is the base grid; when the base is entirely nodata, the
+first finite current-view grid establishes it instead. Repeated or constant
+values receive only the minimum padding needed by the strictly ordered color
+contract. Later grids reuse the current range, so an equal numeric value keeps
+the same color across base/detail seams. Nodata remains alpha-transparent.
+
+## Appearance controls and clicked histograms
+
+Sampled rasters use the same palette, numeric threshold, legend, histogram,
+and percentile controls as WMS rasters. A palette or threshold change recolors
+the bounded numeric images in the browser and atomically replaces both the base
+and current-view presentations. It does not publish the raster, send a style to
+GeoServer, or read the source again. Reset restores the initial approximate
+minimum/median/maximum range.
+
+There is deliberately no whole-raster histogram for an overview-limited
+raster. A 1–300 km map window follows the pointer without source I/O. A click,
+tap, or **Sample map center** action submits only that canonical WGS 84 window.
+The server then reuses the authorized detail-preview service with the fixed
+fine center-sample policy: exactly 127 × 127 spatially placed point samples,
+subject to the same native-block and decoded-work preflight. Finite points are
+summarized into 64 bins; nodata and non-finite points are excluded rather than
+converted to zero. An all-nodata window reports an actionable error and leaves
+manual appearance controls available.
+
+This selected-window endpoint does not accept a missing window, a temporary
+AOI, a filesystem path, source dimensions, a source window, or a caller-owned
+sampling policy. The published-raster pixel probe is also disabled because a
+sampled raster was never admitted to that authorization registry. Changing the
+clicked window aborts prior browser work, and the shared statistics controller
+prevents a late response from replacing the current selection even if
+cancellation loses a race. The underlying preview cache identity already
+includes source signature, center-sample mode, fine density, exact window, and
+policy/resource-bound versions.
 
 ## Source-read proof and output bounds
 
