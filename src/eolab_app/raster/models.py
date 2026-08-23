@@ -27,6 +27,14 @@ RasterDetailPreviewMode = Literal[
     "representativeSample",
     "representativePatch",
 ]
+RasterDetailPreviewDensity = Literal["coarse", "medium", "fine"]
+RasterDetailPreviewScope = Literal[
+    "rasterExtent",
+    "currentView",
+    "representativePatch",
+]
+# Projection roundoff allowance; far below a displayable map distance.
+RASTER_DETAIL_PREVIEW_BOUNDS_TOLERANCE = 1e-9
 RasterDetailPreviewCacheKey = tuple[
     str,
     str,
@@ -34,6 +42,8 @@ RasterDetailPreviewCacheKey = tuple[
     tuple[float, float, float, float],
     str,
     RasterDetailPreviewMode,
+    RasterDetailPreviewDensity | None,
+    CanonicalWgs84Bounds | None,
     tuple[int, ...],
 ]
 
@@ -208,9 +218,36 @@ class CatalogRasterDetailPreviewRequest(CatalogRasterRequest):
     Attributes:
         mode: Explicit per-cell center, per-cell representative, or local
             representative-patch choice.
+        density: Server-owned grid-density profile for sampled proxy modes.
+        view_bounds: Optional current map rectangle for a refined proxy.
     """
 
     mode: RasterDetailPreviewMode
+    density: RasterDetailPreviewDensity | None = None
+    view_bounds: Wgs84Bounds | None = Field(default=None, alias="viewBounds")
+
+    @model_validator(mode="after")
+    def require_mode_specific_sampling_parameters(
+        self,
+    ) -> "CatalogRasterDetailPreviewRequest":
+        """Require a density only for sampled grids and a view only for them.
+
+        Returns:
+            Validated request with one unambiguous bounded-preview policy.
+
+        Raises:
+            ValueError: If patch and sampled-grid parameters are mixed, or a
+                sampled-grid request omits its fixed density profile.
+        """
+        if self.mode == "representativePatch":
+            if self.density is not None or self.view_bounds is not None:
+                raise ValueError(
+                    "Representative patches do not accept density or viewBounds"
+                )
+            return self
+        if self.density is None:
+            raise ValueError("Sampled raster proxies require a density")
+        return self
 
 
 class PublishedRaster(BaseModel):
@@ -272,6 +309,8 @@ class RasterDetailPreviewLimits(BaseModel):
         maximum_source_block_reads: Maximum unique native blocks read.
         maximum_decoded_source_bytes: Maximum decoded band-one values plus
             their in-memory validity bytes.
+        maximum_transformed_positions: Maximum target probes transformed over
+            every possible sampled-grid coarsening candidate in one request.
         maximum_points_per_cell: Maximum deterministic probes in a proxy cell.
         maximum_patch_dimension: Maximum source/output patch edge.
         maximum_patch_candidates: Maximum candidate windows examined.
@@ -283,6 +322,9 @@ class RasterDetailPreviewLimits(BaseModel):
     )
     maximum_decoded_source_bytes: Literal[67_108_864] = Field(
         alias="maximumDecodedSourceBytes"
+    )
+    maximum_transformed_positions: Literal[1_747_520] = Field(
+        alias="maximumTransformedPositions"
     )
     maximum_points_per_cell: Literal[5] = Field(alias="maximumPointsPerCell")
     maximum_patch_dimension: Literal[128] = Field(
@@ -299,17 +341,19 @@ class RasterDetailPreviewWork(BaseModel):
     Attributes:
         sample_grid_width: Width of the bounded source numeric grid.
         sample_grid_height: Height of the bounded source numeric grid.
-        source_block_read_count: Unique native source blocks read once.
-        decoded_source_bytes: Conservative band-plus-validity decoded bytes.
+        source_block_read_count: Unique native source blocks read once; zero
+            when every transformed probe lies outside a rotated source.
+        decoded_source_bytes: Conservative band-plus-validity decoded bytes,
+            also zero exactly when no block is required.
         points_per_cell: Maximum positions inspected for each proxy cell.
         candidate_window_count: Detail-patch candidates admitted by the shared
-            native-block budget, or zero for full-extent proxy modes.
+            native-block budget, or zero for sampled proxy modes.
     """
 
     sample_grid_width: int = Field(alias="sampleGridWidth", ge=1)
     sample_grid_height: int = Field(alias="sampleGridHeight", ge=1)
-    source_block_read_count: int = Field(alias="sourceBlockReadCount", ge=1)
-    decoded_source_bytes: int = Field(alias="decodedSourceBytes", ge=1)
+    source_block_read_count: int = Field(alias="sourceBlockReadCount", ge=0)
+    decoded_source_bytes: int = Field(alias="decodedSourceBytes", ge=0)
     points_per_cell: int = Field(alias="pointsPerCell", ge=0)
     candidate_window_count: int = Field(alias="candidateWindowCount", ge=0)
 
@@ -319,6 +363,8 @@ class RasterDetailPreview(BaseModel):
 
     Attributes:
         mode: Explicit preview mode that produced this document.
+        scope: Raster extent, current map view, or representative patch.
+        density: Fixed sampled-grid density, or ``None`` for a patch.
         policy_version: Algorithm and cache policy identity.
         approximate: Literal marker preventing full-render interpretation.
         label: User-facing approximation label.
@@ -334,7 +380,9 @@ class RasterDetailPreview(BaseModel):
     """
 
     mode: RasterDetailPreviewMode
-    policy_version: Literal["bounded-sampled-raster-v2"] = Field(
+    scope: RasterDetailPreviewScope
+    density: RasterDetailPreviewDensity | None
+    policy_version: Literal["bounded-sampled-raster-v3"] = Field(
         alias="policyVersion"
     )
     approximate: Literal[True] = True
@@ -366,10 +414,22 @@ class RasterDetailPreview(BaseModel):
             raise ValueError("Detail preview values must fill its numeric image")
         if not self.label.strip():
             raise ValueError("Detail preview label must not be blank")
+        if self.mode == "representativePatch":
+            if self.scope != "representativePatch" or self.density is not None:
+                raise ValueError("Patch preview provenance is inconsistent")
+        elif (
+            self.scope not in {"rasterExtent", "currentView"}
+            or self.density is None
+        ):
+            raise ValueError("Sampled proxy provenance is inconsistent")
         maximum_image_dimension = (
             self.limits.maximum_patch_dimension
             if self.mode == "representativePatch"
-            else self.limits.maximum_proxy_dimension
+            else {
+                "coarse": 31,
+                "medium": 63,
+                "fine": self.limits.maximum_proxy_dimension,
+            }[self.density]
         )
         if (
             self.image_width > maximum_image_dimension
@@ -391,7 +451,13 @@ class RasterDetailPreview(BaseModel):
             > self.limits.maximum_patch_candidates
         ):
             raise ValueError("Detail preview work exceeds fixed limits")
+        if (self.actual.source_block_read_count == 0) != (
+            self.actual.decoded_source_bytes == 0
+        ):
+            raise ValueError("Detail preview block and byte work disagree")
         is_patch = self.mode == "representativePatch"
+        if is_patch and self.actual.source_block_read_count == 0:
+            raise ValueError("Detail patches require positive source reads")
         if is_patch != (self.actual.candidate_window_count > 0):
             raise ValueError("Only detail patches declare candidate windows")
         expected_points_per_cell = {
@@ -416,7 +482,25 @@ class RasterDetailPreview(BaseModel):
             for bounds in (self.raster_extent, self.image_bounds)
         ):
             raise ValueError("Detail preview bounds must be canonical WGS 84")
+        if not (
+            self.raster_extent[0] - RASTER_DETAIL_PREVIEW_BOUNDS_TOLERANCE
+            <= self.image_bounds[0]
+            and self.raster_extent[1] - RASTER_DETAIL_PREVIEW_BOUNDS_TOLERANCE
+            <= self.image_bounds[1]
+            and self.raster_extent[2] + RASTER_DETAIL_PREVIEW_BOUNDS_TOLERANCE
+            >= self.image_bounds[2]
+            and self.raster_extent[3] + RASTER_DETAIL_PREVIEW_BOUNDS_TOLERANCE
+            >= self.image_bounds[3]
+        ):
+            raise ValueError("Detail preview image must stay in the raster extent")
         has_finite_value = any(value is not None for value in self.pixel_values)
+        if self.actual.source_block_read_count == 0 and (
+            has_finite_value or self.suggested_range is not None
+        ):
+            raise ValueError(
+                "A preview without source reads cannot contain finite values "
+                "or a suggested range"
+            )
         if self.suggested_range is None and has_finite_value:
             raise ValueError("Finite preview values require a suggested range")
         if self.suggested_range is not None and not has_finite_value:

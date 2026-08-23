@@ -18,9 +18,10 @@ from eolab_app.raster.detail_preview import (
 from eolab_app.raster.detail_proxy import (
     DETAIL_PROXY_CENTER_OFFSETS,
     DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES,
-    DETAIL_PROXY_MAX_DIMENSION,
     DETAIL_PROXY_MAX_SOURCE_BLOCK_READS,
+    DETAIL_PROXY_MAX_TRANSFORMED_POSITIONS,
     DETAIL_PROXY_REPRESENTATIVE_OFFSETS,
+    detail_proxy_maximum_dimension,
 )
 from eolab_app.raster.eligibility import (
     DETAIL_ONLY_PREVIEW_REASON_CODES,
@@ -31,10 +32,12 @@ from eolab_app.raster.eligibility import (
 from eolab_app.raster.errors import RasterConflictError
 from eolab_app.raster.models import (
     AuthorizedRaster,
+    CanonicalWgs84Bounds,
     CatalogRasterDetailPreviewRequest,
     GEOSERVER_READER_CONTRACT,
     RasterDetailPreview,
     RasterDetailPreviewCacheKey,
+    RasterDetailPreviewDensity,
     RasterDetailPreviewMode,
     SourceSignature,
     Wgs84Bounds,
@@ -44,7 +47,11 @@ from eolab_app.raster.sources import MountedRasterResolver, source_signature
 
 
 class RasterDetailPreviewService:
-    """Authorize, coalesce, and cache strictly bounded detail previews."""
+    """Authorize, admit, coalesce, and cache bounded detail previews.
+
+    Unique in-flight computations are limited to the configured read capacity;
+    identical cache identities share one admitted computation.
+    """
 
     def __init__(
         self,
@@ -53,7 +60,13 @@ class RasterDetailPreviewService:
         read_concurrency: int,
         cache_entries: int,
         preview_reader: Callable[
-            [Path, RasterDetailPreviewMode, tuple[float, float, float, float]],
+            [
+                Path,
+                RasterDetailPreviewMode,
+                CanonicalWgs84Bounds,
+                RasterDetailPreviewDensity | None,
+                CanonicalWgs84Bounds | None,
+            ],
             RasterDetailPreview,
         ] = read_raster_detail_preview,
         signature_reader: Callable[[Path], SourceSignature] = source_signature,
@@ -63,7 +76,8 @@ class RasterDetailPreviewService:
         Args:
             catalog: Authoritative scanner-owned raster catalog.
             source_resolver: Resolver confined to the read-only scan mount.
-            read_concurrency: Maximum simultaneous Rasterio preview reads.
+            read_concurrency: Maximum simultaneous Rasterio reads and admitted
+                unique preview computations.
             cache_entries: Maximum completed preview documents retained.
             preview_reader: Synchronous bounded Rasterio preview boundary.
             signature_reader: Synchronous source identity boundary.
@@ -78,6 +92,7 @@ class RasterDetailPreviewService:
         self._catalog = catalog
         self._source_resolver = source_resolver
         self._read_semaphore = asyncio.Semaphore(read_concurrency)
+        self._maximum_inflight = read_concurrency
         self._cache_entries = cache_entries
         self._preview_reader = preview_reader
         self._signature_reader = signature_reader
@@ -92,34 +107,79 @@ class RasterDetailPreviewService:
         self._state_lock = asyncio.Lock()
 
     @staticmethod
-    def _mode_parameters(mode: RasterDetailPreviewMode) -> tuple[int, ...]:
+    def _mode_parameters(
+        mode: RasterDetailPreviewMode,
+        density: RasterDetailPreviewDensity | None,
+    ) -> tuple[int, ...]:
         """Return fixed algorithm inputs included in cache identity.
 
         Args:
             mode: Validated detail preview mode.
+            density: Fixed sampled-grid profile, or ``None`` for a patch.
 
         Returns:
             Mode-specific sampling limits and location-policy inputs.
+
+        Raises:
+            ValueError: If sampled mode parameters bypass request validation
+                without a density profile.
         """
         # Deterministic fractional locations are encoded in thousandths.
         if mode in {"centerSample", "representativeSample"}:
+            if density is None:
+                raise ValueError("Sampled raster proxies require a density")
             offsets = (
                 DETAIL_PROXY_CENTER_OFFSETS
                 if mode == "centerSample"
                 else DETAIL_PROXY_REPRESENTATIVE_OFFSETS
             )
             return (
-                DETAIL_PROXY_MAX_DIMENSION,
+                detail_proxy_maximum_dimension(density),
                 DETAIL_PROXY_MAX_SOURCE_BLOCK_READS,
                 DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES,
+                DETAIL_PROXY_MAX_TRANSFORMED_POSITIONS,
                 *(round(value * 1000) for offset in offsets for value in offset),
             )
         return (
             DETAIL_PREVIEW_PATCH_DIMENSION,
             DETAIL_PROXY_MAX_SOURCE_BLOCK_READS,
             DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES,
+            DETAIL_PROXY_MAX_TRANSFORMED_POSITIONS,
             *(round(value * 1000) for value in DETAIL_PREVIEW_CANDIDATE_FRACTIONS),
         )
+
+    @staticmethod
+    def _effective_view_bounds(
+        request: CatalogRasterDetailPreviewRequest,
+        raster_extent: CanonicalWgs84Bounds,
+    ) -> CanonicalWgs84Bounds | None:
+        """Clip an optional validated map view to the raster extent.
+
+        Args:
+            request: Validated preview request.
+            raster_extent: Current authoritative WGS 84 raster extent.
+
+        Returns:
+            Canonical positive-area intersection, or ``None`` for an extent
+            proxy or representative patch.
+
+        Raises:
+            RasterConflictError: If the current view misses the raster.
+        """
+        if request.view_bounds is None:
+            return None
+        requested = request.view_bounds.canonical_tuple()
+        effective = (
+            max(requested[0], raster_extent[0]),
+            max(requested[1], raster_extent[1]),
+            min(requested[2], raster_extent[2]),
+            min(requested[3], raster_extent[3]),
+        )
+        if effective[0] >= effective[2] or effective[1] >= effective[3]:
+            raise RasterConflictError(
+                "Current map view does not intersect the raster extent."
+            )
+        return effective
 
     async def _authorize(
         self,
@@ -241,6 +301,10 @@ class RasterDetailPreviewService:
             RasterConflictError: If bounded reading or georeferencing fails.
         """
         authorized_raster, raster_extent = await self._authorize(request)
+        effective_view_bounds = self._effective_view_bounds(
+            request,
+            raster_extent,
+        )
         cache_key: RasterDetailPreviewCacheKey = (
             request.collection_id,
             request.item_id,
@@ -248,7 +312,9 @@ class RasterDetailPreviewService:
             raster_extent,
             DETAIL_PREVIEW_POLICY_VERSION,
             request.mode,
-            self._mode_parameters(request.mode),
+            request.density,
+            effective_view_bounds,
+            self._mode_parameters(request.mode, request.density),
         )
         async with self._state_lock:
             cached = self._cache.get(cache_key)
@@ -257,11 +323,18 @@ class RasterDetailPreviewService:
                 return cached
             task = self._inflight.get(cache_key)
             if task is None:
+                if len(self._inflight) >= self._maximum_inflight:
+                    raise RasterConflictError(
+                        "Detail-only preview capacity is busy; retry after "
+                        "the current bounded read finishes."
+                    )
                 task = asyncio.create_task(
                     self._compute(
                         authorized_raster,
                         request.mode,
                         raster_extent,
+                        request.density,
+                        effective_view_bounds,
                         cache_key,
                     )
                 )
@@ -285,7 +358,9 @@ class RasterDetailPreviewService:
         self,
         authorized_raster: AuthorizedRaster,
         mode: RasterDetailPreviewMode,
-        raster_extent: tuple[float, float, float, float],
+        raster_extent: CanonicalWgs84Bounds,
+        density: RasterDetailPreviewDensity | None,
+        view_bounds: CanonicalWgs84Bounds | None,
         cache_key: RasterDetailPreviewCacheKey,
     ) -> RasterDetailPreview:
         """Compute and cache one source version within read capacity.
@@ -294,6 +369,8 @@ class RasterDetailPreviewService:
             authorized_raster: Source identity approved at request start.
             mode: Explicit preview mode.
             raster_extent: Cataloged WGS 84 raster extent.
+            density: Fixed sampled-grid profile, or ``None`` for a patch.
+            view_bounds: Effective current-view intersection, when requested.
             cache_key: Complete source, mode, parameters, and policy identity.
 
         Returns:
@@ -319,6 +396,8 @@ class RasterDetailPreviewService:
                     authorized_raster.source_path,
                     mode,
                     raster_extent,
+                    density,
+                    view_bounds,
                 )
                 if await asyncio.to_thread(
                     self._signature_reader,

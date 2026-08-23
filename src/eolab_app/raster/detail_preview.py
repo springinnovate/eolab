@@ -16,21 +16,26 @@ from eolab_app.raster.detail_proxy import (
     DETAIL_PROXY_MAX_DIMENSION,
     DETAIL_PROXY_MAX_POINTS_PER_CELL,
     DETAIL_PROXY_MAX_SOURCE_BLOCK_READS,
+    DETAIL_PROXY_MAX_TRANSFORMED_POSITIONS,
     BoundedWindowSamples,
+    detail_proxy_maximum_dimension,
     read_bounded_candidate_windows,
     read_detail_proxy,
 )
 from eolab_app.raster.models import (
+    CanonicalWgs84Bounds,
     RasterDetailPreview,
+    RasterDetailPreviewDensity,
     RasterDetailPreviewLimits,
     RasterDetailPreviewMode,
+    RasterDetailPreviewScope,
     RasterDetailPreviewWork,
     RasterValueRange,
 )
 from eolab_app.raster.statistics import strict_raster_value_range
 
 
-DETAIL_PREVIEW_POLICY_VERSION = "bounded-sampled-raster-v2"
+DETAIL_PREVIEW_POLICY_VERSION = "bounded-sampled-raster-v3"
 DETAIL_PREVIEW_PATCH_DIMENSION = 128
 DETAIL_PREVIEW_CANDIDATE_FRACTIONS = (0.2, 0.5, 0.8)
 DETAIL_PREVIEW_MAX_PATCH_CANDIDATES = (
@@ -38,6 +43,7 @@ DETAIL_PREVIEW_MAX_PATCH_CANDIDATES = (
 )
 DETAIL_PREVIEW_EDGE_DENSIFY_SEGMENTS = 21
 WEB_MERCATOR_LIMIT = 20_037_508.342789244
+WEB_MERCATOR_LATITUDE_LIMIT = 85.0511287798066
 
 
 class NoUsefulDetailPatchError(ValueError):
@@ -170,6 +176,7 @@ def _web_mercator_bounds(
 
     Raises:
         ValueError: If projection is non-finite or misses Leaflet's world.
+        rasterio.errors.RasterioError: If CRS transformation fails.
     """
     source_x, source_y = _densified_array_edge_positions(
         source_transform,
@@ -294,6 +301,94 @@ def _warp_numeric_image(
     return image_bounds, numpy.ma.array(destination_values, mask=mask)
 
 
+def _intersect_canonical_bounds(
+    first: CanonicalWgs84Bounds,
+    second: CanonicalWgs84Bounds,
+) -> CanonicalWgs84Bounds:
+    """Return the non-empty intersection of two canonical WGS 84 bounds.
+
+    Args:
+        first: Ordered west, south, east, north bounds.
+        second: Ordered west, south, east, north bounds.
+
+    Returns:
+        Canonical intersection rectangle.
+
+    Raises:
+        ValueError: If either input is invalid or the rectangles do not
+            overlap with positive area.
+    """
+    if any(
+        not (
+            len(bounds) == 4
+            and all(math.isfinite(value) for value in bounds)
+            and -180 <= bounds[0] < bounds[2] <= 180
+            and -90 <= bounds[1] < bounds[3] <= 90
+        )
+        for bounds in (first, second)
+    ):
+        raise ValueError("Sampled raster bounds are invalid")
+    intersection = (
+        max(first[0], second[0]),
+        max(first[1], second[1]),
+        min(first[2], second[2]),
+        min(first[3], second[3]),
+    )
+    if intersection[0] >= intersection[2] or intersection[1] >= intersection[3]:
+        raise ValueError("Current map view does not intersect the raster extent")
+    return intersection
+
+
+def _projected_sampling_bounds(
+    sampling_bounds: CanonicalWgs84Bounds,
+) -> tuple[
+    tuple[float, float, float, float],
+    CanonicalWgs84Bounds,
+]:
+    """Convert canonical bounds into one displayable Mercator target grid.
+
+    Args:
+        sampling_bounds: Ordered WGS 84 raster/view intersection.
+
+    Returns:
+        EPSG:3857 target bounds and their canonical display bounds. Polar
+        latitude is clipped only to Leaflet's finite Web Mercator world.
+
+    Raises:
+        ValueError: If the bounds are outside the displayable Mercator world
+            or transformation is invalid.
+        rasterio.errors.RasterioError: If CRS transformation fails.
+    """
+    west, south, east, north = sampling_bounds
+    display_bounds = (
+        west,
+        max(south, -WEB_MERCATOR_LATITUDE_LIMIT),
+        east,
+        min(north, WEB_MERCATOR_LATITUDE_LIMIT),
+    )
+    if display_bounds[1] >= display_bounds[3]:
+        raise ValueError("Sampled raster bounds are outside the displayable world")
+    projected_x, projected_y = warp_transform(
+        "EPSG:4326",
+        "EPSG:3857",
+        [display_bounds[0], display_bounds[2]],
+        [display_bounds[1], display_bounds[3]],
+    )
+    projected_bounds = (
+        float(projected_x[0]),
+        float(projected_y[0]),
+        float(projected_x[1]),
+        float(projected_y[1]),
+    )
+    if not (
+        all(math.isfinite(value) for value in projected_bounds)
+        and projected_bounds[0] < projected_bounds[2]
+        and projected_bounds[1] < projected_bounds[3]
+    ):
+        raise ValueError("Sampled raster projected bounds are invalid")
+    return projected_bounds, display_bounds
+
+
 def _suggested_range(
     values: numpy.ma.MaskedArray,
 ) -> RasterValueRange | None:
@@ -390,7 +485,7 @@ def _representative_patch(
 
 
 def _limits() -> RasterDetailPreviewLimits:
-    """Return the fixed public work limits for policy version two.
+    """Return the fixed public work limits for policy version three.
 
     Returns:
         Immutable response model containing every server-owned ceiling.
@@ -399,6 +494,7 @@ def _limits() -> RasterDetailPreviewLimits:
         maximumProxyDimension=DETAIL_PROXY_MAX_DIMENSION,
         maximumSourceBlockReads=DETAIL_PROXY_MAX_SOURCE_BLOCK_READS,
         maximumDecodedSourceBytes=DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES,
+        maximumTransformedPositions=DETAIL_PROXY_MAX_TRANSFORMED_POSITIONS,
         maximumPointsPerCell=DETAIL_PROXY_MAX_POINTS_PER_CELL,
         maximumPatchDimension=DETAIL_PREVIEW_PATCH_DIMENSION,
         maximumPatchCandidates=DETAIL_PREVIEW_MAX_PATCH_CANDIDATES,
@@ -407,6 +503,8 @@ def _limits() -> RasterDetailPreviewLimits:
 
 def _preview_response(
     mode: RasterDetailPreviewMode,
+    scope: RasterDetailPreviewScope,
+    density: RasterDetailPreviewDensity | None,
     label: str,
     raster_extent: tuple[float, float, float, float],
     image_bounds: tuple[float, float, float, float],
@@ -417,6 +515,8 @@ def _preview_response(
 
     Args:
         mode: Explicit user-selected preview policy.
+        scope: Raster extent, current map view, or patch provenance.
+        density: Fixed sampled-grid profile, or ``None`` for a patch.
         label: User-facing approximation description.
         raster_extent: Authoritative cataloged WGS 84 extent.
         image_bounds: WGS 84 placement of the Web-Mercator-aligned image.
@@ -429,6 +529,8 @@ def _preview_response(
     image_height, image_width = values.shape
     return RasterDetailPreview(
         mode=mode,
+        scope=scope,
+        density=density,
         policyVersion=DETAIL_PREVIEW_POLICY_VERSION,
         label=label,
         rasterExtent=raster_extent,
@@ -445,21 +547,29 @@ def _preview_response(
 def read_raster_detail_preview(
     source_path: Path,
     mode: RasterDetailPreviewMode,
-    raster_extent: tuple[float, float, float, float],
+    raster_extent: CanonicalWgs84Bounds,
+    density: RasterDetailPreviewDensity | None,
+    view_bounds: CanonicalWgs84Bounds | None = None,
 ) -> RasterDetailPreview:
     """Read one bounded numeric preview from an overview-limited raster.
 
-    Full-extent modes adapt their grid density until unique native block reads
-    and decoded band-one bytes fit fixed ceilings. Every native block is read
-    once without ``out_shape``. The representative patch retains its fixed
-    at-most-nine-candidate, 128-by-128-window policy; candidates that exceed
-    the shared block/byte ceilings are skipped. Only already-bounded NumPy
-    arrays are reprojected for Leaflet.
+    Sampled modes place a fixed-density grid over either the raster extent or
+    current map intersection in EPSG:3857, transform only their deterministic
+    probe positions to source pixels, and adapt downward until unique native
+    block reads and decoded band-one bytes fit fixed ceilings. Every native
+    block is read once without ``out_shape``. The representative patch keeps a
+    fixed at-most-nine-candidate, 128-by-128-window policy; candidates that
+    exceed the shared block/byte ceilings are skipped. Only already-bounded
+    NumPy patch arrays are reprojected for Leaflet; sampled grids are already
+    aligned to the Web Mercator target rectangle.
 
     Args:
         source_path: Authorized mounted GeoTIFF.
         mode: Explicit preview mode selected by the user.
         raster_extent: Authoritative cataloged WGS 84 raster extent.
+        density: Coarse, medium, or fine server-owned grid profile for sampled
+            modes; ``None`` for the representative patch.
+        view_bounds: Optional canonical current map rectangle to refine.
 
     Returns:
         Browser-safe georeferenced numeric preview with public resource limits.
@@ -470,17 +580,23 @@ def read_raster_detail_preview(
         rasterio.errors.RasterioError: If GDAL cannot open/read/reproject it.
         ValueError: If the dataset contract or georeferencing is invalid.
     """
-    labels = {
-        "centerSample": (
-            "Approximate full-extent proxy using each preview cell's center"
-        ),
-        "representativeSample": (
-            "Approximate full-extent proxy using representative cell samples"
-        ),
-        "representativePatch": "Approximate representative detail patch",
-    }
-    if mode not in labels:
+    if mode not in {
+        "centerSample",
+        "representativeSample",
+        "representativePatch",
+    }:
         raise ValueError(f"Unsupported detail preview mode: {mode}")
+    if mode == "representativePatch":
+        if density is not None or view_bounds is not None:
+            raise ValueError(
+                "Representative patches do not accept density or view bounds"
+            )
+    elif density is None:
+        raise ValueError("Sampled raster proxies require a density")
+    effective_bounds = _intersect_canonical_bounds(
+        raster_extent,
+        view_bounds or raster_extent,
+    )
     with rasterio.open(source_path) as dataset:
         _require_signed_geotiff_dependencies(dataset, source_path)
         if dataset.count != 1 or dataset.width < 1 or dataset.height < 1:
@@ -488,23 +604,37 @@ def read_raster_detail_preview(
         if dataset.crs is None:
             raise ValueError("Detail-only preview requires a valid raster CRS")
         if mode in {"centerSample", "representativeSample"}:
-            proxy_values, plan = read_detail_proxy(dataset, mode)
-            source_transform = dataset.transform * Affine.scale(
-                dataset.width / plan.width,
-                dataset.height / plan.height,
+            projected_bounds, image_bounds = _projected_sampling_bounds(
+                effective_bounds
             )
-            image_bounds, image_values = _warp_numeric_image(
-                dataset.crs,
-                source_transform,
-                proxy_values,
-                DETAIL_PROXY_MAX_DIMENSION,
+            proxy_values, plan = read_detail_proxy(
+                dataset,
+                mode,
+                detail_proxy_maximum_dimension(density),
+                projected_bounds,
+            )
+            scope: RasterDetailPreviewScope = (
+                "currentView" if view_bounds is not None else "rasterExtent"
+            )
+            sample_description = (
+                "each map cell's center"
+                if mode == "centerSample"
+                else "representative positions in each map cell"
+            )
+            scope_description = (
+                "current-view detail"
+                if scope == "currentView"
+                else "raster-extent"
             )
             return _preview_response(
                 mode,
-                labels[mode],
+                scope,
+                density,
+                "Approximate "
+                f"{scope_description} sampled proxy using {sample_description}",
                 raster_extent,
                 image_bounds,
-                image_values,
+                proxy_values,
                 RasterDetailPreviewWork(
                     sampleGridWidth=plan.width,
                     sampleGridHeight=plan.height,
@@ -524,7 +654,9 @@ def read_raster_detail_preview(
         )
         return _preview_response(
             mode,
-            labels[mode],
+            "representativePatch",
+            None,
+            "Approximate representative detail patch",
             raster_extent,
             image_bounds,
             image_values,

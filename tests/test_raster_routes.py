@@ -80,10 +80,97 @@ def test_raster_routes_translate_application_errors_at_http_boundary() -> None:
             "collectionId": "eolab-mounted-geotiffs",
             "itemId": "geotiff-0123456789abcdef01234567",
             "mode": "representativeSample",
+            "density": "coarse",
+            "viewBounds": {
+                "west": -123.0,
+                "south": 37.0,
+                "east": -122.0,
+                "north": 38.0,
+            },
         },
     )
     assert detail_response.status_code == 409
     assert detail_response.json() == {"detail": "controlled raster conflict"}
+
+
+@pytest.mark.parametrize(
+    "request_overrides",
+    [
+        {"density": "arbitrary"},
+        {
+            "viewBounds": {
+                "west": -122.0,
+                "south": 37.0,
+                "east": -123.0,
+                "north": 38.0,
+            }
+        },
+        {
+            "viewBounds": {
+                "west": -123.0,
+                "south": 37.0,
+                "east": -122.0,
+                "north": 38.0,
+                "path": "/browser-controlled/source.tif",
+            }
+        },
+        {"width": 25},
+        {"path": "/browser-controlled/source.tif"},
+        {
+            "sourceWindow": {
+                "columnOffset": 0,
+                "rowOffset": 0,
+                "width": 25,
+                "height": 10,
+            }
+        },
+    ],
+    ids=[
+        "unknown-density",
+        "reversed-view-bounds",
+        "nested-view-bounds-path",
+        "browser-width",
+        "browser-path",
+        "browser-source-window",
+    ],
+)
+def test_detail_preview_route_rejects_unowned_sampling_parameters(
+    request_overrides: dict[str, object],
+) -> None:
+    """Reject invalid bounds and browser-controlled read parameters.
+
+    Args:
+        request_overrides: Invalid fields merged into an otherwise valid
+            sampled-grid preview request.
+
+    Returns:
+        None.
+    """
+    service = _ConflictService()
+    feature = create_raster_feature(
+        service,
+        service,
+        service,
+        service,
+        service,
+        PublishedRasterRegistry(),
+    )
+    application = FastAPI()
+    application.include_router(feature.router)
+    request_body: dict[str, object] = {
+        "collectionId": "eolab-mounted-geotiffs",
+        "itemId": "geotiff-0123456789abcdef01234567",
+        "mode": "representativeSample",
+        "density": "coarse",
+    }
+    request_body.update(request_overrides)
+
+    response = TestClient(application).post(
+        "/api/rendering/detail-previews",
+        json=request_body,
+    )
+
+    assert response.status_code == 422
 
 
 def test_publication_route_returns_actionable_category_document() -> None:

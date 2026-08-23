@@ -1,7 +1,9 @@
 """Test sampled-raster detail previews and their authorization lifecycle."""
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
+import threading
 
 from affine import Affine
 import numpy
@@ -10,11 +12,13 @@ import rasterio
 from rasterio.transform import from_origin
 from rasterio.warp import transform as warp_transform
 
+import eolab_app.raster.detail_proxy as detail_proxy_module
 from eolab_app.raster.detail_preview import (
     DETAIL_PREVIEW_MAX_PATCH_CANDIDATES,
     DETAIL_PREVIEW_PATCH_DIMENSION,
     DETAIL_PREVIEW_POLICY_VERSION,
     NoUsefulDetailPatchError,
+    _projected_sampling_bounds,
     _representative_patch,
     read_raster_detail_preview,
 )
@@ -23,7 +27,12 @@ from eolab_app.raster.detail_proxy import (
     DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES,
     DETAIL_PROXY_MAX_DIMENSION,
     DETAIL_PROXY_MAX_SOURCE_BLOCK_READS,
+    DETAIL_PROXY_MAX_TRANSFORMED_POSITIONS,
     BoundedWindowSamples,
+    DetailProxyPlan,
+    _projected_cell_positions,
+    detail_proxy_maximum_dimension,
+    plan_detail_proxy,
     read_detail_proxy,
 )
 from eolab_app.raster.eligibility import (
@@ -37,6 +46,7 @@ from eolab_app.raster.models import (
     CatalogRasterDetailPreviewRequest,
     GEOSERVER_READER_CONTRACT,
     RasterDetailPreview,
+    RasterDetailPreviewDensity,
     RasterDetailPreviewMode,
 )
 from eolab_app.raster.sources import source_signature
@@ -76,6 +86,193 @@ def test_reader_and_crs_rejections_take_precedence_over_detail_preview() -> None
     )
     assert rejected["reason_code"] == "geoserver_crs_metadata_incompatible"
     assert supports_detail_only_preview(rejected) is False
+
+
+def test_request_contract_separates_sampled_grids_from_detail_patches() -> None:
+    """Reject browser-controlled dimensions and mixed patch/grid parameters."""
+    identity = {
+        "collectionId": "eolab-mounted-geotiffs",
+        "itemId": ITEM_ID,
+    }
+    current_view = CatalogRasterDetailPreviewRequest.model_validate({
+        **identity,
+        "mode": "centerSample",
+        "density": "coarse",
+        "viewBounds": {
+            "west": -119,
+            "south": 31,
+            "east": -111,
+            "north": 39,
+        },
+    })
+    assert current_view.view_bounds is not None
+    assert current_view.view_bounds.canonical_tuple() == (
+        -119,
+        31,
+        -111,
+        39,
+    )
+    for invalid in (
+        {**identity, "mode": "centerSample"},
+        {
+            **identity,
+            "mode": "representativePatch",
+            "density": "coarse",
+        },
+        {
+            **identity,
+            "mode": "representativePatch",
+            "viewBounds": {
+                "west": -119,
+                "south": 31,
+                "east": -111,
+                "north": 39,
+            },
+        },
+        {
+            **identity,
+            "mode": "centerSample",
+            "density": "coarse",
+            "width": 25,
+        },
+    ):
+        with pytest.raises(ValueError):
+            CatalogRasterDetailPreviewRequest.model_validate(invalid)
+
+
+def _valid_sampled_preview_document() -> dict[str, object]:
+    """Return one valid minimal sampled-preview response document.
+
+    Returns:
+        Browser-shaped response data satisfying every owned invariant.
+    """
+    return {
+        "mode": "centerSample",
+        "scope": "rasterExtent",
+        "density": "coarse",
+        "policyVersion": DETAIL_PREVIEW_POLICY_VERSION,
+        "approximate": True,
+        "label": "Approximate raster-extent sample",
+        "rasterExtent": list(RASTER_EXTENT),
+        "imageBounds": list(RASTER_EXTENT),
+        "imageWidth": 1,
+        "imageHeight": 1,
+        "pixelValues": [1.0],
+        "suggestedRange": {
+            "minimum": 0.0,
+            "midpoint": 1.0,
+            "maximum": 2.0,
+        },
+        "limits": {
+            "maximumProxyDimension": 127,
+            "maximumSourceBlockReads": 1024,
+            "maximumDecodedSourceBytes": 67_108_864,
+            "maximumTransformedPositions": (
+                DETAIL_PROXY_MAX_TRANSFORMED_POSITIONS
+            ),
+            "maximumPointsPerCell": 5,
+            "maximumPatchDimension": 128,
+            "maximumPatchCandidates": 9,
+        },
+        "actual": {
+            "sampleGridWidth": 1,
+            "sampleGridHeight": 1,
+            "sourceBlockReadCount": 1,
+            "decodedSourceBytes": 5,
+            "pointsPerCell": 1,
+            "candidateWindowCount": 0,
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("pixel_values", "suggested_range"),
+    (
+        ([1.0], {"minimum": 0.0, "midpoint": 1.0, "maximum": 2.0}),
+        ([None], {"minimum": 0.0, "midpoint": 1.0, "maximum": 2.0}),
+    ),
+)
+def test_response_rejects_values_or_ranges_without_source_reads(
+    pixel_values: list[float | None],
+    suggested_range: dict[str, float],
+) -> None:
+    """Keep impossible no-read numeric payloads outside the public contract.
+
+    Args:
+        pixel_values: Controlled finite or nodata-only one-cell image.
+        suggested_range: Controlled finite display range.
+    """
+    document = _valid_sampled_preview_document()
+    document["pixelValues"] = pixel_values
+    document["suggestedRange"] = suggested_range
+    document["actual"] = {
+        "sampleGridWidth": 1,
+        "sampleGridHeight": 1,
+        "sourceBlockReadCount": 0,
+        "decodedSourceBytes": 0,
+        "pointsPerCell": 1,
+        "candidateWindowCount": 0,
+    }
+
+    with pytest.raises(ValueError, match="without source reads"):
+        RasterDetailPreview.model_validate(document)
+
+
+def test_response_rejects_a_patch_without_positive_source_reads() -> None:
+    """Require a selected patch to originate from admitted native blocks."""
+    document = _valid_sampled_preview_document()
+    document.update({
+        "mode": "representativePatch",
+        "scope": "representativePatch",
+        "density": None,
+        "pixelValues": [None],
+        "suggestedRange": None,
+    })
+    document["actual"] = {
+        "sampleGridWidth": 1,
+        "sampleGridHeight": 1,
+        "sourceBlockReadCount": 0,
+        "decodedSourceBytes": 0,
+        "pointsPerCell": 0,
+        "candidateWindowCount": 1,
+    }
+
+    with pytest.raises(ValueError, match="positive source reads"):
+        RasterDetailPreview.model_validate(document)
+
+
+def test_response_publishes_the_fixed_request_transform_ceiling() -> None:
+    """Expose the cumulative sampled-grid transformation limit exactly."""
+    preview = RasterDetailPreview.model_validate(
+        _valid_sampled_preview_document()
+    )
+
+    assert (
+        preview.limits.maximum_transformed_positions
+        == DETAIL_PROXY_MAX_TRANSFORMED_POSITIONS
+        == 1_747_520
+    )
+    assert DETAIL_PROXY_MAX_TRANSFORMED_POSITIONS in (
+        RasterDetailPreviewService._mode_parameters("centerSample", "fine")
+    )
+    assert DETAIL_PROXY_MAX_TRANSFORMED_POSITIONS in (
+        RasterDetailPreviewService._mode_parameters(
+            "representativePatch",
+            None,
+        )
+    )
+
+
+def test_response_image_stays_within_the_raster_extent() -> None:
+    """Reject misplaced images while tolerating projection-scale roundoff."""
+    tolerated = _valid_sampled_preview_document()
+    tolerated["imageBounds"] = [-120.0000000005, 31.0, -111.0, 39.0]
+    RasterDetailPreview.model_validate(tolerated)
+
+    outside = _valid_sampled_preview_document()
+    outside["imageBounds"] = [-120.0001, 31.0, -111.0, 39.0]
+    with pytest.raises(ValueError, match="stay in the raster extent"):
+        RasterDetailPreview.model_validate(outside)
 
 
 def _write_raster(
@@ -222,6 +419,7 @@ def test_huge_full_extent_proxy_obeys_exact_source_work_limits(
         source_path,
         mode,
         GLOBAL_EXTENT,
+        "fine",
     )
 
     tracker = trackers[0]
@@ -261,6 +459,336 @@ def test_huge_full_extent_proxy_obeys_exact_source_work_limits(
         preview.limits.maximum_decoded_source_bytes
         == DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES
     )
+
+
+@pytest.mark.parametrize("mode", ("centerSample", "representativeSample"))
+def test_huge_current_view_uses_only_fixed_map_grid_native_blocks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: RasterDetailPreviewMode,
+) -> None:
+    """Refine a huge raster without reading the intersecting source window.
+
+    Args:
+        tmp_path: Temporary raster directory.
+        monkeypatch: Rasterio-open replacement fixture.
+        mode: Center or representative map-cell policy.
+    """
+    source_path = tmp_path / f"huge-view-{mode}.tif"
+    _write_raster(
+        source_path,
+        10_000,
+        10_000,
+        transform=from_origin(-180, 90, 0.036, 0.018),
+    )
+    real_open = rasterio.open
+    trackers: list[_TrackingDataset] = []
+
+    def tracked_open(path: Path) -> _TrackingDataset:
+        """Open the controlled source and record each exact block read.
+
+        Args:
+            path: Controlled source path.
+
+        Returns:
+            Tracking dataset proxy.
+        """
+        tracker = _TrackingDataset(real_open(path))
+        trackers.append(tracker)
+        return tracker
+
+    monkeypatch.setattr(
+        "eolab_app.raster.detail_preview.rasterio.open",
+        tracked_open,
+    )
+    view_bounds = (-20.0, -10.0, 20.0, 10.0)
+    preview = read_raster_detail_preview(
+        source_path,
+        mode,
+        GLOBAL_EXTENT,
+        "coarse",
+        view_bounds,
+    )
+
+    tracker = trackers[0]
+    projected_bounds, _ = _projected_sampling_bounds(view_bounds)
+    with real_open(source_path) as dataset:
+        expected_plan = plan_detail_proxy(
+            dataset,
+            mode,
+            detail_proxy_maximum_dimension("coarse"),
+            projected_bounds,
+        )
+        expected_window_identities = [
+            (
+                int(window.row_off),
+                int(window.col_off),
+                int(window.height),
+                int(window.width),
+            )
+            for window in (
+                dataset.block_window(1, block_row, block_column)
+                for block_row, block_column in expected_plan.block_indexes
+            )
+        ]
+    actual_window_identities = [
+        (
+            int(keyword_args["window"].row_off),
+            int(keyword_args["window"].col_off),
+            int(keyword_args["window"].height),
+            int(keyword_args["window"].width),
+        )
+        for _, keyword_args in tracker.reads
+    ]
+    decoded_bytes = sum(
+        height * width * (numpy.dtype("float32").itemsize + 1)
+        for _, _, height, width in actual_window_identities
+    )
+    assert preview.scope == "currentView"
+    assert preview.density == "coarse"
+    assert preview.image_bounds == pytest.approx(view_bounds)
+    assert max(preview.image_width, preview.image_height) <= 31
+    assert actual_window_identities == expected_window_identities
+    assert len(actual_window_identities) == len(set(actual_window_identities))
+    assert len(tracker.reads) == preview.actual.source_block_read_count
+    assert len(tracker.reads) <= DETAIL_PROXY_MAX_SOURCE_BLOCK_READS
+    assert all(args == (1,) for args, _ in tracker.reads)
+    assert all(
+        keyword_args["window"].width <= 128
+        and keyword_args["window"].height <= 128
+        and keyword_args["masked"] is False
+        and "out_shape" not in keyword_args
+        for _, keyword_args in tracker.reads
+    )
+    assert decoded_bytes == preview.actual.decoded_source_bytes
+    assert decoded_bytes <= DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES
+
+
+def test_nested_views_keep_density_while_sampling_finer_source_spacing(
+    tmp_path: Path,
+) -> None:
+    """Use the same target grid over progressively smaller map rectangles.
+
+    Args:
+        tmp_path: Temporary raster directory.
+    """
+    source_path = tmp_path / "nested-views.tif"
+    _write_raster(source_path, 4000, 2000)
+    outer = (-119.0, 31.0, -111.0, 39.0)
+    inner = (-117.0, 33.0, -113.0, 37.0)
+    outer_projected, _ = _projected_sampling_bounds(outer)
+    inner_projected, _ = _projected_sampling_bounds(inner)
+    with rasterio.open(source_path) as dataset:
+        outer_plan = plan_detail_proxy(
+            dataset,
+            "centerSample",
+            detail_proxy_maximum_dimension("coarse"),
+            outer_projected,
+        )
+        inner_plan = plan_detail_proxy(
+            dataset,
+            "centerSample",
+            detail_proxy_maximum_dimension("coarse"),
+            inner_projected,
+        )
+
+    assert (outer_plan.width, outer_plan.height) == (
+        inner_plan.width,
+        inner_plan.height,
+    )
+    assert max(outer_plan.width, outer_plan.height) == 31
+    outer_column_spacing = (
+        outer_plan.cell_positions[1][0][1]
+        - outer_plan.cell_positions[0][0][1]
+    )
+    inner_column_spacing = (
+        inner_plan.cell_positions[1][0][1]
+        - inner_plan.cell_positions[0][0][1]
+    )
+    assert 0 < inner_column_spacing < outer_column_spacing
+
+
+def test_map_aligned_density_does_not_collapse_for_a_rotated_thin_raster(
+    tmp_path: Path,
+) -> None:
+    """Cap target axes by map shape rather than unrotated dataset axes.
+
+    Args:
+        tmp_path: Temporary raster directory.
+    """
+    source_path = tmp_path / "rotated-thin.tif"
+    source_transform = Affine.rotation(90) * Affine.scale(1, -1)
+    _write_raster(
+        source_path,
+        1,
+        1000,
+        crs="EPSG:3857",
+        transform=source_transform,
+    )
+    with rasterio.open(source_path) as dataset:
+        plan = plan_detail_proxy(
+            dataset,
+            "centerSample",
+            127,
+            (0.0, 0.0, 1000.0, 1.0),
+        )
+
+    assert (plan.width, plan.height) == (127, 1)
+
+
+def test_projected_grid_reports_a_noninvertible_source_affine() -> None:
+    """Translate affine inversion failure into the bounded-reader contract."""
+    class SingularDataset:
+        """Expose the projected-grid metadata required by the owned helper."""
+
+        crs = "EPSG:3857"
+        transform = Affine(0, 0, 0, 0, 0, 0)
+        width = 10
+        height = 10
+
+    with pytest.raises(ValueError, match="not invertible"):
+        _projected_cell_positions(
+            SingularDataset(),
+            (0.0, 0.0, 10.0, 10.0),
+            3,
+            3,
+            ((0.5, 0.5),),
+        )
+
+
+@pytest.mark.parametrize(
+    ("density", "maximum_dimension"),
+    (("coarse", 31), ("medium", 63), ("fine", 127)),
+)
+def test_density_profiles_are_fixed_server_owned_grid_ceilings(
+    density: RasterDetailPreviewDensity,
+    maximum_dimension: int,
+) -> None:
+    """Keep UI density choices mapped to documented immutable ceilings.
+
+    Args:
+        density: Fixed request profile.
+        maximum_dimension: Expected maximum grid edge.
+    """
+    assert detail_proxy_maximum_dimension(density) == maximum_dimension
+
+
+def test_one_request_bounds_all_transformed_coarsening_positions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bound cumulative CRS work even when every candidate is evaluated.
+
+    Args:
+        tmp_path: Temporary raster directory.
+        monkeypatch: Planner and transformation tracking fixture.
+    """
+    source_path = tmp_path / "transform-ceiling.tif"
+    _write_raster(
+        source_path,
+        1000,
+        1000,
+        crs="EPSG:3857",
+        transform=from_origin(0, 1000, 1, 1),
+    )
+    transformed_counts: list[int] = []
+    real_transform = detail_proxy_module.warp_transform
+    real_plan_for_dimension = detail_proxy_module._plan_for_dimension
+
+    def tracked_transform(
+        source_crs: object,
+        target_crs: object,
+        source_x: list[float],
+        source_y: list[float],
+    ) -> tuple[list[float], list[float]]:
+        """Record one candidate's positions and delegate CRS transformation.
+
+        Args:
+            source_crs: Candidate source coordinate reference system.
+            target_crs: Candidate target coordinate reference system.
+            source_x: Candidate x coordinates.
+            source_y: Candidate y coordinates.
+
+        Returns:
+            Transformed x and y coordinates.
+        """
+        transformed_counts.append(len(source_x))
+        return real_transform(source_crs, target_crs, source_x, source_y)
+
+    def force_every_candidate(
+        dataset: rasterio.io.DatasetReader,
+        maximum_dimension: int,
+        offsets: tuple[tuple[float, float], ...],
+        projected_bounds: tuple[float, float, float, float] | None,
+    ) -> DetailProxyPlan:
+        """Make every candidate except the final one exceed decoded bytes.
+
+        Args:
+            dataset: Open controlled raster.
+            maximum_dimension: Current odd target-grid edge.
+            offsets: Representative probe offsets.
+            projected_bounds: Controlled projected target rectangle.
+
+        Returns:
+            Real candidate plan with a forced over-budget cost until one cell.
+        """
+        plan = real_plan_for_dimension(
+            dataset,
+            maximum_dimension,
+            offsets,
+            projected_bounds,
+        )
+        if maximum_dimension == 1:
+            return plan
+        return replace(
+            plan,
+            decoded_source_bytes=DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES + 1,
+        )
+
+    monkeypatch.setattr(detail_proxy_module, "warp_transform", tracked_transform)
+    monkeypatch.setattr(
+        detail_proxy_module,
+        "_plan_for_dimension",
+        force_every_candidate,
+    )
+    with rasterio.open(source_path) as dataset:
+        plan = plan_detail_proxy(
+            dataset,
+            "representativeSample",
+            DETAIL_PROXY_MAX_DIMENSION,
+            (0.0, 0.0, 1000.0, 1000.0),
+        )
+
+    assert (plan.width, plan.height) == (1, 1)
+    assert transformed_counts[0] == 127 * 127 * 5
+    assert sum(transformed_counts) == DETAIL_PROXY_MAX_TRANSFORMED_POSITIONS
+
+
+def test_current_view_center_nodata_remains_transparent(
+    tmp_path: Path,
+) -> None:
+    """Never translate a nodata center probe into a numeric zero.
+
+    Args:
+        tmp_path: Temporary raster directory.
+    """
+    source_path = tmp_path / "view-center-nodata.tif"
+    _write_raster(source_path, 3, 3)
+    values = numpy.ones((3, 3), dtype=numpy.float32)
+    values[1, 1] = -9999
+    with rasterio.open(source_path, "r+") as dataset:
+        dataset.write(values, 1)
+    preview = read_raster_detail_preview(
+        source_path,
+        "centerSample",
+        RASTER_EXTENT,
+        "coarse",
+        RASTER_EXTENT,
+    )
+
+    assert (preview.image_width, preview.image_height) == (1, 3)
+    assert preview.pixel_values[1] is None
+    assert 0 not in preview.pixel_values
 
 
 def test_expensive_native_blocks_force_deterministic_proxy_coarsening(
@@ -354,23 +882,18 @@ def test_center_proxy_is_a_full_extent_multicell_numeric_raster(
         [71.0, 74.0, 77.0],
     ]
 
+    monkeypatch.setattr(
+        "eolab_app.raster.detail_proxy.DETAIL_PROXY_MAX_DIMENSION",
+        127,
+    )
     preview = read_raster_detail_preview(
         source_path,
         "centerSample",
         SQUARE_EXTENT,
+        "fine",
     )
-    assert (preview.image_height, preview.image_width) == (3, 3)
-    assert preview.pixel_values == [
-        11.0,
-        14.0,
-        17.0,
-        41.0,
-        44.0,
-        47.0,
-        71.0,
-        74.0,
-        77.0,
-    ]
+    assert (preview.image_height, preview.image_width) == (9, 9)
+    assert preview.pixel_values[40] == 44.0
     assert preview.image_bounds == pytest.approx(SQUARE_EXTENT)
     assert preview.raster_extent == SQUARE_EXTENT
     assert preview.suggested_range is not None
@@ -415,6 +938,36 @@ def test_representative_proxy_deduplicates_points_and_uses_lower_median(
     with rasterio.open(source_path) as dataset:
         nodata, _ = read_detail_proxy(dataset, "representativeSample")
     assert nodata.mask.item() is True
+
+
+def test_current_view_representative_grid_uses_observed_lower_median(
+    tmp_path: Path,
+) -> None:
+    """Preserve representative selection through the map-target reader path.
+
+    Args:
+        tmp_path: Temporary raster directory.
+    """
+    source_path = tmp_path / "representative-view.tif"
+    _write_raster(source_path, 2, 2)
+    with rasterio.open(source_path, "r+") as dataset:
+        dataset.write(
+            numpy.array([[10, -9999], [30, 40]], dtype=numpy.float32),
+            1,
+        )
+
+    preview = read_raster_detail_preview(
+        source_path,
+        "representativeSample",
+        RASTER_EXTENT,
+        "coarse",
+        RASTER_EXTENT,
+    )
+
+    assert preview.scope == "currentView"
+    assert (preview.image_width, preview.image_height) == (1, 1)
+    assert preview.pixel_values == [30.0]
+    assert preview.actual.points_per_cell == 5
 
 
 def test_representative_patch_returns_deterministic_bounded_numeric_payload(
@@ -472,11 +1025,13 @@ def test_representative_patch_returns_deterministic_bounded_numeric_payload(
         source_path,
         "representativePatch",
         RASTER_EXTENT,
+        None,
     )
     second = read_raster_detail_preview(
         source_path,
         "representativePatch",
         RASTER_EXTENT,
+        None,
     )
 
     assert first.image_bounds == second.image_bounds
@@ -568,6 +1123,7 @@ def test_huge_representative_patch_reads_only_bounded_native_blocks(
         source_path,
         "representativePatch",
         RASTER_EXTENT,
+        None,
     )
 
     tracker = trackers[0]
@@ -667,6 +1223,7 @@ def test_preview_rejects_unsigned_external_gdal_sidecars(tmp_path: Path) -> None
             source_path,
             "centerSample",
             RASTER_EXTENT,
+            "fine",
         )
 
 
@@ -686,6 +1243,7 @@ def test_representative_patch_reports_bounded_nodata_search(
             source_path,
             "representativePatch",
             RASTER_EXTENT,
+            None,
         )
 
 
@@ -733,6 +1291,7 @@ def test_rotated_non_wgs84_proxy_retains_geographic_image_placement(
         source_path,
         "centerSample",
         expected_bounds,
+        "fine",
     )
 
     assert preview.image_bounds == pytest.approx(expected_bounds, abs=1e-7)
@@ -741,6 +1300,85 @@ def test_rotated_non_wgs84_proxy_retains_geographic_image_placement(
     assert any(value is None for value in preview.pixel_values)
     assert preview.image_width <= DETAIL_PROXY_MAX_DIMENSION
     assert preview.image_height <= DETAIL_PROXY_MAX_DIMENSION
+
+
+def test_current_view_samples_a_skewed_non_mercator_source_grid(
+    tmp_path: Path,
+) -> None:
+    """Transform a bounded map grid into an arbitrary projected source CRS.
+
+    Args:
+        tmp_path: Temporary raster directory.
+    """
+    source_path = tmp_path / "skewed-utm-view.tif"
+    source_transform = Affine(
+        30.0,
+        6.0,
+        500_000.0,
+        4.0,
+        -30.0,
+        4_200_000.0,
+    )
+    width = 200
+    height = 100
+    _write_raster(
+        source_path,
+        width,
+        height,
+        crs="EPSG:32610",
+        transform=source_transform,
+    )
+    with rasterio.open(source_path, "r+") as dataset:
+        dataset.write(
+            numpy.fromfunction(
+                lambda row, column: row * width + column,
+                (height, width),
+                dtype=numpy.float32,
+            ).astype(numpy.float32),
+            1,
+        )
+
+    source_corners = [
+        source_transform * position
+        for position in ((0, 0), (width, 0), (width, height), (0, height))
+    ]
+    longitudes, latitudes = warp_transform(
+        "EPSG:32610",
+        "EPSG:4326",
+        [position[0] for position in source_corners],
+        [position[1] for position in source_corners],
+    )
+    raster_extent = (
+        min(longitudes),
+        min(latitudes),
+        max(longitudes),
+        max(latitudes),
+    )
+    longitude_margin = (raster_extent[2] - raster_extent[0]) * 0.15
+    latitude_margin = (raster_extent[3] - raster_extent[1]) * 0.15
+    current_view = (
+        raster_extent[0] + longitude_margin,
+        raster_extent[1] + latitude_margin,
+        raster_extent[2] - longitude_margin,
+        raster_extent[3] - latitude_margin,
+    )
+
+    preview = read_raster_detail_preview(
+        source_path,
+        "centerSample",
+        raster_extent,
+        "medium",
+        current_view,
+    )
+
+    assert preview.scope == "currentView"
+    assert preview.image_bounds == pytest.approx(current_view)
+    assert preview.raster_extent == pytest.approx(raster_extent)
+    assert any(value is not None for value in preview.pixel_values)
+    assert preview.actual.source_block_read_count <= 4
+    assert preview.actual.decoded_source_bytes <= (
+        DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES
+    )
 
 
 class _Catalog:
@@ -833,7 +1471,13 @@ def test_service_coalesces_by_source_mode_parameters_and_rejects_unsafe_reason(
     source_path.write_bytes(b"source")
     signature = source_signature(source_path)
     item, rendering = _detail_item(signature)
-    read_modes: list[RasterDetailPreviewMode] = []
+    read_requests: list[
+        tuple[
+            RasterDetailPreviewMode,
+            RasterDetailPreviewDensity | None,
+            tuple[float, float, float, float] | None,
+        ]
+    ] = []
     tiny_raster = tmp_path / "tiny.tif"
     _write_raster(tiny_raster, 2, 2)
 
@@ -841,6 +1485,8 @@ def test_service_coalesces_by_source_mode_parameters_and_rejects_unsafe_reason(
         _: Path,
         mode: RasterDetailPreviewMode,
         extent: tuple[float, float, float, float],
+        density: RasterDetailPreviewDensity | None,
+        view_bounds: tuple[float, float, float, float] | None,
     ) -> RasterDetailPreview:
         """Return a controlled valid numeric preview.
 
@@ -848,12 +1494,20 @@ def test_service_coalesces_by_source_mode_parameters_and_rejects_unsafe_reason(
             _: Unused path.
             mode: Requested preview mode.
             extent: Requested raster extent.
+            density: Requested fixed density profile.
+            view_bounds: Optional current-view intersection.
 
         Returns:
             Valid preview model produced by the real bounded reader fixture.
         """
-        read_modes.append(mode)
-        return read_raster_detail_preview(tiny_raster, mode, extent)
+        read_requests.append((mode, density, view_bounds))
+        return read_raster_detail_preview(
+            tiny_raster,
+            mode,
+            extent,
+            density,
+            view_bounds,
+        )
 
     service = RasterDetailPreviewService(
         _Catalog(item),
@@ -866,11 +1520,43 @@ def test_service_coalesces_by_source_mode_parameters_and_rejects_unsafe_reason(
         "collectionId": "eolab-mounted-geotiffs",
         "itemId": ITEM_ID,
         "mode": "centerSample",
+        "density": "fine",
     })
     representative_request = CatalogRasterDetailPreviewRequest.model_validate({
         "collectionId": "eolab-mounted-geotiffs",
         "itemId": ITEM_ID,
         "mode": "representativeSample",
+        "density": "fine",
+    })
+    medium_request = CatalogRasterDetailPreviewRequest.model_validate({
+        "collectionId": "eolab-mounted-geotiffs",
+        "itemId": ITEM_ID,
+        "mode": "centerSample",
+        "density": "medium",
+    })
+    view_request = CatalogRasterDetailPreviewRequest.model_validate({
+        "collectionId": "eolab-mounted-geotiffs",
+        "itemId": ITEM_ID,
+        "mode": "centerSample",
+        "density": "fine",
+        "viewBounds": {
+            "west": -119,
+            "south": 31,
+            "east": -111,
+            "north": 39,
+        },
+    })
+    distinct_view_request = CatalogRasterDetailPreviewRequest.model_validate({
+        "collectionId": "eolab-mounted-geotiffs",
+        "itemId": ITEM_ID,
+        "mode": "centerSample",
+        "density": "fine",
+        "viewBounds": {
+            "west": -118,
+            "south": 32,
+            "east": -112,
+            "north": 38,
+        },
     })
 
     async def exercise() -> None:
@@ -881,6 +1567,14 @@ def test_service_coalesces_by_source_mode_parameters_and_rejects_unsafe_reason(
         )
         assert first is second
         await service.get(representative_request)
+        await service.get(medium_request)
+        first_view, second_view = await asyncio.gather(
+            service.get(view_request),
+            service.get(view_request),
+        )
+        assert first_view is second_view
+        distinct_view = await service.get(distinct_view_request)
+        assert distinct_view is not first_view
         item["bbox"] = [-119.0, 31.0, -109.0, 41.0]
         await service.get(center_request)
         item["bbox"] = [-181.0, 31.0, -109.0, 41.0]
@@ -897,10 +1591,13 @@ def test_service_coalesces_by_source_mode_parameters_and_rejects_unsafe_reason(
             await service.get(center_request)
 
     asyncio.run(exercise())
-    assert read_modes == [
-        "centerSample",
-        "representativeSample",
-        "centerSample",
+    assert read_requests == [
+        ("centerSample", "fine", None),
+        ("representativeSample", "fine", None),
+        ("centerSample", "medium", None),
+        ("centerSample", "fine", (-119.0, 31.0, -111.0, 39.0)),
+        ("centerSample", "fine", (-118.0, 32.0, -112.0, 38.0)),
+        ("centerSample", "fine", None),
     ]
 
 
@@ -939,10 +1636,14 @@ def test_service_rechecks_source_signature_after_bounded_read(
         _Resolver(source_path),
         read_concurrency=1,
         cache_entries=4,
-        preview_reader=lambda _path, mode, extent: read_raster_detail_preview(
-            tiny_raster,
-            mode,
-            extent,
+        preview_reader=lambda _path, mode, extent, density, view_bounds: (
+            read_raster_detail_preview(
+                tiny_raster,
+                mode,
+                extent,
+                density,
+                view_bounds,
+            )
         ),
         signature_reader=changing_signature,
     )
@@ -950,7 +1651,89 @@ def test_service_rechecks_source_signature_after_bounded_read(
         "collectionId": "eolab-mounted-geotiffs",
         "itemId": ITEM_ID,
         "mode": "centerSample",
+        "density": "fine",
     })
 
     with pytest.raises(RasterConflictError, match="changed while"):
         asyncio.run(service.get(request))
+
+
+def test_service_bounds_distinct_inflight_view_work(tmp_path: Path) -> None:
+    """Reject an unbounded unique-view backlog while coalescing remains safe.
+
+    Args:
+        tmp_path: Temporary source directory.
+    """
+    source_path = tmp_path / "source.tif"
+    source_path.write_bytes(b"source")
+    item, _ = _detail_item(source_signature(source_path))
+    tiny_raster = tmp_path / "tiny.tif"
+    _write_raster(tiny_raster, 2, 2)
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocking_reader(
+        _path: Path,
+        mode: RasterDetailPreviewMode,
+        extent: tuple[float, float, float, float],
+        density: RasterDetailPreviewDensity | None,
+        view_bounds: tuple[float, float, float, float] | None,
+    ) -> RasterDetailPreview:
+        """Hold one admitted read until the capacity assertion completes.
+
+        Args:
+            _path: Unused authorized path.
+            mode: Requested preview mode.
+            extent: Authorized raster extent.
+            density: Requested fixed density.
+            view_bounds: Optional effective map intersection.
+
+        Returns:
+            Valid bounded preview after the test releases capacity.
+
+        Raises:
+            TimeoutError: If the test fails to release the controlled read.
+        """
+        started.set()
+        if not release.wait(timeout=5):
+            raise TimeoutError("controlled preview read was not released")
+        return read_raster_detail_preview(
+            tiny_raster,
+            mode,
+            extent,
+            density,
+            view_bounds,
+        )
+
+    service = RasterDetailPreviewService(
+        _Catalog(item),
+        _Resolver(source_path),
+        read_concurrency=1,
+        cache_entries=4,
+        preview_reader=blocking_reader,
+    )
+    first_request = CatalogRasterDetailPreviewRequest.model_validate({
+        "collectionId": "eolab-mounted-geotiffs",
+        "itemId": ITEM_ID,
+        "mode": "centerSample",
+        "density": "coarse",
+    })
+    distinct_request = CatalogRasterDetailPreviewRequest.model_validate({
+        "collectionId": "eolab-mounted-geotiffs",
+        "itemId": ITEM_ID,
+        "mode": "centerSample",
+        "density": "medium",
+    })
+
+    async def exercise() -> None:
+        """Hold one key, reject another, then complete the admitted work."""
+        first = asyncio.create_task(service.get(first_request))
+        try:
+            assert await asyncio.to_thread(started.wait, 5)
+            with pytest.raises(RasterConflictError, match="capacity is busy"):
+                await service.get(distinct_request)
+        finally:
+            release.set()
+        await first
+
+    asyncio.run(exercise())
