@@ -2,6 +2,7 @@
 
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
+from datetime import timedelta
 from pathlib import Path
 
 import httpx2
@@ -20,9 +21,15 @@ from eolab_app.catalog.s3 import (
 from eolab_app.catalog.stac_api import StacApiWriter
 from eolab_app.diagnostics.service import RenderingDiagnosticsService
 from eolab_app.diagnostics.tracker import GetMapRequestTracker
-from eolab_app.raster.assessment import RasterAssessmentService
+from eolab_app.raster.assessment import (
+    RasterAssessmentFinalizer,
+    RasterAssessmentService,
+)
 from eolab_app.raster.catalog import StacRasterCatalog
-from eolab_app.raster.geoserver import GeoServerRasterPublisher
+from eolab_app.raster.geoserver import (
+    GeoServerRasterPublisher,
+    GeoServerRasterReaderAssessor,
+)
 from eolab_app.raster.pixel_service import RasterPixelService
 from eolab_app.raster.publication import RasterPublicationService
 from eolab_app.raster.sources import (
@@ -39,8 +46,10 @@ from eolab_app.routes.stac_proxy import (
     create_stac_proxy_router,
 )
 from eolab_app.routes.system import create_system_router
+from eolab_app.routes.temporary_aois import create_temporary_aoi_router
 from eolab_app.routes.wms_proxy import create_wms_proxy_router
 from eolab_app.settings import APPLICATION_VERSION_PATH, load_settings
+from eolab_app.temporary_aoi.service import TemporaryAoiService
 
 
 def create_app(
@@ -108,12 +117,33 @@ def create_app(
     raster_source_resolver = MountedRasterResolver(
         app_global_configuration.scan_mount_path
     )
+    raster_reader_assessor = GeoServerRasterReaderAssessor(
+        geoserver_rest_client,
+        app_global_configuration.geoserver_internal_url,
+    )
+    raster_assessment_finalizer = RasterAssessmentFinalizer(
+        raster_source_resolver,
+        raster_reader_assessor,
+    )
     published_rasters = PublishedRasterRegistry()
+    temporary_aoi_service = TemporaryAoiService(
+        ttl=timedelta(
+            seconds=app_global_configuration.temporary_aoi_ttl_seconds
+        ),
+        maximum_upload_bytes=(
+            app_global_configuration.temporary_aoi_max_upload_bytes
+        ),
+        forbidden_roots=(
+            Path.cwd(),
+            app_global_configuration.scan_mount_path,
+        )
+    )
     raster_feature = create_raster_feature(
         RasterAssessmentService(
             app_global_configuration.scan_mount_path,
             raster_catalog,
             raster_source_resolver,
+            raster_reader_assessor,
         ),
         RasterPublicationService(
             raster_catalog,
@@ -132,6 +162,7 @@ def create_app(
             published_rasters,
             app_global_configuration.raster_statistics_read_concurrency,
             app_global_configuration.raster_statistics_cache_entries,
+            temporary_aoi_reader=temporary_aoi_service,
         ),
         published_rasters,
     )
@@ -144,7 +175,6 @@ def create_app(
         app_global_configuration.geoserver_internal_url,
         get_map_request_tracker,
     )
-
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         """Own and close all shared upstream connection pools.
@@ -156,6 +186,8 @@ def create_app(
             Control while the application serves requests.
         """
         async with AsyncExitStack() as client_stack:
+            await temporary_aoi_service.start()
+            client_stack.push_async_callback(temporary_aoi_service.close)
             for client in (
                 catalog_client,
                 geoserver_wms_client,
@@ -196,6 +228,7 @@ def create_app(
         app_global_configuration.scan_worker_count,
         app_global_configuration.scan_writer_count,
         app_global_configuration.scan_batch_size,
+        item_finalizer=raster_assessment_finalizer,
         reconciler=MissingItemReconciler(
             app_global_configuration.scan_mount_path,
             catalog_database,
@@ -241,6 +274,12 @@ def create_app(
         )
     )
     application.include_router(create_diagnostics_router(rendering_diagnostics))
+    application.include_router(
+        create_temporary_aoi_router(
+            temporary_aoi_service,
+            app_global_configuration.temporary_aoi_max_upload_bytes,
+        )
+    )
     application.include_router(
         create_stac_proxy_router(
             catalog_client,

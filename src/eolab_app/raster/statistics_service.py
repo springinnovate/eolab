@@ -12,10 +12,17 @@ import rasterio
 from eolab_app.raster.errors import RasterConflictError
 from eolab_app.raster.models import (
     AuthorizedRaster,
-    CanonicalWgs84Bounds,
     CatalogRasterStatisticsRequest,
     RasterStatistics,
     RasterStatisticsCacheKey,
+)
+from eolab_app.sampling_area import (
+    RasterSamplingArea,
+    SamplingAreaUnavailableError,
+    SelectedBoundsSamplingArea,
+    TemporaryAoiSamplingArea,
+    TemporaryAoiSamplingAreaReader,
+    WholeRasterSamplingArea,
 )
 from eolab_app.raster.sources import PublishedRasterRegistry
 from eolab_app.raster.statistics import (
@@ -50,8 +57,15 @@ class RasterStatisticsService:
         raster_registry: PublishedRasterRegistry,
         read_concurrency: int,
         cache_entries: int,
+        temporary_aoi_reader: TemporaryAoiSamplingAreaReader | None = None,
         statistics_reader: Callable[
-            [Path, CanonicalWgs84Bounds | None], RasterStatistics
+            [
+                Path,
+                tuple[float, float, float, float]
+                | TemporaryAoiSamplingArea
+                | None,
+            ],
+            RasterStatistics,
         ] = read_raster_statistics,
     ) -> None:
         """Create a bounded, coalescing raster statistics service.
@@ -60,11 +74,14 @@ class RasterStatisticsService:
             raster_registry: Current-process publication authorizations.
             read_concurrency: Maximum simultaneous Rasterio statistics reads.
             cache_entries: Maximum completed statistics documents retained.
+            temporary_aoi_reader: Narrow resolver for opaque ready AOIs. It is
+                optional only for compositions that never accept AOI requests.
             statistics_reader: Synchronous Rasterio statistics boundary.
         """
         self._raster_registry = raster_registry
         self._read_semaphore = asyncio.Semaphore(read_concurrency)
         self._cache_entries = cache_entries
+        self._temporary_aoi_reader = temporary_aoi_reader
         self._statistics_reader = statistics_reader
         self._cache: OrderedDict[
             RasterStatisticsCacheKey,
@@ -98,16 +115,15 @@ class RasterStatisticsService:
             self._raster_registry.require_current,
             layer_name,
         )
-        selected_bounds = (
-            request.selected_bounds.canonical_tuple()
-            if request.selected_bounds is not None
-            else None
-        )
+        try:
+            sampling_area = await self._resolve_sampling_area(request)
+        except SamplingAreaUnavailableError as error:
+            raise RasterConflictError(error.detail) from error
         cache_key = (
             layer_name,
             authorized_raster.source_signature,
             RASTER_STATISTICS_ALGORITHM,
-            selected_bounds,
+            sampling_area.cache_identity(),
         )
         async with self._state_lock:
             cached_statistics = self._cache.get(cache_key)
@@ -122,7 +138,7 @@ class RasterStatisticsService:
                         layer_name,
                         authorized_raster,
                         cache_key,
-                        selected_bounds,
+                        sampling_area,
                     )
                 )
                 read_task.add_done_callback(self._retrieve_task_exception)
@@ -133,14 +149,24 @@ class RasterStatisticsService:
         try:
             return await asyncio.shield(work.task)
         except NoRasterBoundsOverlapError as error:
-            raise RasterConflictError(
-                "The selected area does not overlap the raster"
-            ) from error
+            detail = (
+                "The uploaded AOI does not overlap the raster. Choose another "
+                "AOI or use the whole raster."
+                if isinstance(sampling_area, TemporaryAoiSamplingArea)
+                else "The selected area does not overlap the raster"
+            )
+            raise RasterConflictError(detail) from error
         except NoValidRasterSamplesError as error:
-            raise RasterConflictError(
-                "No finite, non-nodata pixels were found in the bounded "
+            detail = (
+                "The uploaded AOI overlaps the raster but contains no finite, "
+                "non-nodata sampled pixels. Choose another AOI or raster."
+                if isinstance(sampling_area, TemporaryAoiSamplingArea)
+                else "No finite, non-nodata pixels were found in the bounded "
                 "raster sample"
-            ) from error
+            )
+            raise RasterConflictError(detail) from error
+        except SamplingAreaUnavailableError as error:
+            raise RasterConflictError(error.detail) from error
         except (OSError, ValueError, rasterio.errors.RasterioError) as error:
             raise RasterConflictError(
                 "The selected raster statistics could not be read"
@@ -174,7 +200,7 @@ class RasterStatisticsService:
         layer_name: str,
         authorized_raster: AuthorizedRaster,
         cache_key: RasterStatisticsCacheKey,
-        selected_bounds: CanonicalWgs84Bounds | None,
+        sampling_area: RasterSamplingArea,
     ) -> RasterStatistics:
         """Compute one source signature while retaining capacity.
 
@@ -182,7 +208,7 @@ class RasterStatisticsService:
             layer_name: Workspace-qualified approved WMS layer.
             authorized_raster: Source approved at request start.
             cache_key: Stable cache identity for the statistics.
-            selected_bounds: Optional canonical selected WGS 84 rectangle.
+            sampling_area: Resolved whole, rectangular, or temporary AOI area.
 
         Returns:
             Newly computed bounded raster statistics.
@@ -211,10 +237,11 @@ class RasterStatisticsService:
                     raise RasterConflictError(
                         "The visualized GeoTIFF changed; select it again"
                     )
+                await self._require_current_sampling_area(sampling_area)
                 statistics = await asyncio.to_thread(
                     self._statistics_reader,
                     authorized_raster.source_path,
-                    selected_bounds,
+                    self._statistics_reader_area(sampling_area),
                 )
                 current_raster = await asyncio.to_thread(
                     self._raster_registry.require_current,
@@ -224,6 +251,7 @@ class RasterStatisticsService:
                     raise RasterConflictError(
                         "The visualized GeoTIFF changed; select it again"
                     )
+                await self._require_current_sampling_area(sampling_area)
 
                 async with self._state_lock:
                     self._cache[cache_key] = statistics
@@ -237,6 +265,91 @@ class RasterStatisticsService:
                 work = self._inflight.get(cache_key)
                 if work is not None and work.task is read_task:
                     self._inflight.pop(cache_key)
+
+    @staticmethod
+    def _statistics_reader_area(
+        sampling_area: RasterSamplingArea,
+    ) -> tuple[float, float, float, float] | TemporaryAoiSamplingArea | None:
+        """Adapt the domain union to the stable synchronous reader boundary.
+
+        Existing whole-raster and rectangular readers retain their ``None`` or
+        canonical bounds arguments. Only temporary AOIs add the reusable area
+        value object needed to carry immutable polygonal geometry.
+
+        Args:
+            sampling_area: Explicit resolved sampling-area value object.
+
+        Returns:
+            ``None`` for whole raster, canonical bounds for a rectangle, or the
+            resolved temporary-AOI area.
+        """
+        if isinstance(sampling_area, WholeRasterSamplingArea):
+            return None
+        if isinstance(sampling_area, SelectedBoundsSamplingArea):
+            return sampling_area.bounds
+        return sampling_area
+
+    async def _resolve_sampling_area(
+        self,
+        request: CatalogRasterStatisticsRequest,
+    ) -> RasterSamplingArea:
+        """Resolve the request's strict sampling-area union.
+
+        Args:
+            request: Validated raster identity and exclusive sampling fields.
+
+        Returns:
+            Whole-raster, rectangular, or immutable resolved AOI area.
+
+        Raises:
+            SamplingAreaUnavailableError: If an AOI reader is unavailable or
+                the opaque lifecycle cannot be resolved.
+        """
+        if request.selected_bounds is not None:
+            return SelectedBoundsSamplingArea(
+                request.selected_bounds.canonical_tuple()
+            )
+        if request.temporary_aoi_id is None:
+            return WholeRasterSamplingArea()
+        if self._temporary_aoi_reader is None:
+            raise SamplingAreaUnavailableError(
+                "Temporary AOI sampling is not available. Use the whole raster."
+            )
+        resolved_aoi = await self._temporary_aoi_reader.resolve_for_sampling(
+            request.temporary_aoi_id
+        )
+        return TemporaryAoiSamplingArea(resolved_aoi)
+
+    async def _require_current_sampling_area(
+        self,
+        sampling_area: RasterSamplingArea,
+    ) -> None:
+        """Recheck temporary-AOI lifecycle identity around a raster read.
+
+        Args:
+            sampling_area: Sampling area resolved at request start.
+
+        Returns:
+            None when whole-raster/bounds sampling needs no lifecycle recheck,
+            or when the AOI is still the exact same ready lifecycle.
+
+        Raises:
+            SamplingAreaUnavailableError: If the AOI was removed, replaced,
+                expired, or its immutable identity unexpectedly changed.
+        """
+        if not isinstance(sampling_area, TemporaryAoiSamplingArea):
+            return
+        if self._temporary_aoi_reader is None:
+            raise SamplingAreaUnavailableError(
+                "Temporary AOI sampling is not available. Use the whole raster."
+            )
+        current = await self._temporary_aoi_reader.resolve_for_sampling(
+            sampling_area.resolved_aoi.identity.reference
+        )
+        if current.identity != sampling_area.resolved_aoi.identity:
+            raise SamplingAreaUnavailableError(
+                "The uploaded AOI changed while it was being sampled. Try again."
+            )
 
     @staticmethod
     def _retrieve_task_exception(

@@ -12,6 +12,8 @@ import {
   RASTER_STATISTICS,
   SELECTED_BOUNDS,
   SELECTED_RASTER_STATISTICS,
+  TEMPORARY_AOI_ID,
+  TEMPORARY_AOI_RASTER_STATISTICS,
 } from "../../test-support/raster/fixtures.js";
 
 test("raster statistics validate their fixed bounded response contract", () => {
@@ -19,6 +21,10 @@ test("raster statistics validate their fixed bounded response contract", () => {
   assert.deepEqual(
     validateRasterStatistics(SELECTED_RASTER_STATISTICS),
     SELECTED_RASTER_STATISTICS,
+  );
+  assert.equal(
+    validateRasterStatistics(TEMPORARY_AOI_RASTER_STATISTICS),
+    TEMPORARY_AOI_RASTER_STATISTICS,
   );
 
   assert.throws(
@@ -59,6 +65,13 @@ test("raster statistics validate their fixed bounded response contract", () => {
     }),
     /invalid selected bounds/,
   );
+  assert.throws(
+    () => validateRasterStatistics({
+      ...TEMPORARY_AOI_RASTER_STATISTICS,
+      temporaryAoiId: "../../server-file",
+    }),
+    /invalid temporary-AOI scope/,
+  );
 });
 
 test("raster statistics apply only to their current whole or selected scope", () => {
@@ -75,6 +88,22 @@ test("raster statistics apply only to their current whole or selected scope", ()
   );
   assert.equal(
     rasterStatisticsMatchesSelection(SELECTED_RASTER_STATISTICS, otherBounds),
+    false,
+  );
+  assert.equal(
+    rasterStatisticsMatchesSelection(
+      TEMPORARY_AOI_RASTER_STATISTICS,
+      null,
+      TEMPORARY_AOI_ID,
+    ),
+    true,
+  );
+  assert.equal(
+    rasterStatisticsMatchesSelection(
+      TEMPORARY_AOI_RASTER_STATISTICS,
+      null,
+      `X${TEMPORARY_AOI_ID.slice(1)}`,
+    ),
     false,
   );
 });

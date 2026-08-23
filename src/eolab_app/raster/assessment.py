@@ -9,24 +9,125 @@ import rasterio
 
 from eolab_app.catalog.geotiff import build_stac_item
 from eolab_app.raster.eligibility import (
+    MOUNTED_GEOTIFF_COLLECTION_ID,
     RENDERING_METADATA_KEY,
-    RENDERING_POLICY,
+    apply_reader_assessment,
 )
 from eolab_app.raster.errors import RasterConflictError
-from eolab_app.raster.models import CatalogRasterRequest
-from eolab_app.raster.ports import RasterCatalog
-from eolab_app.raster.sources import MountedRasterResolver
+from eolab_app.raster.models import CatalogRasterRequest, SourceSignature
+from eolab_app.raster.ports import RasterCatalog, RasterReaderAssessor
+from eolab_app.raster.sources import (
+    MountedRasterResolver,
+    source_signature,
+)
+
+
+class RasterAssessmentFinalizer:
+    """Complete structural raster metadata with deployed-reader evidence.
+
+    The finalizer is shared by catalog scans and selected-Item reassessment so
+    both persistence paths apply the same source and reader contracts.
+    """
+
+    def __init__(
+        self,
+        source_resolver: MountedRasterResolver,
+        reader_assessor: RasterReaderAssessor,
+        signature_reader: Callable[[Path], SourceSignature] = source_signature,
+    ) -> None:
+        """Create a finalizer over source identity and reader boundaries.
+
+        Args:
+            source_resolver: Resolver confined to the shared scan mount.
+            reader_assessor: Read-only deployed GeoServer reader boundary.
+            signature_reader: Synchronous source identity boundary.
+        """
+        self._source_resolver = source_resolver
+        self._reader_assessor = reader_assessor
+        self._signature_reader = signature_reader
+
+    async def finalize(self, item: dict[str, Any]) -> dict[str, Any]:
+        """Finalize one freshly built scanner Item assessment.
+
+        Non-raster and remote-object-storage Items pass through unchanged.
+        Structurally ineligible mounted rasters retain their more specific
+        policy reason without invoking GeoServer. Structurally eligible
+        mounted rasters are acquired once by the deployed reader and keep the
+        source identity used for that decision.
+
+        Args:
+            item: Fresh scanner-owned STAC Item with structural metadata.
+
+        Returns:
+            The same Item with a complete, machine-readable assessment.
+
+        Raises:
+            OSError: If source identity cannot be read.
+            RasterAssetError: If the Item does not resolve to the scan mount.
+            RasterConflictError: If the source changes during reader
+                assessment.
+            RasterUpstreamError: If GeoServer cannot perform the assessment.
+            ValueError: If the fresh Item violates the structural assessment
+                contract.
+        """
+        properties = item.get("properties")
+        if (
+            item.get("collection") != MOUNTED_GEOTIFF_COLLECTION_ID
+            or isinstance(properties, dict)
+            and properties.get("eolab:source_kind") == "remote-object-storage"
+        ):
+            return item
+
+        source_path = self._source_resolver.resolve(item)
+        inspected_signature = await asyncio.to_thread(
+            self._signature_reader,
+            source_path,
+        )
+        rendering_metadata = item["assets"]["data"].get(
+            RENDERING_METADATA_KEY
+        )
+        if not isinstance(rendering_metadata, dict):
+            raise ValueError("Raster Item has no structural rendering metadata")
+        if rendering_metadata.get("source_signature") != list(
+            inspected_signature
+        ):
+            raise RasterConflictError(
+                "The GeoTIFF changed while its metadata was being extracted"
+            )
+
+        completed_metadata = dict(rendering_metadata)
+        if rendering_metadata.get("eligible"):
+            reader_assessment = await self._reader_assessor.assess(source_path)
+            completed_metadata = apply_reader_assessment(
+                rendering_metadata,
+                reader_contract=reader_assessment.contract,
+                reader_compatible=reader_assessment.compatible,
+                reader_reason_code=reader_assessment.reason_code,
+            )
+
+        current_signature = await asyncio.to_thread(
+            self._signature_reader,
+            source_path,
+        )
+        if current_signature != inspected_signature:
+            raise RasterConflictError(
+                "The GeoTIFF changed while it was being assessed"
+            )
+        item["assets"]["data"][RENDERING_METADATA_KEY] = completed_metadata
+        return item
 
 
 class RasterAssessmentService:
-    """Refresh one catalog Item's structural rendering assessment."""
+    """Replace one catalog Item's authoritative rendering assessment."""
 
     def __init__(
         self,
         scan_mount_path: Path,
         catalog: RasterCatalog,
         source_resolver: MountedRasterResolver,
+        reader_assessor: RasterReaderAssessor,
         item_builder: Callable[[Path, Path], dict[str, Any]] = build_stac_item,
+        signature_reader: Callable[[Path], SourceSignature] = source_signature,
     ) -> None:
         """Create the assessment workflow from focused collaborators.
 
@@ -34,12 +135,19 @@ class RasterAssessmentService:
             scan_mount_path: Read-only root containing cataloged GeoTIFFs.
             catalog: Authoritative raster catalog port.
             source_resolver: Resolver confined to the scan mount.
+            reader_assessor: Read-only deployed GeoServer reader boundary.
             item_builder: Synchronous GeoTIFF-to-STAC boundary.
+            signature_reader: Synchronous source identity boundary.
         """
         self._scan_mount_path = scan_mount_path
         self._catalog = catalog
         self._source_resolver = source_resolver
         self._item_builder = item_builder
+        self._finalizer = RasterAssessmentFinalizer(
+            source_resolver,
+            reader_assessor,
+            signature_reader,
+        )
 
     async def assess(
         self,
@@ -47,15 +155,16 @@ class RasterAssessmentService:
     ) -> dict[str, Any]:
         """Update one Item with its current visualization assessment.
 
-        Existing assessments under the current policy are returned unchanged.
-        Otherwise the source Item is rebuilt and upserted without scanning
-        sibling datasets.
+        The source Item is always rebuilt, finalized against the deployed
+        reader, and upserted without scanning sibling datasets. Repeating this
+        operation intentionally replaces a result after source repair or a
+        reader-contract change.
 
         Args:
             request: Validated Collection and Item identity.
 
         Returns:
-            Existing or newly assessed authoritative STAC Item.
+            Newly assessed authoritative STAC Item.
 
         Raises:
             RasterFeatureError: If the Item or mounted Asset is unavailable.
@@ -64,15 +173,6 @@ class RasterAssessmentService:
         """
         item = await self._catalog.get_item(request)
         source_path = self._source_resolver.resolve(item)
-        existing_assessment = item["assets"]["data"].get(
-            RENDERING_METADATA_KEY
-        )
-        if (
-            existing_assessment is not None
-            and existing_assessment.get("policy") == RENDERING_POLICY
-        ):
-            return item
-
         try:
             updated_item = await asyncio.to_thread(
                 self._item_builder,
@@ -93,5 +193,12 @@ class RasterAssessmentService:
             raise RasterConflictError(
                 "The mounted GeoTIFF no longer matches the catalog Item"
             )
+        try:
+            updated_item = await self._finalizer.finalize(updated_item)
+        except OSError as error:
+            raise RasterConflictError(
+                "Visualization unavailable: the raster metadata could not "
+                "be read."
+            ) from error
         await self._catalog.upsert_item(request, updated_item)
         return updated_item

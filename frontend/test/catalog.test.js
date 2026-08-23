@@ -43,7 +43,7 @@ const viewableFilter = {
       op: "=",
       args: [
         { property: "assets.data.eolab:rendering.policy" },
-        "raster-v2",
+        "raster-v3",
       ],
     },
     {
@@ -1008,7 +1008,7 @@ test("CatalogResultStream ignores a page from a superseded search", async () => 
 
 test("buildCatalogItemDetails presents scanned GeoTIFF metadata", () => {
   const renderingMetadata = {
-    policy: "raster-v2",
+    policy: "raster-v3",
     eligible: true,
     bounded_blocks: true,
     block_shapes: [[256, 256]],
@@ -1134,7 +1134,7 @@ test("getRasterVisualization distinguishes unassessed and non-raster Items", () 
 
 test("getRasterVisualization returns the scanner decision", () => {
   const renderingMetadata = {
-    policy: "raster-v2",
+    policy: "raster-v3",
     eligible: false,
     reason:
       "Visualization unavailable: this raster needs smaller internal blocks.",

@@ -41,6 +41,24 @@ class DatasetMetadataReader(Protocol):
         """
 
 
+class DatasetItemFinalizer(Protocol):
+    """Complete external assessments before scanner Item persistence."""
+
+    async def finalize(self, item: dict[str, Any]) -> dict[str, Any]:
+        """Finalize one freshly extracted STAC Item.
+
+        Args:
+            item: Complete metadata-worker Item.
+
+        Returns:
+            Item ready for authoritative catalog persistence.
+
+        Raises:
+            Exception: Propagates an external finalization failure.
+        """
+        ...
+
+
 class CatalogReconciler(Protocol):
     """Verify and remove missing scanner-owned Items."""
 

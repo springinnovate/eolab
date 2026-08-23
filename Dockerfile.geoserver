@@ -1,3 +1,14 @@
+FROM maven:3.9.11-eclipse-temurin-17@sha256:e4a7ace3dc0d645ed97f8d9ad0b0d3f0b14fa8d150138f27f116d7105a639b82 AS reader-assessment-builder
+
+WORKDIR /build
+
+COPY geoserver/reader-assessment/pom.xml ./pom.xml
+RUN mvn --batch-mode --no-transfer-progress dependency:go-offline
+
+COPY geoserver/reader-assessment/src/ ./src/
+RUN mvn --batch-mode --no-transfer-progress package -DskipTests
+
+
 FROM docker.osgeo.org/geoserver:3.0.1@sha256:7cb827ba3f6d9fc04a6647fc0cfa6c254fc642407f0d99281fdf026d2540b558
 
 ADD --checksum=sha256:a95983fd96e865d2bcdf911cc500e7c82808c27ab9fd226bf96732b6c3d8c46e \
@@ -12,6 +23,10 @@ RUN unzip -q /tmp/control-flow.zip "*.jar" \
         -d /usr/local/tomcat/webapps/geoserver/WEB-INF/lib \
     && rm /tmp/control-flow.zip \
     && chmod 0444 /opt/eolab-jmx/jmx_prometheus_javaagent-1.6.0.jar
+
+COPY --from=reader-assessment-builder --chmod=0444 \
+    /build/target/geoserver-reader-assessment-1.0.0.jar \
+    /usr/local/tomcat/webapps/geoserver/WEB-INF/lib/
 
 COPY --chmod=0444 geoserver/jmx-exporter.yml \
     /opt/eolab-jmx/jmx-exporter.yml

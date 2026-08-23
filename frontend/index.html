@@ -139,6 +139,147 @@
         ></p>
 
         <div class="panel-content">
+          <section
+            class="temporary-aoi-card"
+            id="temporary-aoi"
+            aria-labelledby="temporary-aoi-heading"
+            aria-busy="false"
+          >
+            <div class="temporary-aoi-heading">
+              <div>
+                <p class="section-label">Map overlay</p>
+                <h2 id="temporary-aoi-heading">Temporary AOI</h2>
+              </div>
+              <p>Not added to the Catalog</p>
+            </div>
+            <p class="temporary-aoi-copy" id="temporary-aoi-help">
+              Upload one GeoPackage or zipped Shapefile. Files are validated,
+              displayed temporarily, and removed automatically after expiration.
+            </p>
+            <form class="temporary-aoi-upload" id="temporary-aoi-upload-form">
+              <label for="temporary-aoi-file">
+                <span>AOI file</span>
+                <input
+                  id="temporary-aoi-file"
+                  name="file"
+                  type="file"
+                  accept=".gpkg,.zip,application/geopackage+sqlite3,application/zip"
+                  aria-describedby="temporary-aoi-help temporary-aoi-status temporary-aoi-error"
+                  required
+                />
+              </label>
+              <button
+                class="secondary-button"
+                id="upload-temporary-aoi"
+                type="submit"
+              >
+                Upload AOI
+              </button>
+            </form>
+            <div
+              class="temporary-aoi-upload-progress"
+              id="temporary-aoi-upload-progress-container"
+              hidden
+            >
+              <label for="temporary-aoi-upload-progress">
+                Approximate upload progress
+              </label>
+              <progress
+                id="temporary-aoi-upload-progress"
+                max="100"
+                value="0"
+                aria-describedby="temporary-aoi-upload-progress-detail temporary-aoi-status"
+              ></progress>
+              <p id="temporary-aoi-upload-progress-detail"></p>
+            </div>
+            <form
+              class="temporary-aoi-selection"
+              id="temporary-aoi-selection-form"
+              aria-labelledby="temporary-aoi-selection-heading"
+              hidden
+            >
+              <strong id="temporary-aoi-selection-heading">Choose a spatial dataset</strong>
+              <p>
+                <span id="temporary-aoi-selection-filename"></span> contains
+                more than one usable spatial dataset. Nothing will be displayed
+                until you choose one.
+              </p>
+              <label for="temporary-aoi-dataset">
+                <span>Dataset or layer</span>
+                <select
+                  id="temporary-aoi-dataset"
+                  aria-describedby="temporary-aoi-status temporary-aoi-error"
+                ></select>
+              </label>
+              <div class="temporary-aoi-selection-actions">
+                <button class="secondary-button" type="submit">Display dataset</button>
+                <button
+                  class="secondary-button"
+                  id="cancel-temporary-aoi-selection"
+                  type="button"
+                >
+                  Cancel upload
+                </button>
+              </div>
+            </form>
+            <dl class="temporary-aoi-details" id="temporary-aoi-details" hidden>
+              <div>
+                <dt>File</dt>
+                <dd id="temporary-aoi-filename"></dd>
+              </div>
+              <div>
+                <dt>Layer</dt>
+                <dd id="temporary-aoi-layer"></dd>
+              </div>
+              <div>
+                <dt>Expires</dt>
+                <dd><time id="temporary-aoi-expiration"></time></dd>
+              </div>
+            </dl>
+            <div
+              class="temporary-aoi-actions"
+              id="temporary-aoi-actions"
+              role="group"
+              aria-label="Temporary AOI map actions"
+              hidden
+            >
+              <button
+                class="secondary-button"
+                id="toggle-temporary-aoi"
+                type="button"
+                aria-pressed="true"
+              >
+                Hide
+              </button>
+              <button
+                class="secondary-button"
+                id="zoom-temporary-aoi"
+                type="button"
+              >
+                Zoom to AOI
+              </button>
+              <button
+                class="secondary-button is-danger"
+                id="remove-temporary-aoi"
+                type="button"
+              >
+                Remove
+              </button>
+            </div>
+            <p
+              class="temporary-aoi-status"
+              id="temporary-aoi-status"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+            ></p>
+            <p
+              class="temporary-aoi-error"
+              id="temporary-aoi-error"
+              role="alert"
+              aria-atomic="true"
+            ></p>
+          </section>
           <section class="catalog-panel">
             <div class="catalog-heading">
               <div>
@@ -390,6 +531,14 @@
                     <div class="raster-sample-window-actions">
                       <button
                         class="secondary-button"
+                        id="select-raster-sample-window"
+                        type="button"
+                        aria-pressed="false"
+                      >
+                        Select map window
+                      </button>
+                      <button
+                        class="secondary-button"
                         id="sample-raster-map-center"
                         type="button"
                       >
@@ -399,9 +548,19 @@
                         class="secondary-button"
                         id="clear-raster-sample-window"
                         type="button"
+                        aria-pressed="true"
                         disabled
                       >
                         Use whole raster
+                      </button>
+                      <button
+                        class="secondary-button"
+                        id="use-temporary-aoi-for-raster"
+                        type="button"
+                        aria-pressed="false"
+                        disabled
+                      >
+                        Use uploaded AOI
                       </button>
                     </div>
                     <p

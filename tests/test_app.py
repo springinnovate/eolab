@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import httpx2
+import fiona
 import numpy
 import pytest
 import rasterio
@@ -15,6 +16,8 @@ from rasterio.transform import from_origin
 
 from eolab_app.catalog.geotiff import build_stac_item as build_geotiff_stac_item
 from eolab_app.main import create_app
+from eolab_app.raster.models import GEOSERVER_READER_CONTRACT
+from eolab_app.raster.sources import source_signature
 from eolab_app.settings import load_settings
 from tests.app_support import (
     GeoServerPublicationMock,
@@ -386,10 +389,31 @@ def test_one_outdated_raster_is_assessed_and_updated(
             return httpx2.Response(200, json="Successfully upserted 1 item.")
         raise AssertionError(f"Unexpected catalog request: {request}")
 
+    def geoserver_response(request: httpx2.Request) -> httpx2.Response:
+        """Return one compatible deployed-reader assessment.
+
+        Args:
+            request: Captured authenticated GeoServer assessment request.
+
+        Returns:
+            Controlled compatible reader response.
+        """
+        assert request.url.path == (
+            "/geoserver/rest/eolab/reader-assessments"
+        )
+        assert request.method == "POST"
+        assert request.content.decode() == source_path.resolve().as_uri()
+        return httpx2.Response(200, json={
+            "contract": GEOSERVER_READER_CONTRACT,
+            "compatible": True,
+            "reasonCode": None,
+        })
+
     with TestClient(
         create_app(
             version_file_path,
             catalog_transport=httpx2.MockTransport(catalog_response),
+            geoserver_transport=httpx2.MockTransport(geoserver_response),
         )
     ) as client:
         request_body = {
@@ -407,8 +431,11 @@ def test_one_outdated_raster_is_assessed_and_updated(
 
     assert first_response.status_code == 200
     assert first_response.json()["assets"]["data"]["eolab:rendering"] == {
-        "policy": "raster-v2",
+        "policy": "raster-v3",
         "eligible": True,
+        "reader_contract": GEOSERVER_READER_CONTRACT,
+        "reader_compatible": True,
+        "source_signature": list(source_signature(source_path)),
         "bounded_blocks": True,
         "block_shapes": [[1, 1]],
         "overview_factors": [[]],
@@ -421,6 +448,7 @@ def test_one_outdated_raster_is_assessed_and_updated(
         "GET",
         "POST",
         "GET",
+        "POST",
     ]
 
 
@@ -433,8 +461,9 @@ def test_one_outdated_raster_is_assessed_and_updated(
         ),
         (
             {
-                "policy": "raster-v2",
+                "policy": "raster-v3",
                 "eligible": False,
+                "reason_code": "blocks_too_large",
                 "reason": (
                     "Visualization unavailable: this raster needs smaller "
                     "internal blocks."
@@ -500,23 +529,14 @@ def test_raster_publication_reassesses_a_changed_source(
     tmp_path: Path,
     version_file_path: Path,
 ) -> None:
-    """Refuse a source that became unsuitable after its catalog scan."""
+    """Require reassessment when source identity changed after assessment."""
     source_path = tmp_path / "raster.tif"
     _write_geotiff(source_path)
     monkeypatch.setenv("SCAN_MOUNT_PATH", str(tmp_path))
     monkeypatch.setenv("SCAN_PATHS_WITHIN_MOUNT", '["."]')
     item = _mounted_geotiff_item(source_path.as_uri())
     geoserver_requests = []
-    monkeypatch.setattr(
-        "eolab_app.raster.publication.inspect_raster_renderability",
-        lambda _: {
-            "eligible": False,
-            "reason": (
-                "Visualization unavailable: the coarsest internal overview "
-                "exceeds 64 MiB of decoded pixel data."
-            ),
-        },
-    )
+    source_path.write_bytes(b"changed after assessment")
 
     def catalog_response(_: httpx2.Request) -> httpx2.Response:
         return httpx2.Response(200, json=item)
@@ -542,8 +562,8 @@ def test_raster_publication_reassesses_a_changed_source(
     assert response.status_code == 409
     assert response.json() == {
         "detail": (
-            "Visualization unavailable: the coarsest internal overview "
-            "exceeds 64 MiB of decoded pixel data."
+            "Visualization unavailable: the raster changed; reassess it "
+            "before publication."
         )
     }
     assert geoserver_requests == []
@@ -894,6 +914,7 @@ def test_raster_statistics_sample_a_published_projected_raster(
         None.
     """
     source_path = tmp_path / "projected.tif"
+    aoi_path = tmp_path / "sampling-area.gpkg"
     with rasterio.open(
         source_path,
         "w",
@@ -909,6 +930,27 @@ def test_raster_statistics_sample_a_published_projected_raster(
             numpy.array([[10, 20], [30, 40]], dtype="int16"),
             1,
         )
+    with fiona.open(
+        aoi_path,
+        mode="w",
+        driver="GPKG",
+        layer="left-half",
+        crs="EPSG:4326",
+        schema={"geometry": "Polygon", "properties": {}},
+    ) as dataset:
+        dataset.write({
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [[
+                    (-2, -2),
+                    (0, -2),
+                    (0, 2),
+                    (-2, 2),
+                    (-2, -2),
+                ]],
+            },
+            "properties": {},
+        })
     monkeypatch.setenv("SCAN_MOUNT_PATH", str(tmp_path))
     monkeypatch.setenv("SCAN_PATHS_WITHIN_MOUNT", '["."]')
     item = _mounted_geotiff_item(source_path.as_uri())
@@ -968,6 +1010,29 @@ def test_raster_statistics_sample_a_published_projected_raster(
                     "east": 11,
                     "north": 11,
                 },
+            },
+        )
+        with aoi_path.open("rb") as source:
+            uploaded_aoi = client.post(
+                "/api/temporary-aois",
+                files={"file": ("sampling-area.gpkg", source)},
+            )
+        temporary_aoi_id = uploaded_aoi.json()["id"]
+        aoi_response = client.post(
+            "/api/rendering/statistics",
+            json={
+                **request_identity,
+                "temporaryAoiId": temporary_aoi_id,
+            },
+        )
+        assert client.delete(
+            f"/api/temporary-aois/{temporary_aoi_id}"
+        ).status_code == 204
+        removed_aoi_response = client.post(
+            "/api/rendering/statistics",
+            json={
+                **request_identity,
+                "temporaryAoiId": temporary_aoi_id,
             },
         )
 
@@ -1030,6 +1095,18 @@ def test_raster_statistics_sample_a_published_projected_raster(
     }
     assert sum(selected_document["histogram"]["counts"]) == 2
 
+    assert aoi_response.status_code == 200
+    aoi_document = aoi_response.json()
+    assert aoi_document["scope"] == "temporaryAoi"
+    assert aoi_document["selectedBounds"] is None
+    assert aoi_document["temporaryAoiId"] == temporary_aoi_id
+    assert aoi_document["sampleMinimum"] == 10.0
+    assert aoi_document["sampleMaximum"] == 30.0
+    assert sum(aoi_document["histogram"]["counts"]) == 2
+
+    assert removed_aoi_response.status_code == 409
+    assert "removed or expired" in removed_aoi_response.json()["detail"]
+
     assert outside_response.status_code == 409
     assert outside_response.json() == {
         "detail": "The selected area does not overlap the raster"
@@ -1059,7 +1136,9 @@ def test_raster_statistics_disconnect_cancels_the_service_waiter(
     statistics_service = BlockingStatisticsService()
     monkeypatch.setattr(
         "eolab_app.main.RasterStatisticsService",
-        lambda _registry, _read_concurrency, _cache_entries: statistics_service,
+        lambda _registry, _read_concurrency, _cache_entries, **_kwargs: (
+            statistics_service
+        ),
     )
     application = create_app(version_file_path)
     request_body = json.dumps(
@@ -1321,6 +1400,8 @@ def test_load_settings_rejects_blank_version(
         ("RASTER_PIXEL_READ_CONCURRENCY", "1.5"),
         ("RASTER_STATISTICS_READ_CONCURRENCY", "1.5"),
         ("RASTER_STATISTICS_CACHE_ENTRIES", "1.5"),
+        ("TEMPORARY_AOI_TTL_SECONDS", "not-a-number"),
+        ("TEMPORARY_AOI_MAX_UPLOAD_BYTES", "1.5"),
     ),
 )
 def test_load_settings_rejects_malformed_number(
@@ -1404,6 +1485,9 @@ def test_load_settings_rejects_invalid_scan_path_lists(
         ("RASTER_PIXEL_READ_CONCURRENCY", "0"),
         ("RASTER_STATISTICS_READ_CONCURRENCY", "0"),
         ("RASTER_STATISTICS_CACHE_ENTRIES", "0"),
+        ("TEMPORARY_AOI_TTL_SECONDS", "0"),
+        ("TEMPORARY_AOI_TTL_SECONDS", "nan"),
+        ("TEMPORARY_AOI_MAX_UPLOAD_BYTES", "0"),
     ),
 )
 def test_load_settings_rejects_out_of_range_number(

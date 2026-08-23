@@ -11,9 +11,14 @@ from eolab_app.raster.errors import RasterPublicationError
 from eolab_app.raster.geoserver import (
     GEOSERVER_ERROR_EXCERPT_LIMIT,
     GeoServerRasterPublisher,
+    GeoServerRasterReaderAssessor,
     sanitize_geoserver_error_excerpt,
 )
-from eolab_app.raster.models import CatalogRasterRequest
+from eolab_app.raster.models import (
+    GEOSERVER_READER_CONTRACT,
+    CatalogRasterRequest,
+    RasterReaderAssessment,
+)
 from eolab_app.raster.publication import RasterPublicationService
 from eolab_app.raster.sources import PublishedRasterRegistry, source_signature
 
@@ -225,8 +230,11 @@ def _catalog_item(source_path: Path) -> dict[str, object]:
             "data": {
                 "href": source_path.as_uri(),
                 "eolab:rendering": {
-                    "policy": "raster-v2",
+                    "policy": "raster-v3",
                     "eligible": True,
+                    "reader_contract": GEOSERVER_READER_CONTRACT,
+                    "reader_compatible": True,
+                    "source_signature": list(source_signature(source_path)),
                 },
             }
         },
@@ -295,7 +303,6 @@ def test_publication_coordinates_upstream_contract_and_authorization(
         publisher,
         registry,
         signature_reader=source_signature,
-        eligibility_inspector=lambda _: {"eligible": True},
     )
 
     result = asyncio.run(service.publish(_catalog_request()))
@@ -529,7 +536,6 @@ def test_app_restart_reauthorizes_existing_complete_publication(
                 ),
                 registry,
                 signature_reader=source_signature,
-                eligibility_inspector=lambda _: {"eligible": True},
             )
             return await service.publish(_catalog_request())
 
@@ -723,3 +729,61 @@ def test_error_excerpt_is_bounded_single_line_and_redacts_secrets() -> None:
     assert "\n" not in excerpt
     assert len(excerpt) <= GEOSERVER_ERROR_EXCERPT_LIMIT + 1
     assert excerpt.endswith("…")
+
+
+def test_geoserver_reader_assessor_owns_read_only_response_contract(
+    tmp_path: Path,
+) -> None:
+    """Validate the stable reader result without publication operations.
+
+    Args:
+        tmp_path: Temporary mounted source directory.
+
+    Returns:
+        None.
+    """
+    source_path = tmp_path / "raster.tif"
+    source_path.write_bytes(b"raster")
+    requests: list[httpx2.Request] = []
+
+    def response(request: httpx2.Request) -> httpx2.Response:
+        """Return one controlled incompatible reader assessment.
+
+        Args:
+            request: Captured internal GeoServer request.
+
+        Returns:
+            Stable incompatible reader response.
+        """
+        requests.append(request)
+        return httpx2.Response(200, json={
+            "contract": GEOSERVER_READER_CONTRACT,
+            "compatible": False,
+            "reasonCode": "geoserver_crs_metadata_incompatible",
+        })
+
+    async def assess() -> RasterReaderAssessment:
+        """Run the asynchronous GeoServer reader adapter.
+
+        Returns:
+            Validated reader assessment.
+        """
+        async with httpx2.AsyncClient(
+            transport=httpx2.MockTransport(response)
+        ) as client:
+            adapter = GeoServerRasterReaderAssessor(
+                client,
+                "http://geoserver:8080/geoserver",
+            )
+            return await adapter.assess(source_path)
+
+    result = asyncio.run(assess())
+
+    assert result.compatible is False
+    assert result.reason_code == "geoserver_crs_metadata_incompatible"
+    assert len(requests) == 1
+    assert requests[0].method == "POST"
+    assert requests[0].url.path == (
+        "/geoserver/rest/eolab/reader-assessments"
+    )
+    assert requests[0].content.decode() == source_path.as_uri()
