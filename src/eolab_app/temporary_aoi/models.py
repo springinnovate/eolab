@@ -7,6 +7,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from eolab_app.sampling_area import ResolvedTemporaryAoi
+
 
 @dataclass(frozen=True)
 class DatasetChoice:
@@ -36,6 +38,7 @@ class TemporaryAoiRecord:
         choices: Opaque selection identifiers mapped to validated datasets.
         expires_at: UTC expiration timestamp.
         replacement_id: Existing AOI removed only after this upload is ready.
+        ready_sampling_area: Immutable polygonal geometry after selection.
     """
 
     id: str
@@ -44,6 +47,7 @@ class TemporaryAoiRecord:
     choices: dict[str, DatasetChoice]
     expires_at: datetime
     replacement_id: str | None
+    ready_sampling_area: ResolvedTemporaryAoi | None = None
 
 
 class TemporaryAoiChoiceResponse(BaseModel):

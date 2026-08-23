@@ -12,6 +12,7 @@
  * @param {Object} item Active STAC Item.
  * @param {AbortSignal} signal Cancellation signal for stale work.
  * @param {Object|null} selectedBounds Optional selected-area bounds.
+ * @param {string|null} temporaryAoiId Optional opaque temporary-AOI reference.
  * @return {Promise<Object>} Validated raster statistics.
  */
 
@@ -61,6 +62,7 @@ export class RasterStatisticsController {
         this.onError = onError;
         this.item = null;
         this.selectedBounds = null;
+        this.temporaryAoiId = null;
         this.abortController = null;
         this.requestSequence = 0;
     }
@@ -71,13 +73,25 @@ export class RasterStatisticsController {
      * @param {Object} item Selected STAC Item.
      * @param {*} [context] Opaque request context returned to callbacks.
      * @param {Object|null} [selectedBounds=null] Optional WGS 84 selection.
+     * @param {string|null} [temporaryAoiId=null] Optional opaque ready AOI.
      * @return {Promise<Object|null>} Current statistics, or null after failure
      * or invalidation.
      */
-    async activate(item, context = undefined, selectedBounds = null) {
+    async activate(
+        item,
+        context = undefined,
+        selectedBounds = null,
+        temporaryAoiId = null
+    ) {
+        if (selectedBounds !== null && temporaryAoiId !== null) {
+            throw new Error(
+                "Raster statistics bounds and temporary AOI are mutually exclusive."
+            );
+        }
         this.clear();
         this.item = item;
         this.selectedBounds = selectedBounds;
+        this.temporaryAoiId = temporaryAoiId;
         const requestSequence = ++this.requestSequence;
         const abortController = new AbortController();
         this.abortController = abortController;
@@ -87,7 +101,8 @@ export class RasterStatisticsController {
             statistics = await this.loadStatistics(
                 item,
                 abortController.signal,
-                selectedBounds
+                selectedBounds,
+                temporaryAoiId
             );
         } catch (error) {
             if (
@@ -118,9 +133,10 @@ export class RasterStatisticsController {
     retry(context = undefined) {
         const item = this.item;
         const selectedBounds = this.selectedBounds;
+        const temporaryAoiId = this.temporaryAoiId;
         return item === null
             ? Promise.resolve(null)
-            : this.activate(item, context, selectedBounds);
+            : this.activate(item, context, selectedBounds, temporaryAoiId);
     }
 
     /**
@@ -134,5 +150,6 @@ export class RasterStatisticsController {
         this.abortController = null;
         this.item = null;
         this.selectedBounds = null;
+        this.temporaryAoiId = null;
     }
 }

@@ -3,6 +3,28 @@
  */
 
 /**
+ * Format a nonnegative byte count for compact upload progress text.
+ *
+ * @param {number} byteCount Finite nonnegative byte count.
+ * @return {string} Human-readable bytes using binary units.
+ * @throws {RangeError} If the byte count is invalid.
+ */
+function formatUploadByteCount(byteCount) {
+    if (!Number.isFinite(byteCount) || byteCount < 0) {
+        throw new RangeError("Upload byte count must be finite and nonnegative.");
+    }
+    const units = ["B", "KiB", "MiB", "GiB"];
+    let value = byteCount;
+    let unitIndex = 0;
+    while (value >= 1024 && unitIndex < units.length - 1) {
+        value /= 1024;
+        unitIndex += 1;
+    }
+    const precision = unitIndex === 0 || value >= 10 ? 0 : 1;
+    return `${value.toFixed(precision)} ${units[unitIndex]}`;
+}
+
+/**
  * @typedef {Object} TemporaryAoiControlHandlers
  * @property {(event: Event) => void} onUpload Submit the selected upload.
  * @property {(event: Event) => void} onSelectDataset Submit a dataset choice.
@@ -26,6 +48,9 @@ export class TemporaryAoiControlsView {
             form: "#temporary-aoi-upload-form",
             fileInput: "#temporary-aoi-file",
             uploadButton: "#upload-temporary-aoi",
+            progressContainer: "#temporary-aoi-upload-progress-container",
+            progress: "#temporary-aoi-upload-progress",
+            progressDetail: "#temporary-aoi-upload-progress-detail",
             selectionForm: "#temporary-aoi-selection-form",
             selectionSelect: "#temporary-aoi-dataset",
             selectionFilename: "#temporary-aoi-selection-filename",
@@ -123,6 +148,7 @@ export class TemporaryAoiControlsView {
      */
     renderIdle(statusMessage = "") {
         this.setBusy(false);
+        this.hideUploadProgress();
         this.fileInput.value = "";
         this.fileInput.disabled = false;
         this.uploadButton.disabled = false;
@@ -142,6 +168,7 @@ export class TemporaryAoiControlsView {
      */
     renderBusy(message) {
         this.setBusy(true);
+        this.hideUploadProgress();
         this.fileInput.disabled = true;
         this.uploadButton.disabled = true;
         this.selectionSelect.disabled = true;
@@ -154,6 +181,70 @@ export class TemporaryAoiControlsView {
     }
 
     /**
+     * Present observable transfer bytes and capped approximate total progress.
+     *
+     * @param {Object} progress Current browser-owned progress presentation.
+     * @param {number} progress.loadedBytes Approximate transferred file bytes.
+     * @param {number} progress.totalBytes Selected file size in bytes.
+     * @param {number} progress.transferPercent Transfer percentage from 0 to 100.
+     * @param {number} progress.approximatePercent Approximate overall percentage.
+     * @param {string} progress.stageMessage Accurate current stage statement.
+     * @return {void}
+     * @throws {RangeError|TypeError} If progress violates the view contract.
+     */
+    renderUploadProgress({
+        loadedBytes,
+        totalBytes,
+        transferPercent,
+        approximatePercent,
+        stageMessage,
+    }) {
+        if (typeof stageMessage !== "string" || stageMessage.trim() === "") {
+            throw new TypeError("Temporary AOI upload stage is invalid.");
+        }
+        if (
+            !Number.isFinite(transferPercent) ||
+            transferPercent < 0 ||
+            transferPercent > 100 ||
+            !Number.isFinite(approximatePercent) ||
+            approximatePercent < 0 ||
+            approximatePercent > 99
+        ) {
+            throw new RangeError("Temporary AOI upload progress is invalid.");
+        }
+        const boundedLoadedBytes = Math.min(loadedBytes, totalBytes);
+        const byteDetail =
+            `${formatUploadByteCount(boundedLoadedBytes)} of ` +
+            `${formatUploadByteCount(totalBytes)} uploaded`;
+        this.setBusy(true);
+        this.progressContainer.hidden = false;
+        this.progress.max = 100;
+        this.progress.value = approximatePercent;
+        this.progress.setAttribute(
+            "aria-valuetext",
+            `${stageMessage} Approximately ${approximatePercent}% complete.`
+        );
+        this.progressDetail.textContent =
+            `${byteDetail} (${Math.round(transferPercent)}% transfer). ` +
+            `Approximately ${Math.round(approximatePercent)}% overall.`;
+        if (this.status.textContent !== stageMessage) {
+            this.status.textContent = stageMessage;
+        }
+    }
+
+    /**
+     * Hide and reset upload-only progress without changing other AOI state.
+     *
+     * @return {void}
+     */
+    hideUploadProgress() {
+        this.progressContainer.hidden = true;
+        this.progress.value = 0;
+        this.progress.setAttribute("aria-valuetext", "");
+        this.progressDetail.textContent = "";
+    }
+
+    /**
      * Present the explicit choice step for a multi-dataset upload.
      *
      * @param {{filename: string, choices: Array<{id: string, label: string}>}}
@@ -162,6 +253,7 @@ export class TemporaryAoiControlsView {
      */
     renderSelection(pendingUpload) {
         this.setBusy(false);
+        this.hideUploadProgress();
         this.fileInput.disabled = true;
         this.uploadButton.disabled = true;
         this.selectionSelect.replaceChildren();
@@ -197,6 +289,7 @@ export class TemporaryAoiControlsView {
         statusMessage = "Temporary AOI displayed on the map."
     ) {
         this.setBusy(false);
+        this.hideUploadProgress();
         this.fileInput.value = "";
         this.fileInput.disabled = false;
         this.uploadButton.disabled = false;
@@ -251,6 +344,7 @@ export class TemporaryAoiControlsView {
      */
     renderError(error, recoveryAction) {
         this.setBusy(false);
+        this.hideUploadProgress();
         this.error.textContent = `${error.message} ${recoveryAction}`;
         this.status.textContent = "";
     }

@@ -427,9 +427,16 @@ function renderCatalogItemInspector(
  *
  * @param {AppGlobalConfiguration} appGlobalConfiguration Application settings.
  * @param {L.Map} leafletMap The initialized Leaflet map.
+ * @param {(viewer: import("./raster/raster-viewer.js").RasterViewer) => void}
+ * [onRasterViewerReady=() => {}] Receives the raster public boundary before
+ * asynchronous catalog loading begins.
  * @return {Promise<Function>} Function that reloads the active catalog search.
  */
-async function initializeCatalog(appGlobalConfiguration, leafletMap) {
+async function initializeCatalog(
+    appGlobalConfiguration,
+    leafletMap,
+    onRasterViewerReady = () => {}
+) {
     const catalogSystemStateElements = {
         disclosure: document.querySelector("#system-state"),
         stateText: document.querySelector("#system-state-text"),
@@ -579,6 +586,7 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
         leaflet: L,
         onChange: refreshCatalogMapAction,
     });
+    onRasterViewerReady(rasterVisualization);
     /**
      * Apply the scanner-owned visualization decision to the map action.
      *
@@ -1432,10 +1440,15 @@ async function startApplication() {
     initializeRenderingDiagnostics();
     const leafletMap = initializeMap(appGlobalConfiguration);
     initializeControlPanel(leafletMap);
-    initializeTemporaryAoi(leafletMap, L);
+    const temporaryAoi = initializeTemporaryAoi(leafletMap, L);
     const refreshCatalog = await initializeCatalog(
         appGlobalConfiguration,
-        leafletMap
+        leafletMap,
+        (rasterViewer) => {
+            temporaryAoi.subscribeSamplingArea(
+                rasterViewer.setTemporaryAoi
+            );
+        }
     );
     await initializeScanner(refreshCatalog);
 }

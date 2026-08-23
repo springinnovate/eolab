@@ -188,7 +188,9 @@ test("RasterControlsView owns style values and semantic control events", () => {
         onSampleWindowNumberInput: (value) => received.push(["number", value]),
         onSampleWindowNumberChange: (value) => received.push(["change", value]),
         onSampleMapCenter: () => received.push(["center"]),
+        onSelectSampleWindow: () => received.push(["select-window"]),
         onClearSampleWindow: () => received.push(["whole"]),
+        onUseTemporaryAoi: () => received.push(["aoi"]),
     });
     documentContext
         .querySelector("#raster-minimum-color")
@@ -204,6 +206,59 @@ test("RasterControlsView owns style values and semantic control events", () => {
         .querySelector("#raster-minimum-color")
         .dispatchEvent(new Event("input"));
     assert.deepEqual(received, [["style", true], ["range", "80"]]);
+});
+
+test("RasterControlsView exposes accessible exclusive histogram-area choices", () => {
+    const documentContext = new FakeRasterDocument();
+    const view = new RasterControlsView(documentContext);
+    const received = [];
+    view.bind({
+        onStyleInput() {},
+        onStyleChange() {},
+        onPaletteChange() {},
+        onResetStyle() {},
+        onPercentileInput() {},
+        onApplyPercentiles() {},
+        onRetryStatistics() {},
+        onSampleWindowRangeInput() {},
+        onSampleWindowNumberInput() {},
+        onSampleWindowNumberChange() {},
+        onSampleMapCenter() {},
+        onSelectSampleWindow: () => received.push("window"),
+        onClearSampleWindow: () => received.push("whole"),
+        onUseTemporaryAoi: () => received.push("aoi"),
+    });
+    const temporaryAoi = {
+        id: "A".repeat(32),
+        filename: "area.gpkg",
+        selectedDataset: "boundary",
+    };
+
+    view.setTemporaryAoiAvailability(temporaryAoi);
+    view.setSamplingAreaMode("temporaryAoi");
+    documentContext
+        .querySelector("#select-raster-sample-window")
+        .dispatchEvent(new Event("click"));
+    documentContext
+        .querySelector("#clear-raster-sample-window")
+        .dispatchEvent(new Event("click"));
+    documentContext
+        .querySelector("#use-temporary-aoi-for-raster")
+        .dispatchEvent(new Event("click"));
+
+    assert.deepEqual(received, ["window", "whole", "aoi"]);
+    assert.equal(
+        documentContext
+            .querySelector("#use-temporary-aoi-for-raster")
+            .getAttribute("aria-pressed"),
+        "true"
+    );
+    assert.match(
+        documentContext
+            .querySelector("#use-temporary-aoi-for-raster")
+            .getAttribute("aria-label"),
+        /area\.gpkg.*boundary/
+    );
 });
 
 test("RasterControlsView clears histogram visibility through its DOM contract", () => {

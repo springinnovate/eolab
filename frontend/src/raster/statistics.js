@@ -48,14 +48,25 @@ export function validateRasterStatistics(statistics) {
     if (statistics.band !== 1) {
         throw rasterStatisticsContractError("band identity");
     }
+    const temporaryAoiId = statistics.temporaryAoiId ?? null;
+    const hasValidTemporaryAoiId =
+        typeof temporaryAoiId === "string" &&
+        /^[A-Za-z0-9_-]{32}$/.test(temporaryAoiId);
     if (
         statistics.scope === "wholeRaster" &&
-        statistics.selectedBounds !== null
+        (statistics.selectedBounds !== null || temporaryAoiId !== null)
     ) {
         throw rasterStatisticsContractError("whole-raster scope");
     }
     if (statistics.scope === "selectedArea") {
         validateRasterSelectedBounds(statistics.selectedBounds);
+        if (temporaryAoiId !== null) {
+            throw rasterStatisticsContractError("selected-area scope");
+        }
+    } else if (statistics.scope === "temporaryAoi") {
+        if (statistics.selectedBounds !== null || !hasValidTemporaryAoiId) {
+            throw rasterStatisticsContractError("temporary-AOI scope");
+        }
     } else if (statistics.scope !== "wholeRaster") {
         throw rasterStatisticsContractError("statistics scope");
     }
@@ -156,16 +167,19 @@ export function validateRasterStatistics(statistics) {
  * @param {Object} statistics Candidate rendering API response.
  * @param {Object|null} selectedBounds Validated requested bounds, or null for
  * the whole raster.
+ * @param {string|null} [temporaryAoiId=null] Requested opaque AOI reference.
  * @return {Object} The validated response for the requested scope.
  * @throws {Error} If the response data, scope, or selected bounds differ.
  */
 export function validateRasterStatisticsForSelection(
     statistics,
-    selectedBounds
+    selectedBounds,
+    temporaryAoiId = null
 ) {
     const validatedStatistics = validateRasterStatistics(statistics);
     if (
         selectedBounds === null &&
+        temporaryAoiId === null &&
         validatedStatistics.scope !== "wholeRaster"
     ) {
         throw rasterStatisticsContractError("whole-raster response scope");
@@ -185,6 +199,15 @@ export function validateRasterStatisticsForSelection(
             }
         }
     }
+    if (
+        temporaryAoiId !== null &&
+        (
+            validatedStatistics.scope !== "temporaryAoi" ||
+            validatedStatistics.temporaryAoiId !== temporaryAoiId
+        )
+    ) {
+        throw rasterStatisticsContractError("temporary-AOI response identity");
+    }
     return validatedStatistics;
 }
 
@@ -193,9 +216,21 @@ export function validateRasterStatisticsForSelection(
  *
  * @param {Object} statistics Validated raster statistics.
  * @param {Object|null} selectedBounds Active selected-area bounds, if any.
+ * @param {string|null} [temporaryAoiId=null] Active opaque AOI identity.
  * @return {boolean} Whether statistics describe the active scope exactly.
  */
-export function rasterStatisticsMatchesSelection(statistics, selectedBounds) {
+export function rasterStatisticsMatchesSelection(
+    statistics,
+    selectedBounds,
+    temporaryAoiId = null
+) {
+    if (temporaryAoiId !== null) {
+        return (
+            selectedBounds === null &&
+            statistics.scope === "temporaryAoi" &&
+            statistics.temporaryAoiId === temporaryAoiId
+        );
+    }
     if (selectedBounds === null) {
         return statistics.scope === "wholeRaster";
     }

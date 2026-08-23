@@ -286,6 +286,7 @@ export async function loadCatalogRasterDetailPreview(
  * @param {Object} item Selected STAC Item.
  * @param {AbortSignal} signal Cancellation signal for a stale selection.
  * @param {Object|null} [selectedBounds=null] Optional WGS 84 rectangle.
+ * @param {string|null} [temporaryAoiId=null] Optional opaque ready AOI.
  * @param {typeof globalThis.fetch} [fetchImplementation=globalThis.fetch]
  * Browser fetch implementation.
  * @return {Promise<Object>} Validated fixed-bin raster statistics.
@@ -295,17 +296,38 @@ export async function loadCatalogRasterStatistics(
     item,
     signal,
     selectedBounds = null,
+    temporaryAoiId = null,
     fetchImplementation = globalThis.fetch
 ) {
+    if (typeof temporaryAoiId === "function") {
+        fetchImplementation = temporaryAoiId;
+        temporaryAoiId = null;
+    }
+    if (selectedBounds !== null && temporaryAoiId !== null) {
+        throw new Error(
+            "Raster statistics bounds and temporary AOI are mutually exclusive."
+        );
+    }
     const validatedSelectedBounds = selectedBounds === null
         ? null
         : validateRasterSelectedBounds(selectedBounds);
+    if (
+        temporaryAoiId !== null &&
+        (
+            typeof temporaryAoiId !== "string" ||
+            !/^[A-Za-z0-9_-]{32}$/.test(temporaryAoiId)
+        )
+    ) {
+        throw new Error("Temporary AOI identity is invalid.");
+    }
     const requestDocument = {
         collectionId: item.collection,
         itemId: item.id
     };
     if (validatedSelectedBounds !== null) {
         requestDocument.selectedBounds = validatedSelectedBounds;
+    } else if (temporaryAoiId !== null) {
+        requestDocument.temporaryAoiId = temporaryAoiId;
     }
     const response = await fetchImplementation.call(
         globalThis,
@@ -328,7 +350,8 @@ export async function loadCatalogRasterStatistics(
     }
     return validateRasterStatisticsForSelection(
         await response.json(),
-        validatedSelectedBounds
+        validatedSelectedBounds,
+        temporaryAoiId
     );
 }
 

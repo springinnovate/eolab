@@ -80,6 +80,17 @@ export const SELECTED_RASTER_STATISTICS = Object.freeze({
   selectedBounds: SELECTED_BOUNDS,
 });
 
+/** @type {string} Representative opaque ready temporary-AOI identity. */
+export const TEMPORARY_AOI_ID = "temporaryAoiIdentity012345678901";
+
+/** @type {Readonly<Object>} Representative temporary-AOI statistics. */
+export const TEMPORARY_AOI_RASTER_STATISTICS = Object.freeze({
+  ...RASTER_STATISTICS,
+  scope: "temporaryAoi",
+  selectedBounds: null,
+  temporaryAoiId: TEMPORARY_AOI_ID,
+});
+
 /** @type {Readonly<Object>} Constant-value raster statistics. */
 export const CONSTANT_RASTER_STATISTICS = Object.freeze({
   ...RASTER_STATISTICS,

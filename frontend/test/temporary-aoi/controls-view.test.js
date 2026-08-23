@@ -82,6 +82,9 @@ function createDocumentFixture() {
     "#temporary-aoi-upload-form",
     "#temporary-aoi-file",
     "#upload-temporary-aoi",
+    "#temporary-aoi-upload-progress-container",
+    "#temporary-aoi-upload-progress",
+    "#temporary-aoi-upload-progress-detail",
     "#temporary-aoi-selection-form",
     "#temporary-aoi-dataset",
     "#temporary-aoi-selection-filename",
@@ -159,6 +162,19 @@ test("temporary AOI controls render selection, metadata, visibility, errors, and
   assert.equal(view.fileInput.disabled, true);
   assert.equal(view.status.textContent, "Validating…");
 
+  view.renderUploadProgress({
+    loadedBytes: 512 * 1024,
+    totalBytes: 1024 * 1024,
+    transferPercent: 50,
+    approximatePercent: 35,
+    stageMessage: "Uploading layers.gpkg…",
+  });
+  assert.equal(view.progressContainer.hidden, false);
+  assert.equal(view.progress.value, 35);
+  assert.match(view.progressDetail.textContent, /512 KiB of 1\.0 MiB uploaded/);
+  assert.match(view.progressDetail.textContent, /50% transfer/);
+  assert.match(view.progress.getAttribute("aria-valuetext"), /35% complete/);
+
   view.renderSelection({
     filename: "layers.gpkg",
     choices: [
@@ -185,6 +201,7 @@ test("temporary AOI controls render selection, metadata, visibility, errors, and
   assert.equal(view.toggleButton.getAttribute("aria-pressed"), "true");
   assert.equal(view.toggleButton.textContent, "Hide");
   assert.equal(view.uploadButton.textContent, "Replace AOI");
+  assert.equal(view.progressContainer.hidden, true);
 
   view.renderVisibility(false);
   assert.equal(view.toggleButton.getAttribute("aria-pressed"), "false");

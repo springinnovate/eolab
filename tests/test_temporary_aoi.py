@@ -16,6 +16,7 @@ from eolab_app.routes.temporary_aois import (
     MAX_MULTIPART_BODY_BYTES,
     create_temporary_aoi_router,
 )
+from eolab_app.sampling_area import SamplingAreaUnavailableError
 from eolab_app.temporary_aoi.service import TemporaryAoiService
 from eolab_app.temporary_aoi.validation import (
     MAX_UPLOAD_BYTES,
@@ -184,6 +185,58 @@ def test_single_layer_geopackage_returns_bounded_wgs84_geometry_and_removes(
     close_service(service)
 
 
+def test_temporary_aoi_sampling_port_returns_only_ready_polygonal_geometry(
+    tmp_path: Path,
+) -> None:
+    """Resolve immutable polygons while rejecting ready non-areal uploads.
+
+    Args:
+        tmp_path: Isolated parent for fixture and service storage.
+
+    Returns:
+        None.
+    """
+    polygon_path = tmp_path / "polygon.gpkg"
+    point_path = tmp_path / "point.gpkg"
+    write_geopackage_layer(polygon_path, "area")
+    write_geopackage_layer(
+        point_path,
+        "marker",
+        crs="EPSG:4326",
+        geometry_type="Point",
+        geometry={"type": "Point", "coordinates": [-122, 48]},
+    )
+    polygon_service = TemporaryAoiService(tmp_path / "temporary-polygon-sampling")
+    point_service = TemporaryAoiService(tmp_path / "temporary-point-sampling")
+    polygon_client = build_client(polygon_service)
+    point_client = build_client(point_service)
+    with polygon_path.open("rb") as source:
+        polygon_response = polygon_client.post(
+            "/api/temporary-aois",
+            files={"file": ("polygon.gpkg", source)},
+        ).json()
+    with point_path.open("rb") as source:
+        point_response = point_client.post(
+            "/api/temporary-aois",
+            files={"file": ("point.gpkg", source)},
+        ).json()
+
+    resolved = asyncio.run(
+        polygon_service.resolve_for_sampling(polygon_response["id"])
+    )
+
+    assert resolved.identity.reference == polygon_response["id"]
+    assert resolved.bounds == tuple(polygon_response["bbox"])
+    assert len(resolved.geometries) == 1
+    assert resolved.geometries[0].geometry_type == "Polygon"
+    assert "geometry" not in resolved.__dict__
+    with pytest.raises(SamplingAreaUnavailableError, match="no polygonal area"):
+        asyncio.run(point_service.resolve_for_sampling(point_response["id"]))
+
+    close_service(polygon_service)
+    close_service(point_service)
+
+
 def test_multiple_geopackage_layers_require_opaque_selection(
     tmp_path: Path,
 ) -> None:
@@ -314,6 +367,10 @@ def test_zipped_shapefile_upload_extracts_safely_and_cleans_up(
     assert document["selectedDataset"] == "nested/habitat.shp"
     assert document["bbox"] == [-123, 47, -122, 48]
     assert str(service.root_path) not in str(document)
+    resolved = asyncio.run(service.resolve_for_sampling(document["id"]))
+    assert resolved.identity.reference == document["id"]
+    assert len(resolved.geometries) == 1
+    assert resolved.geometries[0].geometry_type == "Polygon"
     assert client.delete(f"/api/temporary-aois/{document['id']}").status_code == 204
     assert not any(service.root_path.iterdir())
     close_service(service)
