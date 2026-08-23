@@ -76,6 +76,9 @@ function createView() {
     renderBusy(message) {
       this.calls.push(["busy", message]);
     },
+    renderUploadProgress(progress) {
+      this.calls.push(["progress", progress]);
+    },
     renderSelection(pending) {
       this.calls.push(["selection", pending]);
     },
@@ -176,6 +179,53 @@ function createCoordinator(apiClient) {
   });
   return { clock, coordinator, layer, view };
 }
+
+test("upload progress reports bytes and capped approximate server stages", async () => {
+  let resolveUpload;
+  const fixture = createCoordinator({
+    upload(file, _replacementId, onProgress) {
+      onProgress({
+        loadedBytes: file.size / 2,
+        totalBytes: file.size,
+        uploadComplete: false,
+      });
+      onProgress({
+        loadedBytes: file.size,
+        totalBytes: file.size,
+        uploadComplete: true,
+      });
+      return new Promise((resolve) => {
+        resolveUpload = resolve;
+      });
+    },
+  });
+
+  const upload = fixture.coordinator.handleUpload(createEvent());
+  const initialProgress = fixture.view.calls.filter(
+    (call) => call[0] === "progress",
+  );
+  assert.equal(initialProgress[1][1].transferPercent, 50);
+  assert.equal(initialProgress[1][1].approximatePercent, 35);
+  assert.equal(initialProgress[2][1].transferPercent, 100);
+  assert.equal(initialProgress[2][1].approximatePercent, 75);
+
+  const stageTimers = [...fixture.clock.timers.keys()];
+  fixture.clock.run(stageTimers[0]);
+  fixture.clock.run(stageTimers[1]);
+  const stagedProgress = fixture.view.calls.filter(
+    (call) => call[0] === "progress",
+  );
+  assert.equal(stagedProgress.at(-2)[1].approximatePercent, 85);
+  assert.match(stagedProgress.at(-2)[1].stageMessage, /validating spatial/);
+  assert.equal(stagedProgress.at(-1)[1].approximatePercent, 92);
+  assert.match(stagedProgress.at(-1)[1].stageMessage, /WGS 84/);
+
+  resolveUpload(READY_AOI);
+  await upload;
+
+  assert.equal(fixture.coordinator.uploadProgressTimers.size, 0);
+  assert.equal(fixture.coordinator.activeAoi, READY_AOI);
+});
 
 test("single-dataset upload displays and zooms one independent AOI", async () => {
   const uploads = [];

@@ -63,6 +63,25 @@ test("temporary AOI status and actionable errors are adjacent live regions", () 
   );
 });
 
+test("temporary AOI upload progress is native, labeled, and described", () => {
+  assert.match(
+    MARKUP,
+    /<label for="temporary-aoi-upload-progress">\s*Approximate upload progress\s*<\/label>/s,
+  );
+  assert.match(
+    MARKUP,
+    /<progress[^>]*id="temporary-aoi-upload-progress"[^>]*max="100"[^>]*value="0"[^>]*aria-describedby="temporary-aoi-upload-progress-detail temporary-aoi-status"/s,
+  );
+  assert.match(
+    STYLESHEET,
+    /\.temporary-aoi-upload-progress progress\s*\{[^}]*width:\s*100%[^}]*accent-color:/s,
+  );
+  assert.match(
+    STYLESHEET,
+    /\.temporary-aoi-upload-progress\[hidden\][^{]*\{[^}]*display:\s*none/s,
+  );
+});
+
 test("temporary AOI layout remains bounded and responsive without taking Catalog scrolling", () => {
   assert.match(
     STYLESHEET,

@@ -6,6 +6,12 @@ import { TemporaryAoiControlsView } from "./controls-view.js";
 import { TemporaryAoiLayerController } from "./leaflet.js";
 
 const MAX_TIMER_DELAY_MILLISECONDS = 2_147_483_647;
+const UPLOAD_TRANSFER_PROGRESS_CEILING = 70;
+const UPLOAD_SERVER_RECEIVED_PERCENT = 75;
+const UPLOAD_VALIDATION_PERCENT = 85;
+const UPLOAD_GEOMETRY_PERCENT = 92;
+const UPLOAD_VALIDATION_STAGE_DELAY_MILLISECONDS = 600;
+const UPLOAD_GEOMETRY_STAGE_DELAY_MILLISECONDS = 1_800;
 
 /**
  * Copy only lifecycle and display identity across the histogram integration.
@@ -70,6 +76,7 @@ export class TemporaryAoiCoordinator {
         this.pendingUpload = null;
         this.activeExpirationTimer = null;
         this.pendingExpirationTimer = null;
+        this.uploadProgressTimers = new Set();
         this.operationSequence = 0;
         this.destroyed = false;
         this.samplingAreaListeners = new Set();
@@ -105,20 +112,35 @@ export class TemporaryAoiCoordinator {
             return;
         }
         const operationSequence = ++this.operationSequence;
+        this.clearUploadProgressTimers();
+        const filename = file.name ?? "selected AOI file";
         this.controlsView.renderBusy(
             this.activeAoi === null
-                ? "Uploading and validating the temporary AOI…"
-                : "Uploading and validating the replacement AOI…"
+                ? "Starting the temporary AOI upload…"
+                : "Starting the replacement AOI upload…"
         );
+        this.controlsView.renderUploadProgress({
+            loadedBytes: 0,
+            totalBytes: file.size,
+            transferPercent: 0,
+            approximatePercent: 0,
+            stageMessage: `Uploading ${filename}…`,
+        });
         try {
             const response = await this.apiClient.upload(
                 file,
-                this.activeAoi?.id ?? null
+                this.activeAoi?.id ?? null,
+                (progress) => this.handleUploadProgress(
+                    operationSequence,
+                    filename,
+                    progress
+                )
             );
             if (!this.isCurrentOperation(operationSequence)) {
                 await this.removeStaleResponse(response);
                 return;
             }
+            this.clearUploadProgressTimers();
             if (response.state === "selectionRequired") {
                 this.setPendingUpload(response);
                 this.controlsView.renderSelection(response);
@@ -127,6 +149,7 @@ export class TemporaryAoiCoordinator {
             this.activateReadyAoi(response);
         } catch (error) {
             if (this.isCurrentOperation(operationSequence)) {
+                this.clearUploadProgressTimers();
                 this.restoreCurrentPresentation();
                 this.controlsView.renderError(
                     error,
@@ -134,6 +157,109 @@ export class TemporaryAoiCoordinator {
                 );
             }
         }
+    }
+
+    /**
+     * Convert observable transfer bytes to capped approximate total progress.
+     *
+     * Transfer bytes are browser measured. Percentages after upload completion
+     * are deliberately approximate because the synchronous server operation
+     * exposes no internal progress endpoint.
+     *
+     * @param {number} operationSequence Upload operation owning the progress.
+     * @param {string} filename Display-only selected filename.
+     * @param {{loadedBytes:number,totalBytes:number,uploadComplete:boolean}}
+     * progress Observable upload transfer state.
+     * @return {void}
+     */
+    handleUploadProgress(operationSequence, filename, progress) {
+        if (!this.isCurrentOperation(operationSequence)) {
+            return;
+        }
+        const transferPercent = progress.totalBytes > 0
+            ? Math.min(100, progress.loadedBytes / progress.totalBytes * 100)
+            : progress.uploadComplete ? 100 : 0;
+        if (!progress.uploadComplete) {
+            this.controlsView.renderUploadProgress({
+                loadedBytes: progress.loadedBytes,
+                totalBytes: progress.totalBytes,
+                transferPercent,
+                approximatePercent: Math.round(
+                    transferPercent / 100 * UPLOAD_TRANSFER_PROGRESS_CEILING
+                ),
+                stageMessage: `Uploading ${filename}…`,
+            });
+            return;
+        }
+        this.controlsView.renderUploadProgress({
+            loadedBytes: progress.totalBytes,
+            totalBytes: progress.totalBytes,
+            transferPercent: 100,
+            approximatePercent: UPLOAD_SERVER_RECEIVED_PERCENT,
+            stageMessage:
+                "Upload complete. Server is checking the file structure…",
+        });
+        this.scheduleUploadProcessingStages(
+            operationSequence,
+            progress.totalBytes
+        );
+    }
+
+    /**
+     * Schedule honest time-based estimates for synchronous server processing.
+     *
+     * The estimates stop below completion and are canceled as soon as the
+     * authoritative response arrives.
+     *
+     * @param {number} operationSequence Upload operation owning the stages.
+     * @param {number} totalBytes Fully transferred selected file size.
+     * @return {void}
+     */
+    scheduleUploadProcessingStages(operationSequence, totalBytes) {
+        this.clearUploadProgressTimers();
+        const stages = [
+            {
+                delay: UPLOAD_VALIDATION_STAGE_DELAY_MILLISECONDS,
+                approximatePercent: UPLOAD_VALIDATION_PERCENT,
+                stageMessage:
+                    "Estimated stage: validating spatial datasets and coordinate metadata…",
+            },
+            {
+                delay: UPLOAD_GEOMETRY_STAGE_DELAY_MILLISECONDS,
+                approximatePercent: UPLOAD_GEOMETRY_PERCENT,
+                stageMessage:
+                    "Estimated stage: preparing bounded WGS 84 map geometry…",
+            },
+        ];
+        for (const stage of stages) {
+            let timerIdentifier;
+            timerIdentifier = this.clock.setTimeout(() => {
+                this.uploadProgressTimers.delete(timerIdentifier);
+                if (!this.isCurrentOperation(operationSequence)) {
+                    return;
+                }
+                this.controlsView.renderUploadProgress({
+                    loadedBytes: totalBytes,
+                    totalBytes,
+                    transferPercent: 100,
+                    approximatePercent: stage.approximatePercent,
+                    stageMessage: stage.stageMessage,
+                });
+            }, stage.delay);
+            this.uploadProgressTimers.add(timerIdentifier);
+        }
+    }
+
+    /**
+     * Cancel all pending approximate upload-processing stage updates.
+     *
+     * @return {void}
+     */
+    clearUploadProgressTimers() {
+        for (const timerIdentifier of this.uploadProgressTimers) {
+            this.clock.clearTimeout(timerIdentifier);
+        }
+        this.uploadProgressTimers.clear();
     }
 
     /**
@@ -149,6 +275,7 @@ export class TemporaryAoiCoordinator {
         }
         const pendingUpload = this.pendingUpload;
         const operationSequence = ++this.operationSequence;
+        this.clearUploadProgressTimers();
         this.controlsView.renderBusy("Preparing the selected spatial dataset…");
         try {
             const readyAoi = await this.apiClient.selectDataset(
@@ -514,6 +641,7 @@ export class TemporaryAoiCoordinator {
     destroy() {
         this.destroyed = true;
         this.operationSequence += 1;
+        this.clearUploadProgressTimers();
         this.clearPendingUpload();
         this.clearActiveAoi();
         this.samplingAreaListeners.clear();

@@ -11,6 +11,32 @@ const MAX_BROWSER_POSITIONS = 100_000;
 const MAX_IDENTIFIER_LENGTH = 256;
 const MAX_DISPLAY_TEXT_LENGTH = 1_024;
 
+/**
+ * @typedef {Object} TemporaryAoiUploadProgress
+ * @property {number} loadedBytes Approximate file bytes transferred.
+ * @property {number} totalBytes Selected file size in bytes.
+ * @property {boolean} uploadComplete Whether the request body reached the server.
+ */
+
+/**
+ * @callback TemporaryAoiUploadProgressHandler
+ * @param {TemporaryAoiUploadProgress} progress Current transfer progress.
+ * @return {void}
+ */
+
+/**
+ * Create the browser request used for observable multipart upload progress.
+ *
+ * @return {XMLHttpRequest} Fresh same-origin upload request.
+ * @throws {Error} If the browser lacks XMLHttpRequest support.
+ */
+function createBrowserUploadRequest() {
+    if (typeof globalThis.XMLHttpRequest !== "function") {
+        throw new Error("Observable browser uploads are not supported.");
+    }
+    return new globalThis.XMLHttpRequest();
+}
+
 /** HTTP failure carrying the temporary-AOI response status for lifecycle UI. */
 export class TemporaryAoiHttpError extends Error {
     /**
@@ -51,6 +77,33 @@ async function temporaryAoiRequestError(response, action) {
         );
     } catch {
         return new TemporaryAoiHttpError(fallbackMessage, response.status);
+    }
+}
+
+/**
+ * Convert one failed XMLHttpRequest upload to a safe user-facing error.
+ *
+ * @param {XMLHttpRequest} request Completed failed upload request.
+ * @param {string} action User-facing action that failed.
+ * @return {Error} Structured service detail or a status fallback.
+ */
+function temporaryAoiUploadRequestError(request, action) {
+    const fallbackMessage = `${action} failed (${request.status}).`;
+    const contentType = request.getResponseHeader("content-type") ?? "";
+    if (!contentType.toLowerCase().includes("application/json")) {
+        return new TemporaryAoiHttpError(fallbackMessage, request.status);
+    }
+    try {
+        const errorDocument = JSON.parse(request.responseText);
+        return new TemporaryAoiHttpError(
+            typeof errorDocument.detail === "string" &&
+                errorDocument.detail.trim() !== ""
+                ? errorDocument.detail
+                : fallbackMessage,
+            request.status
+        );
+    } catch {
+        return new TemporaryAoiHttpError(fallbackMessage, request.status);
     }
 }
 
@@ -332,9 +385,26 @@ export class TemporaryAoiApiClient {
      *
      * @param {typeof globalThis.fetch} [fetchImplementation=globalThis.fetch]
      * Browser fetch implementation.
+     * @param {(() => XMLHttpRequest)|null} [uploadRequestFactory] Optional
+     * observable upload-request factory; browsers use XMLHttpRequest by default.
+     * @throws {TypeError} If the observable upload factory is not callable.
      */
-    constructor(fetchImplementation = globalThis.fetch) {
+    constructor(
+        fetchImplementation = globalThis.fetch,
+        uploadRequestFactory = (
+            typeof globalThis.XMLHttpRequest === "function"
+                ? createBrowserUploadRequest
+                : null
+        )
+    ) {
+        if (
+            uploadRequestFactory !== null &&
+            typeof uploadRequestFactory !== "function"
+        ) {
+            throw new TypeError("Temporary AOI upload request factory is invalid.");
+        }
         this.fetchImplementation = fetchImplementation;
+        this.uploadRequestFactory = uploadRequestFactory;
     }
 
     /**
@@ -342,12 +412,17 @@ export class TemporaryAoiApiClient {
      *
      * @param {File|Blob} file User-selected bounded multipart file.
      * @param {string|null} [replacementId=null] Opaque current AOI identifier.
+     * @param {TemporaryAoiUploadProgressHandler} [onProgress=() => {}]
+     * Receives observable file-byte transfer progress.
      * @return {Promise<Object>} Ready or selection-required upload response.
      * @throws {Error} If the request fails or the response is invalid.
      */
-    async upload(file, replacementId = null) {
+    async upload(file, replacementId = null, onProgress = () => {}) {
         if (!(file instanceof Blob)) {
             throw new TypeError("Temporary AOI upload requires a file.");
+        }
+        if (typeof onProgress !== "function") {
+            throw new TypeError("Temporary AOI upload progress handler is invalid.");
         }
         const formData = new FormData();
         formData.append("file", file, file.name ?? "temporary-aoi-upload");
@@ -357,6 +432,102 @@ export class TemporaryAoiApiClient {
                 validateOpaqueIdentifier(replacementId, "Replacement identifier")
             );
         }
+        if (this.uploadRequestFactory !== null) {
+            return this.uploadWithObservableProgress(
+                file,
+                formData,
+                onProgress
+            );
+        }
+        return this.uploadWithFetchFallback(file, formData, onProgress);
+    }
+
+    /**
+     * Upload with XMLHttpRequest so file-byte transfer progress is observable.
+     *
+     * @param {File|Blob} file Selected bounded upload.
+     * @param {FormData} formData Strict multipart request body.
+     * @param {TemporaryAoiUploadProgressHandler} onProgress Progress receiver.
+     * @return {Promise<Object>} Ready or selection-required upload response.
+     * @throws {Error} If transport, HTTP, JSON, or response validation fails.
+     */
+    uploadWithObservableProgress(file, formData, onProgress) {
+        const request = this.uploadRequestFactory();
+        return new Promise((resolve, reject) => {
+            request.open("POST", "/api/temporary-aois");
+            request.setRequestHeader("Accept", "application/json");
+            onProgress({
+                loadedBytes: 0,
+                totalBytes: file.size,
+                uploadComplete: false,
+            });
+            request.upload.addEventListener("progress", (event) => {
+                const transferFraction = event.lengthComputable && event.total > 0
+                    ? Math.min(1, event.loaded / event.total)
+                    : 0;
+                onProgress({
+                    loadedBytes: Math.round(file.size * transferFraction),
+                    totalBytes: file.size,
+                    uploadComplete: false,
+                });
+            });
+            request.upload.addEventListener("load", () => {
+                onProgress({
+                    loadedBytes: file.size,
+                    totalBytes: file.size,
+                    uploadComplete: true,
+                });
+            });
+            request.addEventListener("load", () => {
+                if (request.status < 200 || request.status >= 300) {
+                    reject(temporaryAoiUploadRequestError(
+                        request,
+                        "Temporary AOI upload"
+                    ));
+                    return;
+                }
+                try {
+                    resolve(validateTemporaryAoiUploadResponse(
+                        JSON.parse(request.responseText)
+                    ));
+                } catch (error) {
+                    reject(error);
+                }
+            });
+            request.addEventListener("error", () => {
+                reject(new TemporaryAoiHttpError(
+                    "Temporary AOI upload failed because the network request was interrupted.",
+                    0
+                ));
+            });
+            request.addEventListener("abort", () => {
+                reject(new TemporaryAoiHttpError(
+                    "Temporary AOI upload was canceled.",
+                    0
+                ));
+            });
+            request.send(formData);
+        });
+    }
+
+    /**
+     * Preserve upload support when XMLHttpRequest is unavailable.
+     *
+     * Fetch cannot expose request-body bytes, so this fallback reports only
+     * start and server-processing boundaries while retaining response parity.
+     *
+     * @param {File|Blob} file Selected bounded upload.
+     * @param {FormData} formData Strict multipart request body.
+     * @param {TemporaryAoiUploadProgressHandler} onProgress Progress receiver.
+     * @return {Promise<Object>} Ready or selection-required upload response.
+     * @throws {Error} If the request fails or the response is invalid.
+     */
+    async uploadWithFetchFallback(file, formData, onProgress) {
+        onProgress({
+            loadedBytes: 0,
+            totalBytes: file.size,
+            uploadComplete: false,
+        });
         const response = await this.fetchImplementation.call(
             globalThis,
             "/api/temporary-aois",
@@ -366,6 +537,11 @@ export class TemporaryAoiApiClient {
                 body: formData,
             }
         );
+        onProgress({
+            loadedBytes: file.size,
+            totalBytes: file.size,
+            uploadComplete: true,
+        });
         if (!response.ok) {
             throw await temporaryAoiRequestError(response, "Temporary AOI upload");
         }
