@@ -66,6 +66,7 @@ class TemporaryAoiService:
         root_path: Path | None = None,
         *,
         ttl: timedelta = TEMPORARY_AOI_TTL,
+        maximum_upload_bytes: int = MAX_UPLOAD_BYTES,
         processing_seconds: float = PROCESSING_TIME_SECONDS,
         now: UtcNow = utc_now,
         forbidden_roots: tuple[Path, ...] = (),
@@ -77,18 +78,24 @@ class TemporaryAoiService:
                 creates a unique directory under the operating-system temp
                 location, outside the repository and scan source.
             ttl: Inactivity-independent lifetime assigned at upload time.
+            maximum_upload_bytes: Maximum uploaded file bytes accepted by the
+                lifecycle boundary.
             processing_seconds: Maximum geometry-processing duration.
             now: UTC clock dependency used for deterministic lifecycle tests.
             forbidden_roots: Repository and mounted-source roots that must not
                 contain or overlap temporary storage.
 
         Raises:
-            ValueError: If TTL or processing limits are not positive, the
-                supplied root is relative, or the root cannot be isolated.
+            ValueError: If TTL, upload, or processing limits are not positive,
+                the supplied root is relative, or the root cannot be isolated.
             OSError: If the storage root cannot be created.
         """
         if ttl.total_seconds() <= 0:
             raise ValueError("Temporary AOI TTL must be greater than zero")
+        if maximum_upload_bytes <= 0:
+            raise ValueError(
+                "Temporary AOI upload limit must be greater than zero"
+            )
         if processing_seconds <= 0:
             raise ValueError(
                 "Temporary AOI processing limit must be greater than zero"
@@ -114,6 +121,7 @@ class TemporaryAoiService:
                     "mounted scan source"
                 )
         self._ttl = ttl
+        self._maximum_upload_bytes = maximum_upload_bytes
         self._processing_seconds = processing_seconds
         self._now = now
         self._records: dict[str, TemporaryAoiRecord] = {}
@@ -182,7 +190,8 @@ class TemporaryAoiService:
         Raises:
             TemporaryAoiRequestError: If filename or replacement identity is
                 invalid.
-            TemporaryAoiTooLargeError: If streamed file bytes exceed 25 MiB.
+            TemporaryAoiTooLargeError: If streamed file bytes exceed the
+                configured upload ceiling.
             TemporaryAoiValidationError: If container or geometry is invalid.
             TemporaryAoiNotFoundError: If a replacement is absent or expired.
             OSError: If isolated server storage cannot be used.
@@ -495,8 +504,7 @@ class TemporaryAoiService:
             )
         return suffix
 
-    @staticmethod
-    def _copy_upload(content: BinaryIO, destination: Path) -> None:
+    def _copy_upload(self, content: BinaryIO, destination: Path) -> None:
         """Copy a rewound multipart stream under the file-size ceiling.
 
         Args:
@@ -507,7 +515,8 @@ class TemporaryAoiService:
             None.
 
         Raises:
-            TemporaryAoiTooLargeError: If content exceeds 25 MiB.
+            TemporaryAoiTooLargeError: If content exceeds the configured file
+                byte ceiling.
             TemporaryAoiRequestError: If the uploaded file is empty.
             OSError: If the destination cannot be written.
         """
@@ -515,9 +524,10 @@ class TemporaryAoiService:
         with destination.open("xb") as target:
             while chunk := content.read(UPLOAD_COPY_CHUNK_BYTES):
                 copied_bytes += len(chunk)
-                if copied_bytes > MAX_UPLOAD_BYTES:
+                if copied_bytes > self._maximum_upload_bytes:
                     raise TemporaryAoiTooLargeError(
-                        f"AOI uploads cannot exceed {MAX_UPLOAD_BYTES} bytes"
+                        "AOI uploads cannot exceed "
+                        f"{self._maximum_upload_bytes} bytes"
                     )
                 target.write(chunk)
         if copied_bytes == 0:

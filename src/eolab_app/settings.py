@@ -42,6 +42,7 @@ class Settings:
         scan_catalog_write_timeout_seconds: Per-operation catalog write timeout.
         scan_catalog_error_detail_limit: Upstream catalog error text limit.
         temporary_aoi_ttl_seconds: Lifetime assigned to a temporary AOI upload.
+        temporary_aoi_max_upload_bytes: Maximum temporary AOI file size.
         basemap_url: Browser basemap tile URL template.
         basemap_attribution: Browser basemap attribution.
         initial_latitude: Initial map-center latitude.
@@ -76,6 +77,7 @@ class Settings:
     scan_catalog_write_timeout_seconds: float
     scan_catalog_error_detail_limit: int
     temporary_aoi_ttl_seconds: float
+    temporary_aoi_max_upload_bytes: int
     basemap_url: str
     basemap_attribution: str
     initial_latitude: float
@@ -161,6 +163,10 @@ class Settings:
         ):
             raise ValueError(
                 "TEMPORARY_AOI_TTL_SECONDS must be greater than zero"
+            )
+        if self.temporary_aoi_max_upload_bytes < 1:
+            raise ValueError(
+                "TEMPORARY_AOI_MAX_UPLOAD_BYTES must be greater than zero"
             )
         if not self.scan_mount_path.is_absolute():
             raise ValueError("SCAN_MOUNT_PATH must be an absolute path")
@@ -325,6 +331,9 @@ def load_settings(
         ),
         temporary_aoi_ttl_seconds=float(
             os.environ["TEMPORARY_AOI_TTL_SECONDS"]
+        ),
+        temporary_aoi_max_upload_bytes=int(
+            os.environ["TEMPORARY_AOI_MAX_UPLOAD_BYTES"]
         ),
         basemap_url=os.environ["BASEMAP_URL"].strip(),
         basemap_attribution=os.environ["BASEMAP_ATTRIBUTION"].strip(),

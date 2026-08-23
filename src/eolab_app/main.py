@@ -146,6 +146,9 @@ def create_app(
         ttl=timedelta(
             seconds=app_global_configuration.temporary_aoi_ttl_seconds
         ),
+        maximum_upload_bytes=(
+            app_global_configuration.temporary_aoi_max_upload_bytes
+        ),
         forbidden_roots=(
             Path.cwd(),
             app_global_configuration.scan_mount_path,
@@ -228,7 +231,10 @@ def create_app(
     )
     application.include_router(create_diagnostics_router(rendering_diagnostics))
     application.include_router(
-        create_temporary_aoi_router(temporary_aoi_service)
+        create_temporary_aoi_router(
+            temporary_aoi_service,
+            app_global_configuration.temporary_aoi_max_upload_bytes,
+        )
     )
     application.include_router(
         create_stac_proxy_router(

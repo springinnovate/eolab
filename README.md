@@ -74,6 +74,7 @@ EOLab no longer loads a sample Collection during deployment. Upgrading does not 
 | `EOLAB_SCAN_CATALOG_WRITE_TIMEOUT_SECONDS` | `120`                                      | Per-operation STAC API write timeout                |
 | `EOLAB_SCAN_CATALOG_ERROR_DETAIL_LIMIT` | `500`                                        | Upstream error characters retained in scan status   |
 | `EOLAB_TEMPORARY_AOI_TTL_SECONDS` | `1800`                                             | Temporary AOI lifetime after upload                  |
+| `EOLAB_TEMPORARY_AOI_MAX_UPLOAD_BYTES` | `26214400`                                  | Maximum temporary AOI file bytes                     |
 | `EOLAB_APP_TITLE`                  | `EOLab`                                           | Browser and panel title                             |
 | `EOLAB_APP_SUBTITLE`               | `Explore, visualize, and analyze Earth observation data` | Short panel description                     |
 | `EOLAB_CATALOG_URL`                | `/stac`                                           | Browser-facing STAC API path                        |

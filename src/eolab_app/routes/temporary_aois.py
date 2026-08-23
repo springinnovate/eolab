@@ -178,15 +178,18 @@ def temporary_aoi_http_exception(error: TemporaryAoiError) -> HTTPException:
     raise TypeError(f"Unmapped temporary AOI failure: {type(error).__name__}")
 
 
-async def bounded_request_stream(request: Request) -> AsyncIterator[bytes]:
+async def bounded_request_stream(
+    request: Request,
+    maximum_body_bytes: int = MAX_MULTIPART_BODY_BYTES,
+) -> AsyncIterator[bytes]:
     """Yield request chunks while enforcing the complete body-size ceiling.
 
     Args:
         request: Incoming multipart upload request.
+        maximum_body_bytes: Maximum complete multipart request bytes.
 
     Yields:
-        ASGI request body chunks within the 25 MiB file limit plus 64 KiB of
-        bounded multipart framing.
+        ASGI request body chunks within the configured body limit.
 
     Raises:
         TemporaryAoiTooLargeError: If the streamed body exceeds the bounded
@@ -195,18 +198,23 @@ async def bounded_request_stream(request: Request) -> AsyncIterator[bytes]:
     received_bytes = 0
     async for chunk in request.stream():
         received_bytes += len(chunk)
-        if received_bytes > MAX_MULTIPART_BODY_BYTES:
+        if received_bytes > maximum_body_bytes:
             raise TemporaryAoiTooLargeError(
-                f"AOI multipart requests cannot exceed {MAX_MULTIPART_BODY_BYTES} bytes"
+                "AOI multipart requests cannot exceed "
+                f"{maximum_body_bytes} bytes"
             )
         yield chunk
 
 
-def validate_declared_body_size(request: Request) -> None:
+def validate_declared_body_size(
+    request: Request,
+    maximum_body_bytes: int = MAX_MULTIPART_BODY_BYTES,
+) -> None:
     """Reject malformed or excessive declared multipart body lengths.
 
     Args:
         request: Incoming multipart upload request.
+        maximum_body_bytes: Maximum complete multipart request bytes.
 
     Returns:
         None.
@@ -229,18 +237,23 @@ def validate_declared_body_size(request: Request) -> None:
         raise TemporaryAoiRequestError(
             "The AOI upload Content-Length cannot be negative"
         )
-    if declared_bytes > MAX_MULTIPART_BODY_BYTES:
+    if declared_bytes > maximum_body_bytes:
         raise TemporaryAoiTooLargeError(
-            f"AOI multipart requests cannot exceed {MAX_MULTIPART_BODY_BYTES} bytes"
+            "AOI multipart requests cannot exceed "
+            f"{maximum_body_bytes} bytes"
         )
 
 
-async def parse_temporary_aoi_form(request: Request) -> FormData:
+async def parse_temporary_aoi_form(
+    request: Request,
+    maximum_file_bytes: int = MAX_UPLOAD_BYTES,
+) -> FormData:
     """Parse the exact bounded multipart upload form.
 
     Args:
         request: Incoming request expected to contain one file and at most one
             replacement identifier.
+        maximum_file_bytes: Maximum bytes accepted for the uploaded file part.
 
     Returns:
         Parsed form whose caller must close after using its UploadFile.
@@ -251,7 +264,8 @@ async def parse_temporary_aoi_form(request: Request) -> FormData:
         TemporaryAoiTooLargeError: If declared or streamed bytes exceed a
             resource ceiling.
     """
-    validate_declared_body_size(request)
+    maximum_body_bytes = maximum_file_bytes + MAX_MULTIPART_FRAMING_BYTES
+    validate_declared_body_size(request, maximum_body_bytes)
     if request.headers.get("content-type", "").partition(";")[0].lower() != (
         "multipart/form-data"
     ):
@@ -260,11 +274,11 @@ async def parse_temporary_aoi_form(request: Request) -> FormData:
         )
     parser = BoundedMultiPartParser(
         request.headers,
-        bounded_request_stream(request),
+        bounded_request_stream(request, maximum_body_bytes),
         max_files=1,
         max_fields=1,
         max_part_size=1024,
-        maximum_file_bytes=MAX_UPLOAD_BYTES,
+        maximum_file_bytes=maximum_file_bytes,
     )
     try:
         form = await parser.parse()
@@ -313,16 +327,23 @@ async def parse_temporary_aoi_form(request: Request) -> FormData:
 
 def create_temporary_aoi_router(
     controller: TemporaryAoiController,
+    maximum_file_bytes: int = MAX_UPLOAD_BYTES,
 ) -> APIRouter:
     """Create focused upload, selection, and removal routes.
 
     Args:
         controller: Application lifecycle service receiving validated route
             inputs and owning all temporary storage.
+        maximum_file_bytes: Maximum bytes accepted for one uploaded file.
 
     Returns:
         Router exposing the temporary-AOI HTTP contract.
+
+    Raises:
+        ValueError: If the configured upload limit is not positive.
     """
+    if maximum_file_bytes <= 0:
+        raise ValueError("Temporary AOI upload limit must be greater than zero")
     router = APIRouter(prefix="/api/temporary-aois", tags=["temporary AOI"])
 
     @router.post(
@@ -344,7 +365,7 @@ def create_temporary_aoi_router(
             HTTPException: If multipart, validation, or lifecycle fails.
         """
         try:
-            form = await parse_temporary_aoi_form(request)
+            form = await parse_temporary_aoi_form(request, maximum_file_bytes)
             try:
                 upload_file = cast(UploadFile, form["file"])
                 await upload_file.seek(0)

@@ -104,17 +104,23 @@ def write_shapefile(path: Path) -> tuple[Path, ...]:
     return tuple(sorted(path.parent.glob(f"{path.stem}.*")))
 
 
-def build_client(service: TemporaryAoiService) -> TestClient:
+def build_client(
+    service: TemporaryAoiService,
+    maximum_upload_bytes: int = MAX_UPLOAD_BYTES,
+) -> TestClient:
     """Create a minimal application containing only temporary-AOI routes.
 
     Args:
         service: Isolated lifecycle service used by the route.
+        maximum_upload_bytes: Maximum file bytes accepted by the route.
 
     Returns:
         Synchronous FastAPI test client.
     """
     application = FastAPI()
-    application.include_router(create_temporary_aoi_router(service))
+    application.include_router(
+        create_temporary_aoi_router(service, maximum_upload_bytes)
+    )
     return TestClient(application)
 
 
@@ -577,6 +583,50 @@ def test_multipart_allows_exact_file_limit_and_rejects_excessive_body(
     assert "multipart requests" in excessive_body.json()["detail"]
     assert not any(service.root_path.iterdir())
     close_service(service)
+
+
+def test_configured_upload_limit_applies_at_route_and_service_boundaries(
+    tmp_path: Path,
+) -> None:
+    """Apply the deployment file limit during streaming and durable copying.
+
+    Args:
+        tmp_path: Isolated parent for service storage.
+
+    Returns:
+        None.
+    """
+    route_limited_service = TemporaryAoiService(
+        tmp_path / "route-limited",
+        maximum_upload_bytes=8,
+    )
+    route_limited_client = build_client(route_limited_service, 4)
+    route_response = route_limited_client.post(
+        "/api/temporary-aois",
+        files={"file": ("route.gpkg", b"12345")},
+    )
+
+    service_limited_service = TemporaryAoiService(
+        tmp_path / "service-limited",
+        maximum_upload_bytes=4,
+    )
+    service_limited_client = build_client(service_limited_service, 8)
+    service_response = service_limited_client.post(
+        "/api/temporary-aois",
+        files={"file": ("service.gpkg", b"12345")},
+    )
+
+    assert route_response.status_code == 413
+    assert "4-byte limit" in route_response.json()["detail"]
+    assert service_response.status_code == 413
+    assert "cannot exceed 4 bytes" in service_response.json()["detail"]
+    assert (
+        not route_limited_service.root_path.exists()
+        or not any(route_limited_service.root_path.iterdir())
+    )
+    assert not any(service_limited_service.root_path.iterdir())
+    close_service(route_limited_service)
+    close_service(service_limited_service)
 
 
 def test_hard_processing_timeout_terminates_worker_before_cleanup(

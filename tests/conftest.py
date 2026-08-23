@@ -32,6 +32,7 @@ DEFAULT_ENVIRONMENT = {
     "SCAN_CATALOG_WRITE_TIMEOUT_SECONDS": "120",
     "SCAN_CATALOG_ERROR_DETAIL_LIMIT": "500",
     "TEMPORARY_AOI_TTL_SECONDS": "1800",
+    "TEMPORARY_AOI_MAX_UPLOAD_BYTES": "26214400",
     "BASEMAP_URL": "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
     "BASEMAP_ATTRIBUTION": "&copy; OpenStreetMap contributors",
     "INITIAL_LATITUDE": "20",

@@ -35,8 +35,8 @@ the map:
 
 | Resource | Limit |
 | --- | ---: |
-| Multipart request body | 25 MiB file plus 64 KiB multipart framing |
-| Uploaded file | 25 MiB |
+| Multipart request body | Configured file limit plus 64 KiB multipart framing |
+| Uploaded file | `EOLAB_TEMPORARY_AOI_MAX_UPLOAD_BYTES` (25 MiB by default) |
 | ZIP entries | 512 |
 | One extracted ZIP member | 25 MiB |
 | Total extracted ZIP bytes | 100 MiB |
