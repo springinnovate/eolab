@@ -746,6 +746,14 @@ test("formatScanStatusSummary shows recency, live progress, and failures", () =>
     }),
     "Last scan failed at time unavailable",
   );
+  assert.equal(
+    formatScanStatusSummary({
+      state: "cancelled",
+      failed: 0,
+      finishedAt: "2026-08-22T21:07:04Z",
+    }),
+    "Last scan cancelled at 2026-08-22 21:07:04 UTC",
+  );
   assert.throws(
     () => formatScanStatusSummary({ state: "complete", failed: 0 }),
     /Unknown scan state: complete/,
@@ -1035,7 +1043,7 @@ test("buildCatalogItemDetails presents scanned GeoTIFF metadata", () => {
         },
       },
     },
-    [{ id: "eolab-mounted-geotiffs", title: "Mounted GeoTIFFs" }],
+    [{ id: "eolab-mounted-geotiffs", title: "Scanned GeoTIFFs" }],
     "bigboi -- Z:\\bigbucket",
   );
 
@@ -1048,7 +1056,7 @@ test("buildCatalogItemDetails presents scanned GeoTIFF metadata", () => {
     { label: "Item ID", value: "stable-item-id" },
     {
       label: "Collection",
-      value: "Mounted GeoTIFFs (eolab-mounted-geotiffs)",
+      value: "Scanned GeoTIFFs (eolab-mounted-geotiffs)",
     },
     { label: "Dataset type", value: "Raster" },
     { label: "Item datetime", value: "2025-02-11T17:31:52Z" },
@@ -1177,7 +1185,7 @@ test("buildCatalogItemDetails presents mounted Shapefile metadata", () => {
         },
       },
     },
-    [{ id: "eolab-mounted-vectors", title: "Mounted vector datasets" }],
+    [{ id: "eolab-mounted-vectors", title: "Scanned vector datasets" }],
     "bigboi -- Z:\\bigbucket",
   );
 
@@ -1185,7 +1193,7 @@ test("buildCatalogItemDetails presents mounted Shapefile metadata", () => {
     { label: "Item ID", value: "shapefile-stable-id" },
     {
       label: "Collection",
-      value: "Mounted vector datasets (eolab-mounted-vectors)",
+      value: "Scanned vector datasets (eolab-mounted-vectors)",
     },
     { label: "Dataset type", value: "Vector" },
     { label: "Item datetime", value: "2025-04-03T12:30:00Z" },

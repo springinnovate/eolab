@@ -98,7 +98,7 @@ function formatScanTimestamp(timestamp) {
 }
 
 /**
- * Formats the compact mounted-directory scan recency or live progress.
+ * Formats the compact configured-source scan recency or live progress.
  *
  * @param {Object} scanStatus Scan progress returned by the backend.
  * @return {string} Human-readable scan summary.
@@ -131,6 +131,11 @@ export function formatScanStatusSummary(scanStatus) {
         case "failed":
             return (
                 "Last scan failed at " +
+                formatScanTimestamp(scanStatus.finishedAt)
+            );
+        case "cancelled":
+            return (
+                "Last scan cancelled at " +
                 formatScanTimestamp(scanStatus.finishedAt)
             );
         default:

@@ -1040,7 +1040,7 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
 }
 
 /**
- * Displays the current mounted-directory scan state.
+ * Displays the current configured-source scan state.
  *
  * @param {Object} scanStatus Scan progress returned by the backend.
  * @return {void}
@@ -1077,7 +1077,7 @@ function renderScanStatus(scanStatus) {
     const wasRunning = scanStatusDisclosureElement.dataset.running === "true";
 
     startScanButton.disabled = isRunning;
-    startScanButton.textContent = isRunning ? "Scanning…" : "Scan directories";
+    startScanButton.textContent = isRunning ? "Scanning…" : "Scan sources";
     scanStatusSummaryElement.textContent = formatScanStatusSummary(scanStatus);
     // Set defaults only when a scan starts or stops so polling does not
     // override a user's disclosure choices during the same run.
@@ -1127,12 +1127,13 @@ function renderScanStatus(scanStatus) {
     const statusMessages = {
         not_started: "No scan has run since EOLab started.",
         discovering:
-            "Discovering geospatial datasets in the mounted directories.",
+            "Discovering geospatial datasets in the configured sources.",
         scanning: scanStatus.currentFile
-            ? `Latest file: ${scanStatus.currentFile}`
+            ? `Latest dataset: ${scanStatus.currentFile}`
             : "Preparing discovered geospatial datasets.",
         completed: "Scan completed. The catalog has been refreshed.",
-        failed: "The scan stopped before it could complete."
+        failed: "The scan stopped before it could complete.",
+        cancelled: "The scan was cancelled."
     };
     scanStatusElement.textContent =
         statusMessages[scanStatus.state] ??
@@ -1154,7 +1155,7 @@ function renderScanStatus(scanStatus) {
     if (scanStatus.errorsTruncated) {
         const truncatedErrorsMessage = document.createElement("li");
         truncatedErrorsMessage.textContent =
-            "Additional file failures are not shown.";
+            "Additional dataset failures are not shown.";
         scanErrorsElement.append(truncatedErrorsMessage);
     }
 }
@@ -1187,7 +1188,7 @@ async function pollScan(refreshCatalog, refreshWhenComplete) {
 }
 
 /**
- * Starts a mounted-directory scan from the Catalog panel.
+ * Starts a configured-source scan from the Catalog panel.
  *
  * @param {Function} refreshCatalog Reloads the active Catalog search.
  * @return {Promise<void>} Resolves after polling has been scheduled.
@@ -1214,7 +1215,7 @@ async function startScan(refreshCatalog) {
 }
 
 /**
- * Connects the mounted-directory scanner controls.
+ * Connects the configured-source scanner controls.
  *
  * @param {Function} refreshCatalog Reloads the active Catalog search.
  * @return {Promise<void>} Resolves after current scan state is displayed.

@@ -42,7 +42,7 @@ export function applyCatalogSystemState(
 }
 
 /**
- * Disclosures coordinated when the mounted-directory scan state changes.
+ * Disclosures coordinated when the configured-source scan state changes.
  *
  * @typedef {Object} ScanDisclosureElements
  * @property {HTMLDetailsElement} catalogState Outer Catalog state disclosure.
@@ -73,7 +73,7 @@ export function synchronizeScanDisclosureState(
 }
 
 /**
- * Renders the configured user-facing scan directories.
+ * Renders the configured user-facing scan sources.
  *
  * @param {HTMLElement} listElement List that owns the scan locations.
  * @param {string[]} scanDisplayPaths User-facing directories scanned recursively.

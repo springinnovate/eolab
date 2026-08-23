@@ -2,6 +2,8 @@
 
 EOLab's mounted-source scanner treats a source dataset and a STAC Item as different units. One discovered source is processed exactly once, but its handler may emit zero, one, or several Items. The coordinator batches every emitted Item by Collection and writes it through the existing bounded bulk-upsert path.
 
+Remote object storage uses the same zero/one/multi-Item result, progress, error-isolation, and bulk-upsert contracts without representing provider objects as mounted paths. Its provider-neutral contracts and S3 transport are documented separately in [Remote object-storage scan contract](remote-object-storage.md).
+
 The currently registered formats are GeoTIFF, GeoPackage, mounted Shapefile, ZIP-contained Shapefile, GeoJSON FeatureCollection, and Esri File Geodatabase.
 
 ## Registry composition

@@ -11,12 +11,13 @@ GEOTIFF_COLLECTION: dict[str, Any] = {
     "type": "Collection",
     "stac_version": "1.0.0",
     "id": MOUNTED_GEOTIFF_COLLECTION_ID,
-    "title": "Mounted GeoTIFFs",
+    "title": "Scanned GeoTIFFs",
     "description": (
-        "GeoTIFF files discovered in the configured read-only EOLab scan source. "
+        "GeoTIFF files discovered in configured read-only mounted or remote "
+        "EOLab scan sources. "
         "When acquisition metadata is unavailable, an Item's datetime is the "
-        "source file's filesystem modification time and its description identifies "
-        "that fallback."
+        "mounted file or remote object's source modification time and its "
+        "description identifies that fallback."
     ),
     "license": "other",
     "extent": {
@@ -30,11 +31,11 @@ SHAPEFILE_COLLECTION: dict[str, Any] = {
     "type": "Collection",
     "stac_version": "1.0.0",
     "id": MOUNTED_VECTOR_COLLECTION_ID,
-    "title": "Mounted vector datasets",
+    "title": "Scanned vector datasets",
     "description": (
-        "Vector datasets discovered in the configured read-only EOLab scan "
-        "source. An Item's datetime is the latest filesystem modification "
-        "time among the files that form the dataset."
+        "Vector datasets discovered in configured read-only mounted or remote "
+        "EOLab scan sources. An Item's fallback datetime is the latest source "
+        "modification time among the files or objects that form the dataset."
     ),
     "license": "other",
     "extent": {
