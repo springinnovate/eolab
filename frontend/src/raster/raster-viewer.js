@@ -19,6 +19,7 @@ import {
 import {
     createRasterSampleWindowLayer,
     createRasterWmsLayer,
+    ensureRasterSampleWindowPane,
     RasterLeafletLayerSet,
 } from "./leaflet.js";
 import {
@@ -142,6 +143,7 @@ export function initializeRasterViewer(
         viewport = globalThis,
     } = {}
 ) {
+    ensureRasterSampleWindowPane(leafletMap);
     const layerStack = new RasterLayerStack();
     const leafletLayers = new RasterLeafletLayerSet(leafletMap);
     const layerSessions = new Map();
@@ -530,8 +532,8 @@ export function initializeRasterViewer(
         } else if (isActiveSampledRaster()) {
             clearRasterStatisticsPresentation();
             controlsView.setStatisticsStatus(
-                "Click the map to calculate a bounded 127 × 127 sampled " +
-                "histogram for that window. No whole-raster histogram is read."
+                "Click the map to calculate an adaptive bounded histogram " +
+                "for that window. No whole-raster histogram is read."
             );
         } else if (wholeRasterStatisticsState === "ready") {
             renderRasterStatistics(wholeRasterStatistics);
@@ -993,9 +995,9 @@ export function initializeRasterViewer(
                 : "Whole-raster approximate distribution";
         const provenance = sampledGrid
             ? `${statistics.validSampleCount.toLocaleString()} finite values ` +
-              `from an exact ${statistics.sampleWidth.toLocaleString()} × ` +
-              `${statistics.sampleHeight.toLocaleString()} bounded point ` +
-              "grid spatially placed over the selected map window"
+              `from a ${statistics.sampleWidth.toLocaleString()} × ` +
+              `${statistics.sampleHeight.toLocaleString()} bounded adaptive ` +
+              "detail image spatially placed over the selected map window"
             : `${statistics.validSampleCount.toLocaleString()} valid pixels ` +
               `from a ${statistics.sampleWidth.toLocaleString()} × ` +
               `${statistics.sampleHeight.toLocaleString()} sample of the ` +
@@ -1193,8 +1195,8 @@ export function initializeRasterViewer(
         if (isActiveSampledRaster()) {
             clearRasterStatisticsPresentation();
             controlsView.setStatisticsStatus(
-                "Click the map to calculate a bounded 127 × 127 sampled " +
-                "histogram for that window. No whole-raster histogram is read."
+                "Click the map to calculate an adaptive bounded histogram " +
+                "for that window. No whole-raster histogram is read."
             );
         } else if (wholeRasterStatisticsState === "ready") {
             renderRasterStatistics(wholeRasterStatistics);
@@ -1240,7 +1242,7 @@ export function initializeRasterViewer(
         } else {
             nextStatus = isActiveSampledRaster()
                 ? "No histogram window selected. Move over the map and click " +
-                  "to sample an exact bounded grid at that location."
+                  "to sample adaptive bounded detail at that location."
                 : "Whole-raster distribution selected. Move over the map " +
                   "and click to display this window's histogram.";
         }

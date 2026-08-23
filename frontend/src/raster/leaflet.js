@@ -7,6 +7,33 @@
  */
 import { validateRasterSelectedBounds } from "./geometry.js";
 
+export const RASTER_SAMPLE_WINDOW_PANE = "rasterSampleWindowPane";
+const RASTER_SAMPLE_WINDOW_PANE_Z_INDEX = "450";
+
+/**
+ * Ensure histogram preview/selection rectangles sit above raster imagery.
+ *
+ * @param {Object} leafletMap Leaflet-compatible map with pane factories.
+ * @return {Object} Existing or created noninteractive sample-window pane.
+ * @throws {Error} If Leaflet cannot provide the required styled pane.
+ */
+export function ensureRasterSampleWindowPane(leafletMap) {
+    if (typeof leafletMap.getPane !== "function" ||
+        typeof leafletMap.createPane !== "function") {
+        throw new Error("Raster sample-window map pane factories are required.");
+    }
+    let pane = leafletMap.getPane(RASTER_SAMPLE_WINDOW_PANE);
+    if (pane === undefined || pane === null) {
+        pane = leafletMap.createPane(RASTER_SAMPLE_WINDOW_PANE);
+    }
+    if (pane === undefined || pane === null || pane.style === undefined) {
+        throw new Error("Raster sample-window map pane is required.");
+    }
+    pane.style.zIndex = RASTER_SAMPLE_WINDOW_PANE_Z_INDEX;
+    pane.style.pointerEvents = "none";
+    return pane;
+}
+
 /**
  * Convert canonical bounds to Leaflet corners in the single visible world.
  *
@@ -69,12 +96,14 @@ export function createRasterWmsLayer(
 export function createRasterSampleWindowLayer(leaflet, bounds, layerKind) {
     return leaflet.rectangle(bounds, layerKind === "preview"
         ? {
+            pane: RASTER_SAMPLE_WINDOW_PANE,
             color: "#f97316",
             weight: 2,
             fill: false,
             interactive: false
         }
         : {
+            pane: RASTER_SAMPLE_WINDOW_PANE,
             color: "#2563eb",
             weight: 2,
             fillColor: "#3b82f6",

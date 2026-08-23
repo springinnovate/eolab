@@ -61,10 +61,20 @@ function createFakeMap() {
     const container = new FakeEventSource();
     const handlers = new Map();
     const layers = new Set();
+    const panes = new Map();
     return {
         container,
         handlers,
         layers,
+        panes,
+        getPane(name) {
+            return panes.get(name);
+        },
+        createPane(name) {
+            const pane = { style: {} };
+            panes.set(name, pane);
+            return pane;
+        },
         getContainer() {
             return container;
         },
@@ -513,7 +523,10 @@ test("sampled rasters reuse color controls and bounded click histograms", async 
     assert.equal(histogramRequests.length, 1);
     assert.equal(histogramRequests[0].item, MOUNTED_GEOTIFF_ITEM);
     assert.equal(controlsView.displayedStatistics.samplingMethod, "sampledGrid");
-    assert.match(controlsView.statisticsStatus, /exact 127 × 127 bounded point grid/);
+    assert.match(
+      controlsView.statisticsStatus,
+      /127 × 127 bounded adaptive detail image/,
+    );
 
     controlsView.setPaletteName("viridis");
     controlsView.handlers.onPaletteChange();
