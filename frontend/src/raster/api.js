@@ -170,8 +170,8 @@ export function publishCatalogRaster(
 
 /** Fixed user-selectable bounded preview modes. */
 const RASTER_DETAIL_PREVIEW_MODES = new Set([
-    "centerPixel",
-    "samplingGrid",
+    "centerSample",
+    "representativeSample",
     "representativePatch"
 ]);
 
@@ -184,52 +184,82 @@ const RASTER_DETAIL_PREVIEW_MODES = new Set([
  * @throws {Error} If the response violates the fixed preview contract.
  */
 export function validateRasterDetailPreview(preview, requestedMode) {
-    const isFiniteBounds = (bounds) =>
+    const isCanonicalBounds = (bounds) =>
         Array.isArray(bounds) && bounds.length === 4 &&
         bounds.every(Number.isFinite) &&
+        bounds[0] >= -180 && bounds[2] <= 180 &&
+        bounds[1] >= -90 && bounds[3] <= 90 &&
         bounds[0] < bounds[2] && bounds[1] < bounds[3];
     if (
         !RASTER_DETAIL_PREVIEW_MODES.has(requestedMode) ||
         preview?.mode !== requestedMode ||
         preview?.approximate !== true ||
-        typeof preview?.policyVersion !== "string" ||
-        typeof preview?.label !== "string" ||
-        !isFiniteBounds(preview?.rasterExtent) ||
-        !Array.isArray(preview?.samples) ||
-        preview?.limits?.maximumGridSamples !== 25 ||
+        preview?.policyVersion !== "bounded-sampled-raster-v2" ||
+        typeof preview?.label !== "string" || preview.label.trim() === "" ||
+        !isCanonicalBounds(preview?.rasterExtent) ||
+        !isCanonicalBounds(preview?.imageBounds) ||
+        !Number.isSafeInteger(preview?.imageWidth) ||
+        preview.imageWidth < 1 ||
+        !Number.isSafeInteger(preview?.imageHeight) ||
+        preview.imageHeight < 1 ||
+        !Array.isArray(preview?.pixelValues) ||
+        preview.pixelValues.length !== preview.imageWidth * preview.imageHeight ||
+        preview.pixelValues.some((value) =>
+            !(value === null || Number.isFinite(value))
+        ) ||
+        preview?.limits?.maximumProxyDimension !== 127 ||
+        preview?.limits?.maximumSourceBlockReads !== 1024 ||
+        preview?.limits?.maximumDecodedSourceBytes !== 67108864 ||
+        preview?.limits?.maximumPointsPerCell !== 5 ||
         preview?.limits?.maximumPatchDimension !== 128 ||
-        preview?.limits?.maximumPatchCandidates !== 9
+        preview?.limits?.maximumPatchCandidates !== 9 ||
+        preview?.actual?.sampleGridWidth !== preview.imageWidth ||
+        preview?.actual?.sampleGridHeight !== preview.imageHeight ||
+        !Number.isSafeInteger(preview?.actual?.sourceBlockReadCount) ||
+        preview.actual.sourceBlockReadCount < 1 ||
+        preview.actual.sourceBlockReadCount >
+            preview.limits.maximumSourceBlockReads ||
+        !Number.isSafeInteger(preview?.actual?.decodedSourceBytes) ||
+        preview.actual.decodedSourceBytes < 1 ||
+        preview.actual.decodedSourceBytes >
+            preview.limits.maximumDecodedSourceBytes ||
+        !Number.isSafeInteger(preview?.actual?.pointsPerCell) ||
+        preview.actual.pointsPerCell < 0 ||
+        !Number.isSafeInteger(preview?.actual?.candidateWindowCount) ||
+        preview.actual.candidateWindowCount < 0
     ) {
         throw new Error("Detail-only preview response is invalid");
     }
-    if (requestedMode === "representativePatch") {
-        if (
-            preview.samples.length !== 0 ||
-            !isFiniteBounds(preview.detailBounds) ||
-            typeof preview.imageDataUrl !== "string" ||
-            !preview.imageDataUrl.startsWith("data:image/png;base64,")
-        ) {
-            throw new Error("Representative detail patch response is invalid");
-        }
-        return preview;
-    }
+    const maximumImageDimension = requestedMode === "representativePatch"
+        ? preview.limits.maximumPatchDimension
+        : preview.limits.maximumProxyDimension;
     if (
-        preview.detailBounds !== null ||
-        preview.imageDataUrl !== null ||
-        preview.samples.length < 1 ||
-        preview.samples.length > preview.limits.maximumGridSamples ||
-        preview.samples.some((sample) =>
-            !Number.isSafeInteger(sample?.row) ||
-            !Number.isSafeInteger(sample?.column) ||
-            !Number.isFinite(sample?.longitude) ||
-            !Number.isFinite(sample?.latitude) ||
-            !(sample?.value === null || Number.isFinite(sample?.value))
-        )
+        preview.imageWidth > maximumImageDimension ||
+        preview.imageHeight > maximumImageDimension ||
+        preview.actual.pointsPerCell !== (
+            requestedMode === "centerSample"
+                ? 1
+                : requestedMode === "representativeSample" ? 5 : 0
+        ) ||
+        (requestedMode === "representativePatch") !==
+            (preview.actual.candidateWindowCount > 0) ||
+        preview.actual.candidateWindowCount >
+            preview.limits.maximumPatchCandidates
     ) {
-        throw new Error("Detail sample preview response is invalid");
+        throw new Error("Detail-only preview image exceeds its fixed limit");
     }
-    if (requestedMode === "centerPixel" && preview.samples.length !== 1) {
-        throw new Error("Center-pixel preview must contain one sample");
+    const finiteValues = preview.pixelValues.filter((value) => value !== null);
+    const range = preview.suggestedRange;
+    const validRange = range !== null &&
+        Number.isFinite(range?.minimum) &&
+        Number.isFinite(range?.midpoint) &&
+        Number.isFinite(range?.maximum) &&
+        range.minimum < range.midpoint && range.midpoint < range.maximum;
+    if (
+        (finiteValues.length === 0 && range !== null) ||
+        (finiteValues.length > 0 && !validRange)
+    ) {
+        throw new Error("Detail-only preview color range is invalid");
     }
     return preview;
 }

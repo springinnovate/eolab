@@ -7,7 +7,7 @@ import { getCatalogRasterLayerKey } from "./layer-stack.js";
 /**
  * @typedef {Object} RasterDetailPreviewController
  * @property {(item:Object, mode:string) => Promise<Object|null>} show Load and
- * display one current preview, returning null after stale invalidation.
+ * display one current preview, returning null when cancellation loses a race.
  * @property {(item:Object) => boolean} contains Whether the Item owns the map
  * preview.
  * @property {(item?:Object) => void} remove Remove the matching/current preview.
@@ -37,7 +37,11 @@ export function initializeRasterDetailPreview(
     let current = null;
     let destroyed = false;
 
-    /** Abort pending work and invalidate it even if cancellation loses. */
+    /**
+     * Abort pending work and invalidate it even if cancellation loses.
+     *
+     * @return {void}
+     */
     function invalidate() {
         generation += 1;
         pendingAbortController?.abort();
@@ -72,7 +76,11 @@ export function initializeRasterDetailPreview(
         }
     }
 
-    /** Abort work and remove the current detail-only preview. */
+    /**
+     * Abort work and remove the current detail-only preview.
+     *
+     * @return {void}
+     */
     function clear() {
         remove();
     }
@@ -83,7 +91,8 @@ export function initializeRasterDetailPreview(
      * @param {Object} item Selected Catalog raster.
      * @param {string} mode Fixed detail preview mode.
      * @return {Promise<Object|null>} Current response or null when stale.
-     * @throws {Error} If the current request or Leaflet construction fails.
+     * @throws {Error} If the request is observably aborted, or the current
+     * request or Leaflet construction otherwise fails.
      */
     async function show(item, mode) {
         invalidate();
@@ -110,25 +119,42 @@ export function initializeRasterDetailPreview(
             return null;
         }
         const presentation = createPreviewLayer(leaflet, preview);
-        if (current !== null) {
-            leafletMap.removeLayer(current.layer);
+        const previous = current;
+        try {
+            presentation.layer.addTo(leafletMap);
+        } catch (layerError) {
+            leafletMap.removeLayer(presentation.layer);
+            throw layerError;
         }
-        presentation.layer.addTo(leafletMap);
+        if (previous !== null) {
+            leafletMap.removeLayer(previous.layer);
+        }
         current = {
             key: getCatalogRasterLayerKey(item),
             item,
             mode,
             layer: presentation.layer,
             preview,
+            style: presentation.style,
         };
-        leafletMap.fitBounds(presentation.focusBounds, {
-            maxZoom: mode === "representativePatch" ? 16 : 8
-        });
+        const changedFocusScope = previous === null ||
+            previous.key !== current.key ||
+            (previous.mode === "representativePatch") !==
+                (mode === "representativePatch");
+        if (changedFocusScope) {
+            leafletMap.fitBounds(presentation.focusBounds, {
+                maxZoom: mode === "representativePatch" ? 16 : 8
+            });
+        }
         onChange();
         return preview;
     }
 
-    /** Permanently clear preview state. */
+    /**
+     * Permanently clear preview state.
+     *
+     * @return {void}
+     */
     function destroy() {
         destroyed = true;
         clear();

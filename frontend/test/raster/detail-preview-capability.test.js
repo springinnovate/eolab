@@ -17,23 +17,46 @@ function itemWithRendering(rendering) {
   };
 }
 
-test("detail preview UI allowlist requires overview reason and current reader", () => {
+test("sampled raster UI allowlist requires overview reason and current reader", () => {
   const rendering = {
     policy: "raster-v3",
     eligible: false,
     reason_code: "internal_overviews_required",
     reader_contract: "geoserver-3.0.1-geotools-35.1-geotiff-v1",
     reader_compatible: true,
+    bounded_blocks: true,
   };
-  assert.equal(
-    supportsRasterDetailOnlyPreview(itemWithRendering(rendering)),
-    true,
-  );
+  for (const reasonCode of [
+    "internal_overviews_required",
+    "incomplete_overview_pyramid",
+    "coarsest_overview_dimension_exceeded",
+    "coarsest_overview_decoded_size_exceeded",
+  ]) {
+    assert.equal(
+      supportsRasterDetailOnlyPreview(itemWithRendering({
+        ...rendering,
+        reason_code: reasonCode,
+      })),
+      true,
+    );
+  }
   assert.equal(
     supportsRasterDetailOnlyPreview(itemWithRendering({
       ...rendering,
       reason_code: "blocks_too_large",
     })),
+    false,
+  );
+  assert.equal(
+    supportsRasterDetailOnlyPreview(itemWithRendering({
+      ...rendering,
+      bounded_blocks: false,
+    })),
+    false,
+  );
+  const { bounded_blocks: _boundedBlocks, ...missingBlockContract } = rendering;
+  assert.equal(
+    supportsRasterDetailOnlyPreview(itemWithRendering(missingBlockContract)),
     false,
   );
   assert.equal(

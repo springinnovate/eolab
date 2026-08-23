@@ -616,8 +616,8 @@ async function initializeCatalog(
         reassessDetailRaster.disabled = pendingAction !== null;
         showRasterDetailPreview.textContent = pendingAction?.buttonText ??
             (hasDetailPreview
-                ? "Update detail-only preview"
-                : "Show detail-only preview");
+                ? "Update sampled raster"
+                : "Show sampled raster");
         removeRasterDetailPreview.hidden = !hasDetailPreview;
         removeRasterDetailPreview.disabled = pendingAction !== null;
         catalogLayerToggle.textContent = pendingAction?.buttonText ?? (
@@ -636,12 +636,12 @@ async function initializeCatalog(
         if (supportsDetailPreview) {
             defaultStatus =
                 "Normal full visualization is unavailable. Choose one " +
-                "bounded approximate preview; none represents the whole raster.";
+                "bounded sampling policy for an approximate raster proxy.";
         }
         if (hasDetailPreview) {
             defaultStatus =
-                "An approximate detail-only preview is displayed at its " +
-                "spatial location; the dashed outline is the raster extent.";
+                "A bounded sampled raster is displayed with the normal color " +
+                "ramp; the dashed outline is the raster extent.";
         }
         catalogLayerStatus.textContent =
             pendingAction?.statusText ?? defaultStatus;
@@ -649,7 +649,7 @@ async function initializeCatalog(
 
     /** Clears the selected result, footprint, and inspector together. */
     function clearCatalogSelection() {
-        rasterDetailPreview.invalidate();
+        rasterDetailPreview.clear();
         catalogState.selectedButton?.classList.remove("is-selected");
         catalogState.selectedButton?.setAttribute("aria-pressed", "false");
         footprintController.clear();
@@ -670,7 +670,11 @@ async function initializeCatalog(
 
     /** Select one result or remotely discovered Item without changing search. */
     function selectCatalogItem(item, requestedButton = null) {
-        rasterDetailPreview.invalidate();
+        if (rasterDetailPreview.contains(item)) {
+            rasterDetailPreview.invalidate();
+        } else {
+            rasterDetailPreview.clear();
+        }
         catalogState.rasterAssessments.apply(item);
         const itemButton = requestedButton ??
             catalogState.resultButtons.get(catalogItemKey(item)) ?? null;
@@ -1117,8 +1121,8 @@ async function initializeCatalog(
         const selectedItem = catalogState.selectedItem;
         const pendingAction = beginCatalogMapAction(
             selectedItem,
-            "Loading detail…",
-            "Reading a strictly bounded approximate raster preview."
+            "Sampling raster…",
+            "Reading a strictly bounded approximate raster proxy."
         );
         try {
             const preview = await rasterDetailPreview.show(
@@ -1132,8 +1136,15 @@ async function initializeCatalog(
                 return;
             }
             finishCatalogMapAction(pendingAction);
-            catalogLayerStatus.textContent = `${preview.label}. The dashed ` +
-                "outline is the raster extent, not a valid-data footprint.";
+            const hasFiniteValues = preview.pixelValues.some(
+                (value) => value !== null
+            );
+            catalogLayerStatus.textContent = `${preview.label}; ` +
+                `${preview.imageWidth} × ${preview.imageHeight} displayed ` +
+                "cells. The dashed outline is the raster extent, not a " +
+                "valid-data footprint." + (hasFiniteValues
+                    ? " Colors use EOLab's normal approximate raster ramp."
+                    : " No finite data was found at the bounded sample positions.");
         } catch (previewError) {
             if (
                 previewError.name !== "AbortError" &&
@@ -1150,7 +1161,7 @@ async function initializeCatalog(
         const selectedItem = catalogState.selectedItem;
         rasterDetailPreview.remove(selectedItem);
         catalogLayerStatus.textContent =
-            "Detail-only preview removed from the map.";
+            "Sampled raster removed from the map.";
     });
 
     await loadCatalog(true);

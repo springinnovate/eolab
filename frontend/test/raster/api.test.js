@@ -8,10 +8,13 @@ import {
   publishCatalogRaster,
   RenderingRequestError,
   sampleCatalogRasterPixel,
+  validateRasterDetailPreview,
 } from "../../src/raster/api.js";
 import {
   MOUNTED_GEOTIFF_ITEM,
-  CENTER_PIXEL_DETAIL_PREVIEW,
+  CENTER_SAMPLE_DETAIL_PREVIEW,
+  NODATA_DETAIL_PREVIEW,
+  PATCH_DETAIL_PREVIEW,
   RASTER_STATISTICS,
   SELECTED_BOUNDS,
   SELECTED_RASTER_STATISTICS,
@@ -26,17 +29,17 @@ test("detail preview sends only Item identity and selected fixed mode", async ()
   assert.deepEqual(
     await loadCatalogRasterDetailPreview(
       MOUNTED_GEOTIFF_ITEM,
-      "centerPixel",
+      "centerSample",
       abortController.signal,
       async (url, options) => {
         requests.push({ url, options });
-        return new Response(JSON.stringify(CENTER_PIXEL_DETAIL_PREVIEW), {
+        return new Response(JSON.stringify(CENTER_SAMPLE_DETAIL_PREVIEW), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         });
       },
     ),
-    CENTER_PIXEL_DETAIL_PREVIEW,
+    CENTER_SAMPLE_DETAIL_PREVIEW,
   );
   assert.deepEqual(requests, [{
     url: "/api/rendering/detail-previews",
@@ -49,15 +52,54 @@ test("detail preview sends only Item identity and selected fixed mode", async ()
       body: JSON.stringify({
         collectionId: MOUNTED_GEOTIFF_ITEM.collection,
         itemId: MOUNTED_GEOTIFF_ITEM.id,
-        mode: "centerPixel",
+        mode: "centerSample",
       }),
       signal: abortController.signal,
     },
   }]);
-  assert.equal(CENTER_PIXEL_DETAIL_PREVIEW.samples[0].value, null);
+  assert.equal("width" in JSON.parse(requests[0].options.body), false);
+  assert.equal("bounds" in JSON.parse(requests[0].options.body), false);
+  assert.equal("path" in JSON.parse(requests[0].options.body), false);
 });
 
-test("detail preview rejects arbitrary modes and malformed patch images", async () => {
+test("detail preview preserves an actionable backend failure", async () => {
+  const request = loadCatalogRasterDetailPreview(
+    MOUNTED_GEOTIFF_ITEM,
+    "centerSample",
+    new AbortController().signal,
+    async () => new Response(
+      JSON.stringify({ detail: "Sampled raster source blocks are unsafe." }),
+      { status: 409, headers: { "Content-Type": "application/json" } },
+    ),
+  );
+
+  await assert.rejects(request, (error) => {
+    assert.equal(error instanceof RenderingRequestError, true);
+    assert.equal(error.status, 409);
+    assert.equal(error.message, "Sampled raster source blocks are unsafe.");
+    return true;
+  });
+});
+
+test("detail preview accepts numeric images and honest all-nodata proxies", () => {
+  assert.equal(
+    validateRasterDetailPreview(
+      CENTER_SAMPLE_DETAIL_PREVIEW,
+      "centerSample",
+    ),
+    CENTER_SAMPLE_DETAIL_PREVIEW,
+  );
+  assert.equal(
+    validateRasterDetailPreview(NODATA_DETAIL_PREVIEW, "centerSample"),
+    NODATA_DETAIL_PREVIEW,
+  );
+  assert.equal(
+    validateRasterDetailPreview(PATCH_DETAIL_PREVIEW, "representativePatch"),
+    PATCH_DETAIL_PREVIEW,
+  );
+});
+
+test("detail preview rejects arbitrary modes before sending a request", async () => {
   await assert.rejects(
     loadCatalogRasterDetailPreview(
       MOUNTED_GEOTIFF_ITEM,
@@ -69,17 +111,117 @@ test("detail preview rejects arbitrary modes and malformed patch images", async 
     ),
     /Unsupported raster detail preview mode/,
   );
-  await assert.rejects(
-    loadCatalogRasterDetailPreview(
-      MOUNTED_GEOTIFF_ITEM,
-      "representativePatch",
-      new AbortController().signal,
-      async () => new Response(JSON.stringify({
-        ...CENTER_PIXEL_DETAIL_PREVIEW,
-        mode: "representativePatch",
-      }), { status: 200, headers: { "Content-Type": "application/json" } }),
-    ),
-    /Representative detail patch response is invalid/,
+});
+
+test("detail preview strictly validates v2 numeric image identity and shape", () => {
+  const invalidPreviews = [
+    ["mismatched mode", {
+      ...CENTER_SAMPLE_DETAIL_PREVIEW,
+      mode: "representativeSample",
+    }],
+    ["legacy policy", {
+      ...CENTER_SAMPLE_DETAIL_PREVIEW,
+      policyVersion: "bounded-detail-preview-v1",
+    }],
+    ["empty label", { ...CENTER_SAMPLE_DETAIL_PREVIEW, label: "" }],
+    ["unordered image bounds", {
+      ...CENTER_SAMPLE_DETAIL_PREVIEW,
+      imageBounds: [-123, 48, -123, 50],
+    }],
+    ["out-of-world raster extent", {
+      ...CENTER_SAMPLE_DETAIL_PREVIEW,
+      rasterExtent: [-181, 48, -121, 50],
+    }],
+    ["out-of-world image bounds", {
+      ...CENTER_SAMPLE_DETAIL_PREVIEW,
+      imageBounds: [-123, -91, -121, 50],
+    }],
+    ["zero width", { ...CENTER_SAMPLE_DETAIL_PREVIEW, imageWidth: 0 }],
+    ["over-limit width", {
+      ...CENTER_SAMPLE_DETAIL_PREVIEW,
+      imageWidth: 128,
+    }],
+    ["short value array", {
+      ...CENTER_SAMPLE_DETAIL_PREVIEW,
+      pixelValues: [0, 50],
+    }],
+    ["nonfinite value", {
+      ...CENTER_SAMPLE_DETAIL_PREVIEW,
+      pixelValues: [0, 50, 100, Number.POSITIVE_INFINITY, 25, 75],
+    }],
+    ["missing finite-value range", {
+      ...CENTER_SAMPLE_DETAIL_PREVIEW,
+      suggestedRange: null,
+    }],
+    ["unordered range", {
+      ...CENTER_SAMPLE_DETAIL_PREVIEW,
+      suggestedRange: { minimum: 0, midpoint: 100, maximum: 50 },
+    }],
+    ["changed resource contract", {
+      ...CENTER_SAMPLE_DETAIL_PREVIEW,
+      limits: {
+        ...CENTER_SAMPLE_DETAIL_PREVIEW.limits,
+        maximumSourceBlockReads: 1025,
+      },
+    }],
+    ["over-limit actual block reads", {
+      ...CENTER_SAMPLE_DETAIL_PREVIEW,
+      actual: {
+        ...CENTER_SAMPLE_DETAIL_PREVIEW.actual,
+        sourceBlockReadCount: 1025,
+      },
+    }],
+    ["over-limit actual decoded bytes", {
+      ...CENTER_SAMPLE_DETAIL_PREVIEW,
+      actual: {
+        ...CENTER_SAMPLE_DETAIL_PREVIEW.actual,
+        decodedSourceBytes: 67108865,
+      },
+    }],
+    ["negative candidate count", {
+      ...CENTER_SAMPLE_DETAIL_PREVIEW,
+      actual: {
+        ...CENTER_SAMPLE_DETAIL_PREVIEW.actual,
+        candidateWindowCount: -1,
+      },
+    }],
+    ["inconsistent center probes", {
+      ...CENTER_SAMPLE_DETAIL_PREVIEW,
+      actual: {
+        ...CENTER_SAMPLE_DETAIL_PREVIEW.actual,
+        pointsPerCell: 5,
+      },
+    }],
+  ];
+
+  for (const [caseName, preview] of invalidPreviews) {
+    assert.throws(
+      () => validateRasterDetailPreview(preview, "centerSample"),
+      /Detail-only preview/,
+      `accepted invalid sampled-raster case: ${caseName}`,
+    );
+  }
+  assert.throws(
+    () => validateRasterDetailPreview({
+      ...PATCH_DETAIL_PREVIEW,
+      imageWidth: 129,
+      pixelValues: new Array(129 * PATCH_DETAIL_PREVIEW.imageHeight).fill(10),
+      actual: {
+        ...PATCH_DETAIL_PREVIEW.actual,
+        sampleGridWidth: 129,
+      },
+    }, "representativePatch"),
+    /exceeds its fixed limit/,
+  );
+});
+
+test("detail preview requires null color range only for all-nodata images", () => {
+  assert.throws(
+    () => validateRasterDetailPreview({
+      ...NODATA_DETAIL_PREVIEW,
+      suggestedRange: { minimum: 0, midpoint: 50, maximum: 100 },
+    }, "centerSample"),
+    /color range is invalid/,
   );
 });
 

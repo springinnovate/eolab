@@ -397,14 +397,14 @@
                       hidden
                     >
                       <p>
-                        <strong>Detail-only visualization</strong>
-                        <span>This approximate preview does not render the whole raster.</span>
+                        <strong>Bounded sampled raster</strong>
+                        <span>This low-resolution proxy covers the raster extent but does not read or render every source pixel. Each displayed cell represents a larger source region.</span>
                       </p>
                       <label for="raster-detail-preview-mode">
                         <span>Preview choice</span>
                         <select id="raster-detail-preview-mode">
-                          <option value="centerPixel">Center-pixel sample</option>
-                          <option value="samplingGrid">Small, bounded sampling grid</option>
+                          <option value="centerSample">Center sample in each proxy cell</option>
+                          <option value="representativeSample">Representative samples in each proxy cell</option>
                           <option value="representativePatch">Representative, bounded detail patch</option>
                         </select>
                       </label>
@@ -414,7 +414,7 @@
                           id="show-raster-detail-preview"
                           type="button"
                         >
-                          Show detail-only preview
+                          Show sampled raster
                         </button>
                         <button
                           class="secondary-button"
@@ -422,7 +422,7 @@
                           type="button"
                           hidden
                         >
-                          Remove detail-only preview
+                          Remove sampled raster
                         </button>
                         <button
                           class="secondary-button"

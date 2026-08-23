@@ -9,37 +9,76 @@ export const MOUNTED_GEOTIFF_ITEM = Object.freeze({
   },
 });
 
-/** @type {Readonly<Object>} Center-pixel detail-only preview. */
-export const CENTER_PIXEL_DETAIL_PREVIEW = Object.freeze({
-  mode: "centerPixel",
-  policyVersion: "bounded-detail-preview-v1",
+/** @type {Readonly<Object>} Fixed public bounds for sampled raster previews. */
+export const RASTER_DETAIL_PREVIEW_LIMITS = Object.freeze({
+  maximumProxyDimension: 127,
+  maximumSourceBlockReads: 1024,
+  maximumDecodedSourceBytes: 67108864,
+  maximumPointsPerCell: 5,
+  maximumPatchDimension: 128,
+  maximumPatchCandidates: 9,
+});
+
+/** @type {Readonly<Object>} Full-extent center-per-cell numeric proxy. */
+export const CENTER_SAMPLE_DETAIL_PREVIEW = Object.freeze({
+  mode: "centerSample",
+  policyVersion: "bounded-sampled-raster-v2",
   approximate: true,
-  label: "Approximate detail-only center-pixel preview",
+  label: "Approximate full-extent proxy using each preview cell's center",
   rasterExtent: [-123, 48, -121, 50],
-  samples: [{
-    row: 500000,
-    column: 750000,
-    longitude: -122,
-    latitude: 49,
-    value: null,
-  }],
-  detailBounds: null,
-  imageDataUrl: null,
-  limits: {
-    maximumGridSamples: 25,
-    maximumPatchDimension: 128,
-    maximumPatchCandidates: 9,
+  imageBounds: [-122.9, 48.1, -121.1, 49.9],
+  imageWidth: 3,
+  imageHeight: 2,
+  pixelValues: [0, 50, 100, null, 25, 75],
+  suggestedRange: { minimum: 0, midpoint: 50, maximum: 100 },
+  limits: RASTER_DETAIL_PREVIEW_LIMITS,
+  actual: {
+    sampleGridWidth: 3,
+    sampleGridHeight: 2,
+    sourceBlockReadCount: 6,
+    decodedSourceBytes: 12288,
+    pointsPerCell: 1,
+    candidateWindowCount: 0,
   },
 });
 
-/** @type {Readonly<Object>} Representative detail-patch preview. */
+/** @type {Readonly<Object>} Full-extent representative-per-cell proxy. */
+export const REPRESENTATIVE_SAMPLE_DETAIL_PREVIEW = Object.freeze({
+  ...CENTER_SAMPLE_DETAIL_PREVIEW,
+  mode: "representativeSample",
+  label: "Approximate full-extent proxy using representative cell samples",
+  pixelValues: [5, 45, 95, null, 30, 80],
+  actual: {
+    ...CENTER_SAMPLE_DETAIL_PREVIEW.actual,
+    pointsPerCell: 5,
+  },
+});
+
+/** @type {Readonly<Object>} Representative bounded numeric detail patch. */
 export const PATCH_DETAIL_PREVIEW = Object.freeze({
-  ...CENTER_PIXEL_DETAIL_PREVIEW,
+  ...CENTER_SAMPLE_DETAIL_PREVIEW,
   mode: "representativePatch",
   label: "Approximate representative detail patch",
-  samples: [],
-  detailBounds: [-122.1, 48.9, -121.9, 49.1],
-  imageDataUrl: "data:image/png;base64,iVBORw0KGgo=",
+  imageBounds: [-122.1, 48.9, -121.9, 49.1],
+  imageWidth: 2,
+  imageHeight: 2,
+  pixelValues: [10, 20, null, 30],
+  suggestedRange: { minimum: 10, midpoint: 20, maximum: 30 },
+  actual: {
+    sampleGridWidth: 2,
+    sampleGridHeight: 2,
+    sourceBlockReadCount: 4,
+    decodedSourceBytes: 65536,
+    pointsPerCell: 0,
+    candidateWindowCount: 3,
+  },
+});
+
+/** @type {Readonly<Object>} Honest all-nodata full-extent numeric proxy. */
+export const NODATA_DETAIL_PREVIEW = Object.freeze({
+  ...CENTER_SAMPLE_DETAIL_PREVIEW,
+  pixelValues: new Array(6).fill(null),
+  suggestedRange: null,
 });
 
 /** @type {Readonly<Object>} Representative validated whole-raster statistics. */

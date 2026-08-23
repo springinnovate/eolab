@@ -55,7 +55,7 @@ export function getRasterVisualization(item) {
  *
  * @param {Object|null} item Selected STAC Item.
  * @return {boolean} Whether only an overview/scale rejection remains and the
- * current deployed reader accepted the raster and CRS.
+ * current deployed reader accepted the raster, CRS, and bounded blocks.
  */
 export function supportsRasterDetailOnlyPreview(item) {
     const renderingMetadata = getRasterVisualization(item);
@@ -65,6 +65,7 @@ export function supportsRasterDetailOnlyPreview(item) {
         DETAIL_ONLY_PREVIEW_REASON_CODES.has(
             renderingMetadata.reason_code
         ) &&
+        renderingMetadata.bounded_blocks === true &&
         renderingMetadata.reader_contract === GEOSERVER_READER_CONTRACT &&
         renderingMetadata.reader_compatible === true;
 }

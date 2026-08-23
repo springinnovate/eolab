@@ -749,6 +749,10 @@ h5 {
   vector-effect: non-scaling-stroke;
 }
 
+.raster-sampled-proxy {
+  image-rendering: pixelated;
+}
+
 .catalog-map-actions[hidden] {
   display: none;
 }
