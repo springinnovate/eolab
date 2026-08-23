@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = { file = "LICENSE" }
 dependencies = [
+    "boto3>=1.35,<2",
     "fastapi>=0.115,<1",
     "fiona>=1.10,<2",
     "httpx2>=2.9,<3",
