@@ -28,7 +28,7 @@ test("numeric proxy colors remain row-major and nodata stays transparent", () =>
     buildRasterDetailPreviewStyle(CENTER_SAMPLE_DETAIL_PREVIEW),
   );
 
-  assert.deepEqual(Array.from(rgba), [
+  assert.deepEqual(Array.from(rgba).slice(0, 24), [
     43, 131, 186, 255,
     255, 255, 191, 255,
     215, 25, 28, 255,
@@ -36,6 +36,7 @@ test("numeric proxy colors remain row-major and nodata stays transparent", () =>
     149, 193, 189, 255,
     235, 140, 110, 255,
   ]);
+  assert.equal(rgba.length, 31 * 31 * 4);
   assert.deepEqual(
     Array.from(buildRasterDetailPreviewRgba(
       NODATA_DETAIL_PREVIEW,
@@ -85,7 +86,7 @@ test("numeric proxy encoder preserves dimensions and RGBA bytes", () => {
   assert.equal(encoded, "data:image/png;base64,sampled");
   assert.equal(canvas.width, CENTER_SAMPLE_DETAIL_PREVIEW.imageWidth);
   assert.equal(canvas.height, CENTER_SAMPLE_DETAIL_PREVIEW.imageHeight);
-  assert.deepEqual(calls[0], ["create", 3, 2]);
+  assert.deepEqual(calls[0], ["create", 31, 31]);
   assert.equal(calls[1][0], "put");
   assert.deepEqual(calls[1][1].slice(12, 16), [0, 0, 0, 0]);
   assert.deepEqual(calls[2], ["encode", "image/png"]);

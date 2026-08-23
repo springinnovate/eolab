@@ -411,11 +411,11 @@
                       <label for="raster-detail-preview-density">
                         <span>Sample density</span>
                         <select id="raster-detail-preview-density">
-                          <option value="coarse">Coarse — up to 31 cells across</option>
-                          <option value="medium">Medium — up to 63 cells across</option>
-                          <option value="fine">Fine — up to 127 cells across</option>
+                          <option value="coarse">Coarse — exact 31 × 31 samples</option>
+                          <option value="medium">Medium — exact 63 × 63 samples</option>
+                          <option value="fine">Fine — exact 127 × 127 samples</option>
                         </select>
-                        <small>Applies to the raster-extent proxy and each current-view refinement. The server may safely reduce the actual grid.</small>
+                        <small>Applies exactly to the raster-extent proxy and each current-view refinement. If that grid exceeds the fixed source-read limit, EOLab reports an error instead of substituting a coarser grid.</small>
                       </label>
                       <output
                         class="raster-detail-preview-resolution"

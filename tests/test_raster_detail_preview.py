@@ -1,7 +1,6 @@
 """Test sampled-raster detail previews and their authorization lifecycle."""
 
 import asyncio
-from dataclasses import replace
 from pathlib import Path
 import threading
 
@@ -24,12 +23,12 @@ from eolab_app.raster.detail_preview import (
 )
 from eolab_app.raster.detail_preview_service import RasterDetailPreviewService
 from eolab_app.raster.detail_proxy import (
+    DETAIL_PATCH_MAX_DECODED_SOURCE_BYTES,
     DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES,
     DETAIL_PROXY_MAX_DIMENSION,
     DETAIL_PROXY_MAX_SOURCE_BLOCK_READS,
     DETAIL_PROXY_MAX_TRANSFORMED_POSITIONS,
     BoundedWindowSamples,
-    DetailProxyPlan,
     _projected_cell_positions,
     detail_proxy_maximum_dimension,
     plan_detail_proxy,
@@ -155,9 +154,9 @@ def _valid_sampled_preview_document() -> dict[str, object]:
         "label": "Approximate raster-extent sample",
         "rasterExtent": list(RASTER_EXTENT),
         "imageBounds": list(RASTER_EXTENT),
-        "imageWidth": 1,
-        "imageHeight": 1,
-        "pixelValues": [1.0],
+        "imageWidth": 31,
+        "imageHeight": 31,
+        "pixelValues": [1.0] * (31 * 31),
         "suggestedRange": {
             "minimum": 0.0,
             "midpoint": 1.0,
@@ -166,7 +165,7 @@ def _valid_sampled_preview_document() -> dict[str, object]:
         "limits": {
             "maximumProxyDimension": 127,
             "maximumSourceBlockReads": 1024,
-            "maximumDecodedSourceBytes": 67_108_864,
+            "maximumDecodedSourceBytes": DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES,
             "maximumTransformedPositions": (
                 DETAIL_PROXY_MAX_TRANSFORMED_POSITIONS
             ),
@@ -175,8 +174,8 @@ def _valid_sampled_preview_document() -> dict[str, object]:
             "maximumPatchCandidates": 9,
         },
         "actual": {
-            "sampleGridWidth": 1,
-            "sampleGridHeight": 1,
+            "sampleGridWidth": 31,
+            "sampleGridHeight": 31,
             "sourceBlockReadCount": 1,
             "decodedSourceBytes": 5,
             "pointsPerCell": 1,
@@ -186,28 +185,28 @@ def _valid_sampled_preview_document() -> dict[str, object]:
 
 
 @pytest.mark.parametrize(
-    ("pixel_values", "suggested_range"),
+    ("pixel_value", "suggested_range"),
     (
-        ([1.0], {"minimum": 0.0, "midpoint": 1.0, "maximum": 2.0}),
-        ([None], {"minimum": 0.0, "midpoint": 1.0, "maximum": 2.0}),
+        (1.0, {"minimum": 0.0, "midpoint": 1.0, "maximum": 2.0}),
+        (None, {"minimum": 0.0, "midpoint": 1.0, "maximum": 2.0}),
     ),
 )
 def test_response_rejects_values_or_ranges_without_source_reads(
-    pixel_values: list[float | None],
+    pixel_value: float | None,
     suggested_range: dict[str, float],
 ) -> None:
     """Keep impossible no-read numeric payloads outside the public contract.
 
     Args:
-        pixel_values: Controlled finite or nodata-only one-cell image.
+        pixel_value: Controlled finite or nodata value filling the exact grid.
         suggested_range: Controlled finite display range.
     """
     document = _valid_sampled_preview_document()
-    document["pixelValues"] = pixel_values
+    document["pixelValues"] = [pixel_value] * (31 * 31)
     document["suggestedRange"] = suggested_range
     document["actual"] = {
-        "sampleGridWidth": 1,
-        "sampleGridHeight": 1,
+        "sampleGridWidth": 31,
+        "sampleGridHeight": 31,
         "sourceBlockReadCount": 0,
         "decodedSourceBytes": 0,
         "pointsPerCell": 1,
@@ -225,9 +224,15 @@ def test_response_rejects_a_patch_without_positive_source_reads() -> None:
         "mode": "representativePatch",
         "scope": "representativePatch",
         "density": None,
+        "imageWidth": 1,
+        "imageHeight": 1,
         "pixelValues": [None],
         "suggestedRange": None,
     })
+    document["limits"] = {
+        **document["limits"],
+        "maximumDecodedSourceBytes": DETAIL_PATCH_MAX_DECODED_SOURCE_BYTES,
+    }
     document["actual"] = {
         "sampleGridWidth": 1,
         "sampleGridHeight": 1,
@@ -241,8 +246,8 @@ def test_response_rejects_a_patch_without_positive_source_reads() -> None:
         RasterDetailPreview.model_validate(document)
 
 
-def test_response_publishes_the_fixed_request_transform_ceiling() -> None:
-    """Expose the cumulative sampled-grid transformation limit exactly."""
+def test_response_publishes_the_exact_grid_transform_ceiling() -> None:
+    """Expose the one-grid sampled-position limit exactly."""
     preview = RasterDetailPreview.model_validate(
         _valid_sampled_preview_document()
     )
@@ -250,7 +255,7 @@ def test_response_publishes_the_fixed_request_transform_ceiling() -> None:
     assert (
         preview.limits.maximum_transformed_positions
         == DETAIL_PROXY_MAX_TRANSFORMED_POSITIONS
-        == 1_747_520
+        == 80_645
     )
     assert DETAIL_PROXY_MAX_TRANSFORMED_POSITIONS in (
         RasterDetailPreviewService._mode_parameters("centerSample", "fine")
@@ -261,6 +266,24 @@ def test_response_publishes_the_fixed_request_transform_ceiling() -> None:
             None,
         )
     )
+
+
+def test_response_rejects_a_silently_reduced_sample_grid() -> None:
+    """Require a sampled response to match its selected exact resolution."""
+    document = _valid_sampled_preview_document()
+    document.update({
+        "imageWidth": 15,
+        "imageHeight": 7,
+        "pixelValues": [1.0] * (15 * 7),
+    })
+    document["actual"] = {
+        **document["actual"],
+        "sampleGridWidth": 15,
+        "sampleGridHeight": 7,
+    }
+
+    with pytest.raises(ValueError, match="selected exact grid"):
+        RasterDetailPreview.model_validate(document)
 
 
 def test_response_image_stays_within_the_raster_extent() -> None:
@@ -282,8 +305,10 @@ def _write_raster(
     *,
     crs: str = "EPSG:4326",
     transform: Affine | None = None,
+    dtype: str = "float32",
+    block_size: int = 128,
 ) -> None:
-    """Create one sparse, tiled, overview-less float raster.
+    """Create one sparse, tiled, overview-less supported raster.
 
     Args:
         path: Destination GeoTIFF.
@@ -291,6 +316,8 @@ def _write_raster(
         height: Raster height.
         crs: Source coordinate reference system.
         transform: Optional source affine transform.
+        dtype: Supported one-band pixel type.
+        block_size: Square native TIFF block edge.
     """
     source_transform = transform or from_origin(
         RASTER_EXTENT[0],
@@ -305,13 +332,13 @@ def _write_raster(
         width=width,
         height=height,
         count=1,
-        dtype="float32",
+        dtype=dtype,
         crs=crs,
         transform=source_transform,
-        nodata=-9999,
+        nodata=255 if dtype == "uint8" else -9999,
         tiled=True,
-        blockxsize=128,
-        blockysize=128,
+        blockxsize=block_size,
+        blockysize=block_size,
         SPARSE_OK="TRUE",
         BIGTIFF="YES",
     ):
@@ -390,6 +417,8 @@ def test_huge_full_extent_proxy_obeys_exact_source_work_limits(
         10_000,
         10_000,
         transform=from_origin(-180, 90, 0.036, 0.018),
+        dtype="uint8",
+        block_size=1024,
     )
     with rasterio.open(source_path) as dataset:
         assessment = assess_raster_renderability(dataset)
@@ -436,7 +465,7 @@ def test_huge_full_extent_proxy_obeys_exact_source_work_limits(
     decoded_bytes = sum(
         int(window.width)
         * int(window.height)
-        * (numpy.dtype("float32").itemsize + 1)
+        * (numpy.dtype("uint8").itemsize + 1)
         for window in windows
     )
     assert 1 < len(windows) <= DETAIL_PROXY_MAX_SOURCE_BLOCK_READS
@@ -445,13 +474,13 @@ def test_huge_full_extent_proxy_obeys_exact_source_work_limits(
     assert decoded_bytes <= DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES
     assert decoded_bytes == preview.actual.decoded_source_bytes
     assert all("out_shape" not in keyword_args for _, keyword_args in tracker.reads)
-    assert all(window.width <= 128 and window.height <= 128 for window in windows)
+    assert all(window.width <= 1024 and window.height <= 1024 for window in windows)
     assert preview.policy_version == DETAIL_PREVIEW_POLICY_VERSION
     assert preview.raster_extent == GLOBAL_EXTENT
     assert preview.image_bounds[0] == pytest.approx(-180)
     assert preview.image_bounds[2] == pytest.approx(180)
-    assert preview.image_width <= DETAIL_PROXY_MAX_DIMENSION
-    assert preview.image_height <= DETAIL_PROXY_MAX_DIMENSION
+    assert preview.image_width == DETAIL_PROXY_MAX_DIMENSION
+    assert preview.image_height == DETAIL_PROXY_MAX_DIMENSION
     assert len(preview.pixel_values) == preview.image_width * preview.image_height
     assert set(preview.pixel_values) == {None}
     assert preview.suggested_range is None
@@ -547,7 +576,7 @@ def test_huge_current_view_uses_only_fixed_map_grid_native_blocks(
     assert preview.scope == "currentView"
     assert preview.density == "coarse"
     assert preview.image_bounds == pytest.approx(view_bounds)
-    assert max(preview.image_width, preview.image_height) <= 31
+    assert (preview.image_width, preview.image_height) == (31, 31)
     assert actual_window_identities == expected_window_identities
     assert len(actual_window_identities) == len(set(actual_window_identities))
     assert len(tracker.reads) == preview.actual.source_block_read_count
@@ -592,11 +621,8 @@ def test_nested_views_keep_density_while_sampling_finer_source_spacing(
             inner_projected,
         )
 
-    assert (outer_plan.width, outer_plan.height) == (
-        inner_plan.width,
-        inner_plan.height,
-    )
-    assert max(outer_plan.width, outer_plan.height) == 31
+    assert (outer_plan.width, outer_plan.height) == (31, 31)
+    assert (inner_plan.width, inner_plan.height) == (31, 31)
     outer_column_spacing = (
         outer_plan.cell_positions[1][0][1]
         - outer_plan.cell_positions[0][0][1]
@@ -633,7 +659,7 @@ def test_map_aligned_density_does_not_collapse_for_a_rotated_thin_raster(
             (0.0, 0.0, 1000.0, 1.0),
         )
 
-    assert (plan.width, plan.height) == (127, 1)
+    assert (plan.width, plan.height) == (127, 127)
 
 
 def test_projected_grid_reports_a_noninvertible_source_affine() -> None:
@@ -660,24 +686,24 @@ def test_projected_grid_reports_a_noninvertible_source_affine() -> None:
     ("density", "maximum_dimension"),
     (("coarse", 31), ("medium", 63), ("fine", 127)),
 )
-def test_density_profiles_are_fixed_server_owned_grid_ceilings(
+def test_density_profiles_are_fixed_server_owned_exact_grids(
     density: RasterDetailPreviewDensity,
     maximum_dimension: int,
 ) -> None:
-    """Keep UI density choices mapped to documented immutable ceilings.
+    """Keep UI density choices mapped to documented immutable resolutions.
 
     Args:
         density: Fixed request profile.
-        maximum_dimension: Expected maximum grid edge.
+        maximum_dimension: Expected exact square-grid edge.
     """
     assert detail_proxy_maximum_dimension(density) == maximum_dimension
 
 
-def test_one_request_bounds_all_transformed_coarsening_positions(
+def test_one_request_transforms_only_the_selected_exact_grid(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Bound cumulative CRS work even when every candidate is evaluated.
+    """Transform one exact representative grid without fallback candidates.
 
     Args:
         tmp_path: Temporary raster directory.
@@ -693,7 +719,6 @@ def test_one_request_bounds_all_transformed_coarsening_positions(
     )
     transformed_counts: list[int] = []
     real_transform = detail_proxy_module.warp_transform
-    real_plan_for_dimension = detail_proxy_module._plan_for_dimension
 
     def tracked_transform(
         source_crs: object,
@@ -715,42 +740,7 @@ def test_one_request_bounds_all_transformed_coarsening_positions(
         transformed_counts.append(len(source_x))
         return real_transform(source_crs, target_crs, source_x, source_y)
 
-    def force_every_candidate(
-        dataset: rasterio.io.DatasetReader,
-        maximum_dimension: int,
-        offsets: tuple[tuple[float, float], ...],
-        projected_bounds: tuple[float, float, float, float] | None,
-    ) -> DetailProxyPlan:
-        """Make every candidate except the final one exceed decoded bytes.
-
-        Args:
-            dataset: Open controlled raster.
-            maximum_dimension: Current odd target-grid edge.
-            offsets: Representative probe offsets.
-            projected_bounds: Controlled projected target rectangle.
-
-        Returns:
-            Real candidate plan with a forced over-budget cost until one cell.
-        """
-        plan = real_plan_for_dimension(
-            dataset,
-            maximum_dimension,
-            offsets,
-            projected_bounds,
-        )
-        if maximum_dimension == 1:
-            return plan
-        return replace(
-            plan,
-            decoded_source_bytes=DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES + 1,
-        )
-
     monkeypatch.setattr(detail_proxy_module, "warp_transform", tracked_transform)
-    monkeypatch.setattr(
-        detail_proxy_module,
-        "_plan_for_dimension",
-        force_every_candidate,
-    )
     with rasterio.open(source_path) as dataset:
         plan = plan_detail_proxy(
             dataset,
@@ -759,9 +749,8 @@ def test_one_request_bounds_all_transformed_coarsening_positions(
             (0.0, 0.0, 1000.0, 1000.0),
         )
 
-    assert (plan.width, plan.height) == (1, 1)
-    assert transformed_counts[0] == 127 * 127 * 5
-    assert sum(transformed_counts) == DETAIL_PROXY_MAX_TRANSFORMED_POSITIONS
+    assert (plan.width, plan.height) == (127, 127)
+    assert transformed_counts == [DETAIL_PROXY_MAX_TRANSFORMED_POSITIONS]
 
 
 def test_current_view_center_nodata_remains_transparent(
@@ -786,15 +775,15 @@ def test_current_view_center_nodata_remains_transparent(
         RASTER_EXTENT,
     )
 
-    assert (preview.image_width, preview.image_height) == (1, 3)
-    assert preview.pixel_values[1] is None
+    assert (preview.image_width, preview.image_height) == (31, 31)
+    assert preview.pixel_values[15 * 31 + 15] is None
     assert 0 not in preview.pixel_values
 
 
-def test_expensive_native_blocks_force_deterministic_proxy_coarsening(
+def test_expensive_native_blocks_do_not_reduce_the_selected_grid(
     tmp_path: Path,
 ) -> None:
-    """Reduce the proxy until even float64 1024-pixel blocks fit 64 MiB.
+    """Keep the exact grid when cumulative streamed work exceeds 64 MiB.
 
     Args:
         tmp_path: Temporary raster directory.
@@ -820,20 +809,46 @@ def test_expensive_native_blocks_force_deterministic_proxy_coarsening(
         pass
 
     with rasterio.open(source_path) as dataset:
-        first, first_plan = read_detail_proxy(dataset, "centerSample")
+        first_plan = plan_detail_proxy(dataset, "centerSample")
     with rasterio.open(source_path) as dataset:
-        second, second_plan = read_detail_proxy(dataset, "centerSample")
+        second_plan = plan_detail_proxy(dataset, "centerSample")
 
     assert first_plan == second_plan
-    assert (first_plan.height, first_plan.width) == (1, 1)
-    assert len(first_plan.block_indexes) == 1
-    assert (
-        first_plan.decoded_source_bytes
-        == 1024 * 1024 * (numpy.dtype("float64").itemsize + 1)
+    assert (first_plan.height, first_plan.width) == (127, 127)
+    assert 1 < len(first_plan.block_indexes) <= DETAIL_PROXY_MAX_SOURCE_BLOCK_READS
+    assert first_plan.decoded_source_bytes > 64 * 1024 * 1024
+    assert first_plan.decoded_source_bytes <= DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES
+
+
+def test_exact_grid_reports_block_limit_instead_of_silent_coarsening(
+    tmp_path: Path,
+) -> None:
+    """Reject an unaffordable exact grid before reading any source pixels.
+
+    Args:
+        tmp_path: Temporary raster directory.
+    """
+    source_path = tmp_path / "too-many-sampled-blocks.tif"
+    _write_raster(
+        source_path,
+        20_000,
+        20_000,
+        crs="EPSG:3857",
+        transform=from_origin(0, 20_000, 1, 1),
     )
-    assert first_plan.decoded_source_bytes < DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES
-    assert first.mask.item() is True
-    assert second.mask.item() is True
+    with rasterio.open(source_path) as dataset:
+        tracked = _TrackingDataset(dataset)
+        with pytest.raises(
+            ValueError,
+            match=r"selected 127 by 127 sample grid requires .* fixed limit is 1024",
+        ):
+            read_detail_proxy(
+                tracked,
+                "centerSample",
+                127,
+                (0.0, 0.0, 20_000.0, 20_000.0),
+            )
+        assert tracked.reads == []
 
 
 def test_center_proxy_is_a_full_extent_multicell_numeric_raster(
@@ -892,8 +907,8 @@ def test_center_proxy_is_a_full_extent_multicell_numeric_raster(
         SQUARE_EXTENT,
         "fine",
     )
-    assert (preview.image_height, preview.image_width) == (9, 9)
-    assert preview.pixel_values[40] == 44.0
+    assert (preview.image_height, preview.image_width) == (127, 127)
+    assert preview.pixel_values[63 * 127 + 63] == 44.0
     assert preview.image_bounds == pytest.approx(SQUARE_EXTENT)
     assert preview.raster_extent == SQUARE_EXTENT
     assert preview.suggested_range is not None
@@ -940,10 +955,10 @@ def test_representative_proxy_deduplicates_points_and_uses_lower_median(
     assert nodata.mask.item() is True
 
 
-def test_current_view_representative_grid_uses_observed_lower_median(
+def test_current_view_representative_grid_uses_only_observed_values(
     tmp_path: Path,
 ) -> None:
-    """Preserve representative selection through the map-target reader path.
+    """Preserve observed values through the exact map-target reader path.
 
     Args:
         tmp_path: Temporary raster directory.
@@ -965,8 +980,8 @@ def test_current_view_representative_grid_uses_observed_lower_median(
     )
 
     assert preview.scope == "currentView"
-    assert (preview.image_width, preview.image_height) == (1, 1)
-    assert preview.pixel_values == [30.0]
+    assert (preview.image_width, preview.image_height) == (31, 31)
+    assert preview.pixel_values[15 * 31 + 15] == 10.0
     assert preview.actual.points_per_cell == 5
 
 
@@ -1072,7 +1087,7 @@ def test_representative_patch_returns_deterministic_bounded_numeric_payload(
         )
         assert (
             first.actual.decoded_source_bytes
-            <= DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES
+            <= DETAIL_PATCH_MAX_DECODED_SOURCE_BYTES
         )
         assert all(
             "out_shape" not in keyword_args
@@ -1137,7 +1152,7 @@ def test_huge_representative_patch_reads_only_bounded_native_blocks(
         for _, keyword_args in tracker.reads
     )
     assert preview.actual.decoded_source_bytes <= (
-        DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES
+        DETAIL_PATCH_MAX_DECODED_SOURCE_BYTES
     )
 
 

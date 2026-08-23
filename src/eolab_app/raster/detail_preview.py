@@ -12,6 +12,7 @@ from rasterio.warp import reproject, transform as warp_transform
 from rasterio.windows import Window, transform as window_transform
 
 from eolab_app.raster.detail_proxy import (
+    DETAIL_PATCH_MAX_DECODED_SOURCE_BYTES,
     DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES,
     DETAIL_PROXY_MAX_DIMENSION,
     DETAIL_PROXY_MAX_POINTS_PER_CELL,
@@ -35,7 +36,7 @@ from eolab_app.raster.models import (
 from eolab_app.raster.statistics import strict_raster_value_range
 
 
-DETAIL_PREVIEW_POLICY_VERSION = "bounded-sampled-raster-v3"
+DETAIL_PREVIEW_POLICY_VERSION = "bounded-sampled-raster-v4"
 DETAIL_PREVIEW_PATCH_DIMENSION = 128
 DETAIL_PREVIEW_CANDIDATE_FRACTIONS = (0.2, 0.5, 0.8)
 DETAIL_PREVIEW_MAX_PATCH_CANDIDATES = (
@@ -484,8 +485,16 @@ def _representative_patch(
     return selected_window, selected_sample, bounded_samples
 
 
-def _limits() -> RasterDetailPreviewLimits:
-    """Return the fixed public work limits for policy version three.
+def _limits(mode: RasterDetailPreviewMode) -> RasterDetailPreviewLimits:
+    """Return the fixed public work limits for one policy-v4 mode.
+
+    Sampled grids stream as many structurally bounded blocks as their exact
+    selected resolution requires, up to the fixed block-count ceiling. Detail
+    patches retain the smaller cumulative decoded-work ceiling because they
+    reconstruct full 128-by-128 candidate windows.
+
+    Args:
+        mode: Validated preview mode whose decoded-work limit is reported.
 
     Returns:
         Immutable response model containing every server-owned ceiling.
@@ -493,7 +502,11 @@ def _limits() -> RasterDetailPreviewLimits:
     return RasterDetailPreviewLimits(
         maximumProxyDimension=DETAIL_PROXY_MAX_DIMENSION,
         maximumSourceBlockReads=DETAIL_PROXY_MAX_SOURCE_BLOCK_READS,
-        maximumDecodedSourceBytes=DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES,
+        maximumDecodedSourceBytes=(
+            DETAIL_PATCH_MAX_DECODED_SOURCE_BYTES
+            if mode == "representativePatch"
+            else DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES
+        ),
         maximumTransformedPositions=DETAIL_PROXY_MAX_TRANSFORMED_POSITIONS,
         maximumPointsPerCell=DETAIL_PROXY_MAX_POINTS_PER_CELL,
         maximumPatchDimension=DETAIL_PREVIEW_PATCH_DIMENSION,
@@ -539,7 +552,7 @@ def _preview_response(
         imageHeight=image_height,
         pixelValues=_flatten_values(values),
         suggestedRange=_suggested_range(values),
-        limits=_limits(),
+        limits=_limits(mode),
         actual=actual_work,
     )
 
@@ -553,22 +566,24 @@ def read_raster_detail_preview(
 ) -> RasterDetailPreview:
     """Read one bounded numeric preview from an overview-limited raster.
 
-    Sampled modes place a fixed-density grid over either the raster extent or
-    current map intersection in EPSG:3857, transform only their deterministic
-    probe positions to source pixels, and adapt downward until unique native
-    block reads and decoded band-one bytes fit fixed ceilings. Every native
-    block is read once without ``out_shape``. The representative patch keeps a
-    fixed at-most-nine-candidate, 128-by-128-window policy; candidates that
-    exceed the shared block/byte ceilings are skipped. Only already-bounded
-    NumPy patch arrays are reprojected for Leaflet; sampled grids are already
-    aligned to the Web Mercator target rectangle.
+    Sampled modes place the exact selected square grid over either the raster
+    extent or current map intersection in EPSG:3857 and transform only their
+    deterministic probe positions to source pixels. The request is rejected
+    before pixel I/O if that exact grid exceeds the native-block work ceiling;
+    it is never silently replaced by a coarser grid. Every admitted native
+    block is read once without ``out_shape`` and discarded after its requested
+    positions are extracted. The representative patch keeps a fixed
+    at-most-nine-candidate, 128-by-128-window policy; candidates that exceed its
+    smaller block/byte ceilings are skipped. Only already-bounded NumPy patch
+    arrays are reprojected for Leaflet; sampled grids are already aligned to the
+    Web Mercator target rectangle.
 
     Args:
         source_path: Authorized mounted GeoTIFF.
         mode: Explicit preview mode selected by the user.
         raster_extent: Authoritative cataloged WGS 84 raster extent.
-        density: Coarse, medium, or fine server-owned grid profile for sampled
-            modes; ``None`` for the representative patch.
+        density: Coarse, medium, or fine server-owned exact square grid for
+            sampled modes; ``None`` for the representative patch.
         view_bounds: Optional canonical current map rectangle to refine.
 
     Returns:

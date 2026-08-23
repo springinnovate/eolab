@@ -24,10 +24,14 @@ DETAIL_PROXY_DENSITY_MAXIMUM_DIMENSIONS: dict[
     "fine": DETAIL_PROXY_MAX_DIMENSION,
 }
 DETAIL_PROXY_MAX_SOURCE_BLOCK_READS = 1024
-DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES = 64 * 1024 * 1024
-# Five probes over every odd square grid from 127 down through 1. This bounds
-# even a request that must evaluate every safety-coarsening candidate.
-DETAIL_PROXY_MAX_TRANSFORMED_POSITIONS = 1_747_520
+# The reader streams one structurally bounded native block at a time. This
+# total-work ceiling is the worst case for 1,024 1024-by-1024 float64 blocks,
+# including one validity byte per source value; it is not a simultaneous-memory
+# allocation.
+DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES = (
+    DETAIL_PROXY_MAX_SOURCE_BLOCK_READS * 1024 * 1024 * (8 + 1)
+)
+DETAIL_PATCH_MAX_DECODED_SOURCE_BYTES = 64 * 1024 * 1024
 DETAIL_PROXY_CENTER_OFFSETS = ((0.5, 0.5),)
 DETAIL_PROXY_REPRESENTATIVE_OFFSETS = (
     (0.5, 0.5),
@@ -37,6 +41,13 @@ DETAIL_PROXY_REPRESENTATIVE_OFFSETS = (
     (0.75, 0.75),
 )
 DETAIL_PROXY_MAX_POINTS_PER_CELL = len(DETAIL_PROXY_REPRESENTATIVE_OFFSETS)
+# One exact fine grid with the representative policy transforms at most five
+# positions in each of 127 by 127 cells.
+DETAIL_PROXY_MAX_TRANSFORMED_POSITIONS = (
+    DETAIL_PROXY_MAX_DIMENSION
+    * DETAIL_PROXY_MAX_DIMENSION
+    * DETAIL_PROXY_MAX_POINTS_PER_CELL
+)
 DetailProxyMode = Literal["centerSample", "representativeSample"]
 SourcePosition = tuple[int, int]
 SourceBlockIndex = tuple[int, int]
@@ -45,13 +56,13 @@ SourceBlockIndex = tuple[int, int]
 def detail_proxy_maximum_dimension(
     density: RasterDetailPreviewDensity,
 ) -> int:
-    """Return the server-owned maximum grid edge for one density profile.
+    """Return the server-owned exact grid edge for one density profile.
 
     Args:
         density: Validated coarse, medium, or fine profile.
 
     Returns:
-        Fixed maximum grid edge for the selected profile.
+        Fixed exact grid edge for the selected profile.
 
     Raises:
         ValueError: If a caller bypasses request validation with an unknown
@@ -273,34 +284,18 @@ def _cell_positions(
 
 
 def _projected_proxy_dimensions(
-    projected_bounds: tuple[float, float, float, float],
     maximum_dimension: int,
 ) -> tuple[int, int]:
-    """Fit an odd map-aligned grid to a projected sampling rectangle.
+    """Return the exact square grid selected for a projected map rectangle.
 
     Args:
-        projected_bounds: Ordered EPSG:3857 west, south, east, north bounds.
-        maximum_dimension: Positive server-owned grid edge ceiling.
+        maximum_dimension: Positive server-owned grid edge resolution.
 
     Returns:
-        Proxy height and width preserving the map rectangle's aspect ratio.
+        Equal proxy height and width at the selected resolution.
     """
-    west, south, east, north = projected_bounds
-    projected_width = east - west
-    projected_height = north - south
-    if projected_width >= projected_height:
-        width = _odd_dimension(maximum_dimension)
-        height = _odd_dimension(min(
-            maximum_dimension,
-            max(1, round(width * projected_height / projected_width)),
-        ))
-        return height, width
-    height = _odd_dimension(maximum_dimension)
-    width = _odd_dimension(min(
-        maximum_dimension,
-        max(1, round(height * projected_width / projected_height)),
-    ))
-    return height, width
+    dimension = _odd_dimension(maximum_dimension)
+    return dimension, dimension
 
 
 def _projected_cell_positions(
@@ -464,7 +459,6 @@ def _plan_for_dimension(
         )
     else:
         proxy_height, proxy_width = _projected_proxy_dimensions(
-            projected_bounds,
             maximum_dimension,
         )
         positions = _projected_cell_positions(
@@ -500,22 +494,22 @@ def plan_detail_proxy(
     maximum_dimension: int | None = None,
     projected_bounds: tuple[float, float, float, float] | None = None,
 ) -> DetailProxyPlan:
-    """Choose the densest deterministic grid within both source-read budgets.
+    """Plan the exact selected grid or reject it before any source read.
 
     Args:
         dataset: Open structurally authorized one-band raster.
         mode: Center-per-cell or representative-per-cell sampling policy.
-        maximum_dimension: Optional positive grid ceiling no larger than the
-            public maximum; defaults to that maximum for direct callers.
+        maximum_dimension: Optional positive exact grid edge no larger than
+            the public maximum; defaults to that maximum for direct callers.
         projected_bounds: Optional ordered EPSG:3857 target rectangle.
 
     Returns:
-        Densest odd grid whose unique native blocks and decoded bytes stay
-        within the fixed public limits.
+        Exact selected grid whose unique native blocks and total decoded work
+        stay within the fixed public limits.
 
     Raises:
-        ValueError: If the raster or mode violates the proxy contract, or no
-            candidate can satisfy the fixed native-block limits.
+        ValueError: If the raster or mode violates the proxy contract, or the
+            exact selected grid exceeds a fixed source-work limit.
         rasterio.errors.RasterioError: If CRS transformation fails.
     """
     _require_source_contract(dataset)
@@ -539,31 +533,28 @@ def plan_detail_proxy(
     ):
         raise ValueError("Sampled raster projected bounds are invalid")
 
-    maximum = _odd_dimension(
-        min(
-            requested_maximum,
-            max(dataset.width, dataset.height),
-        )
+    dimension = _odd_dimension(
+        requested_maximum
+        if projected_bounds is not None
+        else min(requested_maximum, max(dataset.width, dataset.height))
     )
-    seen_dimensions: set[tuple[int, int]] = set()
-    for candidate_dimension in range(maximum, 0, -2):
-        plan = _plan_for_dimension(
-            dataset,
-            candidate_dimension,
-            offsets,
-            projected_bounds,
+    plan = _plan_for_dimension(dataset, dimension, offsets, projected_bounds)
+    block_count = len(plan.block_indexes)
+    if block_count > DETAIL_PROXY_MAX_SOURCE_BLOCK_READS:
+        raise ValueError(
+            f"The selected {plan.width} by {plan.height} sample grid requires "
+            f"{block_count} native source blocks; the fixed limit is "
+            f"{DETAIL_PROXY_MAX_SOURCE_BLOCK_READS}. Choose a lower exact "
+            "density or zoom farther into the raster."
         )
-        dimensions = (plan.height, plan.width)
-        if dimensions in seen_dimensions:
-            continue
-        seen_dimensions.add(dimensions)
-        if (
-            len(plan.block_indexes) <= DETAIL_PROXY_MAX_SOURCE_BLOCK_READS
-            and plan.decoded_source_bytes
-            <= DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES
-        ):
-            return plan
-    raise ValueError("Sampled raster proxy exceeds fixed source-read limits")
+    if plan.decoded_source_bytes > DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES:
+        raise ValueError(
+            f"The selected {plan.width} by {plan.height} sample grid requires "
+            f"{plan.decoded_source_bytes} decoded source bytes; the fixed "
+            f"limit is {DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES}. Choose a "
+            "lower exact density or zoom farther into the raster."
+        )
+    return plan
 
 
 def _finite_block_value(
@@ -621,9 +612,9 @@ def read_bounded_candidate_windows(
 
     Candidate windows are considered in caller order. A candidate is retained
     when the union of native blocks still satisfies both fixed source limits;
-    candidates that would exceed either ceiling are skipped. Every accepted
-    window is reconstructed from the shared native blocks, each read exactly
-    once without resampling.
+    candidates that would exceed either patch ceiling are skipped. Every
+    accepted window is reconstructed from the shared native blocks, each read
+    exactly once without resampling.
 
     Args:
         dataset: Open structurally authorized one-band raster.
@@ -649,7 +640,7 @@ def read_bounded_candidate_windows(
         proposed_bytes = _decoded_bytes_for_blocks(dataset, proposed_indexes)
         if (
             len(proposed_indexes) > DETAIL_PROXY_MAX_SOURCE_BLOCK_READS
-            or proposed_bytes > DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES
+            or proposed_bytes > DETAIL_PATCH_MAX_DECODED_SOURCE_BYTES
         ):
             continue
         accepted.append(window)
@@ -721,7 +712,8 @@ def read_detail_proxy(
     Args:
         dataset: Open structurally authorized one-band raster.
         mode: Center-per-cell or representative-per-cell sampling policy.
-        maximum_dimension: Optional fixed target-grid edge ceiling.
+        maximum_dimension: Optional fixed target-grid edge. Projected preview
+            grids use it exactly on both axes.
         projected_bounds: Optional EPSG:3857 target rectangle.
 
     Returns:

@@ -174,6 +174,43 @@ test("detail preview accepts numeric images and honest all-nodata proxies", () =
   );
 });
 
+test("fine density requires and accepts an exact 127 by 127 grid", () => {
+  const finePreview = {
+    ...CENTER_SAMPLE_DETAIL_PREVIEW,
+    density: "fine",
+    imageWidth: 127,
+    imageHeight: 127,
+    pixelValues: new Array(127 * 127).fill(1),
+    actual: {
+      ...CENTER_SAMPLE_DETAIL_PREVIEW.actual,
+      sampleGridWidth: 127,
+      sampleGridHeight: 127,
+    },
+  };
+  assert.equal(
+    validateRasterDetailPreview(
+      finePreview,
+      { mode: "centerSample", density: "fine" },
+    ),
+    finePreview,
+  );
+
+  assert.throws(
+    () => validateRasterDetailPreview({
+      ...finePreview,
+      imageWidth: 15,
+      imageHeight: 7,
+      pixelValues: new Array(15 * 7).fill(1),
+      actual: {
+        ...finePreview.actual,
+        sampleGridWidth: 15,
+        sampleGridHeight: 7,
+      },
+    }, { mode: "centerSample", density: "fine" }),
+    /exceeds its fixed limit/,
+  );
+});
+
 test("detail preview rejects arbitrary modes before sending a request", async () => {
   await assert.rejects(
     loadCatalogRasterDetailPreview(
@@ -188,7 +225,7 @@ test("detail preview rejects arbitrary modes before sending a request", async ()
   );
 });
 
-test("detail preview strictly validates v3 numeric image identity and shape", () => {
+test("detail preview strictly validates v4 exact-grid identity and shape", () => {
   const invalidPreviews = [
     ["mismatched mode", {
       ...CENTER_SAMPLE_DETAIL_PREVIEW,
@@ -243,7 +280,7 @@ test("detail preview strictly validates v3 numeric image identity and shape", ()
       ...CENTER_SAMPLE_DETAIL_PREVIEW,
       limits: {
         ...CENTER_SAMPLE_DETAIL_PREVIEW.limits,
-        maximumTransformedPositions: 1747519,
+        maximumTransformedPositions: 80644,
       },
     }],
     ["over-limit actual block reads", {
@@ -257,7 +294,7 @@ test("detail preview strictly validates v3 numeric image identity and shape", ()
       ...CENTER_SAMPLE_DETAIL_PREVIEW,
       actual: {
         ...CENTER_SAMPLE_DETAIL_PREVIEW.actual,
-        decodedSourceBytes: 67108865,
+        decodedSourceBytes: 9663676417,
       },
     }],
     ["negative candidate count", {

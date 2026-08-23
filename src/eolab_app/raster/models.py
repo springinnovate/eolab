@@ -305,12 +305,13 @@ class RasterDetailPreviewLimits(BaseModel):
     """Public resource bounds applied to one detail-only preview.
 
     Attributes:
-        maximum_proxy_dimension: Maximum source/output proxy-grid edge.
+        maximum_proxy_dimension: Maximum exact source/output proxy-grid edge.
         maximum_source_block_reads: Maximum unique native blocks read.
-        maximum_decoded_source_bytes: Maximum decoded band-one values plus
-            their in-memory validity bytes.
-        maximum_transformed_positions: Maximum target probes transformed over
-            every possible sampled-grid coarsening candidate in one request.
+        maximum_decoded_source_bytes: Mode-specific maximum cumulative decoded
+            band-one values plus their validity bytes. Sampled blocks are
+            streamed rather than retained simultaneously.
+        maximum_transformed_positions: Maximum target probes transformed for
+            one exact sampled grid.
         maximum_points_per_cell: Maximum deterministic probes in a proxy cell.
         maximum_patch_dimension: Maximum source/output patch edge.
         maximum_patch_candidates: Maximum candidate windows examined.
@@ -320,10 +321,10 @@ class RasterDetailPreviewLimits(BaseModel):
     maximum_source_block_reads: Literal[1024] = Field(
         alias="maximumSourceBlockReads"
     )
-    maximum_decoded_source_bytes: Literal[67_108_864] = Field(
+    maximum_decoded_source_bytes: Literal[67_108_864, 9_663_676_416] = Field(
         alias="maximumDecodedSourceBytes"
     )
-    maximum_transformed_positions: Literal[1_747_520] = Field(
+    maximum_transformed_positions: Literal[80_645] = Field(
         alias="maximumTransformedPositions"
     )
     maximum_points_per_cell: Literal[5] = Field(alias="maximumPointsPerCell")
@@ -382,7 +383,7 @@ class RasterDetailPreview(BaseModel):
     mode: RasterDetailPreviewMode
     scope: RasterDetailPreviewScope
     density: RasterDetailPreviewDensity | None
-    policy_version: Literal["bounded-sampled-raster-v3"] = Field(
+    policy_version: Literal["bounded-sampled-raster-v4"] = Field(
         alias="policyVersion"
     )
     approximate: Literal[True] = True
@@ -422,24 +423,34 @@ class RasterDetailPreview(BaseModel):
             or self.density is None
         ):
             raise ValueError("Sampled proxy provenance is inconsistent")
-        maximum_image_dimension = (
-            self.limits.maximum_patch_dimension
-            if self.mode == "representativePatch"
-            else {
+        if self.mode == "representativePatch":
+            if (
+                self.image_width > self.limits.maximum_patch_dimension
+                or self.image_height > self.limits.maximum_patch_dimension
+            ):
+                raise ValueError("Detail preview dimensions exceed fixed limits")
+            expected_decoded_limit = 67_108_864
+        else:
+            exact_grid_dimension = {
                 "coarse": 31,
                 "medium": 63,
                 "fine": self.limits.maximum_proxy_dimension,
             }[self.density]
-        )
+            if (
+                self.image_width != exact_grid_dimension
+                or self.image_height != exact_grid_dimension
+            ):
+                raise ValueError(
+                    "Sampled preview dimensions must match the selected exact grid"
+                )
+            expected_decoded_limit = 9_663_676_416
         if (
-            self.image_width > maximum_image_dimension
-            or self.image_height > maximum_image_dimension
-            or self.actual.sample_grid_width > maximum_image_dimension
-            or self.actual.sample_grid_height > maximum_image_dimension
-            or self.actual.sample_grid_width != self.image_width
+            self.actual.sample_grid_width != self.image_width
             or self.actual.sample_grid_height != self.image_height
         ):
             raise ValueError("Detail preview dimensions exceed fixed limits")
+        if self.limits.maximum_decoded_source_bytes != expected_decoded_limit:
+            raise ValueError("Detail preview decoded-work limit is inconsistent")
         if (
             self.actual.source_block_read_count
             > self.limits.maximum_source_block_reads

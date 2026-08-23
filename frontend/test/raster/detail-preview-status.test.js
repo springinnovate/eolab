@@ -29,7 +29,7 @@ test("detail preview resolution distinguishes patches from adaptive grids", () =
       detailPreview: CURRENT_VIEW_DETAIL_PREVIEW,
       detailStatus: "ready",
     }),
-    "Base sample grid: 3 × 2; current-view detail: 3 × 2",
+    "Base sample grid: 31 × 31; current-view detail: 31 × 31",
   );
 });
 
@@ -41,7 +41,7 @@ test("detail preview resolution reports pending and retained update states", () 
       detailPreview: null,
       detailStatus: "loading",
     }),
-    "Base sample grid: 3 × 2; current-view detail: loading…",
+    "Base sample grid: 31 × 31; current-view detail: loading…",
   );
   assert.equal(
     formatRasterDetailPreviewResolution({
@@ -50,7 +50,7 @@ test("detail preview resolution reports pending and retained update states", () 
       detailPreview: CURRENT_VIEW_DETAIL_PREVIEW,
       detailStatus: "error",
     }),
-    "Base sample grid: 3 × 2; current-view detail: 3 × 2 " +
+    "Base sample grid: 31 × 31; current-view detail: 31 × 31 " +
       "(retained; update failed)",
   );
 });

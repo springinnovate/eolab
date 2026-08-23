@@ -13,31 +13,37 @@ export const MOUNTED_GEOTIFF_ITEM = Object.freeze({
 export const RASTER_DETAIL_PREVIEW_LIMITS = Object.freeze({
   maximumProxyDimension: 127,
   maximumSourceBlockReads: 1024,
-  maximumDecodedSourceBytes: 67108864,
-  maximumTransformedPositions: 1747520,
+  maximumDecodedSourceBytes: 9663676416,
+  maximumTransformedPositions: 80645,
   maximumPointsPerCell: 5,
   maximumPatchDimension: 128,
   maximumPatchCandidates: 9,
 });
+
+/** Exact coarse-grid values with a deterministic repeating color pattern. */
+const COARSE_GRID_VALUES = Array.from(
+  { length: 31 * 31 },
+  (_, index) => [0, 50, 100, null, 25, 75][index % 6],
+);
 
 /** @type {Readonly<Object>} Full-extent center-per-cell numeric proxy. */
 export const CENTER_SAMPLE_DETAIL_PREVIEW = Object.freeze({
   mode: "centerSample",
   scope: "rasterExtent",
   density: "coarse",
-  policyVersion: "bounded-sampled-raster-v3",
+  policyVersion: "bounded-sampled-raster-v4",
   approximate: true,
   label: "Approximate full-extent proxy using each preview cell's center",
   rasterExtent: [-123, 48, -121, 50],
   imageBounds: [-122.9, 48.1, -121.1, 49.9],
-  imageWidth: 3,
-  imageHeight: 2,
-  pixelValues: [0, 50, 100, null, 25, 75],
+  imageWidth: 31,
+  imageHeight: 31,
+  pixelValues: COARSE_GRID_VALUES,
   suggestedRange: { minimum: 0, midpoint: 50, maximum: 100 },
   limits: RASTER_DETAIL_PREVIEW_LIMITS,
   actual: {
-    sampleGridWidth: 3,
-    sampleGridHeight: 2,
+    sampleGridWidth: 31,
+    sampleGridHeight: 31,
     sourceBlockReadCount: 6,
     decodedSourceBytes: 12288,
     pointsPerCell: 1,
@@ -50,7 +56,9 @@ export const REPRESENTATIVE_SAMPLE_DETAIL_PREVIEW = Object.freeze({
   ...CENTER_SAMPLE_DETAIL_PREVIEW,
   mode: "representativeSample",
   label: "Approximate full-extent proxy using representative cell samples",
-  pixelValues: [5, 45, 95, null, 30, 80],
+  pixelValues: COARSE_GRID_VALUES.map((value) =>
+    value === null ? null : Math.min(100, value + 5)
+  ),
   actual: {
     ...CENTER_SAMPLE_DETAIL_PREVIEW.actual,
     pointsPerCell: 5,
@@ -69,6 +77,10 @@ export const PATCH_DETAIL_PREVIEW = Object.freeze({
   imageHeight: 2,
   pixelValues: [10, 20, null, 30],
   suggestedRange: { minimum: 10, midpoint: 20, maximum: 30 },
+  limits: Object.freeze({
+    ...RASTER_DETAIL_PREVIEW_LIMITS,
+    maximumDecodedSourceBytes: 67108864,
+  }),
   actual: {
     sampleGridWidth: 2,
     sampleGridHeight: 2,
@@ -85,13 +97,16 @@ export const CURRENT_VIEW_DETAIL_PREVIEW = Object.freeze({
   scope: "currentView",
   label: "Approximate current-view sampled proxy using each map cell's center",
   imageBounds: [-122.5, 48.5, -121.5, 49.5],
-  pixelValues: [10, 20, 30, 40, 50, 60],
+  pixelValues: Array.from(
+    { length: 31 * 31 },
+    (_, index) => 10 + (index % 6) * 10,
+  ),
 });
 
 /** @type {Readonly<Object>} Honest all-nodata full-extent numeric proxy. */
 export const NODATA_DETAIL_PREVIEW = Object.freeze({
   ...CENTER_SAMPLE_DETAIL_PREVIEW,
-  pixelValues: new Array(6).fill(null),
+  pixelValues: new Array(31 * 31).fill(null),
   suggestedRange: null,
 });
 

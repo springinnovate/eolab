@@ -16,6 +16,7 @@ from eolab_app.raster.detail_preview import (
     read_raster_detail_preview,
 )
 from eolab_app.raster.detail_proxy import (
+    DETAIL_PATCH_MAX_DECODED_SOURCE_BYTES,
     DETAIL_PROXY_CENTER_OFFSETS,
     DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES,
     DETAIL_PROXY_MAX_SOURCE_BLOCK_READS,
@@ -115,7 +116,7 @@ class RasterDetailPreviewService:
 
         Args:
             mode: Validated detail preview mode.
-            density: Fixed sampled-grid profile, or ``None`` for a patch.
+            density: Fixed exact sampled-grid profile, or ``None`` for a patch.
 
         Returns:
             Mode-specific sampling limits and location-policy inputs.
@@ -143,7 +144,7 @@ class RasterDetailPreviewService:
         return (
             DETAIL_PREVIEW_PATCH_DIMENSION,
             DETAIL_PROXY_MAX_SOURCE_BLOCK_READS,
-            DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES,
+            DETAIL_PATCH_MAX_DECODED_SOURCE_BYTES,
             DETAIL_PROXY_MAX_TRANSFORMED_POSITIONS,
             *(round(value * 1000) for value in DETAIL_PREVIEW_CANDIDATE_FRACTIONS),
         )

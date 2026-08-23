@@ -174,7 +174,7 @@ const RASTER_DETAIL_PREVIEW_MODES = new Set([
     "representativeSample",
     "representativePatch"
 ]);
-/** Fixed server-owned target-grid ceilings for sampled raster proxies. */
+/** Fixed server-owned exact square grids for sampled raster proxies. */
 const RASTER_DETAIL_PREVIEW_DENSITIES = new Map([
     ["coarse", 31],
     ["medium", 63],
@@ -271,6 +271,9 @@ function validateRasterDetailPreviewOptions(options) {
 export function validateRasterDetailPreview(preview, options) {
     const request = validateRasterDetailPreviewOptions(options);
     const requestedMode = request.mode;
+    const expectedDecodedSourceBytes = requestedMode === "representativePatch"
+        ? 67108864
+        : 9663676416;
     const isCanonicalBounds = (bounds) =>
         Array.isArray(bounds) && bounds.length === 4 &&
         bounds.every(Number.isFinite) &&
@@ -284,7 +287,7 @@ export function validateRasterDetailPreview(preview, options) {
             : request.viewBounds === null ? "rasterExtent" : "currentView") ||
         preview?.density !== request.density ||
         preview?.approximate !== true ||
-        preview?.policyVersion !== "bounded-sampled-raster-v3" ||
+        preview?.policyVersion !== "bounded-sampled-raster-v4" ||
         typeof preview?.label !== "string" || preview.label.trim() === "" ||
         !isCanonicalBounds(preview?.rasterExtent) ||
         !isCanonicalBounds(preview?.imageBounds) ||
@@ -299,8 +302,9 @@ export function validateRasterDetailPreview(preview, options) {
         ) ||
         preview?.limits?.maximumProxyDimension !== 127 ||
         preview?.limits?.maximumSourceBlockReads !== 1024 ||
-        preview?.limits?.maximumDecodedSourceBytes !== 67108864 ||
-        preview?.limits?.maximumTransformedPositions !== 1747520 ||
+        preview?.limits?.maximumDecodedSourceBytes !==
+            expectedDecodedSourceBytes ||
+        preview?.limits?.maximumTransformedPositions !== 80645 ||
         preview?.limits?.maximumPointsPerCell !== 5 ||
         preview?.limits?.maximumPatchDimension !== 128 ||
         preview?.limits?.maximumPatchCandidates !== 9 ||
@@ -321,12 +325,15 @@ export function validateRasterDetailPreview(preview, options) {
     ) {
         throw new Error("Detail-only preview response is invalid");
     }
-    const maximumImageDimension = requestedMode === "representativePatch"
+    const selectedGridDimension = requestedMode === "representativePatch"
         ? preview.limits.maximumPatchDimension
         : RASTER_DETAIL_PREVIEW_DENSITIES.get(request.density);
     if (
-        preview.imageWidth > maximumImageDimension ||
-        preview.imageHeight > maximumImageDimension ||
+        (requestedMode === "representativePatch"
+            ? preview.imageWidth > selectedGridDimension ||
+                preview.imageHeight > selectedGridDimension
+            : preview.imageWidth !== selectedGridDimension ||
+                preview.imageHeight !== selectedGridDimension) ||
         preview.actual.pointsPerCell !== (
             requestedMode === "centerSample"
                 ? 1

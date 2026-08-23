@@ -3,9 +3,10 @@
 EOLab keeps normal full visualization and bounded sampled visualization as
 separate contracts. Normal visualization publishes an eligible raster to
 GeoServer and permits authorized WMS tiles. A sampled raster is a synthetic,
-approximate grid built by Rasterio in EOLab from a fixed number of observed
-source pixels. It is not a whole-raster read, an overview pyramid, or permission
-for arbitrary WMS requests.
+approximate grid built by Rasterio in EOLab from an exact user-selected number
+of map cells and a fixed number of observed source pixels per cell. It is not a
+whole-raster read, an overview pyramid, or permission for arbitrary WMS
+requests.
 
 ## Applicability and authorization
 
@@ -51,18 +52,20 @@ sampled images, while the temporary-AOI pane remains above both.
 | Representative samples in each proxy cell | Each cell examines the center plus four fixed quadrant-center positions. Duplicate source positions are removed. The lower median observed finite value is displayed with value/row/column deterministic ordering. An all-nodata cell remains transparent. |
 | Representative bounded detail patch | At most nine 128 × 128 source windows are ranked by finite valid-pixel coverage, then population standard deviation, then top-left row-major order. The selected already-read window is displayed at its true spatial location. |
 
-For the first two modes the user chooses one closed density profile. These are
-ceilings, not browser-controlled dimensions:
+For the first two modes the user chooses one closed, exact square-grid profile.
+The browser selects only these server-owned profiles; it cannot supply arbitrary
+numeric dimensions:
 
-| Density | Maximum target-grid edge |
+| Density | Exact target grid |
 | --- | ---: |
-| Coarse | 31 cells |
-| Medium | 63 cells |
-| Fine | 127 cells |
+| Coarse | 31 × 31 cells |
+| Medium | 63 × 63 cells |
+| Fine | 127 × 127 cells |
 
-The widget reports the actual base and current-view grid dimensions returned by
-the server. Aspect ratio and safety coarsening can make an actual grid smaller
-than its profile ceiling.
+The widget reports the base and current-view grid dimensions returned by the
+server. A sampled response always matches the selected profile exactly. EOLab
+preflights the exact grid and returns an actionable conflict before pixel I/O if
+it would exceed a fixed source-read limit; it never substitutes a coarser grid.
 
 ## Zoom-adaptive detail
 
@@ -89,31 +92,33 @@ base/detail seams. Nodata remains alpha-transparent.
 
 ## Source-read proof and output bounds
 
-Policy `bounded-sampled-raster-v3` constructs its target grid directly in
-EPSG:3857. For each cell it transforms only the fixed center or five
+Policy `bounded-sampled-raster-v4` constructs its exact square target grid
+directly in EPSG:3857. For each cell it transforms only the fixed center or five
 representative positions into the raster CRS, applies the inverse source affine
 transform (including rotated or skewed grids), and discards positions outside
 the source. It never reads the potentially enormous source-pixel envelope of a
 view.
 
 Valid source positions are deduplicated and grouped by their native TIFF block.
-Each required band-one block is read exactly once at base resolution with no
-`out_shape`, resampling, or boundless read. A candidate grid is deterministically
-reduced until both ceilings hold:
+The exact grid is admitted only when it needs at most 1,024 unique native
+blocks. Each required band-one block is then read exactly once at base
+resolution with no `out_shape`, resampling, or boundless read. Only requested
+values are retained; the block array is discarded before the next block is
+read. If the exact grid exceeds the block ceiling, the response fails rather
+than changing resolution.
 
+The exact fixed bounds are:
+
+- at most 127 × 127 × 5 = 80,645 transformed positions;
 - at most 1,024 unique native-block reads; and
-- at most 64 MiB of conservatively estimated decoded band-one values plus
-  their in-memory validity bytes.
+- at most 9,663,676,416 cumulative decoded band-one and validity bytes. This
+  last worst case is derived from 1,024 structurally authorized 1024 × 1024
+  float64 blocks at nine bytes per source value. It bounds total decode work;
+  the blocks are streamed and are not retained together.
 
-One attempted fine representative grid transforms at most 127 × 127 × 5 =
-80,645 positions before deduplication. If that grid exceeds a source-read
-ceiling, deterministic safety coarsening may try each of the 64 odd edge sizes
-from 127 through 1. The request-level ceiling is therefore 1,747,520 transformed
-positions across all attempts, while peak transformation memory is one attempted
-grid. Transformation is bounded CPU/memory work and cannot cause an unbounded
-GDAL source read. The already map-aligned numeric grid is returned at no more
-than its selected 31, 63, or 127 edge. Patch candidates use the same block/byte
-ceilings and an output edge of at most 128.
+The representative patch retains its smaller 64 MiB cumulative decoded-work
+ceiling because it reconstructs full candidate windows. Patch output remains at
+most 128 × 128.
 
 ## Caching and source changes
 
@@ -122,10 +127,11 @@ Identical work is coalesced. The number of admitted distinct in-flight cache
 identities is capped at the same configured concurrency; excess distinct work
 receives an actionable busy conflict instead of accumulating a viewport-request
 backlog. Cache identity includes Collection and Item, assessed source signature,
-cataloged raster extent, policy v3, preview mode, density, exact effective view
-bounds, transformed-position, native-block, and byte ceilings, fixed probe
-offsets, and patch selection parameters. The source signature is checked before
-and after pixel work; changed files are neither returned nor cached.
+cataloged raster extent, policy v4, preview mode, density, exact effective view
+bounds, transformed-position, native-block, and mode-specific byte ceilings,
+fixed probe offsets, and patch selection parameters. The source signature is
+checked before and after pixel work; changed files are neither returned nor
+cached.
 
 ## Why this is not normal full-raster visualization
 

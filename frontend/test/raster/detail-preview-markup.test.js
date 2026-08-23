@@ -16,9 +16,10 @@ test("sampled raster visualization explains its three bounded policies", () => {
   assert.match(MARKUP, /value="representativeSample">Representative samples in each proxy cell/);
   assert.match(MARKUP, /value="representativePatch">Representative, bounded detail patch/);
   assert.match(MARKUP, /id="raster-detail-preview-density"/);
-  assert.match(MARKUP, /value="coarse">Coarse — up to 31 cells across/);
-  assert.match(MARKUP, /value="medium">Medium — up to 63 cells across/);
-  assert.match(MARKUP, /value="fine">Fine — up to 127 cells across/);
+  assert.match(MARKUP, /value="coarse">Coarse — exact 31 × 31 samples/);
+  assert.match(MARKUP, /value="medium">Medium — exact 63 × 63 samples/);
+  assert.match(MARKUP, /value="fine">Fine — exact 127 × 127 samples/);
+  assert.match(MARKUP, /reports an error instead of substituting a coarser grid/);
   assert.match(MARKUP, /id="raster-detail-preview-resolution"/);
   assert.match(MARKUP, /id="show-raster-detail-preview"[^>]*type="button"/s);
   assert.match(MARKUP, /Show sampled raster/);
