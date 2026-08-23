@@ -56,6 +56,7 @@ def test_raster_routes_translate_application_errors_at_http_boundary() -> None:
         service,
         service,
         service,
+        service,
         registry,
     )
     application = FastAPI()
@@ -73,6 +74,17 @@ def test_raster_routes_translate_application_errors_at_http_boundary() -> None:
     assert response.json() == {"detail": "controlled raster conflict"}
     assert feature.registry is registry
 
+    detail_response = TestClient(application).post(
+        "/api/rendering/detail-previews",
+        json={
+            "collectionId": "eolab-mounted-geotiffs",
+            "itemId": "geotiff-0123456789abcdef01234567",
+            "mode": "samplingGrid",
+        },
+    )
+    assert detail_response.status_code == 409
+    assert detail_response.json() == {"detail": "controlled raster conflict"}
+
 
 def test_publication_route_returns_actionable_category_document() -> None:
     """Serialize the reader category and guidance through FastAPI.
@@ -83,6 +95,7 @@ def test_publication_route_returns_actionable_category_document() -> None:
     service = _PublicationFailureService()
     registry = PublishedRasterRegistry()
     feature = create_raster_feature(
+        service,
         service,
         service,
         service,

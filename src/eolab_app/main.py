@@ -25,6 +25,7 @@ from eolab_app.raster.geoserver import (
     GeoServerRasterPublisher,
     GeoServerRasterReaderAssessor,
 )
+from eolab_app.raster.detail_preview_service import RasterDetailPreviewService
 from eolab_app.raster.pixel_service import RasterPixelService
 from eolab_app.raster.publication import RasterPublicationService
 from eolab_app.raster.sources import (
@@ -144,6 +145,12 @@ def create_app(
         RasterStatisticsService(
             published_rasters,
             app_global_configuration.raster_statistics_read_concurrency,
+            app_global_configuration.raster_statistics_cache_entries,
+        ),
+        RasterDetailPreviewService(
+            raster_catalog,
+            raster_source_resolver,
+            app_global_configuration.raster_pixel_read_concurrency,
             app_global_configuration.raster_statistics_cache_entries,
         ),
         published_rasters,

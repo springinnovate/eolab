@@ -22,6 +22,20 @@ RasterStatisticsCacheKey = tuple[
     str,
     CanonicalWgs84Bounds | None,
 ]
+RasterDetailPreviewMode = Literal[
+    "centerPixel",
+    "samplingGrid",
+    "representativePatch",
+]
+RasterDetailPreviewCacheKey = tuple[
+    str,
+    str,
+    SourceSignature,
+    tuple[float, float, float, float],
+    str,
+    RasterDetailPreviewMode,
+    tuple[int, ...],
+]
 
 
 @dataclass(frozen=True)
@@ -150,6 +164,16 @@ class CatalogRasterStatisticsRequest(CatalogRasterRequest):
     )
 
 
+class CatalogRasterDetailPreviewRequest(CatalogRasterRequest):
+    """Select one fixed, bounded preview for an overview-limited raster.
+
+    Attributes:
+        mode: Explicit center, grid, or representative-patch choice.
+    """
+
+    mode: RasterDetailPreviewMode
+
+
 class PublishedRaster(BaseModel):
     """Browser-safe identity of one published WMS layer."""
 
@@ -183,6 +207,91 @@ class RasterPixel(BaseModel):
     column: int | None
     in_bounds: bool = Field(alias="inBounds")
     value: float | None
+
+
+class RasterDetailSample(BaseModel):
+    """One georeferenced band-1 sample in a detail-only preview.
+
+    Attributes:
+        row: Zero-based source raster row.
+        column: Zero-based source raster column.
+        longitude: WGS 84 cell-center longitude.
+        latitude: WGS 84 cell-center latitude.
+        value: Finite band-1 value, or ``None`` for nodata/non-finite data.
+    """
+
+    row: int
+    column: int
+    longitude: FiniteFloat
+    latitude: FiniteFloat
+    value: FiniteFloat | None
+
+
+class RasterDetailPreviewLimits(BaseModel):
+    """Public resource bounds applied to one detail-only preview.
+
+    Attributes:
+        maximum_grid_samples: Maximum one-pixel reads in grid mode.
+        maximum_patch_dimension: Maximum source/output patch edge.
+        maximum_patch_candidates: Maximum candidate windows examined.
+    """
+
+    maximum_grid_samples: int = Field(alias="maximumGridSamples")
+    maximum_patch_dimension: int = Field(alias="maximumPatchDimension")
+    maximum_patch_candidates: int = Field(alias="maximumPatchCandidates")
+
+
+class RasterDetailPreview(BaseModel):
+    """Browser-safe, georeferenced approximate raster detail preview.
+
+    Attributes:
+        mode: Explicit preview mode that produced this document.
+        policy_version: Algorithm and cache policy identity.
+        approximate: Literal marker preventing full-render interpretation.
+        label: User-facing approximation label.
+        raster_extent: Cataloged WGS 84 raster extent, not a data footprint.
+        samples: Georeferenced point samples for center/grid modes.
+        detail_bounds: WGS 84 bounds of a representative patch.
+        image_data_url: Fixed-size transparent PNG for patch mode.
+        limits: Resource bounds used to produce the response.
+    """
+
+    mode: RasterDetailPreviewMode
+    policy_version: str = Field(alias="policyVersion")
+    approximate: Literal[True] = True
+    label: str
+    raster_extent: tuple[FiniteFloat, FiniteFloat, FiniteFloat, FiniteFloat] = (
+        Field(alias="rasterExtent")
+    )
+    samples: list[RasterDetailSample]
+    detail_bounds: (
+        tuple[FiniteFloat, FiniteFloat, FiniteFloat, FiniteFloat] | None
+    ) = Field(default=None, alias="detailBounds")
+    image_data_url: str | None = Field(default=None, alias="imageDataUrl")
+    limits: RasterDetailPreviewLimits
+
+    @model_validator(mode="after")
+    def require_mode_payload(self) -> "RasterDetailPreview":
+        """Require samples or a bounded image according to preview mode.
+
+        Returns:
+            The validated detail preview.
+
+        Raises:
+            ValueError: If the payload does not match its declared mode.
+        """
+        is_patch = self.mode == "representativePatch"
+        if is_patch != (
+            self.detail_bounds is not None and self.image_data_url is not None
+        ):
+            raise ValueError(
+                "Representative patches require one image and detail bounds"
+            )
+        if is_patch and self.samples:
+            raise ValueError("Representative patches cannot include samples")
+        if not is_patch and not self.samples:
+            raise ValueError("Point previews require georeferenced samples")
+        return self
 
 
 class RasterPercentiles(BaseModel):

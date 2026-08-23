@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from fastapi import APIRouter, HTTPException, Request
 
 from eolab_app.raster.assessment import RasterAssessmentService
+from eolab_app.raster.detail_preview_service import RasterDetailPreviewService
 from eolab_app.raster.errors import (
     RasterAssetError,
     RasterConflictError,
@@ -17,9 +18,11 @@ from eolab_app.raster.errors import (
 )
 from eolab_app.raster.models import (
     CatalogPixelRequest,
+    CatalogRasterDetailPreviewRequest,
     CatalogRasterRequest,
     CatalogRasterStatisticsRequest,
     PublishedRaster,
+    RasterDetailPreview,
     RasterPixel,
     RasterStatistics,
 )
@@ -99,6 +102,7 @@ def create_raster_feature(
     publication_service: RasterPublicationService,
     pixel_service: RasterPixelService,
     statistics_service: RasterStatisticsService,
+    detail_preview_service: RasterDetailPreviewService,
     registry: PublishedRasterRegistry,
 ) -> RasterFeature:
     """Create the raster router around fully constructed services.
@@ -108,6 +112,7 @@ def create_raster_feature(
         publication_service: Serialized publication workflow.
         pixel_service: Capacity-limited pixel-read workflow.
         statistics_service: Coalescing statistics workflow.
+        detail_preview_service: Coalescing bounded detail-preview workflow.
         registry: Process-local layer authorization shared with WMS.
 
     Returns:
@@ -181,6 +186,29 @@ def create_raster_feature(
         """
         try:
             return await pixel_service.get(request)
+        except RasterFeatureError as error:
+            raise raster_http_exception(error) from error
+
+    @router.post(
+        "/detail-previews",
+        response_model=RasterDetailPreview,
+    )
+    async def raster_detail_preview(
+        request: CatalogRasterDetailPreviewRequest,
+    ) -> RasterDetailPreview:
+        """Return an explicitly selected bounded detail-only preview.
+
+        Args:
+            request: Catalog identity and one of the three fixed preview modes.
+
+        Returns:
+            Georeferenced point samples or one bounded WGS 84 patch image.
+
+        Raises:
+            HTTPException: If the raster or preview contract is inapplicable.
+        """
+        try:
+            return await detail_preview_service.get(request)
         except RasterFeatureError as error:
             raise raster_http_exception(error) from error
 
