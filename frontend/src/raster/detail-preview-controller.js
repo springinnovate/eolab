@@ -1,61 +1,169 @@
-/** Lifecycle coordinator for one transient, bounded raster detail preview. */
+/** Lifecycle coordinator for zoom-adaptive, bounded raster detail previews. */
 
 import { loadCatalogRasterDetailPreview } from "./api.js";
-import { createRasterDetailPreviewLayer } from "./detail-preview-leaflet.js";
+import {
+    createRasterDetailPreviewLayer,
+    ensureRasterDetailPreviewPanes
+} from "./detail-preview-leaflet.js";
+import {
+    intersectRasterViewport,
+    isRasterDetailZoom,
+    rasterViewportKey
+} from "./detail-preview-viewport.js";
 import { getCatalogRasterLayerKey } from "./layer-stack.js";
+
+const DETAIL_REFINEMENT_DEBOUNCE_MILLISECONDS = 200;
+
+/**
+ * Return whether two controller-owned Leaflet bounds have identical corners.
+ *
+ * @param {number[][]} left First southwest/northeast latitude-longitude pair.
+ * @param {number[][]} right Second southwest/northeast pair.
+ * @return {boolean} Whether both focus rectangles are spatially identical.
+ */
+function rasterDetailFocusBoundsMatch(left, right) {
+    return left[0][0] === right[0][0] && left[0][1] === right[0][1] &&
+        left[1][0] === right[1][0] && left[1][1] === right[1][1];
+}
 
 /**
  * @typedef {Object} RasterDetailPreviewController
- * @property {(item:Object, mode:string) => Promise<Object|null>} show Load and
- * display one current preview, returning null when cancellation loses a race.
- * @property {(item:Object) => boolean} contains Whether the Item owns the map
- * preview.
- * @property {(item?:Object) => void} remove Remove the matching/current preview.
+ * @property {(item:Object,mode:string,density:string|null)=>Promise<Object|null>}
+ * show Load and display one base preview, returning null when stale.
+ * @property {(item:Object) => boolean} contains Whether the Item owns preview.
+ * @property {(item?:Object) => void} remove Remove matching/current layers.
  * @property {() => void} invalidate Abort pending work without removing display.
- * @property {() => void} clear Abort work and remove the current display.
- * @property {() => void} destroy Permanently clear the controller.
+ * @property {(item?:Object) => Object|null} getState Return current UI state.
+ * @property {() => void} clear Abort work and remove all current layers.
+ * @property {() => void} destroy Permanently clear and unbind the controller.
  */
 
 /**
- * Initialize one detail-only preview boundary against the shared map.
+ * Initialize one sampled-raster session against the shared Leaflet map.
+ *
+ * The controller owns one coarse/base layer and at most one finer current-view
+ * layer. Every completed replacement is added before its predecessor is
+ * removed. Move requests are debounced, abortable, and guarded by both session
+ * and viewport identities so stale responses cannot replace current state.
  *
  * @param {{leafletMap:Object,leaflet:Object,onChange?:Function}} configuration
  * Leaflet collaborators and optional state-change callback.
- * @param {{loadPreview?:Function,createPreviewLayer?:Function}} dependencies
- * Injectable network and Leaflet boundaries.
+ * @param {{loadPreview?:Function,createPreviewLayer?:Function,setTimer?:Function,
+ * clearTimer?:Function,detailDebounceMilliseconds?:number}} dependencies
+ * Injectable network, presentation, and timer boundaries.
  * @return {RasterDetailPreviewController} Detail preview lifecycle API.
+ * @throws {TypeError} If the map does not expose required event methods.
+ * @throws {Error} If Leaflet cannot create the ordered preview panes.
  */
 export function initializeRasterDetailPreview(
     { leafletMap, leaflet, onChange = () => {} },
     {
         loadPreview = loadCatalogRasterDetailPreview,
         createPreviewLayer = createRasterDetailPreviewLayer,
+        setTimer = globalThis.setTimeout.bind(globalThis),
+        clearTimer = globalThis.clearTimeout.bind(globalThis),
+        detailDebounceMilliseconds = DETAIL_REFINEMENT_DEBOUNCE_MILLISECONDS
     } = {}
 ) {
+    if (typeof leafletMap.on !== "function" ||
+        typeof leafletMap.off !== "function") {
+        throw new TypeError("Sampled raster preview requires Leaflet map events");
+    }
+    ensureRasterDetailPreviewPanes(leafletMap);
     let generation = 0;
-    let pendingAbortController = null;
+    let detailGeneration = 0;
+    let pendingBaseAbortController = null;
+    let pendingDetail = null;
+    let detailTimer = null;
     let current = null;
+    let replacingBase = false;
     let destroyed = false;
 
     /**
-     * Abort pending work and invalidate it even if cancellation loses.
+     * Remove one presentation and release any resources it owns.
      *
+     * @param {{layer:Object,dispose?:Function}|null} presentation Presentation.
      * @return {void}
      */
+    function disposePresentation(presentation) {
+        if (presentation === null) {
+            return;
+        }
+        try {
+            leafletMap.removeLayer(presentation.layer);
+        } finally {
+            presentation.dispose?.();
+        }
+    }
+
+    /** Cancel scheduled/in-flight current-view work. @return {void} */
+    function cancelDetailWork() {
+        detailGeneration += 1;
+        if (detailTimer !== null) {
+            clearTimer(detailTimer);
+            detailTimer = null;
+        }
+        pendingDetail?.abortController.abort();
+        pendingDetail = null;
+    }
+
+    /** Abort every pending request and invalidate late completions. @return {void} */
     function invalidate() {
         generation += 1;
-        pendingAbortController?.abort();
-        pendingAbortController = null;
+        pendingBaseAbortController?.abort();
+        pendingBaseAbortController = null;
+        cancelDetailWork();
+        if (current !== null) {
+            current.detailStatus = current.detail === null ? "none" : "ready";
+            current.detailError = null;
+        }
     }
 
     /**
-     * Return whether one Item owns the displayed preview.
+     * Return whether one Item owns the displayed sampled raster.
      *
      * @param {Object} item Catalog Item.
      * @return {boolean} Whether its composite identity is displayed.
      */
     function contains(item) {
         return current?.key === getCatalogRasterLayerKey(item);
+    }
+
+    /**
+     * Return browser-safe state for the matching/current sampled raster.
+     *
+     * @param {Object} [item] Optional Item that must own the state.
+     * @return {Object|null} Base/detail metrics and refinement status.
+     */
+    function getState(item) {
+        if (current === null || (item !== undefined && !contains(item))) {
+            return null;
+        }
+        return {
+            mode: current.mode,
+            density: current.density,
+            basePreview: current.base.preview,
+            detailPreview: current.detail?.preview ?? null,
+            detailStatus: current.detailStatus,
+            detailError: current.detailError
+        };
+    }
+
+    /** Clear only the current-view overlay. @return {void} */
+    function clearDetailLayer() {
+        cancelDetailWork();
+        if (current === null) {
+            return;
+        }
+        const changed = current.detail !== null ||
+            current.detailStatus !== "none" || current.detailError !== null;
+        disposePresentation(current.detail?.presentation ?? null);
+        current.detail = null;
+        current.detailStatus = "none";
+        current.detailError = null;
+        if (changed) {
+            onChange();
+        }
     }
 
     /**
@@ -70,95 +178,309 @@ export function initializeRasterDetailPreview(
         }
         invalidate();
         if (current !== null) {
-            leafletMap.removeLayer(current.layer);
+            disposePresentation(current.detail?.presentation ?? null);
+            disposePresentation(current.base.presentation);
             current = null;
             onChange();
         }
     }
 
-    /**
-     * Abort work and remove the current detail-only preview.
-     *
-     * @return {void}
-     */
+    /** Abort work and remove the current preview. @return {void} */
     function clear() {
         remove();
     }
 
     /**
-     * Load and display one explicitly selected detail preview.
+     * Return whether an asynchronous detail intent is still current.
+     *
+     * @param {number} sessionGeneration Explicit base-session identity.
+     * @param {number} requestDetailGeneration Viewport intent identity.
+     * @param {string} intentKey Item/mode/density/bounds identity.
+     * @return {boolean} Whether a completion may update the map.
+     */
+    function isCurrentDetailIntent(
+        sessionGeneration,
+        requestDetailGeneration,
+        intentKey
+    ) {
+        return !destroyed && current !== null &&
+            sessionGeneration === generation &&
+            requestDetailGeneration === detailGeneration &&
+            current.requestedDetailKey === intentKey;
+    }
+
+    /**
+     * Load and atomically attach one finer proxy over the current map view.
+     *
+     * @param {number} sessionGeneration Base-session identity.
+     * @param {number} requestDetailGeneration Viewport intent identity.
+     * @param {string} intentKey Item/mode/density/bounds identity.
+     * @param {Object} viewBounds Canonical raster/view intersection.
+     * @return {Promise<void>} Completion after success, stale ignore, or an
+     * honestly reported non-destructive refinement failure.
+     */
+    async function loadCurrentViewDetail(
+        sessionGeneration,
+        requestDetailGeneration,
+        intentKey,
+        viewBounds
+    ) {
+        detailTimer = null;
+        if (!isCurrentDetailIntent(
+            sessionGeneration,
+            requestDetailGeneration,
+            intentKey
+        )) {
+            return;
+        }
+        const abortController = new AbortController();
+        pendingDetail = { abortController, intentKey };
+        try {
+            const preview = await loadPreview(
+                current.item,
+                {
+                    mode: current.mode,
+                    density: current.density,
+                    viewBounds
+                },
+                abortController.signal
+            );
+            if (abortController.signal.aborted || !isCurrentDetailIntent(
+                sessionGeneration,
+                requestDetailGeneration,
+                intentKey
+            )) {
+                return;
+            }
+            const presentation = createPreviewLayer(
+                leaflet,
+                preview,
+                current.base.styleEstablished
+                    ? { style: current.base.style }
+                    : {}
+            );
+            try {
+                presentation.layer.addTo(leafletMap);
+            } catch (layerError) {
+                disposePresentation(presentation);
+                throw layerError;
+            }
+            if (!isCurrentDetailIntent(
+                sessionGeneration,
+                requestDetailGeneration,
+                intentKey
+            )) {
+                disposePresentation(presentation);
+                return;
+            }
+            const previousDetail = current.detail;
+            if (!current.base.styleEstablished &&
+                preview.suggestedRange !== null) {
+                current.base.style = Object.freeze(presentation.style);
+                current.base.styleEstablished = true;
+            }
+            current.detail = { intentKey, presentation, preview };
+            current.detailStatus = "ready";
+            current.detailError = null;
+            disposePresentation(previousDetail?.presentation ?? null);
+            onChange();
+        } catch (error) {
+            if (error.name !== "AbortError" && isCurrentDetailIntent(
+                sessionGeneration,
+                requestDetailGeneration,
+                intentKey
+            )) {
+                current.detailStatus = "error";
+                current.detailError = error.message;
+                onChange();
+            }
+        } finally {
+            if (pendingDetail?.abortController === abortController) {
+                pendingDetail = null;
+            }
+        }
+    }
+
+    /** Derive and debounce the latest viewport refinement intent. @return {void} */
+    function queueCurrentViewDetail() {
+        if (destroyed || replacingBase || pendingBaseAbortController !== null ||
+            current === null || current.mode === "representativePatch") {
+            return;
+        }
+        if (!isRasterDetailZoom(leafletMap.getZoom(), current.baseZoom)) {
+            clearDetailLayer();
+            return;
+        }
+        const viewBounds = intersectRasterViewport(
+            leafletMap.getBounds(),
+            current.base.preview.rasterExtent
+        );
+        if (viewBounds === null) {
+            clearDetailLayer();
+            return;
+        }
+        const intentKey = JSON.stringify([
+            current.key,
+            current.mode,
+            current.density,
+            rasterViewportKey(viewBounds)
+        ]);
+        if (current.detail?.intentKey === intentKey) {
+            const changed = detailTimer !== null || pendingDetail !== null ||
+                current.detailStatus !== "ready" ||
+                current.detailError !== null;
+            cancelDetailWork();
+            current.requestedDetailKey = intentKey;
+            current.detailStatus = "ready";
+            current.detailError = null;
+            if (changed) {
+                onChange();
+            }
+            return;
+        }
+        if (pendingDetail?.intentKey === intentKey ||
+            (detailTimer !== null && current.requestedDetailKey === intentKey)) {
+            return;
+        }
+        cancelDetailWork();
+        const requestDetailGeneration = detailGeneration;
+        const sessionGeneration = generation;
+        current.requestedDetailKey = intentKey;
+        current.detailStatus = "loading";
+        current.detailError = null;
+        onChange();
+        detailTimer = setTimer(() => {
+            void loadCurrentViewDetail(
+                sessionGeneration,
+                requestDetailGeneration,
+                intentKey,
+                viewBounds
+            );
+        }, detailDebounceMilliseconds);
+    }
+
+    /** Respond to a completed Leaflet pan or zoom. @return {void} */
+    function handleMoveEnd() {
+        queueCurrentViewDetail();
+    }
+    leafletMap.on("moveend", handleMoveEnd);
+
+    /**
+     * Load and display one explicitly selected base sampled raster.
      *
      * @param {Object} item Selected Catalog raster.
      * @param {string} mode Fixed detail preview mode.
+     * @param {string|null} density Fixed grid profile, or null for a patch.
      * @return {Promise<Object|null>} Current response or null when stale.
-     * @throws {Error} If the request is observably aborted, or the current
-     * request or Leaflet construction otherwise fails.
+     * @throws {Error} If the current request or presentation fails.
      */
-    async function show(item, mode) {
+    async function show(item, mode, density) {
         invalidate();
         const requestGeneration = generation;
         const abortController = new AbortController();
-        pendingAbortController = abortController;
+        pendingBaseAbortController = abortController;
         let preview;
         try {
             preview = await loadPreview(
                 item,
-                mode,
+                {
+                    mode,
+                    density: mode === "representativePatch" ? null : density,
+                    viewBounds: null
+                },
                 abortController.signal
             );
         } finally {
-            if (pendingAbortController === abortController) {
-                pendingAbortController = null;
+            if (pendingBaseAbortController === abortController) {
+                pendingBaseAbortController = null;
             }
         }
-        if (
-            destroyed ||
-            requestGeneration !== generation ||
-            abortController.signal.aborted
-        ) {
+        if (destroyed || requestGeneration !== generation ||
+            abortController.signal.aborted) {
             return null;
         }
         const presentation = createPreviewLayer(leaflet, preview);
-        const previous = current;
         try {
             presentation.layer.addTo(leafletMap);
         } catch (layerError) {
-            leafletMap.removeLayer(presentation.layer);
+            disposePresentation(presentation);
             throw layerError;
         }
-        if (previous !== null) {
-            leafletMap.removeLayer(previous.layer);
+        const previous = current;
+        const key = getCatalogRasterLayerKey(item);
+        const changedFocusScope = previous === null || previous.key !== key ||
+            (previous.mode === "representativePatch") !==
+                (mode === "representativePatch") ||
+            !rasterDetailFocusBoundsMatch(
+                previous.base.presentation.focusBounds,
+                presentation.focusBounds
+            );
+        let baseZoom = previous?.baseZoom ?? null;
+        if (changedFocusScope) {
+            const maximumFocusZoom = mode === "representativePatch" ? 16 : 8;
+            baseZoom = Math.max(
+                leafletMap.getMinZoom(),
+                Math.min(
+                    leafletMap.getBoundsZoom(presentation.focusBounds),
+                    maximumFocusZoom
+                )
+            );
+            replacingBase = true;
+            try {
+                leafletMap.fitBounds(presentation.focusBounds, {
+                    maxZoom: maximumFocusZoom,
+                    animate: false
+                });
+            } catch (focusError) {
+                disposePresentation(presentation);
+                throw focusError;
+            } finally {
+                replacingBase = false;
+            }
         }
         current = {
-            key: getCatalogRasterLayerKey(item),
+            key,
             item,
             mode,
-            layer: presentation.layer,
-            preview,
-            style: presentation.style,
+            density: preview.density,
+            base: {
+                presentation,
+                preview,
+                style: preview.suggestedRange === null
+                    ? presentation.style
+                    : Object.freeze(presentation.style),
+                styleEstablished: preview.suggestedRange !== null
+            },
+            detail: null,
+            baseZoom,
+            requestedDetailKey: null,
+            detailStatus: "none",
+            detailError: null
         };
-        const changedFocusScope = previous === null ||
-            previous.key !== current.key ||
-            (previous.mode === "representativePatch") !==
-                (mode === "representativePatch");
-        if (changedFocusScope) {
-            leafletMap.fitBounds(presentation.focusBounds, {
-                maxZoom: mode === "representativePatch" ? 16 : 8
-            });
-        }
+        disposePresentation(previous?.detail?.presentation ?? null);
+        disposePresentation(previous?.base.presentation ?? null);
         onChange();
+        queueCurrentViewDetail();
         return preview;
     }
 
-    /**
-     * Permanently clear preview state.
-     *
-     * @return {void}
-     */
+    /** Permanently clear state and the registered map listener. @return {void} */
     function destroy() {
+        if (destroyed) {
+            return;
+        }
         destroyed = true;
+        leafletMap.off("moveend", handleMoveEnd);
         clear();
     }
 
-    return { show, contains, remove, invalidate, clear, destroy };
+    return {
+        show,
+        contains,
+        remove,
+        invalidate,
+        getState,
+        clear,
+        destroy
+    };
 }

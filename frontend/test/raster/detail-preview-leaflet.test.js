@@ -1,9 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createRasterDetailPreviewLayer } from "../../src/raster/detail-preview-leaflet.js";
+import {
+  createRasterDetailPreviewLayer,
+  ensureRasterDetailPreviewPanes,
+  RASTER_DETAIL_PREVIEW_BOUNDARY_PANE,
+  RASTER_DETAIL_PREVIEW_IMAGE_PANE,
+} from "../../src/raster/detail-preview-leaflet.js";
 import {
   CENTER_SAMPLE_DETAIL_PREVIEW,
+  CURRENT_VIEW_DETAIL_PREVIEW,
   PATCH_DETAIL_PREVIEW,
   REPRESENTATIVE_SAMPLE_DETAIL_PREVIEW,
 } from "../../test-support/raster/fixtures.js";
@@ -35,6 +41,25 @@ function fakeLeaflet() {
     },
   };
 }
+
+test("sampled raster panes keep boundaries above opaque images", () => {
+  const panes = new Map();
+  const map = {
+    getPane(name) { return panes.get(name); },
+    createPane(name) {
+      const pane = { style: {} };
+      panes.set(name, pane);
+      return pane;
+    },
+  };
+
+  const result = ensureRasterDetailPreviewPanes(map);
+
+  assert.equal(result.imagePane.style.zIndex, "420");
+  assert.equal(result.boundaryPane.style.zIndex, "440");
+  assert.equal(result.imagePane.style.pointerEvents, "none");
+  assert.equal(result.boundaryPane.style.pointerEvents, "none");
+});
 
 test("full-extent sampled modes use one colored image at warped bounds", () => {
   const leaflet = fakeLeaflet();
@@ -70,6 +95,14 @@ test("full-extent sampled modes use one colored image at warped bounds", () => {
     "raster-sampled-proxy",
   );
   assert.equal(presentation.layer.layers[1].options.opacity, 1);
+  assert.equal(
+    presentation.layer.layers[0].options.pane,
+    RASTER_DETAIL_PREVIEW_BOUNDARY_PANE,
+  );
+  assert.equal(
+    presentation.layer.layers[1].options.pane,
+    RASTER_DETAIL_PREVIEW_IMAGE_PANE,
+  );
 
   const representative = createRasterDetailPreviewLayer(
     fakeLeaflet(),
@@ -100,4 +133,42 @@ test("representative patch focuses its numeric image and retains raster extent",
     presentation.layer.layers[2].options.className,
     "raster-detail-patch-boundary",
   );
+  assert.equal(
+    presentation.layer.layers[2].options.pane,
+    RASTER_DETAIL_PREVIEW_BOUNDARY_PANE,
+  );
+});
+
+test("current-view detail uses the base style and no duplicate raster extent", () => {
+  const leaflet = fakeLeaflet();
+  const style = { minimum: 0, midpoint: 50, maximum: 100 };
+  const presentation = createRasterDetailPreviewLayer(
+    leaflet,
+    CURRENT_VIEW_DETAIL_PREVIEW,
+    {
+      style,
+      encodeImage(_preview, actualStyle) {
+        assert.equal(actualStyle, style);
+        return "data:image/png;base64,current-view";
+      },
+    },
+  );
+
+  assert.deepEqual(
+    presentation.layer.layers.map((layer) => layer.kind),
+    ["image", "rectangle"],
+  );
+  assert.equal(
+    presentation.layer.layers[1].options.className,
+    "raster-current-view-detail-boundary",
+  );
+  assert.equal(
+    presentation.layer.layers[0].options.pane,
+    RASTER_DETAIL_PREVIEW_IMAGE_PANE,
+  );
+  assert.equal(
+    presentation.layer.layers[1].options.pane,
+    RASTER_DETAIL_PREVIEW_BOUNDARY_PANE,
+  );
+  assert.equal(presentation.style, style);
 });

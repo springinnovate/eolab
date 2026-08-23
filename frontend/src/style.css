@@ -749,6 +749,16 @@ h5 {
   vector-effect: non-scaling-stroke;
 }
 
+.raster-detail-preview-controls small,
+.raster-detail-preview-resolution {
+  color: var(--text-2);
+  font-size: 0.76rem;
+}
+
+.raster-detail-preview-resolution {
+  display: block;
+}
+
 .raster-sampled-proxy {
   image-rendering: pixelated;
 }

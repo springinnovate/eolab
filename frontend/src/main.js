@@ -42,6 +42,7 @@ import {
 } from "./catalog-map-actions.js";
 import { assessCatalogRaster } from "./raster/api.js";
 import { initializeRasterDetailPreview } from "./raster/detail-preview-controller.js";
+import { formatRasterDetailPreviewResolution } from "./raster/detail-preview-status.js";
 import { initializeRasterViewer } from "./raster/raster-viewer.js";
 import { initializeTemporaryAoi } from "./temporary-aoi/temporary-aoi.js";
 import {
@@ -484,6 +485,12 @@ async function initializeCatalog(
     const rasterDetailPreviewMode = document.querySelector(
         "#raster-detail-preview-mode"
     );
+    const rasterDetailPreviewDensity = document.querySelector(
+        "#raster-detail-preview-density"
+    );
+    const rasterDetailPreviewResolution = document.querySelector(
+        "#raster-detail-preview-resolution"
+    );
     const showRasterDetailPreview = document.querySelector(
         "#show-raster-detail-preview"
     );
@@ -536,6 +543,17 @@ async function initializeCatalog(
      */
     function refreshCatalogMapAction() {
         updateCatalogMapAction(catalogState.selectedItem);
+    }
+
+    /**
+     * Render exact backend-reported sampled-grid dimensions.
+     *
+     * @param {Object|null} previewState Current sampled-raster session state.
+     * @return {void}
+     */
+    function renderRasterDetailPreviewResolution(previewState) {
+        rasterDetailPreviewResolution.textContent =
+            formatRasterDetailPreviewResolution(previewState);
     }
 
     /**
@@ -600,6 +618,9 @@ async function initializeCatalog(
         const isRetained = item !== null && rasterVisualization.contains(item);
         const hasDetailPreview = item !== null &&
             rasterDetailPreview.contains(item);
+        const detailPreviewState = item === null
+            ? null
+            : rasterDetailPreview.getState(item);
         const pendingAction = item === null
             ? null
             : catalogState.pendingMapActions.get(item);
@@ -612,6 +633,8 @@ async function initializeCatalog(
         catalogLayerToggle.hidden = supportsDetailPreview;
         rasterDetailPreviewControls.hidden = !supportsDetailPreview;
         rasterDetailPreviewMode.disabled = pendingAction !== null;
+        rasterDetailPreviewDensity.disabled = pendingAction !== null ||
+            rasterDetailPreviewMode.value === "representativePatch";
         showRasterDetailPreview.disabled = pendingAction !== null;
         reassessDetailRaster.disabled = pendingAction !== null;
         showRasterDetailPreview.textContent = pendingAction?.buttonText ??
@@ -620,6 +643,7 @@ async function initializeCatalog(
                 : "Show sampled raster");
         removeRasterDetailPreview.hidden = !hasDetailPreview;
         removeRasterDetailPreview.disabled = pendingAction !== null;
+        renderRasterDetailPreviewResolution(detailPreviewState);
         catalogLayerToggle.textContent = pendingAction?.buttonText ?? (
             visualization === undefined
                 ? "Assess for visualization"
@@ -639,9 +663,34 @@ async function initializeCatalog(
                 "bounded sampling policy for an approximate raster proxy.";
         }
         if (hasDetailPreview) {
-            defaultStatus =
-                "A bounded sampled raster is displayed with the normal color " +
-                "ramp; the dashed outline is the raster extent.";
+            const base = detailPreviewState.basePreview;
+            const hasFiniteValues = base.pixelValues.some(
+                (value) => value !== null
+            );
+            if (detailPreviewState.mode === "representativePatch") {
+                defaultStatus = `${base.label}; ${base.imageWidth} × ` +
+                    `${base.imageHeight} displayed cells. The dashed outline ` +
+                    "is the raster extent, not a valid-data footprint.";
+            } else {
+                defaultStatus =
+                    "Approximate sampled raster — not full resolution. The " +
+                    "orange dashed outline is the raster extent; zooming one " +
+                    "level closer requests one bounded current-view grid.";
+                if (detailPreviewState.detailStatus === "loading") {
+                    defaultStatus += " Loading finer current-view detail…";
+                } else if (detailPreviewState.detailStatus === "ready") {
+                    defaultStatus +=
+                        " The teal outline marks the current-view detail overlay.";
+                } else if (detailPreviewState.detailStatus === "error") {
+                    defaultStatus += " Current-view refinement failed: " +
+                        detailPreviewState.detailError +
+                        ". The prior bounded display remains visible.";
+                }
+            }
+            if (!hasFiniteValues) {
+                defaultStatus +=
+                    " No finite data was found at the bounded base positions.";
+            }
         }
         catalogLayerStatus.textContent =
             pendingAction?.statusText ?? defaultStatus;
@@ -1127,7 +1176,10 @@ async function initializeCatalog(
         try {
             const preview = await rasterDetailPreview.show(
                 selectedItem,
-                rasterDetailPreviewMode.value
+                rasterDetailPreviewMode.value,
+                rasterDetailPreviewMode.value === "representativePatch"
+                    ? null
+                    : rasterDetailPreviewDensity.value
             );
             if (
                 preview === null ||
@@ -1136,15 +1188,7 @@ async function initializeCatalog(
                 return;
             }
             finishCatalogMapAction(pendingAction);
-            const hasFiniteValues = preview.pixelValues.some(
-                (value) => value !== null
-            );
-            catalogLayerStatus.textContent = `${preview.label}; ` +
-                `${preview.imageWidth} × ${preview.imageHeight} displayed ` +
-                "cells. The dashed outline is the raster extent, not a " +
-                "valid-data footprint." + (hasFiniteValues
-                    ? " Colors use EOLab's normal approximate raster ramp."
-                    : " No finite data was found at the bounded sample positions.");
+            updateCatalogMapAction(selectedItem);
         } catch (previewError) {
             if (
                 previewError.name !== "AbortError" &&
@@ -1156,6 +1200,10 @@ async function initializeCatalog(
         } finally {
             finishCatalogMapAction(pendingAction);
         }
+    });
+    rasterDetailPreviewMode.addEventListener("change", () => {
+        rasterDetailPreviewDensity.disabled =
+            rasterDetailPreviewMode.value === "representativePatch";
     });
     removeRasterDetailPreview.addEventListener("click", () => {
         const selectedItem = catalogState.selectedItem;

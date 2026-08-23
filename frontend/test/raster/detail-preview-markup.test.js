@@ -10,12 +10,16 @@ const STYLE = readFileSync(
 
 test("sampled raster visualization explains its three bounded policies", () => {
   assert.match(MARKUP, /<strong>Bounded sampled raster<\/strong>/);
-  assert.match(MARKUP, /low-resolution proxy covers the raster extent/);
   assert.match(MARKUP, /does not read or render every source pixel/);
-  assert.match(MARKUP, /Each displayed cell represents a larger source region/);
+  assert.match(MARKUP, /same selected density/);
   assert.match(MARKUP, /value="centerSample">Center sample in each proxy cell/);
   assert.match(MARKUP, /value="representativeSample">Representative samples in each proxy cell/);
   assert.match(MARKUP, /value="representativePatch">Representative, bounded detail patch/);
+  assert.match(MARKUP, /id="raster-detail-preview-density"/);
+  assert.match(MARKUP, /value="coarse">Coarse — up to 31 cells across/);
+  assert.match(MARKUP, /value="medium">Medium — up to 63 cells across/);
+  assert.match(MARKUP, /value="fine">Fine — up to 127 cells across/);
+  assert.match(MARKUP, /id="raster-detail-preview-resolution"/);
   assert.match(MARKUP, /id="show-raster-detail-preview"[^>]*type="button"/s);
   assert.match(MARKUP, /Show sampled raster/);
   assert.match(MARKUP, /id="remove-raster-detail-preview"[^>]*type="button"/s);

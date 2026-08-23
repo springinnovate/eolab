@@ -13,6 +13,7 @@ import {
 import {
   MOUNTED_GEOTIFF_ITEM,
   CENTER_SAMPLE_DETAIL_PREVIEW,
+  CURRENT_VIEW_DETAIL_PREVIEW,
   NODATA_DETAIL_PREVIEW,
   PATCH_DETAIL_PREVIEW,
   RASTER_STATISTICS,
@@ -22,14 +23,14 @@ import {
   TEMPORARY_AOI_RASTER_STATISTICS,
 } from "../../test-support/raster/fixtures.js";
 
-test("detail preview sends only Item identity and selected fixed mode", async () => {
+test("detail preview sends only identity, fixed mode, and density", async () => {
   const requests = [];
   const abortController = new AbortController();
 
   assert.deepEqual(
     await loadCatalogRasterDetailPreview(
       MOUNTED_GEOTIFF_ITEM,
-      "centerSample",
+      { mode: "centerSample", density: "coarse" },
       abortController.signal,
       async (url, options) => {
         requests.push({ url, options });
@@ -53,6 +54,7 @@ test("detail preview sends only Item identity and selected fixed mode", async ()
         collectionId: MOUNTED_GEOTIFF_ITEM.collection,
         itemId: MOUNTED_GEOTIFF_ITEM.id,
         mode: "centerSample",
+        density: "coarse",
       }),
       signal: abortController.signal,
     },
@@ -65,7 +67,7 @@ test("detail preview sends only Item identity and selected fixed mode", async ()
 test("detail preview preserves an actionable backend failure", async () => {
   const request = loadCatalogRasterDetailPreview(
     MOUNTED_GEOTIFF_ITEM,
-    "centerSample",
+    { mode: "centerSample", density: "coarse" },
     new AbortController().signal,
     async () => new Response(
       JSON.stringify({ detail: "Sampled raster source blocks are unsafe." }),
@@ -81,20 +83,93 @@ test("detail preview preserves an actionable backend failure", async () => {
   });
 });
 
+test("detail preview sends one canonical current-view rectangle", async () => {
+  const viewBounds = { west: -122.5, south: 48.5, east: -121.5, north: 49.5 };
+  let requestBody = null;
+  const preview = await loadCatalogRasterDetailPreview(
+    MOUNTED_GEOTIFF_ITEM,
+    { mode: "centerSample", density: "coarse", viewBounds },
+    new AbortController().signal,
+    async (_url, options) => {
+      requestBody = JSON.parse(options.body);
+      return new Response(JSON.stringify(CURRENT_VIEW_DETAIL_PREVIEW), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    },
+  );
+
+  assert.equal(preview.scope, "currentView");
+  assert.deepEqual(requestBody, {
+    collectionId: MOUNTED_GEOTIFF_ITEM.collection,
+    itemId: MOUNTED_GEOTIFF_ITEM.id,
+    mode: "centerSample",
+    density: "coarse",
+    viewBounds,
+  });
+  assert.equal("width" in requestBody, false);
+  assert.equal("path" in requestBody, false);
+});
+
+test("detail preview rejects extra request and view-bound fields", async () => {
+  let requestCount = 0;
+  const fetchImplementation = async () => {
+    requestCount += 1;
+    throw new Error("request should not be sent");
+  };
+  const requestCases = [
+    {
+      mode: "centerSample",
+      density: "coarse",
+      width: 31,
+    },
+    {
+      mode: "centerSample",
+      density: "coarse",
+      viewBounds: {
+        west: -122.5,
+        south: 48.5,
+        east: -121.5,
+        north: 49.5,
+        path: "file:///untrusted.tif",
+      },
+    },
+  ];
+
+  for (const options of requestCases) {
+    await assert.rejects(
+      loadCatalogRasterDetailPreview(
+        MOUNTED_GEOTIFF_ITEM,
+        options,
+        new AbortController().signal,
+        fetchImplementation,
+      ),
+      /unsupported fields|view bounds are invalid/,
+    );
+  }
+  assert.equal(requestCount, 0);
+});
+
 test("detail preview accepts numeric images and honest all-nodata proxies", () => {
   assert.equal(
     validateRasterDetailPreview(
       CENTER_SAMPLE_DETAIL_PREVIEW,
-      "centerSample",
+      { mode: "centerSample", density: "coarse" },
     ),
     CENTER_SAMPLE_DETAIL_PREVIEW,
   );
   assert.equal(
-    validateRasterDetailPreview(NODATA_DETAIL_PREVIEW, "centerSample"),
+    validateRasterDetailPreview(
+      NODATA_DETAIL_PREVIEW,
+      { mode: "centerSample", density: "coarse" },
+    ),
     NODATA_DETAIL_PREVIEW,
   );
   assert.equal(
-    validateRasterDetailPreview(PATCH_DETAIL_PREVIEW, "representativePatch"),
+    validateRasterDetailPreview(
+      PATCH_DETAIL_PREVIEW,
+      { mode: "representativePatch" },
+    ),
     PATCH_DETAIL_PREVIEW,
   );
 });
@@ -103,7 +178,7 @@ test("detail preview rejects arbitrary modes before sending a request", async ()
   await assert.rejects(
     loadCatalogRasterDetailPreview(
       MOUNTED_GEOTIFF_ITEM,
-      "fullExtent",
+      { mode: "fullExtent", density: "coarse" },
       new AbortController().signal,
       async () => {
         throw new Error("request should not be sent");
@@ -113,7 +188,7 @@ test("detail preview rejects arbitrary modes before sending a request", async ()
   );
 });
 
-test("detail preview strictly validates v2 numeric image identity and shape", () => {
+test("detail preview strictly validates v3 numeric image identity and shape", () => {
   const invalidPreviews = [
     ["mismatched mode", {
       ...CENTER_SAMPLE_DETAIL_PREVIEW,
@@ -164,6 +239,13 @@ test("detail preview strictly validates v2 numeric image identity and shape", ()
         maximumSourceBlockReads: 1025,
       },
     }],
+    ["changed transformed-position contract", {
+      ...CENTER_SAMPLE_DETAIL_PREVIEW,
+      limits: {
+        ...CENTER_SAMPLE_DETAIL_PREVIEW.limits,
+        maximumTransformedPositions: 1747519,
+      },
+    }],
     ["over-limit actual block reads", {
       ...CENTER_SAMPLE_DETAIL_PREVIEW,
       actual: {
@@ -196,7 +278,10 @@ test("detail preview strictly validates v2 numeric image identity and shape", ()
 
   for (const [caseName, preview] of invalidPreviews) {
     assert.throws(
-      () => validateRasterDetailPreview(preview, "centerSample"),
+      () => validateRasterDetailPreview(
+        preview,
+        { mode: "centerSample", density: "coarse" },
+      ),
       /Detail-only preview/,
       `accepted invalid sampled-raster case: ${caseName}`,
     );
@@ -210,7 +295,7 @@ test("detail preview strictly validates v2 numeric image identity and shape", ()
         ...PATCH_DETAIL_PREVIEW.actual,
         sampleGridWidth: 129,
       },
-    }, "representativePatch"),
+    }, { mode: "representativePatch" }),
     /exceeds its fixed limit/,
   );
 });
@@ -220,8 +305,88 @@ test("detail preview requires null color range only for all-nodata images", () =
     () => validateRasterDetailPreview({
       ...NODATA_DETAIL_PREVIEW,
       suggestedRange: { minimum: 0, midpoint: 50, maximum: 100 },
-    }, "centerSample"),
+    }, { mode: "centerSample", density: "coarse" }),
     /color range is invalid/,
+  );
+  assert.throws(
+    () => validateRasterDetailPreview({
+      ...CENTER_SAMPLE_DETAIL_PREVIEW,
+      actual: {
+        ...CENTER_SAMPLE_DETAIL_PREVIEW.actual,
+        sourceBlockReadCount: 0,
+        decodedSourceBytes: 0,
+      },
+    }, { mode: "centerSample", density: "coarse" }),
+    /color range is invalid/,
+  );
+  assert.equal(
+    validateRasterDetailPreview({
+      ...NODATA_DETAIL_PREVIEW,
+      actual: {
+        ...NODATA_DETAIL_PREVIEW.actual,
+        sourceBlockReadCount: 0,
+        decodedSourceBytes: 0,
+      },
+    }, { mode: "centerSample", density: "coarse" }).suggestedRange,
+    null,
+  );
+});
+
+test("representative patches require positive bounded source reads", () => {
+  assert.throws(
+    () => validateRasterDetailPreview({
+      ...PATCH_DETAIL_PREVIEW,
+      pixelValues: new Array(4).fill(null),
+      suggestedRange: null,
+      actual: {
+        ...PATCH_DETAIL_PREVIEW.actual,
+        sourceBlockReadCount: 0,
+        decodedSourceBytes: 0,
+      },
+    }, { mode: "representativePatch" }),
+    /color range is invalid/,
+  );
+});
+
+test("every detail image must stay inside its raster and requested view", () => {
+  assert.throws(
+    () => validateRasterDetailPreview(
+      {
+        ...CENTER_SAMPLE_DETAIL_PREVIEW,
+        imageBounds: [-123.5, 48.5, -121.5, 49.5],
+      },
+      { mode: "centerSample", density: "coarse" },
+    ),
+    /placement is invalid/,
+  );
+  assert.throws(
+    () => validateRasterDetailPreview(
+      {
+        ...PATCH_DETAIL_PREVIEW,
+        imageBounds: [-120.9, 48.9, -120.7, 49.1],
+      },
+      { mode: "representativePatch" },
+    ),
+    /placement is invalid/,
+  );
+  assert.throws(
+    () => validateRasterDetailPreview(
+      {
+        ...CURRENT_VIEW_DETAIL_PREVIEW,
+        imageBounds: [-123.5, 48.5, -121.5, 49.5],
+      },
+      {
+        mode: "centerSample",
+        density: "coarse",
+        viewBounds: {
+          west: -122.5,
+          south: 48.5,
+          east: -121.5,
+          north: 49.5,
+        },
+      },
+    ),
+    /placement is invalid/,
   );
 });
 

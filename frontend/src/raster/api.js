@@ -174,16 +174,103 @@ const RASTER_DETAIL_PREVIEW_MODES = new Set([
     "representativeSample",
     "representativePatch"
 ]);
+/** Fixed server-owned target-grid ceilings for sampled raster proxies. */
+const RASTER_DETAIL_PREVIEW_DENSITIES = new Map([
+    ["coarse", 31],
+    ["medium", 63],
+    ["fine", 127]
+]);
+/** Projection roundoff allowance, far below a displayable map distance. */
+const RASTER_DETAIL_PREVIEW_BOUNDS_TOLERANCE = 1e-9;
+
+/**
+ * @typedef {Object} RasterDetailPreviewViewBounds
+ * @property {number} west Western WGS 84 longitude.
+ * @property {number} south Southern WGS 84 latitude.
+ * @property {number} east Eastern WGS 84 longitude.
+ * @property {number} north Northern WGS 84 latitude.
+ */
+
+/**
+ * @typedef {Object} RasterDetailPreviewOptions
+ * @property {string} mode Fixed server-owned sampling policy.
+ * @property {string|null} [density] Fixed target-grid density profile.
+ * @property {RasterDetailPreviewViewBounds|null} [viewBounds] Optional exact
+ * current raster/view intersection; no source paths or read controls are
+ * accepted.
+ */
+
+/**
+ * Validate and normalize one detail-preview request owned by the browser.
+ *
+ * @param {RasterDetailPreviewOptions} options
+ * Explicit mode, fixed density profile, and optional current map rectangle.
+ * @return {{mode:string,density:string|null,
+ * viewBounds:RasterDetailPreviewViewBounds|null}} Strict request options safe
+ * to serialize without paths or numeric read controls.
+ * @throws {TypeError} If mode-specific parameters violate the request union.
+ */
+function validateRasterDetailPreviewOptions(options) {
+    const optionKeys = Object.keys(options ?? {});
+    if (optionKeys.some((key) =>
+        !["mode", "density", "viewBounds"].includes(key)
+    )) {
+        throw new TypeError("Raster detail request contains unsupported fields");
+    }
+    const mode = options?.mode;
+    const density = options?.density ?? null;
+    const viewBounds = options?.viewBounds ?? null;
+    const isCanonicalBounds = (bounds) => bounds !== null &&
+        typeof bounds === "object" &&
+        Object.keys(bounds).length === 4 &&
+        Object.keys(bounds).every((key) =>
+            ["west", "south", "east", "north"].includes(key)
+        ) &&
+        ["west", "south", "east", "north"].every((key) =>
+            Number.isFinite(bounds[key])
+        ) &&
+        bounds.west >= -180 && bounds.east <= 180 &&
+        bounds.south >= -90 && bounds.north <= 90 &&
+        bounds.west < bounds.east && bounds.south < bounds.north;
+    if (!RASTER_DETAIL_PREVIEW_MODES.has(mode)) {
+        throw new TypeError(`Unsupported raster detail preview mode: ${mode}`);
+    }
+    if (mode === "representativePatch") {
+        if (density !== null || viewBounds !== null) {
+            throw new TypeError(
+                "Representative patches do not accept density or view bounds"
+            );
+        }
+    } else if (!RASTER_DETAIL_PREVIEW_DENSITIES.has(density)) {
+        throw new TypeError(`Unsupported raster detail density: ${density}`);
+    }
+    if (viewBounds !== null && !isCanonicalBounds(viewBounds)) {
+        throw new TypeError("Raster detail view bounds are invalid");
+    }
+    return {
+        mode,
+        density,
+        viewBounds: viewBounds === null ? null : {
+            west: viewBounds.west,
+            south: viewBounds.south,
+            east: viewBounds.east,
+            north: viewBounds.north
+        }
+    };
+}
 
 /**
  * Validate one browser-safe detail-only preview at the network boundary.
  *
  * @param {Object} preview Parsed response document.
- * @param {string} requestedMode Mode sent by the current UI request.
+ * @param {RasterDetailPreviewOptions} options
+ * Options sent by the current UI request.
  * @return {Object} The validated response document.
  * @throws {Error} If the response violates the fixed preview contract.
  */
-export function validateRasterDetailPreview(preview, requestedMode) {
+export function validateRasterDetailPreview(preview, options) {
+    const request = validateRasterDetailPreviewOptions(options);
+    const requestedMode = request.mode;
     const isCanonicalBounds = (bounds) =>
         Array.isArray(bounds) && bounds.length === 4 &&
         bounds.every(Number.isFinite) &&
@@ -191,10 +278,13 @@ export function validateRasterDetailPreview(preview, requestedMode) {
         bounds[1] >= -90 && bounds[3] <= 90 &&
         bounds[0] < bounds[2] && bounds[1] < bounds[3];
     if (
-        !RASTER_DETAIL_PREVIEW_MODES.has(requestedMode) ||
         preview?.mode !== requestedMode ||
+        preview?.scope !== (requestedMode === "representativePatch"
+            ? "representativePatch"
+            : request.viewBounds === null ? "rasterExtent" : "currentView") ||
+        preview?.density !== request.density ||
         preview?.approximate !== true ||
-        preview?.policyVersion !== "bounded-sampled-raster-v2" ||
+        preview?.policyVersion !== "bounded-sampled-raster-v3" ||
         typeof preview?.label !== "string" || preview.label.trim() === "" ||
         !isCanonicalBounds(preview?.rasterExtent) ||
         !isCanonicalBounds(preview?.imageBounds) ||
@@ -210,17 +300,18 @@ export function validateRasterDetailPreview(preview, requestedMode) {
         preview?.limits?.maximumProxyDimension !== 127 ||
         preview?.limits?.maximumSourceBlockReads !== 1024 ||
         preview?.limits?.maximumDecodedSourceBytes !== 67108864 ||
+        preview?.limits?.maximumTransformedPositions !== 1747520 ||
         preview?.limits?.maximumPointsPerCell !== 5 ||
         preview?.limits?.maximumPatchDimension !== 128 ||
         preview?.limits?.maximumPatchCandidates !== 9 ||
         preview?.actual?.sampleGridWidth !== preview.imageWidth ||
         preview?.actual?.sampleGridHeight !== preview.imageHeight ||
         !Number.isSafeInteger(preview?.actual?.sourceBlockReadCount) ||
-        preview.actual.sourceBlockReadCount < 1 ||
+        preview.actual.sourceBlockReadCount < 0 ||
         preview.actual.sourceBlockReadCount >
             preview.limits.maximumSourceBlockReads ||
         !Number.isSafeInteger(preview?.actual?.decodedSourceBytes) ||
-        preview.actual.decodedSourceBytes < 1 ||
+        preview.actual.decodedSourceBytes < 0 ||
         preview.actual.decodedSourceBytes >
             preview.limits.maximumDecodedSourceBytes ||
         !Number.isSafeInteger(preview?.actual?.pointsPerCell) ||
@@ -232,7 +323,7 @@ export function validateRasterDetailPreview(preview, requestedMode) {
     }
     const maximumImageDimension = requestedMode === "representativePatch"
         ? preview.limits.maximumPatchDimension
-        : preview.limits.maximumProxyDimension;
+        : RASTER_DETAIL_PREVIEW_DENSITIES.get(request.density);
     if (
         preview.imageWidth > maximumImageDimension ||
         preview.imageHeight > maximumImageDimension ||
@@ -244,9 +335,34 @@ export function validateRasterDetailPreview(preview, requestedMode) {
         (requestedMode === "representativePatch") !==
             (preview.actual.candidateWindowCount > 0) ||
         preview.actual.candidateWindowCount >
-            preview.limits.maximumPatchCandidates
+            preview.limits.maximumPatchCandidates ||
+        (preview.actual.sourceBlockReadCount === 0) !==
+            (preview.actual.decodedSourceBytes === 0)
     ) {
         throw new Error("Detail-only preview image exceeds its fixed limit");
+    }
+    const containsImage = (outerBounds) =>
+        outerBounds[0] - RASTER_DETAIL_PREVIEW_BOUNDS_TOLERANCE <=
+            preview.imageBounds[0] &&
+        outerBounds[1] - RASTER_DETAIL_PREVIEW_BOUNDS_TOLERANCE <=
+            preview.imageBounds[1] &&
+        outerBounds[2] + RASTER_DETAIL_PREVIEW_BOUNDS_TOLERANCE >=
+            preview.imageBounds[2] &&
+        outerBounds[3] + RASTER_DETAIL_PREVIEW_BOUNDS_TOLERANCE >=
+            preview.imageBounds[3];
+    if (!containsImage(preview.rasterExtent)) {
+        throw new Error("Detail-only preview placement is invalid");
+    }
+    if (preview.scope === "currentView") {
+        const requestedBounds = [
+            request.viewBounds.west,
+            request.viewBounds.south,
+            request.viewBounds.east,
+            request.viewBounds.north
+        ];
+        if (!containsImage(requestedBounds)) {
+            throw new Error("Detail-only preview placement is invalid");
+        }
     }
     const finiteValues = preview.pixelValues.filter((value) => value !== null);
     const range = preview.suggestedRange;
@@ -257,7 +373,11 @@ export function validateRasterDetailPreview(preview, requestedMode) {
         range.minimum < range.midpoint && range.midpoint < range.maximum;
     if (
         (finiteValues.length === 0 && range !== null) ||
-        (finiteValues.length > 0 && !validRange)
+        (finiteValues.length > 0 && !validRange) ||
+        (preview.actual.sourceBlockReadCount === 0 &&
+            (finiteValues.length > 0 || range !== null)) ||
+        (requestedMode === "representativePatch" &&
+            preview.actual.sourceBlockReadCount === 0)
     ) {
         throw new Error("Detail-only preview color range is invalid");
     }
@@ -268,7 +388,8 @@ export function validateRasterDetailPreview(preview, requestedMode) {
  * Load one explicitly selected bounded preview for an overview-limited raster.
  *
  * @param {Object} item Selected scanner-owned STAC Item.
- * @param {string} mode One fixed detail preview mode.
+ * @param {RasterDetailPreviewOptions} options
+ * Fixed mode and density plus an optional current map rectangle.
  * @param {AbortSignal} signal Cancellation signal for stale UI intent.
  * @param {typeof globalThis.fetch} [fetchImplementation=globalThis.fetch]
  * Browser fetch implementation.
@@ -277,12 +398,21 @@ export function validateRasterDetailPreview(preview, requestedMode) {
  */
 export async function loadCatalogRasterDetailPreview(
     item,
-    mode,
+    options,
     signal,
     fetchImplementation = globalThis.fetch
 ) {
-    if (!RASTER_DETAIL_PREVIEW_MODES.has(mode)) {
-        throw new TypeError(`Unsupported raster detail preview mode: ${mode}`);
+    const request = validateRasterDetailPreviewOptions(options);
+    const body = {
+        collectionId: item.collection,
+        itemId: item.id,
+        mode: request.mode
+    };
+    if (request.density !== null) {
+        body.density = request.density;
+    }
+    if (request.viewBounds !== null) {
+        body.viewBounds = request.viewBounds;
     }
     const response = await fetchImplementation.call(
         globalThis,
@@ -293,11 +423,7 @@ export async function loadCatalogRasterDetailPreview(
                 Accept: "application/json",
                 "Content-Type": "application/json"
             },
-            body: JSON.stringify({
-                collectionId: item.collection,
-                itemId: item.id,
-                mode
-            }),
+            body: JSON.stringify(body),
             signal
         }
     );
@@ -307,7 +433,7 @@ export async function loadCatalogRasterDetailPreview(
             "Detail-only preview request"
         );
     }
-    return validateRasterDetailPreview(await response.json(), mode);
+    return validateRasterDetailPreview(await response.json(), request);
 }
 
 /**

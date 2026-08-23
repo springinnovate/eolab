@@ -14,6 +14,7 @@ export const RASTER_DETAIL_PREVIEW_LIMITS = Object.freeze({
   maximumProxyDimension: 127,
   maximumSourceBlockReads: 1024,
   maximumDecodedSourceBytes: 67108864,
+  maximumTransformedPositions: 1747520,
   maximumPointsPerCell: 5,
   maximumPatchDimension: 128,
   maximumPatchCandidates: 9,
@@ -22,7 +23,9 @@ export const RASTER_DETAIL_PREVIEW_LIMITS = Object.freeze({
 /** @type {Readonly<Object>} Full-extent center-per-cell numeric proxy. */
 export const CENTER_SAMPLE_DETAIL_PREVIEW = Object.freeze({
   mode: "centerSample",
-  policyVersion: "bounded-sampled-raster-v2",
+  scope: "rasterExtent",
+  density: "coarse",
+  policyVersion: "bounded-sampled-raster-v3",
   approximate: true,
   label: "Approximate full-extent proxy using each preview cell's center",
   rasterExtent: [-123, 48, -121, 50],
@@ -58,6 +61,8 @@ export const REPRESENTATIVE_SAMPLE_DETAIL_PREVIEW = Object.freeze({
 export const PATCH_DETAIL_PREVIEW = Object.freeze({
   ...CENTER_SAMPLE_DETAIL_PREVIEW,
   mode: "representativePatch",
+  scope: "representativePatch",
+  density: null,
   label: "Approximate representative detail patch",
   imageBounds: [-122.1, 48.9, -121.9, 49.1],
   imageWidth: 2,
@@ -72,6 +77,15 @@ export const PATCH_DETAIL_PREVIEW = Object.freeze({
     pointsPerCell: 0,
     candidateWindowCount: 3,
   },
+});
+
+/** @type {Readonly<Object>} Finer proxy for the current visible map area. */
+export const CURRENT_VIEW_DETAIL_PREVIEW = Object.freeze({
+  ...CENTER_SAMPLE_DETAIL_PREVIEW,
+  scope: "currentView",
+  label: "Approximate current-view sampled proxy using each map cell's center",
+  imageBounds: [-122.5, 48.5, -121.5, 49.5],
+  pixelValues: [10, 20, 30, 40, 50, 60],
 });
 
 /** @type {Readonly<Object>} Honest all-nodata full-extent numeric proxy. */

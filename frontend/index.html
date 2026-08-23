@@ -398,7 +398,7 @@
                     >
                       <p>
                         <strong>Bounded sampled raster</strong>
-                        <span>This low-resolution proxy covers the raster extent but does not read or render every source pixel. Each displayed cell represents a larger source region.</span>
+                        <span>This approximate proxy does not read or render every source pixel. Zooming in replaces one bounded current-view sample grid with finer source detail at the same selected density.</span>
                       </p>
                       <label for="raster-detail-preview-mode">
                         <span>Preview choice</span>
@@ -408,6 +408,20 @@
                           <option value="representativePatch">Representative, bounded detail patch</option>
                         </select>
                       </label>
+                      <label for="raster-detail-preview-density">
+                        <span>Sample density</span>
+                        <select id="raster-detail-preview-density">
+                          <option value="coarse">Coarse — up to 31 cells across</option>
+                          <option value="medium">Medium — up to 63 cells across</option>
+                          <option value="fine">Fine — up to 127 cells across</option>
+                        </select>
+                        <small>Applies to the raster-extent proxy and each current-view refinement. The server may safely reduce the actual grid.</small>
+                      </label>
+                      <output
+                        class="raster-detail-preview-resolution"
+                        id="raster-detail-preview-resolution"
+                        aria-live="polite"
+                      >Base sample grid: —; current-view detail: —</output>
                       <div class="raster-detail-preview-actions">
                         <button
                           class="secondary-button"
