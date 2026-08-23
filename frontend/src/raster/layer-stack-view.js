@@ -1,5 +1,5 @@
 /**
- * Accessible DOM presentation for the retained raster layer stack.
+ * Accessible DOM presentation for the retained raster/vector layer stack.
  *
  * This adapter renders top-first keyed rows and forwards activation,
  * visibility, opacity, ordering, and removal intent. It does not publish
@@ -93,6 +93,9 @@ export class RasterLayerStackView {
     render(layers, activeKey, requestedFocus = null) {
         const retainedFocus = requestedFocus ?? this.#readFocusedAction();
         const visibleCount = layers.filter((layer) => layer.visible).length;
+        const layerKindLabel = layers.some((layer) => layer.kind === "vector")
+            ? "map"
+            : "raster";
         const focusTargets = new Map();
         const rows = layers.map((layer, index) => this.#buildRow(
             layer,
@@ -105,8 +108,8 @@ export class RasterLayerStackView {
         this.list.replaceChildren(...rows);
         this.root.hidden = layers.length === 0;
         this.limit.textContent = visibleCount >= MAX_VISIBLE_RASTER_LAYERS
-            ? `Two raster layers are visible. Hide one before showing another.`
-            : `${visibleCount} of ${MAX_VISIBLE_RASTER_LAYERS} raster layers visible.`;
+            ? `Two ${layerKindLabel} layers are visible. Hide one before showing another.`
+            : `${visibleCount} of ${MAX_VISIBLE_RASTER_LAYERS} ${layerKindLabel} layers visible.`;
         if (retainedFocus !== null) {
             let focusTarget = focusTargets.get(
                 `${retainedFocus.key}\u0000${retainedFocus.action}`
@@ -161,6 +164,7 @@ export class RasterLayerStackView {
         const accessibleName = `${layer.label}; Catalog Item ${itemIdentity}`;
         const row = this.documentContext.createElement("li");
         row.className = "raster-layer-row";
+        row.classList.toggle("is-vector", layer.kind === "vector");
         row.classList.toggle("is-active", layer.key === activeKey);
         row.classList.toggle("is-hidden", !layer.visible);
         row.setAttribute("aria-label", accessibleName);
@@ -170,11 +174,14 @@ export class RasterLayerStackView {
 
         const activeInput = this.documentContext.createElement("input");
         activeInput.type = "radio";
-        activeInput.name = "active-raster-layer";
+        activeInput.name = "active-map-layer";
         activeInput.checked = layer.key === activeKey;
         activeInput.dataset.layerKey = layer.key;
         activeInput.dataset.layerAction = "activate";
-        activeInput.setAttribute("aria-label", `Edit ${accessibleName}`);
+        activeInput.setAttribute(
+            "aria-label",
+            `${layer.kind === "vector" ? "Select" : "Edit"} ${accessibleName}`
+        );
         activeInput.addEventListener("change", () => {
             if (activeInput.checked) {
                 this.handlers?.onActivate(layer.key);
@@ -294,6 +301,27 @@ export class RasterLayerStackView {
         order.append(upButton, downButton);
         presentation.append(visibilityLabel, opacityLabel, order);
 
+        const { legend, labels } = layer.kind === "vector"
+            ? this.#buildVectorLegend(layer, accessibleName)
+            : this.#buildRasterLegend(layer, accessibleName);
+
+        const error = this.documentContext.createElement("p");
+        error.className = "raster-layer-error";
+        error.textContent = layer.error ?? "";
+        error.hidden = !layer.error;
+
+        row.append(heading, presentation, legend, labels, error);
+        return row;
+    }
+
+    /**
+     * Build the dynamic raster legend and numeric labels.
+     *
+     * @param {Object} layer Raster presentation snapshot.
+     * @param {string} accessibleName Complete layer accessible name.
+     * @return {{legend:HTMLDivElement,labels:HTMLDivElement}} Legend elements.
+     */
+    #buildRasterLegend(layer, accessibleName) {
         const legend = this.documentContext.createElement("div");
         legend.className = "raster-layer-legend";
         legend.setAttribute("role", "img");
@@ -303,7 +331,6 @@ export class RasterLayerStackView {
             "aria-label",
             `${accessibleName}. ${legendDefinition.description}`
         );
-
         const labels = this.documentContext.createElement("div");
         labels.className = "raster-layer-legend-labels";
         labels.setAttribute("aria-hidden", "true");
@@ -316,14 +343,31 @@ export class RasterLayerStackView {
             label.textContent = String(value);
             labels.append(label);
         }
+        return { legend, labels };
+    }
 
-        const error = this.documentContext.createElement("p");
-        error.className = "raster-layer-error";
-        error.textContent = layer.error ?? "";
-        error.hidden = !layer.error;
-
-        row.append(heading, presentation, legend, labels, error);
-        return row;
+    /**
+     * Build one fixed vector geometry swatch without raster style controls.
+     *
+     * @param {Object} layer Vector presentation snapshot.
+     * @param {string} accessibleName Complete layer accessible name.
+     * @return {{legend:HTMLDivElement,labels:HTMLDivElement}} Legend elements.
+     */
+    #buildVectorLegend(layer, accessibleName) {
+        const { label, fill, stroke } = layer.vectorSymbology;
+        const legend = this.documentContext.createElement("div");
+        legend.className = "raster-layer-legend vector-layer-legend";
+        legend.setAttribute("role", "img");
+        legend.style.background = fill;
+        legend.style.borderColor = stroke;
+        legend.setAttribute(
+            "aria-label",
+            `${accessibleName}. Default ${label.toLowerCase()} symbology.`
+        );
+        const labels = this.documentContext.createElement("div");
+        labels.className = "raster-layer-legend-labels vector-layer-legend-label";
+        labels.textContent = `${label} features · fixed default style`;
+        return { legend, labels };
     }
 
     /**

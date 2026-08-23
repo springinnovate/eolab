@@ -8,6 +8,8 @@
 
 /** Scanner-owned rendering metadata on a mounted raster's data Asset. */
 const RASTER_RENDERING_METADATA_KEY = "eolab:rendering";
+/** Scanner-owned rendering metadata on a vector Item's properties. */
+const VECTOR_RENDERING_METADATA_KEY = "eolab:vector_rendering";
 
 /**
  * Build the collision-safe key for one Catalog Item.
@@ -51,10 +53,20 @@ export class CatalogRasterAssessmentCache {
      */
     record(requestedItem, assessedItem) {
         const key = getCatalogMapActionKey(requestedItem);
-        const renderingMetadata =
-            assessedItem.assets.data[RASTER_RENDERING_METADATA_KEY];
+        const rasterMetadata =
+            assessedItem.assets?.data?.[RASTER_RENDERING_METADATA_KEY];
+        const vectorMetadata =
+            assessedItem.properties?.[VECTOR_RENDERING_METADATA_KEY];
+        const assessment = rasterMetadata === undefined
+            ? { kind: "vector", metadata: vectorMetadata }
+            : { kind: "raster", metadata: rasterMetadata };
+        if (assessment.metadata === undefined) {
+            throw new TypeError(
+                "Completed Catalog assessments require rendering metadata."
+            );
+        }
         Object.assign(requestedItem, assessedItem);
-        this.assessments.set(key, renderingMetadata);
+        this.assessments.set(key, assessment);
     }
 
     /**
@@ -69,20 +81,25 @@ export class CatalogRasterAssessmentCache {
      */
     apply(item) {
         const key = getCatalogMapActionKey(item);
-        const renderingMetadata = this.assessments.get(key);
-        if (renderingMetadata === undefined) {
+        const assessment = this.assessments.get(key);
+        if (assessment === undefined) {
             return false;
         }
-        const dataAsset = item.assets.data;
+        const { kind, metadata } = assessment;
+        const currentMetadata = kind === "raster"
+            ? item.assets?.data?.[RASTER_RENDERING_METADATA_KEY]
+            : item.properties?.[VECTOR_RENDERING_METADATA_KEY];
         if (
-            dataAsset[RASTER_RENDERING_METADATA_KEY]?.policy ===
-                renderingMetadata.policy
+            currentMetadata?.policy === metadata.policy
         ) {
             this.assessments.delete(key);
             return false;
         }
-        dataAsset[RASTER_RENDERING_METADATA_KEY] =
-            renderingMetadata;
+        if (kind === "raster") {
+            item.assets.data[RASTER_RENDERING_METADATA_KEY] = metadata;
+        } else {
+            item.properties[VECTOR_RENDERING_METADATA_KEY] = metadata;
+        }
         this.assessments.delete(key);
         return true;
     }

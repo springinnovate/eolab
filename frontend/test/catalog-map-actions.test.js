@@ -101,6 +101,41 @@ test("assessment results survive selection changes and equivalent reloads", () =
     assert.equal(assessments.apply(createItem("raster")), false);
 });
 
+test("vector assessments survive equivalent Catalog reloads", () => {
+    const assessments = new CatalogRasterAssessmentCache();
+    const requestedItem = {
+        collection: "eolab-mounted-vectors",
+        id: "geopackage-a",
+        assets: { data: {} },
+        properties: { title: "Original" },
+    };
+    const reloadedItem = {
+        ...requestedItem,
+        properties: { title: "Reloaded" },
+    };
+    const assessment = {
+        ...requestedItem,
+        properties: {
+            title: "Assessed",
+            "eolab:vector_rendering": {
+                policy: "vector-v1",
+                eligible: true,
+            },
+        },
+    };
+
+    assessments.record(requestedItem, assessment);
+
+    assert.equal(assessments.apply(reloadedItem), true);
+    assert.deepEqual(reloadedItem.properties, {
+        title: "Reloaded",
+        "eolab:vector_rendering": {
+            policy: "vector-v1",
+            eligible: true,
+        },
+    });
+});
+
 test("newer authoritative Catalog assessments are never overwritten", () => {
     const assessments = new CatalogRasterAssessmentCache();
     const requestedItem = createItem("raster");

@@ -19,10 +19,12 @@ const CATALOG_DATE_SYNTAX_ERROR =
     "Use date:YYYY, date:YYYY-MM, date:YYYY-MM-DD, or a range " +
     "between two of these values.";
 export const MOUNTED_GEOTIFF_COLLECTION_ID = "eolab-mounted-geotiffs";
+export const MOUNTED_VECTOR_COLLECTION_ID = "eolab-mounted-vectors";
 const RASTER_RENDERING_POLICY = "raster-v3";
+const VECTOR_RENDERING_POLICY = "vector-v1";
 export const MOUNTED_DATASET_TYPES = new Map([
     [MOUNTED_GEOTIFF_COLLECTION_ID, "Raster"],
-    ["eolab-mounted-vectors", "Vector"]
+    [MOUNTED_VECTOR_COLLECTION_ID, "Vector"]
 ]);
 
 /**
@@ -40,6 +42,43 @@ export function getRasterVisualization(item) {
     return renderingMetadata?.policy === RASTER_RENDERING_POLICY
         ? renderingMetadata
         : undefined;
+}
+
+/**
+ * Return the scanner-owned decision for a catalog vector source layer.
+ *
+ * @param {Object|null} item Selected STAC Item.
+ * @return {Object|null|undefined} Rendering metadata, null for a non-vector
+ * Item, or undefined when the selected vector has not been assessed.
+ */
+export function getVectorVisualization(item) {
+    if (item?.collection !== MOUNTED_VECTOR_COLLECTION_ID) {
+        return null;
+    }
+    const renderingMetadata = item.properties?.["eolab:vector_rendering"];
+    return renderingMetadata?.policy === VECTOR_RENDERING_POLICY
+        ? renderingMetadata
+        : undefined;
+}
+
+/**
+ * Classify one Catalog Item through supported visualization contracts.
+ *
+ * @param {Object|null} item Selected STAC Item.
+ * @return {{kind:"raster"|"vector",metadata:Object|undefined}|null}
+ * Supported visualization kind and current assessment, or null when the Item
+ * has no Catalog-to-map adapter.
+ */
+export function getCatalogVisualization(item) {
+    const rasterMetadata = getRasterVisualization(item);
+    if (rasterMetadata !== null) {
+        return { kind: "raster", metadata: rasterMetadata };
+    }
+    const vectorMetadata = getVectorVisualization(item);
+    if (vectorMetadata !== null) {
+        return { kind: "vector", metadata: vectorMetadata };
+    }
+    return null;
 }
 
 /** Format a byte count without implying decimal storage units. */

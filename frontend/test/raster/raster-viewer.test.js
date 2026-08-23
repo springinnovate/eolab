@@ -411,6 +411,66 @@ test("raster viewer owns the displayed layer lifecycle and detaches cleanly", as
     assert.equal(leafletMap.handlers.get("mousemove").size, 0);
 });
 
+test("catalog vectors share map lifecycle without raster controls", async () => {
+    const leafletMap = createFakeMap();
+    const fittedBounds = [];
+    leafletMap.fitBounds = (bounds, options) => {
+        fittedBounds.push({ bounds, options });
+    };
+    const { leaflet, wmsLayers } = createFakeLeaflet();
+    const controlsView = createFakeControlsView();
+    const layerStackView = createFakeLayerStackView();
+    const vectorItem = {
+        collection: "eolab-mounted-vectors",
+        id: "geopackage-0123456789abcdef01234567",
+        properties: { title: "Survey parcels" },
+    };
+    const viewer = initializeRasterViewer(
+        {
+            wmsUrl: "/geoserver/eolab/wms",
+            leafletMap,
+            leaflet,
+            onTileError() {},
+        },
+        {
+            controlsView,
+            layerStackView,
+            publishVector: async () => ({
+                layerName: `eolab:${vectorItem.id}`,
+                bbox: [-123, 48, -122, 49],
+                geometryKind: "polygon",
+                styleName: "vector-polygon",
+            }),
+            loadStatistics: () => new Promise(() => {}),
+            samplePixel: async () => ({ inBounds: true, value: 1 }),
+            viewport: { innerWidth: 1280, innerHeight: 720 },
+        }
+    );
+
+    await viewer.showVector(vectorItem);
+
+    assert.equal(controlsView.controlsVisible, false);
+    assert.equal(wmsLayers.length, 1);
+    assert.equal(wmsLayers[0].wmsOptions.layers, `eolab:${vectorItem.id}`);
+    assert.equal(wmsLayers[0].wmsOptions.styles, "vector-polygon");
+    assert.equal("env" in wmsLayers[0].wmsOptions, false);
+    assert.equal(layerStackView.layers[0].kind, "vector");
+    assert.deepEqual(layerStackView.layers[0].vectorSymbology, {
+        label: "Polygon",
+        fill: "#a855f7",
+        stroke: "#581c87",
+    });
+    assert.deepEqual(fittedBounds, [{
+        bounds: [[48, -123], [49, -122]],
+        options: { maxZoom: 14, padding: [24, 24] },
+    }]);
+
+    viewer.remove(vectorItem);
+    assert.equal(viewer.contains(vectorItem), false);
+    assert.equal(leafletMap.layers.has(wmsLayers[0]), false);
+    viewer.destroy();
+});
+
 test("raster viewer samples pixels only inside the single map world", async () => {
     const leafletMap = createFakeMap();
     const { leaflet } = createFakeLeaflet();

@@ -21,9 +21,9 @@ import {
     formatScanProgressCounts,
     formatScanTiming,
     formatScanStatusSummary,
-    getRasterVisualization,
     MOUNTED_DATASET_TYPES,
 } from "./catalog.js";
+import { CatalogVisualizationCoordinator } from "./catalog-visualization.js";
 import { initializeCatalogPaneControls } from "./catalog-pane-controller.js";
 import {
     applyCatalogSystemState,
@@ -39,7 +39,6 @@ import {
     CatalogMapActionRegistry,
     CatalogRasterAssessmentCache,
 } from "./catalog-map-actions.js";
-import { assessCatalogRaster } from "./raster/api.js";
 import { initializeRasterViewer } from "./raster/raster-viewer.js";
 import { initializeTemporaryAoi } from "./temporary-aoi/temporary-aoi.js";
 import {
@@ -486,20 +485,20 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
         selectedButton: null,
         selectedItem: null,
         pendingMapActions: new CatalogMapActionRegistry(),
-        rasterAssessments: new CatalogRasterAssessmentCache(),
+        visualizationAssessments: new CatalogRasterAssessmentCache(),
         // Generation token: filter/search changes invalidate older async
         // Surprise responses so they cannot select an Item from stale criteria.
         surpriseRequestGeneration: 0,
     };
 
     /**
-     * Report one layer-specific raster tile failure in the Catalog action.
+     * Report one layer-specific tile failure in the Catalog action.
      *
-     * @param {string} message User-facing raster tile failure.
+     * @param {string} message User-facing map tile failure.
      * @param {Object} item Affected Catalog Item.
      * @return {void}
      */
-    function reportRasterTileError(message, item) {
+    function reportMapTileError(message, item) {
         if (catalogItemsMatch(catalogState.selectedItem, item)) {
             catalogLayerStatus.textContent = message;
         }
@@ -550,13 +549,16 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
         }
     }
 
-    const rasterVisualization = initializeRasterViewer({
+    const mixedLayerViewer = initializeRasterViewer({
         wmsUrl: appGlobalConfiguration.wmsUrl,
         leafletMap,
         leaflet: L,
-        onTileError: reportRasterTileError,
+        onTileError: reportMapTileError,
         onLayersChange: refreshCatalogMapAction,
     });
+    const catalogVisualization = new CatalogVisualizationCoordinator(
+        mixedLayerViewer
+    );
     /**
      * Apply the scanner-owned visualization decision to the map action.
      *
@@ -564,8 +566,8 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
      * @return {void}
      */
     function updateCatalogMapAction(item) {
-        const visualization = getRasterVisualization(item);
-        const isRetained = item !== null && rasterVisualization.contains(item);
+        const visualization = catalogVisualization.describe(item);
+        const isRetained = item !== null && catalogVisualization.contains(item);
         const pendingAction = item === null
             ? null
             : catalogState.pendingMapActions.get(item);
@@ -577,9 +579,9 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
         catalogLayerToggle.disabled = pendingAction !== null;
         catalogLayerToggle.hidden = false;
         catalogLayerToggle.textContent = pendingAction?.buttonText ?? (
-            visualization === undefined
+            visualization?.metadata === undefined
                 ? "Assess for visualization"
-                : visualization?.eligible === false
+                : visualization?.metadata?.eligible === false
                     ? "Reassess visualization"
                     : isRetained
                         ? "Remove from map layers"
@@ -587,8 +589,9 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
         );
         catalogLayerStatus.textContent = pendingAction?.statusText ?? (
             isRetained
-                ? "This raster is retained in the map layer stack."
-                : visualization?.reason ?? ""
+                ? `This ${catalogVisualization.noun(item)} is retained in the ` +
+                  "map layer stack."
+                : visualization?.metadata?.reason ?? ""
         );
     }
 
@@ -614,7 +617,7 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
 
     /** Select one result or remotely discovered Item without changing search. */
     function selectCatalogItem(item, requestedButton = null) {
-        catalogState.rasterAssessments.apply(item);
+        catalogState.visualizationAssessments.apply(item);
         const itemButton = requestedButton ??
             catalogState.resultButtons.get(catalogItemKey(item)) ?? null;
         if (catalogState.selectedButton !== null) {
@@ -672,7 +675,7 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
         }
 
         for (const item of itemCollection.features) {
-            catalogState.rasterAssessments.apply(item);
+            catalogState.visualizationAssessments.apply(item);
             const itemButton = document.createElement("button");
             itemButton.className = "catalog-result";
             itemButton.type = "button";
@@ -778,7 +781,7 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
     /** Start a new search and replace every result from the previous stream. */
     async function loadCatalog(reloadCollections = false) {
         const searchSequence = ++catalogState.searchSequence;
-        catalogState.rasterAssessments.clear();
+        catalogState.visualizationAssessments.clear();
         catalogState.surpriseRequestGeneration += 1;
         catalogState.searchText = catalogSearchInput.value;
         catalogSearchInput.removeAttribute("aria-invalid");
@@ -960,25 +963,28 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
     );
     retryPageButton.addEventListener("click", prefetchNextCatalogPage);
     /**
-     * Assess, reassess, add, or remove the selected Catalog raster.
+     * Assess, reassess, add, or remove the selected supported Catalog layer.
      *
      * @return {Promise<void>} Completion after the selected action settles.
      */
-    async function toggleCatalogRaster() {
+    async function toggleCatalogLayer() {
         const selectedItem = catalogState.selectedItem;
-        const visualization = getRasterVisualization(selectedItem);
+        const visualization = catalogVisualization.describe(selectedItem);
         if (
-            visualization === undefined ||
-            visualization?.eligible === false
+            visualization?.metadata === undefined ||
+            visualization?.metadata?.eligible === false
         ) {
+            const noun = catalogVisualization.noun(selectedItem);
             const pendingAction = beginCatalogMapAction(
                 selectedItem,
                 "Assessing...",
-                "Inspecting the selected raster."
+                `Inspecting the selected ${noun}.`
             );
             try {
-                const assessedItem = await assessCatalogRaster(selectedItem);
-                catalogState.rasterAssessments.record(
+                const assessedItem = await catalogVisualization.assess(
+                    selectedItem
+                );
+                catalogState.visualizationAssessments.record(
                     selectedItem,
                     assessedItem
                 );
@@ -988,7 +994,7 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
                 )) {
                     return;
                 }
-                catalogState.rasterAssessments.apply(
+                catalogState.visualizationAssessments.apply(
                     catalogState.selectedItem
                 );
                 renderCatalogItemInspector(
@@ -1004,7 +1010,7 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
                 )) {
                     finishCatalogMapAction(pendingAction);
                     catalogLayerToggle.textContent =
-                        visualization === undefined
+                        visualization?.metadata === undefined
                             ? "Assess for visualization"
                             : "Reassess visualization";
                     catalogLayerStatus.textContent = assessmentError.message;
@@ -1015,34 +1021,38 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
             return;
         }
 
-        if (rasterVisualization.contains(selectedItem)) {
-            rasterVisualization.remove(selectedItem);
+        const noun = catalogVisualization.noun(selectedItem);
+        if (catalogVisualization.contains(selectedItem)) {
+            catalogVisualization.remove(selectedItem);
             catalogLayerToggle.textContent = "Add to map layers";
             catalogLayerStatus.textContent =
-                "Raster removed from the map layer stack.";
+                `${noun[0].toUpperCase()}${noun.slice(1)} removed from the ` +
+                "map layer stack.";
             return;
         }
 
         const pendingAction = beginCatalogMapAction(
             selectedItem,
             "Adding to map…",
-            "Preparing the selected raster."
+            `Preparing the selected ${noun}.`
         );
         try {
-            const publishedRaster = await rasterVisualization.show(
+            const publishedLayer = await catalogVisualization.show(
                 selectedItem
             );
             if (
-                publishedRaster === null ||
+                publishedLayer === null ||
                 !catalogItemsMatch(catalogState.selectedItem, selectedItem)
             ) {
                 return;
             }
             finishCatalogMapAction(pendingAction);
             catalogLayerToggle.textContent = "Remove from map layers";
-            catalogLayerStatus.textContent =
-                "Raster retained in map layers. Hover over the map to " +
-                "inspect the active visible layer.";
+            catalogLayerStatus.textContent = noun === "raster"
+                ? "Raster retained in map layers. Hover over the map to " +
+                  "inspect the active visible layer."
+                : "Vector layer retained in map layers with fixed default " +
+                  "symbology.";
         } catch (renderingError) {
             if (catalogItemsMatch(catalogState.selectedItem, selectedItem)) {
                 finishCatalogMapAction(pendingAction);
@@ -1053,7 +1063,7 @@ async function initializeCatalog(appGlobalConfiguration, leafletMap) {
             finishCatalogMapAction(pendingAction);
         }
     }
-    catalogLayerToggle.addEventListener("click", toggleCatalogRaster);
+    catalogLayerToggle.addEventListener("click", toggleCatalogLayer);
 
     await loadCatalog(true);
     return loadCatalog.bind(null, true);

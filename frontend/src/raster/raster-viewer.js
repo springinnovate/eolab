@@ -48,6 +48,11 @@ import {
 } from "./style.js";
 import { buildRasterStyleEnvironment } from "./wms.js";
 import { RasterControlsView } from "./controls-view.js";
+import { publishCatalogVector } from "../vector/api.js";
+import {
+    createVectorWmsLayer,
+    VECTOR_DEFAULT_SYMBOLOGY,
+} from "../vector/leaflet.js";
 
 const RASTER_STYLE_DEBOUNCE_MILLISECONDS = 200;
 
@@ -57,6 +62,8 @@ const RASTER_STYLE_DEBOUNCE_MILLISECONDS = 200;
  * @property {() => void} reset Clear the raster and restore default styling.
  * @property {(item: Object) => Promise<Object|null>} show Publish and retain
  * one selected raster Item.
+ * @property {(item: Object) => Promise<Object|null>} showVector Publish and
+ * retain one selected exact vector layer.
  * @property {(item: Object) => boolean} contains Return whether an Item is
  * retained in the layer stack.
  * @property {(item: Object) => void} remove Remove one Item from the stack.
@@ -84,6 +91,8 @@ const RASTER_STYLE_DEBOUNCE_MILLISECONDS = 200;
  * Layer-list DOM adapter.
  * @property {(item: Object) => Promise<Object>}
  * [publishRaster=publishCatalogRaster] Publishes one Catalog raster.
+ * @property {(item: Object) => Promise<Object>}
+ * [publishVector=publishCatalogVector] Publishes one Catalog vector layer.
  * @property {(item: Object, signal: AbortSignal, selectedBounds: Object|null)
  * => Promise<Object>} [loadStatistics=loadCatalogRasterStatistics] Loads whole
  * or selected statistics.
@@ -121,6 +130,7 @@ export function initializeRasterViewer(
         controlsView = new RasterControlsView(),
         layerStackView = new RasterLayerStackView(),
         publishRaster = publishCatalogRaster,
+        publishVector = publishCatalogVector,
         loadStatistics = loadCatalogRasterStatistics,
         samplePixel = sampleCatalogRasterPixel,
         clock = globalThis,
@@ -158,14 +168,16 @@ export function initializeRasterViewer(
      *
      * @param {Object} entry Pure stack entry.
      * @param {Object} publishedRaster GeoServer publication response.
+     * @param {"raster"|"vector"} [layerKind="raster"] Retained layer kind.
      * @return {Object} Per-layer state restored on activation.
      */
-    function createLayerSession(entry, publishedRaster) {
+    function createLayerSession(entry, publishedRaster, layerKind = "raster") {
         return {
             key: entry.key,
             item: entry.item,
             label: entry.label,
             publishedRaster,
+            layerKind,
             rasterStyle: { ...DEFAULT_RASTER_STYLE },
             paletteName: "blue-yellow-red",
             rasterStyleWasEdited: false,
@@ -208,6 +220,9 @@ export function initializeRasterViewer(
             return;
         }
         const session = requireLayerSession(activeLayerKey);
+        if (session.layerKind !== "raster") {
+            return;
+        }
         Object.assign(session, {
             rasterStyle: { ...rasterStyle },
             paletteName: controlsView.getPaletteName(),
@@ -233,7 +248,7 @@ export function initializeRasterViewer(
      */
     function loadActiveLayerSession(session) {
         activeLayerKey = session.key;
-        activeRasterItem = session.item;
+        activeRasterItem = session.layerKind === "raster" ? session.item : null;
         rasterPixelProbeLabel = session.label;
         rasterStyle = { ...session.rasterStyle };
         rasterStyleWasEdited = session.rasterStyleWasEdited;
@@ -278,6 +293,32 @@ export function initializeRasterViewer(
     }
 
     /**
+     * Create one fixed-style bounded vector WMS layer.
+     *
+     * @param {string} layerKey Stable retained layer key.
+     * @param {{bbox:number[],layerName:string,geometryKind:string,styleName:string}}
+     * publishedVector Published exact vector layer.
+     * @return {Object} Leaflet-compatible WMS tile layer.
+     */
+    function createVectorLayer(layerKey, publishedVector) {
+        const vectorLayer = createVectorWmsLayer(
+            leaflet,
+            wmsUrl,
+            publishedVector,
+            () => {
+                if (leafletLayers.get(layerKey) !== vectorLayer) {
+                    return;
+                }
+                const session = requireLayerSession(layerKey);
+                session.error = "Vector map tiles could not be rendered.";
+                renderLayerStack();
+                onTileError(session.error, session.item);
+            }
+        );
+        return vectorLayer;
+    }
+
+    /**
      * Create one transient or committed sample-window rectangle.
      *
      * @param {Array} bounds Leaflet rectangle bounds.
@@ -313,12 +354,12 @@ export function initializeRasterViewer(
     );
 
     /**
-     * Return whether the active retained layer is attached to the map.
+     * Return whether the active raster layer is attached to the map.
      *
      * @return {boolean} Whether active map interactions are meaningful.
      */
     function isActiveLayerVisible() {
-        return activeLayerKey !== null &&
+        return activeRasterItem !== null && activeLayerKey !== null &&
             layerStack.get(activeLayerKey)?.visible === true;
     }
 
@@ -333,7 +374,15 @@ export function initializeRasterViewer(
             const session = requireLayerSession(entry.key);
             return {
                 ...entry,
-                style: { ...session.rasterStyle },
+                kind: session.layerKind,
+                style: session.layerKind === "raster"
+                    ? { ...session.rasterStyle }
+                    : null,
+                vectorSymbology: session.layerKind === "vector"
+                    ? VECTOR_DEFAULT_SYMBOLOGY[
+                        session.publishedRaster.geometryKind
+                    ]
+                    : null,
                 error: session.error,
             };
         });
@@ -456,6 +505,12 @@ export function initializeRasterViewer(
         const entry = layerStack.activate(key);
         const session = requireLayerSession(key);
         loadActiveLayerSession(session);
+        if (session.layerKind === "vector") {
+            controlsView.setControlsVisible(false);
+            controlsView.hidePixelProbe();
+            renderLayerStack(requestedFocus);
+            return;
+        }
         controlsView.setControlsVisible(true);
         controlsView.setActiveLayer(entry.label, entry.visible);
         controlsView.setStyle(rasterStyle, session.paletteName);
@@ -1266,6 +1321,14 @@ export function initializeRasterViewer(
         }
         leafletLayers.setVisible(key, visible);
         if (activeLayerKey === key) {
+            const activeSession = requireLayerSession(key);
+            if (activeSession.layerKind === "vector") {
+                layerStackView.setStatus(
+                    `${entry.label} is now ${visible ? "visible" : "hidden"}.`
+                );
+                renderLayerStack({ key, action: "visibility" });
+                return;
+            }
             saveActiveLayerSession();
             rasterSampleWindowController.clear();
             pixelProbeController.clear();
@@ -1461,13 +1524,14 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Publish and retain one selected Catalog raster.
+     * Publish and retain one selected raster or exact vector layer.
      *
-     * @param {Object} item Selected mounted GeoTIFF STAC Item.
-     * @return {Promise<Object|null>} Published raster or null after invalidation.
+     * @param {Object} item Selected supported STAC Item.
+     * @param {"raster"|"vector"} layerKind Owned visualization adapter kind.
+     * @return {Promise<Object|null>} Publication or null after invalidation.
      * @throws {Error} If publication or Leaflet layer construction fails.
      */
-    async function show(item) {
+    async function showLayer(item, layerKind) {
         const key = getCatalogRasterLayerKey(item);
         activationIntentSequence += 1;
         const showRequestSequence = activationIntentSequence;
@@ -1493,14 +1557,18 @@ export function initializeRasterViewer(
         const generation = (publicationGenerations.get(key) ?? 0) + 1;
         publicationGenerations.set(key, generation);
         const publication = (async () => {
-            const publishedRaster = await publishRaster(item);
+            const publishedRaster = layerKind === "raster"
+                ? await publishRaster(item)
+                : await publishVector(item);
             if (
                 destroyed ||
                 publicationGenerations.get(key) !== generation
             ) {
                 return null;
             }
-            const label = getCatalogRasterBasename(item);
+            const label = layerKind === "raster"
+                ? getCatalogRasterBasename(item)
+                : (item.properties?.title ?? item.id);
             const previousActiveKey = layerStack.activeKey;
             const { entry } = layerStack.add(
                 item,
@@ -1513,16 +1581,32 @@ export function initializeRasterViewer(
             if (!shouldActivate && previousActiveKey !== null) {
                 layerStack.activate(previousActiveKey);
             }
-            const session = createLayerSession(entry, publishedRaster);
+            const session = createLayerSession(
+                entry,
+                publishedRaster,
+                layerKind
+            );
             layerSessions.set(key, session);
             try {
-                const layer = createRasterLayer(
-                    key,
-                    publishedRaster,
-                    session.rasterStyle
-                );
+                const layer = layerKind === "raster"
+                    ? createRasterLayer(
+                        key,
+                        publishedRaster,
+                        session.rasterStyle
+                    )
+                    : createVectorLayer(key, publishedRaster);
                 leafletLayers.add(key, layer, entry);
                 applyLeafletLayerOrder();
+                if (
+                    layerKind === "vector" &&
+                    typeof leafletMap.fitBounds === "function"
+                ) {
+                    const [west, south, east, north] = publishedRaster.bbox;
+                    leafletMap.fitBounds(
+                        [[south, west], [north, east]],
+                        { maxZoom: 14, padding: [24, 24] }
+                    );
+                }
                 if (shouldActivate) {
                     activateLayer(key);
                 } else {
@@ -1545,7 +1629,7 @@ export function initializeRasterViewer(
             layerStackView.setStatus(
                 entry.visible
                     ? `${label} was added and is visible.`
-                    : `${label} was added hidden because two raster layers ` +
+                    : `${label} was added hidden because two map layers ` +
                       "are already visible. Hide one to show it."
             );
             renderLayerStack();
@@ -1559,6 +1643,28 @@ export function initializeRasterViewer(
                 pendingPublications.delete(key);
             }
         }
+    }
+
+    /**
+     * Publish and retain one selected Catalog raster.
+     *
+     * @param {Object} item Selected mounted GeoTIFF STAC Item.
+     * @return {Promise<Object|null>} Publication or null after invalidation.
+     * @throws {Error} If publication or layer construction fails.
+     */
+    function show(item) {
+        return showLayer(item, "raster");
+    }
+
+    /**
+     * Publish and retain one selected Catalog vector layer.
+     *
+     * @param {Object} item Selected exact vector STAC Item.
+     * @return {Promise<Object|null>} Publication or null after invalidation.
+     * @throws {Error} If publication or layer construction fails.
+     */
+    function showVector(item) {
+        return showLayer(item, "vector");
     }
 
     /**
@@ -1624,6 +1730,7 @@ export function initializeRasterViewer(
         clear,
         reset,
         show,
+        showVector,
         contains,
         remove,
         destroy,
