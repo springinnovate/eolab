@@ -2,114 +2,136 @@
 
 EOLab keeps normal full visualization and bounded sampled visualization as
 separate contracts. Normal visualization publishes an eligible raster to
-GeoServer and permits authorized WMS tiles across its extent. A sampled raster
-is instead a low-resolution, synthetic proxy: every displayed cell represents
-a much larger source region using only the explicitly selected observations.
-It covers the raster extent, but it is not a full-resolution rendering or an
-overview pyramid.
+GeoServer and permits authorized WMS tiles. A sampled raster is a synthetic,
+approximate grid built by Rasterio in EOLab from a fixed number of observed
+source pixels. It is not a whole-raster read, an overview pyramid, or permission
+for arbitrary WMS requests.
 
 ## Applicability and authorization
 
-The fallback is offered only when the current `raster-v3` assessment rejects
-normal visualization for one of these overview/scale reasons:
+This fallback is offered only when the current `raster-v3` assessment rejects
+normal visualization for an overview/scale reason:
 
 - `internal_overviews_required`
 - `incomplete_overview_pyramid`
 - `coarsest_overview_dimension_exceeded`
 - `coarsest_overview_decoded_size_exceeded`
 
-The deployed GeoServer/GeoTools reader must still accept the raster and its CRS
-under the current reader contract, and the structural assessment must report
-bounded native blocks. Reader/CRS incompatibility, unsafe blocks, unsupported
-band counts or pixel types, stale sources, invalid extents, and publication
-failures retain their actionable failures. This mode is not a publication
-recovery path.
+The deployed GeoServer/GeoTools reader must still accept the raster and its CRS,
+and the structural assessment must report bounded native blocks. Reader or CRS
+incompatibility, unsafe blocks, unsupported band counts or pixel types, stale
+sources, invalid extents, and publication failures retain their actionable
+failures. This mode is not a publication recovery path.
 
-The browser sends only the scanner-owned Collection ID, Item ID, and one fixed
-sampling mode to `POST /api/rendering/detail-previews`. EOLab reloads the
-authoritative Item, resolves its data Asset inside the configured read-only scan
-mount, and compares the current filesystem source signature with the
-assessment. Browser-supplied paths, source windows, dimensions, work budgets,
-CRS values, styles, and arbitrary GeoServer layer names are not accepted.
-Because the established source signature owns only the GeoTIFF, sampled
-previews also require georeferencing and validity metadata to be embedded in
-that signed file. External GDAL masks, overviews, and auxiliary metadata are
-rejected rather than silently entering source reads or cache identity. Alpha
-and per-dataset validity masks are unsupported by this bounded band-one path.
+The browser sends scanner-owned Collection and Item IDs, one fixed preview mode,
+and, for sampled grids, a server-owned density name. A refinement may also send
+one canonical non-wrapping WGS 84 map rectangle. EOLab reloads the authoritative
+Item, resolves its Asset inside the configured read-only scan mount, and checks
+the current source signature. Browser-supplied paths, source windows, numeric
+dimensions, work budgets, CRS values, styles, and GeoServer layer names are not
+accepted.
 
-## Preview choices
+The authorized signature owns only the GeoTIFF, so georeferencing and validity
+metadata must be embedded in that signed file. External GDAL masks, overviews,
+and auxiliary metadata are rejected. Alpha and per-dataset masks are also
+unsupported by this bounded band-one path.
 
-All responses identify themselves as approximate and include the cataloged
-**raster extent**. The dashed map outline is the raster extent, not a measured
-valid-data footprint.
+## Preview choices and density
+
+Every response is labeled approximate and includes the cataloged **raster
+extent**. The orange dashed outline is the raster extent, not a measured
+valid-data footprint. Every displayed image must remain inside that extent;
+backend and browser validators allow only `1e-9` degree of projection
+roundoff. Raster/detail outlines use a noninteractive pane above the opaque
+sampled images, while the temporary-AOI pane remains above both.
 
 | Choice | Meaning |
 | --- | --- |
-| Center sample in each proxy cell | The full source grid is partitioned into a small aspect-preserving grid. Each proxy cell uses the source pixel at the center of its larger source region. A nodata center remains transparent; it is never converted to zero. |
-| Representative samples in each proxy cell | Every proxy cell examines the center plus four fixed quadrant-center positions. Duplicate positions are removed. The displayed value is the lower median observed finite source value, with value/row/column ordering as a deterministic tie-break. An all-nodata cell remains transparent. |
-| Representative bounded detail patch | At most nine 128 × 128 source windows are ranked by valid finite-pixel coverage, then population standard deviation, then top-left row-major order. The selected already-read window is displayed at its actual spatial location. |
+| Center sample in each proxy cell | Each map-aligned grid cell displays its center source pixel. A nodata center remains transparent; it is never converted to zero. |
+| Representative samples in each proxy cell | Each cell examines the center plus four fixed quadrant-center positions. Duplicate source positions are removed. The lower median observed finite value is displayed with value/row/column deterministic ordering. An all-nodata cell remains transparent. |
+| Representative bounded detail patch | At most nine 128 × 128 source windows are ranked by finite valid-pixel coverage, then population standard deviation, then top-left row-major order. The selected already-read window is displayed at its true spatial location. |
 
-The first two choices are synthetic full-extent rasters, not point markers. A
-displayed cell does not contain an average or exhaustive statistic for its
-source region; unsampled source pixels remain unknown. The third choice remains
-a local detail view and cannot promise that the best data lies within its nine
-candidate locations.
+For the first two modes the user chooses one closed density profile. These are
+ceilings, not browser-controlled dimensions:
 
-## Source-read and output bounds
+| Density | Maximum target-grid edge |
+| --- | ---: |
+| Coarse | 31 cells |
+| Medium | 63 cells |
+| Fine | 127 cells |
 
-The `bounded-sampled-raster-v2` policy initially considers an odd grid no larger
-than 127 × 127 cells, then deterministically reduces it until both native-source
-limits hold:
+The widget reports the actual base and current-view grid dimensions returned by
+the server. Aspect ratio and safety coarsening can make an actual grid smaller
+than its profile ceiling.
 
-- at most 1,024 unique band-one native-block reads; and
+## Zoom-adaptive detail
+
+The initial grid covers the displayable raster extent. Once the map is at least
+one zoom level closer than that fitted extent, EOLab places another grid with
+the same selected density over only the visible map/raster intersection. At the
+next zoom level that rectangle is smaller, so approximately the same number of
+displayed cells samples finer-spaced source positions. Panning requests the same
+bounded grid over the new intersection.
+
+Only one teal-outlined current-view detail layer is retained. A 200 ms move-end
+debounce collapses rapid interaction; a new intent aborts the previous browser
+request, and monotonic session plus exact bounds identities prevent stale
+responses from replacing current state even when cancellation loses a race.
+The new overlay is attached before the prior one is removed. Zooming back to
+the fitted scale removes only the detail overlay and retains the base grid.
+The representative patch remains explicit and does not auto-refine.
+
+The first grid in the session that contains finite observations establishes one
+immutable color range. Usually that is the base grid; when the base is entirely
+nodata, the first finite current-view grid establishes it instead. Later grids
+reuse that range, so an equal numeric value keeps the same color across
+base/detail seams. Nodata remains alpha-transparent.
+
+## Source-read proof and output bounds
+
+Policy `bounded-sampled-raster-v3` constructs its target grid directly in
+EPSG:3857. For each cell it transforms only the fixed center or five
+representative positions into the raster CRS, applies the inverse source affine
+transform (including rotated or skewed grids), and discards positions outside
+the source. It never reads the potentially enormous source-pixel envelope of a
+view.
+
+Valid source positions are deduplicated and grouped by their native TIFF block.
+Each required band-one block is read exactly once at base resolution with no
+`out_shape`, resampling, or boundless read. A candidate grid is deterministically
+reduced until both ceilings hold:
+
+- at most 1,024 unique native-block reads; and
 - at most 64 MiB of conservatively estimated decoded band-one values plus
-  their validity-mask bytes.
+  their in-memory validity bytes.
 
-The center policy uses one position per cell. The representative policy uses at
-most five positions per cell. Positions are grouped by their native TIFF block;
-each required block is read exactly once at base resolution with no `out_shape`.
-Consequently, a logical 1 × 1 observation cannot conceal an unbounded tile or
-strip decode. Rasters with more expensive blocks receive a coarser proxy.
+One attempted fine representative grid transforms at most 127 × 127 × 5 =
+80,645 positions before deduplication. If that grid exceeds a source-read
+ceiling, deterministic safety coarsening may try each of the 64 odd edge sizes
+from 127 through 1. The request-level ceiling is therefore 1,747,520 transformed
+positions across all attempts, while peak transformation memory is one attempted
+grid. Transformation is bounded CPU/memory work and cannot cause an unbounded
+GDAL source read. The already map-aligned numeric grid is returned at no more
+than its selected 31, 63, or 127 edge. Patch candidates use the same block/byte
+ceilings and an output edge of at most 128.
 
-Only the resulting bounded in-memory numeric grid and validity mask are warped,
-using nearest-neighbor resampling, into a Web-Mercator-aligned image no larger
-than 127 × 127. Patch candidates are admitted only while their union of native
-blocks remains within the same 1,024-block and 64 MiB ceilings. Each admitted
-block is read once; the selected candidate is reconstructed from those bounded
-reads and its output edge is at most 128. GDAL never receives a full-source
-downsampling request for these previews.
+## Caching and source changes
 
-Zooming the map scales this same cached proxy; it does not request a denser
-sample grid or unlock ordinary WMS detail tiles. Building internal overviews is
-still required for scale-dependent refinement and normal visualization.
-
-The browser colors finite numeric cells with the same default three-stop raster
-ramp used by normal visualization. Approximate fifth, median, and ninety-fifth
-percentiles from the bounded values provide the numeric thresholds. Nodata is
-alpha-transparent. Coloring happens locally and cannot trigger another source
-read.
-
-## Concurrency, caching, and stale state
-
-Preview reads share the configured bounded Rasterio read concurrency and a
-bounded process-local LRU capacity. In-flight identical work is coalesced.
-Cache identity includes Collection and Item identity, assessed source signature,
-cataloged raster extent, `bounded-sampled-raster-v2`, preview mode, native-block
-and decoded-byte ceilings, maximum dimensions, fixed per-cell offsets, patch
-candidate locations, and deterministic selection policy. The source signature
-is checked before and after pixel work; changed files are neither returned nor
-cached.
-
-The frontend aborts superseded requests and also compares a monotonic intent
-generation after completion. A stale response cannot replace current map state
-even when network cancellation loses a race. Replacement is atomic: a failed
-request or image construction leaves the existing preview visible.
+Reads share the configured bounded Rasterio concurrency and process-local LRU.
+Identical work is coalesced. The number of admitted distinct in-flight cache
+identities is capped at the same configured concurrency; excess distinct work
+receives an actionable busy conflict instead of accumulating a viewport-request
+backlog. Cache identity includes Collection and Item, assessed source signature,
+cataloged raster extent, policy v3, preview mode, density, exact effective view
+bounds, transformed-position, native-block, and byte ceilings, fixed probe
+offsets, and patch selection parameters. The source signature is checked before
+and after pixel work; changed files are neither returned nor cached.
 
 ## Why this is not normal full-raster visualization
 
-GeoServer response buffers and concurrent-request limits bound output and
-control flow, not GDAL source reads. EOLab therefore does not weaken the normal
-overview policy, publish the overview-limited raster, or authorize it through
-the WMS proxy. The sampled image deliberately contains only bounded observations
-and remains visibly pixelated and labeled approximate. Building proper internal
-overviews is still the path to normal full-raster visualization.
+GeoServer output buffers and request concurrency bound output/control flow, not
+GDAL source reads. EOLab therefore does not weaken the overview policy, publish
+the overview-limited raster, or authorize it through the WMS proxy. The map
+contains only fixed, bounded observations and remains visibly pixelated and
+labeled approximate. Building proper internal overviews remains the path to
+normal full-raster visualization.
