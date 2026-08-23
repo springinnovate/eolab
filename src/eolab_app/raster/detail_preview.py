@@ -1,4 +1,4 @@
-"""Bounded numeric images for approximate raster visualization."""
+"""Adaptive bounded numeric images for overview-limited raster detail."""
 
 import math
 from pathlib import Path
@@ -23,20 +23,29 @@ from eolab_app.raster.detail_proxy import (
     read_bounded_candidate_windows,
     read_detail_proxy,
 )
+from eolab_app.raster.exact_detail import (
+    EXACT_DETAIL_MAX_DECODED_SOURCE_BYTES,
+    EXACT_DETAIL_MAX_DIMENSION,
+    EXACT_DETAIL_MAX_SOURCE_BLOCK_READS,
+    plan_exact_current_view,
+    read_exact_current_view,
+)
 from eolab_app.raster.models import (
     CanonicalWgs84Bounds,
     RasterDetailPreview,
     RasterDetailPreviewDensity,
     RasterDetailPreviewLimits,
     RasterDetailPreviewMode,
+    RasterDetailPreviewRendering,
     RasterDetailPreviewScope,
+    RasterDetailSourceWindow,
     RasterDetailPreviewWork,
     RasterValueRange,
 )
 from eolab_app.raster.statistics import strict_raster_value_range
 
 
-DETAIL_PREVIEW_POLICY_VERSION = "bounded-sampled-raster-v5"
+DETAIL_PREVIEW_POLICY_VERSION = "bounded-adaptive-raster-v6"
 DETAIL_PREVIEW_PATCH_DIMENSION = 128
 DETAIL_PREVIEW_CANDIDATE_FRACTIONS = (0.2, 0.5, 0.8)
 DETAIL_PREVIEW_MAX_PATCH_CANDIDATES = (
@@ -302,6 +311,80 @@ def _warp_numeric_image(
     return image_bounds, numpy.ma.array(destination_values, mask=mask)
 
 
+def _warp_exact_current_view(
+    source_crs: object,
+    source_transform: Affine,
+    source_values: numpy.ma.MaskedArray,
+    projected_bounds: tuple[float, float, float, float],
+) -> numpy.ma.MaskedArray:
+    """Warp one already-bounded native window onto its exact map rectangle.
+
+    The destination retains the source-window dimensions, so the close-view
+    handoff never uses a lower-resolution output than the admitted native
+    window. Nearest-neighbor reprojection preserves observed band-one values
+    and independent validity.
+
+    Args:
+        source_crs: Valid source CRS for the admitted native window.
+        source_transform: Affine transform of that exact source window.
+        source_values: Complete bounded native values and nodata mask.
+        projected_bounds: Ordered EPSG:3857 current-view intersection.
+
+    Returns:
+        Web-Mercator-aligned masked numeric image with the source dimensions.
+
+    Raises:
+        rasterio.errors.RasterioError: If in-memory reprojection fails.
+    """
+    destination_height, destination_width = source_values.shape
+    destination_transform = from_bounds(
+        *projected_bounds,
+        destination_width,
+        destination_height,
+    )
+    numeric_source = numpy.asarray(
+        numpy.ma.filled(source_values, numpy.nan),
+        dtype=numpy.float64,
+    )
+    valid_source = numpy.asarray(
+        ~numpy.ma.getmaskarray(source_values) & numpy.isfinite(numeric_source),
+        dtype=numpy.uint8,
+    )
+    destination_values = numpy.full(
+        (destination_height, destination_width),
+        numpy.nan,
+        dtype=numpy.float64,
+    )
+    destination_valid = numpy.zeros(
+        destination_values.shape,
+        dtype=numpy.uint8,
+    )
+    reproject(
+        numeric_source,
+        destination_values,
+        src_transform=source_transform,
+        src_crs=source_crs,
+        src_nodata=numpy.nan,
+        dst_transform=destination_transform,
+        dst_crs="EPSG:3857",
+        dst_nodata=numpy.nan,
+        resampling=Resampling.nearest,
+    )
+    reproject(
+        valid_source,
+        destination_valid,
+        src_transform=source_transform,
+        src_crs=source_crs,
+        src_nodata=0,
+        dst_transform=destination_transform,
+        dst_crs="EPSG:3857",
+        dst_nodata=0,
+        resampling=Resampling.nearest,
+    )
+    mask = (destination_valid != 1) | ~numpy.isfinite(destination_values)
+    return numpy.ma.array(destination_values, mask=mask)
+
+
 def _intersect_canonical_bounds(
     first: CanonicalWgs84Bounds,
     second: CanonicalWgs84Bounds,
@@ -487,8 +570,11 @@ def _representative_patch(
     return selected_window, selected_sample, bounded_samples
 
 
-def _limits(mode: RasterDetailPreviewMode) -> RasterDetailPreviewLimits:
-    """Return the fixed public work limits for one policy-v5 mode.
+def _limits(
+    mode: RasterDetailPreviewMode,
+    rendering: RasterDetailPreviewRendering,
+) -> RasterDetailPreviewLimits:
+    """Return the fixed public work limits for one policy-v6 representation.
 
     Sampled grids stream as many structurally bounded blocks as their exact
     selected resolution requires, up to the fixed block-count ceiling. Detail
@@ -496,18 +582,28 @@ def _limits(mode: RasterDetailPreviewMode) -> RasterDetailPreviewLimits:
     reconstruct full 128-by-128 candidate windows.
 
     Args:
-        mode: Validated preview mode whose decoded-work limit is reported.
+        mode: Validated user-selected preview mode.
+        rendering: Sampled, exact-window, or representative-patch result.
 
     Returns:
         Immutable response model containing every server-owned ceiling.
     """
     return RasterDetailPreviewLimits(
         maximumProxyDimension=DETAIL_PROXY_MAX_DIMENSION,
-        maximumSourceBlockReads=DETAIL_PROXY_MAX_SOURCE_BLOCK_READS,
+        maximumExactDetailDimension=EXACT_DETAIL_MAX_DIMENSION,
+        maximumSourceBlockReads=(
+            EXACT_DETAIL_MAX_SOURCE_BLOCK_READS
+            if rendering == "exactSourceWindow"
+            else DETAIL_PROXY_MAX_SOURCE_BLOCK_READS
+        ),
         maximumDecodedSourceBytes=(
-            DETAIL_PATCH_MAX_DECODED_SOURCE_BYTES
-            if mode == "representativePatch"
-            else DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES
+            EXACT_DETAIL_MAX_DECODED_SOURCE_BYTES
+            if rendering == "exactSourceWindow"
+            else (
+                DETAIL_PATCH_MAX_DECODED_SOURCE_BYTES
+                if mode == "representativePatch"
+                else DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES
+            )
         ),
         maximumTransformedPositions=DETAIL_PROXY_MAX_TRANSFORMED_POSITIONS,
         maximumPointsPerCell=DETAIL_PROXY_MAX_POINTS_PER_CELL,
@@ -519,6 +615,7 @@ def _limits(mode: RasterDetailPreviewMode) -> RasterDetailPreviewLimits:
 def _preview_response(
     mode: RasterDetailPreviewMode,
     scope: RasterDetailPreviewScope,
+    rendering: RasterDetailPreviewRendering,
     density: RasterDetailPreviewDensity | None,
     label: str,
     raster_extent: tuple[float, float, float, float],
@@ -531,6 +628,7 @@ def _preview_response(
     Args:
         mode: Explicit user-selected preview policy.
         scope: Raster extent, current map view, or patch provenance.
+        rendering: Sampled, exact-window, or representative-patch result.
         density: Fixed sampled-grid profile, or ``None`` for a patch.
         label: User-facing approximation description.
         raster_extent: Authoritative cataloged WGS 84 extent.
@@ -545,6 +643,7 @@ def _preview_response(
     return RasterDetailPreview(
         mode=mode,
         scope=scope,
+        rendering=rendering,
         density=density,
         policyVersion=DETAIL_PREVIEW_POLICY_VERSION,
         label=label,
@@ -554,7 +653,7 @@ def _preview_response(
         imageHeight=image_height,
         pixelValues=_flatten_values(values),
         suggestedRange=_suggested_range(values),
-        limits=_limits(mode),
+        limits=_limits(mode, rendering),
         actual=actual_work,
     )
 
@@ -568,13 +667,15 @@ def read_raster_detail_preview(
 ) -> RasterDetailPreview:
     """Read one bounded numeric preview from an overview-limited raster.
 
-    Sampled modes place the exact selected square grid over either the raster
-    extent or current map intersection in EPSG:3857 and transform only their
-    deterministic probe positions to source pixels. The request is rejected
-    before pixel I/O if that exact grid exceeds the native-block work ceiling;
-    it is never silently replaced by a coarser grid. Every admitted native
-    block is read once without ``out_shape`` and discarded after its requested
-    positions are extracted. The representative patch keeps a fixed
+    Sampled modes place the selected cell count on the projected rectangle's
+    longest edge and preserve its aspect ratio on the shorter edge.
+    A current-view request first attempts an exact native window and admits it
+    only when its dimensions, native blocks, and decoded bytes satisfy smaller
+    fixed limits; broader views retain the selected sampling policy.
+    Sampled probes are rejected before pixel I/O if their exact grid exceeds
+    its native-block work ceiling and are never silently coarsened. Every
+    admitted native block is read once without ``out_shape``. The
+    representative patch keeps a fixed
     at-most-nine-candidate, 128-by-128-window policy; candidates that exceed its
     smaller block/byte ceilings are skipped. Only already-bounded NumPy patch
     arrays are reprojected for Leaflet; sampled grids are already aligned to the
@@ -584,8 +685,9 @@ def read_raster_detail_preview(
         source_path: Authorized mounted GeoTIFF.
         mode: Explicit preview mode selected by the user.
         raster_extent: Authoritative cataloged WGS 84 raster extent.
-        density: Coarse, medium, or fine server-owned exact square grid for
-            sampled modes; ``None`` for the representative patch.
+        density: Coarse, medium, or fine server-owned exact longest-edge
+            resolution for sampled modes; ``None`` for the representative
+            patch.
         view_bounds: Optional canonical current map rectangle to refine.
 
     Returns:
@@ -624,6 +726,45 @@ def read_raster_detail_preview(
             projected_bounds, image_bounds = _projected_sampling_bounds(
                 effective_bounds
             )
+            exact_plan = (
+                plan_exact_current_view(dataset, projected_bounds)
+                if view_bounds is not None
+                else None
+            )
+            if exact_plan is not None:
+                exact_values = read_exact_current_view(dataset, exact_plan)
+                image_values = _warp_exact_current_view(
+                    dataset.crs,
+                    window_transform(exact_plan.source_window, dataset.transform),
+                    exact_values,
+                    projected_bounds,
+                )
+                source_window = exact_plan.source_window
+                return _preview_response(
+                    mode,
+                    "currentView",
+                    "exactSourceWindow",
+                    density,
+                    "Exact bounded current-view source detail; not a whole-raster "
+                    "rendering",
+                    raster_extent,
+                    image_bounds,
+                    image_values,
+                    RasterDetailPreviewWork(
+                        sampleGridWidth=image_values.shape[1],
+                        sampleGridHeight=image_values.shape[0],
+                        sourceBlockReadCount=len(exact_plan.block_indexes),
+                        decodedSourceBytes=exact_plan.decoded_source_bytes,
+                        pointsPerCell=0,
+                        candidateWindowCount=0,
+                        sourceWindow=RasterDetailSourceWindow(
+                            columnOffset=int(source_window.col_off),
+                            rowOffset=int(source_window.row_off),
+                            width=int(source_window.width),
+                            height=int(source_window.height),
+                        ),
+                    ),
+                )
             proxy_values, plan = read_detail_proxy(
                 dataset,
                 mode,
@@ -646,6 +787,7 @@ def read_raster_detail_preview(
             return _preview_response(
                 mode,
                 scope,
+                "sampledProxy",
                 density,
                 "Approximate "
                 f"{scope_description} sampled proxy using {sample_description}",
@@ -672,6 +814,7 @@ def read_raster_detail_preview(
         return _preview_response(
             mode,
             "representativePatch",
+            "representativePatch",
             None,
             "Approximate representative detail patch",
             raster_extent,
@@ -684,5 +827,11 @@ def read_raster_detail_preview(
                 decodedSourceBytes=patch_work.decoded_source_bytes,
                 pointsPerCell=0,
                 candidateWindowCount=len(patch_work.samples),
+                sourceWindow=RasterDetailSourceWindow(
+                    columnOffset=int(patch_window.col_off),
+                    rowOffset=int(patch_window.row_off),
+                    width=int(patch_window.width),
+                    height=int(patch_window.height),
+                ),
             ),
         )

@@ -33,6 +33,11 @@ RasterDetailPreviewScope = Literal[
     "currentView",
     "representativePatch",
 ]
+RasterDetailPreviewRendering = Literal[
+    "sampledProxy",
+    "exactSourceWindow",
+    "representativePatch",
+]
 # Projection roundoff allowance; far below a displayable map distance.
 RASTER_DETAIL_PREVIEW_BOUNDS_TOLERANCE = 1e-9
 RasterDetailPreviewCacheKey = tuple[
@@ -315,8 +320,11 @@ class RasterDetailPreviewLimits(BaseModel):
     """Public resource bounds applied to one detail-only preview.
 
     Attributes:
-        maximum_proxy_dimension: Maximum exact source/output proxy-grid edge.
-        maximum_source_block_reads: Maximum unique native blocks read.
+        maximum_proxy_dimension: Maximum exact sampled-proxy grid edge.
+        maximum_exact_detail_dimension: Maximum native source/output edge for
+            an automatically admitted exact current-view window.
+        maximum_source_block_reads: Representation-specific maximum unique
+            native blocks read.
         maximum_decoded_source_bytes: Mode-specific maximum cumulative decoded
             band-one values plus their validity bytes. Sampled blocks are
             streamed rather than retained simultaneously.
@@ -328,7 +336,10 @@ class RasterDetailPreviewLimits(BaseModel):
     """
 
     maximum_proxy_dimension: Literal[127] = Field(alias="maximumProxyDimension")
-    maximum_source_block_reads: Literal[16_129] = Field(
+    maximum_exact_detail_dimension: Literal[512] = Field(
+        alias="maximumExactDetailDimension"
+    )
+    maximum_source_block_reads: Literal[1_024, 16_129] = Field(
         alias="maximumSourceBlockReads"
     )
     maximum_decoded_source_bytes: Literal[67_108_864, 9_663_676_416] = Field(
@@ -359,6 +370,8 @@ class RasterDetailPreviewWork(BaseModel):
         points_per_cell: Maximum positions inspected for each proxy cell.
         candidate_window_count: Detail-patch candidates admitted by the shared
             native-block budget, or zero for sampled proxy modes.
+        source_window: Exact integral source window for native detail or a
+            representative patch; absent for spatially dispersed proxy probes.
     """
 
     sample_grid_width: int = Field(alias="sampleGridWidth", ge=1)
@@ -367,6 +380,26 @@ class RasterDetailPreviewWork(BaseModel):
     decoded_source_bytes: int = Field(alias="decodedSourceBytes", ge=0)
     points_per_cell: int = Field(alias="pointsPerCell", ge=0)
     candidate_window_count: int = Field(alias="candidateWindowCount", ge=0)
+    source_window: "RasterDetailSourceWindow | None" = Field(
+        default=None,
+        alias="sourceWindow",
+    )
+
+
+class RasterDetailSourceWindow(BaseModel):
+    """Browser-safe integral source-pixel window provenance.
+
+    Attributes:
+        column_offset: Zero-based first source column.
+        row_offset: Zero-based first source row.
+        width: Positive number of complete source columns read.
+        height: Positive number of complete source rows read.
+    """
+
+    column_offset: int = Field(alias="columnOffset", ge=0)
+    row_offset: int = Field(alias="rowOffset", ge=0)
+    width: int = Field(ge=1)
+    height: int = Field(ge=1)
 
 
 class RasterDetailPreview(BaseModel):
@@ -375,6 +408,7 @@ class RasterDetailPreview(BaseModel):
     Attributes:
         mode: Explicit preview mode that produced this document.
         scope: Raster extent, current map view, or representative patch.
+        rendering: Sampled proxy, exact bounded source window, or patch.
         density: Fixed sampled-grid density, or ``None`` for a patch.
         policy_version: Algorithm and cache policy identity.
         approximate: Literal marker preventing full-render interpretation.
@@ -392,8 +426,9 @@ class RasterDetailPreview(BaseModel):
 
     mode: RasterDetailPreviewMode
     scope: RasterDetailPreviewScope
+    rendering: RasterDetailPreviewRendering
     density: RasterDetailPreviewDensity | None
-    policy_version: Literal["bounded-sampled-raster-v5"] = Field(
+    policy_version: Literal["bounded-adaptive-raster-v6"] = Field(
         alias="policyVersion"
     )
     approximate: Literal[True] = True
@@ -426,34 +461,62 @@ class RasterDetailPreview(BaseModel):
         if not self.label.strip():
             raise ValueError("Detail preview label must not be blank")
         if self.mode == "representativePatch":
-            if self.scope != "representativePatch" or self.density is not None:
+            if (
+                self.scope != "representativePatch"
+                or self.rendering != "representativePatch"
+                or self.density is not None
+            ):
                 raise ValueError("Patch preview provenance is inconsistent")
         elif (
             self.scope not in {"rasterExtent", "currentView"}
             or self.density is None
         ):
             raise ValueError("Sampled proxy provenance is inconsistent")
-        if self.mode == "representativePatch":
+        elif self.rendering == "representativePatch":
+            raise ValueError("Sampled proxy rendering provenance is inconsistent")
+        if self.rendering == "representativePatch":
             if (
                 self.image_width > self.limits.maximum_patch_dimension
                 or self.image_height > self.limits.maximum_patch_dimension
             ):
                 raise ValueError("Detail preview dimensions exceed fixed limits")
             expected_decoded_limit = 67_108_864
+            expected_block_limit = 16_129
+            if self.actual.source_window is None:
+                raise ValueError("Patch preview requires source-window provenance")
+        elif self.rendering == "exactSourceWindow":
+            if self.scope != "currentView":
+                raise ValueError("Exact detail requires current-view provenance")
+            if (
+                self.image_width > self.limits.maximum_exact_detail_dimension
+                or self.image_height > self.limits.maximum_exact_detail_dimension
+            ):
+                raise ValueError("Exact detail dimensions exceed fixed limits")
+            expected_decoded_limit = 67_108_864
+            expected_block_limit = 1_024
+            source_window = self.actual.source_window
+            if (
+                source_window is None
+                or source_window.width != self.image_width
+                or source_window.height != self.image_height
+                or self.actual.points_per_cell != 0
+                or self.actual.candidate_window_count != 0
+            ):
+                raise ValueError("Exact detail source-window provenance is invalid")
         else:
             exact_grid_dimension = {
                 "coarse": 31,
                 "medium": 63,
                 "fine": self.limits.maximum_proxy_dimension,
             }[self.density]
-            if (
-                self.image_width != exact_grid_dimension
-                or self.image_height != exact_grid_dimension
-            ):
+            if max(self.image_width, self.image_height) != exact_grid_dimension:
                 raise ValueError(
-                    "Sampled preview dimensions must match the selected exact grid"
+                    "Sampled preview longest edge must match the selected exact grid"
                 )
             expected_decoded_limit = 9_663_676_416
+            expected_block_limit = 16_129
+            if self.actual.source_window is not None:
+                raise ValueError("Sampled proxies cannot claim a source window")
         if (
             self.actual.sample_grid_width != self.image_width
             or self.actual.sample_grid_height != self.image_height
@@ -461,6 +524,8 @@ class RasterDetailPreview(BaseModel):
             raise ValueError("Detail preview dimensions exceed fixed limits")
         if self.limits.maximum_decoded_source_bytes != expected_decoded_limit:
             raise ValueError("Detail preview decoded-work limit is inconsistent")
+        if self.limits.maximum_source_block_reads != expected_block_limit:
+            raise ValueError("Detail preview block-read limit is inconsistent")
         if (
             self.actual.source_block_read_count
             > self.limits.maximum_source_block_reads
@@ -481,11 +546,15 @@ class RasterDetailPreview(BaseModel):
             raise ValueError("Detail patches require positive source reads")
         if is_patch != (self.actual.candidate_window_count > 0):
             raise ValueError("Only detail patches declare candidate windows")
-        expected_points_per_cell = {
-            "centerSample": 1,
-            "representativeSample": self.limits.maximum_points_per_cell,
-            "representativePatch": 0,
-        }[self.mode]
+        expected_points_per_cell = (
+            0
+            if self.rendering == "exactSourceWindow"
+            else {
+                "centerSample": 1,
+                "representativeSample": self.limits.maximum_points_per_cell,
+                "representativePatch": 0,
+            }[self.mode]
+        )
         if self.actual.points_per_cell != expected_points_per_cell:
             raise ValueError("Detail preview cell-probe count is inconsistent")
         if not (

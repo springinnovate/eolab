@@ -15,8 +15,10 @@ import {
   MOUNTED_GEOTIFF_ITEM,
   CENTER_SAMPLE_DETAIL_PREVIEW,
   CURRENT_VIEW_DETAIL_PREVIEW,
+  EXACT_CURRENT_VIEW_DETAIL_PREVIEW,
   NODATA_DETAIL_PREVIEW,
   PATCH_DETAIL_PREVIEW,
+  RASTER_DETAIL_PREVIEW_LIMITS,
   RASTER_STATISTICS,
   SELECTED_BOUNDS,
   SELECTED_RASTER_STATISTICS,
@@ -175,17 +177,17 @@ test("detail preview accepts numeric images and honest all-nodata proxies", () =
   );
 });
 
-test("fine density requires and accepts an exact 127 by 127 grid", () => {
+test("fine density puts exactly 127 cells on the viewport's longest edge", () => {
   const finePreview = {
     ...CENTER_SAMPLE_DETAIL_PREVIEW,
     density: "fine",
     imageWidth: 127,
-    imageHeight: 127,
-    pixelValues: new Array(127 * 127).fill(1),
+    imageHeight: 64,
+    pixelValues: new Array(127 * 64).fill(1),
     actual: {
       ...CENTER_SAMPLE_DETAIL_PREVIEW.actual,
       sampleGridWidth: 127,
-      sampleGridHeight: 127,
+      sampleGridHeight: 64,
     },
   };
   assert.equal(
@@ -226,7 +228,7 @@ test("detail preview rejects arbitrary modes before sending a request", async ()
   );
 });
 
-test("detail preview strictly validates v5 exact-grid identity and shape", () => {
+test("detail preview strictly validates v6 adaptive identity and shape", () => {
   const invalidPreviews = [
     ["mismatched mode", {
       ...CENTER_SAMPLE_DETAIL_PREVIEW,
@@ -335,6 +337,61 @@ test("detail preview strictly validates v5 exact-grid identity and shape", () =>
       },
     }, { mode: "representativePatch" }),
     /exceeds its fixed limit/,
+  );
+});
+
+test("exact current-view detail requires bounded source-window provenance", () => {
+  const request = {
+    mode: "centerSample",
+    density: "coarse",
+    viewBounds: {
+      west: -122.5,
+      south: 48.5,
+      east: -121.5,
+      north: 49.5,
+    },
+  };
+  assert.equal(
+    validateRasterDetailPreview(EXACT_CURRENT_VIEW_DETAIL_PREVIEW, request),
+    EXACT_CURRENT_VIEW_DETAIL_PREVIEW,
+  );
+
+  for (const [caseName, preview] of [
+    ["missing source window", {
+      ...EXACT_CURRENT_VIEW_DETAIL_PREVIEW,
+      actual: {
+        ...EXACT_CURRENT_VIEW_DETAIL_PREVIEW.actual,
+        sourceWindow: null,
+      },
+    }],
+    ["mismatched source width", {
+      ...EXACT_CURRENT_VIEW_DETAIL_PREVIEW,
+      actual: {
+        ...EXACT_CURRENT_VIEW_DETAIL_PREVIEW.actual,
+        sourceWindow: {
+          ...EXACT_CURRENT_VIEW_DETAIL_PREVIEW.actual.sourceWindow,
+          width: 5,
+        },
+      },
+    }],
+    ["sampled-proxy resource limit", {
+      ...EXACT_CURRENT_VIEW_DETAIL_PREVIEW,
+      limits: RASTER_DETAIL_PREVIEW_LIMITS,
+    }],
+  ]) {
+    assert.throws(
+      () => validateRasterDetailPreview(preview, request),
+      /Detail-only preview/,
+      `accepted invalid exact-detail case: ${caseName}`,
+    );
+  }
+
+  assert.throws(
+    () => validateRasterDetailPreview(
+      EXACT_CURRENT_VIEW_DETAIL_PREVIEW,
+      { mode: "centerSample", density: "coarse" },
+    ),
+    /Detail-only preview/,
   );
 });
 

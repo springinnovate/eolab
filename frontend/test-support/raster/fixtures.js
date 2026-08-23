@@ -12,6 +12,7 @@ export const MOUNTED_GEOTIFF_ITEM = Object.freeze({
 /** @type {Readonly<Object>} Fixed public bounds for sampled raster previews. */
 export const RASTER_DETAIL_PREVIEW_LIMITS = Object.freeze({
   maximumProxyDimension: 127,
+  maximumExactDetailDimension: 512,
   maximumSourceBlockReads: 16129,
   maximumDecodedSourceBytes: 9663676416,
   maximumTransformedPositions: 80645,
@@ -30,8 +31,9 @@ const COARSE_GRID_VALUES = Array.from(
 export const CENTER_SAMPLE_DETAIL_PREVIEW = Object.freeze({
   mode: "centerSample",
   scope: "rasterExtent",
+  rendering: "sampledProxy",
   density: "coarse",
-  policyVersion: "bounded-sampled-raster-v5",
+  policyVersion: "bounded-adaptive-raster-v6",
   approximate: true,
   label: "Approximate full-extent proxy using each preview cell's center",
   rasterExtent: [-123, 48, -121, 50],
@@ -70,6 +72,7 @@ export const PATCH_DETAIL_PREVIEW = Object.freeze({
   ...CENTER_SAMPLE_DETAIL_PREVIEW,
   mode: "representativePatch",
   scope: "representativePatch",
+  rendering: "representativePatch",
   density: null,
   label: "Approximate representative detail patch",
   imageBounds: [-122.1, 48.9, -121.9, 49.1],
@@ -88,6 +91,12 @@ export const PATCH_DETAIL_PREVIEW = Object.freeze({
     decodedSourceBytes: 65536,
     pointsPerCell: 0,
     candidateWindowCount: 3,
+    sourceWindow: {
+      columnOffset: 20,
+      rowOffset: 30,
+      width: 2,
+      height: 2,
+    },
   },
 });
 
@@ -101,6 +110,35 @@ export const CURRENT_VIEW_DETAIL_PREVIEW = Object.freeze({
     { length: 31 * 31 },
     (_, index) => 10 + (index % 6) * 10,
   ),
+});
+
+/** @type {Readonly<Object>} Exact native detail for a safely close map view. */
+export const EXACT_CURRENT_VIEW_DETAIL_PREVIEW = Object.freeze({
+  ...CURRENT_VIEW_DETAIL_PREVIEW,
+  rendering: "exactSourceWindow",
+  label: "Exact bounded current-view source detail; not a whole-raster rendering",
+  imageWidth: 4,
+  imageHeight: 3,
+  pixelValues: [10, 20, 30, 40, 20, 30, null, 50, 30, 40, 50, 60],
+  limits: Object.freeze({
+    ...RASTER_DETAIL_PREVIEW_LIMITS,
+    maximumSourceBlockReads: 1024,
+    maximumDecodedSourceBytes: 67108864,
+  }),
+  actual: {
+    sampleGridWidth: 4,
+    sampleGridHeight: 3,
+    sourceBlockReadCount: 2,
+    decodedSourceBytes: 40960,
+    pointsPerCell: 0,
+    candidateWindowCount: 0,
+    sourceWindow: {
+      columnOffset: 400,
+      rowOffset: 250,
+      width: 4,
+      height: 3,
+    },
+  },
 });
 
 /** @type {Readonly<Object>} Honest all-nodata full-extent numeric proxy. */

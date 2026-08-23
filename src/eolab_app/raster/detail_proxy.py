@@ -60,13 +60,13 @@ SourceBlockIndex = tuple[int, int]
 def detail_proxy_maximum_dimension(
     density: RasterDetailPreviewDensity,
 ) -> int:
-    """Return the server-owned exact grid edge for one density profile.
+    """Return the server-owned exact longest edge for one density profile.
 
     Args:
         density: Validated coarse, medium, or fine profile.
 
     Returns:
-        Fixed exact grid edge for the selected profile.
+        Fixed exact longest grid edge for the selected profile.
 
     Raises:
         ValueError: If a caller bypasses request validation with an unknown
@@ -289,17 +289,31 @@ def _cell_positions(
 
 def _projected_proxy_dimensions(
     maximum_dimension: int,
+    projected_bounds: tuple[float, float, float, float],
 ) -> tuple[int, int]:
-    """Return the exact square grid selected for a projected map rectangle.
+    """Fit the selected maximum edge to a projected map rectangle's aspect.
 
     Args:
         maximum_dimension: Positive server-owned grid edge resolution.
+        projected_bounds: Ordered finite EPSG:3857 map rectangle.
 
     Returns:
-        Equal proxy height and width at the selected resolution.
+        Positive height and width whose longest edge equals the selected
+        resolution and whose shorter edge follows the rectangle aspect ratio.
     """
     dimension = _odd_dimension(maximum_dimension)
-    return dimension, dimension
+    west, south, east, north = projected_bounds
+    projected_width = east - west
+    projected_height = north - south
+    if projected_width >= projected_height:
+        return (
+            max(1, round(dimension * projected_height / projected_width)),
+            dimension,
+        )
+    return (
+        dimension,
+        max(1, round(dimension * projected_width / projected_height)),
+    )
 
 
 def _projected_cell_positions(
@@ -464,6 +478,7 @@ def _plan_for_dimension(
     else:
         proxy_height, proxy_width = _projected_proxy_dimensions(
             maximum_dimension,
+            projected_bounds,
         )
         positions = _projected_cell_positions(
             dataset,
@@ -503,13 +518,14 @@ def plan_detail_proxy(
     Args:
         dataset: Open structurally authorized one-band raster.
         mode: Center-per-cell or representative-per-cell sampling policy.
-        maximum_dimension: Optional positive exact grid edge no larger than
-            the public maximum; defaults to that maximum for direct callers.
+        maximum_dimension: Optional positive exact longest grid edge no larger
+            than the public maximum; defaults to that maximum for direct
+            callers.
         projected_bounds: Optional ordered EPSG:3857 target rectangle.
 
     Returns:
-        Exact selected grid whose unique native blocks and total decoded work
-        stay within the fixed public limits.
+        Exact selected longest-edge grid whose unique native blocks and total
+        decoded work stay within the fixed public limits.
 
     Raises:
         ValueError: If the raster or mode violates the proxy contract, or the

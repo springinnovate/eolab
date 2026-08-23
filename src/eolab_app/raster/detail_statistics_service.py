@@ -26,13 +26,14 @@ class RasterDetailStatisticsService:
         self,
         request: CatalogRasterDetailStatisticsRequest,
     ) -> RasterStatistics:
-        """Return a histogram from a fine center grid over selected bounds.
+        """Return a histogram from fine adaptive detail over selected bounds.
 
         Args:
             request: Catalog identity and required click-centered map window.
 
         Returns:
-            Shared selected-area histogram response.
+            Shared selected-area histogram over a sampled proxy or an admitted
+            exact bounded source window.
 
         Raises:
             RasterFeatureError: If detail-preview authorization fails.

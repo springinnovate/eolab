@@ -174,7 +174,7 @@ const RASTER_DETAIL_PREVIEW_MODES = new Set([
     "representativeSample",
     "representativePatch"
 ]);
-/** Fixed server-owned exact square grids for sampled raster proxies. */
+/** Fixed server-owned longest-edge resolutions for sampled raster proxies. */
 const RASTER_DETAIL_PREVIEW_DENSITIES = new Map([
     ["coarse", 31],
     ["medium", 63],
@@ -271,9 +271,13 @@ function validateRasterDetailPreviewOptions(options) {
 export function validateRasterDetailPreview(preview, options) {
     const request = validateRasterDetailPreviewOptions(options);
     const requestedMode = request.mode;
-    const expectedDecodedSourceBytes = requestedMode === "representativePatch"
+    const rendering = preview?.rendering;
+    const isExactDetail = rendering === "exactSourceWindow";
+    const isPatch = rendering === "representativePatch";
+    const expectedDecodedSourceBytes = isExactDetail || isPatch
         ? 67108864
         : 9663676416;
+    const expectedSourceBlockReads = isExactDetail ? 1024 : 16129;
     const isCanonicalBounds = (bounds) =>
         Array.isArray(bounds) && bounds.length === 4 &&
         bounds.every(Number.isFinite) &&
@@ -282,12 +286,17 @@ export function validateRasterDetailPreview(preview, options) {
         bounds[0] < bounds[2] && bounds[1] < bounds[3];
     if (
         preview?.mode !== requestedMode ||
+        !new Set([
+            "sampledProxy",
+            "exactSourceWindow",
+            "representativePatch"
+        ]).has(rendering) ||
         preview?.scope !== (requestedMode === "representativePatch"
             ? "representativePatch"
             : request.viewBounds === null ? "rasterExtent" : "currentView") ||
         preview?.density !== request.density ||
         preview?.approximate !== true ||
-        preview?.policyVersion !== "bounded-sampled-raster-v5" ||
+        preview?.policyVersion !== "bounded-adaptive-raster-v6" ||
         typeof preview?.label !== "string" || preview.label.trim() === "" ||
         !isCanonicalBounds(preview?.rasterExtent) ||
         !isCanonicalBounds(preview?.imageBounds) ||
@@ -301,7 +310,8 @@ export function validateRasterDetailPreview(preview, options) {
             !(value === null || Number.isFinite(value))
         ) ||
         preview?.limits?.maximumProxyDimension !== 127 ||
-        preview?.limits?.maximumSourceBlockReads !== 16129 ||
+        preview?.limits?.maximumExactDetailDimension !== 512 ||
+        preview?.limits?.maximumSourceBlockReads !== expectedSourceBlockReads ||
         preview?.limits?.maximumDecodedSourceBytes !==
             expectedDecodedSourceBytes ||
         preview?.limits?.maximumTransformedPositions !== 80645 ||
@@ -328,23 +338,47 @@ export function validateRasterDetailPreview(preview, options) {
     const selectedGridDimension = requestedMode === "representativePatch"
         ? preview.limits.maximumPatchDimension
         : RASTER_DETAIL_PREVIEW_DENSITIES.get(request.density);
+    const sourceWindow = preview.actual.sourceWindow;
+    const validSourceWindow = sourceWindow !== null &&
+        typeof sourceWindow === "object" &&
+        Object.keys(sourceWindow).length === 4 &&
+        Number.isSafeInteger(sourceWindow.columnOffset) &&
+        sourceWindow.columnOffset >= 0 &&
+        Number.isSafeInteger(sourceWindow.rowOffset) &&
+        sourceWindow.rowOffset >= 0 &&
+        Number.isSafeInteger(sourceWindow.width) && sourceWindow.width >= 1 &&
+        Number.isSafeInteger(sourceWindow.height) && sourceWindow.height >= 1;
     if (
-        (requestedMode === "representativePatch"
-            ? preview.imageWidth > selectedGridDimension ||
-                preview.imageHeight > selectedGridDimension
-            : preview.imageWidth !== selectedGridDimension ||
-                preview.imageHeight !== selectedGridDimension) ||
+        (rendering === "sampledProxy"
+            ? Math.max(preview.imageWidth, preview.imageHeight) !==
+                selectedGridDimension
+            : rendering === "exactSourceWindow"
+                ? preview.imageWidth > preview.limits.maximumExactDetailDimension ||
+                    preview.imageHeight >
+                        preview.limits.maximumExactDetailDimension
+                : preview.imageWidth > selectedGridDimension ||
+                    preview.imageHeight > selectedGridDimension) ||
         preview.actual.pointsPerCell !== (
-            requestedMode === "centerSample"
+            rendering === "exactSourceWindow"
+                ? 0
+                : requestedMode === "centerSample"
                 ? 1
                 : requestedMode === "representativeSample" ? 5 : 0
         ) ||
-        (requestedMode === "representativePatch") !==
+        (rendering === "representativePatch") !==
             (preview.actual.candidateWindowCount > 0) ||
         preview.actual.candidateWindowCount >
             preview.limits.maximumPatchCandidates ||
         (preview.actual.sourceBlockReadCount === 0) !==
-            (preview.actual.decodedSourceBytes === 0)
+            (preview.actual.decodedSourceBytes === 0) ||
+        ((rendering === "sampledProxy") !== (sourceWindow == null)) ||
+        (rendering !== "sampledProxy" && (
+            !validSourceWindow ||
+            sourceWindow.width !== preview.imageWidth ||
+            sourceWindow.height !== preview.imageHeight
+        )) ||
+        (requestedMode === "representativePatch") !== isPatch ||
+        (request.viewBounds === null && isExactDetail)
     ) {
         throw new Error("Detail-only preview image exceeds its fixed limit");
     }
@@ -446,9 +480,10 @@ export async function loadCatalogRasterDetailPreview(
 /**
  * Load histogram statistics over one bounded sampled-raster map window.
  *
- * The server reuses the overview-safe detail-preview reader and always reads
- * an exact 127 by 127 center-point grid. No whole-raster or arbitrary source
- * window is accepted through this boundary.
+ * The server reuses the overview-safe adaptive detail reader. It uses a
+ * center-point grid with exactly 127 cells on its longest edge at broad scales
+ * and complete source detail when the selected window satisfies the exact
+ * limits. No whole-raster or arbitrary source window is accepted here.
  *
  * @param {Object} item Selected scanner-owned STAC Item.
  * @param {AbortSignal} signal Cancellation signal for a stale selection.

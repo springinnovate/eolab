@@ -20,18 +20,19 @@ def summarize_raster_detail_preview(
     preview: RasterDetailPreview,
     request: CatalogRasterDetailStatisticsRequest,
 ) -> RasterStatistics:
-    """Build the shared histogram contract from one exact sampled grid.
+    """Build the shared histogram contract from one adaptive bounded image.
 
     The preview reader has already enforced source authorization, strict native
     block/decoded-work ceilings, nodata handling, and exact placement over the
     requested map window. This function performs no source I/O.
 
     Args:
-        preview: Current-view fine center-sample preview.
+        preview: Current-view fine center policy rendered as a sampled proxy
+            or an exact bounded source window.
         request: Catalog identity and exact selected WGS 84 bounds.
 
     Returns:
-        Selected-area 64-bin statistics over finite sampled-grid cells.
+        Selected-area 64-bin statistics over finite displayed cells.
 
     Raises:
         NoValidRasterSamplesError: If every sampled cell is nodata/non-finite.
@@ -41,10 +42,15 @@ def summarize_raster_detail_preview(
         preview.mode != "centerSample"
         or preview.scope != "currentView"
         or preview.density != "fine"
-        or preview.image_width != 127
-        or preview.image_height != 127
+        or preview.rendering not in {"sampledProxy", "exactSourceWindow"}
+        or (
+            preview.rendering == "sampledProxy"
+            and max(preview.image_width, preview.image_height) != 127
+        )
     ):
-        raise ValueError("Detail histogram requires a fine current-view center grid")
+        raise ValueError(
+            "Detail histogram requires a fine current-view center policy"
+        )
     sample_values = numpy.asarray(
         [value for value in preview.pixel_values if value is not None],
         dtype=numpy.float64,

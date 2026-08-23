@@ -30,6 +30,13 @@ from eolab_app.raster.eligibility import (
     RENDERING_POLICY,
     supports_detail_only_preview,
 )
+from eolab_app.raster.exact_detail import (
+    EXACT_DETAIL_EDGE_DENSIFY_POINTS,
+    EXACT_DETAIL_MAX_DECODED_SOURCE_BYTES,
+    EXACT_DETAIL_MAX_DIMENSION,
+    EXACT_DETAIL_MAX_SOURCE_BLOCK_READS,
+    EXACT_DETAIL_WINDOW_PADDING_PIXELS,
+)
 from eolab_app.raster.errors import RasterConflictError
 from eolab_app.raster.models import (
     AuthorizedRaster,
@@ -139,6 +146,11 @@ class RasterDetailPreviewService:
                 DETAIL_PROXY_MAX_SOURCE_BLOCK_READS,
                 DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES,
                 DETAIL_PROXY_MAX_TRANSFORMED_POSITIONS,
+                EXACT_DETAIL_MAX_DIMENSION,
+                EXACT_DETAIL_MAX_SOURCE_BLOCK_READS,
+                EXACT_DETAIL_MAX_DECODED_SOURCE_BYTES,
+                EXACT_DETAIL_EDGE_DENSIFY_POINTS,
+                EXACT_DETAIL_WINDOW_PADDING_PIXELS,
                 *(round(value * 1000) for offset in offsets for value in offset),
             )
         return (
