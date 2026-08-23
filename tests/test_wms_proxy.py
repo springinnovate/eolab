@@ -1,12 +1,17 @@
 """Test the restricted public WMS proxy contract."""
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx2
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from eolab_app.main import create_app
+from eolab_app.diagnostics.tracker import GetMapRequestTracker
+from eolab_app.raster.errors import RasterRequestError
+from eolab_app.routes.wms_proxy import create_wms_proxy_router
 from tests.app_support import (
     GeoServerPublicationMock,
     RASTER_STYLE_ENVIRONMENT_ERROR,
@@ -15,6 +20,102 @@ from tests.app_support import (
     mounted_geotiff_item as _mounted_geotiff_item,
     write_geotiff as _write_geotiff,
 )
+
+
+class _NoRasterAuthorization:
+    """Reject every data layer as an unapproved raster."""
+
+    def require_current(self, layer_name: str) -> None:
+        """Reject one candidate raster layer.
+
+        Args:
+            layer_name: Requested workspace-qualified layer name.
+
+        Raises:
+            RasterRequestError: Always, because this registry is empty.
+        """
+        raise RasterRequestError("not an approved raster")
+
+
+class _FixedVectorAuthorization:
+    """Authorize exactly one fixed-style vector layer."""
+
+    def require_current(self, layer_name: str) -> SimpleNamespace:
+        """Return the fixed vector authorization.
+
+        Args:
+            layer_name: Requested workspace-qualified layer name.
+
+        Returns:
+            Authorization exposing the fixed style name.
+
+        Raises:
+            RasterRequestError: If a different layer is requested.
+        """
+        if layer_name != "eolab:parcels":
+            raise RasterRequestError("not an approved vector")
+        return SimpleNamespace(style_name="vector-polygon")
+
+
+def test_wms_proxy_forwards_one_authorized_fixed_style_vector_layer() -> None:
+    """Allow a bounded vector tile without accepting raster style controls."""
+    forwarded_requests = []
+
+    def geoserver_response(request: httpx2.Request) -> httpx2.Response:
+        """Capture one exact forwarded WMS request.
+
+        Args:
+            request: Internal GeoServer WMS request.
+
+        Returns:
+            Controlled PNG response.
+        """
+        forwarded_requests.append(request)
+        return httpx2.Response(
+            200,
+            content=b"vector png",
+            headers={"Content-Type": "image/png"},
+        )
+
+    application = FastAPI()
+    application.include_router(create_wms_proxy_router(
+        httpx2.AsyncClient(transport=httpx2.MockTransport(geoserver_response)),
+        "http://geoserver:8080/geoserver",
+        _NoRasterAuthorization(),
+        _FixedVectorAuthorization(),
+        GetMapRequestTracker(2),
+    ))
+    client = TestClient(application)
+    query = (
+        "?service=WMS&version=1.3.0&request=GetMap"
+        "&layers=eolab%3Aparcels&styles=vector-polygon"
+        "&crs=EPSG%3A3857&bbox=0%2C0%2C1%2C1"
+        "&width=256&height=256&format=image%2Fpng&transparent=true"
+    )
+
+    response = client.get(f"/geoserver/eolab/wms{query}")
+    raster_style_response = client.get(
+        f"/geoserver/eolab/wms{query.replace('vector-polygon', 'dynamic-raster')}"
+    )
+    env_response = client.get(
+        f"/geoserver/eolab/wms{query}&env=min%3A0%3Bmed%3A1%3Bmax%3A2%3B"
+        "cmin%3A%23000000%3Bcmed%3A%23888888%3Bcmax%3A%23ffffff"
+    )
+
+    assert response.status_code == 200
+    assert response.content == b"vector png"
+    assert len(forwarded_requests) == 1
+    assert forwarded_requests[0].url.params.get_list("layers") == [
+        "eolab:parcels"
+    ]
+    assert raster_style_response.status_code == 400
+    assert raster_style_response.json() == {
+        "detail": "WMS style does not match the authorized layer"
+    }
+    assert env_response.status_code == 400
+    assert env_response.json() == {
+        "detail": "env is available only for the dynamic raster style"
+    }
 
 
 def test_wms_proxy_forwards_supported_read_operation(

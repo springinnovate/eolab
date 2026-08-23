@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from eolab_app.catalog.pgstac import PgStacCatalogDatabase
+from eolab_app.catalog.finalization import CompositeDatasetItemFinalizer
 from eolab_app.catalog.reconciliation import MissingItemReconciler
 from eolab_app.catalog.scanner import ScanManager
 from eolab_app.catalog.search_counts import number_matched_is_estimated
@@ -42,9 +43,24 @@ from eolab_app.routes.stac_proxy import (
 )
 from eolab_app.routes.system import create_system_router
 from eolab_app.routes.temporary_aois import create_temporary_aoi_router
+from eolab_app.routes.vectors import create_vector_feature
 from eolab_app.routes.wms_proxy import create_wms_proxy_router
 from eolab_app.settings import APPLICATION_VERSION_PATH, load_settings
 from eolab_app.temporary_aoi.service import TemporaryAoiService
+from eolab_app.vector.assessment import (
+    VectorAssessmentFinalizer,
+    VectorAssessmentService,
+)
+from eolab_app.vector.catalog import StacVectorCatalog
+from eolab_app.vector.geoserver import (
+    GeoServerVectorPublisher,
+    GeoServerVectorReaderAssessor,
+)
+from eolab_app.vector.publication import VectorPublicationService
+from eolab_app.vector.sources import (
+    MountedVectorResolver,
+    PublishedVectorRegistry,
+)
 
 
 def create_app(
@@ -148,6 +164,40 @@ def create_app(
         ),
         published_rasters,
     )
+    vector_catalog = StacVectorCatalog(
+        catalog_client,
+        app_global_configuration.catalog_internal_url,
+    )
+    vector_source_resolver = MountedVectorResolver(
+        app_global_configuration.scan_mount_path
+    )
+    vector_reader_assessor = GeoServerVectorReaderAssessor(
+        geoserver_rest_client,
+        app_global_configuration.geoserver_internal_url,
+    )
+    vector_assessment_finalizer = VectorAssessmentFinalizer(
+        vector_source_resolver,
+        vector_reader_assessor,
+    )
+    published_vectors = PublishedVectorRegistry()
+    vector_feature = create_vector_feature(
+        VectorAssessmentService(
+            app_global_configuration.scan_mount_path,
+            vector_catalog,
+            vector_source_resolver,
+            vector_assessment_finalizer,
+        ),
+        VectorPublicationService(
+            vector_catalog,
+            vector_source_resolver,
+            GeoServerVectorPublisher(
+                geoserver_rest_client,
+                app_global_configuration.geoserver_internal_url,
+            ),
+            published_vectors,
+        ),
+        published_vectors,
+    )
     get_map_request_tracker = GetMapRequestTracker(
         app_global_configuration.geoserver_wms_render_count
     )
@@ -203,6 +253,7 @@ def create_app(
         create_catalog_router(catalog_database.random_matching_item)
     )
     application.include_router(raster_feature.router)
+    application.include_router(vector_feature.router)
     scan_manager = ScanManager(
         app_global_configuration.scan_mount_path,
         tuple(
@@ -223,7 +274,10 @@ def create_app(
         app_global_configuration.scan_worker_count,
         app_global_configuration.scan_writer_count,
         app_global_configuration.scan_batch_size,
-        item_finalizer=raster_assessment_finalizer,
+        item_finalizer=CompositeDatasetItemFinalizer((
+            raster_assessment_finalizer,
+            vector_assessment_finalizer,
+        )),
         reconciler=MissingItemReconciler(
             app_global_configuration.scan_mount_path,
             catalog_database,
@@ -264,6 +318,7 @@ def create_app(
             geoserver_wms_client,
             app_global_configuration.geoserver_internal_url,
             raster_feature.registry,
+            vector_feature.registry,
             get_map_request_tracker,
         )
     )

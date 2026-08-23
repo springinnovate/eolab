@@ -115,6 +115,50 @@ def test_initialization_updates_existing_style_without_destructive_changes() -> 
     assert all(request[0] != "DELETE" for request in client.requests)
 
 
+def test_initialization_converges_every_fixed_vector_style() -> None:
+    """Create or update all point, line, and polygon style resources."""
+    client = RecordingGeoServerClient(
+        [
+            (200, b'{"oldMasterPassword":"new-master-password"}'),
+            (200, b""),
+            (200, b""),
+            (200, b""),
+            (200, b""),
+            (200, b""),
+            (404, b""),
+            (201, b""),
+            (200, b""),
+            (200, b""),
+            (404, b""),
+            (201, b""),
+        ]
+    )
+    vector_styles = {
+        "vector-point": b"<point/>",
+        "vector-line": b"<line/>",
+        "vector-polygon": b"<polygon/>",
+    }
+
+    initialize_geoserver(
+        client,
+        "new-master-password",
+        b"<raster/>",
+        vector_styles,
+    )
+
+    style_writes = [
+        request for request in client.requests
+        if request[0] in {"POST", "PUT"}
+        and "/styles" in request[1]
+    ]
+    assert [(request[1], request[2]) for request in style_writes] == [
+        ("/workspaces/eolab/styles/dynamic-raster", b"<raster/>"),
+        ("/workspaces/eolab/styles?name=vector-point", b"<point/>"),
+        ("/workspaces/eolab/styles/vector-line", b"<line/>"),
+        ("/workspaces/eolab/styles?name=vector-polygon", b"<polygon/>"),
+    ]
+
+
 def test_initialization_rejects_unexpected_geoserver_response() -> None:
     """Fail deployment rather than guessing after an undocumented response."""
     client = RecordingGeoServerClient([(401, b"")])

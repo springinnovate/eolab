@@ -12,6 +12,11 @@ from urllib.request import Request, urlopen
 WORKSPACE_NAME = "eolab"
 RASTER_STYLE_NAME = "dynamic-raster"
 RASTER_STYLE_PATH = Path(__file__).with_name(f"{RASTER_STYLE_NAME}.sld")
+VECTOR_STYLE_NAMES = ("vector-point", "vector-line", "vector-polygon")
+VECTOR_STYLE_PATHS = {
+    style_name: Path(__file__).with_name(f"{style_name}.sld")
+    for style_name in VECTOR_STYLE_NAMES
+}
 SCAN_SOURCE_URL_CHECK_NAME = "eolab-scan-source"
 SCAN_SOURCE_URL_PATTERN = r"^file:///scan-source/.*$"
 ADMIN_PASSWORD_PATTERN = re.compile(r"[A-Za-z0-9._-]{16,}")
@@ -80,7 +85,17 @@ def _require_status(
     method: str,
     path: str,
 ) -> None:
-    """Reject a REST response outside the operation's documented contract."""
+    """Reject a REST response outside the operation's documented contract.
+
+    Args:
+        actual_status: HTTP status returned by GeoServer.
+        expected_status: Only accepted status for the operation.
+        method: HTTP method used for diagnostic context.
+        path: GeoServer REST path used for diagnostic context.
+
+    Raises:
+        RuntimeError: If GeoServer returns a different status.
+    """
     if actual_status != expected_status:
         raise RuntimeError(
             f"GeoServer returned {actual_status} for {method} {path}"
@@ -91,6 +106,7 @@ def initialize_geoserver(
     client: GeoServerRestClient,
     master_password: str,
     raster_style: bytes,
+    vector_styles: dict[str, bytes] | None = None,
 ) -> None:
     """Ensure the EOLab security and rendering configuration.
 
@@ -98,6 +114,13 @@ def initialize_geoserver(
         client: Authenticated internal GeoServer REST client.
         master_password: Desired keystore password.
         raster_style: SLD document for the shared raster style.
+        vector_styles: Geometry-specific vector SLD documents keyed by their
+            initialized style names. ``None`` preserves the legacy test seam.
+
+    Raises:
+        KeyError: If GeoServer returns an invalid master-password document.
+        RuntimeError: If a GeoServer operation violates its status contract.
+        ValueError: If a vector style name is outside the initializer contract.
     """
     master_password_path = "/security/masterpw.json"
     status, response_body = client.request("GET", master_password_path)
@@ -192,9 +215,48 @@ def initialize_geoserver(
         )
         _require_status(status, 200, "PUT", style_path)
 
+    for style_name, style_document in (vector_styles or {}).items():
+        if style_name not in VECTOR_STYLE_NAMES:
+            raise ValueError(f"Unsupported initialized vector style: {style_name}")
+        vector_style_path = (
+            f"/workspaces/{WORKSPACE_NAME}/styles/{style_name}"
+        )
+        status, _ = client.request(
+            "GET",
+            f"{vector_style_path}.sld?quietOnNotFound=true",
+        )
+        if status == 404:
+            create_style_path = (
+                f"/workspaces/{WORKSPACE_NAME}/styles?name={style_name}"
+            )
+            status, _ = client.request(
+                "POST",
+                create_style_path,
+                style_document,
+                "application/vnd.ogc.sld+xml",
+            )
+            _require_status(status, 201, "POST", create_style_path)
+        else:
+            _require_status(status, 200, "GET", vector_style_path)
+            status, _ = client.request(
+                "PUT",
+                vector_style_path,
+                style_document,
+                "application/vnd.ogc.sld+xml",
+            )
+            _require_status(status, 200, "PUT", vector_style_path)
+
 
 def main() -> None:
-    """Load the deployment contract and initialize GeoServer."""
+    """Load the deployment contract and initialize GeoServer.
+
+    Raises:
+        KeyError: If a required deployment variable is absent.
+        OSError: If an initializer-owned SLD cannot be read.
+        RuntimeError: If GeoServer violates an operation status contract.
+        ValueError: If credentials or initialized styles violate their
+            contracts.
+    """
     base_url = os.environ["GEOSERVER_INTERNAL_URL"].strip()
     username = os.environ["GEOSERVER_ADMIN_USER"].strip()
     admin_password = os.environ["GEOSERVER_ADMIN_PASSWORD"]
@@ -223,6 +285,10 @@ def main() -> None:
         GeoServerRestClient(base_url, username, admin_password),
         master_password,
         RASTER_STYLE_PATH.read_bytes(),
+        {
+            style_name: style_path.read_bytes()
+            for style_name, style_path in VECTOR_STYLE_PATHS.items()
+        },
     )
     print("EOLab GeoServer security and rendering configuration are ready.")
 

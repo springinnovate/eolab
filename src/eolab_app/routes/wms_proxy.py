@@ -8,9 +8,10 @@ import httpx2
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from eolab_app.diagnostics.tracker import GetMapRequestTracker
-from eolab_app.raster.errors import RasterFeatureError
+from eolab_app.raster.errors import RasterFeatureError, RasterRequestError
 from eolab_app.raster.sources import PublishedRasterRegistry
 from eolab_app.routes.rasters import raster_http_exception
+from eolab_app.vector.sources import PublishedVectorRegistry
 
 
 PUBLIC_WMS_COMMON_QUERY_PARAMETERS = frozenset(
@@ -71,6 +72,12 @@ RASTER_STYLE_ENVIRONMENT_ERROR = (
     "env must define ordered finite min, med, and max values plus cmin, "
     "cmed, and cmax six-digit hex colors"
 )
+PUBLIC_WMS_STYLE_NAMES = frozenset({
+    "dynamic-raster",
+    "vector-point",
+    "vector-line",
+    "vector-polygon",
+})
 
 
 def validate_raster_style_environment(environment: str) -> None:
@@ -192,9 +199,6 @@ def validated_public_wms_query(
                     "or text/plain"
                 ),
             )
-    if "env" in normalized_query:
-        validate_raster_style_environment(normalized_query["env"])
-
     layer_name = None
     if operation == "getmap":
         layer_name = normalized_query.get("layers")
@@ -208,15 +212,24 @@ def validated_public_wms_query(
     elif operation == "getlegendgraphic":
         layer_name = normalized_query.get("layer")
     style_parameter = "style" if operation == "getlegendgraphic" else "styles"
-    if normalized_query.get(style_parameter, "") not in {
-        "",
-        "dynamic-raster",
-        "eolab:dynamic-raster",
-    }:
+    requested_style = normalized_query.get(style_parameter, "")
+    unqualified_style = requested_style.removeprefix("eolab:")
+    if requested_style and unqualified_style not in PUBLIC_WMS_STYLE_NAMES:
         raise HTTPException(
             status_code=400,
             detail="WMS style must be dynamic-raster",
         )
+    if "env" in normalized_query:
+        validate_raster_style_environment(normalized_query["env"])
+        if unqualified_style in {
+            "vector-point",
+            "vector-line",
+            "vector-polygon",
+        }:
+            raise HTTPException(
+                status_code=400,
+                detail="env is available only for the dynamic raster style",
+            )
     if operation != "getcapabilities" and (
         not layer_name or "," in layer_name
     ):
@@ -231,6 +244,7 @@ def create_wms_proxy_router(
     geoserver_client: httpx2.AsyncClient,
     geoserver_internal_url: str,
     published_rasters: PublishedRasterRegistry,
+    published_vectors: PublishedVectorRegistry,
     get_map_request_tracker: GetMapRequestTracker,
 ) -> APIRouter:
     """Create the restricted public WMS proxy.
@@ -239,6 +253,7 @@ def create_wms_proxy_router(
         geoserver_client: Shared unauthenticated GeoServer WMS client.
         geoserver_internal_url: Internal GeoServer base URL.
         published_rasters: Current-process layer authorization registry.
+        published_vectors: Current-process exact-vector authorization registry.
         get_map_request_tracker: Bounded GetMap request observer.
 
     Returns:
@@ -275,12 +290,33 @@ def create_wms_proxy_router(
         query_entries, layer_name, operation = validated_public_wms_query(request)
         if layer_name is not None:
             try:
-                await asyncio.to_thread(
-                    published_rasters.require_current,
-                    layer_name,
-                )
+                try:
+                    authorization = await asyncio.to_thread(
+                        published_rasters.require_current,
+                        layer_name,
+                    )
+                except RasterRequestError:
+                    authorization = await asyncio.to_thread(
+                        published_vectors.require_current,
+                        layer_name,
+                    )
             except RasterFeatureError as error:
                 raise raster_http_exception(error) from error
+            normalized_query = {
+                key.lower(): value for key, value in query_entries
+            }
+            style_parameter = (
+                "style" if operation == "getlegendgraphic" else "styles"
+            )
+            requested_style = normalized_query.get(
+                style_parameter,
+                "",
+            ).removeprefix("eolab:")
+            if requested_style not in {"", authorization.style_name}:
+                raise HTTPException(
+                    status_code=400,
+                    detail="WMS style does not match the authorized layer",
+                )
 
         forwarded_headers = {
             "accept": request.headers.get("accept", "*/*"),

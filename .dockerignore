@@ -13,3 +13,11 @@ icon
 output
 scripts
 tests
+!tests/
+tests/*
+!tests/fixtures/
+tests/fixtures/*
+!tests/fixtures/rasters/
+!tests/fixtures/rasters/*.tif
+!tests/fixtures/vectors/
+!tests/fixtures/vectors/*.gpkg

@@ -31,10 +31,12 @@ class AuthorizedRaster:
     Attributes:
         source_path: Canonical mounted GeoTIFF path.
         source_signature: Filesystem identity approved during publication.
+        style_name: Only WMS style authorized for the published raster.
     """
 
     source_path: Path
     source_signature: SourceSignature
+    style_name: str = "dynamic-raster"
 
 
 @dataclass(frozen=True)

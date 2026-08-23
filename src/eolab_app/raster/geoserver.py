@@ -164,6 +164,8 @@ def sanitize_geoserver_error_excerpt(response_content: bytes) -> str:
 class GeoServerRasterPublisher:
     """Converge mounted GeoTIFFs to healthy private GeoServer publications."""
 
+    _publication_kind = "raster"
+
     def __init__(
         self,
         geoserver_client: httpx2.AsyncClient,
@@ -484,8 +486,9 @@ class GeoServerRasterPublisher:
             )
         except httpx2.TimeoutException as error:
             LOGGER.warning(
-                "GeoServer raster publication failed: operation=%s "
+                "GeoServer %s publication failed: operation=%s "
                 "status=unavailable detail=request timed out",
+                self._publication_kind,
                 operation,
             )
             raise RasterPublicationError(
@@ -494,8 +497,9 @@ class GeoServerRasterPublisher:
             ) from error
         except httpx2.RequestError as error:
             LOGGER.warning(
-                "GeoServer raster publication failed: operation=%s "
+                "GeoServer %s publication failed: operation=%s "
                 "status=unavailable detail=connection failed",
+                self._publication_kind,
                 operation,
             )
             raise RasterPublicationError(
@@ -526,8 +530,9 @@ class GeoServerRasterPublisher:
         """
         excerpt = sanitize_geoserver_error_excerpt(response.content)
         LOGGER.warning(
-            "GeoServer raster publication failed: operation=%s status=%s "
+            "GeoServer %s publication failed: operation=%s status=%s "
             "detail=%s",
+            self._publication_kind,
             operation,
             response.status_code,
             excerpt,

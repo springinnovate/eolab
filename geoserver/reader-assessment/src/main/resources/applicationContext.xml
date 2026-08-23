@@ -6,4 +6,6 @@
         class="org.springinnovate.eolab.geoserver.RasterReaderAssessmentController">
     <constructor-arg ref="catalog" />
   </bean>
+  <bean id="eolabVectorReaderAssessmentController"
+        class="org.springinnovate.eolab.geoserver.VectorReaderAssessmentController" />
 </beans>
