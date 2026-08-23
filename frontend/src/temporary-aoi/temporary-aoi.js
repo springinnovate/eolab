@@ -8,6 +8,24 @@ import { TemporaryAoiLayerController } from "./leaflet.js";
 const MAX_TIMER_DELAY_MILLISECONDS = 2_147_483_647;
 
 /**
+ * Copy only lifecycle and display identity across the histogram integration.
+ *
+ * Browser overlay geometry remains private to the temporary-AOI controller;
+ * the raster API needs only the opaque server reference.
+ *
+ * @param {Object} readyAoi Validated ready temporary-AOI response.
+ * @return {Readonly<Object>} Immutable public sampling-area snapshot.
+ */
+function temporaryAoiSamplingSnapshot(readyAoi) {
+    return Object.freeze({
+        id: readyAoi.id,
+        filename: readyAoi.filename,
+        selectedDataset: readyAoi.selectedDataset,
+        expiresAt: readyAoi.expiresAt,
+    });
+}
+
+/**
  * @typedef {Object} TemporaryAoiCoordinatorDependencies
  * @property {TemporaryAoiApiClient} [apiClient=new TemporaryAoiApiClient()]
  * Temporary-AOI API client.
@@ -54,6 +72,7 @@ export class TemporaryAoiCoordinator {
         this.pendingExpirationTimer = null;
         this.operationSequence = 0;
         this.destroyed = false;
+        this.samplingAreaListeners = new Set();
 
         this.handlers = {
             onUpload: this.handleUpload.bind(this),
@@ -273,6 +292,7 @@ export class TemporaryAoiCoordinator {
         this.layerController.load(readyAoi);
         this.scheduleActiveExpiration(readyAoi);
         this.controlsView.renderReady(readyAoi, true);
+        this.notifySamplingAreaChange();
     }
 
     /**
@@ -362,9 +382,52 @@ export class TemporaryAoiCoordinator {
      * @return {void}
      */
     clearActiveAoi() {
+        const hadActiveAoi = this.activeAoi !== null;
         this.clearActiveExpirationTimer();
         this.activeAoi = null;
         this.layerController.clear();
+        if (hadActiveAoi) {
+            this.notifySamplingAreaChange();
+        }
+    }
+
+    /**
+     * Subscribe to ready-AOI lifecycle changes through the public boundary.
+     *
+     * Visibility toggles do not publish because overlay presentation and
+     * histogram inclusion are deliberately independent.
+     *
+     * @param {(temporaryAoi: Readonly<Object>|null) => void} listener Receives
+     * opaque lifecycle/display snapshots and removal or expiration as null.
+     * @return {() => void} Idempotent function that removes the subscription.
+     */
+    subscribeSamplingArea(listener) {
+        if (typeof listener !== "function") {
+            throw new TypeError("Temporary AOI sampling listener is required.");
+        }
+        this.samplingAreaListeners.add(listener);
+        listener(
+            this.activeAoi === null
+                ? null
+                : temporaryAoiSamplingSnapshot(this.activeAoi)
+        );
+        return () => {
+            this.samplingAreaListeners.delete(listener);
+        };
+    }
+
+    /**
+     * Publish the current ready lifecycle without exposing overlay geometry.
+     *
+     * @return {void}
+     */
+    notifySamplingAreaChange() {
+        const snapshot = this.activeAoi === null
+            ? null
+            : temporaryAoiSamplingSnapshot(this.activeAoi);
+        for (const listener of this.samplingAreaListeners) {
+            listener(snapshot);
+        }
     }
 
     /**
@@ -446,6 +509,7 @@ export class TemporaryAoiCoordinator {
         this.operationSequence += 1;
         this.clearPendingUpload();
         this.clearActiveAoi();
+        this.samplingAreaListeners.clear();
         this.controlsView.unbind();
     }
 }

@@ -60,6 +60,8 @@ const RASTER_STYLE_DEBOUNCE_MILLISECONDS = 200;
  * @property {(item: Object) => boolean} contains Return whether an Item is
  * retained in the layer stack.
  * @property {(item: Object) => void} remove Remove one Item from the stack.
+ * @property {(temporaryAoi: Readonly<Object>|null) => void} setTemporaryAoi
+ * Receive ready lifecycle snapshots from the temporary-AOI public boundary.
  * @property {() => void} destroy Permanently detach viewer listeners; the
  * viewer must not be reused afterward.
  * @property {boolean} isDisplayed Whether any raster layer is visible.
@@ -84,7 +86,8 @@ const RASTER_STYLE_DEBOUNCE_MILLISECONDS = 200;
  * Layer-list DOM adapter.
  * @property {(item: Object) => Promise<Object>}
  * [publishRaster=publishCatalogRaster] Publishes one Catalog raster.
- * @property {(item: Object, signal: AbortSignal, selectedBounds: Object|null)
+ * @property {(item: Object, signal: AbortSignal, selectedBounds: Object|null,
+ * temporaryAoiId: string|null)
  * => Promise<Object>} [loadStatistics=loadCatalogRasterStatistics] Loads whole
  * or selected statistics.
  * @property {(item: Object, point: Object, signal: AbortSignal)
@@ -147,6 +150,8 @@ export function initializeRasterViewer(
     let wholeRasterStatisticsState = "idle";
     let wholeRasterStatisticsError = null;
     let selectedRasterBounds = null;
+    let selectedTemporaryAoi = null;
+    let availableTemporaryAoi = null;
     let selectedRasterWindowSizeKm = null;
     let activeRasterItem = null;
     let selectedRasterStatistics = null;
@@ -175,6 +180,7 @@ export function initializeRasterViewer(
             wholeRasterStatisticsState: "idle",
             wholeRasterStatisticsError: null,
             selectedRasterBounds: null,
+            selectedTemporaryAoi: availableTemporaryAoi,
             selectedRasterWindowSizeKm: null,
             selectedRasterStatistics: null,
             selectedRasterStatisticsState: "idle",
@@ -218,6 +224,7 @@ export function initializeRasterViewer(
             wholeRasterStatisticsState,
             wholeRasterStatisticsError,
             selectedRasterBounds,
+            selectedTemporaryAoi,
             selectedRasterWindowSizeKm,
             selectedRasterStatistics,
             selectedRasterStatisticsState,
@@ -243,6 +250,7 @@ export function initializeRasterViewer(
         wholeRasterStatisticsState = session.wholeRasterStatisticsState;
         wholeRasterStatisticsError = session.wholeRasterStatisticsError;
         selectedRasterBounds = session.selectedRasterBounds;
+        selectedTemporaryAoi = session.selectedTemporaryAoi;
         selectedRasterWindowSizeKm = session.selectedRasterWindowSizeKm;
         selectedRasterStatistics = session.selectedRasterStatistics;
         selectedRasterStatisticsState = session.selectedRasterStatisticsState;
@@ -311,6 +319,40 @@ export function initializeRasterViewer(
         renderSelectedRasterStatistics,
         renderSelectedRasterStatisticsError
     );
+
+    /**
+     * Return whether the active raster uses a non-whole sampling area.
+     *
+     * @return {boolean} Whether bounds or a temporary AOI owns the histogram.
+     */
+    function hasSelectedRasterSamplingArea() {
+        return selectedRasterBounds !== null || selectedTemporaryAoi !== null;
+    }
+
+    /**
+     * Return the active sampling-area discriminator for control presentation.
+     *
+     * @return {"wholeRaster"|"selectedArea"|"temporaryAoi"} Active mode.
+     */
+    function getRasterSamplingAreaMode() {
+        if (selectedTemporaryAoi !== null) {
+            return "temporaryAoi";
+        }
+        return selectedRasterBounds === null ? "wholeRaster" : "selectedArea";
+    }
+
+    /**
+     * Synchronize explicit histogram-area choices with lifecycle state.
+     *
+     * @return {void}
+     */
+    function renderRasterSamplingAreaControls() {
+        controlsView.setTemporaryAoiAvailability(availableTemporaryAoi);
+        controlsView.setClearSampleWindowEnabled(
+            hasSelectedRasterSamplingArea()
+        );
+        controlsView.setSamplingAreaMode(getRasterSamplingAreaMode());
+    }
 
     /**
      * Return whether the active retained layer is attached to the map.
@@ -401,7 +443,7 @@ export function initializeRasterViewer(
             void wholeRasterStatisticsController.activate(activeRasterItem);
         }
 
-        if (selectedRasterBounds !== null) {
+        if (hasSelectedRasterSamplingArea()) {
             if (selectedRasterStatisticsState === "ready") {
                 renderRasterStatistics(selectedRasterStatistics);
             } else if (selectedRasterStatisticsState === "error") {
@@ -413,7 +455,8 @@ export function initializeRasterViewer(
                 void selectedRasterStatisticsController.activate(
                     activeRasterItem,
                     undefined,
-                    selectedRasterBounds
+                    selectedRasterBounds,
+                    selectedTemporaryAoi?.id ?? null
                 );
             } else {
                 clearRasterStatisticsPresentation();
@@ -469,14 +512,16 @@ export function initializeRasterViewer(
             rasterSampleWindowController.windowSizeKm
         );
         controlsView.setSampleWindowInvalid(false);
-        controlsView.setClearSampleWindowEnabled(selectedRasterBounds !== null);
+        renderRasterSamplingAreaControls();
         if (entry.visible) {
             if (selectedRasterBounds !== null) {
                 rasterSampleWindowController.restoreSelection(
                     selectedRasterBounds
                 );
             }
-            rasterSampleWindowController.enable();
+            if (selectedTemporaryAoi === null) {
+                rasterSampleWindowController.enable();
+            }
             pixelProbeController.activate(activeRasterItem);
         }
         renderRasterSampleWindowGuidance("");
@@ -677,7 +722,7 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Present one current whole-raster or selected-area histogram.
+     * Present one current whole-raster, map-window, or AOI histogram.
      *
      * @param {Object} statistics Validated raster statistics.
      * @param {boolean} [initialRangeApplied=false] Whether its range was
@@ -694,7 +739,11 @@ export function initializeRasterViewer(
         rasterStatistics = statistics;
         rasterStatisticsIsApplicable =
             allowApply &&
-            rasterStatisticsMatchesSelection(statistics, selectedRasterBounds);
+            rasterStatisticsMatchesSelection(
+                statistics,
+                selectedRasterBounds,
+                selectedTemporaryAoi?.id ?? null
+            );
         controlsView.setStatisticsBusy(false);
         controlsView.setStatisticsRetryVisible(false);
         controlsView.renderHistogram(statistics, rasterStyle);
@@ -708,12 +757,16 @@ export function initializeRasterViewer(
 
         const excludedCount =
             statistics.sampledPixelCount - statistics.validSampleCount;
-        const sourceDescription = statistics.scope === "selectedArea"
-            ? "source-cell window"
-            : "source raster";
-        const scopeDescription = statistics.scope === "selectedArea"
-            ? "Selected-area approximate distribution"
-            : "Whole-raster approximate distribution";
+        const sourceDescription = statistics.scope === "wholeRaster"
+            ? "source raster"
+            : "source-cell window";
+        const scopeDescription = statistics.scope === "temporaryAoi"
+            ? `Uploaded AOI ${selectedTemporaryAoi?.filename ?? "area"}, ` +
+              `layer ${selectedTemporaryAoi?.selectedDataset ?? "selected"}, ` +
+              "approximate distribution"
+            : statistics.scope === "selectedArea"
+                ? "Selected-area approximate distribution"
+                : "Whole-raster approximate distribution";
         const provenance =
             `${statistics.validSampleCount.toLocaleString()} valid pixels ` +
             `from a ${statistics.sampleWidth.toLocaleString()} × ` +
@@ -767,7 +820,7 @@ export function initializeRasterViewer(
     function renderWholeRasterStatisticsLoading() {
         wholeRasterStatisticsState = "loading";
         wholeRasterStatisticsError = null;
-        if (selectedRasterBounds === null) {
+        if (!hasSelectedRasterSamplingArea()) {
             renderRasterStatisticsLoading("wholeRaster");
         }
         saveActiveLayerSession();
@@ -783,8 +836,10 @@ export function initializeRasterViewer(
         wholeRasterStatistics = statistics;
         wholeRasterStatisticsState = "ready";
         wholeRasterStatisticsError = null;
-        const initialRangeApplied = applyInitialWholeRasterStyle(statistics);
-        if (selectedRasterBounds === null) {
+        const initialRangeApplied = hasSelectedRasterSamplingArea()
+            ? false
+            : applyInitialWholeRasterStyle(statistics);
+        if (!hasSelectedRasterSamplingArea()) {
             renderRasterStatistics(statistics, initialRangeApplied);
         }
         saveActiveLayerSession();
@@ -799,14 +854,14 @@ export function initializeRasterViewer(
     function renderWholeRasterStatisticsError(error) {
         wholeRasterStatisticsState = "error";
         wholeRasterStatisticsError = error;
-        if (selectedRasterBounds === null) {
+        if (!hasSelectedRasterSamplingArea()) {
             renderRasterStatisticsError(error, "wholeRaster");
         }
         saveActiveLayerSession();
     }
 
     /**
-     * Present the start of a selected-area statistics request.
+     * Present the start of a bounded map-window or AOI statistics request.
      *
      * @return {void}
      */
@@ -819,8 +874,8 @@ export function initializeRasterViewer(
         controlsView.setApplyPercentilesEnabled(false);
         controlsView.setStatisticsStatus(
             rasterStatistics === null
-                ? "Calculating an approximate distribution for the selected area..."
-                : "Calculating an approximate distribution for the selected area... " +
+                ? selectedRasterStatisticsLoadingMessage()
+                : selectedRasterStatisticsLoadingMessage() + " " +
                   "The previous distribution remains visible for reference and " +
                   "cannot be applied to this selection."
         );
@@ -828,9 +883,25 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Present one successful selected-area statistics response.
+     * Describe the active bounded statistics request without map-move chatter.
      *
-     * @param {Object} statistics Validated selected-area statistics.
+     * @return {string} Accessible loading announcement for bounds or AOI.
+     */
+    function selectedRasterStatisticsLoadingMessage() {
+        if (selectedTemporaryAoi === null) {
+            return "Calculating an approximate distribution for the selected area...";
+        }
+        return (
+            `Calculating an approximate distribution for uploaded AOI ` +
+            `${selectedTemporaryAoi.filename}, layer ` +
+            `${selectedTemporaryAoi.selectedDataset}...`
+        );
+    }
+
+    /**
+     * Present one successful bounded map-window or AOI response.
+     *
+     * @param {Object} statistics Validated map-window or AOI statistics.
      * @return {void}
      */
     function renderSelectedRasterStatistics(statistics) {
@@ -841,7 +912,7 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Present a selected-area failure while retaining useful prior context.
+     * Present a map-window or AOI failure while retaining prior context.
      *
      * @param {Error} error Statistics request failure.
      * @return {void}
@@ -856,11 +927,15 @@ export function initializeRasterViewer(
         controlsView.setStatisticsBusy(false);
         controlsView.setStatisticsRetryVisible(true);
         controlsView.setApplyPercentilesEnabled(false);
+        const areaName = selectedTemporaryAoi === null
+            ? "Selected-area"
+            : `Uploaded AOI ${selectedTemporaryAoi.filename}, layer ` +
+              selectedTemporaryAoi.selectedDataset;
         controlsView.setStatisticsStatus(
             rasterStatistics === null
-                ? `Selected-area distribution unavailable: ${error.message} ` +
+                ? `${areaName} distribution unavailable: ${error.message} ` +
                   "Manual appearance controls remain available."
-                : `Selected-area distribution unavailable: ${error.message} ` +
+                : `${areaName} distribution unavailable: ${error.message} ` +
                   "The previous distribution remains visible for reference but " +
                   "cannot be applied to this selection. Your appearance was " +
                   "preserved."
@@ -869,19 +944,23 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Restore retained whole-raster statistics after clearing a selected area.
+     * Restore whole-raster statistics after clearing a map window or AOI.
      *
      * @return {void}
      */
     function restoreWholeRasterStatistics() {
         selectedRasterStatisticsController.clear();
         selectedRasterBounds = null;
+        selectedTemporaryAoi = null;
         selectedRasterWindowSizeKm = null;
         selectedRasterStatistics = null;
         selectedRasterStatisticsState = "idle";
         selectedRasterStatisticsError = null;
         rasterSampleWindowController.clearSelection();
-        controlsView.setClearSampleWindowEnabled(false);
+        if (isActiveLayerVisible()) {
+            rasterSampleWindowController.enable();
+        }
+        renderRasterSamplingAreaControls();
         renderRasterSampleWindowGuidance("");
         if (wholeRasterStatisticsState === "ready") {
             renderRasterStatistics(wholeRasterStatistics);
@@ -919,6 +998,11 @@ export function initializeRasterViewer(
                 `W ${west.toFixed(3)}, S ${south.toFixed(3)}, ` +
                 `E ${east.toFixed(3)}, N ${north.toFixed(3)}. ` +
                 "Move and click again to replace it.";
+        } else if (selectedTemporaryAoi !== null) {
+            nextStatus =
+                `Uploaded AOI selected: ${selectedTemporaryAoi.filename}, ` +
+                `layer ${selectedTemporaryAoi.selectedDataset}. Hiding its ` +
+                "map overlay does not change this histogram area.";
         } else {
             nextStatus =
                 "Whole-raster distribution selected. Move over the map " +
@@ -938,13 +1022,15 @@ export function initializeRasterViewer(
             return;
         }
         selectedRasterBounds = bounds;
+        selectedTemporaryAoi = null;
         selectedRasterWindowSizeKm = rasterSampleWindowController.windowSizeKm;
-        controlsView.setClearSampleWindowEnabled(true);
+        renderRasterSamplingAreaControls();
         renderRasterSampleWindowGuidance("");
         void selectedRasterStatisticsController.activate(
             activeRasterItem,
             undefined,
-            bounds
+            bounds,
+            null
         );
         saveActiveLayerSession();
     }
@@ -982,13 +1068,64 @@ export function initializeRasterViewer(
         rasterSampleWindowController.clear();
         selectedRasterStatisticsController.clear();
         selectedRasterBounds = null;
+        selectedTemporaryAoi = null;
         selectedRasterWindowSizeKm = null;
         selectedRasterStatistics = null;
         selectedRasterStatisticsState = "idle";
         selectedRasterStatisticsError = null;
         setRasterSampleWindowSize(DEFAULT_RASTER_SAMPLE_WINDOW_SIZE_KM);
-        controlsView.setClearSampleWindowEnabled(false);
+        renderRasterSamplingAreaControls();
         renderRasterSampleWindowGuidance("");
+    }
+
+    /**
+     * Select the retained ready AOI and disable pointer-window previews.
+     *
+     * @return {void}
+     */
+    function useTemporaryAoiForRasterStatistics() {
+        if (availableTemporaryAoi === null || activeRasterItem === null) {
+            return;
+        }
+        selectedRasterStatisticsController.clear();
+        selectedRasterBounds = null;
+        selectedTemporaryAoi = availableTemporaryAoi;
+        selectedRasterWindowSizeKm = null;
+        selectedRasterStatistics = null;
+        selectedRasterStatisticsState = "idle";
+        selectedRasterStatisticsError = null;
+        rasterSampleWindowController.clear();
+        renderRasterSamplingAreaControls();
+        renderRasterSampleWindowGuidance("");
+        if (isActiveLayerVisible()) {
+            void selectedRasterStatisticsController.activate(
+                activeRasterItem,
+                undefined,
+                null,
+                selectedTemporaryAoi.id
+            );
+        }
+        saveActiveLayerSession();
+    }
+
+    /**
+     * Leave AOI sampling and enable mouse, touch, and keyboard window choice.
+     *
+     * The whole-raster distribution is the stable interim scope until the user
+     * commits a new map window.
+     *
+     * @return {void}
+     */
+    function enableRasterSampleWindowSelection() {
+        restoreWholeRasterStatistics();
+        if (!isActiveLayerVisible()) {
+            return;
+        }
+        rasterSampleWindowController.enable();
+        controlsView.setSampleWindowStatus(
+            "Map-window selection enabled. Move over the map and click, tap " +
+            "Sample map center, or use the keyboard action to choose a window."
+        );
     }
 
     /**
@@ -1118,7 +1255,7 @@ export function initializeRasterViewer(
         if (wholeRasterStatistics !== null) {
             resetRasterPercentileControls();
             updateRasterPercentileValues();
-            const scopeNote = selectedRasterBounds === null
+            const scopeNote = !hasSelectedRasterSamplingArea()
                 ? ""
                 : rasterStatisticsIsApplicable
                     ? " The selected-area distribution remains available."
@@ -1163,12 +1300,13 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function handleRetryStatistics() {
-        if (selectedRasterBounds !== null) {
+        if (hasSelectedRasterSamplingArea()) {
             selectedRasterStatisticsState = "idle";
             void selectedRasterStatisticsController.activate(
                 activeRasterItem,
                 undefined,
-                selectedRasterBounds
+                selectedRasterBounds,
+                selectedTemporaryAoi?.id ?? null
             );
         } else {
             wholeRasterStatisticsState = "idle";
@@ -1281,7 +1419,9 @@ export function initializeRasterViewer(
                         selectedRasterBounds
                     );
                 }
-                rasterSampleWindowController.enable();
+                if (selectedTemporaryAoi === null) {
+                    rasterSampleWindowController.enable();
+                }
                 pixelProbeController.activate(activeRasterItem);
             } else {
                 wholeRasterStatisticsController.clear();
@@ -1438,6 +1578,7 @@ export function initializeRasterViewer(
         wholeRasterStatisticsState = "idle";
         wholeRasterStatisticsError = null;
         selectedRasterBounds = null;
+        selectedTemporaryAoi = null;
         selectedRasterWindowSizeKm = null;
         selectedRasterStatistics = null;
         selectedRasterStatisticsState = "idle";
@@ -1562,6 +1703,104 @@ export function initializeRasterViewer(
     }
 
     /**
+     * Validate one lifecycle snapshot received from the temporary-AOI boundary.
+     *
+     * @param {Readonly<Object>|null} temporaryAoi Candidate public snapshot.
+     * @return {Readonly<Object>|null} Validated immutable snapshot or null.
+     * @throws {TypeError} If identity, display, or expiration fields are invalid.
+     */
+    function validateTemporaryAoiSamplingSnapshot(temporaryAoi) {
+        if (temporaryAoi === null) {
+            return null;
+        }
+        if (
+            typeof temporaryAoi !== "object" ||
+            typeof temporaryAoi.id !== "string" ||
+            !/^[A-Za-z0-9_-]{32}$/.test(temporaryAoi.id) ||
+            typeof temporaryAoi.filename !== "string" ||
+            temporaryAoi.filename.trim() === "" ||
+            typeof temporaryAoi.selectedDataset !== "string" ||
+            temporaryAoi.selectedDataset.trim() === "" ||
+            typeof temporaryAoi.expiresAt !== "string" ||
+            !Number.isFinite(Date.parse(temporaryAoi.expiresAt))
+        ) {
+            throw new TypeError("Temporary AOI sampling snapshot is invalid.");
+        }
+        return Object.freeze({
+            id: temporaryAoi.id,
+            filename: temporaryAoi.filename,
+            selectedDataset: temporaryAoi.selectedDataset,
+            expiresAt: temporaryAoi.expiresAt,
+        });
+    }
+
+    /**
+     * Invalidate a session's selected-area result for an AOI lifecycle change.
+     *
+     * @param {Object} session Retained raster-layer interaction session.
+     * @param {Readonly<Object>|null} nextTemporaryAoi Replacement lifecycle or
+     * null when removal or expiration restores whole-raster sampling.
+     * @return {void}
+     */
+    function replaceSessionTemporaryAoi(session, nextTemporaryAoi) {
+        session.selectedRasterBounds = null;
+        session.selectedTemporaryAoi = nextTemporaryAoi;
+        session.selectedRasterWindowSizeKm = null;
+        session.selectedRasterStatistics = null;
+        session.selectedRasterStatisticsState = "idle";
+        session.selectedRasterStatisticsError = null;
+        session.rasterStatisticsIsApplicable = false;
+    }
+
+    /**
+     * Receive one ready-AOI lifecycle change through the public integration.
+     *
+     * First readiness automatically selects the AOI for retained rasters.
+     * Replacement migrates only sessions actively using the previous AOI;
+     * removal and expiration restore those sessions to whole-raster sampling.
+     * Overlay geometry and visibility never cross this boundary.
+     *
+     * @param {Readonly<Object>|null} temporaryAoi Ready lifecycle snapshot or
+     * null after removal or expiration.
+     * @return {void}
+     * @throws {TypeError} If the public snapshot violates its contract.
+     */
+    function setTemporaryAoi(temporaryAoi) {
+        const validatedAoi = validateTemporaryAoiSamplingSnapshot(temporaryAoi);
+        const previousAoi = availableTemporaryAoi;
+        if (previousAoi?.id === validatedAoi?.id) {
+            return;
+        }
+        saveActiveLayerSession();
+        availableTemporaryAoi = validatedAoi;
+        for (const session of layerSessions.values()) {
+            const automaticallyEligible = previousAoi === null && validatedAoi !== null;
+            const usesPreviousAoi =
+                previousAoi !== null &&
+                session.selectedTemporaryAoi?.id === previousAoi.id;
+            if (automaticallyEligible || usesPreviousAoi) {
+                replaceSessionTemporaryAoi(session, validatedAoi);
+            }
+        }
+        controlsView.setTemporaryAoiAvailability(availableTemporaryAoi);
+        if (activeLayerKey === null) {
+            return;
+        }
+        const activeSession = requireLayerSession(activeLayerKey);
+        loadActiveLayerSession(activeSession);
+        selectedRasterStatisticsController.clear();
+        if (selectedTemporaryAoi !== null) {
+            rasterSampleWindowController.clear();
+        } else if (isActiveLayerVisible()) {
+            rasterSampleWindowController.enable();
+        }
+        renderRasterSamplingAreaControls();
+        renderRasterSampleWindowGuidance("");
+        restoreActiveLayerStatistics();
+        saveActiveLayerSession();
+    }
+
+    /**
      * Return whether one Catalog Item is retained in the layer stack.
      *
      * @param {Object} item Catalog STAC Item.
@@ -1601,10 +1840,15 @@ export function initializeRasterViewer(
         onSampleWindowNumberChange: handleSampleWindowNumberChange,
         onSampleMapCenter: () => {
             if (isActiveLayerVisible()) {
+                if (selectedTemporaryAoi !== null) {
+                    restoreWholeRasterStatistics();
+                }
                 rasterSampleWindowController.sampleMapCenter();
             }
         },
+        onSelectSampleWindow: enableRasterSampleWindowSelection,
         onClearSampleWindow: restoreWholeRasterStatistics,
+        onUseTemporaryAoi: useTemporaryAoiForRasterStatistics,
     });
     layerStackView.bind({
         onActivate: handleLayerActivation,
@@ -1626,6 +1870,7 @@ export function initializeRasterViewer(
         show,
         contains,
         remove,
+        setTemporaryAoi,
         destroy,
         /**
          * Return whether at least one raster layer is currently displayed.

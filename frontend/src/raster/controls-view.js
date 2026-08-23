@@ -43,7 +43,9 @@ function requireRasterControl(documentContext, selector) {
  * @property {(value: string) => void} onSampleWindowNumberChange Commits the
  * numeric sample-window size.
  * @property {() => void} onSampleMapCenter Selects the map-center window.
+ * @property {() => void} onSelectSampleWindow Enables pointer window selection.
  * @property {() => void} onClearSampleWindow Restores whole-raster statistics.
+ * @property {() => void} onUseTemporaryAoi Selects the retained uploaded AOI.
  */
 
 /**
@@ -191,9 +193,17 @@ export class RasterControlsView {
             documentContext,
             "#sample-raster-map-center"
         );
+        this.selectSampleWindowButton = requireRasterControl(
+            documentContext,
+            "#select-raster-sample-window"
+        );
         this.clearSampleWindowButton = requireRasterControl(
             documentContext,
             "#clear-raster-sample-window"
+        );
+        this.useTemporaryAoiButton = requireRasterControl(
+            documentContext,
+            "#use-temporary-aoi-for-raster"
         );
         this.sampleWindowStatus = requireRasterControl(
             documentContext,
@@ -226,8 +236,12 @@ export class RasterControlsView {
         this.boundSampleWindowNumberChange =
             this.#handleSampleWindowNumberChange.bind(this);
         this.boundSampleMapCenter = this.#handleSampleMapCenter.bind(this);
+        this.boundSelectSampleWindow =
+            this.#handleSelectSampleWindow.bind(this);
         this.boundClearSampleWindow =
             this.#handleClearSampleWindow.bind(this);
+        this.boundUseTemporaryAoi =
+            this.#handleUseTemporaryAoi.bind(this);
     }
 
     /**
@@ -261,6 +275,7 @@ export class RasterControlsView {
             ? `Editing ${label}.`
             : `Editing ${label}; this layer is hidden from the map.`;
         this.sampleMapCenterButton.disabled = !visible;
+        this.selectSampleWindowButton.disabled = !visible;
         this.retryStatisticsButton.disabled = !visible;
     }
 
@@ -305,9 +320,17 @@ export class RasterControlsView {
             "click",
             this.boundSampleMapCenter
         );
+        this.selectSampleWindowButton.addEventListener(
+            "click",
+            this.boundSelectSampleWindow
+        );
         this.clearSampleWindowButton.addEventListener(
             "click",
             this.boundClearSampleWindow
+        );
+        this.useTemporaryAoiButton.addEventListener(
+            "click",
+            this.boundUseTemporaryAoi
         );
     }
 
@@ -353,9 +376,17 @@ export class RasterControlsView {
             "click",
             this.boundSampleMapCenter
         );
+        this.selectSampleWindowButton.removeEventListener(
+            "click",
+            this.boundSelectSampleWindow
+        );
         this.clearSampleWindowButton.removeEventListener(
             "click",
             this.boundClearSampleWindow
+        );
+        this.useTemporaryAoiButton.removeEventListener(
+            "click",
+            this.boundUseTemporaryAoi
         );
         this.handlers = null;
     }
@@ -676,6 +707,47 @@ export class RasterControlsView {
     }
 
     /**
+     * Present whether a retained ready AOI can be used for raster statistics.
+     *
+     * @param {Object|null} temporaryAoi Ready AOI display identity, or null.
+     * @return {void}
+     */
+    setTemporaryAoiAvailability(temporaryAoi) {
+        this.useTemporaryAoiButton.disabled = temporaryAoi === null;
+        if (temporaryAoi === null) {
+            this.useTemporaryAoiButton.removeAttribute("aria-label");
+            this.useTemporaryAoiButton.title = "Upload a polygonal AOI to enable this area.";
+            return;
+        }
+        const description =
+            `Use uploaded AOI ${temporaryAoi.filename}, ` +
+            `layer ${temporaryAoi.selectedDataset}`;
+        this.useTemporaryAoiButton.setAttribute("aria-label", description);
+        this.useTemporaryAoiButton.title = description;
+    }
+
+    /**
+     * Mark the active histogram-area choice without changing availability.
+     *
+     * @param {"wholeRaster"|"selectedArea"|"temporaryAoi"} mode Active area.
+     * @return {void}
+     */
+    setSamplingAreaMode(mode) {
+        this.clearSampleWindowButton.setAttribute(
+            "aria-pressed",
+            String(mode === "wholeRaster")
+        );
+        this.selectSampleWindowButton.setAttribute(
+            "aria-pressed",
+            String(mode === "selectedArea")
+        );
+        this.useTemporaryAoiButton.setAttribute(
+            "aria-pressed",
+            String(mode === "temporaryAoi")
+        );
+    }
+
+    /**
      * Show or hide the complete raster-appearance control group.
      *
      * @param {boolean} isVisible Whether a raster is displayed.
@@ -839,11 +911,29 @@ export class RasterControlsView {
     }
 
     /**
+     * Forward the explicit pointer-window selection action.
+     *
+     * @return {void}
+     */
+    #handleSelectSampleWindow() {
+        this.handlers.onSelectSampleWindow();
+    }
+
+    /**
      * Forward the whole-raster restore action to the raster viewer.
      *
      * @return {void}
      */
     #handleClearSampleWindow() {
         this.handlers.onClearSampleWindow();
+    }
+
+    /**
+     * Forward the retained temporary-AOI sampling action.
+     *
+     * @return {void}
+     */
+    #handleUseTemporaryAoi() {
+        this.handlers.onUseTemporaryAoi();
     }
 }

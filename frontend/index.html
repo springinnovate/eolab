@@ -515,6 +515,14 @@
                     <div class="raster-sample-window-actions">
                       <button
                         class="secondary-button"
+                        id="select-raster-sample-window"
+                        type="button"
+                        aria-pressed="false"
+                      >
+                        Select map window
+                      </button>
+                      <button
+                        class="secondary-button"
                         id="sample-raster-map-center"
                         type="button"
                       >
@@ -524,9 +532,19 @@
                         class="secondary-button"
                         id="clear-raster-sample-window"
                         type="button"
+                        aria-pressed="true"
                         disabled
                       >
                         Use whole raster
+                      </button>
+                      <button
+                        class="secondary-button"
+                        id="use-temporary-aoi-for-raster"
+                        type="button"
+                        aria-pressed="false"
+                        disabled
+                      >
+                        Use uploaded AOI
                       </button>
                     </div>
                     <p

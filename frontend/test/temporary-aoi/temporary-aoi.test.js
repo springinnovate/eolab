@@ -381,3 +381,38 @@ test("destroyed coordinator deletes a successful stale upload response", async (
   assert.equal(fixture.view.handlers, null);
   assert.equal(fixture.coordinator.activeAoi, null);
 });
+
+test("sampling subscribers receive lifecycle changes but never overlay visibility", async () => {
+  let uploadCount = 0;
+  const fixture = createCoordinator({
+    async upload() {
+      uploadCount += 1;
+      return uploadCount === 1 ? READY_AOI : REPLACEMENT_AOI;
+    },
+    async remove() {},
+  });
+  const snapshots = [];
+  const unsubscribe = fixture.coordinator.subscribeSamplingArea(
+    (temporaryAoi) => snapshots.push(temporaryAoi),
+  );
+
+  await fixture.coordinator.handleUpload(createEvent());
+  fixture.coordinator.handleToggleVisibility(createEvent());
+  fixture.coordinator.handleToggleVisibility(createEvent());
+  await fixture.coordinator.handleUpload(createEvent());
+  await fixture.coordinator.handleRemove(createEvent());
+  unsubscribe();
+
+  assert.equal(snapshots.length, 4);
+  assert.equal(snapshots[0], null);
+  assert.deepEqual(snapshots[1], {
+    id: READY_AOI.id,
+    filename: READY_AOI.filename,
+    selectedDataset: READY_AOI.selectedDataset,
+    expiresAt: READY_AOI.expiresAt,
+  });
+  assert.equal(Object.isFrozen(snapshots[1]), true);
+  assert.equal("geometry" in snapshots[1], false);
+  assert.equal(snapshots[2].id, REPLACEMENT_AOI.id);
+  assert.equal(snapshots[3], null);
+});

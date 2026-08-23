@@ -5,6 +5,8 @@ import { initializeRasterViewer } from "../../src/raster/raster-viewer.js";
 import {
     MOUNTED_GEOTIFF_ITEM,
     RASTER_STATISTICS,
+    TEMPORARY_AOI_ID,
+    TEMPORARY_AOI_RASTER_STATISTICS,
 } from "../../test-support/raster/fixtures.js";
 
 /** Minimal add/remove event source with inspectable listener ownership. */
@@ -253,6 +255,12 @@ function createFakeControlsView() {
         },
         setClearSampleWindowEnabled(isEnabled) {
             this.clearSampleWindowEnabled = isEnabled;
+        },
+        setTemporaryAoiAvailability(temporaryAoi) {
+            this.availableTemporaryAoi = temporaryAoi;
+        },
+        setSamplingAreaMode(mode) {
+            this.samplingAreaMode = mode;
         },
         setControlsVisible(isVisible) {
             this.controlsVisible = isVisible;
@@ -1372,4 +1380,99 @@ test("a failed publication preserves existing layers and can be retried", async 
         2
     );
     viewer.destroy();
+});
+
+test("ready AOIs auto-select, replace stale work, and remain independent of windows", async () => {
+    const leafletMap = createFakeMap();
+    const { leaflet } = createFakeLeaflet();
+    const controlsView = createFakeControlsView();
+    const aoiRequests = [];
+    const replacementId = "R".repeat(32);
+    const viewer = initializeRasterViewer(
+        {
+            wmsUrl: "/geoserver/eolab/wms",
+            leafletMap,
+            leaflet,
+            onTileError() {},
+        },
+        {
+            controlsView,
+            layerStackView: createFakeLayerStackView(),
+            publishRaster: async () => ({
+                layerName: "eolab:test-raster",
+                bbox: [-180, -90, 180, 90],
+            }),
+            loadStatistics: async (
+                _item,
+                signal,
+                selectedBounds,
+                temporaryAoiId
+            ) => {
+                if (temporaryAoiId === null) {
+                    return createLayerStatistics(
+                        MOUNTED_GEOTIFF_ITEM,
+                        selectedBounds
+                    );
+                }
+                const deferred = createDeferred();
+                aoiRequests.push({ deferred, signal, temporaryAoiId });
+                return deferred.promise;
+            },
+            samplePixel: async () => ({ inBounds: true, value: 1 }),
+            viewport: { innerWidth: 1280, innerHeight: 720 },
+        }
+    );
+    await viewer.show(MOUNTED_GEOTIFF_ITEM);
+    await flushPromises();
+    const firstAoi = Object.freeze({
+        id: TEMPORARY_AOI_ID,
+        filename: "area.gpkg",
+        selectedDataset: "boundary",
+        expiresAt: "2030-01-01T01:00:00Z",
+    });
+    const replacementAoi = Object.freeze({
+        ...firstAoi,
+        id: replacementId,
+        filename: "replacement.zip",
+        selectedDataset: "inside/boundary.shp",
+    });
+
+    viewer.setTemporaryAoi(firstAoi);
+
+    assert.equal(aoiRequests.length, 1);
+    assert.equal(aoiRequests[0].temporaryAoiId, TEMPORARY_AOI_ID);
+    assert.equal(controlsView.samplingAreaMode, "temporaryAoi");
+    assert.equal(controlsView.availableTemporaryAoi.id, TEMPORARY_AOI_ID);
+    const requestCountBeforeMapClick = aoiRequests.length;
+    leafletMap.emit("click", { latlng: { lng: 0, lat: 0 } });
+    assert.equal(aoiRequests.length, requestCountBeforeMapClick);
+
+    viewer.setTemporaryAoi(replacementAoi);
+
+    assert.equal(aoiRequests.length, 2);
+    assert.equal(aoiRequests[0].signal.aborted, true);
+    assert.equal(aoiRequests[1].temporaryAoiId, replacementId);
+    aoiRequests[0].deferred.resolve(TEMPORARY_AOI_RASTER_STATISTICS);
+    aoiRequests[1].deferred.resolve({
+        ...TEMPORARY_AOI_RASTER_STATISTICS,
+        temporaryAoiId: replacementId,
+    });
+    await flushPromises();
+
+    assert.equal(controlsView.displayedStatistics.temporaryAoiId, replacementId);
+    assert.match(controlsView.statisticsStatus, /replacement\.zip/);
+    assert.match(controlsView.statisticsStatus, /inside\/boundary\.shp/);
+
+    controlsView.handlers.onClearSampleWindow();
+    assert.equal(controlsView.samplingAreaMode, "wholeRaster");
+    controlsView.handlers.onUseTemporaryAoi();
+    assert.equal(aoiRequests.length, 3);
+    assert.equal(aoiRequests[2].temporaryAoiId, replacementId);
+
+    viewer.setTemporaryAoi(null);
+
+    assert.equal(aoiRequests[2].signal.aborted, true);
+    assert.equal(controlsView.samplingAreaMode, "wholeRaster");
+    assert.equal(controlsView.availableTemporaryAoi, null);
+    assert.equal(controlsView.displayedStatistics.scope, "wholeRaster");
 });
