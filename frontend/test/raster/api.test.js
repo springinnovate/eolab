@@ -13,6 +13,8 @@ import {
   RASTER_STATISTICS,
   SELECTED_BOUNDS,
   SELECTED_RASTER_STATISTICS,
+  TEMPORARY_AOI_ID,
+  TEMPORARY_AOI_RASTER_STATISTICS,
 } from "../../test-support/raster/fixtures.js";
 
 test("assessCatalogRaster sends only the STAC Item identity", async () => {
@@ -209,6 +211,43 @@ test("loadCatalogRasterStatistics adds only validated selected bounds", async ()
       }),
     ),
     /invalid selected-area response bounds/,
+  );
+});
+
+test("loadCatalogRasterStatistics sends only one opaque temporary AOI identity", async () => {
+  const requests = [];
+  const abortController = new AbortController();
+
+  const statistics = await loadCatalogRasterStatistics(
+    MOUNTED_GEOTIFF_ITEM,
+    abortController.signal,
+    null,
+    TEMPORARY_AOI_ID,
+    async (url, options) => {
+      requests.push({ url, options });
+      return new Response(JSON.stringify(TEMPORARY_AOI_RASTER_STATISTICS), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    },
+  );
+
+  assert.equal(statistics.temporaryAoiId, TEMPORARY_AOI_ID);
+  assert.deepEqual(JSON.parse(requests[0].options.body), {
+    collectionId: "eolab-mounted-geotiffs",
+    itemId: "geotiff-0123456789abcdef01234567",
+    temporaryAoiId: TEMPORARY_AOI_ID,
+  });
+  assert.equal("geometry" in JSON.parse(requests[0].options.body), false);
+  await assert.rejects(
+    loadCatalogRasterStatistics(
+      MOUNTED_GEOTIFF_ITEM,
+      abortController.signal,
+      SELECTED_BOUNDS,
+      TEMPORARY_AOI_ID,
+      async () => new Response(),
+    ),
+    /mutually exclusive/,
   );
 });
 

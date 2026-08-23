@@ -31,6 +31,12 @@ from eolab_app.temporary_aoi.validation import (
     MAX_UPLOAD_BYTES,
     PROCESSING_TIME_SECONDS,
 )
+from eolab_app.sampling_area import (
+    ResolvedTemporaryAoi,
+    SamplingAreaUnavailableError,
+    TemporaryAoiLifecycleIdentity,
+    polygonal_geometries_from_feature_collection,
+)
 
 
 TEMPORARY_AOI_TTL = timedelta(minutes=30)
@@ -340,6 +346,44 @@ class TemporaryAoiService:
             self._require_record(temporary_id)
             await self._discard_record(temporary_id)
 
+    async def resolve_for_sampling(
+        self,
+        temporary_aoi_id: str,
+    ) -> ResolvedTemporaryAoi:
+        """Resolve one ready AOI through the analysis-only read boundary.
+
+        Args:
+            temporary_aoi_id: Untrusted opaque browser reference.
+
+        Returns:
+            Immutable bounded WGS 84 polygonal geometry and lifecycle identity.
+
+        Raises:
+            SamplingAreaUnavailableError: If the AOI is absent, expired,
+                pending dataset selection, or contains no polygonal area.
+        """
+        await self.expire()
+        if not self._is_identifier(temporary_aoi_id):
+            raise SamplingAreaUnavailableError(
+                "The uploaded AOI was removed or expired. Upload or select it again."
+            )
+        async with self._lock:
+            record = self._records.get(temporary_aoi_id)
+            if record is None:
+                raise SamplingAreaUnavailableError(
+                    "The uploaded AOI was removed or expired. Upload or select it again."
+                )
+            resolved = record.ready_sampling_area
+            if resolved is None:
+                raise SamplingAreaUnavailableError(
+                    "The uploaded AOI is not ready. Finish selecting its spatial dataset."
+                )
+            if not resolved.geometries:
+                raise SamplingAreaUnavailableError(
+                    "The uploaded AOI has no polygonal area. Upload a Polygon or MultiPolygon dataset."
+                )
+            return resolved
+
     async def expire(self) -> int:
         """Remove all records at or beyond their fixed expiration timestamp.
 
@@ -389,6 +433,14 @@ class TemporaryAoiService:
             "geometry",
             (choice, self._processing_seconds),
             self._processing_seconds,
+        )
+        record.ready_sampling_area = ResolvedTemporaryAoi(
+            identity=TemporaryAoiLifecycleIdentity(
+                reference=record.id,
+                expires_at=record.expires_at,
+            ),
+            bounds=bbox,
+            geometries=polygonal_geometries_from_feature_collection(geometry),
         )
         return TemporaryAoiReadyResponse(
             id=record.id,

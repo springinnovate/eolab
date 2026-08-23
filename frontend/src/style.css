@@ -424,6 +424,31 @@ h5 {
   font-weight: 650;
 }
 
+.temporary-aoi-upload-progress {
+  display: grid;
+  gap: 5px;
+  margin-top: 10px;
+}
+
+.temporary-aoi-upload-progress label {
+  color: var(--text-2);
+  font-size: 0.7rem;
+  font-weight: 650;
+}
+
+.temporary-aoi-upload-progress progress {
+  width: 100%;
+  height: 9px;
+  accent-color: #6d1b7b;
+}
+
+.temporary-aoi-upload-progress p {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 0.68rem;
+  line-height: 1.35;
+}
+
 .temporary-aoi-selection {
   display: grid;
   gap: 8px;
@@ -527,7 +552,8 @@ h5 {
 
 .temporary-aoi-selection[hidden],
 .temporary-aoi-details[hidden],
-.temporary-aoi-actions[hidden] {
+.temporary-aoi-actions[hidden],
+.temporary-aoi-upload-progress[hidden] {
   display: none;
 }
 

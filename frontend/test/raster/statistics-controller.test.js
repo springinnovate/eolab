@@ -7,6 +7,8 @@ import {
   RASTER_STATISTICS,
   SELECTED_BOUNDS,
   SELECTED_RASTER_STATISTICS,
+  TEMPORARY_AOI_ID,
+  TEMPORARY_AOI_RASTER_STATISTICS,
 } from "../../test-support/raster/fixtures.js";
 
 test("RasterStatisticsController aborts and ignores stale Item results", async () => {
@@ -118,4 +120,55 @@ test("RasterStatisticsController retains its Item for a recoverable retry", asyn
   assert.equal(await controller.retry(), RASTER_STATISTICS);
   assert.deepEqual(requestedBounds, [SELECTED_BOUNDS, SELECTED_BOUNDS]);
   assert.deepEqual(results, [RASTER_STATISTICS]);
+});
+
+test("RasterStatisticsController aborts and ignores a replaced AOI lifecycle", async () => {
+  const replacementId = "R".repeat(32);
+  const requests = [];
+  const results = [];
+  const controller = new RasterStatisticsController(
+    (_item, signal, selectedBounds, temporaryAoiId) =>
+      new Promise((resolve) => {
+        requests.push({ resolve, selectedBounds, signal, temporaryAoiId });
+      }),
+    () => {},
+    (statistics) => results.push(statistics),
+    () => assert.fail("Unexpected statistics error"),
+  );
+
+  const firstRequest = controller.activate(
+    MOUNTED_GEOTIFF_ITEM,
+    undefined,
+    null,
+    TEMPORARY_AOI_ID,
+  );
+  const replacementRequest = controller.activate(
+    MOUNTED_GEOTIFF_ITEM,
+    undefined,
+    null,
+    replacementId,
+  );
+
+  assert.equal(requests[0].signal.aborted, true);
+  assert.deepEqual(
+    requests.map(({ selectedBounds, temporaryAoiId }) => ({
+      selectedBounds,
+      temporaryAoiId,
+    })),
+    [
+      { selectedBounds: null, temporaryAoiId: TEMPORARY_AOI_ID },
+      { selectedBounds: null, temporaryAoiId: replacementId },
+    ],
+  );
+  requests[0].resolve(TEMPORARY_AOI_RASTER_STATISTICS);
+  requests[1].resolve({
+    ...TEMPORARY_AOI_RASTER_STATISTICS,
+    temporaryAoiId: replacementId,
+  });
+  await Promise.all([firstRequest, replacementRequest]);
+
+  assert.deepEqual(results, [{
+    ...TEMPORARY_AOI_RASTER_STATISTICS,
+    temporaryAoiId: replacementId,
+  }]);
 });
