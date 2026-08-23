@@ -20,8 +20,20 @@ RasterStatisticsCacheKey = tuple[
     str,
     SourceSignature,
     str,
-    CanonicalWgs84Bounds | None,
+    tuple[object, ...],
 ]
+
+
+def _exclude_none_from_response(value: object) -> bool:
+    """Return whether an optional response field should be omitted.
+
+    Args:
+        value: Candidate serialized field value.
+
+    Returns:
+        True only when the value is absent.
+    """
+    return value is None
 
 
 @dataclass(frozen=True)
@@ -43,11 +55,11 @@ class SelectedRasterArea:
 
     Attributes:
         source_window: Integer source-pixel window containing the selection.
-        projected_geometry: Selection polygon in the source raster CRS.
+        projected_geometries: Polygonal selections in the source raster CRS.
     """
 
     source_window: Window
-    projected_geometry: dict[str, object]
+    projected_geometries: tuple[dict[str, object], ...]
 
 
 class CatalogRasterRequest(BaseModel):
@@ -142,12 +154,38 @@ class Wgs84Bounds(BaseModel):
 
 
 class CatalogRasterStatisticsRequest(CatalogRasterRequest):
-    """Identify a published raster and an optional selected WGS 84 area."""
+    """Identify a published raster and exactly one optional sampling area."""
 
     selected_bounds: Wgs84Bounds | None = Field(
         default=None,
         alias="selectedBounds",
     )
+    temporary_aoi_id: str | None = Field(
+        default=None,
+        alias="temporaryAoiId",
+        min_length=32,
+        max_length=32,
+        pattern=r"^[A-Za-z0-9_-]{32}$",
+        strict=True,
+    )
+
+    @model_validator(mode="after")
+    def require_strict_sampling_area_union(
+        self,
+    ) -> "CatalogRasterStatisticsRequest":
+        """Reject requests containing both rectangular and AOI sampling.
+
+        Returns:
+            Validated request with whole-raster, bounds, or AOI sampling.
+
+        Raises:
+            ValueError: If selected bounds and an AOI reference coexist.
+        """
+        if self.selected_bounds is not None and self.temporary_aoi_id is not None:
+            raise ValueError(
+                "selectedBounds and temporaryAoiId are mutually exclusive"
+            )
+        return self
 
 
 class PublishedRaster(BaseModel):
@@ -212,8 +250,13 @@ class RasterStatistics(BaseModel):
     """Bounded raster sample used for display-range selection."""
 
     band: Literal[1] = 1
-    scope: Literal["wholeRaster", "selectedArea"]
+    scope: Literal["wholeRaster", "selectedArea", "temporaryAoi"]
     selected_bounds: Wgs84Bounds | None = Field(alias="selectedBounds")
+    temporary_aoi_id: str | None = Field(
+        default=None,
+        alias="temporaryAoiId",
+        exclude_if=_exclude_none_from_response,
+    )
     source_width: int = Field(alias="sourceWidth")
     source_height: int = Field(alias="sourceHeight")
     source_pixel_count: int = Field(alias="sourcePixelCount")
@@ -238,8 +281,12 @@ class RasterStatistics(BaseModel):
         Raises:
             ValueError: If selected bounds do not match the declared scope.
         """
-        if self.scope == "wholeRaster" and self.selected_bounds is not None:
-            raise ValueError("wholeRaster statistics cannot have selected bounds")
-        if self.scope == "selectedArea" and self.selected_bounds is None:
-            raise ValueError("selectedArea statistics require selected bounds")
+        has_bounds = self.selected_bounds is not None
+        has_temporary_aoi = self.temporary_aoi_id is not None
+        if self.scope == "wholeRaster" and (has_bounds or has_temporary_aoi):
+            raise ValueError("wholeRaster statistics cannot identify a selected area")
+        if self.scope == "selectedArea" and (not has_bounds or has_temporary_aoi):
+            raise ValueError("selectedArea statistics require only selected bounds")
+        if self.scope == "temporaryAoi" and (has_bounds or not has_temporary_aoi):
+            raise ValueError("temporaryAoi statistics require only an AOI identity")
         return self

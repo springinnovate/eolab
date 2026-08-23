@@ -176,6 +176,22 @@
                 Upload AOI
               </button>
             </form>
+            <div
+              class="temporary-aoi-upload-progress"
+              id="temporary-aoi-upload-progress-container"
+              hidden
+            >
+              <label for="temporary-aoi-upload-progress">
+                Approximate upload progress
+              </label>
+              <progress
+                id="temporary-aoi-upload-progress"
+                max="100"
+                value="0"
+                aria-describedby="temporary-aoi-upload-progress-detail temporary-aoi-status"
+              ></progress>
+              <p id="temporary-aoi-upload-progress-detail"></p>
+            </div>
             <form
               class="temporary-aoi-selection"
               id="temporary-aoi-selection-form"
@@ -515,6 +531,14 @@
                     <div class="raster-sample-window-actions">
                       <button
                         class="secondary-button"
+                        id="select-raster-sample-window"
+                        type="button"
+                        aria-pressed="false"
+                      >
+                        Select map window
+                      </button>
+                      <button
+                        class="secondary-button"
                         id="sample-raster-map-center"
                         type="button"
                       >
@@ -524,9 +548,19 @@
                         class="secondary-button"
                         id="clear-raster-sample-window"
                         type="button"
+                        aria-pressed="true"
                         disabled
                       >
                         Use whole raster
+                      </button>
+                      <button
+                        class="secondary-button"
+                        id="use-temporary-aoi-for-raster"
+                        type="button"
+                        aria-pressed="false"
+                        disabled
+                      >
+                        Use uploaded AOI
                       </button>
                     </div>
                     <p

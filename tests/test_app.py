@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import httpx2
+import fiona
 import numpy
 import pytest
 import rasterio
@@ -913,6 +914,7 @@ def test_raster_statistics_sample_a_published_projected_raster(
         None.
     """
     source_path = tmp_path / "projected.tif"
+    aoi_path = tmp_path / "sampling-area.gpkg"
     with rasterio.open(
         source_path,
         "w",
@@ -928,6 +930,27 @@ def test_raster_statistics_sample_a_published_projected_raster(
             numpy.array([[10, 20], [30, 40]], dtype="int16"),
             1,
         )
+    with fiona.open(
+        aoi_path,
+        mode="w",
+        driver="GPKG",
+        layer="left-half",
+        crs="EPSG:4326",
+        schema={"geometry": "Polygon", "properties": {}},
+    ) as dataset:
+        dataset.write({
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [[
+                    (-2, -2),
+                    (0, -2),
+                    (0, 2),
+                    (-2, 2),
+                    (-2, -2),
+                ]],
+            },
+            "properties": {},
+        })
     monkeypatch.setenv("SCAN_MOUNT_PATH", str(tmp_path))
     monkeypatch.setenv("SCAN_PATHS_WITHIN_MOUNT", '["."]')
     item = _mounted_geotiff_item(source_path.as_uri())
@@ -987,6 +1010,29 @@ def test_raster_statistics_sample_a_published_projected_raster(
                     "east": 11,
                     "north": 11,
                 },
+            },
+        )
+        with aoi_path.open("rb") as source:
+            uploaded_aoi = client.post(
+                "/api/temporary-aois",
+                files={"file": ("sampling-area.gpkg", source)},
+            )
+        temporary_aoi_id = uploaded_aoi.json()["id"]
+        aoi_response = client.post(
+            "/api/rendering/statistics",
+            json={
+                **request_identity,
+                "temporaryAoiId": temporary_aoi_id,
+            },
+        )
+        assert client.delete(
+            f"/api/temporary-aois/{temporary_aoi_id}"
+        ).status_code == 204
+        removed_aoi_response = client.post(
+            "/api/rendering/statistics",
+            json={
+                **request_identity,
+                "temporaryAoiId": temporary_aoi_id,
             },
         )
 
@@ -1049,6 +1095,18 @@ def test_raster_statistics_sample_a_published_projected_raster(
     }
     assert sum(selected_document["histogram"]["counts"]) == 2
 
+    assert aoi_response.status_code == 200
+    aoi_document = aoi_response.json()
+    assert aoi_document["scope"] == "temporaryAoi"
+    assert aoi_document["selectedBounds"] is None
+    assert aoi_document["temporaryAoiId"] == temporary_aoi_id
+    assert aoi_document["sampleMinimum"] == 10.0
+    assert aoi_document["sampleMaximum"] == 30.0
+    assert sum(aoi_document["histogram"]["counts"]) == 2
+
+    assert removed_aoi_response.status_code == 409
+    assert "removed or expired" in removed_aoi_response.json()["detail"]
+
     assert outside_response.status_code == 409
     assert outside_response.json() == {
         "detail": "The selected area does not overlap the raster"
@@ -1078,7 +1136,9 @@ def test_raster_statistics_disconnect_cancels_the_service_waiter(
     statistics_service = BlockingStatisticsService()
     monkeypatch.setattr(
         "eolab_app.main.RasterStatisticsService",
-        lambda _registry, _read_concurrency, _cache_entries: statistics_service,
+        lambda _registry, _read_concurrency, _cache_entries, **_kwargs: (
+            statistics_service
+        ),
     )
     application = create_app(version_file_path)
     request_body = json.dumps(

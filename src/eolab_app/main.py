@@ -121,6 +121,18 @@ def create_app(
         raster_reader_assessor,
     )
     published_rasters = PublishedRasterRegistry()
+    temporary_aoi_service = TemporaryAoiService(
+        ttl=timedelta(
+            seconds=app_global_configuration.temporary_aoi_ttl_seconds
+        ),
+        maximum_upload_bytes=(
+            app_global_configuration.temporary_aoi_max_upload_bytes
+        ),
+        forbidden_roots=(
+            Path.cwd(),
+            app_global_configuration.scan_mount_path,
+        )
+    )
     raster_feature = create_raster_feature(
         RasterAssessmentService(
             app_global_configuration.scan_mount_path,
@@ -145,6 +157,7 @@ def create_app(
             published_rasters,
             app_global_configuration.raster_statistics_read_concurrency,
             app_global_configuration.raster_statistics_cache_entries,
+            temporary_aoi_reader=temporary_aoi_service,
         ),
         published_rasters,
     )
@@ -157,19 +170,6 @@ def create_app(
         app_global_configuration.geoserver_internal_url,
         get_map_request_tracker,
     )
-    temporary_aoi_service = TemporaryAoiService(
-        ttl=timedelta(
-            seconds=app_global_configuration.temporary_aoi_ttl_seconds
-        ),
-        maximum_upload_bytes=(
-            app_global_configuration.temporary_aoi_max_upload_bytes
-        ),
-        forbidden_roots=(
-            Path.cwd(),
-            app_global_configuration.scan_mount_path,
-        )
-    )
-
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         """Own and close all shared upstream connection pools.
