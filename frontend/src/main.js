@@ -656,8 +656,8 @@ async function initializeCatalog(
         reassessDetailRaster.disabled = pendingAction !== null;
         showRasterDetailPreview.textContent = pendingAction?.buttonText ??
             (hasDetailPreview
-                ? "Update sampled raster"
-                : "Show sampled raster");
+                ? "Update adaptive raster"
+                : "Show adaptive raster");
         removeRasterDetailPreview.hidden = !hasDetailPreview;
         removeRasterDetailPreview.disabled = pendingAction !== null;
         renderRasterDetailPreviewResolution(detailPreviewState);
@@ -677,7 +677,8 @@ async function initializeCatalog(
         if (supportsDetailPreview) {
             defaultStatus =
                 "Normal full visualization is unavailable. Choose one " +
-                "bounded sampling policy for an approximate raster proxy.";
+                "bounded sampling policy for broad views; close views " +
+                "automatically use exact bounded source detail.";
         }
         if (hasDetailPreview) {
             const base = detailPreviewState.basePreview;
@@ -690,14 +691,18 @@ async function initializeCatalog(
                     "is the raster extent, not a valid-data footprint.";
             } else {
                 defaultStatus =
-                    "Approximate sampled raster — not full resolution. The " +
-                    "orange dashed outline is the raster extent; zooming one " +
-                    "level closer requests one bounded current-view grid.";
+                    "Adaptive detail-only raster — not a whole-raster " +
+                    "rendering. The orange dashed outline is the raster " +
+                    "extent; zooming requests a bounded current-view layer.";
                 if (detailPreviewState.detailStatus === "loading") {
                     defaultStatus += " Loading finer current-view detail…";
                 } else if (detailPreviewState.detailStatus === "ready") {
-                    defaultStatus +=
-                        " The teal outline marks the current-view detail overlay.";
+                    defaultStatus += detailPreviewState.detailPreview.rendering ===
+                        "exactSourceWindow"
+                        ? " The teal outline contains complete bounded source " +
+                            "detail at this map scale."
+                        : " The teal outline contains the selected current-view " +
+                            "sample grid; zoom closer for exact bounded detail.";
                 } else if (detailPreviewState.detailStatus === "error") {
                     defaultStatus += " Current-view refinement failed: " +
                         detailPreviewState.detailError +

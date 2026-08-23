@@ -8,23 +8,24 @@ const STYLE = readFileSync(
   "utf8",
 );
 
-test("sampled raster visualization explains its three bounded policies", () => {
-  assert.match(MARKUP, /<strong>Bounded sampled raster<\/strong>/);
-  assert.match(MARKUP, /does not read or render every source pixel/);
-  assert.match(MARKUP, /same selected density/);
+test("adaptive raster detail explains sampling and exact-view handoff", () => {
+  assert.match(MARKUP, /<strong>Adaptive bounded raster detail<\/strong>/);
+  assert.match(MARKUP, /Broad views use the selected approximate sample grid/);
+  assert.match(MARKUP, /complete bounded source-pixel detail/);
   assert.match(MARKUP, /value="centerSample">Center sample in each proxy cell/);
   assert.match(MARKUP, /value="representativeSample">Representative samples in each proxy cell/);
   assert.match(MARKUP, /value="representativePatch">Representative, bounded detail patch/);
   assert.match(MARKUP, /id="raster-detail-preview-density"/);
-  assert.match(MARKUP, /value="coarse">Coarse — exact 31 × 31 samples/);
-  assert.match(MARKUP, /value="medium">Medium — exact 63 × 63 samples/);
-  assert.match(MARKUP, /value="fine">Fine — exact 127 × 127 samples/);
-  assert.match(MARKUP, /reports an error instead of substituting a coarser grid/);
+  assert.match(MARKUP, /value="coarse">Coarse — 31 samples on the longest edge/);
+  assert.match(MARKUP, /value="medium">Medium — 63 samples on the longest edge/);
+  assert.match(MARKUP, /value="fine">Fine — 127 samples on the longest edge/);
+  assert.match(MARKUP, /shorter edge preserves the displayed rectangle's aspect ratio/);
+  assert.match(MARKUP, /active map area, source window, native blocks, and decoded work/);
   assert.match(MARKUP, /id="raster-detail-preview-resolution"/);
   assert.match(MARKUP, /id="show-raster-detail-preview"[^>]*type="button"/s);
-  assert.match(MARKUP, /Show sampled raster/);
+  assert.match(MARKUP, /Show adaptive raster/);
   assert.match(MARKUP, /id="remove-raster-detail-preview"[^>]*type="button"/s);
-  assert.match(MARKUP, /Remove sampled raster/);
+  assert.match(MARKUP, /Remove adaptive raster/);
   assert.match(
     STYLE,
     /\.raster-sampled-proxy\s*\{[^}]*image-rendering:\s*pixelated;/s,

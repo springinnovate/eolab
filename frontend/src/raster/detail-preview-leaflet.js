@@ -1,4 +1,4 @@
-/** Leaflet construction for bounded, sampled raster preview images. */
+/** Leaflet construction for adaptive bounded raster-detail images. */
 
 import {
     buildRasterDetailPreviewStyle,
@@ -13,7 +13,7 @@ const RASTER_DETAIL_PREVIEW_IMAGE_Z_INDEX = "420";
 const RASTER_DETAIL_PREVIEW_BOUNDARY_Z_INDEX = "440";
 
 /**
- * Ensure sampled images and their outlines use ordered noninteractive panes.
+ * Ensure bounded detail images and outlines use ordered noninteractive panes.
  *
  * The boundary pane sits above the opaque numeric images but below the
  * temporary-AOI pane, preserving both raster labels and AOI visibility.
@@ -73,7 +73,7 @@ function toLeafletBounds(bounds) {
 }
 
 /**
- * Create one grouped map layer and appropriate focus for a sampled preview.
+ * Create one grouped map layer and focus for adaptive bounded raster detail.
  *
  * The dashed outline is the cataloged raster extent, not a valid-data
  * footprint. The backend has already warped the bounded numeric image into a

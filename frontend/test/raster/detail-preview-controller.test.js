@@ -5,6 +5,7 @@ import { initializeRasterDetailPreview } from "../../src/raster/detail-preview-c
 import {
   CENTER_SAMPLE_DETAIL_PREVIEW,
   CURRENT_VIEW_DETAIL_PREVIEW,
+  EXACT_CURRENT_VIEW_DETAIL_PREVIEW,
   MOUNTED_GEOTIFF_ITEM,
   NODATA_DETAIL_PREVIEW,
   PATCH_DETAIL_PREVIEW,
@@ -497,7 +498,7 @@ test("removing a sampled raster prevents a late request from restoring it", asyn
   assert.equal(controller.contains(MOUNTED_GEOTIFF_ITEM), false);
 });
 
-test("zoom and pan replace one bounded current-view grid without stale flashes", async () => {
+test("zoom and pan replace sampled or exact current detail without stale flashes", async () => {
   const requests = [];
   const events = [];
   const timers = new Map();
@@ -569,7 +570,7 @@ test("zoom and pan replace one bounded current-view grid without stale flashes",
   assert.equal(requests.length, 2);
 
   const currentResponse = {
-    ...CURRENT_VIEW_DETAIL_PREVIEW,
+    ...EXACT_CURRENT_VIEW_DETAIL_PREVIEW,
     imageBounds: [-122.4, 48.6, -121.4, 49.6],
   };
   requests[1].work.resolve(currentResponse);
@@ -579,6 +580,7 @@ test("zoom and pan replace one bounded current-view grid without stale flashes",
 
   const state = controller.getState(MOUNTED_GEOTIFF_ITEM);
   assert.equal(state.detailPreview, currentResponse);
+  assert.equal(state.detailPreview.rendering, "exactSourceWindow");
   assert.equal(state.detailStatus, "ready");
   assert.equal(events.length, 2);
 
