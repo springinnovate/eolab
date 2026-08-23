@@ -42,7 +42,10 @@ import {
 } from "./catalog-map-actions.js";
 import { assessCatalogRaster } from "./raster/api.js";
 import { initializeRasterDetailPreview } from "./raster/detail-preview-controller.js";
-import { formatRasterDetailPreviewResolution } from "./raster/detail-preview-status.js";
+import {
+    formatRasterDetailMapNotice,
+    formatRasterDetailPreviewResolution,
+} from "./raster/detail-preview-status.js";
 import { initializeRasterViewer } from "./raster/raster-viewer.js";
 import { initializeTemporaryAoi } from "./temporary-aoi/temporary-aoi.js";
 import {
@@ -491,6 +494,9 @@ async function initializeCatalog(
     const rasterDetailPreviewResolution = document.querySelector(
         "#raster-detail-preview-resolution"
     );
+    const rasterDetailMapNotice = document.querySelector(
+        "#raster-detail-map-notice"
+    );
     const showRasterDetailPreview = document.querySelector(
         "#show-raster-detail-preview"
     );
@@ -559,6 +565,9 @@ async function initializeCatalog(
     ) {
         rasterDetailPreviewResolution.textContent =
             formatRasterDetailPreviewResolution(previewState, baseStatus);
+        const mapNotice = formatRasterDetailMapNotice(previewState);
+        rasterDetailMapNotice.textContent = mapNotice;
+        rasterDetailMapNotice.hidden = mapNotice === "";
     }
 
     /**

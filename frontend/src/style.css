@@ -72,6 +72,40 @@ button:disabled {
   right: calc(var(--catalog-workspace-width) + 40px);
 }
 
+.raster-detail-map-notice {
+  position: absolute;
+  z-index: 1000;
+  top: 20px;
+  right: 438px;
+  left: 70px;
+  width: fit-content;
+  max-width: min(720px, calc(100vw - 528px));
+  margin: 0 auto;
+  pointer-events: none;
+  border: 2px solid #9a4d00;
+  border-radius: var(--radius);
+  background: rgb(255 247 224 / 96%);
+  padding: 10px 13px;
+  color: #582a00;
+  box-shadow: 0 2px 10px rgb(0 0 0 / 24%);
+  font-size: 0.8rem;
+  font-weight: 650;
+  line-height: 1.45;
+  text-align: center;
+}
+
+.raster-detail-map-notice[hidden] {
+  display: none;
+}
+
+#app.is-catalog-workspace .raster-detail-map-notice {
+  right: calc(var(--catalog-workspace-width) + 60px);
+  max-width: min(
+    720px,
+    calc(100vw - var(--catalog-workspace-width) - 150px)
+  );
+}
+
 .leaflet-container {
   font-family: inherit;
 }
@@ -1814,9 +1848,20 @@ h5 {
   #app.is-catalog-workspace .map-position {
     display: none;
   }
+
+  #app.is-catalog-workspace .raster-detail-map-notice {
+    display: none;
+  }
 }
 
 @media (max-width: 700px) {
+  .raster-detail-map-notice {
+    top: 70px;
+    right: 20px;
+    left: 20px;
+    max-width: none;
+  }
+
   .control-panel {
     top: auto;
     right: 10px;

@@ -22,6 +22,10 @@ test("adaptive raster detail explains sampling and exact-view handoff", () => {
   assert.match(MARKUP, /shorter edge preserves the displayed rectangle's aspect ratio/);
   assert.match(MARKUP, /active map area, source window, native blocks, and decoded work/);
   assert.match(MARKUP, /id="raster-detail-preview-resolution"/);
+  assert.match(
+    MARKUP,
+    /class="raster-detail-map-notice"[^>]*id="raster-detail-map-notice"[^>]*role="status"[^>]*aria-live="polite"[^>]*hidden/s,
+  );
   assert.match(MARKUP, /id="show-raster-detail-preview"[^>]*type="button"/s);
   assert.match(MARKUP, /Show adaptive raster/);
   assert.match(MARKUP, /id="remove-raster-detail-preview"[^>]*type="button"/s);
@@ -29,5 +33,9 @@ test("adaptive raster detail explains sampling and exact-view handoff", () => {
   assert.match(
     STYLE,
     /\.raster-sampled-proxy\s*\{[^}]*image-rendering:\s*pixelated;/s,
+  );
+  assert.match(
+    STYLE,
+    /\.raster-detail-map-notice\s*\{[^}]*z-index:\s*1000;[^}]*pointer-events:\s*none;[^}]*border:\s*2px solid/s,
   );
 });

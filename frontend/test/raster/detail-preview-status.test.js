@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { formatRasterDetailPreviewResolution } from "../../src/raster/detail-preview-status.js";
+import {
+  formatRasterDetailMapNotice,
+  formatRasterDetailPreviewResolution,
+} from "../../src/raster/detail-preview-status.js";
 import {
   CENTER_SAMPLE_DETAIL_PREVIEW,
   CURRENT_VIEW_DETAIL_PREVIEW,
@@ -69,5 +72,30 @@ test("detail preview resolution reports pending and retained update states", () 
       detailStatus: "error",
     }),
     /Active view: sampled proxy 31 × 31 center samples; .+ \(retained; update failed\)$/,
+  );
+});
+
+test("map notice explains overview limits and the active representation", () => {
+  assert.equal(formatRasterDetailMapNotice(null), "");
+  assert.match(
+    formatRasterDetailMapNotice({
+      basePreview: CENTER_SAMPLE_DETAIL_PREVIEW,
+      detailPreview: CURRENT_VIEW_DETAIL_PREVIEW,
+    }),
+    /DETAIL-ONLY RASTER.*does not have a usable overview pyramid.*sampled current view is not the raster's native resolution.*Current view sampling grid: 31 × 31 proxy cells \(center-sampled\)/,
+  );
+  assert.match(
+    formatRasterDetailMapNotice({
+      basePreview: CENTER_SAMPLE_DETAIL_PREVIEW,
+      detailPreview: EXACT_CURRENT_VIEW_DETAIL_PREVIEW,
+    }),
+    /current view is exact bounded source detail \(4 × 3 source pixels\); broader areas remain represented by sampled detail/,
+  );
+  assert.match(
+    formatRasterDetailMapNotice({
+      basePreview: PATCH_DETAIL_PREVIEW,
+      detailPreview: null,
+    }),
+    /representative bounded 2 × 2 source patch; it is not a whole-raster rendering/,
   );
 });

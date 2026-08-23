@@ -48,6 +48,12 @@ backend and browser validators allow only `1e-9` degree of projection
 roundoff. Raster/detail outlines use a noninteractive pane above the opaque
 sampled images, while the temporary-AOI pane remains above both.
 
+While the mode is active, a prominent noninteractive notice is displayed over
+the map. It explains that the raster cannot be shown safely at full extent
+because it lacks a usable overview pyramid, distinguishes sampled proxies from
+exact bounded source detail, and reports the dimensions of the representation
+currently laid over the map. The notice is removed with the adaptive raster.
+
 | Choice | Meaning |
 | --- | --- |
 | Center sample in each proxy cell | Each map-aligned grid cell displays its center source pixel. A nodata center remains transparent; it is never converted to zero. |
@@ -137,13 +143,21 @@ appearance controls available.
 
 This selected-window endpoint does not accept a missing window, a temporary
 AOI, a filesystem path, source dimensions, a source window, or a caller-owned
-sampling policy. The published-raster pixel probe is also disabled because a
-sampled raster was never admitted to that authorization registry. Changing the
-clicked window aborts prior browser work, and the shared statistics controller
-prevents a late response from replacing the current selection even if
-cancellation loses a race. The underlying preview cache identity already
-includes source signature, center-sample mode, fine density, exact window, and
-policy/resource-bound versions.
+sampling policy. Changing the clicked window aborts prior browser work, and the
+shared statistics controller prevents a late response from replacing the
+current selection even if cancellation loses a race. The underlying preview
+cache identity already includes source signature, center-sample mode, fine
+density, exact window, and policy/resource-bound versions.
+
+The pointer pixel probe remains available in this mode, but it uses a distinct
+`/detail-pixels` contract rather than the published-raster endpoint. The
+browser supplies only Collection and Item IDs plus one WGS 84 coordinate. The
+server repeats the adaptive-preview authorization and source-signature checks,
+opens the signed GeoTIFF once, and reads exactly the one native band-one block
+containing that source cell. Embedded nodata is returned as nodata, never zero.
+The existing 100 ms throttle, cancellation, and request-sequence rules prevent
+superseded hover responses from updating the tooltip. This does not publish the
+raster or authorize WMS access.
 
 ## Source-read proofs and output bounds
 
@@ -173,6 +187,11 @@ The sampled-proxy fixed bounds are:
   blocks at nine bytes per source value while still rejecting larger-block or
   multi-probe work that exceeds the fixed total. It bounds total decode work;
   the blocks are streamed and are not retained together.
+
+Each independent pointer probe is bounded to one source open and one complete
+native band-one block read. The overview-only authorization requires the
+catalog assessment to have already proven that native block structure safe;
+the source signature is rechecked before and after the read.
 
 The representative patch retains its smaller 64 MiB cumulative decoded-work
 ceiling because it reconstructs full candidate windows. Patch output remains at

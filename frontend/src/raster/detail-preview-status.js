@@ -104,3 +104,40 @@ export function formatRasterDetailPreviewResolution(
     }
     return `${base}; Active view: ${detail}`;
 }
+
+/**
+ * Format the prominent map disclosure for one adaptive detail-only raster.
+ *
+ * @param {Object|null} previewState Current adaptive-raster session state.
+ * @return {string} Empty text when inactive, otherwise an explicit explanation
+ * of the full-extent limitation and currently displayed resolution.
+ */
+export function formatRasterDetailMapNotice(previewState) {
+    if (previewState === null) {
+        return "";
+    }
+    const preview = previewState.detailPreview ?? previewState.basePreview;
+    const limitation = "DETAIL-ONLY RASTER — EOLab cannot safely display " +
+        "this raster at full extent because the source does not have a " +
+        "usable overview pyramid.";
+    if (preview.rendering === "exactSourceWindow") {
+        return `${limitation} This current view is exact bounded source ` +
+            `detail (${preview.imageWidth} × ${preview.imageHeight} source ` +
+            "pixels); broader areas remain represented by sampled detail.";
+    }
+    if (preview.rendering === "representativePatch") {
+        return `${limitation} Showing one representative bounded ` +
+            `${preview.imageWidth} × ${preview.imageHeight} source patch; ` +
+            "it is not a whole-raster rendering.";
+    }
+    const method = preview.mode === "centerSample"
+        ? "center-sampled"
+        : "representative-sampled";
+    const scope = preview.scope === "currentView"
+        ? "Current view"
+        : "Base display";
+    return `${limitation} This sampled ${scope.toLowerCase()} is not the ` +
+        `raster's native resolution. ${scope} sampling grid: ` +
+        `${preview.imageWidth} × ${preview.imageHeight} proxy cells ` +
+        `(${method}).`;
+}
