@@ -28,6 +28,10 @@ class _ConflictService:
         """Fail analysis with a browser-safe conflict."""
         raise RasterConflictError("controlled raster conflict")
 
+    async def get_pixel(self, _: object) -> None:
+        """Fail detail-pixel analysis with a browser-safe conflict."""
+        raise RasterConflictError("controlled raster conflict")
+
 
 class _PublicationFailureService:
     """Raise one controlled categorized publication failure."""
@@ -92,6 +96,20 @@ def test_raster_routes_translate_application_errors_at_http_boundary() -> None:
     )
     assert detail_response.status_code == 409
     assert detail_response.json() == {"detail": "controlled raster conflict"}
+
+    detail_pixel_response = TestClient(application).post(
+        "/api/rendering/detail-pixels",
+        json={
+            "collectionId": "eolab-mounted-geotiffs",
+            "itemId": "geotiff-0123456789abcdef01234567",
+            "longitude": -122.5,
+            "latitude": 37.5,
+        },
+    )
+    assert detail_pixel_response.status_code == 409
+    assert detail_pixel_response.json() == {
+        "detail": "controlled raster conflict"
+    }
 
     statistics_response = TestClient(application).post(
         "/api/rendering/detail-statistics",

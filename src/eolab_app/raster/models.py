@@ -273,7 +273,7 @@ class PublishedRaster(BaseModel):
 
 
 class CatalogPixelRequest(CatalogRasterRequest):
-    """Identify one published raster and a WGS 84 position to sample."""
+    """Identify one catalog raster and a WGS 84 position to sample."""
 
     longitude: float = Field(
         strict=True,
@@ -290,7 +290,7 @@ class CatalogPixelRequest(CatalogRasterRequest):
 
 
 class RasterPixel(BaseModel):
-    """One band-1 pixel sampled from a published catalog raster."""
+    """One band-1 pixel sampled from an authorized catalog raster."""
 
     longitude: float
     latitude: float

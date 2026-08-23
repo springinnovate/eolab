@@ -651,3 +651,50 @@ export async function sampleCatalogRasterPixel(
     }
     return response.json();
 }
+
+/**
+ * Read one band-1 source pixel from an authorized detail-only raster.
+ *
+ * This endpoint retains catalog/source-signature authorization without
+ * pretending that the overview-limited raster was published through WMS.
+ *
+ * @param {Object} item Selected overview-limited STAC Item.
+ * @param {{longitude:number,latitude:number}} position WGS 84 position.
+ * @param {AbortSignal} signal Cancellation signal for a superseded position.
+ * @param {typeof globalThis.fetch} [fetchImplementation=globalThis.fetch]
+ * Browser fetch implementation.
+ * @return {Promise<Object>} Honest source cell, bounds state, and value.
+ * @throws {Error} If authorization, source identity, or bounded reading fails.
+ */
+export async function sampleCatalogRasterDetailPixel(
+    item,
+    position,
+    signal,
+    fetchImplementation = globalThis.fetch
+) {
+    const response = await fetchImplementation.call(
+        globalThis,
+        "/api/rendering/detail-pixels",
+        {
+            method: "POST",
+            headers: {
+                Accept: "application/json",
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                collectionId: item.collection,
+                itemId: item.id,
+                longitude: position.longitude,
+                latitude: position.latitude
+            }),
+            signal
+        }
+    );
+    if (!response.ok) {
+        throw await renderingRequestError(
+            response,
+            "Detail-only pixel sample request"
+        );
+    }
+    return response.json();
+}

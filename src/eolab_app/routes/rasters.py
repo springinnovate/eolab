@@ -280,13 +280,37 @@ def create_raster_feature(
             request: Catalog identity and required WGS 84 selected bounds.
 
         Returns:
-            Fixed-bin histogram over a bounded 127 by 127 point grid.
+            Fixed-bin histogram over bounded Fine adaptive detail.
 
         Raises:
             HTTPException: If authorization or bounded sampling fails.
         """
         try:
             return await detail_statistics_service.get(request)
+        except RasterFeatureError as error:
+            raise raster_http_exception(error) from error
+
+    @router.post(
+        "/detail-pixels",
+        response_model=RasterPixel,
+    )
+    async def sample_raster_detail_pixel(
+        request: CatalogPixelRequest,
+    ) -> RasterPixel:
+        """Read one pixel from an authorized overview-limited raster.
+
+        Args:
+            request: Catalog Item identity and WGS 84 coordinate.
+
+        Returns:
+            Band-one source cell and value or out-of-bounds result.
+
+        Raises:
+            HTTPException: If detail-only authorization or bounded sampling
+                fails.
+        """
+        try:
+            return await detail_preview_service.get_pixel(request)
         except RasterFeatureError as error:
             raise raster_http_exception(error) from error
 

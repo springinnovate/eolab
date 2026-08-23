@@ -10,6 +10,7 @@ import {
     loadCatalogRasterDetailStatistics,
     loadCatalogRasterStatistics,
     publishCatalogRaster,
+    sampleCatalogRasterDetailPixel,
     sampleCatalogRasterPixel,
 } from "./api.js";
 import {
@@ -100,11 +101,14 @@ const RASTER_STYLE_DEBOUNCE_MILLISECONDS = 200;
  * or selected statistics.
  * @property {(item:Object,signal:AbortSignal,selectedBounds:Object)
  * => Promise<Object>}
- * [loadDetailStatistics=loadCatalogRasterDetailStatistics] Loads one exact
- * bounded sampled-grid histogram.
+ * [loadDetailStatistics=loadCatalogRasterDetailStatistics] Loads one bounded
+ * adaptive-detail histogram.
  * @property {(item: Object, point: Object, signal: AbortSignal)
  * => Promise<Object>} [samplePixel=sampleCatalogRasterPixel] Samples one raster
  * pixel.
+ * @property {(item:Object,point:Object,signal:AbortSignal)=>Promise<Object>}
+ * [sampleDetailPixel=sampleCatalogRasterDetailPixel] Samples one authorized
+ * detail-only source pixel.
  * @property {{setTimeout: (callback: () => void, delay: number) => *,
  * clearTimeout: (identifier: *) => void}} [clock=globalThis] Timer
  * implementation.
@@ -139,6 +143,7 @@ export function initializeRasterViewer(
         loadStatistics = loadCatalogRasterStatistics,
         loadDetailStatistics = loadCatalogRasterDetailStatistics,
         samplePixel = sampleCatalogRasterPixel,
+        sampleDetailPixel = sampleCatalogRasterDetailPixel,
         clock = globalThis,
         viewport = globalThis,
     } = {}
@@ -324,7 +329,9 @@ export function initializeRasterViewer(
     }
 
     const pixelProbeController = new RasterPixelProbeController(
-        samplePixel,
+        (item, point, signal) => isActiveSampledRaster()
+            ? sampleDetailPixel(item, point, signal)
+            : samplePixel(item, point, signal),
         renderRasterPixel,
         renderRasterPixelError
     );
@@ -605,8 +612,9 @@ export function initializeRasterViewer(
      * Activate shared appearance and click-histogram controls for one sampled
      * raster that is already visible through the detail-preview controller.
      *
-     * The session never publishes WMS, reads whole-raster statistics, enables
-     * the published-raster pixel endpoint, or accepts a temporary AOI.
+     * The session never publishes WMS, reads whole-raster statistics, or
+     * accepts a temporary AOI. Pixel hovering uses the separate catalog-
+     * authorized one-native-block detail endpoint.
      *
      * @param {Object} item Selected overview-limited Catalog raster.
      * @param {Object} style Initial min/median/max shared raster color style.
@@ -646,6 +654,7 @@ export function initializeRasterViewer(
             selectedRasterStatisticsError: null,
         };
         loadActiveLayerSession(sampledRasterSession);
+        pixelProbeController.activate(item);
         controlsView.setControlsVisible(true);
         controlsView.setActiveLayer(sampledRasterSession.label, true);
         controlsView.setStyle(rasterStyle, sampledRasterSession.paletteName);
@@ -1580,7 +1589,7 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function handleMapPointerMove(pointerEvent) {
-        if (isActiveLayerVisible() && !isActiveSampledRaster()) {
+        if (isActiveLayerVisible()) {
             pixelProbeClientPosition = {
                 x: pointerEvent.clientX,
                 y: pointerEvent.clientY,
@@ -1596,7 +1605,7 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function handleMapMouseMove(mapEvent) {
-        if (!isActiveLayerVisible() || isActiveSampledRaster()) {
+        if (!isActiveLayerVisible()) {
             return;
         }
         const point = {

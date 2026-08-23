@@ -439,6 +439,7 @@ test("sampled rasters reuse color controls and bounded click histograms", async 
     const styleChanges = [];
     const histogramRequests = [];
     const pixelRequests = [];
+    const detailPixelRequests = [];
     let wholeStatisticsRequests = 0;
     const initialStyle = {
         minimum: -12,
@@ -490,6 +491,10 @@ test("sampled rasters reuse color controls and bounded click histograms", async 
                 pixelRequests.push(request);
                 return { inBounds: true, value: 1 };
             },
+            sampleDetailPixel: async (...request) => {
+                detailPixelRequests.push(request);
+                return { inBounds: true, value: 1 };
+            },
             viewport: { innerWidth: 1280, innerHeight: 720 },
         }
     );
@@ -516,8 +521,16 @@ test("sampled rasters reuse color controls and bounded click histograms", async 
     assert.deepEqual(controlsView.style, firstFiniteStyle);
 
     leafletMap.emit("mousemove", { latlng: { lng: -122, lat: 48.5 } });
+    await flushPromises();
     assert.equal(pixelRequests.length, 0);
-    assert.equal(controlsView.probeVisible, false);
+    assert.equal(detailPixelRequests.length, 1);
+    assert.equal(detailPixelRequests[0][0], MOUNTED_GEOTIFF_ITEM);
+    assert.deepEqual(detailPixelRequests[0][1], {
+      longitude: -122,
+      latitude: 48.5,
+    });
+    assert.equal(controlsView.probeVisible, true);
+    assert.match(controlsView.pixelProbeContent.detail, /Pixel: 1\.000e\+0/);
     leafletMap.emit("click", { latlng: { lng: -122, lat: 48.5 } });
     await flushPromises();
     assert.equal(histogramRequests.length, 1);
