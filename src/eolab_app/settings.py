@@ -12,7 +12,43 @@ APPLICATION_VERSION_PATH = Path("/app/version")
 
 @dataclass(frozen=True)
 class Settings:
-    """Validated runtime settings for the EOLab application."""
+    """Validated runtime settings for the EOLab application.
+
+    Attributes:
+        app_title: Browser and API application title.
+        app_subtitle: Browser and API application subtitle.
+        app_version: Git-derived application version.
+        catalog_url: Browser-facing STAC API URL.
+        catalog_internal_url: Application-facing STAC API URL.
+        wms_url: Browser-facing WMS URL.
+        geoserver_internal_url: Application-facing GeoServer URL.
+        geoserver_metrics_internal_url: Internal GeoServer metrics URL.
+        geoserver_wms_render_count: Maximum concurrent WMS renders.
+        raster_pixel_read_concurrency: Maximum concurrent raster pixel reads.
+        raster_statistics_read_concurrency: Maximum concurrent statistics reads.
+        raster_statistics_cache_entries: Completed statistics cache capacity.
+        geoserver_admin_user: GeoServer administrator username.
+        geoserver_admin_password: GeoServer administrator password.
+        scan_mount_path: Read-only mounted dataset root.
+        scan_paths_within_mount: Relative mounted directories to scan.
+        scan_display_path_prefix: User-facing mounted-source prefix.
+        scan_worker_count: Concurrent dataset metadata workers.
+        scan_writer_count: Concurrent catalog writers.
+        scan_batch_size: Maximum catalog Items per bulk write.
+        scan_error_detail_limit: Scan failure details retained in memory.
+        scan_reconciliation_page_size: Catalog Items per reconciliation page.
+        scan_reconciliation_concurrency: Concurrent mounted-file checks.
+        scan_reconciliation_spool_memory_bytes: Reconciliation in-memory limit.
+        scan_catalog_write_timeout_seconds: Per-operation catalog write timeout.
+        scan_catalog_error_detail_limit: Upstream catalog error text limit.
+        temporary_aoi_ttl_seconds: Lifetime assigned to a temporary AOI upload.
+        temporary_aoi_max_upload_bytes: Maximum temporary AOI file size.
+        basemap_url: Browser basemap tile URL template.
+        basemap_attribution: Browser basemap attribution.
+        initial_latitude: Initial map-center latitude.
+        initial_longitude: Initial map-center longitude.
+        initial_zoom: Initial map zoom level.
+    """
 
     app_title: str
     app_subtitle: str
@@ -40,6 +76,8 @@ class Settings:
     scan_reconciliation_spool_memory_bytes: int
     scan_catalog_write_timeout_seconds: float
     scan_catalog_error_detail_limit: int
+    temporary_aoi_ttl_seconds: float
+    temporary_aoi_max_upload_bytes: int
     basemap_url: str
     basemap_attribution: str
     initial_latitude: float
@@ -119,6 +157,17 @@ class Settings:
                 raise ValueError(
                     f"{environment_variable_name} must be greater than zero"
                 )
+        if (
+            not math.isfinite(self.temporary_aoi_ttl_seconds)
+            or self.temporary_aoi_ttl_seconds <= 0
+        ):
+            raise ValueError(
+                "TEMPORARY_AOI_TTL_SECONDS must be greater than zero"
+            )
+        if self.temporary_aoi_max_upload_bytes < 1:
+            raise ValueError(
+                "TEMPORARY_AOI_MAX_UPLOAD_BYTES must be greater than zero"
+            )
         if not self.scan_mount_path.is_absolute():
             raise ValueError("SCAN_MOUNT_PATH must be an absolute path")
         if not self.scan_mount_path.is_dir():
@@ -279,6 +328,12 @@ def load_settings(
         ),
         scan_catalog_error_detail_limit=int(
             os.environ["SCAN_CATALOG_ERROR_DETAIL_LIMIT"]
+        ),
+        temporary_aoi_ttl_seconds=float(
+            os.environ["TEMPORARY_AOI_TTL_SECONDS"]
+        ),
+        temporary_aoi_max_upload_bytes=int(
+            os.environ["TEMPORARY_AOI_MAX_UPLOAD_BYTES"]
         ),
         basemap_url=os.environ["BASEMAP_URL"].strip(),
         basemap_attribution=os.environ["BASEMAP_ATTRIBUTION"].strip(),

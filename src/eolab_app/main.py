@@ -2,6 +2,7 @@
 
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
+from datetime import timedelta
 from pathlib import Path
 
 import httpx2
@@ -40,8 +41,10 @@ from eolab_app.routes.stac_proxy import (
     create_stac_proxy_router,
 )
 from eolab_app.routes.system import create_system_router
+from eolab_app.routes.temporary_aois import create_temporary_aoi_router
 from eolab_app.routes.wms_proxy import create_wms_proxy_router
 from eolab_app.settings import APPLICATION_VERSION_PATH, load_settings
+from eolab_app.temporary_aoi.service import TemporaryAoiService
 
 
 def create_app(
@@ -154,6 +157,18 @@ def create_app(
         app_global_configuration.geoserver_internal_url,
         get_map_request_tracker,
     )
+    temporary_aoi_service = TemporaryAoiService(
+        ttl=timedelta(
+            seconds=app_global_configuration.temporary_aoi_ttl_seconds
+        ),
+        maximum_upload_bytes=(
+            app_global_configuration.temporary_aoi_max_upload_bytes
+        ),
+        forbidden_roots=(
+            Path.cwd(),
+            app_global_configuration.scan_mount_path,
+        )
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -166,6 +181,8 @@ def create_app(
             Control while the application serves requests.
         """
         async with AsyncExitStack() as client_stack:
+            await temporary_aoi_service.start()
+            client_stack.push_async_callback(temporary_aoi_service.close)
             for client in (
                 catalog_client,
                 geoserver_wms_client,
@@ -229,6 +246,12 @@ def create_app(
         )
     )
     application.include_router(create_diagnostics_router(rendering_diagnostics))
+    application.include_router(
+        create_temporary_aoi_router(
+            temporary_aoi_service,
+            app_global_configuration.temporary_aoi_max_upload_bytes,
+        )
+    )
     application.include_router(
         create_stac_proxy_router(
             catalog_client,
