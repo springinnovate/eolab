@@ -32,6 +32,11 @@ from eolab_app.catalog.ports import (
     DatasetMetadataReader,
 )
 from eolab_app.catalog.reconciliation import MissingItemReconciler
+from eolab_app.catalog.remote import (
+    RemoteDatasetCandidate,
+    RemoteDatasetDiscovery,
+    RemoteDatasetMetadataReader,
+)
 
 
 DEFAULT_SCAN_ERROR_DETAIL_LIMIT = 100
@@ -54,6 +59,8 @@ class ScanManager:
         discovery: DatasetDiscovery | None = None,
         metadata_pipeline: DatasetMetadataReader | None = None,
         reconciler: CatalogReconciler | None = None,
+        remote_discovery: RemoteDatasetDiscovery | None = None,
+        remote_metadata_pipeline: RemoteDatasetMetadataReader | None = None,
         error_detail_limit: int = DEFAULT_SCAN_ERROR_DETAIL_LIMIT,
     ) -> None:
         """Configure the scanner and its bounded phase collaborators.
@@ -71,6 +78,9 @@ class ScanManager:
             discovery: Optional filesystem discovery collaborator.
             metadata_pipeline: Optional metadata extraction collaborator.
             reconciler: Optional destructive reconciliation collaborator.
+            remote_discovery: Optional paginated remote-source discovery.
+            remote_metadata_pipeline: Optional remote metadata reader. It must
+                be supplied together with ``remote_discovery``.
             error_detail_limit: Maximum individual failure details retained in
                 the public scan status.
 
@@ -101,6 +111,12 @@ class ScanManager:
             catalog_database,
             item_batch_size,
         )
+        if (remote_discovery is None) != (remote_metadata_pipeline is None):
+            raise ValueError(
+                "Remote discovery and metadata pipeline must be configured together"
+            )
+        self.remote_discovery = remote_discovery
+        self.remote_metadata_pipeline = remote_metadata_pipeline
         self._start_lock = asyncio.Lock()
         self._task: asyncio.Task[None] | None = None
         self._started_at_monotonic: float | None = None
@@ -144,6 +160,22 @@ class ScanManager:
             self._task = asyncio.create_task(self._run())
             return self.status()
 
+    async def cancel(self) -> dict[str, Any]:
+        """Cancel the active scan and await bounded collaborator teardown.
+
+        Returns:
+            Terminal cancelled scan status.
+
+        Raises:
+            RuntimeError: If no scan is currently active.
+        """
+        async with self._start_lock:
+            if self._task is None or self._task.done():
+                raise RuntimeError("No dataset scan is running")
+            self._task.cancel()
+            await asyncio.gather(self._task, return_exceptions=True)
+            return self.status()
+
     async def _run(self) -> None:
         """Execute inventory, discovery, indexing, reconciliation, and cleanup."""
         reconciliation_task: asyncio.Task[int] | None = None
@@ -162,10 +194,22 @@ class ScanManager:
                     dataset_candidates,
                     existing_item_keys,
                 )
+                await self._extract_and_write_remote_items(
+                    catalog_session,
+                    existing_item_keys,
+                )
 
             await reconciliation_task
             await self._invalidate_search_count_cache()
             self._status.state = "completed"
+        except asyncio.CancelledError:
+            if reconciliation_task is not None:
+                reconciliation_task.cancel()
+                await asyncio.gather(
+                    reconciliation_task,
+                    return_exceptions=True,
+                )
+            self._status.state = "cancelled"
         except Exception as error:
             await self._record_scan_failure(error, reconciliation_task)
         finally:
@@ -251,8 +295,12 @@ class ScanManager:
     async def _extract_and_write_items(
         self,
         catalog_session: CatalogWriteSession,
-        dataset_candidates: list[DatasetCandidate],
+        dataset_candidates: list[DatasetCandidate | RemoteDatasetCandidate],
         existing_item_keys: set[tuple[str, str]],
+        *,
+        metadata_pipeline: (
+            DatasetMetadataReader | RemoteDatasetMetadataReader | None
+        ) = None,
     ) -> None:
         """Consume metadata results and issue bounded concurrent bulk writes.
 
@@ -260,6 +308,8 @@ class ScanManager:
             catalog_session: Open STAC Transactions session.
             dataset_candidates: Datasets awaiting metadata extraction.
             existing_item_keys: Pre-scan catalog inventory.
+            metadata_pipeline: Reader appropriate for the supplied candidate
+                source kind. The mounted reader is the default.
 
         Raises:
             Exception: Propagates pipeline or catalog writer failures after
@@ -270,8 +320,9 @@ class ScanManager:
             for collection_identifier in SCAN_COLLECTION_IDENTIFIERS
         }
         catalog_write_tasks: set[asyncio.Task[None]] = set()
+        active_metadata_pipeline = metadata_pipeline or self.metadata_pipeline
         metadata_results = aiter(
-            self.metadata_pipeline.results(dataset_candidates)
+            active_metadata_pipeline.results(dataset_candidates)
         )
         try:
             while True:
@@ -330,6 +381,66 @@ class ScanManager:
                 return_exceptions=True,
             )
 
+    async def _extract_and_write_remote_items(
+        self,
+        catalog_session: CatalogWriteSession,
+        existing_item_keys: set[tuple[str, str]],
+    ) -> None:
+        """Consume paginated remote discovery through existing bulk writes.
+
+        Args:
+            catalog_session: Open STAC Transactions session.
+            existing_item_keys: Pre-scan catalog inventory.
+
+        Raises:
+            Exception: Propagates systemic listing, metadata-pipeline, or
+                catalog-write failures after collaborator cleanup.
+        """
+        if self.remote_discovery is None or self.remote_metadata_pipeline is None:
+            return
+        remote_pages = aiter(self.remote_discovery.pages())
+        try:
+            while True:
+                phase_started = perf_counter()
+                try:
+                    discovery_page = await anext(remote_pages)
+                except StopAsyncIteration:
+                    self._status.timing.discovery_seconds += (
+                        perf_counter() - phase_started
+                    )
+                    break
+                self._status.timing.discovery_seconds += (
+                    perf_counter() - phase_started
+                )
+                self._status.discovered += len(discovery_page.candidates)
+                self._record_remote_discovery_errors(discovery_page.errors)
+                await self._extract_and_write_items(
+                    catalog_session,
+                    list(discovery_page.candidates),
+                    existing_item_keys,
+                    metadata_pipeline=self.remote_metadata_pipeline,
+                )
+        finally:
+            await remote_pages.aclose()
+
+    def _record_remote_discovery_errors(
+        self,
+        discovery_errors: tuple[ScanError, ...],
+    ) -> None:
+        """Append bounded remote listing failures to live status.
+
+        Args:
+            discovery_errors: Browser-safe failures from one listing page.
+        """
+        self._status.failed += len(discovery_errors)
+        available_slots = max(
+            self.error_detail_limit - len(self._status.errors),
+            0,
+        )
+        self._status.errors.extend(discovery_errors[:available_slots])
+        if len(discovery_errors) > available_slots:
+            self._status.errors_truncated = True
+
     def _record_metadata_result(
         self,
         metadata_result: DatasetMetadataResult,
@@ -349,9 +460,13 @@ class ScanManager:
             metadata_result.elapsed_seconds - metadata_result.processing_seconds,
             0,
         )
-        relative_path = metadata_result.path.relative_to(
-            self.source_root
-        ).as_posix()
+        relative_path = (
+            metadata_result.path.relative_to(self.source_root).as_posix()
+            if metadata_result.path is not None
+            else metadata_result.source_name
+        )
+        if relative_path is None:
+            raise ValueError("Metadata result has no displayable source identity")
         self._status.current_file = relative_path
         self._status.processed += 1
         self._status.items_produced += len(metadata_result.items)

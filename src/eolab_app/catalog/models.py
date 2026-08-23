@@ -13,6 +13,7 @@ ScanState = Literal[
     "scanning",
     "completed",
     "failed",
+    "cancelled",
 ]
 ReconciliationState = Literal[
     "not_started",
@@ -59,25 +60,33 @@ class DatasetMetadataResult:
     """One dataset result with worker wall and CPU measurements.
 
     Attributes:
-        path: Primary dataset path.
+        path: Primary mounted dataset path, or ``None`` for a remote source.
+        source_name: Browser-safe source name for a remote dataset, or
+            ``None`` for a mounted dataset.
         items: Zero or more built STAC Items. Failures always contain none.
         error: Failure text, or ``None`` when metadata extraction succeeded.
         elapsed_seconds: Worker wall time.
         processing_seconds: Worker CPU time.
     """
 
-    path: Path
+    path: Path | None
     items: tuple[dict[str, Any], ...]
     error: str | None
     elapsed_seconds: float
     processing_seconds: float
+    source_name: str | None = None
 
     def __post_init__(self) -> None:
         """Keep successful Items and captured failures mutually exclusive.
 
         Raises:
-            ValueError: If a failed result also contains Items.
+            ValueError: If the result does not identify exactly one mounted or
+                remote source, or a failed result also contains Items.
         """
+        if (self.path is None) == (self.source_name is None):
+            raise ValueError(
+                "Metadata result must identify exactly one mounted or remote source"
+            )
         if self.error is not None and self.items:
             raise ValueError("Failed dataset metadata result cannot contain Items")
 

@@ -6,13 +6,52 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from eolab_app.catalog.remote import RemoteScanRoot, validate_remote_scan_roots
+from eolab_app.catalog.s3 import S3ConnectionSettings
+
 
 APPLICATION_VERSION_PATH = Path("/app/version")
 
 
 @dataclass(frozen=True)
 class Settings:
-    """Validated runtime settings for the EOLab application."""
+    """Validated runtime settings for the EOLab application.
+
+    Attributes:
+        app_title: Browser-visible application title.
+        app_subtitle: Browser-visible application description.
+        app_version: Git-derived deployed version.
+        catalog_url: Browser-facing STAC API path or URL.
+        catalog_internal_url: Server-side STAC API URL.
+        wms_url: Browser-facing WMS path or URL.
+        geoserver_internal_url: Server-side GeoServer base URL.
+        geoserver_metrics_internal_url: Server-side metrics endpoint.
+        geoserver_wms_render_count: Concurrent GeoServer render capacity.
+        raster_pixel_read_concurrency: Concurrent pixel-read capacity.
+        raster_statistics_read_concurrency: Concurrent statistics capacity.
+        raster_statistics_cache_entries: Completed statistics cache capacity.
+        geoserver_admin_user: Server-side GeoServer administrator name.
+        geoserver_admin_password: Server-side GeoServer secret.
+        scan_mount_path: Read-only mounted source root.
+        scan_paths_within_mount: Relative mounted directories to scan.
+        scan_display_path_prefix: User-facing mounted source root.
+        scan_worker_count: Mounted metadata worker processes.
+        scan_writer_count: Concurrent catalog writers.
+        scan_batch_size: Maximum Items per catalog write.
+        scan_error_detail_limit: Browser-visible per-dataset error limit.
+        scan_reconciliation_page_size: Catalog cleanup page size.
+        scan_reconciliation_concurrency: Concurrent source existence checks.
+        scan_reconciliation_spool_memory_bytes: In-memory stale-key limit.
+        scan_catalog_write_timeout_seconds: Per-operation STAC write timeout.
+        scan_catalog_error_detail_limit: Captured upstream error-text limit.
+        remote_s3_roots: Provider-neutral remote source namespaces.
+        s3_connection: Server-side S3 connection and operation limits.
+        basemap_url: Browser map tile URL template.
+        basemap_attribution: Browser map attribution markup.
+        initial_latitude: Initial WGS 84 map latitude.
+        initial_longitude: Initial WGS 84 map longitude.
+        initial_zoom: Initial map zoom level.
+    """
 
     app_title: str
     app_subtitle: str
@@ -40,6 +79,8 @@ class Settings:
     scan_reconciliation_spool_memory_bytes: int
     scan_catalog_write_timeout_seconds: float
     scan_catalog_error_detail_limit: int
+    remote_s3_roots: tuple[RemoteScanRoot, ...]
+    s3_connection: S3ConnectionSettings = field(repr=False)
     basemap_url: str
     basemap_attribution: str
     initial_latitude: float
@@ -125,6 +166,7 @@ class Settings:
             raise ValueError("SCAN_MOUNT_PATH must be an existing directory")
         if not self.scan_paths_within_mount:
             raise ValueError("SCAN_PATHS_WITHIN_MOUNT must contain at least one path")
+        validate_remote_scan_roots(self.remote_s3_roots)
 
         resolved_mount_path = self.scan_mount_path.resolve()
         source_paths: list[Path] = []
@@ -171,7 +213,10 @@ class Settings:
             "catalogUrl": self.catalog_url,
             "wmsUrl": self.wms_url,
             "scanDisplayPathPrefix": self.scan_display_path_prefix,
-            "scanDisplayPaths": list(self.scan_display_paths()),
+            "scanDisplayPaths": [
+                *self.scan_display_paths(),
+                *(root.display_name for root in self.remote_s3_roots),
+            ],
             "basemap": {
                 "url": self.basemap_url,
                 "attribution": self.basemap_attribution,
@@ -235,6 +280,53 @@ def load_settings(
     ):
         raise ValueError("SCAN_PATHS_WITHIN_MOUNT must be a JSON array of paths")
 
+    remote_s3_sources = json.loads(
+        os.environ.get("SCAN_REMOTE_S3_SOURCES", "[]")
+    )
+    if not isinstance(remote_s3_sources, list) or not all(
+        isinstance(source, dict)
+        and set(source) == {"id", "bucket", "prefix", "displayName"}
+        and all(isinstance(value, str) for value in source.values())
+        for source in remote_s3_sources
+    ):
+        raise ValueError(
+            "SCAN_REMOTE_S3_SOURCES must be a JSON array of objects with "
+            "id, bucket, prefix, and displayName strings"
+        )
+    remote_s3_roots = tuple(
+        RemoteScanRoot(
+            source_id=source["id"].strip(),
+            bucket=source["bucket"].strip(),
+            prefix=source["prefix"],
+            display_name=source["displayName"].strip(),
+        )
+        for source in remote_s3_sources
+    )
+
+    def optional_environment_text(name: str) -> str | None:
+        """Read an optional environment value with blank treated as absent.
+
+        Args:
+            name: Environment variable name.
+
+        Returns:
+            Stripped nonempty value, or ``None`` when unset or blank.
+        """
+        value = os.environ.get(name, "").strip()
+        return value or None
+
+    s3_connection = S3ConnectionSettings(
+        endpoint_url=optional_environment_text("S3_ENDPOINT_URL"),
+        region=os.environ.get("S3_REGION", "us-east-1").strip(),
+        access_key_id=optional_environment_text("S3_ACCESS_KEY_ID"),
+        secret_access_key=optional_environment_text("S3_SECRET_ACCESS_KEY"),
+        session_token=optional_environment_text("S3_SESSION_TOKEN"),
+        list_page_size=int(os.environ.get("S3_LIST_PAGE_SIZE", "500")),
+        metadata_concurrency=int(
+            os.environ.get("S3_METADATA_CONCURRENCY", "4")
+        ),
+    )
+
     return Settings(
         app_title=os.environ["APP_TITLE"].strip(),
         app_subtitle=os.environ["APP_SUBTITLE"].strip(),
@@ -280,6 +372,8 @@ def load_settings(
         scan_catalog_error_detail_limit=int(
             os.environ["SCAN_CATALOG_ERROR_DETAIL_LIMIT"]
         ),
+        remote_s3_roots=remote_s3_roots,
+        s3_connection=s3_connection,
         basemap_url=os.environ["BASEMAP_URL"].strip(),
         basemap_attribution=os.environ["BASEMAP_ATTRIBUTION"].strip(),
         initial_latitude=float(os.environ["INITIAL_LATITUDE"]),

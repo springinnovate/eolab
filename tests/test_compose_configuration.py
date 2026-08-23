@@ -73,6 +73,26 @@ def test_scan_paths_share_one_read_only_deployment_mount() -> None:
     assert '"EOLAB_SCAN_MOUNT_PATH=${EOLAB_SCAN_MOUNT_PATH' not in compose
 
 
+def test_remote_s3_secrets_and_bounds_are_deployer_configurable() -> None:
+    """Map Coolify inputs only into server-side S3 environment variables."""
+    compose = COMPOSE_PATH.read_text(encoding="utf-8")
+
+    assert (
+        '"SCAN_REMOTE_S3_SOURCES=${EOLAB_SCAN_REMOTE_S3_SOURCES:-[]}"'
+        in compose
+    )
+    assert '"S3_ENDPOINT_URL=${EOLAB_S3_ENDPOINT_URL:-}"' in compose
+    assert '"S3_REGION=${EOLAB_S3_REGION:-us-east-1}"' in compose
+    assert '"S3_ACCESS_KEY_ID=${EOLAB_S3_ACCESS_KEY_ID:-}"' in compose
+    assert '"S3_SECRET_ACCESS_KEY=${EOLAB_S3_SECRET_ACCESS_KEY:-}"' in compose
+    assert '"S3_SESSION_TOKEN=${EOLAB_S3_SESSION_TOKEN:-}"' in compose
+    assert '"S3_LIST_PAGE_SIZE=${EOLAB_S3_LIST_PAGE_SIZE:-500}"' in compose
+    assert (
+        '"S3_METADATA_CONCURRENCY=${EOLAB_S3_METADATA_CONCURRENCY:-4}"'
+        in compose
+    )
+
+
 def test_raster_capacity_is_deployer_configurable() -> None:
     """Expose safe defaults while allowing explicit deployment overrides."""
     compose = COMPOSE_PATH.read_text(encoding="utf-8")

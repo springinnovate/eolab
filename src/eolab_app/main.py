@@ -12,6 +12,11 @@ from eolab_app.catalog.pgstac import PgStacCatalogDatabase
 from eolab_app.catalog.reconciliation import MissingItemReconciler
 from eolab_app.catalog.scanner import ScanManager
 from eolab_app.catalog.search_counts import number_matched_is_estimated
+from eolab_app.catalog.s3 import (
+    S3AssetAvailability,
+    S3DatasetDiscovery,
+    S3DatasetMetadataPipeline,
+)
 from eolab_app.catalog.stac_api import StacApiWriter
 from eolab_app.diagnostics.service import RenderingDiagnosticsService
 from eolab_app.diagnostics.tracker import GetMapRequestTracker
@@ -202,6 +207,29 @@ def create_app(
             spool_memory_bytes=(
                 app_global_configuration.scan_reconciliation_spool_memory_bytes
             ),
+            remote_asset_availability=(
+                S3AssetAvailability(
+                    app_global_configuration.remote_s3_roots,
+                    app_global_configuration.s3_connection,
+                )
+                if app_global_configuration.remote_s3_roots
+                else None
+            ),
+        ),
+        remote_discovery=(
+            S3DatasetDiscovery(
+                app_global_configuration.remote_s3_roots,
+                app_global_configuration.s3_connection,
+            )
+            if app_global_configuration.remote_s3_roots
+            else None
+        ),
+        remote_metadata_pipeline=(
+            S3DatasetMetadataPipeline(
+                app_global_configuration.s3_connection
+            )
+            if app_global_configuration.remote_s3_roots
+            else None
         ),
         error_detail_limit=app_global_configuration.scan_error_detail_limit,
     )
