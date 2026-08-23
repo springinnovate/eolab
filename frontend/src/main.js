@@ -607,7 +607,19 @@ async function initializeCatalog(
     const rasterDetailPreview = initializeRasterDetailPreview({
         leafletMap,
         leaflet: L,
-        onChange: refreshCatalogMapAction,
+        onChange: () => {
+            refreshCatalogMapAction();
+            const selectedItem = catalogState.selectedItem;
+            const previewState = selectedItem === null
+                ? null
+                : rasterDetailPreview.getState(selectedItem);
+            if (previewState !== null) {
+                rasterVisualization.updateSampledInitialStyle(
+                    selectedItem,
+                    previewState.style
+                );
+            }
+        },
     });
     onRasterViewerReady(rasterVisualization);
     /**
@@ -703,6 +715,9 @@ async function initializeCatalog(
 
     /** Clears the selected result, footprint, and inspector together. */
     function clearCatalogSelection() {
+        if (catalogState.selectedItem !== null) {
+            rasterVisualization.removeSampled(catalogState.selectedItem);
+        }
         rasterDetailPreview.clear();
         catalogState.selectedButton?.classList.remove("is-selected");
         catalogState.selectedButton?.setAttribute("aria-pressed", "false");
@@ -727,6 +742,11 @@ async function initializeCatalog(
         if (rasterDetailPreview.contains(item)) {
             rasterDetailPreview.invalidate();
         } else {
+            if (catalogState.selectedItem !== null) {
+                rasterVisualization.removeSampled(
+                    catalogState.selectedItem
+                );
+            }
             rasterDetailPreview.clear();
         }
         catalogState.rasterAssessments.apply(item);
@@ -1097,6 +1117,7 @@ async function initializeCatalog(
                     selectedItem,
                     assessedItem
                 );
+                rasterVisualization.removeSampled(selectedItem);
                 rasterDetailPreview.remove(selectedItem);
                 if (!catalogItemsMatch(
                     catalogState.selectedItem,
@@ -1195,6 +1216,12 @@ async function initializeCatalog(
             ) {
                 return;
             }
+            const previewState = rasterDetailPreview.getState(selectedItem);
+            rasterVisualization.activateSampled(
+                selectedItem,
+                previewState.style,
+                (style) => rasterDetailPreview.setStyle(selectedItem, style)
+            );
             finishCatalogMapAction(pendingAction);
             updateCatalogMapAction(selectedItem);
         } catch (previewError) {
@@ -1218,6 +1245,7 @@ async function initializeCatalog(
     });
     removeRasterDetailPreview.addEventListener("click", () => {
         const selectedItem = catalogState.selectedItem;
+        rasterVisualization.removeSampled(selectedItem);
         rasterDetailPreview.remove(selectedItem);
         catalogLayerStatus.textContent =
             "Sampled raster removed from the map.";

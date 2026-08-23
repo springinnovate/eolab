@@ -707,6 +707,21 @@ export class RasterControlsView {
     }
 
     /**
+     * Label the action that clears a selected histogram window.
+     *
+     * @param {string} label Whole-raster restore or sampled-histogram clear
+     * wording owned by the active rendering mode.
+     * @return {void}
+     * @throws {TypeError} If the label is empty or non-text.
+     */
+    setClearSampleWindowLabel(label) {
+        if (typeof label !== "string" || label.trim() === "") {
+            throw new TypeError("Histogram clear label must not be blank");
+        }
+        this.clearSampleWindowButton.textContent = label;
+    }
+
+    /**
      * Present whether a retained ready AOI can be used for raster statistics.
      *
      * @param {Object|null} temporaryAoi Ready AOI display identity, or null.
@@ -729,7 +744,8 @@ export class RasterControlsView {
     /**
      * Mark the active histogram-area choice without changing availability.
      *
-     * @param {"wholeRaster"|"selectedArea"|"temporaryAoi"} mode Active area.
+     * @param {"none"|"wholeRaster"|"selectedArea"|"temporaryAoi"} mode
+     * Active area, or no selected histogram area for a sampled raster.
      * @return {void}
      */
     setSamplingAreaMode(mode) {

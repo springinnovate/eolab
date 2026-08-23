@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   assessCatalogRaster,
+  loadCatalogRasterDetailStatistics,
   loadCatalogRasterStatistics,
   loadCatalogRasterDetailPreview,
   publishCatalogRaster,
@@ -615,6 +616,80 @@ test("loadCatalogRasterStatistics adds only validated selected bounds", async ()
       async () => new Response(JSON.stringify({
         ...SELECTED_RASTER_STATISTICS,
         selectedBounds: { ...SELECTED_BOUNDS, west: -124 },
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    ),
+    /invalid selected-area response bounds/,
+  );
+});
+
+test("sampled raster histogram requires and sends only selected bounds", async () => {
+  const requests = [];
+  const abortController = new AbortController();
+  const statistics = await loadCatalogRasterDetailStatistics(
+    MOUNTED_GEOTIFF_ITEM,
+    abortController.signal,
+    SELECTED_BOUNDS,
+    async (url, options) => {
+      requests.push({ url, options });
+      return new Response(JSON.stringify(SELECTED_RASTER_STATISTICS), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    },
+  );
+
+  assert.equal(statistics.samplingMethod, "sampledGrid");
+  assert.deepEqual(requests, [{
+    url: "/api/rendering/detail-statistics",
+    options: {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        collectionId: MOUNTED_GEOTIFF_ITEM.collection,
+        itemId: MOUNTED_GEOTIFF_ITEM.id,
+        selectedBounds: SELECTED_BOUNDS,
+      }),
+      signal: abortController.signal,
+    },
+  }]);
+  await assert.rejects(
+    loadCatalogRasterDetailStatistics(
+      MOUNTED_GEOTIFF_ITEM,
+      abortController.signal,
+      null,
+      async () => new Response(),
+    ),
+    /invalid selected bounds/,
+  );
+});
+
+test("sampled raster histogram preserves bounded errors and response identity", async () => {
+  await assert.rejects(
+    loadCatalogRasterDetailStatistics(
+      MOUNTED_GEOTIFF_ITEM,
+      new AbortController().signal,
+      SELECTED_BOUNDS,
+      async () => new Response(
+        JSON.stringify({ detail: "No finite, non-nodata points were found." }),
+        { status: 409, headers: { "Content-Type": "application/json" } },
+      ),
+    ),
+    /No finite, non-nodata/,
+  );
+  await assert.rejects(
+    loadCatalogRasterDetailStatistics(
+      MOUNTED_GEOTIFF_ITEM,
+      new AbortController().signal,
+      SELECTED_BOUNDS,
+      async () => new Response(JSON.stringify({
+        ...SELECTED_RASTER_STATISTICS,
+        selectedBounds: { ...SELECTED_BOUNDS, east: -120 },
       }), {
         status: 200,
         headers: { "Content-Type": "application/json" },

@@ -31,6 +31,8 @@ function rasterDetailFocusBoundsMatch(left, right) {
  * @property {(item:Object,mode:string,density:string|null)=>Promise<Object|null>}
  * show Load and display one base preview, returning null when stale.
  * @property {(item:Object) => boolean} contains Whether the Item owns preview.
+ * @property {(item:Object,style:Object) => void} setStyle Recolor current base
+ * and detail images with the shared raster style.
  * @property {(item?:Object) => void} remove Remove matching/current layers.
  * @property {() => void} invalidate Abort pending work without removing display.
  * @property {(item?:Object) => Object|null} getState Return current UI state.
@@ -145,8 +147,61 @@ export function initializeRasterDetailPreview(
             basePreview: current.base.preview,
             detailPreview: current.detail?.preview ?? null,
             detailStatus: current.detailStatus,
-            detailError: current.detailError
+            detailError: current.detailError,
+            style: { ...current.base.style }
         };
+    }
+
+    /**
+     * Recolor the displayed numeric images without new source reads.
+     *
+     * Replacement layers are both constructed and attached before the prior
+     * layers are removed, so a style edit cannot leave a partially updated
+     * sampled raster on the map.
+     *
+     * @param {Object} item Catalog Item that must own the current preview.
+     * @param {Object} style Valid shared raster thresholds and color stops.
+     * @return {void}
+     * @throws {Error} If the Item is not current or recoloring/attachment
+     * violates the preview presentation contract.
+     */
+    function setStyle(item, style) {
+        if (!contains(item)) {
+            throw new Error("Sampled raster style target is not current");
+        }
+        const nextBasePresentation = createPreviewLayer(
+            leaflet,
+            current.base.preview,
+            { style }
+        );
+        let nextDetailPresentation = null;
+        try {
+            nextDetailPresentation = current.detail === null
+                ? null
+                : createPreviewLayer(
+                    leaflet,
+                    current.detail.preview,
+                    { style }
+                );
+            nextBasePresentation.layer.addTo(leafletMap);
+            nextDetailPresentation?.layer.addTo(leafletMap);
+        } catch (error) {
+            disposePresentation(nextDetailPresentation);
+            disposePresentation(nextBasePresentation);
+            throw error;
+        }
+        const previousBasePresentation = current.base.presentation;
+        const previousDetailPresentation =
+            current.detail?.presentation ?? null;
+        current.base.presentation = nextBasePresentation;
+        current.base.style = Object.freeze({ ...nextBasePresentation.style });
+        current.base.styleEstablished = true;
+        if (current.detail !== null) {
+            current.detail.presentation = nextDetailPresentation;
+        }
+        disposePresentation(previousDetailPresentation);
+        disposePresentation(previousBasePresentation);
+        onChange();
     }
 
     /** Clear only the current-view overlay. @return {void} */
@@ -477,6 +532,7 @@ export function initializeRasterDetailPreview(
     return {
         show,
         contains,
+        setStyle,
         remove,
         invalidate,
         getState,

@@ -259,6 +259,27 @@ test("RasterControlsView exposes accessible exclusive histogram-area choices", (
             .getAttribute("aria-label"),
         /area\.gpkg.*boundary/
     );
+
+    view.setClearSampleWindowLabel("Clear selected histogram");
+    view.setSamplingAreaMode("none");
+    assert.equal(
+        documentContext.querySelector("#clear-raster-sample-window").textContent,
+        "Clear selected histogram"
+    );
+    for (const selector of [
+        "#clear-raster-sample-window",
+        "#select-raster-sample-window",
+        "#use-temporary-aoi-for-raster",
+    ]) {
+        assert.equal(
+            documentContext.querySelector(selector).getAttribute("aria-pressed"),
+            "false"
+        );
+    }
+    assert.throws(
+        () => view.setClearSampleWindowLabel(""),
+        /must not be blank/
+    );
 });
 
 test("RasterControlsView clears histogram visibility through its DOM contract", () => {

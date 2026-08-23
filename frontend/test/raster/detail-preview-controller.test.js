@@ -212,6 +212,83 @@ test("successful replacement is atomic and preserves full-extent map focus", asy
   assert.deepEqual(fits[1].options, { maxZoom: 16, animate: false });
 });
 
+test("style changes atomically recolor base and current-view sampled images", async () => {
+  const events = [];
+  const timers = [];
+  const map = fakeMap({
+    removeLayer(layer) { events.push(`remove:${layer.name}`); },
+  });
+  const defaultStyle = {
+    minimum: 0,
+    midpoint: 50,
+    maximum: 100,
+    minimumColor: "#0000ff",
+    midpointColor: "#ffff00",
+    maximumColor: "#ff0000",
+  };
+  const nextStyle = {
+    ...defaultStyle,
+    minimum: 10,
+    midpoint: 20,
+    maximum: 30,
+  };
+  const controller = initializeRasterDetailPreview(
+    { leafletMap: map, leaflet: {} },
+    {
+      async loadPreview(_item, options) {
+        return options.viewBounds === null
+          ? CENTER_SAMPLE_DETAIL_PREVIEW
+          : CURRENT_VIEW_DETAIL_PREVIEW;
+      },
+      createPreviewLayer(_leaflet, preview, options = {}) {
+        const name = preview.scope === "currentView" ? "detail" : "base";
+        return {
+          layer: {
+            name,
+            addTo() { events.push(`add:${name}`); },
+          },
+          focusBounds: [[48, -123], [50, -121]],
+          style: options.style ?? defaultStyle,
+          dispose() {},
+        };
+      },
+      setTimer(callback) {
+        timers.push(callback);
+        return callback;
+      },
+      clearTimer(timer) {
+        const index = timers.indexOf(timer);
+        if (index >= 0) timers.splice(index, 1);
+      },
+    },
+  );
+
+  await controller.show(MOUNTED_GEOTIFF_ITEM, "centerSample", "coarse");
+  map.setZoom(5);
+  map.emit("moveend");
+  timers.shift()();
+  await new Promise((resolve) => setImmediate(resolve));
+  controller.setStyle(MOUNTED_GEOTIFF_ITEM, nextStyle);
+
+  assert.deepEqual(events, [
+    "add:base",
+    "add:detail",
+    "add:base",
+    "add:detail",
+    "remove:detail",
+    "remove:base",
+  ]);
+  assert.deepEqual(controller.getState().style, nextStyle);
+  assert.equal(Object.isFrozen(controller.getState().style), false);
+  assert.throws(
+    () => controller.setStyle(
+      { ...MOUNTED_GEOTIFF_ITEM, id: "geotiff-ffffffffffffffffffffffff" },
+      nextStyle,
+    ),
+    /style target is not current/,
+  );
+});
+
 test("same-item reassessment refits when its raster focus changes", async () => {
   const fits = [];
   let currentPreview = CENTER_SAMPLE_DETAIL_PREVIEW;

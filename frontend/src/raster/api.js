@@ -444,6 +444,64 @@ export async function loadCatalogRasterDetailPreview(
 }
 
 /**
+ * Load histogram statistics over one bounded sampled-raster map window.
+ *
+ * The server reuses the overview-safe detail-preview reader and always reads
+ * an exact 127 by 127 center-point grid. No whole-raster or arbitrary source
+ * window is accepted through this boundary.
+ *
+ * @param {Object} item Selected scanner-owned STAC Item.
+ * @param {AbortSignal} signal Cancellation signal for a stale selection.
+ * @param {Object} selectedBounds Required canonical WGS 84 rectangle.
+ * @param {typeof globalThis.fetch} [fetchImplementation=globalThis.fetch]
+ * Browser fetch implementation.
+ * @return {Promise<Object>} Validated selected-area raster statistics with
+ * sampled-grid provenance.
+ * @throws {Error} If bounds, backend response, or histogram data are invalid.
+ */
+export async function loadCatalogRasterDetailStatistics(
+    item,
+    signal,
+    selectedBounds,
+    fetchImplementation = globalThis.fetch
+) {
+    const validatedSelectedBounds = validateRasterSelectedBounds(
+        selectedBounds
+    );
+    const response = await fetchImplementation.call(
+        globalThis,
+        "/api/rendering/detail-statistics",
+        {
+            method: "POST",
+            headers: {
+                Accept: "application/json",
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                collectionId: item.collection,
+                itemId: item.id,
+                selectedBounds: validatedSelectedBounds
+            }),
+            signal
+        }
+    );
+    if (!response.ok) {
+        throw await renderingRequestError(
+            response,
+            "Sampled raster histogram request"
+        );
+    }
+    return {
+        ...validateRasterStatisticsForSelection(
+            await response.json(),
+            validatedSelectedBounds,
+            null
+        ),
+        samplingMethod: "sampledGrid"
+    };
+}
+
+/**
  * Load the bounded band-1 sample statistics for one published Catalog raster.
  *
  * @param {Object} item Selected STAC Item.

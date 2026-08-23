@@ -256,6 +256,9 @@ function createFakeControlsView() {
         setClearSampleWindowEnabled(isEnabled) {
             this.clearSampleWindowEnabled = isEnabled;
         },
+        setClearSampleWindowLabel(label) {
+            this.clearSampleWindowLabel = label;
+        },
         setTemporaryAoiAvailability(temporaryAoi) {
             this.availableTemporaryAoi = temporaryAoi;
         },
@@ -417,6 +420,180 @@ test("raster viewer owns the displayed layer lifecycle and detaches cleanly", as
     assert.equal(controlsView.handlers, null);
     assert.equal(leafletMap.container.listenerCount("pointermove"), 0);
     assert.equal(leafletMap.handlers.get("mousemove").size, 0);
+});
+
+test("sampled rasters reuse color controls and bounded click histograms", async () => {
+    const leafletMap = createFakeMap();
+    const { leaflet, wmsLayers } = createFakeLeaflet();
+    const controlsView = createFakeControlsView();
+    const styleChanges = [];
+    const histogramRequests = [];
+    const pixelRequests = [];
+    let wholeStatisticsRequests = 0;
+    const initialStyle = {
+        minimum: -12,
+        midpoint: 4,
+        maximum: 30,
+        minimumColor: "#2b83ba",
+        midpointColor: "#ffffbf",
+        maximumColor: "#d7191c",
+    };
+    const firstFiniteStyle = {
+        ...initialStyle,
+        minimum: -20,
+        midpoint: 2,
+        maximum: 45,
+    };
+    const viewer = initializeRasterViewer(
+        {
+            wmsUrl: "/geoserver/eolab/wms",
+            leafletMap,
+            leaflet,
+            onTileError() {},
+        },
+        {
+            controlsView,
+            layerStackView: createFakeLayerStackView(),
+            publishRaster: async () => {
+                throw new Error("sampled raster must not publish WMS");
+            },
+            loadStatistics: async () => {
+                wholeStatisticsRequests += 1;
+                throw new Error("sampled raster must not read whole statistics");
+            },
+            loadDetailStatistics: async (item, signal, selectedBounds) => {
+                histogramRequests.push({ item, signal, selectedBounds });
+                return {
+                    ...RASTER_STATISTICS,
+                    scope: "selectedArea",
+                    selectedBounds,
+                    sourceWidth: 127,
+                    sourceHeight: 127,
+                    sourcePixelCount: 127 * 127,
+                    sampleWidth: 127,
+                    sampleHeight: 127,
+                    sampledPixelCount: 127 * 127,
+                    samplingMethod: "sampledGrid",
+                };
+            },
+            samplePixel: async (...request) => {
+                pixelRequests.push(request);
+                return { inBounds: true, value: 1 };
+            },
+            viewport: { innerWidth: 1280, innerHeight: 720 },
+        }
+    );
+
+    viewer.activateSampled(
+        MOUNTED_GEOTIFF_ITEM,
+        initialStyle,
+        (style) => styleChanges.push({ ...style })
+    );
+    assert.equal(viewer.isDisplayed, true);
+    assert.equal(controlsView.controlsVisible, true);
+    assert.match(controlsView.activeLayer.label, /sampled raster/);
+    assert.equal(controlsView.samplingAreaMode, "none");
+    assert.equal(controlsView.clearSampleWindowLabel, "Clear selected histogram");
+    assert.equal(controlsView.availableTemporaryAoi, null);
+    assert.match(controlsView.statisticsStatus, /No whole-raster histogram/);
+    assert.equal(wholeStatisticsRequests, 0);
+    assert.equal(wmsLayers.length, 0);
+
+    viewer.updateSampledInitialStyle(
+        MOUNTED_GEOTIFF_ITEM,
+        firstFiniteStyle
+    );
+    assert.deepEqual(controlsView.style, firstFiniteStyle);
+
+    leafletMap.emit("mousemove", { latlng: { lng: -122, lat: 48.5 } });
+    assert.equal(pixelRequests.length, 0);
+    assert.equal(controlsView.probeVisible, false);
+    leafletMap.emit("click", { latlng: { lng: -122, lat: 48.5 } });
+    await flushPromises();
+    assert.equal(histogramRequests.length, 1);
+    assert.equal(histogramRequests[0].item, MOUNTED_GEOTIFF_ITEM);
+    assert.equal(controlsView.displayedStatistics.samplingMethod, "sampledGrid");
+    assert.match(controlsView.statisticsStatus, /exact 127 × 127 bounded point grid/);
+
+    controlsView.setPaletteName("viridis");
+    controlsView.handlers.onPaletteChange();
+    assert.equal(styleChanges.length, 1);
+    assert.equal(styleChanges[0].minimumColor, "#440154");
+    assert.equal(controlsView.displayedStatistics.samplingMethod, "sampledGrid");
+
+    controlsView.handlers.onResetStyle();
+    assert.equal(styleChanges.length, 2);
+    assert.deepEqual(styleChanges[1], firstFiniteStyle);
+    assert.match(controlsView.statisticsStatus, /minimum, median, and maximum/);
+
+    viewer.updateSampledInitialStyle(MOUNTED_GEOTIFF_ITEM, initialStyle);
+    assert.deepEqual(controlsView.style, firstFiniteStyle);
+
+    controlsView.handlers.onClearSampleWindow();
+    assert.equal(controlsView.samplingAreaMode, "none");
+    assert.equal(controlsView.displayedStatistics, null);
+    assert.match(controlsView.statisticsStatus, /No whole-raster histogram/);
+
+    viewer.removeSampled(MOUNTED_GEOTIFF_ITEM);
+    assert.equal(viewer.isDisplayed, false);
+    assert.equal(controlsView.controlsVisible, false);
+    viewer.destroy();
+});
+
+test("late sampled histogram responses cannot replace a newer clicked window", async () => {
+    const leafletMap = createFakeMap();
+    const { leaflet } = createFakeLeaflet();
+    const controlsView = createFakeControlsView();
+    const requests = [];
+    const style = {
+        minimum: 0,
+        midpoint: 50,
+        maximum: 100,
+        minimumColor: "#2b83ba",
+        midpointColor: "#ffffbf",
+        maximumColor: "#d7191c",
+    };
+    const viewer = initializeRasterViewer(
+        {
+            wmsUrl: "/geoserver/eolab/wms",
+            leafletMap,
+            leaflet,
+            onTileError() {},
+        },
+        {
+            controlsView,
+            layerStackView: createFakeLayerStackView(),
+            loadStatistics: () => new Promise(() => {}),
+            loadDetailStatistics(_item, signal, selectedBounds) {
+                const result = createDeferred();
+                requests.push({ signal, selectedBounds, result });
+                return result.promise;
+            },
+            viewport: { innerWidth: 1280, innerHeight: 720 },
+        }
+    );
+    viewer.activateSampled(MOUNTED_GEOTIFF_ITEM, style, () => {});
+
+    leafletMap.emit("click", { latlng: { lng: -122, lat: 48 } });
+    leafletMap.emit("click", { latlng: { lng: -121, lat: 49 } });
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].signal.aborted, true);
+    const currentStatistics = {
+        ...RASTER_STATISTICS,
+        scope: "selectedArea",
+        selectedBounds: requests[1].selectedBounds,
+        samplingMethod: "sampledGrid",
+    };
+    requests[1].result.resolve(currentStatistics);
+    await flushPromises();
+    requests[0].result.resolve({
+        ...currentStatistics,
+        selectedBounds: requests[0].selectedBounds,
+    });
+    await flushPromises();
+
+    assert.equal(controlsView.displayedStatistics, currentStatistics);
+    viewer.destroy();
 });
 
 test("raster viewer samples pixels only inside the single map world", async () => {
