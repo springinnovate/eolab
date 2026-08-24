@@ -6,6 +6,7 @@ from pathlib import Path
 
 
 COMPOSE_PATH = Path(__file__).parents[1] / "docker-compose.yml"
+ENV_EXAMPLE_PATH = Path(__file__).parents[1] / ".env.example"
 
 
 def test_public_app_variables_are_not_self_referential() -> None:
@@ -31,6 +32,25 @@ def test_public_app_variables_are_not_self_referential() -> None:
         'Earth observation data}"'
         in compose
     )
+
+
+def test_default_basemap_is_attributed_opentopomap() -> None:
+    """Keep the credential-free topographic default and attribution together."""
+    compose = COMPOSE_PATH.read_text(encoding="utf-8")
+    environment_example = ENV_EXAMPLE_PATH.read_text(encoding="utf-8")
+    basemap_url = "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png"
+    required_attribution = (
+        "OpenStreetMap contributors",
+        "SRTM",
+        "OpenTopoMap",
+        "CC-BY-SA",
+    )
+
+    assert f"EOLAB_BASEMAP_URL={basemap_url}" in environment_example
+    assert f"EOLAB_BASEMAP_URL:-{basemap_url}" in compose
+    for attribution_text in required_attribution:
+        assert attribution_text in environment_example
+        assert attribution_text in compose
 
 
 def test_scan_paths_share_one_read_only_deployment_mount() -> None:
