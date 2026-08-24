@@ -124,26 +124,23 @@ The scanner assesses mounted GeoTIFFs before offering **Add to map layers**. The
 Large rasters rejected only because internal overviews or the coarsest overview
 scale are inadequate can instead offer an explicit **adaptive bounded raster**
 after the current deployed reader accepts their CRS. EOLab builds a map-aligned
-raster-extent proxy with exactly 31, 63, or 127 cells on the projected
-rectangle's longest edge and derives the other edge from its aspect ratio. For
-either cell-sampling mode, zooming and panning replaces one bounded current-view
-overlay at that same density until the visible native source window is small
+raster-extent proxy with exactly 127 cells on the projected rectangle's longest
+edge, derives the other edge from its aspect ratio, and observes the source at
+each map cell's center. Zooming and panning replaces one bounded current-view
+overlay under that same fixed policy until the visible native source window is small
 enough to read completely under strict 512-pixel-edge, 1,024-block, and 64 MiB
-ceilings; that close view then displays exact bounded source detail. The
-deterministic representative detail patch is the fixed-location alternative
-and does not auto-refine. A sampled grid that exceeds its separate fixed
+ceilings; that close view then displays exact bounded source detail. A sampled
+grid that exceeds its separate fixed
 source-block limit is rejected before pixel I/O instead of being silently
-coarsened. Center-cell and representative-cell policies remain distinct.
-Native blocks are read once under fixed block-count and decoded-work ceilings;
+coarsened. Native blocks are read once under fixed block-count and decoded-work ceilings;
 the raster is never published and no arbitrary full-extent WMS request is made.
-A prominent map disclosure names the current sampled, exact, or patch
-representation and reports its dimensions. Broad sampled proxies use smooth
-display interpolation. Exact windows use crisp nearest-neighbor presentation,
-while representative patches retain crisp native-pixel edges. The shared color
-controls recolor these numeric images in the browser, initialized from their
-approximate minimum, median, and maximum.
-There is no whole-raster histogram; clicking the map summarizes the Fine
-adaptive bounded policy over that window. Hover probing uses the same
+A prominent map disclosure names the current sampled or exact representation
+and reports its dimensions. Broad sampled proxies use smooth display
+interpolation, while exact windows use crisp nearest-neighbor presentation.
+The shared color controls recolor these numeric images in the browser,
+initialized from their approximate minimum, median, and maximum.
+There is no whole-raster histogram; clicking the map summarizes the fixed
+127-center policy over that window. Hover probing uses the same
 rendering-independent catalog-authorized pixel-analysis path as every other
 raster: it opens the mounted source directly, requests one band-one source cell,
 and never consults GeoServer or WMS publication state. Nodata stays nodata, and

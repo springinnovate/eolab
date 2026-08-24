@@ -10,21 +10,13 @@ const STYLE = readFileSync(
 
 test("adaptive raster detail explains sampling and exact-view handoff", () => {
   assert.match(MARKUP, /<strong>Adaptive bounded raster detail<\/strong>/);
-  assert.match(MARKUP, /Broad views in either cell-sampling mode use the selected approximate grid/);
+  assert.match(MARKUP, /Broad views always use one center sample in each proxy cell/);
+  assert.match(MARKUP, /127 cells on the longest displayed edge/);
   assert.match(MARKUP, /complete bounded source-window read reprojected for the map at the same dimensions/);
-  assert.match(MARKUP, /representative patch remains fixed at its selected source location/i);
-  assert.match(MARKUP, /value="centerSample">Center sample in each proxy cell/);
-  assert.match(MARKUP, /value="representativeSample">Representative samples in each proxy cell/);
-  assert.match(MARKUP, /value="representativePatch">Representative, bounded detail patch/);
-  assert.match(MARKUP, /id="raster-detail-preview-density"/);
-  assert.match(MARKUP, /value="coarse">Coarse — 31 samples on the longest edge/);
-  assert.match(MARKUP, /value="medium">Medium — 63 samples on the longest edge/);
-  assert.match(MARKUP, /value="fine">Fine — 127 samples on the longest edge/);
-  assert.match(MARKUP, /shorter edge preserves the displayed rectangle's aspect ratio/);
-  assert.match(MARKUP, /representative patch does not auto-refine/i);
+  assert.doesNotMatch(MARKUP, /raster-detail-preview-mode/);
+  assert.doesNotMatch(MARKUP, /raster-detail-preview-density/);
   assert.match(MARKUP, /Sampled proxies use smooth display interpolation/);
-  assert.match(MARKUP, /exact windows use crisp nearest-neighbor presentation/);
-  assert.match(MARKUP, /representative patches retain crisp native-pixel edges/);
+  assert.match(MARKUP, /exact close-view windows use crisp nearest-neighbor presentation/);
   assert.match(MARKUP, /active map area, source window, native blocks, and decoded work/);
   assert.match(MARKUP, /id="raster-detail-preview-resolution"/);
   assert.match(

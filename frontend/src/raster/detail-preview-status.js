@@ -50,17 +50,8 @@ function formatPreview(preview) {
             `${lastColumn}, rows ${window.rowOffset}–${lastRow}; ${location}; ` +
             work;
     }
-    if (preview.rendering === "representativePatch") {
-        const window = actual.sourceWindow;
-        return `representative patch ${preview.imageWidth} × ` +
-            `${preview.imageHeight}; source window at column ` +
-            `${window.columnOffset}, row ${window.rowOffset}; ${location}; ${work}`;
-    }
-    const policy = preview.mode === "centerSample"
-        ? "center samples"
-        : "representative samples";
     return `sampled proxy ${preview.imageWidth} × ${preview.imageHeight} ` +
-        `${policy}; ${location}; ${work}`;
+        `center samples; ${location}; ${work}`;
 }
 
 /**
@@ -107,9 +98,6 @@ export function formatRasterDetailPreviewResolution(
         return "Base raster detail: —; active view: —";
     }
     const base = `Base: ${formatPreview(previewState.basePreview)}`;
-    if (previewState.mode === "representativePatch") {
-        return `${base}; automatic current-view refinement: off`;
-    }
     let detail = "zoom in to request a bounded current view";
     if (previewState.detailStatus === "loading") {
         detail = previewState.detailPreview === null
@@ -154,19 +142,11 @@ export function formatRasterDetailMapNotice(previewState) {
     const limitation = "DETAIL-ONLY RASTER — EOLab cannot safely display " +
         "this raster at full extent because the source does not have a " +
         "usable overview pyramid.";
-    if (preview.rendering === "representativePatch") {
-        return `${limitation} Showing one representative bounded ` +
-            `${preview.imageWidth} × ${preview.imageHeight} source patch; ` +
-            "it is not a whole-raster rendering.";
-    }
-    const method = preview.mode === "centerSample"
-        ? "center-sampled"
-        : "representative-sampled";
     const scope = preview.scope === "currentView"
         ? "Current view"
         : "Base display";
     return `${limitation} This sampled ${scope.toLowerCase()} is not the ` +
         `raster's native resolution. ${scope} sampling grid: ` +
         `${preview.imageWidth} × ${preview.imageHeight} proxy cells ` +
-        `(${method}).`;
+        `(center-sampled; 127 cells on the longest edge).`;
 }

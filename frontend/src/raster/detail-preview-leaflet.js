@@ -133,21 +133,9 @@ export function createRasterDetailPreviewLayer(
             className: "raster-current-view-detail-boundary"
         }));
     }
-    if (preview.mode === "representativePatch") {
-        layers.push(leaflet.rectangle(imageBounds, {
-            pane: RASTER_DETAIL_PREVIEW_BOUNDARY_PANE,
-            color: "#0f766e",
-            weight: 2,
-            fill: false,
-            interactive: false,
-            className: "raster-detail-patch-boundary"
-        }));
-    }
     return {
         layer: leaflet.layerGroup(layers),
-        focusBounds: preview.scope === "representativePatch"
-            ? imageBounds
-            : extentBounds,
+        focusBounds: extentBounds,
         style,
         dispose() {}
     };

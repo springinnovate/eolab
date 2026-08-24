@@ -486,12 +486,6 @@ async function initializeCatalog(
     const rasterDetailPreviewControls = document.querySelector(
         "#raster-detail-preview-controls"
     );
-    const rasterDetailPreviewMode = document.querySelector(
-        "#raster-detail-preview-mode"
-    );
-    const rasterDetailPreviewDensity = document.querySelector(
-        "#raster-detail-preview-density"
-    );
     const rasterDetailPreviewResolution = document.querySelector(
         "#raster-detail-preview-resolution"
     );
@@ -671,9 +665,6 @@ async function initializeCatalog(
         catalogLayerToggle.disabled = pendingAction !== null;
         catalogLayerToggle.hidden = supportsDetailPreview;
         rasterDetailPreviewControls.hidden = !supportsDetailPreview;
-        rasterDetailPreviewMode.disabled = pendingAction !== null;
-        rasterDetailPreviewDensity.disabled = pendingAction !== null ||
-            rasterDetailPreviewMode.value === "representativePatch";
         showRasterDetailPreview.disabled = pendingAction !== null;
         reassessDetailRaster.disabled = pendingAction !== null;
         showRasterDetailPreview.textContent = pendingAction?.buttonText ??
@@ -698,8 +689,8 @@ async function initializeCatalog(
         }
         if (supportsDetailPreview) {
             defaultStatus =
-                "Normal full visualization is unavailable. Choose one " +
-                "bounded sampling policy for broad views; close views " +
+                "Normal full visualization is unavailable. Broad views use " +
+                "a fixed 127-longest-edge center sample; close views " +
                 "automatically use exact bounded source detail.";
         }
         if (hasDetailPreview) {
@@ -707,29 +698,23 @@ async function initializeCatalog(
             const hasFiniteValues = base.pixelValues.some(
                 (value) => value !== null
             );
-            if (detailPreviewState.mode === "representativePatch") {
-                defaultStatus = `${base.label}; ${base.imageWidth} × ` +
-                    `${base.imageHeight} displayed cells. The dashed outline ` +
-                    "is the raster extent, not a valid-data footprint.";
-            } else {
-                defaultStatus =
-                    "Adaptive detail-only raster — not a whole-raster " +
-                    "rendering. The orange dashed outline is the raster " +
-                    "extent; zooming requests a bounded current-view layer.";
-                if (detailPreviewState.detailStatus === "loading") {
-                    defaultStatus += " Loading finer current-view detail…";
-                } else if (detailPreviewState.detailStatus === "ready") {
-                    defaultStatus += detailPreviewState.detailPreview.rendering ===
-                        "exactSourceWindow"
-                        ? " The teal outline contains complete bounded source " +
-                            "detail at this map scale."
-                        : " The teal outline contains the selected current-view " +
-                            "sample grid; zoom closer for exact bounded detail.";
-                } else if (detailPreviewState.detailStatus === "error") {
-                    defaultStatus += " Current-view refinement failed: " +
-                        detailPreviewState.detailError +
-                        ". The prior bounded display remains visible.";
-                }
+            defaultStatus =
+                "Adaptive detail-only raster — not a whole-raster " +
+                "rendering. The orange dashed outline is the raster " +
+                "extent; zooming requests a bounded current-view layer.";
+            if (detailPreviewState.detailStatus === "loading") {
+                defaultStatus += " Loading finer current-view detail…";
+            } else if (detailPreviewState.detailStatus === "ready") {
+                defaultStatus += detailPreviewState.detailPreview.rendering ===
+                    "exactSourceWindow"
+                    ? " The teal outline contains complete bounded source " +
+                        "detail at this map scale."
+                    : " The teal outline contains the fixed current-view " +
+                        "sample grid; zoom closer for exact bounded detail.";
+            } else if (detailPreviewState.detailStatus === "error") {
+                defaultStatus += " Current-view refinement failed: " +
+                    detailPreviewState.detailError +
+                    ". The prior bounded display remains visible.";
             }
             if (!hasFiniteValues) {
                 defaultStatus +=
@@ -1231,11 +1216,7 @@ async function initializeCatalog(
         }
         try {
             const preview = await rasterDetailPreview.show(
-                selectedItem,
-                rasterDetailPreviewMode.value,
-                rasterDetailPreviewMode.value === "representativePatch"
-                    ? null
-                    : rasterDetailPreviewDensity.value
+                selectedItem
             );
             if (
                 preview === null ||
@@ -1265,10 +1246,6 @@ async function initializeCatalog(
         } finally {
             finishCatalogMapAction(pendingAction);
         }
-    });
-    rasterDetailPreviewMode.addEventListener("change", () => {
-        rasterDetailPreviewDensity.disabled =
-            rasterDetailPreviewMode.value === "representativePatch";
     });
     removeRasterDetailPreview.addEventListener("click", () => {
         const selectedItem = catalogState.selectedItem;

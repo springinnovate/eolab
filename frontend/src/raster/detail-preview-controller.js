@@ -32,7 +32,7 @@ function rasterDetailFocusBoundsMatch(left, right) {
 
 /**
  * @typedef {Object} RasterDetailPreviewController
- * @property {(item:Object,mode:string,density:string|null)=>Promise<Object|null>}
+ * @property {(item:Object)=>Promise<Object|null>}
  * show Load and display one base preview, returning null when stale.
  * @property {(item:Object) => boolean} contains Whether the Item owns preview.
  * @property {(item:Object,style:Object) => void} setStyle Recolor current base
@@ -148,8 +148,6 @@ export function initializeRasterDetailPreview(
             return null;
         }
         return {
-            mode: current.mode,
-            density: current.density,
             basePreview: current.base.preview,
             detailPreview: current.detail?.preview ?? null,
             detailStatus: current.detailStatus,
@@ -256,7 +254,7 @@ export function initializeRasterDetailPreview(
      *
      * @param {number} sessionGeneration Explicit base-session identity.
      * @param {number} requestDetailGeneration Viewport intent identity.
-     * @param {string} intentKey Item/mode/density/bounds identity.
+     * @param {string} intentKey Item and bounds identity.
      * @return {boolean} Whether a completion may update the map.
      */
     function isCurrentDetailIntent(
@@ -275,7 +273,7 @@ export function initializeRasterDetailPreview(
      *
      * @param {number} sessionGeneration Base-session identity.
      * @param {number} requestDetailGeneration Viewport intent identity.
-     * @param {string} intentKey Item/mode/density/bounds identity.
+     * @param {string} intentKey Item and bounds identity.
      * @param {Object} viewBounds Canonical raster/view intersection.
      * @return {Promise<void>} Completion after success, stale ignore, or an
      * honestly reported non-destructive refinement failure.
@@ -300,8 +298,6 @@ export function initializeRasterDetailPreview(
             const preview = await loadPreview(
                 current.item,
                 {
-                    mode: current.mode,
-                    density: current.density,
                     viewBounds
                 },
                 abortController.signal
@@ -382,7 +378,7 @@ export function initializeRasterDetailPreview(
     /** Derive and debounce the latest viewport refinement intent. @return {void} */
     function queueCurrentViewDetail() {
         if (destroyed || replacingBase || pendingBaseAbortController !== null ||
-            current === null || current.mode === "representativePatch") {
+            current === null) {
             return;
         }
         if (!isRasterDetailZoom(leafletMap.getZoom(), current.baseZoom)) {
@@ -399,8 +395,6 @@ export function initializeRasterDetailPreview(
         }
         const intentKey = JSON.stringify([
             current.key,
-            current.mode,
-            current.density,
             rasterViewportKey(viewBounds)
         ]);
         if (current.detail?.intentKey === intentKey) {
@@ -447,12 +441,10 @@ export function initializeRasterDetailPreview(
      * Load and display one explicitly selected base sampled raster.
      *
      * @param {Object} item Selected Catalog raster.
-     * @param {string} mode Fixed detail preview mode.
-     * @param {string|null} density Fixed grid profile, or null for a patch.
      * @return {Promise<Object|null>} Current response or null when stale.
      * @throws {Error} If the current request or presentation fails.
      */
-    async function show(item, mode, density) {
+    async function show(item) {
         invalidate();
         const requestGeneration = generation;
         const abortController = new AbortController();
@@ -462,8 +454,6 @@ export function initializeRasterDetailPreview(
             preview = await loadPreview(
                 item,
                 {
-                    mode,
-                    density: mode === "representativePatch" ? null : density,
                     viewBounds: null
                 },
                 abortController.signal
@@ -487,15 +477,13 @@ export function initializeRasterDetailPreview(
         const previous = current;
         const key = getCatalogRasterLayerKey(item);
         const changedFocusScope = previous === null || previous.key !== key ||
-            (previous.mode === "representativePatch") !==
-                (mode === "representativePatch") ||
             !rasterDetailFocusBoundsMatch(
                 previous.base.presentation.focusBounds,
                 presentation.focusBounds
             );
         let baseZoom = previous?.baseZoom ?? null;
         if (changedFocusScope) {
-            const maximumFocusZoom = mode === "representativePatch" ? 16 : 8;
+            const maximumFocusZoom = 8;
             baseZoom = Math.max(
                 leafletMap.getMinZoom(),
                 Math.min(
@@ -519,8 +507,6 @@ export function initializeRasterDetailPreview(
         current = {
             key,
             item,
-            mode,
-            density: preview.density,
             base: {
                 presentation,
                 preview,

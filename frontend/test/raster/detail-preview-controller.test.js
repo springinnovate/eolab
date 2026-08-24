@@ -9,8 +9,6 @@ import {
   EXACT_CURRENT_VIEW_DETAIL_PREVIEW,
   MOUNTED_GEOTIFF_ITEM,
   NODATA_DETAIL_PREVIEW,
-  PATCH_DETAIL_PREVIEW,
-  REPRESENTATIVE_SAMPLE_DETAIL_PREVIEW,
 } from "../../test-support/raster/fixtures.js";
 
 /**
@@ -69,7 +67,7 @@ function fakeMap(overrides = {}) {
   };
 }
 
-test("detail preview ignores stale mode responses even when abort loses", async () => {
+test("detail preview ignores a stale repeated base response when abort loses", async () => {
   const requests = [];
   const added = [];
   const removed = [];
@@ -80,7 +78,7 @@ test("detail preview ignores stale mode responses even when abort loses", async 
   });
   const createPreviewLayer = (_leaflet, preview) => {
     const layer = {
-      mode: preview.mode,
+      label: preview.label,
       addTo(target) {
         assert.equal(target, map);
         added.push(this);
@@ -91,28 +89,26 @@ test("detail preview ignores stale mode responses even when abort loses", async 
   const controller = initializeRasterDetailPreview(
     { leafletMap: map, leaflet: {} },
     {
-      loadPreview(_item, { mode }, signal) {
+      loadPreview(_item, _options, signal) {
         const work = deferred();
-        requests.push({ mode, signal, work });
+        requests.push({ signal, work });
         return work.promise;
       },
       createPreviewLayer,
     },
   );
 
-  const oldShow = controller.show(MOUNTED_GEOTIFF_ITEM, "centerSample", "coarse");
-  const currentShow = controller.show(
-    MOUNTED_GEOTIFF_ITEM,
-    "representativeSample",
-    "coarse",
-  );
+  const oldShow = controller.show(MOUNTED_GEOTIFF_ITEM);
+  const currentShow = controller.show(MOUNTED_GEOTIFF_ITEM);
   assert.equal(requests[0].signal.aborted, true);
-  requests[1].work.resolve(REPRESENTATIVE_SAMPLE_DETAIL_PREVIEW);
-  assert.equal((await currentShow).mode, "representativeSample");
+  requests[1].work.resolve(CENTER_SAMPLE_DETAIL_PREVIEW);
+  assert.equal(await currentShow, CENTER_SAMPLE_DETAIL_PREVIEW);
   requests[0].work.resolve(CENTER_SAMPLE_DETAIL_PREVIEW);
   assert.equal(await oldShow, null);
 
-  assert.deepEqual(added.map((layer) => layer.mode), ["representativeSample"]);
+  assert.deepEqual(added.map((layer) => layer.label), [
+    CENTER_SAMPLE_DETAIL_PREVIEW.label,
+  ]);
   assert.deepEqual(removed, []);
   assert.equal(fits.length, 1);
   assert.deepEqual(fits[0].options, { maxZoom: 8, animate: false });
@@ -144,74 +140,56 @@ test("a failed replacement preserves the current map preview", async () => {
     },
   );
 
-  await controller.show(MOUNTED_GEOTIFF_ITEM, "centerSample", "coarse");
+  await controller.show(MOUNTED_GEOTIFF_ITEM);
   fail = true;
   await assert.rejects(
-    controller.show(MOUNTED_GEOTIFF_ITEM, "representativeSample", "coarse"),
+    controller.show(MOUNTED_GEOTIFF_ITEM),
     /bounded read failed/,
   );
   assert.equal(controller.contains(MOUNTED_GEOTIFF_ITEM), true);
   assert.deepEqual(removed, []);
 });
 
-test("successful replacement is atomic and preserves full-extent map focus", async () => {
+test("successful same-item replacement is atomic and preserves map focus", async () => {
   const events = [];
   const fits = [];
   const map = fakeMap({
-    removeLayer(layer) { events.push(`remove:${layer.mode}`); },
+    removeLayer(layer) { events.push(`remove:${layer.name}`); },
     fitBounds(bounds, options) { fits.push({ bounds, options }); },
   });
-  const previews = new Map([
-    ["centerSample", CENTER_SAMPLE_DETAIL_PREVIEW],
-    ["representativeSample", REPRESENTATIVE_SAMPLE_DETAIL_PREVIEW],
-    ["representativePatch", PATCH_DETAIL_PREVIEW],
-  ]);
+  let layerNumber = 0;
   const controller = initializeRasterDetailPreview(
     { leafletMap: map, leaflet: {} },
     {
-      async loadPreview(_item, { mode }) { return previews.get(mode); },
+      async loadPreview() { return CENTER_SAMPLE_DETAIL_PREVIEW; },
       createPreviewLayer(_leaflet, preview) {
+        layerNumber += 1;
         const layer = {
-          mode: preview.mode,
+          name: `base-${layerNumber}`,
           addTo(target) {
             assert.equal(target, map);
-            events.push(`add:${this.mode}`);
+            events.push(`add:${this.name}`);
           },
         };
         return {
           layer,
-          focusBounds: preview.mode === "representativePatch"
-            ? [[48.9, -122.1], [49.1, -121.9]]
-            : [[48, -123], [50, -121]],
+          focusBounds: [[48, -123], [50, -121]],
           style: {},
         };
       },
     },
   );
 
-  await controller.show(MOUNTED_GEOTIFF_ITEM, "centerSample", "coarse");
-  await controller.show(
-    MOUNTED_GEOTIFF_ITEM,
-    "representativeSample",
-    "coarse",
-  );
+  await controller.show(MOUNTED_GEOTIFF_ITEM);
+  await controller.show(MOUNTED_GEOTIFF_ITEM);
 
   assert.deepEqual(events, [
-    "add:centerSample",
-    "add:representativeSample",
-    "remove:centerSample",
+    "add:base-1",
+    "add:base-2",
+    "remove:base-1",
   ]);
   assert.equal(fits.length, 1);
   assert.deepEqual(fits[0].options, { maxZoom: 8, animate: false });
-
-  await controller.show(MOUNTED_GEOTIFF_ITEM, "representativePatch", null);
-  assert.deepEqual(events.slice(-2), [
-    "add:representativePatch",
-    "remove:representativeSample",
-  ]);
-  assert.equal(fits.length, 2);
-  assert.deepEqual(fits[1].bounds, [[48.9, -122.1], [49.1, -121.9]]);
-  assert.deepEqual(fits[1].options, { maxZoom: 16, animate: false });
 });
 
 test("style changes atomically recolor base and current-view sampled images", async () => {
@@ -265,7 +243,7 @@ test("style changes atomically recolor base and current-view sampled images", as
     },
   );
 
-  await controller.show(MOUNTED_GEOTIFF_ITEM, "centerSample", "coarse");
+  await controller.show(MOUNTED_GEOTIFF_ITEM);
   map.setZoom(5);
   map.emit("moveend");
   timers.shift()();
@@ -314,13 +292,13 @@ test("same-item reassessment refits when its raster focus changes", async () => 
     },
   );
 
-  await controller.show(MOUNTED_GEOTIFF_ITEM, "centerSample", "coarse");
+  await controller.show(MOUNTED_GEOTIFF_ITEM);
   currentPreview = {
     ...CENTER_SAMPLE_DETAIL_PREVIEW,
     rasterExtent: [-124, 47, -120, 51],
     imageBounds: [-123.9, 47.1, -120.1, 50.9],
   };
-  await controller.show(MOUNTED_GEOTIFF_ITEM, "centerSample", "coarse");
+  await controller.show(MOUNTED_GEOTIFF_ITEM);
 
   assert.deepEqual(fits, [
     [[48, -123], [50, -121]],
@@ -363,35 +341,31 @@ test("detail refinement starts above the map-minimum-clamped fit zoom", async ()
     },
   );
 
-  await controller.show(MOUNTED_GEOTIFF_ITEM, "centerSample", "coarse");
+  await controller.show(MOUNTED_GEOTIFF_ITEM);
   assert.equal(timers.length, 0);
   zoom = 3;
   map.emit("moveend");
   assert.equal(timers.length, 1);
 });
 
-test("failed construction or map attachment cannot remove the current layer", async () => {
+test("failed replacement construction or attachment preserves current layer", async () => {
   const removed = [];
   let nextFailure = null;
   const map = fakeMap({
-    removeLayer(layer) { removed.push(layer.mode); },
+    removeLayer(layer) { removed.push(layer.name); },
     fitBounds() {},
   });
   const controller = initializeRasterDetailPreview(
     { leafletMap: map, leaflet: {} },
     {
-      async loadPreview(_item, { mode }) {
-        return mode === "centerSample"
-          ? CENTER_SAMPLE_DETAIL_PREVIEW
-          : REPRESENTATIVE_SAMPLE_DETAIL_PREVIEW;
-      },
+      async loadPreview() { return CENTER_SAMPLE_DETAIL_PREVIEW; },
       createPreviewLayer(_leaflet, preview) {
         if (nextFailure === "construct") {
           throw new Error("image construction failed");
         }
         return {
           layer: {
-            mode: preview.mode,
+            name: "replacement",
             addTo() {
               if (nextFailure === "attach") {
                 throw new Error("image attachment failed");
@@ -405,10 +379,10 @@ test("failed construction or map attachment cannot remove the current layer", as
     },
   );
 
-  await controller.show(MOUNTED_GEOTIFF_ITEM, "centerSample", "coarse");
+  await controller.show(MOUNTED_GEOTIFF_ITEM);
   nextFailure = "construct";
   await assert.rejects(
-    controller.show(MOUNTED_GEOTIFF_ITEM, "representativeSample", "coarse"),
+    controller.show(MOUNTED_GEOTIFF_ITEM),
     /construction failed/,
   );
   assert.deepEqual(removed, []);
@@ -416,14 +390,14 @@ test("failed construction or map attachment cannot remove the current layer", as
 
   nextFailure = "attach";
   await assert.rejects(
-    controller.show(MOUNTED_GEOTIFF_ITEM, "representativeSample", "coarse"),
+    controller.show(MOUNTED_GEOTIFF_ITEM),
     /attachment failed/,
   );
-  assert.deepEqual(removed, ["representativeSample"]);
+  assert.deepEqual(removed, ["replacement"]);
   assert.equal(controller.contains(MOUNTED_GEOTIFF_ITEM), true);
 });
 
-test("detail preview ignores a stale Item using the same proxy mode", async () => {
+test("detail preview ignores a stale Item using the fixed proxy policy", async () => {
   const requests = [];
   const added = [];
   const secondItem = {
@@ -434,9 +408,9 @@ test("detail preview ignores a stale Item using the same proxy mode", async () =
   const controller = initializeRasterDetailPreview(
     { leafletMap: map, leaflet: {} },
     {
-      loadPreview(item, { mode }, signal) {
+      loadPreview(item, _options, signal) {
         const work = deferred();
-        requests.push({ item, mode, signal, work });
+        requests.push({ item, signal, work });
         return work.promise;
       },
       createPreviewLayer(_leaflet, preview) {
@@ -449,12 +423,8 @@ test("detail preview ignores a stale Item using the same proxy mode", async () =
     },
   );
 
-  const staleShow = controller.show(
-    MOUNTED_GEOTIFF_ITEM,
-    "centerSample",
-    "coarse",
-  );
-  const currentShow = controller.show(secondItem, "centerSample", "coarse");
+  const staleShow = controller.show(MOUNTED_GEOTIFF_ITEM);
+  const currentShow = controller.show(secondItem);
   assert.equal(requests[0].signal.aborted, true);
   requests[1].work.resolve(CENTER_SAMPLE_DETAIL_PREVIEW);
   assert.equal(await currentShow, CENTER_SAMPLE_DETAIL_PREVIEW);
@@ -486,11 +456,7 @@ test("removing a sampled raster prevents a late request from restoring it", asyn
     },
   );
 
-  const pending = controller.show(
-    MOUNTED_GEOTIFF_ITEM,
-    "centerSample",
-    "coarse",
-  );
+  const pending = controller.show(MOUNTED_GEOTIFF_ITEM);
   controller.remove();
   work.resolve(CENTER_SAMPLE_DETAIL_PREVIEW);
 
@@ -543,7 +509,7 @@ test("zoom and pan replace sampled or exact current detail without stale flashes
     },
   );
 
-  await controller.show(MOUNTED_GEOTIFF_ITEM, "centerSample", "coarse");
+  await controller.show(MOUNTED_GEOTIFF_ITEM);
   map.setZoom(5);
   map.setBounds({
     getWest: () => -122.8,
@@ -556,7 +522,7 @@ test("zoom and pan replace sampled or exact current detail without stale flashes
   timers.values().next().value();
   timers.clear();
   assert.equal(requests.length, 1);
-  assert.equal(requests[0].options.density, "coarse");
+  assert.deepEqual(Object.keys(requests[0].options), ["viewBounds"]);
 
   map.setBounds({
     getWest: () => -122.4,
@@ -675,7 +641,7 @@ test("latest viewport retries transient bounded-reader capacity", async () => {
     },
   );
 
-  await controller.show(MOUNTED_GEOTIFF_ITEM, "centerSample", "coarse");
+  await controller.show(MOUNTED_GEOTIFF_ITEM);
   map.setZoom(5);
   map.emit("moveend");
   timers.values().next().value();
@@ -757,7 +723,7 @@ test("first finite detail establishes style after an all-nodata base", async () 
     },
   );
 
-  await controller.show(MOUNTED_GEOTIFF_ITEM, "centerSample", "coarse");
+  await controller.show(MOUNTED_GEOTIFF_ITEM);
   map.setZoom(5);
   map.setBounds({
     getWest: () => -122.5,

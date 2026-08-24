@@ -15,88 +15,36 @@ export const RASTER_DETAIL_PREVIEW_LIMITS = Object.freeze({
   maximumExactDetailDimension: 512,
   maximumSourceBlockReads: 16129,
   maximumDecodedSourceBytes: 9663676416,
-  maximumTransformedPositions: 80645,
-  maximumPointsPerCell: 5,
-  maximumPatchDimension: 128,
-  maximumPatchCandidates: 9,
+  maximumTransformedPositions: 16129,
+  maximumPointsPerCell: 1,
 });
 
-/** Exact coarse-grid values with a deterministic repeating color pattern. */
-const COARSE_GRID_VALUES = Array.from(
-  { length: 31 * 31 },
+/** Exact fixed-grid values with a deterministic repeating color pattern. */
+const FIXED_GRID_VALUES = Array.from(
+  { length: 127 * 127 },
   (_, index) => [0, 50, 100, null, 25, 75][index % 6],
 );
 
 /** @type {Readonly<Object>} Full-extent center-per-cell numeric proxy. */
 export const CENTER_SAMPLE_DETAIL_PREVIEW = Object.freeze({
-  mode: "centerSample",
   scope: "rasterExtent",
   rendering: "sampledProxy",
-  density: "coarse",
-  policyVersion: "bounded-adaptive-raster-v6",
+  policyVersion: "bounded-adaptive-raster-v7",
   approximate: true,
   label: "Approximate full-extent proxy using each preview cell's center",
   rasterExtent: [-123, 48, -121, 50],
   imageBounds: [-122.9, 48.1, -121.1, 49.9],
-  imageWidth: 31,
-  imageHeight: 31,
-  pixelValues: COARSE_GRID_VALUES,
+  imageWidth: 127,
+  imageHeight: 127,
+  pixelValues: FIXED_GRID_VALUES,
   suggestedRange: { minimum: 0, midpoint: 50, maximum: 100 },
   limits: RASTER_DETAIL_PREVIEW_LIMITS,
   actual: {
-    sampleGridWidth: 31,
-    sampleGridHeight: 31,
+    sampleGridWidth: 127,
+    sampleGridHeight: 127,
     sourceBlockReadCount: 6,
     decodedSourceBytes: 12288,
     pointsPerCell: 1,
-    candidateWindowCount: 0,
-  },
-});
-
-/** @type {Readonly<Object>} Full-extent representative-per-cell proxy. */
-export const REPRESENTATIVE_SAMPLE_DETAIL_PREVIEW = Object.freeze({
-  ...CENTER_SAMPLE_DETAIL_PREVIEW,
-  mode: "representativeSample",
-  label: "Approximate full-extent proxy using representative cell samples",
-  pixelValues: COARSE_GRID_VALUES.map((value) =>
-    value === null ? null : Math.min(100, value + 5)
-  ),
-  actual: {
-    ...CENTER_SAMPLE_DETAIL_PREVIEW.actual,
-    pointsPerCell: 5,
-  },
-});
-
-/** @type {Readonly<Object>} Representative bounded numeric detail patch. */
-export const PATCH_DETAIL_PREVIEW = Object.freeze({
-  ...CENTER_SAMPLE_DETAIL_PREVIEW,
-  mode: "representativePatch",
-  scope: "representativePatch",
-  rendering: "representativePatch",
-  density: null,
-  label: "Approximate representative detail patch",
-  imageBounds: [-122.1, 48.9, -121.9, 49.1],
-  imageWidth: 2,
-  imageHeight: 2,
-  pixelValues: [10, 20, null, 30],
-  suggestedRange: { minimum: 10, midpoint: 20, maximum: 30 },
-  limits: Object.freeze({
-    ...RASTER_DETAIL_PREVIEW_LIMITS,
-    maximumDecodedSourceBytes: 67108864,
-  }),
-  actual: {
-    sampleGridWidth: 2,
-    sampleGridHeight: 2,
-    sourceBlockReadCount: 4,
-    decodedSourceBytes: 65536,
-    pointsPerCell: 0,
-    candidateWindowCount: 3,
-    sourceWindow: {
-      columnOffset: 20,
-      rowOffset: 30,
-      width: 2,
-      height: 2,
-    },
   },
 });
 
@@ -107,7 +55,7 @@ export const CURRENT_VIEW_DETAIL_PREVIEW = Object.freeze({
   label: "Approximate current-view sampled proxy using each map cell's center",
   imageBounds: [-122.5, 48.5, -121.5, 49.5],
   pixelValues: Array.from(
-    { length: 31 * 31 },
+    { length: 127 * 127 },
     (_, index) => 10 + (index % 6) * 10,
   ),
 });
@@ -131,7 +79,6 @@ export const EXACT_CURRENT_VIEW_DETAIL_PREVIEW = Object.freeze({
     sourceBlockReadCount: 2,
     decodedSourceBytes: 40960,
     pointsPerCell: 0,
-    candidateWindowCount: 0,
     sourceWindow: {
       columnOffset: 400,
       rowOffset: 250,
@@ -144,7 +91,7 @@ export const EXACT_CURRENT_VIEW_DETAIL_PREVIEW = Object.freeze({
 /** @type {Readonly<Object>} Honest all-nodata full-extent numeric proxy. */
 export const NODATA_DETAIL_PREVIEW = Object.freeze({
   ...CENTER_SAMPLE_DETAIL_PREVIEW,
-  pixelValues: new Array(31 * 31).fill(null),
+  pixelValues: new Array(127 * 127).fill(null),
   suggestedRange: null,
 });
 

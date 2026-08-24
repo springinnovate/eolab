@@ -429,25 +429,9 @@
                     >
                       <p>
                         <strong>Adaptive bounded raster detail</strong>
-                        <span>Broad views in either cell-sampling mode use the selected approximate grid. Once the visible source window satisfies strict server-owned limits, EOLab automatically replaces that grid with a complete bounded source-window read reprojected for the map at the same dimensions. The representative patch remains fixed at its selected source location.</span>
+                        <span>Broad views always use one center sample in each proxy cell, with 127 cells on the longest displayed edge and an aspect-preserving shorter edge. Once the visible source window satisfies strict server-owned limits, EOLab automatically replaces that grid with a complete bounded source-window read reprojected for the map at the same dimensions.</span>
                       </p>
-                      <label for="raster-detail-preview-mode">
-                        <span>Preview choice</span>
-                        <select id="raster-detail-preview-mode">
-                          <option value="centerSample">Center sample in each proxy cell</option>
-                          <option value="representativeSample">Representative samples in each proxy cell</option>
-                          <option value="representativePatch">Representative, bounded detail patch</option>
-                        </select>
-                      </label>
-                      <label for="raster-detail-preview-density">
-                        <span>Sample density</span>
-                        <select id="raster-detail-preview-density">
-                          <option value="coarse">Coarse — 31 samples on the longest edge</option>
-                          <option value="medium">Medium — 63 samples on the longest edge</option>
-                          <option value="fine">Fine — 127 samples on the longest edge</option>
-                        </select>
-                        <small>The selected count is used exactly on the longer projected edge; the shorter edge preserves the displayed rectangle's aspect ratio. Close views in either cell-sampling mode automatically use a complete bounded native-window read; the representative patch does not auto-refine. Sampled proxies use smooth display interpolation, exact windows use crisp nearest-neighbor presentation, and representative patches retain crisp native-pixel edges. This overview-limited raster is never published to GeoServer. The status below reports the active map area, source window, native blocks, and decoded work.</small>
-                      </label>
+                      <small>Sampled proxies use smooth display interpolation; exact close-view windows use crisp nearest-neighbor presentation. This overview-limited raster is never published to GeoServer. The status below reports the active map area, source window, native blocks, and decoded work.</small>
                       <output
                         class="raster-detail-preview-resolution"
                         id="raster-detail-preview-resolution"

@@ -168,18 +168,6 @@ export function publishCatalogRaster(
     );
 }
 
-/** Fixed user-selectable bounded preview modes. */
-const RASTER_DETAIL_PREVIEW_MODES = new Set([
-    "centerSample",
-    "representativeSample",
-    "representativePatch"
-]);
-/** Fixed server-owned longest-edge resolutions for sampled raster proxies. */
-const RASTER_DETAIL_PREVIEW_DENSITIES = new Map([
-    ["coarse", 31],
-    ["medium", 63],
-    ["fine", 127]
-]);
 /** Projection roundoff allowance, far below a displayable map distance. */
 const RASTER_DETAIL_PREVIEW_BOUNDS_TOLERANCE = 1e-9;
 
@@ -193,8 +181,6 @@ const RASTER_DETAIL_PREVIEW_BOUNDS_TOLERANCE = 1e-9;
 
 /**
  * @typedef {Object} RasterDetailPreviewOptions
- * @property {string} mode Fixed server-owned sampling policy.
- * @property {string|null} [density] Fixed target-grid density profile.
  * @property {RasterDetailPreviewViewBounds|null} [viewBounds] Optional exact
  * current raster/view intersection; no source paths or read controls are
  * accepted.
@@ -204,21 +190,18 @@ const RASTER_DETAIL_PREVIEW_BOUNDS_TOLERANCE = 1e-9;
  * Validate and normalize one detail-preview request owned by the browser.
  *
  * @param {RasterDetailPreviewOptions} options
- * Explicit mode, fixed density profile, and optional current map rectangle.
- * @return {{mode:string,density:string|null,
- * viewBounds:RasterDetailPreviewViewBounds|null}} Strict request options safe
- * to serialize without paths or numeric read controls.
- * @throws {TypeError} If mode-specific parameters violate the request union.
+ * Optional current map rectangle.
+ * @return {{viewBounds:RasterDetailPreviewViewBounds|null}} Strict request
+ * options safe to serialize without paths or numeric read controls.
+ * @throws {TypeError} If fields or bounds violate the fixed request contract.
  */
 function validateRasterDetailPreviewOptions(options) {
     const optionKeys = Object.keys(options ?? {});
     if (optionKeys.some((key) =>
-        !["mode", "density", "viewBounds"].includes(key)
+        key !== "viewBounds"
     )) {
         throw new TypeError("Raster detail request contains unsupported fields");
     }
-    const mode = options?.mode;
-    const density = options?.density ?? null;
     const viewBounds = options?.viewBounds ?? null;
     const isCanonicalBounds = (bounds) => bounds !== null &&
         typeof bounds === "object" &&
@@ -232,24 +215,10 @@ function validateRasterDetailPreviewOptions(options) {
         bounds.west >= -180 && bounds.east <= 180 &&
         bounds.south >= -90 && bounds.north <= 90 &&
         bounds.west < bounds.east && bounds.south < bounds.north;
-    if (!RASTER_DETAIL_PREVIEW_MODES.has(mode)) {
-        throw new TypeError(`Unsupported raster detail preview mode: ${mode}`);
-    }
-    if (mode === "representativePatch") {
-        if (density !== null || viewBounds !== null) {
-            throw new TypeError(
-                "Representative patches do not accept density or view bounds"
-            );
-        }
-    } else if (!RASTER_DETAIL_PREVIEW_DENSITIES.has(density)) {
-        throw new TypeError(`Unsupported raster detail density: ${density}`);
-    }
     if (viewBounds !== null && !isCanonicalBounds(viewBounds)) {
         throw new TypeError("Raster detail view bounds are invalid");
     }
     return {
-        mode,
-        density,
         viewBounds: viewBounds === null ? null : {
             west: viewBounds.west,
             south: viewBounds.south,
@@ -289,11 +258,9 @@ export function isRasterDetailPreviewCapacityError(error) {
  */
 export function validateRasterDetailPreview(preview, options) {
     const request = validateRasterDetailPreviewOptions(options);
-    const requestedMode = request.mode;
     const rendering = preview?.rendering;
     const isExactDetail = rendering === "exactSourceWindow";
-    const isPatch = rendering === "representativePatch";
-    const expectedDecodedSourceBytes = isExactDetail || isPatch
+    const expectedDecodedSourceBytes = isExactDetail
         ? 67108864
         : 9663676416;
     const expectedSourceBlockReads = isExactDetail ? 1024 : 16129;
@@ -304,18 +271,12 @@ export function validateRasterDetailPreview(preview, options) {
         bounds[1] >= -90 && bounds[3] <= 90 &&
         bounds[0] < bounds[2] && bounds[1] < bounds[3];
     if (
-        preview?.mode !== requestedMode ||
-        !new Set([
-            "sampledProxy",
-            "exactSourceWindow",
-            "representativePatch"
-        ]).has(rendering) ||
-        preview?.scope !== (requestedMode === "representativePatch"
-            ? "representativePatch"
-            : request.viewBounds === null ? "rasterExtent" : "currentView") ||
-        preview?.density !== request.density ||
+        !new Set(["sampledProxy", "exactSourceWindow"]).has(rendering) ||
+        preview?.scope !== (request.viewBounds === null
+            ? "rasterExtent"
+            : "currentView") ||
         preview?.approximate !== true ||
-        preview?.policyVersion !== "bounded-adaptive-raster-v6" ||
+        preview?.policyVersion !== "bounded-adaptive-raster-v7" ||
         typeof preview?.label !== "string" || preview.label.trim() === "" ||
         !isCanonicalBounds(preview?.rasterExtent) ||
         !isCanonicalBounds(preview?.imageBounds) ||
@@ -333,10 +294,8 @@ export function validateRasterDetailPreview(preview, options) {
         preview?.limits?.maximumSourceBlockReads !== expectedSourceBlockReads ||
         preview?.limits?.maximumDecodedSourceBytes !==
             expectedDecodedSourceBytes ||
-        preview?.limits?.maximumTransformedPositions !== 80645 ||
-        preview?.limits?.maximumPointsPerCell !== 5 ||
-        preview?.limits?.maximumPatchDimension !== 128 ||
-        preview?.limits?.maximumPatchCandidates !== 9 ||
+        preview?.limits?.maximumTransformedPositions !== 16129 ||
+        preview?.limits?.maximumPointsPerCell !== 1 ||
         preview?.actual?.sampleGridWidth !== preview.imageWidth ||
         preview?.actual?.sampleGridHeight !== preview.imageHeight ||
         !Number.isSafeInteger(preview?.actual?.sourceBlockReadCount) ||
@@ -348,15 +307,10 @@ export function validateRasterDetailPreview(preview, options) {
         preview.actual.decodedSourceBytes >
             preview.limits.maximumDecodedSourceBytes ||
         !Number.isSafeInteger(preview?.actual?.pointsPerCell) ||
-        preview.actual.pointsPerCell < 0 ||
-        !Number.isSafeInteger(preview?.actual?.candidateWindowCount) ||
-        preview.actual.candidateWindowCount < 0
+        preview.actual.pointsPerCell < 0
     ) {
         throw new Error("Detail-only preview response is invalid");
     }
-    const selectedGridDimension = requestedMode === "representativePatch"
-        ? preview.limits.maximumPatchDimension
-        : RASTER_DETAIL_PREVIEW_DENSITIES.get(request.density);
     const sourceWindow = preview.actual.sourceWindow;
     const validSourceWindow = sourceWindow !== null &&
         typeof sourceWindow === "object" &&
@@ -370,33 +324,19 @@ export function validateRasterDetailPreview(preview, options) {
     if (
         (rendering === "sampledProxy"
             ? Math.max(preview.imageWidth, preview.imageHeight) !==
-                selectedGridDimension
-            : rendering === "exactSourceWindow"
-                ? preview.imageWidth > preview.limits.maximumExactDetailDimension ||
-                    preview.imageHeight >
-                        preview.limits.maximumExactDetailDimension
-                : preview.imageWidth > selectedGridDimension ||
-                    preview.imageHeight > selectedGridDimension) ||
-        preview.actual.pointsPerCell !== (
-            rendering === "exactSourceWindow"
-                ? 0
-                : requestedMode === "centerSample"
-                ? 1
-                : requestedMode === "representativeSample" ? 5 : 0
-        ) ||
-        (rendering === "representativePatch") !==
-            (preview.actual.candidateWindowCount > 0) ||
-        preview.actual.candidateWindowCount >
-            preview.limits.maximumPatchCandidates ||
+                preview.limits.maximumProxyDimension
+            : preview.imageWidth > preview.limits.maximumExactDetailDimension ||
+                preview.imageHeight >
+                    preview.limits.maximumExactDetailDimension) ||
+        preview.actual.pointsPerCell !== (isExactDetail ? 0 : 1) ||
         (preview.actual.sourceBlockReadCount === 0) !==
             (preview.actual.decodedSourceBytes === 0) ||
         ((rendering === "sampledProxy") !== (sourceWindow == null)) ||
-        (rendering !== "sampledProxy" && (
+        (isExactDetail && (
             !validSourceWindow ||
             sourceWindow.width !== preview.imageWidth ||
             sourceWindow.height !== preview.imageHeight
         )) ||
-        (requestedMode === "representativePatch") !== isPatch ||
         (request.viewBounds === null && isExactDetail)
     ) {
         throw new Error("Detail-only preview image exceeds its fixed limit");
@@ -435,9 +375,7 @@ export function validateRasterDetailPreview(preview, options) {
         (finiteValues.length === 0 && range !== null) ||
         (finiteValues.length > 0 && !validRange) ||
         (preview.actual.sourceBlockReadCount === 0 &&
-            (finiteValues.length > 0 || range !== null)) ||
-        (requestedMode === "representativePatch" &&
-            preview.actual.sourceBlockReadCount === 0)
+            (finiteValues.length > 0 || range !== null))
     ) {
         throw new Error("Detail-only preview color range is invalid");
     }
@@ -449,7 +387,7 @@ export function validateRasterDetailPreview(preview, options) {
  *
  * @param {Object} item Selected scanner-owned STAC Item.
  * @param {RasterDetailPreviewOptions} options
- * Fixed mode and density plus an optional current map rectangle.
+ * Optional current map rectangle; center sampling and 127 are server-owned.
  * @param {AbortSignal} signal Cancellation signal for stale UI intent.
  * @param {typeof globalThis.fetch} [fetchImplementation=globalThis.fetch]
  * Browser fetch implementation.
@@ -465,12 +403,8 @@ export async function loadCatalogRasterDetailPreview(
     const request = validateRasterDetailPreviewOptions(options);
     const body = {
         collectionId: item.collection,
-        itemId: item.id,
-        mode: request.mode
+        itemId: item.id
     };
-    if (request.density !== null) {
-        body.density = request.density;
-    }
     if (request.viewBounds !== null) {
         body.viewBounds = request.viewBounds;
     }

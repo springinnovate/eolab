@@ -21,7 +21,6 @@ import {
   CURRENT_VIEW_DETAIL_PREVIEW,
   EXACT_CURRENT_VIEW_DETAIL_PREVIEW,
   NODATA_DETAIL_PREVIEW,
-  PATCH_DETAIL_PREVIEW,
   RASTER_DETAIL_PREVIEW_LIMITS,
   RASTER_STATISTICS,
   SELECTED_BOUNDS,
@@ -30,14 +29,14 @@ import {
   TEMPORARY_AOI_RASTER_STATISTICS,
 } from "../../test-support/raster/fixtures.js";
 
-test("detail preview sends only identity, fixed mode, and density", async () => {
+test("detail preview sends only identity for the fixed base policy", async () => {
   const requests = [];
   const abortController = new AbortController();
 
   assert.deepEqual(
     await loadCatalogRasterDetailPreview(
       MOUNTED_GEOTIFF_ITEM,
-      { mode: "centerSample", density: "coarse" },
+      {},
       abortController.signal,
       async (url, options) => {
         requests.push({ url, options });
@@ -60,8 +59,6 @@ test("detail preview sends only identity, fixed mode, and density", async () => 
       body: JSON.stringify({
         collectionId: MOUNTED_GEOTIFF_ITEM.collection,
         itemId: MOUNTED_GEOTIFF_ITEM.id,
-        mode: "centerSample",
-        density: "coarse",
       }),
       signal: abortController.signal,
     },
@@ -74,7 +71,7 @@ test("detail preview sends only identity, fixed mode, and density", async () => 
 test("detail preview preserves an actionable backend failure", async () => {
   const request = loadCatalogRasterDetailPreview(
     MOUNTED_GEOTIFF_ITEM,
-    { mode: "centerSample", density: "coarse" },
+    {},
     new AbortController().signal,
     async () => new Response(
       JSON.stringify({ detail: "Sampled raster source blocks are unsafe." }),
@@ -122,7 +119,7 @@ test("detail preview sends one canonical current-view rectangle", async () => {
   let requestBody = null;
   const preview = await loadCatalogRasterDetailPreview(
     MOUNTED_GEOTIFF_ITEM,
-    { mode: "centerSample", density: "coarse", viewBounds },
+    { viewBounds },
     new AbortController().signal,
     async (_url, options) => {
       requestBody = JSON.parse(options.body);
@@ -137,8 +134,6 @@ test("detail preview sends one canonical current-view rectangle", async () => {
   assert.deepEqual(requestBody, {
     collectionId: MOUNTED_GEOTIFF_ITEM.collection,
     itemId: MOUNTED_GEOTIFF_ITEM.id,
-    mode: "centerSample",
-    density: "coarse",
     viewBounds,
   });
   assert.equal("width" in requestBody, false);
@@ -153,13 +148,9 @@ test("detail preview rejects extra request and view-bound fields", async () => {
   };
   const requestCases = [
     {
-      mode: "centerSample",
-      density: "coarse",
       width: 31,
     },
     {
-      mode: "centerSample",
-      density: "coarse",
       viewBounds: {
         west: -122.5,
         south: 48.5,
@@ -188,83 +179,63 @@ test("detail preview accepts numeric images and honest all-nodata proxies", () =
   assert.equal(
     validateRasterDetailPreview(
       CENTER_SAMPLE_DETAIL_PREVIEW,
-      { mode: "centerSample", density: "coarse" },
+      {},
     ),
     CENTER_SAMPLE_DETAIL_PREVIEW,
   );
   assert.equal(
     validateRasterDetailPreview(
       NODATA_DETAIL_PREVIEW,
-      { mode: "centerSample", density: "coarse" },
+      {},
     ),
     NODATA_DETAIL_PREVIEW,
   );
-  assert.equal(
-    validateRasterDetailPreview(
-      PATCH_DETAIL_PREVIEW,
-      { mode: "representativePatch" },
-    ),
-    PATCH_DETAIL_PREVIEW,
-  );
 });
 
-test("fine density puts exactly 127 cells on the viewport's longest edge", () => {
-  const finePreview = {
+test("fixed policy puts exactly 127 cells on the viewport's longest edge", () => {
+  const fixedPreview = {
     ...CENTER_SAMPLE_DETAIL_PREVIEW,
-    density: "fine",
-    imageWidth: 127,
     imageHeight: 64,
     pixelValues: new Array(127 * 64).fill(1),
-    actual: {
-      ...CENTER_SAMPLE_DETAIL_PREVIEW.actual,
-      sampleGridWidth: 127,
-      sampleGridHeight: 64,
-    },
+    actual: { ...CENTER_SAMPLE_DETAIL_PREVIEW.actual, sampleGridHeight: 64 },
   };
   assert.equal(
-    validateRasterDetailPreview(
-      finePreview,
-      { mode: "centerSample", density: "fine" },
-    ),
-    finePreview,
+    validateRasterDetailPreview(fixedPreview, {}),
+    fixedPreview,
   );
 
   assert.throws(
     () => validateRasterDetailPreview({
-      ...finePreview,
+      ...fixedPreview,
       imageWidth: 15,
       imageHeight: 7,
       pixelValues: new Array(15 * 7).fill(1),
       actual: {
-        ...finePreview.actual,
+        ...fixedPreview.actual,
         sampleGridWidth: 15,
         sampleGridHeight: 7,
       },
-    }, { mode: "centerSample", density: "fine" }),
+    }, {}),
     /exceeds its fixed limit/,
   );
 });
 
-test("detail preview rejects arbitrary modes before sending a request", async () => {
+test("detail preview rejects removed mode and density fields", async () => {
   await assert.rejects(
     loadCatalogRasterDetailPreview(
       MOUNTED_GEOTIFF_ITEM,
-      { mode: "fullExtent", density: "coarse" },
+      { mode: "centerSample", density: "fine" },
       new AbortController().signal,
       async () => {
         throw new Error("request should not be sent");
       },
     ),
-    /Unsupported raster detail preview mode/,
+    /unsupported fields/,
   );
 });
 
-test("detail preview strictly validates v6 adaptive identity and shape", () => {
+test("detail preview strictly validates v7 fixed identity and shape", () => {
   const invalidPreviews = [
-    ["mismatched mode", {
-      ...CENTER_SAMPLE_DETAIL_PREVIEW,
-      mode: "representativeSample",
-    }],
     ["legacy policy", {
       ...CENTER_SAMPLE_DETAIL_PREVIEW,
       policyVersion: "bounded-detail-preview-v1",
@@ -314,7 +285,7 @@ test("detail preview strictly validates v6 adaptive identity and shape", () => {
       ...CENTER_SAMPLE_DETAIL_PREVIEW,
       limits: {
         ...CENTER_SAMPLE_DETAIL_PREVIEW.limits,
-        maximumTransformedPositions: 80644,
+        maximumTransformedPositions: 16128,
       },
     }],
     ["over-limit actual block reads", {
@@ -331,13 +302,6 @@ test("detail preview strictly validates v6 adaptive identity and shape", () => {
         decodedSourceBytes: 9663676417,
       },
     }],
-    ["negative candidate count", {
-      ...CENTER_SAMPLE_DETAIL_PREVIEW,
-      actual: {
-        ...CENTER_SAMPLE_DETAIL_PREVIEW.actual,
-        candidateWindowCount: -1,
-      },
-    }],
     ["inconsistent center probes", {
       ...CENTER_SAMPLE_DETAIL_PREVIEW,
       actual: {
@@ -351,30 +315,16 @@ test("detail preview strictly validates v6 adaptive identity and shape", () => {
     assert.throws(
       () => validateRasterDetailPreview(
         preview,
-        { mode: "centerSample", density: "coarse" },
+        {},
       ),
       /Detail-only preview/,
       `accepted invalid sampled-raster case: ${caseName}`,
     );
   }
-  assert.throws(
-    () => validateRasterDetailPreview({
-      ...PATCH_DETAIL_PREVIEW,
-      imageWidth: 129,
-      pixelValues: new Array(129 * PATCH_DETAIL_PREVIEW.imageHeight).fill(10),
-      actual: {
-        ...PATCH_DETAIL_PREVIEW.actual,
-        sampleGridWidth: 129,
-      },
-    }, { mode: "representativePatch" }),
-    /exceeds its fixed limit/,
-  );
 });
 
 test("exact current-view detail requires bounded source-window provenance", () => {
   const request = {
-    mode: "centerSample",
-    density: "coarse",
     viewBounds: {
       west: -122.5,
       south: 48.5,
@@ -420,7 +370,7 @@ test("exact current-view detail requires bounded source-window provenance", () =
   assert.throws(
     () => validateRasterDetailPreview(
       EXACT_CURRENT_VIEW_DETAIL_PREVIEW,
-      { mode: "centerSample", density: "coarse" },
+      {},
     ),
     /Detail-only preview/,
   );
@@ -431,7 +381,7 @@ test("detail preview requires null color range only for all-nodata images", () =
     () => validateRasterDetailPreview({
       ...NODATA_DETAIL_PREVIEW,
       suggestedRange: { minimum: 0, midpoint: 50, maximum: 100 },
-    }, { mode: "centerSample", density: "coarse" }),
+    }, {}),
     /color range is invalid/,
   );
   assert.throws(
@@ -442,7 +392,7 @@ test("detail preview requires null color range only for all-nodata images", () =
         sourceBlockReadCount: 0,
         decodedSourceBytes: 0,
       },
-    }, { mode: "centerSample", density: "coarse" }),
+    }, {}),
     /color range is invalid/,
   );
   assert.equal(
@@ -453,24 +403,8 @@ test("detail preview requires null color range only for all-nodata images", () =
         sourceBlockReadCount: 0,
         decodedSourceBytes: 0,
       },
-    }, { mode: "centerSample", density: "coarse" }).suggestedRange,
+    }, {}).suggestedRange,
     null,
-  );
-});
-
-test("representative patches require positive bounded source reads", () => {
-  assert.throws(
-    () => validateRasterDetailPreview({
-      ...PATCH_DETAIL_PREVIEW,
-      pixelValues: new Array(4).fill(null),
-      suggestedRange: null,
-      actual: {
-        ...PATCH_DETAIL_PREVIEW.actual,
-        sourceBlockReadCount: 0,
-        decodedSourceBytes: 0,
-      },
-    }, { mode: "representativePatch" }),
-    /color range is invalid/,
   );
 });
 
@@ -481,17 +415,7 @@ test("every detail image must stay inside its raster and requested view", () => 
         ...CENTER_SAMPLE_DETAIL_PREVIEW,
         imageBounds: [-123.5, 48.5, -121.5, 49.5],
       },
-      { mode: "centerSample", density: "coarse" },
-    ),
-    /placement is invalid/,
-  );
-  assert.throws(
-    () => validateRasterDetailPreview(
-      {
-        ...PATCH_DETAIL_PREVIEW,
-        imageBounds: [-120.9, 48.9, -120.7, 49.1],
-      },
-      { mode: "representativePatch" },
+      {},
     ),
     /placement is invalid/,
   );
@@ -502,8 +426,6 @@ test("every detail image must stay inside its raster and requested view", () => 
         imageBounds: [-123.5, 48.5, -121.5, 49.5],
       },
       {
-        mode: "centerSample",
-        density: "coarse",
         viewBounds: {
           west: -122.5,
           south: 48.5,

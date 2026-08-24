@@ -11,8 +11,6 @@ import {
   CENTER_SAMPLE_DETAIL_PREVIEW,
   CURRENT_VIEW_DETAIL_PREVIEW,
   EXACT_CURRENT_VIEW_DETAIL_PREVIEW,
-  PATCH_DETAIL_PREVIEW,
-  REPRESENTATIVE_SAMPLE_DETAIL_PREVIEW,
 } from "../../test-support/raster/fixtures.js";
 
 /**
@@ -62,7 +60,7 @@ test("sampled raster panes keep boundaries above opaque images", () => {
   assert.equal(result.boundaryPane.style.pointerEvents, "none");
 });
 
-test("full-extent sampled modes use one colored image at warped bounds", () => {
+test("full-extent fixed sample uses one colored image at warped bounds", () => {
   const leaflet = fakeLeaflet();
   const presentation = createRasterDetailPreviewLayer(
     leaflet,
@@ -103,44 +101,6 @@ test("full-extent sampled modes use one colored image at warped bounds", () => {
   assert.equal(
     presentation.layer.layers[1].options.pane,
     RASTER_DETAIL_PREVIEW_IMAGE_PANE,
-  );
-
-  const representative = createRasterDetailPreviewLayer(
-    fakeLeaflet(),
-    REPRESENTATIVE_SAMPLE_DETAIL_PREVIEW,
-    { encodeImage: () => "data:image/png;base64,representative-proxy" },
-  );
-  assert.deepEqual(representative.focusBounds, [[48, -123], [50, -121]]);
-});
-
-test("representative patch focuses its numeric image and retains raster extent", () => {
-  const leaflet = fakeLeaflet();
-  const presentation = createRasterDetailPreviewLayer(
-    leaflet,
-    PATCH_DETAIL_PREVIEW,
-    { encodeImage: () => "data:image/png;base64,detail-patch" },
-  );
-
-  assert.deepEqual(presentation.focusBounds, [[48.9, -122.1], [49.1, -121.9]]);
-  assert.deepEqual(
-    presentation.layer.layers.map((layer) => layer.kind),
-    ["rectangle", "image", "rectangle"],
-  );
-  assert.equal(
-    presentation.layer.layers[1].url,
-    "data:image/png;base64,detail-patch",
-  );
-  assert.equal(
-    presentation.layer.layers[1].options.className,
-    "raster-detail-image raster-source-detail",
-  );
-  assert.equal(
-    presentation.layer.layers[2].options.className,
-    "raster-detail-patch-boundary",
-  );
-  assert.equal(
-    presentation.layer.layers[2].options.pane,
-    RASTER_DETAIL_PREVIEW_BOUNDARY_PANE,
   );
 });
 
