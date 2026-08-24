@@ -78,11 +78,39 @@ EOLab no longer loads a sample Collection during deployment. Upgrading does not 
 | `EOLAB_APP_TITLE`                  | `EOLab`                                           | Browser and panel title                             |
 | `EOLAB_APP_SUBTITLE`               | `Explore, visualize, and analyze Earth observation data` | Short panel description                     |
 | `EOLAB_CATALOG_URL`                | `/stac`                                           | Browser-facing STAC API path                        |
-| `EOLAB_BASEMAP_URL`                | OpenStreetMap tiles                               | Leaflet tile URL template                           |
-| `EOLAB_BASEMAP_ATTRIBUTION`        | OpenStreetMap attribution                         | Basemap attribution text                            |
+| `EOLAB_BASEMAP_URL`                | OpenTopoMap raster tiles                          | Leaflet tile URL template                           |
+| `EOLAB_BASEMAP_ATTRIBUTION`        | OpenTopoMap, OpenStreetMap, and SRTM attribution  | Basemap attribution HTML                            |
 | `EOLAB_INITIAL_LATITUDE`           | `20`                                              | Initial map latitude                                |
 | `EOLAB_INITIAL_LONGITUDE`          | `0`                                               | Initial map longitude                               |
 | `EOLAB_INITIAL_ZOOM`               | `2`                                               | Initial Leaflet zoom, from 0 to 22                  |
+
+### Basemap provider
+
+The default basemap is the public OpenTopoMap raster service at
+`https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png`. Its map style is licensed
+under CC-BY-SA 3.0, its OpenStreetMap data is licensed under ODbL, and the
+required OpenTopoMap, OpenStreetMap, SRTM, and license links remain visible in
+Leaflet attribution. OpenTopoMap permits use in web applications, including
+commercial use, without an API credential or license fee. Its operators ask
+applications to avoid mass downloads, request contact before large-scale use,
+and provide no availability guarantee. See the provider's
+[usage and attribution guidance](https://opentopomap.org/about#verwendung) and
+[service FAQ](https://opentopomap.org/about#faq).
+
+OpenTopoMap supplies native tiles through zoom 17. Leaflet overzooms those
+tiles when EOLab's existing map workflow reaches zoom 18 through 22. Failed
+tile requests render as transparent neutral-background tiles; EOLab does not
+silently send requests to a second provider, and raster, vector, AOI,
+sample-window, footprint, and pixel-probe overlays remain available. A
+deployment that needs guaranteed availability or expects high traffic should
+set `EOLAB_BASEMAP_URL` and `EOLAB_BASEMAP_ATTRIBUTION` to a self-hosted or
+contracted provider before deployment.
+
+Esri World Topographic Map was evaluated first. Esri's current Basemap Styles
+service requires an access token with the `premium:user:basemaps` privilege and
+meters basemap tile or session usage. EOLab does not expose a basemap secret or
+add an authentication lifecycle for this presentation-only change. See Esri's
+[Basemap Styles authentication and usage documentation](https://developers.arcgis.com/documentation/mapping-and-location-services/mapping/basemaps/introduction-basemap-styles-service/).
 
 ## Rendering service
 

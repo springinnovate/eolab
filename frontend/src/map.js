@@ -10,6 +10,11 @@ export const SINGLE_WORLD_BOUNDS = [
     [90, 180]
 ];
 
+const BASEMAP_MAX_NATIVE_ZOOM = 17;
+const BASEMAP_ERROR_TILE_URL =
+    "data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 " +
+    "width=%221%22 height=%221%22/%3E";
+
 /**
  * Format a pointer position only when it belongs to the canonical world.
  *
@@ -60,7 +65,10 @@ export function createSingleWorldMap(leaflet, appGlobalConfiguration) {
     leaflet.control.zoom({ position: "bottomleft" }).addTo(leafletMap);
     leaflet.tileLayer(appGlobalConfiguration.basemap.url, {
         attribution: appGlobalConfiguration.basemap.attribution,
+        className: "eolab-basemap",
+        errorTileUrl: BASEMAP_ERROR_TILE_URL,
         maxZoom: 22,
+        maxNativeZoom: BASEMAP_MAX_NATIVE_ZOOM,
         noWrap: true,
         bounds: SINGLE_WORLD_BOUNDS
     }).addTo(leafletMap);

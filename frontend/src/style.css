@@ -1,25 +1,34 @@
 :root {
   color-scheme: light;
-  font-family:
-    "Avenir Next", Avenir, "Helvetica Neue", Arial, ui-sans-serif, system-ui,
-    sans-serif;
-  --surface-1: #f7f7f7;
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", "Avenir Next", Avenir,
+    "Helvetica Neue", Arial, sans-serif;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.45;
+  --surface-1: #f7f6f3;
   --surface-2: #ffffff;
-  --surface-3: #f2f2f2;
-  --surface-4: #ebebeb;
-  --border-1: #d4d4d4;
-  --border-2: #dedede;
+  --surface-3: #f6f6f4;
+  --surface-4: #eeeeeb;
+  --surface-hover: #f2f7fa;
+  --surface-selected: #e5f2f8;
+  --border-1: #d6d6d3;
+  --border-2: #dfdfdc;
   --border-3: #ebebeb;
-  --text-1: #141414;
+  --text-1: #2f2f2f;
   --text-2: #4a4a4a;
-  --text-3: #6b6b6b;
+  --text-3: #686868;
   --brand: #007ac2;
   --brand-hover: #00619b;
   --brand-press: #004874;
+  --focus-ring: #005e95;
   --status-success: #288835;
   --status-warning: #da7c0b;
   --status-danger: #d83020;
-  --radius: 4px;
+  --disabled-opacity: 0.48;
+  --radius: 3px;
+  --elevation-control: 0 1px 3px rgb(0 0 0 / 14%);
+  --elevation-panel: 0 2px 10px rgb(0 0 0 / 14%);
   background: var(--surface-1);
   color: var(--text-1);
 }
@@ -47,18 +56,34 @@ select {
   font: inherit;
 }
 
+strong {
+  font-weight: 600;
+}
+
 button:focus-visible,
 a:focus-visible,
 input:focus-visible,
 select:focus-visible,
 summary:focus-visible {
-  outline: 2px solid var(--brand);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
-button:disabled {
+button:disabled,
+input:disabled,
+select:disabled,
+[aria-disabled="true"] {
   cursor: not-allowed;
-  opacity: 0.55;
+  opacity: var(--disabled-opacity);
+}
+
+input:hover:not(:disabled),
+select:hover:not(:disabled) {
+  border-color: var(--text-3);
+}
+
+[aria-busy="true"] {
+  cursor: progress;
 }
 
 #map {
@@ -157,7 +182,7 @@ button:disabled {
   background: rgb(255 247 224 / 96%);
   padding: 10px 13px;
   color: #582a00;
-  box-shadow: 0 2px 10px rgb(0 0 0 / 24%);
+  box-shadow: var(--elevation-control);
   font-size: 0.8rem;
   font-weight: 650;
   line-height: 1.45;
@@ -180,15 +205,43 @@ button:disabled {
   font-family: inherit;
 }
 
+.eolab-basemap {
+  opacity: 0.72 !important;
+  filter: saturate(0.6) contrast(0.86);
+}
+
 .leaflet-control-zoom a {
   border-color: var(--border-1) !important;
   background: var(--surface-2) !important;
-  color: var(--text-1) !important;
+  color: var(--text-2) !important;
+}
+
+.leaflet-control-zoom {
+  border: 0 !important;
+  box-shadow: var(--elevation-control) !important;
+}
+
+.leaflet-control-zoom a:hover {
+  background: var(--surface-hover) !important;
+  color: var(--brand-hover) !important;
+}
+
+.leaflet-control-zoom a:active {
+  background: var(--surface-selected) !important;
+  color: var(--brand-press) !important;
+}
+
+.leaflet-control-zoom a:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 .leaflet-control-attribution {
-  background: rgb(255 255 255 / 88%) !important;
+  background: rgb(255 255 255 / 92%) !important;
   color: var(--text-2) !important;
+  font-size: 0.72rem !important;
 }
 
 .leaflet-control-attribution a {
@@ -208,7 +261,7 @@ button:disabled {
   border: 1px solid var(--border-1);
   border-radius: var(--radius);
   background: rgb(255 255 255 / 98%);
-  box-shadow: 0 2px 12px rgb(0 0 0 / 20%);
+  box-shadow: var(--elevation-panel);
   transition:
     width 220ms ease,
     transform 220ms ease,
@@ -239,8 +292,8 @@ button:disabled {
   margin: 0 0 7px;
   color: var(--brand-hover);
   font-size: 0.7rem;
-  font-weight: 700;
-  letter-spacing: 0.13em;
+  font-weight: 600;
+  letter-spacing: 0.11em;
   text-transform: uppercase;
 }
 
@@ -252,16 +305,18 @@ p {
 
 h1 {
   margin-bottom: 5px;
-  font-size: clamp(1.7rem, 5vw, 2.35rem);
-  font-weight: 650;
-  letter-spacing: -0.045em;
+  font-size: clamp(1.45rem, 3vw, 1.8rem);
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  line-height: 1.2;
 }
 
 h2 {
   margin-bottom: 12px;
-  font-size: 1.45rem;
-  font-weight: 650;
-  letter-spacing: -0.025em;
+  font-size: 1.18rem;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 1.25;
 }
 
 h3,
@@ -273,18 +328,21 @@ h5 {
 
 h3 {
   margin-bottom: 12px;
-  font-size: 1.15rem;
+  font-size: 1rem;
+  font-weight: 600;
   overflow-wrap: anywhere;
 }
 
 h4 {
   margin: 24px 0 10px;
   font-size: 0.9rem;
+  font-weight: 600;
 }
 
 h5 {
   margin-bottom: 3px;
   font-size: 0.84rem;
+  font-weight: 600;
 }
 
 .subtitle,
@@ -313,7 +371,14 @@ h5 {
 
 .icon-button:hover {
   border-color: var(--brand-hover);
+  background: var(--surface-hover);
   color: var(--brand-hover);
+}
+
+.icon-button:active {
+  border-color: var(--brand-press);
+  background: var(--surface-selected);
+  color: var(--brand-press);
 }
 
 .system-state {
@@ -328,6 +393,15 @@ h5 {
   cursor: pointer;
   padding: 11px 24px;
   user-select: none;
+}
+
+.system-state > summary:hover {
+  background: var(--surface-hover);
+}
+
+.system-state[open] > summary {
+  background: var(--surface-selected);
+  box-shadow: inset 2px 0 0 var(--brand);
 }
 
 .system-state > summary .status-dot {
@@ -355,7 +429,7 @@ h5 {
 }
 
 .system-state-details-body:focus-visible {
-  outline: 2px solid var(--brand);
+  outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
 }
 
@@ -368,6 +442,10 @@ h5 {
 .rendering-diagnostics.is-degraded .status-dot {
   background: var(--status-warning);
   box-shadow: 0 0 0 4px rgb(218 124 11 / 12%);
+}
+
+.rendering-diagnostics.is-busy > summary {
+  background: color-mix(in srgb, var(--status-warning) 8%, var(--surface-2));
 }
 
 .rendering-diagnostics.is-unavailable .status-dot {
@@ -475,7 +553,7 @@ h5 {
   margin: 0;
   color: var(--text-3);
   font-size: 0.68rem;
-  font-weight: 650;
+  font-weight: 500;
   text-align: right;
 }
 
@@ -500,7 +578,7 @@ h5 {
   gap: 5px;
   color: var(--text-2);
   font-size: 0.7rem;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .temporary-aoi-upload input,
@@ -525,7 +603,7 @@ h5 {
   padding: 2px 8px 2px 0;
   color: var(--brand-hover);
   font: inherit;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .temporary-aoi-upload-progress {
@@ -537,7 +615,7 @@ h5 {
 .temporary-aoi-upload-progress label {
   color: var(--text-2);
   font-size: 0.7rem;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .temporary-aoi-upload-progress progress {
@@ -610,7 +688,7 @@ h5 {
 .temporary-aoi-details dt {
   color: var(--text-3);
   font-size: 0.66rem;
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
@@ -936,6 +1014,7 @@ h5 {
 
 .raster-layer-row.is-active {
   border-color: var(--brand);
+  background: var(--surface-selected);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--brand) 30%, transparent);
 }
 
@@ -955,7 +1034,7 @@ h5 {
   min-width: 0;
   overflow: hidden;
   font-size: 0.74rem;
-  font-weight: 700;
+  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -977,7 +1056,7 @@ h5 {
 .raster-layer-state {
   color: var(--text-3);
   font-size: 0.65rem;
-  font-weight: 650;
+  font-weight: 600;
   text-transform: uppercase;
 }
 
@@ -1075,14 +1154,14 @@ h5 {
 .raster-style-controls legend {
   padding: 0 5px;
   font-size: 0.78rem;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .raster-active-layer-label {
   margin: 0 0 10px;
   color: var(--text-2);
   font-size: 0.72rem;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .raster-palette,
@@ -1091,7 +1170,7 @@ h5 {
   gap: 5px;
   color: var(--text-2);
   font-size: 0.7rem;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .raster-palette {
@@ -1190,7 +1269,7 @@ h5 {
   gap: 4px;
   color: var(--text-2);
   font-size: 0.68rem;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .raster-sample-window-size input[type="range"] {
@@ -1269,6 +1348,10 @@ h5 {
   background: var(--surface-2);
 }
 
+.raster-histogram[aria-busy="true"] .raster-histogram-chart {
+  opacity: 0.58;
+}
+
 .raster-histogram-chart[hidden],
 .raster-histogram-axis[hidden],
 .raster-percentile-controls[hidden] {
@@ -1339,7 +1422,7 @@ h5 {
   align-items: center;
   color: var(--text-2);
   font-size: 0.68rem;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .raster-percentile-controls input[type="range"] {
@@ -1409,7 +1492,7 @@ h5 {
 .catalog-metadata dt {
   color: var(--text-3);
   font-size: 0.7rem;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .catalog-metadata dd {
@@ -1512,11 +1595,17 @@ h5 {
   padding: 7px 11px;
   color: var(--brand-hover);
   font-size: 0.76rem;
-  font-weight: 650;
+  font-weight: 600;
 }
 
-.secondary-button:hover {
-  background: #d6efff;
+.secondary-button:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.secondary-button:active:not(:disabled) {
+  border-color: var(--brand-press);
+  background: var(--surface-selected);
+  color: var(--brand-press);
 }
 
 .catalog-results {
@@ -1537,7 +1626,7 @@ h5 {
   margin-bottom: 16px;
   color: var(--text-2);
   font-size: 0.74rem;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .catalog-search input {
@@ -1591,7 +1680,7 @@ h5 {
   padding: 4px 9px;
   color: var(--text-2);
   font: inherit;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .catalog-surprise-button:hover:not(:disabled) {
@@ -1655,7 +1744,7 @@ h5 {
   cursor: pointer;
   color: var(--text-2);
   font-size: 0.78rem;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .scan-status-details {
@@ -1767,12 +1856,17 @@ h5 {
 
 .catalog-result:hover {
   border-color: var(--brand);
-  background: #f2f9fd;
+  background: var(--surface-hover);
+}
+
+.catalog-result:active {
+  border-color: var(--brand-press);
+  background: var(--surface-selected);
 }
 
 .catalog-result.is-selected {
   border-color: var(--brand);
-  background: #e5f4fc;
+  background: var(--surface-selected);
   box-shadow: inset 3px 0 0 var(--brand);
 }
 
@@ -1836,7 +1930,7 @@ h5 {
   background: var(--brand);
   padding: 11px 15px;
   color: #ffffff;
-  box-shadow: 0 2px 8px rgb(0 0 0 / 20%);
+  box-shadow: var(--elevation-control);
 }
 
 .panel-opener:hover {
@@ -1859,7 +1953,7 @@ h5 {
   background: rgb(255 255 255 / 92%);
   padding: 7px 11px;
   color: var(--text-2);
-  box-shadow: 0 1px 4px rgb(0 0 0 / 16%);
+  box-shadow: var(--elevation-control);
   font: 0.72rem/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   transition: right 220ms ease;
 }
@@ -1876,7 +1970,7 @@ h5 {
   background: rgb(255 255 255 / 96%);
   padding: 8px 10px;
   color: var(--text-1);
-  box-shadow: 0 2px 8px rgb(0 0 0 / 20%);
+  box-shadow: var(--elevation-control);
   font: 0.72rem/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   overflow-wrap: anywhere;
   will-change: transform;
@@ -1884,7 +1978,7 @@ h5 {
 
 .raster-pixel-probe-name {
   overflow: hidden;
-  font-weight: 700;
+  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

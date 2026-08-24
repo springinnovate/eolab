@@ -98,7 +98,12 @@ test("basemap tile requests do not wrap into another world", () => {
     url: "https://tiles.example/{z}/{x}/{y}.png",
     options: {
       attribution: "Example tiles",
+      className: "eolab-basemap",
+      errorTileUrl:
+        "data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 " +
+        "width=%221%22 height=%221%22/%3E",
       maxZoom: 22,
+      maxNativeZoom: 17,
       noWrap: true,
       bounds: SINGLE_WORLD_BOUNDS,
     },
