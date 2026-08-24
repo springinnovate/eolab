@@ -106,3 +106,14 @@ class VectorReaderAssessment(BaseModel):
                 "Incompatible vector assessments require a reason and no geometry"
             )
         return self
+
+
+class PublishedVector(BaseModel):
+    """Browser-safe identity of one published vector WMS layer."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    layer_name: str = Field(alias="layerName")
+    bbox: tuple[float, float, float, float]
+    geometry_kind: VectorGeometryKind = Field(alias="geometryKind")
+    style_name: str = Field(alias="styleName")

@@ -6,6 +6,7 @@ from typing import Any, Protocol
 from eolab_app.vector.models import (
     CatalogVectorRequest,
     VectorFormat,
+    VectorGeometryKind,
     VectorReaderAssessment,
 )
 
@@ -29,6 +30,7 @@ class VectorCatalog(Protocol):
             VectorFeatureError: If the catalog is unavailable or invalid.
         """
         ...
+
     async def upsert_item(
         self,
         request: CatalogVectorRequest,
@@ -68,5 +70,34 @@ class VectorReaderAssessor(Protocol):
         Raises:
             VectorUpstreamError: If the assessment boundary is unavailable or
                 violates its response contract.
+        """
+        ...
+
+
+class VectorPublisher(Protocol):
+    """Rendering adapter required by vector publication."""
+
+    async def publish(
+        self,
+        resource_name: str,
+        source_format: VectorFormat,
+        source_path: Path,
+        layer_name: str,
+        geometry_kind: VectorGeometryKind,
+    ) -> str:
+        """Converge and style one exact mounted vector layer.
+
+        Args:
+            resource_name: Stable GeoServer feature type and layer name.
+            source_format: Supported mounted vector format.
+            source_path: Canonical mounted container or file path.
+            layer_name: Exact native layer selected by the Item.
+            geometry_kind: Default point, line, or polygon style class.
+
+        Returns:
+            Unqualified initialized style name assigned to the layer.
+
+        Raises:
+            VectorPublicationError: If GeoServer cannot converge the layer.
         """
         ...

@@ -16,6 +16,10 @@ from eolab_app.catalog.shapefile import (
 )
 from eolab_app.catalog.zipped_shapefile import ZIP_MEDIA_TYPE
 from eolab_app.catalog.vector import MOUNTED_VECTOR_COLLECTION_ID
+from eolab_app.rendering.errors import (
+    PublishedLayerChangedError,
+    PublishedLayerNotAuthorizedError,
+)
 from eolab_app.vector.errors import (
     VectorAssetError,
     VectorConflictError,
@@ -26,6 +30,7 @@ from eolab_app.vector.models import (
     VectorFormat,
     VectorSourceSignature,
 )
+from eolab_app.vector.wms_authorization import PublishedVectorAuthorization
 
 
 _FORMAT_ITEM_PREFIXES: dict[VectorFormat, str] = {
@@ -432,3 +437,85 @@ class MountedVectorResolver:
             )
         return tuple(paths[extension] for extension in SHAPEFILE_COMPONENT_TYPES
                      if extension in paths)
+
+
+class PublishedVectorRegistry:
+    """Authorize only current exact vector sources for the public WMS proxy."""
+
+    def __init__(self) -> None:
+        """Create an empty process-local vector authorization registry."""
+        self._sources: dict[
+            str,
+            tuple[ResolvedVectorSource, VectorSourceSignature, str],
+        ] = {}
+
+    def authorize(
+        self,
+        layer_name: str,
+        source: ResolvedVectorSource,
+        inspected_signature: VectorSourceSignature,
+        style_name: str,
+    ) -> None:
+        """Authorize a vector layer only if its complete source is unchanged.
+
+        Args:
+            layer_name: Workspace-qualified GeoServer WMS layer name.
+            source: Exact mounted source and native layer identity.
+            inspected_signature: Complete identity captured before publication.
+            style_name: Geometry-specific initialized WMS style.
+
+        Raises:
+            PublishedLayerChangedError: If the mounted source changed or
+                disappeared.
+        """
+        try:
+            current_signature = vector_source_signature(source)
+        except OSError:
+            current_signature = None
+        if current_signature != inspected_signature:
+            raise PublishedLayerChangedError(
+                "The vector source changed while it was being published"
+            )
+        self._sources[layer_name] = (
+            source,
+            inspected_signature,
+            style_name,
+        )
+
+    def require_current(
+        self,
+        layer_name: str,
+    ) -> PublishedVectorAuthorization:
+        """Require an authorized layer whose complete source is unchanged.
+
+        Args:
+            layer_name: Workspace-qualified GeoServer WMS layer name.
+
+        Returns:
+            Current exact source, approved signature, and allowed style.
+
+        Raises:
+            PublishedLayerNotAuthorizedError: If this process did not authorize
+                the layer.
+            PublishedLayerChangedError: If any source component changed
+                afterward.
+        """
+        authorization = self._sources.get(layer_name)
+        if authorization is None:
+            raise PublishedLayerNotAuthorizedError(
+                "The WMS layer has not been approved for visualization"
+            )
+        source, approved_signature, style_name = authorization
+        try:
+            current_signature = vector_source_signature(source)
+        except OSError:
+            current_signature = None
+        if current_signature != approved_signature:
+            raise PublishedLayerChangedError(
+                "The visualized vector source changed; select it again"
+            )
+        return PublishedVectorAuthorization(
+            source,
+            approved_signature,
+            style_name,
+        )
