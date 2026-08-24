@@ -484,6 +484,8 @@ class RasterDetailPreview(BaseModel):
             and self.image_bounds[1] < self.image_bounds[3]
         ):
             raise ValueError("Detail preview bounds must be strictly ordered")
+        # The browser/map protocol is canonical WGS 84 even when the source
+        # raster uses another CRS; readers transform before this boundary.
         if any(
             bounds[0] < -180
             or bounds[2] > 180
