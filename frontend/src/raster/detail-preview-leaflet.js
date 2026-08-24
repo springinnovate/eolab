@@ -15,8 +15,9 @@ const RASTER_DETAIL_PREVIEW_BOUNDARY_Z_INDEX = "440";
 /**
  * Ensure bounded detail images and outlines use ordered noninteractive panes.
  *
- * The boundary pane sits above the opaque numeric images but below the
- * temporary-AOI pane, preserving both raster labels and AOI visibility.
+ * The boundary pane sits above the numeric image pane but below the
+ * temporary-AOI pane, preserving raster labels, transparent nodata, and AOI
+ * visibility.
  *
  * @param {Object} leafletMap Leaflet-compatible map with pane factories.
  * @return {{imagePane:Object,boundaryPane:Object}} Existing or created panes.

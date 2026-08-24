@@ -403,7 +403,7 @@ class RasterDetailSourceWindow(BaseModel):
 
 
 class RasterDetailPreview(BaseModel):
-    """Browser-safe, georeferenced approximate raster detail preview.
+    """Browser-safe, georeferenced bounded raster representation.
 
     Attributes:
         mode: Explicit preview mode that produced this document.
@@ -411,8 +411,10 @@ class RasterDetailPreview(BaseModel):
         rendering: Sampled proxy, exact bounded source window, or patch.
         density: Fixed sampled-grid density, or ``None`` for a patch.
         policy_version: Algorithm and cache policy identity.
-        approximate: Literal marker preventing full-render interpretation.
-        label: User-facing approximation label.
+        approximate: Detail-only marker preventing whole-raster interpretation;
+            an exact result is produced from a complete read of its bounded
+            native source window before same-dimension map reprojection.
+        label: User-facing representation label.
         raster_extent: Cataloged WGS 84 raster extent, not a data footprint.
         image_bounds: WGS 84 placement of the sampled image in Leaflet.
         image_width: Width of the numeric image in pixels.

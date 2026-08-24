@@ -144,9 +144,10 @@ export function formatRasterDetailMapNotice(previewState) {
     const preview = previewState.detailPreview ?? previewState.basePreview;
     if (preview.rendering === "exactSourceWindow") {
         return "ZOOMED IN TO FULL SOURCE DETAIL — This view is small enough " +
-            "for EOLab to display every native source pixel in the bounded " +
-            `window (${preview.imageWidth} × ${preview.imageHeight}). You are ` +
-            "seeing the raster's true source detail; zooming out will return " +
+            "for EOLab to read the complete bounded native source window " +
+            `(${preview.imageWidth} × ${preview.imageHeight}) and display its ` +
+            "same-dimension nearest-neighbor map reprojection. You are seeing " +
+            "full bounded source detail at this scale; zooming out will return " +
             "to sampled detail because the source does not have a usable " +
             "overview pyramid.";
     }

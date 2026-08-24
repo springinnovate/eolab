@@ -10,8 +10,9 @@ const STYLE = readFileSync(
 
 test("adaptive raster detail explains sampling and exact-view handoff", () => {
   assert.match(MARKUP, /<strong>Adaptive bounded raster detail<\/strong>/);
-  assert.match(MARKUP, /Broad views use the selected approximate sample grid/);
-  assert.match(MARKUP, /complete bounded source-pixel detail/);
+  assert.match(MARKUP, /Broad views in either cell-sampling mode use the selected approximate grid/);
+  assert.match(MARKUP, /complete bounded source-window read reprojected for the map at the same dimensions/);
+  assert.match(MARKUP, /representative patch remains fixed at its selected source location/i);
   assert.match(MARKUP, /value="centerSample">Center sample in each proxy cell/);
   assert.match(MARKUP, /value="representativeSample">Representative samples in each proxy cell/);
   assert.match(MARKUP, /value="representativePatch">Representative, bounded detail patch/);
@@ -20,6 +21,10 @@ test("adaptive raster detail explains sampling and exact-view handoff", () => {
   assert.match(MARKUP, /value="medium">Medium — 63 samples on the longest edge/);
   assert.match(MARKUP, /value="fine">Fine — 127 samples on the longest edge/);
   assert.match(MARKUP, /shorter edge preserves the displayed rectangle's aspect ratio/);
+  assert.match(MARKUP, /representative patch does not auto-refine/i);
+  assert.match(MARKUP, /Sampled proxies use smooth display interpolation/);
+  assert.match(MARKUP, /exact windows use crisp nearest-neighbor presentation/);
+  assert.match(MARKUP, /representative patches retain crisp native-pixel edges/);
   assert.match(MARKUP, /active map area, source window, native blocks, and decoded work/);
   assert.match(MARKUP, /id="raster-detail-preview-resolution"/);
   assert.match(

@@ -429,7 +429,7 @@
                     >
                       <p>
                         <strong>Adaptive bounded raster detail</strong>
-                        <span>Broad views use the selected approximate sample grid. Once the visible source window satisfies strict server-owned limits, EOLab automatically replaces it with complete bounded source-pixel detail.</span>
+                        <span>Broad views in either cell-sampling mode use the selected approximate grid. Once the visible source window satisfies strict server-owned limits, EOLab automatically replaces that grid with a complete bounded source-window read reprojected for the map at the same dimensions. The representative patch remains fixed at its selected source location.</span>
                       </p>
                       <label for="raster-detail-preview-mode">
                         <span>Preview choice</span>
@@ -446,7 +446,7 @@
                           <option value="medium">Medium — 63 samples on the longest edge</option>
                           <option value="fine">Fine — 127 samples on the longest edge</option>
                         </select>
-                        <small>The selected count is used exactly on the longer projected edge; the shorter edge preserves the displayed rectangle's aspect ratio. Close views automatically use exact bounded source pixels read by EOLab; this overview-limited raster is never published to GeoServer. The status below reports the active map area, source window, native blocks, and decoded work.</small>
+                        <small>The selected count is used exactly on the longer projected edge; the shorter edge preserves the displayed rectangle's aspect ratio. Close views in either cell-sampling mode automatically use a complete bounded native-window read; the representative patch does not auto-refine. Sampled proxies use smooth display interpolation, exact windows use crisp nearest-neighbor presentation, and representative patches retain crisp native-pixel edges. This overview-limited raster is never published to GeoServer. The status below reports the active map area, source window, native blocks, and decoded work.</small>
                       </label>
                       <output
                         class="raster-detail-preview-resolution"

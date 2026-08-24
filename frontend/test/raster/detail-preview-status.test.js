@@ -109,7 +109,7 @@ test("map notice explains overview limits and the active representation", () => 
       basePreview: CENTER_SAMPLE_DETAIL_PREVIEW,
       detailPreview: EXACT_CURRENT_VIEW_DETAIL_PREVIEW,
     }),
-    /ZOOMED IN TO FULL SOURCE DETAIL.*display every native source pixel in the bounded window \(4 × 3\).*true source detail; zooming out will return to sampled detail/s,
+    /ZOOMED IN TO FULL SOURCE DETAIL.*read the complete bounded native source window \(4 × 3\).*same-dimension nearest-neighbor map reprojection.*full bounded source detail at this scale; zooming out will return to sampled detail/s,
   );
   assert.match(
     formatRasterDetailMapNotice({

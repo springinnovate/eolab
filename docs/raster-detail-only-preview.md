@@ -41,12 +41,22 @@ unsupported by this bounded band-one path.
 
 ## Preview choices and density
 
-Every response is labeled approximate and includes the cataloged **raster
-extent**. The orange dashed outline is the raster extent, not a measured
-valid-data footprint. Every displayed image must remain inside that extent;
-backend and browser validators allow only `1e-9` degree of projection
-roundoff. Raster/detail outlines use a noninteractive pane above the opaque
-sampled images, while the temporary-AOI pane remains above both.
+Every response carries `approximate: true` as a detail-only marker: the
+contract never grants normal whole-raster visualization. A `sampledProxy`
+subsamples the displayed area and is numerically approximate. A
+`representativePatch` contains actual source pixels, but its deterministic
+location is only representative of the raster. An `exactSourceWindow` is
+produced from a complete base-resolution read of its admitted native source
+window, then nearest-neighbor reprojected at the same dimensions for map
+placement. It is explicitly labeled exact bounded source detail, but it is
+still not a whole-raster rendering.
+
+Every response also includes the cataloged **raster extent**. The orange dashed
+outline is the raster extent, not a measured valid-data footprint. Every
+displayed image must remain inside that extent; backend and browser validators
+allow only `1e-9` degree of projection roundoff. Raster/detail outlines use a
+noninteractive pane above the numeric image pane, while the temporary-AOI pane
+remains above both. Nodata image pixels remain alpha-transparent.
 
 While the mode is active, a prominent noninteractive notice is displayed over
 the map. It explains that the raster cannot be shown safely at full extent
@@ -78,6 +88,13 @@ EOLab never silently substitutes a coarser grid. The widget reports the actual
 base and current-view dimensions returned by the server. EOLab preflights that
 exact grid and returns an actionable conflict before pixel I/O if it would
 exceed a fixed source-read limit.
+
+Sampled proxies use normal browser image smoothing so enlarged proxy-cell
+edges look visibly soft at broad scales. This changes only presentation; it
+does not infer values, add observations, or increase the reported grid density.
+Exact current-view windows retain crisp nearest-neighbor pixel edges, and
+representative source patches retain crisp native-pixel edges. Neither display
+uses the smoothing applied to sampled proxies.
 
 ## Zoom-adaptive detail
 
@@ -119,6 +136,11 @@ the browser has moved on, the latest stable viewport retries that one transient
 busy conflict once per second. Other conflicts remain visible and are not
 retried. The compact provenance status includes the actual failure reason while
 retaining the prior overlay.
+The same gray processing veil and spinner appear during the initial adaptive
+raster request and during scheduled, active, or capacity-retry current-view
+work. The veil prevents the empty initial map or retained lower-detail image
+from being mistaken for the completed result; it does not block newer map
+input.
 The new overlay is attached before the prior one is removed. Zooming back to
 the fitted scale removes only the detail overlay and retains the base grid.
 The representative patch remains explicit and does not auto-refine.
@@ -252,7 +274,9 @@ GeoServer output buffers and request concurrency bound output/control flow, not
 GDAL source reads. EOLab therefore does not weaken the overview policy, publish
 the overview-limited raster, or authorize it through the WMS proxy. The map
 contains only fixed, bounded observations or one proven-bounded current-view
-source window. It remains visibly pixelated and labeled detail-only; even an
-exact current-view window says that it is not a whole-raster rendering.
-Building proper internal overviews remains the path to normal full-raster
-visualization.
+source window. Broad sampled proxies are visually smoothed but remain explicitly
+labeled low-density approximations. Exact current-view windows use crisp
+nearest-neighbor presentation, and representative source patches keep crisp
+native-pixel edges. Even exact bounded detail is identified as a current-view
+window rather than a whole-raster rendering. Building proper internal
+overviews remains the path to normal full-raster visualization.
