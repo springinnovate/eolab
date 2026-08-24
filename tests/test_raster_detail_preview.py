@@ -913,18 +913,18 @@ def test_one_request_transforms_only_the_selected_exact_grid(
     assert transformed_counts == [DETAIL_PROXY_MAX_TRANSFORMED_POSITIONS]
 
 
-def test_current_view_center_nodata_remains_transparent(
+def test_current_view_uint8_center_nodata_remains_transparent(
     tmp_path: Path,
 ) -> None:
-    """Never translate a nodata center probe into a numeric zero.
+    """Cast integer exact detail before representing nodata with NaN.
 
     Args:
         tmp_path: Temporary raster directory.
     """
     source_path = tmp_path / "view-center-nodata.tif"
-    _write_raster(source_path, 3, 3)
-    values = numpy.ones((3, 3), dtype=numpy.float32)
-    values[1, 1] = -9999
+    _write_raster(source_path, 3, 3, dtype="uint8")
+    values = numpy.ones((3, 3), dtype=numpy.uint8)
+    values[1, 1] = 255
     with rasterio.open(source_path, "r+") as dataset:
         dataset.write(values, 1)
     preview = read_raster_detail_preview(
@@ -1338,6 +1338,38 @@ def test_representative_patch_returns_deterministic_bounded_numeric_payload(
             "out_shape" not in keyword_args
             for _, keyword_args in tracker.reads
         )
+
+
+def test_representative_patch_casts_uint8_before_filling_nodata(
+    tmp_path: Path,
+) -> None:
+    """Preserve integer patch values while rendering nodata transparently.
+
+    Args:
+        tmp_path: Temporary raster directory.
+
+    Returns:
+        None.
+    """
+    source_path = tmp_path / "uint8-patch.tif"
+    _write_raster(source_path, 128, 128, dtype="uint8")
+    values = numpy.full((128, 128), 10, dtype=numpy.uint8)
+    values[64, 64] = 255
+    with rasterio.open(source_path, "r+") as dataset:
+        dataset.write(values, 1)
+
+    preview = read_raster_detail_preview(
+        source_path,
+        "representativePatch",
+        RASTER_EXTENT,
+        None,
+    )
+
+    assert preview.rendering == "representativePatch"
+    assert preview.pixel_values.count(None) == 1
+    assert {
+        value for value in preview.pixel_values if value is not None
+    } == {10.0}
 
 
 def test_huge_representative_patch_reads_only_bounded_native_blocks(

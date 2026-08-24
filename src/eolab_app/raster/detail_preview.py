@@ -216,6 +216,35 @@ def _web_mercator_bounds(
     return west, south, east, north
 
 
+def _floating_values_and_validity(
+    source_values: numpy.ma.MaskedArray,
+) -> tuple[numpy.ndarray, numpy.ndarray]:
+    """Materialize masked source values for GDAL without integer NaN writes.
+
+    The source data is converted to a private float64 array before invalid
+    positions receive NaN. This preserves integer rasters while giving GDAL an
+    unambiguous numeric nodata marker and an independent validity plane.
+
+    Args:
+        source_values: Two-dimensional masked numeric source values.
+
+    Returns:
+        Float64 values with invalid positions set to NaN, and a matching uint8
+        plane containing one for valid positions and zero for invalid ones.
+    """
+    numeric_source = numpy.asarray(
+        source_values.data,
+        dtype=numpy.float64,
+    ).copy()
+    invalid_source = (
+        numpy.ma.getmaskarray(source_values)
+        | ~numpy.isfinite(numeric_source)
+    )
+    numeric_source[invalid_source] = numpy.nan
+    valid_source = numpy.asarray(~invalid_source, dtype=numpy.uint8)
+    return numeric_source, valid_source
+
+
 def _warp_numeric_image(
     source_crs: object,
     source_transform: Affine,
@@ -254,14 +283,7 @@ def _warp_numeric_image(
         destination_width,
         destination_height,
     )
-    numeric_source = numpy.asarray(
-        numpy.ma.filled(source_values, numpy.nan),
-        dtype=numpy.float64,
-    )
-    valid_source = numpy.asarray(
-        ~numpy.ma.getmaskarray(source_values) & numpy.isfinite(numeric_source),
-        dtype=numpy.uint8,
-    )
+    numeric_source, valid_source = _floating_values_and_validity(source_values)
     destination_values = numpy.full(
         (destination_height, destination_width),
         numpy.nan,
@@ -346,14 +368,7 @@ def _warp_exact_current_view(
         destination_width,
         destination_height,
     )
-    numeric_source = numpy.asarray(
-        numpy.ma.filled(source_values, numpy.nan),
-        dtype=numpy.float64,
-    )
-    valid_source = numpy.asarray(
-        ~numpy.ma.getmaskarray(source_values) & numpy.isfinite(numeric_source),
-        dtype=numpy.uint8,
-    )
+    numeric_source, valid_source = _floating_values_and_validity(source_values)
     destination_values = numpy.full(
         (destination_height, destination_width),
         numpy.nan,
@@ -514,16 +529,12 @@ def _flatten_values(values: numpy.ma.MaskedArray) -> list[float | None]:
     Returns:
         Finite floats and ``None`` for nodata/non-finite cells.
     """
-    numeric_values = numpy.asarray(
-        numpy.ma.filled(values, numpy.nan),
-        dtype=numpy.float64,
-    )
-    mask = numpy.ma.getmaskarray(values) | ~numpy.isfinite(numeric_values)
+    numeric_values, validity = _floating_values_and_validity(values)
     return [
-        None if masked else float(value)
-        for value, masked in zip(
+        None if not valid else float(value)
+        for value, valid in zip(
             numeric_values.ravel(),
-            mask.ravel(),
+            validity.ravel(),
             strict=True,
         )
     ]
