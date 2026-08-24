@@ -14,12 +14,12 @@ from eolab_app.raster.detail_preview import (
     DETAIL_PREVIEW_POLICY_VERSION,
     read_raster_detail_preview,
 )
-from eolab_app.raster.detail_proxy import (
-    DETAIL_PROXY_CENTER_OFFSETS,
-    DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES,
-    DETAIL_PROXY_MAX_DIMENSION,
-    DETAIL_PROXY_MAX_SOURCE_BLOCK_READS,
-    DETAIL_PROXY_MAX_TRANSFORMED_POSITIONS,
+from eolab_app.raster.sample_grid import (
+    SAMPLE_GRID_CENTER_OFFSETS,
+    SAMPLE_GRID_MAX_DECODED_SOURCE_BYTES,
+    SAMPLE_GRID_MAX_DIMENSION,
+    SAMPLE_GRID_MAX_SOURCE_BLOCK_READS,
+    SAMPLE_GRID_MAX_TRANSFORMED_POSITIONS,
 )
 from eolab_app.raster.eligibility import (
     DETAIL_ONLY_PREVIEW_REASON_CODES,
@@ -140,10 +140,10 @@ class RasterDetailPreviewService:
         """
         # Deterministic fractional locations are encoded in thousandths.
         return (
-            DETAIL_PROXY_MAX_DIMENSION,
-            DETAIL_PROXY_MAX_SOURCE_BLOCK_READS,
-            DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES,
-            DETAIL_PROXY_MAX_TRANSFORMED_POSITIONS,
+            SAMPLE_GRID_MAX_DIMENSION,
+            SAMPLE_GRID_MAX_SOURCE_BLOCK_READS,
+            SAMPLE_GRID_MAX_DECODED_SOURCE_BYTES,
+            SAMPLE_GRID_MAX_TRANSFORMED_POSITIONS,
             EXACT_DETAIL_MAX_DIMENSION,
             EXACT_DETAIL_MAX_SOURCE_BLOCK_READS,
             EXACT_DETAIL_MAX_DECODED_SOURCE_BYTES,
@@ -151,7 +151,7 @@ class RasterDetailPreviewService:
             EXACT_DETAIL_WINDOW_PADDING_PIXELS,
             *(
                 round(value * 1000)
-                for offset in DETAIL_PROXY_CENTER_OFFSETS
+                for offset in SAMPLE_GRID_CENTER_OFFSETS
                 for value in offset
             ),
         )
@@ -169,7 +169,7 @@ class RasterDetailPreviewService:
 
         Returns:
             Canonical positive-area intersection, or ``None`` for an extent
-            proxy.
+            sample grid.
 
         Raises:
             RasterConflictError: If the current view misses the raster.

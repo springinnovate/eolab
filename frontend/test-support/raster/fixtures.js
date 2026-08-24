@@ -11,7 +11,7 @@ export const MOUNTED_GEOTIFF_ITEM = Object.freeze({
 
 /** @type {Readonly<Object>} Fixed public bounds for sampled raster previews. */
 export const RASTER_DETAIL_PREVIEW_LIMITS = Object.freeze({
-  maximumProxyDimension: 127,
+  maximumSampleGridDimension: 127,
   maximumExactDetailDimension: 512,
   maximumSourceBlockReads: 16129,
   maximumDecodedSourceBytes: 9663676416,
@@ -25,13 +25,13 @@ const FIXED_GRID_VALUES = Array.from(
   (_, index) => [0, 50, 100, null, 25, 75][index % 6],
 );
 
-/** @type {Readonly<Object>} Full-extent center-per-cell numeric proxy. */
+/** @type {Readonly<Object>} Full-extent center-per-cell numeric sample grid. */
 export const CENTER_SAMPLE_DETAIL_PREVIEW = Object.freeze({
   scope: "rasterExtent",
-  rendering: "sampledProxy",
-  policyVersion: "bounded-adaptive-raster-v7",
+  rendering: "sampleGrid",
+  policyVersion: "bounded-adaptive-raster-v8",
   approximate: true,
-  label: "Approximate full-extent proxy using each preview cell's center",
+  label: "Approximate full-extent sample grid using each preview cell's center",
   rasterExtent: [-123, 48, -121, 50],
   imageBounds: [-122.9, 48.1, -121.1, 49.9],
   imageWidth: 127,
@@ -48,11 +48,11 @@ export const CENTER_SAMPLE_DETAIL_PREVIEW = Object.freeze({
   },
 });
 
-/** @type {Readonly<Object>} Finer proxy for the current visible map area. */
+/** @type {Readonly<Object>} Finer sample grid for the current visible map area. */
 export const CURRENT_VIEW_DETAIL_PREVIEW = Object.freeze({
   ...CENTER_SAMPLE_DETAIL_PREVIEW,
   scope: "currentView",
-  label: "Approximate current-view sampled proxy using each map cell's center",
+  label: "Approximate current-view sample grid using each map cell's center",
   imageBounds: [-122.5, 48.5, -121.5, 49.5],
   pixelValues: Array.from(
     { length: 127 * 127 },
@@ -88,7 +88,7 @@ export const EXACT_CURRENT_VIEW_DETAIL_PREVIEW = Object.freeze({
   },
 });
 
-/** @type {Readonly<Object>} Honest all-nodata full-extent numeric proxy. */
+/** @type {Readonly<Object>} Honest all-nodata full-extent numeric sample grid. */
 export const NODATA_DETAIL_PREVIEW = Object.freeze({
   ...CENTER_SAMPLE_DETAIL_PREVIEW,
   pixelValues: new Array(127 * 127).fill(null),

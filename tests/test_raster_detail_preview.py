@@ -9,19 +9,19 @@ import pytest
 import rasterio
 from rasterio.transform import from_origin
 
-import eolab_app.raster.detail_proxy as detail_proxy_module
+import eolab_app.raster.sample_grid as sample_grid_module
 from eolab_app.raster.detail_preview import (
     DETAIL_PREVIEW_POLICY_VERSION,
     _projected_sampling_bounds,
     read_raster_detail_preview,
 )
 from eolab_app.raster.detail_preview_service import RasterDetailPreviewService
-from eolab_app.raster.detail_proxy import (
-    DETAIL_PROXY_MAX_DIMENSION,
-    DETAIL_PROXY_MAX_SOURCE_BLOCK_READS,
-    DETAIL_PROXY_MAX_TRANSFORMED_POSITIONS,
-    plan_detail_proxy,
-    read_detail_proxy,
+from eolab_app.raster.sample_grid import (
+    SAMPLE_GRID_MAX_DIMENSION,
+    SAMPLE_GRID_MAX_SOURCE_BLOCK_READS,
+    SAMPLE_GRID_MAX_TRANSFORMED_POSITIONS,
+    plan_sample_grid,
+    read_sample_grid,
 )
 from eolab_app.raster.eligibility import (
     RENDERING_METADATA_KEY,
@@ -80,13 +80,13 @@ def _write_raster(
 def _preview_document(
     *,
     scope: str = "rasterExtent",
-    rendering: str = "sampledProxy",
+    rendering: str = "sampleGrid",
 ) -> RasterDetailPreview:
     """Build one valid fixed-policy response for service-boundary tests.
 
     Args:
         scope: Raster extent or current-view provenance.
-        rendering: Sampled proxy or exact source-window representation.
+        rendering: Sample grid or exact source-window representation.
 
     Returns:
         Validated immutable preview response.
@@ -94,7 +94,7 @@ def _preview_document(
     if rendering == "exactSourceWindow":
         width, height = 4, 3
         limits = {
-            "maximumProxyDimension": 127,
+            "maximumSampleGridDimension": 127,
             "maximumExactDetailDimension": 512,
             "maximumSourceBlockReads": 1_024,
             "maximumDecodedSourceBytes": 67_108_864,
@@ -117,7 +117,7 @@ def _preview_document(
     else:
         width, height = 127, 64
         limits = {
-            "maximumProxyDimension": 127,
+            "maximumSampleGridDimension": 127,
             "maximumExactDetailDimension": 512,
             "maximumSourceBlockReads": 16_129,
             "maximumDecodedSourceBytes": 9_663_676_416,
@@ -222,8 +222,8 @@ def test_fixed_grid_preserves_projected_aspect_ratio(tmp_path: Path) -> None:
     _write_raster(source_path, numpy.ones((128, 256), dtype=numpy.uint16))
     projected_bounds, _ = _projected_sampling_bounds(RASTER_EXTENT)
     with rasterio.open(source_path) as dataset:
-        plan = plan_detail_proxy(dataset, projected_bounds)
-    assert max(plan.width, plan.height) == DETAIL_PROXY_MAX_DIMENSION
+        plan = plan_sample_grid(dataset, projected_bounds)
+    assert max(plan.width, plan.height) == SAMPLE_GRID_MAX_DIMENSION
     projected_ratio = (
         (projected_bounds[2] - projected_bounds[0])
         / (projected_bounds[3] - projected_bounds[1])
@@ -231,7 +231,7 @@ def test_fixed_grid_preserves_projected_aspect_ratio(tmp_path: Path) -> None:
     assert plan.width / plan.height == pytest.approx(projected_ratio, rel=0.02)
     assert plan.points_per_cell == 1
     assert sum(len(cell) for cell in plan.cell_positions) <= (
-        DETAIL_PROXY_MAX_TRANSFORMED_POSITIONS
+        SAMPLE_GRID_MAX_TRANSFORMED_POSITIONS
     )
 
 
@@ -242,14 +242,14 @@ def test_center_nodata_remains_transparent(tmp_path: Path) -> None:
     values[63, 63] = 255
     _write_raster(source_path, values, nodata=255)
     with rasterio.open(source_path) as dataset:
-        proxy, plan = read_detail_proxy(dataset)
+        sample_grid, plan = read_sample_grid(dataset)
     assert plan.width == plan.height == 127
-    assert bool(proxy.mask[63, 63]) is True
-    assert proxy[63, 63] is numpy.ma.masked
-    assert float(proxy[0, 0]) == 1.0
+    assert bool(sample_grid.mask[63, 63]) is True
+    assert sample_grid[63, 63] is numpy.ma.masked
+    assert float(sample_grid[0, 0]) == 1.0
 
 
-def test_proxy_reads_each_required_native_block_once(
+def test_sample_grid_reads_each_required_native_block_once(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -260,7 +260,7 @@ def test_proxy_reads_each_required_native_block_once(
         numpy.arange(256 * 256, dtype=numpy.uint32).reshape(256, 256),
     )
     calls: list[object] = []
-    original = detail_proxy_module._read_native_block
+    original = sample_grid_module._read_native_block
 
     def tracked_read(dataset: rasterio.io.DatasetReader, window: object):
         """Record and delegate one native-block read.
@@ -275,20 +275,20 @@ def test_proxy_reads_each_required_native_block_once(
         calls.append(window)
         return original(dataset, window)
 
-    monkeypatch.setattr(detail_proxy_module, "_read_native_block", tracked_read)
+    monkeypatch.setattr(sample_grid_module, "_read_native_block", tracked_read)
     with rasterio.open(source_path) as dataset:
-        expected = plan_detail_proxy(dataset)
-        read_detail_proxy(dataset)
+        expected = plan_sample_grid(dataset)
+        read_sample_grid(dataset)
         expected_windows = [
             dataset.block_window(1, row, column)
             for row, column in expected.block_indexes
         ]
     assert calls == expected_windows
     assert len(calls) == len(set(calls))
-    assert len(calls) <= DETAIL_PROXY_MAX_SOURCE_BLOCK_READS
+    assert len(calls) <= SAMPLE_GRID_MAX_SOURCE_BLOCK_READS
 
 
-def test_proxy_cooperatively_cancels_between_native_blocks(
+def test_sample_grid_cooperatively_cancels_between_native_blocks(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -297,7 +297,7 @@ def test_proxy_cooperatively_cancels_between_native_blocks(
     _write_raster(source_path, numpy.ones((256, 256), dtype=numpy.uint16))
     reads = 0
     cancelled = threading.Event()
-    original = detail_proxy_module._read_native_block
+    original = sample_grid_module._read_native_block
 
     def tracked_read(dataset: rasterio.io.DatasetReader, block_index: tuple[int, int]):
         """Cancel the request after its first complete native-block read.
@@ -315,22 +315,22 @@ def test_proxy_cooperatively_cancels_between_native_blocks(
         cancelled.set()
         return values
 
-    monkeypatch.setattr(detail_proxy_module, "_read_native_block", tracked_read)
+    monkeypatch.setattr(sample_grid_module, "_read_native_block", tracked_read)
     with rasterio.open(source_path) as dataset:
         with pytest.raises(RasterReadCancelled):
-            read_detail_proxy(dataset, cancellation_requested=cancelled.is_set)
+            read_sample_grid(dataset, cancellation_requested=cancelled.is_set)
     assert reads == 1
 
 
 def test_base_and_close_view_use_sampled_then_exact_detail(tmp_path: Path) -> None:
-    """Retain the fixed proxy until a complete bounded source window is safe."""
+    """Retain the fixed sample grid until a complete bounded source window is safe."""
     source_path = tmp_path / "adaptive.tif"
     _write_raster(
         source_path,
         numpy.arange(256 * 256, dtype=numpy.float32).reshape(256, 256),
     )
     base = read_raster_detail_preview(source_path, RASTER_EXTENT)
-    assert base.rendering == "sampledProxy"
+    assert base.rendering == "sampleGrid"
     assert max(base.image_width, base.image_height) == 127
     assert base.actual.source_window is None
 

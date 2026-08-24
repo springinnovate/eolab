@@ -10,12 +10,12 @@ const STYLE = readFileSync(
 
 test("adaptive raster detail explains sampling and exact-view handoff", () => {
   assert.match(MARKUP, /<strong>Adaptive bounded raster detail<\/strong>/);
-  assert.match(MARKUP, /Broad views always use one center sample in each proxy cell/);
+  assert.match(MARKUP, /Broad views always use one center sample in each sample-grid cell/);
   assert.match(MARKUP, /127 cells on the longest displayed edge/);
   assert.match(MARKUP, /complete bounded source-window read reprojected for the map at the same dimensions/);
   assert.doesNotMatch(MARKUP, /raster-detail-preview-mode/);
   assert.doesNotMatch(MARKUP, /raster-detail-preview-density/);
-  assert.match(MARKUP, /Sampled proxies use smooth display interpolation/);
+  assert.match(MARKUP, /Sample grids use smooth display interpolation/);
   assert.match(MARKUP, /exact close-view windows use crisp nearest-neighbor presentation/);
   assert.match(MARKUP, /active map area, source window, native blocks, and decoded work/);
   assert.match(MARKUP, /id="raster-detail-preview-resolution"/);
@@ -35,7 +35,7 @@ test("adaptive raster detail explains sampling and exact-view handoff", () => {
   assert.match(MARKUP, /Remove adaptive raster/);
   assert.match(
     STYLE,
-    /\.raster-sampled-proxy\s*\{[^}]*image-rendering:\s*auto;/s,
+    /\.raster-sample-grid\s*\{[^}]*image-rendering:\s*auto;/s,
   );
   assert.match(
     STYLE,

@@ -71,7 +71,7 @@ test("full-extent fixed sample uses one colored image at warped bounds", () => {
         [style.minimum, style.midpoint, style.maximum],
         [0, 50, 100],
       );
-      return "data:image/png;base64,center-proxy";
+      return "data:image/png;base64,center-sample-grid";
     } },
   );
 
@@ -87,11 +87,11 @@ test("full-extent fixed sample uses one colored image at warped bounds", () => {
   );
   assert.equal(
     presentation.layer.layers[1].url,
-    "data:image/png;base64,center-proxy",
+    "data:image/png;base64,center-sample-grid",
   );
   assert.equal(
     presentation.layer.layers[1].options.className,
-    "raster-detail-image raster-sampled-proxy",
+    "raster-detail-image raster-sample-grid",
   );
   assert.equal(presentation.layer.layers[1].options.opacity, 1);
   assert.equal(

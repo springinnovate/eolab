@@ -27,7 +27,7 @@ RasterDetailPreviewScope = Literal[
     "currentView",
 ]
 RasterDetailPreviewRendering = Literal[
-    "sampledProxy",
+    "sampleGrid",
     "exactSourceWindow",
 ]
 # Projection roundoff allowance; far below a displayable map distance.
@@ -37,8 +37,8 @@ RASTER_DETAIL_PREVIEW_BOUNDS_TOLERANCE = 1e-9
 # the transport model boundary.
 EXACT_DETAIL_MAX_SOURCE_BLOCK_READS = 1_024
 EXACT_DETAIL_MAX_DECODED_SOURCE_BYTES = 64 * 1024 * 1024
-DETAIL_PROXY_MAX_SOURCE_BLOCK_READS = 127 * 127
-DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES = 9 * 1024 * 1024 * 1024
+SAMPLE_GRID_MAX_SOURCE_BLOCK_READS = 127 * 127
+SAMPLE_GRID_MAX_DECODED_SOURCE_BYTES = 9 * 1024 * 1024 * 1024
 RasterDetailPreviewCacheKey = tuple[
     str,
     str,
@@ -228,7 +228,7 @@ class CatalogRasterDetailPreviewRequest(CatalogRasterRequest):
     """Request the fixed bounded preview for an overview-limited raster.
 
     Attributes:
-        view_bounds: Optional current map rectangle for a refined proxy.
+        view_bounds: Optional current map rectangle for a refined sample grid.
     """
 
     view_bounds: Wgs84Bounds | None = Field(default=None, alias="viewBounds")
@@ -289,7 +289,7 @@ class RasterDetailPreviewLimits(BaseModel):
     """Public resource bounds applied to one detail-only preview.
 
     Attributes:
-        maximum_proxy_dimension: Maximum exact sampled-proxy grid edge.
+        maximum_sample_grid_dimension: Maximum sampled-grid edge.
         maximum_exact_detail_dimension: Maximum native source/output edge for
             an automatically admitted exact current-view window.
         maximum_source_block_reads: Representation-specific maximum unique
@@ -299,10 +299,10 @@ class RasterDetailPreviewLimits(BaseModel):
             streamed rather than retained simultaneously.
         maximum_transformed_positions: Maximum target probes transformed for
             the fixed center-sampled grid.
-        maximum_points_per_cell: Fixed center probes in each proxy cell.
+        maximum_points_per_cell: Fixed center probes in each sample-grid cell.
     """
 
-    maximum_proxy_dimension: Literal[127] = Field(alias="maximumProxyDimension")
+    maximum_sample_grid_dimension: Literal[127] = Field(alias="maximumSampleGridDimension")
     maximum_exact_detail_dimension: Literal[512] = Field(
         alias="maximumExactDetailDimension"
     )
@@ -328,10 +328,10 @@ class RasterDetailPreviewWork(BaseModel):
             when every transformed probe lies outside a rotated source.
         decoded_source_bytes: Conservative band-plus-validity decoded bytes,
             also zero exactly when no block is required.
-        points_per_cell: Center positions inspected for each proxy cell, or zero
+        points_per_cell: Center positions inspected for each sample-grid cell, or zero
             for exact bounded source detail.
         source_window: Exact integral source window for native detail; absent
-            for spatially dispersed proxy probes.
+            for spatially dispersed sample-grid probes.
     """
 
     sample_grid_width: int = Field(alias="sampleGridWidth", ge=1)
@@ -366,7 +366,7 @@ class RasterDetailPreview(BaseModel):
 
     Attributes:
         scope: Raster extent or current map view.
-        rendering: Fixed center-sampled proxy or exact bounded source window.
+        rendering: Fixed center-sample grid or exact bounded source window.
         policy_version: Algorithm and cache policy identity.
         approximate: Detail-only marker preventing whole-raster interpretation;
             an exact result is produced from a complete read of its bounded
@@ -385,7 +385,7 @@ class RasterDetailPreview(BaseModel):
 
     scope: RasterDetailPreviewScope
     rendering: RasterDetailPreviewRendering
-    policy_version: Literal["bounded-adaptive-raster-v7"] = Field(
+    policy_version: Literal["bounded-adaptive-raster-v8"] = Field(
         alias="policyVersion"
     )
     approximate: Literal[True] = True
@@ -418,7 +418,7 @@ class RasterDetailPreview(BaseModel):
         if not self.label.strip():
             raise ValueError("Detail preview label must not be blank")
         if self.scope not in {"rasterExtent", "currentView"}:
-            raise ValueError("Sampled proxy provenance is inconsistent")
+            raise ValueError("Sample grid provenance is inconsistent")
         if self.rendering == "exactSourceWindow":
             if self.scope != "currentView":
                 raise ValueError("Exact detail requires current-view provenance")
@@ -439,15 +439,15 @@ class RasterDetailPreview(BaseModel):
                 raise ValueError("Exact detail source-window provenance is invalid")
         else:
             if max(self.image_width, self.image_height) != (
-                self.limits.maximum_proxy_dimension
+                self.limits.maximum_sample_grid_dimension
             ):
                 raise ValueError(
                     "Sampled preview longest edge must match the fixed grid"
                 )
-            expected_decoded_limit = DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES
-            expected_block_limit = DETAIL_PROXY_MAX_SOURCE_BLOCK_READS
+            expected_decoded_limit = SAMPLE_GRID_MAX_DECODED_SOURCE_BYTES
+            expected_block_limit = SAMPLE_GRID_MAX_SOURCE_BLOCK_READS
             if self.actual.source_window is not None:
-                raise ValueError("Sampled proxies cannot claim a source window")
+                raise ValueError("Sample grids cannot claim a source window")
         if (
             self.actual.sample_grid_width != self.image_width
             or self.actual.sample_grid_height != self.image_height

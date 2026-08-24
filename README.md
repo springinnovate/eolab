@@ -124,7 +124,7 @@ The scanner assesses mounted GeoTIFFs before offering **Add to map layers**. The
 Large rasters rejected only because internal overviews or the coarsest overview
 scale are inadequate can instead offer an explicit **adaptive bounded raster**
 after the current deployed reader accepts their CRS. EOLab builds a map-aligned
-raster-extent proxy with exactly 127 cells on the projected rectangle's longest
+raster-extent sample grid with exactly 127 cells on the projected rectangle's longest
 edge, derives the other edge from its aspect ratio, and observes the source at
 each map cell's center. Zooming and panning replaces one bounded current-view
 overlay under that same fixed policy until the visible native source window is small
@@ -135,7 +135,7 @@ source-block limit is rejected before pixel I/O instead of being silently
 coarsened. Native blocks are read once under fixed block-count and decoded-work ceilings;
 the raster is never published and no arbitrary full-extent WMS request is made.
 A prominent map disclosure names the current sampled or exact representation
-and reports its dimensions. Broad sampled proxies use smooth display
+and reports its dimensions. Broad sample grids use smooth display
 interpolation, while exact windows use crisp nearest-neighbor presentation.
 The shared color controls recolor these numeric images in the browser,
 initialized from their approximate minimum, median, and maximum.

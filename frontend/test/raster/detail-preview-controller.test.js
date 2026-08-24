@@ -397,7 +397,7 @@ test("failed replacement construction or attachment preserves current layer", as
   assert.equal(controller.contains(MOUNTED_GEOTIFF_ITEM), true);
 });
 
-test("detail preview ignores a stale Item using the fixed proxy policy", async () => {
+test("detail preview ignores a stale Item using the fixed sample-grid policy", async () => {
   const requests = [];
   const added = [];
   const secondItem = {

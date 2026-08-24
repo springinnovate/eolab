@@ -27,7 +27,7 @@ def summarize_raster_detail_preview(
     requested map window. This function performs no source I/O.
 
     Args:
-        preview: Current-view center policy rendered as a sampled proxy or an
+        preview: Current-view center policy rendered as a sample grid or an
             exact bounded source window.
         request: Catalog identity and exact selected WGS 84 bounds.
 
@@ -40,9 +40,9 @@ def summarize_raster_detail_preview(
     """
     if (
         preview.scope != "currentView"
-        or preview.rendering not in {"sampledProxy", "exactSourceWindow"}
+        or preview.rendering not in {"sampleGrid", "exactSourceWindow"}
         or (
-            preview.rendering == "sampledProxy"
+            preview.rendering == "sampleGrid"
             and max(preview.image_width, preview.image_height) != 127
         )
     ):

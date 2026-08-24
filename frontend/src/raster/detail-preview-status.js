@@ -50,7 +50,7 @@ function formatPreview(preview) {
             `${lastColumn}, rows ${window.rowOffset}–${lastRow}; ${location}; ` +
             work;
     }
-    return `sampled proxy ${preview.imageWidth} × ${preview.imageHeight} ` +
+    return `sample grid ${preview.imageWidth} × ${preview.imageHeight} ` +
         `center samples; ${location}; ${work}`;
 }
 
@@ -147,6 +147,6 @@ export function formatRasterDetailMapNotice(previewState) {
         : "Base display";
     return `${limitation} This sampled ${scope.toLowerCase()} is not the ` +
         `raster's native resolution. ${scope} sampling grid: ` +
-        `${preview.imageWidth} × ${preview.imageHeight} proxy cells ` +
+        `${preview.imageWidth} × ${preview.imageHeight} sample-grid cells ` +
         `(center-sampled; 127 cells on the longest edge).`;
 }

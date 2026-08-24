@@ -264,7 +264,7 @@ export function initializeRasterDetailPreview(
     }
 
     /**
-     * Load and atomically attach one finer proxy over the current map view.
+     * Load and atomically attach one finer sample grid over the current map view.
      *
      * @param {{sessionGeneration:number,detailGeneration:number,intentKey:string}}
      * intent Immutable base-session, viewport-generation, and bounds identity.

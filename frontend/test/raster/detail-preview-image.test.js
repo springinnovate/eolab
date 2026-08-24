@@ -11,7 +11,7 @@ import {
   NODATA_DETAIL_PREVIEW,
 } from "../../test-support/raster/fixtures.js";
 
-test("sampled raster style uses proxy range with the normal color ramp", () => {
+test("sampled raster style uses sample-grid range with the normal color ramp", () => {
   assert.deepEqual(buildRasterDetailPreviewStyle(CENTER_SAMPLE_DETAIL_PREVIEW), {
     minimum: 0,
     midpoint: 50,
@@ -22,7 +22,7 @@ test("sampled raster style uses proxy range with the normal color ramp", () => {
   });
 });
 
-test("numeric proxy colors remain row-major and nodata stays transparent", () => {
+test("numeric sample grid colors remain row-major and nodata stays transparent", () => {
   const rgba = buildRasterDetailPreviewRgba(
     CENTER_SAMPLE_DETAIL_PREVIEW,
     buildRasterDetailPreviewStyle(CENTER_SAMPLE_DETAIL_PREVIEW),
@@ -46,7 +46,7 @@ test("numeric proxy colors remain row-major and nodata stays transparent", () =>
   );
 });
 
-test("numeric proxy encoder preserves dimensions and RGBA bytes", () => {
+test("numeric sample-grid encoder preserves dimensions and RGBA bytes", () => {
   const calls = [];
   const canvas = {
     width: 0,
@@ -92,7 +92,7 @@ test("numeric proxy encoder preserves dimensions and RGBA bytes", () => {
   assert.deepEqual(calls[2], ["encode", "image/png"]);
 });
 
-test("numeric proxy encoder reports an unavailable canvas context", () => {
+test("numeric sample-grid encoder reports an unavailable canvas context", () => {
   assert.throws(
     () => encodeRasterDetailPreviewPng(
       CENTER_SAMPLE_DETAIL_PREVIEW,

@@ -9,7 +9,7 @@ from affine import TransformNotInvertibleError
 from rasterio.warp import transform_bounds
 from rasterio.windows import Window
 
-from eolab_app.raster.detail_proxy import (
+from eolab_app.raster.sample_grid import (
     SourceBlockIndex,
     _block_indexes_for_window,
     _decoded_bytes_for_blocks,
@@ -145,7 +145,7 @@ def plan_exact_current_view(
     Returns:
         Exact bounded read plan, or ``None`` when the view is outside the
         source or remains too broad for exact rendering. Returning ``None`` is
-        the owned signal to retain the selected sampled-proxy policy.
+        the owned signal to retain the selected sample-grid policy.
 
     Raises:
         ValueError: If source structure, bounds, transformation, or affine

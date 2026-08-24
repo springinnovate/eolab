@@ -170,13 +170,13 @@ export function publishCatalogRaster(
 
 /** Projection roundoff allowance, far below a displayable map distance. */
 const RASTER_DETAIL_PREVIEW_BOUNDS_TOLERANCE = 1e-9;
-const RASTER_DETAIL_PREVIEW_POLICY_VERSION = "bounded-adaptive-raster-v7";
+const RASTER_DETAIL_PREVIEW_POLICY_VERSION = "bounded-adaptive-raster-v8";
 const RASTER_DETAIL_PREVIEW_MAXIMUM_GRID_DIMENSION = 127;
 const RASTER_DETAIL_PREVIEW_MAXIMUM_EXACT_DIMENSION = 512;
 const RASTER_DETAIL_PREVIEW_MAXIMUM_TRANSFORMED_POSITIONS = 127 * 127;
 const RASTER_DETAIL_PREVIEW_MAXIMUM_POINTS_PER_CELL = 1;
 const RASTER_DETAIL_PREVIEW_RENDERING_CONTRACTS = Object.freeze({
-    sampledProxy: Object.freeze({
+    sampleGrid: Object.freeze({
         maximumSourceBlockReads: 127 * 127,
         maximumDecodedSourceBytes: 9 * 1024 * 1024 * 1024,
         pointsPerCell: RASTER_DETAIL_PREVIEW_MAXIMUM_POINTS_PER_CELL,
@@ -354,7 +354,7 @@ function requireRasterDetailPreviewEnvelope(preview, request) {
  */
 function requireRasterDetailPreviewLimits(limits, renderingContract) {
     const expectedLimits = {
-        maximumProxyDimension: RASTER_DETAIL_PREVIEW_MAXIMUM_GRID_DIMENSION,
+        maximumSampleGridDimension: RASTER_DETAIL_PREVIEW_MAXIMUM_GRID_DIMENSION,
         maximumExactDetailDimension:
             RASTER_DETAIL_PREVIEW_MAXIMUM_EXACT_DIMENSION,
         maximumSourceBlockReads:

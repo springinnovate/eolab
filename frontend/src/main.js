@@ -1209,7 +1209,7 @@ async function initializeCatalog(
         const pendingAction = beginCatalogMapAction(
             selectedItem,
             "Sampling raster…",
-            "Reading a strictly bounded approximate raster proxy."
+            "Reading a strictly bounded approximate raster sample grid."
         );
         if (!rasterDetailPreview.contains(selectedItem)) {
             renderRasterDetailPreviewResolution(null, "loading");

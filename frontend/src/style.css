@@ -863,7 +863,7 @@ h5 {
   display: block;
 }
 
-.raster-sampled-proxy {
+.raster-sample-grid {
   image-rendering: auto;
 }
 

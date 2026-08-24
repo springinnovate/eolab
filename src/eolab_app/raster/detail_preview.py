@@ -11,13 +11,13 @@ from rasterio.transform import from_bounds
 from rasterio.warp import reproject, transform as warp_transform
 from rasterio.windows import transform as window_transform
 
-from eolab_app.raster.detail_proxy import (
-    DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES,
-    DETAIL_PROXY_MAX_DIMENSION,
-    DETAIL_PROXY_MAX_POINTS_PER_CELL,
-    DETAIL_PROXY_MAX_SOURCE_BLOCK_READS,
-    DETAIL_PROXY_MAX_TRANSFORMED_POSITIONS,
-    read_detail_proxy,
+from eolab_app.raster.sample_grid import (
+    SAMPLE_GRID_MAX_DECODED_SOURCE_BYTES,
+    SAMPLE_GRID_MAX_DIMENSION,
+    SAMPLE_GRID_MAX_POINTS_PER_CELL,
+    SAMPLE_GRID_MAX_SOURCE_BLOCK_READS,
+    SAMPLE_GRID_MAX_TRANSFORMED_POSITIONS,
+    read_sample_grid,
 )
 from eolab_app.raster.exact_detail import (
     EXACT_DETAIL_MAX_DECODED_SOURCE_BYTES,
@@ -43,7 +43,7 @@ from eolab_app.raster.read_cancellation import (
 from eolab_app.raster.statistics import strict_raster_value_range
 
 
-DETAIL_PREVIEW_POLICY_VERSION = "bounded-adaptive-raster-v7"
+DETAIL_PREVIEW_POLICY_VERSION = "bounded-adaptive-raster-v8"
 WEB_MERCATOR_LIMIT = 20_037_508.342789244
 WEB_MERCATOR_LATITUDE_LIMIT = 85.0511287798066
 
@@ -313,9 +313,9 @@ def _flatten_values(values: numpy.ma.MaskedArray) -> list[float | None]:
 def _limits(
     rendering: RasterDetailPreviewRendering,
 ) -> RasterDetailPreviewLimits:
-    """Return the fixed public work limits for one policy-v7 representation.
+    """Return the fixed public work limits for one policy-v8 representation.
 
-    The sampled proxy always has 127 cells on its longest edge and one center
+    The sample grid always has 127 cells on its longest edge and one center
     point per cell. Exact close-view windows retain their separate stricter
     dimension and source-work admission limits.
 
@@ -326,20 +326,20 @@ def _limits(
         Immutable response model containing every server-owned ceiling.
     """
     return RasterDetailPreviewLimits(
-        maximumProxyDimension=DETAIL_PROXY_MAX_DIMENSION,
+        maximumSampleGridDimension=SAMPLE_GRID_MAX_DIMENSION,
         maximumExactDetailDimension=EXACT_DETAIL_MAX_DIMENSION,
         maximumSourceBlockReads=(
             EXACT_DETAIL_MAX_SOURCE_BLOCK_READS
             if rendering == "exactSourceWindow"
-            else DETAIL_PROXY_MAX_SOURCE_BLOCK_READS
+            else SAMPLE_GRID_MAX_SOURCE_BLOCK_READS
         ),
         maximumDecodedSourceBytes=(
             EXACT_DETAIL_MAX_DECODED_SOURCE_BYTES
             if rendering == "exactSourceWindow"
-            else DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES
+            else SAMPLE_GRID_MAX_DECODED_SOURCE_BYTES
         ),
-        maximumTransformedPositions=DETAIL_PROXY_MAX_TRANSFORMED_POSITIONS,
-        maximumPointsPerCell=DETAIL_PROXY_MAX_POINTS_PER_CELL,
+        maximumTransformedPositions=SAMPLE_GRID_MAX_TRANSFORMED_POSITIONS,
+        maximumPointsPerCell=SAMPLE_GRID_MAX_POINTS_PER_CELL,
     )
 
 
@@ -471,7 +471,7 @@ def read_raster_detail_preview(
                     ),
                 ),
             )
-        proxy_values, plan = read_detail_proxy(
+        sample_grid_values, plan = read_sample_grid(
             dataset,
             projected_bounds=projected_bounds,
             cancellation_requested=cancellation_requested,
@@ -486,13 +486,13 @@ def read_raster_detail_preview(
         )
         return _preview_response(
             scope,
-            "sampledProxy",
+            "sampleGrid",
             "Approximate "
-            f"{scope_description} 127-longest-edge proxy using each map cell's "
+            f"{scope_description} 127-longest-edge sample grid using each map cell's "
             "center",
             raster_extent,
             image_bounds,
-            proxy_values,
+            sample_grid_values,
             RasterDetailPreviewWork(
                 sampleGridWidth=plan.width,
                 sampleGridHeight=plan.height,

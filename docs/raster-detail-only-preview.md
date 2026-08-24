@@ -39,7 +39,7 @@ of this bounded band-one contract.
 
 ## Fixed sampled policy
 
-Policy `bounded-adaptive-raster-v7` always builds a grid directly in EPSG:3857
+Policy `bounded-adaptive-raster-v8` always builds a grid directly in EPSG:3857
 with:
 
 - exactly 127 cells on the displayed rectangle's longest edge;
@@ -52,12 +52,12 @@ portrait rectangle is 64 × 127. EOLab never silently substitutes a smaller
 grid. A center observation that maps to nodata stays transparent; it is never
 converted to zero.
 
-Every response carries `approximate: true`. A `sampledProxy` is explicitly a
+Every response carries `approximate: true`. A `sampleGrid` is explicitly a
 low-resolution approximation of the displayed area. The response also carries
 the cataloged **raster extent**, which is not a measured valid-data footprint.
 The orange dashed map outline is labeled and treated as that extent.
 
-Sampled proxies use browser image smoothing so their enlarged cell edges look
+Sample grids use browser image smoothing so their enlarged cell edges look
 soft. This is presentation only: it adds no observations and changes no
 reported resolution. Exact current-view images use crisp nearest-neighbor
 presentation.
@@ -82,7 +82,7 @@ When admitted, each intersecting block is read once at base resolution, the
 complete source window is assembled, and it is nearest-neighbor reprojected at
 the same dimensions for map placement. This is labeled exact bounded source
 detail at the current scale, not a whole-raster rendering. Otherwise the fixed
-center-sampled proxy remains in effect.
+center-sample grid remains in effect.
 
 The Catalog inspector reports the active map rectangle, sample dimensions,
 native block count, decoded work, and source window when exact detail is
@@ -101,7 +101,7 @@ required band-one block is read once at base resolution without `out_shape`,
 boundless reads, or overview selection. Requested values are retained and the
 block array is released before the next block.
 
-The sampled-proxy ceilings are:
+The sample-grid ceilings are:
 
 - at most 127 × 127 = 16,129 transformed positions;
 - at most 16,129 unique native-block reads; and
@@ -150,7 +150,7 @@ nodata remains nodata.
 Completed reads use a process-local LRU and identical in-flight work is
 coalesced. Distinct admitted work is capped by configured Rasterio concurrency.
 Cache identity includes Collection and Item, source signature, raster extent,
-policy v7, effective view bounds, the 127-center sampling parameters, sampled
+policy v8, effective view bounds, the 127-center sampling parameters, sampled
 and exact block/byte ceilings, exact dimension, transform densification, and
 window padding. A changed source is neither returned nor cached.
 

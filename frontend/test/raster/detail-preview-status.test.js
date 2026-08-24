@@ -31,7 +31,7 @@ test("detail preview resolution distinguishes sampled and exact detail", () => {
       detailPreview: CURRENT_VIEW_DETAIL_PREVIEW,
       detailStatus: "ready",
     }),
-    /Base: sampled proxy 127 × 127 center samples; .*Active view: sampled proxy 127 × 127 center samples;/,
+    /Base: sample grid 127 × 127 center samples; .*Active view: sample grid 127 × 127 center samples;/,
   );
   assert.match(
     formatRasterDetailPreviewResolution({
@@ -59,7 +59,7 @@ test("detail preview resolution reports pending and retained update states", () 
       detailStatus: "error",
       detailError: "The bounded detail-only preview could not be read.",
     }),
-    /Active view: sampled proxy 127 × 127 center samples; .+ \(retained; update failed: The bounded detail-only preview could not be read\.\)$/,
+    /Active view: sample grid 127 × 127 center samples; .+ \(retained; update failed: The bounded detail-only preview could not be read\.\)$/,
   );
 });
 
@@ -88,7 +88,7 @@ test("map notice explains overview limits and the active representation", () => 
       basePreview: CENTER_SAMPLE_DETAIL_PREVIEW,
       detailPreview: CURRENT_VIEW_DETAIL_PREVIEW,
     }),
-    /DETAIL-ONLY RASTER.*does not have a usable overview pyramid.*sampled current view is not the raster's native resolution.*Current view sampling grid: 127 × 127 proxy cells \(center-sampled; 127 cells on the longest edge\)/,
+    /DETAIL-ONLY RASTER.*does not have a usable overview pyramid.*sampled current view is not the raster's native resolution.*Current view sampling grid: 127 × 127 sample-grid cells \(center-sampled; 127 cells on the longest edge\)/,
   );
   assert.match(
     formatRasterDetailMapNotice({

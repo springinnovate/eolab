@@ -175,7 +175,7 @@ test("detail preview rejects extra request and view-bound fields", async () => {
   assert.equal(requestCount, 0);
 });
 
-test("detail preview accepts numeric images and honest all-nodata proxies", () => {
+test("detail preview accepts numeric images and honest all-nodata grids", () => {
   assert.equal(
     validateRasterDetailPreview(
       CENTER_SAMPLE_DETAIL_PREVIEW,
@@ -234,7 +234,7 @@ test("detail preview rejects removed mode and density fields", async () => {
   );
 });
 
-test("detail preview strictly validates v7 fixed identity and shape", () => {
+test("detail preview strictly validates v8 fixed identity and shape", () => {
   const invalidPreviews = [
     ["legacy policy", {
       ...CENTER_SAMPLE_DETAIL_PREVIEW,
@@ -355,7 +355,7 @@ test("exact current-view detail requires bounded source-window provenance", () =
         },
       },
     }],
-    ["sampled-proxy resource limit", {
+    ["sample-grid resource limit", {
       ...EXACT_CURRENT_VIEW_DETAIL_PREVIEW,
       limits: RASTER_DETAIL_PREVIEW_LIMITS,
     }],

@@ -35,11 +35,11 @@ def _preview(
 
     Args:
         values: Finite/nodata prefix padded to the exact fixed grid.
-        width: Positive sampled-proxy width.
-        height: Positive sampled-proxy height.
+        width: Positive sample-grid width.
+        height: Positive sample-grid height.
 
     Returns:
-        Valid fine center-point sampled proxy.
+        Valid fine center-point sample grid.
     """
     pixels = values + [None] * (width * height - len(values))
     finite_values = [value for value in values if value is not None]
@@ -49,8 +49,8 @@ def _preview(
         suggested_range = _suggested_range(sample)
     return RasterDetailPreview(
         scope="currentView",
-        rendering="sampledProxy",
-        policyVersion="bounded-adaptive-raster-v7",
+        rendering="sampleGrid",
+        policyVersion="bounded-adaptive-raster-v8",
         approximate=True,
         label="Approximate current-view center sample",
         rasterExtent=(-180.0, -90.0, 180.0, 90.0),
@@ -60,7 +60,7 @@ def _preview(
         pixelValues=pixels,
         suggestedRange=suggested_range,
         limits={
-            "maximumProxyDimension": 127,
+            "maximumSampleGridDimension": 127,
             "maximumExactDetailDimension": 512,
             "maximumSourceBlockReads": 16_129,
             "maximumDecodedSourceBytes": 9_663_676_416,

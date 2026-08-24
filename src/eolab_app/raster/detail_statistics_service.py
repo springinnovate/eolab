@@ -32,7 +32,7 @@ class RasterDetailStatisticsService:
             request: Catalog identity and required click-centered map window.
 
         Returns:
-            Shared selected-area histogram over a sampled proxy or an admitted
+            Shared selected-area histogram over a sample grid or an admitted
             exact bounded source window.
 
         Raises:

@@ -102,8 +102,8 @@ export function createRasterDetailPreviewLayer(
     const imageBounds = toLeafletBounds(preview.imageBounds);
     const style = sessionStyle ?? buildRasterDetailPreviewStyle(preview);
     const imageDataUrl = encodeImage(preview, style);
-    const imageClassName = preview.rendering === "sampledProxy"
-        ? "raster-detail-image raster-sampled-proxy"
+    const imageClassName = preview.rendering === "sampleGrid"
+        ? "raster-detail-image raster-sample-grid"
         : "raster-detail-image raster-source-detail";
     const layers = [];
     if (preview.scope !== "currentView") {
