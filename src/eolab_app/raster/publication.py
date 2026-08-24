@@ -17,6 +17,7 @@ from eolab_app.raster.models import (
     SourceSignature,
 )
 from eolab_app.raster.ports import RasterCatalog, RasterPublisher
+from eolab_app.rendering.errors import PublishedLayerChangedError
 from eolab_app.raster.sources import (
     MountedRasterResolver,
     PublishedRasterRegistry,
@@ -114,12 +115,15 @@ class RasterPublicationService:
             resource_name = request.item_id
             await self._publisher.publish(resource_name, source_path)
             layer_name = f"{GEOSERVER_WORKSPACE_NAME}:{resource_name}"
-            await asyncio.to_thread(
-                self._raster_registry.authorize,
-                layer_name,
-                source_path,
-                inspected_signature,
-            )
+            try:
+                await asyncio.to_thread(
+                    self._raster_registry.authorize,
+                    layer_name,
+                    source_path,
+                    inspected_signature,
+                )
+            except PublishedLayerChangedError as error:
+                raise RasterConflictError(str(error)) from error
             return PublishedRaster(
                 layerName=layer_name,
                 bbox=tuple(item["bbox"]),

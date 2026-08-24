@@ -1261,7 +1261,7 @@ test("raster viewer retains candidates while enforcing two visible layers", asyn
     const firstKey = layerStackView.layers[2].key;
     layerStackView.handlers.onVisibility(thirdKey, true);
     assert.equal(layerStackView.layers[0].visible, false);
-    assert.match(layerStackView.status, /Only 2 raster layers/);
+    assert.match(layerStackView.status, /Only 2 map layers/);
 
     layerStackView.handlers.onVisibility(firstKey, false);
     layerStackView.handlers.onVisibility(thirdKey, true);

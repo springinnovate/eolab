@@ -199,6 +199,12 @@ active layer chooses which raster the shared appearance, histogram, sampling,
 and pixel-probe controls edit. Visibility and active selection are independent,
 and showing a hidden layer reuses its existing GeoServer publication.
 
+The retained browser lifecycle and restricted WMS delivery contracts are
+dataset-neutral; raster keeps ownership of its assessment, source validation,
+publication reconciliation, dynamic appearance, and analysis behavior. The
+module ownership and dependency direction are documented in
+[Map rendering boundaries](docs/map-rendering-boundaries.md).
+
 For the active raster, **Raster appearance** shows a bounded band-1
 distribution. Its provenance says whether the server read an exact bounded
 source window or used the approximate 127-longest-edge center grid. EOLab

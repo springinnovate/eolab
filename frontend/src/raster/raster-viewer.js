@@ -6,6 +6,7 @@
  * their shared lifecycle and stale-work rules while delegating domain logic,
  * HTTP access, DOM presentation, and Leaflet construction to focused modules.
  */
+import { getCatalogItemKey } from "../catalog-item-identity.js";
 import { publishCatalogRaster } from "./api.js";
 import {
     loadCatalogRasterStatistics,
@@ -19,14 +20,9 @@ import {
     createRasterSampleWindowLayer,
     createRasterWmsLayer,
     ensureRasterSampleWindowPane,
-    RasterLeafletLayerSet,
 } from "./leaflet.js";
-import {
-    getCatalogRasterLayerKey,
-    RasterLayerStack,
-    RasterLayerVisibilityLimitError,
-} from "./layer-stack.js";
-import { RasterLayerStackView } from "./layer-stack-view.js";
+import { MapLayerController } from "../map-layers/controller.js";
+import { MapLayerStackView } from "../map-layers/layer-stack-view.js";
 import {
     getCatalogRasterBasename,
     getRasterPixelProbePosition,
@@ -48,6 +44,7 @@ import {
     deriveInitialRasterStyleFromStatistics,
     deriveRasterStyleFromStatistics,
     RASTER_COLOR_PALETTES,
+    buildRasterLegend,
 } from "./style.js";
 import { buildRasterStyleEnvironment } from "./wms.js";
 import { RasterControlsView } from "./controls-view.js";
@@ -95,8 +92,10 @@ const RASTER_STYLE_DEBOUNCE_MILLISECONDS = 200;
  * @typedef {Object} RasterViewerDependencies
  * @property {RasterControlsView} [controlsView=new RasterControlsView()]
  * Raster-control DOM adapter.
- * @property {RasterLayerStackView} [layerStackView=new RasterLayerStackView()]
- * Layer-list DOM adapter.
+ * @property {MapLayerStackView|null} [layerStackView=null] Layer-list DOM
+ * adapter created only when the viewer owns its neutral controller.
+ * @property {MapLayerController|null} [mapLayerController=null] Neutral shared
+ * retained-layer controller supplied by application composition.
  * @property {(item: Object) => Promise<Object>}
  * [publishRaster=publishCatalogRaster] Publishes one Catalog raster.
  * @property {(item: Object, samplingArea:Object, signal:AbortSignal)
@@ -114,8 +113,8 @@ const RASTER_STYLE_DEBOUNCE_MILLISECONDS = 200;
 /**
  * Connect raster appearance, statistics, sampling, and Leaflet interactions.
  *
- * The returned feature boundary owns retained raster layers, their isolated
- * presentation state, and the shared controls for the explicitly active layer.
+ * The returned feature boundary owns isolated raster state and controls while
+ * consuming the neutral retained map-layer controller.
  *
  * @param {RasterViewerConfiguration} configuration Viewer configuration.
  * @param {RasterViewerDependencies} [dependencies={}] Injectable
@@ -134,7 +133,8 @@ export function initializeRasterViewer(
     },
     {
         controlsView = new RasterControlsView(),
-        layerStackView = new RasterLayerStackView(),
+        layerStackView = null,
+        mapLayerController = null,
         publishRaster = publishCatalogRaster,
         loadStatistics = loadCatalogRasterStatistics,
         samplePixel = sampleCatalogRasterPixel,
@@ -143,15 +143,14 @@ export function initializeRasterViewer(
     } = {}
 ) {
     ensureRasterSampleWindowPane(leafletMap);
-    const layerStack = new RasterLayerStack();
-    const leafletLayers = new RasterLeafletLayerSet(leafletMap);
-    const layerSessions = new Map();
-    const publicationGenerations = new Map();
-    const pendingPublications = new Map();
+    const ownsMapLayerController = mapLayerController === null;
+    const mapLayers = mapLayerController ?? new MapLayerController({
+        leafletMap,
+        view: layerStackView ?? new MapLayerStackView(),
+        onLayersChange,
+    });
     let sampledRasterSession = null;
     let analysisRasterSession = null;
-    let destroyed = false;
-    let activationIntentSequence = 0;
     let activeLayerKey = null;
     let rasterStyle = { ...DEFAULT_RASTER_STYLE };
     let rasterPixelProbeLabel = "";
@@ -248,7 +247,7 @@ export function initializeRasterViewer(
      */
     function createAnalysisSession(item) {
         return {
-            key: `analysis:${getCatalogRasterLayerKey(item)}`,
+            key: `analysis:${getCatalogItemKey(item)}`,
             item,
             label: `${getCatalogRasterBasename(item)} (analysis only)`,
             rasterStyle: { ...DEFAULT_RASTER_STYLE },
@@ -324,7 +323,7 @@ export function initializeRasterViewer(
      * @return {Object|null} Matching analysis session or null.
      */
     function matchingAnalysisSession(item) {
-        const expectedKey = `analysis:${getCatalogRasterLayerKey(item)}`;
+        const expectedKey = `analysis:${getCatalogItemKey(item)}`;
         return analysisRasterSession?.key === expectedKey
             ? analysisRasterSession
             : null;
@@ -338,8 +337,8 @@ export function initializeRasterViewer(
      * @throws {Error} If stack and session state have diverged.
      */
     function requireLayerSession(key) {
-        const session = layerSessions.get(key);
-        if (session === undefined) {
+        const session = mapLayers.getRecord(key)?.state ?? null;
+        if (session === null) {
             throw new Error(`Raster layer session is missing: ${key}`);
         }
         return session;
@@ -402,29 +401,20 @@ export function initializeRasterViewer(
     /**
      * Create one Leaflet WMS layer from a successful publication response.
      *
-     * @param {string} layerKey Stable retained layer key.
      * @param {{bbox: number[], layerName: string}} publishedRaster Published
      * GeoServer layer details.
      * @param {Object} style Retained style for this layer.
+     * @param {() => void} reportTileError Owned tile-error callback.
      * @return {Object} Leaflet-compatible WMS layer.
      */
-    function createRasterLayer(layerKey, publishedRaster, style) {
-        const rasterLayer = createRasterWmsLayer(
+    function createRasterLayer(publishedRaster, style, reportTileError) {
+        return createRasterWmsLayer(
             leaflet,
             wmsUrl,
             publishedRaster,
             buildRasterStyleEnvironment(style),
-            () => {
-                if (leafletLayers.get(layerKey) !== rasterLayer) {
-                    return;
-                }
-                const session = requireLayerSession(layerKey);
-                session.error = "Map tiles could not be rendered.";
-                renderLayerStack();
-                onTileError(session.error, session.item);
-            }
+            reportTileError
         );
-        return rasterLayer;
     }
 
     /**
@@ -563,22 +553,89 @@ export function initializeRasterViewer(
         return activeRasterItem !== null;
     }
 
-    /**
-     * Build presentation-only snapshots for the layer-list adapter.
-     *
-     * @return {Object[]} Retained layers in top-first order.
-     */
-    function getLayerSnapshots() {
-        saveActiveLayerSession();
-        return layerStack.entries.map((entry) => {
-            const session = requireLayerSession(entry.key);
+    /** Feature-owned adapter consumed by the neutral map-layer controller. */
+    const rasterMapLayerAdapter = {
+        tileErrorMessage: "Map tiles could not be rendered.",
+        label: getCatalogRasterBasename,
+        publish: publishRaster,
+        createState({ entry, publication, item }) {
+            const analysisSession = matchingAnalysisSession(item);
+            if (analysisSession !== null) {
+                saveActiveLayerSession();
+            }
+            const session = createLayerSession(entry, publication);
+            if (analysisSession !== null) {
+                copyRasterInteractionState(session, analysisSession);
+            }
+            return session;
+        },
+        createLayer(record, reportTileError) {
+            return createRasterLayer(
+                record.publication,
+                record.state.rasterStyle,
+                reportTileError
+            );
+        },
+        snapshot(record) {
+            if (activeLayerKey === record.entry.key) {
+                saveActiveLayerSession();
+            }
+            const definition = buildRasterLegend(record.state.rasterStyle);
             return {
-                ...entry,
-                style: { ...session.rasterStyle },
-                error: session.error,
+                legend: {
+                    kind: "gradient",
+                    gradient: definition.gradient,
+                    description: definition.description,
+                    labels: [
+                        record.state.rasterStyle.minimum,
+                        record.state.rasterStyle.midpoint,
+                        record.state.rasterStyle.maximum,
+                    ],
+                },
             };
-        });
-    }
+        },
+        prepare(record) {
+            const analysisSession = matchingAnalysisSession(record.entry.item);
+            if (analysisSession !== null) {
+                saveActiveLayerSession();
+                copyRasterInteractionState(record.state, analysisSession);
+            }
+        },
+        deactivate(record) {
+            if (activeLayerKey === record.entry.key) {
+                deactivateActiveLayer();
+                analysisRasterSession = null;
+            }
+        },
+        activate(record) {
+            activateRasterSession(record.entry, record.state);
+        },
+        beforeRemove(record, { wasActive }) {
+            if (!wasActive) {
+                return undefined;
+            }
+            deactivateActiveLayer();
+            analysisRasterSession = detachAnalysisSession(record.state);
+            return { activateFallback: false };
+        },
+        removed(_record, { wasActive }) {
+            if (wasActive && analysisRasterSession !== null) {
+                activateDetachedSession(analysisRasterSession);
+            }
+        },
+        visibilityChanged(record, visible) {
+            if (activeLayerKey !== record.entry.key) {
+                return;
+            }
+            saveActiveLayerSession();
+            controlsView.setActiveLayer(record.entry.label, visible);
+            renderRasterSampleWindowGuidance("");
+            saveActiveLayerSession();
+        },
+        tileError(record) {
+            onTileError(record.error, record.entry.item);
+        },
+    };
 
     /**
      * Render and publish the current retained-layer state.
@@ -588,20 +645,11 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function renderLayerStack(requestedFocus = null) {
-        const snapshots = getLayerSnapshots();
-        layerStackView.render(
-            snapshots,
-            activeDetachedRasterSession() === null
-                ? layerStack.activeKey
-                : null,
-            requestedFocus
-        );
-        onLayersChange(snapshots);
-    }
-
-    /** Apply top-first stack order to all retained Leaflet layers. */
-    function applyLeafletLayerOrder() {
-        leafletLayers.setOrder(layerStack.entries.map((entry) => entry.key));
+        if (activeDetachedRasterSession() !== null) {
+            mapLayers.deactivatePresentation();
+            return;
+        }
+        mapLayers.render(requestedFocus);
     }
 
     /**
@@ -671,23 +719,16 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Restore the active session's controls, map interactions, and statistics.
+     * Restore one retained raster session after neutral activation.
      *
-     * @param {string} key Stable retained layer key.
-     * @param {{key:string,action:string}|null} [requestedFocus=null] Optional
-     * focus target for the layer-stack rerender.
+     * @param {Object} entry Neutral retained-layer entry.
+     * @param {Object} session Raster-owned interaction session.
      * @return {void}
      */
-    function activateLayer(key, requestedFocus = null) {
-        if (activeLayerKey === key) {
-            layerStack.activate(key);
-            renderLayerStack(requestedFocus);
+    function activateRasterSession(entry, session) {
+        if (activeLayerKey === entry.key) {
             return;
         }
-        deactivateActiveLayer();
-        analysisRasterSession = null;
-        const entry = layerStack.activate(key);
-        const session = requireLayerSession(key);
         loadActiveLayerSession(session);
         controlsView.setControlsVisible(true);
         controlsView.setActiveLayer(entry.label, entry.visible);
@@ -716,7 +757,17 @@ export function initializeRasterViewer(
 
         restoreActiveLayerStatistics();
         saveActiveLayerSession();
-        renderLayerStack(requestedFocus);
+    }
+
+    /**
+     * Ask the neutral controller to activate one retained raster.
+     *
+     * @param {string} key Stable retained-layer key.
+     * @param {{key:string,action:string}|null} [requestedFocus=null] Focus hint.
+     * @return {void}
+     */
+    function activateLayer(key, requestedFocus = null) {
+        mapLayers.activate(key, requestedFocus);
     }
 
     /**
@@ -768,13 +819,13 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function activateAnalysis(item) {
-        activationIntentSequence += 1;
-        const retainedKey = getCatalogRasterLayerKey(item);
+        mapLayers.recordIntent();
+        const retainedKey = getCatalogItemKey(item);
         const existingSession = matchingAnalysisSession(item);
         if (existingSession !== null && isActiveAnalysisRaster()) {
             return;
         }
-        const retainedSession = layerSessions.get(retainedKey);
+        const retainedSession = mapLayers.getRecord(retainedKey)?.state;
         if (retainedSession !== undefined) {
             const analysisSession = matchingAnalysisSession(item);
             if (analysisSession !== null) {
@@ -812,7 +863,7 @@ export function initializeRasterViewer(
         if (item !== null && matchingAnalysisSession(item) === null) {
             return;
         }
-        activationIntentSequence += 1;
+        mapLayers.recordIntent();
         const wasActive = isActiveAnalysisRaster();
         if (wasActive) {
             deactivateActiveLayer();
@@ -821,8 +872,8 @@ export function initializeRasterViewer(
         if (!wasActive) {
             return;
         }
-        if (layerStack.activeKey !== null) {
-            activateLayer(layerStack.activeKey);
+        if (mapLayers.activeKey !== null) {
+            activateLayer(mapLayers.activeKey);
         } else {
             controlsView.setControlsVisible(false);
             controlsView.hidePixelProbe();
@@ -851,10 +902,10 @@ export function initializeRasterViewer(
             throw new TypeError("Sampled raster recoloring callback is required");
         }
         buildRasterStyleEnvironment(style);
-        activationIntentSequence += 1;
+        mapLayers.recordIntent();
         const analysisSession = matchingAnalysisSession(item);
         deactivateActiveLayer();
-        const key = `detail:${getCatalogRasterLayerKey(item)}`;
+        const key = `detail:${getCatalogItemKey(item)}`;
         const initialStyle = Object.freeze({ ...style });
         sampledRasterSession = {
             key,
@@ -902,7 +953,7 @@ export function initializeRasterViewer(
      * @throws {Error} If a matching session receives an invalid style.
      */
     function updateSampledInitialStyle(item, style) {
-        const expectedKey = `detail:${getCatalogRasterLayerKey(item)}`;
+        const expectedKey = `detail:${getCatalogItemKey(item)}`;
         if (
             sampledRasterSession?.key !== expectedKey ||
             (
@@ -938,11 +989,11 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function removeSampled(item) {
-        const expectedKey = `detail:${getCatalogRasterLayerKey(item)}`;
+        const expectedKey = `detail:${getCatalogItemKey(item)}`;
         if (sampledRasterSession?.key !== expectedKey) {
             return;
         }
-        activationIntentSequence += 1;
+        mapLayers.recordIntent();
         const wasActive = isActiveSampledRaster();
         if (wasActive) {
             deactivateActiveLayer();
@@ -956,7 +1007,7 @@ export function initializeRasterViewer(
             activateDetachedSession(analysisRasterSession);
             return;
         }
-        const nextActiveKey = layerStack.activeKey;
+        const nextActiveKey = mapLayers.activeKey;
         if (nextActiveKey === null) {
             controlsView.setControlsVisible(false);
             controlsView.hidePixelProbe();
@@ -964,17 +1015,6 @@ export function initializeRasterViewer(
             return;
         }
         activateLayer(nextActiveKey);
-    }
-
-    /**
-     * Record an explicit layer-list activation before applying it.
-     *
-     * @param {string} key Stable retained layer key.
-     * @return {void}
-     */
-    function handleLayerActivation(key) {
-        activationIntentSequence += 1;
-        activateLayer(key);
     }
 
     /**
@@ -1033,7 +1073,7 @@ export function initializeRasterViewer(
             saveActiveLayerSession();
             return;
         }
-        const activeLayer = leafletLayers.get(activeLayerKey);
+        const activeLayer = mapLayers.getLeafletLayer(activeLayerKey);
         if (activeLayer === null) {
             return;
         }
@@ -1881,147 +1921,13 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Attach or detach one retained layer under the two-visible contract.
-     *
-     * @param {string} key Stable layer key.
-     * @param {boolean} visible Requested visibility.
-     * @return {void}
-     */
-    function handleLayerVisibility(key, visible) {
-        let entry;
-        try {
-            entry = layerStack.setVisible(key, visible);
-        } catch (error) {
-            if (!(error instanceof RasterLayerVisibilityLimitError)) {
-                throw error;
-            }
-            layerStackView.setStatus(error.message);
-            renderLayerStack({ key, action: "visibility" });
-            return;
-        }
-        leafletLayers.setVisible(key, visible);
-        if (activeLayerKey === key) {
-            saveActiveLayerSession();
-            controlsView.setActiveLayer(entry.label, visible);
-            renderRasterSampleWindowGuidance("");
-            saveActiveLayerSession();
-        }
-        layerStackView.setStatus(
-            `${entry.label} is now ${visible ? "visible" : "hidden"}.`
-        );
-        renderLayerStack({ key, action: "visibility" });
-    }
-
-    /**
-     * Apply ordinary-overlay opacity to one retained layer.
-     *
-     * @param {string} key Stable layer key.
-     * @param {number} opacity Opacity from zero through one.
-     * @return {void}
-     */
-    function handleLayerOpacity(key, opacity) {
-        layerStack.setOpacity(key, opacity);
-        leafletLayers.setOpacity(key, opacity);
-        onLayersChange(getLayerSnapshots());
-    }
-
-    /**
-     * Move one retained layer in top-first map order.
-     *
-     * @param {string} key Stable layer key.
-     * @param {"up"|"down"} direction Requested movement.
-     * @return {void}
-     */
-    function handleLayerMove(key, direction) {
-        if (!layerStack.move(key, direction)) {
-            return;
-        }
-        const entry = requireLayerSession(key);
-        applyLeafletLayerOrder();
-        layerStackView.setStatus(
-            `${entry.label} moved ${direction} in the map drawing order.`
-        );
-        renderLayerStack({ key, action: `move-${direction}` });
-    }
-
-    /**
-     * Invalidate pending publication work for one stable key.
-     *
-     * @param {string} key Stable layer key.
-     * @return {void}
-     */
-    function invalidatePublication(key) {
-        publicationGenerations.set(
-            key,
-            (publicationGenerations.get(key) ?? 0) + 1
-        );
-        pendingPublications.delete(key);
-    }
-
-    /**
-     * Remove one retained or pending layer by stable key.
-     *
-     * @param {string} key Stable layer key.
-     * @return {void}
-     */
-    function removeLayer(key) {
-        const removedSession = requireLayerSession(key);
-        activationIntentSequence += 1;
-        invalidatePublication(key);
-        const removedIndex = layerStack.entries.findIndex(
-            (candidate) => candidate.key === key
-        );
-        const wasActive = activeLayerKey === key;
-        if (wasActive) {
-            deactivateActiveLayer();
-        }
-        const detachedSession = wasActive
-            ? detachAnalysisSession(removedSession)
-            : null;
-        const { removed: entry, activeKey: nextActiveKey } =
-            layerStack.remove(key);
-        leafletLayers.remove(key);
-        layerSessions.delete(key);
-        if (layerStack.entries.length > 0) {
-            applyLeafletLayerOrder();
-        }
-        const focusKey =
-            layerStack.entries[removedIndex]?.key ??
-            layerStack.entries[removedIndex - 1]?.key ??
-            null;
-        if (detachedSession !== null) {
-            analysisRasterSession = detachedSession;
-            activateDetachedSession(analysisRasterSession);
-        } else if (wasActive && nextActiveKey !== null) {
-            activateLayer(nextActiveKey, {
-                key: nextActiveKey,
-                action: "activate",
-            });
-        } else {
-            if (
-                layerStack.entries.length === 0 &&
-                activeDetachedRasterSession() === null
-            ) {
-                activeLayerKey = null;
-                activeRasterItem = null;
-                controlsView.setControlsVisible(false);
-                controlsView.hidePixelProbe();
-            }
-            renderLayerStack(focusKey === null
-                ? null
-                : { key: focusKey, action: "activate" });
-        }
-        layerStackView.setStatus(`${entry.label} was removed from map layers.`);
-    }
-
-    /**
      * Remove one Catalog Item from the retained layer stack.
      *
      * @param {Object} item Catalog STAC Item.
      * @return {void}
      */
     function remove(item) {
-        removeLayer(getCatalogRasterLayerKey(item));
+        mapLayers.remove(item);
     }
 
     /**
@@ -2030,20 +1936,15 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function clear() {
-        activationIntentSequence += 1;
         if (rasterStyleCommitTimeout !== null) {
             clock.clearTimeout(rasterStyleCommitTimeout);
             rasterStyleCommitTimeout = null;
         }
-        for (const key of pendingPublications.keys()) {
-            invalidatePublication(key);
-        }
         deactivateActiveLayer();
+        mapLayers.deactivatePresentation();
         sampledRasterSession = null;
         analysisRasterSession = null;
-        leafletLayers.clear();
-        layerStack.clear();
-        layerSessions.clear();
+        mapLayers.removeOwned(rasterMapLayerAdapter);
         pixelProbeController.clear();
         rasterStatisticsController.clear();
         rasterSampleWindowController.clear();
@@ -2066,8 +1967,6 @@ export function initializeRasterViewer(
         rasterPixelProbeLabel = "";
         controlsView.setControlsVisible(false);
         controlsView.hidePixelProbe();
-        layerStackView.setStatus("");
-        renderLayerStack();
     }
 
     /**
@@ -2088,108 +1987,7 @@ export function initializeRasterViewer(
      * @throws {Error} If publication or Leaflet layer construction fails.
      */
     async function show(item) {
-        const key = getCatalogRasterLayerKey(item);
-        activationIntentSequence += 1;
-        const showRequestSequence = activationIntentSequence;
-        const retainedSession = layerSessions.get(key);
-        if (retainedSession !== undefined) {
-            const analysisSession = matchingAnalysisSession(item);
-            if (analysisSession !== null) {
-                saveActiveLayerSession();
-                copyRasterInteractionState(retainedSession, analysisSession);
-            }
-            activateLayer(key);
-            layerStackView.setStatus(`${retainedSession.label} is active.`);
-            return retainedSession.publishedRaster;
-        }
-        const pendingPublication = pendingPublications.get(key);
-        if (pendingPublication !== undefined) {
-            const publishedRaster = await pendingPublication;
-            if (
-                publishedRaster !== null &&
-                showRequestSequence === activationIntentSequence &&
-                layerSessions.has(key)
-            ) {
-                activateLayer(key);
-            }
-            return publishedRaster;
-        }
-
-        const generation = (publicationGenerations.get(key) ?? 0) + 1;
-        publicationGenerations.set(key, generation);
-        const publication = (async () => {
-            const publishedRaster = await publishRaster(item);
-            if (
-                destroyed ||
-                publicationGenerations.get(key) !== generation
-            ) {
-                return null;
-            }
-            const label = getCatalogRasterBasename(item);
-            const previousActiveKey = layerStack.activeKey;
-            const { entry } = layerStack.add(
-                item,
-                label,
-                showRequestSequence
-            );
-            const shouldActivate =
-                showRequestSequence === activationIntentSequence;
-            if (!shouldActivate && previousActiveKey !== null) {
-                layerStack.activate(previousActiveKey);
-            }
-            const analysisSession = matchingAnalysisSession(item);
-            if (analysisSession !== null) {
-                saveActiveLayerSession();
-            }
-            const session = createLayerSession(entry, publishedRaster);
-            if (analysisSession !== null) {
-                copyRasterInteractionState(session, analysisSession);
-            }
-            layerSessions.set(key, session);
-            try {
-                const layer = createRasterLayer(
-                    key,
-                    publishedRaster,
-                    session.rasterStyle
-                );
-                leafletLayers.add(key, layer, entry);
-                applyLeafletLayerOrder();
-                if (shouldActivate) {
-                    activateLayer(key);
-                } else {
-                    renderLayerStack();
-                }
-            } catch (error) {
-                leafletLayers.remove(key);
-                layerSessions.delete(key);
-                layerStack.remove(key);
-                if (
-                    previousActiveKey !== null &&
-                    layerStack.get(previousActiveKey) !== null
-                ) {
-                    activateLayer(previousActiveKey);
-                } else {
-                    renderLayerStack();
-                }
-                throw error;
-            }
-            layerStackView.setStatus(
-                entry.visible
-                    ? `${label} was added and is visible.`
-                    : `${label} was added hidden because two raster layers ` +
-                      "are already visible. Hide one to show it."
-            );
-            renderLayerStack();
-            return publishedRaster;
-        })();
-        pendingPublications.set(key, publication);
-        try {
-            return await publication;
-        } finally {
-            if (pendingPublications.get(key) === publication) {
-                pendingPublications.delete(key);
-            }
-        }
+        return mapLayers.show(item, rasterMapLayerAdapter);
     }
 
     /**
@@ -2264,7 +2062,9 @@ export function initializeRasterViewer(
         }
         saveActiveLayerSession();
         availableTemporaryAoi = validatedAoi;
-        const sessions = [...layerSessions.values()];
+        const sessions = mapLayers.retainedRecords.map(
+            (record) => record.state
+        );
         if (sampledRasterSession !== null) {
             sessions.push(sampledRasterSession);
         }
@@ -2307,7 +2107,7 @@ export function initializeRasterViewer(
      * @return {boolean} Whether the Item is retained.
      */
     function contains(item) {
-        return layerStack.hasItem(item);
+        return mapLayers.contains(item);
     }
 
     /**
@@ -2317,10 +2117,11 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function destroy() {
-        destroyed = true;
         clear();
         controlsView.unbind();
-        layerStackView.unbind();
+        if (ownsMapLayerController) {
+            mapLayers.destroy();
+        }
         mapContainer.removeEventListener("pointermove", handleMapPointerMove);
         mapContainer.removeEventListener("mouseleave", handleMapMouseLeave);
         leafletMap.off("mousemove", handleMapMouseMove);
@@ -2350,13 +2151,6 @@ export function initializeRasterViewer(
         onClearSampleWindow: restoreWholeRasterStatistics,
         onUseTemporaryAoi: useTemporaryAoiForRasterStatistics,
     });
-    layerStackView.bind({
-        onActivate: handleLayerActivation,
-        onVisibility: handleLayerVisibility,
-        onOpacity: handleLayerOpacity,
-        onMove: handleLayerMove,
-        onRemove: removeLayer,
-    });
     const mapContainer = leafletMap.getContainer();
     mapContainer.addEventListener("pointermove", handleMapPointerMove);
     leafletMap.on("mousemove", handleMapMouseMove);
@@ -2383,7 +2177,8 @@ export function initializeRasterViewer(
          * @return {boolean} Whether any raster layer is displayed.
          */
         get isDisplayed() {
-            return layerStack.visibleCount > 0 || sampledRasterSession !== null;
+            return mapLayers.visibleCountFor(rasterMapLayerAdapter) > 0 ||
+                sampledRasterSession !== null;
         },
     };
 }

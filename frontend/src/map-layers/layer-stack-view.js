@@ -1,12 +1,11 @@
 /**
- * Accessible DOM presentation for the retained raster layer stack.
+ * Accessible DOM presentation for the retained map-layer stack.
  *
  * This adapter renders top-first keyed rows and forwards activation,
  * visibility, opacity, ordering, and removal intent. It does not publish
- * rasters, enforce state invariants, or manipulate Leaflet layers.
+ * datasets, enforce state invariants, or manipulate Leaflet layers.
  */
-import { MAX_VISIBLE_RASTER_LAYERS } from "./layer-stack.js";
-import { buildRasterLegend } from "./style.js";
+import { MAX_VISIBLE_MAP_LAYERS } from "./layer-stack.js";
 
 /**
  * Resolve one required stack element.
@@ -19,13 +18,13 @@ import { buildRasterLegend } from "./style.js";
 function requireLayerStackElement(documentContext, selector) {
     const element = documentContext.querySelector(selector);
     if (element === null) {
-        throw new Error(`Required raster layer-stack element is missing: ${selector}`);
+        throw new Error(`Required map layer-stack element is missing: ${selector}`);
     }
     return element;
 }
 
 /**
- * @typedef {Object} RasterLayerStackViewHandlers
+ * @typedef {Object} MapLayerStackViewHandlers
  * @property {(key: string) => void} onActivate Activate one retained layer.
  * @property {(key: string, visible: boolean) => void} onVisibility Change
  * map visibility.
@@ -36,8 +35,8 @@ function requireLayerStackElement(documentContext, selector) {
  * @property {(key: string) => void} onRemove Remove one retained layer.
  */
 
-/** Own the raster layer-list elements and their direct event listeners. */
-export class RasterLayerStackView {
+/** Own the map layer-list elements and their direct event listeners. */
+export class MapLayerStackView {
     /**
      * Resolve the fixed layer-stack markup.
      *
@@ -62,21 +61,25 @@ export class RasterLayerStackView {
             documentContext,
             "#raster-layer-stack-limit"
         );
-        /** @type {RasterLayerStackViewHandlers|null} */
+        /** @type {MapLayerStackViewHandlers|null} */
         this.handlers = null;
     }
 
     /**
      * Retain the complete interaction contract.
      *
-     * @param {RasterLayerStackViewHandlers} handlers Stack intent handlers.
+     * @param {MapLayerStackViewHandlers} handlers Stack intent handlers.
      * @return {void}
      */
     bind(handlers) {
         this.handlers = handlers;
     }
 
-    /** Stop forwarding intent after viewer destruction. */
+    /**
+     * Stop forwarding intent after viewer destruction.
+     *
+     * @return {void}
+     */
     unbind() {
         this.handlers = null;
     }
@@ -104,9 +107,9 @@ export class RasterLayerStackView {
         ));
         this.list.replaceChildren(...rows);
         this.root.hidden = layers.length === 0;
-        this.limit.textContent = visibleCount >= MAX_VISIBLE_RASTER_LAYERS
-            ? `Two raster layers are visible. Hide one before showing another.`
-            : `${visibleCount} of ${MAX_VISIBLE_RASTER_LAYERS} raster layers visible.`;
+        this.limit.textContent = visibleCount >= MAX_VISIBLE_MAP_LAYERS
+            ? "Two map layers are visible. Hide one before showing another."
+            : `${visibleCount} of ${MAX_VISIBLE_MAP_LAYERS} map layers visible.`;
         if (retainedFocus !== null) {
             let focusTarget = focusTargets.get(
                 `${retainedFocus.key}\u0000${retainedFocus.action}`
@@ -170,7 +173,7 @@ export class RasterLayerStackView {
 
         const activeInput = this.documentContext.createElement("input");
         activeInput.type = "radio";
-        activeInput.name = "active-raster-layer";
+        activeInput.name = "active-map-layer";
         activeInput.checked = layer.key === activeKey;
         activeInput.dataset.layerKey = layer.key;
         activeInput.dataset.layerAction = "activate";
@@ -217,7 +220,7 @@ export class RasterLayerStackView {
         visibilityInput.type = "checkbox";
         visibilityInput.checked = layer.visible;
         visibilityInput.disabled =
-            !layer.visible && visibleCount >= MAX_VISIBLE_RASTER_LAYERS;
+            !layer.visible && visibleCount >= MAX_VISIBLE_MAP_LAYERS;
         visibilityInput.dataset.layerKey = layer.key;
         visibilityInput.dataset.layerAction = "visibility";
         visibilityInput.setAttribute(
@@ -294,28 +297,10 @@ export class RasterLayerStackView {
         order.append(upButton, downButton);
         presentation.append(visibilityLabel, opacityLabel, order);
 
-        const legend = this.documentContext.createElement("div");
-        legend.className = "raster-layer-legend";
-        legend.setAttribute("role", "img");
-        const legendDefinition = buildRasterLegend(layer.style);
-        legend.style.background = legendDefinition.gradient;
-        legend.setAttribute(
-            "aria-label",
-            `${accessibleName}. ${legendDefinition.description}`
+        const { legend, labels } = this.#buildGradientLegend(
+            layer,
+            accessibleName
         );
-
-        const labels = this.documentContext.createElement("div");
-        labels.className = "raster-layer-legend-labels";
-        labels.setAttribute("aria-hidden", "true");
-        for (const value of [
-            layer.style.minimum,
-            layer.style.midpoint,
-            layer.style.maximum,
-        ]) {
-            const label = this.documentContext.createElement("span");
-            label.textContent = String(value);
-            labels.append(label);
-        }
 
         const error = this.documentContext.createElement("p");
         error.className = "raster-layer-error";
@@ -324,6 +309,33 @@ export class RasterLayerStackView {
 
         row.append(heading, presentation, legend, labels, error);
         return row;
+    }
+
+    /**
+     * Build one feature-owned gradient legend and numeric labels.
+     *
+     * @param {Object} layer Map-layer presentation snapshot.
+     * @param {string} accessibleName Complete layer accessible name.
+     * @return {{legend:HTMLDivElement,labels:HTMLDivElement}} Legend elements.
+     */
+    #buildGradientLegend(layer, accessibleName) {
+        const legend = this.documentContext.createElement("div");
+        legend.className = "raster-layer-legend";
+        legend.setAttribute("role", "img");
+        legend.style.background = layer.legend.gradient;
+        legend.setAttribute(
+            "aria-label",
+            `${accessibleName}. ${layer.legend.description}`
+        );
+        const labels = this.documentContext.createElement("div");
+        labels.className = "raster-layer-legend-labels";
+        labels.setAttribute("aria-hidden", "true");
+        for (const value of layer.legend.labels) {
+            const label = this.documentContext.createElement("span");
+            label.textContent = String(value);
+            labels.append(label);
+        }
+        return { legend, labels };
     }
 
     /**

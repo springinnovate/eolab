@@ -1,5 +1,6 @@
 /** Lifecycle coordinator for zoom-adaptive, bounded raster detail previews. */
 
+import { getCatalogItemKey } from "../catalog-item-identity.js";
 import {
     isRasterDetailPreviewCapacityError,
     loadCatalogRasterDetailPreview
@@ -13,7 +14,6 @@ import {
     isRasterDetailZoom,
     rasterViewportKey
 } from "./detail-preview-viewport.js";
-import { getCatalogRasterLayerKey } from "./layer-stack.js";
 
 const DETAIL_REFINEMENT_DEBOUNCE_MILLISECONDS = 200;
 const DETAIL_CAPACITY_RETRY_MILLISECONDS = 1_000;
@@ -134,7 +134,7 @@ export function initializeRasterDetailPreview(
      * @return {boolean} Whether its composite identity is displayed.
      */
     function contains(item) {
-        return current?.key === getCatalogRasterLayerKey(item);
+        return current?.key === getCatalogItemKey(item);
     }
 
     /**
@@ -446,7 +446,7 @@ export function initializeRasterDetailPreview(
             throw layerError;
         }
         const previous = current;
-        const key = getCatalogRasterLayerKey(item);
+        const key = getCatalogItemKey(item);
         const changedFocusScope = previous === null || previous.key !== key ||
             !rasterDetailFocusBoundsMatch(
                 previous.base.presentation.focusBounds,
