@@ -15,6 +15,7 @@ from rasterio.warp import transform_bounds
 from eolab_app.catalog.vector import (
     MOUNTED_VECTOR_COLLECTION_ID,
     TABLE_EXTENSION,
+    build_vector_source_properties,
     build_vector_table_properties,
 )
 
@@ -210,6 +211,9 @@ def _build_layer_item(
                 f"{FALLBACK_DATETIME_DESCRIPTION}"
             ),
             GEOPACKAGE_LAYER_PROPERTY: layer_name,
+            **build_vector_source_properties(
+                "geopackage", "data", layer_name
+            ),
             "proj:bbox": native_bbox,
             **build_vector_table_properties(
                 feature_count,

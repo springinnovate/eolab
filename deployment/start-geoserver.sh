@@ -22,6 +22,8 @@ if [ "$heap_megabytes" -lt 256 ]; then
     exit 1
 fi
 
+/usr/local/bin/require-geoserver-vector-datastores
+
 # The Java agent exposes the allowlisted JVM metrics from jmx-exporter.yml on
 # port 9404. Compose keeps that HTTP endpoint internal for the EOLab app.
 export EXTRA_JAVA_OPTS="-Xms256m -Xmx${GEOSERVER_MAX_HEAP_SIZE} \

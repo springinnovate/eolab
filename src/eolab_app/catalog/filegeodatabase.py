@@ -16,6 +16,7 @@ from eolab_app.catalog.vector import (
     MOUNTED_VECTOR_COLLECTION_ID,
     TABLE_EXTENSION,
     build_bbox_polygon,
+    build_vector_source_properties,
     build_vector_table_properties,
 )
 
@@ -201,6 +202,9 @@ def build_layer_stac_item(
             "description": FALLBACK_DATETIME_DESCRIPTION,
             "datetime": _format_datetime(modified_at),
             "eolab:layer_name": layer_name,
+            **build_vector_source_properties(
+                "file-geodatabase", "data", layer_name
+            ),
             **build_vector_table_properties(
                 feature_count,
                 geometry_type,

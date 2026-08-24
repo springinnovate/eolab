@@ -31,6 +31,10 @@ from eolab_app.catalog.zipped_shapefile import (
 DatasetItem = dict[str, Any]
 
 
+class DatasetBuildError(RuntimeError):
+    """Report a format-owned metadata failure at the registry boundary."""
+
+
 @dataclass(frozen=True)
 class DatasetMatch:
     """One dataset recognized by a handler during directory discovery.
@@ -177,11 +181,14 @@ class DatasetHandlerRegistry:
 
         Raises:
             KeyError: If the candidate names a handler outside the registry.
-            Exception: Propagates format-specific metadata failures.
+            DatasetBuildError: If the selected handler cannot read metadata.
         """
         for handler in self.handlers:
             if handler.name == candidate.handler_name:
-                return handler.build_items(source_root, candidate)
+                try:
+                    return handler.build_items(source_root, candidate)
+                except Exception as error:
+                    raise DatasetBuildError(str(error)) from error
         raise KeyError(f"Unknown dataset handler: {candidate.handler_name}")
 
 

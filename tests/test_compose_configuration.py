@@ -145,6 +145,46 @@ def test_app_and_geoserver_refuse_a_writable_scan_mount() -> None:
     assert 'exec "$@"' in guard
 
 
+def test_geoserver_requires_supported_vector_datastore_modules(
+    tmp_path: Path,
+) -> None:
+    """Fail the image contract unless both required GeoTools modules exist.
+
+    Args:
+        tmp_path: Isolated fake GeoServer library directory.
+    """
+    repository_root = COMPOSE_PATH.parent
+    guard_path = (
+        repository_root
+        / "deployment"
+        / "require-geoserver-vector-datastores.sh"
+    )
+    (tmp_path / "gt-shapefile-35.1.jar").touch()
+    shell_tmp_path = (
+        f"/cygdrive/{tmp_path.drive[0].lower()}{tmp_path.as_posix()[2:]}"
+        if tmp_path.drive
+        else tmp_path.as_posix()
+    )
+
+    missing_geopackage = subprocess.run(
+        ["sh", str(guard_path), shell_tmp_path],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    (tmp_path / "gt-geopkg-35.1.jar").touch()
+    complete = subprocess.run(
+        ["sh", str(guard_path), shell_tmp_path],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert missing_geopackage.returncode == 1
+    assert "GeoPackage datastore module is missing" in missing_geopackage.stderr
+    assert complete.returncode == 0
+
+
 def test_geoserver_has_bounded_tunable_rendering_resources() -> None:
     """Pin render scheduling while leaving its limits deployer-configurable."""
     repository_root = COMPOSE_PATH.parent

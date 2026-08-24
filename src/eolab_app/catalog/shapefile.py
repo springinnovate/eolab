@@ -14,6 +14,7 @@ from eolab_app.catalog.vector import (
     MOUNTED_VECTOR_COLLECTION_ID,
     TABLE_EXTENSION,
     build_bbox_polygon,
+    build_vector_source_properties,
     build_vector_table_properties,
 )
 
@@ -154,6 +155,9 @@ def build_stac_item(
         properties: dict[str, Any] = {
             "title": relative_path_text,
             "description": FALLBACK_DATETIME_DESCRIPTION,
+            **build_vector_source_properties(
+                "shapefile", "shp", shapefile_path.stem
+            ),
             **build_vector_table_properties(
                 feature_count,
                 geometry_type,
