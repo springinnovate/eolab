@@ -17,6 +17,7 @@ import {
     CatalogSurpriseClient,
     createDebouncedAction,
     formatCatalogItemCount,
+    formatCatalogRasterStatus,
     formatScanReconciliation,
     formatScanProgressCounts,
     formatScanTiming,
@@ -683,25 +684,18 @@ async function initializeCatalog(
                         ? "Remove from map layers"
                         : "Add to map layers"
         );
-        let defaultStatus = visualization?.reason ?? "";
-        if (isRetained) {
-            defaultStatus = "This raster is retained in the map layer stack.";
-        }
-        if (supportsDetailPreview) {
-            defaultStatus =
-                "Normal full visualization is unavailable. Broad views use " +
-                "a fixed 127-longest-edge center sample; close views " +
-                "automatically use exact bounded source detail.";
-        }
+        const fullVisualizationReason = visualization?.reason ?? "";
+        let defaultStatus = formatCatalogRasterStatus(
+            fullVisualizationReason,
+            isRetained,
+            supportsDetailPreview,
+            hasDetailPreview
+        );
         if (hasDetailPreview) {
             const base = detailPreviewState.basePreview;
             const hasFiniteValues = base.pixelValues.some(
                 (value) => value !== null
             );
-            defaultStatus =
-                "Adaptive detail-only raster — not a whole-raster " +
-                "rendering. The orange dashed outline is the raster " +
-                "extent; zooming requests a bounded current-view layer.";
             if (detailPreviewState.detailStatus === "loading") {
                 defaultStatus += " Loading finer current-view detail…";
             } else if (detailPreviewState.detailStatus === "ready") {

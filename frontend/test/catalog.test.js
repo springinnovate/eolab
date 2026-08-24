@@ -15,6 +15,7 @@ import {
   createDebouncedAction,
   findPaginationLink,
   formatCatalogItemCount,
+  formatCatalogRasterStatus,
   formatScanReconciliation,
   formatScanProgressCounts,
   formatScanTiming,
@@ -1138,6 +1139,27 @@ test("getRasterVisualization returns the scanner decision", () => {
       assets: { data: { "eolab:rendering": renderingMetadata } },
     }),
     renderingMetadata,
+  );
+});
+
+test("Catalog raster status preserves the precise adaptive rejection", () => {
+  const rejection =
+    "Visualization unavailable: this raster needs an internal overview " +
+    "pyramid beginning at 2x without skipped levels.";
+
+  assert.equal(
+    formatCatalogRasterStatus(rejection, false, true, false),
+    rejection +
+      " Normal full visualization is unavailable. Broad views use a fixed " +
+      "127-longest-edge center sample; close views automatically use exact " +
+      "bounded source detail.",
+  );
+  assert.equal(
+    formatCatalogRasterStatus(rejection, false, true, true),
+    rejection +
+      " Adaptive detail-only raster — not a whole-raster rendering. The " +
+      "orange dashed outline is the raster extent; zooming requests a " +
+      "bounded current-view layer.",
   );
 });
 
