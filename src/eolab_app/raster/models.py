@@ -32,6 +32,13 @@ RasterDetailPreviewRendering = Literal[
 ]
 # Projection roundoff allowance; far below a displayable map distance.
 RASTER_DETAIL_PREVIEW_BOUNDS_TOLERANCE = 1e-9
+# Fixed representation limits repeated in the public response contract. These
+# names keep model validation readable without importing reader modules into
+# the transport model boundary.
+EXACT_DETAIL_MAX_SOURCE_BLOCK_READS = 1_024
+EXACT_DETAIL_MAX_DECODED_SOURCE_BYTES = 64 * 1024 * 1024
+DETAIL_PROXY_MAX_SOURCE_BLOCK_READS = 127 * 127
+DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES = 9 * 1024 * 1024 * 1024
 RasterDetailPreviewCacheKey = tuple[
     str,
     str,
@@ -420,8 +427,8 @@ class RasterDetailPreview(BaseModel):
                 or self.image_height > self.limits.maximum_exact_detail_dimension
             ):
                 raise ValueError("Exact detail dimensions exceed fixed limits")
-            expected_decoded_limit = 67_108_864
-            expected_block_limit = 1_024
+            expected_decoded_limit = EXACT_DETAIL_MAX_DECODED_SOURCE_BYTES
+            expected_block_limit = EXACT_DETAIL_MAX_SOURCE_BLOCK_READS
             source_window = self.actual.source_window
             if (
                 source_window is None
@@ -437,8 +444,8 @@ class RasterDetailPreview(BaseModel):
                 raise ValueError(
                     "Sampled preview longest edge must match the fixed grid"
                 )
-            expected_decoded_limit = 9_663_676_416
-            expected_block_limit = 16_129
+            expected_decoded_limit = DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES
+            expected_block_limit = DETAIL_PROXY_MAX_SOURCE_BLOCK_READS
             if self.actual.source_window is not None:
                 raise ValueError("Sampled proxies cannot claim a source window")
         if (
