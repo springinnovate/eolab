@@ -194,7 +194,7 @@ function makeRasterRangeStrict(minimum, midpoint, maximum) {
  * @param {Object} statistics Validated raster statistics.
  * @param {{lower:number,middle:number,upper:number}} [percentiles=DEFAULT_RASTER_PERCENTILES]
  * Histogram positions used for the three thresholds.
- * @return {RasterStyle} Style with approximate histogram-derived thresholds.
+ * @return {RasterStyle} Style with bounded histogram-derived thresholds.
  * @throws {Error} If percentiles are nonfinite, unordered, or out of range.
  */
 export function deriveRasterStyleFromStatistics(

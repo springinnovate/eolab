@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   DEFAULT_RASTER_PERCENTILES,
   estimateRasterHistogramPercentile,
+  normalizeRasterSamplingArea,
   rasterStatisticsMatchesSelection,
   validateRasterStatistics,
 } from "../../src/raster/statistics.js";
@@ -77,34 +78,65 @@ test("raster statistics validate their fixed bounded response contract", () => {
 test("raster statistics apply only to their current whole or selected scope", () => {
   const otherBounds = { ...SELECTED_BOUNDS, west: -120, east: -118 };
 
-  assert.equal(rasterStatisticsMatchesSelection(RASTER_STATISTICS, null), true);
+  assert.equal(rasterStatisticsMatchesSelection(
+    RASTER_STATISTICS,
+    { kind: "wholeRaster" },
+  ), true);
   assert.equal(
-    rasterStatisticsMatchesSelection(RASTER_STATISTICS, SELECTED_BOUNDS),
+    rasterStatisticsMatchesSelection(
+      RASTER_STATISTICS,
+      { kind: "selectedArea", selectedBounds: SELECTED_BOUNDS },
+    ),
     false,
   );
   assert.equal(
-    rasterStatisticsMatchesSelection(SELECTED_RASTER_STATISTICS, SELECTED_BOUNDS),
+    rasterStatisticsMatchesSelection(
+      SELECTED_RASTER_STATISTICS,
+      { kind: "selectedArea", selectedBounds: SELECTED_BOUNDS },
+    ),
     true,
   );
   assert.equal(
-    rasterStatisticsMatchesSelection(SELECTED_RASTER_STATISTICS, otherBounds),
+    rasterStatisticsMatchesSelection(
+      SELECTED_RASTER_STATISTICS,
+      { kind: "selectedArea", selectedBounds: otherBounds },
+    ),
     false,
   );
   assert.equal(
     rasterStatisticsMatchesSelection(
       TEMPORARY_AOI_RASTER_STATISTICS,
-      null,
-      TEMPORARY_AOI_ID,
+      { kind: "temporaryAoi", temporaryAoiId: TEMPORARY_AOI_ID },
     ),
     true,
   );
   assert.equal(
     rasterStatisticsMatchesSelection(
       TEMPORARY_AOI_RASTER_STATISTICS,
-      null,
-      `X${TEMPORARY_AOI_ID.slice(1)}`,
+      {
+        kind: "temporaryAoi",
+        temporaryAoiId: `X${TEMPORARY_AOI_ID.slice(1)}`,
+      },
     ),
     false,
+  );
+});
+
+test("raster sampling areas form one strict immutable union", () => {
+  assert.deepEqual(normalizeRasterSamplingArea(), { kind: "wholeRaster" });
+  assert.deepEqual(
+    normalizeRasterSamplingArea({
+      kind: "selectedArea",
+      selectedBounds: SELECTED_BOUNDS,
+    }),
+    { kind: "selectedArea", selectedBounds: SELECTED_BOUNDS },
+  );
+  assert.throws(
+    () => normalizeRasterSamplingArea({
+      kind: "wholeRaster",
+      selectedBounds: SELECTED_BOUNDS,
+    }),
+    /sampling area is invalid/,
   );
 });
 

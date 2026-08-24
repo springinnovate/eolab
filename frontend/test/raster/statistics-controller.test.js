@@ -16,21 +16,25 @@ test("RasterStatisticsController aborts and ignores stale Item results", async (
   const loading = [];
   const results = [];
   const controller = new RasterStatisticsController(
-    (item, signal) => new Promise((resolve) => {
-      requests.push({ item, signal, resolve });
+    (item, samplingArea, signal) => new Promise((resolve) => {
+      requests.push({ item, samplingArea, signal, resolve });
     }),
-    (item, context) => loading.push({ item, context }),
-    (statistics, item, context) => results.push({ statistics, item, context }),
+    (item, _samplingArea, context) => loading.push({ item, context }),
+    (statistics, item, _samplingArea, context) => {
+      results.push({ statistics, item, context });
+    },
     () => assert.fail("Unexpected statistics error"),
   );
   const secondItem = { ...MOUNTED_GEOTIFF_ITEM, id: "geotiff-second" };
 
   const firstRequest = controller.activate(
     MOUNTED_GEOTIFF_ITEM,
+    { kind: "wholeRaster" },
     { styleRevision: 0 },
   );
   const secondRequest = controller.activate(
     secondItem,
+    { kind: "wholeRaster" },
     { styleRevision: 1 },
   );
   assert.equal(requests[0].signal.aborted, true);
@@ -52,8 +56,8 @@ test("RasterStatisticsController aborts and ignores a stale clicked area", async
   const requests = [];
   const results = [];
   const controller = new RasterStatisticsController(
-    (item, signal, selectedBounds) => new Promise((resolve) => {
-      requests.push({ item, signal, selectedBounds, resolve });
+    (item, samplingArea, signal) => new Promise((resolve) => {
+      requests.push({ item, samplingArea, signal, resolve });
     }),
     () => {},
     (statistics) => results.push(statistics),
@@ -63,18 +67,16 @@ test("RasterStatisticsController aborts and ignores a stale clicked area", async
 
   const firstRequest = controller.activate(
     MOUNTED_GEOTIFF_ITEM,
-    undefined,
-    SELECTED_BOUNDS,
+    { kind: "selectedArea", selectedBounds: SELECTED_BOUNDS },
   );
   const secondRequest = controller.activate(
     MOUNTED_GEOTIFF_ITEM,
-    undefined,
-    secondBounds,
+    { kind: "selectedArea", selectedBounds: secondBounds },
   );
   assert.equal(requests[0].signal.aborted, true);
-  assert.deepEqual(requests.map(({ selectedBounds }) => selectedBounds), [
-    SELECTED_BOUNDS,
-    secondBounds,
+  assert.deepEqual(requests.map(({ samplingArea }) => samplingArea), [
+    { kind: "selectedArea", selectedBounds: SELECTED_BOUNDS },
+    { kind: "selectedArea", selectedBounds: secondBounds },
   ]);
 
   requests[0].resolve(SELECTED_RASTER_STATISTICS);
@@ -95,9 +97,9 @@ test("RasterStatisticsController retains its Item for a recoverable retry", asyn
   const errors = [];
   const results = [];
   const controller = new RasterStatisticsController(
-    async (_item, _signal, selectedBounds) => {
+    async (_item, samplingArea) => {
       attempts += 1;
-      requestedBounds.push(selectedBounds);
+      requestedBounds.push(samplingArea.selectedBounds);
       if (attempts === 1) {
         throw new Error("Statistics service busy");
       }
@@ -111,8 +113,7 @@ test("RasterStatisticsController retains its Item for a recoverable retry", asyn
   assert.equal(
     await controller.activate(
       MOUNTED_GEOTIFF_ITEM,
-      undefined,
-      SELECTED_BOUNDS,
+      { kind: "selectedArea", selectedBounds: SELECTED_BOUNDS },
     ),
     null,
   );
@@ -127,9 +128,9 @@ test("RasterStatisticsController aborts and ignores a replaced AOI lifecycle", a
   const requests = [];
   const results = [];
   const controller = new RasterStatisticsController(
-    (_item, signal, selectedBounds, temporaryAoiId) =>
+    (_item, samplingArea, signal) =>
       new Promise((resolve) => {
-        requests.push({ resolve, selectedBounds, signal, temporaryAoiId });
+        requests.push({ resolve, samplingArea, signal });
       }),
     () => {},
     (statistics) => results.push(statistics),
@@ -138,26 +139,19 @@ test("RasterStatisticsController aborts and ignores a replaced AOI lifecycle", a
 
   const firstRequest = controller.activate(
     MOUNTED_GEOTIFF_ITEM,
-    undefined,
-    null,
-    TEMPORARY_AOI_ID,
+    { kind: "temporaryAoi", temporaryAoiId: TEMPORARY_AOI_ID },
   );
   const replacementRequest = controller.activate(
     MOUNTED_GEOTIFF_ITEM,
-    undefined,
-    null,
-    replacementId,
+    { kind: "temporaryAoi", temporaryAoiId: replacementId },
   );
 
   assert.equal(requests[0].signal.aborted, true);
   assert.deepEqual(
-    requests.map(({ selectedBounds, temporaryAoiId }) => ({
-      selectedBounds,
-      temporaryAoiId,
-    })),
+    requests.map(({ samplingArea }) => samplingArea),
     [
-      { selectedBounds: null, temporaryAoiId: TEMPORARY_AOI_ID },
-      { selectedBounds: null, temporaryAoiId: replacementId },
+      { kind: "temporaryAoi", temporaryAoiId: TEMPORARY_AOI_ID },
+      { kind: "temporaryAoi", temporaryAoiId: replacementId },
     ],
   );
   requests[0].resolve(TEMPORARY_AOI_RASTER_STATISTICS);

@@ -103,19 +103,38 @@ export const RASTER_STATISTICS = Object.freeze({
   sourceWidth: 1024,
   sourceHeight: 512,
   sourcePixelCount: 524288,
-  sampleWidth: 512,
-  sampleHeight: 256,
-  sampledPixelCount: 131072,
-  validSampleCount: 128000,
+  sampleWidth: 127,
+  sampleHeight: 63,
+  sampledPixelCount: 8001,
+  validSampleCount: 8000,
+  samplingMethod: "sampleGrid",
   estimated: true,
   sampleMinimum: -10,
   sampleMaximum: 30,
   percentiles: { p05: -4, p50: 3, p95: 20 },
   histogram: {
-    counts: [2000, ...new Array(63).fill(2000)],
+    counts: new Array(64).fill(125),
     edges: Array.from({ length: 65 }, (_, index) => -10 + index * 0.625),
   },
   suggestedRange: { minimum: -4, midpoint: 3, maximum: 20 },
+});
+
+/** @type {Readonly<Object>} Representative exact bounded statistics. */
+export const EXACT_RASTER_STATISTICS = Object.freeze({
+  ...RASTER_STATISTICS,
+  sourceWidth: 64,
+  sourceHeight: 32,
+  sourcePixelCount: 2048,
+  sampleWidth: 64,
+  sampleHeight: 32,
+  sampledPixelCount: 2048,
+  validSampleCount: 2048,
+  samplingMethod: "exactSourceWindow",
+  estimated: false,
+  histogram: {
+    ...RASTER_STATISTICS.histogram,
+    counts: new Array(64).fill(32),
+  },
 });
 
 /** @type {Readonly<Object>} Representative canonical selected-area bounds. */

@@ -1,7 +1,7 @@
 /**
  * Domain rules for bounded raster statistics and histogram percentiles.
  *
- * This module validates the rendering API's statistics contract, determines
+ * This module validates the analysis API's statistics contract, determines
  * whether results match the active whole-raster or selected-area scope, and
  * estimates values from histogram percentiles. It performs no I/O or rendering.
  */
@@ -13,6 +13,62 @@ export const DEFAULT_RASTER_PERCENTILES = Object.freeze({
     middle: 50,
     upper: 95
 });
+
+/** Immutable whole-raster member of the frontend sampling-area union. */
+export const WHOLE_RASTER_SAMPLING_AREA = Object.freeze({
+    kind: "wholeRaster"
+});
+
+/**
+ * Normalize one strict raster-statistics sampling-area union.
+ *
+ * @param {Object} [samplingArea=WHOLE_RASTER_SAMPLING_AREA] Candidate whole,
+ * selected-bounds, or temporary-AOI area.
+ * @return {Readonly<Object>} Validated immutable sampling area.
+ * @throws {TypeError} If the discriminator, owned field, or object shape is
+ * invalid.
+ */
+export function normalizeRasterSamplingArea(
+    samplingArea = WHOLE_RASTER_SAMPLING_AREA
+) {
+    if (samplingArea === null || typeof samplingArea !== "object") {
+        throw new TypeError("Raster statistics sampling area is invalid.");
+    }
+    const keys = Object.keys(samplingArea).sort();
+    if (
+        samplingArea.kind === "wholeRaster" &&
+        keys.length === 1 && keys[0] === "kind"
+    ) {
+        return WHOLE_RASTER_SAMPLING_AREA;
+    }
+    if (
+        samplingArea.kind === "selectedArea" &&
+        keys.length === 2 &&
+        keys[0] === "kind" &&
+        keys[1] === "selectedBounds"
+    ) {
+        return Object.freeze({
+            kind: "selectedArea",
+            selectedBounds: Object.freeze({
+                ...validateRasterSelectedBounds(samplingArea.selectedBounds)
+            })
+        });
+    }
+    if (
+        samplingArea.kind === "temporaryAoi" &&
+        keys.length === 2 &&
+        keys[0] === "kind" &&
+        keys[1] === "temporaryAoiId" &&
+        typeof samplingArea.temporaryAoiId === "string" &&
+        /^[A-Za-z0-9_-]{32}$/.test(samplingArea.temporaryAoiId)
+    ) {
+        return Object.freeze({
+            kind: "temporaryAoi",
+            temporaryAoiId: samplingArea.temporaryAoiId
+        });
+    }
+    throw new TypeError("Raster statistics sampling area is invalid.");
+}
 
 /**
  * Build a stable error for a malformed statistics response.
@@ -39,7 +95,7 @@ function isPositiveInteger(value) {
  *
  * @param {Object} statistics Candidate response from EOLab.
  * @return {Object} The validated response.
- * @throws {Error} If the document violates the rendering API contract.
+ * @throws {Error} If the document violates the analysis API contract.
  */
 export function validateRasterStatistics(statistics) {
     if (statistics === null || typeof statistics !== "object") {
@@ -98,6 +154,29 @@ export function validateRasterStatistics(statistics) {
     }
     if (typeof statistics.estimated !== "boolean") {
         throw rasterStatisticsContractError("estimate metadata");
+    }
+    if (
+        !["sampleGrid", "exactSourceWindow"].includes(
+            statistics.samplingMethod
+        ) ||
+        statistics.estimated !== (statistics.samplingMethod === "sampleGrid")
+    ) {
+        throw rasterStatisticsContractError("sampling provenance");
+    }
+    if (
+        statistics.samplingMethod === "sampleGrid" &&
+        Math.max(statistics.sampleWidth, statistics.sampleHeight) > 127
+    ) {
+        throw rasterStatisticsContractError("sample-grid bounds");
+    }
+    if (
+        statistics.samplingMethod === "exactSourceWindow" &&
+        (
+            statistics.sampleWidth !== statistics.sourceWidth ||
+            statistics.sampleHeight !== statistics.sourceHeight
+        )
+    ) {
+        throw rasterStatisticsContractError("exact-window dimensions");
     }
 
     const sampleValues = [
@@ -164,34 +243,31 @@ export function validateRasterStatistics(statistics) {
 /**
  * Validate that statistics describe the exact scope requested by the client.
  *
- * @param {Object} statistics Candidate rendering API response.
- * @param {Object|null} selectedBounds Validated requested bounds, or null for
- * the whole raster.
- * @param {string|null} [temporaryAoiId=null] Requested opaque AOI reference.
+ * @param {Object} statistics Candidate analysis API response.
+ * @param {Object} samplingArea Normalized requested sampling-area union.
  * @return {Object} The validated response for the requested scope.
  * @throws {Error} If the response data, scope, or selected bounds differ.
  */
 export function validateRasterStatisticsForSelection(
     statistics,
-    selectedBounds,
-    temporaryAoiId = null
+    samplingArea
 ) {
+    const normalizedArea = normalizeRasterSamplingArea(samplingArea);
     const validatedStatistics = validateRasterStatistics(statistics);
     if (
-        selectedBounds === null &&
-        temporaryAoiId === null &&
+        normalizedArea.kind === "wholeRaster" &&
         validatedStatistics.scope !== "wholeRaster"
     ) {
         throw rasterStatisticsContractError("whole-raster response scope");
     }
-    if (selectedBounds !== null) {
+    if (normalizedArea.kind === "selectedArea") {
         if (validatedStatistics.scope !== "selectedArea") {
             throw rasterStatisticsContractError("selected-area response scope");
         }
         for (const fieldName of ["west", "south", "east", "north"]) {
             if (
                 validatedStatistics.selectedBounds[fieldName] !==
-                selectedBounds[fieldName]
+                normalizedArea.selectedBounds[fieldName]
             ) {
                 throw rasterStatisticsContractError(
                     "selected-area response bounds"
@@ -200,10 +276,11 @@ export function validateRasterStatisticsForSelection(
         }
     }
     if (
-        temporaryAoiId !== null &&
+        normalizedArea.kind === "temporaryAoi" &&
         (
             validatedStatistics.scope !== "temporaryAoi" ||
-            validatedStatistics.temporaryAoiId !== temporaryAoiId
+            validatedStatistics.temporaryAoiId !==
+                normalizedArea.temporaryAoiId
         )
     ) {
         throw rasterStatisticsContractError("temporary-AOI response identity");
@@ -215,23 +292,21 @@ export function validateRasterStatisticsForSelection(
  * Return whether one distribution belongs to the active histogram scope.
  *
  * @param {Object} statistics Validated raster statistics.
- * @param {Object|null} selectedBounds Active selected-area bounds, if any.
- * @param {string|null} [temporaryAoiId=null] Active opaque AOI identity.
+ * @param {Object} samplingArea Normalized active sampling-area union.
  * @return {boolean} Whether statistics describe the active scope exactly.
  */
 export function rasterStatisticsMatchesSelection(
     statistics,
-    selectedBounds,
-    temporaryAoiId = null
+    samplingArea
 ) {
-    if (temporaryAoiId !== null) {
+    const normalizedArea = normalizeRasterSamplingArea(samplingArea);
+    if (normalizedArea.kind === "temporaryAoi") {
         return (
-            selectedBounds === null &&
             statistics.scope === "temporaryAoi" &&
-            statistics.temporaryAoiId === temporaryAoiId
+            statistics.temporaryAoiId === normalizedArea.temporaryAoiId
         );
     }
-    if (selectedBounds === null) {
+    if (normalizedArea.kind === "wholeRaster") {
         return statistics.scope === "wholeRaster";
     }
     return (
@@ -239,7 +314,7 @@ export function rasterStatisticsMatchesSelection(
         ["west", "south", "east", "north"].every(
             (fieldName) =>
                 statistics.selectedBounds?.[fieldName] ===
-                selectedBounds[fieldName]
+                normalizedArea.selectedBounds[fieldName]
         )
     );
 }

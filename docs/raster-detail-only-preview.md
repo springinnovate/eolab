@@ -127,23 +127,29 @@ retried.
 
 ## Colors, histograms, and pixel probes
 
-The first representation containing finite observations initializes the shared
-color range from its approximate minimum, median, and maximum. Later views
-reuse the current range so equal values keep equal colors. Palette and
+The first numeric representation can initialize the shared color range. Later
+views reuse the current range so equal values keep equal colors. Palette and
 threshold changes recolor the numeric images in the browser without source I/O
 or GeoServer publication.
 
-There is no whole-raster histogram for an overview-limited raster. Clicking or
-tapping a 1–300 km map window sends only that canonical rectangle and reuses
-the same authorized fixed preview policy. Finite displayed values are
-summarized into 64 bins. Nodata and non-finite values are excluded; an
-all-nodata window reports an actionable error.
+Histograms are not derived from the displayed preview and do not use the
+detail-preview service. One rendering-independent catalog analysis endpoint
+supports whole-raster, 1–300 km rectangle, and ready temporary-AOI selections
+for WMS, adaptive, and analysis-only sessions with no map raster renderer. It
+uses an exact bounded native window when safe and otherwise a fixed
+127-longest-edge center grid, then summarizes finite values into 64 bins. Its
+label reports exact versus approximate provenance. Nodata and non-finite values
+are excluded; an all-nodata area reports an actionable error. Hiding the AOI
+overlay does not change the selected analysis area.
 
 Pointer probing is independent of map rendering. It uses the shared
 `/api/raster-analysis/pixels` contract with Collection and Item IDs plus one WGS
 84 position. Its catalog-source authorizer does not depend on preview state,
 GeoServer health, or WMS publication. One masked band-one cell is requested and
 nodata remains nodata.
+
+The complete authorization, work-bound, lifecycle, and cache contract is in
+[Rendering-independent raster analysis](raster-analysis.md).
 
 ## Cache identity and source changes
 

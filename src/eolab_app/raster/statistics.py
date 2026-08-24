@@ -5,11 +5,17 @@ from pathlib import Path
 
 import numpy
 import rasterio
-from rasterio.enums import Resampling
 from rasterio.features import geometry_mask
 from rasterio.warp import transform
 from rasterio.windows import Window, transform as window_transform
 
+from eolab_app.raster.exact_source import (
+    EXACT_SOURCE_MAX_BLOCK_READS,
+    EXACT_SOURCE_MAX_DECODED_BYTES,
+    EXACT_SOURCE_MAX_DIMENSION,
+    plan_exact_source_window,
+    read_exact_source_window,
+)
 from eolab_app.raster.models import (
     CanonicalWgs84Bounds,
     RasterHistogram,
@@ -19,6 +25,23 @@ from eolab_app.raster.models import (
     SelectedRasterArea,
     Wgs84Bounds,
 )
+from eolab_app.raster.read_cancellation import (
+    RasterReadCancellationCheck,
+    require_active_raster_read,
+)
+from eolab_app.raster.sample_grid import (
+    SAMPLE_GRID_CENTER_OFFSETS,
+    SAMPLE_GRID_MAX_DECODED_SOURCE_BYTES,
+    SAMPLE_GRID_MAX_DIMENSION,
+    SAMPLE_GRID_MAX_SOURCE_BLOCK_READS,
+    SAMPLE_GRID_MAX_TRANSFORMED_POSITIONS,
+    read_source_window_sample_grid,
+)
+from eolab_app.raster.source_contract import (
+    RASTER_ANALYSIS_MAX_NATIVE_BLOCK_EDGE,
+    require_raster_analysis_georeferencing,
+    require_signed_raster_dependencies,
+)
 from eolab_app.sampling_area import (
     RasterSamplingArea,
     SelectedBoundsSamplingArea,
@@ -27,14 +50,42 @@ from eolab_app.sampling_area import (
 )
 
 
-RASTER_STATISTICS_ALGORITHM = "bounded-sampling-area-v4"
+RASTER_STATISTICS_ALGORITHM = "rendering-independent-bounded-area-v5"
 RASTER_STATISTICS_BIN_COUNT = 64
 RASTER_STATISTICS_BOUNDS_DENSIFY_POINTS = 21
-RASTER_STATISTICS_MAX_SAMPLE_DIMENSION = 512
 RASTER_STATISTICS_MAX_TRANSFORMED_COORDINATES = 500_000
+RASTER_STATISTICS_SOURCE_WINDOW_PADDING_PIXELS = 1
 # Match the ESOS-C AOI contract: a resampled cell contributes when the
 # transformed selection touches it, including cells crossed only at an edge.
 RASTER_STATISTICS_SELECTION_ALL_TOUCHED = True
+
+
+def raster_statistics_policy_parameters() -> tuple[int, ...]:
+    """Return every fixed planning input used by cache identity.
+
+    Returns:
+        Sampling-grid, exact-window, geometry, and point-location parameters.
+    """
+    return (
+        RASTER_STATISTICS_BIN_COUNT,
+        RASTER_STATISTICS_BOUNDS_DENSIFY_POINTS,
+        RASTER_STATISTICS_MAX_TRANSFORMED_COORDINATES,
+        RASTER_STATISTICS_SOURCE_WINDOW_PADDING_PIXELS,
+        int(RASTER_STATISTICS_SELECTION_ALL_TOUCHED),
+        RASTER_ANALYSIS_MAX_NATIVE_BLOCK_EDGE,
+        SAMPLE_GRID_MAX_DIMENSION,
+        SAMPLE_GRID_MAX_SOURCE_BLOCK_READS,
+        SAMPLE_GRID_MAX_DECODED_SOURCE_BYTES,
+        SAMPLE_GRID_MAX_TRANSFORMED_POSITIONS,
+        EXACT_SOURCE_MAX_DIMENSION,
+        EXACT_SOURCE_MAX_BLOCK_READS,
+        EXACT_SOURCE_MAX_DECODED_BYTES,
+        *(
+            round(value * 1000)
+            for offset in SAMPLE_GRID_CENTER_OFFSETS
+            for value in offset
+        ),
+    )
 
 
 class NoValidRasterSamplesError(ValueError):
@@ -43,30 +94,6 @@ class NoValidRasterSamplesError(ValueError):
 
 class NoRasterBoundsOverlapError(ValueError):
     """Raised when a selected WGS 84 area does not overlap the raster."""
-
-
-def bounded_raster_sample_shape(
-    source_width: int,
-    source_height: int,
-    maximum_sample_dimension: int = RASTER_STATISTICS_MAX_SAMPLE_DIMENSION,
-) -> tuple[int, int]:
-    """Return an aspect-preserving sample size within a square bound.
-
-    Args:
-        source_width: Raster width in source pixels.
-        source_height: Raster height in source pixels.
-        maximum_sample_dimension: Maximum height or width of the sample.
-
-    Returns:
-        Sample height and width.
-    """
-    if max(source_width, source_height) <= maximum_sample_dimension:
-        return source_height, source_width
-
-    scale = maximum_sample_dimension / max(source_width, source_height)
-    sample_height = max(1, math.floor(source_height * scale))
-    sample_width = max(1, math.floor(source_width * scale))
-    return sample_height, sample_width
 
 
 def strict_raster_value_range(
@@ -86,7 +113,7 @@ def strict_raster_value_range(
         p95: Ninety-fifth sample percentile.
 
     Returns:
-        Strict range accepted by the WMS style contract.
+        Strict range safe for downstream color and style controls.
     """
     if p05 < p50 < p95:
         return RasterValueRange(minimum=p05, midpoint=p50, maximum=p95)
@@ -245,15 +272,22 @@ def selected_raster_area_for_wgs84_bounds(
         inverse_transform * projected_coordinate
         for projected_coordinate in projected_ring
     )
-    column_start = max(0, math.floor(min(point[0] for point in pixel_ring)))
-    row_start = max(0, math.floor(min(point[1] for point in pixel_ring)))
+    padding = RASTER_STATISTICS_SOURCE_WINDOW_PADDING_PIXELS
+    column_start = max(
+        0,
+        math.floor(min(point[0] for point in pixel_ring)) - padding,
+    )
+    row_start = max(
+        0,
+        math.floor(min(point[1] for point in pixel_ring)) - padding,
+    )
     column_stop = min(
         dataset.width,
-        math.ceil(max(point[0] for point in pixel_ring)),
+        math.ceil(max(point[0] for point in pixel_ring)) + padding,
     )
     row_stop = min(
         dataset.height,
-        math.ceil(max(point[1] for point in pixel_ring)),
+        math.ceil(max(point[1] for point in pixel_ring)) + padding,
     )
     if column_start >= column_stop or row_start >= row_stop:
         raise NoRasterBoundsOverlapError
@@ -377,15 +411,22 @@ def _source_window_for_projected_geometries(
     pixel_positions = tuple(
         inverse_transform * position for position in projected_positions
     )
-    column_start = max(0, math.floor(min(point[0] for point in pixel_positions)))
-    row_start = max(0, math.floor(min(point[1] for point in pixel_positions)))
+    padding = RASTER_STATISTICS_SOURCE_WINDOW_PADDING_PIXELS
+    column_start = max(
+        0,
+        math.floor(min(point[0] for point in pixel_positions)) - padding,
+    )
+    row_start = max(
+        0,
+        math.floor(min(point[1] for point in pixel_positions)) - padding,
+    )
     column_stop = min(
         dataset.width,
-        math.ceil(max(point[0] for point in pixel_positions)),
+        math.ceil(max(point[0] for point in pixel_positions)) + padding,
     )
     row_stop = min(
         dataset.height,
-        math.ceil(max(point[1] for point in pixel_positions)),
+        math.ceil(max(point[1] for point in pixel_positions)) + padding,
     )
     if column_start >= column_stop or row_start >= row_stop:
         raise NoRasterBoundsOverlapError
@@ -489,42 +530,24 @@ def selected_raster_area_for_temporary_aoi(
     )
 
 
-def normalize_raster_sampling_area(
-    sampling_area: CanonicalWgs84Bounds | RasterSamplingArea | None,
-) -> RasterSamplingArea:
-    """Normalize the legacy direct-reader shape to the sampling-area union.
-
-    Args:
-        sampling_area: Whole-raster ``None``, canonical bounds tuple, or an
-            explicit reusable sampling-area value object.
-
-    Returns:
-        Explicit whole-raster, rectangular, or temporary-AOI sampling area.
-
-    Raises:
-        TypeError: If the caller supplies an unsupported value.
-    """
-    if sampling_area is None:
-        return WholeRasterSamplingArea()
-    if isinstance(
-        sampling_area,
-        (WholeRasterSamplingArea, SelectedBoundsSamplingArea, TemporaryAoiSamplingArea),
-    ):
-        return sampling_area
-    if isinstance(sampling_area, tuple) and len(sampling_area) == 4:
-        return SelectedBoundsSamplingArea(sampling_area)
-    raise TypeError("Unsupported raster sampling area")
-
-
 def read_raster_statistics(
     source_path: Path,
-    sampling_area: CanonicalWgs84Bounds | RasterSamplingArea | None = None,
+    sampling_area: RasterSamplingArea,
+    cancellation_requested: RasterReadCancellationCheck | None = None,
 ) -> RasterStatistics:
-    """Read a fixed-size raster sample and summarize band 1.
+    """Read band-1 statistics through one bounded source-work planner.
+
+    Every scope first resolves a finite integral source envelope. Envelopes
+    satisfying the exact dimension, block, and decoded-byte ceilings are read
+    completely one native block at a time. Broader envelopes use the fixed
+    127-longest-edge center grid, whose unique blocks and cumulative decoded
+    work are proven before I/O. No path uses a broad ``out_shape`` read or
+    relies on raster overviews, WMS publication, or rendering state.
 
     Args:
         source_path: Authorized mounted GeoTIFF.
-        sampling_area: Whole raster, canonical bounds, or resolved temporary AOI.
+        sampling_area: Explicit whole, selected-bounds, or resolved AOI value.
+        cancellation_requested: Optional thread-safe obsolescence predicate.
 
     Returns:
         Finite sample distribution and a suggested display range.
@@ -534,49 +557,54 @@ def read_raster_statistics(
         NoValidRasterSamplesError: If the sample has no finite data values.
         OSError: If the source cannot be read.
         rasterio.errors.RasterioError: If GDAL cannot open or sample it.
-        ValueError: If selected bounds cannot be projected.
+        RasterReadCancelled: If every coalesced request waiter disconnects.
+        TypeError: If the sampling area is outside the strict area union.
+        ValueError: If source structure, CRS, transformation, or bounded-read
+            admission is invalid.
     """
-    normalized_area = normalize_raster_sampling_area(sampling_area)
+    require_active_raster_read(cancellation_requested)
     with rasterio.open(source_path) as dataset:
-        if isinstance(normalized_area, SelectedBoundsSamplingArea):
+        require_active_raster_read(cancellation_requested)
+        require_signed_raster_dependencies(dataset, source_path)
+        require_raster_analysis_georeferencing(dataset)
+        if isinstance(sampling_area, SelectedBoundsSamplingArea):
             selected_area = selected_raster_area_for_wgs84_bounds(
                 dataset,
-                normalized_area.bounds,
+                sampling_area.bounds,
             )
-        elif isinstance(normalized_area, TemporaryAoiSamplingArea):
+        elif isinstance(sampling_area, TemporaryAoiSamplingArea):
             selected_area = selected_raster_area_for_temporary_aoi(
                 dataset,
-                normalized_area,
+                sampling_area,
             )
-        else:
+        elif isinstance(sampling_area, WholeRasterSamplingArea):
             selected_area = None
-        source_window = (
-            selected_area.source_window
-            if selected_area is not None
-            else None
+        else:
+            raise TypeError("Unsupported raster sampling area")
+        source_window = selected_area.source_window if selected_area else Window(
+            0,
+            0,
+            dataset.width,
+            dataset.height,
         )
-        source_width = (
-            int(source_window.width)
-            if source_window is not None
-            else dataset.width
-        )
-        source_height = (
-            int(source_window.height)
-            if source_window is not None
-            else dataset.height
-        )
-        sample_height, sample_width = bounded_raster_sample_shape(
-            source_width,
-            source_height,
-        )
-        read_options: dict[str, object] = {
-            "out_shape": (sample_height, sample_width),
-            "masked": True,
-            "resampling": Resampling.nearest,
-        }
-        if source_window is not None:
-            read_options["window"] = source_window
-        sample = dataset.read(1, **read_options)
+        source_width = int(source_window.width)
+        source_height = int(source_window.height)
+        exact_plan = plan_exact_source_window(dataset, source_window)
+        if exact_plan is None:
+            sample, _ = read_source_window_sample_grid(
+                dataset,
+                source_window,
+                cancellation_requested,
+            )
+            sampling_method = "sampleGrid"
+        else:
+            sample = read_exact_source_window(
+                dataset,
+                exact_plan,
+                cancellation_requested,
+            )
+            sampling_method = "exactSourceWindow"
+        sample_height, sample_width = sample.shape
         if selected_area is not None:
             source_sample_transform = window_transform(
                 source_window,
@@ -600,6 +628,7 @@ def read_raster_statistics(
                     outside_selection,
                 ),
             )
+        require_active_raster_read(cancellation_requested)
 
     sample_values = numpy.asarray(sample.compressed(), dtype=numpy.float64)
     sample_values = sample_values[numpy.isfinite(sample_values)]
@@ -638,21 +667,21 @@ def read_raster_statistics(
     sampled_pixel_count = sample_width * sample_height
     selected_bounds_model = (
         Wgs84Bounds(
-            west=normalized_area.bounds[0],
-            south=normalized_area.bounds[1],
-            east=normalized_area.bounds[2],
-            north=normalized_area.bounds[3],
+            west=sampling_area.bounds[0],
+            south=sampling_area.bounds[1],
+            east=sampling_area.bounds[2],
+            north=sampling_area.bounds[3],
         )
-        if isinstance(normalized_area, SelectedBoundsSamplingArea)
+        if isinstance(sampling_area, SelectedBoundsSamplingArea)
         else None
     )
     temporary_aoi_id = (
-        normalized_area.resolved_aoi.identity.reference
-        if isinstance(normalized_area, TemporaryAoiSamplingArea)
+        sampling_area.resolved_aoi.identity.reference
+        if isinstance(sampling_area, TemporaryAoiSamplingArea)
         else None
     )
     return RasterStatistics(
-        scope=normalized_area.kind,
+        scope=sampling_area.kind,
         selectedBounds=selected_bounds_model,
         temporaryAoiId=temporary_aoi_id,
         sourceWidth=source_width,
@@ -662,7 +691,8 @@ def read_raster_statistics(
         sampleHeight=sample_height,
         sampledPixelCount=sampled_pixel_count,
         validSampleCount=int(sample_values.size),
-        estimated=sampled_pixel_count < source_pixel_count,
+        samplingMethod=sampling_method,
+        estimated=sampling_method == "sampleGrid",
         sampleMinimum=sample_minimum,
         sampleMaximum=sample_maximum,
         percentiles=RasterPercentiles(p05=p05, p50=p50, p95=p95),

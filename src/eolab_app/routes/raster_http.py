@@ -1,6 +1,6 @@
 """Stable HTTP error translation shared by raster feature boundaries."""
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from eolab_app.raster.errors import (
     RasterAssetError,
@@ -11,6 +11,19 @@ from eolab_app.raster.errors import (
     RasterRequestError,
     RasterUpstreamError,
 )
+
+
+async def wait_for_http_disconnect(request: Request) -> None:
+    """Wait until the ASGI server reports that the browser disconnected.
+
+    Args:
+        request: Incoming request whose connection owns cancellable work.
+
+    Returns:
+        None after an ``http.disconnect`` message arrives.
+    """
+    while (message := await request.receive())["type"] != "http.disconnect":
+        pass
 
 
 def raster_http_exception(error: RasterFeatureError) -> HTTPException:

@@ -87,10 +87,13 @@ export function renderRasterHistogramChart(
     const barWidth = HISTOGRAM_CHART_WIDTH / counts.length;
     const bars = [];
     const title = documentContext.createElementNS(SVG_NAMESPACE, "title");
+    const provenance = statistics.estimated
+        ? "Approximate sampled"
+        : "Exact bounded";
     title.textContent =
-        `Approximate band 1 histogram with ${counts.length} bins from ` +
-        `${statistics.validSampleCount.toLocaleString()} valid sampled ` +
-        `pixels. Values range from ${formatRasterPixelValue(
+        `${provenance} band 1 histogram with ${counts.length} bins from ` +
+        `${statistics.validSampleCount.toLocaleString()} valid values. ` +
+        `Values range from ${formatRasterPixelValue(
             statistics.sampleMinimum
         )} to ${formatRasterPixelValue(statistics.sampleMaximum)}; ` +
         `the 5th, 50th, and 95th percentiles are ${formatRasterPixelValue(

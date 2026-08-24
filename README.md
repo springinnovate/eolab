@@ -137,17 +137,19 @@ the raster is never published and no arbitrary full-extent WMS request is made.
 A prominent map disclosure names the current sampled or exact representation
 and reports its dimensions. Broad sample grids use smooth display
 interpolation, while exact windows use crisp nearest-neighbor presentation.
-The shared color controls recolor these numeric images in the browser,
-initialized from their approximate minimum, median, and maximum.
-There is no whole-raster histogram; clicking the map summarizes the fixed
-127-center policy over that window. Hover probing uses the same
-rendering-independent catalog-authorized pixel-analysis path as every other
-raster: it opens the mounted source directly, requests one band-one source cell,
-and never consults GeoServer or WMS publication state. Nodata stays nodata, and
-the raster extent is not presented as a valid-data footprint. See
+The shared color controls recolor these numeric images in the browser. A
+separate catalog-authorized analysis path supplies the whole-raster or selected
+bounded distribution whether the map uses WMS, adaptive visualization, or no
+raster renderer.
+Broad areas use a fixed 127-longest-edge center sample; safely small areas use
+an exact native source window. Hover probing is an independent sibling path:
+it opens the mounted source directly, requests one band-one source cell, and
+never consults GeoServer or WMS publication state. Nodata stays nodata, and the
+raster extent is not presented as a valid-data footprint. See
 [Adaptive bounded raster visualization](docs/raster-detail-only-preview.md) for
 applicability, exact resource bounds, cache identity, and approximation
-semantics.
+semantics, and [Rendering-independent raster analysis](docs/raster-analysis.md)
+for statistics authorization, sampling, lifecycle, and cache contracts.
 
 An unavailable raster offers **Reassess visualization**. Reassessment rebuilds the selected Item from the current read-only source, repeats the deployed-reader acquisition, and replaces the prior assessment. Use it after repairing the source metadata. A GeoServer/GeoTools reader upgrade must update the shared reader-contract identifier and rendering policy so stored results cannot be mistaken for assessments made by the new reader. Publication requires both the recorded source identity and reader contract to remain current; it does not create an assessment. Publication rollback and runtime recovery remain governed by the separate recovery contract below.
 
@@ -169,14 +171,16 @@ active layer chooses which raster the shared appearance, histogram, sampling,
 and pixel-probe controls edit. Visibility and active selection are independent,
 and showing a hidden layer reuses its existing GeoServer publication.
 
-For the active raster, **Raster appearance** shows an approximate
-band-1 distribution from a fixed, bounded sample. EOLab initially applies the
-sample's 5th, 50th, and 95th percentiles, and the user can apply other ordered
-percentiles or directly edit the color palette and minimum, midpoint, and
-maximum display values. Whenever a raster is displayed, a 1–300 km window
+For the active raster, **Raster appearance** shows a bounded band-1
+distribution. Its provenance says whether the server read an exact bounded
+source window or used the approximate 127-longest-edge center grid. EOLab
+initially applies the distribution's 5th, 50th, and 95th percentiles, and the
+user can apply other ordered percentiles or directly edit the color palette
+and minimum, midpoint, and maximum display values. Whenever a raster is selected
+for analysis, a 1–300 km window
 follows the pointer without reading the raster; clicking or tapping fixes that
 window and displays its bounded histogram. The percentile controls immediately
-show the selected distribution's approximate 5th, 50th, and 95th percentile
+show the selected distribution's 5th, 50th, and 95th percentile
 values without changing the rendered colors. **Rescale colors to this range**
 applies those values, or other selected percentiles, when the user chooses.
 Hovering a histogram bar reports its bin midpoint, its percentage of the valid

@@ -6,12 +6,11 @@
  * their shared lifecycle and stale-work rules while delegating domain logic,
  * HTTP access, DOM presentation, and Leaflet construction to focused modules.
  */
+import { publishCatalogRaster } from "./api.js";
 import {
-    loadCatalogRasterDetailStatistics,
     loadCatalogRasterStatistics,
-    publishCatalogRaster,
-} from "./api.js";
-import { sampleCatalogRasterPixel } from "./pixel-api.js";
+    sampleCatalogRasterPixel,
+} from "./analysis-api.js";
 import {
     DEFAULT_RASTER_SAMPLE_WINDOW_SIZE_KM,
     isCanonicalWgs84Position,
@@ -38,7 +37,9 @@ import { RasterSampleWindowController } from "./sample-window-controller.js";
 import {
     DEFAULT_RASTER_PERCENTILES,
     estimateRasterHistogramPercentile,
+    normalizeRasterSamplingArea,
     rasterStatisticsMatchesSelection,
+    WHOLE_RASTER_SAMPLING_AREA,
 } from "./statistics.js";
 import { RasterStatisticsController } from "./statistics-controller.js";
 import {
@@ -59,6 +60,10 @@ const RASTER_STYLE_DEBOUNCE_MILLISECONDS = 200;
  * @property {() => void} reset Clear the raster and restore default styling.
  * @property {(item: Object) => Promise<Object|null>} show Publish and retain
  * one selected raster Item.
+ * @property {(item:Object) => void} activateAnalysis Start independent raster
+ * analysis controls without requiring a renderer.
+ * @property {(item:Object|null) => void} deactivateAnalysis Remove a matching
+ * analysis-only session and restore retained map-layer controls.
  * @property {(item:Object,style:Object,onStyleChange:(style:Object)=>void)
  * => void} activateSampled Edit one visible browser-rendered sampled raster.
  * @property {(item:Object,style:Object) => void} updateSampledInitialStyle
@@ -94,14 +99,9 @@ const RASTER_STYLE_DEBOUNCE_MILLISECONDS = 200;
  * Layer-list DOM adapter.
  * @property {(item: Object) => Promise<Object>}
  * [publishRaster=publishCatalogRaster] Publishes one Catalog raster.
- * @property {(item: Object, signal: AbortSignal, selectedBounds: Object|null,
- * temporaryAoiId: string|null)
+ * @property {(item: Object, samplingArea:Object, signal:AbortSignal)
  * => Promise<Object>} [loadStatistics=loadCatalogRasterStatistics] Loads whole
  * or selected statistics.
- * @property {(item:Object,signal:AbortSignal,selectedBounds:Object)
- * => Promise<Object>}
- * [loadDetailStatistics=loadCatalogRasterDetailStatistics] Loads one bounded
- * adaptive-detail histogram.
  * @property {(item: Object, point: Object, signal: AbortSignal)
  * => Promise<Object>} [samplePixel=sampleCatalogRasterPixel] Samples one raster
  * pixel.
@@ -137,7 +137,6 @@ export function initializeRasterViewer(
         layerStackView = new RasterLayerStackView(),
         publishRaster = publishCatalogRaster,
         loadStatistics = loadCatalogRasterStatistics,
-        loadDetailStatistics = loadCatalogRasterDetailStatistics,
         samplePixel = sampleCatalogRasterPixel,
         clock = globalThis,
         viewport = globalThis,
@@ -150,6 +149,7 @@ export function initializeRasterViewer(
     const publicationGenerations = new Map();
     const pendingPublications = new Map();
     let sampledRasterSession = null;
+    let analysisRasterSession = null;
     let destroyed = false;
     let activationIntentSequence = 0;
     let activeLayerKey = null;
@@ -184,6 +184,28 @@ export function initializeRasterViewer(
     }
 
     /**
+     * Return whether shared controls own a renderer-independent session.
+     *
+     * @return {boolean} Whether analysis-only controls are active.
+     */
+    function isActiveAnalysisRaster() {
+        return analysisRasterSession !== null &&
+            activeLayerKey === analysisRasterSession.key;
+    }
+
+    /**
+     * Return the active non-WMS session, if one owns the shared controls.
+     *
+     * @return {Object|null} Sampled or analysis-only session.
+     */
+    function activeDetachedRasterSession() {
+        if (isActiveSampledRaster()) {
+            return sampledRasterSession;
+        }
+        return isActiveAnalysisRaster() ? analysisRasterSession : null;
+    }
+
+    /**
      * Create retained interaction state for one successfully published layer.
      *
      * @param {Object} entry Pure stack entry.
@@ -215,6 +237,100 @@ export function initializeRasterViewer(
     }
 
     /**
+     * Create renderer-independent interaction state for one Catalog raster.
+     *
+     * The session is deliberately not inserted into the map-layer stack. It
+     * gives pixel and statistics analysis an owner while the selected raster
+     * has no WMS or adaptive-detail presentation.
+     *
+     * @param {Object} item Selected Catalog raster Item.
+     * @return {Object} Analysis-only interaction state.
+     */
+    function createAnalysisSession(item) {
+        return {
+            key: `analysis:${getCatalogRasterLayerKey(item)}`,
+            item,
+            label: `${getCatalogRasterBasename(item)} (analysis only)`,
+            rasterStyle: { ...DEFAULT_RASTER_STYLE },
+            paletteName: "blue-yellow-red",
+            rasterStyleWasEdited: false,
+            rasterStatistics: null,
+            rasterStatisticsIsApplicable: false,
+            wholeRasterStatistics: null,
+            wholeRasterStatisticsState: "idle",
+            wholeRasterStatisticsError: null,
+            selectedRasterBounds: null,
+            selectedTemporaryAoi: availableTemporaryAoi,
+            selectedRasterWindowSizeKm: null,
+            selectedRasterStatistics: null,
+            selectedRasterStatisticsState: "idle",
+            selectedRasterStatisticsError: null,
+        };
+    }
+
+    /**
+     * Copy renderer-neutral controls and analysis state between sessions.
+     *
+     * @param {Object} target Newly established renderer session.
+     * @param {Object} source Existing analysis-only session for the same Item.
+     * @param {boolean} [includeAppearance=true] Whether style and palette state
+     * can transfer to the target renderer.
+     * @return {void}
+     */
+    function copyRasterInteractionState(
+        target,
+        source,
+        includeAppearance = true
+    ) {
+        Object.assign(target, {
+            rasterStatistics: source.rasterStatistics,
+            rasterStatisticsIsApplicable:
+                source.rasterStatisticsIsApplicable,
+            wholeRasterStatistics: source.wholeRasterStatistics,
+            wholeRasterStatisticsState: source.wholeRasterStatisticsState,
+            wholeRasterStatisticsError: source.wholeRasterStatisticsError,
+            selectedRasterBounds: source.selectedRasterBounds,
+            selectedTemporaryAoi: source.selectedTemporaryAoi,
+            selectedRasterWindowSizeKm: source.selectedRasterWindowSizeKm,
+            selectedRasterStatistics: source.selectedRasterStatistics,
+            selectedRasterStatisticsState: source.selectedRasterStatisticsState,
+            selectedRasterStatisticsError: source.selectedRasterStatisticsError,
+        });
+        if (includeAppearance) {
+            Object.assign(target, {
+                rasterStyle: { ...source.rasterStyle },
+                paletteName: source.paletteName,
+                rasterStyleWasEdited: source.rasterStyleWasEdited,
+            });
+        }
+    }
+
+    /**
+     * Detach renderer-neutral state from a renderer session.
+     *
+     * @param {Object} source Active WMS or adaptive-detail session.
+     * @return {Object} Analysis-only session with the same area and controls.
+     */
+    function detachAnalysisSession(source) {
+        const session = createAnalysisSession(source.item);
+        copyRasterInteractionState(session, source);
+        return session;
+    }
+
+    /**
+     * Return analysis-only state when it belongs to one Catalog raster.
+     *
+     * @param {Object} item Candidate Catalog raster Item.
+     * @return {Object|null} Matching analysis session or null.
+     */
+    function matchingAnalysisSession(item) {
+        const expectedKey = `analysis:${getCatalogRasterLayerKey(item)}`;
+        return analysisRasterSession?.key === expectedKey
+            ? analysisRasterSession
+            : null;
+    }
+
+    /**
      * Require the retained session paired with one stack entry.
      *
      * @param {string} key Stable retained layer key.
@@ -238,9 +354,8 @@ export function initializeRasterViewer(
         if (activeLayerKey === null) {
             return;
         }
-        const session = isActiveSampledRaster()
-            ? sampledRasterSession
-            : requireLayerSession(activeLayerKey);
+        const session = activeDetachedRasterSession() ??
+            requireLayerSession(activeLayerKey);
         Object.assign(session, {
             rasterStyle: { ...rasterStyle },
             paletteName: controlsView.getPaletteName(),
@@ -334,33 +449,66 @@ export function initializeRasterViewer(
         selectRasterSampleWindow,
         renderRasterSampleWindowGuidance
     );
-    const wholeRasterStatisticsController = new RasterStatisticsController(
+    const rasterStatisticsController = new RasterStatisticsController(
         loadStatistics,
-        renderWholeRasterStatisticsLoading,
-        renderWholeRasterStatistics,
-        renderWholeRasterStatisticsError
-    );
-    const selectedRasterStatisticsController = new RasterStatisticsController(
-        async (item, signal, bounds, temporaryAoiId) => {
-            if (!isActiveSampledRaster()) {
-                return loadStatistics(
-                    item,
-                    signal,
-                    bounds,
-                    temporaryAoiId
-                );
+        (_, samplingArea) => {
+            resetPendingRasterStatisticsState();
+            if (samplingArea.kind === "wholeRaster") {
+                renderWholeRasterStatisticsLoading();
+            } else {
+                renderSelectedRasterStatisticsLoading();
             }
-            if (bounds === null || temporaryAoiId !== null) {
-                throw new Error(
-                    "Sampled raster histograms require a selected map window."
-                );
-            }
-            return loadDetailStatistics(item, signal, bounds);
         },
-        renderSelectedRasterStatisticsLoading,
-        renderSelectedRasterStatistics,
-        renderSelectedRasterStatisticsError
+        (statistics, _, samplingArea) => {
+            if (samplingArea.kind === "wholeRaster") {
+                renderWholeRasterStatistics(statistics);
+            } else {
+                renderSelectedRasterStatistics(statistics);
+            }
+        },
+        (error, _, samplingArea) => {
+            if (samplingArea.kind === "wholeRaster") {
+                renderWholeRasterStatisticsError(error);
+            } else {
+                renderSelectedRasterStatisticsError(error);
+            }
+        }
     );
+
+    /**
+     * Return the normalized area selected by the parent viewer.
+     *
+     * @return {Readonly<Object>} Strict whole/bounds/AOI sampling-area union.
+     */
+    function currentRasterSamplingArea() {
+        if (selectedTemporaryAoi !== null) {
+            return normalizeRasterSamplingArea({
+                kind: "temporaryAoi",
+                temporaryAoiId: selectedTemporaryAoi.id
+            });
+        }
+        if (selectedRasterBounds !== null) {
+            return normalizeRasterSamplingArea({
+                kind: "selectedArea",
+                selectedBounds: selectedRasterBounds
+            });
+        }
+        return WHOLE_RASTER_SAMPLING_AREA;
+    }
+
+    /**
+     * Release a superseded controller request's loading marker.
+     *
+     * @return {void}
+     */
+    function resetPendingRasterStatisticsState() {
+        if (wholeRasterStatisticsState === "loading") {
+            wholeRasterStatisticsState = "idle";
+        }
+        if (selectedRasterStatisticsState === "loading") {
+            selectedRasterStatisticsState = "idle";
+        }
+    }
 
     /**
      * Return whether the active raster uses a non-whole sampling area.
@@ -374,15 +522,12 @@ export function initializeRasterViewer(
     /**
      * Return the active sampling-area discriminator for control presentation.
      *
-     * @return {"none"|"wholeRaster"|"selectedArea"|"temporaryAoi"} Active
+     * @return {"wholeRaster"|"selectedArea"|"temporaryAoi"} Active
      * mode.
      */
     function getRasterSamplingAreaMode() {
         if (selectedTemporaryAoi !== null) {
             return "temporaryAoi";
-        }
-        if (isActiveSampledRaster() && selectedRasterBounds === null) {
-            return "none";
         }
         return selectedRasterBounds === null ? "wholeRaster" : "selectedArea";
     }
@@ -394,12 +539,10 @@ export function initializeRasterViewer(
      */
     function renderRasterSamplingAreaControls() {
         controlsView.setTemporaryAoiAvailability(
-            isActiveSampledRaster() ? null : availableTemporaryAoi
+            availableTemporaryAoi
         );
         controlsView.setClearSampleWindowLabel(
-            isActiveSampledRaster()
-                ? "Clear selected histogram"
-                : "Use whole raster"
+            "Use whole raster"
         );
         controlsView.setClearSampleWindowEnabled(
             hasSelectedRasterSamplingArea()
@@ -408,16 +551,16 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Return whether the active retained layer is attached to the map.
+     * Return whether one active Catalog raster can receive analysis inputs.
      *
-     * @return {boolean} Whether active map interactions are meaningful.
+     * Renderer visibility is presentation-only. The basemap remains available
+     * for bounds selection and pixel positions with WMS, adaptive detail, or
+     * no renderer.
+     *
+     * @return {boolean} Whether a Catalog raster owns the shared controls.
      */
-    function isActiveLayerVisible() {
-        if (isActiveSampledRaster()) {
-            return true;
-        }
-        return activeLayerKey !== null &&
-            layerStack.get(activeLayerKey)?.visible === true;
+    function canUseActiveRasterMapInteractions() {
+        return activeRasterItem !== null;
     }
 
     /**
@@ -448,7 +591,9 @@ export function initializeRasterViewer(
         const snapshots = getLayerSnapshots();
         layerStackView.render(
             snapshots,
-            isActiveSampledRaster() ? null : layerStack.activeKey,
+            activeDetachedRasterSession() === null
+                ? layerStack.activeKey
+                : null,
             requestedFocus
         );
         onLayersChange(snapshots);
@@ -471,8 +616,7 @@ export function initializeRasterViewer(
         if (rasterStyleCommitTimeout !== null) {
             commitRasterStyle();
         }
-        wholeRasterStatisticsController.clear();
-        selectedRasterStatisticsController.clear();
+        rasterStatisticsController.clear();
         pixelProbeController.clear();
         rasterSampleWindowController.clear();
         controlsView.hidePixelProbe();
@@ -489,24 +633,13 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Present cached active statistics and start only visible missing work.
+     * Present cached active statistics or start missing Catalog analysis.
      *
-     * Hidden retained layers never begin source reads merely because they are
-     * active. Completed distributions remain available for reference.
+     * Renderer type and visibility never participate in this decision.
      *
      * @return {void}
      */
     function restoreActiveLayerStatistics() {
-        const visible = isActiveLayerVisible();
-        if (
-            !isActiveSampledRaster() &&
-            wholeRasterStatisticsState === "idle" &&
-            visible
-        ) {
-            wholeRasterStatisticsState = "idle";
-            void wholeRasterStatisticsController.activate(activeRasterItem);
-        }
-
         if (hasSelectedRasterSamplingArea()) {
             if (selectedRasterStatisticsState === "ready") {
                 renderRasterStatistics(selectedRasterStatistics);
@@ -514,27 +647,13 @@ export function initializeRasterViewer(
                 renderSelectedRasterStatisticsError(
                     selectedRasterStatisticsError
                 );
-            } else if (visible) {
-                selectedRasterStatisticsState = "idle";
-                void selectedRasterStatisticsController.activate(
-                    activeRasterItem,
-                    undefined,
-                    selectedRasterBounds,
-                    selectedTemporaryAoi?.id ?? null
-                );
             } else {
-                clearRasterStatisticsPresentation();
-                controlsView.setStatisticsStatus(
-                    "The active raster is hidden. Show it to calculate its " +
-                    "selected-area distribution."
+                selectedRasterStatisticsState = "idle";
+                void rasterStatisticsController.activate(
+                    activeRasterItem,
+                    currentRasterSamplingArea()
                 );
             }
-        } else if (isActiveSampledRaster()) {
-            clearRasterStatisticsPresentation();
-            controlsView.setStatisticsStatus(
-                "Click the map to calculate an adaptive bounded histogram " +
-                "for that window. No whole-raster histogram is read."
-            );
         } else if (wholeRasterStatisticsState === "ready") {
             renderRasterStatistics(wholeRasterStatistics);
         } else if (wholeRasterStatisticsState === "error") {
@@ -542,11 +661,11 @@ export function initializeRasterViewer(
                 wholeRasterStatisticsError,
                 "wholeRaster"
             );
-        } else if (!visible) {
-            clearRasterStatisticsPresentation();
-            controlsView.setStatisticsStatus(
-                "The active raster is hidden. Show it to calculate its " +
-                "approximate distribution."
+        } else {
+            wholeRasterStatisticsState = "idle";
+            void rasterStatisticsController.activate(
+                activeRasterItem,
+                WHOLE_RASTER_SAMPLING_AREA
             );
         }
     }
@@ -566,6 +685,7 @@ export function initializeRasterViewer(
             return;
         }
         deactivateActiveLayer();
+        analysisRasterSession = null;
         const entry = layerStack.activate(key);
         const session = requireLayerSession(key);
         loadActiveLayerSession(session);
@@ -583,17 +703,15 @@ export function initializeRasterViewer(
         );
         controlsView.setSampleWindowInvalid(false);
         renderRasterSamplingAreaControls();
-        if (entry.visible) {
-            if (selectedRasterBounds !== null) {
-                rasterSampleWindowController.restoreSelection(
-                    selectedRasterBounds
-                );
-            }
-            if (selectedTemporaryAoi === null) {
-                rasterSampleWindowController.enable();
-            }
-            pixelProbeController.activate(activeRasterItem);
+        if (selectedRasterBounds !== null) {
+            rasterSampleWindowController.restoreSelection(
+                selectedRasterBounds
+            );
         }
+        if (selectedTemporaryAoi === null) {
+            rasterSampleWindowController.enable();
+        }
+        pixelProbeController.activate(activeRasterItem);
         renderRasterSampleWindowGuidance("");
 
         restoreActiveLayerStatistics();
@@ -602,12 +720,123 @@ export function initializeRasterViewer(
     }
 
     /**
+     * Restore one renderer-detached session into shared viewer controls.
+     *
+     * @param {Object} session Sampled-renderer or analysis-only interaction
+     * state.
+     * @return {void}
+     */
+    function activateDetachedSession(session) {
+        loadActiveLayerSession(session);
+        pixelProbeController.activate(session.item);
+        controlsView.setControlsVisible(true);
+        controlsView.setActiveLayer(session.label, true);
+        controlsView.setStyle(rasterStyle, session.paletteName);
+        controlsView.renderLegend(rasterStyle);
+        resetRasterPercentileControls();
+        rasterSampleWindowController.setWindowSize(
+            selectedRasterWindowSizeKm ?? DEFAULT_RASTER_SAMPLE_WINDOW_SIZE_KM
+        );
+        controlsView.setSampleWindowSize(
+            rasterSampleWindowController.windowSizeKm
+        );
+        controlsView.setSampleWindowInvalid(false);
+        if (selectedRasterBounds !== null) {
+            rasterSampleWindowController.restoreSelection(
+                selectedRasterBounds
+            );
+        }
+        if (selectedTemporaryAoi === null) {
+            rasterSampleWindowController.enable();
+        }
+        renderRasterSamplingAreaControls();
+        renderRasterSampleWindowGuidance("");
+        restoreActiveLayerStatistics();
+        saveActiveLayerSession();
+        renderLayerStack();
+    }
+
+    /**
+     * Activate renderer-independent analysis for one selected Catalog raster.
+     *
+     * A retained WMS layer or active adaptive-detail layer remains the parent
+     * session when one exists. Otherwise this method presents the same pixel,
+     * area-selection, histogram, percentile, and color controls without
+     * publishing or constructing a map raster layer.
+     *
+     * @param {Object} item Selected Catalog raster Item.
+     * @return {void}
+     */
+    function activateAnalysis(item) {
+        activationIntentSequence += 1;
+        const retainedKey = getCatalogRasterLayerKey(item);
+        const existingSession = matchingAnalysisSession(item);
+        if (existingSession !== null && isActiveAnalysisRaster()) {
+            return;
+        }
+        const retainedSession = layerSessions.get(retainedKey);
+        if (retainedSession !== undefined) {
+            const analysisSession = matchingAnalysisSession(item);
+            if (analysisSession !== null) {
+                saveActiveLayerSession();
+                copyRasterInteractionState(retainedSession, analysisSession);
+            }
+            activateLayer(retainedKey);
+            return;
+        }
+        const sampledKey = `detail:${retainedKey}`;
+        if (sampledRasterSession?.key === sampledKey) {
+            if (!isActiveSampledRaster()) {
+                deactivateActiveLayer();
+                analysisRasterSession = null;
+                activateDetachedSession(sampledRasterSession);
+            }
+            return;
+        }
+        deactivateActiveLayer();
+        analysisRasterSession = existingSession ?? createAnalysisSession(item);
+        activateDetachedSession(analysisRasterSession);
+    }
+
+    /**
+     * Remove a matching renderer-independent analysis session.
+     *
+     * @param {Object|null} item Catalog raster to match, or null to remove any
+     * analysis-only selection.
+     * @return {void}
+     */
+    function deactivateAnalysis(item) {
+        if (analysisRasterSession === null) {
+            return;
+        }
+        if (item !== null && matchingAnalysisSession(item) === null) {
+            return;
+        }
+        activationIntentSequence += 1;
+        const wasActive = isActiveAnalysisRaster();
+        if (wasActive) {
+            deactivateActiveLayer();
+        }
+        analysisRasterSession = null;
+        if (!wasActive) {
+            return;
+        }
+        if (layerStack.activeKey !== null) {
+            activateLayer(layerStack.activeKey);
+        } else {
+            controlsView.setControlsVisible(false);
+            controlsView.hidePixelProbe();
+            renderLayerStack();
+        }
+    }
+
+    /**
      * Activate shared appearance and click-histogram controls for one sampled
      * raster that is already visible through the detail-preview controller.
      *
-     * The session never publishes WMS, reads whole-raster statistics, or
-     * accepts a temporary AOI. The independent pixel controller receives only
-     * the active Catalog Item, exactly as it does for a WMS-rendered raster.
+     * The session never publishes WMS. Pixel and statistics controllers receive
+     * only the active Catalog Item and their own analysis inputs, exactly as
+     * they do for a WMS-rendered raster.
      *
      * @param {Object} item Selected overview-limited Catalog raster.
      * @param {Object} style Initial min/median/max shared raster color style.
@@ -622,6 +851,8 @@ export function initializeRasterViewer(
             throw new TypeError("Sampled raster recoloring callback is required");
         }
         buildRasterStyleEnvironment(style);
+        activationIntentSequence += 1;
+        const analysisSession = matchingAnalysisSession(item);
         deactivateActiveLayer();
         const key = `detail:${getCatalogRasterLayerKey(item)}`;
         const initialStyle = Object.freeze({ ...style });
@@ -637,35 +868,24 @@ export function initializeRasterViewer(
             rasterStatistics: null,
             rasterStatisticsIsApplicable: false,
             wholeRasterStatistics: null,
-            wholeRasterStatisticsState: "unavailable",
+            wholeRasterStatisticsState: "idle",
             wholeRasterStatisticsError: null,
             selectedRasterBounds: null,
-            selectedTemporaryAoi: null,
+            selectedTemporaryAoi: availableTemporaryAoi,
             selectedRasterWindowSizeKm: null,
             selectedRasterStatistics: null,
             selectedRasterStatisticsState: "idle",
             selectedRasterStatisticsError: null,
         };
-        loadActiveLayerSession(sampledRasterSession);
-        pixelProbeController.activate(item);
-        controlsView.setControlsVisible(true);
-        controlsView.setActiveLayer(sampledRasterSession.label, true);
-        controlsView.setStyle(rasterStyle, sampledRasterSession.paletteName);
-        controlsView.renderLegend(rasterStyle);
-        resetRasterPercentileControls();
-        rasterSampleWindowController.setWindowSize(
-            DEFAULT_RASTER_SAMPLE_WINDOW_SIZE_KM
-        );
-        controlsView.setSampleWindowSize(
-            rasterSampleWindowController.windowSizeKm
-        );
-        controlsView.setSampleWindowInvalid(false);
-        rasterSampleWindowController.enable();
-        renderRasterSamplingAreaControls();
-        renderRasterSampleWindowGuidance("");
-        restoreActiveLayerStatistics();
-        saveActiveLayerSession();
-        renderLayerStack();
+        if (analysisSession !== null) {
+            copyRasterInteractionState(
+                sampledRasterSession,
+                analysisSession,
+                false
+            );
+        }
+        analysisRasterSession = null;
+        activateDetachedSession(sampledRasterSession);
     }
 
     /**
@@ -722,10 +942,20 @@ export function initializeRasterViewer(
         if (sampledRasterSession?.key !== expectedKey) {
             return;
         }
-        if (isActiveSampledRaster()) {
+        activationIntentSequence += 1;
+        const wasActive = isActiveSampledRaster();
+        if (wasActive) {
             deactivateActiveLayer();
         }
+        const detachedSession = wasActive
+            ? detachAnalysisSession(sampledRasterSession)
+            : null;
         sampledRasterSession = null;
+        if (detachedSession !== null) {
+            analysisRasterSession = detachedSession;
+            activateDetachedSession(analysisRasterSession);
+            return;
+        }
         const nextActiveKey = layerStack.activeKey;
         if (nextActiveKey === null) {
             controlsView.setControlsVisible(false);
@@ -786,6 +1016,15 @@ export function initializeRasterViewer(
                 controlsView.renderStyleError(error);
                 return;
             }
+            rasterStyle = candidate.style;
+            controlsView.renderLegend(rasterStyle);
+            if (rasterStatistics !== null) {
+                controlsView.renderHistogram(rasterStatistics, rasterStyle);
+            }
+            saveActiveLayerSession();
+            return;
+        }
+        if (isActiveAnalysisRaster()) {
             rasterStyle = candidate.style;
             controlsView.renderLegend(rasterStyle);
             if (rasterStatistics !== null) {
@@ -921,8 +1160,8 @@ export function initializeRasterViewer(
         controlsView.setStatisticsBusy(true);
         controlsView.setStatisticsStatus(
             scope === "selectedArea"
-                ? "Calculating an approximate distribution for the selected area..."
-                : "Calculating an approximate whole-raster distribution..."
+                ? "Calculating a bounded distribution for the selected area..."
+                : "Calculating a bounded whole-raster distribution..."
         );
         saveActiveLayerSession();
     }
@@ -931,7 +1170,7 @@ export function initializeRasterViewer(
      * Apply the initial whole-raster range unless a manual edit superseded it.
      *
      * @param {Object} statistics Validated whole-raster statistics.
-     * @return {boolean} Whether the approximate initial range was applied.
+     * @return {boolean} Whether the bounded initial range was applied.
      */
     function applyInitialWholeRasterStyle(statistics) {
         const initialStyle = deriveInitialRasterStyleFromStatistics(
@@ -968,15 +1207,19 @@ export function initializeRasterViewer(
             allowApply &&
             rasterStatisticsMatchesSelection(
                 statistics,
-                selectedRasterBounds,
-                selectedTemporaryAoi?.id ?? null
+                currentRasterSamplingArea()
             );
         controlsView.setStatisticsBusy(false);
         controlsView.setStatisticsRetryVisible(false);
         controlsView.renderHistogram(statistics, rasterStyle);
+        const approximationMarker = statistics.estimated ? "≈ " : "";
         controlsView.showHistogramAxis(
-            `≈ ${formatRasterPixelValue(statistics.sampleMinimum)}`,
-            `≈ ${formatRasterPixelValue(statistics.sampleMaximum)}`
+            `${approximationMarker}${formatRasterPixelValue(
+                statistics.sampleMinimum
+            )}`,
+            `${approximationMarker}${formatRasterPixelValue(
+                statistics.sampleMaximum
+            )}`
         );
         controlsView.setPercentileControlsVisible(true);
         resetRasterPercentileControls();
@@ -984,27 +1227,28 @@ export function initializeRasterViewer(
 
         const excludedCount =
             statistics.sampledPixelCount - statistics.validSampleCount;
-        const sampledGrid = statistics.samplingMethod === "sampledGrid";
+        const usesSampleGrid = statistics.samplingMethod === "sampleGrid";
         const sourceDescription = statistics.scope === "wholeRaster"
             ? "source raster"
             : "source-cell window";
+        const approximation = statistics.estimated ? "approximate" : "exact";
         const scopeDescription = statistics.scope === "temporaryAoi"
             ? `Uploaded AOI ${selectedTemporaryAoi?.filename ?? "area"}, ` +
               `layer ${selectedTemporaryAoi?.selectedDataset ?? "selected"}, ` +
-              "approximate distribution"
+              `${approximation} bounded distribution`
             : statistics.scope === "selectedArea"
-                ? "Selected-area approximate distribution"
-                : "Whole-raster approximate distribution";
-        const provenance = sampledGrid
+                ? `Selected-area ${approximation} bounded distribution`
+                : `Whole-raster ${approximation} bounded distribution`;
+        const provenance = usesSampleGrid
             ? `${statistics.validSampleCount.toLocaleString()} finite values ` +
               `from a ${statistics.sampleWidth.toLocaleString()} × ` +
-              `${statistics.sampleHeight.toLocaleString()} bounded adaptive ` +
-              "detail image spatially placed over the selected map window"
+              `${statistics.sampleHeight.toLocaleString()} bounded center ` +
+              `grid over the ${statistics.sourceWidth.toLocaleString()} × ` +
+              `${statistics.sourceHeight.toLocaleString()} ${sourceDescription}`
             : `${statistics.validSampleCount.toLocaleString()} valid pixels ` +
-              `from a ${statistics.sampleWidth.toLocaleString()} × ` +
-              `${statistics.sampleHeight.toLocaleString()} sample of the ` +
-              `${statistics.sourceWidth.toLocaleString()} × ` +
-              `${statistics.sourceHeight.toLocaleString()} ${sourceDescription}`;
+              `from the exact ${statistics.sampleWidth.toLocaleString()} × ` +
+              `${statistics.sampleHeight.toLocaleString()} bounded ` +
+              sourceDescription;
         const excluded = excludedCount === 0
             ? ""
             : `; ${excludedCount.toLocaleString()} masked, nodata, or ` +
@@ -1013,7 +1257,7 @@ export function initializeRasterViewer(
         controlsView.setStatisticsStatus(
             initialRangeApplied
                 ? `${scopeDescription}: ${provenance}${excluded}. ` +
-                  "The approximate 5th, 50th, and 95th percentile range was " +
+                  "The 5th, 50th, and 95th percentile range was " +
                   "applied."
                 : `${scopeDescription}: ${provenance}${excluded}. ` +
                   "Your current appearance was preserved."
@@ -1121,10 +1365,10 @@ export function initializeRasterViewer(
      */
     function selectedRasterStatisticsLoadingMessage() {
         if (selectedTemporaryAoi === null) {
-            return "Calculating an approximate distribution for the selected area...";
+            return "Calculating a bounded distribution for the selected area...";
         }
         return (
-            `Calculating an approximate distribution for uploaded AOI ` +
+            `Calculating a bounded distribution for uploaded AOI ` +
             `${selectedTemporaryAoi.filename}, layer ` +
             `${selectedTemporaryAoi.selectedDataset}...`
         );
@@ -1181,7 +1425,8 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function restoreWholeRasterStatistics() {
-        selectedRasterStatisticsController.clear();
+        rasterStatisticsController.clear();
+        resetPendingRasterStatisticsState();
         selectedRasterBounds = null;
         selectedTemporaryAoi = null;
         selectedRasterWindowSizeKm = null;
@@ -1189,21 +1434,13 @@ export function initializeRasterViewer(
         selectedRasterStatisticsState = "idle";
         selectedRasterStatisticsError = null;
         rasterSampleWindowController.clearSelection();
-        if (isActiveLayerVisible()) {
+        if (canUseActiveRasterMapInteractions()) {
             rasterSampleWindowController.enable();
         }
         renderRasterSamplingAreaControls();
         renderRasterSampleWindowGuidance("");
-        if (isActiveSampledRaster()) {
-            clearRasterStatisticsPresentation();
-            controlsView.setStatisticsStatus(
-                "Click the map to calculate an adaptive bounded histogram " +
-                "for that window. No whole-raster histogram is read."
-            );
-        } else if (wholeRasterStatisticsState === "ready") {
+        if (wholeRasterStatisticsState === "ready") {
             renderRasterStatistics(wholeRasterStatistics);
-        } else if (wholeRasterStatisticsState === "loading") {
-            renderRasterStatisticsLoading("wholeRaster");
         } else if (wholeRasterStatisticsState === "error") {
             renderRasterStatisticsError(
                 wholeRasterStatisticsError,
@@ -1211,6 +1448,12 @@ export function initializeRasterViewer(
             );
         } else {
             clearRasterStatisticsPresentation();
+            if (canUseActiveRasterMapInteractions()) {
+                void rasterStatisticsController.activate(
+                    activeRasterItem,
+                    WHOLE_RASTER_SAMPLING_AREA
+                );
+            }
         }
         saveActiveLayerSession();
     }
@@ -1223,10 +1466,7 @@ export function initializeRasterViewer(
      */
     function renderRasterSampleWindowGuidance(guidance) {
         let nextStatus;
-        if (activeLayerKey !== null && !isActiveLayerVisible()) {
-            nextStatus =
-                "The active raster is hidden. Show it to select a histogram area.";
-        } else if (guidance) {
+        if (guidance) {
             nextStatus = guidance;
         } else if (selectedRasterBounds !== null) {
             const { west, south, east, north } = selectedRasterBounds;
@@ -1239,14 +1479,11 @@ export function initializeRasterViewer(
         } else if (selectedTemporaryAoi !== null) {
             nextStatus =
                 `Uploaded AOI selected: ${selectedTemporaryAoi.filename}, ` +
-                `layer ${selectedTemporaryAoi.selectedDataset}. Hide the AOI ` +
-                "to return histogram sampling to the mouse-hover map window.";
+                `layer ${selectedTemporaryAoi.selectedDataset}. Map overlay ` +
+                "visibility does not change this histogram selection.";
         } else {
-            nextStatus = isActiveSampledRaster()
-                ? "No histogram window selected. Move over the map and click " +
-                  "to sample adaptive bounded detail at that location."
-                : "Whole-raster distribution selected. Move over the map " +
-                  "and click to display this window's histogram.";
+            nextStatus = "Whole-raster distribution selected. Move over the " +
+                "map and click to display this window's histogram.";
         }
         controlsView.setSampleWindowStatus(nextStatus);
     }
@@ -1258,7 +1495,7 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function selectRasterSampleWindow(bounds) {
-        if (!isActiveLayerVisible()) {
+        if (!canUseActiveRasterMapInteractions()) {
             return;
         }
         selectedRasterBounds = bounds;
@@ -1266,11 +1503,9 @@ export function initializeRasterViewer(
         selectedRasterWindowSizeKm = rasterSampleWindowController.windowSizeKm;
         renderRasterSamplingAreaControls();
         renderRasterSampleWindowGuidance("");
-        void selectedRasterStatisticsController.activate(
+        void rasterStatisticsController.activate(
             activeRasterItem,
-            undefined,
-            bounds,
-            null
+            currentRasterSamplingArea()
         );
         saveActiveLayerSession();
     }
@@ -1306,7 +1541,8 @@ export function initializeRasterViewer(
      */
     function resetRasterSampleWindow() {
         rasterSampleWindowController.clear();
-        selectedRasterStatisticsController.clear();
+        rasterStatisticsController.clear();
+        resetPendingRasterStatisticsState();
         selectedRasterBounds = null;
         selectedTemporaryAoi = null;
         selectedRasterWindowSizeKm = null;
@@ -1325,13 +1561,13 @@ export function initializeRasterViewer(
      */
     function useTemporaryAoiForRasterStatistics() {
         if (
-            isActiveSampledRaster() ||
             availableTemporaryAoi === null ||
             activeRasterItem === null
         ) {
             return;
         }
-        selectedRasterStatisticsController.clear();
+        rasterStatisticsController.clear();
+        resetPendingRasterStatisticsState();
         selectedRasterBounds = null;
         selectedTemporaryAoi = availableTemporaryAoi;
         selectedRasterWindowSizeKm = null;
@@ -1341,12 +1577,10 @@ export function initializeRasterViewer(
         rasterSampleWindowController.clear();
         renderRasterSamplingAreaControls();
         renderRasterSampleWindowGuidance("");
-        if (isActiveLayerVisible()) {
-            void selectedRasterStatisticsController.activate(
+        if (canUseActiveRasterMapInteractions()) {
+            void rasterStatisticsController.activate(
                 activeRasterItem,
-                undefined,
-                null,
-                selectedTemporaryAoi.id
+                currentRasterSamplingArea()
             );
         }
         saveActiveLayerSession();
@@ -1362,7 +1596,7 @@ export function initializeRasterViewer(
      */
     function enableRasterSampleWindowSelection() {
         restoreWholeRasterStatistics();
-        if (!isActiveLayerVisible()) {
+        if (!canUseActiveRasterMapInteractions()) {
             return;
         }
         rasterSampleWindowController.enable();
@@ -1488,7 +1722,7 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Reset the active style to its whole-raster approximate range.
+     * Reset the active style to its bounded whole-raster reference range.
      *
      * @return {void}
      */
@@ -1497,9 +1731,16 @@ export function initializeRasterViewer(
         resetRasterStyle();
         commitRasterStyle();
         if (isActiveSampledRaster()) {
+            const provenance = rasterStatistics === null
+                ? ""
+                : ` The current histogram remains the ${
+                    rasterStatistics.samplingMethod === "sampleGrid"
+                        ? "approximate sampled-grid"
+                        : "exact bounded"
+                } distribution.`;
             controlsView.setStatisticsStatus(
-                "Reset appearance to the sampled raster's approximate " +
-                "minimum, median, and maximum."
+                "Reset appearance to the adaptive raster's initial minimum, " +
+                `median, and maximum.${provenance}`
             );
         } else if (wholeRasterStatistics !== null) {
             resetRasterPercentileControls();
@@ -1510,15 +1751,19 @@ export function initializeRasterViewer(
                     ? " The selected-area distribution remains available."
                     : " The previous distribution remains reference-only " +
                       "and cannot be applied to the current selected area.";
+            const provenance = wholeRasterStatistics.estimated
+                ? "sampled-grid"
+                : "exact bounded";
             controlsView.setStatisticsStatus(
-                "Reset appearance to the whole-raster approximate 5th, " +
-                `50th, and 95th percentile range.${scopeNote}`
+                "Reset appearance to the histogram-estimated whole-raster " +
+                `5th, 50th, and 95th percentile range from the ${provenance} ` +
+                `distribution.${scopeNote}`
             );
         }
     }
 
     /**
-     * Apply the current ordered approximate percentile range to WMS styling.
+     * Apply the current ordered histogram-estimated percentile range.
      *
      * @return {void}
      */
@@ -1539,7 +1784,9 @@ export function initializeRasterViewer(
         );
         commitRasterStyle();
         controlsView.setStatisticsStatus(
-            "Rescaled the colors to the selected approximate percentile range."
+            `Rescaled the colors to the selected ${
+                rasterStatistics.estimated ? "approximate" : "exact"
+            } percentile range.`
         );
     }
 
@@ -1551,15 +1798,16 @@ export function initializeRasterViewer(
     function handleRetryStatistics() {
         if (hasSelectedRasterSamplingArea()) {
             selectedRasterStatisticsState = "idle";
-            void selectedRasterStatisticsController.activate(
+            void rasterStatisticsController.activate(
                 activeRasterItem,
-                undefined,
-                selectedRasterBounds,
-                selectedTemporaryAoi?.id ?? null
+                currentRasterSamplingArea()
             );
-        } else if (!isActiveSampledRaster()) {
+        } else {
             wholeRasterStatisticsState = "idle";
-            void wholeRasterStatisticsController.activate(activeRasterItem);
+            void rasterStatisticsController.activate(
+                activeRasterItem,
+                WHOLE_RASTER_SAMPLING_AREA
+            );
         }
     }
 
@@ -1582,7 +1830,7 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function handleMapPointerMove(pointerEvent) {
-        if (isActiveLayerVisible()) {
+        if (canUseActiveRasterMapInteractions()) {
             pixelProbeClientPosition = {
                 x: pointerEvent.clientX,
                 y: pointerEvent.clientY,
@@ -1598,7 +1846,7 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function handleMapMouseMove(mapEvent) {
-        if (!isActiveLayerVisible()) {
+        if (!canUseActiveRasterMapInteractions()) {
             return;
         }
         const point = {
@@ -1654,36 +1902,8 @@ export function initializeRasterViewer(
         leafletLayers.setVisible(key, visible);
         if (activeLayerKey === key) {
             saveActiveLayerSession();
-            rasterSampleWindowController.clear();
-            pixelProbeController.clear();
-            controlsView.hidePixelProbe();
             controlsView.setActiveLayer(entry.label, visible);
-            if (visible) {
-                rasterSampleWindowController.setWindowSize(
-                    selectedRasterWindowSizeKm ??
-                    DEFAULT_RASTER_SAMPLE_WINDOW_SIZE_KM
-                );
-                if (selectedRasterBounds !== null) {
-                    rasterSampleWindowController.restoreSelection(
-                        selectedRasterBounds
-                    );
-                }
-                if (selectedTemporaryAoi === null) {
-                    rasterSampleWindowController.enable();
-                }
-                pixelProbeController.activate(activeRasterItem);
-            } else {
-                wholeRasterStatisticsController.clear();
-                selectedRasterStatisticsController.clear();
-                if (wholeRasterStatisticsState === "loading") {
-                    wholeRasterStatisticsState = "idle";
-                }
-                if (selectedRasterStatisticsState === "loading") {
-                    selectedRasterStatisticsState = "idle";
-                }
-            }
             renderRasterSampleWindowGuidance("");
-            restoreActiveLayerStatistics();
             saveActiveLayerSession();
         }
         layerStackView.setStatus(
@@ -1745,7 +1965,7 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function removeLayer(key) {
-        requireLayerSession(key);
+        const removedSession = requireLayerSession(key);
         activationIntentSequence += 1;
         invalidatePublication(key);
         const removedIndex = layerStack.entries.findIndex(
@@ -1755,6 +1975,9 @@ export function initializeRasterViewer(
         if (wasActive) {
             deactivateActiveLayer();
         }
+        const detachedSession = wasActive
+            ? detachAnalysisSession(removedSession)
+            : null;
         const { removed: entry, activeKey: nextActiveKey } =
             layerStack.remove(key);
         leafletLayers.remove(key);
@@ -1766,7 +1989,10 @@ export function initializeRasterViewer(
             layerStack.entries[removedIndex]?.key ??
             layerStack.entries[removedIndex - 1]?.key ??
             null;
-        if (wasActive && nextActiveKey !== null) {
+        if (detachedSession !== null) {
+            analysisRasterSession = detachedSession;
+            activateDetachedSession(analysisRasterSession);
+        } else if (wasActive && nextActiveKey !== null) {
             activateLayer(nextActiveKey, {
                 key: nextActiveKey,
                 action: "activate",
@@ -1774,7 +2000,7 @@ export function initializeRasterViewer(
         } else {
             if (
                 layerStack.entries.length === 0 &&
-                !isActiveSampledRaster()
+                activeDetachedRasterSession() === null
             ) {
                 activeLayerKey = null;
                 activeRasterItem = null;
@@ -1814,12 +2040,12 @@ export function initializeRasterViewer(
         }
         deactivateActiveLayer();
         sampledRasterSession = null;
+        analysisRasterSession = null;
         leafletLayers.clear();
         layerStack.clear();
         layerSessions.clear();
         pixelProbeController.clear();
-        wholeRasterStatisticsController.clear();
-        selectedRasterStatisticsController.clear();
+        rasterStatisticsController.clear();
         rasterSampleWindowController.clear();
         activeRasterItem = null;
         activeLayerKey = null;
@@ -1867,6 +2093,11 @@ export function initializeRasterViewer(
         const showRequestSequence = activationIntentSequence;
         const retainedSession = layerSessions.get(key);
         if (retainedSession !== undefined) {
+            const analysisSession = matchingAnalysisSession(item);
+            if (analysisSession !== null) {
+                saveActiveLayerSession();
+                copyRasterInteractionState(retainedSession, analysisSession);
+            }
             activateLayer(key);
             layerStackView.setStatus(`${retainedSession.label} is active.`);
             return retainedSession.publishedRaster;
@@ -1902,12 +2133,18 @@ export function initializeRasterViewer(
                 showRequestSequence
             );
             const shouldActivate =
-                showRequestSequence === activationIntentSequence ||
-                previousActiveKey === null;
+                showRequestSequence === activationIntentSequence;
             if (!shouldActivate && previousActiveKey !== null) {
                 layerStack.activate(previousActiveKey);
             }
+            const analysisSession = matchingAnalysisSession(item);
+            if (analysisSession !== null) {
+                saveActiveLayerSession();
+            }
             const session = createLayerSession(entry, publishedRaster);
+            if (analysisSession !== null) {
+                copyRasterInteractionState(session, analysisSession);
+            }
             layerSessions.set(key, session);
             try {
                 const layer = createRasterLayer(
@@ -2010,12 +2247,12 @@ export function initializeRasterViewer(
      *
      * First readiness automatically selects the AOI for retained rasters.
      * Replacement migrates only sessions actively using the previous AOI;
-     * hiding, removal, and expiration restore those sessions to mouse-hover
-     * map-window sampling. Showing retained geometry selects its AOI again.
+     * removal and expiration restore those sessions to mouse-hover map-window
+     * sampling. Overlay visibility remains presentation-only.
      * Overlay geometry never crosses this boundary.
      *
      * @param {Readonly<Object>|null} temporaryAoi Ready lifecycle snapshot or
-     * null while hidden or after removal or expiration.
+     * null after removal or expiration.
      * @return {void}
      * @throws {TypeError} If the public snapshot violates its contract.
      */
@@ -2027,7 +2264,14 @@ export function initializeRasterViewer(
         }
         saveActiveLayerSession();
         availableTemporaryAoi = validatedAoi;
-        for (const session of layerSessions.values()) {
+        const sessions = [...layerSessions.values()];
+        if (sampledRasterSession !== null) {
+            sessions.push(sampledRasterSession);
+        }
+        if (analysisRasterSession !== null) {
+            sessions.push(analysisRasterSession);
+        }
+        for (const session of sessions) {
             const automaticallyEligible = previousAoi === null && validatedAoi !== null;
             const usesPreviousAoi =
                 previousAoi !== null &&
@@ -2040,17 +2284,14 @@ export function initializeRasterViewer(
         if (activeLayerKey === null) {
             return;
         }
-        if (isActiveSampledRaster()) {
-            renderRasterSamplingAreaControls();
-            saveActiveLayerSession();
-            return;
-        }
-        const activeSession = requireLayerSession(activeLayerKey);
+        const activeSession = activeDetachedRasterSession() ??
+            requireLayerSession(activeLayerKey);
         loadActiveLayerSession(activeSession);
-        selectedRasterStatisticsController.clear();
+        rasterStatisticsController.clear();
+        resetPendingRasterStatisticsState();
         if (selectedTemporaryAoi !== null) {
             rasterSampleWindowController.clear();
-        } else if (isActiveLayerVisible()) {
+        } else if (canUseActiveRasterMapInteractions()) {
             rasterSampleWindowController.enable();
         }
         renderRasterSamplingAreaControls();
@@ -2098,7 +2339,7 @@ export function initializeRasterViewer(
         onSampleWindowNumberInput: setRasterSampleWindowSize,
         onSampleWindowNumberChange: handleSampleWindowNumberChange,
         onSampleMapCenter: () => {
-            if (isActiveLayerVisible()) {
+            if (canUseActiveRasterMapInteractions()) {
                 if (selectedTemporaryAoi !== null) {
                     restoreWholeRasterStatistics();
                 }
@@ -2127,6 +2368,8 @@ export function initializeRasterViewer(
         clear,
         reset,
         show,
+        activateAnalysis,
+        deactivateAnalysis,
         activateSampled,
         updateSampledInitialStyle,
         removeSampled,

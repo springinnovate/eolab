@@ -1,4 +1,9 @@
-/** Same-origin adapter for rendering-independent raster pixel analysis. */
+/** Same-origin adapters for rendering-independent raster analysis. */
+
+import {
+    normalizeRasterSamplingArea,
+    validateRasterStatisticsForSelection,
+} from "./statistics.js";
 
 /**
  * Represent one browser-safe raster-analysis failure.
@@ -23,11 +28,12 @@ export class RasterAnalysisRequestError extends Error {
  * Convert one failed analysis response into a browser-safe error.
  *
  * @param {Response} response Failed analysis response.
+ * @param {string} action User-facing request description.
  * @return {Promise<RasterAnalysisRequestError>} Structured detail or a status
  * fallback.
  */
-async function analysisRequestError(response) {
-    const fallbackMessage = `Pixel sample request failed (${response.status})`;
+async function analysisRequestError(response, action) {
+    const fallbackMessage = `${action} failed (${response.status})`;
     if (!response.headers.get("content-type")?.toLowerCase().includes(
         "application/json"
     )) {
@@ -49,9 +55,6 @@ async function analysisRequestError(response) {
 
 /**
  * Read one band-one pixel from the selected Catalog raster.
- *
- * Pixel analysis is catalog-authorized and does not depend on whether the
- * raster is displayed through WMS, adaptive detail, or no renderer at all.
  *
  * @param {Object} item Selected STAC Item.
  * @param {{longitude: number, latitude: number}} position WGS 84 position.
@@ -86,7 +89,59 @@ export async function sampleCatalogRasterPixel(
         }
     );
     if (!response.ok) {
-        throw await analysisRequestError(response);
+        throw await analysisRequestError(response, "Pixel sample request");
     }
     return response.json();
+}
+
+/**
+ * Load bounded band-1 statistics for one catalog raster and sampling area.
+ *
+ * @param {Object} item Selected scanner-owned STAC Item.
+ * @param {Object} samplingArea Strict whole/bounds/AOI sampling-area union.
+ * @param {AbortSignal} signal Cancellation signal for stale UI intent.
+ * @param {typeof globalThis.fetch} [fetchImplementation=globalThis.fetch]
+ * Browser fetch implementation.
+ * @return {Promise<Object>} Validated fixed-bin raster statistics.
+ * @throws {Error} If the area or response violates the analysis contract.
+ */
+export async function loadCatalogRasterStatistics(
+    item,
+    samplingArea,
+    signal,
+    fetchImplementation = globalThis.fetch
+) {
+    const normalizedArea = normalizeRasterSamplingArea(samplingArea);
+    const requestDocument = {
+        collectionId: item.collection,
+        itemId: item.id
+    };
+    if (normalizedArea.kind === "selectedArea") {
+        requestDocument.selectedBounds = normalizedArea.selectedBounds;
+    } else if (normalizedArea.kind === "temporaryAoi") {
+        requestDocument.temporaryAoiId = normalizedArea.temporaryAoiId;
+    }
+    const response = await fetchImplementation.call(
+        globalThis,
+        "/api/raster-analysis/statistics",
+        {
+            method: "POST",
+            headers: {
+                Accept: "application/json",
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify(requestDocument),
+            signal
+        }
+    );
+    if (!response.ok) {
+        throw await analysisRequestError(
+            response,
+            "Raster statistics request"
+        );
+    }
+    return validateRasterStatisticsForSelection(
+        await response.json(),
+        normalizedArea
+    );
 }

@@ -40,42 +40,13 @@ from eolab_app.raster.read_cancellation import (
     RasterReadCancellationCheck,
     require_active_raster_read,
 )
+from eolab_app.raster.source_contract import require_signed_raster_dependencies
 from eolab_app.raster.statistics import strict_raster_value_range
 
 
 DETAIL_PREVIEW_POLICY_VERSION = "bounded-adaptive-raster-v8"
 WEB_MERCATOR_LIMIT = 20_037_508.342789244
 WEB_MERCATOR_LATITUDE_LIMIT = 85.0511287798066
-
-
-def _require_signed_geotiff_dependencies(
-    dataset: rasterio.io.DatasetReader,
-    source_path: Path,
-) -> None:
-    """Reject GDAL sidecars outside the authorized source signature.
-
-    Args:
-        dataset: Open raster whose GDAL dependencies are known.
-        source_path: Scanner-authorized GeoTIFF signed by the catalog.
-
-    Returns:
-        None when GDAL reports only the signed GeoTIFF dependency.
-
-    Raises:
-        ValueError: If an external mask, overview, or auxiliary metadata file
-            could influence sampling or georeferencing.
-    """
-    signed_source = source_path.resolve(strict=False)
-    dependencies = {
-        Path(dataset_file).resolve(strict=False)
-        for dataset_file in dataset.files
-    }
-    if dependencies != {signed_source}:
-        raise ValueError(
-            "Sampled raster preview requires validity and georeferencing "
-            "metadata embedded in the signed GeoTIFF; external GDAL "
-            "sidecars are unsupported"
-        )
 
 
 def _floating_values_and_validity(
@@ -423,7 +394,7 @@ def read_raster_detail_preview(
     require_active_raster_read(cancellation_requested)
     with rasterio.open(source_path) as dataset:
         require_active_raster_read(cancellation_requested)
-        _require_signed_geotiff_dependencies(dataset, source_path)
+        require_signed_raster_dependencies(dataset, source_path)
         if dataset.count != 1 or dataset.width < 1 or dataset.height < 1:
             raise ValueError("Detail-only preview requires one non-empty band")
         if dataset.crs is None:

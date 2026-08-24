@@ -3,7 +3,10 @@ import test from "node:test";
 
 import { RasterControlsView } from "../../src/raster/controls-view.js";
 import { DEFAULT_RASTER_STYLE } from "../../src/raster/style.js";
-import { RASTER_STATISTICS } from "../../test-support/raster/fixtures.js";
+import {
+    EXACT_RASTER_STATISTICS,
+    RASTER_STATISTICS,
+} from "../../test-support/raster/fixtures.js";
 
 /** Minimal DOM element used by the raster controls adapter tests. */
 class FakeControlElement extends EventTarget {
@@ -300,7 +303,7 @@ test("RasterControlsView clears histogram visibility through its DOM contract", 
     assert.equal(documentContext.querySelector("#retry-raster-statistics").hidden, true);
 });
 
-test("RasterControlsView identifies the active layer and disables map reads while hidden", () => {
+test("RasterControlsView reports renderer visibility without gating analysis", () => {
     const documentContext = new FakeRasterDocument();
     const view = new RasterControlsView(documentContext);
 
@@ -312,11 +315,15 @@ test("RasterControlsView identifies the active layer and disables map reads whil
     );
     assert.equal(
         documentContext.querySelector("#sample-raster-map-center").disabled,
-        true
+        false
+    );
+    assert.equal(
+        documentContext.querySelector("#select-raster-sample-window").disabled,
+        false
     );
     assert.equal(
         documentContext.querySelector("#retry-raster-statistics").disabled,
-        true
+        false
     );
 
     view.setActiveLayer("global-temperature.tif", true);
@@ -376,6 +383,26 @@ test("RasterControlsView reveals a successful histogram presentation", () => {
         documentContext.querySelector("#raster-middle-percentile-value")
             .textContent,
         "50% ≈ 3.000e+0"
+    );
+});
+
+test("RasterControlsView labels exact bounded histogram provenance", () => {
+    const documentContext = new FakeRasterDocument();
+    const view = new RasterControlsView(documentContext);
+    const chart = documentContext.querySelector("#raster-histogram-chart");
+
+    view.renderHistogram(EXACT_RASTER_STATISTICS, DEFAULT_RASTER_STYLE);
+    view.showHistogramAxis("-1.000e+1", "3.000e+1");
+
+    assert.match(chart.children[0].textContent, /^Exact bounded band 1/);
+    assert.match(chart.getAttribute("aria-label"), /^Exact bounded band 1/);
+    assert.doesNotMatch(
+        documentContext.querySelector("#raster-histogram-minimum").textContent,
+        /≈/
+    );
+    assert.doesNotMatch(
+        documentContext.querySelector("#raster-histogram-maximum").textContent,
+        /≈/
     );
 });
 

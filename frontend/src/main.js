@@ -725,10 +725,17 @@ async function initializeCatalog(
             pendingAction?.statusText ?? defaultStatus;
     }
 
-    /** Clears the selected result, footprint, and inspector together. */
+    /**
+     * Clear the selected result, analysis session, footprint, and inspector.
+     *
+     * @return {void}
+     */
     function clearCatalogSelection() {
         if (catalogState.selectedItem !== null) {
             rasterVisualization.removeSampled(catalogState.selectedItem);
+            rasterVisualization.deactivateAnalysis(
+                catalogState.selectedItem
+            );
         }
         rasterDetailPreview.clear();
         catalogState.selectedButton?.classList.remove("is-selected");
@@ -749,7 +756,14 @@ async function initializeCatalog(
         return JSON.stringify([item.collection, item.id]);
     }
 
-    /** Select one result or remotely discovered Item without changing search. */
+    /**
+     * Select one result and activate analysis when it is a Catalog raster.
+     *
+     * @param {Object} item Catalog Item selected from results or discovery.
+     * @param {HTMLElement|null} [requestedButton=null] Optional matching result
+     * button when the Item is already present in the current page.
+     * @return {void}
+     */
     function selectCatalogItem(item, requestedButton = null) {
         if (rasterDetailPreview.contains(item)) {
             rasterDetailPreview.invalidate();
@@ -778,6 +792,11 @@ async function initializeCatalog(
             catalogState.collectionsDocument.collections,
             appGlobalConfiguration.scanDisplayPathPrefix
         );
+        if (getRasterVisualization(item) === null) {
+            rasterVisualization.deactivateAnalysis(null);
+        } else {
+            rasterVisualization.activateAnalysis(item);
+        }
         updateCatalogMapAction(item);
     }
 
@@ -1140,6 +1159,9 @@ async function initializeCatalog(
                 catalogState.rasterAssessments.apply(
                     catalogState.selectedItem
                 );
+                rasterVisualization.activateAnalysis(
+                    catalogState.selectedItem
+                );
                 renderCatalogItemInspector(
                     catalogState.selectedItem,
                     catalogState.collectionsDocument.collections,
@@ -1166,6 +1188,7 @@ async function initializeCatalog(
 
         if (rasterVisualization.contains(selectedItem)) {
             rasterVisualization.remove(selectedItem);
+            rasterVisualization.activateAnalysis(selectedItem);
             catalogLayerToggle.textContent = "Add to map layers";
             catalogLayerStatus.textContent =
                 "Raster removed from the map layer stack.";
@@ -1251,6 +1274,7 @@ async function initializeCatalog(
         const selectedItem = catalogState.selectedItem;
         rasterVisualization.removeSampled(selectedItem);
         rasterDetailPreview.remove(selectedItem);
+        rasterVisualization.activateAnalysis(selectedItem);
         catalogLayerStatus.textContent =
             "Sampled raster removed from the map.";
     });
