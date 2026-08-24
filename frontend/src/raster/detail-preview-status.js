@@ -95,10 +95,14 @@ export function formatRasterDetailPreviewResolution(
             ? "updating…"
             : `${formatPreview(previewState.detailPreview)} (retained; updating…)`;
     } else if (previewState.detailStatus === "error") {
+        const failure = typeof previewState.detailError === "string" &&
+            previewState.detailError.trim() !== ""
+            ? `: ${previewState.detailError}`
+            : "";
         detail = previewState.detailPreview === null
-            ? "update failed"
+            ? `update failed${failure}`
             : `${formatPreview(previewState.detailPreview)} ` +
-                "(retained; update failed)";
+                `(retained; update failed${failure})`;
     } else if (previewState.detailPreview !== null) {
         detail = formatPreview(previewState.detailPreview);
     }

@@ -70,8 +70,9 @@ test("detail preview resolution reports pending and retained update states", () 
       basePreview: CENTER_SAMPLE_DETAIL_PREVIEW,
       detailPreview: CURRENT_VIEW_DETAIL_PREVIEW,
       detailStatus: "error",
+      detailError: "The bounded detail-only preview could not be read.",
     }),
-    /Active view: sampled proxy 31 × 31 center samples; .+ \(retained; update failed\)$/,
+    /Active view: sampled proxy 31 × 31 center samples; .+ \(retained; update failed: The bounded detail-only preview could not be read\.\)$/,
   );
 });
 

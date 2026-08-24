@@ -107,6 +107,11 @@ native-block count, decoded work, and native source window when one exists. A
 previous browser
 request, and monotonic session plus exact bounds identities prevent stale
 responses from replacing current state even when cancellation loses a race.
+If an older bounded read is still occupying the fixed server capacity after
+the browser has moved on, the latest stable viewport retries that one transient
+busy conflict once per second. Other conflicts remain visible and are not
+retried. The compact provenance status includes the actual failure reason while
+retaining the prior overlay.
 The new overlay is attached before the prior one is removed. Zooming back to
 the fitted scale removes only the detail overlay and retains the base grid.
 The representative patch remains explicit and does not auto-refine.

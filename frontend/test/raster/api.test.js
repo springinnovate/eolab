@@ -6,6 +6,7 @@ import {
   loadCatalogRasterDetailStatistics,
   loadCatalogRasterStatistics,
   loadCatalogRasterDetailPreview,
+  isRasterDetailPreviewCapacityError,
   publishCatalogRaster,
   RenderingRequestError,
   validateRasterDetailPreview,
@@ -87,6 +88,33 @@ test("detail preview preserves an actionable backend failure", async () => {
     assert.equal(error.message, "Sampled raster source blocks are unsafe.");
     return true;
   });
+});
+
+test("only bounded-reader capacity conflicts are retryable previews", () => {
+  assert.equal(
+    isRasterDetailPreviewCapacityError(new RenderingRequestError(
+      "Detail-only preview capacity is busy; retry after the current bounded " +
+        "read finishes.",
+      null,
+      409,
+    )),
+    true,
+  );
+  assert.equal(
+    isRasterDetailPreviewCapacityError(new RenderingRequestError(
+      "Sampled raster source blocks are unsafe.",
+      null,
+      409,
+    )),
+    false,
+  );
+  assert.equal(
+    isRasterDetailPreviewCapacityError(new Error(
+      "Detail-only preview capacity is busy; retry after the current bounded " +
+        "read finishes.",
+    )),
+    false,
+  );
 });
 
 test("detail preview sends one canonical current-view rectangle", async () => {

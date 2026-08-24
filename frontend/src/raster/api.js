@@ -259,6 +259,25 @@ function validateRasterDetailPreviewOptions(options) {
     };
 }
 
+/** Browser-safe conflict returned when all bounded preview readers are busy. */
+const DETAIL_PREVIEW_CAPACITY_BUSY_MESSAGE =
+    "Detail-only preview capacity is busy; retry after the current bounded " +
+    "read finishes.";
+
+/**
+ * Identify the one transient detail-preview conflict that is safe to retry.
+ *
+ * Other HTTP 409 responses describe source, authorization, geometry, or work
+ * contract failures and must remain actionable instead of being retried.
+ *
+ * @param {unknown} error Candidate request failure.
+ * @return {boolean} Whether the failure is bounded-reader capacity contention.
+ */
+export function isRasterDetailPreviewCapacityError(error) {
+    return error instanceof RenderingRequestError && error.status === 409 &&
+        error.message === DETAIL_PREVIEW_CAPACITY_BUSY_MESSAGE;
+}
+
 /**
  * Validate one browser-safe detail-only preview at the network boundary.
  *

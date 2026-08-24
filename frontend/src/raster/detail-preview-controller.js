@@ -1,6 +1,9 @@
 /** Lifecycle coordinator for zoom-adaptive, bounded raster detail previews. */
 
-import { loadCatalogRasterDetailPreview } from "./api.js";
+import {
+    isRasterDetailPreviewCapacityError,
+    loadCatalogRasterDetailPreview
+} from "./api.js";
 import {
     createRasterDetailPreviewLayer,
     ensureRasterDetailPreviewPanes
@@ -13,6 +16,7 @@ import {
 import { getCatalogRasterLayerKey } from "./layer-stack.js";
 
 const DETAIL_REFINEMENT_DEBOUNCE_MILLISECONDS = 200;
+const DETAIL_CAPACITY_RETRY_MILLISECONDS = 1_000;
 
 /**
  * Return whether two controller-owned Leaflet bounds have identical corners.
@@ -51,7 +55,8 @@ function rasterDetailFocusBoundsMatch(left, right) {
  * @param {{leafletMap:Object,leaflet:Object,onChange?:Function}} configuration
  * Leaflet collaborators and optional state-change callback.
  * @param {{loadPreview?:Function,createPreviewLayer?:Function,setTimer?:Function,
- * clearTimer?:Function,detailDebounceMilliseconds?:number}} dependencies
+ * clearTimer?:Function,detailDebounceMilliseconds?:number,
+ * detailCapacityRetryMilliseconds?:number}} dependencies
  * Injectable network, presentation, and timer boundaries.
  * @return {RasterDetailPreviewController} Detail preview lifecycle API.
  * @throws {TypeError} If the map does not expose required event methods.
@@ -64,7 +69,8 @@ export function initializeRasterDetailPreview(
         createPreviewLayer = createRasterDetailPreviewLayer,
         setTimer = globalThis.setTimeout.bind(globalThis),
         clearTimer = globalThis.clearTimeout.bind(globalThis),
-        detailDebounceMilliseconds = DETAIL_REFINEMENT_DEBOUNCE_MILLISECONDS
+        detailDebounceMilliseconds = DETAIL_REFINEMENT_DEBOUNCE_MILLISECONDS,
+        detailCapacityRetryMilliseconds = DETAIL_CAPACITY_RETRY_MILLISECONDS
     } = {}
 ) {
     if (typeof leafletMap.on !== "function" ||
@@ -340,7 +346,24 @@ export function initializeRasterDetailPreview(
             disposePresentation(previousDetail?.presentation ?? null);
             onChange();
         } catch (error) {
-            if (error.name !== "AbortError" && isCurrentDetailIntent(
+            if (isRasterDetailPreviewCapacityError(error) &&
+                isCurrentDetailIntent(
+                    sessionGeneration,
+                    requestDetailGeneration,
+                    intentKey
+                )) {
+                current.detailStatus = "loading";
+                current.detailError = null;
+                detailTimer = setTimer(() => {
+                    void loadCurrentViewDetail(
+                        sessionGeneration,
+                        requestDetailGeneration,
+                        intentKey,
+                        viewBounds
+                    );
+                }, detailCapacityRetryMilliseconds);
+                onChange();
+            } else if (error.name !== "AbortError" && isCurrentDetailIntent(
                 sessionGeneration,
                 requestDetailGeneration,
                 intentKey

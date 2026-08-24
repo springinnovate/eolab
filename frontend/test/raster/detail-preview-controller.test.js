@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { RenderingRequestError } from "../../src/raster/api.js";
 import { initializeRasterDetailPreview } from "../../src/raster/detail-preview-controller.js";
 import {
   CENTER_SAMPLE_DETAIL_PREVIEW,
@@ -627,6 +628,76 @@ test("zoom and pan replace sampled or exact current detail without stale flashes
   assert.equal(controller.getState().detailStatus, "none");
   controller.destroy();
   assert.equal(map.listenerCount(), 0);
+});
+
+test("latest viewport retries transient bounded-reader capacity", async () => {
+  const timers = new Map();
+  const delays = [];
+  const map = fakeMap();
+  let nextTimer = 1;
+  let detailAttempts = 0;
+  const controller = initializeRasterDetailPreview(
+    { leafletMap: map, leaflet: {} },
+    {
+      async loadPreview(_item, options) {
+        if (options.viewBounds === null) {
+          return CENTER_SAMPLE_DETAIL_PREVIEW;
+        }
+        detailAttempts += 1;
+        if (detailAttempts === 1) {
+          throw new RenderingRequestError(
+            "Detail-only preview capacity is busy; retry after the current " +
+              "bounded read finishes.",
+            null,
+            409,
+          );
+        }
+        return EXACT_CURRENT_VIEW_DETAIL_PREVIEW;
+      },
+      createPreviewLayer(_leaflet, preview) {
+        return {
+          layer: { addTo() {} },
+          focusBounds: [[48, -123], [50, -121]],
+          style: { minimum: 0, midpoint: 50, maximum: 100 },
+          dispose() {},
+          preview,
+        };
+      },
+      setTimer(callback, delay) {
+        const id = nextTimer++;
+        timers.set(id, callback);
+        delays.push(delay);
+        return id;
+      },
+      clearTimer(id) { timers.delete(id); },
+      detailDebounceMilliseconds: 200,
+      detailCapacityRetryMilliseconds: 1_000,
+    },
+  );
+
+  await controller.show(MOUNTED_GEOTIFF_ITEM, "centerSample", "coarse");
+  map.setZoom(5);
+  map.emit("moveend");
+  timers.values().next().value();
+  timers.clear();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(detailAttempts, 1);
+  assert.equal(controller.getState().detailStatus, "loading");
+  assert.equal(controller.getState().detailError, null);
+  assert.deepEqual(delays, [200, 1_000]);
+  assert.equal(timers.size, 1);
+
+  timers.values().next().value();
+  timers.clear();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(detailAttempts, 2);
+  assert.equal(controller.getState().detailStatus, "ready");
+  assert.equal(
+    controller.getState().detailPreview.rendering,
+    "exactSourceWindow",
+  );
+  controller.destroy();
 });
 
 test("first finite detail establishes style after an all-nodata base", async () => {
