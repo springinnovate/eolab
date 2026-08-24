@@ -6,7 +6,9 @@ COPY geoserver/reader-assessment/pom.xml ./pom.xml
 RUN mvn --batch-mode --no-transfer-progress dependency:go-offline
 
 COPY geoserver/reader-assessment/src/ ./src/
-RUN mvn --batch-mode --no-transfer-progress package -DskipTests
+COPY tests/fixtures/rasters/ /tests/fixtures/rasters/
+COPY tests/fixtures/vectors/ /tests/fixtures/vectors/
+RUN mvn --batch-mode --no-transfer-progress package
 
 
 FROM docker.osgeo.org/geoserver:3.0.1@sha256:7cb827ba3f6d9fc04a6647fc0cfa6c254fc642407f0d99281fdf026d2540b558
@@ -23,6 +25,10 @@ RUN unzip -q /tmp/control-flow.zip "*.jar" \
         -d /usr/local/tomcat/webapps/geoserver/WEB-INF/lib \
     && rm /tmp/control-flow.zip \
     && chmod 0444 /opt/eolab-jmx/jmx_prometheus_javaagent-1.6.0.jar
+
+COPY --chmod=0555 deployment/require-geoserver-vector-datastores.sh \
+    /usr/local/bin/require-geoserver-vector-datastores
+RUN /usr/local/bin/require-geoserver-vector-datastores
 
 COPY --from=reader-assessment-builder --chmod=0444 \
     /build/target/geoserver-reader-assessment-1.0.0.jar \

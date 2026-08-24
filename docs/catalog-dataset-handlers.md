@@ -64,6 +64,12 @@ Vector handlers should use `build_vector_table_properties()` and `build_bbox_pol
 - `table:columns` with the shared `geometry` column followed by real attribute fields; and
 - `table:primary_geometry` naming that geometry column.
 
+Every vector handler also uses `build_vector_source_properties()` to emit the
+closed `eolab:vector_source` contract consumed by assessment. The contract
+records the stable handler format, primary Asset key, and exact native layer
+identity. Container handlers must preserve the selected layer; downstream
+services do not rediscover a GeoPackage or FileGDB layer by suffix or position.
+
 Handlers should include the published STAC Table Extension URL and Projection Extension metadata that the source can actually provide. They must not emit empty format-specific properties for unavailable values. The Catalog inspector reads these Table and Projection Extension fields data-first: feature count, declared geometry type, and attribute rows appear only when present. This preserves current Shapefile presentation while allowing another vector handler to reuse the same inspector without format checks.
 
 Format-specific Assets, media types, timestamps, layer selection, and ID rules remain in the focused handler. The GeoPackage handler records the exact layer name as `eolab:geopackage_layer` on both the Item and its container Asset; its Item title combines the mount-relative container path and layer name so existing text search and inspector presentation identify both. The File Geodatabase handler records the exact layer name as `eolab:layer_name` on the Item and Asset and adds `eolab:layer_alias` to the Item only when GDAL exposes an alias. Shared vector conventions are not permission to flatten distinct container or multi-layer semantics into a broad utility.
@@ -79,3 +85,6 @@ Property columns preserve every observed JSON type in deterministic union string
 ## Required tests for a new handler
 
 A focused format PR should cover its recognition and pruning behavior, deterministic mount-relative identity, zero/one/multi-Item cardinality as applicable, mixed valid and invalid sources, stable rescan IDs, STAC metadata and Assets, and absence of empty optional fields. It must also run the full Python suite, frontend tests when inspector/status behavior is affected, and the frontend production build.
+
+The read-only deployed-reader workflow and deliberately bounded capability
+matrix are documented in [Catalog vector assessment](vector-assessment.md).

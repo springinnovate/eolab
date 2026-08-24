@@ -224,6 +224,12 @@ def test_openfilegdb_builds_deterministic_items_for_spatial_layers(
         "datetime": "2025-05-06T07:08:09Z",
         "eolab:layer_name": "habitat",
         "eolab:layer_alias": "Priority habitat",
+        "eolab:vector_source": {
+            "kind": "mounted",
+            "format": "file-geodatabase",
+            "asset_key": "data",
+            "layer_name": "habitat",
+        },
         "table:row_count": 1,
         "table:columns": [
             {"name": "geometry", "type": "MultiPolygon"},

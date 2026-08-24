@@ -14,6 +14,7 @@ from eolab_app.catalog.vector import (
     MOUNTED_VECTOR_COLLECTION_ID,
     TABLE_EXTENSION,
     build_bbox_polygon,
+    build_vector_source_properties,
     build_vector_table_properties,
 )
 
@@ -327,6 +328,7 @@ def build_stac_item(source_root: Path, geojson_path: Path) -> dict[str, Any]:
         "datetime": modified_at,
         "proj:epsg": 4326,
         "proj:bbox": bbox,
+        **build_vector_source_properties("geojson", "data", None),
         **build_vector_table_properties(
             feature_count,
             geometry_type,

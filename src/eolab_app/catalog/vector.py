@@ -5,8 +5,40 @@ from typing import Any
 
 
 MOUNTED_VECTOR_COLLECTION_ID = "eolab-mounted-vectors"
+VECTOR_SOURCE_METADATA_KEY = "eolab:vector_source"
 TABLE_EXTENSION = "https://stac-extensions.github.io/table/v1.2.0/schema.json"
 PRIMARY_GEOMETRY_COLUMN = "geometry"
+
+
+def build_vector_source_properties(
+    source_format: str,
+    asset_key: str,
+    layer_name: str | None,
+) -> dict[str, Any]:
+    """Build the explicit source identity consumed by vector assessment.
+
+    Args:
+        source_format: Stable dataset-handler registry name.
+        asset_key: Primary source or container Asset key.
+        layer_name: Exact native layer identity, or none for a single-layer
+            format that has no inner layer name.
+
+    Returns:
+        Closed scanner-owned source metadata property.
+
+    Raises:
+        ValueError: If an identity field is blank.
+    """
+    if not source_format or not asset_key or layer_name == "":
+        raise ValueError("Vector source identity fields cannot be blank")
+    return {
+        VECTOR_SOURCE_METADATA_KEY: {
+            "kind": "mounted",
+            "format": source_format,
+            "asset_key": asset_key,
+            "layer_name": layer_name,
+        }
+    }
 
 
 def build_bbox_polygon(bbox: Sequence[float]) -> dict[str, Any]:
