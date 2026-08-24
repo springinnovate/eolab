@@ -84,8 +84,6 @@ def test_raster_routes_translate_application_errors_at_http_boundary() -> None:
         json={
             "collectionId": "eolab-mounted-geotiffs",
             "itemId": "geotiff-0123456789abcdef01234567",
-            "mode": "representativeSample",
-            "density": "coarse",
             "viewBounds": {
                 "west": -123.0,
                 "south": 37.0,
@@ -185,8 +183,6 @@ def test_detail_preview_disconnect_cancels_the_service_waiter() -> None:
     request_body = json.dumps({
         "collectionId": "eolab-mounted-geotiffs",
         "itemId": "geotiff-0123456789abcdef01234567",
-        "mode": "centerSample",
-        "density": "fine",
     }).encode()
     scope = {
         "type": "http",

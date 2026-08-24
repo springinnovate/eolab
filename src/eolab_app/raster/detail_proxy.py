@@ -2,7 +2,6 @@
 
 import math
 from dataclasses import dataclass
-from typing import Literal
 
 import numpy
 import rasterio
@@ -11,7 +10,6 @@ from rasterio.enums import MaskFlags
 from rasterio.warp import transform as warp_transform
 from rasterio.windows import Window
 
-from eolab_app.raster.models import RasterDetailPreviewDensity
 from eolab_app.raster.read_cancellation import (
     RasterReadCancellationCheck,
     require_active_raster_read,
@@ -19,14 +17,6 @@ from eolab_app.raster.read_cancellation import (
 
 
 DETAIL_PROXY_MAX_DIMENSION = 127
-DETAIL_PROXY_DENSITY_MAXIMUM_DIMENSIONS: dict[
-    RasterDetailPreviewDensity,
-    int,
-] = {
-    "coarse": 31,
-    "medium": 63,
-    "fine": DETAIL_PROXY_MAX_DIMENSION,
-}
 # One exact center-sample grid can require one distinct native block per cell.
 # The independent decoded-work ceiling below remains the controlling bound for
 # large blocks and prevents this count from authorizing unbounded source work.
@@ -37,49 +27,18 @@ DETAIL_PROXY_MAX_SOURCE_BLOCK_READS = (
 # cumulative-work ceiling is 9 GiB and is not a simultaneous-memory allocation.
 # It accommodates all 16,129 center samples for common 256-by-256 float64
 # blocks while retaining an explicit byte bound for larger native blocks and
-# representative sampling.
+# unusually large source blocks.
 DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES = 9 * 1024 * 1024 * 1024
-DETAIL_PATCH_MAX_DECODED_SOURCE_BYTES = 64 * 1024 * 1024
 DETAIL_PROXY_CENTER_OFFSETS = ((0.5, 0.5),)
-DETAIL_PROXY_REPRESENTATIVE_OFFSETS = (
-    (0.5, 0.5),
-    (0.25, 0.25),
-    (0.75, 0.25),
-    (0.25, 0.75),
-    (0.75, 0.75),
-)
-DETAIL_PROXY_MAX_POINTS_PER_CELL = len(DETAIL_PROXY_REPRESENTATIVE_OFFSETS)
-# One exact fine grid with the representative policy transforms at most five
-# positions in each of 127 by 127 cells.
+DETAIL_PROXY_MAX_POINTS_PER_CELL = len(DETAIL_PROXY_CENTER_OFFSETS)
+# The one fixed center-sampled grid transforms one position in each cell.
 DETAIL_PROXY_MAX_TRANSFORMED_POSITIONS = (
     DETAIL_PROXY_MAX_DIMENSION
     * DETAIL_PROXY_MAX_DIMENSION
     * DETAIL_PROXY_MAX_POINTS_PER_CELL
 )
-DetailProxyMode = Literal["centerSample", "representativeSample"]
 SourcePosition = tuple[int, int]
 SourceBlockIndex = tuple[int, int]
-
-
-def detail_proxy_maximum_dimension(
-    density: RasterDetailPreviewDensity,
-) -> int:
-    """Return the server-owned exact longest edge for one density profile.
-
-    Args:
-        density: Validated coarse, medium, or fine profile.
-
-    Returns:
-        Fixed exact longest grid edge for the selected profile.
-
-    Raises:
-        ValueError: If a caller bypasses request validation with an unknown
-            density value.
-    """
-    try:
-        return DETAIL_PROXY_DENSITY_MAXIMUM_DIMENSIONS[density]
-    except KeyError:
-        raise ValueError(f"Unsupported sampled raster density: {density}") from None
 
 
 def _require_source_contract(
@@ -162,21 +121,6 @@ class DetailProxyPlan:
     points_per_cell: int
 
 
-@dataclass(frozen=True)
-class BoundedWindowSamples:
-    """Native-block-coalesced source windows under the shared decode budget.
-
-    Attributes:
-        samples: Accepted windows paired with reconstructed masked values.
-        block_indexes: Unique native blocks read exactly once.
-        decoded_source_bytes: Conservative band-plus-validity decoded bytes.
-    """
-
-    samples: tuple[tuple[Window, numpy.ma.MaskedArray], ...]
-    block_indexes: tuple[SourceBlockIndex, ...]
-    decoded_source_bytes: int
-
-
 def _odd_dimension(limit: int) -> int:
     """Return the greatest positive odd integer no larger than ``limit``.
 
@@ -246,19 +190,16 @@ def _cell_positions(
     source_height: int,
     proxy_width: int,
     proxy_height: int,
-    offsets: tuple[tuple[float, float], ...],
 ) -> tuple[tuple[SourcePosition, ...], ...]:
-    """Map every proxy cell to a fixed set of unique source positions.
+    """Map every proxy cell to its deterministic source center.
 
     Args:
         source_width: Positive source width in pixels.
         source_height: Positive source height in pixels.
         proxy_width: Positive proxy width in cells.
         proxy_height: Positive proxy height in cells.
-        offsets: Column/row fractions sampled inside every proxy cell.
-
     Returns:
-        Row-major source positions for every proxy cell.
+        One row-major center source position for every proxy cell.
     """
     cells: list[tuple[SourcePosition, ...]] = []
     for proxy_row in range(proxy_height):
@@ -275,19 +216,10 @@ def _cell_positions(
                 column_start + 1,
                 math.floor((proxy_column + 1) * source_width / proxy_width),
             )
-            positions: list[SourcePosition] = []
-            for column_fraction, row_fraction in offsets:
-                position = (
-                    _position_in_cell(row_start, row_stop, row_fraction),
-                    _position_in_cell(
-                        column_start,
-                        column_stop,
-                        column_fraction,
-                    ),
-                )
-                if position not in positions:
-                    positions.append(position)
-            cells.append(tuple(positions))
+            cells.append(((
+                _position_in_cell(row_start, row_stop, 0.5),
+                _position_in_cell(column_start, column_stop, 0.5),
+            ),))
     return tuple(cells)
 
 
@@ -325,23 +257,19 @@ def _projected_cell_positions(
     projected_bounds: tuple[float, float, float, float],
     proxy_width: int,
     proxy_height: int,
-    offsets: tuple[tuple[float, float], ...],
 ) -> tuple[tuple[SourcePosition, ...], ...]:
-    """Transform fixed map-cell probes into honest source-pixel positions.
+    """Transform map-cell centers into honest source-pixel positions.
 
     Positions outside a rotated/skewed raster remain absent instead of being
-    clamped to an edge pixel. Duplicate positions inside a cell are removed
-    while preserving the configured probe order.
+    clamped to an edge pixel.
 
     Args:
         dataset: Open source with a valid CRS and invertible affine transform.
         projected_bounds: Ordered EPSG:3857 sampling rectangle.
         proxy_width: Positive proxy width in map-aligned cells.
         proxy_height: Positive proxy height in map-aligned cells.
-        offsets: Column/row fractions sampled inside every proxy cell.
-
     Returns:
-        Row-major source positions for every map cell; cells outside the
+        One row-major source position for every map cell; cells outside the
         raster contain an empty tuple.
 
     Raises:
@@ -358,9 +286,8 @@ def _projected_cell_positions(
         cell_north = north - proxy_row * cell_height
         for proxy_column in range(proxy_width):
             cell_west = west + proxy_column * cell_width
-            for column_fraction, row_fraction in offsets:
-                projected_x.append(cell_west + column_fraction * cell_width)
-                projected_y.append(cell_north - row_fraction * cell_height)
+            projected_x.append(cell_west + 0.5 * cell_width)
+            projected_y.append(cell_north - 0.5 * cell_height)
 
     source_x, source_y = warp_transform(
         "EPSG:3857",
@@ -387,15 +314,12 @@ def _projected_cell_positions(
             else None
         )
 
-    points_per_cell = len(offsets)
     cells: list[tuple[SourcePosition, ...]] = []
-    for cell_index in range(proxy_width * proxy_height):
-        positions: list[SourcePosition] = []
-        start = cell_index * points_per_cell
-        for position in transformed_positions[start:start + points_per_cell]:
-            if position is not None and position not in positions:
-                positions.append(position)
-        cells.append(tuple(positions))
+    for position in transformed_positions:
+        if position is None:
+            cells.append(())
+        else:
+            cells.append((position,))
     return tuple(cells)
 
 
@@ -443,10 +367,34 @@ def _decoded_bytes_for_blocks(
     )
 
 
+def _block_indexes_for_window(
+    window: Window,
+    block_shape: tuple[int, int],
+) -> tuple[SourceBlockIndex, ...]:
+    """Return every native block intersecting one integral source window.
+
+    Args:
+        window: Positive integral source window inside the raster.
+        block_shape: Native block height and width.
+
+    Returns:
+        Intersecting native block indexes in row-major order.
+    """
+    block_height, block_width = block_shape
+    row_start = int(window.row_off) // block_height
+    row_stop = (int(window.row_off + window.height) - 1) // block_height
+    column_start = int(window.col_off) // block_width
+    column_stop = (int(window.col_off + window.width) - 1) // block_width
+    return tuple(
+        (block_row, block_column)
+        for block_row in range(row_start, row_stop + 1)
+        for block_column in range(column_start, column_stop + 1)
+    )
+
+
 def _plan_for_dimension(
     dataset: rasterio.io.DatasetReader,
     maximum_dimension: int,
-    offsets: tuple[tuple[float, float], ...],
     projected_bounds: tuple[float, float, float, float] | None,
 ) -> DetailProxyPlan:
     """Build one candidate plan and calculate its exact native-block cost.
@@ -454,7 +402,6 @@ def _plan_for_dimension(
     Args:
         dataset: Open one-band source raster.
         maximum_dimension: Maximum proxy edge for this candidate.
-        offsets: Fixed probe pattern used inside each proxy cell.
         projected_bounds: Optional EPSG:3857 map rectangle. ``None`` retains
             the direct source-grid planner used by lower-level callers.
 
@@ -477,7 +424,6 @@ def _plan_for_dimension(
             dataset.height,
             proxy_width,
             proxy_height,
-            offsets,
         )
     else:
         proxy_height, proxy_width = _projected_proxy_dimensions(
@@ -489,7 +435,6 @@ def _plan_for_dimension(
             projected_bounds,
             proxy_width,
             proxy_height,
-            offsets,
         )
     block_shape = tuple(int(value) for value in dataset.block_shapes[0])
     block_indexes = tuple(sorted({
@@ -507,49 +452,30 @@ def _plan_for_dimension(
         cell_positions=positions,
         block_indexes=block_indexes,
         decoded_source_bytes=decoded_source_bytes,
-        points_per_cell=len(offsets),
+        points_per_cell=DETAIL_PROXY_MAX_POINTS_PER_CELL,
     )
 
 
 def plan_detail_proxy(
     dataset: rasterio.io.DatasetReader,
-    mode: DetailProxyMode,
-    maximum_dimension: int | None = None,
     projected_bounds: tuple[float, float, float, float] | None = None,
 ) -> DetailProxyPlan:
-    """Plan the exact selected grid or reject it before any source read.
+    """Plan the fixed 127-longest-edge center grid before source reads.
 
     Args:
         dataset: Open structurally authorized one-band raster.
-        mode: Center-per-cell or representative-per-cell sampling policy.
-        maximum_dimension: Optional positive exact longest grid edge no larger
-            than the public maximum; defaults to that maximum for direct
-            callers.
         projected_bounds: Optional ordered EPSG:3857 target rectangle.
 
     Returns:
-        Exact selected longest-edge grid whose unique native blocks and total
+        Fixed longest-edge grid whose unique native blocks and total
         decoded work stay within the fixed public limits.
 
     Raises:
-        ValueError: If the raster or mode violates the proxy contract, or the
-            exact selected grid exceeds a fixed source-work limit.
+        ValueError: If the raster violates the proxy contract or the fixed grid
+            exceeds a source-work limit.
         rasterio.errors.RasterioError: If CRS transformation fails.
     """
     _require_source_contract(dataset)
-    offsets = {
-        "centerSample": DETAIL_PROXY_CENTER_OFFSETS,
-        "representativeSample": DETAIL_PROXY_REPRESENTATIVE_OFFSETS,
-    }.get(mode)
-    if offsets is None:
-        raise ValueError(f"Unsupported sampled raster proxy mode: {mode}")
-    requested_maximum = (
-        DETAIL_PROXY_MAX_DIMENSION
-        if maximum_dimension is None
-        else maximum_dimension
-    )
-    if not 1 <= requested_maximum <= DETAIL_PROXY_MAX_DIMENSION:
-        raise ValueError("Sampled raster proxy dimension is outside fixed limits")
     if projected_bounds is not None and not (
         all(math.isfinite(value) for value in projected_bounds)
         and projected_bounds[0] < projected_bounds[2]
@@ -558,25 +484,25 @@ def plan_detail_proxy(
         raise ValueError("Sampled raster projected bounds are invalid")
 
     dimension = _odd_dimension(
-        requested_maximum
+        DETAIL_PROXY_MAX_DIMENSION
         if projected_bounds is not None
-        else min(requested_maximum, max(dataset.width, dataset.height))
+        else min(DETAIL_PROXY_MAX_DIMENSION, max(dataset.width, dataset.height))
     )
-    plan = _plan_for_dimension(dataset, dimension, offsets, projected_bounds)
+    plan = _plan_for_dimension(dataset, dimension, projected_bounds)
     block_count = len(plan.block_indexes)
     if block_count > DETAIL_PROXY_MAX_SOURCE_BLOCK_READS:
         raise ValueError(
             f"The selected {plan.width} by {plan.height} sample grid requires "
             f"{block_count} native source blocks; the fixed limit is "
-            f"{DETAIL_PROXY_MAX_SOURCE_BLOCK_READS}. Choose a lower exact "
-            "density or zoom farther into the raster."
+            f"{DETAIL_PROXY_MAX_SOURCE_BLOCK_READS}. Zoom farther into the "
+            "raster."
         )
     if plan.decoded_source_bytes > DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES:
         raise ValueError(
             f"The selected {plan.width} by {plan.height} sample grid requires "
             f"{plan.decoded_source_bytes} decoded source bytes; the fixed "
-            f"limit is {DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES}. Choose a "
-            "lower exact density or zoom farther into the raster."
+            f"limit is {DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES}. Zoom farther "
+            "into the raster."
         )
     return plan
 
@@ -603,149 +529,18 @@ def _finite_block_value(
     return finite_value if math.isfinite(finite_value) else None
 
 
-def _block_indexes_for_window(
-    window: Window,
-    block_shape: tuple[int, int],
-) -> tuple[SourceBlockIndex, ...]:
-    """Return every native block intersecting one integral source window.
-
-    Args:
-        window: Positive integral source window inside the raster.
-        block_shape: Native block height and width.
-
-    Returns:
-        Intersecting native block indexes in row-major order.
-    """
-    block_height, block_width = block_shape
-    row_start = int(window.row_off) // block_height
-    row_stop = (int(window.row_off + window.height) - 1) // block_height
-    column_start = int(window.col_off) // block_width
-    column_stop = (int(window.col_off + window.width) - 1) // block_width
-    return tuple(
-        (block_row, block_column)
-        for block_row in range(row_start, row_stop + 1)
-        for block_column in range(column_start, column_stop + 1)
-    )
-
-
-def read_bounded_candidate_windows(
-    dataset: rasterio.io.DatasetReader,
-    windows: list[Window],
-    cancellation_requested: RasterReadCancellationCheck | None = None,
-) -> BoundedWindowSamples:
-    """Read a deterministic candidate subset through unique native blocks.
-
-    Candidate windows are considered in caller order. A candidate is retained
-    when the union of native blocks still satisfies both fixed source limits;
-    candidates that would exceed either patch ceiling are skipped. Every
-    accepted window is reconstructed from the shared native blocks, each read
-    exactly once without resampling.
-
-    Args:
-        dataset: Open structurally authorized one-band raster.
-        windows: Non-empty deterministic integral candidate windows.
-        cancellation_requested: Optional thread-safe obsolescence predicate.
-
-    Returns:
-        Accepted masked windows plus exact block and decoded-byte work.
-
-    Raises:
-        ValueError: If no candidate fits the native-block limits.
-        RasterReadCancelled: If every request waiter disconnects.
-        rasterio.errors.RasterioError: If a bounded native-block read fails.
-    """
-    require_active_raster_read(cancellation_requested)
-    _require_source_contract(dataset)
-    block_shape = tuple(int(value) for value in dataset.block_shapes[0])
-    accepted: list[Window] = []
-    accepted_blocks: set[SourceBlockIndex] = set()
-    decoded_source_bytes = 0
-    for window in windows:
-        proposed_blocks = accepted_blocks | set(
-            _block_indexes_for_window(window, block_shape)
-        )
-        proposed_indexes = tuple(sorted(proposed_blocks))
-        proposed_bytes = _decoded_bytes_for_blocks(dataset, proposed_indexes)
-        if (
-            len(proposed_indexes) > DETAIL_PROXY_MAX_SOURCE_BLOCK_READS
-            or proposed_bytes > DETAIL_PATCH_MAX_DECODED_SOURCE_BYTES
-        ):
-            continue
-        accepted.append(window)
-        accepted_blocks = proposed_blocks
-        decoded_source_bytes = proposed_bytes
-    if not accepted:
-        raise ValueError("No detail-patch candidate fits source-read limits")
-
-    block_indexes = tuple(sorted(accepted_blocks))
-    blocks: dict[SourceBlockIndex, tuple[Window, numpy.ma.MaskedArray]] = {}
-    for block_index in block_indexes:
-        require_active_raster_read(cancellation_requested)
-        block_window = dataset.block_window(1, *block_index)
-        block = _read_native_block(dataset, block_window)
-        require_active_raster_read(cancellation_requested)
-        blocks[block_index] = (
-            block_window,
-            block,
-        )
-
-    samples: list[tuple[Window, numpy.ma.MaskedArray]] = []
-    for window in accepted:
-        sample = numpy.ma.masked_all(
-            (int(window.height), int(window.width)),
-            dtype=numpy.dtype(dataset.dtypes[0]),
-        )
-        window_row_start = int(window.row_off)
-        window_column_start = int(window.col_off)
-        window_row_stop = window_row_start + int(window.height)
-        window_column_stop = window_column_start + int(window.width)
-        for block_index in _block_indexes_for_window(window, block_shape):
-            block_window, block = blocks[block_index]
-            block_row_start = int(block_window.row_off)
-            block_column_start = int(block_window.col_off)
-            row_start = max(window_row_start, block_row_start)
-            column_start = max(window_column_start, block_column_start)
-            row_stop = min(
-                window_row_stop,
-                block_row_start + int(block_window.height),
-            )
-            column_stop = min(
-                window_column_stop,
-                block_column_start + int(block_window.width),
-            )
-            sample[
-                row_start - window_row_start:row_stop - window_row_start,
-                column_start - window_column_start:column_stop - window_column_start,
-            ] = block[
-                row_start - block_row_start:row_stop - block_row_start,
-                column_start - block_column_start:column_stop - block_column_start,
-            ]
-        samples.append((window, sample))
-    return BoundedWindowSamples(
-        samples=tuple(samples),
-        block_indexes=block_indexes,
-        decoded_source_bytes=decoded_source_bytes,
-    )
-
-
 def read_detail_proxy(
     dataset: rasterio.io.DatasetReader,
-    mode: DetailProxyMode,
-    maximum_dimension: int | None = None,
     projected_bounds: tuple[float, float, float, float] | None = None,
     cancellation_requested: RasterReadCancellationCheck | None = None,
 ) -> tuple[numpy.ma.MaskedArray, DetailProxyPlan]:
     """Read each planned native block once and build a numeric proxy raster.
 
-    Representative cells choose the lower median observed finite value after
-    ordering by value, source row, and source column. No averaging invents a
-    source value. Nodata-only cells remain masked.
+    Each cell contains its one observed source-center value. Nodata-only cells
+    remain masked.
 
     Args:
         dataset: Open structurally authorized one-band raster.
-        mode: Center-per-cell or representative-per-cell sampling policy.
-        maximum_dimension: Optional fixed target-grid edge. Projected preview
-            grids use it exactly on both axes.
         projected_bounds: Optional EPSG:3857 target rectangle.
         cancellation_requested: Optional thread-safe obsolescence predicate.
 
@@ -758,12 +553,7 @@ def read_detail_proxy(
         rasterio.errors.RasterioError: If a bounded native-block read fails.
     """
     require_active_raster_read(cancellation_requested)
-    plan = plan_detail_proxy(
-        dataset,
-        mode,
-        maximum_dimension,
-        projected_bounds,
-    )
+    plan = plan_detail_proxy(dataset, projected_bounds)
     block_shape = tuple(int(value) for value in dataset.block_shapes[0])
     positions_by_block: dict[SourceBlockIndex, set[SourcePosition]] = {}
     for position in {
@@ -794,17 +584,11 @@ def read_detail_proxy(
     values = numpy.zeros((plan.height, plan.width), dtype=numpy.float64)
     mask = numpy.ones(values.shape, dtype=bool)
     for cell_index, positions in enumerate(plan.cell_positions):
-        candidates = sorted(
-            (
-                (value, row, column)
-                for row, column in positions
-                if (value := sampled_values[(row, column)]) is not None
-            ),
-            key=lambda candidate: candidate,
-        )
-        if not candidates:
+        if not positions:
             continue
-        selected = candidates[(len(candidates) - 1) // 2][0]
+        selected = sampled_values[positions[0]]
+        if selected is None:
+            continue
         proxy_row, proxy_column = divmod(cell_index, plan.width)
         values[proxy_row, proxy_column] = selected
         mask[proxy_row, proxy_column] = False

@@ -48,11 +48,9 @@ def _preview(
         sample = numpy.ma.array(finite_values, dtype=numpy.float64)
         suggested_range = _suggested_range(sample)
     return RasterDetailPreview(
-        mode="centerSample",
         scope="currentView",
         rendering="sampledProxy",
-        density="fine",
-        policyVersion="bounded-adaptive-raster-v6",
+        policyVersion="bounded-adaptive-raster-v7",
         approximate=True,
         label="Approximate current-view center sample",
         rasterExtent=(-180.0, -90.0, 180.0, 90.0),
@@ -66,10 +64,8 @@ def _preview(
             "maximumExactDetailDimension": 512,
             "maximumSourceBlockReads": 16_129,
             "maximumDecodedSourceBytes": 9_663_676_416,
-            "maximumTransformedPositions": 80_645,
-            "maximumPointsPerCell": 5,
-            "maximumPatchDimension": 128,
-            "maximumPatchCandidates": 9,
+            "maximumTransformedPositions": 16_129,
+            "maximumPointsPerCell": 1,
         },
         actual={
             "sampleGridWidth": width,
@@ -77,7 +73,6 @@ def _preview(
             "sourceBlockReadCount": 1,
             "decodedSourceBytes": 4096,
             "pointsPerCell": 1,
-            "candidateWindowCount": 0,
         },
     )
 
@@ -143,7 +138,6 @@ def test_detail_statistics_accept_aspect_grid_and_exact_source_detail() -> None:
             "sourceBlockReadCount": 1,
             "decodedSourceBytes": 4096,
             "pointsPerCell": 0,
-            "candidateWindowCount": 0,
             "sourceWindow": {
                 "columnOffset": 10,
                 "rowOffset": 20,
@@ -161,14 +155,14 @@ def test_detail_statistics_accept_aspect_grid_and_exact_source_detail() -> None:
 
 
 def test_detail_statistics_reject_nodata_only_and_wrong_preview_policy() -> None:
-    """Keep empty or non-fine/non-center data outside histogram contract."""
+    """Keep empty or non-current-view data outside histogram contract."""
     with pytest.raises(NoValidRasterSamplesError):
         summarize_raster_detail_preview(_preview([None]), _request())
 
     wrong_preview = _preview([1.0, 2.0]).model_copy(
-        update={"mode": "representativeSample"}
+        update={"scope": "rasterExtent"}
     )
-    with pytest.raises(ValueError, match="fine current-view center policy"):
+    with pytest.raises(ValueError, match="fixed current-view center policy"):
         summarize_raster_detail_preview(wrong_preview, _request())
 
 
@@ -195,8 +189,6 @@ def test_service_forces_fine_center_grid_over_selected_bounds() -> None:
     statistics = asyncio.run(service.get(_request()))
 
     delegated = requests[0]
-    assert delegated.mode == "centerSample"
-    assert delegated.density == "fine"
     assert delegated.view_bounds is not None
     assert delegated.view_bounds.model_dump() == SELECTED_BOUNDS
     assert statistics.valid_sample_count == 3

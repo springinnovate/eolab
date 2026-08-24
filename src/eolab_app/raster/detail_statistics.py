@@ -20,15 +20,15 @@ def summarize_raster_detail_preview(
     preview: RasterDetailPreview,
     request: CatalogRasterDetailStatisticsRequest,
 ) -> RasterStatistics:
-    """Build the shared histogram contract from one adaptive bounded image.
+    """Build the shared histogram contract from one fixed-policy bounded image.
 
     The preview reader has already enforced source authorization, strict native
     block/decoded-work ceilings, nodata handling, and exact placement over the
     requested map window. This function performs no source I/O.
 
     Args:
-        preview: Current-view fine center policy rendered as a sampled proxy
-            or an exact bounded source window.
+        preview: Current-view center policy rendered as a sampled proxy or an
+            exact bounded source window.
         request: Catalog identity and exact selected WGS 84 bounds.
 
     Returns:
@@ -39,9 +39,7 @@ def summarize_raster_detail_preview(
         ValueError: If the preview does not have the required provenance.
     """
     if (
-        preview.mode != "centerSample"
-        or preview.scope != "currentView"
-        or preview.density != "fine"
+        preview.scope != "currentView"
         or preview.rendering not in {"sampledProxy", "exactSourceWindow"}
         or (
             preview.rendering == "sampledProxy"
@@ -49,7 +47,7 @@ def summarize_raster_detail_preview(
         )
     ):
         raise ValueError(
-            "Detail histogram requires a fine current-view center policy"
+            "Detail histogram requires the fixed current-view center policy"
         )
     sample_values = numpy.asarray(
         [value for value in preview.pixel_values if value is not None],

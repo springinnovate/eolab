@@ -26,7 +26,7 @@ class RasterDetailStatisticsService:
         self,
         request: CatalogRasterDetailStatisticsRequest,
     ) -> RasterStatistics:
-        """Return a histogram from fine adaptive detail over selected bounds.
+        """Return a histogram from fixed center detail over selected bounds.
 
         Args:
             request: Catalog identity and required click-centered map window.
@@ -42,8 +42,6 @@ class RasterDetailStatisticsService:
         preview_request = CatalogRasterDetailPreviewRequest(
             collectionId=request.collection_id,
             itemId=request.item_id,
-            mode="centerSample",
-            density="fine",
             viewBounds=request.selected_bounds,
         )
         preview = await self._preview_service.get(preview_request)

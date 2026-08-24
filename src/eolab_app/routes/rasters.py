@@ -132,7 +132,7 @@ def create_raster_feature(
         """Return an explicitly selected bounded sampled-raster preview.
 
         Args:
-            request: Catalog identity and one of the three fixed preview modes.
+            request: Catalog identity and optional current map view.
             http_request: Incoming request used to detect cancellation.
 
         Returns:

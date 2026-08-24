@@ -11,20 +11,15 @@ from pathlib import Path
 import rasterio
 
 from eolab_app.raster.detail_preview import (
-    DETAIL_PREVIEW_CANDIDATE_FRACTIONS,
-    DETAIL_PREVIEW_PATCH_DIMENSION,
     DETAIL_PREVIEW_POLICY_VERSION,
-    NoUsefulDetailPatchError,
     read_raster_detail_preview,
 )
 from eolab_app.raster.detail_proxy import (
-    DETAIL_PATCH_MAX_DECODED_SOURCE_BYTES,
     DETAIL_PROXY_CENTER_OFFSETS,
     DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES,
+    DETAIL_PROXY_MAX_DIMENSION,
     DETAIL_PROXY_MAX_SOURCE_BLOCK_READS,
     DETAIL_PROXY_MAX_TRANSFORMED_POSITIONS,
-    DETAIL_PROXY_REPRESENTATIVE_OFFSETS,
-    detail_proxy_maximum_dimension,
 )
 from eolab_app.raster.eligibility import (
     DETAIL_ONLY_PREVIEW_REASON_CODES,
@@ -48,8 +43,6 @@ from eolab_app.raster.models import (
     GEOSERVER_READER_CONTRACT,
     RasterDetailPreview,
     RasterDetailPreviewCacheKey,
-    RasterDetailPreviewDensity,
-    RasterDetailPreviewMode,
     SourceSignature,
     Wgs84Bounds,
 )
@@ -95,9 +88,7 @@ class RasterDetailPreviewService:
         preview_reader: Callable[
             [
                 Path,
-                RasterDetailPreviewMode,
                 CanonicalWgs84Bounds,
-                RasterDetailPreviewDensity | None,
                 CanonicalWgs84Bounds | None,
                 RasterReadCancellationCheck,
             ],
@@ -141,50 +132,28 @@ class RasterDetailPreviewService:
         self._state_lock = asyncio.Lock()
 
     @staticmethod
-    def _mode_parameters(
-        mode: RasterDetailPreviewMode,
-        density: RasterDetailPreviewDensity | None,
-    ) -> tuple[int, ...]:
+    def _policy_parameters() -> tuple[int, ...]:
         """Return fixed algorithm inputs included in cache identity.
 
-        Args:
-            mode: Validated detail preview mode.
-            density: Fixed exact sampled-grid profile, or ``None`` for a patch.
-
         Returns:
-            Mode-specific sampling limits and location-policy inputs.
-
-        Raises:
-            ValueError: If sampled mode parameters bypass request validation
-                without a density profile.
+            Center-grid, exact-window, and location-policy inputs.
         """
         # Deterministic fractional locations are encoded in thousandths.
-        if mode in {"centerSample", "representativeSample"}:
-            if density is None:
-                raise ValueError("Sampled raster proxies require a density")
-            offsets = (
-                DETAIL_PROXY_CENTER_OFFSETS
-                if mode == "centerSample"
-                else DETAIL_PROXY_REPRESENTATIVE_OFFSETS
-            )
-            return (
-                detail_proxy_maximum_dimension(density),
-                DETAIL_PROXY_MAX_SOURCE_BLOCK_READS,
-                DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES,
-                DETAIL_PROXY_MAX_TRANSFORMED_POSITIONS,
-                EXACT_DETAIL_MAX_DIMENSION,
-                EXACT_DETAIL_MAX_SOURCE_BLOCK_READS,
-                EXACT_DETAIL_MAX_DECODED_SOURCE_BYTES,
-                EXACT_DETAIL_EDGE_DENSIFY_POINTS,
-                EXACT_DETAIL_WINDOW_PADDING_PIXELS,
-                *(round(value * 1000) for offset in offsets for value in offset),
-            )
         return (
-            DETAIL_PREVIEW_PATCH_DIMENSION,
+            DETAIL_PROXY_MAX_DIMENSION,
             DETAIL_PROXY_MAX_SOURCE_BLOCK_READS,
-            DETAIL_PATCH_MAX_DECODED_SOURCE_BYTES,
+            DETAIL_PROXY_MAX_DECODED_SOURCE_BYTES,
             DETAIL_PROXY_MAX_TRANSFORMED_POSITIONS,
-            *(round(value * 1000) for value in DETAIL_PREVIEW_CANDIDATE_FRACTIONS),
+            EXACT_DETAIL_MAX_DIMENSION,
+            EXACT_DETAIL_MAX_SOURCE_BLOCK_READS,
+            EXACT_DETAIL_MAX_DECODED_SOURCE_BYTES,
+            EXACT_DETAIL_EDGE_DENSIFY_POINTS,
+            EXACT_DETAIL_WINDOW_PADDING_PIXELS,
+            *(
+                round(value * 1000)
+                for offset in DETAIL_PROXY_CENTER_OFFSETS
+                for value in offset
+            ),
         )
 
     @staticmethod
@@ -200,7 +169,7 @@ class RasterDetailPreviewService:
 
         Returns:
             Canonical positive-area intersection, or ``None`` for an extent
-            proxy or representative patch.
+            proxy.
 
         Raises:
             RasterConflictError: If the current view misses the raster.
@@ -330,7 +299,7 @@ class RasterDetailPreviewService:
         """Return a current preview while coalescing identical bounded work.
 
         Args:
-            request: Validated Catalog identity and explicit preview mode.
+            request: Validated Catalog identity and optional current view.
 
         Returns:
             Cached or newly computed detail-only preview.
@@ -350,10 +319,8 @@ class RasterDetailPreviewService:
             authorized_raster.source_signature,
             raster_extent,
             DETAIL_PREVIEW_POLICY_VERSION,
-            request.mode,
-            request.density,
             effective_view_bounds,
-            self._mode_parameters(request.mode, request.density),
+            self._policy_parameters(),
         )
         async with self._state_lock:
             cached = self._cache.get(cache_key)
@@ -371,9 +338,7 @@ class RasterDetailPreviewService:
                 task = asyncio.create_task(
                     self._compute(
                         authorized_raster,
-                        request.mode,
                         raster_extent,
-                        request.density,
                         effective_view_bounds,
                         cache_key,
                         cancellation_requested,
@@ -391,11 +356,6 @@ class RasterDetailPreviewService:
         try:
             try:
                 return await asyncio.shield(inflight.task)
-            except NoUsefulDetailPatchError as error:
-                raise RasterConflictError(
-                    "No finite, non-nodata pixels were found in the bounded "
-                    "representative-patch candidates."
-                ) from error
             except ValueError as error:
                 raise RasterConflictError(str(error)) from error
             except (OSError, rasterio.errors.RasterioError) as error:
@@ -432,9 +392,7 @@ class RasterDetailPreviewService:
     async def _compute(
         self,
         authorized_raster: AuthorizedRaster,
-        mode: RasterDetailPreviewMode,
         raster_extent: CanonicalWgs84Bounds,
-        density: RasterDetailPreviewDensity | None,
         view_bounds: CanonicalWgs84Bounds | None,
         cache_key: RasterDetailPreviewCacheKey,
         cancellation_requested: threading.Event,
@@ -443,11 +401,9 @@ class RasterDetailPreviewService:
 
         Args:
             authorized_raster: Source identity approved at request start.
-            mode: Explicit preview mode.
             raster_extent: Cataloged WGS 84 raster extent.
-            density: Fixed sampled-grid profile, or ``None`` for a patch.
             view_bounds: Effective current-view intersection, when requested.
-            cache_key: Complete source, mode, parameters, and policy identity.
+            cache_key: Complete source, view, parameters, and policy identity.
             cancellation_requested: Thread-safe last-waiter signal.
 
         Returns:
@@ -473,9 +429,7 @@ class RasterDetailPreviewService:
                 preview = await asyncio.to_thread(
                     self._preview_reader,
                     authorized_raster.source_path,
-                    mode,
                     raster_extent,
-                    density,
                     view_bounds,
                     cancellation_requested.is_set,
                 )
