@@ -10,6 +10,7 @@ import {
   validateRasterDetailPreview,
 } from "../../src/raster/api.js";
 import {
+  isRasterStatisticsRetryableError,
   loadCatalogRasterStatistics,
   RasterAnalysisRequestError,
   sampleCatalogRasterPixel,
@@ -723,6 +724,38 @@ test("loadCatalogRasterStatistics reports backend and response errors", async ()
     ),
     /invalid band identity/,
   );
+});
+
+test("statistics retry policy distinguishes capacity from deterministic conflicts", () => {
+  assert.equal(
+    isRasterStatisticsRetryableError(new RasterAnalysisRequestError(
+      "Raster statistics capacity is busy; retry after the current bounded read finishes.",
+      409,
+    )),
+    true,
+  );
+  assert.equal(
+    isRasterStatisticsRetryableError(new RasterAnalysisRequestError(
+      "Raster statistics capacity is finishing canceled work; retry shortly.",
+      409,
+    )),
+    true,
+  );
+  assert.equal(
+    isRasterStatisticsRetryableError(new RasterAnalysisRequestError(
+      "Retile the GeoTIFF with smaller native blocks and scan it again.",
+      409,
+    )),
+    false,
+  );
+  assert.equal(
+    isRasterStatisticsRetryableError(new RasterAnalysisRequestError(
+      "Raster statistics request failed (503)",
+      503,
+    )),
+    true,
+  );
+  assert.equal(isRasterStatisticsRetryableError(new TypeError("offline")), true);
 });
 
 test("sampleCatalogRasterPixel sends only Item identity and WGS 84 position", async () => {

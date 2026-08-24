@@ -9,6 +9,7 @@
 import { getCatalogItemKey } from "../catalog-item-identity.js";
 import { publishCatalogRaster } from "./api.js";
 import {
+    isRasterStatisticsRetryableError,
     loadCatalogRasterStatistics,
     sampleCatalogRasterPixel,
 } from "./analysis-api.js";
@@ -1319,7 +1320,9 @@ export function initializeRasterViewer(
         controlsView.clearHistogram();
         controlsView.hideHistogramAxis();
         controlsView.setPercentileControlsVisible(false);
-        controlsView.setStatisticsRetryVisible(true);
+        controlsView.setStatisticsRetryVisible(
+            isRasterStatisticsRetryableError(error)
+        );
         controlsView.setStatisticsStatus(
             `${scope === "selectedArea" ? "Selected-area" : "Whole-raster"} ` +
             `distribution unavailable: ${error.message} ` +
@@ -1441,7 +1444,9 @@ export function initializeRasterViewer(
             renderRasterStatistics(wholeRasterStatistics, false, false);
         }
         controlsView.setStatisticsBusy(false);
-        controlsView.setStatisticsRetryVisible(true);
+        controlsView.setStatisticsRetryVisible(
+            isRasterStatisticsRetryableError(error)
+        );
         controlsView.setApplyPercentilesEnabled(false);
         const areaName = selectedTemporaryAoi === null
             ? "Selected-area"

@@ -5,6 +5,11 @@ import {
     validateRasterStatisticsForSelection,
 } from "./statistics.js";
 
+const RETRYABLE_RASTER_STATISTICS_CAPACITY_MESSAGES = new Set([
+    "Raster statistics capacity is busy; retry after the current bounded read finishes.",
+    "Raster statistics capacity is finishing canceled work; retry shortly.",
+]);
+
 /**
  * Represent one browser-safe raster-analysis failure.
  *
@@ -22,6 +27,28 @@ export class RasterAnalysisRequestError extends Error {
         this.name = "RasterAnalysisRequestError";
         this.status = status;
     }
+}
+
+/**
+ * Report whether retrying a failed statistics request can change the outcome.
+ *
+ * Transport failures have no HTTP classification and remain retryable. Server
+ * and request-throttling responses are transient, while client and conflict
+ * responses are deterministic except for the service's two bounded-capacity
+ * conflicts.
+ *
+ * @param {Error} error Statistics request failure from the analysis adapter.
+ * @return {boolean} Whether the viewer should offer an explicit retry action.
+ */
+export function isRasterStatisticsRetryableError(error) {
+    if (!(error instanceof RasterAnalysisRequestError)) {
+        return true;
+    }
+    if (error.status === 408 || error.status === 429 || error.status >= 500) {
+        return true;
+    }
+    return error.status === 409 &&
+        RETRYABLE_RASTER_STATISTICS_CAPACITY_MESSAGES.has(error.message);
 }
 
 /**

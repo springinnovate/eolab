@@ -54,7 +54,9 @@ affine georeferencing must be valid, and validity/georeferencing dependencies
 must be embedded in the signed GeoTIFF. External GDAL masks, overviews,
 auxiliary files, alpha masks, and per-dataset masks are rejected because they
 are outside that source signature. Nodata and non-finite values are excluded
-rather than converted to zero.
+rather than converted to zero. A deterministic source-structure or work-limit
+conflict keeps its actionable explanation but does not offer a browser Retry
+action. Bounded-reader capacity and transport failures remain retryable.
 
 ## Distribution and provenance
 

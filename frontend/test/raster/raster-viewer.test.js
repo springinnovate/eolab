@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { RasterAnalysisRequestError } from "../../src/raster/analysis-api.js";
 import { initializeRasterViewer } from "../../src/raster/raster-viewer.js";
 import {
     EXACT_RASTER_STATISTICS,
@@ -1425,6 +1426,45 @@ test("a restored whole-raster statistics error retries the active layer", async 
     assert.equal(firstRequests[1].signal.aborted, false);
     assert.equal(controlsView.displayedStatistics.itemId, first.id);
     assert.equal(controlsView.displayedStatistics.scope, "wholeRaster");
+    assert.equal(controlsView.statisticsRetryVisible, false);
+    viewer.destroy();
+});
+
+test("a deterministic statistics conflict does not offer a retry", async () => {
+    const leafletMap = createFakeMap();
+    const { leaflet } = createFakeLeaflet();
+    const controlsView = createFakeControlsView();
+    const layerStackView = createFakeLayerStackView();
+    const item = createRasterItem("deterministic-statistics-conflict");
+    const viewer = initializeRasterViewer(
+        {
+            wmsUrl: "/geoserver/eolab/wms",
+            leafletMap,
+            leaflet,
+            onTileError() {},
+        },
+        {
+            controlsView,
+            layerStackView,
+            publishRaster: async () => ({
+                layerName: `eolab:${item.id}`,
+                bbox: [-180, -90, 180, 90],
+            }),
+            loadStatistics: async () => {
+                throw new RasterAnalysisRequestError(
+                    "Retile the GeoTIFF with smaller native blocks and scan it again.",
+                    409,
+                );
+            },
+            samplePixel: async () => ({ inBounds: true, value: 1 }),
+            viewport: { innerWidth: 1280, innerHeight: 720 },
+        }
+    );
+
+    await viewer.show(item);
+    await flushPromises();
+
+    assert.match(controlsView.statisticsStatus, /Retile the GeoTIFF/);
     assert.equal(controlsView.statisticsRetryVisible, false);
     viewer.destroy();
 });
