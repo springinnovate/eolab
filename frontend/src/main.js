@@ -22,10 +22,11 @@ import {
     formatScanProgressCounts,
     formatScanTiming,
     formatScanStatusSummary,
-    getRasterVisualization,
+    getCatalogVisualization,
     supportsRasterDetailOnlyPreview,
     MOUNTED_DATASET_TYPES,
 } from "./catalog.js";
+import { CatalogVisualizationCoordinator } from "./catalog-visualization.js";
 import { initializeCatalogPaneControls } from "./catalog-pane-controller.js";
 import { getCatalogItemKey } from "./catalog-item-identity.js";
 import {
@@ -42,9 +43,8 @@ import { MapLayerStackView } from "./map-layers/layer-stack-view.js";
 import {
     catalogItemsMatch,
     CatalogMapActionRegistry,
-    CatalogRasterAssessmentCache,
+    CatalogVisualizationAssessmentCache,
 } from "./catalog-map-actions.js";
-import { assessCatalogRaster } from "./raster/api.js";
 import { initializeRasterDetailPreview } from "./raster/detail-preview-controller.js";
 import {
     formatRasterDetailMapNotice,
@@ -52,6 +52,7 @@ import {
     isRasterDetailPreviewProcessing,
 } from "./raster/detail-preview-status.js";
 import { initializeRasterViewer } from "./raster/raster-viewer.js";
+import { createVectorMapLayerAdapter } from "./vector/map-layer-adapter.js";
 import { initializeTemporaryAoi } from "./temporary-aoi/temporary-aoi.js";
 import {
     applyRenderingDiagnosticsViewModel,
@@ -525,7 +526,7 @@ async function initializeCatalog(
         selectedButton: null,
         selectedItem: null,
         pendingMapActions: new CatalogMapActionRegistry(),
-        rasterAssessments: new CatalogRasterAssessmentCache(),
+        visualizationAssessments: new CatalogVisualizationAssessmentCache(),
         // Generation token: filter/search changes invalidate older async
         // Surprise responses so they cannot select an Item from stale criteria.
         surpriseRequestGeneration: 0,
@@ -538,7 +539,7 @@ async function initializeCatalog(
      * @param {Object} item Affected Catalog Item.
      * @return {void}
      */
-    function reportRasterTileError(message, item) {
+    function reportMapTileError(message, item) {
         if (catalogItemsMatch(catalogState.selectedItem, item)) {
             catalogLayerStatus.textContent = message;
         }
@@ -626,8 +627,18 @@ async function initializeCatalog(
         wmsUrl: appGlobalConfiguration.wmsUrl,
         leafletMap,
         leaflet: L,
-        onTileError: reportRasterTileError,
+        onTileError: reportMapTileError,
     }, { mapLayerController });
+    const catalogVisualization = new CatalogVisualizationCoordinator(
+        rasterVisualization,
+        mapLayerController,
+        createVectorMapLayerAdapter({
+            leaflet: L,
+            leafletMap,
+            wmsUrl: appGlobalConfiguration.wmsUrl,
+            onTileError: reportMapTileError,
+        })
+    );
     const rasterDetailPreview = initializeRasterDetailPreview({
         leafletMap,
         leaflet: L,
@@ -653,10 +664,10 @@ async function initializeCatalog(
      * @return {void}
      */
     function updateCatalogMapAction(item) {
-        const visualization = getRasterVisualization(item);
+        const visualization = getCatalogVisualization(item);
         const supportsDetailPreview =
             supportsRasterDetailOnlyPreview(item);
-        const isRetained = item !== null && rasterVisualization.contains(item);
+        const isRetained = item !== null && catalogVisualization.contains(item);
         const hasDetailPreview = item !== null &&
             rasterDetailPreview.contains(item);
         const detailPreviewState = item === null
@@ -683,21 +694,28 @@ async function initializeCatalog(
         removeRasterDetailPreview.disabled = pendingAction !== null;
         renderRasterDetailPreviewResolution(detailPreviewState);
         catalogLayerToggle.textContent = pendingAction?.buttonText ?? (
-            visualization === undefined
+            visualization?.metadata === undefined
                 ? "Assess for visualization"
-                : visualization?.eligible === false
+                : visualization?.metadata?.eligible === false
                     ? "Reassess visualization"
                     : isRetained
                         ? "Remove from map layers"
                         : "Add to map layers"
         );
-        const fullVisualizationReason = visualization?.reason ?? "";
-        let defaultStatus = formatCatalogRasterStatus(
-            fullVisualizationReason,
-            isRetained,
-            supportsDetailPreview,
-            hasDetailPreview
-        );
+        const fullVisualizationReason = visualization?.metadata?.reason ?? "";
+        let defaultStatus = visualization?.kind === "vector"
+            ? [
+                fullVisualizationReason,
+                isRetained
+                    ? "This vector layer is retained in the map layer stack."
+                    : "",
+            ].filter((message) => message !== "").join(" ")
+            : formatCatalogRasterStatus(
+                fullVisualizationReason,
+                isRetained,
+                supportsDetailPreview,
+                hasDetailPreview
+            );
         if (hasDetailPreview) {
             const base = detailPreviewState.basePreview;
             const hasFiniteValues = base.pixelValues.some(
@@ -771,7 +789,7 @@ async function initializeCatalog(
             }
             rasterDetailPreview.clear();
         }
-        catalogState.rasterAssessments.apply(item);
+        catalogState.visualizationAssessments.apply(item);
         const itemButton = requestedButton ??
             catalogState.resultButtons.get(getCatalogItemKey(item)) ?? null;
         if (catalogState.selectedButton !== null) {
@@ -788,7 +806,7 @@ async function initializeCatalog(
             catalogState.collectionsDocument.collections,
             appGlobalConfiguration.scanDisplayPathPrefix
         );
-        if (getRasterVisualization(item) === null) {
+        if (getCatalogVisualization(item)?.kind !== "raster") {
             rasterVisualization.deactivateAnalysis(null);
         } else {
             rasterVisualization.activateAnalysis(item);
@@ -834,7 +852,7 @@ async function initializeCatalog(
         }
 
         for (const item of itemCollection.features) {
-            catalogState.rasterAssessments.apply(item);
+            catalogState.visualizationAssessments.apply(item);
             const itemButton = document.createElement("button");
             itemButton.className = "catalog-result";
             itemButton.type = "button";
@@ -940,7 +958,7 @@ async function initializeCatalog(
     /** Start a new search and replace every result from the previous stream. */
     async function loadCatalog(reloadCollections = false) {
         const searchSequence = ++catalogState.searchSequence;
-        catalogState.rasterAssessments.clear();
+        catalogState.visualizationAssessments.clear();
         catalogState.surpriseRequestGeneration += 1;
         catalogState.searchText = catalogSearchInput.value;
         catalogSearchInput.removeAttribute("aria-invalid");
@@ -1122,25 +1140,27 @@ async function initializeCatalog(
     );
     retryPageButton.addEventListener("click", prefetchNextCatalogPage);
     /**
-     * Assess, reassess, add, or remove the selected Catalog raster.
+     * Assess, reassess, add, or remove the selected Catalog map layer.
      *
      * @return {Promise<void>} Completion after the selected action settles.
      */
-    async function toggleCatalogRaster() {
+    async function toggleCatalogLayer() {
         const selectedItem = catalogState.selectedItem;
-        const visualization = getRasterVisualization(selectedItem);
+        const visualization = catalogVisualization.describe(selectedItem);
         if (
-            visualization === undefined ||
-            visualization?.eligible === false
+            visualization?.metadata === undefined ||
+            visualization.metadata.eligible === false
         ) {
             const pendingAction = beginCatalogMapAction(
                 selectedItem,
                 "Assessing...",
-                "Inspecting the selected raster."
+                "Inspecting the selected dataset."
             );
             try {
-                const assessedItem = await assessCatalogRaster(selectedItem);
-                catalogState.rasterAssessments.record(
+                const assessedItem = await catalogVisualization.assess(
+                    selectedItem
+                );
+                catalogState.visualizationAssessments.record(
                     selectedItem,
                     assessedItem
                 );
@@ -1152,12 +1172,14 @@ async function initializeCatalog(
                 )) {
                     return;
                 }
-                catalogState.rasterAssessments.apply(
+                catalogState.visualizationAssessments.apply(
                     catalogState.selectedItem
                 );
-                rasterVisualization.activateAnalysis(
-                    catalogState.selectedItem
-                );
+                if (visualization?.kind === "raster") {
+                    rasterVisualization.activateAnalysis(
+                        catalogState.selectedItem
+                    );
+                }
                 renderCatalogItemInspector(
                     catalogState.selectedItem,
                     catalogState.collectionsDocument.collections,
@@ -1171,7 +1193,7 @@ async function initializeCatalog(
                 )) {
                     finishCatalogMapAction(pendingAction);
                     catalogLayerToggle.textContent =
-                        visualization === undefined
+                        visualization?.metadata === undefined
                             ? "Assess for visualization"
                             : "Reassess visualization";
                     catalogLayerStatus.textContent = assessmentError.message;
@@ -1182,26 +1204,30 @@ async function initializeCatalog(
             return;
         }
 
-        if (rasterVisualization.contains(selectedItem)) {
-            rasterVisualization.remove(selectedItem);
-            rasterVisualization.activateAnalysis(selectedItem);
+        const datasetNoun = catalogVisualization.noun(selectedItem);
+        if (catalogVisualization.contains(selectedItem)) {
+            catalogVisualization.remove(selectedItem);
+            if (visualization.kind === "raster") {
+                rasterVisualization.activateAnalysis(selectedItem);
+            }
             catalogLayerToggle.textContent = "Add to map layers";
             catalogLayerStatus.textContent =
-                "Raster removed from the map layer stack.";
+                `${datasetNoun[0].toUpperCase()}${datasetNoun.slice(1)} ` +
+                "removed from the map layer stack.";
             return;
         }
 
         const pendingAction = beginCatalogMapAction(
             selectedItem,
             "Adding to map…",
-            "Preparing the selected raster."
+            `Preparing the selected ${datasetNoun}.`
         );
         try {
-            const publishedRaster = await rasterVisualization.show(
+            const publication = await catalogVisualization.show(
                 selectedItem
             );
             if (
-                publishedRaster === null ||
+                publication === null ||
                 !catalogItemsMatch(catalogState.selectedItem, selectedItem)
             ) {
                 return;
@@ -1209,8 +1235,8 @@ async function initializeCatalog(
             finishCatalogMapAction(pendingAction);
             catalogLayerToggle.textContent = "Remove from map layers";
             catalogLayerStatus.textContent =
-                "Raster retained in map layers. Hover over the map to " +
-                "inspect the active visible layer.";
+                `${datasetNoun[0].toUpperCase()}${datasetNoun.slice(1)} ` +
+                "retained in map layers.";
         } catch (renderingError) {
             if (catalogItemsMatch(catalogState.selectedItem, selectedItem)) {
                 finishCatalogMapAction(pendingAction);
@@ -1221,8 +1247,8 @@ async function initializeCatalog(
             finishCatalogMapAction(pendingAction);
         }
     }
-    catalogLayerToggle.addEventListener("click", toggleCatalogRaster);
-    reassessDetailRaster.addEventListener("click", toggleCatalogRaster);
+    catalogLayerToggle.addEventListener("click", toggleCatalogLayer);
+    reassessDetailRaster.addEventListener("click", toggleCatalogLayer);
     showRasterDetailPreview.addEventListener("click", async () => {
         const selectedItem = catalogState.selectedItem;
         const pendingAction = beginCatalogMapAction(

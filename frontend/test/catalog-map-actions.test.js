@@ -3,7 +3,7 @@ import test from "node:test";
 
 import {
     CatalogMapActionRegistry,
-    CatalogRasterAssessmentCache,
+    CatalogVisualizationAssessmentCache,
 } from "../src/catalog-map-actions.js";
 
 /**
@@ -64,7 +64,7 @@ test("an obsolete token cannot finish a replacement action", () => {
 });
 
 test("assessment results survive selection changes and equivalent reloads", () => {
-    const assessments = new CatalogRasterAssessmentCache();
+    const assessments = new CatalogVisualizationAssessmentCache();
     const requestedItem = createItem("raster");
     const reloadedItem = createItem("raster");
     const otherItem = createItem("other");
@@ -101,8 +101,43 @@ test("assessment results survive selection changes and equivalent reloads", () =
     assert.equal(assessments.apply(createItem("raster")), false);
 });
 
+test("vector assessments survive equivalent Catalog reloads", () => {
+    const assessments = new CatalogVisualizationAssessmentCache();
+    const requestedItem = {
+        collection: "eolab-mounted-vectors",
+        id: "geopackage-a",
+        assets: { data: {} },
+        properties: { title: "Original" },
+    };
+    const reloadedItem = {
+        ...requestedItem,
+        properties: { title: "Reloaded" },
+    };
+    const assessment = {
+        ...requestedItem,
+        properties: {
+            title: "Assessed",
+            "eolab:vector_rendering": {
+                policy: "vector-v1",
+                eligible: true,
+            },
+        },
+    };
+
+    assessments.record(requestedItem, assessment);
+
+    assert.equal(assessments.apply(reloadedItem), true);
+    assert.deepEqual(reloadedItem.properties, {
+        title: "Reloaded",
+        "eolab:vector_rendering": {
+            policy: "vector-v1",
+            eligible: true,
+        },
+    });
+});
+
 test("newer authoritative Catalog assessments are never overwritten", () => {
-    const assessments = new CatalogRasterAssessmentCache();
+    const assessments = new CatalogVisualizationAssessmentCache();
     const requestedItem = createItem("raster");
     const oldAssessment = {
         ...createItem("raster"),
@@ -142,7 +177,7 @@ test("newer authoritative Catalog assessments are never overwritten", () => {
 });
 
 test("an overlapping legacy-policy result receives the current assessment", () => {
-    const assessments = new CatalogRasterAssessmentCache();
+    const assessments = new CatalogVisualizationAssessmentCache();
     const requestedItem = createItem("raster");
     const currentAssessment = {
         ...createItem("raster"),
@@ -186,7 +221,7 @@ test("an overlapping legacy-policy result receives the current assessment", () =
 });
 
 test("a new Catalog request discards older transient assessments", () => {
-    const assessments = new CatalogRasterAssessmentCache();
+    const assessments = new CatalogVisualizationAssessmentCache();
     const requestedItem = createItem("raster");
     const assessment = {
         ...createItem("raster"),

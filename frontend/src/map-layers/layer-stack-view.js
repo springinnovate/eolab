@@ -164,6 +164,7 @@ export class MapLayerStackView {
         const accessibleName = `${layer.label}; Catalog Item ${itemIdentity}`;
         const row = this.documentContext.createElement("li");
         row.className = "raster-layer-row";
+        row.classList.toggle("has-fixed-legend", layer.legend.kind === "fixed");
         row.classList.toggle("is-active", layer.key === activeKey);
         row.classList.toggle("is-hidden", !layer.visible);
         row.setAttribute("aria-label", accessibleName);
@@ -177,7 +178,10 @@ export class MapLayerStackView {
         activeInput.checked = layer.key === activeKey;
         activeInput.dataset.layerKey = layer.key;
         activeInput.dataset.layerAction = "activate";
-        activeInput.setAttribute("aria-label", `Edit ${accessibleName}`);
+        activeInput.setAttribute(
+            "aria-label",
+            `${layer.legend.kind === "fixed" ? "Select" : "Edit"} ${accessibleName}`
+        );
         activeInput.addEventListener("change", () => {
             if (activeInput.checked) {
                 this.handlers?.onActivate(layer.key);
@@ -297,10 +301,9 @@ export class MapLayerStackView {
         order.append(upButton, downButton);
         presentation.append(visibilityLabel, opacityLabel, order);
 
-        const { legend, labels } = this.#buildGradientLegend(
-            layer,
-            accessibleName
-        );
+        const { legend, labels } = layer.legend.kind === "fixed"
+            ? this.#buildFixedLegend(layer, accessibleName)
+            : this.#buildGradientLegend(layer, accessibleName);
 
         const error = this.documentContext.createElement("p");
         error.className = "raster-layer-error";
@@ -335,6 +338,30 @@ export class MapLayerStackView {
             label.textContent = String(value);
             labels.append(label);
         }
+        return { legend, labels };
+    }
+
+    /**
+     * Build one feature-owned fixed swatch without raster style controls.
+     *
+     * @param {Object} layer Fixed-style layer presentation snapshot.
+     * @param {string} accessibleName Complete layer accessible name.
+     * @return {{legend:HTMLDivElement,labels:HTMLDivElement}} Legend elements.
+     */
+    #buildFixedLegend(layer, accessibleName) {
+        const { label, fill, stroke } = layer.legend;
+        const legend = this.documentContext.createElement("div");
+        legend.className = "raster-layer-legend";
+        legend.setAttribute("role", "img");
+        legend.style.background = fill;
+        legend.style.borderColor = stroke;
+        legend.setAttribute(
+            "aria-label",
+            `${accessibleName}. Default ${label.toLowerCase()} symbology.`
+        );
+        const labels = this.documentContext.createElement("div");
+        labels.className = "raster-layer-legend-labels";
+        labels.textContent = `${label} features · fixed default style`;
         return { legend, labels };
     }
 

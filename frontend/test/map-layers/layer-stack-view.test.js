@@ -350,6 +350,31 @@ test("MapLayerStackView renders semantic, accessible independent rows", () => {
   assert.equal(elementsByClass(moistureRow, "raster-layer-error")[0].hidden, false);
 });
 
+test("MapLayerStackView renders a neutral fixed-swatch legend", () => {
+  const documentContext = new FakeLayerStackDocument();
+  const view = new MapLayerStackView(documentContext);
+  const layer = {
+    ...LAYERS[0],
+    legend: {
+      kind: "fixed",
+      label: "Polygon",
+      fill: "#a855f7",
+      stroke: "#581c87",
+    },
+  };
+
+  view.render([layer], layer.key);
+
+  const row = documentContext.querySelector("#raster-layer-list").children[0];
+  const legend = elementsByClass(row, "raster-layer-legend")[0];
+  const labels = elementsByClass(row, "raster-layer-legend-labels")[0];
+  assert.equal(row.classList.contains("has-fixed-legend"), true);
+  assert.equal(legend.style.background, "#a855f7");
+  assert.equal(legend.style.borderColor, "#581c87");
+  assert.match(legend.getAttribute("aria-label"), /Default polygon symbology/);
+  assert.equal(labels.textContent, "Polygon features · fixed default style");
+});
+
 test("MapLayerStackView forwards controls and updates opacity output", () => {
   const documentContext = new FakeLayerStackDocument();
   const view = new MapLayerStackView(documentContext);
