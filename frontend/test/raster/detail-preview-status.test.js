@@ -77,8 +77,10 @@ test("detail preview resolution reports pending and retained update states", () 
   );
 });
 
-test("map processing state follows only current-view refinement work", () => {
+test("map processing state follows initial and current-view raster work", () => {
   assert.equal(isRasterDetailPreviewProcessing(null), false);
+  assert.equal(isRasterDetailPreviewProcessing(null, "loading"), true);
+  assert.equal(isRasterDetailPreviewProcessing(null, "error"), false);
   assert.equal(isRasterDetailPreviewProcessing({
     detailStatus: "none",
   }), false);

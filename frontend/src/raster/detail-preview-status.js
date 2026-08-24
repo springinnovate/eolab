@@ -66,16 +66,22 @@ function formatPreview(preview) {
 /**
  * Return whether the current map view is awaiting adaptive raster detail.
  *
- * A retained lower-resolution image may remain visible during this state; the
- * processing indicator prevents users from mistaking it for the completed
- * current-view result.
+ * During an initial request no adaptive image exists yet. During refinement a
+ * retained lower-resolution image may remain visible. In both cases the
+ * processing indicator makes the outstanding raster work explicit.
  *
  * @param {Object|null} previewState Current adaptive-raster session state.
- * @return {boolean} Whether current-view detail is scheduled, reading, or
- * waiting to retry bounded-reader capacity.
+ * @param {"idle"|"loading"|"error"} [baseStatus="idle"] Lifecycle of an
+ * initial base request when no preview state exists yet.
+ * @return {boolean} Whether initial or current-view detail is scheduled,
+ * reading, or waiting to retry bounded-reader capacity.
  */
-export function isRasterDetailPreviewProcessing(previewState) {
-    return previewState?.detailStatus === "loading";
+export function isRasterDetailPreviewProcessing(
+    previewState,
+    baseStatus = "idle"
+) {
+    return baseStatus === "loading" ||
+        previewState?.detailStatus === "loading";
 }
 
 /**

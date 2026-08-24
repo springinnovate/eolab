@@ -572,7 +572,10 @@ async function initializeCatalog(
         const mapNotice = formatRasterDetailMapNotice(previewState);
         rasterDetailMapNotice.textContent = mapNotice;
         rasterDetailMapNotice.hidden = mapNotice === "";
-        const isProcessing = isRasterDetailPreviewProcessing(previewState);
+        const isProcessing = isRasterDetailPreviewProcessing(
+            previewState,
+            baseStatus
+        );
         rasterDetailProcessing.hidden = !isProcessing;
         rasterDetailProcessing.setAttribute(
             "aria-busy",
