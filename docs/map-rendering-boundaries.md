@@ -16,9 +16,9 @@ publication adapters:
   published layer.
 - `PublishedLayerAuthorization` exposes the fixed authorized appearance and
   validates parameters owned by the publishing dataset domain.
-- The restricted WMS route owns operation, size, response-format, parameter,
-  and request-count bounds. It asks each configured registry for authorization
-  and does not import a dataset feature package.
+- The restricted WMS route owns operation, size, response-format, and parameter
+  bounds. It asks each configured registry for authorization and does not
+  import a dataset feature package.
 
 Raster retains ownership of mounted-source resolution, filesystem signatures,
 dynamic-appearance parameters, assessment, and publication reconciliation.
