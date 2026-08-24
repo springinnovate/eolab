@@ -136,14 +136,17 @@ export function formatRasterDetailMapNotice(previewState) {
         return "";
     }
     const preview = previewState.detailPreview ?? previewState.basePreview;
+    if (preview.rendering === "exactSourceWindow") {
+        return "ZOOMED IN TO FULL SOURCE DETAIL — This view is small enough " +
+            "for EOLab to display every native source pixel in the bounded " +
+            `window (${preview.imageWidth} × ${preview.imageHeight}). You are ` +
+            "seeing the raster's true source detail; zooming out will return " +
+            "to sampled detail because the source does not have a usable " +
+            "overview pyramid.";
+    }
     const limitation = "DETAIL-ONLY RASTER — EOLab cannot safely display " +
         "this raster at full extent because the source does not have a " +
         "usable overview pyramid.";
-    if (preview.rendering === "exactSourceWindow") {
-        return `${limitation} This current view is exact bounded source ` +
-            `detail (${preview.imageWidth} × ${preview.imageHeight} source ` +
-            "pixels); broader areas remain represented by sampled detail.";
-    }
     if (preview.rendering === "representativePatch") {
         return `${limitation} Showing one representative bounded ` +
             `${preview.imageWidth} × ${preview.imageHeight} source patch; ` +
