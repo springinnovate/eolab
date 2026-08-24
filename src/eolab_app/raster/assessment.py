@@ -9,6 +9,7 @@ import rasterio
 
 from eolab_app.catalog.geotiff import build_stac_item
 from eolab_app.raster.eligibility import (
+    DETAIL_ONLY_PREVIEW_REASON_CODES,
     MOUNTED_GEOTIFF_COLLECTION_ID,
     RENDERING_METADATA_KEY,
     apply_reader_assessment,
@@ -49,10 +50,12 @@ class RasterAssessmentFinalizer:
     async def finalize(self, item: dict[str, Any]) -> dict[str, Any]:
         """Finalize one freshly built scanner Item assessment.
 
-        Non-raster Items pass through unchanged. Structurally ineligible
-        rasters retain their more specific policy reason without invoking
-        GeoServer. Structurally eligible rasters are acquired once by the
-        deployed reader and keep the source identity used for that decision.
+        Non-raster Items pass through unchanged. Structurally eligible and
+        overview-limited detail-preview candidates are acquired once by the
+        deployed reader so CRS/reader failures take precedence. Other
+        structurally ineligible rasters retain their specific policy reason
+        without invoking GeoServer. Every assessed source keeps the identity
+        used for its decision.
 
         Args:
             item: Fresh scanner-owned STAC Item with structural metadata.
@@ -90,7 +93,11 @@ class RasterAssessmentFinalizer:
             )
 
         completed_metadata = dict(rendering_metadata)
-        if rendering_metadata.get("eligible"):
+        if (
+            rendering_metadata.get("eligible")
+            or rendering_metadata.get("reason_code")
+            in DETAIL_ONLY_PREVIEW_REASON_CODES
+        ):
             reader_assessment = await self._reader_assessor.assess(source_path)
             completed_metadata = apply_reader_assessment(
                 rendering_metadata,

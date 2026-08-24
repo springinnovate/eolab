@@ -22,6 +22,7 @@ import {
     formatScanTiming,
     formatScanStatusSummary,
     getRasterVisualization,
+    supportsRasterDetailOnlyPreview,
     MOUNTED_DATASET_TYPES,
 } from "./catalog.js";
 import { initializeCatalogPaneControls } from "./catalog-pane-controller.js";
@@ -40,6 +41,12 @@ import {
     CatalogRasterAssessmentCache,
 } from "./catalog-map-actions.js";
 import { assessCatalogRaster } from "./raster/api.js";
+import { initializeRasterDetailPreview } from "./raster/detail-preview-controller.js";
+import {
+    formatRasterDetailMapNotice,
+    formatRasterDetailPreviewResolution,
+    isRasterDetailPreviewProcessing,
+} from "./raster/detail-preview-status.js";
 import { initializeRasterViewer } from "./raster/raster-viewer.js";
 import { initializeTemporaryAoi } from "./temporary-aoi/temporary-aoi.js";
 import {
@@ -476,6 +483,27 @@ async function initializeCatalog(
     const catalogLayerStatus = document.querySelector(
         "#catalog-layer-status"
     );
+    const rasterDetailPreviewControls = document.querySelector(
+        "#raster-detail-preview-controls"
+    );
+    const rasterDetailPreviewResolution = document.querySelector(
+        "#raster-detail-preview-resolution"
+    );
+    const rasterDetailMapNotice = document.querySelector(
+        "#raster-detail-map-notice"
+    );
+    const rasterDetailProcessing = document.querySelector(
+        "#raster-detail-processing"
+    );
+    const showRasterDetailPreview = document.querySelector(
+        "#show-raster-detail-preview"
+    );
+    const removeRasterDetailPreview = document.querySelector(
+        "#remove-raster-detail-preview"
+    );
+    const reassessDetailRaster = document.querySelector(
+        "#reassess-detail-raster"
+    );
     const catalogUrl = appGlobalConfiguration.catalogUrl.replace(/\/$/, "");
     const resultStream = new CatalogResultStream(
         new CatalogSearchClient(catalogUrl)
@@ -522,6 +550,34 @@ async function initializeCatalog(
     }
 
     /**
+     * Render exact backend-reported sampled-grid dimensions.
+     *
+     * @param {Object|null} previewState Current sampled-raster session state.
+     * @param {"idle"|"loading"|"error"} [baseStatus="idle"] Initial base
+     * request lifecycle when no displayed preview exists.
+     * @return {void}
+     */
+    function renderRasterDetailPreviewResolution(
+        previewState,
+        baseStatus = "idle"
+    ) {
+        rasterDetailPreviewResolution.textContent =
+            formatRasterDetailPreviewResolution(previewState, baseStatus);
+        const mapNotice = formatRasterDetailMapNotice(previewState);
+        rasterDetailMapNotice.textContent = mapNotice;
+        rasterDetailMapNotice.hidden = mapNotice === "";
+        const isProcessing = isRasterDetailPreviewProcessing(
+            previewState,
+            baseStatus
+        );
+        rasterDetailProcessing.hidden = !isProcessing;
+        rasterDetailProcessing.setAttribute(
+            "aria-busy",
+            String(isProcessing)
+        );
+    }
+
+    /**
      * Begin one assessment or publication action for a selected Item.
      *
      * @param {Object} item Selected Catalog Item.
@@ -564,6 +620,23 @@ async function initializeCatalog(
         onTileError: reportRasterTileError,
         onLayersChange: refreshCatalogMapAction,
     });
+    const rasterDetailPreview = initializeRasterDetailPreview({
+        leafletMap,
+        leaflet: L,
+        onChange: () => {
+            refreshCatalogMapAction();
+            const selectedItem = catalogState.selectedItem;
+            const previewState = selectedItem === null
+                ? null
+                : rasterDetailPreview.getState(selectedItem);
+            if (previewState !== null) {
+                rasterVisualization.updateSampledInitialStyle(
+                    selectedItem,
+                    previewState.style
+                );
+            }
+        },
+    });
     onRasterViewerReady(rasterVisualization);
     /**
      * Apply the scanner-owned visualization decision to the map action.
@@ -573,7 +646,14 @@ async function initializeCatalog(
      */
     function updateCatalogMapAction(item) {
         const visualization = getRasterVisualization(item);
+        const supportsDetailPreview =
+            supportsRasterDetailOnlyPreview(item);
         const isRetained = item !== null && rasterVisualization.contains(item);
+        const hasDetailPreview = item !== null &&
+            rasterDetailPreview.contains(item);
+        const detailPreviewState = item === null
+            ? null
+            : rasterDetailPreview.getState(item);
         const pendingAction = item === null
             ? null
             : catalogState.pendingMapActions.get(item);
@@ -583,7 +663,17 @@ async function initializeCatalog(
             String(pendingAction !== null)
         );
         catalogLayerToggle.disabled = pendingAction !== null;
-        catalogLayerToggle.hidden = false;
+        catalogLayerToggle.hidden = supportsDetailPreview;
+        rasterDetailPreviewControls.hidden = !supportsDetailPreview;
+        showRasterDetailPreview.disabled = pendingAction !== null;
+        reassessDetailRaster.disabled = pendingAction !== null;
+        showRasterDetailPreview.textContent = pendingAction?.buttonText ??
+            (hasDetailPreview
+                ? "Update adaptive raster"
+                : "Show adaptive raster");
+        removeRasterDetailPreview.hidden = !hasDetailPreview;
+        removeRasterDetailPreview.disabled = pendingAction !== null;
+        renderRasterDetailPreviewResolution(detailPreviewState);
         catalogLayerToggle.textContent = pendingAction?.buttonText ?? (
             visualization === undefined
                 ? "Assess for visualization"
@@ -593,15 +683,54 @@ async function initializeCatalog(
                         ? "Remove from map layers"
                         : "Add to map layers"
         );
-        catalogLayerStatus.textContent = pendingAction?.statusText ?? (
-            isRetained
-                ? "This raster is retained in the map layer stack."
-                : visualization?.reason ?? ""
-        );
+        let defaultStatus = visualization?.reason ?? "";
+        if (isRetained) {
+            defaultStatus = "This raster is retained in the map layer stack.";
+        }
+        if (supportsDetailPreview) {
+            defaultStatus =
+                "Normal full visualization is unavailable. Broad views use " +
+                "a fixed 127-longest-edge center sample; close views " +
+                "automatically use exact bounded source detail.";
+        }
+        if (hasDetailPreview) {
+            const base = detailPreviewState.basePreview;
+            const hasFiniteValues = base.pixelValues.some(
+                (value) => value !== null
+            );
+            defaultStatus =
+                "Adaptive detail-only raster — not a whole-raster " +
+                "rendering. The orange dashed outline is the raster " +
+                "extent; zooming requests a bounded current-view layer.";
+            if (detailPreviewState.detailStatus === "loading") {
+                defaultStatus += " Loading finer current-view detail…";
+            } else if (detailPreviewState.detailStatus === "ready") {
+                defaultStatus += detailPreviewState.detailPreview.rendering ===
+                    "exactSourceWindow"
+                    ? " The teal outline contains complete bounded source " +
+                        "detail at this map scale."
+                    : " The teal outline contains the fixed current-view " +
+                        "sample grid; zoom closer for exact bounded detail.";
+            } else if (detailPreviewState.detailStatus === "error") {
+                defaultStatus += " Current-view refinement failed: " +
+                    detailPreviewState.detailError +
+                    ". The prior bounded display remains visible.";
+            }
+            if (!hasFiniteValues) {
+                defaultStatus +=
+                    " No finite data was found at the bounded base positions.";
+            }
+        }
+        catalogLayerStatus.textContent =
+            pendingAction?.statusText ?? defaultStatus;
     }
 
     /** Clears the selected result, footprint, and inspector together. */
     function clearCatalogSelection() {
+        if (catalogState.selectedItem !== null) {
+            rasterVisualization.removeSampled(catalogState.selectedItem);
+        }
+        rasterDetailPreview.clear();
         catalogState.selectedButton?.classList.remove("is-selected");
         catalogState.selectedButton?.setAttribute("aria-pressed", "false");
         footprintController.clear();
@@ -622,6 +751,16 @@ async function initializeCatalog(
 
     /** Select one result or remotely discovered Item without changing search. */
     function selectCatalogItem(item, requestedButton = null) {
+        if (rasterDetailPreview.contains(item)) {
+            rasterDetailPreview.invalidate();
+        } else {
+            if (catalogState.selectedItem !== null) {
+                rasterVisualization.removeSampled(
+                    catalogState.selectedItem
+                );
+            }
+            rasterDetailPreview.clear();
+        }
         catalogState.rasterAssessments.apply(item);
         const itemButton = requestedButton ??
             catalogState.resultButtons.get(catalogItemKey(item)) ?? null;
@@ -990,6 +1129,8 @@ async function initializeCatalog(
                     selectedItem,
                     assessedItem
                 );
+                rasterVisualization.removeSampled(selectedItem);
+                rasterDetailPreview.remove(selectedItem);
                 if (!catalogItemsMatch(
                     catalogState.selectedItem,
                     selectedItem
@@ -1062,6 +1203,57 @@ async function initializeCatalog(
         }
     }
     catalogLayerToggle.addEventListener("click", toggleCatalogRaster);
+    reassessDetailRaster.addEventListener("click", toggleCatalogRaster);
+    showRasterDetailPreview.addEventListener("click", async () => {
+        const selectedItem = catalogState.selectedItem;
+        const pendingAction = beginCatalogMapAction(
+            selectedItem,
+            "Sampling raster…",
+            "Reading a strictly bounded approximate raster sample grid."
+        );
+        if (!rasterDetailPreview.contains(selectedItem)) {
+            renderRasterDetailPreviewResolution(null, "loading");
+        }
+        try {
+            const preview = await rasterDetailPreview.show(
+                selectedItem
+            );
+            if (
+                preview === null ||
+                !catalogItemsMatch(catalogState.selectedItem, selectedItem)
+            ) {
+                return;
+            }
+            const previewState = rasterDetailPreview.getState(selectedItem);
+            rasterVisualization.activateSampled(
+                selectedItem,
+                previewState.style,
+                (style) => rasterDetailPreview.setStyle(selectedItem, style)
+            );
+            finishCatalogMapAction(pendingAction);
+            updateCatalogMapAction(selectedItem);
+        } catch (previewError) {
+            if (
+                previewError.name !== "AbortError" &&
+                catalogItemsMatch(catalogState.selectedItem, selectedItem)
+            ) {
+                finishCatalogMapAction(pendingAction);
+                catalogLayerStatus.textContent = previewError.message;
+                if (!rasterDetailPreview.contains(selectedItem)) {
+                    renderRasterDetailPreviewResolution(null, "error");
+                }
+            }
+        } finally {
+            finishCatalogMapAction(pendingAction);
+        }
+    });
+    removeRasterDetailPreview.addEventListener("click", () => {
+        const selectedItem = catalogState.selectedItem;
+        rasterVisualization.removeSampled(selectedItem);
+        rasterDetailPreview.remove(selectedItem);
+        catalogLayerStatus.textContent =
+            "Sampled raster removed from the map.";
+    });
 
     await loadCatalog(true);
     return loadCatalog.bind(null, true);

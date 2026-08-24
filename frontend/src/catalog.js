@@ -20,6 +20,14 @@ const CATALOG_DATE_SYNTAX_ERROR =
     "between two of these values.";
 export const MOUNTED_GEOTIFF_COLLECTION_ID = "eolab-mounted-geotiffs";
 const RASTER_RENDERING_POLICY = "raster-v3";
+const GEOSERVER_READER_CONTRACT =
+    "geoserver-3.0.1-geotools-35.1-geotiff-v1";
+const DETAIL_ONLY_PREVIEW_REASON_CODES = new Set([
+    "internal_overviews_required",
+    "incomplete_overview_pyramid",
+    "coarsest_overview_dimension_exceeded",
+    "coarsest_overview_decoded_size_exceeded"
+]);
 export const MOUNTED_DATASET_TYPES = new Map([
     [MOUNTED_GEOTIFF_COLLECTION_ID, "Raster"],
     ["eolab-mounted-vectors", "Vector"]
@@ -40,6 +48,26 @@ export function getRasterVisualization(item) {
     return renderingMetadata?.policy === RASTER_RENDERING_POLICY
         ? renderingMetadata
         : undefined;
+}
+
+/**
+ * Return whether one assessed raster may use bounded detail-only previews.
+ *
+ * @param {Object|null} item Selected STAC Item.
+ * @return {boolean} Whether only an overview/scale rejection remains and the
+ * current deployed reader accepted the raster, CRS, and bounded blocks.
+ */
+export function supportsRasterDetailOnlyPreview(item) {
+    const renderingMetadata = getRasterVisualization(item);
+    return renderingMetadata !== null &&
+        renderingMetadata !== undefined &&
+        renderingMetadata.eligible === false &&
+        DETAIL_ONLY_PREVIEW_REASON_CODES.has(
+            renderingMetadata.reason_code
+        ) &&
+        renderingMetadata.bounded_blocks === true &&
+        renderingMetadata.reader_contract === GEOSERVER_READER_CONTRACT &&
+        renderingMetadata.reader_compatible === true;
 }
 
 /** Format a byte count without implying decimal storage units. */

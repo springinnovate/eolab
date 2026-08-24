@@ -6,6 +6,8 @@ from typing import Any
 
 import rasterio
 
+from eolab_app.raster.catalog_metadata import RASTER_ASSET_METADATA_KEY
+
 
 GEOTIFF_MEDIA_TYPE = "image/tiff; application=geotiff"
 COG_MEDIA_TYPE = (
@@ -14,12 +16,18 @@ COG_MEDIA_TYPE = (
 GEOTIFF_MEDIA_TYPES = frozenset({GEOTIFF_MEDIA_TYPE, COG_MEDIA_TYPE})
 MOUNTED_GEOTIFF_COLLECTION_ID = "eolab-mounted-geotiffs"
 MOUNTED_GEOTIFF_ITEM_ID_PATTERN = r"^geotiff-[0-9a-f]{24}$"
-RENDERING_METADATA_KEY = "eolab:rendering"
+RENDERING_METADATA_KEY = RASTER_ASSET_METADATA_KEY
 RENDERING_POLICY = "raster-v3"
 DIRECT_RENDERING_MAX_BYTES = 64 * 1024 * 1024
 OVERVIEW_RENDERING_MAX_BYTES = 64 * 1024 * 1024
 OVERVIEW_RENDERING_MAX_DIMENSION = 8192
 RENDERING_MAX_BLOCK_EDGE = 1024
+DETAIL_ONLY_PREVIEW_REASON_CODES = frozenset({
+    "internal_overviews_required",
+    "incomplete_overview_pyramid",
+    "coarsest_overview_dimension_exceeded",
+    "coarsest_overview_decoded_size_exceeded",
+})
 SUPPORTED_RENDERING_DATA_TYPES = frozenset(
     {"uint8", "uint16", "int16", "int32", "float32", "float64"}
 )
@@ -213,8 +221,15 @@ def apply_reader_assessment(
     """
     if rendering_metadata.get("policy") != RENDERING_POLICY:
         raise ValueError("Reader assessment requires current structural metadata")
-    if not rendering_metadata.get("eligible"):
-        raise ValueError("Reader assessment requires structural eligibility")
+    if (
+        not rendering_metadata.get("eligible")
+        and rendering_metadata.get("reason_code")
+        not in DETAIL_ONLY_PREVIEW_REASON_CODES
+    ):
+        raise ValueError(
+            "Reader assessment requires full or detail-only structural "
+            "eligibility"
+        )
     if reader_compatible == (reader_reason_code is not None):
         raise ValueError("Reader compatibility and reason code are inconsistent")
 
@@ -235,6 +250,29 @@ def apply_reader_assessment(
         ),
     })
     return completed_metadata
+
+
+def supports_detail_only_preview(rendering_metadata: dict[str, Any]) -> bool:
+    """Return whether an assessment permits bounded detail-only previews.
+
+    The structural rejection must be exclusively overview/scale related,
+    native source blocks must be bounded, and the current deployed reader must
+    have accepted the raster and its CRS.
+
+    Args:
+        rendering_metadata: Complete current-policy rendering assessment.
+
+    Returns:
+        Whether the raster may enter the separate detail-only preview path.
+    """
+    return (
+        rendering_metadata.get("policy") == RENDERING_POLICY
+        and rendering_metadata.get("eligible") is False
+        and rendering_metadata.get("reason_code")
+        in DETAIL_ONLY_PREVIEW_REASON_CODES
+        and rendering_metadata.get("bounded_blocks") is True
+        and rendering_metadata.get("reader_compatible") is True
+    )
 
 
 def inspect_raster_renderability(geotiff_path: Path) -> dict[str, Any]:

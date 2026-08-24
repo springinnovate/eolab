@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  createRasterSampleWindowLayer,
-  createRasterWmsLayer,
+    createRasterSampleWindowLayer,
+    createRasterWmsLayer,
+    ensureRasterSampleWindowPane,
+    RASTER_SAMPLE_WINDOW_PANE,
   RasterLeafletLayerSet,
   rasterSampleBoundsToLeaflet,
 } from "../../src/raster/leaflet.js";
@@ -17,6 +19,24 @@ test("sample bounds convert to canonical single-world Leaflet corners", () => {
       [50, -121],
     ],
   );
+});
+
+test("sample-window pane stays above bounded raster images", () => {
+  const panes = new Map();
+  const map = {
+    getPane(name) { return panes.get(name); },
+    createPane(name) {
+      const pane = { style: {} };
+      panes.set(name, pane);
+      return pane;
+    },
+  };
+
+  const pane = ensureRasterSampleWindowPane(map);
+
+  assert.equal(panes.get(RASTER_SAMPLE_WINDOW_PANE), pane);
+  assert.equal(pane.style.zIndex, "450");
+  assert.equal(pane.style.pointerEvents, "none");
 });
 
 test("Leaflet adapters own WMS and sample-window presentation options", () => {
@@ -83,6 +103,7 @@ test("Leaflet adapters own WMS and sample-window presentation options", () => {
   assert.deepEqual(capturedRectangle, {
     bounds: [[48, -123], [50, -121]],
     options: {
+      pane: RASTER_SAMPLE_WINDOW_PANE,
       color: "#f97316",
       weight: 2,
       fill: false,
@@ -98,6 +119,7 @@ test("Leaflet adapters own WMS and sample-window presentation options", () => {
   assert.deepEqual(capturedRectangle, {
     bounds: [[10, 20], [11, 21]],
     options: {
+      pane: RASTER_SAMPLE_WINDOW_PANE,
       color: "#2563eb",
       weight: 2,
       fillColor: "#3b82f6",

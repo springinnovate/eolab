@@ -12,6 +12,37 @@
         id="map"
         aria-label="MAP LABEL TO BE SET BY CONFIGURATION"
       ></div>
+      <div
+        class="raster-detail-processing"
+        id="raster-detail-processing"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        aria-busy="false"
+        hidden
+      >
+        <div class="raster-detail-processing-card">
+          <span
+            class="raster-detail-processing-spinner"
+            aria-hidden="true"
+          ></span>
+          <span class="raster-detail-processing-message">
+            <strong>Processing raster detail…</strong>
+            <small>
+              Calculating the current map view. The displayed raster will
+              update when it is ready.
+            </small>
+          </span>
+        </div>
+      </div>
+      <p
+        class="raster-detail-map-notice"
+        id="raster-detail-map-notice"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        hidden
+      ></p>
 
       <section
         class="control-panel"
@@ -391,6 +422,46 @@
                     >
                       Add to map layers
                     </button>
+                    <div
+                      class="raster-detail-preview-controls"
+                      id="raster-detail-preview-controls"
+                      hidden
+                    >
+                      <p>
+                        <strong>Adaptive bounded raster detail</strong>
+                        <span>Broad views always use one center sample in each sample-grid cell, with 127 cells on the longest displayed edge and an aspect-preserving shorter edge. Once the visible source window satisfies strict server-owned limits, EOLab automatically replaces that grid with a complete bounded source-window read reprojected for the map at the same dimensions.</span>
+                      </p>
+                      <small>Sampled proxies use smooth display interpolation; exact close-view windows use crisp nearest-neighbor presentation. This overview-limited raster is never published to GeoServer. The status below reports the active map area, source window, native blocks, and decoded work.</small>
+                      <output
+                        class="raster-detail-preview-resolution"
+                        id="raster-detail-preview-resolution"
+                        aria-live="polite"
+                      >Base raster detail: —; active view: —</output>
+                      <div class="raster-detail-preview-actions">
+                        <button
+                          class="secondary-button"
+                          id="show-raster-detail-preview"
+                          type="button"
+                        >
+                              Show adaptive raster
+                        </button>
+                        <button
+                          class="secondary-button"
+                          id="remove-raster-detail-preview"
+                          type="button"
+                          hidden
+                        >
+                              Remove adaptive raster
+                        </button>
+                        <button
+                          class="secondary-button"
+                          id="reassess-detail-raster"
+                          type="button"
+                        >
+                          Check for full visualization
+                        </button>
+                      </div>
+                    </div>
                     <p
                       id="catalog-layer-status"
                       role="status"

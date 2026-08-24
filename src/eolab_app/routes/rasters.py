@@ -6,27 +6,24 @@ from dataclasses import dataclass
 from fastapi import APIRouter, HTTPException, Request
 
 from eolab_app.raster.assessment import RasterAssessmentService
-from eolab_app.raster.errors import (
-    RasterAssetError,
-    RasterConflictError,
-    RasterFeatureError,
-    RasterNotFoundError,
-    RasterPublicationError,
-    RasterRequestError,
-    RasterUpstreamError,
+from eolab_app.raster.detail_preview_service import RasterDetailPreviewService
+from eolab_app.raster.detail_statistics_service import (
+    RasterDetailStatisticsService,
 )
+from eolab_app.raster.errors import RasterFeatureError
 from eolab_app.raster.models import (
-    CatalogPixelRequest,
+    CatalogRasterDetailPreviewRequest,
+    CatalogRasterDetailStatisticsRequest,
     CatalogRasterRequest,
     CatalogRasterStatisticsRequest,
     PublishedRaster,
-    RasterPixel,
+    RasterDetailPreview,
     RasterStatistics,
 )
-from eolab_app.raster.pixel_service import RasterPixelService
 from eolab_app.raster.publication import RasterPublicationService
 from eolab_app.raster.sources import PublishedRasterRegistry
 from eolab_app.raster.statistics_service import RasterStatisticsService
+from eolab_app.routes.raster_http import raster_http_exception
 
 
 @dataclass(frozen=True)
@@ -40,45 +37,6 @@ class RasterFeature:
 
     router: APIRouter
     registry: PublishedRasterRegistry
-
-
-def raster_http_exception(error: RasterFeatureError) -> HTTPException:
-    """Translate one application failure into the stable public HTTP contract.
-
-    Args:
-        error: Application-level raster failure.
-
-    Returns:
-        FastAPI exception with the stable status and public error document.
-
-    Raises:
-        TypeError: If a new failure type has no explicit HTTP mapping.
-    """
-    if isinstance(error, RasterPublicationError):
-        publication_status_codes = {
-            "reader_rejection": 422,
-            "connectivity": 503,
-            "authentication": 502,
-            "timeout": 504,
-            "configuration": 503,
-            "upstream_failure": 502,
-        }
-        return HTTPException(
-            status_code=publication_status_codes[error.category],
-            detail={"category": error.category, "message": error.detail},
-        )
-
-    status_codes: tuple[tuple[type[RasterFeatureError], int], ...] = (
-        (RasterRequestError, 400),
-        (RasterNotFoundError, 404),
-        (RasterAssetError, 422),
-        (RasterConflictError, 409),
-        (RasterUpstreamError, 502),
-    )
-    for error_type, status_code in status_codes:
-        if isinstance(error, error_type):
-            return HTTPException(status_code=status_code, detail=error.detail)
-    raise TypeError(f"Unmapped raster failure: {type(error).__name__}")
 
 
 async def wait_for_http_disconnect(request: Request) -> None:
@@ -97,8 +55,9 @@ async def wait_for_http_disconnect(request: Request) -> None:
 def create_raster_feature(
     assessment_service: RasterAssessmentService,
     publication_service: RasterPublicationService,
-    pixel_service: RasterPixelService,
     statistics_service: RasterStatisticsService,
+    detail_preview_service: RasterDetailPreviewService,
+    detail_statistics_service: RasterDetailStatisticsService,
     registry: PublishedRasterRegistry,
 ) -> RasterFeature:
     """Create the raster router around fully constructed services.
@@ -106,8 +65,9 @@ def create_raster_feature(
     Args:
         assessment_service: Authoritative reassessment workflow.
         publication_service: Serialized publication workflow.
-        pixel_service: Capacity-limited pixel-read workflow.
         statistics_service: Coalescing statistics workflow.
+        detail_preview_service: Coalescing bounded detail-preview workflow.
+        detail_statistics_service: Selected-window sampled-grid statistics.
         registry: Process-local layer authorization shared with WMS.
 
     Returns:
@@ -162,27 +122,54 @@ def create_raster_feature(
             raise raster_http_exception(error) from error
 
     @router.post(
-        "/pixels",
-        response_model=RasterPixel,
+        "/detail-previews",
+        response_model=RasterDetailPreview,
     )
-    async def sample_raster_pixel(
-        request: CatalogPixelRequest,
-    ) -> RasterPixel:
-        """Read one pixel from a selected published raster.
+    async def raster_detail_preview(
+        request: CatalogRasterDetailPreviewRequest,
+        http_request: Request,
+    ) -> RasterDetailPreview:
+        """Return an explicitly selected bounded sampled-raster preview.
 
         Args:
-            request: Published Item identity and WGS 84 coordinate.
+            request: Catalog identity and optional current map view.
+            http_request: Incoming request used to detect cancellation.
 
         Returns:
-            Band-one pixel position and value or out-of-bounds result.
+            Georeferenced numeric image colored by the browser's shared raster
+            ramp without any arbitrary full-source read.
 
         Raises:
-            HTTPException: If the layer is not current or cannot be sampled.
+            HTTPException: If the raster or preview contract is inapplicable
+                or the browser disconnects.
         """
+        preview_task = asyncio.create_task(detail_preview_service.get(request))
+        disconnect_task = asyncio.create_task(
+            wait_for_http_disconnect(http_request)
+        )
         try:
-            return await pixel_service.get(request)
-        except RasterFeatureError as error:
-            raise raster_http_exception(error) from error
+            completed_tasks, _ = await asyncio.wait(
+                (preview_task, disconnect_task),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if preview_task in completed_tasks:
+                try:
+                    return preview_task.result()
+                except RasterFeatureError as error:
+                    raise raster_http_exception(error) from error
+
+            raise HTTPException(
+                status_code=499,
+                detail="The raster detail preview request was canceled",
+            )
+        finally:
+            disconnect_task.cancel()
+            preview_task.cancel()
+            await asyncio.gather(
+                preview_task,
+                disconnect_task,
+                return_exceptions=True,
+            )
 
     @router.post(
         "/statistics",
@@ -231,5 +218,28 @@ def create_raster_feature(
                 disconnect_task,
                 return_exceptions=True,
             )
+
+    @router.post(
+        "/detail-statistics",
+        response_model=RasterStatistics,
+    )
+    async def raster_detail_statistics(
+        request: CatalogRasterDetailStatisticsRequest,
+    ) -> RasterStatistics:
+        """Summarize one clicked window on an overview-limited raster.
+
+        Args:
+            request: Catalog identity and required WGS 84 selected bounds.
+
+        Returns:
+            Fixed-bin histogram over bounded Fine adaptive detail.
+
+        Raises:
+            HTTPException: If authorization or bounded sampling fails.
+        """
+        try:
+            return await detail_statistics_service.get(request)
+        except RasterFeatureError as error:
+            raise raster_http_exception(error) from error
 
     return RasterFeature(router=router, registry=registry)
