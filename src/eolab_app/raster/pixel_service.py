@@ -7,20 +7,21 @@ from pathlib import Path
 import rasterio
 
 from eolab_app.raster.errors import RasterConflictError
-from eolab_app.raster.models import CatalogPixelRequest, RasterPixel
+from eolab_app.raster.models import (
+    AuthorizedRaster,
+    CatalogPixelRequest,
+    RasterPixel,
+)
 from eolab_app.raster.pixel import read_raster_pixel
-from eolab_app.raster.sources import PublishedRasterRegistry
-
-
-GEOSERVER_WORKSPACE_NAME = "eolab"
+from eolab_app.raster.ports import RasterSourceAuthorizer
 
 
 class RasterPixelService:
-    """Authorize and schedule pixel reads within a fixed capacity."""
+    """Authorize and schedule rendering-independent pixel reads."""
 
     def __init__(
         self,
-        raster_registry: PublishedRasterRegistry,
+        source_authorizer: RasterSourceAuthorizer,
         read_concurrency: int,
         pixel_reader: Callable[[Path, float, float], RasterPixel] = (
             read_raster_pixel
@@ -29,57 +30,67 @@ class RasterPixelService:
         """Create a bounded pixel-read service.
 
         Args:
-            raster_registry: Current-process publication authorizations.
+            source_authorizer: Catalog-owned mounted-source authorization.
             read_concurrency: Maximum simultaneous Rasterio reads.
             pixel_reader: Synchronous pixel boundary, replaceable in tests.
         """
-        self._raster_registry = raster_registry
+        self._source_authorizer = source_authorizer
         self._read_semaphore = asyncio.Semaphore(read_concurrency)
         self._pixel_reader = pixel_reader
 
-    def _read_current(self, request: CatalogPixelRequest) -> RasterPixel:
-        """Resolve and sample an approved raster in one worker-thread job.
+    async def _read_current(
+        self,
+        authorized_raster: AuthorizedRaster,
+        request: CatalogPixelRequest,
+    ) -> RasterPixel:
+        """Sample one source while retaining read capacity and identity.
 
         Args:
+            authorized_raster: Catalog source authorized at request start.
             request: Validated Item identity and WGS 84 position.
 
         Returns:
-            The sampled band-1 value and source cell.
+            The sampled band-one value and source cell.
 
         Raises:
-            RasterConflictError: If the source changed or is unreadable.
+            RasterConflictError: If the source changes around the read.
             OSError: If the source cannot be read.
             rasterio.errors.RasterioError: If GDAL cannot sample it.
             ValueError: If its CRS cannot transform the position.
         """
-        layer_name = f"{GEOSERVER_WORKSPACE_NAME}:{request.item_id}"
-        authorized_raster = self._raster_registry.require_current(layer_name)
-        return self._pixel_reader(
+        await self._source_authorizer.require_current(authorized_raster)
+        pixel = await asyncio.to_thread(
+            self._pixel_reader,
             authorized_raster.source_path,
             request.longitude,
             request.latitude,
         )
+        await self._source_authorizer.require_current(authorized_raster)
+        return pixel
 
     async def get(self, request: CatalogPixelRequest) -> RasterPixel:
-        """Sample one pixel without exceeding raster-read capacity.
+        """Sample one catalog raster without rendering-state authorization.
 
         Args:
             request: Validated Item identity and WGS 84 position.
 
         Returns:
-            The sampled band-1 value and source cell.
+            The sampled band-one value and source cell.
 
         Raises:
-            RasterConflictError: If the source is changed or unreadable.
-            RasterRequestError: If the layer has not been approved.
+            RasterFeatureError: If the catalog source cannot be authorized.
+            RasterConflictError: If the source is stale or cannot be sampled.
         """
+        authorized_raster = await self._source_authorizer.authorize(request)
         await self._read_semaphore.acquire()
-        read_task = asyncio.create_task(asyncio.to_thread(self._read_current, request))
+        read_task = asyncio.create_task(
+            self._read_current(authorized_raster, request)
+        )
 
-        def release_read_slot(
+        def retrieve_task_exception(
             completed_task: asyncio.Task[RasterPixel],
         ) -> None:
-            """Release capacity after the worker thread actually completes.
+            """Retrieve a worker failure after HTTP cancellation.
 
             Args:
                 completed_task: Finished pixel-read task.
@@ -88,9 +99,11 @@ class RasterPixelService:
             if not completed_task.cancelled():
                 completed_task.exception()
 
-        read_task.add_done_callback(release_read_slot)
+        read_task.add_done_callback(retrieve_task_exception)
         try:
             return await asyncio.shield(read_task)
+        except RasterConflictError:
+            raise
         except (OSError, ValueError, rasterio.errors.RasterioError) as error:
             raise RasterConflictError(
                 "The selected raster could not be sampled"

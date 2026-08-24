@@ -149,15 +149,18 @@ current selection even if cancellation loses a race. The underlying preview
 cache identity already includes source signature, center-sample mode, fine
 density, exact window, and policy/resource-bound versions.
 
-The pointer pixel probe remains available in this mode, but it uses a distinct
-`/detail-pixels` contract rather than the published-raster endpoint. The
-browser supplies only Collection and Item IDs plus one WGS 84 coordinate. The
-server repeats the adaptive-preview authorization and source-signature checks,
-opens the signed GeoTIFF once, and reads exactly the one native band-one block
-containing that source cell. Embedded nodata is returned as nodata, never zero.
-The existing 100 ms throttle, cancellation, and request-sequence rules prevent
-superseded hover responses from updating the tooltip. This does not publish the
-raster or authorize WMS access.
+The pointer pixel probe remains available in this mode through the same
+`/api/raster-analysis/pixels` contract used by normally rendered rasters. The
+browser supplies only Collection and Item IDs plus one WGS 84 coordinate. A
+dedicated catalog-source authorizer resolves the mounted Asset and checks its
+scanner-recorded source identity without inspecting visualization eligibility,
+publication state, preview mode, or GeoServer health. The independent pixel
+service opens the source once and requests one masked band-one source cell;
+nodata is returned as nodata, never zero. The existing 100 ms throttle,
+cancellation, and request-sequence rules prevent superseded hover responses
+from updating the tooltip. The parent raster viewer coordinates only the
+active Item and pointer position. Neither the pixel controller nor its backend
+service depends on the WMS or adaptive-preview component.
 
 ## Source-read proofs and output bounds
 
@@ -188,10 +191,10 @@ The sampled-proxy fixed bounds are:
   multi-probe work that exceeds the fixed total. It bounds total decode work;
   the blocks are streamed and are not retained together.
 
-Each independent pointer probe is bounded to one source open and one complete
-native band-one block read. The overview-only authorization requires the
-catalog assessment to have already proven that native block structure safe;
-the source signature is rechecked before and after the read.
+Each independent pointer probe is bounded to one source open and one 1 × 1
+band-one Rasterio window; the underlying native data and validity blocks are
+therefore limited to those needed for that cell. The scanner-recorded primary
+source signature is checked at authorization and around the read.
 
 The representative patch retains its smaller 64 MiB cumulative decoded-work
 ceiling because it reconstructs full candidate windows. Patch output remains at

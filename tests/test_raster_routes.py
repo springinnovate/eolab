@@ -10,7 +10,9 @@ from eolab_app.raster.errors import (
     RasterPublicationFailureCategory,
 )
 from eolab_app.raster.sources import PublishedRasterRegistry
-from eolab_app.routes.rasters import create_raster_feature, raster_http_exception
+from eolab_app.routes.raster_analysis import create_raster_analysis_router
+from eolab_app.routes.raster_http import raster_http_exception
+from eolab_app.routes.rasters import create_raster_feature
 
 
 class _ConflictService:
@@ -27,11 +29,6 @@ class _ConflictService:
     async def get(self, _: object) -> None:
         """Fail analysis with a browser-safe conflict."""
         raise RasterConflictError("controlled raster conflict")
-
-    async def get_pixel(self, _: object) -> None:
-        """Fail detail-pixel analysis with a browser-safe conflict."""
-        raise RasterConflictError("controlled raster conflict")
-
 
 class _PublicationFailureService:
     """Raise one controlled categorized publication failure."""
@@ -61,10 +58,10 @@ def test_raster_routes_translate_application_errors_at_http_boundary() -> None:
         service,
         service,
         service,
-        service,
         registry,
     )
     application = FastAPI()
+    application.include_router(create_raster_analysis_router(service))
     application.include_router(feature.router)
 
     response = TestClient(application).post(
@@ -97,8 +94,8 @@ def test_raster_routes_translate_application_errors_at_http_boundary() -> None:
     assert detail_response.status_code == 409
     assert detail_response.json() == {"detail": "controlled raster conflict"}
 
-    detail_pixel_response = TestClient(application).post(
-        "/api/rendering/detail-pixels",
+    pixel_response = TestClient(application).post(
+        "/api/raster-analysis/pixels",
         json={
             "collectionId": "eolab-mounted-geotiffs",
             "itemId": "geotiff-0123456789abcdef01234567",
@@ -106,10 +103,20 @@ def test_raster_routes_translate_application_errors_at_http_boundary() -> None:
             "latitude": 37.5,
         },
     )
-    assert detail_pixel_response.status_code == 409
-    assert detail_pixel_response.json() == {
+    assert pixel_response.status_code == 409
+    assert pixel_response.json() == {
         "detail": "controlled raster conflict"
     }
+    retired_rendering_pixel_response = TestClient(application).post(
+        "/api/rendering/pixels",
+        json={
+            "collectionId": "eolab-mounted-geotiffs",
+            "itemId": "geotiff-0123456789abcdef01234567",
+            "longitude": -122.5,
+            "latitude": 37.5,
+        },
+    )
+    assert retired_rendering_pixel_response.status_code == 404
 
     statistics_response = TestClient(application).post(
         "/api/rendering/detail-statistics",
@@ -190,7 +197,6 @@ def test_detail_preview_route_rejects_unowned_sampling_parameters(
         service,
         service,
         service,
-        service,
         PublishedRasterRegistry(),
     )
     application = FastAPI()
@@ -246,7 +252,6 @@ def test_detail_statistics_route_requires_only_selected_bounds(
         service,
         service,
         service,
-        service,
         PublishedRasterRegistry(),
     )
     application = FastAPI()
@@ -274,7 +279,6 @@ def test_publication_route_returns_actionable_category_document() -> None:
     service = _PublicationFailureService()
     registry = PublishedRasterRegistry()
     feature = create_raster_feature(
-        service,
         service,
         service,
         service,

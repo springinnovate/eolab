@@ -789,13 +789,13 @@ def test_raster_publication_rejects_a_mismatched_catalog_item(
 
 
 
-def test_pixel_probe_samples_nodata_and_outside_the_published_raster(
+def test_pixel_probe_samples_catalog_raster_without_geoserver(
     configured_environment: None,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     version_file_path: Path,
 ) -> None:
-    """Read one band-1 cell and distinguish nodata from out-of-bounds.
+    """Read value, nodata, and bounds without a rendering dependency.
 
     Args:
         configured_environment: Applied baseline application environment.
@@ -826,20 +826,37 @@ def test_pixel_probe_samples_nodata_and_outside_the_published_raster(
     monkeypatch.setenv("SCAN_MOUNT_PATH", str(tmp_path))
     monkeypatch.setenv("SCAN_PATHS_WITHIN_MOUNT", '["."]')
     item = _mounted_geotiff_item(source_path.as_uri())
-    publication_mock = GeoServerPublicationMock()
+    rendering = item["assets"]["data"]["eolab:rendering"]
+    rendering.update({
+        "eligible": False,
+        "reader_compatible": False,
+        "reason_code": "geoserver_crs_metadata_incompatible",
+    })
+    geoserver_requests: list[httpx2.Request] = []
 
-    def upstream_response(request: httpx2.Request) -> httpx2.Response:
-        """Return the controlled catalog or GeoServer response.
+    def catalog_response(request: httpx2.Request) -> httpx2.Response:
+        """Return the controlled catalog Item.
 
         Args:
             request: Upstream request issued by the application.
 
         Returns:
-            Catalog Item or stateful GeoServer publication response.
+            Authoritative scanner-owned Item.
         """
-        if request.url.host == "stac-api":
-            return httpx2.Response(200, json=item)
-        return publication_mock(request)
+        assert request.url.host == "stac-api"
+        return httpx2.Response(200, json=item)
+
+    def geoserver_response(request: httpx2.Request) -> httpx2.Response:
+        """Record any forbidden pixel dependency on GeoServer.
+
+        Args:
+            request: Unexpected GeoServer request.
+
+        Returns:
+            Controlled unavailable response.
+        """
+        geoserver_requests.append(request)
+        return httpx2.Response(503)
 
     request_identity = {
         "collectionId": "eolab-mounted-geotiffs",
@@ -848,27 +865,24 @@ def test_pixel_probe_samples_nodata_and_outside_the_published_raster(
     with TestClient(
         create_app(
             version_file_path,
-            catalog_transport=httpx2.MockTransport(upstream_response),
-            geoserver_transport=httpx2.MockTransport(upstream_response),
+            catalog_transport=httpx2.MockTransport(catalog_response),
+            geoserver_transport=httpx2.MockTransport(geoserver_response),
         )
     ) as client:
-        assert client.post(
-            "/api/rendering/layers",
-            json=request_identity,
-        ).status_code == 200
         value_response = client.post(
-            "/api/rendering/pixels",
+            "/api/raster-analysis/pixels",
             json={**request_identity, "longitude": -0.5, "latitude": 0.5},
         )
         nodata_response = client.post(
-            "/api/rendering/pixels",
+            "/api/raster-analysis/pixels",
             json={**request_identity, "longitude": 0.5, "latitude": 0.5},
         )
         outside_response = client.post(
-            "/api/rendering/pixels",
+            "/api/raster-analysis/pixels",
             json={**request_identity, "longitude": 10, "latitude": 10},
         )
 
+    assert geoserver_requests == []
     assert value_response.status_code == 200
     assert value_response.json() == {
         "longitude": -0.5,
@@ -1272,27 +1286,6 @@ def test_raster_statistics_require_the_published_identity_contract(
     assert response.status_code == expected_status
 
 
-def test_pixel_probe_requires_an_approved_current_raster(
-    configured_environment: None,
-    version_file_path: Path,
-) -> None:
-    """Reject a valid Item identity until this app process publishes it."""
-    response = TestClient(create_app(version_file_path)).post(
-        "/api/rendering/pixels",
-        json={
-            "collectionId": "eolab-mounted-geotiffs",
-            "itemId": TEST_GEOTIFF_ITEM_ID,
-            "longitude": -123,
-            "latitude": 48,
-        },
-    )
-
-    assert response.status_code == 400
-    assert response.json() == {
-        "detail": "The WMS layer has not been approved for visualization"
-    }
-
-
 @pytest.mark.parametrize(
     "request_body",
     (
@@ -1336,7 +1329,7 @@ def test_pixel_probe_rejects_input_outside_its_public_contract(
 ) -> None:
     """Accept only mounted-raster identity and finite WGS 84 coordinates."""
     response = TestClient(create_app(version_file_path)).post(
-        "/api/rendering/pixels",
+        "/api/raster-analysis/pixels",
         json=request_body,
     )
 

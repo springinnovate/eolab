@@ -41,7 +41,6 @@ from eolab_app.raster.errors import RasterConflictError
 from eolab_app.raster.models import (
     AuthorizedRaster,
     CanonicalWgs84Bounds,
-    CatalogPixelRequest,
     CatalogRasterDetailPreviewRequest,
     CatalogRasterRequest,
     GEOSERVER_READER_CONTRACT,
@@ -49,11 +48,9 @@ from eolab_app.raster.models import (
     RasterDetailPreviewCacheKey,
     RasterDetailPreviewDensity,
     RasterDetailPreviewMode,
-    RasterPixel,
     SourceSignature,
     Wgs84Bounds,
 )
-from eolab_app.raster.pixel import read_raster_detail_pixel
 from eolab_app.raster.ports import RasterCatalog
 from eolab_app.raster.sources import MountedRasterResolver, source_signature
 
@@ -81,9 +78,6 @@ class RasterDetailPreviewService:
             ],
             RasterDetailPreview,
         ] = read_raster_detail_preview,
-        pixel_reader: Callable[[Path, float, float], RasterPixel] = (
-            read_raster_detail_pixel
-        ),
         signature_reader: Callable[[Path], SourceSignature] = source_signature,
     ) -> None:
         """Create a bounded preview workflow over authoritative catalog data.
@@ -95,7 +89,6 @@ class RasterDetailPreviewService:
                 unique preview computations.
             cache_entries: Maximum completed preview documents retained.
             preview_reader: Synchronous bounded Rasterio preview boundary.
-            pixel_reader: Synchronous signed detail-pixel boundary.
             signature_reader: Synchronous source identity boundary.
 
         Raises:
@@ -111,7 +104,6 @@ class RasterDetailPreviewService:
         self._maximum_inflight = read_concurrency
         self._cache_entries = cache_entries
         self._preview_reader = preview_reader
-        self._pixel_reader = pixel_reader
         self._signature_reader = signature_reader
         self._cache: OrderedDict[
             RasterDetailPreviewCacheKey,
@@ -306,86 +298,6 @@ class RasterDetailPreviewService:
             raster_extent,
         )
 
-    async def get_pixel(
-        self,
-        request: CatalogPixelRequest,
-    ) -> RasterPixel:
-        """Read one pixel from a currently authorized detail-only raster.
-
-        The pixel uses the same overview-rejection, source-signature, mounted
-        path, validity, and bounded concurrency contracts as adaptive previews.
-        It is intentionally separate from published-raster authorization.
-
-        Args:
-            request: Catalog identity and validated WGS 84 position.
-
-        Returns:
-            Honest band-one source cell and value or out-of-bounds response.
-
-        Raises:
-            RasterFeatureError: If catalog or mounted-source authorization
-                fails.
-            RasterConflictError: If the source changes or the one-block read
-                cannot satisfy the detail-only contract.
-        """
-        authorized_raster, _ = await self._authorize(request)
-        read_task = asyncio.create_task(
-            self._read_pixel(authorized_raster, request)
-        )
-        read_task.add_done_callback(self._retrieve_task_exception)
-        try:
-            return await asyncio.shield(read_task)
-        except RasterConflictError:
-            raise
-        except (OSError, ValueError, rasterio.errors.RasterioError) as error:
-            raise RasterConflictError(
-                "The bounded detail-only raster pixel could not be sampled."
-            ) from error
-
-    async def _read_pixel(
-        self,
-        authorized_raster: AuthorizedRaster,
-        request: CatalogPixelRequest,
-    ) -> RasterPixel:
-        """Hold shared read capacity through one complete worker-thread probe.
-
-        Args:
-            authorized_raster: Current source identity established at request
-                start.
-            request: Validated WGS 84 pixel position.
-
-        Returns:
-            Current source pixel response.
-
-        Raises:
-            RasterConflictError: If the source changes around the read.
-            OSError: If source identity or pixels cannot be read.
-            rasterio.errors.RasterioError: If GDAL cannot transform or read.
-            ValueError: If the detail-only source contract is invalid.
-        """
-        async with self._read_semaphore:
-            if await asyncio.to_thread(
-                self._signature_reader,
-                authorized_raster.source_path,
-            ) != authorized_raster.source_signature:
-                raise RasterConflictError(
-                    "The raster changed before detail pixel sampling."
-                )
-            pixel = await asyncio.to_thread(
-                self._pixel_reader,
-                authorized_raster.source_path,
-                request.longitude,
-                request.latitude,
-            )
-            if await asyncio.to_thread(
-                self._signature_reader,
-                authorized_raster.source_path,
-            ) != authorized_raster.source_signature:
-                raise RasterConflictError(
-                    "The raster changed while its detail pixel was sampled."
-                )
-            return pixel
-
     async def get(
         self,
         request: CatalogRasterDetailPreviewRequest,
@@ -521,7 +433,7 @@ class RasterDetailPreviewService:
 
     @staticmethod
     def _retrieve_task_exception(
-        completed_task: asyncio.Task[object],
+        completed_task: asyncio.Task[RasterDetailPreview],
     ) -> None:
         """Retrieve failures from coalesced work after HTTP cancellation.
 

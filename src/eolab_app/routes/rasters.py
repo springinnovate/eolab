@@ -10,30 +10,20 @@ from eolab_app.raster.detail_preview_service import RasterDetailPreviewService
 from eolab_app.raster.detail_statistics_service import (
     RasterDetailStatisticsService,
 )
-from eolab_app.raster.errors import (
-    RasterAssetError,
-    RasterConflictError,
-    RasterFeatureError,
-    RasterNotFoundError,
-    RasterPublicationError,
-    RasterRequestError,
-    RasterUpstreamError,
-)
+from eolab_app.raster.errors import RasterFeatureError
 from eolab_app.raster.models import (
-    CatalogPixelRequest,
     CatalogRasterDetailPreviewRequest,
     CatalogRasterDetailStatisticsRequest,
     CatalogRasterRequest,
     CatalogRasterStatisticsRequest,
     PublishedRaster,
     RasterDetailPreview,
-    RasterPixel,
     RasterStatistics,
 )
-from eolab_app.raster.pixel_service import RasterPixelService
 from eolab_app.raster.publication import RasterPublicationService
 from eolab_app.raster.sources import PublishedRasterRegistry
 from eolab_app.raster.statistics_service import RasterStatisticsService
+from eolab_app.routes.raster_http import raster_http_exception
 
 
 @dataclass(frozen=True)
@@ -47,45 +37,6 @@ class RasterFeature:
 
     router: APIRouter
     registry: PublishedRasterRegistry
-
-
-def raster_http_exception(error: RasterFeatureError) -> HTTPException:
-    """Translate one application failure into the stable public HTTP contract.
-
-    Args:
-        error: Application-level raster failure.
-
-    Returns:
-        FastAPI exception with the stable status and public error document.
-
-    Raises:
-        TypeError: If a new failure type has no explicit HTTP mapping.
-    """
-    if isinstance(error, RasterPublicationError):
-        publication_status_codes = {
-            "reader_rejection": 422,
-            "connectivity": 503,
-            "authentication": 502,
-            "timeout": 504,
-            "configuration": 503,
-            "upstream_failure": 502,
-        }
-        return HTTPException(
-            status_code=publication_status_codes[error.category],
-            detail={"category": error.category, "message": error.detail},
-        )
-
-    status_codes: tuple[tuple[type[RasterFeatureError], int], ...] = (
-        (RasterRequestError, 400),
-        (RasterNotFoundError, 404),
-        (RasterAssetError, 422),
-        (RasterConflictError, 409),
-        (RasterUpstreamError, 502),
-    )
-    for error_type, status_code in status_codes:
-        if isinstance(error, error_type):
-            return HTTPException(status_code=status_code, detail=error.detail)
-    raise TypeError(f"Unmapped raster failure: {type(error).__name__}")
 
 
 async def wait_for_http_disconnect(request: Request) -> None:
@@ -104,7 +55,6 @@ async def wait_for_http_disconnect(request: Request) -> None:
 def create_raster_feature(
     assessment_service: RasterAssessmentService,
     publication_service: RasterPublicationService,
-    pixel_service: RasterPixelService,
     statistics_service: RasterStatisticsService,
     detail_preview_service: RasterDetailPreviewService,
     detail_statistics_service: RasterDetailStatisticsService,
@@ -115,7 +65,6 @@ def create_raster_feature(
     Args:
         assessment_service: Authoritative reassessment workflow.
         publication_service: Serialized publication workflow.
-        pixel_service: Capacity-limited pixel-read workflow.
         statistics_service: Coalescing statistics workflow.
         detail_preview_service: Coalescing bounded detail-preview workflow.
         detail_statistics_service: Selected-window sampled-grid statistics.
@@ -169,29 +118,6 @@ def create_raster_feature(
         """
         try:
             return await publication_service.publish(request)
-        except RasterFeatureError as error:
-            raise raster_http_exception(error) from error
-
-    @router.post(
-        "/pixels",
-        response_model=RasterPixel,
-    )
-    async def sample_raster_pixel(
-        request: CatalogPixelRequest,
-    ) -> RasterPixel:
-        """Read one pixel from a selected published raster.
-
-        Args:
-            request: Published Item identity and WGS 84 coordinate.
-
-        Returns:
-            Band-one pixel position and value or out-of-bounds result.
-
-        Raises:
-            HTTPException: If the layer is not current or cannot be sampled.
-        """
-        try:
-            return await pixel_service.get(request)
         except RasterFeatureError as error:
             raise raster_http_exception(error) from error
 
@@ -287,30 +213,6 @@ def create_raster_feature(
         """
         try:
             return await detail_statistics_service.get(request)
-        except RasterFeatureError as error:
-            raise raster_http_exception(error) from error
-
-    @router.post(
-        "/detail-pixels",
-        response_model=RasterPixel,
-    )
-    async def sample_raster_detail_pixel(
-        request: CatalogPixelRequest,
-    ) -> RasterPixel:
-        """Read one pixel from an authorized overview-limited raster.
-
-        Args:
-            request: Catalog Item identity and WGS 84 coordinate.
-
-        Returns:
-            Band-one source cell and value or out-of-bounds result.
-
-        Raises:
-            HTTPException: If detail-only authorization or bounded sampling
-                fails.
-        """
-        try:
-            return await detail_preview_service.get_pixel(request)
         except RasterFeatureError as error:
             raise raster_http_exception(error) from error
 

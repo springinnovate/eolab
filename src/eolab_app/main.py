@@ -31,6 +31,9 @@ from eolab_app.raster.detail_statistics_service import (
 )
 from eolab_app.raster.pixel_service import RasterPixelService
 from eolab_app.raster.publication import RasterPublicationService
+from eolab_app.raster.source_authorization import (
+    CatalogRasterSourceAuthorizer,
+)
 from eolab_app.raster.sources import (
     MountedRasterResolver,
     PublishedRasterRegistry,
@@ -38,6 +41,7 @@ from eolab_app.raster.sources import (
 from eolab_app.raster.statistics_service import RasterStatisticsService
 from eolab_app.routes.catalog import create_catalog_router
 from eolab_app.routes.diagnostics import create_diagnostics_router
+from eolab_app.routes.raster_analysis import create_raster_analysis_router
 from eolab_app.routes.rasters import create_raster_feature
 from eolab_app.routes.scans import create_scan_router
 from eolab_app.routes.stac_proxy import (
@@ -116,6 +120,10 @@ def create_app(
     raster_source_resolver = MountedRasterResolver(
         app_global_configuration.scan_mount_path
     )
+    raster_source_authorizer = CatalogRasterSourceAuthorizer(
+        raster_catalog,
+        raster_source_resolver,
+    )
     raster_reader_assessor = GeoServerRasterReaderAssessor(
         geoserver_rest_client,
         app_global_configuration.geoserver_internal_url,
@@ -143,6 +151,10 @@ def create_app(
         app_global_configuration.raster_pixel_read_concurrency,
         app_global_configuration.raster_statistics_cache_entries,
     )
+    raster_pixel_service = RasterPixelService(
+        raster_source_authorizer,
+        app_global_configuration.raster_pixel_read_concurrency,
+    )
     raster_feature = create_raster_feature(
         RasterAssessmentService(
             app_global_configuration.scan_mount_path,
@@ -158,10 +170,6 @@ def create_app(
                 app_global_configuration.geoserver_internal_url,
             ),
             published_rasters,
-        ),
-        RasterPixelService(
-            published_rasters,
-            app_global_configuration.raster_pixel_read_concurrency,
         ),
         RasterStatisticsService(
             published_rasters,
@@ -213,6 +221,9 @@ def create_app(
     catalog_database = PgStacCatalogDatabase()
     application.include_router(
         create_catalog_router(catalog_database.random_matching_item)
+    )
+    application.include_router(
+        create_raster_analysis_router(raster_pixel_service)
     )
     application.include_router(raster_feature.router)
     scan_manager = ScanManager(

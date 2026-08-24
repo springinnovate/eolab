@@ -49,13 +49,11 @@ from eolab_app.raster.exact_detail import (
 )
 from eolab_app.raster.errors import RasterConflictError
 from eolab_app.raster.models import (
-    CatalogPixelRequest,
     CatalogRasterDetailPreviewRequest,
     GEOSERVER_READER_CONTRACT,
     RasterDetailPreview,
     RasterDetailPreviewDensity,
     RasterDetailPreviewMode,
-    RasterPixel,
 )
 from eolab_app.raster.sources import source_signature
 
@@ -1668,65 +1666,6 @@ def _detail_item(
         },
         rendering,
     )
-
-
-def test_service_authorizes_detail_pixel_without_publication(
-    tmp_path: Path,
-) -> None:
-    """Use overview-only catalog authorization for one native-block probe.
-
-    Args:
-        tmp_path: Temporary authorized source directory.
-    """
-    source_path = tmp_path / "detail-pixel.tif"
-    source_path.write_bytes(b"source")
-    item, _ = _detail_item(source_signature(source_path))
-    pixel_reads: list[tuple[Path, float, float]] = []
-
-    def pixel_reader(
-        path: Path,
-        longitude: float,
-        latitude: float,
-    ) -> RasterPixel:
-        """Return one controlled pixel after recording authorized inputs.
-
-        Args:
-            path: Authorized mounted source.
-            longitude: WGS 84 longitude.
-            latitude: WGS 84 latitude.
-
-        Returns:
-            Controlled finite source pixel.
-        """
-        pixel_reads.append((path, longitude, latitude))
-        return RasterPixel(
-            longitude=longitude,
-            latitude=latitude,
-            row=4,
-            column=5,
-            inBounds=True,
-            value=12.5,
-        )
-
-    service = RasterDetailPreviewService(
-        _Catalog(item),
-        _Resolver(source_path),
-        read_concurrency=1,
-        cache_entries=2,
-        pixel_reader=pixel_reader,
-    )
-    request = CatalogPixelRequest(
-        collectionId="eolab-mounted-geotiffs",
-        itemId=ITEM_ID,
-        longitude=-117.5,
-        latitude=36.5,
-    )
-
-    pixel = asyncio.run(service.get_pixel(request))
-
-    assert pixel.value == 12.5
-    assert (pixel.row, pixel.column) == (4, 5)
-    assert pixel_reads == [(source_path, -117.5, 36.5)]
 
 
 def test_service_coalesces_by_source_mode_parameters_and_rejects_unsafe_reason(

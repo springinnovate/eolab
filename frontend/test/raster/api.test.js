@@ -8,10 +8,12 @@ import {
   loadCatalogRasterDetailPreview,
   publishCatalogRaster,
   RenderingRequestError,
-  sampleCatalogRasterDetailPixel,
-  sampleCatalogRasterPixel,
   validateRasterDetailPreview,
 } from "../../src/raster/api.js";
+import {
+  RasterAnalysisRequestError,
+  sampleCatalogRasterPixel,
+} from "../../src/raster/pixel-api.js";
 import {
   MOUNTED_GEOTIFF_ITEM,
   CENTER_SAMPLE_DETAIL_PREVIEW,
@@ -872,7 +874,7 @@ test("sampleCatalogRasterPixel sends only Item identity and WGS 84 position", as
   assert.equal(pixel.value, 12.5);
   assert.deepEqual(requests, [
     {
-      url: "/api/rendering/pixels",
+      url: "/api/raster-analysis/pixels",
       options: {
         method: "POST",
         headers: {
@@ -891,45 +893,23 @@ test("sampleCatalogRasterPixel sends only Item identity and WGS 84 position", as
   ]);
 });
 
-test("detail-only pixel sampling uses its catalog-authorized endpoint", async () => {
-  const requests = [];
-  const abortController = new AbortController();
-  const pixel = await sampleCatalogRasterDetailPixel(
+test("pixel analysis preserves catalog-source failures", async () => {
+  const request = sampleCatalogRasterPixel(
     MOUNTED_GEOTIFF_ITEM,
     { longitude: -122.25, latitude: 48.75 },
-    abortController.signal,
-    async (url, options) => {
-      requests.push({ url, options });
-      return new Response(JSON.stringify({
-        longitude: -122.25,
-        latitude: 48.75,
-        row: 10,
-        column: 20,
-        inBounds: true,
-        value: 42.5,
-      }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    },
+    new AbortController().signal,
+    async () => new Response(
+      JSON.stringify({
+        detail: "The cataloged raster changed; scan it again before analysis.",
+      }),
+      { status: 409, headers: { "Content-Type": "application/json" } },
+    ),
   );
 
-  assert.equal(pixel.value, 42.5);
-  assert.deepEqual(requests, [{
-    url: "/api/rendering/detail-pixels",
-    options: {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        collectionId: MOUNTED_GEOTIFF_ITEM.collection,
-        itemId: MOUNTED_GEOTIFF_ITEM.id,
-        longitude: -122.25,
-        latitude: 48.75,
-      }),
-      signal: abortController.signal,
-    },
-  }]);
+  await assert.rejects(request, (error) => {
+    assert.equal(error instanceof RasterAnalysisRequestError, true);
+    assert.equal(error.status, 409);
+    assert.match(error.message, /scan it again/);
+    return true;
+  });
 });

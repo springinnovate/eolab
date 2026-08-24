@@ -10,9 +10,8 @@ import {
     loadCatalogRasterDetailStatistics,
     loadCatalogRasterStatistics,
     publishCatalogRaster,
-    sampleCatalogRasterDetailPixel,
-    sampleCatalogRasterPixel,
 } from "./api.js";
+import { sampleCatalogRasterPixel } from "./pixel-api.js";
 import {
     DEFAULT_RASTER_SAMPLE_WINDOW_SIZE_KM,
     isCanonicalWgs84Position,
@@ -106,9 +105,6 @@ const RASTER_STYLE_DEBOUNCE_MILLISECONDS = 200;
  * @property {(item: Object, point: Object, signal: AbortSignal)
  * => Promise<Object>} [samplePixel=sampleCatalogRasterPixel] Samples one raster
  * pixel.
- * @property {(item:Object,point:Object,signal:AbortSignal)=>Promise<Object>}
- * [sampleDetailPixel=sampleCatalogRasterDetailPixel] Samples one authorized
- * detail-only source pixel.
  * @property {{setTimeout: (callback: () => void, delay: number) => *,
  * clearTimeout: (identifier: *) => void}} [clock=globalThis] Timer
  * implementation.
@@ -143,7 +139,6 @@ export function initializeRasterViewer(
         loadStatistics = loadCatalogRasterStatistics,
         loadDetailStatistics = loadCatalogRasterDetailStatistics,
         samplePixel = sampleCatalogRasterPixel,
-        sampleDetailPixel = sampleCatalogRasterDetailPixel,
         clock = globalThis,
         viewport = globalThis,
     } = {}
@@ -329,9 +324,7 @@ export function initializeRasterViewer(
     }
 
     const pixelProbeController = new RasterPixelProbeController(
-        (item, point, signal) => isActiveSampledRaster()
-            ? sampleDetailPixel(item, point, signal)
-            : samplePixel(item, point, signal),
+        samplePixel,
         renderRasterPixel,
         renderRasterPixelError
     );
@@ -613,8 +606,8 @@ export function initializeRasterViewer(
      * raster that is already visible through the detail-preview controller.
      *
      * The session never publishes WMS, reads whole-raster statistics, or
-     * accepts a temporary AOI. Pixel hovering uses the separate catalog-
-     * authorized one-native-block detail endpoint.
+     * accepts a temporary AOI. The independent pixel controller receives only
+     * the active Catalog Item, exactly as it does for a WMS-rendered raster.
      *
      * @param {Object} item Selected overview-limited Catalog raster.
      * @param {Object} style Initial min/median/max shared raster color style.

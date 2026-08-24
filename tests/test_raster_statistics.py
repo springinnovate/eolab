@@ -18,7 +18,9 @@ from rasterio.windows import Window
 
 from eolab_app.raster.errors import RasterConflictError
 from eolab_app.raster.models import (
+    AuthorizedRaster,
     CatalogPixelRequest,
+    CatalogRasterRequest,
     CatalogRasterStatisticsRequest,
     RasterPixel,
     RasterHistogram,
@@ -46,6 +48,46 @@ from eolab_app.sampling_area import (
     TemporaryAoiSamplingArea,
     freeze_coordinates,
 )
+
+
+class _PixelSourceAuthorizer:
+    """Authorize one controlled catalog source without rendering state."""
+
+    def __init__(self) -> None:
+        """Create one stable controlled source identity."""
+        self.authorization = AuthorizedRaster(
+            source_path=Path("raster.tif"),
+            source_signature=(1, 2, 3, 4, 5),
+        )
+        self.authorization_count = 0
+        self.current_check_count = 0
+
+    async def authorize(
+        self,
+        _: CatalogRasterRequest,
+    ) -> AuthorizedRaster:
+        """Return the controlled current source.
+
+        Args:
+            _: Ignored catalog pixel request.
+
+        Returns:
+            Stable controlled source authorization.
+        """
+        self.authorization_count += 1
+        return self.authorization
+
+    async def require_current(self, authorized_raster: AuthorizedRaster) -> None:
+        """Require the service to retain the controlled identity.
+
+        Args:
+            authorized_raster: Source authorization being rechecked.
+
+        Returns:
+            None when the expected identity is supplied.
+        """
+        assert authorized_raster == self.authorization
+        self.current_check_count += 1
 
 
 class _RasterSample:
@@ -805,9 +847,12 @@ def test_pixel_sampler_limits_concurrent_raster_reads(
 
     async def to_thread(
         _: object,
-        request: CatalogPixelRequest,
+        source_path: Path,
+        longitude: float,
+        latitude: float,
     ) -> RasterPixel:
         nonlocal active_reads, maximum_active_reads
+        assert source_path == Path("raster.tif")
         active_reads += 1
         maximum_active_reads = max(maximum_active_reads, active_reads)
         if active_reads == 2:
@@ -815,8 +860,8 @@ def test_pixel_sampler_limits_concurrent_raster_reads(
         await release_reads.wait()
         active_reads -= 1
         return RasterPixel(
-            longitude=request.longitude,
-            latitude=request.latitude,
+            longitude=longitude,
+            latitude=latitude,
             row=0,
             column=0,
             inBounds=True,
@@ -828,11 +873,12 @@ def test_pixel_sampler_limits_concurrent_raster_reads(
         to_thread,
     )
 
-    class Registry:
-        pass
-
     async def sample_three_pixels() -> None:
-        service = RasterPixelService(Registry(), read_concurrency=2)
+        authorizer = _PixelSourceAuthorizer()
+        service = RasterPixelService(
+            authorizer,
+            read_concurrency=2,
+        )
         requests = [
             CatalogPixelRequest.model_validate(
                 {
@@ -853,6 +899,8 @@ def test_pixel_sampler_limits_concurrent_raster_reads(
         assert maximum_active_reads == 2
         release_reads.set()
         await asyncio.gather(*tasks)
+        assert authorizer.authorization_count == 3
+        assert authorizer.current_check_count == 6
 
     asyncio.run(sample_three_pixels())
     assert maximum_active_reads == 2
@@ -868,15 +916,18 @@ def test_cancelled_pixel_request_keeps_its_slot_until_gdal_finishes(
 
     async def to_thread(
         _: object,
-        request: CatalogPixelRequest,
+        source_path: Path,
+        longitude: float,
+        latitude: float,
     ) -> RasterPixel:
         nonlocal started_reads
+        assert source_path == Path("raster.tif")
         started_reads += 1
         first_read_started.set()
         await release_reads.wait()
         return RasterPixel(
-            longitude=request.longitude,
-            latitude=request.latitude,
+            longitude=longitude,
+            latitude=latitude,
             row=0,
             column=0,
             inBounds=True,
@@ -888,11 +939,11 @@ def test_cancelled_pixel_request_keeps_its_slot_until_gdal_finishes(
         to_thread,
     )
 
-    class Registry:
-        pass
-
     async def cancel_during_read() -> None:
-        service = RasterPixelService(Registry(), read_concurrency=1)
+        service = RasterPixelService(
+            _PixelSourceAuthorizer(),
+            read_concurrency=1,
+        )
         request = CatalogPixelRequest.model_validate(
             {
                 "collectionId": "eolab-mounted-geotiffs",
