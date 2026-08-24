@@ -170,6 +170,25 @@ export function publishCatalogRaster(
 
 /** Projection roundoff allowance, far below a displayable map distance. */
 const RASTER_DETAIL_PREVIEW_BOUNDS_TOLERANCE = 1e-9;
+const RASTER_DETAIL_PREVIEW_POLICY_VERSION = "bounded-adaptive-raster-v7";
+const RASTER_DETAIL_PREVIEW_MAXIMUM_GRID_DIMENSION = 127;
+const RASTER_DETAIL_PREVIEW_MAXIMUM_EXACT_DIMENSION = 512;
+const RASTER_DETAIL_PREVIEW_MAXIMUM_TRANSFORMED_POSITIONS = 127 * 127;
+const RASTER_DETAIL_PREVIEW_MAXIMUM_POINTS_PER_CELL = 1;
+const RASTER_DETAIL_PREVIEW_RENDERING_CONTRACTS = Object.freeze({
+    sampledProxy: Object.freeze({
+        maximumSourceBlockReads: 127 * 127,
+        maximumDecodedSourceBytes: 9 * 1024 * 1024 * 1024,
+        pointsPerCell: RASTER_DETAIL_PREVIEW_MAXIMUM_POINTS_PER_CELL,
+        sourceWindowRequired: false
+    }),
+    exactSourceWindow: Object.freeze({
+        maximumSourceBlockReads: 1_024,
+        maximumDecodedSourceBytes: 64 * 1024 * 1024,
+        pointsPerCell: 0,
+        sourceWindowRequired: true
+    })
+});
 
 /**
  * @typedef {Object} RasterDetailPreviewViewBounds
@@ -248,6 +267,257 @@ export function isRasterDetailPreviewCapacityError(error) {
 }
 
 /**
+ * Return whether a value is a positive safe integer.
+ *
+ * @param {unknown} value Candidate numeric field.
+ * @return {boolean} Whether the value is an integer greater than zero.
+ */
+function isPositiveSafeInteger(value) {
+    return Number.isSafeInteger(value) && value > 0;
+}
+
+/**
+ * Return whether a value is a nonnegative safe integer.
+ *
+ * @param {unknown} value Candidate work-accounting field.
+ * @return {boolean} Whether the value is an integer at least zero.
+ */
+function isNonnegativeSafeInteger(value) {
+    return Number.isSafeInteger(value) && value >= 0;
+}
+
+/**
+ * Return whether an array is one ordered canonical WGS 84 rectangle.
+ *
+ * @param {unknown} bounds Candidate west, south, east, north tuple.
+ * @return {boolean} Whether the tuple satisfies the map boundary contract.
+ */
+function isCanonicalWgs84BoundsTuple(bounds) {
+    return Array.isArray(bounds) && bounds.length === 4 &&
+        bounds.every(Number.isFinite) &&
+        bounds[0] >= -180 && bounds[2] <= 180 &&
+        bounds[1] >= -90 && bounds[3] <= 90 &&
+        bounds[0] < bounds[2] && bounds[1] < bounds[3];
+}
+
+/**
+ * Validate the response fields shared by every detail representation.
+ *
+ * @param {Object} preview Parsed response document.
+ * @param {RasterDetailPreviewOptions} request Validated request options.
+ * @return {Object} Fixed contract for the selected rendering representation.
+ * @throws {Error} If identity, dimensions, bounds, or pixels are invalid.
+ */
+function requireRasterDetailPreviewEnvelope(preview, request) {
+    if (preview === null || typeof preview !== "object") {
+        throw new Error("Detail-only preview response is invalid");
+    }
+    const renderingContract =
+        RASTER_DETAIL_PREVIEW_RENDERING_CONTRACTS[preview.rendering];
+    if (renderingContract === undefined) {
+        throw new Error("Detail-only preview response is invalid");
+    }
+    const expectedScope = request.viewBounds === null
+        ? "rasterExtent"
+        : "currentView";
+    if (preview.scope !== expectedScope || preview.approximate !== true ||
+        preview.policyVersion !== RASTER_DETAIL_PREVIEW_POLICY_VERSION) {
+        throw new Error("Detail-only preview response is invalid");
+    }
+    if (typeof preview.label !== "string" || preview.label.trim() === "") {
+        throw new Error("Detail-only preview response is invalid");
+    }
+    if (!isCanonicalWgs84BoundsTuple(preview.rasterExtent) ||
+        !isCanonicalWgs84BoundsTuple(preview.imageBounds)) {
+        throw new Error("Detail-only preview response is invalid");
+    }
+    if (!isPositiveSafeInteger(preview.imageWidth) ||
+        !isPositiveSafeInteger(preview.imageHeight)) {
+        throw new Error("Detail-only preview response is invalid");
+    }
+    if (!Array.isArray(preview.pixelValues) ||
+        preview.pixelValues.length !== preview.imageWidth * preview.imageHeight ||
+        preview.pixelValues.some((value) =>
+            !(value === null || Number.isFinite(value)))) {
+        throw new Error("Detail-only preview response is invalid");
+    }
+    return renderingContract;
+}
+
+/**
+ * Validate the server-owned resource limits for one representation.
+ *
+ * @param {Object} limits Parsed response resource limits.
+ * @param {Object} renderingContract Selected fixed rendering contract.
+ * @return {void}
+ * @throws {Error} If the server reports a different resource policy.
+ */
+function requireRasterDetailPreviewLimits(limits, renderingContract) {
+    const expectedLimits = {
+        maximumProxyDimension: RASTER_DETAIL_PREVIEW_MAXIMUM_GRID_DIMENSION,
+        maximumExactDetailDimension:
+            RASTER_DETAIL_PREVIEW_MAXIMUM_EXACT_DIMENSION,
+        maximumSourceBlockReads:
+            renderingContract.maximumSourceBlockReads,
+        maximumDecodedSourceBytes:
+            renderingContract.maximumDecodedSourceBytes,
+        maximumTransformedPositions:
+            RASTER_DETAIL_PREVIEW_MAXIMUM_TRANSFORMED_POSITIONS,
+        maximumPointsPerCell:
+            RASTER_DETAIL_PREVIEW_MAXIMUM_POINTS_PER_CELL
+    };
+    if (limits === null || typeof limits !== "object" ||
+        Object.entries(expectedLimits).some(
+            ([field, expected]) => limits[field] !== expected
+        )) {
+        throw new Error("Detail-only preview response is invalid");
+    }
+}
+
+/**
+ * Return whether a source-window value is a positive integral rectangle.
+ *
+ * @param {unknown} sourceWindow Candidate source-pixel window.
+ * @return {boolean} Whether all four owned fields are valid.
+ */
+function isValidRasterDetailSourceWindow(sourceWindow) {
+    return sourceWindow !== null && typeof sourceWindow === "object" &&
+        Object.keys(sourceWindow).length === 4 &&
+        isNonnegativeSafeInteger(sourceWindow.columnOffset) &&
+        isNonnegativeSafeInteger(sourceWindow.rowOffset) &&
+        isPositiveSafeInteger(sourceWindow.width) &&
+        isPositiveSafeInteger(sourceWindow.height);
+}
+
+/**
+ * Validate actual work and representation-specific image provenance.
+ *
+ * @param {Object} preview Validated preview envelope.
+ * @param {RasterDetailPreviewOptions} request Validated request options.
+ * @param {Object} renderingContract Selected fixed rendering contract.
+ * @return {void}
+ * @throws {Error} If actual work or source placement violates fixed limits.
+ */
+function requireRasterDetailPreviewWork(preview, request, renderingContract) {
+    const actual = preview.actual;
+    if (actual === null || typeof actual !== "object" ||
+        actual.sampleGridWidth !== preview.imageWidth ||
+        actual.sampleGridHeight !== preview.imageHeight) {
+        throw new Error("Detail-only preview response is invalid");
+    }
+    if (!isNonnegativeSafeInteger(actual.sourceBlockReadCount) ||
+        actual.sourceBlockReadCount >
+            renderingContract.maximumSourceBlockReads ||
+        !isNonnegativeSafeInteger(actual.decodedSourceBytes) ||
+        actual.decodedSourceBytes >
+            renderingContract.maximumDecodedSourceBytes ||
+        !isNonnegativeSafeInteger(actual.pointsPerCell)) {
+        throw new Error("Detail-only preview response is invalid");
+    }
+    const sourceWorkIsEmpty = actual.sourceBlockReadCount === 0;
+    if (sourceWorkIsEmpty !== (actual.decodedSourceBytes === 0) ||
+        actual.pointsPerCell !== renderingContract.pointsPerCell) {
+        throw new Error("Detail-only preview image exceeds its fixed limit");
+    }
+
+    if (!renderingContract.sourceWindowRequired) {
+        if (Math.max(preview.imageWidth, preview.imageHeight) !==
+            RASTER_DETAIL_PREVIEW_MAXIMUM_GRID_DIMENSION ||
+            actual.sourceWindow != null) {
+            throw new Error("Detail-only preview image exceeds its fixed limit");
+        }
+        return;
+    }
+    if (request.viewBounds === null ||
+        preview.imageWidth > RASTER_DETAIL_PREVIEW_MAXIMUM_EXACT_DIMENSION ||
+        preview.imageHeight > RASTER_DETAIL_PREVIEW_MAXIMUM_EXACT_DIMENSION ||
+        !isValidRasterDetailSourceWindow(actual.sourceWindow) ||
+        actual.sourceWindow.width !== preview.imageWidth ||
+        actual.sourceWindow.height !== preview.imageHeight) {
+        throw new Error("Detail-only preview image exceeds its fixed limit");
+    }
+}
+
+/**
+ * Return whether outer bounds contain the preview image within roundoff.
+ *
+ * @param {number[]} outerBounds Candidate containing rectangle.
+ * @param {number[]} imageBounds Validated preview image rectangle.
+ * @return {boolean} Whether the image stays inside the outer rectangle.
+ */
+function rasterDetailBoundsContainImage(outerBounds, imageBounds) {
+    return outerBounds[0] - RASTER_DETAIL_PREVIEW_BOUNDS_TOLERANCE <=
+            imageBounds[0] &&
+        outerBounds[1] - RASTER_DETAIL_PREVIEW_BOUNDS_TOLERANCE <=
+            imageBounds[1] &&
+        outerBounds[2] + RASTER_DETAIL_PREVIEW_BOUNDS_TOLERANCE >=
+            imageBounds[2] &&
+        outerBounds[3] + RASTER_DETAIL_PREVIEW_BOUNDS_TOLERANCE >=
+            imageBounds[3];
+}
+
+/**
+ * Validate raster-extent and current-view placement.
+ *
+ * @param {Object} preview Validated preview envelope.
+ * @param {RasterDetailPreviewOptions} request Validated request options.
+ * @return {void}
+ * @throws {Error} If the image escapes its raster or requested map bounds.
+ */
+function requireRasterDetailPreviewPlacement(preview, request) {
+    if (!rasterDetailBoundsContainImage(
+        preview.rasterExtent,
+        preview.imageBounds
+    )) {
+        throw new Error("Detail-only preview placement is invalid");
+    }
+    if (preview.scope !== "currentView") {
+        return;
+    }
+    const requestedBounds = [
+        request.viewBounds.west,
+        request.viewBounds.south,
+        request.viewBounds.east,
+        request.viewBounds.north
+    ];
+    if (!rasterDetailBoundsContainImage(
+        requestedBounds,
+        preview.imageBounds
+    )) {
+        throw new Error("Detail-only preview placement is invalid");
+    }
+}
+
+/**
+ * Validate finite-value and suggested-range agreement.
+ *
+ * @param {Object} preview Validated preview and work document.
+ * @return {void}
+ * @throws {Error} If nodata, finite values, source work, and range disagree.
+ */
+function requireRasterDetailPreviewRange(preview) {
+    const finiteValueCount = preview.pixelValues.reduce(
+        (count, value) => count + (value === null ? 0 : 1),
+        0
+    );
+    const range = preview.suggestedRange;
+    const validRange = range !== null &&
+        Number.isFinite(range?.minimum) &&
+        Number.isFinite(range?.midpoint) &&
+        Number.isFinite(range?.maximum) &&
+        range.minimum < range.midpoint && range.midpoint < range.maximum;
+    const rangeMatchesValues = finiteValueCount === 0
+        ? range === null
+        : validRange;
+    const emptyWorkContainsValues =
+        preview.actual.sourceBlockReadCount === 0 &&
+        (finiteValueCount > 0 || range !== null);
+    if (!rangeMatchesValues || emptyWorkContainsValues) {
+        throw new Error("Detail-only preview color range is invalid");
+    }
+}
+
+/**
  * Validate one browser-safe detail-only preview at the network boundary.
  *
  * @param {Object} preview Parsed response document.
@@ -258,127 +528,14 @@ export function isRasterDetailPreviewCapacityError(error) {
  */
 export function validateRasterDetailPreview(preview, options) {
     const request = validateRasterDetailPreviewOptions(options);
-    const rendering = preview?.rendering;
-    const isExactDetail = rendering === "exactSourceWindow";
-    const expectedDecodedSourceBytes = isExactDetail
-        ? 67108864
-        : 9663676416;
-    const expectedSourceBlockReads = isExactDetail ? 1024 : 16129;
-    const isCanonicalBounds = (bounds) =>
-        Array.isArray(bounds) && bounds.length === 4 &&
-        bounds.every(Number.isFinite) &&
-        bounds[0] >= -180 && bounds[2] <= 180 &&
-        bounds[1] >= -90 && bounds[3] <= 90 &&
-        bounds[0] < bounds[2] && bounds[1] < bounds[3];
-    if (
-        !new Set(["sampledProxy", "exactSourceWindow"]).has(rendering) ||
-        preview?.scope !== (request.viewBounds === null
-            ? "rasterExtent"
-            : "currentView") ||
-        preview?.approximate !== true ||
-        preview?.policyVersion !== "bounded-adaptive-raster-v7" ||
-        typeof preview?.label !== "string" || preview.label.trim() === "" ||
-        !isCanonicalBounds(preview?.rasterExtent) ||
-        !isCanonicalBounds(preview?.imageBounds) ||
-        !Number.isSafeInteger(preview?.imageWidth) ||
-        preview.imageWidth < 1 ||
-        !Number.isSafeInteger(preview?.imageHeight) ||
-        preview.imageHeight < 1 ||
-        !Array.isArray(preview?.pixelValues) ||
-        preview.pixelValues.length !== preview.imageWidth * preview.imageHeight ||
-        preview.pixelValues.some((value) =>
-            !(value === null || Number.isFinite(value))
-        ) ||
-        preview?.limits?.maximumProxyDimension !== 127 ||
-        preview?.limits?.maximumExactDetailDimension !== 512 ||
-        preview?.limits?.maximumSourceBlockReads !== expectedSourceBlockReads ||
-        preview?.limits?.maximumDecodedSourceBytes !==
-            expectedDecodedSourceBytes ||
-        preview?.limits?.maximumTransformedPositions !== 16129 ||
-        preview?.limits?.maximumPointsPerCell !== 1 ||
-        preview?.actual?.sampleGridWidth !== preview.imageWidth ||
-        preview?.actual?.sampleGridHeight !== preview.imageHeight ||
-        !Number.isSafeInteger(preview?.actual?.sourceBlockReadCount) ||
-        preview.actual.sourceBlockReadCount < 0 ||
-        preview.actual.sourceBlockReadCount >
-            preview.limits.maximumSourceBlockReads ||
-        !Number.isSafeInteger(preview?.actual?.decodedSourceBytes) ||
-        preview.actual.decodedSourceBytes < 0 ||
-        preview.actual.decodedSourceBytes >
-            preview.limits.maximumDecodedSourceBytes ||
-        !Number.isSafeInteger(preview?.actual?.pointsPerCell) ||
-        preview.actual.pointsPerCell < 0
-    ) {
-        throw new Error("Detail-only preview response is invalid");
-    }
-    const sourceWindow = preview.actual.sourceWindow;
-    const validSourceWindow = sourceWindow !== null &&
-        typeof sourceWindow === "object" &&
-        Object.keys(sourceWindow).length === 4 &&
-        Number.isSafeInteger(sourceWindow.columnOffset) &&
-        sourceWindow.columnOffset >= 0 &&
-        Number.isSafeInteger(sourceWindow.rowOffset) &&
-        sourceWindow.rowOffset >= 0 &&
-        Number.isSafeInteger(sourceWindow.width) && sourceWindow.width >= 1 &&
-        Number.isSafeInteger(sourceWindow.height) && sourceWindow.height >= 1;
-    if (
-        (rendering === "sampledProxy"
-            ? Math.max(preview.imageWidth, preview.imageHeight) !==
-                preview.limits.maximumProxyDimension
-            : preview.imageWidth > preview.limits.maximumExactDetailDimension ||
-                preview.imageHeight >
-                    preview.limits.maximumExactDetailDimension) ||
-        preview.actual.pointsPerCell !== (isExactDetail ? 0 : 1) ||
-        (preview.actual.sourceBlockReadCount === 0) !==
-            (preview.actual.decodedSourceBytes === 0) ||
-        ((rendering === "sampledProxy") !== (sourceWindow == null)) ||
-        (isExactDetail && (
-            !validSourceWindow ||
-            sourceWindow.width !== preview.imageWidth ||
-            sourceWindow.height !== preview.imageHeight
-        )) ||
-        (request.viewBounds === null && isExactDetail)
-    ) {
-        throw new Error("Detail-only preview image exceeds its fixed limit");
-    }
-    const containsImage = (outerBounds) =>
-        outerBounds[0] - RASTER_DETAIL_PREVIEW_BOUNDS_TOLERANCE <=
-            preview.imageBounds[0] &&
-        outerBounds[1] - RASTER_DETAIL_PREVIEW_BOUNDS_TOLERANCE <=
-            preview.imageBounds[1] &&
-        outerBounds[2] + RASTER_DETAIL_PREVIEW_BOUNDS_TOLERANCE >=
-            preview.imageBounds[2] &&
-        outerBounds[3] + RASTER_DETAIL_PREVIEW_BOUNDS_TOLERANCE >=
-            preview.imageBounds[3];
-    if (!containsImage(preview.rasterExtent)) {
-        throw new Error("Detail-only preview placement is invalid");
-    }
-    if (preview.scope === "currentView") {
-        const requestedBounds = [
-            request.viewBounds.west,
-            request.viewBounds.south,
-            request.viewBounds.east,
-            request.viewBounds.north
-        ];
-        if (!containsImage(requestedBounds)) {
-            throw new Error("Detail-only preview placement is invalid");
-        }
-    }
-    const finiteValues = preview.pixelValues.filter((value) => value !== null);
-    const range = preview.suggestedRange;
-    const validRange = range !== null &&
-        Number.isFinite(range?.minimum) &&
-        Number.isFinite(range?.midpoint) &&
-        Number.isFinite(range?.maximum) &&
-        range.minimum < range.midpoint && range.midpoint < range.maximum;
-    if (
-        (finiteValues.length === 0 && range !== null) ||
-        (finiteValues.length > 0 && !validRange) ||
-        (preview.actual.sourceBlockReadCount === 0 &&
-            (finiteValues.length > 0 || range !== null))
-    ) {
-        throw new Error("Detail-only preview color range is invalid");
-    }
+    const renderingContract = requireRasterDetailPreviewEnvelope(
+        preview,
+        request
+    );
+    requireRasterDetailPreviewLimits(preview.limits, renderingContract);
+    requireRasterDetailPreviewWork(preview, request, renderingContract);
+    requireRasterDetailPreviewPlacement(preview, request);
+    requireRasterDetailPreviewRange(preview);
     return preview;
 }
 
