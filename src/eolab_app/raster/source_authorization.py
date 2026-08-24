@@ -60,13 +60,9 @@ def _cataloged_source_signature(item: dict[str, Any]) -> SourceSignature:
             "Raster analysis unavailable: scan this source again to record "
             "its current identity."
         )
-    return (
-        signature[0],
-        signature[1],
-        signature[2],
-        signature[3],
-        signature[4],
-    )
+    # The scanner persists ``Path.stat()`` identity in this exact order.
+    device, inode, size_bytes, modified_ns, changed_ns = signature
+    return (device, inode, size_bytes, modified_ns, changed_ns)
 
 
 class CatalogRasterSourceAuthorizer:
