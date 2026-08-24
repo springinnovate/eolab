@@ -252,48 +252,33 @@ export function initializeRasterDetailPreview(
     /**
      * Return whether an asynchronous detail intent is still current.
      *
-     * @param {number} sessionGeneration Explicit base-session identity.
-     * @param {number} requestDetailGeneration Viewport intent identity.
-     * @param {string} intentKey Item and bounds identity.
+     * @param {{sessionGeneration:number,detailGeneration:number,intentKey:string}}
+     * intent Immutable base-session, viewport-generation, and bounds identity.
      * @return {boolean} Whether a completion may update the map.
      */
-    function isCurrentDetailIntent(
-        sessionGeneration,
-        requestDetailGeneration,
-        intentKey
-    ) {
+    function isCurrentDetailIntent(intent) {
         return !destroyed && current !== null &&
-            sessionGeneration === generation &&
-            requestDetailGeneration === detailGeneration &&
-            current.requestedDetailKey === intentKey;
+            intent.sessionGeneration === generation &&
+            intent.detailGeneration === detailGeneration &&
+            current.requestedDetailKey === intent.intentKey;
     }
 
     /**
      * Load and atomically attach one finer proxy over the current map view.
      *
-     * @param {number} sessionGeneration Base-session identity.
-     * @param {number} requestDetailGeneration Viewport intent identity.
-     * @param {string} intentKey Item and bounds identity.
+     * @param {{sessionGeneration:number,detailGeneration:number,intentKey:string}}
+     * intent Immutable base-session, viewport-generation, and bounds identity.
      * @param {Object} viewBounds Canonical raster/view intersection.
      * @return {Promise<void>} Completion after success, stale ignore, or an
      * honestly reported non-destructive refinement failure.
      */
-    async function loadCurrentViewDetail(
-        sessionGeneration,
-        requestDetailGeneration,
-        intentKey,
-        viewBounds
-    ) {
+    async function loadCurrentViewDetail(intent, viewBounds) {
         detailTimer = null;
-        if (!isCurrentDetailIntent(
-            sessionGeneration,
-            requestDetailGeneration,
-            intentKey
-        )) {
+        if (!isCurrentDetailIntent(intent)) {
             return;
         }
         const abortController = new AbortController();
-        pendingDetail = { abortController, intentKey };
+        pendingDetail = { abortController, intentKey: intent.intentKey };
         try {
             const preview = await loadPreview(
                 current.item,
@@ -302,11 +287,8 @@ export function initializeRasterDetailPreview(
                 },
                 abortController.signal
             );
-            if (abortController.signal.aborted || !isCurrentDetailIntent(
-                sessionGeneration,
-                requestDetailGeneration,
-                intentKey
-            )) {
+            if (abortController.signal.aborted ||
+                !isCurrentDetailIntent(intent)) {
                 return;
             }
             const presentation = createPreviewLayer(
@@ -322,11 +304,7 @@ export function initializeRasterDetailPreview(
                 disposePresentation(presentation);
                 throw layerError;
             }
-            if (!isCurrentDetailIntent(
-                sessionGeneration,
-                requestDetailGeneration,
-                intentKey
-            )) {
+            if (!isCurrentDetailIntent(intent)) {
                 disposePresentation(presentation);
                 return;
             }
@@ -336,38 +314,31 @@ export function initializeRasterDetailPreview(
                 current.base.style = Object.freeze(presentation.style);
                 current.base.styleEstablished = true;
             }
-            current.detail = { intentKey, presentation, preview };
+            current.detail = {
+                intentKey: intent.intentKey,
+                presentation,
+                preview
+            };
             current.detailStatus = "ready";
             current.detailError = null;
             disposePresentation(previousDetail?.presentation ?? null);
             onChange();
         } catch (error) {
-            if (isRasterDetailPreviewCapacityError(error) &&
-                isCurrentDetailIntent(
-                    sessionGeneration,
-                    requestDetailGeneration,
-                    intentKey
-                )) {
+            if (error.name === "AbortError" || !isCurrentDetailIntent(intent)) {
+                return;
+            }
+            if (isRasterDetailPreviewCapacityError(error)) {
                 current.detailStatus = "loading";
                 current.detailError = null;
                 detailTimer = setTimer(() => {
-                    void loadCurrentViewDetail(
-                        sessionGeneration,
-                        requestDetailGeneration,
-                        intentKey,
-                        viewBounds
-                    );
+                    void loadCurrentViewDetail(intent, viewBounds);
                 }, detailCapacityRetryMilliseconds);
                 onChange();
-            } else if (error.name !== "AbortError" && isCurrentDetailIntent(
-                sessionGeneration,
-                requestDetailGeneration,
-                intentKey
-            )) {
-                current.detailStatus = "error";
-                current.detailError = error.message;
-                onChange();
+                return;
             }
+            current.detailStatus = "error";
+            current.detailError = error.message;
+            onChange();
         } finally {
             if (pendingDetail?.abortController === abortController) {
                 pendingDetail = null;
@@ -377,8 +348,9 @@ export function initializeRasterDetailPreview(
 
     /** Derive and debounce the latest viewport refinement intent. @return {void} */
     function queueCurrentViewDetail() {
-        if (destroyed || replacingBase || pendingBaseAbortController !== null ||
-            current === null) {
+        const detailUnavailable = destroyed || replacingBase ||
+            pendingBaseAbortController !== null || current === null;
+        if (detailUnavailable) {
             return;
         }
         if (!isRasterDetailZoom(leafletMap.getZoom(), current.baseZoom)) {
@@ -398,36 +370,35 @@ export function initializeRasterDetailPreview(
             rasterViewportKey(viewBounds)
         ]);
         if (current.detail?.intentKey === intentKey) {
-            const changed = detailTimer !== null || pendingDetail !== null ||
+            const statusChanged = detailTimer !== null || pendingDetail !== null ||
                 current.detailStatus !== "ready" ||
                 current.detailError !== null;
             cancelDetailWork();
             current.requestedDetailKey = intentKey;
             current.detailStatus = "ready";
             current.detailError = null;
-            if (changed) {
+            if (statusChanged) {
                 onChange();
             }
             return;
         }
-        if (pendingDetail?.intentKey === intentKey ||
-            (detailTimer !== null && current.requestedDetailKey === intentKey)) {
+        const intentIsPending = pendingDetail?.intentKey === intentKey ||
+            (detailTimer !== null && current.requestedDetailKey === intentKey);
+        if (intentIsPending) {
             return;
         }
         cancelDetailWork();
-        const requestDetailGeneration = detailGeneration;
-        const sessionGeneration = generation;
+        const intent = Object.freeze({
+            sessionGeneration: generation,
+            detailGeneration,
+            intentKey
+        });
         current.requestedDetailKey = intentKey;
         current.detailStatus = "loading";
         current.detailError = null;
         onChange();
         detailTimer = setTimer(() => {
-            void loadCurrentViewDetail(
-                sessionGeneration,
-                requestDetailGeneration,
-                intentKey,
-                viewBounds
-            );
+            void loadCurrentViewDetail(intent, viewBounds);
         }, detailDebounceMilliseconds);
     }
 
