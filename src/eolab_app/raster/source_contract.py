@@ -11,7 +11,9 @@ from rasterio.enums import MaskFlags
 from rasterio.windows import Window
 
 
-RASTER_ANALYSIS_MAX_NATIVE_BLOCK_EDGE = 1024
+# Preserve the peak decoded allocation admitted by the former 1,024-by-1,024
+# edge rule for the widest supported value type plus one validity byte.
+BOUNDED_RASTER_MAX_DECODED_NATIVE_BLOCK_BYTES = 9 * 1024 * 1024
 SUPPORTED_RASTER_ANALYSIS_DATA_TYPES = frozenset(
     {"uint8", "uint16", "int16", "int32", "float32", "float64"}
 )
@@ -89,13 +91,14 @@ def require_raster_analysis_georeferencing(
 def require_bounded_source_structure(
     dataset: rasterio.io.DatasetReader,
 ) -> None:
-    """Require one band with bounded blocks and signed validity metadata.
+    """Require one band with native blocks and signed validity metadata.
 
     Args:
         dataset: Open candidate raster dataset.
 
     Returns:
-        None when native band-one reads have a supported bounded structure.
+        None when native band-one reads have a supported structure whose work
+        can be admitted by a request-specific planner.
 
     Raises:
         ValueError: If band, datatype, block, or validity structure is
@@ -110,11 +113,8 @@ def require_bounded_source_structure(
             "Bounded raster reads do not support "
             f"{dataset.dtypes[0]} band values"
         )
-    if max(dataset.block_shapes[0]) > RASTER_ANALYSIS_MAX_NATIVE_BLOCK_EDGE:
-        raise ValueError(
-            "Bounded raster reads require native blocks no larger than "
-            f"{RASTER_ANALYSIS_MAX_NATIVE_BLOCK_EDGE} pixels on either edge"
-        )
+    if any(int(dimension) < 1 for dimension in dataset.block_shapes[0]):
+        raise ValueError("Bounded raster reads require positive native blocks")
     mask_flags = set(dataset.mask_flag_enums[0])
     if not mask_flags.issubset({MaskFlags.all_valid, MaskFlags.nodata}):
         raise ValueError(
@@ -154,7 +154,7 @@ def decoded_source_bytes_for_blocks(
     dataset: rasterio.io.DatasetReader,
     block_indexes: tuple[SourceBlockIndex, ...],
 ) -> int:
-    """Return conservative decoded band and validity bytes for blocks.
+    """Admit native blocks and return their conservative decoded-byte total.
 
     Args:
         dataset: Open one-band raster with native block metadata.
@@ -162,15 +162,27 @@ def decoded_source_bytes_for_blocks(
 
     Returns:
         Conservative decoded byte total for the supplied blocks.
+
+    Raises:
+        ValueError: If an individual native block exceeds the peak decoded
+            band-plus-validity byte ceiling.
     """
     bytes_per_pixel = numpy.dtype(dataset.dtypes[0]).itemsize + 1
-    return sum(
-        int(window.width) * int(window.height) * bytes_per_pixel
-        for window in (
-            dataset.block_window(1, block_row, block_column)
-            for block_row, block_column in block_indexes
-        )
-    )
+    decoded_source_bytes = 0
+    for block_row, block_column in block_indexes:
+        window = dataset.block_window(1, block_row, block_column)
+        block_bytes = int(window.width) * int(window.height) * bytes_per_pixel
+        if block_bytes > BOUNDED_RASTER_MAX_DECODED_NATIVE_BLOCK_BYTES:
+            raise ValueError(
+                "Bounded raster reads require each native block to decode to "
+                f"at most {BOUNDED_RASTER_MAX_DECODED_NATIVE_BLOCK_BYTES} "
+                "bytes of band values and validity data; native block "
+                f"({block_row}, {block_column}) requires {block_bytes} bytes. "
+                "Retile the GeoTIFF with smaller native blocks and scan it "
+                "again."
+            )
+        decoded_source_bytes += block_bytes
+    return decoded_source_bytes
 
 
 def source_block_indexes_for_window(

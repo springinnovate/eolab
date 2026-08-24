@@ -567,6 +567,49 @@ def test_raster_statistics_broad_source_uses_fixed_sample_grid(
     assert len(set(dataset.read_windows)) == len(dataset.read_windows)
 
 
+def test_raster_statistics_reads_real_long_striped_geotiff(
+    tmp_path: Path,
+) -> None:
+    """Read issue-141 strip geometry through exact and sampled pipelines."""
+    source_path = tmp_path / "long-striped-raster.tif"
+    values = numpy.broadcast_to(
+        numpy.arange(4_320, dtype=numpy.float32),
+        (2_160, 4_320),
+    )
+    with rasterio.open(
+        source_path,
+        "w",
+        driver="GTiff",
+        width=4_320,
+        height=2_160,
+        count=1,
+        dtype="float32",
+        crs="EPSG:4326",
+        transform=from_origin(-180, 90, 1 / 12, 1 / 12),
+        tiled=False,
+        blockysize=1,
+        compress="deflate",
+    ) as dataset:
+        dataset.write(values, 1)
+    with rasterio.open(source_path) as dataset:
+        assert dataset.block_shapes[0] == (1, 4_320)
+
+    exact = read_raster_statistics(
+        source_path,
+        SelectedBoundsSamplingArea((-1.0, -1.0, 1.0, 1.0)),
+    )
+    sampled = read_raster_statistics(
+        source_path,
+        WholeRasterSamplingArea(),
+    )
+
+    assert exact.sampling_method == "exactSourceWindow"
+    assert exact.estimated is False
+    assert sampled.sampling_method == "sampleGrid"
+    assert sampled.estimated is True
+    assert (sampled.sample_width, sampled.sample_height) == (127, 63)
+
+
 @pytest.mark.parametrize(
     "selected_bounds",
     (

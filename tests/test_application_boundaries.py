@@ -123,3 +123,40 @@ def test_application_root_has_no_generic_shared_module() -> None:
         source_path.name
         for source_path in APPLICATION_SOURCE.glob("*.py")
     }.intersection(ROOT_GENERIC_MODULE_NAMES)
+
+
+def test_raster_analysis_does_not_depend_on_rendering_or_http_composition() -> None:
+    """Keep bounded pixel/statistics work independent of renderer state."""
+    analysis_modules = {
+        APPLICATION_SOURCE / "raster" / module_name
+        for module_name in {
+            "exact_source.py",
+            "pixel.py",
+            "pixel_service.py",
+            "sample_grid.py",
+            "source_contract.py",
+            "statistics.py",
+            "statistics_service.py",
+        }
+    }
+    forbidden_prefixes = {
+        "eolab_app.rendering",
+        "eolab_app.raster.detail_preview",
+        "eolab_app.raster.eligibility",
+        "eolab_app.raster.geoserver",
+        "eolab_app.raster.publication",
+        "eolab_app.routes",
+    }
+
+    violations = {
+        f"{source_path.relative_to(APPLICATION_SOURCE).as_posix()} -> {imported_module}"
+        for source_path in analysis_modules
+        for imported_module in imported_modules(source_path)
+        if any(
+            imported_module == prefix
+            or imported_module.startswith(f"{prefix}.")
+            for prefix in forbidden_prefixes
+        )
+    }
+
+    assert violations == set()

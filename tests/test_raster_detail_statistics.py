@@ -248,6 +248,79 @@ def test_huge_source_grid_is_planned_under_fixed_limits_without_source_reads() -
     assert plan.points_per_cell == 1
 
 
+def test_long_striped_source_is_admitted_by_actual_decoded_work() -> None:
+    """Admit safe 1-by-4,320 float32 strips for exact and sampled reads."""
+    dataset = _PlanningDataset(4_320, 2_160, block_shape=(1, 4_320))
+    dataset.dtypes = ("float32",)
+
+    exact_plan = plan_exact_source_window(
+        dataset,  # type: ignore[arg-type]
+        Window(0, 0, 512, 512),
+    )
+    sample_plan = plan_source_window_sample_grid(
+        dataset,  # type: ignore[arg-type]
+        Window(0, 0, dataset.width, dataset.height),
+    )
+
+    assert exact_plan is not None
+    assert len(exact_plan.block_indexes) == 512
+    assert exact_plan.decoded_source_bytes == 512 * 4_320 * 5
+    assert (sample_plan.width, sample_plan.height) == (127, 63)
+    assert len(sample_plan.block_indexes) == 63
+    assert sample_plan.decoded_source_bytes == 63 * 4_320 * 5
+
+
+def test_exact_planner_keeps_peak_count_and_cumulative_limits_independent() -> None:
+    """Retain every exact-read ceiling after admitting flexible block shapes."""
+    boundary_blocks = _PlanningDataset(
+        1_048_576,
+        8,
+        block_shape=(1, 1_048_576),
+    )
+    boundary_blocks.dtypes = ("float64",)
+
+    one_block = plan_exact_source_window(
+        boundary_blocks,  # type: ignore[arg-type]
+        Window(0, 0, 512, 1),
+    )
+
+    assert one_block is not None
+    assert one_block.decoded_source_bytes == 9 * 1024 * 1024
+    assert plan_exact_source_window(  # type: ignore[arg-type]
+        boundary_blocks,
+        Window(0, 0, 512, 8),
+    ) is None
+
+    too_many_blocks = _PlanningDataset(33, 33, block_shape=(1, 1))
+    assert plan_exact_source_window(  # type: ignore[arg-type]
+        too_many_blocks,
+        Window(0, 0, 33, 33),
+    ) is None
+
+
+def test_oversized_decoded_native_block_is_rejected_before_source_reads() -> None:
+    """Reject unsafe peak block work from metadata before source-pixel I/O."""
+    dataset = _PlanningDataset(2_048, 2_048, block_shape=(2_048, 2_048))
+    dataset.dtypes = ("float32",)
+
+    with pytest.raises(
+        ValueError,
+        match=r"each native block.*20971520 bytes.*Retile",
+    ):
+        plan_exact_source_window(  # type: ignore[arg-type]
+            dataset,
+            Window(0, 0, 1, 1),
+        )
+    with pytest.raises(
+        ValueError,
+        match=r"each native block.*20971520 bytes.*Retile",
+    ):
+        plan_source_window_sample_grid(  # type: ignore[arg-type]
+            dataset,
+            Window(0, 0, 1, 1),
+        )
+
+
 def test_over_budget_sample_grid_is_rejected_before_source_reads() -> None:
     """Reject decoded work from metadata alone before any pixel I/O."""
     dataset = _PlanningDataset(
@@ -338,13 +411,6 @@ def test_planners_reject_unsafe_structure_and_unbounded_exact_windows() -> None:
     with pytest.raises(ValueError, match="alpha or per-dataset"):
         plan_source_window_sample_grid(  # type: ignore[arg-type]
             external_validity,
-            Window(0, 0, 100, 100),
-        )
-
-    oversized_blocks = _PlanningDataset(2_048, 2_048, (1_025, 16))
-    with pytest.raises(ValueError, match="no larger than 1024"):
-        plan_source_window_sample_grid(  # type: ignore[arg-type]
-            oversized_blocks,
             Window(0, 0, 100, 100),
         )
 

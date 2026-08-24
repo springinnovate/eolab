@@ -40,17 +40,21 @@ EOLab then chooses one of two server-owned plans:
   decoded source work. The response is marked `estimated: true`.
 
 The sample-grid limits are fixed ceilings, not browser controls. A request that
-cannot satisfy them fails before pixel I/O. Each admitted native block is read
-at most once without a broad `out_shape` read, a boundless read, or an arbitrary
-full-extent WMS request. The 9 GiB limit measures cumulative decoded work; only
-one bounded native block is retained at a time.
+cannot satisfy them fails before pixel I/O. Each touched native block must
+decode to at most 9 MiB of band-one values plus one validity byte per pixel.
+This peak limit preserves the former worst case of a 1,024 by 1,024 float64
+block while admitting safe long, narrow layouts according to their actual
+decoded work. Each admitted native block is read at most once without a broad
+`out_shape` read, a boundless read, or an arbitrary full-extent WMS request.
+The 9 GiB sample-grid limit measures cumulative decoded work; only one bounded
+native block is retained at a time.
 
-Only one non-empty band with a supported scalar datatype and native block edges
-no larger than 1,024 pixels is accepted. CRS and affine georeferencing must be
-valid, and validity/georeferencing dependencies must be embedded in the signed
-GeoTIFF. External GDAL masks, overviews, auxiliary files, alpha masks, and
-per-dataset masks are rejected because they are outside that source signature.
-Nodata and non-finite values are excluded rather than converted to zero.
+Only one non-empty band with a supported scalar datatype is accepted. CRS and
+affine georeferencing must be valid, and validity/georeferencing dependencies
+must be embedded in the signed GeoTIFF. External GDAL masks, overviews,
+auxiliary files, alpha masks, and per-dataset masks are rejected because they
+are outside that source signature. Nodata and non-finite values are excluded
+rather than converted to zero.
 
 ## Distribution and provenance
 
