@@ -1,6 +1,7 @@
 """Structural eligibility policy for raster visualization."""
 
 import math
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +48,43 @@ RASTER_DATA_TYPE_BYTES = {
     "uint64": 8,
     "complex128": 16,
 }
+
+
+def _has_complete_overview_pyramid(
+    raster_width: int,
+    factors: Sequence[int],
+) -> bool:
+    """Return whether Rasterio factors can describe every half-size level.
+
+    Rasterio reports each factor as the rounded ratio of the base raster width
+    to the actual overview width. Reconstructing possible floor- or
+    ceiling-halved widths preserves that rounding behavior without treating the
+    lossy reported factors as exact ratios.
+
+    Args:
+        raster_width: Base raster width in pixels.
+        factors: Rasterio-reported overview factors in pyramid order.
+
+    Returns:
+        Whether every factor can represent the next approximately halved
+        integer overview width.
+    """
+    possible_widths = {raster_width}
+    for factor in factors:
+        next_widths = {
+            overview_width
+            for previous_width in possible_widths
+            for overview_width in {
+                previous_width // 2,
+                math.ceil(previous_width / 2),
+            }
+            if 0 < overview_width < previous_width
+            and round(raster_width / overview_width) == factor
+        }
+        if not next_widths:
+            return False
+        possible_widths = next_widths
+    return bool(factors)
 
 
 def assess_raster_renderability(
@@ -130,16 +168,9 @@ def assess_raster_renderability(
         )
     else:
         factors = overview_factors[0]
-        complete_overview_pyramid = (
-            bool(factors)
-            and factors[0] == 2
-            and all(
-                previous_factor < current_factor <= previous_factor * 2
-                for previous_factor, current_factor in zip(
-                    factors,
-                    factors[1:],
-                )
-            )
+        complete_overview_pyramid = _has_complete_overview_pyramid(
+            dataset.width,
+            factors,
         )
         if not complete_overview_pyramid:
             eligible = False

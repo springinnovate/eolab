@@ -70,6 +70,43 @@ export function supportsRasterDetailOnlyPreview(item) {
         renderingMetadata.reader_compatible === true;
 }
 
+/**
+ * Format the Catalog status for one assessed raster and rendering state.
+ *
+ * @param {string} fullVisualizationReason Scanner-owned rejection reason.
+ * @param {boolean} isRetained Whether normal rendering is retained on the map.
+ * @param {boolean} supportsDetailPreview Whether adaptive rendering is offered.
+ * @param {boolean} hasDetailPreview Whether adaptive rendering is active.
+ * @return {string} Catalog status preserving the assessment and map state.
+ */
+export function formatCatalogRasterStatus(
+    fullVisualizationReason,
+    isRetained,
+    supportsDetailPreview,
+    hasDetailPreview
+) {
+    let renderingExplanation = "";
+    if (isRetained) {
+        renderingExplanation =
+            "This raster is retained in the map layer stack.";
+    }
+    if (supportsDetailPreview) {
+        renderingExplanation =
+            "Normal full visualization is unavailable. Broad views use " +
+            "a fixed 127-longest-edge center sample; close views " +
+            "automatically use exact bounded source detail.";
+    }
+    if (hasDetailPreview) {
+        renderingExplanation =
+            "Adaptive detail-only raster — not a whole-raster rendering. " +
+            "The orange dashed outline is the raster extent; zooming " +
+            "requests a bounded current-view layer.";
+    }
+    return [fullVisualizationReason, renderingExplanation]
+        .filter((message) => message !== "")
+        .join(" ");
+}
+
 /** Format a byte count without implying decimal storage units. */
 function formatByteSize(byteCount) {
     const units = ["B", "KiB", "MiB", "GiB", "TiB"];
