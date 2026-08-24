@@ -65,7 +65,12 @@ function createAdapter(owner, publish = async (item) => ({ id: item.id })) {
             },
         }),
         snapshot: (record) => ({
-            legend: { kind: "fixed", label: record.state.owner },
+            legend: {
+                kind: "gradient",
+                gradient: "linear-gradient(#000000, #ffffff)",
+                description: `${record.state.owner} test gradient`,
+                labels: [0, 0.5, 1],
+            },
         }),
         deactivate: (record, next) =>
             events.push(["deactivate", record.entry.key, next.entry.key]),
