@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  getCatalogMapLayerKey,
   MAX_VISIBLE_MAP_LAYERS,
   MapLayerStack,
   MapLayerVisibilityLimitError,
@@ -11,39 +10,6 @@ import {
 function catalogItem(collection, id) {
   return { collection, id };
 }
-
-test("catalog map-layer keys validate and preserve composite identity", () => {
-  const splitAfterFirstCharacter = catalogItem("a", "bc");
-  const splitBeforeLastCharacter = catalogItem("ab", "c");
-  const delimiterValues = catalogItem("a\",\"b", "[c]");
-
-  assert.equal(
-    getCatalogMapLayerKey(splitAfterFirstCharacter),
-    getCatalogMapLayerKey({ ...splitAfterFirstCharacter }),
-  );
-  assert.notEqual(
-    getCatalogMapLayerKey(splitAfterFirstCharacter),
-    getCatalogMapLayerKey(splitBeforeLastCharacter),
-  );
-  assert.notEqual(
-    getCatalogMapLayerKey(delimiterValues),
-    getCatalogMapLayerKey(catalogItem("a", "b\",\"[c]")),
-  );
-
-  for (const invalidItem of [
-    null,
-    {},
-    catalogItem("", "item"),
-    catalogItem("collection", ""),
-    catalogItem(7, "item"),
-    catalogItem("collection", 7),
-  ]) {
-    assert.throws(
-      () => getCatalogMapLayerKey(invalidItem),
-      TypeError,
-    );
-  }
-});
 
 test("adding an existing layer is idempotent and activates it in place", () => {
   const stack = new MapLayerStack();

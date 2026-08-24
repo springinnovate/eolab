@@ -27,11 +27,15 @@ neither the route nor the shared rendering package constructs feature services.
 
 ## Browser ownership
 
+`frontend/src/catalog-item-identity.js` owns validation and serialization of a
+Catalog Item's composite Collection and Item identity. Catalog actions, map
+layers, and raster detail previews depend on that lower-level contract without
+depending on each other's implementation state.
+
 `frontend/src/map-layers/` owns the retained presentation contract:
 
-- `MapLayerStack` owns composite Catalog Item identity, two-visible-layer
-  capacity, opacity, active selection, and top-first order without DOM or
-  Leaflet dependencies.
+- `MapLayerStack` owns two-visible-layer capacity, opacity, active selection,
+  and top-first order without DOM or Leaflet dependencies.
 - `LeafletLayerSet` owns keyed attachment, detachment, opacity, z-order, and
   cleanup without publication behavior.
 - `MapLayerStackView` owns the layer-list DOM and emits semantic user actions.
@@ -44,6 +48,8 @@ The application composition root constructs the controller. The raster viewer
 supplies an adapter and continues to own its appearance, analysis, sampling,
 and pixel-probe sessions. Shared map-layer modules do not import raster modules,
 and raster modules do not duplicate retained-stack or Leaflet-set ownership.
+Raster detail preview depends on Catalog identity directly and does not import
+the map-layer package.
 
 ## Dependency direction
 
@@ -51,6 +57,7 @@ and raster modules do not duplicate retained-stack or Leaflet-set ownership.
 application composition
     -> dataset feature adapter
     -> neutral map-layer controller -> stack / view / Leaflet set
+    -> Catalog Item identity <- detail preview / Catalog actions
 
 FastAPI composition
     -> dataset publication service -> shared GeoServer REST gateway

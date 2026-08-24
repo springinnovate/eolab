@@ -6,6 +6,7 @@
  * their shared lifecycle and stale-work rules while delegating domain logic,
  * HTTP access, DOM presentation, and Leaflet construction to focused modules.
  */
+import { getCatalogItemKey } from "../catalog-item-identity.js";
 import { publishCatalogRaster } from "./api.js";
 import {
     loadCatalogRasterStatistics,
@@ -21,7 +22,6 @@ import {
     ensureRasterSampleWindowPane,
 } from "./leaflet.js";
 import { MapLayerController } from "../map-layers/controller.js";
-import { getCatalogMapLayerKey } from "../map-layers/layer-stack.js";
 import { MapLayerStackView } from "../map-layers/layer-stack-view.js";
 import {
     getCatalogRasterBasename,
@@ -247,7 +247,7 @@ export function initializeRasterViewer(
      */
     function createAnalysisSession(item) {
         return {
-            key: `analysis:${getCatalogMapLayerKey(item)}`,
+            key: `analysis:${getCatalogItemKey(item)}`,
             item,
             label: `${getCatalogRasterBasename(item)} (analysis only)`,
             rasterStyle: { ...DEFAULT_RASTER_STYLE },
@@ -323,7 +323,7 @@ export function initializeRasterViewer(
      * @return {Object|null} Matching analysis session or null.
      */
     function matchingAnalysisSession(item) {
-        const expectedKey = `analysis:${getCatalogMapLayerKey(item)}`;
+        const expectedKey = `analysis:${getCatalogItemKey(item)}`;
         return analysisRasterSession?.key === expectedKey
             ? analysisRasterSession
             : null;
@@ -820,7 +820,7 @@ export function initializeRasterViewer(
      */
     function activateAnalysis(item) {
         mapLayers.recordIntent();
-        const retainedKey = getCatalogMapLayerKey(item);
+        const retainedKey = getCatalogItemKey(item);
         const existingSession = matchingAnalysisSession(item);
         if (existingSession !== null && isActiveAnalysisRaster()) {
             return;
@@ -905,7 +905,7 @@ export function initializeRasterViewer(
         mapLayers.recordIntent();
         const analysisSession = matchingAnalysisSession(item);
         deactivateActiveLayer();
-        const key = `detail:${getCatalogMapLayerKey(item)}`;
+        const key = `detail:${getCatalogItemKey(item)}`;
         const initialStyle = Object.freeze({ ...style });
         sampledRasterSession = {
             key,
@@ -953,7 +953,7 @@ export function initializeRasterViewer(
      * @throws {Error} If a matching session receives an invalid style.
      */
     function updateSampledInitialStyle(item, style) {
-        const expectedKey = `detail:${getCatalogMapLayerKey(item)}`;
+        const expectedKey = `detail:${getCatalogItemKey(item)}`;
         if (
             sampledRasterSession?.key !== expectedKey ||
             (
@@ -989,7 +989,7 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function removeSampled(item) {
-        const expectedKey = `detail:${getCatalogMapLayerKey(item)}`;
+        const expectedKey = `detail:${getCatalogItemKey(item)}`;
         if (sampledRasterSession?.key !== expectedKey) {
             return;
         }

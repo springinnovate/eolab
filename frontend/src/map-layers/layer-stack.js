@@ -1,10 +1,12 @@
 /**
  * Domain state and invariants for the retained map-layer stack.
  *
- * This module owns stable Catalog Item identity, active selection, visibility,
- * opacity, and top-first ordering. It performs no publication, DOM, Leaflet,
- * statistics, or styling work.
+ * This module owns active selection, visibility, opacity, and top-first
+ * ordering keyed by the Catalog identity contract. It performs no publication,
+ * DOM, Leaflet, statistics, or styling work.
  */
+
+import { getCatalogItemKey } from "../catalog-item-identity.js";
 
 /** Maximum retained layers that may issue map tile requests simultaneously. */
 export const MAX_VISIBLE_MAP_LAYERS = 2;
@@ -19,27 +21,6 @@ export class MapLayerVisibilityLimitError extends Error {
         );
         this.name = "MapLayerVisibilityLimitError";
     }
-}
-
-/**
- * Return one stable stack key from a STAC Item's composite identity.
- *
- * @param {Object} item Catalog STAC Item.
- * @return {string} Collision-safe serialized collection and Item identity.
- * @throws {TypeError} If the Item identity violates the Catalog contract.
- */
-export function getCatalogMapLayerKey(item) {
-    if (
-        typeof item?.collection !== "string" ||
-        item.collection.length === 0 ||
-        typeof item?.id !== "string" ||
-        item.id.length === 0
-    ) {
-        throw new TypeError(
-            "Map layer Items require non-empty collection and id strings."
-        );
-    }
-    return JSON.stringify([item.collection, item.id]);
 }
 
 /**
@@ -77,7 +58,7 @@ export class MapLayerStack {
      * and whether the stack changed.
      */
     add(item, label, retentionOrder = this.nextRetentionOrder) {
-        const key = getCatalogMapLayerKey(item);
+        const key = getCatalogItemKey(item);
         if (typeof label !== "string" || label.length === 0) {
             throw new TypeError("Map layer labels must be non-empty strings.");
         }
@@ -141,7 +122,7 @@ export class MapLayerStack {
      * @return {boolean} Whether its composite identity exists in the stack.
      */
     hasItem(item) {
-        return this.get(getCatalogMapLayerKey(item)) !== null;
+        return this.get(getCatalogItemKey(item)) !== null;
     }
 
     /**

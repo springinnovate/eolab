@@ -27,6 +27,7 @@ import {
     MOUNTED_DATASET_TYPES,
 } from "./catalog.js";
 import { initializeCatalogPaneControls } from "./catalog-pane-controller.js";
+import { getCatalogItemKey } from "./catalog-item-identity.js";
 import {
     applyCatalogSystemState,
     renderScanLocations,
@@ -751,11 +752,6 @@ async function initializeCatalog(
         );
     }
 
-    /** Return the stable identity used to pair result buttons with Items. */
-    function catalogItemKey(item) {
-        return JSON.stringify([item.collection, item.id]);
-    }
-
     /**
      * Select one result and activate analysis when it is a Catalog raster.
      *
@@ -777,7 +773,7 @@ async function initializeCatalog(
         }
         catalogState.rasterAssessments.apply(item);
         const itemButton = requestedButton ??
-            catalogState.resultButtons.get(catalogItemKey(item)) ?? null;
+            catalogState.resultButtons.get(getCatalogItemKey(item)) ?? null;
         if (catalogState.selectedButton !== null) {
             catalogState.selectedButton.classList.remove("is-selected");
             catalogState.selectedButton.setAttribute("aria-pressed", "false");
@@ -873,11 +869,11 @@ async function initializeCatalog(
             itemButton.addEventListener("blur", () => {
                 footprintController.clearPreview();
             });
-            catalogState.resultButtons.set(catalogItemKey(item), itemButton);
+            catalogState.resultButtons.set(getCatalogItemKey(item), itemButton);
             if (
                 catalogState.selectedItem !== null &&
-                catalogItemKey(catalogState.selectedItem) ===
-                    catalogItemKey(item)
+                getCatalogItemKey(catalogState.selectedItem) ===
+                    getCatalogItemKey(item)
             ) {
                 catalogState.selectedButton = itemButton;
                 itemButton.classList.add("is-selected");

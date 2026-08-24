@@ -6,18 +6,10 @@
  * while completed assessment metadata bridges only an overlapping refresh.
  */
 
+import { getCatalogItemKey } from "./catalog-item-identity.js";
+
 /** Scanner-owned rendering metadata on a mounted raster's data Asset. */
 const RASTER_RENDERING_METADATA_KEY = "eolab:rendering";
-
-/**
- * Build the collision-safe key for one Catalog Item.
- *
- * @param {Object} item Catalog STAC Item.
- * @return {string} Serialized Collection and Item identity.
- */
-function getCatalogMapActionKey(item) {
-    return JSON.stringify([item.collection, item.id]);
-}
 
 /**
  * Return whether two STAC Items have the same composite identity.
@@ -50,7 +42,7 @@ export class CatalogRasterAssessmentCache {
      * @return {void}
      */
     record(requestedItem, assessedItem) {
-        const key = getCatalogMapActionKey(requestedItem);
+        const key = getCatalogItemKey(requestedItem);
         const renderingMetadata =
             assessedItem.assets.data[RASTER_RENDERING_METADATA_KEY];
         Object.assign(requestedItem, assessedItem);
@@ -68,7 +60,7 @@ export class CatalogRasterAssessmentCache {
      * @return {boolean} Whether a completed assessment matched the Item.
      */
     apply(item) {
-        const key = getCatalogMapActionKey(item);
+        const key = getCatalogItemKey(item);
         const renderingMetadata = this.assessments.get(key);
         if (renderingMetadata === undefined) {
             return false;
@@ -115,7 +107,7 @@ export class CatalogMapActionRegistry {
      * @throws {Error} If the Item already owns an in-flight action.
      */
     begin(item, buttonText, statusText) {
-        const key = getCatalogMapActionKey(item);
+        const key = getCatalogItemKey(item);
         if (this.actions.has(key)) {
             throw new Error(`Catalog map action is already pending: ${key}`);
         }
@@ -132,7 +124,7 @@ export class CatalogMapActionRegistry {
      * Matching action, or null when the Item has no pending action.
      */
     get(item) {
-        return this.actions.get(getCatalogMapActionKey(item)) ?? null;
+        return this.actions.get(getCatalogItemKey(item)) ?? null;
     }
 
     /**

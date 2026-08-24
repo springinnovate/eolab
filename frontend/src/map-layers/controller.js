@@ -1,8 +1,8 @@
 /** Neutral retained map-layer publication and presentation lifecycle. */
 
+import { getCatalogItemKey } from "../catalog-item-identity.js";
 import { LeafletLayerSet } from "./leaflet-layer-set.js";
 import {
-    getCatalogMapLayerKey,
     MapLayerStack,
     MapLayerVisibilityLimitError,
 } from "./layer-stack.js";
@@ -86,7 +86,7 @@ export class MapLayerController {
      */
     async show(item, adapter) {
         this.#requireAdapter(adapter);
-        const key = getCatalogMapLayerKey(item);
+        const key = getCatalogItemKey(item);
         const showRequestSequence = this.recordIntent();
         const retainedRecord = this.records.get(key);
         if (retainedRecord !== undefined) {
@@ -276,7 +276,7 @@ export class MapLayerController {
      */
     remove(item) {
         this.recordIntent();
-        const key = getCatalogMapLayerKey(item);
+        const key = getCatalogItemKey(item);
         this.#invalidatePublication(key);
         if (this.records.has(key)) {
             this.removeKey(key);

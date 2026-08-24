@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { getCatalogItemKey } from "../../src/catalog-item-identity.js";
 import { MapLayerController } from "../../src/map-layers/controller.js";
-import { getCatalogMapLayerKey } from "../../src/map-layers/layer-stack.js";
 
 /** Create a Catalog Item with the identity required by the layer boundary. */
 function catalogItem(id) {
@@ -97,24 +97,24 @@ test("controller owns cross-adapter visibility, ordering, and removal", async ()
 
     assert.equal(controller.retainedRecords.length, 3);
     assert.deepEqual(secondOwner.events, [
-        ["activate", getCatalogMapLayerKey(second)],
+        ["activate", getCatalogItemKey(second)],
         [
             "deactivate",
-            getCatalogMapLayerKey(second),
-            getCatalogMapLayerKey(third),
+            getCatalogItemKey(second),
+            getCatalogItemKey(third),
         ],
     ]);
     assert.equal(controller.visibleCount, 2);
-    assert.equal(controller.isAttached(getCatalogMapLayerKey(third)), false);
-    view.handlers.onVisibility(getCatalogMapLayerKey(third), true);
+    assert.equal(controller.isAttached(getCatalogItemKey(third)), false);
+    view.handlers.onVisibility(getCatalogItemKey(third), true);
     assert.match(view.status, /Only 2 map layers/);
 
-    view.handlers.onVisibility(getCatalogMapLayerKey(first), false);
-    view.handlers.onVisibility(getCatalogMapLayerKey(third), true);
-    view.handlers.onOpacity(getCatalogMapLayerKey(third), 0.35);
-    view.handlers.onMove(getCatalogMapLayerKey(first), "up");
+    view.handlers.onVisibility(getCatalogItemKey(first), false);
+    view.handlers.onVisibility(getCatalogItemKey(third), true);
+    view.handlers.onOpacity(getCatalogItemKey(third), 0.35);
+    view.handlers.onMove(getCatalogItemKey(first), "up");
 
-    assert.equal(controller.getLeafletLayer(getCatalogMapLayerKey(third)).opacity, 0.35);
+    assert.equal(controller.getLeafletLayer(getCatalogItemKey(third)).opacity, 0.35);
     assert.deepEqual(
         controller.snapshots().map(({ item }) => item.id),
         ["three", "one", "two"],

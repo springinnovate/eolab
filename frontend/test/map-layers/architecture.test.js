@@ -9,7 +9,7 @@ const MAP_LAYER_MODULES = [
     "leaflet-layer-set.js",
 ];
 
-test("map-layer modules depend only on their neutral package", async () => {
+test("map-layer modules depend only on peers and Catalog identity", async () => {
     for (const moduleName of MAP_LAYER_MODULES) {
         const source = await readFile(
             new URL(`../../src/map-layers/${moduleName}`, import.meta.url),
@@ -18,13 +18,33 @@ test("map-layer modules depend only on their neutral package", async () => {
         const relativeImports = [...source.matchAll(/from\s+["']([^"']+)["']/g)]
             .map((match) => match[1]);
 
-        assert.ok(
-            relativeImports.every(
-                (modulePath) => modulePath.startsWith("./"),
-            ),
-            `${moduleName} imports only its package peers`,
+        const externalImports = relativeImports.filter(
+            (modulePath) => !modulePath.startsWith("./"),
+        );
+        assert.deepEqual(
+            externalImports,
+            moduleName === "layer-stack.js" || moduleName === "controller.js"
+                ? ["../catalog-item-identity.js"]
+                : [],
+            `${moduleName} imports only peers and the Catalog identity contract`,
         );
     }
+});
+
+test("raster detail preview remains independent from map layers", async () => {
+    const detailPreviewSource = await readFile(
+        new URL(
+            "../../src/raster/detail-preview-controller.js",
+            import.meta.url,
+        ),
+        "utf8",
+    );
+
+    assert.match(
+        detailPreviewSource,
+        /from\s+["']\.\.\/catalog-item-identity\.js["']/,
+    );
+    assert.doesNotMatch(detailPreviewSource, /\.\.\/map-layers\//);
 });
 
 test("composition owns the controller and raster consumes it", async () => {
