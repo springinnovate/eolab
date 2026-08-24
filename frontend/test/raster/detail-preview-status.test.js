@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   formatRasterDetailMapNotice,
   formatRasterDetailPreviewResolution,
+  isRasterDetailPreviewProcessing,
 } from "../../src/raster/detail-preview-status.js";
 import {
   CENTER_SAMPLE_DETAIL_PREVIEW,
@@ -74,6 +75,22 @@ test("detail preview resolution reports pending and retained update states", () 
     }),
     /Active view: sampled proxy 31 × 31 center samples; .+ \(retained; update failed: The bounded detail-only preview could not be read\.\)$/,
   );
+});
+
+test("map processing state follows only current-view refinement work", () => {
+  assert.equal(isRasterDetailPreviewProcessing(null), false);
+  assert.equal(isRasterDetailPreviewProcessing({
+    detailStatus: "none",
+  }), false);
+  assert.equal(isRasterDetailPreviewProcessing({
+    detailStatus: "ready",
+  }), false);
+  assert.equal(isRasterDetailPreviewProcessing({
+    detailStatus: "error",
+  }), false);
+  assert.equal(isRasterDetailPreviewProcessing({
+    detailStatus: "loading",
+  }), true);
 });
 
 test("map notice explains overview limits and the active representation", () => {

@@ -26,6 +26,12 @@ test("adaptive raster detail explains sampling and exact-view handoff", () => {
     MARKUP,
     /class="raster-detail-map-notice"[^>]*id="raster-detail-map-notice"[^>]*role="status"[^>]*aria-live="polite"[^>]*hidden/s,
   );
+  assert.match(
+    MARKUP,
+    /class="raster-detail-processing"[^>]*id="raster-detail-processing"[^>]*role="status"[^>]*aria-live="polite"[^>]*aria-busy="false"[^>]*hidden/s,
+  );
+  assert.match(MARKUP, /Processing raster detail…/);
+  assert.match(MARKUP, /The displayed raster will\s+update when it is ready/);
   assert.match(MARKUP, /id="show-raster-detail-preview"[^>]*type="button"/s);
   assert.match(MARKUP, /Show adaptive raster/);
   assert.match(MARKUP, /id="remove-raster-detail-preview"[^>]*type="button"/s);
@@ -37,5 +43,13 @@ test("adaptive raster detail explains sampling and exact-view handoff", () => {
   assert.match(
     STYLE,
     /\.raster-detail-map-notice\s*\{[^}]*z-index:\s*1000;[^}]*pointer-events:\s*none;[^}]*border:\s*2px solid/s,
+  );
+  assert.match(
+    STYLE,
+    /\.raster-detail-processing\s*\{[^}]*z-index:\s*990;[^}]*pointer-events:\s*none;[^}]*backdrop-filter:\s*grayscale\(85%\) brightness\(72%\)/s,
+  );
+  assert.match(
+    STYLE,
+    /\.raster-detail-processing-spinner\s*\{[^}]*animation:\s*raster-detail-processing-spin 800ms linear infinite/s,
   );
 });

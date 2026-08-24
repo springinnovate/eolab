@@ -72,6 +72,76 @@ button:disabled {
   right: calc(var(--catalog-workspace-width) + 40px);
 }
 
+.raster-detail-processing {
+  position: absolute;
+  z-index: 990;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  background: rgb(31 41 55 / 32%);
+  backdrop-filter: grayscale(85%) brightness(72%);
+  transition: right 220ms ease;
+}
+
+.raster-detail-processing[hidden] {
+  display: none;
+}
+
+#app.is-catalog-workspace .raster-detail-processing {
+  right: calc(var(--catalog-workspace-width) + 40px);
+}
+
+.raster-detail-processing-card {
+  display: flex;
+  width: min(360px, calc(100% - 40px));
+  align-items: center;
+  gap: 14px;
+  border: 1px solid rgb(255 255 255 / 72%);
+  border-radius: 10px;
+  background: rgb(17 24 39 / 92%);
+  padding: 16px 18px;
+  color: #ffffff;
+  box-shadow: 0 8px 28px rgb(0 0 0 / 38%);
+}
+
+.raster-detail-processing-spinner {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  border: 4px solid rgb(255 255 255 / 34%);
+  border-top-color: #ffffff;
+  border-radius: 50%;
+  animation: raster-detail-processing-spin 800ms linear infinite;
+}
+
+.raster-detail-processing-message {
+  display: grid;
+  gap: 3px;
+  line-height: 1.35;
+}
+
+.raster-detail-processing-message strong {
+  font-size: 0.95rem;
+}
+
+.raster-detail-processing-message small {
+  color: rgb(255 255 255 / 82%);
+  font-size: 0.78rem;
+}
+
+@keyframes raster-detail-processing-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .raster-detail-processing-spinner {
+    animation: none;
+  }
+}
+
 .raster-detail-map-notice {
   position: absolute;
   z-index: 1000;
@@ -1835,6 +1905,10 @@ h5 {
   #app.is-catalog-workspace #map {
     right: 0;
     visibility: hidden;
+  }
+
+  #app.is-catalog-workspace .raster-detail-processing {
+    display: none;
   }
 
   #app.is-catalog-workspace .control-panel {

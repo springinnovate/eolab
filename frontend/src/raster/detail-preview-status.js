@@ -64,6 +64,21 @@ function formatPreview(preview) {
 }
 
 /**
+ * Return whether the current map view is awaiting adaptive raster detail.
+ *
+ * A retained lower-resolution image may remain visible during this state; the
+ * processing indicator prevents users from mistaking it for the completed
+ * current-view result.
+ *
+ * @param {Object|null} previewState Current adaptive-raster session state.
+ * @return {boolean} Whether current-view detail is scheduled, reading, or
+ * waiting to retry bounded-reader capacity.
+ */
+export function isRasterDetailPreviewProcessing(previewState) {
+    return previewState?.detailStatus === "loading";
+}
+
+/**
  * Format base and active current-view provenance for the Catalog inspector.
  *
  * @param {Object|null} previewState Current adaptive-raster session state, or

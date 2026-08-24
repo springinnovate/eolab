@@ -45,6 +45,7 @@ import { initializeRasterDetailPreview } from "./raster/detail-preview-controlle
 import {
     formatRasterDetailMapNotice,
     formatRasterDetailPreviewResolution,
+    isRasterDetailPreviewProcessing,
 } from "./raster/detail-preview-status.js";
 import { initializeRasterViewer } from "./raster/raster-viewer.js";
 import { initializeTemporaryAoi } from "./temporary-aoi/temporary-aoi.js";
@@ -497,6 +498,9 @@ async function initializeCatalog(
     const rasterDetailMapNotice = document.querySelector(
         "#raster-detail-map-notice"
     );
+    const rasterDetailProcessing = document.querySelector(
+        "#raster-detail-processing"
+    );
     const showRasterDetailPreview = document.querySelector(
         "#show-raster-detail-preview"
     );
@@ -568,6 +572,12 @@ async function initializeCatalog(
         const mapNotice = formatRasterDetailMapNotice(previewState);
         rasterDetailMapNotice.textContent = mapNotice;
         rasterDetailMapNotice.hidden = mapNotice === "";
+        const isProcessing = isRasterDetailPreviewProcessing(previewState);
+        rasterDetailProcessing.hidden = !isProcessing;
+        rasterDetailProcessing.setAttribute(
+            "aria-busy",
+            String(isProcessing)
+        );
     }
 
     /**
