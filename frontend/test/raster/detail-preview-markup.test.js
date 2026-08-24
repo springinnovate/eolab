@@ -38,7 +38,11 @@ test("adaptive raster detail explains sampling and exact-view handoff", () => {
   assert.match(MARKUP, /Remove adaptive raster/);
   assert.match(
     STYLE,
-    /\.raster-sampled-proxy\s*\{[^}]*image-rendering:\s*pixelated;/s,
+    /\.raster-sampled-proxy\s*\{[^}]*image-rendering:\s*auto;/s,
+  );
+  assert.match(
+    STYLE,
+    /\.raster-source-detail\s*\{[^}]*image-rendering:\s*pixelated;/s,
   );
   assert.match(
     STYLE,

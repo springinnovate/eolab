@@ -864,6 +864,10 @@ h5 {
 }
 
 .raster-sampled-proxy {
+  image-rendering: auto;
+}
+
+.raster-source-detail {
   image-rendering: pixelated;
 }
 

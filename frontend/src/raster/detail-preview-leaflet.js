@@ -101,6 +101,9 @@ export function createRasterDetailPreviewLayer(
     const imageBounds = toLeafletBounds(preview.imageBounds);
     const style = sessionStyle ?? buildRasterDetailPreviewStyle(preview);
     const imageDataUrl = encodeImage(preview, style);
+    const imageClassName = preview.rendering === "sampledProxy"
+        ? "raster-detail-image raster-sampled-proxy"
+        : "raster-detail-image raster-source-detail";
     const layers = [];
     if (preview.scope !== "currentView") {
         layers.push(leaflet.rectangle(extentBounds, {
@@ -117,7 +120,7 @@ export function createRasterDetailPreviewLayer(
             pane: RASTER_DETAIL_PREVIEW_IMAGE_PANE,
             opacity: 1,
             interactive: false,
-            className: "raster-sampled-proxy"
+            className: imageClassName
         }));
     if (preview.scope === "currentView") {
         layers.push(leaflet.rectangle(imageBounds, {

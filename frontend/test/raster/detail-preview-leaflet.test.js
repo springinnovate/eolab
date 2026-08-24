@@ -10,6 +10,7 @@ import {
 import {
   CENTER_SAMPLE_DETAIL_PREVIEW,
   CURRENT_VIEW_DETAIL_PREVIEW,
+  EXACT_CURRENT_VIEW_DETAIL_PREVIEW,
   PATCH_DETAIL_PREVIEW,
   REPRESENTATIVE_SAMPLE_DETAIL_PREVIEW,
 } from "../../test-support/raster/fixtures.js";
@@ -92,7 +93,7 @@ test("full-extent sampled modes use one colored image at warped bounds", () => {
   );
   assert.equal(
     presentation.layer.layers[1].options.className,
-    "raster-sampled-proxy",
+    "raster-detail-image raster-sampled-proxy",
   );
   assert.equal(presentation.layer.layers[1].options.opacity, 1);
   assert.equal(
@@ -128,6 +129,10 @@ test("representative patch focuses its numeric image and retains raster extent",
   assert.equal(
     presentation.layer.layers[1].url,
     "data:image/png;base64,detail-patch",
+  );
+  assert.equal(
+    presentation.layer.layers[1].options.className,
+    "raster-detail-image raster-source-detail",
   );
   assert.equal(
     presentation.layer.layers[2].options.className,
@@ -171,4 +176,17 @@ test("current-view detail uses the base style and no duplicate raster extent", (
     RASTER_DETAIL_PREVIEW_BOUNDARY_PANE,
   );
   assert.equal(presentation.style, style);
+
+  const exactPresentation = createRasterDetailPreviewLayer(
+    fakeLeaflet(),
+    EXACT_CURRENT_VIEW_DETAIL_PREVIEW,
+    {
+      style,
+      encodeImage: () => "data:image/png;base64,exact-current-view",
+    },
+  );
+  assert.equal(
+    exactPresentation.layer.layers[0].options.className,
+    "raster-detail-image raster-source-detail",
+  );
 });
