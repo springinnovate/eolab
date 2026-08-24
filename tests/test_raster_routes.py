@@ -1,5 +1,8 @@
 """Test raster HTTP delivery and application-error translation."""
 
+import asyncio
+import json
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
@@ -135,6 +138,123 @@ def test_raster_routes_translate_application_errors_at_http_boundary() -> None:
     assert statistics_response.json() == {
         "detail": "controlled raster conflict"
     }
+
+
+def test_detail_preview_disconnect_cancels_the_service_waiter() -> None:
+    """Propagate an abandoned browser fetch into preview service ownership."""
+
+    class BlockingDetailPreviewService:
+        """Expose cancellation of one controlled preview waiter."""
+
+        def __init__(self) -> None:
+            """Create unset lifecycle events."""
+            self.started = asyncio.Event()
+            self.canceled = asyncio.Event()
+
+        async def get(self, _request: object) -> None:
+            """Wait until the HTTP boundary cancels this caller.
+
+            Args:
+                _request: Ignored validated preview request.
+
+            Returns:
+                Never returns normally.
+
+            Raises:
+                asyncio.CancelledError: When the browser disconnects.
+            """
+            self.started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.canceled.set()
+                raise
+
+    detail_service = BlockingDetailPreviewService()
+    conflict_service = _ConflictService()
+    feature = create_raster_feature(
+        conflict_service,
+        conflict_service,
+        conflict_service,
+        detail_service,
+        conflict_service,
+        PublishedRasterRegistry(),
+    )
+    application = FastAPI()
+    application.include_router(feature.router)
+    request_body = json.dumps({
+        "collectionId": "eolab-mounted-geotiffs",
+        "itemId": "geotiff-0123456789abcdef01234567",
+        "mode": "centerSample",
+        "density": "fine",
+    }).encode()
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/api/rendering/detail-previews",
+        "raw_path": b"/api/rendering/detail-previews",
+        "query_string": b"",
+        "headers": [
+            (b"host", b"testserver"),
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(request_body)).encode()),
+        ],
+        "client": ("127.0.0.1", 12345),
+        "server": ("testserver", 80),
+        "root_path": "",
+        "state": {},
+    }
+
+    async def exercise_disconnect() -> list[dict[str, object]]:
+        """Send one valid body followed by an explicit disconnect.
+
+        Returns:
+            ASGI response messages emitted around cancellation.
+        """
+        request_messages: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+        await request_messages.put({
+            "type": "http.request",
+            "body": request_body,
+            "more_body": False,
+        })
+        response_messages: list[dict[str, object]] = []
+
+        async def receive() -> dict[str, object]:
+            """Return the next controlled ASGI request message.
+
+            Returns:
+                Next queued request or disconnect event.
+            """
+            return await request_messages.get()
+
+        async def send(message: dict[str, object]) -> None:
+            """Retain one application response message for assertions.
+
+            Args:
+                message: ASGI response event emitted by FastAPI.
+
+            Returns:
+                None.
+            """
+            response_messages.append(message)
+
+        request_task = asyncio.create_task(application(scope, receive, send))
+        await asyncio.wait_for(detail_service.started.wait(), 1)
+        await request_messages.put({"type": "http.disconnect"})
+        await asyncio.wait_for(request_task, 1)
+        return response_messages
+
+    response_messages = asyncio.run(exercise_disconnect())
+
+    assert detail_service.canceled.is_set()
+    assert next(
+        message["status"]
+        for message in response_messages
+        if message["type"] == "http.response.start"
+    ) == 499
 
 
 @pytest.mark.parametrize(

@@ -127,23 +127,49 @@ def create_raster_feature(
     )
     async def raster_detail_preview(
         request: CatalogRasterDetailPreviewRequest,
+        http_request: Request,
     ) -> RasterDetailPreview:
         """Return an explicitly selected bounded sampled-raster preview.
 
         Args:
             request: Catalog identity and one of the three fixed preview modes.
+            http_request: Incoming request used to detect cancellation.
 
         Returns:
             Georeferenced numeric image colored by the browser's shared raster
             ramp without any arbitrary full-source read.
 
         Raises:
-            HTTPException: If the raster or preview contract is inapplicable.
+            HTTPException: If the raster or preview contract is inapplicable
+                or the browser disconnects.
         """
+        preview_task = asyncio.create_task(detail_preview_service.get(request))
+        disconnect_task = asyncio.create_task(
+            wait_for_http_disconnect(http_request)
+        )
         try:
-            return await detail_preview_service.get(request)
-        except RasterFeatureError as error:
-            raise raster_http_exception(error) from error
+            completed_tasks, _ = await asyncio.wait(
+                (preview_task, disconnect_task),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if preview_task in completed_tasks:
+                try:
+                    return preview_task.result()
+                except RasterFeatureError as error:
+                    raise raster_http_exception(error) from error
+
+            raise HTTPException(
+                status_code=499,
+                detail="The raster detail preview request was canceled",
+            )
+        finally:
+            disconnect_task.cancel()
+            preview_task.cancel()
+            await asyncio.gather(
+                preview_task,
+                disconnect_task,
+                return_exceptions=True,
+            )
 
     @router.post(
         "/statistics",

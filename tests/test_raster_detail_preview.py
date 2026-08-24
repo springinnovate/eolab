@@ -55,6 +55,10 @@ from eolab_app.raster.models import (
     RasterDetailPreviewDensity,
     RasterDetailPreviewMode,
 )
+from eolab_app.raster.read_cancellation import (
+    RasterReadCancellationCheck,
+    RasterReadCancelled,
+)
 from eolab_app.raster.sources import source_signature
 
 
@@ -1042,6 +1046,53 @@ def test_exact_representative_grid_reports_block_limit_before_pixel_reads(
         assert tracked.reads == []
 
 
+def test_proxy_read_stops_after_cancellation_between_native_blocks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Close an obsolete proxy after its current native block returns.
+
+    Args:
+        tmp_path: Temporary raster directory.
+        monkeypatch: Controlled native-block reader wrapper.
+
+    Returns:
+        None.
+    """
+    source_path = tmp_path / "cancel-between-blocks.tif"
+    _write_raster(source_path, 1_024, 1_024, block_size=128)
+    native_reader = detail_proxy_module._read_native_block
+    read_count = 0
+
+    def tracked_read(
+        dataset: rasterio.io.DatasetReader,
+        window: rasterio.windows.Window,
+    ) -> numpy.ma.MaskedArray:
+        """Count and delegate one native-block read.
+
+        Args:
+            dataset: Open controlled raster.
+            window: Planned native block window.
+
+        Returns:
+            Delegated masked block values.
+        """
+        nonlocal read_count
+        read_count += 1
+        return native_reader(dataset, window)
+
+    monkeypatch.setattr(detail_proxy_module, "_read_native_block", tracked_read)
+    with rasterio.open(source_path) as dataset:
+        with pytest.raises(RasterReadCancelled):
+            read_detail_proxy(
+                dataset,
+                "centerSample",
+                cancellation_requested=lambda: read_count == 1,
+            )
+
+    assert read_count == 1
+
+
 def test_center_proxy_is_a_full_extent_multicell_numeric_raster(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1389,7 +1440,7 @@ def test_representative_patch_ranking_uses_coverage_variability_then_order(
         )
         monkeypatch.setattr(
             "eolab_app.raster.detail_preview.read_bounded_candidate_windows",
-            lambda _dataset, _windows: bounded,
+            lambda _dataset, _windows, _cancellation_requested: bounded,
         )
         selected, _, _ = _representative_patch(CandidateDataset())
         return selected
@@ -1696,6 +1747,7 @@ def test_service_coalesces_by_source_mode_parameters_and_rejects_unsafe_reason(
         extent: tuple[float, float, float, float],
         density: RasterDetailPreviewDensity | None,
         view_bounds: tuple[float, float, float, float] | None,
+        cancellation_requested: RasterReadCancellationCheck,
     ) -> RasterDetailPreview:
         """Return a controlled valid numeric preview.
 
@@ -1705,6 +1757,7 @@ def test_service_coalesces_by_source_mode_parameters_and_rejects_unsafe_reason(
             extent: Requested raster extent.
             density: Requested fixed density profile.
             view_bounds: Optional current-view intersection.
+            cancellation_requested: Shared request-obsolescence predicate.
 
         Returns:
             Valid preview model produced by the real bounded reader fixture.
@@ -1716,6 +1769,7 @@ def test_service_coalesces_by_source_mode_parameters_and_rejects_unsafe_reason(
             extent,
             density,
             view_bounds,
+            cancellation_requested,
         )
 
     service = RasterDetailPreviewService(
@@ -1840,20 +1894,42 @@ def test_service_rechecks_source_signature_after_bounded_read(
         signature_reads += 1
         return approved_signature if signature_reads < 3 else changed_signature
 
+    def reader(
+        _path: Path,
+        mode: RasterDetailPreviewMode,
+        extent: tuple[float, float, float, float],
+        density: RasterDetailPreviewDensity | None,
+        view_bounds: tuple[float, float, float, float] | None,
+        cancellation_requested: RasterReadCancellationCheck,
+    ) -> RasterDetailPreview:
+        """Delegate to the controlled raster while preserving cancellation.
+
+        Args:
+            _path: Unused authorized path.
+            mode: Requested preview mode.
+            extent: Authorized raster extent.
+            density: Requested fixed density.
+            view_bounds: Optional effective map intersection.
+            cancellation_requested: Shared obsolescence predicate.
+
+        Returns:
+            Valid bounded preview from the controlled raster.
+        """
+        return read_raster_detail_preview(
+            tiny_raster,
+            mode,
+            extent,
+            density,
+            view_bounds,
+            cancellation_requested,
+        )
+
     service = RasterDetailPreviewService(
         _Catalog(item),
         _Resolver(source_path),
         read_concurrency=1,
         cache_entries=4,
-        preview_reader=lambda _path, mode, extent, density, view_bounds: (
-            read_raster_detail_preview(
-                tiny_raster,
-                mode,
-                extent,
-                density,
-                view_bounds,
-            )
-        ),
+        preview_reader=reader,
         signature_reader=changing_signature,
     )
     request = CatalogRasterDetailPreviewRequest.model_validate({
@@ -1887,6 +1963,7 @@ def test_service_bounds_distinct_inflight_view_work(tmp_path: Path) -> None:
         extent: tuple[float, float, float, float],
         density: RasterDetailPreviewDensity | None,
         view_bounds: tuple[float, float, float, float] | None,
+        _cancellation_requested: RasterReadCancellationCheck,
     ) -> RasterDetailPreview:
         """Hold one admitted read until the capacity assertion completes.
 
@@ -1896,6 +1973,7 @@ def test_service_bounds_distinct_inflight_view_work(tmp_path: Path) -> None:
             extent: Authorized raster extent.
             density: Requested fixed density.
             view_bounds: Optional effective map intersection.
+            _cancellation_requested: Unused obsolescence predicate.
 
         Returns:
             Valid bounded preview after the test releases capacity.
@@ -1946,3 +2024,101 @@ def test_service_bounds_distinct_inflight_view_work(tmp_path: Path) -> None:
         await first
 
     asyncio.run(exercise())
+
+
+def test_service_cancels_worker_only_after_last_coalesced_waiter(
+    tmp_path: Path,
+) -> None:
+    """Stop abandoned block work without disrupting a duplicate waiter.
+
+    Args:
+        tmp_path: Temporary source directory.
+
+    Returns:
+        None.
+    """
+    source_path = tmp_path / "source.tif"
+    source_path.write_bytes(b"source")
+    item, _ = _detail_item(source_signature(source_path))
+    tiny_raster = tmp_path / "tiny.tif"
+    _write_raster(tiny_raster, 2, 2)
+    started = threading.Event()
+    stopped = threading.Event()
+    poll = threading.Event()
+    reader_calls = 0
+
+    def cancellable_reader(
+        _path: Path,
+        mode: RasterDetailPreviewMode,
+        extent: tuple[float, float, float, float],
+        density: RasterDetailPreviewDensity | None,
+        view_bounds: tuple[float, float, float, float] | None,
+        cancellation_requested: RasterReadCancellationCheck,
+    ) -> RasterDetailPreview:
+        """Block the first computation until its final waiter cancels.
+
+        Args:
+            _path: Unused authorized source path.
+            mode: Requested preview mode.
+            extent: Authorized raster extent.
+            density: Requested fixed density.
+            view_bounds: Optional effective map intersection.
+            cancellation_requested: Shared last-waiter predicate.
+
+        Returns:
+            Valid preview for later non-canceled work.
+
+        Raises:
+            RasterReadCancelled: When the first computation is abandoned.
+        """
+        nonlocal reader_calls
+        reader_calls += 1
+        if reader_calls == 1:
+            started.set()
+            while not cancellation_requested():
+                poll.wait(0.005)
+            stopped.set()
+            raise RasterReadCancelled
+        return read_raster_detail_preview(
+            tiny_raster,
+            mode,
+            extent,
+            density,
+            view_bounds,
+            cancellation_requested,
+        )
+
+    service = RasterDetailPreviewService(
+        _Catalog(item),
+        _Resolver(source_path),
+        read_concurrency=1,
+        cache_entries=4,
+        preview_reader=cancellable_reader,
+    )
+    request = CatalogRasterDetailPreviewRequest.model_validate({
+        "collectionId": "eolab-mounted-geotiffs",
+        "itemId": ITEM_ID,
+        "mode": "centerSample",
+        "density": "coarse",
+    })
+    async def exercise() -> None:
+        """Cancel duplicate waiters in order, then reuse released capacity."""
+        first = asyncio.create_task(service.get(request))
+        second = asyncio.create_task(service.get(request))
+        assert await asyncio.to_thread(started.wait, 1)
+
+        first.cancel()
+        await asyncio.gather(first, return_exceptions=True)
+        await asyncio.sleep(0.02)
+        assert not stopped.is_set()
+        assert not second.done()
+
+        second.cancel()
+        await asyncio.gather(second, return_exceptions=True)
+        assert await asyncio.to_thread(stopped.wait, 1)
+        while service._inflight:
+            await asyncio.sleep(0)
+        assert await service.get(request) is not None
+
+    asyncio.run(exercise())
+    assert reader_calls == 2

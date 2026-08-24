@@ -12,6 +12,10 @@ from rasterio.warp import transform as warp_transform
 from rasterio.windows import Window
 
 from eolab_app.raster.models import RasterDetailPreviewDensity
+from eolab_app.raster.read_cancellation import (
+    RasterReadCancellationCheck,
+    require_active_raster_read,
+)
 
 
 DETAIL_PROXY_MAX_DIMENSION = 127
@@ -627,6 +631,7 @@ def _block_indexes_for_window(
 def read_bounded_candidate_windows(
     dataset: rasterio.io.DatasetReader,
     windows: list[Window],
+    cancellation_requested: RasterReadCancellationCheck | None = None,
 ) -> BoundedWindowSamples:
     """Read a deterministic candidate subset through unique native blocks.
 
@@ -639,14 +644,17 @@ def read_bounded_candidate_windows(
     Args:
         dataset: Open structurally authorized one-band raster.
         windows: Non-empty deterministic integral candidate windows.
+        cancellation_requested: Optional thread-safe obsolescence predicate.
 
     Returns:
         Accepted masked windows plus exact block and decoded-byte work.
 
     Raises:
         ValueError: If no candidate fits the native-block limits.
+        RasterReadCancelled: If every request waiter disconnects.
         rasterio.errors.RasterioError: If a bounded native-block read fails.
     """
+    require_active_raster_read(cancellation_requested)
     _require_source_contract(dataset)
     block_shape = tuple(int(value) for value in dataset.block_shapes[0])
     accepted: list[Window] = []
@@ -672,10 +680,13 @@ def read_bounded_candidate_windows(
     block_indexes = tuple(sorted(accepted_blocks))
     blocks: dict[SourceBlockIndex, tuple[Window, numpy.ma.MaskedArray]] = {}
     for block_index in block_indexes:
+        require_active_raster_read(cancellation_requested)
         block_window = dataset.block_window(1, *block_index)
+        block = _read_native_block(dataset, block_window)
+        require_active_raster_read(cancellation_requested)
         blocks[block_index] = (
             block_window,
-            _read_native_block(dataset, block_window),
+            block,
         )
 
     samples: list[tuple[Window, numpy.ma.MaskedArray]] = []
@@ -722,6 +733,7 @@ def read_detail_proxy(
     mode: DetailProxyMode,
     maximum_dimension: int | None = None,
     projected_bounds: tuple[float, float, float, float] | None = None,
+    cancellation_requested: RasterReadCancellationCheck | None = None,
 ) -> tuple[numpy.ma.MaskedArray, DetailProxyPlan]:
     """Read each planned native block once and build a numeric proxy raster.
 
@@ -735,14 +747,17 @@ def read_detail_proxy(
         maximum_dimension: Optional fixed target-grid edge. Projected preview
             grids use it exactly on both axes.
         projected_bounds: Optional EPSG:3857 target rectangle.
+        cancellation_requested: Optional thread-safe obsolescence predicate.
 
     Returns:
         Masked proxy values and the exact bounded plan that produced them.
 
     Raises:
         ValueError: If planning cannot satisfy the fixed source-read contract.
+        RasterReadCancelled: If every request waiter disconnects.
         rasterio.errors.RasterioError: If a bounded native-block read fails.
     """
+    require_active_raster_read(cancellation_requested)
     plan = plan_detail_proxy(
         dataset,
         mode,
@@ -763,8 +778,10 @@ def read_detail_proxy(
 
     sampled_values: dict[SourcePosition, float | None] = {}
     for block_row, block_column in plan.block_indexes:
+        require_active_raster_read(cancellation_requested)
         window = dataset.block_window(1, block_row, block_column)
         block = _read_native_block(dataset, window)
+        require_active_raster_read(cancellation_requested)
         row_offset = int(window.row_off)
         column_offset = int(window.col_off)
         for row, column in sorted(positions_by_block[(block_row, block_column)]):

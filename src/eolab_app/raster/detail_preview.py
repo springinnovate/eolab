@@ -42,6 +42,10 @@ from eolab_app.raster.models import (
     RasterDetailPreviewWork,
     RasterValueRange,
 )
+from eolab_app.raster.read_cancellation import (
+    RasterReadCancellationCheck,
+    require_active_raster_read,
+)
 from eolab_app.raster.statistics import strict_raster_value_range
 
 
@@ -527,6 +531,7 @@ def _flatten_values(values: numpy.ma.MaskedArray) -> list[float | None]:
 
 def _representative_patch(
     dataset: rasterio.io.DatasetReader,
+    cancellation_requested: RasterReadCancellationCheck | None = None,
 ) -> tuple[Window, numpy.ma.MaskedArray, BoundedWindowSamples]:
     """Select one patch using deterministic bounded candidate windows.
 
@@ -537,6 +542,7 @@ def _representative_patch(
 
     Args:
         dataset: Open band-one raster.
+        cancellation_requested: Optional thread-safe obsolescence predicate.
 
     Returns:
         Selected source window, its already-read masked values, and the shared
@@ -544,11 +550,13 @@ def _representative_patch(
 
     Raises:
         NoUsefulDetailPatchError: If every candidate is nodata/non-finite.
+        RasterReadCancelled: If every request waiter disconnects.
         rasterio.errors.RasterioError: If a bounded read fails.
     """
     bounded_samples = read_bounded_candidate_windows(
         dataset,
         _candidate_windows(dataset.width, dataset.height),
+        cancellation_requested,
     )
     candidates: list[
         tuple[tuple[float, float, int], Window, numpy.ma.MaskedArray]
@@ -664,6 +672,7 @@ def read_raster_detail_preview(
     raster_extent: CanonicalWgs84Bounds,
     density: RasterDetailPreviewDensity | None,
     view_bounds: CanonicalWgs84Bounds | None = None,
+    cancellation_requested: RasterReadCancellationCheck | None = None,
 ) -> RasterDetailPreview:
     """Read one bounded numeric preview from an overview-limited raster.
 
@@ -689,12 +698,14 @@ def read_raster_detail_preview(
             resolution for sampled modes; ``None`` for the representative
             patch.
         view_bounds: Optional canonical current map rectangle to refine.
+        cancellation_requested: Optional thread-safe obsolescence predicate.
 
     Returns:
         Browser-safe georeferenced numeric preview with public resource limits.
 
     Raises:
         NoUsefulDetailPatchError: If bounded patch candidates contain no data.
+        RasterReadCancelled: If every request waiter disconnects.
         OSError: If the source cannot be read.
         rasterio.errors.RasterioError: If GDAL cannot open/read/reproject it.
         ValueError: If the dataset contract or georeferencing is invalid.
@@ -716,7 +727,9 @@ def read_raster_detail_preview(
         raster_extent,
         view_bounds or raster_extent,
     )
+    require_active_raster_read(cancellation_requested)
     with rasterio.open(source_path) as dataset:
+        require_active_raster_read(cancellation_requested)
         _require_signed_geotiff_dependencies(dataset, source_path)
         if dataset.count != 1 or dataset.width < 1 or dataset.height < 1:
             raise ValueError("Detail-only preview requires one non-empty band")
@@ -732,7 +745,11 @@ def read_raster_detail_preview(
                 else None
             )
             if exact_plan is not None:
-                exact_values = read_exact_current_view(dataset, exact_plan)
+                exact_values = read_exact_current_view(
+                    dataset,
+                    exact_plan,
+                    cancellation_requested,
+                )
                 image_values = _warp_exact_current_view(
                     dataset.crs,
                     window_transform(exact_plan.source_window, dataset.transform),
@@ -770,6 +787,7 @@ def read_raster_detail_preview(
                 mode,
                 detail_proxy_maximum_dimension(density),
                 projected_bounds,
+                cancellation_requested,
             )
             scope: RasterDetailPreviewScope = (
                 "currentView" if view_bounds is not None else "rasterExtent"
@@ -804,7 +822,10 @@ def read_raster_detail_preview(
                 ),
             )
 
-        patch_window, patch_values, patch_work = _representative_patch(dataset)
+        patch_window, patch_values, patch_work = _representative_patch(
+            dataset,
+            cancellation_requested,
+        )
         image_bounds, image_values = _warp_numeric_image(
             dataset.crs,
             window_transform(patch_window, dataset.transform),

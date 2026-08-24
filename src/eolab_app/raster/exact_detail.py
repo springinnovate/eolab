@@ -16,6 +16,10 @@ from eolab_app.raster.detail_proxy import (
     _read_native_block,
     _require_source_contract,
 )
+from eolab_app.raster.read_cancellation import (
+    RasterReadCancellationCheck,
+    require_active_raster_read,
+)
 
 
 EXACT_DETAIL_MAX_DIMENSION = 512
@@ -174,18 +178,21 @@ def plan_exact_current_view(
 def read_exact_current_view(
     dataset: rasterio.io.DatasetReader,
     plan: ExactDetailPlan,
+    cancellation_requested: RasterReadCancellationCheck | None = None,
 ) -> numpy.ma.MaskedArray:
     """Read every pixel in an admitted source window one native block at a time.
 
     Args:
         dataset: Open source that owns the already-established plan.
         plan: Immutable exact-detail plan returned for this dataset.
+        cancellation_requested: Optional thread-safe obsolescence predicate.
 
     Returns:
         Complete masked source window at native resolution. Each intersecting
         native block is read once without resampling or a boundless read.
 
     Raises:
+        RasterReadCancelled: If every request waiter disconnects.
         rasterio.errors.RasterioError: If an admitted native-block read fails.
     """
     source_window = plan.source_window
@@ -198,8 +205,10 @@ def read_exact_current_view(
         dtype=numpy.dtype(dataset.dtypes[0]),
     )
     for block_index in plan.block_indexes:
+        require_active_raster_read(cancellation_requested)
         block_window = dataset.block_window(1, *block_index)
         block = _read_native_block(dataset, block_window)
+        require_active_raster_read(cancellation_requested)
         block_row_start = int(block_window.row_off)
         block_column_start = int(block_window.col_off)
         copy_row_start = max(row_start, block_row_start)

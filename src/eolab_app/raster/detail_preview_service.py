@@ -2,8 +2,10 @@
 
 import asyncio
 import math
+import threading
 from collections import OrderedDict
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 import rasterio
@@ -52,7 +54,29 @@ from eolab_app.raster.models import (
     Wgs84Bounds,
 )
 from eolab_app.raster.ports import RasterCatalog
+from eolab_app.raster.read_cancellation import (
+    RasterReadCancellationCheck,
+    require_active_raster_read,
+)
 from eolab_app.raster.sources import MountedRasterResolver, source_signature
+
+
+@dataclass
+class _InflightPreview:
+    """Track one coalesced worker and the request waiters that still need it.
+
+    Attributes:
+        task: Shared asynchronous computation around one Rasterio worker.
+        cancellation_requested: Thread-safe signal set after the last waiter
+            disconnects.
+        waiter_count: Number of active service callers awaiting this identity.
+        finished: Whether the worker has completed its cache/error lifecycle.
+    """
+
+    task: asyncio.Task[RasterDetailPreview]
+    cancellation_requested: threading.Event
+    waiter_count: int = 0
+    finished: bool = False
 
 
 class RasterDetailPreviewService:
@@ -75,6 +99,7 @@ class RasterDetailPreviewService:
                 CanonicalWgs84Bounds,
                 RasterDetailPreviewDensity | None,
                 CanonicalWgs84Bounds | None,
+                RasterReadCancellationCheck,
             ],
             RasterDetailPreview,
         ] = read_raster_detail_preview,
@@ -111,7 +136,7 @@ class RasterDetailPreviewService:
         ] = OrderedDict()
         self._inflight: dict[
             RasterDetailPreviewCacheKey,
-            asyncio.Task[RasterDetailPreview],
+            _InflightPreview,
         ] = {}
         self._state_lock = asyncio.Lock()
 
@@ -335,13 +360,14 @@ class RasterDetailPreviewService:
             if cached is not None:
                 self._cache.move_to_end(cache_key)
                 return cached
-            task = self._inflight.get(cache_key)
-            if task is None:
+            inflight = self._inflight.get(cache_key)
+            if inflight is None:
                 if len(self._inflight) >= self._maximum_inflight:
                     raise RasterConflictError(
                         "Detail-only preview capacity is busy; retry after "
                         "the current bounded read finishes."
                     )
+                cancellation_requested = threading.Event()
                 task = asyncio.create_task(
                     self._compute(
                         authorized_raster,
@@ -350,23 +376,58 @@ class RasterDetailPreviewService:
                         request.density,
                         effective_view_bounds,
                         cache_key,
+                        cancellation_requested,
                     )
                 )
                 task.add_done_callback(self._retrieve_task_exception)
-                self._inflight[cache_key] = task
+                inflight = _InflightPreview(task, cancellation_requested)
+                self._inflight[cache_key] = inflight
+            elif inflight.cancellation_requested.is_set():
+                raise RasterConflictError(
+                    "Detail-only preview capacity is busy; retry after "
+                    "the current bounded read finishes."
+                )
+            inflight.waiter_count += 1
         try:
-            return await asyncio.shield(task)
-        except NoUsefulDetailPatchError as error:
-            raise RasterConflictError(
-                "No finite, non-nodata pixels were found in the bounded "
-                "representative-patch candidates."
-            ) from error
-        except ValueError as error:
-            raise RasterConflictError(str(error)) from error
-        except (OSError, rasterio.errors.RasterioError) as error:
-            raise RasterConflictError(
-                "The bounded detail-only preview could not be read."
-            ) from error
+            try:
+                return await asyncio.shield(inflight.task)
+            except NoUsefulDetailPatchError as error:
+                raise RasterConflictError(
+                    "No finite, non-nodata pixels were found in the bounded "
+                    "representative-patch candidates."
+                ) from error
+            except ValueError as error:
+                raise RasterConflictError(str(error)) from error
+            except (OSError, rasterio.errors.RasterioError) as error:
+                raise RasterConflictError(
+                    "The bounded detail-only preview could not be read."
+                ) from error
+        finally:
+            await self._release_waiter(cache_key, inflight)
+
+    async def _release_waiter(
+        self,
+        cache_key: RasterDetailPreviewCacheKey,
+        inflight: _InflightPreview,
+    ) -> None:
+        """Release one waiter and cooperatively stop an abandoned worker.
+
+        Args:
+            cache_key: Complete identity of the shared computation.
+            inflight: Exact in-flight state joined by the caller.
+
+        Returns:
+            None after detaching the caller and updating worker ownership.
+        """
+        async with self._state_lock:
+            inflight.waiter_count -= 1
+            if inflight.waiter_count != 0:
+                return
+            if inflight.finished:
+                if self._inflight.get(cache_key) is inflight:
+                    self._inflight.pop(cache_key)
+                return
+            inflight.cancellation_requested.set()
 
     async def _compute(
         self,
@@ -376,6 +437,7 @@ class RasterDetailPreviewService:
         density: RasterDetailPreviewDensity | None,
         view_bounds: CanonicalWgs84Bounds | None,
         cache_key: RasterDetailPreviewCacheKey,
+        cancellation_requested: threading.Event,
     ) -> RasterDetailPreview:
         """Compute and cache one source version within read capacity.
 
@@ -386,18 +448,21 @@ class RasterDetailPreviewService:
             density: Fixed sampled-grid profile, or ``None`` for a patch.
             view_bounds: Effective current-view intersection, when requested.
             cache_key: Complete source, mode, parameters, and policy identity.
+            cancellation_requested: Thread-safe last-waiter signal.
 
         Returns:
             Newly computed bounded preview.
 
         Raises:
             RasterConflictError: If the source changes around the read.
+            RasterReadCancelled: If every coalesced waiter disconnects.
             OSError: If source identity or pixels cannot be read.
             rasterio.errors.RasterioError: If GDAL cannot read or warp.
             ValueError: If sampling or georeferencing fails.
         """
         try:
             async with self._read_semaphore:
+                require_active_raster_read(cancellation_requested.is_set)
                 if await asyncio.to_thread(
                     self._signature_reader,
                     authorized_raster.source_path,
@@ -412,7 +477,9 @@ class RasterDetailPreviewService:
                     raster_extent,
                     density,
                     view_bounds,
+                    cancellation_requested.is_set,
                 )
+                require_active_raster_read(cancellation_requested.is_set)
                 if await asyncio.to_thread(
                     self._signature_reader,
                     authorized_raster.source_path,
@@ -428,7 +495,13 @@ class RasterDetailPreviewService:
                 return preview
         finally:
             async with self._state_lock:
-                if self._inflight.get(cache_key) is asyncio.current_task():
+                inflight = self._inflight[cache_key]
+                if inflight.task is not asyncio.current_task():
+                    raise RuntimeError(
+                        "Detail preview in-flight task identity changed"
+                    )
+                inflight.finished = True
+                if inflight.waiter_count == 0:
                     self._inflight.pop(cache_key)
 
     @staticmethod
