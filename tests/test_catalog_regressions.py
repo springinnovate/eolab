@@ -433,6 +433,33 @@ def test_external_geotiff_overviews_are_recorded(tmp_path: Path) -> None:
         ),
         (
             RasterLayout(
+                width=1_296_704,
+                height=1_296_704,
+                block_shapes=((512, 512),),
+                overview_factors=(
+                    (
+                        2,
+                        4,
+                        8,
+                        16,
+                        32,
+                        64,
+                        128,
+                        256,
+                        512,
+                        1024,
+                        2049,
+                        4103,
+                    ),
+                ),
+                compression="ZSTD",
+            ),
+            True,
+            None,
+            None,
+        ),
+        (
+            RasterLayout(
                 width=300_000,
                 height=10_000,
                 data_types=("float32",),
@@ -486,6 +513,7 @@ def test_external_geotiff_overviews_are_recorded(tmp_path: Path) -> None:
         "shallow-overviews",
         "gapped-overviews",
         "global-cog-overviews",
+        "rounded-deep-overviews",
         "oversized-coarsest-overview",
         "oversized-blocks",
         "multiple-bands",
