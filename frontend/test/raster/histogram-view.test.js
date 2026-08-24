@@ -53,7 +53,7 @@ test("raster histogram rendering displays all 64 SVG bars", () => {
   assert.equal(tooltip.hasAttribute("hidden"), false);
   assert.equal(tooltip.attributes.get("transform"), "translate(4 4)");
   assert.match(tooltip.children[1].textContent, /-1\.000e\+1–-9\.375e\+0/);
-  assert.match(tooltip.children[1].textContent, /2,000 pixels · 1\.56%/);
+  assert.match(tooltip.children[1].textContent, /125 pixels · 1\.56%/);
 
   bars[63].dispatchEvent(new Event("pointerenter"));
   assert.equal(bars[0].classList.contains("is-hovered"), false);

@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { initializeRasterViewer } from "../../src/raster/raster-viewer.js";
 import {
+    EXACT_RASTER_STATISTICS,
     MOUNTED_GEOTIFF_ITEM,
     RASTER_STATISTICS,
     TEMPORARY_AOI_ID,
@@ -247,8 +248,12 @@ function createFakeControlsView() {
         clearHistogram() {
             this.displayedStatistics = null;
         },
-        showHistogramAxis() {},
-        hideHistogramAxis() {},
+        showHistogramAxis(minimum, maximum) {
+            this.histogramAxis = { minimum, maximum };
+        },
+        hideHistogramAxis() {
+            this.histogramAxis = null;
+        },
         setPercentileControlsVisible() {},
         setStatisticsRetryVisible(isVisible) {
             this.statisticsRetryVisible = isVisible;
@@ -376,6 +381,18 @@ function createLayerStatistics(item, selectedBounds = null) {
 }
 
 /**
+ * Return rectangular bounds from one normalized test sampling area.
+ *
+ * @param {Object} samplingArea Whole, selected, or temporary-AOI area.
+ * @return {Object|null} Selected rectangle or null for another scope.
+ */
+function selectedBoundsFromArea(samplingArea) {
+    return samplingArea.kind === "selectedArea"
+        ? samplingArea.selectedBounds
+        : null;
+}
+
+/**
  * Allow pending async controller continuations to update their views.
  *
  * @return {Promise<void>} Resolves on the next event-loop turn.
@@ -432,6 +449,371 @@ test("raster viewer owns the displayed layer lifecycle and detaches cleanly", as
     assert.equal(leafletMap.handlers.get("mousemove").size, 0);
 });
 
+test("renderer-independent analysis supports exact windows without publication", async () => {
+    const leafletMap = createFakeMap();
+    const { leaflet, wmsLayers } = createFakeLeaflet();
+    const controlsView = createFakeControlsView();
+    const statisticsRequests = [];
+    const pixelRequests = [];
+    let publicationCalls = 0;
+    const viewer = initializeRasterViewer(
+        {
+            wmsUrl: "/geoserver/eolab/wms",
+            leafletMap,
+            leaflet,
+            onTileError() {},
+        },
+        {
+            controlsView,
+            layerStackView: createFakeLayerStackView(),
+            publishRaster: async () => {
+                publicationCalls += 1;
+                throw new Error("analysis must not publish a raster");
+            },
+            loadStatistics: async (item, samplingArea, signal) => {
+                statisticsRequests.push({ item, samplingArea, signal });
+                return samplingArea.kind === "wholeRaster"
+                    ? EXACT_RASTER_STATISTICS
+                    : {
+                        ...EXACT_RASTER_STATISTICS,
+                        scope: "selectedArea",
+                        selectedBounds: samplingArea.selectedBounds,
+                    };
+            },
+            samplePixel: async (item, point) => {
+                pixelRequests.push({ item, point });
+                return { inBounds: true, value: 17 };
+            },
+            viewport: { innerWidth: 1280, innerHeight: 720 },
+        }
+    );
+
+    viewer.activateAnalysis(MOUNTED_GEOTIFF_ITEM);
+    await flushPromises();
+
+    assert.equal(viewer.isDisplayed, false);
+    assert.equal(publicationCalls, 0);
+    assert.equal(wmsLayers.length, 0);
+    assert.equal(controlsView.controlsVisible, true);
+    assert.match(controlsView.activeLayer.label, /analysis only/);
+    assert.deepEqual(
+        statisticsRequests.map(({ samplingArea }) => samplingArea.kind),
+        ["wholeRaster"]
+    );
+    assert.match(controlsView.statisticsStatus, /Whole-raster exact/);
+    assert.doesNotMatch(controlsView.histogramAxis.minimum, /≈/);
+    assert.doesNotMatch(controlsView.histogramAxis.maximum, /≈/);
+
+    leafletMap.emit("mousemove", { latlng: { lng: -122, lat: 48.5 } });
+    await flushPromises();
+    assert.deepEqual(pixelRequests, [{
+        item: MOUNTED_GEOTIFF_ITEM,
+        point: { longitude: -122, latitude: 48.5 },
+    }]);
+    leafletMap.emit("click", { latlng: { lng: -122, lat: 48.5 } });
+    await flushPromises();
+    assert.equal(statisticsRequests.at(-1).samplingArea.kind, "selectedArea");
+    assert.match(controlsView.statisticsStatus, /Selected-area exact/);
+
+    controlsView.setPaletteName("viridis");
+    controlsView.handlers.onPaletteChange();
+    assert.equal(controlsView.legendStyle.minimumColor, "#440154");
+    controlsView.handlers.onApplyPercentiles();
+    assert.match(controlsView.statisticsStatus, /selected exact percentile/);
+    controlsView.handlers.onResetStyle();
+    assert.match(controlsView.statisticsStatus, /exact bounded distribution/);
+
+    viewer.deactivateAnalysis(MOUNTED_GEOTIFF_ITEM);
+    assert.equal(controlsView.controlsVisible, false);
+    viewer.destroy();
+});
+
+test("WMS activation adopts the existing renderer-neutral analysis session", async () => {
+    const leafletMap = createFakeMap();
+    const { leaflet, wmsLayers } = createFakeLeaflet();
+    const controlsView = createFakeControlsView();
+    let statisticsRequests = 0;
+    const viewer = initializeRasterViewer(
+        {
+            wmsUrl: "/geoserver/eolab/wms",
+            leafletMap,
+            leaflet,
+            onTileError() {},
+        },
+        {
+            controlsView,
+            layerStackView: createFakeLayerStackView(),
+            publishRaster: async () => ({
+                layerName: "eolab:test-raster",
+                bbox: [-180, -90, 180, 90],
+            }),
+            loadStatistics: async () => {
+                statisticsRequests += 1;
+                return RASTER_STATISTICS;
+            },
+            samplePixel: async () => ({ inBounds: true, value: 1 }),
+            viewport: { innerWidth: 1280, innerHeight: 720 },
+        }
+    );
+
+    viewer.activateAnalysis(MOUNTED_GEOTIFF_ITEM);
+    await flushPromises();
+    assert.equal(statisticsRequests, 1);
+    assert.match(controlsView.activeLayer.label, /analysis only/);
+
+    await viewer.show(MOUNTED_GEOTIFF_ITEM);
+
+    assert.equal(statisticsRequests, 1);
+    assert.equal(wmsLayers.length, 1);
+    assert.equal(viewer.isDisplayed, true);
+    assert.doesNotMatch(controlsView.activeLayer.label, /analysis only/);
+    assert.equal(controlsView.displayedStatistics, RASTER_STATISTICS);
+    viewer.destroy();
+});
+
+test("a pending WMS publication cannot steal newer Catalog analysis", async () => {
+    const leafletMap = createFakeMap();
+    const { leaflet } = createFakeLeaflet();
+    const controlsView = createFakeControlsView();
+    const layerStackView = createFakeLayerStackView();
+    const publication = createDeferred();
+    const publishing = createRasterItem("pending-publication");
+    const selected = createRasterItem("newer-analysis");
+    const viewer = initializeRasterViewer(
+        {
+            wmsUrl: "/geoserver/eolab/wms",
+            leafletMap,
+            leaflet,
+            onTileError() {},
+        },
+        {
+            controlsView,
+            layerStackView,
+            publishRaster: () => publication.promise,
+            loadStatistics: async (item, samplingArea) =>
+                createLayerStatistics(
+                    item,
+                    selectedBoundsFromArea(samplingArea)
+                ),
+            samplePixel: async () => ({ inBounds: true, value: 1 }),
+            viewport: { innerWidth: 1280, innerHeight: 720 },
+        }
+    );
+
+    viewer.activateAnalysis(publishing);
+    await flushPromises();
+    const pendingShow = viewer.show(publishing);
+    viewer.activateAnalysis(selected);
+    await flushPromises();
+    publication.resolve({
+        layerName: `eolab:${publishing.id}`,
+        bbox: [-180, -90, 180, 90],
+    });
+    await pendingShow;
+    await flushPromises();
+
+    assert.equal(viewer.contains(publishing), true);
+    assert.equal(layerStackView.activeKey, null);
+    assert.match(controlsView.activeLayer.label, /newer-analysis/);
+    assert.match(controlsView.activeLayer.label, /analysis only/);
+    assert.equal(controlsView.displayedStatistics.itemId, selected.id);
+    viewer.destroy();
+});
+
+test("reaffirming Catalog analysis invalidates a pending WMS activation", async () => {
+    const leafletMap = createFakeMap();
+    const { leaflet } = createFakeLeaflet();
+    const controlsView = createFakeControlsView();
+    const layerStackView = createFakeLayerStackView();
+    const publication = createDeferred();
+    const item = createRasterItem("reaffirmed-analysis");
+    const viewer = initializeRasterViewer(
+        {
+            wmsUrl: "/geoserver/eolab/wms",
+            leafletMap,
+            leaflet,
+            onTileError() {},
+        },
+        {
+            controlsView,
+            layerStackView,
+            publishRaster: () => publication.promise,
+            loadStatistics: async (requestedItem, samplingArea) =>
+                createLayerStatistics(
+                    requestedItem,
+                    selectedBoundsFromArea(samplingArea)
+                ),
+            samplePixel: async () => ({ inBounds: true, value: 1 }),
+            viewport: { innerWidth: 1280, innerHeight: 720 },
+        }
+    );
+
+    viewer.activateAnalysis(item);
+    await flushPromises();
+    const pendingShow = viewer.show(item);
+    viewer.activateAnalysis(item);
+    publication.resolve({
+        layerName: `eolab:${item.id}`,
+        bbox: [-180, -90, 180, 90],
+    });
+    await pendingShow;
+
+    assert.equal(viewer.contains(item), true);
+    assert.equal(layerStackView.activeKey, null);
+    assert.match(controlsView.activeLayer.label, /reaffirmed-analysis/);
+    assert.match(controlsView.activeLayer.label, /analysis only/);
+    assert.equal(controlsView.displayedStatistics.itemId, item.id);
+    viewer.destroy();
+});
+
+test("clearing analysis invalidates a pending renderer activation", async () => {
+    const leafletMap = createFakeMap();
+    const { leaflet } = createFakeLeaflet();
+    const controlsView = createFakeControlsView();
+    const publication = createDeferred();
+    const item = createRasterItem("cleared-analysis");
+    const viewer = initializeRasterViewer(
+        {
+            wmsUrl: "/geoserver/eolab/wms",
+            leafletMap,
+            leaflet,
+            onTileError() {},
+        },
+        {
+            controlsView,
+            layerStackView: createFakeLayerStackView(),
+            publishRaster: () => publication.promise,
+            loadStatistics: async (requestedItem, samplingArea) =>
+                createLayerStatistics(
+                    requestedItem,
+                    selectedBoundsFromArea(samplingArea)
+                ),
+            samplePixel: async () => ({ inBounds: true, value: 1 }),
+            viewport: { innerWidth: 1280, innerHeight: 720 },
+        }
+    );
+
+    viewer.activateAnalysis(item);
+    const pendingShow = viewer.show(item);
+    viewer.deactivateAnalysis(item);
+    publication.resolve({
+        layerName: `eolab:${item.id}`,
+        bbox: [-180, -90, 180, 90],
+    });
+    await pendingShow;
+
+    assert.equal(controlsView.controlsVisible, false);
+    assert.equal(viewer.contains(item), true);
+    viewer.destroy();
+});
+
+test("renderer changes abort and ignore obsolete analysis responses", async () => {
+    const leafletMap = createFakeMap();
+    const { leaflet } = createFakeLeaflet();
+    const controlsView = createFakeControlsView();
+    const requests = [];
+    const viewer = initializeRasterViewer(
+        {
+            wmsUrl: "/geoserver/eolab/wms",
+            leafletMap,
+            leaflet,
+            onTileError() {},
+        },
+        {
+            controlsView,
+            layerStackView: createFakeLayerStackView(),
+            loadStatistics(_item, samplingArea, signal) {
+                const result = createDeferred();
+                requests.push({ samplingArea, signal, result });
+                return result.promise;
+            },
+            samplePixel: async () => ({ inBounds: true, value: 1 }),
+            viewport: { innerWidth: 1280, innerHeight: 720 },
+        }
+    );
+    const style = {
+        minimum: 0,
+        midpoint: 50,
+        maximum: 100,
+        minimumColor: "#2b83ba",
+        midpointColor: "#ffffbf",
+        maximumColor: "#d7191c",
+    };
+
+    viewer.activateAnalysis(MOUNTED_GEOTIFF_ITEM);
+    viewer.activateSampled(MOUNTED_GEOTIFF_ITEM, style, () => {});
+
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].signal.aborted, true);
+    requests[1].result.resolve(EXACT_RASTER_STATISTICS);
+    await flushPromises();
+    requests[0].result.resolve(RASTER_STATISTICS);
+    await flushPromises();
+
+    assert.equal(controlsView.displayedStatistics, EXACT_RASTER_STATISTICS);
+    assert.match(controlsView.activeLayer.label, /sampled raster/);
+    controlsView.handlers.onResetStyle();
+    assert.match(controlsView.statisticsStatus, /exact bounded distribution/);
+    viewer.destroy();
+});
+
+test("a ready AOI owns detail-only statistics before map-window handlers", async () => {
+    const leafletMap = createFakeMap();
+    const { leaflet, rectangleLayers } = createFakeLeaflet();
+    const controlsView = createFakeControlsView();
+    const statisticsRequests = [];
+    const viewer = initializeRasterViewer(
+        {
+            wmsUrl: "/geoserver/eolab/wms",
+            leafletMap,
+            leaflet,
+            onTileError() {},
+        },
+        {
+            controlsView,
+            layerStackView: createFakeLayerStackView(),
+            loadStatistics: async (item, samplingArea, signal) => {
+                statisticsRequests.push({ item, samplingArea, signal });
+                return TEMPORARY_AOI_RASTER_STATISTICS;
+            },
+            samplePixel: async () => ({ inBounds: true, value: 1 }),
+            viewport: { innerWidth: 1280, innerHeight: 720 },
+        }
+    );
+    const temporaryAoi = Object.freeze({
+        id: TEMPORARY_AOI_ID,
+        filename: "detail-area.gpkg",
+        selectedDataset: "boundary",
+        expiresAt: "2030-01-01T01:00:00Z",
+    });
+    const style = {
+        minimum: 0,
+        midpoint: 50,
+        maximum: 100,
+        minimumColor: "#2b83ba",
+        midpointColor: "#ffffbf",
+        maximumColor: "#d7191c",
+    };
+
+    viewer.setTemporaryAoi(temporaryAoi);
+    viewer.activateAnalysis(MOUNTED_GEOTIFF_ITEM);
+    await flushPromises();
+    viewer.activateSampled(MOUNTED_GEOTIFF_ITEM, style, () => {});
+    await flushPromises();
+
+    assert.deepEqual(
+        statisticsRequests.map(({ samplingArea }) => samplingArea),
+        [{ kind: "temporaryAoi", temporaryAoiId: TEMPORARY_AOI_ID }]
+    );
+    assert.equal(controlsView.samplingAreaMode, "temporaryAoi");
+    const requestCount = statisticsRequests.length;
+    leafletMap.emit("click", { latlng: { lng: -122, lat: 48.5 } });
+    assert.equal(statisticsRequests.length, requestCount);
+    assert.equal(rectangleLayers.length, 0);
+
+    viewer.destroy();
+});
+
 test("sampled rasters reuse color controls and bounded click histograms", async () => {
     const leafletMap = createFakeMap();
     const { leaflet, wmsLayers } = createFakeLeaflet();
@@ -467,11 +849,12 @@ test("sampled rasters reuse color controls and bounded click histograms", async 
             publishRaster: async () => {
                 throw new Error("sampled raster must not publish WMS");
             },
-            loadStatistics: async () => {
-                wholeStatisticsRequests += 1;
-                throw new Error("sampled raster must not read whole statistics");
-            },
-            loadDetailStatistics: async (item, signal, selectedBounds) => {
+            loadStatistics: async (item, samplingArea, signal) => {
+                if (samplingArea.kind === "wholeRaster") {
+                    wholeStatisticsRequests += 1;
+                    return RASTER_STATISTICS;
+                }
+                const selectedBounds = samplingArea.selectedBounds;
                 histogramRequests.push({ item, signal, selectedBounds });
                 return {
                     ...RASTER_STATISTICS,
@@ -483,7 +866,7 @@ test("sampled rasters reuse color controls and bounded click histograms", async 
                     sampleWidth: 127,
                     sampleHeight: 127,
                     sampledPixelCount: 127 * 127,
-                    samplingMethod: "sampledGrid",
+                    samplingMethod: "sampleGrid",
                 };
             },
             samplePixel: async (...request) => {
@@ -499,14 +882,15 @@ test("sampled rasters reuse color controls and bounded click histograms", async 
         initialStyle,
         (style) => styleChanges.push({ ...style })
     );
+    await flushPromises();
     assert.equal(viewer.isDisplayed, true);
     assert.equal(controlsView.controlsVisible, true);
     assert.match(controlsView.activeLayer.label, /sampled raster/);
-    assert.equal(controlsView.samplingAreaMode, "none");
-    assert.equal(controlsView.clearSampleWindowLabel, "Clear selected histogram");
+    assert.equal(controlsView.samplingAreaMode, "wholeRaster");
+    assert.equal(controlsView.clearSampleWindowLabel, "Use whole raster");
     assert.equal(controlsView.availableTemporaryAoi, null);
-    assert.match(controlsView.statisticsStatus, /No whole-raster histogram/);
-    assert.equal(wholeStatisticsRequests, 0);
+    assert.match(controlsView.statisticsStatus, /Whole-raster approximate/);
+    assert.equal(wholeStatisticsRequests, 1);
     assert.equal(wmsLayers.length, 0);
 
     viewer.updateSampledInitialStyle(
@@ -529,34 +913,37 @@ test("sampled rasters reuse color controls and bounded click histograms", async 
     await flushPromises();
     assert.equal(histogramRequests.length, 1);
     assert.equal(histogramRequests[0].item, MOUNTED_GEOTIFF_ITEM);
-    assert.equal(controlsView.displayedStatistics.samplingMethod, "sampledGrid");
+    assert.equal(controlsView.displayedStatistics.samplingMethod, "sampleGrid");
     assert.match(
       controlsView.statisticsStatus,
-      /127 × 127 bounded adaptive detail image/,
+      /127 × 127 bounded center grid/,
     );
 
     controlsView.setPaletteName("viridis");
     controlsView.handlers.onPaletteChange();
-    assert.equal(styleChanges.length, 1);
-    assert.equal(styleChanges[0].minimumColor, "#440154");
-    assert.equal(controlsView.displayedStatistics.samplingMethod, "sampledGrid");
+    assert.equal(styleChanges.length, 2);
+    assert.equal(styleChanges[1].minimumColor, "#440154");
+    assert.equal(controlsView.displayedStatistics.samplingMethod, "sampleGrid");
 
     controlsView.handlers.onResetStyle();
-    assert.equal(styleChanges.length, 2);
-    assert.deepEqual(styleChanges[1], firstFiniteStyle);
+    assert.equal(styleChanges.length, 3);
+    assert.deepEqual(styleChanges[2], firstFiniteStyle);
     assert.match(controlsView.statisticsStatus, /minimum, median, and maximum/);
 
     viewer.updateSampledInitialStyle(MOUNTED_GEOTIFF_ITEM, initialStyle);
     assert.deepEqual(controlsView.style, firstFiniteStyle);
 
     controlsView.handlers.onClearSampleWindow();
-    assert.equal(controlsView.samplingAreaMode, "none");
-    assert.equal(controlsView.displayedStatistics, null);
-    assert.match(controlsView.statisticsStatus, /No whole-raster histogram/);
+    assert.equal(controlsView.samplingAreaMode, "wholeRaster");
+    assert.equal(controlsView.displayedStatistics, RASTER_STATISTICS);
+    assert.match(controlsView.statisticsStatus, /Whole-raster approximate/);
 
     viewer.removeSampled(MOUNTED_GEOTIFF_ITEM);
     assert.equal(viewer.isDisplayed, false);
-    assert.equal(controlsView.controlsVisible, false);
+    assert.equal(controlsView.controlsVisible, true);
+    assert.match(controlsView.activeLayer.label, /analysis only/);
+    assert.equal(controlsView.displayedStatistics, RASTER_STATISTICS);
+    assert.equal(wholeStatisticsRequests, 1);
     viewer.destroy();
 });
 
@@ -583,10 +970,16 @@ test("late sampled histogram responses cannot replace a newer clicked window", a
         {
             controlsView,
             layerStackView: createFakeLayerStackView(),
-            loadStatistics: () => new Promise(() => {}),
-            loadDetailStatistics(_item, signal, selectedBounds) {
+            loadStatistics(_item, samplingArea, signal) {
+                if (samplingArea.kind === "wholeRaster") {
+                    return new Promise(() => {});
+                }
                 const result = createDeferred();
-                requests.push({ signal, selectedBounds, result });
+                requests.push({
+                    signal,
+                    selectedBounds: samplingArea.selectedBounds,
+                    result,
+                });
                 return result.promise;
             },
             viewport: { innerWidth: 1280, innerHeight: 720 },
@@ -602,7 +995,7 @@ test("late sampled histogram responses cannot replace a newer clicked window", a
         ...RASTER_STATISTICS,
         scope: "selectedArea",
         selectedBounds: requests[1].selectedBounds,
-        samplingMethod: "sampledGrid",
+        samplingMethod: "sampleGrid",
     };
     requests[1].result.resolve(currentStatistics);
     await flushPromises();
@@ -715,7 +1108,8 @@ test("selected statistics remain draft-only until the user applies them", async 
                 layerName: "eolab:test-raster",
                 bbox: [-180, -90, 180, 90],
             }),
-            loadStatistics: (item, signal, selectedBounds) => {
+            loadStatistics: (item, samplingArea) => {
+                const selectedBounds = selectedBoundsFromArea(samplingArea);
                 if (selectedBounds === null) {
                     return wholeStatistics.promise;
                 }
@@ -992,7 +1386,8 @@ test("a restored whole-raster statistics error retries the active layer", async 
                 layerName: `eolab:${item.id}`,
                 bbox: [-180, -90, 180, 90],
             }),
-            loadStatistics: async (item, signal, selectedBounds) => {
+            loadStatistics: async (item, samplingArea, signal) => {
+                const selectedBounds = selectedBoundsFromArea(samplingArea);
                 statisticsRequests.push({ item, selectedBounds, signal });
                 const firstAttemptCount = statisticsRequests.filter(
                     (request) => request.item === first
@@ -1118,7 +1513,8 @@ test("manual activation outranks an earlier deferred publication", async () => {
                     bbox: [-180, -90, 180, 90],
                 };
             },
-            loadStatistics: async (item, signal, selectedBounds) => {
+            loadStatistics: async (item, samplingArea, signal) => {
+                const selectedBounds = selectedBoundsFromArea(samplingArea);
                 statisticsRequests.push({ item, signal, selectedBounds });
                 return createLayerStatistics(item, selectedBounds);
             },
@@ -1157,7 +1553,7 @@ test("manual activation outranks an earlier deferred publication", async () => {
     viewer.destroy();
 });
 
-test("hidden active layers defer work, abort stale statistics, and restart when shown", async () => {
+test("hidden WMS renderers do not gate active Catalog analysis", async () => {
     const leafletMap = createFakeMap();
     const { leaflet } = createFakeLeaflet();
     const controlsView = createFakeControlsView();
@@ -1178,7 +1574,8 @@ test("hidden active layers defer work, abort stale statistics, and restart when 
                 layerName: `eolab:${item.id}`,
                 bbox: [-180, -90, 180, 90],
             }),
-            loadStatistics: (item, signal, selectedBounds) => {
+            loadStatistics: (item, samplingArea, signal) => {
+                const selectedBounds = selectedBoundsFromArea(samplingArea);
                 const deferred = createDeferred();
                 statisticsRequests.push({
                     deferred,
@@ -1203,14 +1600,30 @@ test("hidden active layers defer work, abort stale statistics, and restart when 
     await viewer.show(second);
     await viewer.show(third);
 
-    assert.equal(
-        statisticsRequests.filter(({ item }) => item === third).length,
-        0
+    const wholeThirdRequest = statisticsRequests.find(
+        ({ item, selectedBounds }) => item === third && selectedBounds === null
     );
+    assert.ok(wholeThirdRequest);
+    assert.equal(wholeThirdRequest.signal.aborted, false);
     assert.deepEqual(controlsView.activeLayer, {
         label: "hidden-work-third.tif",
         visible: false,
     });
+
+    leafletMap.emit("click", { latlng: { lng: -74, lat: 41 } });
+    leafletMap.emit("mousemove", {
+        latlng: { lng: -74, lat: 41 },
+    });
+    await flushPromises();
+    const selectedThirdRequest = statisticsRequests.find(
+        ({ item, selectedBounds }) =>
+            item === third && selectedBounds !== null
+    );
+    assert.ok(selectedThirdRequest);
+    assert.equal(wholeThirdRequest.signal.aborted, true);
+    assert.equal(selectedThirdRequest.signal.aborted, false);
+    assert.equal(pixelRequests.length, 1);
+    assert.equal(pixelRequests[0].item, third);
 
     const firstKey = layerStackView.layers.find(
         ({ item }) => item === first
@@ -1220,38 +1633,24 @@ test("hidden active layers defer work, abort stale statistics, and restart when 
     ).key;
     layerStackView.handlers.onVisibility(firstKey, false);
     layerStackView.handlers.onVisibility(thirdKey, true);
-    const firstThirdRequest = statisticsRequests.find(
-        ({ item }) => item === third
-    );
-    assert.ok(firstThirdRequest);
-    assert.equal(firstThirdRequest.signal.aborted, false);
-
     layerStackView.handlers.onVisibility(thirdKey, false);
-    assert.equal(firstThirdRequest.signal.aborted, true);
-    leafletMap.emit("click", { latlng: { lng: -74, lat: 41 } });
-    leafletMap.emit("mousemove", {
-        latlng: { lng: -74, lat: 41 },
-    });
-    assert.equal(
-        statisticsRequests.filter(
-            ({ item, selectedBounds }) =>
-                item === third && selectedBounds !== null
-        ).length,
-        0
-    );
-    assert.equal(pixelRequests.length, 0);
+    assert.equal(selectedThirdRequest.signal.aborted, false);
 
-    firstThirdRequest.deferred.resolve(createLayerStatistics(third));
+    selectedThirdRequest.deferred.resolve(
+        createLayerStatistics(third, selectedThirdRequest.selectedBounds)
+    );
     await flushPromises();
-    assert.notEqual(controlsView.displayedStatistics?.itemId, third.id);
+    assert.equal(controlsView.displayedStatistics.itemId, third.id);
+    assert.equal(controlsView.displayedStatistics.scope, "selectedArea");
+    wholeThirdRequest.deferred.resolve(createLayerStatistics(third));
+    await flushPromises();
+    assert.equal(controlsView.displayedStatistics.scope, "selectedArea");
 
     layerStackView.handlers.onVisibility(thirdKey, true);
     const thirdRequests = statisticsRequests.filter(
         ({ item }) => item === third
     );
     assert.equal(thirdRequests.length, 2);
-    thirdRequests[1].deferred.resolve(createLayerStatistics(third));
-    await flushPromises();
     assert.equal(controlsView.displayedStatistics.itemId, third.id);
     viewer.destroy();
 });
@@ -1276,7 +1675,8 @@ test("active layers restore their selected-area statistics, size, and rectangle"
                 layerName: `eolab:${item.id}`,
                 bbox: [-180, -90, 180, 90],
             }),
-            loadStatistics: async (item, signal, selectedBounds) => {
+            loadStatistics: async (item, samplingArea, signal) => {
+                const selectedBounds = selectedBoundsFromArea(samplingArea);
                 statisticsRequests.push({ item, selectedBounds, signal });
                 return createLayerStatistics(item, selectedBounds);
             },
@@ -1347,11 +1747,12 @@ test("active layers restore their selected-area statistics, size, and rectangle"
     viewer.destroy();
 });
 
-test("removing active layers restores the deterministic adjacent session", async () => {
+test("removing an active WMS renderer preserves analysis before adjacent restore", async () => {
     const leafletMap = createFakeMap();
     const { leaflet, wmsLayers } = createFakeLeaflet();
     const controlsView = createFakeControlsView();
     const layerStackView = createFakeLayerStackView();
+    const statisticsRequests = [];
     const viewer = initializeRasterViewer(
         {
             wmsUrl: "/geoserver/eolab/wms",
@@ -1366,8 +1767,13 @@ test("removing active layers restores the deterministic adjacent session", async
                 layerName: `eolab:${item.id}`,
                 bbox: [-180, -90, 180, 90],
             }),
-            loadStatistics: async (item, signal, selectedBounds) =>
-                createLayerStatistics(item, selectedBounds),
+            loadStatistics: async (item, samplingArea) => {
+                statisticsRequests.push({ item, samplingArea });
+                return createLayerStatistics(
+                    item,
+                    selectedBoundsFromArea(samplingArea)
+                );
+            },
             samplePixel: async () => ({ inBounds: true, value: 1 }),
             viewport: { innerWidth: 1280, innerHeight: 720 },
         }
@@ -1381,17 +1787,31 @@ test("removing active layers restores the deterministic adjacent session", async
     await viewer.show(second);
     await flushPromises();
     await viewer.show(third);
+    await flushPromises();
     const keys = new Map(
         layerStackView.layers.map(({ item, key }) => [item, key])
     );
 
+    leafletMap.emit("click", { latlng: { lng: -73, lat: 42 } });
+    await flushPromises();
+    assert.equal(controlsView.displayedStatistics.scope, "selectedArea");
+    controlsView.setPaletteName("viridis");
+    controlsView.handlers.onPaletteChange();
+    const thirdRequestCount = statisticsRequests.filter(
+        ({ item }) => item === third
+    ).length;
+
     layerStackView.handlers.onRemove(keys.get(third));
-    assert.equal(layerStackView.activeKey, keys.get(second));
-    assert.deepEqual(controlsView.activeLayer, {
-        label: "remove-second.tif",
-        visible: true,
-    });
-    assert.equal(controlsView.displayedStatistics.itemId, second.id);
+    assert.equal(layerStackView.activeKey, null);
+    assert.match(controlsView.activeLayer.label, /remove-third/);
+    assert.match(controlsView.activeLayer.label, /analysis only/);
+    assert.equal(controlsView.displayedStatistics.itemId, third.id);
+    assert.equal(controlsView.displayedStatistics.scope, "selectedArea");
+    assert.equal(controlsView.paletteName, "viridis");
+    assert.equal(
+        statisticsRequests.filter(({ item }) => item === third).length,
+        thirdRequestCount
+    );
     assert.equal(
         wmsLayers.some(
             (layer) =>
@@ -1401,11 +1821,21 @@ test("removing active layers restores the deterministic adjacent session", async
         false
     );
 
+    viewer.deactivateAnalysis(third);
+    assert.equal(layerStackView.activeKey, keys.get(second));
+    assert.equal(controlsView.displayedStatistics.itemId, second.id);
     layerStackView.handlers.onRemove(keys.get(second));
+    assert.equal(layerStackView.activeKey, null);
+    assert.match(controlsView.activeLayer.label, /remove-second/);
+    assert.match(controlsView.activeLayer.label, /analysis only/);
+    viewer.deactivateAnalysis(second);
     assert.equal(layerStackView.activeKey, keys.get(first));
     assert.equal(controlsView.displayedStatistics.itemId, first.id);
     layerStackView.handlers.onRemove(keys.get(first));
     assert.equal(layerStackView.layers.length, 0);
+    assert.equal(controlsView.controlsVisible, true);
+    assert.match(controlsView.activeLayer.label, /analysis only/);
+    viewer.deactivateAnalysis(first);
     assert.equal(controlsView.controlsVisible, false);
     assert.equal(
         wmsLayers.some((layer) => leafletMap.layers.has(layer)),
@@ -1434,8 +1864,11 @@ test("tile failures remain associated with their owning raster layer", async () 
                 layerName: `eolab:${item.id}`,
                 bbox: [-180, -90, 180, 90],
             }),
-            loadStatistics: async (item, signal, selectedBounds) =>
-                createLayerStatistics(item, selectedBounds),
+            loadStatistics: async (item, samplingArea) =>
+                createLayerStatistics(
+                    item,
+                    selectedBoundsFromArea(samplingArea)
+                ),
             samplePixel: async () => ({ inBounds: true, value: 1 }),
             viewport: { innerWidth: 1280, innerHeight: 720 },
         }
@@ -1492,8 +1925,11 @@ test("a removed layer's late tile failure cannot mark its replacement", async ()
                 layerName: `eolab:${item.id}`,
                 bbox: [-180, -90, 180, 90],
             }),
-            loadStatistics: async (requestedItem, signal, selectedBounds) =>
-                createLayerStatistics(requestedItem, selectedBounds),
+            loadStatistics: async (requestedItem, samplingArea) =>
+                createLayerStatistics(
+                    requestedItem,
+                    selectedBoundsFromArea(samplingArea)
+                ),
             samplePixel: async () => ({ inBounds: true, value: 1 }),
             viewport: { innerWidth: 1280, innerHeight: 720 },
         }
@@ -1542,8 +1978,11 @@ test("a failed publication preserves existing layers and can be retried", async 
                     bbox: [-180, -90, 180, 90],
                 };
             },
-            loadStatistics: async (item, signal, selectedBounds) =>
-                createLayerStatistics(item, selectedBounds),
+            loadStatistics: async (item, samplingArea) =>
+                createLayerStatistics(
+                    item,
+                    selectedBoundsFromArea(samplingArea)
+                ),
             samplePixel: async () => ({ inBounds: true, value: 1 }),
             viewport: { innerWidth: 1280, innerHeight: 720 },
         }
@@ -1601,17 +2040,17 @@ test("AOI hide restores hover windows and show restores AOI sampling", async () 
             }),
             loadStatistics: async (
                 _item,
-                signal,
-                selectedBounds,
-                temporaryAoiId
+                samplingArea,
+                signal
             ) => {
-                if (temporaryAoiId === null) {
+                if (samplingArea.kind !== "temporaryAoi") {
                     return createLayerStatistics(
                         MOUNTED_GEOTIFF_ITEM,
-                        selectedBounds
+                        selectedBoundsFromArea(samplingArea)
                     );
                 }
                 const deferred = createDeferred();
+                const temporaryAoiId = samplingArea.temporaryAoiId;
                 aoiRequests.push({ deferred, signal, temporaryAoiId });
                 return deferred.promise;
             },

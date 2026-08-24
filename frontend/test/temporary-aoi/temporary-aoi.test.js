@@ -432,7 +432,7 @@ test("destroyed coordinator deletes a successful stale upload response", async (
   assert.equal(fixture.coordinator.activeAoi, null);
 });
 
-test("sampling subscribers switch between visible AOIs and mouse-window mode", async () => {
+test("sampling subscribers ignore overlay visibility and follow AOI lifecycle", async () => {
   let uploadCount = 0;
   const fixture = createCoordinator({
     async upload() {
@@ -453,7 +453,7 @@ test("sampling subscribers switch between visible AOIs and mouse-window mode", a
   await fixture.coordinator.handleRemove(createEvent());
   unsubscribe();
 
-  assert.equal(snapshots.length, 6);
+  assert.equal(snapshots.length, 4);
   assert.equal(snapshots[0], null);
   assert.deepEqual(snapshots[1], {
     id: READY_AOI.id,
@@ -463,8 +463,6 @@ test("sampling subscribers switch between visible AOIs and mouse-window mode", a
   });
   assert.equal(Object.isFrozen(snapshots[1]), true);
   assert.equal("geometry" in snapshots[1], false);
-  assert.equal(snapshots[2], null);
-  assert.equal(snapshots[3].id, READY_AOI.id);
-  assert.equal(snapshots[4].id, REPLACEMENT_AOI.id);
-  assert.equal(snapshots[5], null);
+  assert.equal(snapshots[2].id, REPLACEMENT_AOI.id);
+  assert.equal(snapshots[3], null);
 });

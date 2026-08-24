@@ -431,7 +431,7 @@
                         <strong>Adaptive bounded raster detail</strong>
                         <span>Broad views always use one center sample in each sample-grid cell, with 127 cells on the longest displayed edge and an aspect-preserving shorter edge. Once the visible source window satisfies strict server-owned limits, EOLab automatically replaces that grid with a complete bounded source-window read reprojected for the map at the same dimensions.</span>
                       </p>
-                      <small>Sampled proxies use smooth display interpolation; exact close-view windows use crisp nearest-neighbor presentation. This overview-limited raster is never published to GeoServer. The status below reports the active map area, source window, native blocks, and decoded work.</small>
+                      <small>Sample grids use smooth display interpolation; exact close-view windows use crisp nearest-neighbor presentation. This overview-limited raster is never published to GeoServer. The status below reports the active map area, source window, native blocks, and decoded work.</small>
                       <output
                         class="raster-detail-preview-resolution"
                         id="raster-detail-preview-resolution"
@@ -650,7 +650,7 @@
                     aria-labelledby="raster-histogram-heading"
                   >
                     <div class="raster-histogram-heading">
-                      <strong id="raster-histogram-heading">Approximate distribution</strong>
+                      <strong id="raster-histogram-heading">Bounded distribution</strong>
                       <button
                         class="secondary-button"
                         id="retry-raster-statistics"

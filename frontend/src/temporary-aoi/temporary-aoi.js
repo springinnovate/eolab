@@ -347,18 +347,17 @@ export class TemporaryAoiCoordinator {
             this.layerController.hide();
             this.controlsView.renderVisibility(false);
             this.controlsView.renderStatus(
-                "Temporary AOI hidden. Raster histogram sampling returned " +
-                "to the map window."
+                "Temporary AOI hidden. Raster histogram selection is " +
+                "unchanged."
             );
         } else {
             this.layerController.show();
             this.controlsView.renderVisibility(true);
             this.controlsView.renderStatus(
-                "Temporary AOI shown. Raster histogram sampling restored " +
-                "the uploaded AOI."
+                "Temporary AOI shown. Raster histogram selection is " +
+                "unchanged."
             );
         }
-        this.notifySamplingAreaChange();
     }
 
     /**
@@ -524,14 +523,13 @@ export class TemporaryAoiCoordinator {
     }
 
     /**
-     * Subscribe to ready and visible AOI changes through the public boundary.
+     * Subscribe to ready AOI lifecycle changes through the public boundary.
      *
-     * A hidden, removed, or expired AOI publishes null so raster sampling can
-     * restore its mouse-hover map window. Showing retained geometry publishes
-     * the same opaque lifecycle again so sampling returns to the AOI.
+     * Removal or expiration publishes null. Overlay visibility is independent
+     * presentation state and never changes the sampleable lifecycle.
      *
      * @param {(temporaryAoi: Readonly<Object>|null) => void} listener Receives
-     * opaque lifecycle/display snapshots and hidden or unavailable state as null.
+     * opaque lifecycle/display snapshots and unavailable state as null.
      * @return {() => void} Idempotent function that removes the subscription.
      */
     subscribeSamplingArea(listener) {
@@ -539,24 +537,22 @@ export class TemporaryAoiCoordinator {
             throw new TypeError("Temporary AOI sampling listener is required.");
         }
         this.samplingAreaListeners.add(listener);
-        listener(
-            this.activeAoi === null || !this.layerController.isVisible
-                ? null
-                : temporaryAoiSamplingSnapshot(this.activeAoi)
-        );
+        listener(this.activeAoi === null
+            ? null
+            : temporaryAoiSamplingSnapshot(this.activeAoi));
         return () => {
             this.samplingAreaListeners.delete(listener);
         };
     }
 
     /**
-     * Publish the current visible lifecycle without exposing overlay geometry.
+     * Publish the current ready lifecycle without exposing overlay geometry.
      *
      * @return {void}
      */
     notifySamplingAreaChange() {
         const snapshot =
-            this.activeAoi === null || !this.layerController.isVisible
+            this.activeAoi === null
                 ? null
                 : temporaryAoiSamplingSnapshot(this.activeAoi);
         for (const listener of this.samplingAreaListeners) {

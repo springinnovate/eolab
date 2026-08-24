@@ -3,8 +3,6 @@ import test from "node:test";
 
 import {
   assessCatalogRaster,
-  loadCatalogRasterDetailStatistics,
-  loadCatalogRasterStatistics,
   loadCatalogRasterDetailPreview,
   isRasterDetailPreviewCapacityError,
   publishCatalogRaster,
@@ -12,9 +10,10 @@ import {
   validateRasterDetailPreview,
 } from "../../src/raster/api.js";
 import {
+  loadCatalogRasterStatistics,
   RasterAnalysisRequestError,
   sampleCatalogRasterPixel,
-} from "../../src/raster/pixel-api.js";
+} from "../../src/raster/analysis-api.js";
 import {
   MOUNTED_GEOTIFF_ITEM,
   CENTER_SAMPLE_DETAIL_PREVIEW,
@@ -558,8 +557,8 @@ test("loadCatalogRasterStatistics sends only Item identity and validates data", 
   assert.deepEqual(
     await loadCatalogRasterStatistics(
       MOUNTED_GEOTIFF_ITEM,
+      { kind: "wholeRaster" },
       abortController.signal,
-      null,
       async (url, options) => {
         requests.push({ url, options });
         return new Response(JSON.stringify(RASTER_STATISTICS), {
@@ -572,7 +571,7 @@ test("loadCatalogRasterStatistics sends only Item identity and validates data", 
   );
   assert.deepEqual(requests, [
     {
-      url: "/api/rendering/statistics",
+      url: "/api/raster-analysis/statistics",
       options: {
         method: "POST",
         headers: {
@@ -596,8 +595,8 @@ test("loadCatalogRasterStatistics adds only validated selected bounds", async ()
   assert.deepEqual(
     await loadCatalogRasterStatistics(
       MOUNTED_GEOTIFF_ITEM,
+      { kind: "selectedArea", selectedBounds: SELECTED_BOUNDS },
       abortController.signal,
-      SELECTED_BOUNDS,
       async (url, options) => {
         requests.push({ url, options });
         return new Response(JSON.stringify(SELECTED_RASTER_STATISTICS), {
@@ -621,85 +620,11 @@ test("loadCatalogRasterStatistics adds only validated selected bounds", async ()
   await assert.rejects(
     loadCatalogRasterStatistics(
       MOUNTED_GEOTIFF_ITEM,
+      { kind: "selectedArea", selectedBounds: SELECTED_BOUNDS },
       abortController.signal,
-      SELECTED_BOUNDS,
       async () => new Response(JSON.stringify({
         ...SELECTED_RASTER_STATISTICS,
         selectedBounds: { ...SELECTED_BOUNDS, west: -124 },
-      }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
-    ),
-    /invalid selected-area response bounds/,
-  );
-});
-
-test("sampled raster histogram requires and sends only selected bounds", async () => {
-  const requests = [];
-  const abortController = new AbortController();
-  const statistics = await loadCatalogRasterDetailStatistics(
-    MOUNTED_GEOTIFF_ITEM,
-    abortController.signal,
-    SELECTED_BOUNDS,
-    async (url, options) => {
-      requests.push({ url, options });
-      return new Response(JSON.stringify(SELECTED_RASTER_STATISTICS), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    },
-  );
-
-  assert.equal(statistics.samplingMethod, "sampledGrid");
-  assert.deepEqual(requests, [{
-    url: "/api/rendering/detail-statistics",
-    options: {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        collectionId: MOUNTED_GEOTIFF_ITEM.collection,
-        itemId: MOUNTED_GEOTIFF_ITEM.id,
-        selectedBounds: SELECTED_BOUNDS,
-      }),
-      signal: abortController.signal,
-    },
-  }]);
-  await assert.rejects(
-    loadCatalogRasterDetailStatistics(
-      MOUNTED_GEOTIFF_ITEM,
-      abortController.signal,
-      null,
-      async () => new Response(),
-    ),
-    /invalid selected bounds/,
-  );
-});
-
-test("sampled raster histogram preserves bounded errors and response identity", async () => {
-  await assert.rejects(
-    loadCatalogRasterDetailStatistics(
-      MOUNTED_GEOTIFF_ITEM,
-      new AbortController().signal,
-      SELECTED_BOUNDS,
-      async () => new Response(
-        JSON.stringify({ detail: "No finite, non-nodata points were found." }),
-        { status: 409, headers: { "Content-Type": "application/json" } },
-      ),
-    ),
-    /No finite, non-nodata/,
-  );
-  await assert.rejects(
-    loadCatalogRasterDetailStatistics(
-      MOUNTED_GEOTIFF_ITEM,
-      new AbortController().signal,
-      SELECTED_BOUNDS,
-      async () => new Response(JSON.stringify({
-        ...SELECTED_RASTER_STATISTICS,
-        selectedBounds: { ...SELECTED_BOUNDS, east: -120 },
       }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
@@ -715,9 +640,8 @@ test("loadCatalogRasterStatistics sends only one opaque temporary AOI identity",
 
   const statistics = await loadCatalogRasterStatistics(
     MOUNTED_GEOTIFF_ITEM,
+    { kind: "temporaryAoi", temporaryAoiId: TEMPORARY_AOI_ID },
     abortController.signal,
-    null,
-    TEMPORARY_AOI_ID,
     async (url, options) => {
       requests.push({ url, options });
       return new Response(JSON.stringify(TEMPORARY_AOI_RASTER_STATISTICS), {
@@ -737,12 +661,15 @@ test("loadCatalogRasterStatistics sends only one opaque temporary AOI identity",
   await assert.rejects(
     loadCatalogRasterStatistics(
       MOUNTED_GEOTIFF_ITEM,
+      {
+        kind: "selectedArea",
+        selectedBounds: SELECTED_BOUNDS,
+        temporaryAoiId: TEMPORARY_AOI_ID,
+      },
       abortController.signal,
-      SELECTED_BOUNDS,
-      TEMPORARY_AOI_ID,
       async () => new Response(),
     ),
-    /mutually exclusive/,
+    /sampling area is invalid/,
   );
 });
 
@@ -750,8 +677,8 @@ test("loadCatalogRasterStatistics reports backend and response errors", async ()
   await assert.rejects(
     loadCatalogRasterStatistics(
       MOUNTED_GEOTIFF_ITEM,
+      { kind: "wholeRaster" },
       new AbortController().signal,
-      null,
       async () => new Response(
         JSON.stringify({ detail: "No valid sampled pixels were found" }),
         { status: 409, headers: { "Content-Type": "application/json" } },
@@ -772,8 +699,8 @@ test("loadCatalogRasterStatistics reports backend and response errors", async ()
     await assert.rejects(
       loadCatalogRasterStatistics(
         MOUNTED_GEOTIFF_ITEM,
+        { kind: "wholeRaster" },
         new AbortController().signal,
-        null,
         async () => errorResponse,
       ),
       new RegExp(
@@ -784,8 +711,8 @@ test("loadCatalogRasterStatistics reports backend and response errors", async ()
   await assert.rejects(
     loadCatalogRasterStatistics(
       MOUNTED_GEOTIFF_ITEM,
+      { kind: "wholeRaster" },
       new AbortController().signal,
-      null,
       async () => new Response(JSON.stringify({
         ...RASTER_STATISTICS,
         band: 2,

@@ -2,17 +2,18 @@
  * Asynchronous request lifecycle for raster statistics.
  *
  * This module owns activation, retry, cancellation, and stale-response
- * suppression for one statistics scope. Loading the data and presenting its
- * results are injected; histogram math and DOM rendering are out of scope.
+ * suppression for one active sampling area. Loading and presentation are
+ * injected; histogram math and DOM rendering are out of scope.
  */
+import { normalizeRasterSamplingArea } from "./statistics.js";
+
 /**
  * Load statistics for one raster scope.
  *
  * @callback LoadRasterStatistics
  * @param {Object} item Active STAC Item.
+ * @param {Object} samplingArea Normalized whole/bounds/AOI area.
  * @param {AbortSignal} signal Cancellation signal for stale work.
- * @param {Object|null} selectedBounds Optional selected-area bounds.
- * @param {string|null} temporaryAoiId Optional opaque temporary-AOI reference.
  * @return {Promise<Object>} Validated raster statistics.
  */
 
@@ -21,6 +22,7 @@
  *
  * @callback RasterStatisticsLoadingHandler
  * @param {Object} item Active STAC Item.
+ * @param {Object} samplingArea Normalized request area.
  * @param {*} context Opaque request context.
  * @return {void}
  */
@@ -31,6 +33,7 @@
  * @callback RasterStatisticsResultHandler
  * @param {Object} statistics Validated response.
  * @param {Object} item Active STAC Item.
+ * @param {Object} samplingArea Normalized request area.
  * @param {*} context Opaque request context.
  * @return {void}
  */
@@ -41,6 +44,7 @@
  * @callback RasterStatisticsErrorHandler
  * @param {Error} error Non-abort statistics error.
  * @param {Object} item Active STAC Item.
+ * @param {Object} samplingArea Normalized request area.
  * @param {*} context Opaque request context.
  * @return {void}
  */
@@ -61,55 +65,46 @@ export class RasterStatisticsController {
         this.onResult = onResult;
         this.onError = onError;
         this.item = null;
-        this.selectedBounds = null;
-        this.temporaryAoiId = null;
+        this.samplingArea = null;
         this.abortController = null;
         this.requestSequence = 0;
     }
 
     /**
-     * Start a new statistics request for the active rendered Item.
+     * Start a new statistics request for the active catalog Item.
      *
      * @param {Object} item Selected STAC Item.
+     * @param {Object} samplingArea Normalized whole/bounds/AOI area.
      * @param {*} [context] Opaque request context returned to callbacks.
-     * @param {Object|null} [selectedBounds=null] Optional WGS 84 selection.
-     * @param {string|null} [temporaryAoiId=null] Optional opaque ready AOI.
      * @return {Promise<Object|null>} Current statistics, or null after failure
      * or invalidation.
      */
     async activate(
         item,
-        context = undefined,
-        selectedBounds = null,
-        temporaryAoiId = null
+        samplingArea,
+        context = undefined
     ) {
-        if (selectedBounds !== null && temporaryAoiId !== null) {
-            throw new Error(
-                "Raster statistics bounds and temporary AOI are mutually exclusive."
-            );
-        }
+        const normalizedArea = normalizeRasterSamplingArea(samplingArea);
         this.clear();
         this.item = item;
-        this.selectedBounds = selectedBounds;
-        this.temporaryAoiId = temporaryAoiId;
+        this.samplingArea = normalizedArea;
         const requestSequence = ++this.requestSequence;
         const abortController = new AbortController();
         this.abortController = abortController;
-        this.onLoading(item, context);
+        this.onLoading(item, normalizedArea, context);
         let statistics;
         try {
             statistics = await this.loadStatistics(
                 item,
-                abortController.signal,
-                selectedBounds,
-                temporaryAoiId
+                normalizedArea,
+                abortController.signal
             );
         } catch (error) {
             if (
                 error.name !== "AbortError" &&
                 requestSequence === this.requestSequence
             ) {
-                this.onError(error, item, context);
+                this.onError(error, item, normalizedArea, context);
             }
             return null;
         } finally {
@@ -120,7 +115,7 @@ export class RasterStatisticsController {
         if (requestSequence !== this.requestSequence) {
             return null;
         }
-        this.onResult(statistics, item, context);
+        this.onResult(statistics, item, normalizedArea, context);
         return statistics;
     }
 
@@ -132,11 +127,10 @@ export class RasterStatisticsController {
      */
     retry(context = undefined) {
         const item = this.item;
-        const selectedBounds = this.selectedBounds;
-        const temporaryAoiId = this.temporaryAoiId;
+        const samplingArea = this.samplingArea;
         return item === null
             ? Promise.resolve(null)
-            : this.activate(item, context, selectedBounds, temporaryAoiId);
+            : this.activate(item, samplingArea, context);
     }
 
     /**
@@ -149,7 +143,6 @@ export class RasterStatisticsController {
         this.abortController?.abort();
         this.abortController = null;
         this.item = null;
-        this.selectedBounds = null;
-        this.temporaryAoiId = null;
+        this.samplingArea = null;
     }
 }
