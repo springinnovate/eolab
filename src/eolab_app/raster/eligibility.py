@@ -7,15 +7,15 @@ from typing import Any
 import rasterio
 
 from eolab_app.raster.catalog_metadata import RASTER_ASSET_METADATA_KEY
-
-
-GEOTIFF_MEDIA_TYPE = "image/tiff; application=geotiff"
-COG_MEDIA_TYPE = (
-    "image/tiff; application=geotiff; profile=cloud-optimized"
+from eolab_app.raster.catalog_contract import (
+    COG_MEDIA_TYPE,
+    GEOTIFF_MEDIA_TYPE,
+    GEOTIFF_MEDIA_TYPES,
+    MOUNTED_GEOTIFF_COLLECTION_ID,
+    MOUNTED_GEOTIFF_ITEM_ID_PATTERN,
 )
-GEOTIFF_MEDIA_TYPES = frozenset({GEOTIFF_MEDIA_TYPE, COG_MEDIA_TYPE})
-MOUNTED_GEOTIFF_COLLECTION_ID = "eolab-mounted-geotiffs"
-MOUNTED_GEOTIFF_ITEM_ID_PATTERN = r"^geotiff-[0-9a-f]{24}$"
+
+
 RENDERING_METADATA_KEY = RASTER_ASSET_METADATA_KEY
 RENDERING_POLICY = "raster-v3"
 DIRECT_RENDERING_MAX_BYTES = 64 * 1024 * 1024

@@ -1,7 +1,6 @@
 """Server-owned exact source-window reads for close raster map views."""
 
 import math
-from dataclasses import dataclass
 
 import numpy
 import rasterio
@@ -9,39 +8,24 @@ from affine import TransformNotInvertibleError
 from rasterio.warp import transform_bounds
 from rasterio.windows import Window
 
-from eolab_app.raster.sample_grid import (
-    SourceBlockIndex,
-    _block_indexes_for_window,
-    _decoded_bytes_for_blocks,
-    _read_native_block,
-    _require_source_contract,
+from eolab_app.raster.exact_source import (
+    EXACT_SOURCE_MAX_BLOCK_READS,
+    EXACT_SOURCE_MAX_DECODED_BYTES,
+    EXACT_SOURCE_MAX_DIMENSION,
+    ExactSourceWindowPlan as ExactDetailPlan,
+    plan_exact_source_window,
+    read_exact_source_window,
 )
-from eolab_app.raster.read_cancellation import (
-    RasterReadCancellationCheck,
-    require_active_raster_read,
-)
+from eolab_app.raster.read_cancellation import RasterReadCancellationCheck
 
 
-EXACT_DETAIL_MAX_DIMENSION = 512
-EXACT_DETAIL_MAX_SOURCE_BLOCK_READS = 1_024
-EXACT_DETAIL_MAX_DECODED_SOURCE_BYTES = 64 * 1024 * 1024
+# Compatibility names retain the established public detail-preview contract;
+# source planning itself is rendering-neutral and owned by ``exact_source``.
+EXACT_DETAIL_MAX_DIMENSION = EXACT_SOURCE_MAX_DIMENSION
+EXACT_DETAIL_MAX_SOURCE_BLOCK_READS = EXACT_SOURCE_MAX_BLOCK_READS
+EXACT_DETAIL_MAX_DECODED_SOURCE_BYTES = EXACT_SOURCE_MAX_DECODED_BYTES
 EXACT_DETAIL_EDGE_DENSIFY_POINTS = 21
 EXACT_DETAIL_WINDOW_PADDING_PIXELS = 1
-
-
-@dataclass(frozen=True)
-class ExactDetailPlan:
-    """Immutable proof for one bounded current-view source window.
-
-    Attributes:
-        source_window: Integral source-pixel envelope clipped to the raster.
-        block_indexes: Intersecting native band-one blocks in row-major order.
-        decoded_source_bytes: Conservative cumulative value and validity bytes.
-    """
-
-    source_window: Window
-    block_indexes: tuple[SourceBlockIndex, ...]
-    decoded_source_bytes: int
 
 
 def _source_window_for_projected_bounds(
@@ -152,27 +136,10 @@ def plan_exact_current_view(
             metadata violates the exact-detail contract.
         rasterio.errors.RasterioError: If CRS transformation fails.
     """
-    _require_source_contract(dataset)
     source_window = _source_window_for_projected_bounds(dataset, projected_bounds)
     if source_window is None:
         return None
-    if (
-        int(source_window.width) > EXACT_DETAIL_MAX_DIMENSION
-        or int(source_window.height) > EXACT_DETAIL_MAX_DIMENSION
-    ):
-        return None
-    block_shape = tuple(int(value) for value in dataset.block_shapes[0])
-    block_indexes = _block_indexes_for_window(source_window, block_shape)
-    if len(block_indexes) > EXACT_DETAIL_MAX_SOURCE_BLOCK_READS:
-        return None
-    decoded_source_bytes = _decoded_bytes_for_blocks(dataset, block_indexes)
-    if decoded_source_bytes > EXACT_DETAIL_MAX_DECODED_SOURCE_BYTES:
-        return None
-    return ExactDetailPlan(
-        source_window=source_window,
-        block_indexes=block_indexes,
-        decoded_source_bytes=decoded_source_bytes,
-    )
+    return plan_exact_source_window(dataset, source_window)
 
 
 def read_exact_current_view(
@@ -180,7 +147,7 @@ def read_exact_current_view(
     plan: ExactDetailPlan,
     cancellation_requested: RasterReadCancellationCheck | None = None,
 ) -> numpy.ma.MaskedArray:
-    """Read every pixel in an admitted source window one native block at a time.
+    """Read one admitted current-view plan through the shared exact reader.
 
     Args:
         dataset: Open source that owns the already-established plan.
@@ -188,44 +155,10 @@ def read_exact_current_view(
         cancellation_requested: Optional thread-safe obsolescence predicate.
 
     Returns:
-        Complete masked source window at native resolution. Each intersecting
-        native block is read once without resampling or a boundless read.
+        Complete masked source window at native resolution.
 
     Raises:
         RasterReadCancelled: If every request waiter disconnects.
         rasterio.errors.RasterioError: If an admitted native-block read fails.
     """
-    source_window = plan.source_window
-    row_start = int(source_window.row_off)
-    column_start = int(source_window.col_off)
-    row_stop = row_start + int(source_window.height)
-    column_stop = column_start + int(source_window.width)
-    values = numpy.ma.masked_all(
-        (int(source_window.height), int(source_window.width)),
-        dtype=numpy.dtype(dataset.dtypes[0]),
-    )
-    for block_index in plan.block_indexes:
-        require_active_raster_read(cancellation_requested)
-        block_window = dataset.block_window(1, *block_index)
-        block = _read_native_block(dataset, block_window)
-        require_active_raster_read(cancellation_requested)
-        block_row_start = int(block_window.row_off)
-        block_column_start = int(block_window.col_off)
-        copy_row_start = max(row_start, block_row_start)
-        copy_column_start = max(column_start, block_column_start)
-        copy_row_stop = min(
-            row_stop,
-            block_row_start + int(block_window.height),
-        )
-        copy_column_stop = min(
-            column_stop,
-            block_column_start + int(block_window.width),
-        )
-        values[
-            copy_row_start - row_start:copy_row_stop - row_start,
-            copy_column_start - column_start:copy_column_stop - column_start,
-        ] = block[
-            copy_row_start - block_row_start:copy_row_stop - block_row_start,
-            copy_column_start - block_column_start:copy_column_stop - block_column_start,
-        ]
-    return values
+    return read_exact_source_window(dataset, plan, cancellation_requested)

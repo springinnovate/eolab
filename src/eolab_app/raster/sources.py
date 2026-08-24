@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
-from eolab_app.raster.eligibility import GEOTIFF_MEDIA_TYPES
+from eolab_app.raster.catalog_contract import GEOTIFF_MEDIA_TYPES
 from eolab_app.raster.errors import (
     RasterAssetError,
     RasterConflictError,
@@ -67,7 +67,7 @@ class MountedRasterResolver:
             or not isinstance(data_asset.get("href"), str)
         ):
             raise RasterAssetError(
-                "The Item has no renderable GeoTIFF data Asset"
+                "The Item has no supported GeoTIFF data Asset"
             )
 
         asset_uri = urlsplit(data_asset["href"])

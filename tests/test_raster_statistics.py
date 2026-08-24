@@ -1,4 +1,4 @@
-"""Test raster sampling contracts independently from the HTTP routes."""
+"""Test rendering-independent raster statistics and service contracts."""
 
 import asyncio
 import threading
@@ -9,8 +9,7 @@ import numpy
 import pytest
 import rasterio
 from pydantic import ValidationError
-from rasterio.coords import BoundingBox
-from rasterio.enums import Resampling
+from rasterio.enums import MaskFlags
 from rasterio.features import geometry_mask
 from rasterio.transform import Affine, from_bounds, from_origin
 from rasterio.warp import transform as transform_coordinates
@@ -22,9 +21,9 @@ from eolab_app.raster.models import (
     CatalogPixelRequest,
     CatalogRasterRequest,
     CatalogRasterStatisticsRequest,
-    RasterPixel,
     RasterHistogram,
     RasterPercentiles,
+    RasterPixel,
     RasterStatistics,
     RasterValueRange,
     Wgs84Bounds,
@@ -35,72 +34,111 @@ from eolab_app.raster.sources import PublishedRasterRegistry, source_signature
 from eolab_app.raster.statistics import (
     NoRasterBoundsOverlapError,
     NoValidRasterSamplesError,
-    bounded_raster_sample_shape,
     read_raster_statistics,
+    selected_raster_area_for_wgs84_bounds,
     strict_raster_value_range,
 )
 from eolab_app.raster.statistics_service import RasterStatisticsService
 from eolab_app.sampling_area import (
     PolygonalWgs84Geometry,
+    RasterSamplingArea,
     ResolvedTemporaryAoi,
     SamplingAreaUnavailableError,
+    SelectedBoundsSamplingArea,
     TemporaryAoiLifecycleIdentity,
     TemporaryAoiSamplingArea,
+    WholeRasterSamplingArea,
     freeze_coordinates,
 )
 
 
-class _PixelSourceAuthorizer:
-    """Authorize one controlled catalog source without rendering state."""
+ITEM_ID = "geotiff-0123456789abcdef01234567"
 
-    def __init__(self) -> None:
-        """Create one stable controlled source identity."""
-        self.authorization = AuthorizedRaster(
-            source_path=Path("raster.tif"),
-            source_signature=(1, 2, 3, 4, 5),
-        )
+
+class _SourceAuthorizer:
+    """Authorize replaceable catalog sources without rendering state."""
+
+    def __init__(
+        self,
+        authorizations: dict[str, AuthorizedRaster] | None = None,
+    ) -> None:
+        """Create an authorizer for controlled Item identities.
+
+        Args:
+            authorizations: Optional Item-to-source authorization mapping.
+        """
+        self.authorizations = authorizations or {
+            ITEM_ID: AuthorizedRaster(Path("raster.tif"), (1, 2, 3, 4, 5))
+        }
         self.authorization_count = 0
         self.current_check_count = 0
 
     async def authorize(
         self,
-        _: CatalogRasterRequest,
+        request: CatalogRasterRequest,
     ) -> AuthorizedRaster:
-        """Return the controlled current source.
+        """Return the current source for one catalog Item.
 
         Args:
-            _: Ignored catalog pixel request.
+            request: Validated catalog raster request.
 
         Returns:
-            Stable controlled source authorization.
+            Current controlled source authorization.
         """
         self.authorization_count += 1
-        return self.authorization
+        return self.authorizations[request.item_id]
 
     async def require_current(self, authorized_raster: AuthorizedRaster) -> None:
-        """Require the service to retain the controlled identity.
+        """Reject a source identity replaced after authorization.
 
         Args:
-            authorized_raster: Source authorization being rechecked.
+            authorized_raster: Previously authorized source identity.
 
         Returns:
-            None when the expected identity is supplied.
+            None when the identity remains current.
+
+        Raises:
+            RasterConflictError: If the controlled source was replaced.
         """
-        assert authorized_raster == self.authorization
         self.current_check_count += 1
+        current = next(
+            (
+                value
+                for value in self.authorizations.values()
+                if value.source_path == authorized_raster.source_path
+            ),
+            None,
+        )
+        if current != authorized_raster:
+            raise RasterConflictError(
+                "The cataloged raster changed; scan it again before analysis."
+            )
 
 
 class _RasterSample:
-    """Minimal masked-array contract returned by a fake Rasterio dataset."""
+    """Minimal masked-array contract returned by a fake pixel dataset."""
 
     def count(self) -> int:
+        """Return one valid sampled pixel.
+
+        Returns:
+            One valid value.
+        """
         return 1
 
     def __getitem__(self, _: tuple[int, int]) -> float:
+        """Return the controlled pixel value.
+
+        Args:
+            _: Ignored two-dimensional sample index.
+
+        Returns:
+            Controlled finite value.
+        """
         return 42.5
 
 
-class _RasterDataset:
+class _PixelDataset:
     """Record the exact band and window requested by the pixel reader."""
 
     crs = "EPSG:3857"
@@ -108,91 +146,199 @@ class _RasterDataset:
     height = 10
 
     def __init__(self) -> None:
-        self.read_arguments = None
+        """Create an unread controlled pixel source."""
+        self.read_arguments: tuple[int, Window, bool] | None = None
 
-    def __enter__(self) -> "_RasterDataset":
+    def __enter__(self) -> "_PixelDataset":
+        """Enter the fake Rasterio context.
+
+        Returns:
+            This dataset.
+        """
         return self
 
     def __exit__(self, *_: object) -> None:
+        """Exit the fake Rasterio context.
+
+        Args:
+            *_: Ignored exception context.
+        """
         return None
 
     def index(self, x: float, y: float) -> tuple[int, int]:
+        """Map the controlled projected position to one pixel.
+
+        Args:
+            x: Projected x coordinate.
+            y: Projected y coordinate.
+
+        Returns:
+            Controlled row and column.
+        """
         assert (x, y) == (10, 20)
         return 2, 3
 
     def read(self, band: int, *, window: Window, masked: bool) -> _RasterSample:
+        """Record the bounded pixel read.
+
+        Args:
+            band: One-based raster band.
+            window: Requested source-pixel window.
+            masked: Whether Rasterio validity masking was requested.
+
+        Returns:
+            Controlled one-value sample.
+        """
         self.read_arguments = (band, window, masked)
         return _RasterSample()
 
 
-class _StatisticsDataset:
-    """Return a controlled masked sample and record its bounded read."""
+class _NativeStatisticsDataset:
+    """Provide native blocks for statistics and reject resampled reads."""
 
-    crs = "EPSG:3857"
-    width = 4
-    height = 2
-    transform = from_origin(0, 2, 1, 1)
-    bounds = BoundingBox(0, 0, 4, 2)
+    count = 1
 
-    def __init__(self, sample: numpy.ma.MaskedArray) -> None:
-        self.sample = sample
-        self.read_arguments = None
+    def __init__(
+        self,
+        values: numpy.ndarray,
+        source_path: Path,
+        *,
+        transform: Affine | None = None,
+        crs: str | None = "EPSG:4326",
+        block_shape: tuple[int, int] | None = None,
+        nodata: float | None = None,
+        extra_files: tuple[Path, ...] = (),
+    ) -> None:
+        """Create a controlled signed one-band source.
 
-    def __enter__(self) -> "_StatisticsDataset":
+        Args:
+            values: Two-dimensional band-one values.
+            source_path: Authorized path represented by this dataset.
+            transform: Optional source affine transform.
+            crs: Optional source CRS.
+            block_shape: Optional native block height and width.
+            nodata: Optional signed band nodata value.
+            extra_files: Additional GDAL dependencies used for rejection tests.
+        """
+        self.values = values
+        self.height, self.width = values.shape
+        self.transform = transform or from_origin(0, self.height, 1, 1)
+        self.crs = crs
+        self.block_shapes = (block_shape or values.shape,)
+        self.dtypes = (values.dtype.name,)
+        self.nodatavals = (nodata,)
+        self.mask_flag_enums = (
+            [MaskFlags.nodata] if nodata is not None else [MaskFlags.all_valid],
+        )
+        self.files = (
+            str(source_path.resolve()),
+            *(str(path.resolve()) for path in extra_files),
+        )
+        self.read_windows: list[Window] = []
+
+    def __enter__(self) -> "_NativeStatisticsDataset":
+        """Enter the fake Rasterio context.
+
+        Returns:
+            This dataset.
+        """
         return self
 
     def __exit__(self, *_: object) -> None:
+        """Exit the fake Rasterio context.
+
+        Args:
+            *_: Ignored exception context.
+        """
         return None
+
+    def block_window(
+        self,
+        band: int,
+        block_row: int,
+        block_column: int,
+    ) -> Window:
+        """Return one clipped native-block window.
+
+        Args:
+            band: One-based raster band.
+            block_row: Zero-based native block row.
+            block_column: Zero-based native block column.
+
+        Returns:
+            Integral native-block window.
+        """
+        assert band == 1
+        block_height, block_width = self.block_shapes[0]
+        row_offset = block_row * block_height
+        column_offset = block_column * block_width
+        return Window(
+            column_offset,
+            row_offset,
+            min(block_width, self.width - column_offset),
+            min(block_height, self.height - row_offset),
+        )
 
     def read(
         self,
         band: int,
         *,
-        window: Window | None = None,
-        out_shape: tuple[int, int],
+        window: Window,
         masked: bool,
-        resampling: Resampling,
-    ) -> numpy.ma.MaskedArray:
-        self.read_arguments = (band, window, out_shape, masked, resampling)
-        return self.sample
+    ) -> numpy.ndarray:
+        """Read one exact native block with no ``out_shape`` escape hatch.
+
+        Args:
+            band: One-based raster band.
+            window: Exact native block window.
+            masked: Rasterio mask request, which must remain false.
+
+        Returns:
+            Copy of the exact requested source values.
+        """
+        assert band == 1
+        assert masked is False
+        self.read_windows.append(window)
+        row_start = int(window.row_off)
+        column_start = int(window.col_off)
+        return self.values[
+            row_start:row_start + int(window.height),
+            column_start:column_start + int(window.width),
+        ].copy()
 
 
 def _statistics_result(
     value: float = 1,
-    selected_bounds: tuple[float, float, float, float] | None = None,
-    temporary_aoi_id: str | None = None,
+    sampling_area: RasterSamplingArea | None = None,
 ) -> RasterStatistics:
-    """Build one valid statistics response for service coordination tests.
+    """Build one valid statistics response for service tests.
 
     Args:
-        value: Single valid sample value represented by the response.
-        selected_bounds: Optional canonical rectangular sampling area.
-        temporary_aoi_id: Optional opaque temporary-AOI lifecycle reference.
+        value: Single finite response value.
+        sampling_area: Optional explicit sampling area; whole raster by default.
 
     Returns:
-        Valid bounded statistics for exactly one requested sampling scope.
-
-    Raises:
-        ValueError: If both selected bounds and an AOI identity are supplied.
+        Valid exact bounded statistics for the supplied scope.
     """
-    if selected_bounds is not None and temporary_aoi_id is not None:
-        raise ValueError("Test statistics scope must be exclusive")
+    area = sampling_area or WholeRasterSamplingArea()
+    selected_bounds = (
+        Wgs84Bounds(
+            west=area.bounds[0],
+            south=area.bounds[1],
+            east=area.bounds[2],
+            north=area.bounds[3],
+        )
+        if isinstance(area, SelectedBoundsSamplingArea)
+        else None
+    )
+    temporary_aoi_id = (
+        area.resolved_aoi.identity.reference
+        if isinstance(area, TemporaryAoiSamplingArea)
+        else None
+    )
     return RasterStatistics(
-        scope=(
-            "temporaryAoi"
-            if temporary_aoi_id is not None
-            else "selectedArea" if selected_bounds is not None else "wholeRaster"
-        ),
-        selectedBounds=(
-            Wgs84Bounds(
-                west=selected_bounds[0],
-                south=selected_bounds[1],
-                east=selected_bounds[2],
-                north=selected_bounds[3],
-            )
-            if selected_bounds is not None
-            else None
-        ),
+        scope=area.kind,
+        selectedBounds=selected_bounds,
         temporaryAoiId=temporary_aoi_id,
         sourceWidth=1,
         sourceHeight=1,
@@ -201,6 +347,7 @@ def _statistics_result(
         sampleHeight=1,
         sampledPixelCount=1,
         validSampleCount=1,
+        samplingMethod="exactSourceWindow",
         estimated=False,
         sampleMinimum=value,
         sampleMaximum=value,
@@ -235,7 +382,7 @@ def _resolved_temporary_aoi(
     """
     immutable_geometries = tuple(
         PolygonalWgs84Geometry(
-            geometry["type"],
+            geometry["type"],  # type: ignore[arg-type]
             freeze_coordinates(geometry["coordinates"]),
         )
         for geometry in geometries
@@ -248,7 +395,7 @@ def _resolved_temporary_aoi(
             if geometry["type"] == "Polygon"
             else geometry["coordinates"]
         )
-        for ring in polygon
+        for ring in polygon  # type: ignore[union-attr]
         for position in ring
     ]
     return ResolvedTemporaryAoi(
@@ -266,16 +413,49 @@ def _resolved_temporary_aoi(
     )
 
 
+def _write_raster(
+    source_path: Path,
+    values: numpy.ndarray,
+    *,
+    transform: Affine,
+    crs: str = "EPSG:4326",
+    nodata: float | None = None,
+) -> None:
+    """Write one small signed GeoTIFF used by geometry integration tests.
+
+    Args:
+        source_path: Destination GeoTIFF path.
+        values: Two-dimensional band-one values.
+        transform: Source affine transform.
+        crs: Source coordinate reference system.
+        nodata: Optional band nodata value.
+
+    Returns:
+        None after writing the source.
+    """
+    height, width = values.shape
+    with rasterio.open(
+        source_path,
+        "w",
+        driver="GTiff",
+        width=width,
+        height=height,
+        count=1,
+        dtype=values.dtype,
+        nodata=nodata,
+        crs=crs,
+        transform=transform,
+    ) as dataset:
+        dataset.write(values, 1)
+
+
 def test_pixel_reader_requests_only_band_one_and_its_source_cell(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Keep hover I/O bounded to a one-cell window in band 1."""
-    dataset = _RasterDataset()
+    """Keep pixel probing independent and bounded to one source cell."""
+    dataset = _PixelDataset()
     monkeypatch.setattr("eolab_app.raster.pixel.rasterio.open", lambda _: dataset)
-    monkeypatch.setattr(
-        "eolab_app.raster.pixel.transform",
-        lambda *_: ([10], [20]),
-    )
+    monkeypatch.setattr("eolab_app.raster.pixel.transform", lambda *_: ([10], [20]))
 
     pixel = read_raster_pixel(Path("raster.tif"), -123, 48)
 
@@ -293,8 +473,8 @@ def test_pixel_reader_requests_only_band_one_and_its_source_cell(
 def test_pixel_reader_treats_an_unprojectable_position_as_outside(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Do not pass infinite projected coordinates to Rasterio indexing."""
-    dataset = _RasterDataset()
+    """Do not pass non-finite projected coordinates to Rasterio indexing."""
+    dataset = _PixelDataset()
     monkeypatch.setattr("eolab_app.raster.pixel.rasterio.open", lambda _: dataset)
     monkeypatch.setattr(
         "eolab_app.raster.pixel.transform",
@@ -309,58 +489,81 @@ def test_pixel_reader_treats_an_unprojectable_position_as_outside(
     assert dataset.read_arguments is None
 
 
-def test_raster_statistics_filter_nodata_and_nonfinite_values(
+def test_raster_statistics_exact_read_filters_nodata_and_nonfinite_values(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Summarize one exact native-grid sample without projecting its bounds."""
-    dataset = _StatisticsDataset(
-        numpy.ma.array(
-            [[0.0, 1.0, 2.0, numpy.nan], [99.0, 3.0, 4.0, 5.0]],
-            mask=[[False, False, False, False], [True, False, False, False]],
-        )
+    """Summarize a small source exactly without resampling or ``out_shape``."""
+    source_path = Path("projected-raster.tif")
+    values = numpy.array(
+        [[0.0, 1.0, 2.0, numpy.nan], [99.0, 3.0, 4.0, 5.0]],
+        dtype=numpy.float32,
+    )
+    dataset = _NativeStatisticsDataset(
+        values,
+        source_path,
+        block_shape=(1, 2),
+        nodata=99,
     )
     monkeypatch.setattr(
         "eolab_app.raster.statistics.rasterio.open",
         lambda _: dataset,
     )
 
-    statistics = read_raster_statistics(Path("projected-raster.tif"))
+    statistics = read_raster_statistics(
+        source_path,
+        WholeRasterSamplingArea(),
+    )
 
-    assert statistics.model_dump(by_alias=True) == {
-        "band": 1,
-        "scope": "wholeRaster",
-        "selectedBounds": None,
-        "sourceWidth": 4,
-        "sourceHeight": 2,
-        "sourcePixelCount": 8,
-        "sampleWidth": 4,
-        "sampleHeight": 2,
-        "sampledPixelCount": 8,
-        "validSampleCount": 6,
-        "estimated": False,
-        "sampleMinimum": 0.0,
-        "sampleMaximum": 5.0,
-        "percentiles": {"p05": 0.25, "p50": 2.5, "p95": 4.75},
-        "histogram": {
-            "counts": statistics.histogram.counts,
-            "edges": statistics.histogram.edges,
-        },
-        "suggestedRange": {
-            "minimum": 0.25,
-            "midpoint": 2.5,
-            "maximum": 4.75,
-        },
+    assert statistics.scope == "wholeRaster"
+    assert statistics.sampling_method == "exactSourceWindow"
+    assert statistics.estimated is False
+    assert (statistics.source_width, statistics.source_height) == (4, 2)
+    assert (statistics.sample_width, statistics.sample_height) == (4, 2)
+    assert statistics.valid_sample_count == 6
+    assert statistics.sample_minimum == 0
+    assert statistics.sample_maximum == 5
+    assert statistics.percentiles.model_dump() == {
+        "p05": 0.25,
+        "p50": 2.5,
+        "p95": 4.75,
     }
     assert sum(statistics.histogram.counts) == 6
-    assert len(statistics.histogram.counts) == 64
-    assert len(statistics.histogram.edges) == 65
-    assert dataset.read_arguments == (
-        1,
-        None,
-        (2, 4),
-        True,
-        Resampling.nearest,
+    assert dataset.read_windows == [
+        Window(0, 0, 2, 1),
+        Window(2, 0, 2, 1),
+        Window(0, 1, 2, 1),
+        Window(2, 1, 2, 1),
+    ]
+
+
+def test_raster_statistics_broad_source_uses_fixed_sample_grid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Report approximate provenance for a broad bounded native-block grid."""
+    source_path = Path("broad-raster.tif")
+    values = numpy.arange(600 * 1_000, dtype=numpy.int32).reshape((600, 1_000))
+    dataset = _NativeStatisticsDataset(
+        values,
+        source_path,
+        block_shape=(32, 32),
     )
+    monkeypatch.setattr(
+        "eolab_app.raster.statistics.rasterio.open",
+        lambda _: dataset,
+    )
+
+    statistics = read_raster_statistics(
+        source_path,
+        WholeRasterSamplingArea(),
+    )
+
+    assert statistics.sampling_method == "sampleGrid"
+    assert statistics.estimated is True
+    assert (statistics.sample_width, statistics.sample_height) == (127, 75)
+    assert statistics.sampled_pixel_count == 127 * 75
+    assert statistics.valid_sample_count == 127 * 75
+    assert 0 < len(dataset.read_windows) <= statistics.sampled_pixel_count
+    assert len(set(dataset.read_windows)) == len(dataset.read_windows)
 
 
 @pytest.mark.parametrize(
@@ -386,23 +589,20 @@ def test_raster_statistics_request_rejects_invalid_selected_bounds(
 ) -> None:
     """Accept only finite, ordered, non-wrapping WGS 84 rectangles."""
     with pytest.raises(ValidationError):
-        CatalogRasterStatisticsRequest.model_validate(
-            {
-                "collectionId": "eolab-mounted-geotiffs",
-                "itemId": "geotiff-0123456789abcdef01234567",
-                "selectedBounds": selected_bounds,
-            }
-        )
+        CatalogRasterStatisticsRequest.model_validate({
+            "collectionId": "eolab-mounted-geotiffs",
+            "itemId": ITEM_ID,
+            "selectedBounds": selected_bounds,
+        })
 
 
 def test_raster_statistics_request_enforces_the_strict_sampling_area_union() -> None:
     """Accept only whole raster, bounds, or one opaque AOI reference."""
     identity = {
         "collectionId": "eolab-mounted-geotiffs",
-        "itemId": "geotiff-0123456789abcdef01234567",
+        "itemId": ITEM_ID,
     }
     temporary_aoi_id = "A" * 32
-
     aoi_request = CatalogRasterStatisticsRequest.model_validate({
         **identity,
         "temporaryAoiId": temporary_aoi_id,
@@ -428,113 +628,23 @@ def test_raster_statistics_request_enforces_the_strict_sampling_area_union() -> 
             CatalogRasterStatisticsRequest.model_validate(invalid_document)
 
 
-def test_temporary_aoi_statistics_union_overlapping_polygon_masks(
-    tmp_path: Path,
-) -> None:
-    """Count each finite raster cell once across overlapping AOI polygons."""
-    source_path = tmp_path / "aoi-mask.tif"
-    raster_values = numpy.arange(1, 25, dtype="float32").reshape((4, 6))
-    raster_transform = from_origin(0, 4, 1, 1)
-    with rasterio.open(
-        source_path,
-        "w",
-        driver="GTiff",
-        width=6,
-        height=4,
-        count=1,
-        dtype="float32",
-        crs="EPSG:4326",
-        transform=raster_transform,
-    ) as dataset:
-        dataset.write(raster_values, 1)
-    polygon_one = {
-        "type": "Polygon",
-        "coordinates": [[(0, 0), (3, 0), (3, 4), (0, 4), (0, 0)]],
-    }
-    polygon_two = {
-        "type": "MultiPolygon",
-        "coordinates": [[[(2, 0), (5, 0), (5, 4), (2, 4), (2, 0)]]],
-    }
-    temporary_aoi_id = "B" * 32
-    sampling_area = TemporaryAoiSamplingArea(
-        _resolved_temporary_aoi(
-            temporary_aoi_id,
-            (polygon_one, polygon_two),
-        )
-    )
-
-    statistics = read_raster_statistics(source_path, sampling_area)
-
-    assert statistics.scope == "temporaryAoi"
-    assert statistics.temporary_aoi_id == temporary_aoi_id
-    assert statistics.selected_bounds is None
-    assert statistics.source_width == 5
-    assert statistics.source_height == 4
-    assert statistics.valid_sample_count == 20
-    assert sum(statistics.histogram.counts) == 20
-    assert statistics.valid_sample_count < 24
-
-
-def test_temporary_aoi_statistics_distinguish_overlap_and_valid_sample_errors(
-    tmp_path: Path,
-) -> None:
-    """Keep out-of-raster AOIs distinct from all-nodata AOI intersections."""
-    source_path = tmp_path / "empty-aoi-mask.tif"
-    with rasterio.open(
-        source_path,
-        "w",
-        driver="GTiff",
-        width=2,
-        height=2,
-        count=1,
-        dtype="float32",
-        nodata=-9999,
-        crs="EPSG:4326",
-        transform=from_origin(0, 2, 1, 1),
-    ) as dataset:
-        dataset.write(numpy.full((2, 2), -9999, dtype="float32"), 1)
-    inside = TemporaryAoiSamplingArea(_resolved_temporary_aoi(
-        "C" * 32,
-        ({
-            "type": "Polygon",
-            "coordinates": [[(0, 0), (2, 0), (2, 2), (0, 2), (0, 0)]],
-        },),
-    ))
-    outside = TemporaryAoiSamplingArea(_resolved_temporary_aoi(
-        "D" * 32,
-        ({
-            "type": "Polygon",
-            "coordinates": [[(10, 10), (11, 10), (11, 11), (10, 11), (10, 10)]],
-        },),
-    ))
-
-    with pytest.raises(NoValidRasterSamplesError):
-        read_raster_statistics(source_path, inside)
-    with pytest.raises(NoRasterBoundsOverlapError):
-        read_raster_statistics(source_path, outside)
-
-
-def test_selected_area_statistics_transform_clip_and_bound_the_source_read(
+def test_selected_bounds_are_densified_padded_and_clipped_before_reading(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Read only the projected raster intersection through the 512px budget."""
-    dataset = _StatisticsDataset(
-        numpy.ma.zeros((512, 341), dtype="float32")
+    """Conservatively derive a rotated source window from all four edges."""
+    source_path = Path("projected-raster.tif")
+    dataset = _NativeStatisticsDataset(
+        numpy.zeros((800, 1_000), dtype=numpy.float32),
+        source_path,
+        transform=(
+            Affine.translation(2_000, 8_000)
+            * Affine.rotation(25)
+            * Affine.scale(10, -10)
+        ),
+        crs="EPSG:3857",
+        block_shape=(64, 64),
     )
-    dataset.width = 1_000
-    dataset.height = 800
-    dataset.transform = (
-        Affine.translation(2_000, 8_000)
-        * Affine.rotation(25)
-        * Affine.scale(10, -10)
-    )
-    selected_bounds = Wgs84Bounds(
-        west=-2,
-        south=-1,
-        east=3,
-        north=4,
-    )
-    transform_call = None
+    transform_call: tuple[object, ...] | None = None
 
     def project_ring(
         source_crs: object,
@@ -542,78 +652,53 @@ def test_selected_area_statistics_transform_clip_and_bound_the_source_read(
         longitudes: list[float],
         latitudes: list[float],
     ) -> tuple[list[float], list[float]]:
+        """Map WGS 84 positions through controlled source-pixel positions.
+
+        Args:
+            source_crs: Expected WGS 84 source CRS.
+            target_crs: Controlled raster CRS.
+            longitudes: Densified longitude sequence.
+            latitudes: Densified latitude sequence.
+
+        Returns:
+            Projected x and y sequences.
+        """
         nonlocal transform_call
-        transform_call = (
-            source_crs,
-            target_crs,
-            longitudes,
-            latitudes,
-        )
+        transform_call = (source_crs, target_crs, longitudes, latitudes)
         pixel_coordinates = [
-            (
-                (longitude + 1) * 100 - 0.25,
-                460 - latitude * 140 - 0.25,
-            )
-            for longitude, latitude in zip(
-                longitudes,
-                latitudes,
-                strict=True,
-            )
+            ((longitude + 1) * 100 - 0.25, 460 - latitude * 140 - 0.25)
+            for longitude, latitude in zip(longitudes, latitudes, strict=True)
         ]
-        projected_coordinates = [
-            dataset.transform * pixel_coordinate
-            for pixel_coordinate in pixel_coordinates
-        ]
+        projected = [dataset.transform * point for point in pixel_coordinates]
         return (
-            [coordinate[0] for coordinate in projected_coordinates],
-            [coordinate[1] for coordinate in projected_coordinates],
+            [coordinate[0] for coordinate in projected],
+            [coordinate[1] for coordinate in projected],
         )
 
-    monkeypatch.setattr(
-        "eolab_app.raster.statistics.rasterio.open",
-        lambda _: dataset,
-    )
-    monkeypatch.setattr(
-        "eolab_app.raster.statistics.transform",
-        project_ring,
-    )
+    monkeypatch.setattr("eolab_app.raster.statistics.transform", project_ring)
+    bounds = (-2.0, -1.0, 3.0, 4.0)
 
-    statistics = read_raster_statistics(
-        Path("projected-raster.tif"),
-        selected_bounds.canonical_tuple(),
+    selected = selected_raster_area_for_wgs84_bounds(
+        dataset,  # type: ignore[arg-type]
+        bounds,
     )
 
     assert transform_call is not None
     assert transform_call[:2] == ("EPSG:4326", "EPSG:3857")
-    transformed_ring = tuple(zip(*transform_call[2:], strict=True))
+    transformed_ring = tuple(zip(transform_call[2], transform_call[3], strict=True))
     assert len(transformed_ring) == 89
-    assert transformed_ring[0] == (-2.0, -1.0)
-    assert transformed_ring[-1] == (-2.0, -1.0)
+    assert transformed_ring[0] == transformed_ring[-1] == (-2.0, -1.0)
     assert (-2.0, 4.0) in transformed_ring
     assert (3.0, -1.0) in transformed_ring
     assert (3.0, 4.0) in transformed_ring
-    assert dataset.read_arguments == (
-        1,
-        Window(0, 0, 400, 600),
-        (512, 341),
-        True,
-        Resampling.nearest,
-    )
-    assert statistics.scope == "selectedArea"
-    assert statistics.selected_bounds == selected_bounds
-    assert statistics.source_width == 400
-    assert statistics.source_height == 600
-    assert statistics.source_pixel_count == 240_000
-    assert statistics.sample_width == 341
-    assert statistics.sample_height == 512
-    assert statistics.sampled_pixel_count <= 512 * 512
-    assert statistics.estimated is True
+    assert selected.source_window == Window(0, 0, 401, 601)
+    assert not dataset.read_windows
 
 
-def test_selected_area_statistics_mask_a_non_axis_aligned_projected_polygon(
+def test_selected_area_masks_non_axis_aligned_projected_envelope(
     tmp_path: Path,
 ) -> None:
-    """Exclude distinctive pixels that fall only in a projected envelope."""
+    """Exclude distinctive cells lying only in a transformed envelope."""
     selected_bounds = (-130.0, 45.0, -60.0, 75.0)
     west, south, east, north = selected_bounds
     denominator = 22
@@ -627,12 +712,10 @@ def test_selected_area_statistics_mask_a_non_axis_aligned_projected_polygon(
     for edge_index, (start, end) in enumerate(edge_endpoints):
         for step in range(0 if edge_index == 0 else 1, denominator + 1):
             fraction = step / denominator
-            wgs84_ring.append(
-                (
-                    start[0] + (end[0] - start[0]) * fraction,
-                    start[1] + (end[1] - start[1]) * fraction,
-                )
-            )
+            wgs84_ring.append((
+                start[0] + (end[0] - start[0]) * fraction,
+                start[1] + (end[1] - start[1]) * fraction,
+            ))
 
     projected_x, projected_y = transform_coordinates(
         "EPSG:4326",
@@ -658,74 +741,246 @@ def test_selected_area_statistics_mask_a_non_axis_aligned_projected_polygon(
         all_touched=True,
         invert=True,
     )
-    assert 0 < int(inside_selection.sum()) < width * height
     raster_values = numpy.where(inside_selection, 7, 997).astype("float32")
     source_path = tmp_path / "non-axis-aligned-selection.tif"
-    with rasterio.open(
+    _write_raster(
         source_path,
-        "w",
-        driver="GTiff",
-        width=width,
-        height=height,
-        count=1,
-        dtype="float32",
-        crs="EPSG:3347",
+        raster_values,
         transform=raster_transform,
-    ) as dataset:
-        dataset.write(raster_values, 1)
+        crs="EPSG:3347",
+    )
 
-    statistics = read_raster_statistics(source_path, selected_bounds)
+    statistics = read_raster_statistics(
+        source_path,
+        SelectedBoundsSamplingArea(selected_bounds),
+    )
 
-    assert statistics.source_width == width
-    assert statistics.source_height == height
+    assert statistics.sampling_method == "exactSourceWindow"
     assert statistics.valid_sample_count == int(inside_selection.sum())
-    assert statistics.sample_minimum == 7
-    assert statistics.sample_maximum == 7
+    assert statistics.sample_minimum == statistics.sample_maximum == 7
 
 
-def test_selected_area_statistics_reject_an_empty_raster_intersection(
+def test_temporary_aoi_unions_overlapping_polygons_once(tmp_path: Path) -> None:
+    """Count each finite source cell once across overlapping AOI polygons."""
+    source_path = tmp_path / "aoi-mask.tif"
+    values = numpy.arange(1, 25, dtype=numpy.float32).reshape((4, 6))
+    transform = from_origin(0, 4, 1, 1)
+    _write_raster(source_path, values, transform=transform)
+    polygons = (
+        {
+            "type": "Polygon",
+            "coordinates": [[(0.1, 0.1), (3.1, 0.1), (3.1, 3.9), (0.1, 3.9), (0.1, 0.1)]],
+        },
+        {
+            "type": "MultiPolygon",
+            "coordinates": [[[(2.1, 0.1), (4.9, 0.1), (4.9, 3.9), (2.1, 3.9), (2.1, 0.1)]]],
+        },
+    )
+    temporary_aoi_id = "B" * 32
+    area = TemporaryAoiSamplingArea(
+        _resolved_temporary_aoi(temporary_aoi_id, polygons)
+    )
+
+    statistics = read_raster_statistics(source_path, area)
+
+    with rasterio.open(source_path) as dataset:
+        expected_inside = geometry_mask(
+            [geometry.as_geojson() for geometry in area.resolved_aoi.geometries],
+            out_shape=(dataset.height, dataset.width),
+            transform=dataset.transform,
+            all_touched=True,
+            invert=True,
+        )
+    assert statistics.scope == "temporaryAoi"
+    assert statistics.temporary_aoi_id == temporary_aoi_id
+    assert statistics.valid_sample_count == int(expected_inside.sum())
+    assert sum(statistics.histogram.counts) == int(expected_inside.sum())
+    assert statistics.valid_sample_count < sum(
+        int(
+            geometry_mask(
+                [geometry.as_geojson()],
+                out_shape=values.shape,
+                transform=transform,
+                all_touched=True,
+                invert=True,
+            ).sum()
+        )
+        for geometry in area.resolved_aoi.geometries
+    )
+
+
+def test_temporary_aoi_sample_grid_masks_a_large_interior_hole(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Give an empty projected intersection its own stable failure type."""
-    dataset = _StatisticsDataset(numpy.ma.zeros((1, 1), dtype="float32"))
+    """Exclude a buffered hole sentinel from broad sampled AOI statistics.
+
+    The sentinel core is 25 source pixels inside every hole edge, while one
+    coarse sample cell spans fewer than 7 source pixels. This keeps the check
+    compatible with the inherited all-touched cell-inclusion policy.
+
+    Args:
+        monkeypatch: Rasterio-open replacement fixture.
+
+    Returns:
+        None.
+    """
+    source_path = Path("sampled-aoi-hole.tif")
+    values = numpy.full((600, 1_000), 7, dtype=numpy.float32)
+    values[200:400, 325:675] = 997
+    dataset = _NativeStatisticsDataset(
+        values,
+        source_path,
+        transform=from_origin(-10, 6, 0.02, 0.02),
+        block_shape=(32, 32),
+    )
     monkeypatch.setattr(
         "eolab_app.raster.statistics.rasterio.open",
         lambda _: dataset,
     )
+    outer_bounds = (-8.0, -4.0, 8.0, 4.0)
+    rectangle = read_raster_statistics(
+        source_path,
+        SelectedBoundsSamplingArea(outer_bounds),
+    )
+    area = TemporaryAoiSamplingArea(_resolved_temporary_aoi(
+        "H" * 32,
+        ({
+            "type": "Polygon",
+            "coordinates": [
+                [(-8, -4), (8, -4), (8, 4), (-8, 4), (-8, -4)],
+                [(-4, -2.5), (-4, 2.5), (4, 2.5), (4, -2.5), (-4, -2.5)],
+            ],
+        },),
+    ))
+
+    statistics = read_raster_statistics(source_path, area)
+
+    assert rectangle.sampling_method == statistics.sampling_method == "sampleGrid"
+    assert rectangle.sample_maximum == 997
+    assert statistics.sample_minimum == statistics.sample_maximum == 7
+    assert statistics.valid_sample_count < rectangle.valid_sample_count
+
+
+def test_temporary_aoi_distinguishes_no_overlap_from_nodata(tmp_path: Path) -> None:
+    """Keep absent intersections distinct from all-nodata intersections."""
+    source_path = tmp_path / "empty-aoi-mask.tif"
+    _write_raster(
+        source_path,
+        numpy.full((2, 2), -9999, dtype=numpy.float32),
+        transform=from_origin(0, 2, 1, 1),
+        nodata=-9999,
+    )
+    inside = TemporaryAoiSamplingArea(_resolved_temporary_aoi(
+        "C" * 32,
+        ({
+            "type": "Polygon",
+            "coordinates": [[(0, 0), (2, 0), (2, 2), (0, 2), (0, 0)]],
+        },),
+    ))
+    outside = TemporaryAoiSamplingArea(_resolved_temporary_aoi(
+        "D" * 32,
+        ({
+            "type": "Polygon",
+            "coordinates": [[(10, 10), (11, 10), (11, 11), (10, 11), (10, 10)]],
+        },),
+    ))
+
+    with pytest.raises(NoValidRasterSamplesError):
+        read_raster_statistics(source_path, inside)
+    with pytest.raises(NoRasterBoundsOverlapError):
+        read_raster_statistics(source_path, outside)
+
+
+def test_statistics_reject_external_sidecars_and_missing_crs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preserve actionable source failures outside bounded statistics."""
+    source_path = Path("unsafe.tif")
+    values = numpy.ones((2, 2), dtype=numpy.uint8)
+    sidecar = _NativeStatisticsDataset(
+        values,
+        source_path,
+        extra_files=(Path("unsafe.tif.ovr"),),
+    )
     monkeypatch.setattr(
-        "eolab_app.raster.statistics.transform",
-        lambda _source, _target, x_values, y_values: (
-            [100 + value for value in x_values],
-            [100 + value for value in y_values],
-        ),
+        "eolab_app.raster.statistics.rasterio.open",
+        lambda _: sidecar,
+    )
+    with pytest.raises(ValueError, match="external GDAL sidecars"):
+        read_raster_statistics(source_path, WholeRasterSamplingArea())
+    assert not sidecar.read_windows
+
+    missing_crs = _NativeStatisticsDataset(values, source_path, crs=None)
+    monkeypatch.setattr(
+        "eolab_app.raster.statistics.rasterio.open",
+        lambda _: missing_crs,
+    )
+    with pytest.raises(ValueError, match="valid source CRS"):
+        read_raster_statistics(source_path, WholeRasterSamplingArea())
+    assert not missing_crs.read_windows
+
+
+@pytest.mark.parametrize(
+    "non_finite_coefficient",
+    (numpy.nan, numpy.inf, -numpy.inf),
+    ids=("nan", "positive-infinity", "negative-infinity"),
+)
+def test_statistics_reject_non_finite_affine_before_native_reads(
+    monkeypatch: pytest.MonkeyPatch,
+    non_finite_coefficient: float,
+) -> None:
+    """Reject unsafe affine coefficients at the source-contract boundary.
+
+    Args:
+        monkeypatch: Rasterio-open replacement fixture.
+        non_finite_coefficient: Controlled NaN or infinite affine value.
+
+    Returns:
+        None.
+    """
+    source_path = Path("non-finite-transform.tif")
+    dataset = _NativeStatisticsDataset(
+        numpy.ones((2, 2), dtype=numpy.uint8),
+        source_path,
+        transform=Affine(non_finite_coefficient, 0, 0, 0, -1, 2),
+    )
+    monkeypatch.setattr(
+        "eolab_app.raster.statistics.rasterio.open",
+        lambda _: dataset,
     )
 
-    with pytest.raises(NoRasterBoundsOverlapError):
-        read_raster_statistics(
-            Path("projected-raster.tif"),
-            (-1, -1, 1, 1),
-        )
+    with pytest.raises(ValueError, match="finite source transform"):
+        read_raster_statistics(source_path, WholeRasterSamplingArea())
+
+    assert not dataset.read_windows
 
 
-def test_raster_statistics_sample_shape_never_exceeds_its_budget() -> None:
-    """Bound global and extremely narrow rasters to a 512-pixel side."""
-    for source_width, source_height in (
-        (133_584, 66_792),
-        (1_000_000_000, 1),
-        (1, 1_000_000_000),
-    ):
-        sample_height, sample_width = bounded_raster_sample_shape(
-            source_width,
-            source_height,
-        )
-        assert sample_width <= source_width
-        assert sample_height <= source_height
-        assert sample_width <= 512
-        assert sample_height <= 512
-        assert sample_width * sample_height <= 512 * 512
+def test_statistics_reject_affine_with_non_finite_inverse(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reject finite coefficients whose inverse overflows before source reads.
 
-    assert bounded_raster_sample_shape(256, 128) == (128, 256)
-    assert bounded_raster_sample_shape(133_584, 66_792) == (256, 512)
+    Args:
+        monkeypatch: Rasterio-open replacement fixture.
+
+    Returns:
+        None.
+    """
+    source_path = Path("unsafe-inverse-transform.tif")
+    dataset = _NativeStatisticsDataset(
+        numpy.ones((2, 2), dtype=numpy.uint8),
+        source_path,
+        transform=Affine(1e-320, 0, 0, 0, -1, 2),
+    )
+    monkeypatch.setattr(
+        "eolab_app.raster.statistics.rasterio.open",
+        lambda _: dataset,
+    )
+
+    with pytest.raises(ValueError, match="safely invertible source transform"):
+        read_raster_statistics(source_path, WholeRasterSamplingArea())
+
+    assert not dataset.read_windows
 
 
 def test_raster_statistics_make_flat_and_repeated_ranges_renderable() -> None:
@@ -737,39 +992,13 @@ def test_raster_statistics_make_flat_and_repeated_ranges_renderable() -> None:
         0.0001,
         0.0001,
     )
-    repeated_percentile_range = strict_raster_value_range(
-        0,
-        100,
-        0,
-        0,
-        90,
-    )
+    repeated_percentile_range = strict_raster_value_range(0, 100, 0, 0, 90)
 
-    assert (
-        flat_range.minimum
-        < flat_range.midpoint
-        < flat_range.maximum
-    )
+    assert flat_range.minimum < flat_range.midpoint < flat_range.maximum
     assert flat_range.midpoint == 0.0001
     assert repeated_percentile_range.minimum == pytest.approx(-0.00009)
     assert repeated_percentile_range.midpoint == 0
     assert repeated_percentile_range.maximum == 90
-
-
-def test_raster_statistics_reject_an_empty_bounded_sample(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Do not invent a display range when every sampled cell is invalid."""
-    dataset = _StatisticsDataset(
-        numpy.ma.masked_all((2, 4), dtype="float32")
-    )
-    monkeypatch.setattr(
-        "eolab_app.raster.statistics.rasterio.open",
-        lambda _: dataset,
-    )
-
-    with pytest.raises(NoValidRasterSamplesError):
-        read_raster_statistics(Path("empty.tif"))
 
 
 @pytest.mark.parametrize(
@@ -781,54 +1010,51 @@ def test_raster_statistics_reject_an_empty_bounded_sample(
         ),
         (
             NoValidRasterSamplesError(),
-            (
-                "No finite, non-nodata pixels were found in the bounded "
-                "raster sample"
-            ),
+            "No finite, non-nodata pixels were found in the bounded raster sample",
         ),
     ),
 )
 def test_statistics_service_returns_stable_selection_conflicts(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
     read_error: ValueError,
     expected_detail: str,
 ) -> None:
-    """Expose empty overlap and empty samples as deliberate 409 contracts."""
-    source_path = tmp_path / "raster.tif"
-    source_path.write_bytes(b"source")
-    item_id = "geotiff-0123456789abcdef01234567"
-    registry = PublishedRasterRegistry()
-    registry.authorize(
-        f"eolab:{item_id}",
-        source_path,
-        source_signature(source_path),
-    )
-    service = RasterStatisticsService(registry, 1, 32)
-    request = CatalogRasterStatisticsRequest.model_validate(
-        {
-            "collectionId": "eolab-mounted-geotiffs",
-            "itemId": item_id,
-            "selectedBounds": {
-                "west": -1,
-                "south": -1,
-                "east": 1,
-                "north": 1,
-            },
-        }
-    )
+    """Expose overlap and empty-sample failures as deliberate conflicts."""
 
-    async def to_thread(function: object, *args: object) -> object:
-        if function is read_raster_statistics:
-            raise read_error
-        return function(*args)
+    def reader(
+        _: Path,
+        __: RasterSamplingArea,
+        ___: object,
+    ) -> RasterStatistics:
+        """Raise the controlled reader failure.
 
-    monkeypatch.setattr(
-        "eolab_app.raster.statistics_service.asyncio.to_thread",
-        to_thread,
+        Args:
+            _: Ignored authorized source path.
+            __: Ignored normalized sampling area.
+            ___: Ignored cooperative cancellation predicate.
+
+        Raises:
+            ValueError: Always raises the parametrized failure.
+        """
+        raise read_error
+
+    service = RasterStatisticsService(
+        _SourceAuthorizer(),
+        1,
+        32,
+        statistics_reader=reader,  # type: ignore[arg-type]
     )
+    request = CatalogRasterStatisticsRequest.model_validate({
+        "collectionId": "eolab-mounted-geotiffs",
+        "itemId": ITEM_ID,
+        "selectedBounds": {"west": -1, "south": -1, "east": 1, "north": 1},
+    })
 
     async def request_statistics() -> None:
+        """Assert the mapped public error.
+
+        Returns:
+            None.
+        """
         with pytest.raises(RasterConflictError) as error:
             await service.get(request)
         assert error.value.detail == expected_detail
@@ -839,7 +1065,7 @@ def test_statistics_service_returns_stable_selection_conflicts(
 def test_pixel_sampler_limits_concurrent_raster_reads(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Keep concurrent hover reads within the supplied process limit."""
+    """Keep independent pixel reads within their supplied process limit."""
     active_reads = 0
     maximum_active_reads = 0
     two_reads_started = asyncio.Event()
@@ -851,6 +1077,17 @@ def test_pixel_sampler_limits_concurrent_raster_reads(
         longitude: float,
         latitude: float,
     ) -> RasterPixel:
+        """Simulate a bounded synchronous pixel reader.
+
+        Args:
+            _: Ignored reader callable.
+            source_path: Authorized raster path.
+            longitude: Requested longitude.
+            latitude: Requested latitude.
+
+        Returns:
+            Controlled valid pixel.
+        """
         nonlocal active_reads, maximum_active_reads
         assert source_path == Path("raster.tif")
         active_reads += 1
@@ -874,28 +1111,24 @@ def test_pixel_sampler_limits_concurrent_raster_reads(
     )
 
     async def sample_three_pixels() -> None:
-        authorizer = _PixelSourceAuthorizer()
-        service = RasterPixelService(
-            authorizer,
-            read_concurrency=2,
-        )
+        """Start three independent pixel requests.
+
+        Returns:
+            None.
+        """
+        authorizer = _SourceAuthorizer()
+        service = RasterPixelService(authorizer, read_concurrency=2)
         requests = [
-            CatalogPixelRequest.model_validate(
-                {
-                    "collectionId": "eolab-mounted-geotiffs",
-                    "itemId": "geotiff-0123456789abcdef01234567",
-                    "longitude": longitude,
-                    "latitude": 0,
-                }
-            )
+            CatalogPixelRequest.model_validate({
+                "collectionId": "eolab-mounted-geotiffs",
+                "itemId": ITEM_ID,
+                "longitude": longitude,
+                "latitude": 0,
+            })
             for longitude in (1, 2, 3)
         ]
-        tasks = [
-            asyncio.create_task(service.get(request))
-            for request in requests
-        ]
+        tasks = [asyncio.create_task(service.get(request)) for request in requests]
         await asyncio.wait_for(two_reads_started.wait(), timeout=1)
-        await asyncio.sleep(0)
         assert maximum_active_reads == 2
         release_reads.set()
         await asyncio.gather(*tasks)
@@ -903,25 +1136,34 @@ def test_pixel_sampler_limits_concurrent_raster_reads(
         assert authorizer.current_check_count == 6
 
     asyncio.run(sample_three_pixels())
-    assert maximum_active_reads == 2
 
 
-def test_cancelled_pixel_request_keeps_its_slot_until_gdal_finishes(
+def test_cancelled_pixel_request_keeps_its_slot_until_reader_finishes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Do not release raster capacity while a canceled request still reads."""
+    """Do not release pixel capacity while its synchronous read is active."""
     started_reads = 0
     first_read_started = asyncio.Event()
     release_reads = asyncio.Event()
 
     async def to_thread(
         _: object,
-        source_path: Path,
+        __: Path,
         longitude: float,
         latitude: float,
     ) -> RasterPixel:
+        """Hold a fake pixel read until explicitly released.
+
+        Args:
+            _: Ignored reader callable.
+            __: Ignored authorized source path.
+            longitude: Requested longitude.
+            latitude: Requested latitude.
+
+        Returns:
+            Controlled valid pixel.
+        """
         nonlocal started_reads
-        assert source_path == Path("raster.tif")
         started_reads += 1
         first_read_started.set()
         await release_reads.wait()
@@ -940,18 +1182,18 @@ def test_cancelled_pixel_request_keeps_its_slot_until_gdal_finishes(
     )
 
     async def cancel_during_read() -> None:
-        service = RasterPixelService(
-            _PixelSourceAuthorizer(),
-            read_concurrency=1,
-        )
-        request = CatalogPixelRequest.model_validate(
-            {
-                "collectionId": "eolab-mounted-geotiffs",
-                "itemId": "geotiff-0123456789abcdef01234567",
-                "longitude": 0,
-                "latitude": 0,
-            }
-        )
+        """Cancel one waiter while the fake pixel worker remains active.
+
+        Returns:
+            None.
+        """
+        service = RasterPixelService(_SourceAuthorizer(), read_concurrency=1)
+        request = CatalogPixelRequest.model_validate({
+            "collectionId": "eolab-mounted-geotiffs",
+            "itemId": ITEM_ID,
+            "longitude": 0,
+            "latitude": 0,
+        })
         first_request = asyncio.create_task(service.get(request))
         await first_read_started.wait()
         first_request.cancel()
@@ -960,9 +1202,7 @@ def test_cancelled_pixel_request_keeps_its_slot_until_gdal_finishes(
 
         second_request = asyncio.create_task(service.get(request))
         await asyncio.sleep(0)
-        assert service._read_semaphore.locked()
         assert started_reads == 1
-
         release_reads.set()
         await second_request
         assert started_reads == 2
@@ -970,168 +1210,439 @@ def test_cancelled_pixel_request_keeps_its_slot_until_gdal_finishes(
     asyncio.run(cancel_during_read())
 
 
-def test_statistics_service_coalesces_caches_and_invalidates_by_signature(
+def test_statistics_service_coalesces_caches_and_keys_normalized_areas(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
 ) -> None:
-    """Read one source version once and never reuse it after replacement."""
-    source_path = tmp_path / "raster.tif"
-    source_path.write_bytes(b"first source")
-    layer_name = "eolab:geotiff-0123456789abcdef01234567"
-    registry = PublishedRasterRegistry()
-    registry.authorize(layer_name, source_path, source_signature(source_path))
-    service = RasterStatisticsService(registry, 1, 32)
-    request = CatalogRasterStatisticsRequest.model_validate(
-        {
-            "collectionId": "eolab-mounted-geotiffs",
-            "itemId": "geotiff-0123456789abcdef01234567",
-        }
+    """Coalesce one identity and cache whole and bounds scopes separately."""
+    authorizer = _SourceAuthorizer()
+    read_areas: list[RasterSamplingArea] = []
+    read_started = asyncio.Event()
+    release_read = asyncio.Event()
+
+    async def to_thread(
+        function: object,
+        source_path: Path,
+        area: RasterSamplingArea,
+        cancellation_requested: object,
+    ) -> RasterStatistics:
+        """Coordinate one asynchronous stand-in for the sync reader.
+
+        Args:
+            function: Service-owned statistics reader.
+            source_path: Authorized source path.
+            area: Normalized sampling area.
+            cancellation_requested: Cooperative cancellation predicate.
+
+        Returns:
+            Controlled statistics for ``area``.
+        """
+        assert callable(function)
+        assert source_path == Path("raster.tif")
+        assert callable(cancellation_requested)
+        read_areas.append(area)
+        if len(read_areas) == 1:
+            read_started.set()
+            await release_read.wait()
+        return _statistics_result(float(len(read_areas)), area)
+
+    monkeypatch.setattr(
+        "eolab_app.raster.statistics_service.asyncio.to_thread",
+        to_thread,
     )
+    service = RasterStatisticsService(authorizer, 1, 32)
+    whole_request = CatalogRasterStatisticsRequest.model_validate({
+        "collectionId": "eolab-mounted-geotiffs",
+        "itemId": ITEM_ID,
+    })
+    bounds_document = {
+        "collectionId": "eolab-mounted-geotiffs",
+        "itemId": ITEM_ID,
+        "selectedBounds": {"west": -2, "south": -1, "east": 0, "north": 1},
+    }
+    bounds_request = CatalogRasterStatisticsRequest.model_validate(bounds_document)
+    equivalent_bounds_request = CatalogRasterStatisticsRequest.model_validate({
+        **bounds_document,
+        "selectedBounds": {
+            "west": -2.0,
+            "south": -1.0,
+            "east": 0.0,
+            "north": 1.0,
+        },
+    })
+
+    async def exercise_cache() -> None:
+        """Exercise coalescing and normalized cache identities.
+
+        Returns:
+            None.
+        """
+        first_task = asyncio.create_task(service.get(whole_request))
+        second_task = asyncio.create_task(service.get(whole_request))
+        await read_started.wait()
+        release_read.set()
+        first, second = await asyncio.gather(first_task, second_task)
+        assert first is second
+        assert await service.get(whole_request) is first
+
+        selected = await service.get(bounds_request)
+        assert await service.get(equivalent_bounds_request) is selected
+        assert selected.scope == "selectedArea"
+
+    asyncio.run(exercise_cache())
+    assert len(read_areas) == 2
+    assert isinstance(read_areas[0], WholeRasterSamplingArea)
+    assert read_areas[1] == SelectedBoundsSamplingArea((-2.0, -1.0, 0.0, 1.0))
+
+
+def test_cancelled_coalesced_waiter_preserves_shared_work_and_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep one shared read alive while another identical waiter remains."""
     read_count = 0
     read_started = asyncio.Event()
     release_read = asyncio.Event()
 
-    async def to_thread(function: object, *args: object) -> object:
+    async def to_thread(
+        _: object,
+        __: Path,
+        area: RasterSamplingArea,
+        cancellation_requested: object,
+    ) -> RasterStatistics:
+        """Hold one shared worker until the first waiter is canceled.
+
+        Args:
+            _: Ignored reader callable.
+            __: Ignored authorized source path.
+            area: Normalized shared sampling area.
+            cancellation_requested: Cooperative last-waiter predicate.
+
+        Returns:
+            Controlled statistics for the shared request.
+        """
         nonlocal read_count
-        if function is read_raster_statistics:
-            read_count += 1
-            read_started.set()
-            await release_read.wait()
-            return _statistics_result(float(read_count))
-        return function(*args)
+        assert callable(cancellation_requested)
+        read_count += 1
+        read_started.set()
+        await release_read.wait()
+        assert cancellation_requested() is False
+        return _statistics_result(float(read_count), area)
 
     monkeypatch.setattr(
         "eolab_app.raster.statistics_service.asyncio.to_thread",
         to_thread,
     )
-
-    async def exercise_cache() -> None:
-        first_request = asyncio.create_task(service.get(request))
-        second_request = asyncio.create_task(service.get(request))
-        await read_started.wait()
-        release_read.set()
-        first_result, second_result = await asyncio.gather(
-            first_request,
-            second_request,
-        )
-        assert first_result is second_result
-        assert read_count == 1
-
-        assert await service.get(request) is first_result
-        assert read_count == 1
-
-        source_path.write_bytes(b"replacement source is larger")
-        registry.authorize(
-            layer_name,
-            source_path,
-            source_signature(source_path),
-        )
-        replacement_result = await service.get(request)
-        assert replacement_result.sample_minimum == 2
-        assert read_count == 2
-
-    asyncio.run(exercise_cache())
-
-
-def test_statistics_service_caches_each_canonical_selected_area_separately(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """Include selected bounds in cache and in-flight work identity."""
-    source_path = tmp_path / "raster.tif"
-    source_path.write_bytes(b"source")
-    item_id = "geotiff-0123456789abcdef01234567"
-    registry = PublishedRasterRegistry()
-    registry.authorize(
-        f"eolab:{item_id}",
-        source_path,
-        source_signature(source_path),
-    )
-    service = RasterStatisticsService(registry, 1, 32)
-    identity = {
+    service = RasterStatisticsService(_SourceAuthorizer(), 1, 32)
+    request = CatalogRasterStatisticsRequest.model_validate({
         "collectionId": "eolab-mounted-geotiffs",
-        "itemId": item_id,
-    }
-    whole_request = CatalogRasterStatisticsRequest.model_validate(identity)
-    west_request = CatalogRasterStatisticsRequest.model_validate(
-        {
-            **identity,
-            "selectedBounds": {
-                "west": -2,
-                "south": -1,
-                "east": 0,
-                "north": 1,
-            },
-        }
-    )
-    equivalent_west_request = CatalogRasterStatisticsRequest.model_validate(
-        {
-            **identity,
-            "selectedBounds": {
-                "west": -2.0,
-                "south": -1.0,
-                "east": 0.0,
-                "north": 1.0,
-            },
-        }
-    )
-    east_request = CatalogRasterStatisticsRequest.model_validate(
-        {
-            **identity,
-            "selectedBounds": {
-                "west": 0,
-                "south": -1,
-                "east": 2,
-                "north": 1,
-            },
-        }
-    )
-    read_bounds = []
+        "itemId": ITEM_ID,
+    })
 
-    async def to_thread(function: object, *args: object) -> object:
-        if function is read_raster_statistics:
-            bounds = args[1]
-            read_bounds.append(bounds)
-            return _statistics_result(float(len(read_bounds)), bounds)
-        return function(*args)
+    async def exercise_waiters() -> None:
+        """Cancel one owner, then complete and cache for the other.
+
+        Returns:
+            None.
+        """
+        first_waiter = asyncio.create_task(service.get(request))
+        await read_started.wait()
+        second_waiter = asyncio.create_task(service.get(request))
+
+        async def wait_for_coalescing() -> None:
+            """Wait until both callers own the same in-flight worker."""
+            while next(iter(service._inflight.values())).waiter_count < 2:
+                await asyncio.sleep(0)
+
+        await asyncio.wait_for(wait_for_coalescing(), timeout=1)
+        work = next(iter(service._inflight.values()))
+        assert work.waiter_count == 2
+
+        first_waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first_waiter
+        assert work.waiter_count == 1
+        assert work.cancellation_requested.is_set() is False
+
+        release_read.set()
+        statistics = await second_waiter
+        assert await service.get(request) is statistics
+
+    asyncio.run(exercise_waiters())
+    assert read_count == 1
+    assert len(service._cache) == 1
+    assert not service._inflight
+
+
+def test_statistics_service_invalidates_cache_by_source_signature(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Never reuse cached analysis after the catalog source identity changes."""
+    authorizer = _SourceAuthorizer()
+    read_count = 0
+
+    async def to_thread(
+        _: object,
+        __: Path,
+        area: RasterSamplingArea,
+        ___: object,
+    ) -> RasterStatistics:
+        """Return one incrementing result.
+
+        Args:
+            _: Ignored reader callable.
+            __: Ignored authorized source path.
+            area: Normalized sampling area.
+            ___: Ignored cancellation predicate.
+
+        Returns:
+            Statistics with an incrementing sample value.
+        """
+        nonlocal read_count
+        read_count += 1
+        return _statistics_result(float(read_count), area)
 
     monkeypatch.setattr(
         "eolab_app.raster.statistics_service.asyncio.to_thread",
         to_thread,
     )
+    service = RasterStatisticsService(authorizer, 1, 32)
+    request = CatalogRasterStatisticsRequest.model_validate({
+        "collectionId": "eolab-mounted-geotiffs",
+        "itemId": ITEM_ID,
+    })
 
-    async def exercise_cache() -> None:
-        whole = await service.get(whole_request)
-        west = await service.get(west_request)
-        assert await service.get(equivalent_west_request) is west
-        east = await service.get(east_request)
+    async def exercise_signature() -> None:
+        """Replace the authorization after one cached response.
 
-        assert whole.scope == "wholeRaster"
-        assert west.scope == "selectedArea"
-        assert east.scope == "selectedArea"
+        Returns:
+            None.
+        """
+        first = await service.get(request)
+        assert await service.get(request) is first
+        original = authorizer.authorizations[ITEM_ID]
+        authorizer.authorizations[ITEM_ID] = AuthorizedRaster(
+            original.source_path,
+            (1, 2, 3, 4, 6),
+        )
+        replacement = await service.get(request)
+        assert replacement.sample_minimum == 2
 
-    asyncio.run(exercise_cache())
-    assert read_bounds == [
-        None,
-        (-2.0, -1.0, 0.0, 1.0),
-        (0.0, -1.0, 2.0, 1.0),
-    ]
+    asyncio.run(exercise_signature())
+    assert read_count == 2
 
 
-def test_statistics_service_keys_and_rechecks_temporary_aoi_lifecycle(
-    tmp_path: Path,
+def test_statistics_service_keys_cache_by_fixed_policy_parameters(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Coalesce by AOI identity and reject lifecycle changes around reads."""
-    source_path = tmp_path / "raster.tif"
-    source_path.write_bytes(b"source")
-    item_id = "geotiff-0123456789abcdef01234567"
-    temporary_aoi_id = "E" * 32
-    registry = PublishedRasterRegistry()
-    registry.authorize(
-        f"eolab:{item_id}",
-        source_path,
-        source_signature(source_path),
+    """Recompute when any server-owned statistics policy identity changes."""
+    policy_parameters = [(101, 201)]
+    read_count = 0
+
+    monkeypatch.setattr(
+        "eolab_app.raster.statistics_service."
+        "raster_statistics_policy_parameters",
+        lambda: policy_parameters[0],
     )
+
+    def statistics_reader(
+        _: Path,
+        area: RasterSamplingArea,
+        __: object,
+    ) -> RasterStatistics:
+        """Return one result that identifies each fresh bounded read.
+
+        Args:
+            _: Ignored authorized source path.
+            area: Normalized statistics sampling area.
+            __: Ignored cooperative cancellation predicate.
+
+        Returns:
+            Controlled statistics with an incrementing sample value.
+        """
+        nonlocal read_count
+        read_count += 1
+        return _statistics_result(float(read_count), area)
+
+    service = RasterStatisticsService(
+        _SourceAuthorizer(),
+        1,
+        32,
+        statistics_reader=statistics_reader,  # type: ignore[arg-type]
+    )
+    request = CatalogRasterStatisticsRequest.model_validate({
+        "collectionId": "eolab-mounted-geotiffs",
+        "itemId": ITEM_ID,
+    })
+
+    async def exercise_policy_identity() -> None:
+        """Reuse one policy identity, then replace it and recompute.
+
+        Returns:
+            None.
+        """
+        first = await service.get(request)
+        assert await service.get(request) is first
+
+        policy_parameters[0] = (101, 202)
+        replacement = await service.get(request)
+        assert replacement.sample_minimum == 2
+        assert replacement is not first
+
+    asyncio.run(exercise_policy_identity())
+    assert read_count == 2
+    assert len(service._cache) == 2
+
+
+def test_statistics_service_rejects_source_changed_during_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Never return or cache statistics spanning two source identities."""
+    authorizer = _SourceAuthorizer()
+    read_count = 0
+
+    async def to_thread(
+        _: object,
+        __: Path,
+        area: RasterSamplingArea,
+        ___: object,
+    ) -> RasterStatistics:
+        """Replace source identity during the first fake read.
+
+        Args:
+            _: Ignored reader callable.
+            __: Ignored authorized source path.
+            area: Normalized sampling area.
+            ___: Ignored cancellation predicate.
+
+        Returns:
+            Controlled statistics for ``area``.
+        """
+        nonlocal read_count
+        read_count += 1
+        if read_count == 1:
+            original = authorizer.authorizations[ITEM_ID]
+            authorizer.authorizations[ITEM_ID] = AuthorizedRaster(
+                original.source_path,
+                (1, 2, 3, 4, 6),
+            )
+        return _statistics_result(float(read_count), area)
+
+    monkeypatch.setattr(
+        "eolab_app.raster.statistics_service.asyncio.to_thread",
+        to_thread,
+    )
+    service = RasterStatisticsService(authorizer, 1, 32)
+    request = CatalogRasterStatisticsRequest.model_validate({
+        "collectionId": "eolab-mounted-geotiffs",
+        "itemId": ITEM_ID,
+    })
+
+    async def change_during_read() -> None:
+        """Verify stale computation rejection and subsequent recovery.
+
+        Returns:
+            None.
+        """
+        with pytest.raises(RasterConflictError, match="changed"):
+            await service.get(request)
+        assert not service._cache
+
+        statistics = await service.get(request)
+        assert statistics.sample_minimum == 2
+
+    asyncio.run(change_during_read())
+    assert read_count == 2
+
+
+def test_final_waiter_cancelled_during_postcheck_is_not_cached() -> None:
+    """Reject abandoned work canceled inside the post-read identity check."""
+    postcheck_started = asyncio.Event()
+    release_postcheck = asyncio.Event()
+    read_count = 0
+
+    class BlockingPostcheckAuthorizer(_SourceAuthorizer):
+        """Pause the source recheck immediately after the first read."""
+
+        async def require_current(
+            self,
+            authorized_raster: AuthorizedRaster,
+        ) -> None:
+            """Block only the first worker's post-read source check.
+
+            Args:
+                authorized_raster: Source identity established for the worker.
+
+            Returns:
+                None after the controlled post-read check is released.
+            """
+            await super().require_current(authorized_raster)
+            if self.current_check_count == 2:
+                postcheck_started.set()
+                await release_postcheck.wait()
+
+    def statistics_reader(
+        _: Path,
+        area: RasterSamplingArea,
+        __: object,
+    ) -> RasterStatistics:
+        """Return immediately so cancellation occurs after source I/O.
+
+        Args:
+            _: Ignored authorized source path.
+            area: Normalized statistics sampling area.
+            __: Ignored cooperative cancellation predicate.
+
+        Returns:
+            Controlled statistics identifying this bounded read.
+        """
+        nonlocal read_count
+        read_count += 1
+        return _statistics_result(float(read_count), area)
+
+    service = RasterStatisticsService(
+        BlockingPostcheckAuthorizer(),
+        1,
+        32,
+        statistics_reader=statistics_reader,  # type: ignore[arg-type]
+    )
+    request = CatalogRasterStatisticsRequest.model_validate({
+        "collectionId": "eolab-mounted-geotiffs",
+        "itemId": ITEM_ID,
+    })
+
+    async def cancel_during_postcheck() -> None:
+        """Abandon the final waiter while its completed read is rechecked.
+
+        Returns:
+            None.
+        """
+        first_waiter = asyncio.create_task(service.get(request))
+        await asyncio.wait_for(postcheck_started.wait(), timeout=1)
+        first_waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first_waiter
+        assert not service._cache
+
+        release_postcheck.set()
+
+        async def wait_for_abandoned_work() -> None:
+            """Wait until the cooperative worker leaves admission."""
+            while service._inflight:
+                await asyncio.sleep(0)
+
+        await asyncio.wait_for(wait_for_abandoned_work(), timeout=1)
+        assert not service._cache
+
+        replacement = await service.get(request)
+        assert replacement.sample_minimum == 2
+
+    asyncio.run(cancel_during_postcheck())
+    assert read_count == 2
+    assert len(service._cache) == 1
+
+
+def test_statistics_service_rechecks_temporary_aoi_lifecycle() -> None:
+    """Reject AOI replacement around reads and keep it out of the cache."""
+    temporary_aoi_id = "E" * 32
     first_aoi = _resolved_temporary_aoi(
         temporary_aoi_id,
         ({
@@ -1168,17 +1679,16 @@ def test_statistics_service_keys_and_rechecks_temporary_aoi_lifecycle(
             self,
             requested_id: str,
         ) -> ResolvedTemporaryAoi:
-            """Return the current lifecycle for the expected opaque reference.
+            """Return the current lifecycle for the expected reference.
 
             Args:
                 requested_id: Opaque reference requested by the service.
 
             Returns:
-                Current immutable resolved test AOI.
+                Current immutable resolved AOI.
 
             Raises:
-                SamplingAreaUnavailableError: If the reference is no longer
-                    owned by the fake lifecycle.
+                SamplingAreaUnavailableError: If the reference is unknown.
             """
             self.calls += 1
             if requested_id != temporary_aoi_id:
@@ -1189,41 +1699,41 @@ def test_statistics_service_keys_and_rechecks_temporary_aoi_lifecycle(
     read_areas: list[TemporaryAoiSamplingArea] = []
 
     def statistics_reader(
-        _source_path: Path,
-        sampling_area: TemporaryAoiSamplingArea,
+        _: Path,
+        area: RasterSamplingArea,
+        __: object,
     ) -> RasterStatistics:
-        """Record the resolved AOI and simulate a mid-read lifecycle change.
+        """Record the resolved AOI and simulate a mid-read change.
 
         Args:
-            _source_path: Authorized raster path unused by this fake.
-            sampling_area: Immutable AOI supplied to the synchronous reader.
+            _: Ignored authorized source path.
+            area: Immutable AOI supplied to the reader.
+            __: Ignored cancellation predicate.
 
         Returns:
-            Valid temporary-AOI statistics for the supplied lifecycle.
+            Valid AOI statistics.
         """
-        read_areas.append(sampling_area)
+        assert isinstance(area, TemporaryAoiSamplingArea)
+        read_areas.append(area)
         if len(read_areas) == 2:
             aoi_reader.current = newer_aoi
-        return _statistics_result(
-            float(len(read_areas)),
-            temporary_aoi_id=temporary_aoi_id,
-        )
+        return _statistics_result(float(len(read_areas)), area)
 
     service = RasterStatisticsService(
-        registry,
+        _SourceAuthorizer(),
         1,
         32,
         temporary_aoi_reader=aoi_reader,
-        statistics_reader=statistics_reader,
+        statistics_reader=statistics_reader,  # type: ignore[arg-type]
     )
     request = CatalogRasterStatisticsRequest.model_validate({
         "collectionId": "eolab-mounted-geotiffs",
-        "itemId": item_id,
+        "itemId": ITEM_ID,
         "temporaryAoiId": temporary_aoi_id,
     })
 
     async def exercise_lifecycle() -> None:
-        """Verify cached reads re-resolve and changed reads never cache.
+        """Exercise cache-hit and mid-read lifecycle rechecks.
 
         Returns:
             None.
@@ -1231,223 +1741,199 @@ def test_statistics_service_keys_and_rechecks_temporary_aoi_lifecycle(
         first = await service.get(request)
         assert await service.get(request) is first
         aoi_reader.current = changed_aoi
-        with pytest.raises(RasterConflictError) as error:
+        with pytest.raises(RasterConflictError, match="changed while"):
             await service.get(request)
-        assert "changed while it was being sampled" in error.value.detail
 
     asyncio.run(exercise_lifecycle())
-
     assert len(read_areas) == 2
     assert read_areas[0].resolved_aoi.identity == first_aoi.identity
     assert read_areas[1].resolved_aoi.identity == changed_aoi.identity
-    assert aoi_reader.calls >= 7
 
 
-def test_statistics_service_rejects_a_source_changed_during_read(
+def test_cancelled_statistics_request_keeps_admission_until_worker_finishes(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
 ) -> None:
-    """Never return or cache statistics read across two source versions."""
-    source_path = tmp_path / "raster.tif"
-    source_path.write_bytes(b"source before statistics")
-    item_id = "geotiff-0123456789abcdef01234567"
-    layer_name = f"eolab:{item_id}"
-    registry = PublishedRasterRegistry()
-    registry.authorize(layer_name, source_path, source_signature(source_path))
-    service = RasterStatisticsService(registry, 1, 32)
-    request = CatalogRasterStatisticsRequest.model_validate(
-        {
+    """Reject new work while an obsolete worker still owns admission.
+
+    Args:
+        monkeypatch: Async thread-boundary replacement fixture.
+
+    Returns:
+        None.
+    """
+    authorizations: dict[str, AuthorizedRaster] = {}
+    requests: list[CatalogRasterStatisticsRequest] = []
+    for index, source_name in enumerate(("first", "second")):
+        item_id = f"geotiff-0123456789abcdef012345{index:02d}"
+        authorizations[item_id] = AuthorizedRaster(
+            Path(f"{source_name}.tif"),
+            (1, 2, 3, 4, index),
+        )
+        requests.append(CatalogRasterStatisticsRequest.model_validate({
             "collectionId": "eolab-mounted-geotiffs",
             "itemId": item_id,
-        }
-    )
-    read_count = 0
-
-    async def to_thread(function: object, *args: object) -> object:
-        nonlocal read_count
-        if function is read_raster_statistics:
-            read_count += 1
-            if read_count == 1:
-                source_path.write_bytes(b"source changed during statistics")
-            return _statistics_result(float(read_count))
-        return function(*args)
-
-    monkeypatch.setattr(
-        "eolab_app.raster.statistics_service.asyncio.to_thread",
-        to_thread,
-    )
-
-    async def change_during_read() -> None:
-        with pytest.raises(RasterConflictError) as error:
-            await service.get(request)
-        assert error.value.detail == (
-            "The visualized GeoTIFF changed; select it again"
-        )
-        assert not service._cache
-
-        registry.authorize(
-            layer_name,
-            source_path,
-            source_signature(source_path),
-        )
-        statistics = await service.get(request)
-        assert statistics.sample_minimum == 2
-        assert read_count == 2
-
-    asyncio.run(change_during_read())
-
-
-def test_cancelled_statistics_request_retains_its_capacity_slot(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """Do not overlap a second GDAL read with canceled work still running."""
-    registry = PublishedRasterRegistry()
-    requests = []
-    for item_suffix in ("67", "68"):
-        item_id = f"geotiff-0123456789abcdef012345{item_suffix}"
-        layer_name = f"eolab:{item_id}"
-        source_path = tmp_path / f"{item_suffix}.tif"
-        source_path.write_bytes(item_suffix.encode())
-        registry.authorize(
-            layer_name,
-            source_path,
-            source_signature(source_path),
-        )
-        requests.append(
-            CatalogRasterStatisticsRequest.model_validate(
-                {
-                    "collectionId": "eolab-mounted-geotiffs",
-                    "itemId": item_id,
-                }
-            )
-        )
-
-    service = RasterStatisticsService(
-        registry,
-        read_concurrency=1,
-        cache_entries=32,
-    )
+        }))
     active_reads = 0
     maximum_active_reads = 0
     started_reads = 0
     first_read_started = asyncio.Event()
     release_reads = asyncio.Event()
 
-    async def to_thread(function: object, *args: object) -> object:
+    async def to_thread(
+        _: object,
+        __: Path,
+        area: RasterSamplingArea,
+        ___: object,
+    ) -> RasterStatistics:
+        """Hold a fake worker until explicitly released.
+
+        Args:
+            _: Ignored reader callable.
+            __: Ignored authorized source path.
+            area: Normalized sampling area.
+            ___: Ignored cancellation predicate.
+
+        Returns:
+            Controlled statistics.
+        """
         nonlocal active_reads, maximum_active_reads, started_reads
-        if function is read_raster_statistics:
-            started_reads += 1
-            active_reads += 1
-            maximum_active_reads = max(maximum_active_reads, active_reads)
-            first_read_started.set()
-            await release_reads.wait()
-            active_reads -= 1
-            return _statistics_result(float(started_reads))
-        return function(*args)
+        started_reads += 1
+        active_reads += 1
+        maximum_active_reads = max(maximum_active_reads, active_reads)
+        first_read_started.set()
+        await release_reads.wait()
+        active_reads -= 1
+        return _statistics_result(float(started_reads), area)
 
     monkeypatch.setattr(
         "eolab_app.raster.statistics_service.asyncio.to_thread",
         to_thread,
     )
+    service = RasterStatisticsService(_SourceAuthorizer(authorizations), 1, 32)
 
     async def cancel_during_read() -> None:
+        """Cancel the first waiter while its fake worker remains active.
+
+        Returns:
+            None.
+        """
         first_request = asyncio.create_task(service.get(requests[0]))
         await first_read_started.wait()
         first_request.cancel()
         with pytest.raises(asyncio.CancelledError):
             await first_request
 
-        second_request = asyncio.create_task(service.get(requests[1]))
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
+        with pytest.raises(RasterConflictError, match="capacity is busy"):
+            await service.get(requests[1])
         assert started_reads == 1
-
         release_reads.set()
-        await second_request
-        assert started_reads == 2
-        assert maximum_active_reads == 1
+        while service._inflight:
+            await asyncio.sleep(0)
+        await service.get(requests[1])
 
     asyncio.run(cancel_during_read())
+    assert started_reads == 2
+    assert maximum_active_reads == 1
+    assert len(service._cache) == 1
 
 
-def test_cancelled_queued_statistics_do_not_delay_the_current_request(
+def test_statistics_service_caps_distinct_work_and_coalesces_at_capacity(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
 ) -> None:
-    """Discard stale work that has not started its bounded GDAL read."""
-    registry = PublishedRasterRegistry()
-    requests = []
-    source_names = ("active", "stale", "current")
-    for index, source_name in enumerate(source_names):
+    """Bound distinct workers while identical callers share admitted work.
+
+    Args:
+        monkeypatch: Async thread-boundary replacement fixture.
+
+    Returns:
+        None.
+    """
+    authorizations: dict[str, AuthorizedRaster] = {}
+    requests: list[CatalogRasterStatisticsRequest] = []
+    for index, source_name in enumerate(("active", "stale", "current")):
         item_id = f"geotiff-0123456789abcdef012345{index:02d}"
-        source_path = tmp_path / f"{source_name}.tif"
-        source_path.write_bytes(source_name.encode())
-        registry.authorize(
-            f"eolab:{item_id}",
-            source_path,
-            source_signature(source_path),
+        authorizations[item_id] = AuthorizedRaster(
+            Path(f"{source_name}.tif"),
+            (1, 2, 3, 4, index),
         )
-        requests.append(
-            CatalogRasterStatisticsRequest.model_validate(
-                {
-                    "collectionId": "eolab-mounted-geotiffs",
-                    "itemId": item_id,
-                }
-            )
-        )
+        requests.append(CatalogRasterStatisticsRequest.model_validate({
+            "collectionId": "eolab-mounted-geotiffs",
+            "itemId": item_id,
+        }))
+    read_order: list[str] = []
+    two_reads_started = asyncio.Event()
+    release_reads = asyncio.Event()
 
-    service = RasterStatisticsService(
-        registry,
-        read_concurrency=1,
-        cache_entries=32,
-    )
-    read_order = []
-    active_read_started = asyncio.Event()
-    release_active_read = asyncio.Event()
+    async def to_thread(
+        _: object,
+        source_path: Path,
+        area: RasterSamplingArea,
+        __: object,
+    ) -> RasterStatistics:
+        """Record fake reader order and hold both admitted workers.
 
-    async def to_thread(function: object, *args: object) -> object:
-        if function is read_raster_statistics:
-            source_name = Path(args[0]).stem
-            read_order.append(source_name)
-            if source_name == "active":
-                active_read_started.set()
-                await release_active_read.wait()
-            return _statistics_result(float(len(read_order)))
-        return function(*args)
+        Args:
+            _: Ignored reader callable.
+            source_path: Authorized source path.
+            area: Normalized sampling area.
+            __: Ignored cancellation predicate.
+
+        Returns:
+            Controlled statistics for ``area``.
+        """
+        source_name = source_path.stem
+        read_order.append(source_name)
+        if len(read_order) == 2:
+            two_reads_started.set()
+        await release_reads.wait()
+        return _statistics_result(float(len(read_order)), area)
 
     monkeypatch.setattr(
         "eolab_app.raster.statistics_service.asyncio.to_thread",
         to_thread,
     )
+    service = RasterStatisticsService(_SourceAuthorizer(authorizations), 2, 32)
 
-    async def cancel_queued_work() -> None:
-        active_request = asyncio.create_task(service.get(requests[0]))
-        await active_read_started.wait()
+    async def exercise_admission() -> None:
+        """Fill admission, join existing work, and recover after completion.
 
-        stale_request = asyncio.create_task(service.get(requests[1]))
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
-        stale_request.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await stale_request
+        Returns:
+            None.
+        """
+        first_request = asyncio.create_task(service.get(requests[0]))
+        second_request = asyncio.create_task(service.get(requests[1]))
+        await two_reads_started.wait()
+        coalesced_request = asyncio.create_task(service.get(requests[0]))
 
-        current_request = asyncio.create_task(service.get(requests[2]))
-        release_active_read.set()
-        await asyncio.gather(active_request, current_request)
+        with pytest.raises(RasterConflictError, match="capacity is busy"):
+            await service.get(requests[2])
+        assert len(service._inflight) == 2
+        assert len(read_order) == 2
 
-    asyncio.run(cancel_queued_work())
-    assert read_order == ["active", "current"]
+        release_reads.set()
+        first, second, coalesced = await asyncio.gather(
+            first_request,
+            second_request,
+            coalesced_request,
+        )
+        assert first is coalesced
+        assert second is not first
+
+        await service.get(requests[2])
+
+    asyncio.run(exercise_admission())
+    assert set(read_order[:2]) == {"active", "stale"}
+    assert read_order[2:] == ["current"]
 
 
-def test_stale_signature_check_does_not_remove_a_new_authorization(
+def test_stale_registry_check_does_not_remove_new_authorization(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """A stale checker must not mutate a concurrently republished layer."""
+    """Preserve a concurrently refreshed rendering registry authorization."""
     source_path = tmp_path / "raster.tif"
     source_path.write_bytes(b"old source")
-    layer_name = "eolab:geotiff-0123456789abcdef01234567"
+    layer_name = f"eolab:{ITEM_ID}"
     registry = PublishedRasterRegistry()
     registry.authorize(layer_name, source_path, source_signature(source_path))
 
@@ -1458,6 +1944,14 @@ def test_stale_signature_check_does_not_remove_a_new_authorization(
     real_source_signature = source_signature
 
     def coordinated_source_signature(path: Path) -> tuple[int, int, int, int, int]:
+        """Pause only the old authorization's background signature check.
+
+        Args:
+            path: Source path whose identity is requested.
+
+        Returns:
+            Current filesystem signature.
+        """
         if threading.current_thread().name == "stale-signature-check":
             stale_check_started.set()
             assert release_stale_check.wait(timeout=1)
@@ -1467,9 +1961,14 @@ def test_stale_signature_check_does_not_remove_a_new_authorization(
         "eolab_app.raster.sources.source_signature",
         coordinated_source_signature,
     )
-    stale_error = []
+    stale_error: list[RasterConflictError] = []
 
     def require_stale_authorization() -> None:
+        """Run the coordinated stale check in one background thread.
+
+        Returns:
+            None after recording the expected conflict.
+        """
         try:
             registry.require_current(layer_name)
         except RasterConflictError as error:

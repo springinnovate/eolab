@@ -257,10 +257,10 @@ def test_sample_grid_reads_each_required_native_block_once(
     source_path = tmp_path / "bounded-blocks.tif"
     _write_raster(
         source_path,
-        numpy.arange(256 * 256, dtype=numpy.uint32).reshape(256, 256),
+        numpy.arange(256 * 256, dtype=numpy.uint16).reshape(256, 256),
     )
     calls: list[object] = []
-    original = sample_grid_module._read_native_block
+    original = sample_grid_module.read_native_raster_block
 
     def tracked_read(dataset: rasterio.io.DatasetReader, window: object):
         """Record and delegate one native-block read.
@@ -275,7 +275,11 @@ def test_sample_grid_reads_each_required_native_block_once(
         calls.append(window)
         return original(dataset, window)
 
-    monkeypatch.setattr(sample_grid_module, "_read_native_block", tracked_read)
+    monkeypatch.setattr(
+        sample_grid_module,
+        "read_native_raster_block",
+        tracked_read,
+    )
     with rasterio.open(source_path) as dataset:
         expected = plan_sample_grid(dataset)
         read_sample_grid(dataset)
@@ -297,25 +301,29 @@ def test_sample_grid_cooperatively_cancels_between_native_blocks(
     _write_raster(source_path, numpy.ones((256, 256), dtype=numpy.uint16))
     reads = 0
     cancelled = threading.Event()
-    original = sample_grid_module._read_native_block
+    original = sample_grid_module.read_native_raster_block
 
-    def tracked_read(dataset: rasterio.io.DatasetReader, block_index: tuple[int, int]):
+    def tracked_read(dataset: rasterio.io.DatasetReader, window: object):
         """Cancel the request after its first complete native-block read.
 
         Args:
             dataset: Open source raster.
-            block_index: Native block row and column.
+            window: Exact native block window.
 
         Returns:
             Original masked native-block payload.
         """
         nonlocal reads
-        values = original(dataset, block_index)
+        values = original(dataset, window)
         reads += 1
         cancelled.set()
         return values
 
-    monkeypatch.setattr(sample_grid_module, "_read_native_block", tracked_read)
+    monkeypatch.setattr(
+        sample_grid_module,
+        "read_native_raster_block",
+        tracked_read,
+    )
     with rasterio.open(source_path) as dataset:
         with pytest.raises(RasterReadCancelled):
             read_sample_grid(dataset, cancellation_requested=cancelled.is_set)

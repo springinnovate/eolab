@@ -1,4 +1,4 @@
-"""Provably bounded native-block sampling for map-aligned raster sample grids."""
+"""Provably bounded native-block sampling for raster sample grids."""
 
 import math
 from dataclasses import dataclass
@@ -6,10 +6,15 @@ from dataclasses import dataclass
 import numpy
 import rasterio
 from affine import TransformNotInvertibleError
-from rasterio.enums import MaskFlags
 from rasterio.warp import transform as warp_transform
 from rasterio.windows import Window
 
+from eolab_app.raster.source_contract import (
+    SourceBlockIndex,
+    decoded_source_bytes_for_blocks,
+    read_native_raster_block,
+    require_bounded_source_structure,
+)
 from eolab_app.raster.read_cancellation import (
     RasterReadCancellationCheck,
     require_active_raster_read,
@@ -38,65 +43,6 @@ SAMPLE_GRID_MAX_TRANSFORMED_POSITIONS = (
     * SAMPLE_GRID_MAX_POINTS_PER_CELL
 )
 SourcePosition = tuple[int, int]
-SourceBlockIndex = tuple[int, int]
-
-
-def _require_source_contract(
-    dataset: rasterio.io.DatasetReader,
-) -> None:
-    """Require one non-empty band with independently bounded validity.
-
-    The sample grid reads only band-one native blocks and derives a validity array
-    from the signed band's nodata value. Alpha and per-dataset masks are
-    rejected because their native block structure is not owned by this
-    sampling contract.
-
-    Args:
-        dataset: Open candidate raster dataset.
-
-    Returns:
-        None when the source satisfies the bounded sampling contract.
-
-    Raises:
-        ValueError: If band, block, or validity structure is unsupported.
-    """
-    if dataset.count != 1 or dataset.width < 1 or dataset.height < 1:
-        raise ValueError("Sampled raster sample grid requires one non-empty band")
-    if not dataset.block_shapes or len(dataset.block_shapes[0]) != 2:
-        raise ValueError("Sampled raster sample grid requires native block metadata")
-    mask_flags = set(dataset.mask_flag_enums[0])
-    if not mask_flags.issubset({MaskFlags.all_valid, MaskFlags.nodata}):
-        raise ValueError(
-            "Sampled raster preview does not support alpha or per-dataset "
-            "validity masks"
-        )
-
-
-def _read_native_block(
-    dataset: rasterio.io.DatasetReader,
-    window: Window,
-) -> numpy.ma.MaskedArray:
-    """Read one exact band block and derive validity without mask I/O.
-
-    Args:
-        dataset: Open source whose validity contract is established.
-        window: Exact integral native band-one block window.
-
-    Returns:
-        Source values masked only by the signed band's nodata metadata.
-
-    Raises:
-        rasterio.errors.RasterioError: If the bounded band read fails.
-    """
-    values = dataset.read(1, window=window, masked=False)
-    nodata = dataset.nodatavals[0]
-    if nodata is None:
-        mask = numpy.zeros(values.shape, dtype=bool)
-    elif math.isnan(float(nodata)):
-        mask = numpy.isnan(values)
-    else:
-        mask = values == nodata
-    return numpy.ma.array(values, mask=mask)
 
 
 @dataclass(frozen=True)
@@ -198,9 +144,11 @@ def _cell_positions(
         source_height: Positive source height in pixels.
         sample_grid_width: Positive sample-grid width in cells.
         sample_grid_height: Positive sample-grid height in cells.
+
     Returns:
         One row-major center source position for every sample-grid cell.
     """
+    row_fraction, column_fraction = SAMPLE_GRID_CENTER_OFFSETS[0]
     cells: list[tuple[SourcePosition, ...]] = []
     for sample_grid_row in range(sample_grid_height):
         row_start = math.floor(sample_grid_row * source_height / sample_grid_height)
@@ -217,10 +165,46 @@ def _cell_positions(
                 math.floor((sample_grid_column + 1) * source_width / sample_grid_width),
             )
             cells.append(((
-                _position_in_cell(row_start, row_stop, 0.5),
-                _position_in_cell(column_start, column_stop, 0.5),
+                _position_in_cell(row_start, row_stop, row_fraction),
+                _position_in_cell(
+                    column_start,
+                    column_stop,
+                    column_fraction,
+                ),
             ),))
     return tuple(cells)
+
+
+def _source_window_cell_positions(
+    source_window: Window,
+    sample_grid_width: int,
+    sample_grid_height: int,
+) -> tuple[tuple[SourcePosition, ...], ...]:
+    """Map a sample grid to centers inside one integral source window.
+
+    Args:
+        source_window: Positive integral source-pixel window.
+        sample_grid_width: Positive sample-grid width in cells.
+        sample_grid_height: Positive sample-grid height in cells.
+
+    Returns:
+        Row-major absolute source positions for every grid cell.
+    """
+    row_offset = int(source_window.row_off)
+    column_offset = int(source_window.col_off)
+    local_positions = _cell_positions(
+        int(source_window.width),
+        int(source_window.height),
+        sample_grid_width,
+        sample_grid_height,
+    )
+    return tuple(
+        tuple(
+            (row + row_offset, column + column_offset)
+            for row, column in cell
+        )
+        for cell in local_positions
+    )
 
 
 def _projected_sample_grid_dimensions(
@@ -268,6 +252,7 @@ def _projected_cell_positions(
         projected_bounds: Ordered EPSG:3857 sampling rectangle.
         sample_grid_width: Positive sample-grid width in map-aligned cells.
         sample_grid_height: Positive sample-grid height in map-aligned cells.
+
     Returns:
         One row-major source position for every map cell; cells outside the
         raster contain an empty tuple.
@@ -280,14 +265,15 @@ def _projected_cell_positions(
     west, south, east, north = projected_bounds
     cell_width = (east - west) / sample_grid_width
     cell_height = (north - south) / sample_grid_height
+    row_fraction, column_fraction = SAMPLE_GRID_CENTER_OFFSETS[0]
     projected_x: list[float] = []
     projected_y: list[float] = []
     for sample_grid_row in range(sample_grid_height):
         cell_north = north - sample_grid_row * cell_height
         for sample_grid_column in range(sample_grid_width):
             cell_west = west + sample_grid_column * cell_width
-            projected_x.append(cell_west + 0.5 * cell_width)
-            projected_y.append(cell_north - 0.5 * cell_height)
+            projected_x.append(cell_west + column_fraction * cell_width)
+            projected_y.append(cell_north - row_fraction * cell_height)
 
     source_x, source_y = warp_transform(
         "EPSG:3857",
@@ -341,57 +327,6 @@ def _block_index(
     return row // block_height, column // block_width
 
 
-def _decoded_bytes_for_blocks(
-    dataset: rasterio.io.DatasetReader,
-    block_indexes: tuple[SourceBlockIndex, ...],
-) -> int:
-    """Estimate decoded band-one and validity bytes for native blocks.
-
-    The extra byte per pixel conservatively accounts for the in-memory
-    validity array derived from nodata in addition to the band-one data type.
-
-    Args:
-        dataset: Open one-band raster with native block metadata.
-        block_indexes: Unique native block row/column indexes.
-
-    Returns:
-        Conservative decoded byte total for the supplied blocks.
-    """
-    bytes_per_pixel = numpy.dtype(dataset.dtypes[0]).itemsize + 1
-    return sum(
-        int(window.width) * int(window.height) * bytes_per_pixel
-        for window in (
-            dataset.block_window(1, block_row, block_column)
-            for block_row, block_column in block_indexes
-        )
-    )
-
-
-def _block_indexes_for_window(
-    window: Window,
-    block_shape: tuple[int, int],
-) -> tuple[SourceBlockIndex, ...]:
-    """Return every native block intersecting one integral source window.
-
-    Args:
-        window: Positive integral source window inside the raster.
-        block_shape: Native block height and width.
-
-    Returns:
-        Intersecting native block indexes in row-major order.
-    """
-    block_height, block_width = block_shape
-    row_start = int(window.row_off) // block_height
-    row_stop = (int(window.row_off + window.height) - 1) // block_height
-    column_start = int(window.col_off) // block_width
-    column_stop = (int(window.col_off + window.width) - 1) // block_width
-    return tuple(
-        (block_row, block_column)
-        for block_row in range(row_start, row_stop + 1)
-        for block_column in range(column_start, column_stop + 1)
-    )
-
-
 def _plan_for_dimension(
     dataset: rasterio.io.DatasetReader,
     maximum_dimension: int,
@@ -442,7 +377,7 @@ def _plan_for_dimension(
         for cell in positions
         for position in cell
     }))
-    decoded_source_bytes = _decoded_bytes_for_blocks(
+    decoded_source_bytes = decoded_source_bytes_for_blocks(
         dataset,
         block_indexes,
     )
@@ -454,6 +389,90 @@ def _plan_for_dimension(
         decoded_source_bytes=decoded_source_bytes,
         points_per_cell=SAMPLE_GRID_MAX_POINTS_PER_CELL,
     )
+
+
+def plan_source_window_sample_grid(
+    dataset: rasterio.io.DatasetReader,
+    source_window: Window,
+) -> SampleGridPlan:
+    """Plan a fixed center grid inside one bounded source-pixel window.
+
+    This is the rendering-independent sibling of the projected map-grid
+    planner. It uses the same native-block and decoded-work ceilings while
+    retaining source-window aspect ratio.
+
+    Args:
+        dataset: Open structurally authorized one-band raster.
+        source_window: Positive integral window wholly inside the source.
+
+    Returns:
+        Fixed longest-edge grid and its exact native-block work proof.
+
+    Raises:
+        ValueError: If the source/window contract is invalid or the fixed grid
+            exceeds a source-work limit.
+    """
+    require_bounded_source_structure(dataset)
+    numeric_window = tuple(
+        float(value)
+        for value in (
+            source_window.col_off,
+            source_window.row_off,
+            source_window.width,
+            source_window.height,
+        )
+    )
+    if not all(math.isfinite(value) and value.is_integer() for value in numeric_window):
+        raise ValueError("Raster analysis source window must be integral")
+    column_offset, row_offset, width, height = (
+        int(value) for value in numeric_window
+    )
+    if (
+        column_offset < 0
+        or row_offset < 0
+        or width < 1
+        or height < 1
+        or column_offset + width > dataset.width
+        or row_offset + height > dataset.height
+    ):
+        raise ValueError("Raster analysis source window is outside the source")
+
+    sample_height, sample_width = _sample_grid_dimensions(
+        width,
+        height,
+        min(SAMPLE_GRID_MAX_DIMENSION, max(width, height)),
+    )
+    positions = _source_window_cell_positions(
+        source_window,
+        sample_width,
+        sample_height,
+    )
+    block_shape = tuple(int(value) for value in dataset.block_shapes[0])
+    block_indexes = tuple(sorted({
+        _block_index(position, block_shape)
+        for cell in positions
+        for position in cell
+    }))
+    decoded_source_bytes = decoded_source_bytes_for_blocks(dataset, block_indexes)
+    plan = SampleGridPlan(
+        width=sample_width,
+        height=sample_height,
+        cell_positions=positions,
+        block_indexes=block_indexes,
+        decoded_source_bytes=decoded_source_bytes,
+        points_per_cell=SAMPLE_GRID_MAX_POINTS_PER_CELL,
+    )
+    if len(block_indexes) > SAMPLE_GRID_MAX_SOURCE_BLOCK_READS:
+        raise ValueError(
+            "The raster analysis sample grid exceeds the native source-block "
+            "limit"
+        )
+    if decoded_source_bytes > SAMPLE_GRID_MAX_DECODED_SOURCE_BYTES:
+        raise ValueError(
+            "The raster analysis sample grid exceeds the decoded source-work "
+            "limit"
+        )
+    return plan
 
 
 def plan_sample_grid(
@@ -475,7 +494,7 @@ def plan_sample_grid(
             exceeds a source-work limit.
         rasterio.errors.RasterioError: If CRS transformation fails.
     """
-    _require_source_contract(dataset)
+    require_bounded_source_structure(dataset)
     if projected_bounds is not None and not (
         all(math.isfinite(value) for value in projected_bounds)
         and projected_bounds[0] < projected_bounds[2]
@@ -529,31 +548,30 @@ def _finite_block_value(
     return finite_value if math.isfinite(finite_value) else None
 
 
-def read_sample_grid(
+def _read_planned_sample_grid(
     dataset: rasterio.io.DatasetReader,
-    projected_bounds: tuple[float, float, float, float] | None = None,
-    cancellation_requested: RasterReadCancellationCheck | None = None,
-) -> tuple[numpy.ma.MaskedArray, SampleGridPlan]:
-    """Read each planned native block once and build a numeric sample grid.
+    plan: SampleGridPlan,
+    cancellation_requested: RasterReadCancellationCheck | None,
+) -> numpy.ma.MaskedArray:
+    """Read one owned plan a native block at a time.
 
-    Each cell contains its one observed source-center value. Nodata-only cells
-    remain masked.
+    The planner owns structural validation and work admission. This reader
+    checks cancellation around every native-block read and never opens or
+    closes the dataset.
 
     Args:
-        dataset: Open structurally authorized one-band raster.
-        projected_bounds: Optional EPSG:3857 target rectangle.
+        dataset: Open source used to build ``plan``.
+        plan: Admitted immutable sample-grid plan.
         cancellation_requested: Optional thread-safe obsolescence predicate.
 
     Returns:
-        Masked sample-grid values and the exact bounded plan that produced them.
+        Masked sample-grid values.
 
     Raises:
-        ValueError: If planning cannot satisfy the fixed source-read contract.
         RasterReadCancelled: If every request waiter disconnects.
         rasterio.errors.RasterioError: If a bounded native-block read fails.
     """
     require_active_raster_read(cancellation_requested)
-    plan = plan_sample_grid(dataset, projected_bounds)
     block_shape = tuple(int(value) for value in dataset.block_shapes[0])
     positions_by_block: dict[SourceBlockIndex, set[SourcePosition]] = {}
     for position in {
@@ -570,7 +588,7 @@ def read_sample_grid(
     for block_row, block_column in plan.block_indexes:
         require_active_raster_read(cancellation_requested)
         window = dataset.block_window(1, block_row, block_column)
-        block = _read_native_block(dataset, window)
+        block = read_native_raster_block(dataset, window)
         require_active_raster_read(cancellation_requested)
         row_offset = int(window.row_off)
         column_offset = int(window.col_off)
@@ -592,4 +610,58 @@ def read_sample_grid(
         sample_grid_row, sample_grid_column = divmod(cell_index, plan.width)
         values[sample_grid_row, sample_grid_column] = selected
         mask[sample_grid_row, sample_grid_column] = False
-    return numpy.ma.array(values, mask=mask), plan
+    return numpy.ma.array(values, mask=mask)
+
+
+def read_sample_grid(
+    dataset: rasterio.io.DatasetReader,
+    projected_bounds: tuple[float, float, float, float] | None = None,
+    cancellation_requested: RasterReadCancellationCheck | None = None,
+) -> tuple[numpy.ma.MaskedArray, SampleGridPlan]:
+    """Read a projected or whole-source fixed center grid within work bounds.
+
+    Args:
+        dataset: Open structurally authorized one-band raster.
+        projected_bounds: Optional EPSG:3857 target rectangle.
+        cancellation_requested: Optional thread-safe obsolescence predicate.
+
+    Returns:
+        Masked sample-grid values and the exact bounded plan that produced them.
+
+    Raises:
+        ValueError: If planning cannot satisfy the fixed source-read contract.
+        RasterReadCancelled: If every request waiter disconnects.
+        rasterio.errors.RasterioError: If a bounded native-block read fails.
+    """
+    plan = plan_sample_grid(dataset, projected_bounds)
+    return (
+        _read_planned_sample_grid(dataset, plan, cancellation_requested),
+        plan,
+    )
+
+
+def read_source_window_sample_grid(
+    dataset: rasterio.io.DatasetReader,
+    source_window: Window,
+    cancellation_requested: RasterReadCancellationCheck | None = None,
+) -> tuple[numpy.ma.MaskedArray, SampleGridPlan]:
+    """Read a fixed center grid from one bounded source-pixel window.
+
+    Args:
+        dataset: Open structurally authorized one-band raster.
+        source_window: Positive integral source window wholly inside the raster.
+        cancellation_requested: Optional thread-safe obsolescence predicate.
+
+    Returns:
+        Masked source-aligned sample values and their admitted work plan.
+
+    Raises:
+        ValueError: If planning cannot satisfy the fixed source-read contract.
+        RasterReadCancelled: If every request waiter disconnects.
+        rasterio.errors.RasterioError: If a bounded native-block read fails.
+    """
+    plan = plan_source_window_sample_grid(dataset, source_window)
+    return (
+        _read_planned_sample_grid(dataset, plan, cancellation_requested),
+        plan,
+    )

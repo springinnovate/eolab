@@ -1,229 +1,355 @@
-"""Test bounded click-window histograms for sampled raster previews."""
+"""Test rendering-independent native-block raster read planners."""
 
-import asyncio
+from pathlib import Path
+
 import numpy
 import pytest
+from rasterio.enums import MaskFlags
+from rasterio.transform import from_origin
+from rasterio.windows import Window
 
-from eolab_app.raster.detail_preview import _suggested_range
-from eolab_app.raster.detail_statistics import summarize_raster_detail_preview
-from eolab_app.raster.detail_statistics_service import (
-    RasterDetailStatisticsService,
+from eolab_app.raster.exact_source import (
+    plan_exact_source_window,
+    read_exact_source_window,
 )
-from eolab_app.raster.errors import RasterConflictError
-from eolab_app.raster.models import (
-    CatalogRasterDetailStatisticsRequest,
-    RasterDetailPreview,
+from eolab_app.raster.read_cancellation import RasterReadCancelled
+from eolab_app.raster.sample_grid import (
+    SAMPLE_GRID_MAX_DECODED_SOURCE_BYTES,
+    SAMPLE_GRID_MAX_DIMENSION,
+    SAMPLE_GRID_MAX_SOURCE_BLOCK_READS,
+    plan_source_window_sample_grid,
+    read_source_window_sample_grid,
 )
-from eolab_app.raster.statistics import NoValidRasterSamplesError
 
 
-ITEM_ID = "geotiff-0123456789abcdef01234567"
-SELECTED_BOUNDS = {
-    "west": -123.0,
-    "south": 48.0,
-    "east": -122.0,
-    "north": 49.0,
-}
+class _NativeBlockDataset:
+    """Provide a minimal one-band Rasterio contract with recorded reads."""
+
+    count = 1
+    crs = "EPSG:4326"
+
+    def __init__(
+        self,
+        values: numpy.ndarray,
+        *,
+        block_shape: tuple[int, int],
+        nodata: float | None = None,
+        source_path: Path = Path("raster.tif"),
+    ) -> None:
+        """Create a controlled native-block source.
+
+        Args:
+            values: Two-dimensional band-one source values.
+            block_shape: Native block height and width.
+            nodata: Optional signed band nodata value.
+            source_path: Path represented by the dataset dependency list.
+        """
+        self.values = values
+        self.height, self.width = values.shape
+        self.transform = from_origin(0, self.height, 1, 1)
+        self.block_shapes = (block_shape,)
+        self.dtypes = (values.dtype.name,)
+        self.nodatavals = (nodata,)
+        self.mask_flag_enums = (
+            [MaskFlags.nodata] if nodata is not None else [MaskFlags.all_valid],
+        )
+        self.files = (str(source_path.resolve()),)
+        self.read_windows: list[Window] = []
+
+    def block_window(
+        self,
+        band: int,
+        block_row: int,
+        block_column: int,
+    ) -> Window:
+        """Return one clipped native-block window.
+
+        Args:
+            band: One-based source band, which must be band one.
+            block_row: Zero-based native block row.
+            block_column: Zero-based native block column.
+
+        Returns:
+            Integral window for the requested block.
+        """
+        assert band == 1
+        block_height, block_width = self.block_shapes[0]
+        row_offset = block_row * block_height
+        column_offset = block_column * block_width
+        return Window(
+            column_offset,
+            row_offset,
+            min(block_width, self.width - column_offset),
+            min(block_height, self.height - row_offset),
+        )
+
+    def read(
+        self,
+        band: int,
+        *,
+        window: Window,
+        masked: bool,
+    ) -> numpy.ndarray:
+        """Read exactly one requested native block.
+
+        Args:
+            band: One-based source band, which must be band one.
+            window: Exact integral block window.
+            masked: Rasterio-style mask request; the bounded reader owns masks.
+
+        Returns:
+            Copy of source values inside ``window``.
+        """
+        assert band == 1
+        assert masked is False
+        self.read_windows.append(window)
+        row_start = int(window.row_off)
+        column_start = int(window.col_off)
+        return self.values[
+            row_start:row_start + int(window.height),
+            column_start:column_start + int(window.width),
+        ].copy()
 
 
-def _preview(
-    values: list[float | None],
-    width: int = 127,
-    height: int = 127,
-) -> RasterDetailPreview:
-    """Build one valid fine current-view preview around controlled values.
+class _PlanningDataset:
+    """Expose huge raster metadata without allocating its source pixels."""
 
-    Args:
-        values: Finite/nodata prefix padded to the exact fixed grid.
-        width: Positive sample-grid width.
-        height: Positive sample-grid height.
+    count = 1
+    crs = "EPSG:4326"
+    dtypes = ("uint8",)
+    nodatavals = (None,)
+    mask_flag_enums = ([MaskFlags.all_valid],)
+    transform = from_origin(0, 1_000_000, 1, 1)
 
-    Returns:
-        Valid fine center-point sample grid.
-    """
-    pixels = values + [None] * (width * height - len(values))
-    finite_values = [value for value in values if value is not None]
-    suggested_range = None
-    if finite_values:
-        sample = numpy.ma.array(finite_values, dtype=numpy.float64)
-        suggested_range = _suggested_range(sample)
-    return RasterDetailPreview(
-        scope="currentView",
-        rendering="sampleGrid",
-        policyVersion="bounded-adaptive-raster-v8",
-        approximate=True,
-        label="Approximate current-view center sample",
-        rasterExtent=(-180.0, -90.0, 180.0, 90.0),
-        imageBounds=(-123.0, 48.0, -122.0, 49.0),
-        imageWidth=width,
-        imageHeight=height,
-        pixelValues=pixels,
-        suggestedRange=suggested_range,
-        limits={
-            "maximumSampleGridDimension": 127,
-            "maximumExactDetailDimension": 512,
-            "maximumSourceBlockReads": 16_129,
-            "maximumDecodedSourceBytes": 9_663_676_416,
-            "maximumTransformedPositions": 16_129,
-            "maximumPointsPerCell": 1,
-        },
-        actual={
-            "sampleGridWidth": width,
-            "sampleGridHeight": height,
-            "sourceBlockReadCount": 1,
-            "decodedSourceBytes": 4096,
-            "pointsPerCell": 1,
-        },
+    def __init__(
+        self,
+        width: int,
+        height: int,
+        block_shape: tuple[int, int] = (64, 64),
+    ) -> None:
+        """Create source metadata at an arbitrary large shape.
+
+        Args:
+            width: Positive source width.
+            height: Positive source height.
+            block_shape: Native block height and width.
+        """
+        self.width = width
+        self.height = height
+        self.block_shapes = (block_shape,)
+
+    def block_window(
+        self,
+        band: int,
+        block_row: int,
+        block_column: int,
+    ) -> Window:
+        """Return one clipped metadata-only native block.
+
+        Args:
+            band: One-based source band, which must be band one.
+            block_row: Zero-based native block row.
+            block_column: Zero-based native block column.
+
+        Returns:
+            Integral native-block window.
+        """
+        assert band == 1
+        block_height, block_width = self.block_shapes[0]
+        row_offset = block_row * block_height
+        column_offset = block_column * block_width
+        return Window(
+            column_offset,
+            row_offset,
+            min(block_width, self.width - column_offset),
+            min(block_height, self.height - row_offset),
+        )
+
+
+def test_exact_reader_reads_each_intersecting_native_block_once() -> None:
+    """Assemble an exact window without resampling or repeated block I/O."""
+    values = numpy.arange(48, dtype=numpy.float32).reshape((6, 8))
+    values[2, 3] = -9999
+    dataset = _NativeBlockDataset(
+        values,
+        block_shape=(3, 4),
+        nodata=-9999,
+    )
+    source_window = Window(2, 1, 4, 3)
+
+    plan = plan_exact_source_window(dataset, source_window)  # type: ignore[arg-type]
+
+    assert plan is not None
+    assert plan.block_indexes == ((0, 0), (0, 1), (1, 0), (1, 1))
+    result = read_exact_source_window(dataset, plan)  # type: ignore[arg-type]
+    assert dataset.read_windows == [
+        Window(0, 0, 4, 3),
+        Window(4, 0, 4, 3),
+        Window(0, 3, 4, 3),
+        Window(4, 3, 4, 3),
+    ]
+    assert result.shape == (3, 4)
+    assert result.mask[1, 1]
+    assert result.compressed().tolist() == [
+        value
+        for row in values[1:4, 2:6].tolist()
+        for value in row
+        if value != -9999
+    ]
+
+
+def test_sample_grid_is_deterministic_and_reads_only_proven_blocks() -> None:
+    """Keep 127-longest-edge centers spatially stable and block bounded."""
+    values = numpy.arange(600 * 1_000, dtype=numpy.int32).reshape((600, 1_000))
+    source_window = Window(100, 100, 800, 400)
+    dataset = _NativeBlockDataset(values, block_shape=(32, 32))
+
+    plan = plan_source_window_sample_grid(
+        dataset,  # type: ignore[arg-type]
+        source_window,
+    )
+    repeated_plan = plan_source_window_sample_grid(
+        dataset,  # type: ignore[arg-type]
+        source_window,
     )
 
+    assert plan == repeated_plan
+    assert (plan.width, plan.height) == (127, 63)
+    assert plan.cell_positions[0] == ((103, 103),)
+    assert plan.cell_positions[-1] == ((496, 896),)
 
-def _request() -> CatalogRasterDetailStatisticsRequest:
-    """Build one validated selected-window statistics request.
+    sample, read_plan = read_source_window_sample_grid(
+        dataset,  # type: ignore[arg-type]
+        source_window,
+    )
+    assert read_plan == plan
+    assert len(dataset.read_windows) == len(plan.block_indexes)
+    assert len(set(dataset.read_windows)) == len(dataset.read_windows)
+    assert sample.shape == (63, 127)
+    for cell_index in (0, len(plan.cell_positions) // 2, len(plan.cell_positions) - 1):
+        row, column = plan.cell_positions[cell_index][0]
+        sample_row, sample_column = divmod(cell_index, plan.width)
+        assert sample[sample_row, sample_column] == values[row, column]
 
-    Returns:
-        Catalog request containing no browser-controlled source parameters.
-    """
-    return CatalogRasterDetailStatisticsRequest(
-        collectionId="eolab-mounted-geotiffs",
-        itemId=ITEM_ID,
-        selectedBounds=SELECTED_BOUNDS,
+
+def test_huge_source_grid_is_planned_under_fixed_limits_without_source_reads() -> None:
+    """Prove bounded work for huge overview-less metadata before any I/O."""
+    dataset = _PlanningDataset(1_000_000_000, 500_000_000)
+
+    plan = plan_source_window_sample_grid(
+        dataset,  # type: ignore[arg-type]
+        Window(0, 0, dataset.width, dataset.height),
     )
 
+    assert (plan.width, plan.height) == (SAMPLE_GRID_MAX_DIMENSION, 63)
+    assert len(plan.cell_positions) == 127 * 63
+    assert len(plan.block_indexes) <= SAMPLE_GRID_MAX_SOURCE_BLOCK_READS
+    assert plan.decoded_source_bytes <= SAMPLE_GRID_MAX_DECODED_SOURCE_BYTES
+    assert plan.points_per_cell == 1
 
-def test_detail_statistics_exclude_nodata_and_preserve_grid_provenance() -> None:
-    """Summarize only finite points and report the exact bounded grid."""
-    statistics = summarize_raster_detail_preview(
-        _preview([-5.0, None, 1.0, 10.0]),
-        _request(),
+
+def test_over_budget_sample_grid_is_rejected_before_source_reads() -> None:
+    """Reject decoded work from metadata alone before any pixel I/O."""
+    dataset = _PlanningDataset(
+        1_000_000_000,
+        500_000_000,
+        block_shape=(1024, 1024),
+    )
+    dataset.dtypes = ("float64",)
+
+    with pytest.raises(ValueError, match="decoded source-work limit"):
+        plan_source_window_sample_grid(
+            dataset,  # type: ignore[arg-type]
+            Window(0, 0, dataset.width, dataset.height),
+        )
+
+
+def test_sample_grid_preserves_nodata_instead_of_inventing_zero() -> None:
+    """Keep a nodata center masked even when neighboring values are finite."""
+    values = numpy.ones((600, 1_000), dtype=numpy.float32)
+    source_window = Window(0, 0, 1_000, 600)
+    dataset = _NativeBlockDataset(
+        values,
+        block_shape=(32, 32),
+        nodata=-9999,
+    )
+    plan = plan_source_window_sample_grid(
+        dataset,  # type: ignore[arg-type]
+        source_window,
+    )
+    center_index = len(plan.cell_positions) // 2
+    center_row, center_column = plan.cell_positions[center_index][0]
+    values[center_row, center_column] = -9999
+
+    sample, _ = read_source_window_sample_grid(
+        dataset,  # type: ignore[arg-type]
+        source_window,
     )
 
-    assert statistics.scope == "selectedArea"
-    assert statistics.selected_bounds is not None
-    assert statistics.selected_bounds.model_dump() == SELECTED_BOUNDS
-    assert statistics.sample_width == statistics.source_width == 127
-    assert statistics.sample_height == statistics.source_height == 127
-    assert statistics.sampled_pixel_count == 127 * 127
-    assert statistics.valid_sample_count == 3
-    assert statistics.sample_minimum == -5.0
-    assert statistics.sample_maximum == 10.0
-    assert statistics.percentiles.p50 == 1.0
-    assert sum(statistics.histogram.counts) == 3
-    assert len(statistics.histogram.counts) == 64
-    assert len(statistics.histogram.edges) == 65
+    sample_row, sample_column = divmod(center_index, plan.width)
+    assert sample.mask[sample_row, sample_column]
+    assert 0 not in sample.compressed()
 
 
-def test_detail_statistics_accept_aspect_grid_and_exact_source_detail() -> None:
-    """Summarize both representations produced by the adaptive reader."""
-    landscape = summarize_raster_detail_preview(
-        _preview([1.0, 2.0, 3.0], width=127, height=64),
-        _request(),
+def test_sample_grid_stops_between_native_blocks_when_cancelled() -> None:
+    """Honor cooperative cancellation before obsolete work reads more blocks."""
+    values = numpy.ones((600, 1_000), dtype=numpy.uint8)
+    dataset = _NativeBlockDataset(values, block_shape=(32, 32))
+
+    with pytest.raises(RasterReadCancelled):
+        read_source_window_sample_grid(
+            dataset,  # type: ignore[arg-type]
+            Window(0, 0, 1_000, 600),
+            lambda: len(dataset.read_windows) >= 1,
+        )
+
+    assert len(dataset.read_windows) == 1
+
+
+def test_planners_reject_unsafe_structure_and_unbounded_exact_windows() -> None:
+    """Keep unsafe sources actionable and broad windows outside exact mode."""
+    values = numpy.ones((600, 1_000), dtype=numpy.uint8)
+    broad = _NativeBlockDataset(values, block_shape=(32, 32))
+    assert plan_exact_source_window(  # type: ignore[arg-type]
+        broad,
+        Window(0, 0, broad.width, broad.height),
+    ) is None
+
+    unsupported_type = _NativeBlockDataset(
+        values.astype(numpy.uint32),
+        block_shape=(32, 32),
     )
-    assert (landscape.sample_width, landscape.sample_height) == (127, 64)
+    with pytest.raises(ValueError, match="do not support uint32"):
+        plan_source_window_sample_grid(  # type: ignore[arg-type]
+            unsupported_type,
+            Window(0, 0, 100, 100),
+        )
 
-    exact_document = _preview([1.0, 2.0]).model_dump(by_alias=True)
-    exact_document.update({
-        "rendering": "exactSourceWindow",
-        "imageWidth": 3,
-        "imageHeight": 2,
-        "pixelValues": [1.0, 2.0, None, 3.0, 4.0, 5.0],
-        "suggestedRange": {"minimum": 1.0, "midpoint": 3.0, "maximum": 5.0},
-        "limits": {
-            **exact_document["limits"],
-            "maximumSourceBlockReads": 1_024,
-            "maximumDecodedSourceBytes": 67_108_864,
-        },
-        "actual": {
-            "sampleGridWidth": 3,
-            "sampleGridHeight": 2,
-            "sourceBlockReadCount": 1,
-            "decodedSourceBytes": 4096,
-            "pointsPerCell": 0,
-            "sourceWindow": {
-                "columnOffset": 10,
-                "rowOffset": 20,
-                "width": 3,
-                "height": 2,
-            },
-        },
-    })
-    exact = summarize_raster_detail_preview(
-        RasterDetailPreview.model_validate(exact_document),
-        _request(),
-    )
-    assert (exact.sample_width, exact.sample_height) == (3, 2)
-    assert exact.valid_sample_count == 5
+    multiple_bands = _NativeBlockDataset(values, block_shape=(32, 32))
+    multiple_bands.count = 2
+    with pytest.raises(ValueError, match="one non-empty band"):
+        plan_source_window_sample_grid(  # type: ignore[arg-type]
+            multiple_bands,
+            Window(0, 0, 100, 100),
+        )
 
+    external_validity = _NativeBlockDataset(values, block_shape=(32, 32))
+    external_validity.mask_flag_enums = ([MaskFlags.per_dataset],)
+    with pytest.raises(ValueError, match="alpha or per-dataset"):
+        plan_source_window_sample_grid(  # type: ignore[arg-type]
+            external_validity,
+            Window(0, 0, 100, 100),
+        )
 
-def test_detail_statistics_reject_nodata_only_and_wrong_preview_policy() -> None:
-    """Keep empty or non-current-view data outside histogram contract."""
-    with pytest.raises(NoValidRasterSamplesError):
-        summarize_raster_detail_preview(_preview([None]), _request())
+    oversized_blocks = _PlanningDataset(2_048, 2_048, (1_025, 16))
+    with pytest.raises(ValueError, match="no larger than 1024"):
+        plan_source_window_sample_grid(  # type: ignore[arg-type]
+            oversized_blocks,
+            Window(0, 0, 100, 100),
+        )
 
-    wrong_preview = _preview([1.0, 2.0]).model_copy(
-        update={"scope": "rasterExtent"}
-    )
-    with pytest.raises(ValueError, match="fixed current-view center policy"):
-        summarize_raster_detail_preview(wrong_preview, _request())
-
-
-def test_service_forces_fine_center_grid_over_selected_bounds() -> None:
-    """Reuse the authorized detail reader with no caller-selected read shape."""
-    requests = []
-
-    class _PreviewService:
-        """Record one delegated bounded-preview request."""
-
-        async def get(self, request: object) -> RasterDetailPreview:
-            """Return controlled preview after recording the request.
-
-            Args:
-                request: Service-owned detail-preview request.
-
-            Returns:
-                Controlled finite fine-grid preview.
-            """
-            requests.append(request)
-            return _preview([2.0, 4.0, 8.0])
-
-    service = RasterDetailStatisticsService(_PreviewService())  # type: ignore[arg-type]
-    statistics = asyncio.run(service.get(_request()))
-
-    delegated = requests[0]
-    assert delegated.view_bounds is not None
-    assert delegated.view_bounds.model_dump() == SELECTED_BOUNDS
-    assert statistics.valid_sample_count == 3
-
-
-def test_service_maps_nodata_only_grid_to_actionable_conflict() -> None:
-    """Report an honest selected-area failure without inventing zero values."""
-
-    class _PreviewService:
-        """Return one all-nodata bounded preview."""
-
-        async def get(self, request: object) -> RasterDetailPreview:
-            """Return all nodata for the ignored controlled request.
-
-            Args:
-                request: Service-owned preview request.
-
-            Returns:
-                Fine current-view preview with no finite points.
-            """
-            return _preview([None])
-
-    service = RasterDetailStatisticsService(_PreviewService())  # type: ignore[arg-type]
-
-    with pytest.raises(RasterConflictError, match="No finite, non-nodata"):
-        asyncio.run(service.get(_request()))
-
-
-def test_preview_initial_range_uses_bounded_minimum_median_and_maximum() -> None:
-    """Initialize browser colors from approximate extrema and median."""
-    result = _suggested_range(
-        numpy.ma.array([-100.0, 1.0, 2.0, 3.0, 1_000.0])
-    )
-
-    assert result is not None
-    assert result.minimum == -100.0
-    assert result.midpoint == 2.0
-    assert result.maximum == 1_000.0
+    with pytest.raises(ValueError, match="outside the source"):
+        plan_source_window_sample_grid(  # type: ignore[arg-type]
+            broad,
+            Window(-1, 0, 100, 100),
+        )

@@ -14,16 +14,20 @@ from eolab_app.raster.models import (
 from eolab_app.raster.statistics_service import RasterStatisticsService
 
 
-class _Registry:
+class _SourceAuthorizer:
     """Return a replaceable authorized source identity."""
 
     def __init__(self, source_path: Path) -> None:
         """Authorize an initial source signature."""
         self.authorization = AuthorizedRaster(source_path, (1, 2, 3, 4, 5))
 
-    def require_current(self, _: str) -> AuthorizedRaster:
+    async def authorize(self, _: object) -> AuthorizedRaster:
         """Return the current controlled authorization."""
         return self.authorization
+
+    async def require_current(self, authorized: AuthorizedRaster) -> None:
+        """Require the supplied authorization to remain current."""
+        assert authorized == self.authorization
 
 
 def _statistics(value: float) -> RasterStatistics:
@@ -38,6 +42,7 @@ def _statistics(value: float) -> RasterStatistics:
         sampleHeight=1,
         sampledPixelCount=1,
         validSampleCount=1,
+        samplingMethod="exactSourceWindow",
         estimated=False,
         sampleMinimum=value,
         sampleMaximum=value,
@@ -58,16 +63,16 @@ def test_statistics_service_caches_by_approved_source_signature(
     tmp_path: Path,
 ) -> None:
     """Reuse one source version and recompute after authorization changes."""
-    registry = _Registry(tmp_path / "raster.tif")
+    source_authorizer = _SourceAuthorizer(tmp_path / "raster.tif")
     read_count = 0
 
-    def reader(_: Path, __: object) -> RasterStatistics:
+    def reader(_: Path, __: object, ___: object) -> RasterStatistics:
         nonlocal read_count
         read_count += 1
         return _statistics(float(read_count))
 
     service = RasterStatisticsService(
-        registry,
+        source_authorizer,
         read_concurrency=1,
         cache_entries=32,
         statistics_reader=reader,
@@ -82,8 +87,8 @@ def test_statistics_service_caches_by_approved_source_signature(
     async def exercise_cache() -> None:
         first = await service.get(request)
         assert await service.get(request) is first
-        registry.authorization = AuthorizedRaster(
-            registry.authorization.source_path,
+        source_authorizer.authorization = AuthorizedRaster(
+            source_authorizer.authorization.source_path,
             (1, 2, 3, 4, 6),
         )
         replacement = await service.get(request)

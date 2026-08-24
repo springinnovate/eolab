@@ -910,13 +910,13 @@ def test_pixel_probe_samples_catalog_raster_without_geoserver(
     }
 
 
-def test_raster_statistics_sample_a_published_projected_raster(
+def test_raster_statistics_sample_a_rendering_ineligible_projected_raster(
     configured_environment: None,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     version_file_path: Path,
 ) -> None:
-    """Transform, clip, and summarize a WGS 84 area in a projected raster.
+    """Analyze a catalog source rejected by rendering without GeoServer.
 
     Args:
         configured_environment: Applied baseline application environment.
@@ -968,20 +968,28 @@ def test_raster_statistics_sample_a_published_projected_raster(
     monkeypatch.setenv("SCAN_MOUNT_PATH", str(tmp_path))
     monkeypatch.setenv("SCAN_PATHS_WITHIN_MOUNT", '["."]')
     item = _mounted_geotiff_item(source_path.as_uri())
-    publication_mock = GeoServerPublicationMock()
+    rendering = item["assets"]["data"]["eolab:rendering"]
+    assert isinstance(rendering, dict)
+    rendering.update({
+        "eligible": False,
+        "reader_compatible": False,
+        "reason_code": "geoserver_crs_metadata_incompatible",
+    })
+    geoserver_requests: list[httpx2.Request] = []
 
     def upstream_response(request: httpx2.Request) -> httpx2.Response:
-        """Return the controlled catalog or GeoServer response.
+        """Return the Item and fail any forbidden GeoServer dependency.
 
         Args:
             request: Upstream request issued by the application.
 
         Returns:
-            Catalog Item or stateful GeoServer publication response.
+            Catalog Item or a controlled unavailable GeoServer response.
         """
         if request.url.host == "stac-api":
             return httpx2.Response(200, json=item)
-        return publication_mock(request)
+        geoserver_requests.append(request)
+        return httpx2.Response(503)
 
     request_identity = {
         "collectionId": "eolab-mounted-geotiffs",
@@ -994,16 +1002,12 @@ def test_raster_statistics_sample_a_published_projected_raster(
             geoserver_transport=httpx2.MockTransport(upstream_response),
         )
     ) as client:
-        assert client.post(
-            "/api/rendering/layers",
-            json=request_identity,
-        ).status_code == 200
         response = client.post(
-            "/api/rendering/statistics",
+            "/api/raster-analysis/statistics",
             json=request_identity,
         )
         selected_response = client.post(
-            "/api/rendering/statistics",
+            "/api/raster-analysis/statistics",
             json={
                 **request_identity,
                 "selectedBounds": {
@@ -1015,7 +1019,7 @@ def test_raster_statistics_sample_a_published_projected_raster(
             },
         )
         outside_response = client.post(
-            "/api/rendering/statistics",
+            "/api/raster-analysis/statistics",
             json={
                 **request_identity,
                 "selectedBounds": {
@@ -1033,7 +1037,7 @@ def test_raster_statistics_sample_a_published_projected_raster(
             )
         temporary_aoi_id = uploaded_aoi.json()["id"]
         aoi_response = client.post(
-            "/api/rendering/statistics",
+            "/api/raster-analysis/statistics",
             json={
                 **request_identity,
                 "temporaryAoiId": temporary_aoi_id,
@@ -1043,13 +1047,14 @@ def test_raster_statistics_sample_a_published_projected_raster(
             f"/api/temporary-aois/{temporary_aoi_id}"
         ).status_code == 204
         removed_aoi_response = client.post(
-            "/api/rendering/statistics",
+            "/api/raster-analysis/statistics",
             json={
                 **request_identity,
                 "temporaryAoiId": temporary_aoi_id,
             },
         )
 
+    assert geoserver_requests == []
     assert response.status_code == 200
     response_document = response.json()
     assert response_document == {
@@ -1063,6 +1068,7 @@ def test_raster_statistics_sample_a_published_projected_raster(
         "sampleHeight": 2,
         "sampledPixelCount": 4,
         "validSampleCount": 4,
+        "samplingMethod": "exactSourceWindow",
         "estimated": False,
         "sampleMinimum": 10.0,
         "sampleMaximum": 40.0,
@@ -1089,13 +1095,14 @@ def test_raster_statistics_sample_a_published_projected_raster(
             "east": 0.0,
             "north": 2.0,
         },
-        "sourceWidth": 1,
+        "sourceWidth": 2,
         "sourceHeight": 2,
-        "sourcePixelCount": 2,
-        "sampleWidth": 1,
+        "sourcePixelCount": 4,
+        "sampleWidth": 2,
         "sampleHeight": 2,
-        "sampledPixelCount": 2,
+        "sampledPixelCount": 4,
         "validSampleCount": 2,
+        "samplingMethod": "exactSourceWindow",
         "estimated": False,
         "sampleMinimum": 10.0,
         "sampleMaximum": 30.0,
@@ -1167,8 +1174,8 @@ def test_raster_statistics_disconnect_cancels_the_service_waiter(
         "http_version": "1.1",
         "method": "POST",
         "scheme": "http",
-        "path": "/api/rendering/statistics",
-        "raw_path": b"/api/rendering/statistics",
+        "path": "/api/raster-analysis/statistics",
+        "raw_path": b"/api/raster-analysis/statistics",
         "query_string": b"",
         "headers": [
             (b"host", b"testserver"),
@@ -1225,7 +1232,7 @@ def test_raster_statistics_disconnect_cancels_the_service_waiter(
                 "collectionId": "eolab-mounted-geotiffs",
                 "itemId": TEST_GEOTIFF_ITEM_ID,
             },
-            400,
+            502,
         ),
         (
             {
@@ -1271,15 +1278,15 @@ def test_raster_statistics_disconnect_cancels_the_service_waiter(
         ),
     ),
 )
-def test_raster_statistics_require_the_published_identity_contract(
+def test_raster_statistics_require_the_catalog_identity_contract(
     configured_environment: None,
     version_file_path: Path,
     request_body: dict[str, object],
     expected_status: int,
 ) -> None:
-    """Reject unpublished raster identities and every browser-supplied path."""
+    """Reject unavailable catalog identities and browser-owned read controls."""
     response = TestClient(create_app(version_file_path)).post(
-        "/api/rendering/statistics",
+        "/api/raster-analysis/statistics",
         json=request_body,
     )
 

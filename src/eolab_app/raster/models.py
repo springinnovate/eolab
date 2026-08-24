@@ -7,7 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, model_validator
 from rasterio.windows import Window
 
-from eolab_app.raster.eligibility import (
+from eolab_app.raster.catalog_contract import (
     MOUNTED_GEOTIFF_COLLECTION_ID,
     MOUNTED_GEOTIFF_ITEM_ID_PATTERN,
 )
@@ -18,9 +18,11 @@ GEOSERVER_READER_CONTRACT = "geoserver-3.0.1-geotools-35.1-geotiff-v1"
 CanonicalWgs84Bounds = tuple[float, float, float, float]
 RasterStatisticsCacheKey = tuple[
     str,
+    str,
     SourceSignature,
     str,
     tuple[object, ...],
+    tuple[int, ...],
 ]
 RasterDetailPreviewScope = Literal[
     "rasterExtent",
@@ -39,6 +41,8 @@ EXACT_DETAIL_MAX_SOURCE_BLOCK_READS = 1_024
 EXACT_DETAIL_MAX_DECODED_SOURCE_BYTES = 64 * 1024 * 1024
 SAMPLE_GRID_MAX_SOURCE_BLOCK_READS = 127 * 127
 SAMPLE_GRID_MAX_DECODED_SOURCE_BYTES = 9 * 1024 * 1024 * 1024
+RASTER_STATISTICS_BIN_COUNT = 64
+RASTER_STATISTICS_SAMPLE_GRID_MAX_DIMENSION = 127
 RasterDetailPreviewCacheKey = tuple[
     str,
     str,
@@ -184,7 +188,14 @@ class Wgs84Bounds(BaseModel):
 
 
 class CatalogRasterStatisticsRequest(CatalogRasterRequest):
-    """Identify a published raster and exactly one optional sampling area."""
+    """Identify a catalog raster and at most one optional sampling area.
+
+    Attributes:
+        selected_bounds: Optional canonical WGS 84 rectangle; absence selects
+            the whole raster unless ``temporary_aoi_id`` is present.
+        temporary_aoi_id: Optional opaque ready-AOI lifecycle reference;
+            absence selects bounds or the whole raster.
+    """
 
     selected_bounds: Wgs84Bounds | None = Field(
         default=None,
@@ -216,16 +227,6 @@ class CatalogRasterStatisticsRequest(CatalogRasterRequest):
                 "selectedBounds and temporaryAoiId are mutually exclusive"
             )
         return self
-
-
-class CatalogRasterDetailStatisticsRequest(CatalogRasterRequest):
-    """Identify one required map window on an overview-limited raster.
-
-    Attributes:
-        selected_bounds: Canonical WGS 84 click-centered histogram window.
-    """
-
-    selected_bounds: Wgs84Bounds = Field(alias="selectedBounds")
 
 
 class CatalogRasterDetailPreviewRequest(CatalogRasterRequest):
@@ -530,7 +531,13 @@ class RasterDetailPreview(BaseModel):
 
 
 class RasterPercentiles(BaseModel):
-    """Percentiles calculated from finite, non-nodata sample values."""
+    """Percentiles calculated from finite, non-nodata sample values.
+
+    Attributes:
+        p05: Fifth percentile of valid sampled values.
+        p50: Median of valid sampled values.
+        p95: Ninety-fifth percentile of valid sampled values.
+    """
 
     p05: FiniteFloat
     p50: FiniteFloat
@@ -538,14 +545,40 @@ class RasterPercentiles(BaseModel):
 
 
 class RasterHistogram(BaseModel):
-    """Fixed-bin histogram calculated from the bounded raster sample."""
+    """Fixed-bin histogram calculated from the bounded raster sample.
+
+    Attributes:
+        counts: Valid-sample counts for the fixed 64 bins.
+        edges: Strictly increasing 65 bin-edge values.
+    """
 
     counts: list[int]
     edges: list[FiniteFloat]
 
 
 class RasterStatistics(BaseModel):
-    """Bounded raster sample used for display-range selection."""
+    """Bounded raster distribution with explicit area and sampling provenance.
+
+    Attributes:
+        band: Fixed source band summarized by this response.
+        scope: Whole-raster, rectangle, or temporary-AOI area discriminator.
+        selected_bounds: Canonical WGS 84 rectangle for ``selectedArea`` only.
+        temporary_aoi_id: Opaque lifecycle identity for ``temporaryAoi`` only.
+        source_width: Width of the integral source envelope in pixels.
+        source_height: Height of the integral source envelope in pixels.
+        source_pixel_count: Pixel count of the integral source envelope.
+        sample_width: Width of the exact or sampled numeric grid.
+        sample_height: Height of the exact or sampled numeric grid.
+        sampled_pixel_count: Number of cells in the numeric grid.
+        valid_sample_count: Finite, non-nodata cells retained by the area mask.
+        sampling_method: Exact bounded window or approximate center-sample grid.
+        estimated: Whether distribution values come from the sample grid.
+        sample_minimum: Minimum valid sampled value.
+        sample_maximum: Maximum valid sampled value.
+        percentiles: Fixed percentiles of valid sampled values.
+        histogram: Fixed 64-bin distribution of valid sampled values.
+        suggested_range: Strict range suggested for downstream color controls.
+    """
 
     band: Literal[1] = 1
     scope: Literal["wholeRaster", "selectedArea", "temporaryAoi"]
@@ -555,13 +588,16 @@ class RasterStatistics(BaseModel):
         alias="temporaryAoiId",
         exclude_if=_exclude_none_from_response,
     )
-    source_width: int = Field(alias="sourceWidth")
-    source_height: int = Field(alias="sourceHeight")
-    source_pixel_count: int = Field(alias="sourcePixelCount")
-    sample_width: int = Field(alias="sampleWidth")
-    sample_height: int = Field(alias="sampleHeight")
-    sampled_pixel_count: int = Field(alias="sampledPixelCount")
-    valid_sample_count: int = Field(alias="validSampleCount")
+    source_width: int = Field(alias="sourceWidth", gt=0)
+    source_height: int = Field(alias="sourceHeight", gt=0)
+    source_pixel_count: int = Field(alias="sourcePixelCount", gt=0)
+    sample_width: int = Field(alias="sampleWidth", gt=0)
+    sample_height: int = Field(alias="sampleHeight", gt=0)
+    sampled_pixel_count: int = Field(alias="sampledPixelCount", gt=0)
+    valid_sample_count: int = Field(alias="validSampleCount", gt=0)
+    sampling_method: Literal["sampleGrid", "exactSourceWindow"] = Field(
+        alias="samplingMethod"
+    )
     estimated: bool
     sample_minimum: FiniteFloat = Field(alias="sampleMinimum")
     sample_maximum: FiniteFloat = Field(alias="sampleMaximum")
@@ -571,13 +607,14 @@ class RasterStatistics(BaseModel):
 
     @model_validator(mode="after")
     def require_scope_provenance(self) -> "RasterStatistics":
-        """Keep whole-raster and selected-area provenance unambiguous.
+        """Keep area, sampling, and distribution provenance self-consistent.
 
         Returns:
             The validated statistics model.
 
         Raises:
-            ValueError: If selected bounds do not match the declared scope.
+            ValueError: If scope fields, counts, sampling method, percentiles,
+                histogram, or suggested range violate the response contract.
         """
         has_bounds = self.selected_bounds is not None
         has_temporary_aoi = self.temporary_aoi_id is not None
@@ -587,4 +624,61 @@ class RasterStatistics(BaseModel):
             raise ValueError("selectedArea statistics require only selected bounds")
         if self.scope == "temporaryAoi" and (has_bounds or not has_temporary_aoi):
             raise ValueError("temporaryAoi statistics require only an AOI identity")
+        if self.estimated != (self.sampling_method == "sampleGrid"):
+            raise ValueError(
+                "statistics estimate metadata must match its sampling method"
+            )
+        if self.source_pixel_count != self.source_width * self.source_height:
+            raise ValueError("statistics source pixel count is inconsistent")
+        if self.sampled_pixel_count != self.sample_width * self.sample_height:
+            raise ValueError("statistics sampled pixel count is inconsistent")
+        if self.valid_sample_count > self.sampled_pixel_count:
+            raise ValueError("statistics valid sample count exceeds the sample")
+        if (
+            self.sample_width > self.source_width
+            or self.sample_height > self.source_height
+        ):
+            raise ValueError("statistics sample dimensions exceed the source")
+        if self.sampling_method == "sampleGrid" and max(
+            self.sample_width,
+            self.sample_height,
+        ) > RASTER_STATISTICS_SAMPLE_GRID_MAX_DIMENSION:
+            raise ValueError("statistics sample grid exceeds its fixed dimension")
+        if self.sampling_method == "exactSourceWindow" and (
+            self.sample_width != self.source_width
+            or self.sample_height != self.source_height
+        ):
+            raise ValueError("exact statistics must cover the source window")
+        if not (
+            self.sample_minimum
+            <= self.percentiles.p05
+            <= self.percentiles.p50
+            <= self.percentiles.p95
+            <= self.sample_maximum
+        ):
+            raise ValueError("statistics percentiles are not ordered")
+        if (
+            len(self.histogram.counts) != RASTER_STATISTICS_BIN_COUNT
+            or len(self.histogram.edges) != RASTER_STATISTICS_BIN_COUNT + 1
+            or any(count < 0 for count in self.histogram.counts)
+            or sum(self.histogram.counts) != self.valid_sample_count
+        ):
+            raise ValueError("statistics histogram counts are inconsistent")
+        if not all(
+            left < right
+            for left, right in zip(
+                self.histogram.edges,
+                self.histogram.edges[1:],
+            )
+        ) or (
+            self.histogram.edges[0] > self.sample_minimum
+            or self.histogram.edges[-1] < self.sample_maximum
+        ):
+            raise ValueError("statistics histogram edges are inconsistent")
+        if not (
+            self.suggested_range.minimum
+            < self.suggested_range.midpoint
+            < self.suggested_range.maximum
+        ):
+            raise ValueError("statistics suggested range is not ordered")
         return self

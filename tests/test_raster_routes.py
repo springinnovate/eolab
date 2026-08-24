@@ -59,12 +59,10 @@ def test_raster_routes_translate_application_errors_at_http_boundary() -> None:
         service,
         service,
         service,
-        service,
-        service,
         registry,
     )
     application = FastAPI()
-    application.include_router(create_raster_analysis_router(service))
+    application.include_router(create_raster_analysis_router(service, service))
     application.include_router(feature.router)
 
     response = TestClient(application).post(
@@ -120,7 +118,7 @@ def test_raster_routes_translate_application_errors_at_http_boundary() -> None:
     assert retired_rendering_pixel_response.status_code == 404
 
     statistics_response = TestClient(application).post(
-        "/api/rendering/detail-statistics",
+        "/api/raster-analysis/statistics",
         json={
             "collectionId": "eolab-mounted-geotiffs",
             "itemId": "geotiff-0123456789abcdef01234567",
@@ -136,6 +134,20 @@ def test_raster_routes_translate_application_errors_at_http_boundary() -> None:
     assert statistics_response.json() == {
         "detail": "controlled raster conflict"
     }
+    assert TestClient(application).post(
+        "/api/rendering/statistics",
+        json={
+            "collectionId": "eolab-mounted-geotiffs",
+            "itemId": "geotiff-0123456789abcdef01234567",
+        },
+    ).status_code == 404
+    assert TestClient(application).post(
+        "/api/rendering/detail-statistics",
+        json={
+            "collectionId": "eolab-mounted-geotiffs",
+            "itemId": "geotiff-0123456789abcdef01234567",
+        },
+    ).status_code == 404
 
 
 def test_detail_preview_disconnect_cancels_the_service_waiter() -> None:
@@ -173,9 +185,7 @@ def test_detail_preview_disconnect_cancels_the_service_waiter() -> None:
     feature = create_raster_feature(
         conflict_service,
         conflict_service,
-        conflict_service,
         detail_service,
-        conflict_service,
         PublishedRasterRegistry(),
     )
     application = FastAPI()
@@ -311,8 +321,6 @@ def test_detail_preview_route_rejects_unowned_sampling_parameters(
         service,
         service,
         service,
-        service,
-        service,
         PublishedRasterRegistry(),
     )
     application = FastAPI()
@@ -336,7 +344,6 @@ def test_detail_preview_route_rejects_unowned_sampling_parameters(
 @pytest.mark.parametrize(
     "request_overrides",
     [
-        {},
         {"path": "/browser-controlled/source.tif"},
         {
             "selectedBounds": {
@@ -347,13 +354,22 @@ def test_detail_preview_route_rejects_unowned_sampling_parameters(
                 "sourceWindow": [0, 0, 127, 127],
             }
         },
+        {
+            "selectedBounds": {
+                "west": -123.0,
+                "south": 37.0,
+                "east": -122.0,
+                "north": 38.0,
+            },
+            "temporaryAoiId": "temporaryAoiIdentity012345678901",
+        },
     ],
-    ids=["missing-bounds", "browser-path", "nested-source-window"],
+    ids=["browser-path", "nested-source-window", "mixed-area-union"],
 )
-def test_detail_statistics_route_requires_only_selected_bounds(
+def test_analysis_statistics_route_rejects_unowned_sampling_parameters(
     request_overrides: dict[str, object],
 ) -> None:
-    """Reject whole-raster and browser-controlled detail histogram reads.
+    """Reject browser-controlled reads outside the strict sampling union.
 
     Args:
         request_overrides: Missing or unsafe fields applied to base identity.
@@ -366,11 +382,10 @@ def test_detail_statistics_route_requires_only_selected_bounds(
         service,
         service,
         service,
-        service,
-        service,
         PublishedRasterRegistry(),
     )
     application = FastAPI()
+    application.include_router(create_raster_analysis_router(service, service))
     application.include_router(feature.router)
     request_body: dict[str, object] = {
         "collectionId": "eolab-mounted-geotiffs",
@@ -379,7 +394,7 @@ def test_detail_statistics_route_requires_only_selected_bounds(
     request_body.update(request_overrides)
 
     response = TestClient(application).post(
-        "/api/rendering/detail-statistics",
+        "/api/raster-analysis/statistics",
         json=request_body,
     )
 
@@ -395,8 +410,6 @@ def test_publication_route_returns_actionable_category_document() -> None:
     service = _PublicationFailureService()
     registry = PublishedRasterRegistry()
     feature = create_raster_feature(
-        service,
-        service,
         service,
         service,
         service,
