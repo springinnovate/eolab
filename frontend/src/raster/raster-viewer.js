@@ -601,8 +601,8 @@ export function initializeRasterViewer(
                 copyRasterInteractionState(record.state, analysisSession);
             }
         },
-        beforeActivate(record) {
-            if (activeLayerKey !== record.entry.key) {
+        deactivate(record) {
+            if (activeLayerKey === record.entry.key) {
                 deactivateActiveLayer();
                 analysisRasterSession = null;
             }

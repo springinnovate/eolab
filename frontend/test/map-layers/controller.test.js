@@ -67,6 +67,8 @@ function createAdapter(owner, publish = async (item) => ({ id: item.id })) {
         snapshot: (record) => ({
             legend: { kind: "fixed", label: record.state.owner },
         }),
+        deactivate: (record, next) =>
+            events.push(["deactivate", record.entry.key, next.entry.key]),
         activate: (record) => events.push(["activate", record.entry.key]),
         visibilityChanged: (record, visible) =>
             events.push(["visibility", record.entry.key, visible]),
@@ -89,6 +91,14 @@ test("controller owns cross-adapter visibility, ordering, and removal", async ()
     await controller.show(third, firstOwner);
 
     assert.equal(controller.retainedRecords.length, 3);
+    assert.deepEqual(secondOwner.events, [
+        ["activate", getCatalogMapLayerKey(second)],
+        [
+            "deactivate",
+            getCatalogMapLayerKey(second),
+            getCatalogMapLayerKey(third),
+        ],
+    ]);
     assert.equal(controller.visibleCount, 2);
     assert.equal(controller.isAttached(getCatalogMapLayerKey(third)), false);
     view.handlers.onVisibility(getCatalogMapLayerKey(third), true);

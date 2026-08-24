@@ -36,7 +36,9 @@ neither the route nor the shared rendering package constructs feature services.
   cleanup without publication behavior.
 - `MapLayerStackView` owns the layer-list DOM and emits semantic user actions.
 - `MapLayerController` coordinates publication concurrency and retained-layer
-  lifecycle through dataset-owned adapters.
+  lifecycle through dataset-owned adapters. When active ownership changes, it
+  asks the outgoing adapter to release its controls before activating the next
+  adapter; neither owner imports or calls its sibling.
 
 The application composition root constructs the controller. The raster viewer
 supplies an adapter and continues to own its appearance, analysis, sampling,

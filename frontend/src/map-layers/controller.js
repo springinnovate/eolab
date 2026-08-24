@@ -19,8 +19,8 @@ import { MapLayerStackView } from "./layer-stack-view.js";
  * and optional feature-owned snapshot fields.
  * @property {(record:Object)=>void} [prepare] Prepare an existing record before
  * activation.
- * @property {(record:Object,previous:Object|null)=>void} [beforeActivate]
- * Release the previous adapter-owned active session.
+ * @property {(record:Object,next:Object)=>void} [deactivate] Release this
+ * adapter's active session before a different owner becomes active.
  * @property {(record:Object)=>void} [activate] Load adapter-owned active state.
  * @property {(record:Object,removal:Object)=>Object|undefined} [beforeRemove]
  * Prepare adapter state before removal and optionally disable fallback
@@ -526,7 +526,12 @@ export class MapLayerController {
         const previousRecord = this.presentationActiveKey === null
             ? null
             : this.records.get(this.presentationActiveKey) ?? null;
-        record.adapter.beforeActivate?.(record, previousRecord);
+        if (
+            previousRecord !== null &&
+            previousRecord.entry.key !== record.entry.key
+        ) {
+            previousRecord.adapter.deactivate?.(previousRecord, record);
+        }
         this.stack.activate(key);
         this.presentationActiveKey = key;
         record.adapter.activate?.(record);
