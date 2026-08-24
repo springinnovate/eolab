@@ -5,6 +5,8 @@ from pathlib import Path
 
 
 VECTOR_SOURCE = Path("src/eolab_app/vector")
+RENDERING_SOURCE = Path("src/eolab_app/rendering")
+MAP_LAYER_SOURCE = Path("frontend/src/map-layers")
 
 
 def imported_modules(source_path: Path) -> set[str]:
@@ -43,3 +45,31 @@ def test_vector_domain_does_not_depend_on_raster_or_http_delivery() -> None:
         or module.startswith("fastapi.")
         for module in imports
     )
+
+
+def test_neutral_rendering_contract_does_not_depend_on_features() -> None:
+    """Keep the shared GeoServer/WMS contract below raster and vector owners."""
+    imports = {
+        module
+        for source_path in RENDERING_SOURCE.glob("*.py")
+        for module in imported_modules(source_path)
+    }
+
+    assert not any(
+        module == "eolab_app.raster"
+        or module.startswith("eolab_app.raster.")
+        or module == "eolab_app.vector"
+        or module.startswith("eolab_app.vector.")
+        for module in imports
+    )
+
+
+def test_map_layer_client_contract_has_no_feature_imports() -> None:
+    """Keep the shared browser lifecycle unaware of raster/vector modules."""
+    source_text = "\n".join(
+        source_path.read_text(encoding="utf-8")
+        for source_path in MAP_LAYER_SOURCE.glob("*.js")
+    )
+
+    assert "../raster/" not in source_text
+    assert "../vector/" not in source_text

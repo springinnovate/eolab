@@ -19,7 +19,9 @@ const CATALOG_DATE_SYNTAX_ERROR =
     "Use date:YYYY, date:YYYY-MM, date:YYYY-MM-DD, or a range " +
     "between two of these values.";
 export const MOUNTED_GEOTIFF_COLLECTION_ID = "eolab-mounted-geotiffs";
+export const MOUNTED_VECTOR_COLLECTION_ID = "eolab-mounted-vectors";
 const RASTER_RENDERING_POLICY = "raster-v3";
+const VECTOR_RENDERING_POLICY = "vector-v1";
 const GEOSERVER_READER_CONTRACT =
     "geoserver-3.0.1-geotools-35.1-geotiff-v1";
 const DETAIL_ONLY_PREVIEW_REASON_CODES = new Set([
@@ -48,6 +50,41 @@ export function getRasterVisualization(item) {
     return renderingMetadata?.policy === RASTER_RENDERING_POLICY
         ? renderingMetadata
         : undefined;
+}
+
+/**
+ * Return the scanner-owned visualization decision for a catalog vector.
+ *
+ * @param {Object|null} item Selected STAC Item.
+ * @return {Object|null|undefined} Rendering metadata, null for a non-vector
+ * Item, or undefined when the vector has not been assessed.
+ */
+export function getVectorVisualization(item) {
+    if (item?.collection !== MOUNTED_VECTOR_COLLECTION_ID) {
+        return null;
+    }
+    const renderingMetadata = item.properties?.["eolab:vector_rendering"];
+    return renderingMetadata?.policy === VECTOR_RENDERING_POLICY
+        ? renderingMetadata
+        : undefined;
+}
+
+/**
+ * Classify one Item through the supported visualization contracts.
+ *
+ * @param {Object|null} item Selected STAC Item.
+ * @return {{kind:"raster"|"vector",metadata:Object|undefined}|null}
+ * Supported visualization descriptor or null.
+ */
+export function getCatalogVisualization(item) {
+    const rasterMetadata = getRasterVisualization(item);
+    if (rasterMetadata !== null) {
+        return { kind: "raster", metadata: rasterMetadata };
+    }
+    const vectorMetadata = getVectorVisualization(item);
+    return vectorMetadata === null
+        ? null
+        : { kind: "vector", metadata: vectorMetadata };
 }
 
 /**

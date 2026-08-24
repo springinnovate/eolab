@@ -1,5 +1,5 @@
 /**
- * Catalog map-action and completed raster-assessment state.
+ * Catalog map-action and completed visualization-assessment state.
  *
  * Assessment and publication requests belong to a Catalog Item's composite
  * identity. Pending actions retain busy presentation across selection changes,
@@ -10,6 +10,8 @@ import { getCatalogItemKey } from "./catalog-item-identity.js";
 
 /** Scanner-owned rendering metadata on a mounted raster's data Asset. */
 const RASTER_RENDERING_METADATA_KEY = "eolab:rendering";
+/** Scanner-owned rendering metadata on a vector Item's properties. */
+const VECTOR_RENDERING_METADATA_KEY = "eolab:vector_rendering";
 
 /**
  * Return whether two STAC Items have the same composite identity.
@@ -24,7 +26,7 @@ export function catalogItemsMatch(first, second) {
 }
 
 /** Retain completed assessments until a refreshed equivalent Item consumes one. */
-export class CatalogRasterAssessmentCache {
+export class CatalogVisualizationAssessmentCache {
     /** Create an empty completed-assessment cache. */
     constructor() {
         this.assessments = new Map();
@@ -43,10 +45,20 @@ export class CatalogRasterAssessmentCache {
      */
     record(requestedItem, assessedItem) {
         const key = getCatalogItemKey(requestedItem);
-        const renderingMetadata =
-            assessedItem.assets.data[RASTER_RENDERING_METADATA_KEY];
+        const rasterMetadata =
+            assessedItem.assets?.data?.[RASTER_RENDERING_METADATA_KEY];
+        const vectorMetadata =
+            assessedItem.properties?.[VECTOR_RENDERING_METADATA_KEY];
+        const assessment = rasterMetadata === undefined
+            ? { kind: "vector", metadata: vectorMetadata }
+            : { kind: "raster", metadata: rasterMetadata };
+        if (assessment.metadata === undefined) {
+            throw new TypeError(
+                "Completed Catalog assessments require rendering metadata."
+            );
+        }
         Object.assign(requestedItem, assessedItem);
-        this.assessments.set(key, renderingMetadata);
+        this.assessments.set(key, assessment);
     }
 
     /**
@@ -61,20 +73,25 @@ export class CatalogRasterAssessmentCache {
      */
     apply(item) {
         const key = getCatalogItemKey(item);
-        const renderingMetadata = this.assessments.get(key);
-        if (renderingMetadata === undefined) {
+        const assessment = this.assessments.get(key);
+        if (assessment === undefined) {
             return false;
         }
-        const dataAsset = item.assets.data;
+        const { kind, metadata } = assessment;
+        const currentMetadata = kind === "raster"
+            ? item.assets?.data?.[RASTER_RENDERING_METADATA_KEY]
+            : item.properties?.[VECTOR_RENDERING_METADATA_KEY];
         if (
-            dataAsset[RASTER_RENDERING_METADATA_KEY]?.policy ===
-                renderingMetadata.policy
+            currentMetadata?.policy === metadata.policy
         ) {
             this.assessments.delete(key);
             return false;
         }
-        dataAsset[RASTER_RENDERING_METADATA_KEY] =
-            renderingMetadata;
+        if (kind === "raster") {
+            item.assets.data[RASTER_RENDERING_METADATA_KEY] = metadata;
+        } else {
+            item.properties[VECTOR_RENDERING_METADATA_KEY] = metadata;
+        }
         this.assessments.delete(key);
         return true;
     }

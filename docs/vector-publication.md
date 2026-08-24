@@ -1,4 +1,4 @@
-# Catalog vector publication
+# Catalog vector visualization
 
 EOLab visualizes catalog vectors through read-only assessment followed by
 authenticated, convergent GeoServer publication and the restricted public WMS
@@ -50,6 +50,14 @@ the authorized fixed style. Raster analysis, pixel reads, statistics, detail
 preview, and temporary AOI lifecycles do not depend on vector assessment or
 publication.
 
+In the browser, `catalog-visualization.js` is the composition-level dispatcher.
+The vector API module owns HTTP, `vector/leaflet.js` owns Leaflet WMS creation,
+and `vector/map-layer-adapter.js` implements the neutral retained-layer
+contract. `map-layers/` owns only identity, visibility, ordering, opacity,
+removal, and presentation-ready legends. It imports neither raster nor vector.
+The raster viewer continues to own raster analysis/control sessions while
+accepting sibling layers only through that neutral adapter contract.
+
 ## Persisted identity and assessment
 
 Every vector handler emits `eolab:vector_source` with exactly:
@@ -91,14 +99,14 @@ A failed clean create performs bounded best-effort rollback of only the newly
 created datastore. Application restart clears process-local WMS authorization,
 not GeoServer state; selecting the Item again converges and reauthorizes it.
 
-## WMS delivery and bounds
+## Browser lifecycle and bounds
 
 Vector layers use fixed `vector-point`, `vector-line`, or `vector-polygon`
-styles and never accept raster `env` substitutions. The public proxy accepts
-only one currently authorized layer and its approved fixed style, retains the
-existing image-dimension limits, and caps `GetFeatureInfo` results. It returns
-WMS images or bounded feature information, never a source path or unbounded
-source feature collection.
+styles and never accept raster `env` substitutions. They share the neutral
+retained-layer visibility limit, opacity, top-first ordering, activation,
+removal, and tile-error ownership with raster WMS layers. Fit-to-bounds is an
+adapter option and defaults on when a vector is added. Selecting a vector hides
+raster-only palette, histogram, pixel, and sample-window controls.
 
 ## Production verification
 
