@@ -86,5 +86,7 @@ Property columns preserve every observed JSON type in deterministic union string
 
 A focused format PR should cover its recognition and pruning behavior, deterministic mount-relative identity, zero/one/multi-Item cardinality as applicable, mixed valid and invalid sources, stable rescan IDs, STAC metadata and Assets, and absence of empty optional fields. It must also run the full Python suite, frontend tests when inspector/status behavior is affected, and the frontend production build.
 
-The read-only deployed-reader workflow and deliberately bounded capability
-matrix are documented in [Catalog vector assessment](vector-assessment.md).
+The read-only deployed-reader workflow is documented in
+[Catalog vector assessment](vector-assessment.md). Stable server-side
+publication and public WMS restrictions are documented in
+[Catalog vector publication](vector-publication.md).

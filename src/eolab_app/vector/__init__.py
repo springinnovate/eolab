@@ -1,1 +1,1 @@
-"""Catalog vector source identity and assessment boundaries."""
+"""Catalog vector assessment, publication, and rendering boundaries."""

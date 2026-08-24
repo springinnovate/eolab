@@ -141,6 +141,18 @@ def validated_public_wms_query(
                     "or text/plain"
                 ),
             )
+        try:
+            feature_count = int(normalized_query.get("feature_count", "1"))
+        except ValueError as error:
+            raise HTTPException(
+                status_code=400,
+                detail="feature_count must be an integer",
+            ) from error
+        if not 1 <= feature_count <= 100:
+            raise HTTPException(
+                status_code=400,
+                detail="feature_count must be between 1 and 100",
+            )
     layer_name = None
     if operation == "getmap":
         layer_name = normalized_query.get("layers")
