@@ -36,6 +36,8 @@ import {
     createSingleWorldMap,
     formatSingleWorldPosition
 } from "./map.js";
+import { MapLayerController } from "./map-layers/controller.js";
+import { MapLayerStackView } from "./map-layers/layer-stack-view.js";
 import {
     catalogItemsMatch,
     CatalogMapActionRegistry,
@@ -614,13 +616,17 @@ async function initializeCatalog(
         }
     }
 
+    const mapLayerController = new MapLayerController({
+        leafletMap,
+        view: new MapLayerStackView(),
+        onLayersChange: refreshCatalogMapAction,
+    });
     const rasterVisualization = initializeRasterViewer({
         wmsUrl: appGlobalConfiguration.wmsUrl,
         leafletMap,
         leaflet: L,
         onTileError: reportRasterTileError,
-        onLayersChange: refreshCatalogMapAction,
-    });
+    }, { mapLayerController });
     const rasterDetailPreview = initializeRasterDetailPreview({
         leafletMap,
         leaflet: L,

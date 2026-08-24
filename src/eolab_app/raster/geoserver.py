@@ -14,30 +14,16 @@ from eolab_app.raster.errors import (
     RasterUpstreamError,
 )
 from eolab_app.raster.models import RasterReaderAssessment
+from eolab_app.rendering.geoserver import (
+    GEOSERVER_ERROR_EXCERPT_LIMIT,
+    GEOSERVER_WORKSPACE_NAME,
+    GeoServerPublicationGateway,
+    sanitize_geoserver_error_excerpt,
+)
 
 
-GEOSERVER_WORKSPACE_NAME = "eolab"
 GEOSERVER_RASTER_STYLE_NAME = "dynamic-raster"
-GEOSERVER_ERROR_EXCERPT_LIMIT = 512
 LOGGER = logging.getLogger(__name__)
-
-_SECRET_ASSIGNMENT_PATTERN = re.compile(
-    r"(?i)(\b(?:authorization|credential|password|secret|token)s?\b"
-    r"\s*[:=]\s*)(?:\"[^\"]*\"|'[^']*'|[^\s,;}<]+)"
-)
-_SECRET_XML_PATTERN = re.compile(
-    r"(?is)(<(?:authorization|credential|password|secret|token)>).*?"
-    r"(</(?:authorization|credential|password|secret|token)>)"
-)
-_AUTH_VALUE_PATTERN = re.compile(
-    r"(?i)\b(Basic|Bearer)\s+[A-Za-z0-9._~+/=-]+"
-)
-_URL_CREDENTIAL_PATTERN = re.compile(
-    r"(?i)(https?://)[^\s/:@]+:[^\s/@]+@"
-)
-_FILE_URL_PATTERN = re.compile(r"(?i)\bfile:(?:/{1,3})?[^\s<>'\"]+")
-_CONTROL_PATTERN = re.compile(r"[\x00-\x1f\x7f]+")
-_WHITESPACE_PATTERN = re.compile(r"\s+")
 _READER_REJECTION_PATTERN = re.compile(
     r"(?i)(could not acquire reader|unable to (?:find|determine).*crs|"
     r"coordinate reference system|coverage.*(?:reader|crs)|"
@@ -129,38 +115,6 @@ class GeoServerPublicationState:
     layer_exists: bool
 
 
-def sanitize_geoserver_error_excerpt(response_content: bytes) -> str:
-    """Return a bounded log-safe excerpt of a GeoServer response body.
-
-    Args:
-        response_content: Raw upstream response bytes already read by HTTPX.
-
-    Returns:
-        A single-line excerpt with common secret forms and file URLs redacted.
-    """
-    bounded_content = response_content[: GEOSERVER_ERROR_EXCERPT_LIMIT + 1]
-    was_truncated = len(bounded_content) > GEOSERVER_ERROR_EXCERPT_LIMIT
-    excerpt = bounded_content[:GEOSERVER_ERROR_EXCERPT_LIMIT].decode(
-        "utf-8",
-        errors="replace",
-    )
-    excerpt = _URL_CREDENTIAL_PATTERN.sub(r"\1[redacted]@", excerpt)
-    excerpt = _AUTH_VALUE_PATTERN.sub(r"\1 [redacted]", excerpt)
-    excerpt = _SECRET_ASSIGNMENT_PATTERN.sub(r"\1[redacted]", excerpt)
-    excerpt = _SECRET_XML_PATTERN.sub(r"\1[redacted]\2", excerpt)
-    excerpt = _FILE_URL_PATTERN.sub("file:[redacted]", excerpt)
-    excerpt = _WHITESPACE_PATTERN.sub(
-        " ",
-        _CONTROL_PATTERN.sub(" ", excerpt),
-    ).strip()
-    if not excerpt:
-        excerpt = "<empty>"
-    if was_truncated or len(excerpt) > GEOSERVER_ERROR_EXCERPT_LIMIT:
-        excerpt = excerpt[:GEOSERVER_ERROR_EXCERPT_LIMIT]
-        excerpt = f"{excerpt}…"
-    return excerpt
-
-
 class GeoServerRasterPublisher:
     """Converge mounted GeoTIFFs to healthy private GeoServer publications."""
 
@@ -178,9 +132,12 @@ class GeoServerRasterPublisher:
         Returns:
             None.
         """
-        self._geoserver_client = geoserver_client
-        self._geoserver_rest_url = (
-            f"{geoserver_internal_url.rstrip('/')}/rest"
+        self._gateway = GeoServerPublicationGateway(
+            geoserver_client,
+            geoserver_internal_url,
+            "raster",
+            RasterPublicationError,
+            self._classify_response_failure,
         )
 
     async def publish(self, resource_name: str, source_path: Path) -> None:
@@ -301,13 +258,7 @@ class GeoServerRasterPublisher:
             RasterPublicationError: If transport fails or GeoServer returns
                 any other response status.
         """
-        response = await self._request(
-            operation,
-            "GET",
-            path,
-            accepted_statuses=frozenset({200, 404}),
-        )
-        return response.status_code == 200
+        return await self._gateway.resource_exists(operation, path)
 
     async def _create_publication(
         self,
@@ -476,39 +427,13 @@ class GeoServerRasterPublisher:
             RasterPublicationError: If transport fails or the response status
                 is outside ``accepted_statuses``.
         """
-        try:
-            response = await self._geoserver_client.request(
-                method,
-                f"{self._geoserver_rest_url}{path}",
-                **request_arguments,
-            )
-        except httpx2.TimeoutException as error:
-            LOGGER.warning(
-                "GeoServer raster publication failed: operation=%s "
-                "status=unavailable detail=request timed out",
-                operation,
-            )
-            raise RasterPublicationError(
-                "timeout",
-                "The rendering service timed out. Retry the publication.",
-            ) from error
-        except httpx2.RequestError as error:
-            LOGGER.warning(
-                "GeoServer raster publication failed: operation=%s "
-                "status=unavailable detail=connection failed",
-                operation,
-            )
-            raise RasterPublicationError(
-                "connectivity",
-                (
-                    "The rendering service is unavailable. Retry when the "
-                    "service is reachable."
-                ),
-            ) from error
-
-        if response.status_code not in accepted_statuses:
-            raise self._response_error(operation, response)
-        return response
+        return await self._gateway.request(
+            operation,
+            method,
+            path,
+            accepted_statuses,
+            **request_arguments,
+        )
 
     def _response_error(
         self,
@@ -524,20 +449,10 @@ class GeoServerRasterPublisher:
         Returns:
             Browser-safe categorized publication error for the caller to raise.
         """
-        excerpt = sanitize_geoserver_error_excerpt(response.content)
-        LOGGER.warning(
-            "GeoServer raster publication failed: operation=%s status=%s "
-            "detail=%s",
-            operation,
-            response.status_code,
-            excerpt,
-        )
-        category, detail = self._classify_response_failure(
-            operation,
-            response.status_code,
-            excerpt,
-        )
-        return RasterPublicationError(category, detail)
+        error = self._gateway.response_error(operation, response)
+        if not isinstance(error, RasterPublicationError):
+            raise TypeError("Raster GeoServer gateway returned the wrong error type")
+        return error
 
     @staticmethod
     def _classify_response_failure(

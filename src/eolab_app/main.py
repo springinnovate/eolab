@@ -285,7 +285,7 @@ def create_app(
         create_wms_proxy_router(
             geoserver_wms_client,
             app_global_configuration.geoserver_internal_url,
-            raster_feature.registry,
+            (raster_feature.registry,),
             get_map_request_tracker,
         )
     )

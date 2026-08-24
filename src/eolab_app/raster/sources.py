@@ -8,9 +8,13 @@ from eolab_app.raster.catalog_contract import GEOTIFF_MEDIA_TYPES
 from eolab_app.raster.errors import (
     RasterAssetError,
     RasterConflictError,
-    RasterRequestError,
 )
-from eolab_app.raster.models import AuthorizedRaster, SourceSignature
+from eolab_app.raster.models import SourceSignature
+from eolab_app.rendering.errors import (
+    PublishedLayerChangedError,
+    PublishedLayerNotAuthorizedError,
+)
+from eolab_app.raster.wms_authorization import PublishedRasterAuthorization
 
 
 def source_signature(source_path: Path) -> SourceSignature:
@@ -127,20 +131,20 @@ class PublishedRasterRegistry:
             inspected_signature: Source identity captured before publication.
 
         Raises:
-            RasterConflictError: If the source changed or disappeared during
-                publication.
+            PublishedLayerChangedError: If the source changed or disappeared
+                during publication.
         """
         try:
             current_signature = source_signature(source_path)
         except OSError:
             current_signature = None
         if current_signature != inspected_signature:
-            raise RasterConflictError(
+            raise PublishedLayerChangedError(
                 "The GeoTIFF changed while it was being published"
             )
         self._sources[layer_name] = (source_path, inspected_signature)
 
-    def require_current(self, layer_name: str) -> AuthorizedRaster:
+    def require_current(self, layer_name: str) -> PublishedRasterAuthorization:
         """Require a layer authorized from a source that has not changed.
 
         Args:
@@ -150,12 +154,13 @@ class PublishedRasterRegistry:
             Canonical path and approved signature for the mounted GeoTIFF.
 
         Raises:
-            RasterRequestError: If the layer is not authorized.
-            RasterConflictError: If its source changed since publication.
+            PublishedLayerNotAuthorizedError: If the layer is not authorized.
+            PublishedLayerChangedError: If its source changed since
+                publication.
         """
         authorization = self._sources.get(layer_name)
         if authorization is None:
-            raise RasterRequestError(
+            raise PublishedLayerNotAuthorizedError(
                 "The WMS layer has not been approved for visualization"
             )
         source_path, approved_signature = authorization
@@ -164,7 +169,7 @@ class PublishedRasterRegistry:
         except OSError:
             current_signature = None
         if current_signature != approved_signature:
-            raise RasterConflictError(
+            raise PublishedLayerChangedError(
                 "The visualized GeoTIFF changed; select it again"
             )
-        return AuthorizedRaster(source_path, approved_signature)
+        return PublishedRasterAuthorization(source_path, approved_signature)

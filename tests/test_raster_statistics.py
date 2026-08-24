@@ -16,6 +16,7 @@ from rasterio.warp import transform as transform_coordinates
 from rasterio.windows import Window
 
 from eolab_app.raster.errors import RasterConflictError
+from eolab_app.rendering.errors import PublishedLayerChangedError
 from eolab_app.raster.models import (
     AuthorizedRaster,
     CatalogPixelRequest,
@@ -1961,7 +1962,7 @@ def test_stale_registry_check_does_not_remove_new_authorization(
         "eolab_app.raster.sources.source_signature",
         coordinated_source_signature,
     )
-    stale_error: list[RasterConflictError] = []
+    stale_error: list[PublishedLayerChangedError] = []
 
     def require_stale_authorization() -> None:
         """Run the coordinated stale check in one background thread.
@@ -1971,7 +1972,7 @@ def test_stale_registry_check_does_not_remove_new_authorization(
         """
         try:
             registry.require_current(layer_name)
-        except RasterConflictError as error:
+        except PublishedLayerChangedError as error:
             stale_error.append(error)
 
     stale_thread = threading.Thread(

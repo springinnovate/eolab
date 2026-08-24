@@ -2,32 +2,32 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  getCatalogRasterLayerKey,
-  MAX_VISIBLE_RASTER_LAYERS,
-  RasterLayerStack,
-  RasterLayerVisibilityLimitError,
-} from "../../src/raster/layer-stack.js";
+  getCatalogMapLayerKey,
+  MAX_VISIBLE_MAP_LAYERS,
+  MapLayerStack,
+  MapLayerVisibilityLimitError,
+} from "../../src/map-layers/layer-stack.js";
 
 function catalogItem(collection, id) {
   return { collection, id };
 }
 
-test("catalog raster keys validate and preserve composite identity", () => {
+test("catalog map-layer keys validate and preserve composite identity", () => {
   const splitAfterFirstCharacter = catalogItem("a", "bc");
   const splitBeforeLastCharacter = catalogItem("ab", "c");
   const delimiterValues = catalogItem("a\",\"b", "[c]");
 
   assert.equal(
-    getCatalogRasterLayerKey(splitAfterFirstCharacter),
-    getCatalogRasterLayerKey({ ...splitAfterFirstCharacter }),
+    getCatalogMapLayerKey(splitAfterFirstCharacter),
+    getCatalogMapLayerKey({ ...splitAfterFirstCharacter }),
   );
   assert.notEqual(
-    getCatalogRasterLayerKey(splitAfterFirstCharacter),
-    getCatalogRasterLayerKey(splitBeforeLastCharacter),
+    getCatalogMapLayerKey(splitAfterFirstCharacter),
+    getCatalogMapLayerKey(splitBeforeLastCharacter),
   );
   assert.notEqual(
-    getCatalogRasterLayerKey(delimiterValues),
-    getCatalogRasterLayerKey(catalogItem("a", "b\",\"[c]")),
+    getCatalogMapLayerKey(delimiterValues),
+    getCatalogMapLayerKey(catalogItem("a", "b\",\"[c]")),
   );
 
   for (const invalidItem of [
@@ -39,14 +39,14 @@ test("catalog raster keys validate and preserve composite identity", () => {
     catalogItem("collection", 7),
   ]) {
     assert.throws(
-      () => getCatalogRasterLayerKey(invalidItem),
+      () => getCatalogMapLayerKey(invalidItem),
       TypeError,
     );
   }
 });
 
 test("adding an existing layer is idempotent and activates it in place", () => {
-  const stack = new RasterLayerStack();
+  const stack = new MapLayerStack();
   const firstItem = catalogItem("collection", "first");
   const secondItem = catalogItem("collection", "second");
   const firstResult = stack.add(firstItem, "first.tif");
@@ -70,7 +70,7 @@ test("adding an existing layer is idempotent and activates it in place", () => {
 });
 
 test("new layers are inserted in top-first drawing order", () => {
-  const stack = new RasterLayerStack();
+  const stack = new MapLayerStack();
 
   stack.add(catalogItem("collection", "bottom"), "bottom.tif");
   stack.add(catalogItem("collection", "middle"), "middle.tif");
@@ -82,8 +82,8 @@ test("new layers are inserted in top-first drawing order", () => {
   );
 });
 
-test("at most two retained raster layers can be visible", () => {
-  const stack = new RasterLayerStack();
+test("at most two retained map layers can be visible", () => {
+  const stack = new MapLayerStack();
   const first = stack.add(catalogItem("collection", "first"), "first.tif").entry;
   const second = stack.add(
     catalogItem("collection", "second"),
@@ -91,14 +91,14 @@ test("at most two retained raster layers can be visible", () => {
   ).entry;
   const third = stack.add(catalogItem("collection", "third"), "third.tif").entry;
 
-  assert.equal(MAX_VISIBLE_RASTER_LAYERS, 2);
+  assert.equal(MAX_VISIBLE_MAP_LAYERS, 2);
   assert.equal(first.visible, true);
   assert.equal(second.visible, true);
   assert.equal(third.visible, false);
   assert.equal(stack.visibleCount, 2);
   assert.throws(
     () => stack.setVisible(third.key, true),
-    RasterLayerVisibilityLimitError,
+    MapLayerVisibilityLimitError,
   );
 
   stack.setVisible(first.key, false);
@@ -111,7 +111,7 @@ test("at most two retained raster layers can be visible", () => {
 });
 
 test("active selection is independent of layer visibility", () => {
-  const stack = new RasterLayerStack();
+  const stack = new MapLayerStack();
   const first = stack.add(catalogItem("collection", "first"), "first.tif").entry;
   stack.add(catalogItem("collection", "second"), "second.tif");
   const hidden = stack.add(catalogItem("collection", "hidden"), "hidden.tif").entry;
@@ -132,7 +132,7 @@ test("active selection is independent of layer visibility", () => {
 });
 
 test("opacity accepts only finite values in the closed unit interval", () => {
-  const stack = new RasterLayerStack();
+  const stack = new MapLayerStack();
   const entry = stack.add(catalogItem("collection", "item"), "item.tif").entry;
 
   for (const opacity of [0, 0.375, 1]) {
@@ -147,7 +147,7 @@ test("opacity accepts only finite values in the closed unit interval", () => {
 });
 
 test("moving layers respects top and bottom boundaries", () => {
-  const stack = new RasterLayerStack();
+  const stack = new MapLayerStack();
   const bottom = stack.add(catalogItem("collection", "bottom"), "bottom.tif").entry;
   const middle = stack.add(catalogItem("collection", "middle"), "middle.tif").entry;
   const top = stack.add(catalogItem("collection", "top"), "top.tif").entry;
@@ -169,7 +169,7 @@ test("moving layers respects top and bottom boundaries", () => {
 });
 
 test("removing the active layer chooses a deterministic adjacent fallback", () => {
-  const stack = new RasterLayerStack();
+  const stack = new MapLayerStack();
   const bottom = stack.add(catalogItem("collection", "bottom"), "bottom.tif").entry;
   const middle = stack.add(catalogItem("collection", "middle"), "middle.tif").entry;
   const top = stack.add(catalogItem("collection", "top"), "top.tif").entry;
@@ -192,7 +192,7 @@ test("removing the active layer chooses a deterministic adjacent fallback", () =
 });
 
 test("clear removes all entries, visibility, and active selection", () => {
-  const stack = new RasterLayerStack();
+  const stack = new MapLayerStack();
   stack.add(catalogItem("collection", "first"), "first.tif");
   stack.add(catalogItem("collection", "second"), "second.tif");
 

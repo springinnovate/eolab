@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { RasterLayerStackView } from "../../src/raster/layer-stack-view.js";
+import { MapLayerStackView } from "../../src/map-layers/layer-stack-view.js";
 
 /** Minimal DOM element used by the raster layer-stack view tests. */
 class FakeLayerStackElement extends EventTarget {
@@ -194,6 +194,30 @@ function actionControl(row, action) {
   return controls[0];
 }
 
+/**
+ * Build the neutral gradient-legend contract emitted by a layer owner.
+ *
+ * @param {Object} style Test ramp with numeric stops and CSS colors.
+ * @return {{kind:"gradient",gradient:string,description:string,labels:number[]}}
+ * Presentation-only legend consumed by the map-layer view.
+ */
+function gradientLegend(style) {
+  const midpointPosition =
+    ((style.midpoint - style.minimum) /
+      (style.maximum - style.minimum)) * 100;
+  return {
+    kind: "gradient",
+    gradient: `linear-gradient(90deg, ${style.minimumColor} 0%, ` +
+      `${style.midpointColor} ${midpointPosition}%, ` +
+      `${style.maximumColor} 100%)`,
+    description:
+      `Color ramp: ${style.minimum} at ${style.minimumColor}, ` +
+      `${style.midpoint} at ${style.midpointColor}, and ` +
+      `${style.maximum} at ${style.maximumColor}.`,
+    labels: [style.minimum, style.midpoint, style.maximum],
+  };
+}
+
 const LAYERS = [
   {
     key: "temperature",
@@ -202,14 +226,14 @@ const LAYERS = [
     visible: true,
     opacity: 0.42,
     error: null,
-    style: {
+    legend: gradientLegend({
       minimum: -10,
       midpoint: 0,
       maximum: 15,
       minimumColor: "#0000ff",
       midpointColor: "#ffffff",
       maximumColor: "#ff0000",
-    },
+    }),
   },
   {
     key: "vegetation",
@@ -218,14 +242,14 @@ const LAYERS = [
     visible: true,
     opacity: 1,
     error: null,
-    style: {
+    legend: gradientLegend({
       minimum: 0,
       midpoint: 50,
       maximum: 100,
       minimumColor: "#30123b",
       midpointColor: "#a4fc3c",
       maximumColor: "#7a0403",
-    },
+    }),
   },
   {
     key: "moisture",
@@ -234,20 +258,20 @@ const LAYERS = [
     visible: false,
     opacity: 0.75,
     error: "Statistics unavailable.",
-    style: {
+    legend: gradientLegend({
       minimum: -5,
       midpoint: 1,
       maximum: 9,
       minimumColor: "#5e4fa2",
       midpointColor: "#ffffbf",
       maximumColor: "#9e0142",
-    },
+    }),
   },
 ];
 
-test("RasterLayerStackView renders semantic, accessible independent rows", () => {
+test("MapLayerStackView renders semantic, accessible independent rows", () => {
   const documentContext = new FakeLayerStackDocument();
-  const view = new RasterLayerStackView(documentContext);
+  const view = new MapLayerStackView(documentContext);
 
   view.render(LAYERS, "vegetation");
 
@@ -259,7 +283,7 @@ test("RasterLayerStackView renders semantic, accessible independent rows", () =>
   assert.deepEqual(list.children.map((row) => row.tagName), ["LI", "LI", "LI"]);
   assert.equal(
     limit.textContent,
-    "Two raster layers are visible. Hide one before showing another.",
+    "Two map layers are visible. Hide one before showing another.",
   );
 
   const [temperatureRow, vegetationRow, moistureRow] = list.children;
@@ -326,9 +350,9 @@ test("RasterLayerStackView renders semantic, accessible independent rows", () =>
   assert.equal(elementsByClass(moistureRow, "raster-layer-error")[0].hidden, false);
 });
 
-test("RasterLayerStackView forwards controls and updates opacity output", () => {
+test("MapLayerStackView forwards controls and updates opacity output", () => {
   const documentContext = new FakeLayerStackDocument();
-  const view = new RasterLayerStackView(documentContext);
+  const view = new MapLayerStackView(documentContext);
   const received = [];
   view.bind({
     onActivate: (key) => received.push(["activate", key]),
@@ -379,9 +403,9 @@ test("RasterLayerStackView forwards controls and updates opacity output", () => 
   assert.equal(received.length, 5);
 });
 
-test("RasterLayerStackView announces status and retains stable action focus", () => {
+test("MapLayerStackView announces status and retains stable action focus", () => {
   const documentContext = new FakeLayerStackDocument();
-  const view = new RasterLayerStackView(documentContext);
+  const view = new MapLayerStackView(documentContext);
   view.render(LAYERS, "temperature");
   const list = documentContext.querySelector("#raster-layer-list");
   const focusedBeforeRender = actionControl(list.children[2], "remove");
@@ -424,6 +448,6 @@ test("RasterLayerStackView announces status and retains stable action focus", ()
   );
   assert.equal(
     documentContext.querySelector("#raster-layer-stack-limit").textContent,
-    "0 of 2 raster layers visible.",
+    "0 of 2 map layers visible.",
   );
 });

@@ -6,8 +6,7 @@ import {
     createRasterWmsLayer,
     ensureRasterSampleWindowPane,
     RASTER_SAMPLE_WINDOW_PANE,
-  RasterLeafletLayerSet,
-  rasterSampleBoundsToLeaflet,
+    rasterSampleBoundsToLeaflet,
 } from "../../src/raster/leaflet.js";
 import { SELECTED_BOUNDS } from "../../test-support/raster/fixtures.js";
 
@@ -20,7 +19,6 @@ test("sample bounds convert to canonical single-world Leaflet corners", () => {
     ],
   );
 });
-
 test("sample-window pane stays above bounded raster images", () => {
   const panes = new Map();
   const map = {
@@ -127,82 +125,4 @@ test("Leaflet adapters own WMS and sample-window presentation options", () => {
       interactive: false,
     },
   });
-});
-
-test("RasterLeafletLayerSet retains hidden layers without tile traffic", () => {
-  const attachedLayers = [];
-  const removedLayers = [];
-  const leafletMap = {
-    removeLayer(layer) {
-      removedLayers.push(layer);
-    },
-  };
-  const createLayer = (name) => ({
-    name,
-    opacity: null,
-    zIndex: null,
-    addCount: 0,
-    addTo(map) {
-      assert.equal(map, leafletMap);
-      this.addCount += 1;
-      attachedLayers.push(this);
-      return this;
-    },
-    setOpacity(opacity) {
-      this.opacity = opacity;
-    },
-    setZIndex(zIndex) {
-      this.zIndex = zIndex;
-    },
-  });
-  const first = createLayer("first");
-  const second = createLayer("second");
-  const layers = new RasterLeafletLayerSet(leafletMap);
-
-  layers.add("first", first, { visible: true, opacity: 0.75 });
-  layers.add("second", second, { visible: false, opacity: 0.5 });
-  assert.deepEqual(attachedLayers, [first]);
-  assert.equal(first.opacity, 0.75);
-  assert.equal(second.opacity, 0.5);
-  assert.equal(layers.isAttached("second"), false);
-
-  layers.setVisible("first", false);
-  layers.setVisible("second", true);
-  layers.setVisible("second", true);
-  assert.deepEqual(removedLayers, [first]);
-  assert.equal(second.addCount, 1);
-  assert.equal(layers.get("second"), second);
-});
-
-test("RasterLeafletLayerSet applies top-first order and isolated opacity", () => {
-  const leafletMap = { removeLayer() {} };
-  const createLayer = () => ({
-    opacity: null,
-    zIndex: null,
-    addTo() {
-      return this;
-    },
-    setOpacity(opacity) {
-      this.opacity = opacity;
-    },
-    setZIndex(zIndex) {
-      this.zIndex = zIndex;
-    },
-  });
-  const top = createLayer();
-  const bottom = createLayer();
-  const layers = new RasterLeafletLayerSet(leafletMap);
-  layers.add("top", top, { visible: true, opacity: 1 });
-  layers.add("bottom", bottom, { visible: true, opacity: 1 });
-
-  layers.setOrder(["top", "bottom"]);
-  layers.setOpacity("bottom", 0.25);
-  assert.ok(top.zIndex > bottom.zIndex);
-  assert.equal(top.opacity, 1);
-  assert.equal(bottom.opacity, 0.25);
-  assert.throws(() => layers.setOrder(["top", "top"]), /complete layer set|duplicate/);
-
-  layers.clear();
-  assert.equal(layers.get("top"), null);
-  assert.equal(layers.get("bottom"), null);
 });

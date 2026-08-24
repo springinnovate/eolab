@@ -1,23 +1,23 @@
 /**
- * Domain state and invariants for the retained raster layer stack.
+ * Domain state and invariants for the retained map-layer stack.
  *
  * This module owns stable Catalog Item identity, active selection, visibility,
  * opacity, and top-first ordering. It performs no publication, DOM, Leaflet,
  * statistics, or styling work.
  */
 
-/** Maximum raster layers that may issue map tile requests simultaneously. */
-export const MAX_VISIBLE_RASTER_LAYERS = 2;
+/** Maximum retained layers that may issue map tile requests simultaneously. */
+export const MAX_VISIBLE_MAP_LAYERS = 2;
 
 /** Raised when a visibility transition would exceed the stack contract. */
-export class RasterLayerVisibilityLimitError extends Error {
+export class MapLayerVisibilityLimitError extends Error {
     /** Create the fixed user-facing visibility-limit error. */
     constructor() {
         super(
-            `Only ${MAX_VISIBLE_RASTER_LAYERS} raster layers can be visible ` +
+            `Only ${MAX_VISIBLE_MAP_LAYERS} map layers can be visible ` +
             "at once. Hide one before showing another."
         );
-        this.name = "RasterLayerVisibilityLimitError";
+        this.name = "MapLayerVisibilityLimitError";
     }
 }
 
@@ -28,7 +28,7 @@ export class RasterLayerVisibilityLimitError extends Error {
  * @return {string} Collision-safe serialized collection and Item identity.
  * @throws {TypeError} If the Item identity violates the Catalog contract.
  */
-export function getCatalogRasterLayerKey(item) {
+export function getCatalogMapLayerKey(item) {
     if (
         typeof item?.collection !== "string" ||
         item.collection.length === 0 ||
@@ -36,27 +36,27 @@ export function getCatalogRasterLayerKey(item) {
         item.id.length === 0
     ) {
         throw new TypeError(
-            "Raster layer Items require non-empty collection and id strings."
+            "Map layer Items require non-empty collection and id strings."
         );
     }
     return JSON.stringify([item.collection, item.id]);
 }
 
 /**
- * @typedef {Object} RasterLayerStackEntry
+ * @typedef {Object} MapLayerStackEntry
  * @property {string} key Stable composite Catalog Item key.
  * @property {Object} item Catalog STAC Item.
- * @property {string} label Readable raster basename.
+ * @property {string} label Readable layer label.
  * @property {number} retentionOrder Monotonic add-intent order.
  * @property {boolean} visible Whether the layer is attached to the map.
  * @property {number} opacity Ordinary-overlay opacity from zero through one.
  */
 
-/** Own retained raster-layer order and cross-entry invariants. */
-export class RasterLayerStack {
+/** Own retained map-layer order and cross-entry invariants. */
+export class MapLayerStack {
     /** Create an empty stack with no active layer. */
     constructor() {
-        /** @type {RasterLayerStackEntry[]} */
+        /** @type {MapLayerStackEntry[]} */
         this.entries = [];
         /** @type {string|null} */
         this.activeKey = null;
@@ -70,20 +70,20 @@ export class RasterLayerStack {
      * Adding an existing Item is idempotent and merely activates it.
      *
      * @param {Object} item Catalog STAC Item.
-     * @param {string} label Readable raster basename.
+     * @param {string} label Readable layer label.
      * @param {number} [retentionOrder=this.nextRetentionOrder] Monotonic
      * add-intent order used to make asynchronous completion deterministic.
-     * @return {{entry: RasterLayerStackEntry, added: boolean}} Result entry
+     * @return {{entry: MapLayerStackEntry, added: boolean}} Result entry
      * and whether the stack changed.
      */
     add(item, label, retentionOrder = this.nextRetentionOrder) {
-        const key = getCatalogRasterLayerKey(item);
+        const key = getCatalogMapLayerKey(item);
         if (typeof label !== "string" || label.length === 0) {
-            throw new TypeError("Raster layer labels must be non-empty strings.");
+            throw new TypeError("Map layer labels must be non-empty strings.");
         }
         if (!Number.isSafeInteger(retentionOrder) || retentionOrder < 1) {
             throw new TypeError(
-                "Raster layer retention order must be a positive safe integer."
+                "Map layer retention order must be a positive safe integer."
             );
         }
         const existingEntry = this.get(key);
@@ -97,7 +97,7 @@ export class RasterLayerStack {
             )
         ) {
             throw new Error(
-                `Raster layer retention order is already used: ${retentionOrder}`
+                `Map layer retention order is already used: ${retentionOrder}`
             );
         }
         const entry = {
@@ -105,7 +105,7 @@ export class RasterLayerStack {
             item,
             label,
             retentionOrder,
-            visible: this.visibleCount < MAX_VISIBLE_RASTER_LAYERS,
+            visible: this.visibleCount < MAX_VISIBLE_MAP_LAYERS,
             opacity: 1,
         };
         const insertionIndex = this.entries.findIndex(
@@ -128,7 +128,7 @@ export class RasterLayerStack {
      * Return an entry by stable key.
      *
      * @param {string} key Stable layer key.
-     * @return {RasterLayerStackEntry|null} Matching entry or null.
+     * @return {MapLayerStackEntry|null} Matching entry or null.
      */
     get(key) {
         return this.entries.find((entry) => entry.key === key) ?? null;
@@ -141,14 +141,14 @@ export class RasterLayerStack {
      * @return {boolean} Whether its composite identity exists in the stack.
      */
     hasItem(item) {
-        return this.get(getCatalogRasterLayerKey(item)) !== null;
+        return this.get(getCatalogMapLayerKey(item)) !== null;
     }
 
     /**
-     * Select the layer edited by the shared raster controls.
+     * Select the retained layer presented as active by its owning adapter.
      *
      * @param {string} key Stable layer key.
-     * @return {RasterLayerStackEntry} Newly active entry.
+     * @return {MapLayerStackEntry} Newly active entry.
      * @throws {RangeError} If key is not retained.
      */
     activate(key) {
@@ -162,20 +162,20 @@ export class RasterLayerStack {
      *
      * @param {string} key Stable layer key.
      * @param {boolean} visible Requested visibility.
-     * @return {RasterLayerStackEntry} Updated entry.
-     * @throws {RasterLayerVisibilityLimitError} If a third layer is requested.
+     * @return {MapLayerStackEntry} Updated entry.
+     * @throws {MapLayerVisibilityLimitError} If a third layer is requested.
      */
     setVisible(key, visible) {
         if (typeof visible !== "boolean") {
-            throw new TypeError("Raster layer visibility must be boolean.");
+            throw new TypeError("Map layer visibility must be boolean.");
         }
         const entry = this.#require(key);
         if (
             visible &&
             !entry.visible &&
-            this.visibleCount >= MAX_VISIBLE_RASTER_LAYERS
+            this.visibleCount >= MAX_VISIBLE_MAP_LAYERS
         ) {
-            throw new RasterLayerVisibilityLimitError();
+            throw new MapLayerVisibilityLimitError();
         }
         entry.visible = visible;
         return entry;
@@ -186,13 +186,13 @@ export class RasterLayerStack {
      *
      * @param {string} key Stable layer key.
      * @param {number} opacity Finite opacity from zero through one.
-     * @return {RasterLayerStackEntry} Updated entry.
+     * @return {MapLayerStackEntry} Updated entry.
      * @throws {RangeError} If opacity is outside its closed interval.
      */
     setOpacity(key, opacity) {
         if (!Number.isFinite(opacity) || opacity < 0 || opacity > 1) {
             throw new RangeError(
-                "Raster layer opacity must be from zero through one."
+                "Map layer opacity must be from zero through one."
             );
         }
         const entry = this.#require(key);
@@ -210,11 +210,11 @@ export class RasterLayerStack {
      */
     move(key, direction) {
         if (direction !== "up" && direction !== "down") {
-            throw new TypeError("Raster layers can move only up or down.");
+            throw new TypeError("Map layers can move only up or down.");
         }
         const index = this.entries.findIndex((entry) => entry.key === key);
         if (index < 0) {
-            throw new RangeError(`Unknown raster layer key: ${key}`);
+            throw new RangeError(`Unknown map layer key: ${key}`);
         }
         const nextIndex = direction === "up" ? index - 1 : index + 1;
         if (nextIndex < 0 || nextIndex >= this.entries.length) {
@@ -231,13 +231,13 @@ export class RasterLayerStack {
      * Remove one retained layer and choose a deterministic active fallback.
      *
      * @param {string} key Stable layer key.
-     * @return {{removed: RasterLayerStackEntry, activeKey: string|null}}
+     * @return {{removed: MapLayerStackEntry, activeKey: string|null}}
      * Removed entry and resulting active key.
      */
     remove(key) {
         const index = this.entries.findIndex((entry) => entry.key === key);
         if (index < 0) {
-            throw new RangeError(`Unknown raster layer key: ${key}`);
+            throw new RangeError(`Unknown map layer key: ${key}`);
         }
         const [removed] = this.entries.splice(index, 1);
         if (this.activeKey === key) {
@@ -249,14 +249,18 @@ export class RasterLayerStack {
         return { removed, activeKey: this.activeKey };
     }
 
-    /** Remove every retained entry and active selection. */
+    /**
+     * Remove every retained entry and active selection.
+     *
+     * @return {void}
+     */
     clear() {
         this.entries.length = 0;
         this.activeKey = null;
         this.nextRetentionOrder = 1;
     }
 
-    /** @return {number} Number of map-attached raster layers. */
+    /** @return {number} Number of map-attached layers. */
     get visibleCount() {
         return this.entries.filter((entry) => entry.visible).length;
     }
@@ -265,13 +269,13 @@ export class RasterLayerStack {
      * Require one retained entry.
      *
      * @param {string} key Stable layer key.
-     * @return {RasterLayerStackEntry} Matching entry.
+     * @return {MapLayerStackEntry} Matching entry.
      * @throws {RangeError} If key is not retained.
      */
     #require(key) {
         const entry = this.get(key);
         if (entry === null) {
-            throw new RangeError(`Unknown raster layer key: ${key}`);
+            throw new RangeError(`Unknown map layer key: ${key}`);
         }
         return entry;
     }

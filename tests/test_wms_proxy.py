@@ -165,6 +165,12 @@ def test_wms_proxy_allows_bounded_png_rendering(
         diagnostics = client.get("/api/rendering/diagnostics")
         exception_response = client.get(tile_url)
         failure_diagnostics = client.get("/api/rendering/diagnostics")
+        wrong_style_response = client.get(
+            tile_url.replace("styles=dynamic-raster", "styles=expensive-style")
+        )
+        malformed_environment_response = client.get(
+            f"{tile_url.partition('&env=')[0]}&env="
+        )
         source_path.write_bytes(b"replacement")
         changed_source_response = client.get(tile_url)
 
@@ -186,6 +192,14 @@ def test_wms_proxy_allows_bounded_png_rendering(
     }
     assert exception_response.status_code == 200
     assert exception_response.headers["content-type"] == "application/xml"
+    assert wrong_style_response.status_code == 400
+    assert wrong_style_response.json() == {
+        "detail": "WMS style must be dynamic-raster"
+    }
+    assert malformed_environment_response.status_code == 400
+    assert malformed_environment_response.json() == {
+        "detail": RASTER_STYLE_ENVIRONMENT_ERROR
+    }
     failure_document = failure_diagnostics.json()
     assert failure_document["state"] == "degraded"
     assert failure_document["metrics"]["requests"] | {
@@ -248,11 +262,6 @@ def test_wms_proxy_rejects_a_layer_not_approved_by_this_app_process(
             "WMS parameters must not repeat",
         ),
         (
-            "service=WMS&request=GetMap&layers=eolab%3Aexample"
-            "&styles=expensive-style&format=image%2Fpng",
-            "WMS style must be dynamic-raster",
-        ),
-        (
             "service=WMS&request=GetMap&layers=eolab%3Afirst%2Ceolab%3Asecond"
             "&format=image%2Fpng",
             "Exactly one WMS layer must be requested",
@@ -280,40 +289,6 @@ def test_wms_proxy_rejects_a_layer_not_approved_by_this_app_process(
                 "WMS feature information format must be application/json "
                 "or text/plain"
             ),
-        ),
-        (
-            "service=WMS&request=GetMap&format=image%2Fpng&env=",
-            RASTER_STYLE_ENVIRONMENT_ERROR,
-        ),
-        (
-            "service=WMS&request=GetMap&format=image%2Fpng"
-            "&env=min%3A0%3Bmed%3A50%3Bmax%3A100%3B"
-            "cmin%3A%232b83ba%3Bcmed%3A%23ffffbf%3Bopacity%3A1",
-            RASTER_STYLE_ENVIRONMENT_ERROR,
-        ),
-        (
-            "service=WMS&request=GetMap&format=image%2Fpng"
-            "&env=min%3A0%3Bmin%3A1%3Bmed%3A50%3Bmax%3A100%3B"
-            "cmin%3A%232b83ba%3Bcmed%3A%23ffffbf",
-            RASTER_STYLE_ENVIRONMENT_ERROR,
-        ),
-        (
-            "service=WMS&request=GetMap&format=image%2Fpng"
-            "&env=min%3A0%3Bmed%3ANaN%3Bmax%3A100%3B"
-            "cmin%3A%232b83ba%3Bcmed%3A%23ffffbf%3Bcmax%3A%23d7191c",
-            RASTER_STYLE_ENVIRONMENT_ERROR,
-        ),
-        (
-            "service=WMS&request=GetMap&format=image%2Fpng"
-            "&env=min%3A0%3Bmed%3A100%3Bmax%3A50%3B"
-            "cmin%3A%232b83ba%3Bcmed%3A%23ffffbf%3Bcmax%3A%23d7191c",
-            RASTER_STYLE_ENVIRONMENT_ERROR,
-        ),
-        (
-            "service=WMS&request=GetMap&format=image%2Fpng"
-            "&env=min%3A0%3Bmed%3A50%3Bmax%3A100%3B"
-            "cmin%3Ablue%3Bcmed%3A%23ffffbf%3Bcmax%3A%23d7191c",
-            RASTER_STYLE_ENVIRONMENT_ERROR,
         ),
     ),
 )

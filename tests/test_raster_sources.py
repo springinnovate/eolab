@@ -4,10 +4,10 @@ from pathlib import Path
 
 import pytest
 
-from eolab_app.raster.errors import (
-    RasterAssetError,
-    RasterConflictError,
-    RasterRequestError,
+from eolab_app.raster.errors import RasterAssetError
+from eolab_app.rendering.errors import (
+    PublishedLayerChangedError,
+    PublishedLayerNotAuthorizedError,
 )
 from eolab_app.raster.sources import (
     MountedRasterResolver,
@@ -59,7 +59,7 @@ def test_registry_requires_an_approved_unchanged_source(tmp_path: Path) -> None:
     layer_name = "eolab:geotiff-0123456789abcdef01234567"
     registry = PublishedRasterRegistry()
 
-    with pytest.raises(RasterRequestError):
+    with pytest.raises(PublishedLayerNotAuthorizedError):
         registry.require_current(layer_name)
 
     approved_signature = source_signature(source_path)
@@ -69,8 +69,8 @@ def test_registry_requires_an_approved_unchanged_source(tmp_path: Path) -> None:
     )
 
     source_path.write_bytes(b"replacement source")
-    with pytest.raises(RasterConflictError) as error:
+    with pytest.raises(PublishedLayerChangedError) as error:
         registry.require_current(layer_name)
-    assert error.value.detail == (
+    assert str(error.value) == (
         "The visualized GeoTIFF changed; select it again"
     )

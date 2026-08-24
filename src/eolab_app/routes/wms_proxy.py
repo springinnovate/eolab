@@ -1,16 +1,17 @@
 """Restricted public WMS validation, authorization, and forwarding."""
 
 import asyncio
-import math
-import re
 
 import httpx2
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from eolab_app.diagnostics.tracker import GetMapRequestTracker
-from eolab_app.raster.errors import RasterFeatureError
-from eolab_app.raster.sources import PublishedRasterRegistry
-from eolab_app.routes.rasters import raster_http_exception
+from eolab_app.rendering.errors import (
+    PublishedLayerChangedError,
+    PublishedLayerNotAuthorizedError,
+    PublishedLayerRequestError,
+)
+from eolab_app.rendering.ports import PublishedLayerRegistry
 
 
 PUBLIC_WMS_COMMON_QUERY_PARAMETERS = frozenset(
@@ -63,58 +64,6 @@ PUBLIC_WMS_QUERY_PARAMETERS = {
         "width",
     },
 }
-RASTER_STYLE_ENVIRONMENT_KEYS = frozenset(
-    {"min", "med", "max", "cmin", "cmed", "cmax"}
-)
-RASTER_STYLE_COLOR_PATTERN = re.compile(r"#[0-9a-fA-F]{6}")
-RASTER_STYLE_ENVIRONMENT_ERROR = (
-    "env must define ordered finite min, med, and max values plus cmin, "
-    "cmed, and cmax six-digit hex colors"
-)
-
-
-def validate_raster_style_environment(environment: str) -> None:
-    """Validate the six substitutions consumed by the dynamic raster SLD.
-
-    Args:
-        environment: Untrusted WMS ``env`` query value.
-
-    Raises:
-        HTTPException: If the value is not exactly the six finite, ordered
-            threshold and color assignments used by EOLab's raster style.
-    """
-    invalid_environment = HTTPException(
-        status_code=400,
-        detail=RASTER_STYLE_ENVIRONMENT_ERROR,
-    )
-    fields = environment.split(";")
-    if len(environment) > 256 or len(fields) != 6:
-        raise invalid_environment
-
-    assignments = {}
-    for field in fields:
-        name, separator, value = field.partition(":")
-        if separator == "" or name in assignments:
-            raise invalid_environment
-        assignments[name] = value
-    if assignments.keys() != RASTER_STYLE_ENVIRONMENT_KEYS:
-        raise invalid_environment
-
-    try:
-        thresholds = tuple(
-            float(assignments[name]) for name in ("min", "med", "max")
-        )
-    except ValueError as error:
-        raise invalid_environment from error
-    if not (
-        all(math.isfinite(value) for value in thresholds)
-        and thresholds[0] < thresholds[1] < thresholds[2]
-        and all(
-            RASTER_STYLE_COLOR_PATTERN.fullmatch(assignments[name])
-            for name in ("cmin", "cmed", "cmax")
-        )
-    ):
-        raise invalid_environment
 
 
 def validated_public_wms_query(
@@ -192,9 +141,18 @@ def validated_public_wms_query(
                     "or text/plain"
                 ),
             )
-    if "env" in normalized_query:
-        validate_raster_style_environment(normalized_query["env"])
-
+        try:
+            feature_count = int(normalized_query.get("feature_count", "1"))
+        except ValueError as error:
+            raise HTTPException(
+                status_code=400,
+                detail="feature_count must be an integer",
+            ) from error
+        if not 1 <= feature_count <= 100:
+            raise HTTPException(
+                status_code=400,
+                detail="feature_count must be between 1 and 100",
+            )
     layer_name = None
     if operation == "getmap":
         layer_name = normalized_query.get("layers")
@@ -207,16 +165,6 @@ def validated_public_wms_query(
             )
     elif operation == "getlegendgraphic":
         layer_name = normalized_query.get("layer")
-    style_parameter = "style" if operation == "getlegendgraphic" else "styles"
-    if normalized_query.get(style_parameter, "") not in {
-        "",
-        "dynamic-raster",
-        "eolab:dynamic-raster",
-    }:
-        raise HTTPException(
-            status_code=400,
-            detail="WMS style must be dynamic-raster",
-        )
     if operation != "getcapabilities" and (
         not layer_name or "," in layer_name
     ):
@@ -230,7 +178,7 @@ def validated_public_wms_query(
 def create_wms_proxy_router(
     geoserver_client: httpx2.AsyncClient,
     geoserver_internal_url: str,
-    published_rasters: PublishedRasterRegistry,
+    published_layers: tuple[PublishedLayerRegistry, ...],
     get_map_request_tracker: GetMapRequestTracker,
 ) -> APIRouter:
     """Create the restricted public WMS proxy.
@@ -238,7 +186,7 @@ def create_wms_proxy_router(
     Args:
         geoserver_client: Shared unauthenticated GeoServer WMS client.
         geoserver_internal_url: Internal GeoServer base URL.
-        published_rasters: Current-process layer authorization registry.
+        published_layers: Feature-owned current-process layer registries.
         get_map_request_tracker: Bounded GetMap request observer.
 
     Returns:
@@ -274,13 +222,42 @@ def create_wms_proxy_router(
             )
         query_entries, layer_name, operation = validated_public_wms_query(request)
         if layer_name is not None:
-            try:
-                await asyncio.to_thread(
-                    published_rasters.require_current,
-                    layer_name,
+            authorization = None
+            for published_layer_registry in published_layers:
+                try:
+                    authorization = await asyncio.to_thread(
+                        published_layer_registry.require_current,
+                        layer_name,
+                    )
+                    break
+                except PublishedLayerNotAuthorizedError:
+                    continue
+                except PublishedLayerChangedError as error:
+                    raise HTTPException(status_code=409, detail=str(error)) from error
+            if authorization is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="The WMS layer has not been approved for visualization",
                 )
-            except RasterFeatureError as error:
-                raise raster_http_exception(error) from error
+            normalized_query = {
+                key.lower(): value for key, value in query_entries
+            }
+            style_parameter = (
+                "style" if operation == "getlegendgraphic" else "styles"
+            )
+            requested_style = normalized_query.get(
+                style_parameter,
+                "",
+            ).removeprefix("eolab:")
+            if requested_style not in {"", authorization.style_name}:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"WMS style must be {authorization.style_name}",
+                )
+            try:
+                authorization.validate_parameters(operation, normalized_query)
+            except PublishedLayerRequestError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
 
         forwarded_headers = {
             "accept": request.headers.get("accept", "*/*"),
