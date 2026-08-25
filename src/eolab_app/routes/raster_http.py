@@ -4,6 +4,7 @@ from fastapi import HTTPException, Request
 
 from eolab_app.raster.errors import (
     RasterAssetError,
+    RasterCapacityError,
     RasterConflictError,
     RasterFeatureError,
     RasterNotFoundError,
@@ -56,6 +57,7 @@ def raster_http_exception(error: RasterFeatureError) -> HTTPException:
         (RasterRequestError, 400),
         (RasterNotFoundError, 404),
         (RasterAssetError, 422),
+        (RasterCapacityError, 429),
         (RasterConflictError, 409),
         (RasterUpstreamError, 502),
     )

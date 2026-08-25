@@ -56,7 +56,8 @@ auxiliary files, alpha masks, and per-dataset masks are rejected because they
 are outside that source signature. Nodata and non-finite values are excluded
 rather than converted to zero. A deterministic source-structure or work-limit
 conflict keeps its actionable explanation but does not offer a browser Retry
-action. Bounded-reader capacity and transport failures remain retryable.
+action. Bounded-reader capacity uses HTTP 429 and remains retryable, as do
+transport failures.
 
 ## Distribution and provenance
 

@@ -52,6 +52,10 @@ class RasterConflictError(RasterFeatureError):
     """Raised when current raster state cannot satisfy an operation."""
 
 
+class RasterCapacityError(RasterConflictError):
+    """Raised when bounded raster work must wait for service capacity."""
+
+
 class RasterUpstreamError(RasterFeatureError):
     """Raised when a required catalog or rendering adapter fails."""
 

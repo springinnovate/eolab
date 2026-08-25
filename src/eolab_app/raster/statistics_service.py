@@ -9,7 +9,7 @@ from pathlib import Path
 
 import rasterio
 
-from eolab_app.raster.errors import RasterConflictError
+from eolab_app.raster.errors import RasterCapacityError, RasterConflictError
 from eolab_app.raster.models import (
     AuthorizedRaster,
     CatalogRasterStatisticsRequest,
@@ -124,6 +124,7 @@ class RasterStatisticsService:
 
         Raises:
             RasterFeatureError: If catalog/source authorization fails.
+            RasterCapacityError: If distinct bounded work fills read capacity.
             RasterConflictError: If raster, AOI, or bounded reading fails.
         """
         authorized_raster = await self._source_authorizer.authorize(request)
@@ -148,7 +149,7 @@ class RasterStatisticsService:
                 work = self._inflight.get(cache_key)
                 if work is None:
                     if len(self._inflight) >= self._maximum_inflight:
-                        raise RasterConflictError(
+                        raise RasterCapacityError(
                             "Raster statistics capacity is busy; retry after "
                             "the current bounded read finishes."
                         )
@@ -165,7 +166,7 @@ class RasterStatisticsService:
                     work = _InflightStatistics(task, cancellation_requested)
                     self._inflight[cache_key] = work
                 elif work.cancellation_requested.is_set():
-                    raise RasterConflictError(
+                    raise RasterCapacityError(
                         "Raster statistics capacity is finishing canceled work; "
                         "retry shortly."
                     )

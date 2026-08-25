@@ -15,7 +15,7 @@ from rasterio.transform import Affine, from_bounds, from_origin
 from rasterio.warp import transform as transform_coordinates
 from rasterio.windows import Window
 
-from eolab_app.raster.errors import RasterConflictError
+from eolab_app.raster.errors import RasterCapacityError, RasterConflictError
 from eolab_app.rendering.errors import PublishedLayerChangedError
 from eolab_app.raster.models import (
     AuthorizedRaster,
@@ -1867,7 +1867,7 @@ def test_cancelled_statistics_request_keeps_admission_until_worker_finishes(
         with pytest.raises(asyncio.CancelledError):
             await first_request
 
-        with pytest.raises(RasterConflictError, match="capacity is busy"):
+        with pytest.raises(RasterCapacityError, match="capacity is busy"):
             await service.get(requests[1])
         assert started_reads == 1
         release_reads.set()
@@ -1949,7 +1949,7 @@ def test_statistics_service_caps_distinct_work_and_coalesces_at_capacity(
         await two_reads_started.wait()
         coalesced_request = asyncio.create_task(service.get(requests[0]))
 
-        with pytest.raises(RasterConflictError, match="capacity is busy"):
+        with pytest.raises(RasterCapacityError, match="capacity is busy"):
             await service.get(requests[2])
         assert len(service._inflight) == 2
         assert len(read_order) == 2

@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from eolab_app.raster.errors import (
+    RasterCapacityError,
     RasterConflictError,
     RasterPublicationError,
     RasterPublicationFailureCategory,
@@ -468,3 +469,13 @@ def test_publication_errors_expose_stable_category_documents(
         "category": category,
         "message": "Actionable publication guidance",
     }
+
+
+def test_raster_capacity_has_a_stable_retryable_http_status() -> None:
+    """Expose bounded-reader capacity without coupling clients to wording."""
+    exception = raster_http_exception(
+        RasterCapacityError("Controlled capacity guidance")
+    )
+
+    assert exception.status_code == 429
+    assert exception.detail == "Controlled capacity guidance"

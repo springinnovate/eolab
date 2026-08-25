@@ -729,15 +729,8 @@ test("loadCatalogRasterStatistics reports backend and response errors", async ()
 test("statistics retry policy distinguishes capacity from deterministic conflicts", () => {
   assert.equal(
     isRasterStatisticsRetryableError(new RasterAnalysisRequestError(
-      "Raster statistics capacity is busy; retry after the current bounded read finishes.",
-      409,
-    )),
-    true,
-  );
-  assert.equal(
-    isRasterStatisticsRetryableError(new RasterAnalysisRequestError(
-      "Raster statistics capacity is finishing canceled work; retry shortly.",
-      409,
+      "Capacity wording is owned by the server",
+      429,
     )),
     true,
   );
