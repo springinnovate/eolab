@@ -43,9 +43,9 @@ from eolab_app.raster.models import (
     GEOSERVER_READER_CONTRACT,
     RasterDetailPreview,
     RasterDetailPreviewCacheKey,
-    SourceSignature,
     Wgs84Bounds,
 )
+from eolab_app.raster.source_identity import RasterSourceIdentity
 from eolab_app.raster.ports import RasterCatalog
 from eolab_app.raster.read_cancellation import (
     RasterReadCancellationCheck,
@@ -94,7 +94,9 @@ class RasterDetailPreviewService:
             ],
             RasterDetailPreview,
         ] = read_raster_detail_preview,
-        signature_reader: Callable[[Path], SourceSignature] = source_signature,
+        signature_reader: Callable[
+            [Path], RasterSourceIdentity
+        ] = source_signature,
     ) -> None:
         """Create a bounded preview workflow over authoritative catalog data.
 
@@ -257,9 +259,16 @@ class RasterDetailPreviewService:
                 "Detail-only preview unavailable: the raster source can no "
                 "longer be read."
             ) from error
-        if list(current_signature) != rendering_metadata.get(
-            "source_signature"
-        ):
+        try:
+            assessed_identity = RasterSourceIdentity.from_catalog(
+                rendering_metadata.get("source_signature")
+            )
+        except ValueError as error:
+            raise RasterConflictError(
+                "Detail-only preview unavailable: the raster assessment has "
+                "invalid source identity metadata; reassess it first."
+            ) from error
+        if current_signature != assessed_identity:
             raise RasterConflictError(
                 "Detail-only preview unavailable: the raster changed; "
                 "reassess it first."

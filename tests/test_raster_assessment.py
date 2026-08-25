@@ -133,7 +133,9 @@ def test_reassessment_rebuilds_and_replaces_a_current_result(
                 "eolab:rendering": {
                     "policy": "raster-v3",
                     "eligible": True,
-                    "source_signature": list(source_signature(source_path)),
+                    "source_signature": (
+                        source_signature(source_path).to_catalog()
+                    ),
                 }
             }
         },
@@ -181,5 +183,5 @@ def test_reassessment_rebuilds_and_replaces_a_current_result(
         "eligible": True,
         "reader_contract": GEOSERVER_READER_CONTRACT,
         "reader_compatible": True,
-        "source_signature": list(source_signature(source_path)),
+        "source_signature": source_signature(source_path).to_catalog(),
     }

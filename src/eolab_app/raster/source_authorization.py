@@ -13,13 +13,13 @@ from eolab_app.raster.errors import RasterConflictError
 from eolab_app.raster.models import (
     AuthorizedRaster,
     CatalogRasterRequest,
-    SourceSignature,
 )
 from eolab_app.raster.ports import RasterCatalog, RasterSourceResolver
+from eolab_app.raster.source_identity import RasterSourceIdentity
 from eolab_app.raster.sources import source_signature
 
 
-def _cataloged_source_signature(item: dict[str, Any]) -> SourceSignature:
+def _cataloged_source_signature(item: dict[str, Any]) -> RasterSourceIdentity:
     """Read the scanner-owned source identity from one catalog Item.
 
     The signature currently lives in the versioned rendering metadata for
@@ -48,21 +48,13 @@ def _cataloged_source_signature(item: dict[str, Any]) -> SourceSignature:
         if isinstance(metadata, dict)
         else None
     )
-    if (
-        not isinstance(signature, list)
-        or len(signature) != 5
-        or any(
-            isinstance(value, bool) or not isinstance(value, int)
-            for value in signature
-        )
-    ):
+    try:
+        return RasterSourceIdentity.from_catalog(signature)
+    except ValueError as error:
         raise RasterConflictError(
             "Raster analysis unavailable: scan this source again to record "
             "its current identity."
-        )
-    # The scanner persists ``Path.stat()`` identity in this exact order.
-    device, inode, size_bytes, modified_ns, changed_ns = signature
-    return (device, inode, size_bytes, modified_ns, changed_ns)
+        ) from error
 
 
 class CatalogRasterSourceAuthorizer:
@@ -72,7 +64,9 @@ class CatalogRasterSourceAuthorizer:
         self,
         catalog: RasterCatalog,
         source_resolver: RasterSourceResolver,
-        signature_reader: Callable[[Path], SourceSignature] = source_signature,
+        signature_reader: Callable[
+            [Path], RasterSourceIdentity
+        ] = source_signature,
     ) -> None:
         """Create catalog authorization for independent raster analysis.
 

@@ -11,15 +11,15 @@ from eolab_app.raster.catalog_contract import (
     MOUNTED_GEOTIFF_COLLECTION_ID,
     MOUNTED_GEOTIFF_ITEM_ID_PATTERN,
 )
+from eolab_app.raster.source_identity import RasterSourceIdentity
 
 
-SourceSignature = tuple[int, int, int, int, int]
 GEOSERVER_READER_CONTRACT = "geoserver-3.0.1-geotools-35.1-geotiff-v1"
 CanonicalWgs84Bounds = tuple[float, float, float, float]
 RasterStatisticsCacheKey = tuple[
     str,
     str,
-    SourceSignature,
+    RasterSourceIdentity,
     str,
     tuple[object, ...],
     tuple[int, ...],
@@ -46,7 +46,7 @@ RASTER_STATISTICS_SAMPLE_GRID_MAX_DIMENSION = 127
 RasterDetailPreviewCacheKey = tuple[
     str,
     str,
-    SourceSignature,
+    RasterSourceIdentity,
     tuple[float, float, float, float],
     str,
     CanonicalWgs84Bounds | None,
@@ -80,7 +80,7 @@ class AuthorizedRaster:
     """
 
     source_path: Path
-    source_signature: SourceSignature
+    source_signature: RasterSourceIdentity
 
 
 @dataclass(frozen=True)

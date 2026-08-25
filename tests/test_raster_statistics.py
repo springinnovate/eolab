@@ -32,6 +32,7 @@ from eolab_app.raster.models import (
 from eolab_app.raster.pixel import read_raster_pixel
 from eolab_app.raster.pixel_service import RasterPixelService
 from eolab_app.raster.sources import PublishedRasterRegistry, source_signature
+from eolab_app.raster.source_identity import RasterSourceIdentity
 from eolab_app.raster.statistics import (
     NoRasterBoundsOverlapError,
     NoValidRasterSamplesError,
@@ -1944,7 +1945,7 @@ def test_stale_registry_check_does_not_remove_new_authorization(
     release_stale_check = threading.Event()
     real_source_signature = source_signature
 
-    def coordinated_source_signature(path: Path) -> tuple[int, int, int, int, int]:
+    def coordinated_source_signature(path: Path) -> RasterSourceIdentity:
         """Pause only the old authorization's background signature check.
 
         Args:

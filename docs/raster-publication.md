@@ -4,6 +4,24 @@ Raster eligibility assessment is an upstream catalog contract. Publication
 does not define CRS eligibility or rewrite a source raster; it makes every
 remaining GeoServer runtime outcome safe, observable, and retryable.
 
+## Source identity
+
+The scanner persists one canonical raster identity in this order: inode, byte
+size, nanosecond modification time, and nanosecond metadata-change time. Inode
+detects replacement at the same mounted path, size and modification time detect
+content changes, and metadata-change time strengthens mutation and replacement
+detection. Assessment, publication, catalog-authorized analysis, detail-only
+preview, and process-local WMS authorization all use this same typed identity.
+
+Filesystem device number is not part of raster identity. It names the current
+mount instance rather than the GeoTIFF and can change when an unchanged
+NFS-backed source is remounted into a replacement container. Catalog records
+written with the former five-field representation remain readable through an
+explicit compatibility parser that discards only the leading device number;
+the catalog is not rewritten during publication. Malformed assessment identity
+metadata receives a distinct reassessment error, while a mismatch in any
+retained field continues to report a changed source.
+
 ## Publication state
 
 Before mutating GeoServer, EOLab reads the initializer-owned workspace and
