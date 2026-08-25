@@ -59,7 +59,14 @@
               SUBTITLE TO BE SET BY CONFIGURATION
             </p>
           </div>
-          <button class="icon-button" id="collapse-panel" type="button" aria-label="Collapse control panel">
+          <button
+            class="icon-button"
+            id="collapse-panel"
+            type="button"
+            aria-label="Collapse control panel"
+            aria-controls="control-panel"
+            aria-expanded="true"
+          >
             <span aria-hidden="true">&#10005;</span>
           </button>
         </header>
@@ -67,7 +74,24 @@
         <section
           class="eomap-workspace-region operational-status-region"
           id="eomap-operational-status-region"
-          aria-label="Operational status"
+          aria-labelledby="eomap-operational-status-heading"
+        >
+        <div class="workspace-region-heading operational-status-heading">
+          <h2 id="eomap-operational-status-heading">Operational status</h2>
+          <button
+            class="secondary-button workspace-region-toggle"
+            id="toggle-operational-status"
+            type="button"
+            aria-controls="eomap-operational-status-body"
+            aria-expanded="true"
+          >
+            Collapse operational status
+          </button>
+        </div>
+        <div
+          class="workspace-region-body operational-status-body"
+          id="eomap-operational-status-body"
+          aria-hidden="false"
         >
         <details class="system-state catalog-system-state" id="system-state">
           <summary>
@@ -175,6 +199,7 @@
           aria-live="polite"
           aria-atomic="true"
         ></p>
+        </div>
         </section>
 
         <div class="panel-content">
@@ -455,9 +480,26 @@
                   <section
                     class="eomap-workspace-region map-layers-region"
                     id="eomap-map-layers-region"
-                    aria-label="Map and layers"
+                    aria-labelledby="eomap-map-layers-heading"
                     aria-controls="map"
                   >
+                    <div class="workspace-region-heading">
+                      <h2 id="eomap-map-layers-heading">Map and layers</h2>
+                      <button
+                        class="secondary-button workspace-region-toggle"
+                        id="toggle-map-layers"
+                        type="button"
+                        aria-controls="eomap-map-layers-body"
+                        aria-expanded="true"
+                      >
+                        Collapse map and layers
+                      </button>
+                    </div>
+                    <div
+                      class="workspace-region-body map-layers-body"
+                      id="eomap-map-layers-body"
+                      aria-hidden="false"
+                    >
                     <div
                       class="raster-detail-preview-controls"
                       id="raster-detail-preview-controls"
@@ -528,12 +570,30 @@
                       aria-atomic="true"
                       tabindex="-1"
                     ></p>
+                    </div>
                   </section>
                 <section
                   class="eomap-workspace-region raster-interpretation-region"
                   id="eomap-raster-interpretation-region"
-                  aria-label="Raster interpretation"
+                  aria-labelledby="eomap-raster-interpretation-heading"
                 >
+                  <div class="workspace-region-heading">
+                    <h2 id="eomap-raster-interpretation-heading">Raster interpretation</h2>
+                    <button
+                      class="secondary-button workspace-region-toggle"
+                      id="toggle-raster-interpretation"
+                      type="button"
+                      aria-controls="eomap-raster-interpretation-body"
+                      aria-expanded="true"
+                    >
+                      Collapse raster interpretation
+                    </button>
+                  </div>
+                  <div
+                    class="workspace-region-body raster-interpretation-body"
+                    id="eomap-raster-interpretation-body"
+                    aria-hidden="false"
+                  >
                   <fieldset
                     class="raster-style-controls"
                     id="raster-style-controls"
@@ -820,6 +880,7 @@
                     </button>
                   </section>
                   </fieldset>
+                  </div>
                 </section>
         </div>
 
@@ -829,7 +890,14 @@
         </footer>
       </section>
 
-      <button class="panel-opener" id="open-panel" type="button" hidden>
+      <button
+        class="panel-opener"
+        id="open-panel"
+        type="button"
+        aria-controls="control-panel"
+        aria-expanded="false"
+        hidden
+      >
         OPEN LABEL TO BE SET BY CONFIGURATION
       </button>
       <div class="map-position" id="map-position">0.000, 0.000</div>

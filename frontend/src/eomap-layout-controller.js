@@ -1,5 +1,5 @@
 /**
- * EOMap control-panel and Catalog-workspace layout controller.
+ * EOMap control-panel and workspace disclosure controller.
  *
  * This component owns only disclosure state, layout classes, ARIA/hidden
  * presentation, disclosure focus, and delayed map-size invalidation. It has no
@@ -8,6 +8,46 @@
 
 /** Delay matching the control-panel width and transform transitions. */
 export const CONTROL_PANEL_TRANSITION_MILLISECONDS = 240;
+
+/**
+ * @typedef {Object} WorkspaceDisclosureConfiguration
+ * @property {string} regionSelector Selector for the semantic region.
+ * @property {string} toggleSelector Selector for the region disclosure button.
+ * @property {string} bodySelector Selector for the disclosed region body.
+ * @property {string} name Lowercase accessible name used in button text.
+ */
+
+/**
+ * @typedef {Object} WorkspaceDisclosureState
+ * @property {WorkspaceDisclosureConfiguration} configuration Static contract.
+ * @property {Element} region Semantic workspace region.
+ * @property {Element} toggle Disclosure button.
+ * @property {Element} body Disclosed region body.
+ * @property {boolean} isExpanded Whether the body is available.
+ * @property {() => void} handleToggle Bound click listener.
+ */
+
+/** @type {WorkspaceDisclosureConfiguration[]} */
+const WORKSPACE_DISCLOSURES = [
+    {
+        regionSelector: "#eomap-operational-status-region",
+        toggleSelector: "#toggle-operational-status",
+        bodySelector: "#eomap-operational-status-body",
+        name: "operational status",
+    },
+    {
+        regionSelector: "#eomap-map-layers-region",
+        toggleSelector: "#toggle-map-layers",
+        bodySelector: "#eomap-map-layers-body",
+        name: "map and layers",
+    },
+    {
+        regionSelector: "#eomap-raster-interpretation-region",
+        toggleSelector: "#toggle-raster-interpretation",
+        bodySelector: "#eomap-raster-interpretation-body",
+        name: "raster interpretation",
+    },
+];
 
 /**
  * Resolve one required element from the static EOMap layout contract.
@@ -33,7 +73,7 @@ function requireLayoutElement(documentContext, selector) {
  * Transition scheduler; defaults to the browser timer.
  */
 
-/** Own the EOMap panel and wide-Catalog disclosure presentation. */
+/** Own the EOMap panel and workspace disclosure presentation. */
 export class EomapLayoutController {
     /**
      * Resolve and bind the static EOMap layout controls.
@@ -78,9 +118,18 @@ export class EomapLayoutController {
             documentContext,
             "#catalog-item-inspector"
         );
+        this.catalogRegion = requireLayoutElement(
+            documentContext,
+            "#eomap-catalog-region"
+        );
         this.catalogWorkspaceIsExpanded =
             this.catalogWorkspaceToggle.getAttribute("aria-expanded") !==
             "false";
+        this.controlPanelIsCollapsed =
+            this.controlPanelElement.classList.contains("is-collapsed");
+        this.workspaceDisclosures = WORKSPACE_DISCLOSURES.map(
+            (configuration) => this.#createWorkspaceDisclosure(configuration)
+        );
         this.boundToggleCatalogWorkspace =
             this.#handleToggleCatalogWorkspace.bind(this);
         this.boundDocumentKeydown = this.#handleDocumentKeydown.bind(this);
@@ -99,6 +148,8 @@ export class EomapLayoutController {
             this.boundCollapsePanel
         );
         this.openPanelButton.addEventListener("click", this.boundOpenPanel);
+        this.#synchronizeCatalogWorkspacePresentation();
+        this.#synchronizeControlPanelPresentation();
     }
 
     /**
@@ -115,18 +166,7 @@ export class EomapLayoutController {
             return;
         }
         this.catalogWorkspaceIsExpanded = isExpanded;
-        this.appElement.classList.toggle("is-catalog-workspace", isExpanded);
-        this.catalogWorkspaceToggle.setAttribute(
-            "aria-expanded",
-            String(isExpanded)
-        );
-        this.catalogWorkspaceToggle.textContent = isExpanded
-            ? "Minimize catalog"
-            : "Expand catalog";
-        this.catalogInspector.setAttribute(
-            "aria-hidden",
-            String(!isExpanded)
-        );
+        this.#synchronizeCatalogWorkspacePresentation();
         this.#scheduleMapInvalidation();
     }
 
@@ -141,18 +181,23 @@ export class EomapLayoutController {
      * @return {void}
      */
     setControlPanelCollapsed(isCollapsed) {
+        if (isCollapsed === this.controlPanelIsCollapsed) {
+            return;
+        }
         const catalogWorkspaceWasExpanded =
             this.catalogWorkspaceIsExpanded;
         if (isCollapsed) {
             this.setCatalogWorkspaceExpanded(false);
         }
-        this.controlPanelElement.classList.toggle(
-            "is-collapsed",
-            isCollapsed
-        );
-        this.openPanelButton.hidden = !isCollapsed;
+        this.controlPanelIsCollapsed = isCollapsed;
+        this.#synchronizeControlPanelPresentation();
         if (!catalogWorkspaceWasExpanded) {
             this.#scheduleMapInvalidation();
+        }
+        if (isCollapsed) {
+            this.openPanelButton.focus();
+        } else {
+            this.collapsePanelButton.focus();
         }
     }
 
@@ -178,6 +223,142 @@ export class EomapLayoutController {
             this.boundCollapsePanel
         );
         this.openPanelButton.removeEventListener("click", this.boundOpenPanel);
+        for (const disclosure of this.workspaceDisclosures) {
+            disclosure.toggle.removeEventListener(
+                "click",
+                disclosure.handleToggle
+            );
+        }
+    }
+
+    /**
+     * Resolve, initialize, and bind one semantically identical workspace
+     * disclosure.
+     *
+     * @param {WorkspaceDisclosureConfiguration} configuration Static DOM and
+     * accessible-name contract.
+     * @return {WorkspaceDisclosureState} Bound disclosure state and elements.
+     * @throws {Error} If any required disclosure element is absent.
+     */
+    #createWorkspaceDisclosure(configuration) {
+        /** @type {WorkspaceDisclosureState} */
+        const disclosure = {
+            configuration,
+            region: requireLayoutElement(
+                this.documentContext,
+                configuration.regionSelector
+            ),
+            toggle: requireLayoutElement(
+                this.documentContext,
+                configuration.toggleSelector
+            ),
+            body: requireLayoutElement(
+                this.documentContext,
+                configuration.bodySelector
+            ),
+            isExpanded: false,
+            handleToggle() {},
+        };
+        disclosure.isExpanded =
+            disclosure.toggle.getAttribute("aria-expanded") !== "false";
+        disclosure.handleToggle = () => {
+            this.#setWorkspaceDisclosureExpanded(
+                disclosure,
+                !disclosure.isExpanded
+            );
+        };
+        disclosure.toggle.addEventListener("click", disclosure.handleToggle);
+        this.#synchronizeWorkspaceDisclosure(disclosure);
+        return disclosure;
+    }
+
+    /**
+     * Apply one workspace disclosure state and schedule map remeasurement.
+     *
+     * @param {WorkspaceDisclosureState} disclosure Workspace disclosure state.
+     * @param {boolean} isExpanded Whether its body should be available.
+     * @return {void}
+     */
+    #setWorkspaceDisclosureExpanded(disclosure, isExpanded) {
+        if (isExpanded === disclosure.isExpanded) {
+            return;
+        }
+        disclosure.isExpanded = isExpanded;
+        this.#synchronizeWorkspaceDisclosure(disclosure);
+        this.#scheduleMapInvalidation();
+    }
+
+    /**
+     * Synchronize classes, ARIA, hidden state, and button text for one region.
+     *
+     * @param {WorkspaceDisclosureState} disclosure Workspace disclosure state.
+     * @return {void}
+     */
+    #synchronizeWorkspaceDisclosure(disclosure) {
+        disclosure.region.classList.toggle(
+            "is-collapsed",
+            !disclosure.isExpanded
+        );
+        disclosure.toggle.setAttribute(
+            "aria-expanded",
+            String(disclosure.isExpanded)
+        );
+        disclosure.toggle.textContent =
+            (disclosure.isExpanded ? "Collapse " : "Expand ") +
+            disclosure.configuration.name;
+        disclosure.body.hidden = !disclosure.isExpanded;
+        disclosure.body.setAttribute(
+            "aria-hidden",
+            String(!disclosure.isExpanded)
+        );
+    }
+
+    /** Synchronize the outer Catalog workspace presentation. @return {void} */
+    #synchronizeCatalogWorkspacePresentation() {
+        this.appElement.classList.toggle(
+            "is-catalog-workspace",
+            this.catalogWorkspaceIsExpanded
+        );
+        this.catalogWorkspaceToggle.setAttribute(
+            "aria-expanded",
+            String(this.catalogWorkspaceIsExpanded)
+        );
+        this.catalogWorkspaceToggle.textContent =
+            this.catalogWorkspaceIsExpanded
+                ? "Minimize catalog"
+                : "Expand catalog";
+        this.catalogInspector.hidden = !this.catalogWorkspaceIsExpanded;
+        this.catalogInspector.setAttribute(
+            "aria-hidden",
+            String(!this.catalogWorkspaceIsExpanded)
+        );
+    }
+
+    /** Synchronize the complete panel's accessible presentation. @return {void} */
+    #synchronizeControlPanelPresentation() {
+        this.controlPanelElement.classList.toggle(
+            "is-collapsed",
+            this.controlPanelIsCollapsed
+        );
+        this.controlPanelElement.setAttribute(
+            "aria-hidden",
+            String(this.controlPanelIsCollapsed)
+        );
+        if (this.controlPanelIsCollapsed) {
+            this.controlPanelElement.setAttribute("inert", "");
+        } else {
+            this.controlPanelElement.removeAttribute("inert");
+        }
+        this.controlPanelElement.inert = this.controlPanelIsCollapsed;
+        this.collapsePanelButton.setAttribute(
+            "aria-expanded",
+            String(!this.controlPanelIsCollapsed)
+        );
+        this.openPanelButton.setAttribute(
+            "aria-expanded",
+            String(!this.controlPanelIsCollapsed)
+        );
+        this.openPanelButton.hidden = !this.controlPanelIsCollapsed;
     }
 
     /** Schedule one map resize after the visual layout transition. @return {void} */
@@ -194,21 +375,63 @@ export class EomapLayoutController {
     }
 
     /**
-     * Minimize an expanded Catalog workspace when Escape is pressed.
+     * Collapse the focused workspace disclosure when Escape is pressed.
+     *
+     * Native form controls keep Escape. A focused map/layers, raster, or
+     * operational-status region collapses independently; otherwise a focused
+     * expanded Catalog workspace minimizes and receives focus.
      *
      * @param {KeyboardEvent} keyboardEvent Document keyboard event.
      * @return {void}
      */
     #handleDocumentKeydown(keyboardEvent) {
+        if (keyboardEvent.key !== "Escape") {
+            return;
+        }
+        const focusedElement = this.documentContext.activeElement;
+        if (this.#focusOwnsEscape(focusedElement)) {
+            return;
+        }
+        const focusedDisclosure = this.workspaceDisclosures.find(
+            (disclosure) =>
+                disclosure.isExpanded &&
+                disclosure.region.contains(focusedElement)
+        );
+        if (focusedDisclosure !== undefined) {
+            keyboardEvent.preventDefault();
+            this.#setWorkspaceDisclosureExpanded(focusedDisclosure, false);
+            focusedDisclosure.toggle.focus();
+            return;
+        }
         if (
-            keyboardEvent.key !== "Escape" ||
-            !this.catalogWorkspaceIsExpanded
+            !this.catalogWorkspaceIsExpanded ||
+            (
+                focusedElement !== null &&
+                focusedElement !== undefined &&
+                focusedElement !== this.catalogWorkspaceToggle &&
+                !this.catalogRegion.contains(focusedElement)
+            )
         ) {
             return;
         }
         keyboardEvent.preventDefault();
         this.setCatalogWorkspaceExpanded(false);
         this.catalogWorkspaceToggle.focus();
+    }
+
+    /**
+     * Report whether the focused native input should retain Escape handling.
+     *
+     * @param {Element|null} focusedElement Current document focus target.
+     * @return {boolean} Whether the layout controller must ignore Escape.
+     */
+    #focusOwnsEscape(focusedElement) {
+        if (focusedElement === null || focusedElement === undefined) {
+            return false;
+        }
+        return ["INPUT", "SELECT", "TEXTAREA"].includes(
+            focusedElement.tagName
+        );
     }
 
     /** Collapse the complete control panel. @return {void} */
