@@ -85,11 +85,15 @@ test("temporary AOI upload progress is native, labeled, and described", () => {
 test("temporary AOI layout remains bounded and responsive without taking Catalog scrolling", () => {
   assert.match(
     STYLESHEET,
-    /\.panel-content\s*\{[^}]*display:\s*flex[^}]*flex-direction:\s*column[^}]*overflow:\s*hidden/s,
+    /\.panel-content\s*\{[^}]*display:\s*grid[^}]*"temporary-aoi"[^}]*overflow-y:\s*auto/s,
   );
   assert.match(
     STYLESHEET,
-    /\.catalog-panel\s*\{[^}]*min-height:\s*0[^}]*flex:\s*1[^}]*overflow:\s*hidden/s,
+    /\.catalog-panel\s*\{[^}]*grid-area:\s*catalog[^}]*min-height:\s*0[^}]*overflow:\s*hidden/s,
+  );
+  assert.match(
+    STYLESHEET,
+    /\.temporary-aoi-card\s*\{[^}]*grid-area:\s*temporary-aoi[^}]*flex:\s*0 0 auto/s,
   );
   assert.match(
     STYLESHEET,

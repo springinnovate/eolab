@@ -85,7 +85,7 @@ test("operational status region groups scanning and rendering diagnostics", () =
     assert.ok(renderingState < panelContent);
     assert.match(
         MARKUP,
-        /id="eomap-operational-status-region"[^>]*aria-label="Operational status"/s
+        /id="eomap-operational-status-region"[^>]*aria-labelledby="eomap-operational-status-heading"/s
     );
 });
 
@@ -137,11 +137,60 @@ test("map and raster siblings retain their focused controls", () => {
     assert.match(rasterRegion.source, /id="raster-style-controls"/);
     assert.match(
         MARKUP,
-        /id="eomap-map-layers-region"[^>]*aria-label="Map and layers"[^>]*aria-controls="map"/s
+        /id="eomap-map-layers-region"[^>]*aria-labelledby="eomap-map-layers-heading"[^>]*aria-controls="map"/s
     );
     assert.match(
         MARKUP,
-        /id="eomap-raster-interpretation-region"[^>]*aria-label="Raster interpretation"/s
+        /id="eomap-raster-interpretation-region"[^>]*aria-labelledby="eomap-raster-interpretation-heading"/s
+    );
+});
+
+test("workspace regions expose named independent disclosure contracts", () => {
+    const disclosures = [
+        {
+            toggle: "toggle-operational-status",
+            body: "eomap-operational-status-body",
+            text: "Collapse operational status",
+        },
+        {
+            toggle: "toggle-map-layers",
+            body: "eomap-map-layers-body",
+            text: "Collapse map and layers",
+        },
+        {
+            toggle: "toggle-raster-interpretation",
+            body: "eomap-raster-interpretation-body",
+            text: "Collapse raster interpretation",
+        },
+    ];
+
+    for (const disclosure of disclosures) {
+        assert.match(
+            MARKUP,
+            new RegExp(
+                'id="' + disclosure.toggle +
+                '"[^>]*aria-controls="' + disclosure.body +
+                '"[^>]*aria-expanded="true"[^>]*>\\s*' + disclosure.text,
+                "s"
+            )
+        );
+        assert.match(
+            MARKUP,
+            new RegExp(
+                'class="workspace-region-body [^"]*"\\s+id="' +
+                disclosure.body +
+                '"\\s+aria-hidden="false"',
+                "s"
+            )
+        );
+    }
+    assert.match(
+        MARKUP,
+        /id="collapse-panel"[^>]*aria-controls="control-panel"[^>]*aria-expanded="true"/s
+    );
+    assert.match(
+        MARKUP,
+        /id="open-panel"[^>]*aria-controls="control-panel"[^>]*aria-expanded="false"[^>]*hidden/s
     );
 });
 
@@ -188,15 +237,46 @@ test("raster interpretation groups active target, area, distribution, then appea
 test("each sibling workspace receives an independent bounded scroll budget", () => {
     assert.match(
         STYLESHEET,
-        /\.catalog-panel\s*\{[^}]*flex:\s*1 1 50%[^}]*overflow:\s*hidden/s
+        /\.catalog-panel\s*\{[^}]*container-name:\s*eomap-catalog[^}]*grid-area:\s*catalog[^}]*overflow:\s*hidden/s
     );
     assert.match(
         STYLESHEET,
-        /\.map-layers-region,\s*\.raster-interpretation-region\s*\{[^}]*max-height:\s*min\(40vh, 480px\)[^}]*overflow-y:\s*auto[^}]*overscroll-behavior:\s*contain/s
+        /\.panel-content\s*\{[^}]*grid-template-areas:[^}]*overflow-y:\s*auto[^}]*overscroll-behavior:\s*contain/s
+    );
+    assert.match(
+        STYLESHEET,
+        /\.map-layers-body,\s*\.raster-interpretation-body\s*\{[^}]*max-height:\s*min\(38vh, 440px\)[^}]*overflow-y:\s*auto[^}]*overscroll-behavior:\s*contain/s
     );
     assert.match(
         STYLESHEET,
         /\.catalog-inspector-body\s*\{[^}]*overflow-y:\s*auto/s
+    );
+});
+
+test("CSS owns deliberate wide, intermediate, narrow, and short reflow", () => {
+    assert.match(
+        STYLESHEET,
+        /@media \(min-width: 1180px\) and \(min-height: 720px\)\s*\{[^}]*#app\.is-catalog-workspace \.panel-content\s*\{[^}]*"catalog temporary-aoi"[^}]*"catalog map-layers"[^}]*"catalog raster-interpretation"[^}]*overflow:\s*hidden/s
+    );
+    assert.match(
+        STYLESHEET,
+        /@media \(max-width: 1024px\)\s*\{[^}]*#app\.is-catalog-workspace #map\s*\{[^}]*right:\s*0/s
+    );
+    assert.match(
+        STYLESHEET,
+        /@media \(max-width: 700px\)\s*\{[\s\S]*?\.control-panel\s*\{[^}]*max-height:\s*min\(82dvh, 720px\)/s
+    );
+    assert.match(
+        STYLESHEET,
+        /@media \(max-width: 420px\)\s*\{[^}]*\.workspace-region-heading\s*\{[^}]*flex-direction:\s*column/s
+    );
+    assert.match(
+        STYLESHEET,
+        /@media \(max-height: 640px\)\s*\{[\s\S]*?\.control-panel\s*\{[^}]*overflow-y:\s*auto[\s\S]*?\.panel-content\s*\{[^}]*overflow:\s*visible/s
+    );
+    assert.match(
+        STYLESHEET,
+        /@media \(prefers-reduced-motion: reduce\)\s*\{[^}]*transition-duration:\s*0\.01ms !important/s
     );
 });
 
@@ -234,13 +314,19 @@ test("semantic regions preserve one DOM instance of every owned control", () => 
     const uniqueIdentifiers = [
         "system-state",
         "rendering-diagnostics",
+        "toggle-operational-status",
+        "eomap-operational-status-body",
         "catalog-search",
         "catalog-results",
         "catalog-item-inspector",
         "toggle-catalog-layer",
         "temporary-aoi",
         "raster-layer-stack",
+        "toggle-map-layers",
+        "eomap-map-layers-body",
         "raster-style-controls",
+        "toggle-raster-interpretation",
+        "eomap-raster-interpretation-body",
         "raster-active-controls",
         "raster-sampling-area-controls",
         "raster-sample-window-range",

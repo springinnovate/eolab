@@ -47,14 +47,18 @@ class FakeLayoutElement extends EventTarget {
      *
      * @param {Object<string, string>} [attributes={}] Initial attributes.
      * @param {string[]} [classes=[]] Initial class tokens.
+     * @param {string} [tagName="DIV"] Uppercase element tag name.
      */
-    constructor(attributes = {}, classes = []) {
+    constructor(attributes = {}, classes = [], tagName = "DIV") {
         super();
         this.attributes = new Map(Object.entries(attributes));
         this.classList = new FakeClassList(...classes);
+        this.descendants = new Set();
         this.hidden = false;
+        this.inert = false;
         this.textContent = "";
         this.focused = false;
+        this.tagName = tagName;
     }
 
     /**
@@ -78,9 +82,39 @@ class FakeLayoutElement extends EventTarget {
         this.attributes.set(name, value);
     }
 
+    /**
+     * Remove one stored attribute.
+     *
+     * @param {string} name Attribute name.
+     * @return {void}
+     */
+    removeAttribute(name) {
+        this.attributes.delete(name);
+    }
+
     /** Mark this element as the focus target. @return {void} */
     focus() {
         this.focused = true;
+    }
+
+    /**
+     * Register one descendant for focus-ownership tests.
+     *
+     * @param {FakeLayoutElement} element Descendant element.
+     * @return {void}
+     */
+    addDescendant(element) {
+        this.descendants.add(element);
+    }
+
+    /**
+     * Report whether an element is this element or a registered descendant.
+     *
+     * @param {FakeLayoutElement|null|undefined} element Candidate element.
+     * @return {boolean} Whether this element contains the candidate.
+     */
+    contains(element) {
+        return element === this || this.descendants.has(element);
     }
 }
 
@@ -94,6 +128,7 @@ class FakeLayoutDocument extends EventTarget {
     constructor(elements) {
         super();
         this.elements = elements;
+        this.activeElement = null;
     }
 
     /**
@@ -134,6 +169,32 @@ function createLayoutFixture() {
     const catalogToggle = new FakeLayoutElement({ "aria-expanded": "true" });
     catalogToggle.textContent = "Minimize catalog";
     const inspector = new FakeLayoutElement({ "aria-hidden": "false" });
+    const catalogRegion = new FakeLayoutElement();
+    catalogRegion.addDescendant(catalogToggle);
+    catalogRegion.addDescendant(inspector);
+    const operationalRegion = new FakeLayoutElement();
+    const operationalToggle = new FakeLayoutElement({
+        "aria-expanded": "true",
+    });
+    const operationalBody = new FakeLayoutElement({
+        "aria-hidden": "false",
+    });
+    operationalRegion.addDescendant(operationalToggle);
+    operationalRegion.addDescendant(operationalBody);
+    const mapLayersRegion = new FakeLayoutElement();
+    const mapLayersToggle = new FakeLayoutElement({
+        "aria-expanded": "true",
+    });
+    const mapLayersBody = new FakeLayoutElement({ "aria-hidden": "false" });
+    mapLayersRegion.addDescendant(mapLayersToggle);
+    mapLayersRegion.addDescendant(mapLayersBody);
+    const rasterRegion = new FakeLayoutElement();
+    const rasterToggle = new FakeLayoutElement({
+        "aria-expanded": "true",
+    });
+    const rasterBody = new FakeLayoutElement({ "aria-hidden": "false" });
+    rasterRegion.addDescendant(rasterToggle);
+    rasterRegion.addDescendant(rasterBody);
     const elements = new Map([
         ["#app", app],
         ["#control-panel", panel],
@@ -141,16 +202,36 @@ function createLayoutFixture() {
         ["#open-panel", openPanel],
         ["#toggle-catalog-workspace", catalogToggle],
         ["#catalog-item-inspector", inspector],
+        ["#eomap-catalog-region", catalogRegion],
+        ["#eomap-operational-status-region", operationalRegion],
+        ["#toggle-operational-status", operationalToggle],
+        ["#eomap-operational-status-body", operationalBody],
+        ["#eomap-map-layers-region", mapLayersRegion],
+        ["#toggle-map-layers", mapLayersToggle],
+        ["#eomap-map-layers-body", mapLayersBody],
+        ["#eomap-raster-interpretation-region", rasterRegion],
+        ["#toggle-raster-interpretation", rasterToggle],
+        ["#eomap-raster-interpretation-body", rasterBody],
     ]);
     const timers = [];
     return {
         app,
         catalogToggle,
         collapsePanel,
+        catalogRegion,
         document: new FakeLayoutDocument(elements),
         inspector,
+        mapLayersBody,
+        mapLayersRegion,
+        mapLayersToggle,
         openPanel,
+        operationalBody,
+        operationalRegion,
+        operationalToggle,
         panel,
+        rasterBody,
+        rasterRegion,
+        rasterToggle,
         schedule(callback, delay) {
             timers.push({ callback, delay });
         },
@@ -173,6 +254,7 @@ test("Catalog workspace disclosure owns classes, ARIA, and invalidation timing",
     assert.equal(fixture.catalogToggle.getAttribute("aria-expanded"), "false");
     assert.equal(fixture.catalogToggle.textContent, "Expand catalog");
     assert.equal(fixture.inspector.getAttribute("aria-hidden"), "true");
+    assert.equal(fixture.inspector.hidden, true);
     assert.equal(invalidationCount, 0);
     assert.equal(fixture.timers.length, 1);
     assert.equal(
@@ -188,10 +270,11 @@ test("Catalog workspace disclosure owns classes, ARIA, and invalidation timing",
     assert.equal(fixture.catalogToggle.getAttribute("aria-expanded"), "true");
     assert.equal(fixture.catalogToggle.textContent, "Minimize catalog");
     assert.equal(fixture.inspector.getAttribute("aria-hidden"), "false");
+    assert.equal(fixture.inspector.hidden, false);
     controller.destroy();
 });
 
-test("panel collapse and reopen preserve minimized Catalog state", () => {
+test("panel collapse and reopen preserve state, ARIA, inertness, and focus", () => {
     const fixture = createLayoutFixture();
     let invalidationCount = 0;
     new EomapLayoutController({
@@ -203,14 +286,26 @@ test("panel collapse and reopen preserve minimized Catalog state", () => {
     fixture.collapsePanel.dispatchEvent(new Event("click"));
 
     assert.equal(fixture.panel.classList.contains("is-collapsed"), true);
+    assert.equal(fixture.panel.getAttribute("aria-hidden"), "true");
+    assert.equal(fixture.panel.getAttribute("inert"), "");
+    assert.equal(fixture.panel.inert, true);
     assert.equal(fixture.openPanel.hidden, false);
+    assert.equal(fixture.openPanel.getAttribute("aria-expanded"), "false");
+    assert.equal(fixture.collapsePanel.getAttribute("aria-expanded"), "false");
+    assert.equal(fixture.openPanel.focused, true);
     assert.equal(fixture.catalogToggle.getAttribute("aria-expanded"), "false");
     assert.equal(fixture.timers.length, 1);
 
     fixture.openPanel.dispatchEvent(new Event("click"));
 
     assert.equal(fixture.panel.classList.contains("is-collapsed"), false);
+    assert.equal(fixture.panel.getAttribute("aria-hidden"), "false");
+    assert.equal(fixture.panel.getAttribute("inert"), null);
+    assert.equal(fixture.panel.inert, false);
     assert.equal(fixture.openPanel.hidden, true);
+    assert.equal(fixture.openPanel.getAttribute("aria-expanded"), "true");
+    assert.equal(fixture.collapsePanel.getAttribute("aria-expanded"), "true");
+    assert.equal(fixture.collapsePanel.focused, true);
     assert.equal(fixture.catalogToggle.getAttribute("aria-expanded"), "false");
     assert.equal(fixture.timers.length, 2);
     for (const timer of fixture.timers) {
@@ -219,13 +314,67 @@ test("panel collapse and reopen preserve minimized Catalog state", () => {
     assert.equal(invalidationCount, 2);
 });
 
-test("Escape minimizes the Catalog workspace and returns disclosure focus", () => {
+test("workspace disclosures own independent hidden, ARIA, and layout state", () => {
+    const fixture = createLayoutFixture();
+    let invalidationCount = 0;
+    const controller = new EomapLayoutController({
+        documentContext: fixture.document,
+        invalidateMapSize: () => invalidationCount += 1,
+        schedule: fixture.schedule,
+    });
+
+    fixture.mapLayersToggle.dispatchEvent(new Event("click"));
+
+    assert.equal(fixture.mapLayersBody.hidden, true);
+    assert.equal(fixture.mapLayersBody.getAttribute("aria-hidden"), "true");
+    assert.equal(
+        fixture.mapLayersRegion.classList.contains("is-collapsed"),
+        true
+    );
+    assert.equal(fixture.mapLayersToggle.getAttribute("aria-expanded"), "false");
+    assert.equal(fixture.mapLayersToggle.textContent, "Expand map and layers");
+    assert.equal(fixture.operationalBody.hidden, false);
+    assert.equal(fixture.rasterBody.hidden, false);
+    assert.equal(fixture.timers.length, 1);
+    fixture.timers.shift().callback();
+    assert.equal(invalidationCount, 1);
+
+    fixture.mapLayersToggle.dispatchEvent(new Event("click"));
+    assert.equal(fixture.mapLayersBody.hidden, false);
+    assert.equal(fixture.mapLayersBody.getAttribute("aria-hidden"), "false");
+    assert.equal(fixture.mapLayersToggle.textContent, "Collapse map and layers");
+    controller.destroy();
+});
+
+test("Escape collapses only the focused workspace and returns toggle focus", () => {
     const fixture = createLayoutFixture();
     const controller = new EomapLayoutController({
         documentContext: fixture.document,
         invalidateMapSize() {},
         schedule: fixture.schedule,
     });
+    fixture.document.activeElement = fixture.rasterBody;
+    const escapeEvent = new FakeKeyboardEvent("Escape");
+
+    fixture.document.dispatchEvent(escapeEvent);
+
+    assert.equal(escapeEvent.defaultPrevented, true);
+    assert.equal(fixture.rasterBody.hidden, true);
+    assert.equal(fixture.rasterToggle.focused, true);
+    assert.equal(fixture.mapLayersBody.hidden, false);
+    assert.equal(fixture.catalogToggle.getAttribute("aria-expanded"), "true");
+    assert.equal(fixture.timers.length, 1);
+    controller.destroy();
+});
+
+test("Escape minimizes focused Catalog workspace and returns disclosure focus", () => {
+    const fixture = createLayoutFixture();
+    const controller = new EomapLayoutController({
+        documentContext: fixture.document,
+        invalidateMapSize() {},
+        schedule: fixture.schedule,
+    });
+    fixture.document.activeElement = fixture.inspector;
     const escapeEvent = new FakeKeyboardEvent("Escape");
 
     fixture.document.dispatchEvent(escapeEvent);
@@ -235,9 +384,33 @@ test("Escape minimizes the Catalog workspace and returns disclosure focus", () =
     assert.equal(fixture.catalogToggle.getAttribute("aria-expanded"), "false");
 
     const secondEscape = new FakeKeyboardEvent("Escape");
+    fixture.document.activeElement = fixture.catalogToggle;
     fixture.document.dispatchEvent(secondEscape);
     assert.equal(secondEscape.defaultPrevented, false);
     assert.equal(fixture.timers.length, 1);
+    controller.destroy();
+});
+
+test("Escape preserves native input handling and unrelated workspace state", () => {
+    const fixture = createLayoutFixture();
+    const rasterInput = new FakeLayoutElement({}, [], "INPUT");
+    fixture.rasterRegion.addDescendant(rasterInput);
+    fixture.document.activeElement = rasterInput;
+    const controller = new EomapLayoutController({
+        documentContext: fixture.document,
+        invalidateMapSize() {},
+        schedule: fixture.schedule,
+    });
+    const escapeEvent = new FakeKeyboardEvent("Escape");
+
+    fixture.document.dispatchEvent(escapeEvent);
+
+    assert.equal(escapeEvent.defaultPrevented, false);
+    assert.equal(fixture.catalogToggle.getAttribute("aria-expanded"), "true");
+    assert.equal(fixture.operationalBody.hidden, false);
+    assert.equal(fixture.mapLayersBody.hidden, false);
+    assert.equal(fixture.rasterBody.hidden, false);
+    assert.equal(fixture.timers.length, 0);
     controller.destroy();
 });
 
@@ -253,10 +426,16 @@ test("destroy detaches every EOMap layout disclosure listener", () => {
     fixture.catalogToggle.dispatchEvent(new Event("click"));
     fixture.collapsePanel.dispatchEvent(new Event("click"));
     fixture.openPanel.dispatchEvent(new Event("click"));
+    fixture.operationalToggle.dispatchEvent(new Event("click"));
+    fixture.mapLayersToggle.dispatchEvent(new Event("click"));
+    fixture.rasterToggle.dispatchEvent(new Event("click"));
     fixture.document.dispatchEvent(new FakeKeyboardEvent("Escape"));
 
     assert.equal(fixture.app.classList.contains("is-catalog-workspace"), true);
     assert.equal(fixture.panel.classList.contains("is-collapsed"), false);
+    assert.equal(fixture.operationalBody.hidden, false);
+    assert.equal(fixture.mapLayersBody.hidden, false);
+    assert.equal(fixture.rasterBody.hidden, false);
     assert.equal(fixture.timers.length, 0);
 });
 
