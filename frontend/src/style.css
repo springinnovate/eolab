@@ -46,7 +46,7 @@ body,
 }
 
 #app {
-  --catalog-workspace-width: min(1100px, 72vw, calc(100vw - 280px));
+  --catalog-workspace-width: min(960px, 64vw, calc(100vw - 360px));
 }
 
 button,
@@ -381,6 +381,57 @@ h5 {
   color: var(--brand-press);
 }
 
+.workspace-region-heading {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.workspace-region-heading h2 {
+  margin: 0;
+  font-size: 0.98rem;
+}
+
+.workspace-region-toggle {
+  flex: 0 0 auto;
+}
+
+.workspace-region-body {
+  min-width: 0;
+  min-height: 0;
+}
+
+.workspace-region-body[hidden] {
+  display: none;
+}
+
+.eomap-workspace-region.is-collapsed .workspace-region-heading {
+  margin-bottom: 0;
+}
+
+.operational-status-heading {
+  align-items: center;
+  margin: 0;
+  padding: 9px 24px;
+  border-bottom: 1px solid var(--border-3);
+}
+
+.operational-status-heading h2 {
+  font-size: 0.8rem;
+}
+
+.operational-status-heading .secondary-button {
+  padding: 5px 8px;
+  font-size: 0.68rem;
+}
+
+.operational-status-body {
+  min-height: 0;
+}
+
 .system-state {
   display: block;
   padding: 0;
@@ -507,28 +558,54 @@ h5 {
 }
 
 .panel-content {
-  display: flex;
+  display: grid;
   min-height: 0;
   flex: 1;
-  flex-direction: column;
+  grid-template-areas:
+    "temporary-aoi"
+    "catalog"
+    "map-layers"
+    "raster-interpretation";
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(500px, 1fr) auto auto;
   gap: 18px;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 25px 24px;
+  scrollbar-gutter: stable;
 }
 
 .catalog-panel {
+  container-name: eomap-catalog;
+  container-type: inline-size;
   display: flex;
+  grid-area: catalog;
   min-height: 0;
-  flex: 1 1 50%;
   flex-direction: column;
   overflow: hidden;
+}
+
+.map-layers-region {
+  grid-area: map-layers;
+}
+
+.raster-interpretation-region {
+  grid-area: raster-interpretation;
 }
 
 .map-layers-region,
 .raster-interpretation-region {
-  min-height: 0;
-  max-height: min(40vh, 480px);
-  flex: 0 1 auto;
+  display: flex;
+  min-height: 43px;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.map-layers-body,
+.raster-interpretation-body {
+  max-height: min(38vh, 440px);
+  overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
   padding-right: 4px;
@@ -536,6 +613,7 @@ h5 {
 }
 
 .temporary-aoi-card {
+  grid-area: temporary-aoi;
   flex: 0 0 auto;
   border: 1px solid var(--border-2);
   border-left: 4px solid #6d1b7b;
@@ -2041,30 +2119,88 @@ h5 {
   right: 20px;
 }
 
+@container eomap-catalog (max-width: 680px) {
+  #app.is-catalog-workspace .catalog-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(245px, 1.7fr) minmax(75px, 0.3fr);
+    gap: 14px;
+  }
+
+  #app.is-catalog-workspace
+    .catalog-layout.is-catalog-browser-collapsed:not(
+      .is-catalog-inspector-collapsed
+    ) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  #app.is-catalog-workspace
+    .catalog-layout.is-catalog-inspector-collapsed:not(
+      .is-catalog-browser-collapsed
+    ) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+
+  #app.is-catalog-workspace
+    .catalog-layout.is-catalog-browser-collapsed.is-catalog-inspector-collapsed {
+    align-content: start;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto;
+  }
+
+  #app.is-catalog-workspace .catalog-inspector {
+    border-top: 1px solid var(--border-2);
+    border-left: 0;
+    padding-top: 14px;
+    padding-left: 0;
+  }
+}
+
+@media (min-width: 1180px) and (min-height: 720px) {
+  #app.is-catalog-workspace .panel-content {
+    grid-template-areas:
+      "catalog temporary-aoi"
+      "catalog map-layers"
+      "catalog raster-interpretation";
+    grid-template-columns: minmax(0, 1.7fr) minmax(270px, 1fr);
+    grid-template-rows: auto minmax(0, 0.8fr) minmax(0, 1.2fr);
+    overflow: hidden;
+  }
+
+  #app.is-catalog-workspace .catalog-panel,
+  #app.is-catalog-workspace .map-layers-region,
+  #app.is-catalog-workspace .raster-interpretation-region {
+    min-height: 0;
+  }
+
+  #app.is-catalog-workspace .map-layers-body,
+  #app.is-catalog-workspace .raster-interpretation-body {
+    max-height: none;
+    flex: 1;
+  }
+}
+
 @media (max-width: 1024px) {
   #app.is-catalog-workspace #map {
     right: 0;
-    visibility: hidden;
   }
 
   #app.is-catalog-workspace .raster-detail-processing {
-    display: none;
+    right: 0;
   }
 
   #app.is-catalog-workspace .control-panel {
-    inset: 0;
-    width: auto;
-    max-height: none;
-    border: 0;
-    border-radius: 0;
+    width: min(560px, calc(100vw - 32px));
   }
 
   #app.is-catalog-workspace .map-position {
-    display: none;
+    right: 20px;
   }
 
   #app.is-catalog-workspace .raster-detail-map-notice {
-    display: none;
+    right: 32px;
+    max-width: min(720px, calc(100vw - 124px));
   }
 }
 
@@ -2082,7 +2218,11 @@ h5 {
     bottom: 10px;
     left: 10px;
     width: auto;
-    max-height: min(72vh, 620px);
+    max-height: min(82dvh, 720px);
+  }
+
+  #app.is-catalog-workspace .control-panel {
+    width: auto;
   }
 
   .control-panel.is-collapsed {
@@ -2099,6 +2239,31 @@ h5 {
     padding-left: 20px;
   }
 
+  .panel-content {
+    grid-template-areas:
+      "temporary-aoi"
+      "catalog"
+      "map-layers"
+      "raster-interpretation";
+    grid-template-rows: auto minmax(500px, 1fr) auto auto;
+  }
+
+  .catalog-panel {
+    max-height: min(64dvh, 600px);
+  }
+
+  .map-layers-body,
+  .raster-interpretation-body {
+    max-height: min(46dvh, 430px);
+  }
+
+  .operational-status-body {
+    max-height: min(38dvh, 320px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .operational-status-heading,
   .system-state > summary,
   .system-state-details-body {
     padding-right: 20px;
@@ -2130,45 +2295,64 @@ h5 {
     justify-self: start;
   }
 
-  #app.is-catalog-workspace .catalog-layout {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(0, 0.65fr) minmax(0, 1.35fr);
-    gap: 14px;
-  }
-
-  #app.is-catalog-workspace
-    .catalog-layout.is-catalog-browser-collapsed:not(
-      .is-catalog-inspector-collapsed
-    ) {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(0, 1fr) auto;
-  }
-
-  #app.is-catalog-workspace
-    .catalog-layout.is-catalog-inspector-collapsed:not(
-      .is-catalog-browser-collapsed
-    ) {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(0, 1fr);
-  }
-
-  #app.is-catalog-workspace
-    .catalog-layout.is-catalog-browser-collapsed.is-catalog-inspector-collapsed {
-    align-content: start;
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto auto;
-  }
-
-  #app.is-catalog-workspace .catalog-inspector {
-    order: -1;
-    border-bottom: 1px solid var(--border-2);
-    border-left: 0;
-    padding-bottom: 14px;
-    padding-left: 0;
-  }
-
   .catalog-pane.is-collapsed .catalog-pane-heading {
     flex-direction: row;
+  }
+}
+
+@media (max-width: 420px) {
+  .workspace-region-heading {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .workspace-region-toggle {
+    align-self: flex-start;
+  }
+
+  .operational-status-heading {
+    align-items: stretch;
+  }
+}
+
+@media (max-height: 640px) {
+  .control-panel {
+    max-height: calc(100dvh - 20px);
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .panel-header,
+  .operational-status-region,
+  .panel-footer {
+    flex: 0 0 auto;
+  }
+
+  .panel-header {
+    padding-top: 14px;
+    padding-bottom: 12px;
+  }
+
+  .panel-header .eyebrow,
+  .panel-header .subtitle {
+    display: none;
+  }
+
+  .panel-content {
+    min-height: auto;
+    flex: 0 0 auto;
+    grid-template-rows: auto minmax(500px, 64dvh) auto auto;
+    overflow: visible;
+  }
+
+  .catalog-panel {
+    max-height: none;
+  }
+
+  .operational-status-body {
+    max-height: none;
+    overflow: visible;
   }
 }
 
