@@ -27,13 +27,10 @@ export class RasterAppearanceControlsView {
      *
      * @param {Document} [documentContext=globalThis.document] Document that
      * owns the controls.
-     * @param {() => void} [onBeforeShow=() => {}] Composite presentation hook
-     * used to close another contextual raster widget before this one opens.
      * @throws {Error} If any required appearance element is missing.
      */
-    constructor(documentContext = globalThis.document, onBeforeShow = () => {}) {
+    constructor(documentContext = globalThis.document) {
         this.documentContext = documentContext;
-        this.onBeforeShow = onBeforeShow;
         this.#root = requireRasterControl(
             documentContext,
             "#raster-appearance-controls"
@@ -189,13 +186,10 @@ export class RasterAppearanceControlsView {
         if (this.openAppearanceButton.hidden) {
             return;
         }
-        if (this.#root.hidden) {
-            this.onBeforeShow();
-        }
         this.#root.hidden = false;
         this.#root.setAttribute("aria-hidden", "false");
         this.openAppearanceButton.setAttribute("aria-expanded", "true");
-        this.openAppearanceButton.textContent = "Hide appearance";
+        this.openAppearanceButton.setAttribute("aria-label", "Hide raster style");
         if (moveFocus) {
             this.closeAppearanceButton.focus();
         }
@@ -211,7 +205,7 @@ export class RasterAppearanceControlsView {
         this.#root.hidden = true;
         this.#root.setAttribute("aria-hidden", "true");
         this.openAppearanceButton.setAttribute("aria-expanded", "false");
-        this.openAppearanceButton.textContent = "Appearance";
+        this.openAppearanceButton.setAttribute("aria-label", "Show raster style");
         if (returnFocus && !this.openAppearanceButton.hidden) {
             this.openAppearanceButton.focus();
         }

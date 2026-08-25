@@ -290,7 +290,8 @@ test("MapLayerStackView renders semantic, accessible independent rows", () => {
     "3",
   );
   assert.equal(
-    documentContext.querySelector("#toggle-map-layer-widget").textContent,
+    documentContext.querySelector("#toggle-map-layer-widget")
+      .getAttribute("aria-label"),
     "Hide layers",
   );
   assert.equal(list.tagName, "OL");
@@ -406,7 +407,7 @@ test("MapLayerStackView forwards controls and updates opacity output", () => {
   widgetToggle.dispatchEvent(new Event("click"));
   assert.equal(widgetBody.hidden, true);
   assert.equal(widgetToggle.getAttribute("aria-expanded"), "false");
-  assert.equal(widgetToggle.textContent, "Show layers");
+  assert.equal(widgetToggle.getAttribute("aria-label"), "Show layers");
   widgetToggle.dispatchEvent(new Event("click"));
   assert.equal(widgetBody.hidden, false);
   const [temperatureRow, vegetationRow, moistureRow] = documentContext
@@ -448,6 +449,56 @@ test("MapLayerStackView forwards controls and updates opacity output", () => {
   view.unbind();
   actionControl(moistureRow, "remove").dispatchEvent(new Event("click"));
   assert.equal(received.length, 5);
+});
+
+test("MapLayerStackView renders and forwards neutral per-layer tools", () => {
+  const documentContext = new FakeLayerStackDocument();
+  const view = new MapLayerStackView(documentContext);
+  const received = [];
+  view.bind({
+    onActivate() {},
+    onVisibility() {},
+    onOpacity() {},
+    onMove() {},
+    onRemove() {},
+    onTool: (key, toolId) => received.push([key, toolId]),
+  });
+  const layer = {
+    ...LAYERS[0],
+    tools: [
+      {
+        id: "distribution",
+        label: "Distribution",
+        status: "50 km map sample",
+        preview: {
+          kind: "bars",
+          values: [1, 4, 2, 8],
+          label: "Sample distribution",
+        },
+      },
+      { id: "style", label: "Style" },
+    ],
+  };
+
+  view.render([layer], layer.key);
+
+  const row = documentContext.querySelector("#raster-layer-list").children[0];
+  const toolGroup = elementsByClass(row, "map-layer-tools")[0];
+  const preview = elementsByClass(row, "map-layer-tool-bars")[0];
+  assert.equal(toolGroup.hidden, false);
+  assert.equal(preview.getAttribute("role"), "img");
+  assert.equal(preview.getAttribute("aria-label"), "Sample distribution");
+  assert.deepEqual(
+    preview.children.map(({ style }) => style.height),
+    ["12.5%", "50%", "25%", "100%"],
+  );
+
+  actionControl(row, "tool-distribution").dispatchEvent(new Event("click"));
+  actionControl(row, "tool-style").dispatchEvent(new Event("click"));
+  assert.deepEqual(received, [
+    [layer.key, "distribution"],
+    [layer.key, "style"],
+  ]);
 });
 
 test("MapLayerStackView Escape collapses only its floating widget", () => {

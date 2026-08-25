@@ -26,13 +26,10 @@ export class RasterHistogramControlsView {
      *
      * @param {Document} [documentContext=globalThis.document] Document that
      * owns the controls and creates histogram SVG nodes.
-     * @param {() => void} [onBeforeShow=() => {}] Composite presentation hook
-     * used to close another contextual raster widget before this one opens.
      * @throws {Error} If any required histogram element is missing.
      */
-    constructor(documentContext = globalThis.document, onBeforeShow = () => {}) {
+    constructor(documentContext = globalThis.document) {
         this.documentContext = documentContext;
-        this.onBeforeShow = onBeforeShow;
         this.histogram = requireRasterControl(
             documentContext,
             "#raster-histogram"
@@ -208,13 +205,10 @@ export class RasterHistogramControlsView {
         if (this.openHistogramButton.hidden) {
             return;
         }
-        if (this.histogram.hidden) {
-            this.onBeforeShow();
-        }
         this.histogram.hidden = false;
         this.histogram.setAttribute("aria-hidden", "false");
         this.openHistogramButton.setAttribute("aria-expanded", "true");
-        this.openHistogramButton.textContent = "Hide histogram";
+        this.openHistogramButton.setAttribute("aria-label", "Hide histogram");
         if (moveFocus) {
             this.closeHistogramButton.focus();
         }
@@ -230,7 +224,7 @@ export class RasterHistogramControlsView {
         this.histogram.hidden = true;
         this.histogram.setAttribute("aria-hidden", "true");
         this.openHistogramButton.setAttribute("aria-expanded", "false");
-        this.openHistogramButton.textContent = "Histogram";
+        this.openHistogramButton.setAttribute("aria-label", "Show histogram");
         if (returnFocus && !this.openHistogramButton.hidden) {
             this.openHistogramButton.focus();
         }
@@ -242,21 +236,22 @@ export class RasterHistogramControlsView {
      *
      * @param {"none"|"wholeRaster"|"selectedArea"|"temporaryAoi"} mode
      * Active sampling-area discriminator.
+     * @param {string} [label=""] Optional semantic sampling-area description.
      * @return {void}
      * @throws {TypeError} If the mode is outside the sampling-area contract.
      */
-    setSamplingAreaMode(mode) {
+    setSamplingAreaMode(mode, label = "") {
         const labels = {
             none: "No sampled area",
             wholeRaster: "Whole raster",
-            selectedArea: "Selected blue map window",
-            temporaryAoi: "Uploaded purple AOI"
+            selectedArea: "Map sample",
+            temporaryAoi: "Uploaded AOI"
         };
         if (!(mode in labels)) {
             throw new TypeError(`Unsupported histogram sampling area: ${mode}`);
         }
         this.histogram.setAttribute("data-sampling-area", mode);
-        this.histogramScope.textContent = labels[mode];
+        this.histogramScope.textContent = label || labels[mode];
     }
 
     /** Enable statistics retry for an active raster. @return {void} */

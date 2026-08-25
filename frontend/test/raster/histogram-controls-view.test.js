@@ -68,7 +68,7 @@ test("histogram adapter owns status, chart, percentiles, and listeners", () => {
     );
     assert.match(
         documentContext.querySelector("#raster-histogram-scope").textContent,
-        /blue map window/
+        /Map sample/
     );
     assert.equal(
         documentContext.querySelector("#raster-histogram")

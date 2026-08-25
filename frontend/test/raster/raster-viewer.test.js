@@ -285,6 +285,10 @@ function createFakeControlsView() {
             this.histogramWidgetOpenCount =
                 (this.histogramWidgetOpenCount ?? 0) + 1;
         },
+        showAppearanceWidget() {
+            this.appearanceWidgetOpenCount =
+                (this.appearanceWidgetOpenCount ?? 0) + 1;
+        },
         setControlsVisible(isVisible) {
             this.controlsVisible = isVisible;
         },
@@ -1412,6 +1416,69 @@ test("active layers restore isolated styles and completed statistics", async () 
     viewer.destroy();
 });
 
+test("raster layer tools open shared detail views from mini histograms", async () => {
+    const leafletMap = createFakeMap();
+    const { leaflet } = createFakeLeaflet();
+    const controlsView = createFakeControlsView();
+    const layerStackView = createFakeLayerStackView();
+    const statisticsCounts = new Map();
+    const viewer = initializeRasterViewer(
+        {
+            wmsUrl: "/geoserver/eolab/wms",
+            leafletMap,
+            leaflet,
+            onTileError() {},
+        },
+        {
+            controlsView,
+            layerStackView,
+            publishRaster: async (item) => ({
+                layerName: `eolab:${item.id}`,
+                bbox: [-180, -90, 180, 90],
+            }),
+            loadStatistics: async (item, samplingArea) => {
+                statisticsCounts.set(
+                    item.id,
+                    (statisticsCounts.get(item.id) ?? 0) + 1
+                );
+                return createLayerStatistics(
+                    item,
+                    selectedBoundsFromArea(samplingArea)
+                );
+            },
+            samplePixel: async () => ({ inBounds: true, value: 1 }),
+            viewport: { innerWidth: 1280, innerHeight: 720 },
+        }
+    );
+    const first = createRasterItem("tool-first");
+    const second = createRasterItem("tool-second");
+    await viewer.show(first);
+    await flushPromises();
+    await viewer.show(second);
+    await flushPromises();
+    const firstLayer = layerStackView.layers.find(({ item }) => item === first);
+    const histogramTool = firstLayer.tools.find(
+        ({ id }) => id === "histogram"
+    );
+
+    assert.equal(histogramTool.status, "Whole raster");
+    assert.equal(histogramTool.preview.kind, "bars");
+    assert.equal(histogramTool.preview.values.length, 64);
+
+    layerStackView.handlers.onTool(firstLayer.key, "histogram");
+    await flushPromises();
+
+    assert.equal(layerStackView.activeKey, firstLayer.key);
+    assert.equal(controlsView.histogramWidgetOpenCount, 1);
+    assert.equal(statisticsCounts.get(first.id), 1);
+    assert.equal(statisticsCounts.get(second.id), 2);
+
+    layerStackView.handlers.onTool(firstLayer.key, "appearance");
+    assert.equal(controlsView.appearanceWidgetOpenCount, 1);
+    assert.equal(controlsView.histogramWidgetOpenCount, 1);
+    viewer.destroy();
+});
+
 test("a restored whole-raster statistics error retries the active layer", async () => {
     const leafletMap = createFakeMap();
     const { leaflet } = createFakeLeaflet();
@@ -1748,7 +1815,7 @@ test("hidden WMS renderers do not gate active Catalog analysis", async () => {
     viewer.destroy();
 });
 
-test("active layers restore their selected-area statistics, size, and rectangle", async () => {
+test("explicit sampling refreshes every raster layer to one shared area", async () => {
     const leafletMap = createFakeMap();
     const { leaflet, rectangleLayers } = createFakeLeaflet();
     const controlsView = createFakeControlsView();
@@ -1796,7 +1863,6 @@ test("active layers restore their selected-area statistics, size, and rectangle"
             leafletMap.layers.has(layer)
     );
     assert.ok(firstSelectionLayer);
-    const firstLeafletBounds = firstSelectionLayer.boundsHistory.at(-1);
     assert.equal(controlsView.displayedStatistics.itemId, first.id);
     assert.equal(controlsView.displayedStatistics.scope, "selectedArea");
 
@@ -1808,25 +1874,35 @@ test("active layers restore their selected-area statistics, size, and rectangle"
     assert.equal(controlsView.displayedStatistics.itemId, second.id);
     assert.equal(controlsView.sampleWindowSizeKm, 80);
 
-    const firstSelectedRequestCount = statisticsRequests.filter(
+    const firstSelectedRequests = statisticsRequests.filter(
         ({ item, selectedBounds }) =>
             item === first && selectedBounds !== null
-    ).length;
+    );
+    assert.equal(firstSelectedRequests.length, 2);
+    const sharedFirstRequest = firstSelectedRequests.at(-1);
+    const secondSelectedRequest = statisticsRequests.findLast(
+        ({ item, selectedBounds }) =>
+            item === second && selectedBounds !== null
+    );
+    assert.deepEqual(
+        sharedFirstRequest.selectedBounds,
+        secondSelectedRequest.selectedBounds
+    );
     layerStackView.handlers.onActivate(firstKey);
 
-    assert.equal(controlsView.sampleWindowSizeKm, 42);
+    assert.equal(controlsView.sampleWindowSizeKm, 80);
     assert.equal(controlsView.displayedStatistics.itemId, first.id);
     assert.equal(controlsView.displayedStatistics.scope, "selectedArea");
     assert.deepEqual(
         controlsView.displayedStatistics.selectedBounds,
-        firstSelectedRequest.selectedBounds
+        sharedFirstRequest.selectedBounds
     );
     assert.equal(
         statisticsRequests.filter(
             ({ item, selectedBounds }) =>
                 item === first && selectedBounds !== null
         ).length,
-        firstSelectedRequestCount
+        firstSelectedRequests.length
     );
     const attachedSelections = rectangleLayers.filter(
         (layer) => layer.kind === "selection" && leafletMap.layers.has(layer)
@@ -1834,7 +1910,16 @@ test("active layers restore their selected-area statistics, size, and rectangle"
     assert.equal(attachedSelections.length, 1);
     assert.deepEqual(
         attachedSelections[0].boundsHistory.at(-1),
-        firstLeafletBounds
+        [
+            [
+                sharedFirstRequest.selectedBounds.south,
+                sharedFirstRequest.selectedBounds.west,
+            ],
+            [
+                sharedFirstRequest.selectedBounds.north,
+                sharedFirstRequest.selectedBounds.east,
+            ],
+        ]
     );
     assert.equal(leafletMap.layers.has(firstSelectionLayer), false);
     viewer.destroy();

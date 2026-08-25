@@ -220,7 +220,7 @@ test("RasterControlsView owns style values and semantic control events", () => {
     assert.equal(documentContext.querySelector("#raster-histogram").hidden, false);
     documentContext.querySelector("#open-raster-appearance-widget")
         .dispatchEvent(new Event("click"));
-    assert.equal(documentContext.querySelector("#raster-histogram").hidden, true);
+    assert.equal(documentContext.querySelector("#raster-histogram").hidden, false);
     assert.equal(
         documentContext.querySelector("#raster-appearance-controls").hidden,
         false
@@ -525,6 +525,7 @@ test("RasterControlsView preserves the raster viewer compatibility surface", () 
         "setTemporaryAoiAvailability",
         "setSamplingAreaMode",
         "showHistogramWidget",
+        "showAppearanceWidget",
         "setControlsVisible",
         "isPixelProbeVisible",
         "setPixelProbeContent",

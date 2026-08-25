@@ -65,14 +65,8 @@ export class RasterControlsView {
             documentContext,
             "#raster-active-layer-label"
         );
-        this.#appearanceView = new RasterAppearanceControlsView(
-            documentContext,
-            () => this.#histogramView?.hideWidget()
-        );
-        this.#histogramView = new RasterHistogramControlsView(
-            documentContext,
-            () => this.#appearanceView.hideWidget()
-        );
+        this.#appearanceView = new RasterAppearanceControlsView(documentContext);
+        this.#histogramView = new RasterHistogramControlsView(documentContext);
         this.#samplingAreaView = new RasterSamplingAreaControlsView(
             documentContext
         );
@@ -370,11 +364,12 @@ export class RasterControlsView {
      *
      * @param {"none"|"wholeRaster"|"selectedArea"|"temporaryAoi"} mode
      * Active area, or no selected histogram area for a sampled raster.
+     * @param {string} [label=""] Optional semantic histogram scope label.
      * @return {void}
      */
-    setSamplingAreaMode(mode) {
+    setSamplingAreaMode(mode, label = "") {
         this.#samplingAreaView.setSamplingAreaMode(mode);
-        this.#histogramView.setSamplingAreaMode(mode);
+        this.#histogramView.setSamplingAreaMode(mode, label);
     }
 
     /**
@@ -385,6 +380,15 @@ export class RasterControlsView {
      */
     showHistogramWidget() {
         this.#histogramView.showWidget();
+    }
+
+    /**
+     * Reveal the contextual appearance editor without changing raster style.
+     *
+     * @return {void}
+     */
+    showAppearanceWidget() {
+        this.#appearanceView.showWidget();
     }
 
     /**

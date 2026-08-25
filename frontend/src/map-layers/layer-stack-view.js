@@ -33,6 +33,8 @@ function requireLayerStackElement(documentContext, selector) {
  * @property {(key: string, direction: "up"|"down") => void} onMove Move one
  * layer in top-first order.
  * @property {(key: string) => void} onRemove Remove one retained layer.
+ * @property {(key: string, toolId: string) => void} onTool Select one optional
+ * feature-owned layer tool.
  */
 
 /** Own the map layer-list elements and their direct event listeners. */
@@ -130,6 +132,7 @@ export class MapLayerStackView {
         ));
         this.list.replaceChildren(...rows);
         this.root.hidden = layers.length === 0;
+        this.toggle.hidden = layers.length === 0;
         this.count.textContent = String(layers.length);
         if (layers.length > 0 && wasEmpty) {
             this.#setExpanded(true);
@@ -337,8 +340,105 @@ export class MapLayerStackView {
         error.textContent = layer.error ?? "";
         error.hidden = !layer.error;
 
-        row.append(heading, presentation, legend, labels, error);
+        const tools = this.#buildTools(layer, accessibleName, focusTargets);
+        row.append(heading, presentation, legend, labels, tools, error);
         return row;
+    }
+
+    /**
+     * Render optional feature-owned tools from neutral presentation data.
+     *
+     * A bar preview is deliberately value-only: the layer owner supplies its
+     * accessible label and the stack view performs no statistics work.
+     *
+     * @param {Object} layer Layer presentation snapshot.
+     * @param {string} accessibleName Complete layer accessible name.
+     * @param {Map<string,Element>} focusTargets Rendered focus targets.
+     * @return {HTMLDivElement} Tool group, hidden when the owner exposes none.
+     */
+    #buildTools(layer, accessibleName, focusTargets) {
+        const tools = this.documentContext.createElement("div");
+        tools.className = "map-layer-tools";
+        const descriptors = Array.isArray(layer.tools) ? layer.tools : [];
+        tools.hidden = descriptors.length === 0;
+        for (const descriptor of descriptors) {
+            const button = this.#button(
+                descriptor.label,
+                `${descriptor.label} for ${accessibleName}`,
+                layer.key,
+                `tool-${descriptor.id}`,
+                () => this.handlers?.onTool(layer.key, descriptor.id),
+                focusTargets
+            );
+            button.classList.toggle(
+                "map-layer-tool-with-preview",
+                descriptor.preview?.kind === "bars"
+            );
+            if (descriptor.preview?.kind === "bars") {
+                button.textContent = "";
+                button.append(
+                    this.#buildBarPreview(descriptor.preview),
+                    this.#toolText(descriptor.label, descriptor.status)
+                );
+            } else if (descriptor.status) {
+                button.append(this.#toolStatus(descriptor.status));
+            }
+            tools.append(button);
+        }
+        return tools;
+    }
+
+    /**
+     * Build one compact value-only bar preview.
+     *
+     * @param {{values:number[],label:string}} preview Owner-provided values and
+     * accessible description.
+     * @return {HTMLDivElement} Compact bar-chart presentation.
+     */
+    #buildBarPreview(preview) {
+        const chart = this.documentContext.createElement("div");
+        chart.className = "map-layer-tool-bars";
+        chart.setAttribute("role", "img");
+        chart.setAttribute("aria-label", preview.label);
+        const maximum = Math.max(1, ...preview.values);
+        for (const value of preview.values) {
+            const bar = this.documentContext.createElement("span");
+            bar.style.height = `${Math.max(2, value / maximum * 100)}%`;
+            chart.append(bar);
+        }
+        return chart;
+    }
+
+    /**
+     * Build a tool's visible label and optional status.
+     *
+     * @param {string} label Short tool label.
+     * @param {string|undefined} status Optional feature status.
+     * @return {HTMLSpanElement} Visible text wrapper.
+     */
+    #toolText(label, status) {
+        const text = this.documentContext.createElement("span");
+        text.className = "map-layer-tool-text";
+        const name = this.documentContext.createElement("strong");
+        name.textContent = label;
+        text.append(name);
+        if (status) {
+            text.append(this.#toolStatus(status));
+        }
+        return text;
+    }
+
+    /**
+     * Build one concise owner-provided tool status.
+     *
+     * @param {string} status Visible status text.
+     * @return {HTMLSpanElement} Status node.
+     */
+    #toolStatus(status) {
+        const node = this.documentContext.createElement("span");
+        node.className = "map-layer-tool-status";
+        node.textContent = status;
+        return node;
     }
 
     /**
@@ -454,7 +554,10 @@ export class MapLayerStackView {
         this.body.hidden = !isExpanded;
         this.root.classList.toggle("is-collapsed", !isExpanded);
         this.toggle.setAttribute("aria-expanded", String(isExpanded));
-        this.toggle.textContent = isExpanded ? "Hide layers" : "Show layers";
+        this.toggle.setAttribute(
+            "aria-label",
+            isExpanded ? "Hide layers" : "Show layers"
+        );
     }
 
     /** Toggle the compact layer widget. @return {void} */

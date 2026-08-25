@@ -155,3 +155,23 @@ test("controller coalesces publication and invalidates removed pending work", as
     assert.equal(controller.contains(item), false);
     assert.equal(map.attached.size, 0);
 });
+
+test("controller redirects a neutral layer tool to its owning adapter", async () => {
+    const map = createMap();
+    const view = createView();
+    const item = catalogItem("tool-owner");
+    const adapter = createAdapter("raster");
+    adapter.handleTool = (record, toolId) => {
+        adapter.events.push(["tool", record.entry.key, toolId]);
+    };
+    const controller = new MapLayerController({ leafletMap: map, view });
+    await controller.show(item, adapter);
+
+    view.handlers.onTool(getCatalogItemKey(item), "distribution");
+
+    assert.deepEqual(adapter.events.at(-1), [
+        "tool",
+        getCatalogItemKey(item),
+        "distribution",
+    ]);
+});
