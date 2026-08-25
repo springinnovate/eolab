@@ -14,9 +14,9 @@ from eolab_app.raster.models import (
     CatalogRasterRequest,
     GEOSERVER_READER_CONTRACT,
     PublishedRaster,
-    SourceSignature,
 )
 from eolab_app.raster.ports import RasterCatalog, RasterPublisher
+from eolab_app.raster.source_identity import RasterSourceIdentity
 from eolab_app.rendering.errors import PublishedLayerChangedError
 from eolab_app.raster.sources import (
     MountedRasterResolver,
@@ -34,7 +34,7 @@ class RasterPublicationService:
         source_resolver: MountedRasterResolver,
         publisher: RasterPublisher,
         raster_registry: PublishedRasterRegistry,
-        signature_reader: Callable[[Path], SourceSignature] | None = None,
+        signature_reader: Callable[[Path], RasterSourceIdentity] | None = None,
     ) -> None:
         """Create a serialized publication use case.
 
@@ -104,9 +104,17 @@ class RasterPublicationService:
                     "Visualization unavailable: the raster metadata can no "
                     "longer be read."
                 ) from error
-            if list(inspected_signature) != rendering_metadata.get(
-                "source_signature"
-            ):
+            try:
+                assessed_identity = RasterSourceIdentity.from_catalog(
+                    rendering_metadata.get("source_signature")
+                )
+            except ValueError as error:
+                raise RasterConflictError(
+                    "Visualization unavailable: the raster assessment has "
+                    "invalid source identity metadata; reassess it before "
+                    "publication."
+                ) from error
+            if inspected_signature != assessed_identity:
                 raise RasterConflictError(
                     "Visualization unavailable: the raster changed; reassess "
                     "it before publication."

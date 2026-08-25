@@ -414,7 +414,7 @@ def test_service_coalesces_fixed_policy_and_separates_view_cache(
         "bounded_blocks": True,
         "reader_compatible": True,
         "reader_contract": GEOSERVER_READER_CONTRACT,
-        "source_signature": list(signature),
+        "source_signature": [92, *signature.to_catalog()],
     }
     item = {
         "bbox": list(RASTER_EXTENT),

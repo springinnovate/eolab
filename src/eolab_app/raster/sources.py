@@ -9,7 +9,7 @@ from eolab_app.raster.errors import (
     RasterAssetError,
     RasterConflictError,
 )
-from eolab_app.raster.models import SourceSignature
+from eolab_app.raster.source_identity import RasterSourceIdentity
 from eolab_app.rendering.errors import (
     PublishedLayerChangedError,
     PublishedLayerNotAuthorizedError,
@@ -17,26 +17,19 @@ from eolab_app.rendering.errors import (
 from eolab_app.raster.wms_authorization import PublishedRasterAuthorization
 
 
-def source_signature(source_path: Path) -> SourceSignature:
-    """Identify one mounted file by stable filesystem metadata.
+def source_signature(source_path: Path) -> RasterSourceIdentity:
+    """Identify one mounted file by content-relevant filesystem metadata.
 
     Args:
         source_path: Mounted GeoTIFF to identify.
 
     Returns:
-        Filesystem identity, size, and modification timestamps.
+        Typed inode, size, modification-time, and metadata-change identity.
 
     Raises:
         OSError: If the source metadata cannot be read.
     """
-    file_status = source_path.stat()
-    return (
-        file_status.st_dev,
-        file_status.st_ino,
-        file_status.st_size,
-        file_status.st_mtime_ns,
-        file_status.st_ctime_ns,
-    )
+    return RasterSourceIdentity.read(source_path)
 
 
 class MountedRasterResolver:
@@ -115,13 +108,13 @@ class PublishedRasterRegistry:
 
     def __init__(self) -> None:
         """Create an empty process-local raster authorization registry."""
-        self._sources: dict[str, tuple[Path, SourceSignature]] = {}
+        self._sources: dict[str, tuple[Path, RasterSourceIdentity]] = {}
 
     def authorize(
         self,
         layer_name: str,
         source_path: Path,
-        inspected_signature: SourceSignature,
+        inspected_signature: RasterSourceIdentity,
     ) -> None:
         """Authorize a layer if its source is unchanged since inspection.
 

@@ -435,7 +435,7 @@ def test_one_outdated_raster_is_assessed_and_updated(
         "eligible": True,
         "reader_contract": GEOSERVER_READER_CONTRACT,
         "reader_compatible": True,
-        "source_signature": list(source_signature(source_path)),
+        "source_signature": source_signature(source_path).to_catalog(),
         "bounded_blocks": True,
         "block_shapes": [[1, 1]],
         "overview_factors": [[]],

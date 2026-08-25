@@ -126,9 +126,9 @@ def mounted_geotiff_item(
         else None
     )
     assessed_signature = (
-        list(source_signature(source_path))
+        source_signature(source_path).to_catalog()
         if source_path is not None and source_path.is_file()
-        else [0, 0, 0, 0, 0]
+        else [0, 0, 0, 0]
     )
     return {
         "type": "Feature",

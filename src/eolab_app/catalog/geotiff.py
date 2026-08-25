@@ -28,6 +28,7 @@ from eolab_app.raster.eligibility import (
     assess_raster_renderability,
     inspect_raster_renderability as inspect_geotiff_renderability,
 )
+from eolab_app.raster.source_identity import RasterSourceIdentity
 
 
 STAC_RASTER_DATA_TYPES = {
@@ -142,13 +143,9 @@ def build_stac_item(source_root: Path, geotiff_path: Path) -> dict[str, Any]:
                 band["nodata"] = _serialize_nodata(nodata_value)
             raster_bands.append(band)
         rendering_metadata = assess_raster_renderability(dataset)
-        rendering_metadata["source_signature"] = [
-            file_status.st_dev,
-            file_status.st_ino,
-            file_status.st_size,
-            file_status.st_mtime_ns,
-            file_status.st_ctime_ns,
-        ]
+        rendering_metadata["source_signature"] = (
+            RasterSourceIdentity.from_status(file_status).to_catalog()
+        )
         media_type = (
             COG_MEDIA_TYPE
             if dataset.tags(ns="IMAGE_STRUCTURE").get("LAYOUT") == "COG"

@@ -15,8 +15,9 @@ from eolab_app.raster.eligibility import (
     apply_reader_assessment,
 )
 from eolab_app.raster.errors import RasterConflictError
-from eolab_app.raster.models import CatalogRasterRequest, SourceSignature
+from eolab_app.raster.models import CatalogRasterRequest
 from eolab_app.raster.ports import RasterCatalog, RasterReaderAssessor
+from eolab_app.raster.source_identity import RasterSourceIdentity
 from eolab_app.raster.sources import (
     MountedRasterResolver,
     source_signature,
@@ -34,7 +35,9 @@ class RasterAssessmentFinalizer:
         self,
         source_resolver: MountedRasterResolver,
         reader_assessor: RasterReaderAssessor,
-        signature_reader: Callable[[Path], SourceSignature] = source_signature,
+        signature_reader: Callable[
+            [Path], RasterSourceIdentity
+        ] = source_signature,
     ) -> None:
         """Create a finalizer over source identity and reader boundaries.
 
@@ -85,9 +88,15 @@ class RasterAssessmentFinalizer:
         )
         if not isinstance(rendering_metadata, dict):
             raise ValueError("Raster Item has no structural rendering metadata")
-        if rendering_metadata.get("source_signature") != list(
-            inspected_signature
-        ):
+        try:
+            extracted_identity = RasterSourceIdentity.from_catalog(
+                rendering_metadata.get("source_signature")
+            )
+        except ValueError as error:
+            raise ValueError(
+                "Raster Item has invalid structural source identity"
+            ) from error
+        if extracted_identity != inspected_signature:
             raise RasterConflictError(
                 "The GeoTIFF changed while its metadata was being extracted"
             )
@@ -128,7 +137,9 @@ class RasterAssessmentService:
         source_resolver: MountedRasterResolver,
         reader_assessor: RasterReaderAssessor,
         item_builder: Callable[[Path, Path], dict[str, Any]] = build_stac_item,
-        signature_reader: Callable[[Path], SourceSignature] = source_signature,
+        signature_reader: Callable[
+            [Path], RasterSourceIdentity
+        ] = source_signature,
     ) -> None:
         """Create the assessment workflow from focused collaborators.
 

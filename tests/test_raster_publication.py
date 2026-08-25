@@ -2,12 +2,13 @@
 
 import asyncio
 import logging
+from dataclasses import replace
 from pathlib import Path
 
 import httpx2
 import pytest
 
-from eolab_app.raster.errors import RasterPublicationError
+from eolab_app.raster.errors import RasterConflictError, RasterPublicationError
 from eolab_app.raster.geoserver import (
     GEOSERVER_ERROR_EXCERPT_LIMIT,
     GeoServerRasterPublisher,
@@ -234,7 +235,9 @@ def _catalog_item(source_path: Path) -> dict[str, object]:
                     "eligible": True,
                     "reader_contract": GEOSERVER_READER_CONTRACT,
                     "reader_compatible": True,
-                    "source_signature": list(source_signature(source_path)),
+                    "source_signature": (
+                        source_signature(source_path).to_catalog()
+                    ),
                 },
             }
         },
@@ -310,6 +313,117 @@ def test_publication_coordinates_upstream_contract_and_authorization(
     assert result.layer_name == f"eolab:{RESOURCE_NAME}"
     assert publisher.calls == [(RESOURCE_NAME, source_path)]
     assert registry.require_current(result.layer_name).source_path == source_path
+
+
+def test_publication_accepts_unchanged_legacy_source_after_remount(
+    tmp_path: Path,
+) -> None:
+    """Authorize an unchanged legacy assessment after device-number churn.
+
+    This reproduces the production mismatch: the catalog recorded ``st_dev``
+    92, the replacement container observed 88, and every retained identity
+    field remained exact.
+
+    Args:
+        tmp_path: Temporary directory containing the controlled source.
+
+    Returns:
+        None.
+    """
+    source_path = tmp_path / "raster.tif"
+    source_path.write_bytes(b"raster")
+    current_identity = source_signature(source_path)
+    item = _catalog_item(source_path)
+    metadata = item["assets"]["data"]["eolab:rendering"]
+    assert isinstance(metadata, dict)
+    metadata["source_signature"] = [92, *current_identity.to_catalog()]
+    publisher = _Publisher()
+    registry = PublishedRasterRegistry()
+    service = RasterPublicationService(
+        _Catalog(item),
+        _Resolver(source_path),
+        publisher,
+        registry,
+        signature_reader=source_signature,
+    )
+
+    result = asyncio.run(service.publish(_catalog_request()))
+
+    assert publisher.calls == [(RESOURCE_NAME, source_path)]
+    assert registry.require_current(result.layer_name).source_signature == (
+        current_identity
+    )
+
+
+def test_publication_distinguishes_invalid_assessment_identity(
+    tmp_path: Path,
+) -> None:
+    """Reject malformed assessment metadata with a specific remediation.
+
+    Args:
+        tmp_path: Temporary directory containing the controlled source.
+
+    Returns:
+        None.
+    """
+    source_path = tmp_path / "raster.tif"
+    source_path.write_bytes(b"raster")
+    item = _catalog_item(source_path)
+    metadata = item["assets"]["data"]["eolab:rendering"]
+    assert isinstance(metadata, dict)
+    metadata["source_signature"] = [1, 2, 3]
+    publisher = _Publisher()
+    service = RasterPublicationService(
+        _Catalog(item),
+        _Resolver(source_path),
+        publisher,
+        PublishedRasterRegistry(),
+        signature_reader=source_signature,
+    )
+
+    with pytest.raises(RasterConflictError, match="invalid source identity"):
+        asyncio.run(service.publish(_catalog_request()))
+
+    assert publisher.calls == []
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    ("inode", "size_bytes", "modified_ns", "changed_ns"),
+)
+def test_publication_rejects_every_retained_identity_change(
+    field_name: str,
+    tmp_path: Path,
+) -> None:
+    """Reject replacement, size, modification-time, and ctime changes.
+
+    Args:
+        field_name: Canonical identity field changed after assessment.
+        tmp_path: Temporary directory containing the controlled source.
+
+    Returns:
+        None.
+    """
+    source_path = tmp_path / "raster.tif"
+    source_path.write_bytes(b"raster")
+    assessed_identity = source_signature(source_path)
+    changed_identity = replace(
+        assessed_identity,
+        **{field_name: getattr(assessed_identity, field_name) + 1},
+    )
+    publisher = _Publisher()
+    service = RasterPublicationService(
+        _Catalog(_catalog_item(source_path)),
+        _Resolver(source_path),
+        publisher,
+        PublishedRasterRegistry(),
+        signature_reader=lambda _: changed_identity,
+    )
+
+    with pytest.raises(RasterConflictError, match="raster changed"):
+        asyncio.run(service.publish(_catalog_request()))
+
+    assert publisher.calls == []
 
 
 def test_clean_publication_creates_verifies_and_styles_exactly_once(

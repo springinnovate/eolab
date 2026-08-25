@@ -305,7 +305,7 @@ def test_geotiff_uses_embedded_acquisition_datetime(tmp_path: Path) -> None:
         "overview_storage": "none",
         "compression": None,
         "estimated_uncompressed_bytes": 6,
-        "source_signature": list(source_signature(geotiff_path)),
+        "source_signature": source_signature(geotiff_path).to_catalog(),
     }
     json.dumps(item)
 

@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from eolab_app.raster.models import SourceSignature
+from eolab_app.raster.source_identity import RasterSourceIdentity
 from eolab_app.rendering.errors import PublishedLayerRequestError
 
 
@@ -71,7 +71,7 @@ class PublishedRasterAuthorization:
     """
 
     source_path: Path
-    source_signature: SourceSignature
+    source_signature: RasterSourceIdentity
     style_name: str = RASTER_WMS_STYLE_NAME
 
     def validate_parameters(
