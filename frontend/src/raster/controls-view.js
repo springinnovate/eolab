@@ -2,13 +2,16 @@
  * Compatibility façade for the raster viewer's DOM controls and readouts.
  *
  * RasterControlsView preserves the viewer-facing contract while delegating
- * element lookup, direct event listeners, control reads, and presentation to
- * focused appearance, sampling-area, histogram, and pixel-probe adapters. It
- * contains no fetch, Leaflet, rendering, statistics, or lifecycle decisions.
+ * subgroup element lookup, direct event listeners, control reads, and
+ * presentation to focused appearance, sampling-area, histogram, and
+ * pixel-probe adapters. The façade owns only its composite root visibility and
+ * active-raster identity presentation. It contains no fetch, Leaflet,
+ * rendering, statistics, or lifecycle decisions.
  */
 import { RasterAppearanceControlsView } from "./appearance-controls-view.js";
 import { RasterHistogramControlsView } from "./histogram-controls-view.js";
 import { RasterPixelProbeView } from "./pixel-probe-view.js";
+import { requireRasterControl } from "./required-control.js";
 import {
     RasterSamplingAreaControlsView,
 } from "./sampling-area-controls-view.js";
@@ -34,11 +37,16 @@ import {
  * @property {() => void} onUseTemporaryAoi Selects the retained uploaded AOI.
  */
 
-/** Preserve the raster viewer's DOM boundary by composing focused adapters. */
+/**
+ * Preserve the raster viewer's DOM boundary and own composite presentation by
+ * composing focused adapters.
+ */
 export class RasterControlsView {
+    #activeLayerLabel;
     #appearanceView;
     #histogramView;
     #pixelProbeView;
+    #root;
     #samplingAreaView;
 
     /**
@@ -49,6 +57,14 @@ export class RasterControlsView {
      * @throws {Error} If any required raster-control element is missing.
      */
     constructor(documentContext = globalThis.document) {
+        this.#root = requireRasterControl(
+            documentContext,
+            "#raster-style-controls"
+        );
+        this.#activeLayerLabel = requireRasterControl(
+            documentContext,
+            "#raster-active-layer-label"
+        );
         this.#appearanceView = new RasterAppearanceControlsView(
             documentContext
         );
@@ -77,7 +93,9 @@ export class RasterControlsView {
      * @return {void}
      */
     setActiveLayer(label, visible) {
-        this.#appearanceView.setActiveLayer(label, visible);
+        this.#activeLayerLabel.textContent = visible
+            ? `Editing ${label}.`
+            : `Editing ${label}; this layer is hidden from the map.`;
         this.#samplingAreaView.enableActiveRasterActions();
         this.#histogramView.enableActiveRasterActions();
     }
@@ -355,13 +373,13 @@ export class RasterControlsView {
     }
 
     /**
-     * Show or hide the complete raster-appearance control group.
+     * Show or hide the complete composite raster-interpretation workspace.
      *
      * @param {boolean} isVisible Whether a raster is displayed.
      * @return {void}
      */
     setControlsVisible(isVisible) {
-        this.#appearanceView.setControlsVisible(isVisible);
+        this.#root.hidden = !isVisible;
     }
 
     /** Return whether the pointer probe is visible. @return {boolean} Visibility. */

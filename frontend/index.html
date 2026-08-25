@@ -539,79 +539,27 @@
                     id="raster-style-controls"
                     hidden
                   >
-                  <legend>Raster appearance</legend>
-                  <p
-                    class="raster-active-layer-label"
-                    id="raster-active-layer-label"
-                  ></p>
-                  <label class="raster-palette" for="raster-palette">
-                    <span>Color palette</span>
-                    <select id="raster-palette"></select>
-                  </label>
-                  <div class="raster-style-stops">
-                    <label for="raster-minimum">
-                      <span>Minimum</span>
-                      <input
-                        id="raster-minimum"
-                        type="number"
-                        step="any"
-                        aria-describedby="raster-style-error"
-                      />
-                    </label>
-                    <input
-                      id="raster-minimum-color"
-                      type="color"
-                      aria-label="Minimum color"
-                      aria-describedby="raster-style-error"
-                    />
-                    <label for="raster-midpoint">
-                      <span>Midpoint</span>
-                      <input
-                        id="raster-midpoint"
-                        type="number"
-                        step="any"
-                        aria-describedby="raster-style-error"
-                      />
-                    </label>
-                    <input
-                      id="raster-midpoint-color"
-                      type="color"
-                      aria-label="Midpoint color"
-                      aria-describedby="raster-style-error"
-                    />
-                    <label for="raster-maximum">
-                      <span>Maximum</span>
-                      <input
-                        id="raster-maximum"
-                        type="number"
-                        step="any"
-                        aria-describedby="raster-style-error"
-                      />
-                    </label>
-                    <input
-                      id="raster-maximum-color"
-                      type="color"
-                      aria-label="Maximum color"
-                      aria-describedby="raster-style-error"
-                    />
-                  </div>
-                  <div
-                    class="raster-legend"
-                    id="raster-legend"
-                    role="img"
-                  ></div>
-                  <div class="raster-legend-labels" aria-hidden="true">
-                    <span id="raster-legend-minimum"></span>
-                    <span id="raster-legend-midpoint"></span>
-                    <span id="raster-legend-maximum"></span>
-                  </div>
+                  <legend>Raster interpretation</legend>
                   <section
-                    class="raster-sample-window"
-                    aria-labelledby="raster-sample-window-heading"
+                    class="raster-control-group raster-active-raster"
+                    id="raster-active-controls"
+                    aria-labelledby="raster-active-raster-heading"
+                    aria-describedby="raster-sample-window-status raster-histogram-status"
                   >
-                    <strong id="raster-sample-window-heading">Histogram area</strong>
+                    <strong id="raster-active-raster-heading">Active raster</strong>
+                    <p
+                      class="raster-active-layer-label"
+                      id="raster-active-layer-label"
+                    ></p>
+                  </section>
+                  <section
+                    class="raster-control-group raster-sample-window"
+                    id="raster-sampling-area-controls"
+                    aria-labelledby="raster-sampling-area-heading"
+                  >
+                    <strong id="raster-sampling-area-heading">Sampling area</strong>
                     <p id="raster-sample-window-description">
-                      Move over the map to position the window, then click or tap to display its histogram.
+                      Choose the geographic area represented by the distribution. Move over the map to position a window, then click or tap to select its bounds.
                     </p>
                     <div class="raster-sample-window-size">
                       <label for="raster-sample-window-range">
@@ -687,7 +635,7 @@
                     </p>
                   </section>
                   <section
-                    class="raster-histogram"
+                    class="raster-control-group raster-histogram"
                     id="raster-histogram"
                     aria-labelledby="raster-histogram-heading"
                   >
@@ -734,7 +682,7 @@
                       hidden
                     >
                       <strong id="raster-percentile-heading">Display percentiles</strong>
-                      <p>Choose three ordered positions in the sampled distribution.</p>
+                      <p>Choose three ordered positions in this distribution, then apply them to the numeric display thresholds below.</p>
                       <label for="raster-lower-percentile">
                         <span>Lower</span>
                         <input
@@ -788,18 +736,89 @@
                       </button>
                     </div>
                   </section>
-                  <p
-                    class="raster-style-error"
-                    id="raster-style-error"
-                    role="status"
-                  ></p>
-                  <button
-                    class="secondary-button"
-                    id="reset-raster-style"
-                    type="button"
+                  <section
+                    class="raster-control-group raster-appearance-controls"
+                    id="raster-appearance-controls"
+                    aria-labelledby="raster-appearance-heading"
                   >
-                    Reset colors and range
-                  </button>
+                    <strong id="raster-appearance-heading">Display appearance</strong>
+                    <p class="raster-appearance-description">
+                      Set numeric display thresholds and their colors independently of the geographic sampling area above.
+                    </p>
+                    <label class="raster-palette" for="raster-palette">
+                      <span>Color palette</span>
+                      <select id="raster-palette"></select>
+                    </label>
+                    <div class="raster-style-stops">
+                      <label for="raster-minimum">
+                        <span>Display minimum</span>
+                        <input
+                          id="raster-minimum"
+                          type="number"
+                          step="any"
+                          aria-describedby="raster-style-error"
+                        />
+                      </label>
+                      <input
+                        id="raster-minimum-color"
+                        type="color"
+                        aria-label="Minimum color"
+                        aria-describedby="raster-style-error"
+                      />
+                      <label for="raster-midpoint">
+                        <span>Display midpoint</span>
+                        <input
+                          id="raster-midpoint"
+                          type="number"
+                          step="any"
+                          aria-describedby="raster-style-error"
+                        />
+                      </label>
+                      <input
+                        id="raster-midpoint-color"
+                        type="color"
+                        aria-label="Midpoint color"
+                        aria-describedby="raster-style-error"
+                      />
+                      <label for="raster-maximum">
+                        <span>Display maximum</span>
+                        <input
+                          id="raster-maximum"
+                          type="number"
+                          step="any"
+                          aria-describedby="raster-style-error"
+                        />
+                      </label>
+                      <input
+                        id="raster-maximum-color"
+                        type="color"
+                        aria-label="Maximum color"
+                        aria-describedby="raster-style-error"
+                      />
+                    </div>
+                    <div
+                      class="raster-legend"
+                      id="raster-legend"
+                      role="img"
+                    ></div>
+                    <div class="raster-legend-labels" aria-hidden="true">
+                      <span id="raster-legend-minimum"></span>
+                      <span id="raster-legend-midpoint"></span>
+                      <span id="raster-legend-maximum"></span>
+                    </div>
+                    <p
+                      class="raster-style-error"
+                      id="raster-style-error"
+                      role="status"
+                    ></p>
+                    <button
+                      class="secondary-button"
+                      id="reset-raster-style"
+                      type="button"
+                    >
+                      Reset colors and range
+                    </button>
+                  </section>
                   </fieldset>
                 </section>
         </div>

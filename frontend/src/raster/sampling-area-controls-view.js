@@ -23,6 +23,8 @@ import { requireRasterControl } from "./required-control.js";
 
 /** Own direct DOM interaction and presentation for histogram sampling areas. */
 export class RasterSamplingAreaControlsView {
+    #root;
+
     /**
      * Resolve the required sampling-area elements once at startup.
      *
@@ -31,6 +33,10 @@ export class RasterSamplingAreaControlsView {
      * @throws {Error} If any required sampling-area element is missing.
      */
     constructor(documentContext = globalThis.document) {
+        this.#root = requireRasterControl(
+            documentContext,
+            "#raster-sampling-area-controls"
+        );
         this.sampleWindowRange = requireRasterControl(
             documentContext,
             "#raster-sample-window-range"
