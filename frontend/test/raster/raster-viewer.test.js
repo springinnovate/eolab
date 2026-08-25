@@ -281,6 +281,10 @@ function createFakeControlsView() {
         setSamplingAreaMode(mode) {
             this.samplingAreaMode = mode;
         },
+        showHistogramWidget() {
+            this.histogramWidgetOpenCount =
+                (this.histogramWidgetOpenCount ?? 0) + 1;
+        },
         setControlsVisible(isVisible) {
             this.controlsVisible = isVisible;
         },
@@ -513,6 +517,7 @@ test("renderer-independent analysis supports exact windows without publication",
     }]);
     leafletMap.emit("click", { latlng: { lng: -122, lat: 48.5 } });
     await flushPromises();
+    assert.equal(controlsView.histogramWidgetOpenCount, 1);
     assert.equal(statisticsRequests.at(-1).samplingArea.kind, "selectedArea");
     assert.match(controlsView.statisticsStatus, /Selected-area exact/);
 

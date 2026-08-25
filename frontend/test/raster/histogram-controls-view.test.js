@@ -20,6 +20,13 @@ test("histogram adapter owns status, chart, percentiles, and listeners", () => {
         onApplyPercentiles: () => received.push("apply"),
         onRetryStatistics: () => received.push("retry"),
     });
+    const launcher = documentContext.querySelector(
+        "#open-raster-histogram-widget"
+    );
+    launcher.hidden = true;
+    view.setActiveRasterAvailable(true);
+    view.setSamplingAreaMode("selectedArea");
+    view.showWidget();
     view.resetPercentiles({ lower: 5, middle: 50, upper: 95 });
     view.setStatisticsBusy(true);
     view.setStatisticsStatus("Ready.");
@@ -48,6 +55,21 @@ test("histogram adapter owns status, chart, percentiles, and listeners", () => {
         upper: 95,
     });
     assert.deepEqual(received, ["percentile", "apply", "retry"]);
+    assert.equal(launcher.hidden, false);
+    assert.equal(launcher.getAttribute("aria-expanded"), "true");
+    assert.equal(
+        documentContext.querySelector("#raster-histogram").hidden,
+        false
+    );
+    assert.equal(
+        documentContext.querySelector("#raster-histogram")
+            .getAttribute("data-sampling-area"),
+        "selectedArea"
+    );
+    assert.match(
+        documentContext.querySelector("#raster-histogram-scope").textContent,
+        /blue map window/
+    );
     assert.equal(
         documentContext.querySelector("#raster-histogram")
             .getAttribute("aria-busy"),
@@ -79,6 +101,26 @@ test("histogram adapter owns status, chart, percentiles, and listeners", () => {
         documentContext.querySelector("#raster-histogram-chart")
             .getAttribute("hidden"),
         ""
+    );
+
+    documentContext.querySelector("#close-raster-histogram-widget")
+        .dispatchEvent(new Event("click"));
+    assert.equal(
+        documentContext.querySelector("#raster-histogram").hidden,
+        true
+    );
+    assert.equal(launcher.getAttribute("aria-expanded"), "false");
+    assert.equal(documentContext.activeElement, launcher);
+
+    launcher.dispatchEvent(new Event("click"));
+    const escapeEvent = new Event("keydown", { cancelable: true });
+    Object.defineProperty(escapeEvent, "key", { value: "Escape" });
+    documentContext.querySelector("#raster-histogram")
+        .dispatchEvent(escapeEvent);
+    assert.equal(escapeEvent.defaultPrevented, true);
+    assert.equal(
+        documentContext.querySelector("#raster-histogram").hidden,
+        true
     );
 
     view.unbind();

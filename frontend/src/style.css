@@ -1195,13 +1195,22 @@ h5 {
 }
 
 .raster-layer-stack {
+  position: fixed;
+  z-index: 1080;
+  top: 72px;
+  right: var(--workspace-edge);
   display: grid;
+  width: min(340px, calc(100vw - 32px));
+  max-height: min(62vh, 560px);
   gap: 10px;
-  margin: 0 0 18px;
-  border: 1px solid var(--border-2);
+  margin: 0;
+  overflow: visible;
+  pointer-events: auto;
+  border: 1px solid var(--border-1);
   border-radius: var(--radius);
-  background: var(--surface-3);
+  background: rgb(255 255 255 / 97%);
   padding: 12px;
+  box-shadow: var(--elevation-panel);
 }
 
 .raster-layer-stack[hidden] {
@@ -1215,18 +1224,49 @@ h5 {
   gap: 12px;
 }
 
-.raster-layer-stack-heading h4,
+.raster-layer-stack-heading h2,
 .raster-layer-stack-heading .section-label,
 .raster-layer-stack-heading > p {
   margin: 0;
 }
 
-.raster-layer-stack-heading > p {
-  max-width: 190px;
+.raster-layer-stack-heading h2 {
+  font-size: 0.92rem;
+}
+
+#raster-layer-widget-count {
+  display: inline-grid;
+  min-width: 1.45rem;
+  min-height: 1.45rem;
+  margin-left: 4px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--surface-selected);
+  color: var(--brand-press);
+  font-size: 0.68rem;
+}
+
+.map-layer-widget-body {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.map-layer-widget-body > p:first-child {
+  margin: 0 0 9px;
   color: var(--text-3);
   font-size: 0.68rem;
   line-height: 1.4;
-  text-align: right;
+}
+
+.map-layer-widget.is-collapsed {
+  width: auto;
+  min-width: 170px;
+}
+
+#app.is-tools-workspace .map-layer-widget {
+  right: calc(var(--tools-workspace-width) + 32px);
 }
 
 .raster-layer-list {
@@ -1575,7 +1615,104 @@ h5 {
 }
 
 .raster-histogram {
+  --histogram-link-color: var(--brand);
+  position: fixed;
+  z-index: 1090;
+  left: 50%;
+  bottom: 58px;
+  display: grid;
+  width: min(440px, calc(100vw - 32px));
+  max-height: min(72vh, 650px);
   min-width: 0;
+  gap: 8px;
+  pointer-events: auto;
+  border: 1px solid var(--border-1);
+  border-left: 4px solid var(--histogram-link-color);
+  border-radius: var(--radius);
+  background: rgb(255 255 255 / 98%);
+  padding: 13px 14px;
+  box-shadow: var(--elevation-panel);
+  transform: translateX(-50%);
+}
+
+.raster-histogram[hidden],
+.map-widget-launcher[hidden] {
+  display: none;
+}
+
+.raster-histogram[data-sampling-area="selectedArea"] {
+  --histogram-link-color: #2563eb;
+}
+
+.raster-histogram[data-sampling-area="temporaryAoi"] {
+  --histogram-link-color: #6d1b7b;
+}
+
+.raster-histogram[data-sampling-area="selectedArea"]::before,
+.raster-histogram[data-sampling-area="temporaryAoi"]::before {
+  position: absolute;
+  top: 54px;
+  right: 100%;
+  width: 34px;
+  border-top: 2px solid var(--histogram-link-color);
+  content: "";
+  opacity: 0.72;
+}
+
+.raster-histogram[data-sampling-area="selectedArea"]::after,
+.raster-histogram[data-sampling-area="temporaryAoi"]::after {
+  position: absolute;
+  top: 49px;
+  right: calc(100% + 30px);
+  border: 5px solid transparent;
+  border-right-color: var(--histogram-link-color);
+  content: "";
+  opacity: 0.72;
+}
+
+.raster-histogram-body {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 3px;
+  scrollbar-gutter: stable;
+}
+
+.raster-histogram-scope {
+  width: fit-content;
+  margin: 0 0 6px;
+  border: 1px solid color-mix(
+    in srgb,
+    var(--histogram-link-color) 55%,
+    var(--border-2)
+  );
+  border-radius: 999px;
+  background: color-mix(
+    in srgb,
+    var(--histogram-link-color) 8%,
+    var(--surface-2)
+  );
+  padding: 4px 8px;
+  color: var(--text-2);
+  font-size: 0.66rem;
+  font-weight: 650;
+}
+
+.histogram-widget-launcher {
+  position: fixed;
+  z-index: 1095;
+  left: 50%;
+  bottom: var(--workspace-edge);
+  cursor: pointer;
+  border: 1px solid var(--brand);
+  border-radius: 999px;
+  background: rgb(255 255 255 / 96%);
+  padding: 8px 12px;
+  color: var(--brand-hover);
+  box-shadow: var(--elevation-control);
+  font-size: 0.74rem;
+  font-weight: 650;
+  transform: translateX(170px);
 }
 
 .raster-histogram-heading {
@@ -1591,11 +1728,30 @@ h5 {
   padding: 5px 8px;
 }
 
+.raster-histogram-heading h2,
+.raster-histogram-heading .section-label {
+  margin: 0;
+}
+
+.raster-histogram-heading h2 {
+  font-size: 0.94rem;
+}
+
+.raster-histogram-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
 .raster-histogram-status {
   margin: 5px 0 8px;
   color: var(--text-2);
   font-size: 0.7rem;
   line-height: 1.4;
+}
+
+.raster-sample-window-selection {
+  filter: drop-shadow(0 0 3px rgb(37 99 235 / 62%));
 }
 
 .raster-histogram-chart {
@@ -2384,6 +2540,37 @@ h5 {
     right: 20px;
     left: 20px;
     max-width: none;
+  }
+
+  .map-layer-widget,
+  #app.is-tools-workspace .map-layer-widget {
+    top: 58px;
+    right: 8px;
+    width: min(320px, calc(100vw - 16px));
+    max-height: 46dvh;
+  }
+
+  .raster-histogram {
+    right: 8px;
+    bottom: 100px;
+    left: 8px;
+    width: auto;
+    max-height: 68dvh;
+    transform: none;
+  }
+
+  .histogram-widget-launcher {
+    right: 8px;
+    bottom: 58px;
+    left: auto;
+    transform: none;
+  }
+
+  .raster-histogram[data-sampling-area="selectedArea"]::before,
+  .raster-histogram[data-sampling-area="selectedArea"]::after,
+  .raster-histogram[data-sampling-area="temporaryAoi"]::before,
+  .raster-histogram[data-sampling-area="temporaryAoi"]::after {
+    display: none;
   }
 
   .control-panel {

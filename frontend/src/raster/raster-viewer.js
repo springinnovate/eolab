@@ -1570,6 +1570,7 @@ export function initializeRasterViewer(
         selectedRasterWindowSizeKm = rasterSampleWindowController.windowSizeKm;
         renderRasterSamplingAreaControls();
         renderRasterSampleWindowGuidance("");
+        controlsView.showHistogramWidget();
         void rasterStatisticsController.activate(
             activeRasterItem,
             currentRasterSamplingArea()
@@ -1644,6 +1645,7 @@ export function initializeRasterViewer(
         rasterSampleWindowController.clear();
         renderRasterSamplingAreaControls();
         renderRasterSampleWindowGuidance("");
+        controlsView.showHistogramWidget();
         if (canUseActiveRasterMapInteractions()) {
             void rasterStatisticsController.activate(
                 activeRasterItem,
@@ -1863,6 +1865,7 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function handleRetryStatistics() {
+        controlsView.showHistogramWidget();
         if (hasSelectedRasterSamplingArea()) {
             selectedRasterStatisticsState = "idle";
             void rasterStatisticsController.activate(
@@ -1888,6 +1891,17 @@ export function initializeRasterViewer(
         if (!setRasterSampleWindowSize(value)) {
             setRasterSampleWindowSize(rasterSampleWindowController.windowSizeKm);
         }
+    }
+
+    /**
+     * Restore whole-raster statistics from an explicit control action and
+     * reveal the contextual histogram that receives the restored result.
+     *
+     * @return {void}
+     */
+    function handleClearSampleWindow() {
+        restoreWholeRasterStatistics();
+        controlsView.showHistogramWidget();
     }
 
     /**
@@ -2175,7 +2189,7 @@ export function initializeRasterViewer(
             }
         },
         onSelectSampleWindow: enableRasterSampleWindowSelection,
-        onClearSampleWindow: restoreWholeRasterStatistics,
+        onClearSampleWindow: handleClearSampleWindow,
         onUseTemporaryAoi: useTemporaryAoiForRasterStatistics,
     });
     const mapContainer = leafletMap.getContainer();

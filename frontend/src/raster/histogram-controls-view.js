@@ -34,6 +34,18 @@ export class RasterHistogramControlsView {
             documentContext,
             "#raster-histogram"
         );
+        this.openHistogramButton = requireRasterControl(
+            documentContext,
+            "#open-raster-histogram-widget"
+        );
+        this.closeHistogramButton = requireRasterControl(
+            documentContext,
+            "#close-raster-histogram-widget"
+        );
+        this.histogramScope = requireRasterControl(
+            documentContext,
+            "#raster-histogram-scope"
+        );
         this.histogramStatus = requireRasterControl(
             documentContext,
             "#raster-histogram-status"
@@ -102,6 +114,9 @@ export class RasterHistogramControlsView {
         this.boundPercentileInput = this.#handlePercentileInput.bind(this);
         this.boundApplyPercentiles = this.#handleApplyPercentiles.bind(this);
         this.boundRetryStatistics = this.#handleRetryStatistics.bind(this);
+        this.boundToggleWidget = this.#handleToggleWidget.bind(this);
+        this.boundCloseWidget = this.#handleCloseWidget.bind(this);
+        this.boundWidgetKeydown = this.#handleWidgetKeydown.bind(this);
     }
 
     /**
@@ -123,6 +138,18 @@ export class RasterHistogramControlsView {
             "click",
             this.boundRetryStatistics
         );
+        this.openHistogramButton.addEventListener(
+            "click",
+            this.boundToggleWidget
+        );
+        this.closeHistogramButton.addEventListener(
+            "click",
+            this.boundCloseWidget
+        );
+        this.histogram.addEventListener(
+            "keydown",
+            this.boundWidgetKeydown
+        );
     }
 
     /** Remove every direct listener installed by {@link bind}. @return {void} */
@@ -138,7 +165,92 @@ export class RasterHistogramControlsView {
             "click",
             this.boundRetryStatistics
         );
+        this.openHistogramButton.removeEventListener(
+            "click",
+            this.boundToggleWidget
+        );
+        this.closeHistogramButton.removeEventListener(
+            "click",
+            this.boundCloseWidget
+        );
+        this.histogram.removeEventListener(
+            "keydown",
+            this.boundWidgetKeydown
+        );
         this.handlers = null;
+    }
+
+    /**
+     * Make the map-associated histogram launcher available for an active
+     * raster, or close and hide it when no raster owns the controls.
+     *
+     * @param {boolean} isAvailable Whether an active raster can own a result.
+     * @return {void}
+     */
+    setActiveRasterAvailable(isAvailable) {
+        this.openHistogramButton.hidden = !isAvailable;
+        if (!isAvailable) {
+            this.hideWidget();
+        }
+    }
+
+    /**
+     * Open the contextual histogram without moving focus from the map action
+     * that initiated sampling.
+     *
+     * @param {boolean} [moveFocus=false] Whether to focus the close control.
+     * @return {void}
+     */
+    showWidget(moveFocus = false) {
+        if (this.openHistogramButton.hidden) {
+            return;
+        }
+        this.histogram.hidden = false;
+        this.histogram.setAttribute("aria-hidden", "false");
+        this.openHistogramButton.setAttribute("aria-expanded", "true");
+        this.openHistogramButton.textContent = "Hide histogram";
+        if (moveFocus) {
+            this.closeHistogramButton.focus();
+        }
+    }
+
+    /**
+     * Hide the histogram presentation while retaining its current result.
+     *
+     * @param {boolean} [returnFocus=false] Whether to focus its launcher.
+     * @return {void}
+     */
+    hideWidget(returnFocus = false) {
+        this.histogram.hidden = true;
+        this.histogram.setAttribute("aria-hidden", "true");
+        this.openHistogramButton.setAttribute("aria-expanded", "false");
+        this.openHistogramButton.textContent = "Histogram";
+        if (returnFocus && !this.openHistogramButton.hidden) {
+            this.openHistogramButton.focus();
+        }
+    }
+
+    /**
+     * Label the distribution with the geographic area that produced it.
+     * Matching map-overlay and widget colors provide the visual connection.
+     *
+     * @param {"none"|"wholeRaster"|"selectedArea"|"temporaryAoi"} mode
+     * Active sampling-area discriminator.
+     * @return {void}
+     * @throws {TypeError} If the mode is outside the sampling-area contract.
+     */
+    setSamplingAreaMode(mode) {
+        const labels = {
+            none: "No sampled area",
+            wholeRaster: "Whole raster",
+            selectedArea: "Selected blue map window",
+            temporaryAoi: "Uploaded purple AOI"
+        };
+        if (!(mode in labels)) {
+            throw new TypeError(`Unsupported histogram sampling area: ${mode}`);
+        }
+        this.histogram.setAttribute("data-sampling-area", mode);
+        this.histogramScope.textContent = labels[mode];
     }
 
     /** Enable statistics retry for an active raster. @return {void} */
@@ -318,5 +430,34 @@ export class RasterHistogramControlsView {
     /** Forward the retry-statistics action. @return {void} */
     #handleRetryStatistics() {
         this.handlers.onRetryStatistics();
+    }
+
+    /** Toggle the retained histogram result from its map control. @return {void} */
+    #handleToggleWidget() {
+        if (this.histogram.hidden) {
+            this.showWidget(true);
+        } else {
+            this.hideWidget(true);
+        }
+    }
+
+    /** Close the widget without clearing statistics. @return {void} */
+    #handleCloseWidget() {
+        this.hideWidget(true);
+    }
+
+    /**
+     * Close only the histogram widget when Escape originates within it.
+     *
+     * @param {KeyboardEvent} event Widget keyboard event.
+     * @return {void}
+     */
+    #handleWidgetKeydown(event) {
+        if (event.key !== "Escape") {
+            return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        this.hideWidget(true);
     }
 }

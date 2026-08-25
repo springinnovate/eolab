@@ -370,6 +370,17 @@ export class RasterControlsView {
      */
     setSamplingAreaMode(mode) {
         this.#samplingAreaView.setSamplingAreaMode(mode);
+        this.#histogramView.setSamplingAreaMode(mode);
+    }
+
+    /**
+     * Reveal the contextual histogram for an explicit sampling request.
+     * The current result remains owned by the histogram adapter.
+     *
+     * @return {void}
+     */
+    showHistogramWidget() {
+        this.#histogramView.showWidget();
     }
 
     /**
@@ -380,6 +391,7 @@ export class RasterControlsView {
      */
     setControlsVisible(isVisible) {
         this.#root.hidden = !isVisible;
+        this.#histogramView.setActiveRasterAvailable(isVisible);
     }
 
     /** Return whether the pointer probe is visible. @return {boolean} Visibility. */

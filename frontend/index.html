@@ -241,7 +241,7 @@
                 aria-controls="eomap-map-layers-region"
                 aria-selected="true"
               >
-                Layers
+                Rendering
               </button>
               <button
                 class="map-tools-tab"
@@ -562,7 +562,7 @@
                     aria-controls="map"
                   >
                     <div class="workspace-region-heading">
-                      <h2 id="eomap-map-layers-heading">Map and layers</h2>
+                      <h2 id="eomap-map-layers-heading">Rendering detail</h2>
                     </div>
                     <div
                       class="workspace-region-body map-layers-body"
@@ -615,29 +615,6 @@
                       role="status"
                       aria-live="polite"
                       aria-atomic="true"
-                    ></p>
-                    <section
-                      class="raster-layer-stack"
-                      id="raster-layer-stack"
-                      aria-labelledby="raster-layer-stack-heading"
-                      hidden
-                    >
-                      <div class="raster-layer-stack-heading">
-                        <div>
-                          <p class="section-label">Map display</p>
-                          <h4 id="raster-layer-stack-heading">Map layers</h4>
-                        </div>
-                        <p id="raster-layer-stack-limit"></p>
-                      </div>
-                      <ol class="raster-layer-list" id="raster-layer-list"></ol>
-                    </section>
-                    <p
-                      class="raster-layer-stack-status"
-                      id="raster-layer-stack-status"
-                      role="status"
-                      aria-live="polite"
-                      aria-atomic="true"
-                      tabindex="-1"
                     ></p>
                     </div>
                   </section>
@@ -757,108 +734,6 @@
                     </p>
                   </section>
                   <section
-                    class="raster-control-group raster-histogram"
-                    id="raster-histogram"
-                    aria-labelledby="raster-histogram-heading"
-                  >
-                    <div class="raster-histogram-heading">
-                      <strong id="raster-histogram-heading">Bounded distribution</strong>
-                      <button
-                        class="secondary-button"
-                        id="retry-raster-statistics"
-                        type="button"
-                        hidden
-                      >
-                        Retry
-                      </button>
-                    </div>
-                    <p
-                      class="raster-histogram-status"
-                      id="raster-histogram-status"
-                      role="status"
-                      aria-live="polite"
-                      aria-atomic="true"
-                    ></p>
-                    <svg
-                      class="raster-histogram-chart"
-                      id="raster-histogram-chart"
-                      viewBox="0 0 640 112"
-                      preserveAspectRatio="none"
-                      role="img"
-                      hidden
-                    ></svg>
-                    <div
-                      class="raster-histogram-axis"
-                      id="raster-histogram-axis"
-                      aria-hidden="true"
-                      hidden
-                    >
-                      <span id="raster-histogram-minimum"></span>
-                      <span id="raster-histogram-maximum"></span>
-                    </div>
-                    <div
-                      class="raster-percentile-controls"
-                      id="raster-percentile-controls"
-                      role="group"
-                      aria-labelledby="raster-percentile-heading"
-                      hidden
-                    >
-                      <strong id="raster-percentile-heading">Display percentiles</strong>
-                      <p>Choose three ordered positions in this distribution, then apply them to the numeric display thresholds below.</p>
-                      <label for="raster-lower-percentile">
-                        <span>Lower</span>
-                        <input
-                          id="raster-lower-percentile"
-                          type="range"
-                          min="0"
-                          max="100"
-                          step="1"
-                          value="5"
-                          aria-describedby="raster-lower-percentile-value raster-percentile-error"
-                        />
-                        <output id="raster-lower-percentile-value" for="raster-lower-percentile"></output>
-                      </label>
-                      <label for="raster-middle-percentile">
-                        <span>Middle</span>
-                        <input
-                          id="raster-middle-percentile"
-                          type="range"
-                          min="0"
-                          max="100"
-                          step="1"
-                          value="50"
-                          aria-describedby="raster-middle-percentile-value raster-percentile-error"
-                        />
-                        <output id="raster-middle-percentile-value" for="raster-middle-percentile"></output>
-                      </label>
-                      <label for="raster-upper-percentile">
-                        <span>Upper</span>
-                        <input
-                          id="raster-upper-percentile"
-                          type="range"
-                          min="0"
-                          max="100"
-                          step="1"
-                          value="95"
-                          aria-describedby="raster-upper-percentile-value raster-percentile-error"
-                        />
-                        <output id="raster-upper-percentile-value" for="raster-upper-percentile"></output>
-                      </label>
-                      <p
-                        class="raster-style-error"
-                        id="raster-percentile-error"
-                        role="status"
-                      ></p>
-                      <button
-                        class="secondary-button"
-                        id="apply-raster-percentiles"
-                        type="button"
-                      >
-                        Rescale colors to this range
-                      </button>
-                    </div>
-                  </section>
-                  <section
                     class="raster-control-group raster-appearance-controls"
                     id="raster-appearance-controls"
                     aria-labelledby="raster-appearance-heading"
@@ -950,6 +825,180 @@
           <span>Runtime configured</span>
           <span id="app-version">VERSION TO BE SET BY CONFIGURATION</span>
         </footer>
+      </section>
+
+      <section
+        class="map-layer-widget raster-layer-stack"
+        id="raster-layer-stack"
+        data-eomap-region="map-layers"
+        aria-labelledby="raster-layer-stack-heading"
+        hidden
+      >
+        <div class="raster-layer-stack-heading">
+          <div>
+            <p class="section-label">Map display</p>
+            <h2 id="raster-layer-stack-heading">
+              Layers <span id="raster-layer-widget-count">0</span>
+            </h2>
+          </div>
+          <button
+            class="secondary-button"
+            id="toggle-map-layer-widget"
+            type="button"
+            aria-controls="raster-layer-stack-body"
+            aria-expanded="true"
+          >
+            Hide layers
+          </button>
+        </div>
+        <div class="map-layer-widget-body" id="raster-layer-stack-body">
+          <p id="raster-layer-stack-limit"></p>
+          <ol class="raster-layer-list" id="raster-layer-list"></ol>
+          <p
+            class="raster-layer-stack-status"
+            id="raster-layer-stack-status"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+            tabindex="-1"
+          ></p>
+        </div>
+      </section>
+
+      <button
+        class="map-widget-launcher histogram-widget-launcher"
+        id="open-raster-histogram-widget"
+        type="button"
+        aria-controls="raster-histogram"
+        aria-expanded="false"
+        hidden
+      >
+        Histogram
+      </button>
+      <section
+        class="map-widget raster-histogram"
+        id="raster-histogram"
+        data-eomap-region="raster-interpretation"
+        data-sampling-area="wholeRaster"
+        aria-labelledby="raster-histogram-heading"
+        aria-hidden="true"
+        aria-busy="false"
+        hidden
+      >
+        <div class="raster-histogram-heading">
+          <div>
+            <p class="section-label">Raster analysis</p>
+            <h2 id="raster-histogram-heading">Distribution</h2>
+          </div>
+          <div class="raster-histogram-actions">
+            <button
+              class="secondary-button"
+              id="retry-raster-statistics"
+              type="button"
+              hidden
+            >
+              Retry
+            </button>
+            <button
+              class="icon-button"
+              id="close-raster-histogram-widget"
+              type="button"
+              aria-label="Close histogram"
+            >
+              <span aria-hidden="true">&#10005;</span>
+            </button>
+          </div>
+        </div>
+        <div class="raster-histogram-body">
+          <p class="raster-histogram-scope" id="raster-histogram-scope">
+            Whole raster
+          </p>
+          <p
+            class="raster-histogram-status"
+            id="raster-histogram-status"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          ></p>
+          <svg
+            class="raster-histogram-chart"
+            id="raster-histogram-chart"
+            viewBox="0 0 640 112"
+            preserveAspectRatio="none"
+            role="img"
+            hidden
+          ></svg>
+          <div
+            class="raster-histogram-axis"
+            id="raster-histogram-axis"
+            aria-hidden="true"
+            hidden
+          >
+            <span id="raster-histogram-minimum"></span>
+            <span id="raster-histogram-maximum"></span>
+          </div>
+          <div
+            class="raster-percentile-controls"
+            id="raster-percentile-controls"
+            role="group"
+            aria-labelledby="raster-percentile-heading"
+            hidden
+          >
+            <strong id="raster-percentile-heading">Display percentiles</strong>
+            <p>Choose three ordered positions in this distribution, then apply them to the numeric display thresholds.</p>
+            <label for="raster-lower-percentile">
+              <span>Lower</span>
+              <input
+                id="raster-lower-percentile"
+                type="range"
+                min="0"
+                max="100"
+                step="1"
+                value="5"
+                aria-describedby="raster-lower-percentile-value raster-percentile-error"
+              />
+              <output id="raster-lower-percentile-value" for="raster-lower-percentile"></output>
+            </label>
+            <label for="raster-middle-percentile">
+              <span>Middle</span>
+              <input
+                id="raster-middle-percentile"
+                type="range"
+                min="0"
+                max="100"
+                step="1"
+                value="50"
+                aria-describedby="raster-middle-percentile-value raster-percentile-error"
+              />
+              <output id="raster-middle-percentile-value" for="raster-middle-percentile"></output>
+            </label>
+            <label for="raster-upper-percentile">
+              <span>Upper</span>
+              <input
+                id="raster-upper-percentile"
+                type="range"
+                min="0"
+                max="100"
+                step="1"
+                value="95"
+                aria-describedby="raster-upper-percentile-value raster-percentile-error"
+              />
+              <output id="raster-upper-percentile-value" for="raster-upper-percentile"></output>
+            </label>
+            <p
+              class="raster-style-error"
+              id="raster-percentile-error"
+              role="status"
+            ></p>
+            <button
+              class="secondary-button"
+              id="apply-raster-percentiles"
+              type="button"
+            >
+              Rescale colors to this range
+            </button>
+          </div>
+        </div>
       </section>
 
       <button

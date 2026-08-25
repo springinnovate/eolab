@@ -124,17 +124,27 @@ test("layout shell owns three physically separate sibling workspaces", () => {
     assert.ok(mapRegion.end < rasterRegion.start);
 });
 
-test("map and raster siblings retain their focused controls", () => {
+test("map rendering, layer widget, and raster controls retain focused ownership", () => {
     const mapRegion = requireElementRange("eomap-map-layers-region");
     const rasterRegion = requireElementRange(
         "eomap-raster-interpretation-region"
     );
+    const layerWidget = requireElementRange("raster-layer-stack");
+    const histogramWidget = requireElementRange("raster-histogram");
 
     assert.match(mapRegion.source, /id="raster-detail-preview-controls"/);
     assert.match(mapRegion.source, /id="catalog-layer-status"/);
-    assert.match(mapRegion.source, /id="raster-layer-stack"/);
-    assert.match(mapRegion.source, /id="raster-layer-stack-status"/);
+    assert.doesNotMatch(mapRegion.source, /id="raster-layer-stack"/);
+    assert.match(layerWidget.source, /id="raster-layer-stack-status"/);
+    assert.match(layerWidget.source, /id="toggle-map-layer-widget"/);
+    assert.match(layerWidget.source, /data-eomap-region="map-layers"/);
     assert.match(rasterRegion.source, /id="raster-style-controls"/);
+    assert.doesNotMatch(rasterRegion.source, /id="raster-histogram"/);
+    assert.match(histogramWidget.source, /id="raster-percentile-controls"/);
+    assert.match(
+        histogramWidget.source,
+        /data-eomap-region="raster-interpretation"/
+    );
     assert.match(
         MARKUP,
         /id="eomap-map-layers-region"[^>]*role="tabpanel"[^>]*aria-labelledby="toggle-map-layers eomap-map-layers-heading"[^>]*aria-controls="map"/s
@@ -193,7 +203,7 @@ test("layout exposes compact status, rail, and map-tools tab contracts", () => {
     );
 });
 
-test("raster interpretation groups active target, area, distribution, then appearance", () => {
+test("raster controls retain groups while distribution is map-associated", () => {
     const composite = requireElementRange("raster-style-controls");
     const active = requireElementRange("raster-active-controls");
     const sampling = requireElementRange("raster-sampling-area-controls");
@@ -202,9 +212,9 @@ test("raster interpretation groups active target, area, distribution, then appea
 
     assert.ok(composite.start < active.start);
     assert.ok(active.end < sampling.start);
-    assert.ok(sampling.end < distribution.start);
-    assert.ok(distribution.end < appearance.start);
+    assert.ok(sampling.end < appearance.start);
     assert.ok(appearance.end < composite.end);
+    assert.ok(composite.end < distribution.start);
     assert.match(active.source, /id="raster-active-layer-label"/);
     assert.match(
         active.source,
@@ -217,6 +227,12 @@ test("raster interpretation groups active target, area, distribution, then appea
     assert.match(sampling.source, /id="use-temporary-aoi-for-raster"/);
     assert.match(distribution.source, /id="raster-histogram-status"/);
     assert.match(distribution.source, /id="raster-percentile-controls"/);
+    assert.match(distribution.source, /id="raster-histogram-scope"/);
+    assert.match(distribution.source, /id="close-raster-histogram-widget"/);
+    assert.match(
+        MARKUP,
+        /id="open-raster-histogram-widget"[^>]*aria-controls="raster-histogram"[^>]*aria-expanded="false"[^>]*hidden/s
+    );
     assert.match(appearance.source, /id="raster-palette"/);
     assert.match(appearance.source, /id="raster-minimum"/);
     assert.match(appearance.source, /id="raster-midpoint"/);
@@ -295,6 +311,33 @@ test("raster interpretation groups retain compact visual separation", () => {
     );
 });
 
+test("map widgets stay bounded and visually link distribution to sampling", () => {
+    assert.match(
+        STYLESHEET,
+        /\.raster-layer-stack\s*\{[^}]*position:\s*fixed[^}]*width:\s*min\(340px,[^}]*max-height:\s*min\(62vh, 560px\)/s
+    );
+    assert.match(
+        STYLESHEET,
+        /\.raster-histogram\s*\{[^}]*--histogram-link-color:\s*var\(--brand\)[^}]*position:\s*fixed[^}]*width:\s*min\(440px,[^}]*max-height:\s*min\(72vh, 650px\)/s
+    );
+    assert.match(
+        STYLESHEET,
+        /\.raster-histogram\[data-sampling-area="selectedArea"\]\s*\{[^}]*--histogram-link-color:\s*#2563eb/s
+    );
+    assert.match(
+        STYLESHEET,
+        /\.raster-histogram\[data-sampling-area="temporaryAoi"\]\s*\{[^}]*--histogram-link-color:\s*#6d1b7b/s
+    );
+    assert.match(
+        STYLESHEET,
+        /\.raster-histogram\[data-sampling-area="selectedArea"\]::before,[\s\S]*?border-top:\s*2px solid var\(--histogram-link-color\)/s
+    );
+    assert.match(
+        STYLESHEET,
+        /\.raster-sample-window-selection\s*\{[^}]*drop-shadow\(0 0 3px rgb\(37 99 235 \/ 62%\)\)/s
+    );
+});
+
 test("viewport overlays retain explicit non-reparenting region ownership", () => {
     assert.match(
         MARKUP,
@@ -322,6 +365,9 @@ test("semantic regions preserve one DOM instance of every owned control", () => 
         "toggle-catalog-layer",
         "temporary-aoi",
         "raster-layer-stack",
+        "raster-layer-stack-body",
+        "toggle-map-layer-widget",
+        "raster-layer-widget-count",
         "toggle-map-layers",
         "eomap-map-layers-body",
         "raster-style-controls",
@@ -331,6 +377,9 @@ test("semantic regions preserve one DOM instance of every owned control", () => 
         "raster-sampling-area-controls",
         "raster-sample-window-range",
         "raster-histogram",
+        "open-raster-histogram-widget",
+        "close-raster-histogram-widget",
+        "raster-histogram-scope",
         "raster-appearance-controls",
         "raster-pixel-probe",
     ];

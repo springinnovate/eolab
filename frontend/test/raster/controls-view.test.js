@@ -15,8 +15,9 @@ class FakeControlElement extends EventTarget {
      *
      * @param {string} [type] Input type exposed to event handlers.
      */
-    constructor(type = "") {
+    constructor(type = "", ownerDocument = null) {
         super();
+        this.ownerDocument = ownerDocument;
         this.type = type;
         this.value = "";
         this.textContent = "";
@@ -101,12 +102,20 @@ class FakeControlElement extends EventTarget {
     getBoundingClientRect() {
         return { width: 120, height: 48 };
     }
+
+    /** Give this control focus in its fake document. @return {void} */
+    focus() {
+        if (this.ownerDocument !== null) {
+            this.ownerDocument.activeElement = this;
+        }
+    }
 }
 
 /** Minimal selector and element factory contract used by the controls view. */
 class FakeRasterDocument {
     /** Create an empty document-backed selector registry. */
     constructor() {
+        this.activeElement = null;
         this.elements = new Map();
     }
 
@@ -128,7 +137,7 @@ class FakeRasterDocument {
                         selector.endsWith("-number")
                         ? "number"
                         : "";
-            this.elements.set(selector, new FakeControlElement(type));
+            this.elements.set(selector, new FakeControlElement(type, this));
         }
         return this.elements.get(selector);
     }
@@ -139,7 +148,7 @@ class FakeRasterDocument {
      * @return {FakeControlElement} New fake element.
      */
     createElement() {
-        return new FakeControlElement();
+        return new FakeControlElement("", this);
     }
 
     /**
@@ -148,7 +157,7 @@ class FakeRasterDocument {
      * @return {FakeControlElement} New fake SVG element.
      */
     createElementNS() {
-        return new FakeControlElement();
+        return new FakeControlElement("", this);
     }
 }
 
@@ -239,6 +248,11 @@ test("RasterControlsView exposes accessible exclusive histogram-area choices", (
 
     view.setTemporaryAoiAvailability(temporaryAoi);
     view.setSamplingAreaMode("temporaryAoi");
+    assert.equal(
+        documentContext.querySelector("#raster-histogram")
+            .getAttribute("data-sampling-area"),
+        "temporaryAoi"
+    );
     documentContext
         .querySelector("#select-raster-sample-window")
         .dispatchEvent(new Event("click"));
@@ -356,6 +370,11 @@ test("RasterControlsView owns composite visibility without clearing subgroup sta
     view.setControlsVisible(false);
 
     assert.equal(root.hidden, true);
+    assert.equal(histogram.hidden, true);
+    assert.equal(
+        documentContext.querySelector("#open-raster-histogram-widget").hidden,
+        true
+    );
     assert.equal(histogram.getAttribute("aria-busy"), "true");
     assert.equal(
         documentContext.querySelector("#raster-histogram-status").textContent,
@@ -366,6 +385,12 @@ test("RasterControlsView owns composite visibility without clearing subgroup sta
 
     view.setControlsVisible(true);
     assert.equal(root.hidden, false);
+    assert.equal(
+        documentContext.querySelector("#open-raster-histogram-widget").hidden,
+        false
+    );
+    view.showHistogramWidget();
+    assert.equal(histogram.hidden, false);
     assert.equal(histogram.getAttribute("aria-busy"), "true");
     assert.equal(samplingStatus.textContent, "Selected geographic map window.");
 });
