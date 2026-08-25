@@ -38,7 +38,7 @@ from eolab_app.raster.sample_grid import (
     read_source_window_sample_grid,
 )
 from eolab_app.raster.source_contract import (
-    RASTER_ANALYSIS_MAX_NATIVE_BLOCK_EDGE,
+    BOUNDED_RASTER_MAX_NATIVE_BLOCK_DECODED_BYTES,
     require_raster_analysis_georeferencing,
     require_signed_raster_dependencies,
 )
@@ -50,7 +50,7 @@ from eolab_app.sampling_area import (
 )
 
 
-RASTER_STATISTICS_ALGORITHM = "rendering-independent-bounded-area-v5"
+RASTER_STATISTICS_ALGORITHM = "rendering-independent-bounded-area-v6"
 RASTER_STATISTICS_BIN_COUNT = 64
 RASTER_STATISTICS_BOUNDS_DENSIFY_POINTS = 21
 RASTER_STATISTICS_MAX_TRANSFORMED_COORDINATES = 500_000
@@ -64,7 +64,8 @@ def raster_statistics_policy_parameters() -> tuple[int, ...]:
     """Return every fixed planning input used by cache identity.
 
     Returns:
-        Sampling-grid, exact-window, geometry, and point-location parameters.
+        Native-block, sampling-grid, exact-window, geometry, and point-location
+        parameters.
     """
     return (
         RASTER_STATISTICS_BIN_COUNT,
@@ -72,7 +73,7 @@ def raster_statistics_policy_parameters() -> tuple[int, ...]:
         RASTER_STATISTICS_MAX_TRANSFORMED_COORDINATES,
         RASTER_STATISTICS_SOURCE_WINDOW_PADDING_PIXELS,
         int(RASTER_STATISTICS_SELECTION_ALL_TOUCHED),
-        RASTER_ANALYSIS_MAX_NATIVE_BLOCK_EDGE,
+        BOUNDED_RASTER_MAX_NATIVE_BLOCK_DECODED_BYTES,
         SAMPLE_GRID_MAX_DIMENSION,
         SAMPLE_GRID_MAX_SOURCE_BLOCK_READS,
         SAMPLE_GRID_MAX_DECODED_SOURCE_BYTES,

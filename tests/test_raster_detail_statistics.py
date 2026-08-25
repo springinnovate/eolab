@@ -20,6 +20,9 @@ from eolab_app.raster.sample_grid import (
     plan_source_window_sample_grid,
     read_source_window_sample_grid,
 )
+from eolab_app.raster.source_contract import (
+    BOUNDED_RASTER_MAX_NATIVE_BLOCK_DECODED_BYTES,
+)
 
 
 class _NativeBlockDataset:
@@ -126,6 +129,7 @@ class _PlanningDataset:
         width: int,
         height: int,
         block_shape: tuple[int, int] = (64, 64),
+        data_type: str = "uint8",
     ) -> None:
         """Create source metadata at an arbitrary large shape.
 
@@ -133,10 +137,12 @@ class _PlanningDataset:
             width: Positive source width.
             height: Positive source height.
             block_shape: Native block height and width.
+            data_type: Rasterio-compatible band-one datatype name.
         """
         self.width = width
         self.height = height
         self.block_shapes = (block_shape,)
+        self.dtypes = (data_type,)
 
     def block_window(
         self,
@@ -248,6 +254,55 @@ def test_huge_source_grid_is_planned_under_fixed_limits_without_source_reads() -
     assert plan.points_per_cell == 1
 
 
+def test_planners_admit_safe_long_strips_by_decoded_work() -> None:
+    """Admit the reported 4320-by-1 float32 strips in both bounded modes."""
+    dataset = _PlanningDataset(
+        4_320,
+        2_160,
+        block_shape=(1, 4_320),
+        data_type="float32",
+    )
+
+    exact_plan = plan_exact_source_window(
+        dataset,  # type: ignore[arg-type]
+        Window(1_000, 700, 512, 512),
+    )
+    sample_plan = plan_source_window_sample_grid(
+        dataset,  # type: ignore[arg-type]
+        Window(0, 0, dataset.width, dataset.height),
+    )
+
+    assert exact_plan is not None
+    assert len(exact_plan.block_indexes) == 512
+    assert exact_plan.decoded_source_bytes == 512 * 4_320 * 5
+    assert len(sample_plan.block_indexes) == 63
+    assert sample_plan.decoded_source_bytes == 63 * 4_320 * 5
+
+
+def test_planners_reject_one_unsafe_native_block_before_source_reads() -> None:
+    """Reject a single excessive decoded allocation from metadata alone."""
+    dataset = _PlanningDataset(
+        4_096,
+        4_096,
+        block_shape=(4_096, 4_096),
+        data_type="float32",
+    )
+    decoded_block_bytes = 4_096 * 4_096 * 5
+    assert decoded_block_bytes > BOUNDED_RASTER_MAX_NATIVE_BLOCK_DECODED_BYTES
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "each native block to decode to no more than "
+            f"{BOUNDED_RASTER_MAX_NATIVE_BLOCK_DECODED_BYTES} bytes"
+        ),
+    ):
+        plan_source_window_sample_grid(
+            dataset,  # type: ignore[arg-type]
+            Window(0, 0, 100, 100),
+        )
+
+
 def test_over_budget_sample_grid_is_rejected_before_source_reads() -> None:
     """Reject decoded work from metadata alone before any pixel I/O."""
     dataset = _PlanningDataset(
@@ -338,13 +393,6 @@ def test_planners_reject_unsafe_structure_and_unbounded_exact_windows() -> None:
     with pytest.raises(ValueError, match="alpha or per-dataset"):
         plan_source_window_sample_grid(  # type: ignore[arg-type]
             external_validity,
-            Window(0, 0, 100, 100),
-        )
-
-    oversized_blocks = _PlanningDataset(2_048, 2_048, (1_025, 16))
-    with pytest.raises(ValueError, match="no larger than 1024"):
-        plan_source_window_sample_grid(  # type: ignore[arg-type]
-            oversized_blocks,
             Window(0, 0, 100, 100),
         )
 

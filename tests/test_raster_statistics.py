@@ -569,6 +569,89 @@ def test_raster_statistics_broad_source_uses_fixed_sample_grid(
 
 
 @pytest.mark.parametrize(
+    ("sampling_area", "expected_sampling_method"),
+    (
+        (WholeRasterSamplingArea(), "sampleGrid"),
+        (
+            SelectedBoundsSamplingArea((-1.0, -1.0, 1.0, 1.0)),
+            "exactSourceWindow",
+        ),
+    ),
+)
+def test_raster_statistics_supports_safe_long_strips(
+    monkeypatch: pytest.MonkeyPatch,
+    sampling_area: RasterSamplingArea,
+    expected_sampling_method: str,
+) -> None:
+    """Produce histograms for the affected layout in sampled and exact modes.
+
+    Args:
+        monkeypatch: Rasterio-open replacement fixture.
+        sampling_area: Whole-raster or narrow selected-area request.
+        expected_sampling_method: Planner mode expected for the request.
+
+    Returns:
+        None.
+    """
+    source_path = Path("barley_N_increase.tif")
+    values = numpy.broadcast_to(
+        numpy.arange(4_320, dtype=numpy.float32),
+        (2_160, 4_320),
+    )
+    dataset = _NativeStatisticsDataset(
+        values,
+        source_path,
+        transform=from_bounds(-180, -90, 180, 90, 4_320, 2_160),
+        block_shape=(1, 4_320),
+    )
+    monkeypatch.setattr(
+        "eolab_app.raster.statistics.rasterio.open",
+        lambda _: dataset,
+    )
+
+    statistics = read_raster_statistics(source_path, sampling_area)
+
+    assert statistics.sampling_method == expected_sampling_method
+    assert statistics.valid_sample_count > 0
+    assert sum(statistics.histogram.counts) == statistics.valid_sample_count
+    assert dataset.read_windows
+    assert all(window.width == 4_320 for window in dataset.read_windows)
+    assert len(set(dataset.read_windows)) == len(dataset.read_windows)
+
+
+def test_raster_statistics_rejects_unsafe_native_block_before_pixel_io(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preserve pre-I/O rejection for one excessive decoded block.
+
+    Args:
+        monkeypatch: Rasterio-open replacement fixture.
+
+    Returns:
+        None.
+    """
+    source_path = Path("unsafe-block.tif")
+    values = numpy.broadcast_to(
+        numpy.zeros(1, dtype=numpy.float32),
+        (4_096, 4_096),
+    )
+    dataset = _NativeStatisticsDataset(
+        values,
+        source_path,
+        block_shape=(4_096, 4_096),
+    )
+    monkeypatch.setattr(
+        "eolab_app.raster.statistics.rasterio.open",
+        lambda _: dataset,
+    )
+
+    with pytest.raises(ValueError, match="each native block to decode"):
+        read_raster_statistics(source_path, WholeRasterSamplingArea())
+
+    assert dataset.read_windows == []
+
+
+@pytest.mark.parametrize(
     "selected_bounds",
     (
         {"west": 10, "south": -1, "east": 10, "north": 1},
