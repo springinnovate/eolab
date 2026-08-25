@@ -46,7 +46,10 @@ body,
 }
 
 #app {
-  --catalog-workspace-width: min(960px, 64vw, calc(100vw - 360px));
+  --catalog-workspace-width: clamp(300px, 27vw, 380px);
+  --tools-workspace-width: clamp(320px, 29vw, 420px);
+  --workspace-edge: 16px;
+  --workspace-gap: 16px;
 }
 
 button,
@@ -88,13 +91,28 @@ select:hover:not(:disabled) {
 
 #map {
   position: absolute;
-  inset: 0;
+  top: var(--workspace-edge);
+  right: var(--workspace-edge);
+  bottom: var(--workspace-edge);
+  left: var(--workspace-edge);
   background: var(--surface-1);
-  transition: right 220ms ease;
+  transition:
+    right 220ms ease,
+    left 220ms ease;
 }
 
 #app.is-catalog-workspace #map {
-  right: calc(var(--catalog-workspace-width) + 40px);
+  left: calc(
+    var(--catalog-workspace-width) + var(--workspace-edge) +
+      var(--workspace-gap)
+  );
+}
+
+#app.is-tools-workspace #map {
+  right: calc(
+    var(--tools-workspace-width) + var(--workspace-edge) +
+      var(--workspace-gap)
+  );
 }
 
 .raster-detail-processing {
@@ -114,7 +132,17 @@ select:hover:not(:disabled) {
 }
 
 #app.is-catalog-workspace .raster-detail-processing {
-  right: calc(var(--catalog-workspace-width) + 40px);
+  left: calc(
+    var(--catalog-workspace-width) + var(--workspace-edge) +
+      var(--workspace-gap)
+  );
+}
+
+#app.is-tools-workspace .raster-detail-processing {
+  right: calc(
+    var(--tools-workspace-width) + var(--workspace-edge) +
+      var(--workspace-gap)
+  );
 }
 
 .raster-detail-processing-card {
@@ -194,11 +222,16 @@ select:hover:not(:disabled) {
 }
 
 #app.is-catalog-workspace .raster-detail-map-notice {
-  right: calc(var(--catalog-workspace-width) + 60px);
+  left: calc(var(--catalog-workspace-width) + 40px);
+  right: 40px;
   max-width: min(
     720px,
-    calc(100vw - var(--catalog-workspace-width) - 150px)
+    calc(100vw - var(--catalog-workspace-width) - 100px)
   );
+}
+
+#app.is-tools-workspace .raster-detail-map-notice {
+  right: calc(var(--tools-workspace-width) + 40px);
 }
 
 .leaflet-container {
@@ -251,40 +284,38 @@ select:hover:not(:disabled) {
 .control-panel {
   position: absolute;
   z-index: 1100;
-  top: 20px;
-  right: 20px;
-  bottom: 20px;
-  display: flex;
-  width: min(400px, calc(100vw - 40px));
-  flex-direction: column;
-  overflow: hidden;
-  border: 1px solid var(--border-1);
-  border-radius: var(--radius);
-  background: rgb(255 255 255 / 98%);
-  box-shadow: var(--elevation-panel);
+  inset: var(--workspace-edge);
+  display: grid;
+  grid-template-columns:
+    var(--catalog-workspace-width) minmax(240px, 1fr)
+    var(--tools-workspace-width);
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  gap: 10px var(--workspace-gap);
+  pointer-events: none;
   transition:
-    width 220ms ease,
     transform 220ms ease,
     opacity 180ms ease;
 }
 
-#app.is-catalog-workspace .control-panel {
-  width: var(--catalog-workspace-width);
-}
-
 .control-panel.is-collapsed {
   pointer-events: none;
-  transform: translateX(calc(100% + 28px));
+  transform: translateY(-12px) scale(0.985);
   opacity: 0;
 }
 
 .panel-header {
   display: flex;
+  grid-column: 1;
+  grid-row: 1;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
-  padding: 24px 24px 18px;
-  border-bottom: 1px solid var(--border-3);
+  gap: 10px;
+  pointer-events: auto;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius);
+  background: rgb(255 255 255 / 98%);
+  padding: 12px 14px;
+  box-shadow: var(--elevation-panel);
 }
 
 .eyebrow,
@@ -305,7 +336,7 @@ p {
 
 h1 {
   margin-bottom: 5px;
-  font-size: clamp(1.45rem, 3vw, 1.8rem);
+  font-size: 1.32rem;
   font-weight: 600;
   letter-spacing: -0.025em;
   line-height: 1.2;
@@ -353,7 +384,7 @@ h5 {
 
 .subtitle {
   margin-bottom: 0;
-  font-size: 0.88rem;
+  font-size: 0.76rem;
 }
 
 .icon-button {
@@ -415,7 +446,7 @@ h5 {
 .operational-status-heading {
   align-items: center;
   margin: 0;
-  padding: 9px 24px;
+  padding: 9px 12px;
   border-bottom: 1px solid var(--border-3);
 }
 
@@ -428,8 +459,97 @@ h5 {
   font-size: 0.68rem;
 }
 
+.operational-status-region {
+  grid-column: 1;
+  grid-row: 2;
+  min-height: 0;
+  pointer-events: auto;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius);
+  background: rgb(255 255 255 / 98%);
+  box-shadow: var(--elevation-panel);
+}
+
+.map-tools-navigation {
+  display: grid;
+  grid-column: 3;
+  grid-row: 1;
+  gap: 10px;
+  pointer-events: auto;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius);
+  background: rgb(255 255 255 / 98%);
+  padding: 11px 12px;
+  box-shadow: var(--elevation-panel);
+}
+
+.map-tools-heading {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.map-tools-heading .section-label {
+  margin-bottom: 2px;
+}
+
+.map-tools-heading h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.map-tools-heading .icon-button {
+  width: 30px;
+  height: 30px;
+}
+
+.map-tools-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  padding: 3px;
+  border-radius: var(--radius);
+  background: var(--surface-4);
+}
+
+.map-tools-tab {
+  min-width: 0;
+  cursor: pointer;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  padding: 7px 6px;
+  color: var(--text-2);
+  font-size: 0.76rem;
+  font-weight: 650;
+}
+
+.map-tools-tab:hover {
+  background: var(--surface-hover);
+  color: var(--brand-hover);
+}
+
+.map-tools-tab[aria-selected="true"] {
+  background: var(--surface-2);
+  color: var(--brand-press);
+  box-shadow: var(--elevation-control);
+}
+
+.catalog-panel[hidden],
+.map-tools-navigation[hidden],
+.map-layers-region[hidden],
+.raster-interpretation-region[hidden],
+.temporary-aoi-card[hidden] {
+  display: none;
+}
+
 .operational-status-body {
   min-height: 0;
+  max-height: min(38vh, 330px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .system-state {
@@ -558,53 +678,54 @@ h5 {
 }
 
 .panel-content {
-  display: grid;
-  min-height: 0;
-  flex: 1;
-  grid-template-areas:
-    "temporary-aoi"
-    "catalog"
-    "map-layers"
-    "raster-interpretation";
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto minmax(500px, 1fr) auto auto;
-  gap: 18px;
-  overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 25px 24px;
-  scrollbar-gutter: stable;
+  display: contents;
 }
 
 .catalog-panel {
   container-name: eomap-catalog;
   container-type: inline-size;
   display: flex;
-  grid-area: catalog;
+  grid-column: 1;
+  grid-row: 3;
   min-height: 0;
   flex-direction: column;
   overflow: hidden;
+  pointer-events: auto;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius);
+  background: rgb(255 255 255 / 98%);
+  padding: 14px;
+  box-shadow: var(--elevation-panel);
 }
 
 .map-layers-region {
-  grid-area: map-layers;
+  grid-column: 3;
+  grid-row: 2 / 5;
 }
 
 .raster-interpretation-region {
-  grid-area: raster-interpretation;
+  grid-column: 3;
+  grid-row: 2 / 5;
 }
 
 .map-layers-region,
 .raster-interpretation-region {
   display: flex;
-  min-height: 43px;
+  min-height: 0;
   flex-direction: column;
   overflow: hidden;
+  pointer-events: auto;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius);
+  background: rgb(255 255 255 / 98%);
+  padding: 14px;
+  box-shadow: var(--elevation-panel);
 }
 
 .map-layers-body,
 .raster-interpretation-body {
-  max-height: min(38vh, 440px);
+  max-height: none;
+  flex: 1;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -613,13 +734,18 @@ h5 {
 }
 
 .temporary-aoi-card {
-  grid-area: temporary-aoi;
-  flex: 0 0 auto;
+  grid-column: 3;
+  grid-row: 2 / 5;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  pointer-events: auto;
   border: 1px solid var(--border-2);
   border-left: 4px solid #6d1b7b;
   border-radius: var(--radius);
   background: var(--surface-3);
   padding: 13px 14px;
+  box-shadow: var(--elevation-panel);
 }
 
 .temporary-aoi-heading {
@@ -2032,10 +2158,16 @@ h5 {
 
 .panel-footer {
   display: flex;
+  grid-column: 1;
+  grid-row: 4;
   justify-content: space-between;
-  padding: 12px 24px;
-  border-top: 1px solid var(--border-3);
+  pointer-events: auto;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius);
+  background: rgb(255 255 255 / 98%);
+  padding: 7px 10px;
   color: var(--text-3);
+  box-shadow: var(--elevation-control);
   font-size: 0.72rem;
 }
 
@@ -2061,6 +2193,43 @@ h5 {
 .panel-opener:active {
   border-color: var(--brand-press);
   background: var(--brand-press);
+}
+
+.workspace-dock {
+  position: absolute;
+  z-index: 1090;
+  top: 16px;
+  left: 50%;
+  display: flex;
+  gap: 6px;
+  transform: translateX(-50%);
+}
+
+.workspace-dock-button {
+  cursor: pointer;
+  border: 1px solid var(--border-1);
+  border-radius: 999px;
+  background: rgb(255 255 255 / 96%);
+  padding: 8px 12px;
+  color: var(--text-2);
+  box-shadow: var(--elevation-control);
+  font-size: 0.74rem;
+  font-weight: 650;
+}
+
+.workspace-dock-button:hover,
+.workspace-dock-button[aria-expanded="false"] {
+  border-color: var(--brand);
+  color: var(--brand-hover);
+}
+
+#app.is-catalog-workspace #open-catalog-workspace,
+#app.is-tools-workspace #open-tools-workspace {
+  display: none;
+}
+
+.control-panel.is-collapsed ~ .workspace-dock {
+  display: none;
 }
 
 .map-position {
@@ -2111,8 +2280,8 @@ h5 {
   display: none;
 }
 
-#app.is-catalog-workspace .map-position {
-  right: calc(var(--catalog-workspace-width) + 40px);
+#app.is-tools-workspace .map-position {
+  right: calc(var(--tools-workspace-width) + 30px);
 }
 
 .control-panel.is-collapsed ~ .map-position {
@@ -2157,54 +2326,51 @@ h5 {
   }
 }
 
-@media (min-width: 1180px) and (min-height: 720px) {
-  #app.is-catalog-workspace .panel-content {
-    grid-template-areas:
-      "catalog temporary-aoi"
-      "catalog map-layers"
-      "catalog raster-interpretation";
-    grid-template-columns: minmax(0, 1.7fr) minmax(270px, 1fr);
-    grid-template-rows: auto minmax(0, 0.8fr) minmax(0, 1.2fr);
-    overflow: hidden;
+@media (max-width: 1279px) {
+  #map,
+  #app.is-catalog-workspace #map,
+  #app.is-tools-workspace #map,
+  .raster-detail-processing,
+  #app.is-catalog-workspace .raster-detail-processing,
+  #app.is-tools-workspace .raster-detail-processing {
+    inset: 0;
   }
 
-  #app.is-catalog-workspace .catalog-panel,
-  #app.is-catalog-workspace .map-layers-region,
-  #app.is-catalog-workspace .raster-interpretation-region {
-    min-height: 0;
+  #app.is-catalog-workspace .raster-detail-map-notice,
+  #app.is-tools-workspace .raster-detail-map-notice {
+    right: 32px;
+    left: 70px;
+    max-width: min(720px, calc(100vw - 124px));
   }
 
-  #app.is-catalog-workspace .map-layers-body,
-  #app.is-catalog-workspace .raster-interpretation-body {
-    max-height: none;
-    flex: 1;
-  }
-}
-
-@media (max-width: 1024px) {
-  #app.is-catalog-workspace #map {
-    right: 0;
-  }
-
-  #app.is-catalog-workspace .raster-detail-processing {
-    right: 0;
-  }
-
-  #app.is-catalog-workspace .control-panel {
-    width: min(560px, calc(100vw - 32px));
-  }
-
-  #app.is-catalog-workspace .map-position {
+  #app.is-tools-workspace .map-position {
     right: 20px;
   }
 
-  #app.is-catalog-workspace .raster-detail-map-notice {
-    right: 32px;
-    max-width: min(720px, calc(100vw - 124px));
+  #app.is-active-catalog-workspace .map-tools-navigation,
+  #app.is-active-catalog-workspace .map-layers-region,
+  #app.is-active-catalog-workspace .raster-interpretation-region,
+  #app.is-active-catalog-workspace .temporary-aoi-card,
+  #app.is-active-tools-workspace .panel-header,
+  #app.is-active-tools-workspace .operational-status-region,
+  #app.is-active-tools-workspace .catalog-panel,
+  #app.is-active-tools-workspace .panel-footer {
+    display: none;
+  }
+
+  #app.is-catalog-workspace #open-catalog-workspace,
+  #app.is-tools-workspace #open-tools-workspace {
+    display: block;
+  }
+
+  .workspace-dock-button[aria-expanded="true"] {
+    border-color: var(--brand);
+    background: var(--surface-selected);
+    color: var(--brand-press);
   }
 }
 
-@media (max-width: 700px) {
+@media (max-width: 820px) {
   .raster-detail-map-notice {
     top: 70px;
     right: 20px;
@@ -2213,77 +2379,129 @@ h5 {
   }
 
   .control-panel {
-    top: auto;
-    right: 10px;
-    bottom: 10px;
-    left: 10px;
-    width: auto;
-    max-height: min(82dvh, 720px);
-  }
-
-  #app.is-catalog-workspace .control-panel {
-    width: auto;
+    inset: auto 8px 50px;
+    height: min(72dvh, 680px);
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto auto minmax(0, 1fr);
+    gap: 0;
+    pointer-events: auto;
+    overflow: hidden;
+    border: 1px solid var(--border-1);
+    border-radius: 8px;
+    background: rgb(255 255 255 / 98%);
+    box-shadow: var(--elevation-panel);
   }
 
   .control-panel.is-collapsed {
-    transform: translateY(calc(100% + 18px));
+    transform: translateY(calc(100% + 58px));
   }
 
   .panel-header {
-    padding: 19px 20px 15px;
+    grid-column: 1;
+    grid-row: 1;
+    border: 0;
+    border-bottom: 1px solid var(--border-3);
+    border-radius: 0;
+    padding: 10px 12px;
+    box-shadow: none;
   }
 
-  .panel-content,
-  .panel-footer {
-    padding-right: 20px;
-    padding-left: 20px;
+  .panel-header .eyebrow,
+  .panel-header .subtitle {
+    display: none;
   }
 
-  .panel-content {
-    grid-template-areas:
-      "temporary-aoi"
-      "catalog"
-      "map-layers"
-      "raster-interpretation";
-    grid-template-rows: auto minmax(500px, 1fr) auto auto;
+  .operational-status-region {
+    grid-column: 1;
+    grid-row: 2;
+    border: 0;
+    border-bottom: 1px solid var(--border-3);
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .system-state > summary,
+  .system-state-details-body {
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  .catalog-panel,
+  .map-tools-navigation,
+  .map-layers-region,
+  .raster-interpretation-region,
+  .temporary-aoi-card {
+    grid-column: 1;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
   }
 
   .catalog-panel {
-    max-height: min(64dvh, 600px);
+    grid-row: 3 / 5;
+    padding: 12px;
   }
 
-  .map-layers-body,
-  .raster-interpretation-body {
-    max-height: min(46dvh, 430px);
+  .map-tools-navigation {
+    grid-row: 3;
+    border-bottom: 1px solid var(--border-3);
+    padding: 8px 10px;
   }
 
-  .operational-status-body {
-    max-height: min(38dvh, 320px);
+  .map-layers-region,
+  .raster-interpretation-region,
+  .temporary-aoi-card {
+    grid-row: 4;
     overflow-y: auto;
-    overscroll-behavior: contain;
+    padding: 12px;
   }
 
-  .operational-status-heading,
-  .system-state > summary,
-  .system-state-details-body {
-    padding-right: 20px;
-    padding-left: 20px;
+  #app.is-active-catalog-workspace .map-tools-navigation,
+  #app.is-active-catalog-workspace .map-layers-region,
+  #app.is-active-catalog-workspace .raster-interpretation-region,
+  #app.is-active-catalog-workspace .temporary-aoi-card,
+  #app.is-active-tools-workspace .catalog-panel {
+    display: none;
+  }
+
+  .panel-footer {
+    display: none;
+  }
+
+  .workspace-dock {
+    top: auto;
+    right: 8px;
+    bottom: 8px;
+    left: 8px;
+    justify-content: center;
+    transform: none;
+  }
+
+  #app.is-catalog-workspace #open-catalog-workspace,
+  #app.is-tools-workspace #open-tools-workspace {
+    display: block;
+  }
+
+  .workspace-dock-button {
+    min-width: 112px;
+  }
+
+  .workspace-dock-button[aria-expanded="true"] {
+    border-color: var(--brand);
+    background: var(--surface-selected);
+    color: var(--brand-press);
   }
 
   .panel-opener {
     top: auto;
-    right: 10px;
-    bottom: 10px;
+    right: 8px;
+    bottom: 8px;
   }
 
   .map-position {
-    top: 10px;
-    right: 10px;
+    top: 8px;
+    right: 8px;
     bottom: auto;
-  }
-
-  #app.is-catalog-workspace .panel-content {
-    padding-top: 18px;
   }
 
   .temporary-aoi-upload,
@@ -2301,58 +2519,25 @@ h5 {
 }
 
 @media (max-width: 420px) {
-  .workspace-region-heading {
-    flex-direction: column;
-    align-items: stretch;
+  .control-panel {
+    height: min(76dvh, 680px);
   }
 
-  .workspace-region-toggle {
-    align-self: flex-start;
+  .workspace-region-heading {
+    align-items: stretch;
   }
 
   .operational-status-heading {
-    align-items: stretch;
-  }
-}
-
-@media (max-height: 640px) {
-  .control-panel {
-    max-height: calc(100dvh - 20px);
-    overflow-x: hidden;
-    overflow-y: auto;
-    overscroll-behavior: contain;
+    align-items: center;
   }
 
-  .panel-header,
-  .operational-status-region,
-  .panel-footer {
-    flex: 0 0 auto;
-  }
-
-  .panel-header {
-    padding-top: 14px;
-    padding-bottom: 12px;
-  }
-
-  .panel-header .eyebrow,
-  .panel-header .subtitle {
+  .map-tools-heading .section-label {
     display: none;
   }
 
-  .panel-content {
-    min-height: auto;
-    flex: 0 0 auto;
-    grid-template-rows: auto minmax(500px, 64dvh) auto auto;
-    overflow: visible;
-  }
-
-  .catalog-panel {
-    max-height: none;
-  }
-
-  .operational-status-body {
-    max-height: none;
-    overflow: visible;
+  .workspace-dock-button {
+    min-width: 0;
+    flex: 1;
   }
 }
 

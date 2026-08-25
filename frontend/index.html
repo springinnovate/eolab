@@ -7,7 +7,10 @@
     <title>TITLE TO BE SET BY CONFIGURATION</title>
   </head>
   <body>
-    <main id="app" class="is-catalog-workspace">
+    <main
+      id="app"
+      class="is-catalog-workspace is-tools-workspace is-active-catalog-workspace"
+    >
       <div
         id="map"
         role="region"
@@ -83,15 +86,16 @@
             id="toggle-operational-status"
             type="button"
             aria-controls="eomap-operational-status-body"
-            aria-expanded="true"
+            aria-expanded="false"
           >
-            Collapse operational status
+            Show status details
           </button>
         </div>
         <div
           class="workspace-region-body operational-status-body"
           id="eomap-operational-status-body"
-          aria-hidden="false"
+          aria-hidden="true"
+          hidden
         >
         <details class="system-state catalog-system-state" id="system-state">
           <summary>
@@ -203,12 +207,74 @@
         </section>
 
         <div class="panel-content">
+          <nav
+            class="map-tools-navigation"
+            id="eomap-tools-workbench"
+            aria-labelledby="map-tools-heading"
+          >
+            <div class="map-tools-heading">
+              <div>
+                <p class="section-label">Map workspace</p>
+                <h2 id="map-tools-heading">Map tools</h2>
+              </div>
+              <button
+                class="icon-button"
+                id="toggle-tools-workspace"
+                type="button"
+                aria-label="Hide map tools"
+                aria-controls="eomap-tools-workbench"
+                aria-expanded="true"
+              >
+                <span aria-hidden="true">&#10005;</span>
+              </button>
+            </div>
+            <div
+              class="map-tools-tabs"
+              role="tablist"
+              aria-label="Map tools"
+            >
+              <button
+                class="map-tools-tab"
+                id="toggle-map-layers"
+                type="button"
+                role="tab"
+                aria-controls="eomap-map-layers-region"
+                aria-selected="true"
+              >
+                Layers
+              </button>
+              <button
+                class="map-tools-tab"
+                id="toggle-raster-interpretation"
+                type="button"
+                role="tab"
+                aria-controls="eomap-raster-interpretation-region"
+                aria-selected="false"
+                tabindex="-1"
+              >
+                Raster
+              </button>
+              <button
+                class="map-tools-tab"
+                id="show-temporary-aoi-workspace"
+                type="button"
+                role="tab"
+                aria-controls="temporary-aoi"
+                aria-selected="false"
+                tabindex="-1"
+              >
+                AOI
+              </button>
+            </div>
+          </nav>
           <section
             class="temporary-aoi-card"
             id="temporary-aoi"
             data-eomap-region="map-layers"
-            aria-labelledby="temporary-aoi-heading"
+            role="tabpanel"
+            aria-labelledby="show-temporary-aoi-workspace temporary-aoi-heading"
             aria-busy="false"
+            hidden
           >
             <div class="temporary-aoi-heading">
               <div>
@@ -359,10 +425,11 @@
                 class="secondary-button"
                 id="toggle-catalog-workspace"
                 type="button"
-                aria-controls="catalog-item-inspector"
+                aria-label="Hide Catalog workspace"
+                aria-controls="eomap-catalog-region"
                 aria-expanded="true"
               >
-                Minimize catalog
+                Hide catalog
               </button>
             </div>
             <p class="section-copy" id="catalog-message">Checking catalog configuration.</p>
@@ -480,20 +547,12 @@
                   <section
                     class="eomap-workspace-region map-layers-region"
                     id="eomap-map-layers-region"
-                    aria-labelledby="eomap-map-layers-heading"
+                    role="tabpanel"
+                    aria-labelledby="toggle-map-layers eomap-map-layers-heading"
                     aria-controls="map"
                   >
                     <div class="workspace-region-heading">
                       <h2 id="eomap-map-layers-heading">Map and layers</h2>
-                      <button
-                        class="secondary-button workspace-region-toggle"
-                        id="toggle-map-layers"
-                        type="button"
-                        aria-controls="eomap-map-layers-body"
-                        aria-expanded="true"
-                      >
-                        Collapse map and layers
-                      </button>
                     </div>
                     <div
                       class="workspace-region-body map-layers-body"
@@ -575,19 +634,12 @@
                 <section
                   class="eomap-workspace-region raster-interpretation-region"
                   id="eomap-raster-interpretation-region"
-                  aria-labelledby="eomap-raster-interpretation-heading"
+                  role="tabpanel"
+                  aria-labelledby="toggle-raster-interpretation eomap-raster-interpretation-heading"
+                  hidden
                 >
                   <div class="workspace-region-heading">
                     <h2 id="eomap-raster-interpretation-heading">Raster interpretation</h2>
-                    <button
-                      class="secondary-button workspace-region-toggle"
-                      id="toggle-raster-interpretation"
-                      type="button"
-                      aria-controls="eomap-raster-interpretation-body"
-                      aria-expanded="true"
-                    >
-                      Collapse raster interpretation
-                    </button>
                   </div>
                   <div
                     class="workspace-region-body raster-interpretation-body"
@@ -900,6 +952,26 @@
       >
         OPEN LABEL TO BE SET BY CONFIGURATION
       </button>
+      <nav class="workspace-dock" aria-label="Workspace visibility">
+        <button
+          class="workspace-dock-button"
+          id="open-catalog-workspace"
+          type="button"
+          aria-controls="eomap-catalog-region"
+          aria-expanded="true"
+        >
+          Catalog
+        </button>
+        <button
+          class="workspace-dock-button"
+          id="open-tools-workspace"
+          type="button"
+          aria-controls="eomap-tools-workbench"
+          aria-expanded="true"
+        >
+          Map tools
+        </button>
+      </nav>
       <div class="map-position" id="map-position">0.000, 0.000</div>
       <div
         class="raster-pixel-probe"
