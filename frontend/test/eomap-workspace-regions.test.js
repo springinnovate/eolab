@@ -137,49 +137,40 @@ test("map and raster siblings retain their focused controls", () => {
     assert.match(rasterRegion.source, /id="raster-style-controls"/);
     assert.match(
         MARKUP,
-        /id="eomap-map-layers-region"[^>]*aria-labelledby="eomap-map-layers-heading"[^>]*aria-controls="map"/s
+        /id="eomap-map-layers-region"[^>]*role="tabpanel"[^>]*aria-labelledby="toggle-map-layers eomap-map-layers-heading"[^>]*aria-controls="map"/s
     );
     assert.match(
         MARKUP,
-        /id="eomap-raster-interpretation-region"[^>]*aria-labelledby="eomap-raster-interpretation-heading"/s
+        /id="eomap-raster-interpretation-region"[^>]*role="tabpanel"[^>]*aria-labelledby="toggle-raster-interpretation eomap-raster-interpretation-heading"[^>]*hidden/s
     );
 });
 
-test("workspace regions expose named independent disclosure contracts", () => {
-    const disclosures = [
-        {
-            toggle: "toggle-operational-status",
-            body: "eomap-operational-status-body",
-            text: "Collapse operational status",
-        },
-        {
-            toggle: "toggle-map-layers",
-            body: "eomap-map-layers-body",
-            text: "Collapse map and layers",
-        },
-        {
-            toggle: "toggle-raster-interpretation",
-            body: "eomap-raster-interpretation-body",
-            text: "Collapse raster interpretation",
-        },
-    ];
-
-    for (const disclosure of disclosures) {
+test("layout exposes compact status, rail, and map-tools tab contracts", () => {
+    assert.match(
+        MARKUP,
+        /id="toggle-operational-status"[^>]*aria-controls="eomap-operational-status-body"[^>]*aria-expanded="false"[^>]*>\s*Show status details/s
+    );
+    assert.match(
+        MARKUP,
+        /id="eomap-operational-status-body"[^>]*aria-hidden="true"[^>]*hidden/s
+    );
+    assert.match(
+        MARKUP,
+        /id="toggle-catalog-workspace"[^>]*aria-label="Hide Catalog workspace"[^>]*aria-controls="eomap-catalog-region"[^>]*aria-expanded="true"/s
+    );
+    assert.match(
+        MARKUP,
+        /id="eomap-tools-workbench"[^>]*aria-labelledby="map-tools-heading"/s
+    );
+    for (const [tab, panel] of [
+        ["toggle-map-layers", "eomap-map-layers-region"],
+        ["toggle-raster-interpretation", "eomap-raster-interpretation-region"],
+        ["show-temporary-aoi-workspace", "temporary-aoi"],
+    ]) {
         assert.match(
             MARKUP,
             new RegExp(
-                'id="' + disclosure.toggle +
-                '"[^>]*aria-controls="' + disclosure.body +
-                '"[^>]*aria-expanded="true"[^>]*>\\s*' + disclosure.text,
-                "s"
-            )
-        );
-        assert.match(
-            MARKUP,
-            new RegExp(
-                'class="workspace-region-body [^"]*"\\s+id="' +
-                disclosure.body +
-                '"\\s+aria-hidden="false"',
+                'id="' + tab + '"[^>]*role="tab"[^>]*aria-controls="' + panel + '"',
                 "s"
             )
         );
@@ -191,6 +182,14 @@ test("workspace regions expose named independent disclosure contracts", () => {
     assert.match(
         MARKUP,
         /id="open-panel"[^>]*aria-controls="control-panel"[^>]*aria-expanded="false"[^>]*hidden/s
+    );
+    assert.match(
+        MARKUP,
+        /id="open-catalog-workspace"[^>]*aria-controls="eomap-catalog-region"[^>]*aria-expanded="true"/s
+    );
+    assert.match(
+        MARKUP,
+        /id="open-tools-workspace"[^>]*aria-controls="eomap-tools-workbench"[^>]*aria-expanded="true"/s
     );
 });
 
@@ -237,15 +236,15 @@ test("raster interpretation groups active target, area, distribution, then appea
 test("each sibling workspace receives an independent bounded scroll budget", () => {
     assert.match(
         STYLESHEET,
-        /\.catalog-panel\s*\{[^}]*container-name:\s*eomap-catalog[^}]*grid-area:\s*catalog[^}]*overflow:\s*hidden/s
+        /\.catalog-panel\s*\{[^}]*container-name:\s*eomap-catalog[^}]*grid-column:\s*1[^}]*grid-row:\s*3[^}]*overflow:\s*hidden/s
     );
     assert.match(
         STYLESHEET,
-        /\.panel-content\s*\{[^}]*grid-template-areas:[^}]*overflow-y:\s*auto[^}]*overscroll-behavior:\s*contain/s
+        /\.panel-content\s*\{[^}]*display:\s*contents/s
     );
     assert.match(
         STYLESHEET,
-        /\.map-layers-body,\s*\.raster-interpretation-body\s*\{[^}]*max-height:\s*min\(38vh, 440px\)[^}]*overflow-y:\s*auto[^}]*overscroll-behavior:\s*contain/s
+        /\.map-layers-body,\s*\.raster-interpretation-body\s*\{[^}]*max-height:\s*none[^}]*overflow-y:\s*auto[^}]*overscroll-behavior:\s*contain/s
     );
     assert.match(
         STYLESHEET,
@@ -256,24 +255,25 @@ test("each sibling workspace receives an independent bounded scroll budget", () 
 test("CSS owns deliberate wide, intermediate, narrow, and short reflow", () => {
     assert.match(
         STYLESHEET,
-        /@media \(min-width: 1180px\) and \(min-height: 720px\)\s*\{[^}]*#app\.is-catalog-workspace \.panel-content\s*\{[^}]*"catalog temporary-aoi"[^}]*"catalog map-layers"[^}]*"catalog raster-interpretation"[^}]*overflow:\s*hidden/s
+        /\.control-panel\s*\{[^}]*grid-template-columns:[^}]*var\(--catalog-workspace-width\)[^}]*var\(--tools-workspace-width\)[^}]*pointer-events:\s*none/s
     );
     assert.match(
         STYLESHEET,
-        /@media \(max-width: 1024px\)\s*\{[^}]*#app\.is-catalog-workspace #map\s*\{[^}]*right:\s*0/s
+        /@media \(max-width: 1279px\)\s*\{[^}]*#map,[^}]*inset:\s*0/s
     );
     assert.match(
         STYLESHEET,
-        /@media \(max-width: 700px\)\s*\{[\s\S]*?\.control-panel\s*\{[^}]*max-height:\s*min\(82dvh, 720px\)/s
+        /@media \(max-width: 820px\)\s*\{[\s\S]*?\.control-panel\s*\{[^}]*height:\s*min\(72dvh, 680px\)[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/s
     );
     assert.match(
         STYLESHEET,
-        /@media \(max-width: 420px\)\s*\{[^}]*\.workspace-region-heading\s*\{[^}]*flex-direction:\s*column/s
+        /@media \(max-width: 820px\)\s*\{[\s\S]*?#app\.is-active-catalog-workspace \.map-tools-navigation,[\s\S]*?#app\.is-active-tools-workspace \.catalog-panel\s*\{[^}]*display:\s*none/s
     );
     assert.match(
         STYLESHEET,
-        /@media \(max-height: 640px\)\s*\{[\s\S]*?\.control-panel\s*\{[^}]*overflow-y:\s*auto[\s\S]*?\.panel-content\s*\{[^}]*overflow:\s*visible/s
+        /#app\.is-catalog-workspace #map\s*\{[^}]*left:\s*calc\([\s\S]*?var\(--catalog-workspace-width\)/s
     );
+    assert.doesNotMatch(STYLESHEET, /min-height:\s*720px/);
     assert.match(
         STYLESHEET,
         /@media \(prefers-reduced-motion: reduce\)\s*\{[^}]*transition-duration:\s*0\.01ms !important/s

@@ -13,7 +13,10 @@ const MAIN_MODULE = readFileSync(
 );
 
 test("temporary AOI upload uses labeled bounded native file and submit controls", () => {
-  assert.match(MARKUP, /<section[^>]*id="temporary-aoi"[^>]*aria-labelledby="temporary-aoi-heading"/s);
+  assert.match(
+    MARKUP,
+    /<section[^>]*id="temporary-aoi"[^>]*role="tabpanel"[^>]*aria-labelledby="show-temporary-aoi-workspace temporary-aoi-heading"/s,
+  );
   assert.match(MARKUP, /<label for="temporary-aoi-file">/);
   assert.match(
     MARKUP,
@@ -85,15 +88,15 @@ test("temporary AOI upload progress is native, labeled, and described", () => {
 test("temporary AOI layout remains bounded and responsive without taking Catalog scrolling", () => {
   assert.match(
     STYLESHEET,
-    /\.panel-content\s*\{[^}]*display:\s*grid[^}]*"temporary-aoi"[^}]*overflow-y:\s*auto/s,
+    /\.panel-content\s*\{[^}]*display:\s*contents/s,
   );
   assert.match(
     STYLESHEET,
-    /\.catalog-panel\s*\{[^}]*grid-area:\s*catalog[^}]*min-height:\s*0[^}]*overflow:\s*hidden/s,
+    /\.catalog-panel\s*\{[^}]*grid-column:\s*1[^}]*grid-row:\s*3[^}]*min-height:\s*0[^}]*overflow:\s*hidden/s,
   );
   assert.match(
     STYLESHEET,
-    /\.temporary-aoi-card\s*\{[^}]*grid-area:\s*temporary-aoi[^}]*flex:\s*0 0 auto/s,
+    /\.temporary-aoi-card\s*\{[^}]*grid-column:\s*3[^}]*grid-row:\s*2 \/ 5[^}]*overflow-y:\s*auto/s,
   );
   assert.match(
     STYLESHEET,
@@ -101,7 +104,7 @@ test("temporary AOI layout remains bounded and responsive without taking Catalog
   );
   assert.match(
     STYLESHEET,
-    /@media \(max-width:\s*700px\)[\s\S]*\.temporary-aoi-upload,[\s\S]*\.temporary-aoi-details\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/s,
+    /@media \(max-width:\s*820px\)[\s\S]*\.temporary-aoi-upload,[\s\S]*\.temporary-aoi-details\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/s,
   );
   assert.match(
     STYLESHEET,
