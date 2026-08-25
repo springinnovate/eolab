@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { initializeRasterViewer } from "../../src/raster/raster-viewer.js";
+import { RasterAnalysisRequestError } from "../../src/raster/analysis-api.js";
 import {
     EXACT_RASTER_STATISTICS,
     MOUNTED_GEOTIFF_ITEM,
@@ -1425,6 +1426,51 @@ test("a restored whole-raster statistics error retries the active layer", async 
     assert.equal(firstRequests[1].signal.aborted, false);
     assert.equal(controlsView.displayedStatistics.itemId, first.id);
     assert.equal(controlsView.displayedStatistics.scope, "wholeRaster");
+    assert.equal(controlsView.statisticsRetryVisible, false);
+    viewer.destroy();
+});
+
+test("a deterministic selected-area conflict does not offer Retry", async () => {
+    const leafletMap = createFakeMap();
+    const { leaflet } = createFakeLeaflet();
+    const controlsView = createFakeControlsView();
+    const viewer = initializeRasterViewer(
+        {
+            wmsUrl: "/geoserver/eolab/wms",
+            leafletMap,
+            leaflet,
+            onTileError() {},
+        },
+        {
+            controlsView,
+            layerStackView: createFakeLayerStackView(),
+            publishRaster: async () => ({
+                layerName: "eolab:striped-raster",
+                bbox: [-180, -90, 180, 90],
+            }),
+            loadStatistics: async (_item, samplingArea) => {
+                if (samplingArea.kind === "wholeRaster") {
+                    return RASTER_STATISTICS;
+                }
+                throw new RasterAnalysisRequestError(
+                    "The native raster block is too large for bounded reads.",
+                    409
+                );
+            },
+            samplePixel: async () => ({ inBounds: true, value: 1 }),
+            viewport: { innerWidth: 1280, innerHeight: 720 },
+        }
+    );
+
+    await viewer.show(MOUNTED_GEOTIFF_ITEM);
+    await flushPromises();
+    leafletMap.emit("click", { latlng: { lng: -122, lat: 48.5 } });
+    await flushPromises();
+
+    assert.match(
+        controlsView.statisticsStatus,
+        /native raster block is too large/
+    );
     assert.equal(controlsView.statisticsRetryVisible, false);
     viewer.destroy();
 });

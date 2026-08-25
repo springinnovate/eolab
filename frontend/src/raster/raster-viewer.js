@@ -10,6 +10,7 @@ import { getCatalogItemKey } from "../catalog-item-identity.js";
 import { publishCatalogRaster } from "./api.js";
 import {
     loadCatalogRasterStatistics,
+    RasterAnalysisRequestError,
     sampleCatalogRasterPixel,
 } from "./analysis-api.js";
 import {
@@ -50,6 +51,28 @@ import { buildRasterStyleEnvironment } from "./wms.js";
 import { RasterControlsView } from "./controls-view.js";
 
 const RASTER_STYLE_DEBOUNCE_MILLISECONDS = 200;
+
+/**
+ * Return whether repeating a failed statistics request may change its result.
+ *
+ * Client and conflict responses describe invalid or currently unsupported
+ * intent, so repeating the same request is not presented as recovery. Unknown
+ * transport failures, timeouts, rate limits, and server failures remain
+ * retryable without coupling the viewer to backend error-message text.
+ *
+ * @param {Error} error Statistics request failure.
+ * @return {boolean} Whether the controls should offer the Retry action.
+ */
+function canRetryRasterStatistics(error) {
+    if (!(error instanceof RasterAnalysisRequestError)) {
+        return true;
+    }
+    return (
+        error.status === 408 ||
+        error.status === 429 ||
+        error.status >= 500
+    );
+}
 
 /**
  * @typedef {Object} RasterViewer
@@ -1308,7 +1331,7 @@ export function initializeRasterViewer(
     /**
      * Keep manual rendering usable after one statistics failure.
      *
-     * @param {Error} error Recoverable statistics request failure.
+     * @param {Error} error Statistics request failure.
      * @param {"wholeRaster"|"selectedArea"} scope Failed request scope.
      * @return {void}
      */
@@ -1319,7 +1342,9 @@ export function initializeRasterViewer(
         controlsView.clearHistogram();
         controlsView.hideHistogramAxis();
         controlsView.setPercentileControlsVisible(false);
-        controlsView.setStatisticsRetryVisible(true);
+        controlsView.setStatisticsRetryVisible(
+            canRetryRasterStatistics(error)
+        );
         controlsView.setStatisticsStatus(
             `${scope === "selectedArea" ? "Selected-area" : "Whole-raster"} ` +
             `distribution unavailable: ${error.message} ` +
@@ -1441,7 +1466,9 @@ export function initializeRasterViewer(
             renderRasterStatistics(wholeRasterStatistics, false, false);
         }
         controlsView.setStatisticsBusy(false);
-        controlsView.setStatisticsRetryVisible(true);
+        controlsView.setStatisticsRetryVisible(
+            canRetryRasterStatistics(error)
+        );
         controlsView.setApplyPercentilesEnabled(false);
         const areaName = selectedTemporaryAoi === null
             ? "Selected-area"
