@@ -29,6 +29,7 @@ import {
 import { CatalogVisualizationCoordinator } from "./catalog-visualization.js";
 import { initializeCatalogPaneControls } from "./catalog-pane-controller.js";
 import { getCatalogItemKey } from "./catalog-item-identity.js";
+import { EomapLayoutController } from "./eomap-layout-controller.js";
 import {
     applyCatalogSystemState,
     renderScanLocations,
@@ -65,7 +66,6 @@ import "./style.css";
 
 const CATALOG_SEARCH_DEBOUNCE_MILLISECONDS = 300;
 const CATALOG_LOAD_ROOT_MARGIN = "300px 0px";
-const CONTROL_PANEL_TRANSITION_MILLISECONDS = 240;
 
 let scanPollTimeout = null;
 
@@ -1493,90 +1493,6 @@ async function initializeScanner(refreshCatalog) {
 }
 
 /**
- * Enables collapsing and reopening the control panel.
- *
- * @param {L.Map} leafletMap The initialized Leaflet map.
- * @return {void}
- */
-function initializeControlPanel(leafletMap) {
-    const appElement = document.querySelector("#app");
-    const controlPanelElement = document.querySelector("#control-panel");
-    const openPanelButton = document.querySelector("#open-panel");
-    const catalogWorkspaceToggle = document.querySelector(
-        "#toggle-catalog-workspace"
-    );
-    const catalogInspector = document.querySelector(
-        "#catalog-item-inspector"
-    );
-    let catalogWorkspaceIsExpanded = true;
-
-    /**
-     * Sets whether the Catalog uses the expanded workspace.
-     *
-     * @param {boolean} isExpanded Whether the workspace is expanded.
-     * @return {void}
-     */
-    function setCatalogWorkspaceExpanded(isExpanded) {
-        if (isExpanded === catalogWorkspaceIsExpanded) {
-            return;
-        }
-        catalogWorkspaceIsExpanded = isExpanded;
-        appElement.classList.toggle("is-catalog-workspace", isExpanded);
-        catalogWorkspaceToggle.setAttribute(
-            "aria-expanded",
-            String(isExpanded)
-        );
-        catalogWorkspaceToggle.textContent = isExpanded
-            ? "Minimize catalog"
-            : "Expand catalog";
-        catalogInspector.setAttribute("aria-hidden", String(!isExpanded));
-        window.setTimeout(
-            () => leafletMap.invalidateSize(),
-            CONTROL_PANEL_TRANSITION_MILLISECONDS
-        );
-    }
-
-    /**
-     * Sets whether the control panel is collapsed.
-     *
-     * @param {boolean} isCollapsed Whether the panel should be collapsed.
-     * @return {void}
-     */
-    function setControlPanelCollapsed(isCollapsed) {
-        const catalogWorkspaceWasExpanded = catalogWorkspaceIsExpanded;
-        if (isCollapsed) {
-            setCatalogWorkspaceExpanded(false);
-        }
-        controlPanelElement.classList.toggle("is-collapsed", isCollapsed);
-        openPanelButton.hidden = !isCollapsed;
-        if (!catalogWorkspaceWasExpanded) {
-            window.setTimeout(
-                () => leafletMap.invalidateSize(),
-                CONTROL_PANEL_TRANSITION_MILLISECONDS
-            );
-        }
-    }
-
-    catalogWorkspaceToggle.addEventListener("click", () => {
-        setCatalogWorkspaceExpanded(!catalogWorkspaceIsExpanded);
-    });
-    document.addEventListener("keydown", (keyboardEvent) => {
-        if (keyboardEvent.key === "Escape" && catalogWorkspaceIsExpanded) {
-            keyboardEvent.preventDefault();
-            setCatalogWorkspaceExpanded(false);
-            catalogWorkspaceToggle.focus();
-        }
-    });
-    document
-        .querySelector("#collapse-panel")
-        .addEventListener("click", setControlPanelCollapsed.bind(null, true));
-    openPanelButton.addEventListener(
-        "click",
-        setControlPanelCollapsed.bind(null, false)
-    );
-}
-
-/**
  * Starts the browser application from its runtime contract.
  *
  * @return {Promise<void>} Resolves after the interface is initialized.
@@ -1587,7 +1503,11 @@ async function startApplication() {
     applyAppGlobalConfiguration(appGlobalConfiguration);
     initializeRenderingDiagnostics();
     const leafletMap = initializeMap(appGlobalConfiguration);
-    initializeControlPanel(leafletMap);
+    new EomapLayoutController({
+        documentContext: document,
+        schedule: window.setTimeout.bind(window),
+        invalidateMapSize: () => leafletMap.invalidateSize(),
+    });
     const temporaryAoi = initializeTemporaryAoi(leafletMap, L);
     const refreshCatalog = await initializeCatalog(
         appGlobalConfiguration,
