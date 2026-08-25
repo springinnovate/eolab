@@ -440,7 +440,7 @@
                 aria-labelledby="catalog-results-heading"
               >
                 <div class="catalog-pane-heading">
-                  <h3 id="catalog-results-heading">Catalog results</h3>
+                  <h3 id="catalog-results-heading" tabindex="-1">Catalog results</h3>
                   <button
                     class="secondary-button catalog-pane-toggle"
                     id="toggle-catalog-results"
@@ -500,23 +500,33 @@
               <aside
                 class="catalog-inspector catalog-pane"
                 id="catalog-item-inspector"
-                aria-hidden="false"
+                aria-hidden="true"
                 aria-labelledby="catalog-inspector-heading"
+                hidden
               >
                 <div class="catalog-pane-heading">
                   <div>
                     <p class="section-label">Selected record</p>
-                    <h3 id="catalog-inspector-heading">Item inspector</h3>
+                    <h3 id="catalog-inspector-heading" tabindex="-1">Item inspector</h3>
                   </div>
-                  <button
-                    class="secondary-button catalog-pane-toggle"
-                    id="toggle-catalog-inspector"
-                    type="button"
-                    aria-controls="catalog-inspector-body"
-                    aria-expanded="true"
-                  >
-                    Collapse Selected record
-                  </button>
+                  <div class="catalog-inspector-navigation">
+                    <button
+                      class="secondary-button catalog-inspector-back"
+                      id="back-to-catalog-results"
+                      type="button"
+                    >
+                      Back to results
+                    </button>
+                    <button
+                      class="secondary-button catalog-pane-toggle"
+                      id="toggle-catalog-inspector"
+                      type="button"
+                      aria-controls="catalog-inspector-body"
+                      aria-expanded="false"
+                    >
+                      Expand Selected record
+                    </button>
+                  </div>
                 </div>
                 <div class="catalog-pane-body catalog-inspector-body" id="catalog-inspector-body">
                   <div class="catalog-map-actions" id="catalog-map-actions" hidden>

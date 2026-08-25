@@ -440,12 +440,15 @@ function renderCatalogItemInspector(
  * @param {(viewer: import("./raster/raster-viewer.js").RasterViewer) => void}
  * [onRasterViewerReady=() => {}] Receives the raster public boundary before
  * asynchronous catalog loading begins.
+ * @param {import("./catalog-pane-controller.js").CatalogPaneControls}
+ * catalogPaneControls Catalog-owned progressive inspector presentation.
  * @return {Promise<Function>} Function that reloads the active catalog search.
  */
 async function initializeCatalog(
     appGlobalConfiguration,
     leafletMap,
-    onRasterViewerReady = () => {}
+    onRasterViewerReady = () => {},
+    catalogPaneControls
 ) {
     const catalogSystemStateElements = {
         disclosure: document.querySelector("#system-state"),
@@ -768,6 +771,7 @@ async function initializeCatalog(
             catalogState.collectionsDocument?.collections ?? [],
             appGlobalConfiguration.scanDisplayPathPrefix
         );
+        catalogPaneControls.showResults();
     }
 
     /**
@@ -812,6 +816,7 @@ async function initializeCatalog(
             rasterVisualization.activateAnalysis(item);
         }
         updateCatalogMapAction(item);
+        catalogPaneControls.showInspector({ moveFocus: true });
     }
 
     /**
@@ -1498,7 +1503,7 @@ async function initializeScanner(refreshCatalog) {
  * @return {Promise<void>} Resolves after the interface is initialized.
  */
 async function startApplication() {
-    initializeCatalogPaneControls();
+    const catalogPaneControls = initializeCatalogPaneControls();
     const appGlobalConfiguration = await loadAppGlobalConfiguration();
     applyAppGlobalConfiguration(appGlobalConfiguration);
     initializeRenderingDiagnostics();
@@ -1516,7 +1521,8 @@ async function startApplication() {
             temporaryAoi.subscribeSamplingArea(
                 rasterViewer.setTemporaryAoi
             );
-        }
+        },
+        catalogPaneControls
     );
     await initializeScanner(refreshCatalog);
 }

@@ -1,87 +1,188 @@
 /**
- * Catalog pane disclosure behavior.
+ * Catalog pane disclosure and progressive-inspector presentation.
  *
- * The results and inspector panes own independent expanded states. Layout
- * classes live on their shared grid so CSS can give an open pane the space
- * released by its collapsed sibling.
+ * Catalog results retain their independent disclosure state. The selected
+ * record is revealed only when a result is chosen: CSS presents it as an
+ * adjacent column when space permits and as a drill-in view otherwise.
  */
-
-const CATALOG_PANES = [
-    {
-        key: "catalog-browser",
-        paneSelector: "#catalog-results-pane",
-        bodySelector: "#catalog-results-body",
-        toggleSelector: "#toggle-catalog-results",
-        name: "Catalog results"
-    },
-    {
-        key: "catalog-inspector",
-        paneSelector: "#catalog-item-inspector",
-        bodySelector: "#catalog-inspector-body",
-        toggleSelector: "#toggle-catalog-inspector",
-        name: "Selected record"
-    }
-];
 
 /**
- * Connects the independent Catalog pane disclosure controls.
+ * @typedef {Object} CatalogPaneControls
+ * @property {(options?: CatalogPaneFocusOptions) => void} showInspector
+ * Reveals and expands the selected-record inspector.
+ * @property {(options?: CatalogPaneFocusOptions) => void} showResults Hides
+ * the selected-record inspector and returns to the results presentation.
+ * @property {() => boolean} isInspectorVisible Reports whether the selected
+ * record is currently presented.
+ */
+
+/**
+ * @typedef {Object} CatalogPaneFocusOptions
+ * @property {boolean} [moveFocus=false] Whether to move focus to the heading
+ * of the pane being shown.
+ */
+
+/**
+ * Connects Catalog result disclosure and progressive inspector navigation.
  *
  * @param {Document} documentContext Document containing the Catalog workspace.
- * @return {void}
+ * @return {CatalogPaneControls} Narrow presentation contract used by Catalog
+ * selection without exposing layout or breakpoint decisions.
+ * @throws {Error} When required Catalog pane markup is absent.
  */
 export function initializeCatalogPaneControls(documentContext = document) {
-    const layoutElement = documentContext.querySelector("#catalog-layout");
-    if (layoutElement === null) {
-        throw new Error("Catalog layout is required");
+    const requiredElements = {
+        layout: "#catalog-layout",
+        resultsPane: "#catalog-results-pane",
+        resultsBody: "#catalog-results-body",
+        resultsToggle: "#toggle-catalog-results",
+        resultsHeading: "#catalog-results-heading",
+        inspectorPane: "#catalog-item-inspector",
+        inspectorBody: "#catalog-inspector-body",
+        inspectorToggle: "#toggle-catalog-inspector",
+        inspectorHeading: "#catalog-inspector-heading",
+        backToResults: "#back-to-catalog-results"
+    };
+    const elements = Object.fromEntries(
+        Object.entries(requiredElements).map(([key, selector]) => [
+            key,
+            documentContext.querySelector(selector)
+        ])
+    );
+    const missingElement = Object.entries(elements).find(
+        ([, element]) => element === null
+    );
+    if (missingElement !== undefined) {
+        throw new Error(
+            `Catalog panes require ${requiredElements[missingElement[0]]}`
+        );
     }
 
-    for (const configuration of CATALOG_PANES) {
-        const paneElement = documentContext.querySelector(
-            configuration.paneSelector
+    /**
+     * Applies the Catalog-results disclosure state.
+     *
+     * @param {boolean} isExpanded Whether result controls and cards are shown.
+     * @return {void}
+     */
+    function setResultsExpanded(isExpanded) {
+        elements.resultsBody.hidden = !isExpanded;
+        elements.resultsPane.classList.toggle("is-collapsed", !isExpanded);
+        elements.layout.classList.toggle(
+            "is-catalog-browser-collapsed",
+            !isExpanded
         );
-        const bodyElement = documentContext.querySelector(
-            configuration.bodySelector
+        elements.resultsToggle.setAttribute(
+            "aria-expanded",
+            String(isExpanded)
         );
-        const toggleElement = documentContext.querySelector(
-            configuration.toggleSelector
-        );
-        if (
-            paneElement === null ||
-            bodyElement === null ||
-            toggleElement === null
-        ) {
-            throw new Error(
-                `${configuration.name} pane requires a body and toggle`
-            );
-        }
+        elements.resultsToggle.textContent = `${
+            isExpanded ? "Collapse" : "Expand"
+        } Catalog results`;
+    }
 
+    /**
+     * Applies selected-record visibility without deciding its CSS placement.
+     *
+     * @param {boolean} isVisible Whether the inspector is presented.
+     * @param {CatalogPaneFocusOptions} [options={}] Focus behavior.
+     * @return {void}
+     */
+    function setInspectorVisible(isVisible, { moveFocus = false } = {}) {
+        elements.inspectorPane.hidden = !isVisible;
+        elements.inspectorPane.setAttribute(
+            "aria-hidden",
+            String(!isVisible)
+        );
+        elements.inspectorBody.hidden = !isVisible;
+        elements.inspectorPane.classList.toggle("is-collapsed", !isVisible);
+        elements.layout.classList.toggle(
+            "is-catalog-inspector-visible",
+            isVisible
+        );
+        elements.layout.classList.toggle(
+            "is-catalog-inspector-collapsed",
+            !isVisible
+        );
+        elements.inspectorToggle.setAttribute(
+            "aria-expanded",
+            String(isVisible)
+        );
+        elements.inspectorToggle.textContent = `${
+            isVisible ? "Collapse" : "Expand"
+        } Selected record`;
+
+        if (moveFocus) {
+            const target = isVisible
+                ? elements.inspectorHeading
+                : elements.resultsHeading;
+            target.focus();
+        }
+    }
+
+    /**
+     * Returns from the active inspector without closing the Catalog workspace.
+     *
+     * @param {KeyboardEvent} event Keyboard event dispatched within inspector.
+     * @return {void}
+     */
+    function handleInspectorKeydown(event) {
+        if (event.key !== "Escape" || elements.inspectorPane.hidden) {
+            return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        setInspectorVisible(false, { moveFocus: true });
+    }
+
+    setResultsExpanded(
+        elements.resultsToggle.getAttribute("aria-expanded") !== "false"
+    );
+    setInspectorVisible(!elements.inspectorPane.hidden);
+
+    elements.resultsToggle.addEventListener("click", () => {
+        setResultsExpanded(
+            elements.resultsToggle.getAttribute("aria-expanded") !== "true"
+        );
+    });
+    elements.inspectorToggle.addEventListener("click", () => {
+        setInspectorVisible(false, { moveFocus: true });
+    });
+    elements.backToResults.addEventListener("click", () => {
+        setInspectorVisible(false, { moveFocus: true });
+    });
+    elements.inspectorPane.addEventListener(
+        "keydown",
+        handleInspectorKeydown
+    );
+
+    return Object.freeze({
         /**
-         * Applies one pane's expanded state without affecting its sibling.
+         * Reveals the selected record and optionally focuses its heading.
          *
-         * @param {boolean} isExpanded Whether the pane body is visible.
+         * @param {CatalogPaneFocusOptions} [options={}] Focus behavior.
          * @return {void}
          */
-        function setExpanded(isExpanded) {
-            bodyElement.hidden = !isExpanded;
-            paneElement.classList.toggle("is-collapsed", !isExpanded);
-            layoutElement.classList.toggle(
-                `is-${configuration.key}-collapsed`,
-                !isExpanded
-            );
-            toggleElement.setAttribute(
-                "aria-expanded",
-                String(isExpanded)
-            );
-            toggleElement.textContent = `${
-                isExpanded ? "Collapse" : "Expand"
-            } ${configuration.name}`;
-        }
+        showInspector(options = {}) {
+            setInspectorVisible(true, options);
+        },
 
-        setExpanded(toggleElement.getAttribute("aria-expanded") !== "false");
-        toggleElement.addEventListener("click", () => {
-            setExpanded(
-                toggleElement.getAttribute("aria-expanded") !== "true"
-            );
-        });
-    }
+        /**
+         * Returns to results and optionally focuses their heading.
+         *
+         * @param {CatalogPaneFocusOptions} [options={}] Focus behavior.
+         * @return {void}
+         */
+        showResults(options = {}) {
+            setInspectorVisible(false, options);
+        },
+
+        /**
+         * Reports the current inspector presentation state.
+         *
+         * @return {boolean} True when the selected-record pane is visible.
+         */
+        isInspectorVisible() {
+            return !elements.inspectorPane.hidden;
+        }
+    });
 }
