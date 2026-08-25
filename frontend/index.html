@@ -10,6 +10,8 @@
     <main id="app" class="is-catalog-workspace">
       <div
         id="map"
+        role="region"
+        data-eomap-region="map-layers"
         aria-label="MAP LABEL TO BE SET BY CONFIGURATION"
       ></div>
       <div
@@ -62,6 +64,11 @@
           </button>
         </header>
 
+        <section
+          class="eomap-workspace-region operational-status-region"
+          id="eomap-operational-status-region"
+          aria-label="Operational status"
+        >
         <details class="system-state catalog-system-state" id="system-state">
           <summary>
             <span class="status-dot" aria-hidden="true"></span>
@@ -168,11 +175,13 @@
           aria-live="polite"
           aria-atomic="true"
         ></p>
+        </section>
 
         <div class="panel-content">
           <section
             class="temporary-aoi-card"
             id="temporary-aoi"
+            data-eomap-region="map-layers"
             aria-labelledby="temporary-aoi-heading"
             aria-busy="false"
           >
@@ -311,11 +320,15 @@
               aria-atomic="true"
             ></p>
           </section>
-          <section class="catalog-panel">
+          <section
+            class="catalog-panel eomap-workspace-region"
+            id="eomap-catalog-region"
+            aria-labelledby="eomap-catalog-heading"
+          >
             <div class="catalog-heading">
               <div>
                 <p class="section-label">Data discovery</p>
-                <h2>Catalog</h2>
+                <h2 id="eomap-catalog-heading">Catalog</h2>
               </div>
               <button
                 class="secondary-button"
@@ -470,33 +483,45 @@
                     ></p>
                   </div>
                   <section
-                    class="raster-layer-stack"
-                    id="raster-layer-stack"
-                    aria-labelledby="raster-layer-stack-heading"
+                    class="eomap-workspace-region map-layers-region"
+                    id="eomap-map-layers-region"
+                    aria-label="Map and layers"
+                    aria-controls="map"
+                  >
+                    <section
+                      class="raster-layer-stack"
+                      id="raster-layer-stack"
+                      aria-labelledby="raster-layer-stack-heading"
+                      hidden
+                    >
+                      <div class="raster-layer-stack-heading">
+                        <div>
+                          <p class="section-label">Map display</p>
+                          <h4 id="raster-layer-stack-heading">Map layers</h4>
+                        </div>
+                        <p id="raster-layer-stack-limit"></p>
+                      </div>
+                      <ol class="raster-layer-list" id="raster-layer-list"></ol>
+                    </section>
+                    <p
+                      class="raster-layer-stack-status"
+                      id="raster-layer-stack-status"
+                      role="status"
+                      aria-live="polite"
+                      aria-atomic="true"
+                      tabindex="-1"
+                    ></p>
+                  </section>
+                <section
+                  class="eomap-workspace-region raster-interpretation-region"
+                  id="eomap-raster-interpretation-region"
+                  aria-label="Raster interpretation"
+                >
+                  <fieldset
+                    class="raster-style-controls"
+                    id="raster-style-controls"
                     hidden
                   >
-                    <div class="raster-layer-stack-heading">
-                      <div>
-                        <p class="section-label">Map display</p>
-                        <h4 id="raster-layer-stack-heading">Map layers</h4>
-                      </div>
-                      <p id="raster-layer-stack-limit"></p>
-                    </div>
-                    <ol class="raster-layer-list" id="raster-layer-list"></ol>
-                  </section>
-                  <p
-                    class="raster-layer-stack-status"
-                    id="raster-layer-stack-status"
-                    role="status"
-                    aria-live="polite"
-                    aria-atomic="true"
-                    tabindex="-1"
-                  ></p>
-                <fieldset
-                  class="raster-style-controls"
-                  id="raster-style-controls"
-                  hidden
-                >
                   <legend>Raster appearance</legend>
                   <p
                     class="raster-active-layer-label"
@@ -758,7 +783,8 @@
                   >
                     Reset colors and range
                   </button>
-                </fieldset>
+                  </fieldset>
+                </section>
                 <div id="catalog-inspector-content">
                   <div class="catalog-inspector-empty">
                     <strong>No item selected</strong>
@@ -790,6 +816,7 @@
       <div
         class="raster-pixel-probe"
         id="raster-pixel-probe"
+        data-eomap-region="raster-interpretation"
         aria-hidden="true"
         hidden
       >
