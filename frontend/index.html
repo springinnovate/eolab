@@ -435,6 +435,29 @@
                     >
                       Add to map layers
                     </button>
+                  </div>
+                  <div id="catalog-inspector-content">
+                    <div class="catalog-inspector-empty">
+                      <strong>No item selected</strong>
+                      <p>Select a Catalog result to inspect its metadata.</p>
+                    </div>
+                  </div>
+                  <p
+                    class="visually-hidden"
+                    id="catalog-inspector-status"
+                    role="status"
+                    aria-live="polite"
+                  ></p>
+                </div>
+              </aside>
+            </div>
+          </section>
+                  <section
+                    class="eomap-workspace-region map-layers-region"
+                    id="eomap-map-layers-region"
+                    aria-label="Map and layers"
+                    aria-controls="map"
+                  >
                     <div
                       class="raster-detail-preview-controls"
                       id="raster-detail-preview-controls"
@@ -476,18 +499,12 @@
                       </div>
                     </div>
                     <p
+                      class="map-layer-action-status"
                       id="catalog-layer-status"
                       role="status"
                       aria-live="polite"
                       aria-atomic="true"
                     ></p>
-                  </div>
-                  <section
-                    class="eomap-workspace-region map-layers-region"
-                    id="eomap-map-layers-region"
-                    aria-label="Map and layers"
-                    aria-controls="map"
-                  >
                     <section
                       class="raster-layer-stack"
                       id="raster-layer-stack"
@@ -785,22 +802,6 @@
                   </button>
                   </fieldset>
                 </section>
-                <div id="catalog-inspector-content">
-                  <div class="catalog-inspector-empty">
-                    <strong>No item selected</strong>
-                    <p>Select a Catalog result to inspect its metadata.</p>
-                  </div>
-                  </div>
-                  <p
-                    class="visually-hidden"
-                    id="catalog-inspector-status"
-                    role="status"
-                    aria-live="polite"
-                  ></p>
-                </div>
-              </aside>
-            </div>
-          </section>
         </div>
 
         <footer class="panel-footer">
