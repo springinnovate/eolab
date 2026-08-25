@@ -75,3 +75,10 @@ test("sampling-area adapter owns size, area choices, status, and listeners", () 
         .dispatchEvent(new Event("click"));
     assert.equal(received.length, 7);
 });
+
+test("sampling-area adapter requires its semantic subgroup root", () => {
+    assert.throws(
+        () => new RasterSamplingAreaControlsView({ querySelector: () => null }),
+        /Required raster control is missing: #raster-sampling-area-controls/
+    );
+});
