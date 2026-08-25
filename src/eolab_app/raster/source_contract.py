@@ -11,7 +11,11 @@ from rasterio.enums import MaskFlags
 from rasterio.windows import Window
 
 
-RASTER_ANALYSIS_MAX_NATIVE_BLOCK_EDGE = 1024
+# Exact reads already admit no more than 64 MiB of cumulative decoded source
+# work. Applying that established ceiling to each streamed native block bounds
+# the reader's largest one-at-a-time value-plus-validity allocation without
+# rejecting safe long, narrow strips solely because one edge is long.
+BOUNDED_RASTER_MAX_NATIVE_BLOCK_DECODED_BYTES = 64 * 1024 * 1024
 SUPPORTED_RASTER_ANALYSIS_DATA_TYPES = frozenset(
     {"uint8", "uint16", "int16", "int32", "float32", "float64"}
 )
@@ -89,13 +93,14 @@ def require_raster_analysis_georeferencing(
 def require_bounded_source_structure(
     dataset: rasterio.io.DatasetReader,
 ) -> None:
-    """Require one band with bounded blocks and signed validity metadata.
+    """Require one band with byte-bounded blocks and signed validity metadata.
 
     Args:
         dataset: Open candidate raster dataset.
 
     Returns:
-        None when native band-one reads have a supported bounded structure.
+        None when each native band-one block has a supported structure and a
+        conservatively bounded decoded value-plus-validity allocation.
 
     Raises:
         ValueError: If band, datatype, block, or validity structure is
@@ -110,10 +115,22 @@ def require_bounded_source_structure(
             "Bounded raster reads do not support "
             f"{dataset.dtypes[0]} band values"
         )
-    if max(dataset.block_shapes[0]) > RASTER_ANALYSIS_MAX_NATIVE_BLOCK_EDGE:
+    block_height, block_width = (
+        int(value) for value in dataset.block_shapes[0]
+    )
+    if block_height < 1 or block_width < 1:
+        raise ValueError("Bounded raster reads require positive native blocks")
+    decoded_block_bytes = (
+        block_height
+        * block_width
+        * (numpy.dtype(dataset.dtypes[0]).itemsize + 1)
+    )
+    if decoded_block_bytes > BOUNDED_RASTER_MAX_NATIVE_BLOCK_DECODED_BYTES:
         raise ValueError(
-            "Bounded raster reads require native blocks no larger than "
-            f"{RASTER_ANALYSIS_MAX_NATIVE_BLOCK_EDGE} pixels on either edge"
+            "Bounded raster reads require each native block to decode to no "
+            f"more than {BOUNDED_RASTER_MAX_NATIVE_BLOCK_DECODED_BYTES} "
+            f"bytes; this layout requires {decoded_block_bytes} bytes per "
+            "block"
         )
     mask_flags = set(dataset.mask_flag_enums[0])
     if not mask_flags.issubset({MaskFlags.all_valid, MaskFlags.nodata}):
