@@ -412,3 +412,49 @@ test("RasterControlsView rejects an incomplete application document", () => {
         /Required raster control is missing: #raster-style-controls/
     );
 });
+
+test("RasterControlsView preserves the raster viewer compatibility surface", () => {
+    const view = new RasterControlsView(new FakeRasterDocument());
+    const expectedMethods = [
+        "populatePalettes",
+        "setActiveLayer",
+        "bind",
+        "unbind",
+        "readStyle",
+        "setStyle",
+        "getPaletteName",
+        "setPaletteName",
+        "renderStyleError",
+        "renderLegend",
+        "readPercentiles",
+        "resetPercentiles",
+        "renderPercentileValues",
+        "clearStatistics",
+        "setStatisticsBusy",
+        "setStatisticsStatus",
+        "renderHistogram",
+        "clearHistogram",
+        "showHistogramAxis",
+        "hideHistogramAxis",
+        "setPercentileControlsVisible",
+        "setStatisticsRetryVisible",
+        "setApplyPercentilesEnabled",
+        "setSampleWindowSize",
+        "setSampleWindowInvalid",
+        "setSampleWindowStatus",
+        "setClearSampleWindowEnabled",
+        "setClearSampleWindowLabel",
+        "setTemporaryAoiAvailability",
+        "setSamplingAreaMode",
+        "setControlsVisible",
+        "isPixelProbeVisible",
+        "setPixelProbeContent",
+        "showPixelProbe",
+        "positionPixelProbe",
+        "hidePixelProbe",
+    ];
+
+    for (const methodName of expectedMethods) {
+        assert.equal(typeof view[methodName], "function", methodName);
+    }
+});
