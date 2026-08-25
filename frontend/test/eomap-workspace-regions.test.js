@@ -6,6 +6,10 @@ const MARKUP = readFileSync(
     new URL("../index.html", import.meta.url),
     "utf8"
 );
+const STYLESHEET = readFileSync(
+    new URL("../src/style.css", import.meta.url),
+    "utf8"
+);
 
 /**
  * Find one stable ID's byte position in the application markup.
@@ -32,6 +36,44 @@ function countMarkupId(identifier) {
     return MARKUP.match(new RegExp(`id="${identifier}"`, "g"))?.length ?? 0;
 }
 
+/**
+ * Find the complete source range for one non-void element with a stable ID.
+ *
+ * Matching tags are balanced so nested sections do not truncate a workspace.
+ *
+ * @param {string} identifier Stable DOM identifier.
+ * @return {{start: number, end: number, source: string}} Complete element
+ * range and source, including its opening and closing tags.
+ * @throws {Error} If the element or its matching closing tag is absent.
+ */
+function requireElementRange(identifier) {
+    const openingPattern = new RegExp(
+        `<([a-z][\\w-]*)\\b[^>]*\\bid="${identifier}"[^>]*>`,
+        "i"
+    );
+    const openingMatch = openingPattern.exec(MARKUP);
+    if (openingMatch === null) {
+        throw new Error(`Required markup element is missing: ${identifier}`);
+    }
+    const tagName = openingMatch[1];
+    const tagPattern = new RegExp(`<\\/?${tagName}\\b[^>]*>`, "gi");
+    tagPattern.lastIndex = openingMatch.index;
+    let depth = 0;
+    for (const tagMatch of MARKUP.matchAll(tagPattern)) {
+        const isClosingTag = tagMatch[0].startsWith("</");
+        depth += isClosingTag ? -1 : 1;
+        if (depth === 0) {
+            const end = tagMatch.index + tagMatch[0].length;
+            return {
+                start: openingMatch.index,
+                end,
+                source: MARKUP.slice(openingMatch.index, end),
+            };
+        }
+    }
+    throw new Error(`Required markup element is not closed: ${identifier}`);
+}
+
 test("operational status region groups scanning and rendering diagnostics", () => {
     const region = requireMarkupPosition("eomap-operational-status-region");
     const catalogState = requireMarkupPosition("system-state");
@@ -47,35 +89,58 @@ test("operational status region groups scanning and rendering diagnostics", () =
     );
 });
 
-test("Catalog region retains discovery, inspection, and explicit map action", () => {
-    const region = requireMarkupPosition("eomap-catalog-region");
-    const results = requireMarkupPosition("catalog-results-pane");
-    const inspector = requireMarkupPosition("catalog-item-inspector");
-    const addAction = requireMarkupPosition("toggle-catalog-layer");
-    const inspectorContent = requireMarkupPosition("catalog-inspector-content");
+test("Catalog owns only discovery, inspection, and its explicit layer action", () => {
+    const catalogRegion = requireElementRange("eomap-catalog-region");
+    const catalogInspector = requireElementRange("catalog-item-inspector");
 
-    assert.ok(region < results);
-    assert.ok(results < inspector);
-    assert.ok(inspector < addAction);
-    assert.ok(addAction < inspectorContent);
-    assert.match(MARKUP, />\s*Add to map layers\s*</);
+    assert.match(catalogRegion.source, /id="catalog-results-pane"/);
+    assert.match(catalogRegion.source, /id="catalog-search"/);
+    assert.match(catalogRegion.source, /id="catalog-item-inspector"/);
+    assert.match(catalogInspector.source, /id="toggle-catalog-layer"/);
+    assert.match(catalogInspector.source, />\s*Add to map layers\s*</);
+    assert.match(catalogInspector.source, /id="catalog-inspector-content"/);
+    assert.doesNotMatch(catalogInspector.source, /id="catalog-layer-status"/);
+    assert.doesNotMatch(catalogInspector.source, /id="raster-layer-stack"/);
+    assert.doesNotMatch(
+        catalogInspector.source,
+        /id="raster-detail-preview-controls"/
+    );
+    assert.doesNotMatch(
+        catalogInspector.source,
+        /id="raster-style-controls"/
+    );
 });
 
-test("map and raster regions retain their existing focused controls", () => {
-    const mapRegion = requireMarkupPosition("eomap-map-layers-region");
-    const layerStack = requireMarkupPosition("raster-layer-stack");
-    const layerStatus = requireMarkupPosition("raster-layer-stack-status");
-    const rasterRegion = requireMarkupPosition(
+test("layout shell owns three physically separate sibling workspaces", () => {
+    const catalogRegion = requireElementRange("eomap-catalog-region");
+    const mapRegion = requireElementRange("eomap-map-layers-region");
+    const rasterRegion = requireElementRange(
         "eomap-raster-interpretation-region"
     );
-    const appearance = requireMarkupPosition("raster-style-controls");
-    const sampling = requireMarkupPosition("raster-sample-window-range");
-    const histogram = requireMarkupPosition("raster-histogram");
 
-    assert.ok(mapRegion < layerStack);
-    assert.ok(layerStack < layerStatus);
-    assert.ok(layerStatus < rasterRegion);
-    assert.ok(rasterRegion < appearance);
+    assert.equal(MARKUP.slice(catalogRegion.end, mapRegion.start).trim(), "");
+    assert.equal(MARKUP.slice(mapRegion.end, rasterRegion.start).trim(), "");
+    assert.ok(catalogRegion.end < mapRegion.start);
+    assert.ok(mapRegion.end < rasterRegion.start);
+});
+
+test("map and raster siblings retain their focused controls and order", () => {
+    const mapRegion = requireElementRange("eomap-map-layers-region");
+    const rasterRegion = requireElementRange(
+        "eomap-raster-interpretation-region"
+    );
+    const appearance = rasterRegion.source.indexOf(
+        'id="raster-style-controls"'
+    );
+    const sampling = rasterRegion.source.indexOf(
+        'id="raster-sample-window-range"'
+    );
+    const histogram = rasterRegion.source.indexOf('id="raster-histogram"');
+
+    assert.match(mapRegion.source, /id="raster-detail-preview-controls"/);
+    assert.match(mapRegion.source, /id="catalog-layer-status"/);
+    assert.match(mapRegion.source, /id="raster-layer-stack"/);
+    assert.match(mapRegion.source, /id="raster-layer-stack-status"/);
     assert.ok(appearance < sampling);
     assert.ok(sampling < histogram);
     assert.match(
@@ -85,6 +150,21 @@ test("map and raster regions retain their existing focused controls", () => {
     assert.match(
         MARKUP,
         /id="eomap-raster-interpretation-region"[^>]*aria-label="Raster interpretation"/s
+    );
+});
+
+test("each sibling workspace receives an independent bounded scroll budget", () => {
+    assert.match(
+        STYLESHEET,
+        /\.catalog-panel\s*\{[^}]*flex:\s*1 1 50%[^}]*overflow:\s*hidden/s
+    );
+    assert.match(
+        STYLESHEET,
+        /\.map-layers-region,\s*\.raster-interpretation-region\s*\{[^}]*max-height:\s*min\(40vh, 480px\)[^}]*overflow-y:\s*auto[^}]*overscroll-behavior:\s*contain/s
+    );
+    assert.match(
+        STYLESHEET,
+        /\.catalog-inspector-body\s*\{[^}]*overflow-y:\s*auto/s
     );
 });
 
