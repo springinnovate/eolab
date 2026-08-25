@@ -1194,28 +1194,85 @@ h5 {
   display: none;
 }
 
-.map-display-widget-dock {
+.map-workspace-dock {
   position: fixed;
-  z-index: 1080;
-  top: 72px;
-  right: var(--workspace-edge);
+  z-index: 1090;
+  top: var(--workspace-edge);
+  left: 50%;
   display: grid;
-  justify-items: end;
+  max-width: calc(100vw - 2 * var(--workspace-edge));
+  justify-items: center;
   gap: 8px;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.map-workspace-dock > * {
+  pointer-events: auto;
+}
+
+.map-workspace-toolbar {
+  display: flex;
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  background: rgb(255 255 255 / 98%);
+  box-shadow: var(--elevation-control);
+  scrollbar-width: thin;
+}
+
+.map-workspace-tool {
+  min-height: 38px;
+  cursor: pointer;
+  border: 0;
+  border-left: 1px solid var(--border-2);
+  background: transparent;
+  padding: 8px 13px;
+  color: var(--text-2);
+  font-size: 0.74rem;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.map-workspace-tool:first-child {
+  border-left: 0;
+}
+
+.map-workspace-tool:hover,
+.map-workspace-tool:focus-visible,
+.map-workspace-tool[aria-expanded="true"] {
+  background: var(--surface-selected);
+  color: var(--brand-press);
+}
+
+.map-workspace-tool[hidden] {
+  display: none;
+}
+
+.map-workspace-panels {
+  display: flex;
+  max-width: calc(100vw - 2 * var(--workspace-edge));
+  min-width: 0;
+  gap: 10px;
+  align-items: flex-start;
+  justify-content: center;
   pointer-events: none;
 }
 
-.map-display-widget-dock > * {
+.map-workspace-panels > * {
   pointer-events: auto;
 }
 
 .raster-layer-stack {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  order: 3;
   width: min(340px, calc(100vw - 32px));
-  max-height: min(62vh, 560px);
+  max-height: min(52dvh, 480px);
   gap: 10px;
   margin: 0;
-  overflow: visible;
+  overflow: hidden;
   pointer-events: auto;
   border: 1px solid var(--border-1);
   border-radius: var(--radius);
@@ -1272,12 +1329,7 @@ h5 {
 }
 
 .map-layer-widget.is-collapsed {
-  width: auto;
-  min-width: 170px;
-}
-
-#app.is-tools-workspace .map-display-widget-dock {
-  right: calc(var(--tools-workspace-width) + 32px);
+  display: none;
 }
 
 .raster-layer-list {
@@ -1390,6 +1442,63 @@ h5 {
 .raster-layer-order {
   display: flex;
   gap: 4px;
+}
+
+.map-layer-tools {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.map-layer-tools[hidden] {
+  display: none;
+}
+
+.map-layer-tools .secondary-button {
+  min-width: 0;
+  margin: 0;
+  padding: 6px 8px;
+  font-size: 0.67rem;
+}
+
+.map-layer-tool-with-preview {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(88px, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  text-align: left;
+}
+
+.map-layer-tool-bars {
+  display: flex;
+  height: 34px;
+  min-width: 0;
+  gap: 1px;
+  align-items: end;
+  border: 1px solid var(--border-2);
+  border-radius: 3px;
+  background: var(--surface-1);
+  padding: 3px;
+}
+
+.map-layer-tool-bars span {
+  min-width: 1px;
+  flex: 1;
+  background: var(--brand);
+  opacity: 0.72;
+}
+
+.map-layer-tool-text {
+  display: grid;
+  gap: 2px;
+}
+
+.map-layer-tool-status {
+  display: block;
+  color: var(--text-3);
+  font-size: 0.61rem;
+  font-weight: 500;
 }
 
 .raster-layer-legend {
@@ -1627,13 +1736,12 @@ h5 {
 
 .raster-histogram {
   --histogram-link-color: var(--brand);
-  position: fixed;
-  z-index: 1090;
-  left: 50%;
-  bottom: 58px;
+  position: static;
+  order: 1;
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   width: min(440px, calc(100vw - 32px));
-  max-height: min(72vh, 650px);
+  max-height: min(52dvh, 480px);
   min-width: 0;
   gap: 8px;
   pointer-events: auto;
@@ -1643,7 +1751,6 @@ h5 {
   background: rgb(255 255 255 / 98%);
   padding: 13px 14px;
   box-shadow: var(--elevation-panel);
-  transform: translateX(-50%);
 }
 
 .raster-histogram[hidden],
@@ -1687,43 +1794,13 @@ h5 {
   font-weight: 650;
 }
 
-.histogram-widget-launcher {
-  position: fixed;
-  z-index: 1095;
-  left: 50%;
-  bottom: var(--workspace-edge);
-  cursor: pointer;
-  border: 1px solid var(--brand);
-  border-radius: 999px;
-  background: rgb(255 255 255 / 96%);
-  padding: 8px 12px;
-  color: var(--brand-hover);
-  box-shadow: var(--elevation-control);
-  font-size: 0.74rem;
-  font-weight: 650;
-  transform: translateX(170px);
-}
-
-.appearance-widget-launcher {
-  cursor: pointer;
-  border: 1px solid var(--brand);
-  border-radius: 999px;
-  background: rgb(255 255 255 / 96%);
-  padding: 8px 12px;
-  color: var(--brand-hover);
-  box-shadow: var(--elevation-control);
-  font-size: 0.74rem;
-  font-weight: 650;
-}
-
 .raster-appearance-controls {
-  position: fixed;
-  z-index: 1092;
-  top: 72px;
-  right: calc(340px + var(--workspace-edge) + 12px);
+  position: static;
+  order: 2;
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   width: min(310px, calc(100vw - 32px));
-  max-height: min(78vh, 680px);
+  max-height: min(52dvh, 480px);
   gap: 10px;
   overflow: hidden;
   pointer-events: auto;
@@ -1762,10 +1839,6 @@ h5 {
   scrollbar-gutter: stable;
 }
 
-#app.is-tools-workspace .raster-appearance-controls {
-  right: calc(var(--tools-workspace-width) + 340px + 44px);
-}
-
 .raster-histogram-connector {
   position: fixed;
   z-index: 1089;
@@ -1789,26 +1862,45 @@ h5 {
   color: #6d1b7b;
 }
 
+#raster-histogram-connector-halo,
 #raster-histogram-connector-line {
-  stroke: currentColor;
   stroke-linecap: round;
-  stroke-width: 2px;
-  opacity: 0.7;
   vector-effect: non-scaling-stroke;
 }
 
+#raster-histogram-connector-halo {
+  stroke: rgb(255 255 255 / 94%);
+  stroke-width: 7px;
+}
+
+#raster-histogram-connector-line {
+  stroke: currentColor;
+  stroke-dasharray: 7 4;
+  stroke-width: 3px;
+  opacity: 0.95;
+}
+
 #raster-histogram-connector-target {
-  fill: none;
+  fill: color-mix(in srgb, currentColor 3%, transparent);
   stroke: currentColor;
   stroke-dasharray: 6 5;
-  stroke-width: 2px;
-  opacity: 0.5;
+  stroke-width: 3px;
+  opacity: 0.82;
   vector-effect: non-scaling-stroke;
 }
 
 #raster-histogram-connector-arrow {
   fill: currentColor;
-  opacity: 0.8;
+  stroke: white;
+  stroke-width: 1px;
+  opacity: 1;
+}
+
+#raster-histogram-connector-endpoint {
+  fill: var(--surface-1);
+  stroke: currentColor;
+  stroke-width: 3px;
+  vector-effect: non-scaling-stroke;
 }
 
 .raster-histogram-heading {
@@ -2638,40 +2730,32 @@ h5 {
     max-width: none;
   }
 
-  .map-display-widget-dock,
-  #app.is-tools-workspace .map-display-widget-dock {
-    top: 58px;
-    right: 8px;
+  .map-workspace-dock {
+    top: 8px;
+    max-width: calc(100vw - 16px);
   }
 
-  .map-layer-widget {
-    width: min(320px, calc(100vw - 16px));
-    max-height: 46dvh;
+  .map-workspace-panels {
+    display: grid;
+    width: min(440px, calc(100vw - 16px));
+    max-width: calc(100vw - 16px);
+    max-height: 58dvh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
   }
 
-  .raster-appearance-controls,
-  #app.is-tools-workspace .raster-appearance-controls {
-    top: 58px;
-    right: 8px;
-    left: 8px;
-    width: auto;
-    max-height: 72dvh;
+  .map-workspace-panels > * {
+    width: 100%;
+    max-height: 50dvh;
   }
 
-  .raster-histogram {
-    right: 8px;
-    bottom: 100px;
-    left: 8px;
-    width: auto;
-    max-height: 68dvh;
-    transform: none;
+  .map-workspace-toolbar {
+    max-width: calc(100vw - 16px);
   }
 
-  .histogram-widget-launcher {
-    right: 8px;
-    bottom: 58px;
-    left: auto;
-    transform: none;
+  .map-workspace-tool {
+    flex: 1;
   }
 
   .control-panel {

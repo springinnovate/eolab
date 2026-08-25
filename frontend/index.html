@@ -744,8 +744,41 @@
         </footer>
       </section>
 
-      <div class="map-display-widget-dock">
-        <section
+      <div class="map-workspace-dock">
+        <nav class="map-workspace-toolbar" aria-label="Map workspace tools">
+          <button
+            class="map-workspace-tool"
+            id="toggle-map-layer-widget"
+            type="button"
+            aria-controls="raster-layer-stack-body"
+            aria-expanded="true"
+            hidden
+          >
+            Layers <span id="raster-layer-widget-count">0</span>
+          </button>
+          <button
+            class="map-workspace-tool"
+            id="open-raster-histogram-widget"
+            type="button"
+            aria-controls="raster-histogram"
+            aria-expanded="false"
+            hidden
+          >
+            Histogram
+          </button>
+          <button
+            class="map-workspace-tool"
+            id="open-raster-appearance-widget"
+            type="button"
+            aria-controls="raster-appearance-controls"
+            aria-expanded="false"
+            hidden
+          >
+            Raster style
+          </button>
+        </nav>
+        <div class="map-workspace-panels">
+          <section
           class="map-layer-widget raster-layer-stack"
           id="raster-layer-stack"
           data-eomap-region="map-layers"
@@ -755,19 +788,8 @@
           <div class="raster-layer-stack-heading">
             <div>
               <p class="section-label">Map display</p>
-              <h2 id="raster-layer-stack-heading">
-                Layers <span id="raster-layer-widget-count">0</span>
-              </h2>
+              <h2 id="raster-layer-stack-heading">Layers</h2>
             </div>
-            <button
-              class="secondary-button"
-              id="toggle-map-layer-widget"
-              type="button"
-              aria-controls="raster-layer-stack-body"
-              aria-expanded="true"
-            >
-              Hide layers
-            </button>
           </div>
           <div class="map-layer-widget-body" id="raster-layer-stack-body">
             <p id="raster-layer-stack-limit"></p>
@@ -781,21 +803,9 @@
               tabindex="-1"
             ></p>
           </div>
-        </section>
+          </section>
 
-        <button
-          class="map-widget-launcher appearance-widget-launcher"
-          id="open-raster-appearance-widget"
-          type="button"
-          aria-controls="raster-appearance-controls"
-          aria-expanded="false"
-          hidden
-        >
-          Appearance
-        </button>
-      </div>
-
-      <section
+          <section
         class="map-widget raster-appearance-controls"
         id="raster-appearance-controls"
         data-eomap-region="raster-interpretation"
@@ -853,19 +863,9 @@
             Reset colors and range
           </button>
         </div>
-      </section>
+          </section>
 
-      <button
-        class="map-widget-launcher histogram-widget-launcher"
-        id="open-raster-histogram-widget"
-        type="button"
-        aria-controls="raster-histogram"
-        aria-expanded="false"
-        hidden
-      >
-        Histogram
-      </button>
-      <section
+          <section
         class="map-widget raster-histogram"
         id="raster-histogram"
         data-eomap-region="raster-interpretation"
@@ -989,7 +989,9 @@
             </button>
           </div>
         </div>
-      </section>
+          </section>
+        </div>
+      </div>
 
       <svg
         class="raster-histogram-connector"
@@ -1000,7 +1002,9 @@
         hidden
       >
         <rect id="raster-histogram-connector-target" hidden></rect>
+        <line id="raster-histogram-connector-halo"></line>
         <line id="raster-histogram-connector-line"></line>
+        <circle id="raster-histogram-connector-endpoint" r="5"></circle>
         <polygon id="raster-histogram-connector-arrow"></polygon>
       </svg>
 

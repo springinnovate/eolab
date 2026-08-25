@@ -85,7 +85,7 @@ export function nearestRectangleConnector(sourceRectangle, targetRectangle) {
         x: (targetRectangle.left + targetRectangle.right) / 2,
         y: (targetRectangle.top + targetRectangle.bottom) / 2,
     };
-    const targetCandidates = [
+    let targetCandidates = [
         { x: targetRectangle.left, y: targetRectangle.top },
         { x: targetRectangle.right, y: targetRectangle.top },
         { x: targetRectangle.right, y: targetRectangle.bottom },
@@ -109,6 +109,31 @@ export function nearestRectangleConnector(sourceRectangle, targetRectangle) {
         nearestPerimeterPoint(targetRectangle, sourceCenter),
         nearestPerimeterPoint(targetRectangle, targetCenter),
     ];
+    const overlapsHorizontally =
+        sourceRectangle.left < targetRectangle.right &&
+        sourceRectangle.right > targetRectangle.left;
+    const overlapsVertically =
+        sourceRectangle.top < targetRectangle.bottom &&
+        sourceRectangle.bottom > targetRectangle.top;
+    if (overlapsHorizontally && overlapsVertically) {
+        const deltaX = targetCenter.x - sourceCenter.x;
+        const deltaY = targetCenter.y - sourceCenter.y;
+        if (Math.abs(deltaY) >= Math.abs(deltaX)) {
+            const targetY = deltaY >= 0
+                ? targetRectangle.bottom
+                : targetRectangle.top;
+            targetCandidates = targetCandidates.filter(
+                ({ y }) => y === targetY
+            );
+        } else {
+            const targetX = deltaX >= 0
+                ? targetRectangle.right
+                : targetRectangle.left;
+            targetCandidates = targetCandidates.filter(
+                ({ x }) => x === targetX
+            );
+        }
+    }
     let best = null;
     for (const end of targetCandidates) {
         if (containsPoint(sourceRectangle, end)) {
@@ -209,6 +234,10 @@ export class RasterHistogramConnectorView {
             documentContext,
             "#raster-histogram-connector-line"
         );
+        this.halo = requireRasterControl(
+            documentContext,
+            "#raster-histogram-connector-halo"
+        );
         this.targetOutline = requireRasterControl(
             documentContext,
             "#raster-histogram-connector-target"
@@ -216,6 +245,10 @@ export class RasterHistogramConnectorView {
         this.arrow = requireRasterControl(
             documentContext,
             "#raster-histogram-connector-arrow"
+        );
+        this.endpoint = requireRasterControl(
+            documentContext,
+            "#raster-histogram-connector-endpoint"
         );
         this.samplingBounds = null;
         this.samplingMode = "none";
@@ -357,30 +390,36 @@ export class RasterHistogramConnectorView {
             this.#hide();
             return;
         }
-        this.line.setAttribute("x1", String(connection.start.x));
-        this.line.setAttribute("y1", String(connection.start.y));
-        this.line.setAttribute("x2", String(connection.end.x));
-        this.line.setAttribute("y2", String(connection.end.y));
-        this.arrow.setAttribute("points", connection.arrowPoints);
-        this.targetOutline.hidden = this.samplingMode !== "temporaryAoi";
-        if (!this.targetOutline.hidden) {
-            this.targetOutline.setAttribute("x", String(sampledRectangle.left));
-            this.targetOutline.setAttribute("y", String(sampledRectangle.top));
-            this.targetOutline.setAttribute(
-                "width",
-                String(sampledRectangle.right - sampledRectangle.left)
-            );
-            this.targetOutline.setAttribute(
-                "height",
-                String(sampledRectangle.bottom - sampledRectangle.top)
-            );
+        for (const line of [this.halo, this.line]) {
+            line.setAttribute("x1", String(connection.start.x));
+            line.setAttribute("y1", String(connection.start.y));
+            line.setAttribute("x2", String(connection.end.x));
+            line.setAttribute("y2", String(connection.end.y));
         }
+        this.arrow.setAttribute("points", connection.arrowPoints);
+        this.endpoint.setAttribute("cx", String(connection.end.x));
+        this.endpoint.setAttribute("cy", String(connection.end.y));
+        this.targetOutline.hidden = false;
+        this.targetOutline.removeAttribute("hidden");
+        this.targetOutline.setAttribute("x", String(sampledRectangle.left));
+        this.targetOutline.setAttribute("y", String(sampledRectangle.top));
+        this.targetOutline.setAttribute(
+            "width",
+            String(sampledRectangle.right - sampledRectangle.left)
+        );
+        this.targetOutline.setAttribute(
+            "height",
+            String(sampledRectangle.bottom - sampledRectangle.top)
+        );
         this.connector.hidden = false;
+        this.connector.removeAttribute("hidden");
     }
 
     /** Hide the connector without changing its sampling contract. */
     #hide() {
         this.targetOutline.hidden = true;
+        this.targetOutline.setAttribute("hidden", "");
         this.connector.hidden = true;
+        this.connector.setAttribute("hidden", "");
     }
 }

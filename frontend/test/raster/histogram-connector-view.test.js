@@ -79,6 +79,17 @@ test("nearest connector terminates on a visible target edge or corner", () => {
   assert.match(connector.arrowPoints, /^[-\d.]+,[-\d.]+ /);
 });
 
+test("overlapping widgets connect to the sampled edge beyond the widget", () => {
+  const source = { left: 160, top: 60, right: 605, bottom: 310 };
+  const target = { left: 446, top: 281, right: 759, bottom: 570 };
+
+  const connector = nearestRectangleConnector(source, target);
+
+  assert.notEqual(connector, null);
+  assert.equal(connector.start.y, source.bottom);
+  assert.equal(connector.end.y, target.bottom);
+});
+
 test("connector follows projected sampled bounds and histogram visibility", () => {
   const documentContext = new FakeRasterControlDocument();
   const histogram = documentContext.querySelector("#raster-histogram");
@@ -107,6 +118,7 @@ test("connector follows projected sampled bounds and histogram visibility", () =
   );
   const firstTargetX = Number(line.getAttribute("x2"));
   assert.equal(connector.hidden, false);
+  assert.equal(connector.getAttribute("hidden"), null);
   assert.equal(connector.getAttribute("data-sampling-area"), "selectedArea");
   assert.equal(Number.isFinite(firstTargetX), true);
 
@@ -122,6 +134,11 @@ test("connector follows projected sampled bounds and histogram visibility", () =
   assert.equal(
     documentContext.querySelector("#raster-histogram-connector-target").hidden,
     false
+  );
+  assert.equal(
+    documentContext.querySelector("#raster-histogram-connector-target")
+      .getAttribute("hidden"),
+    null
   );
 
   histogram.hidden = true;

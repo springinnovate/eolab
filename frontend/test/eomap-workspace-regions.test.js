@@ -137,7 +137,10 @@ test("map rendering, layer widget, and raster controls retain focused ownership"
     assert.match(mapRegion.source, /id="catalog-layer-status"/);
     assert.doesNotMatch(mapRegion.source, /id="raster-layer-stack"/);
     assert.match(layerWidget.source, /id="raster-layer-stack-status"/);
-    assert.match(layerWidget.source, /id="toggle-map-layer-widget"/);
+    assert.match(
+        MARKUP,
+        /class="map-workspace-toolbar"[\s\S]*?id="toggle-map-layer-widget"/
+    );
     assert.match(layerWidget.source, /data-eomap-region="map-layers"/);
     assert.match(rasterRegion.source, /id="raster-style-controls"/);
     assert.doesNotMatch(rasterRegion.source, /id="raster-histogram"/);
@@ -325,15 +328,19 @@ test("raster interpretation groups retain compact visual separation", () => {
 test("map widgets stay bounded and visually link distribution to sampling", () => {
     assert.match(
         STYLESHEET,
-        /\.map-display-widget-dock\s*\{[^}]*position:\s*fixed[^}]*pointer-events:\s*none/s
+        /\.map-workspace-dock\s*\{[^}]*position:\s*fixed[^}]*pointer-events:\s*none/s
     );
     assert.match(
         STYLESHEET,
-        /\.raster-layer-stack\s*\{[^}]*width:\s*min\(340px,[^}]*max-height:\s*min\(62vh, 560px\)/s
+        /\.map-workspace-toolbar\s*\{[^}]*display:\s*flex[^}]*overflow-x:\s*auto/s
     );
     assert.match(
         STYLESHEET,
-        /\.raster-histogram\s*\{[^}]*--histogram-link-color:\s*var\(--brand\)[^}]*position:\s*fixed[^}]*width:\s*min\(440px,[^}]*max-height:\s*min\(72vh, 650px\)/s
+        /\.raster-layer-stack\s*\{[^}]*width:\s*min\(340px,[^}]*max-height:\s*min\(52dvh, 480px\)/s
+    );
+    assert.match(
+        STYLESHEET,
+        /\.raster-histogram\s*\{[^}]*--histogram-link-color:\s*var\(--brand\)[^}]*position:\s*static[^}]*width:\s*min\(440px,[^}]*max-height:\s*min\(52dvh, 480px\)/s
     );
     assert.match(
         STYLESHEET,
@@ -349,7 +356,7 @@ test("map widgets stay bounded and visually link distribution to sampling", () =
     );
     assert.match(
         STYLESHEET,
-        /#raster-histogram-connector-line\s*\{[^}]*stroke:\s*currentColor[^}]*stroke-width:\s*2px/s
+        /#raster-histogram-connector-line\s*\{[^}]*stroke:\s*currentColor[^}]*stroke-dasharray:\s*7 4[^}]*stroke-width:\s*3px/s
     );
     assert.match(
         STYLESHEET,
