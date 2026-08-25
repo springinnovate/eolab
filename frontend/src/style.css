@@ -519,9 +519,20 @@ h5 {
 .catalog-panel {
   display: flex;
   min-height: 0;
-  flex: 1;
+  flex: 1 1 50%;
   flex-direction: column;
   overflow: hidden;
+}
+
+.map-layers-region,
+.raster-interpretation-region {
+  min-height: 0;
+  max-height: min(40vh, 480px);
+  flex: 0 1 auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+  scrollbar-gutter: stable;
 }
 
 .temporary-aoi-card {
@@ -899,6 +910,7 @@ h5 {
   display: grid;
   flex: 1 1 100%;
   gap: 0.65rem;
+  margin-bottom: 18px;
   padding: 0.75rem;
   border: 1px solid color-mix(in srgb, #f97316 45%, var(--border-2));
   border-radius: 0.65rem;
@@ -953,10 +965,15 @@ h5 {
   display: none;
 }
 
-.catalog-map-actions p {
+.catalog-map-actions p,
+.map-layer-action-status {
   margin: 0;
   color: var(--text-2);
   font-size: 0.76rem;
+}
+
+.map-layer-action-status:empty {
+  display: none;
 }
 
 .raster-layer-stack {
