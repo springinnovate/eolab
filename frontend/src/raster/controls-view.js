@@ -66,9 +66,13 @@ export class RasterControlsView {
             "#raster-active-layer-label"
         );
         this.#appearanceView = new RasterAppearanceControlsView(
-            documentContext
+            documentContext,
+            () => this.#histogramView?.hideWidget()
         );
-        this.#histogramView = new RasterHistogramControlsView(documentContext);
+        this.#histogramView = new RasterHistogramControlsView(
+            documentContext,
+            () => this.#appearanceView.hideWidget()
+        );
         this.#samplingAreaView = new RasterSamplingAreaControlsView(
             documentContext
         );
@@ -391,6 +395,7 @@ export class RasterControlsView {
      */
     setControlsVisible(isVisible) {
         this.#root.hidden = !isVisible;
+        this.#appearanceView.setActiveRasterAvailable(isVisible);
         this.#histogramView.setActiveRasterAvailable(isVisible);
     }
 

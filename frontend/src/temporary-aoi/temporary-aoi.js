@@ -14,20 +14,24 @@ const UPLOAD_VALIDATION_STAGE_DELAY_MILLISECONDS = 600;
 const UPLOAD_GEOMETRY_STAGE_DELAY_MILLISECONDS = 1_800;
 
 /**
- * Copy only lifecycle and display identity across the histogram integration.
+ * Copy lifecycle, display identity, and a canonical presentation anchor across
+ * the histogram integration.
  *
- * Browser overlay geometry remains private to the temporary-AOI controller;
- * the raster API needs only the opaque server reference.
+ * Browser GeoJSON remains private to the temporary-AOI controller. The frozen
+ * bounding box lets a map presentation point to the sampled area, while the
+ * raster statistics API continues to receive only the opaque server reference.
  *
  * @param {Object} readyAoi Validated ready temporary-AOI response.
  * @return {Readonly<Object>} Immutable public sampling-area snapshot.
  */
 function temporaryAoiSamplingSnapshot(readyAoi) {
+    const [west, south, east, north] = readyAoi.bbox;
     return Object.freeze({
         id: readyAoi.id,
         filename: readyAoi.filename,
         selectedDataset: readyAoi.selectedDataset,
         expiresAt: readyAoi.expiresAt,
+        bounds: Object.freeze({ west, south, east, north }),
     });
 }
 
@@ -529,7 +533,8 @@ export class TemporaryAoiCoordinator {
      * presentation state and never changes the sampleable lifecycle.
      *
      * @param {(temporaryAoi: Readonly<Object>|null) => void} listener Receives
-     * opaque lifecycle/display snapshots and unavailable state as null.
+     * lifecycle/display snapshots with a frozen presentation bounding box and
+     * unavailable state as null. GeoJSON remains private.
      * @return {() => void} Idempotent function that removes the subscription.
      */
     subscribeSamplingArea(listener) {

@@ -336,6 +336,27 @@ function createFakeLayerStackView() {
 }
 
 /**
+ * Create an inspectable sampled-area connector presentation adapter.
+ *
+ * @return {Object} Fake connector with retained sampling presentations.
+ */
+function createFakeHistogramConnectorView() {
+    return {
+        areas: [],
+        isBound: false,
+        bind() {
+            this.isBound = true;
+        },
+        unbind() {
+            this.isBound = false;
+        },
+        setSamplingArea(bounds, mode) {
+            this.areas.push({ bounds, mode });
+        },
+    };
+}
+
+/**
  * Create an externally resolvable promise.
  *
  * @return {{promise: Promise<*>, resolve: (value: *) => void,
@@ -458,6 +479,7 @@ test("renderer-independent analysis supports exact windows without publication",
     const leafletMap = createFakeMap();
     const { leaflet, wmsLayers } = createFakeLeaflet();
     const controlsView = createFakeControlsView();
+    const histogramConnectorView = createFakeHistogramConnectorView();
     const statisticsRequests = [];
     const pixelRequests = [];
     let publicationCalls = 0;
@@ -470,6 +492,7 @@ test("renderer-independent analysis supports exact windows without publication",
         },
         {
             controlsView,
+            histogramConnectorView,
             layerStackView: createFakeLayerStackView(),
             publishRaster: async () => {
                 publicationCalls += 1;
@@ -519,6 +542,11 @@ test("renderer-independent analysis supports exact windows without publication",
     await flushPromises();
     assert.equal(controlsView.histogramWidgetOpenCount, 1);
     assert.equal(statisticsRequests.at(-1).samplingArea.kind, "selectedArea");
+    assert.equal(histogramConnectorView.areas.at(-1).mode, "selectedArea");
+    assert.deepEqual(
+        histogramConnectorView.areas.at(-1).bounds,
+        statisticsRequests.at(-1).samplingArea.selectedBounds
+    );
     assert.match(controlsView.statisticsStatus, /Selected-area exact/);
 
     controlsView.setPaletteName("viridis");
@@ -532,6 +560,7 @@ test("renderer-independent analysis supports exact windows without publication",
     viewer.deactivateAnalysis(MOUNTED_GEOTIFF_ITEM);
     assert.equal(controlsView.controlsVisible, false);
     viewer.destroy();
+    assert.equal(histogramConnectorView.isBound, false);
 });
 
 test("WMS activation adopts the existing renderer-neutral analysis session", async () => {
@@ -767,6 +796,7 @@ test("a ready AOI owns detail-only statistics before map-window handlers", async
     const leafletMap = createFakeMap();
     const { leaflet, rectangleLayers } = createFakeLeaflet();
     const controlsView = createFakeControlsView();
+    const histogramConnectorView = createFakeHistogramConnectorView();
     const statisticsRequests = [];
     const viewer = initializeRasterViewer(
         {
@@ -777,6 +807,7 @@ test("a ready AOI owns detail-only statistics before map-window handlers", async
         },
         {
             controlsView,
+            histogramConnectorView,
             layerStackView: createFakeLayerStackView(),
             loadStatistics: async (item, samplingArea, signal) => {
                 statisticsRequests.push({ item, samplingArea, signal });
@@ -791,6 +822,12 @@ test("a ready AOI owns detail-only statistics before map-window handlers", async
         filename: "detail-area.gpkg",
         selectedDataset: "boundary",
         expiresAt: "2030-01-01T01:00:00Z",
+        bounds: Object.freeze({
+            west: -123,
+            south: 48,
+            east: -122,
+            north: 49,
+        }),
     });
     const style = {
         minimum: 0,
@@ -812,6 +849,11 @@ test("a ready AOI owns detail-only statistics before map-window handlers", async
         [{ kind: "temporaryAoi", temporaryAoiId: TEMPORARY_AOI_ID }]
     );
     assert.equal(controlsView.samplingAreaMode, "temporaryAoi");
+    assert.equal(histogramConnectorView.areas.at(-1).mode, "temporaryAoi");
+    assert.deepEqual(
+        histogramConnectorView.areas.at(-1).bounds,
+        temporaryAoi.bounds
+    );
     const requestCount = statisticsRequests.length;
     leafletMap.emit("click", { latlng: { lng: -122, lat: 48.5 } });
     assert.equal(statisticsRequests.length, requestCount);

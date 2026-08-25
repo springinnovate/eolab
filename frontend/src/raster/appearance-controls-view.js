@@ -27,13 +27,24 @@ export class RasterAppearanceControlsView {
      *
      * @param {Document} [documentContext=globalThis.document] Document that
      * owns the controls.
+     * @param {() => void} [onBeforeShow=() => {}] Composite presentation hook
+     * used to close another contextual raster widget before this one opens.
      * @throws {Error} If any required appearance element is missing.
      */
-    constructor(documentContext = globalThis.document) {
+    constructor(documentContext = globalThis.document, onBeforeShow = () => {}) {
         this.documentContext = documentContext;
+        this.onBeforeShow = onBeforeShow;
         this.#root = requireRasterControl(
             documentContext,
             "#raster-appearance-controls"
+        );
+        this.openAppearanceButton = requireRasterControl(
+            documentContext,
+            "#open-raster-appearance-widget"
+        );
+        this.closeAppearanceButton = requireRasterControl(
+            documentContext,
+            "#close-raster-appearance-widget"
         );
         this.palette = requireRasterControl(documentContext, "#raster-palette");
         this.styleInputs = {
@@ -81,6 +92,9 @@ export class RasterAppearanceControlsView {
         this.boundStyleChange = this.#handleStyleChange.bind(this);
         this.boundPaletteChange = this.#handlePaletteChange.bind(this);
         this.boundResetStyle = this.#handleResetStyle.bind(this);
+        this.boundToggleWidget = this.#handleToggleWidget.bind(this);
+        this.boundCloseWidget = this.#handleCloseWidget.bind(this);
+        this.boundWidgetKeydown = this.#handleWidgetKeydown.bind(this);
     }
 
     /**
@@ -116,6 +130,15 @@ export class RasterAppearanceControlsView {
         }
         this.palette.addEventListener("change", this.boundPaletteChange);
         this.resetStyleButton.addEventListener("click", this.boundResetStyle);
+        this.openAppearanceButton.addEventListener(
+            "click",
+            this.boundToggleWidget
+        );
+        this.closeAppearanceButton.addEventListener(
+            "click",
+            this.boundCloseWidget
+        );
+        this.#root.addEventListener("keydown", this.boundWidgetKeydown);
     }
 
     /**
@@ -130,7 +153,68 @@ export class RasterAppearanceControlsView {
         }
         this.palette.removeEventListener("change", this.boundPaletteChange);
         this.resetStyleButton.removeEventListener("click", this.boundResetStyle);
+        this.openAppearanceButton.removeEventListener(
+            "click",
+            this.boundToggleWidget
+        );
+        this.closeAppearanceButton.removeEventListener(
+            "click",
+            this.boundCloseWidget
+        );
+        this.#root.removeEventListener("keydown", this.boundWidgetKeydown);
         this.handlers = null;
+    }
+
+    /**
+     * Make raster appearance available for the active raster, or close and
+     * hide its launcher when no raster owns the shared controls.
+     *
+     * @param {boolean} isAvailable Whether an active raster can be styled.
+     * @return {void}
+     */
+    setActiveRasterAvailable(isAvailable) {
+        this.openAppearanceButton.hidden = !isAvailable;
+        if (!isAvailable) {
+            this.hideWidget();
+        }
+    }
+
+    /**
+     * Reveal the contextual appearance editor without changing raster style.
+     *
+     * @param {boolean} [moveFocus=false] Whether to focus its close control.
+     * @return {void}
+     */
+    showWidget(moveFocus = false) {
+        if (this.openAppearanceButton.hidden) {
+            return;
+        }
+        if (this.#root.hidden) {
+            this.onBeforeShow();
+        }
+        this.#root.hidden = false;
+        this.#root.setAttribute("aria-hidden", "false");
+        this.openAppearanceButton.setAttribute("aria-expanded", "true");
+        this.openAppearanceButton.textContent = "Hide appearance";
+        if (moveFocus) {
+            this.closeAppearanceButton.focus();
+        }
+    }
+
+    /**
+     * Hide the appearance editor while retaining every committed style value.
+     *
+     * @param {boolean} [returnFocus=false] Whether to focus its launcher.
+     * @return {void}
+     */
+    hideWidget(returnFocus = false) {
+        this.#root.hidden = true;
+        this.#root.setAttribute("aria-hidden", "true");
+        this.openAppearanceButton.setAttribute("aria-expanded", "false");
+        this.openAppearanceButton.textContent = "Appearance";
+        if (returnFocus && !this.openAppearanceButton.hidden) {
+            this.openAppearanceButton.focus();
+        }
     }
 
     /**
@@ -252,5 +336,34 @@ export class RasterAppearanceControlsView {
     /** Forward the reset-style action to the raster viewer. @return {void} */
     #handleResetStyle() {
         this.handlers.onResetStyle();
+    }
+
+    /** Toggle the retained appearance editor from its map control. @return {void} */
+    #handleToggleWidget() {
+        if (this.#root.hidden) {
+            this.showWidget(true);
+        } else {
+            this.hideWidget(true);
+        }
+    }
+
+    /** Close the appearance widget without changing style. @return {void} */
+    #handleCloseWidget() {
+        this.hideWidget(true);
+    }
+
+    /**
+     * Close only the appearance widget when Escape originates within it.
+     *
+     * @param {KeyboardEvent} event Widget keyboard event.
+     * @return {void}
+     */
+    #handleWidgetKeydown(event) {
+        if (event.key !== "Escape") {
+            return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        this.hideWidget(true);
     }
 }

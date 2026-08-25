@@ -460,8 +460,15 @@ test("sampling subscribers ignore overlay visibility and follow AOI lifecycle", 
     filename: READY_AOI.filename,
     selectedDataset: READY_AOI.selectedDataset,
     expiresAt: READY_AOI.expiresAt,
+    bounds: {
+      west: READY_AOI.bbox[0],
+      south: READY_AOI.bbox[1],
+      east: READY_AOI.bbox[2],
+      north: READY_AOI.bbox[3],
+    },
   });
   assert.equal(Object.isFrozen(snapshots[1]), true);
+  assert.equal(Object.isFrozen(snapshots[1].bounds), true);
   assert.equal("geometry" in snapshots[1], false);
   assert.equal(snapshots[2].id, REPLACEMENT_AOI.id);
   assert.equal(snapshots[3], null);

@@ -21,6 +21,22 @@ test("appearance adapter owns style reads, presentation, and listeners", () => {
         onPaletteChange: () => received.push(["palette"]),
         onResetStyle: () => received.push(["reset"]),
     });
+    const launcher = documentContext.querySelector(
+        "#open-raster-appearance-widget"
+    );
+    documentContext.querySelector("#raster-appearance-controls").hidden = true;
+    launcher.hidden = true;
+    view.setActiveRasterAvailable(true);
+    launcher.dispatchEvent(new Event("click"));
+    assert.equal(
+        documentContext.querySelector("#raster-appearance-controls").hidden,
+        false
+    );
+    assert.equal(launcher.getAttribute("aria-expanded"), "true");
+    assert.equal(
+        documentContext.activeElement,
+        documentContext.querySelector("#close-raster-appearance-widget")
+    );
 
     documentContext.querySelector("#raster-minimum-color")
         .dispatchEvent(new Event("input"));
@@ -43,6 +59,17 @@ test("appearance adapter owns style reads, presentation, and listeners", () => {
         ["palette"],
         ["reset"],
     ]);
+
+    const escapeEvent = new Event("keydown", { cancelable: true });
+    Object.defineProperty(escapeEvent, "key", { value: "Escape" });
+    documentContext.querySelector("#raster-appearance-controls")
+        .dispatchEvent(escapeEvent);
+    assert.equal(escapeEvent.defaultPrevented, true);
+    assert.equal(
+        documentContext.querySelector("#raster-appearance-controls").hidden,
+        true
+    );
+    assert.equal(documentContext.activeElement, launcher);
 
     const error = Object.assign(new Error("Invalid colors"), {
         fieldGroup: "colors",

@@ -213,6 +213,19 @@ test("RasterControlsView owns style values and semantic control events", () => {
         .dispatchEvent(new Event("input"));
     assert.deepEqual(received, [["style", true], ["range", "80"]]);
 
+    documentContext.querySelector("#raster-histogram").hidden = true;
+    documentContext.querySelector("#raster-appearance-controls").hidden = true;
+    view.setControlsVisible(true);
+    view.showHistogramWidget();
+    assert.equal(documentContext.querySelector("#raster-histogram").hidden, false);
+    documentContext.querySelector("#open-raster-appearance-widget")
+        .dispatchEvent(new Event("click"));
+    assert.equal(documentContext.querySelector("#raster-histogram").hidden, true);
+    assert.equal(
+        documentContext.querySelector("#raster-appearance-controls").hidden,
+        false
+    );
+
     view.unbind();
     documentContext
         .querySelector("#raster-minimum-color")
@@ -381,12 +394,20 @@ test("RasterControlsView owns composite visibility without clearing subgroup sta
         "Calculating selected-area distribution..."
     );
     assert.equal(samplingStatus.textContent, "Selected geographic map window.");
-    assert.equal(appearance.hidden, false);
+    assert.equal(appearance.hidden, true);
+    assert.equal(
+        documentContext.querySelector("#open-raster-appearance-widget").hidden,
+        true
+    );
 
     view.setControlsVisible(true);
     assert.equal(root.hidden, false);
     assert.equal(
         documentContext.querySelector("#open-raster-histogram-widget").hidden,
+        false
+    );
+    assert.equal(
+        documentContext.querySelector("#open-raster-appearance-widget").hidden,
         false
     );
     view.showHistogramWidget();
@@ -503,6 +524,7 @@ test("RasterControlsView preserves the raster viewer compatibility surface", () 
         "setClearSampleWindowLabel",
         "setTemporaryAoiAvailability",
         "setSamplingAreaMode",
+        "showHistogramWidget",
         "setControlsVisible",
         "isPixelProbeVisible",
         "setPixelProbeContent",

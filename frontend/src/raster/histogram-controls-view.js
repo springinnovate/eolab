@@ -26,10 +26,13 @@ export class RasterHistogramControlsView {
      *
      * @param {Document} [documentContext=globalThis.document] Document that
      * owns the controls and creates histogram SVG nodes.
+     * @param {() => void} [onBeforeShow=() => {}] Composite presentation hook
+     * used to close another contextual raster widget before this one opens.
      * @throws {Error} If any required histogram element is missing.
      */
-    constructor(documentContext = globalThis.document) {
+    constructor(documentContext = globalThis.document, onBeforeShow = () => {}) {
         this.documentContext = documentContext;
+        this.onBeforeShow = onBeforeShow;
         this.histogram = requireRasterControl(
             documentContext,
             "#raster-histogram"
@@ -204,6 +207,9 @@ export class RasterHistogramControlsView {
     showWidget(moveFocus = false) {
         if (this.openHistogramButton.hidden) {
             return;
+        }
+        if (this.histogram.hidden) {
+            this.onBeforeShow();
         }
         this.histogram.hidden = false;
         this.histogram.setAttribute("aria-hidden", "false");

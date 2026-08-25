@@ -80,3 +80,19 @@ test("focused raster views validate only their semantic subgroup roots", async (
     assert.match(samplingSource, /"#raster-sampling-area-controls"/);
     assert.match(histogramSource, /"#raster-histogram"/);
 });
+
+test("histogram connector depends only on neutral geometry and DOM providers", async () => {
+    const source = await readFile(
+        new URL(
+            "../../src/raster/histogram-connector-view.js",
+            import.meta.url
+        ),
+        "utf8"
+    );
+    const imports = [...source.matchAll(/from\s+["']([^"']+)["']/g)]
+        .map((match) => match[1])
+        .sort();
+
+    assert.deepEqual(imports, ["./geometry.js", "./required-control.js"]);
+    assert.doesNotMatch(source, /from\s+["'][^"']*(temporary-aoi|statistics)/i);
+});

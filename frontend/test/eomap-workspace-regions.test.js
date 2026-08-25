@@ -131,6 +131,7 @@ test("map rendering, layer widget, and raster controls retain focused ownership"
     );
     const layerWidget = requireElementRange("raster-layer-stack");
     const histogramWidget = requireElementRange("raster-histogram");
+    const appearanceWidget = requireElementRange("raster-appearance-controls");
 
     assert.match(mapRegion.source, /id="raster-detail-preview-controls"/);
     assert.match(mapRegion.source, /id="catalog-layer-status"/);
@@ -140,7 +141,13 @@ test("map rendering, layer widget, and raster controls retain focused ownership"
     assert.match(layerWidget.source, /data-eomap-region="map-layers"/);
     assert.match(rasterRegion.source, /id="raster-style-controls"/);
     assert.doesNotMatch(rasterRegion.source, /id="raster-histogram"/);
+    assert.doesNotMatch(rasterRegion.source, /id="raster-appearance-controls"/);
     assert.match(histogramWidget.source, /id="raster-percentile-controls"/);
+    assert.match(appearanceWidget.source, /id="raster-palette"/);
+    assert.match(
+        appearanceWidget.source,
+        /data-eomap-region="raster-interpretation"/
+    );
     assert.match(
         histogramWidget.source,
         /data-eomap-region="raster-interpretation"/
@@ -212,9 +219,9 @@ test("raster controls retain groups while distribution is map-associated", () =>
 
     assert.ok(composite.start < active.start);
     assert.ok(active.end < sampling.start);
-    assert.ok(sampling.end < appearance.start);
-    assert.ok(appearance.end < composite.end);
-    assert.ok(composite.end < distribution.start);
+    assert.ok(sampling.end < composite.end);
+    assert.ok(composite.end < appearance.start);
+    assert.ok(appearance.end < distribution.start);
     assert.match(active.source, /id="raster-active-layer-label"/);
     assert.match(
         active.source,
@@ -232,6 +239,10 @@ test("raster controls retain groups while distribution is map-associated", () =>
     assert.match(
         MARKUP,
         /id="open-raster-histogram-widget"[^>]*aria-controls="raster-histogram"[^>]*aria-expanded="false"[^>]*hidden/s
+    );
+    assert.match(
+        MARKUP,
+        /id="open-raster-appearance-widget"[^>]*aria-controls="raster-appearance-controls"[^>]*aria-expanded="false"[^>]*hidden/s
     );
     assert.match(appearance.source, /id="raster-palette"/);
     assert.match(appearance.source, /id="raster-minimum"/);
@@ -307,14 +318,18 @@ test("raster interpretation groups retain compact visual separation", () => {
     );
     assert.match(
         STYLESHEET,
-        /\.raster-appearance-controls > \.secondary-button\s*\{[^}]*justify-self:\s*start/s
+        /\.raster-appearance-body > \.secondary-button\s*\{[^}]*justify-self:\s*start/s
     );
 });
 
 test("map widgets stay bounded and visually link distribution to sampling", () => {
     assert.match(
         STYLESHEET,
-        /\.raster-layer-stack\s*\{[^}]*position:\s*fixed[^}]*width:\s*min\(340px,[^}]*max-height:\s*min\(62vh, 560px\)/s
+        /\.map-display-widget-dock\s*\{[^}]*position:\s*fixed[^}]*pointer-events:\s*none/s
+    );
+    assert.match(
+        STYLESHEET,
+        /\.raster-layer-stack\s*\{[^}]*width:\s*min\(340px,[^}]*max-height:\s*min\(62vh, 560px\)/s
     );
     assert.match(
         STYLESHEET,
@@ -330,7 +345,15 @@ test("map widgets stay bounded and visually link distribution to sampling", () =
     );
     assert.match(
         STYLESHEET,
-        /\.raster-histogram\[data-sampling-area="selectedArea"\]::before,[\s\S]*?border-top:\s*2px solid var\(--histogram-link-color\)/s
+        /\.raster-histogram-connector\s*\{[^}]*position:\s*fixed[^}]*pointer-events:\s*none/s
+    );
+    assert.match(
+        STYLESHEET,
+        /#raster-histogram-connector-line\s*\{[^}]*stroke:\s*currentColor[^}]*stroke-width:\s*2px/s
+    );
+    assert.match(
+        STYLESHEET,
+        /#raster-histogram-connector-target\s*\{[^}]*stroke:\s*currentColor[^}]*stroke-dasharray:\s*6 5/s
     );
     assert.match(
         STYLESHEET,
@@ -380,7 +403,13 @@ test("semantic regions preserve one DOM instance of every owned control", () => 
         "open-raster-histogram-widget",
         "close-raster-histogram-widget",
         "raster-histogram-scope",
+        "raster-histogram-connector",
+        "raster-histogram-connector-line",
+        "raster-histogram-connector-target",
+        "raster-histogram-connector-arrow",
         "raster-appearance-controls",
+        "open-raster-appearance-widget",
+        "close-raster-appearance-widget",
         "raster-pixel-probe",
     ];
 

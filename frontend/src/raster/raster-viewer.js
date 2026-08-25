@@ -16,7 +16,9 @@ import {
 import {
     DEFAULT_RASTER_SAMPLE_WINDOW_SIZE_KM,
     isCanonicalWgs84Position,
+    validateRasterSelectedBounds,
 } from "./geometry.js";
+import { RasterHistogramConnectorView } from "./histogram-connector-view.js";
 import {
     createRasterSampleWindowLayer,
     createRasterWmsLayer,
@@ -113,8 +115,11 @@ function canRetryRasterStatistics(error) {
 
 /**
  * @typedef {Object} RasterViewerDependencies
- * @property {RasterControlsView} [controlsView=new RasterControlsView()]
- * Raster-control DOM adapter.
+ * @property {RasterControlsView|null} [controlsView=null] Raster-control DOM
+ * adapter; null constructs the application view.
+ * @property {RasterHistogramConnectorView|null} [histogramConnectorView=null]
+ * Optional sampled-area connector; the application view creates one by
+ * default while injected control fixtures may omit it.
  * @property {MapLayerStackView|null} [layerStackView=null] Layer-list DOM
  * adapter created only when the viewer owns its neutral controller.
  * @property {MapLayerController|null} [mapLayerController=null] Neutral shared
@@ -155,7 +160,8 @@ export function initializeRasterViewer(
         onLayersChange = () => {},
     },
     {
-        controlsView = new RasterControlsView(),
+        controlsView = null,
+        histogramConnectorView = null,
         layerStackView = null,
         mapLayerController = null,
         publishRaster = publishCatalogRaster,
@@ -165,6 +171,13 @@ export function initializeRasterViewer(
         viewport = globalThis,
     } = {}
 ) {
+    const ownsControlsView = controlsView === null;
+    controlsView ??= new RasterControlsView();
+    const histogramConnector = histogramConnectorView ??
+        (ownsControlsView
+            ? new RasterHistogramConnectorView(leafletMap)
+            : null);
+    histogramConnector?.bind();
     ensureRasterSampleWindowPane(leafletMap);
     const ownsMapLayerController = mapLayerController === null;
     const mapLayers = mapLayerController ?? new MapLayerController({
@@ -551,6 +564,7 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function renderRasterSamplingAreaControls() {
+        const samplingMode = getRasterSamplingAreaMode();
         controlsView.setTemporaryAoiAvailability(
             availableTemporaryAoi
         );
@@ -560,7 +574,13 @@ export function initializeRasterViewer(
         controlsView.setClearSampleWindowEnabled(
             hasSelectedRasterSamplingArea()
         );
-        controlsView.setSamplingAreaMode(getRasterSamplingAreaMode());
+        controlsView.setSamplingAreaMode(samplingMode);
+        const connectorBounds = samplingMode === "selectedArea"
+            ? selectedRasterBounds
+            : samplingMode === "temporaryAoi"
+                ? selectedTemporaryAoi?.bounds ?? null
+                : null;
+        histogramConnector?.setSamplingArea(connectorBounds, samplingMode);
     }
 
     /**
@@ -2055,11 +2075,17 @@ export function initializeRasterViewer(
         ) {
             throw new TypeError("Temporary AOI sampling snapshot is invalid.");
         }
+        const bounds = temporaryAoi.bounds === undefined
+            ? null
+            : Object.freeze({
+                ...validateRasterSelectedBounds(temporaryAoi.bounds),
+            });
         return Object.freeze({
             id: temporaryAoi.id,
             filename: temporaryAoi.filename,
             selectedDataset: temporaryAoi.selectedDataset,
             expiresAt: temporaryAoi.expiresAt,
+            bounds,
         });
     }
 
@@ -2159,6 +2185,7 @@ export function initializeRasterViewer(
      */
     function destroy() {
         clear();
+        histogramConnector?.unbind();
         controlsView.unbind();
         if (ownsMapLayerController) {
             mapLayers.destroy();
