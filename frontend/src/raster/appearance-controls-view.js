@@ -20,6 +20,8 @@ import { buildRasterLegend } from "./style.js";
  * Own the DOM contract and direct listeners for raster appearance controls.
  */
 export class RasterAppearanceControlsView {
+    #root;
+
     /**
      * Resolve the required raster-appearance elements once at startup.
      *
@@ -29,13 +31,9 @@ export class RasterAppearanceControlsView {
      */
     constructor(documentContext = globalThis.document) {
         this.documentContext = documentContext;
-        this.controls = requireRasterControl(
+        this.#root = requireRasterControl(
             documentContext,
-            "#raster-style-controls"
-        );
-        this.activeLayerLabel = requireRasterControl(
-            documentContext,
-            "#raster-active-layer-label"
+            "#raster-appearance-controls"
         );
         this.palette = requireRasterControl(documentContext, "#raster-palette");
         this.styleInputs = {
@@ -102,19 +100,6 @@ export class RasterAppearanceControlsView {
         customOption.value = "custom";
         customOption.textContent = "Custom";
         this.palette.append(customOption);
-    }
-
-    /**
-     * Identify the raster target edited by the appearance controls.
-     *
-     * @param {string} label Readable raster basename.
-     * @param {boolean} visible Whether its optional renderer is visible on map.
-     * @return {void}
-     */
-    setActiveLayer(label, visible) {
-        this.activeLayerLabel.textContent = visible
-            ? `Editing ${label}.`
-            : `Editing ${label}; this layer is hidden from the map.`;
     }
 
     /**
@@ -242,19 +227,6 @@ export class RasterAppearanceControlsView {
         for (const thresholdName of ["minimum", "midpoint", "maximum"]) {
             this.legendLabels[thresholdName].textContent = style[thresholdName];
         }
-    }
-
-    /**
-     * Show or hide the complete raster-control fieldset.
-     *
-     * The existing fieldset contains the peer sampling and histogram regions;
-     * this method owns only the root visibility presentation.
-     *
-     * @param {boolean} isVisible Whether a raster is displayed.
-     * @return {void}
-     */
-    setControlsVisible(isVisible) {
-        this.controls.hidden = !isVisible;
     }
 
     /**

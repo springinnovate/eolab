@@ -1186,11 +1186,33 @@ h5 {
   font-weight: 600;
 }
 
+.raster-control-group {
+  display: grid;
+  gap: 8px;
+}
+
+.raster-control-group + .raster-control-group {
+  margin-top: 14px;
+  border-top: 1px solid var(--border-2);
+  padding-top: 12px;
+}
+
+.raster-control-group > strong {
+  font-size: 0.75rem;
+}
+
 .raster-active-layer-label {
-  margin: 0 0 10px;
+  margin: 0;
   color: var(--text-2);
   font-size: 0.72rem;
   font-weight: 600;
+}
+
+.raster-appearance-description {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 0.68rem;
+  line-height: 1.4;
 }
 
 .raster-palette,
@@ -1268,15 +1290,7 @@ h5 {
 }
 
 .raster-sample-window {
-  display: grid;
-  gap: 8px;
-  margin-top: 14px;
-  border-top: 1px solid var(--border-2);
-  padding-top: 12px;
-}
-
-.raster-sample-window > strong {
-  font-size: 0.75rem;
+  min-width: 0;
 }
 
 .raster-sample-window > p {
@@ -1343,9 +1357,7 @@ h5 {
 }
 
 .raster-histogram {
-  margin-top: 14px;
-  border-top: 1px solid var(--border-2);
-  padding-top: 12px;
+  min-width: 0;
 }
 
 .raster-histogram-heading {
@@ -1489,8 +1501,9 @@ h5 {
   display: none;
 }
 
-.raster-style-controls > .secondary-button {
+.raster-appearance-controls > .secondary-button {
   margin-top: 11px;
+  justify-self: start;
 }
 
 .catalog-inspector-empty {

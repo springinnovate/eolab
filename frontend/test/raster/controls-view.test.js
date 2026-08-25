@@ -338,6 +338,38 @@ test("RasterControlsView reports renderer visibility without gating analysis", (
     );
 });
 
+test("RasterControlsView owns composite visibility without clearing subgroup state", () => {
+    const documentContext = new FakeRasterDocument();
+    const view = new RasterControlsView(documentContext);
+    const root = documentContext.querySelector("#raster-style-controls");
+    const histogram = documentContext.querySelector("#raster-histogram");
+    const samplingStatus = documentContext.querySelector(
+        "#raster-sample-window-status"
+    );
+    const appearance = documentContext.querySelector(
+        "#raster-appearance-controls"
+    );
+
+    view.setStatisticsBusy(true);
+    view.setStatisticsStatus("Calculating selected-area distribution...");
+    view.setSampleWindowStatus("Selected geographic map window.");
+    view.setControlsVisible(false);
+
+    assert.equal(root.hidden, true);
+    assert.equal(histogram.getAttribute("aria-busy"), "true");
+    assert.equal(
+        documentContext.querySelector("#raster-histogram-status").textContent,
+        "Calculating selected-area distribution..."
+    );
+    assert.equal(samplingStatus.textContent, "Selected geographic map window.");
+    assert.equal(appearance.hidden, false);
+
+    view.setControlsVisible(true);
+    assert.equal(root.hidden, false);
+    assert.equal(histogram.getAttribute("aria-busy"), "true");
+    assert.equal(samplingStatus.textContent, "Selected geographic map window.");
+});
+
 test("RasterControlsView reveals a successful histogram presentation", () => {
     const documentContext = new FakeRasterDocument();
     const view = new RasterControlsView(documentContext);

@@ -15,8 +15,6 @@ test("appearance adapter owns style reads, presentation, and listeners", () => {
     const received = [];
     view.populatePalettes({ viridis: { label: "Viridis" } });
     view.setStyle(DEFAULT_RASTER_STYLE, "viridis");
-    view.setActiveLayer("temperature.tif", false);
-    view.setControlsVisible(true);
     view.bind({
         onStyleInput: (isColor) => received.push(["input", isColor]),
         onStyleChange: () => received.push(["change"]),
@@ -39,11 +37,6 @@ test("appearance adapter owns style reads, presentation, and listeners", () => {
         documentContext.querySelector("#raster-palette").children.length,
         2
     );
-    assert.match(
-        documentContext.querySelector("#raster-active-layer-label").textContent,
-        /temperature\.tif; this layer is hidden/
-    );
-    assert.equal(documentContext.querySelector("#raster-style-controls").hidden, false);
     assert.deepEqual(received, [
         ["input", true],
         ["change"],
@@ -64,4 +57,11 @@ test("appearance adapter owns style reads, presentation, and listeners", () => {
     documentContext.querySelector("#reset-raster-style")
         .dispatchEvent(new Event("click"));
     assert.equal(received.length, 4);
+});
+
+test("appearance adapter requires its semantic subgroup root", () => {
+    assert.throws(
+        () => new RasterAppearanceControlsView({ querySelector: () => null }),
+        /Required raster control is missing: #raster-appearance-controls/
+    );
 });

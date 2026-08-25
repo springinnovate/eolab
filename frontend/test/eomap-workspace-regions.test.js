@@ -124,25 +124,17 @@ test("layout shell owns three physically separate sibling workspaces", () => {
     assert.ok(mapRegion.end < rasterRegion.start);
 });
 
-test("map and raster siblings retain their focused controls and order", () => {
+test("map and raster siblings retain their focused controls", () => {
     const mapRegion = requireElementRange("eomap-map-layers-region");
     const rasterRegion = requireElementRange(
         "eomap-raster-interpretation-region"
     );
-    const appearance = rasterRegion.source.indexOf(
-        'id="raster-style-controls"'
-    );
-    const sampling = rasterRegion.source.indexOf(
-        'id="raster-sample-window-range"'
-    );
-    const histogram = rasterRegion.source.indexOf('id="raster-histogram"');
 
     assert.match(mapRegion.source, /id="raster-detail-preview-controls"/);
     assert.match(mapRegion.source, /id="catalog-layer-status"/);
     assert.match(mapRegion.source, /id="raster-layer-stack"/);
     assert.match(mapRegion.source, /id="raster-layer-stack-status"/);
-    assert.ok(appearance < sampling);
-    assert.ok(sampling < histogram);
+    assert.match(rasterRegion.source, /id="raster-style-controls"/);
     assert.match(
         MARKUP,
         /id="eomap-map-layers-region"[^>]*aria-label="Map and layers"[^>]*aria-controls="map"/s
@@ -150,6 +142,46 @@ test("map and raster siblings retain their focused controls and order", () => {
     assert.match(
         MARKUP,
         /id="eomap-raster-interpretation-region"[^>]*aria-label="Raster interpretation"/s
+    );
+});
+
+test("raster interpretation groups active target, area, distribution, then appearance", () => {
+    const composite = requireElementRange("raster-style-controls");
+    const active = requireElementRange("raster-active-controls");
+    const sampling = requireElementRange("raster-sampling-area-controls");
+    const distribution = requireElementRange("raster-histogram");
+    const appearance = requireElementRange("raster-appearance-controls");
+
+    assert.ok(composite.start < active.start);
+    assert.ok(active.end < sampling.start);
+    assert.ok(sampling.end < distribution.start);
+    assert.ok(distribution.end < appearance.start);
+    assert.ok(appearance.end < composite.end);
+    assert.match(active.source, /id="raster-active-layer-label"/);
+    assert.match(
+        active.source,
+        /aria-describedby="raster-sample-window-status raster-histogram-status"/
+    );
+    assert.match(sampling.source, /id="clear-raster-sample-window"/);
+    assert.match(sampling.source, /id="sample-raster-map-center"/);
+    assert.match(sampling.source, /id="select-raster-sample-window"/);
+    assert.match(sampling.source, /id="raster-sample-window-range"/);
+    assert.match(sampling.source, /id="use-temporary-aoi-for-raster"/);
+    assert.match(distribution.source, /id="raster-histogram-status"/);
+    assert.match(distribution.source, /id="raster-percentile-controls"/);
+    assert.match(appearance.source, /id="raster-palette"/);
+    assert.match(appearance.source, /id="raster-minimum"/);
+    assert.match(appearance.source, /id="raster-midpoint"/);
+    assert.match(appearance.source, /id="raster-maximum"/);
+    assert.match(appearance.source, /id="raster-legend"/);
+    assert.match(appearance.source, /id="reset-raster-style"/);
+    assert.match(
+        sampling.source,
+        /geographic area represented by the distribution/
+    );
+    assert.match(
+        appearance.source,
+        /numeric display thresholds.*independently of the geographic sampling area/s
     );
 });
 
@@ -165,6 +197,21 @@ test("each sibling workspace receives an independent bounded scroll budget", () 
     assert.match(
         STYLESHEET,
         /\.catalog-inspector-body\s*\{[^}]*overflow-y:\s*auto/s
+    );
+});
+
+test("raster interpretation groups retain compact visual separation", () => {
+    assert.match(
+        STYLESHEET,
+        /\.raster-control-group\s*\{[^}]*display:\s*grid[^}]*gap:\s*8px/s
+    );
+    assert.match(
+        STYLESHEET,
+        /\.raster-control-group \+ \.raster-control-group\s*\{[^}]*border-top:\s*1px solid var\(--border-2\)[^}]*padding-top:\s*12px/s
+    );
+    assert.match(
+        STYLESHEET,
+        /\.raster-appearance-controls > \.secondary-button\s*\{[^}]*justify-self:\s*start/s
     );
 });
 
@@ -194,8 +241,11 @@ test("semantic regions preserve one DOM instance of every owned control", () => 
         "temporary-aoi",
         "raster-layer-stack",
         "raster-style-controls",
+        "raster-active-controls",
+        "raster-sampling-area-controls",
         "raster-sample-window-range",
         "raster-histogram",
+        "raster-appearance-controls",
         "raster-pixel-probe",
     ];
 
