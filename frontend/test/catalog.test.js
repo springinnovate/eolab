@@ -16,6 +16,7 @@ import {
   findPaginationLink,
   formatCatalogItemCount,
   formatCatalogRasterStatus,
+  formatCatalogVisualizationReason,
   formatScanReconciliation,
   formatScanProgressCounts,
   formatScanTiming,
@@ -1139,6 +1140,66 @@ test("getRasterVisualization returns the scanner decision", () => {
       assets: { data: { "eolab:rendering": renderingMetadata } },
     }),
     renderingMetadata,
+  );
+});
+
+test("Catalog visualization reasons name the file and oversized blocks", () => {
+  const item = {
+    id: "geotiff-stable-id",
+    properties: { title: "Model Outputs/barley_N_increase.tif" },
+    assets: {
+      data: {
+        title: "Model Outputs/barley_N_increase.tif",
+      },
+    },
+  };
+  const renderingMetadata = {
+    reason_code: "blocks_too_large",
+    reason:
+      "Visualization unavailable: this raster needs smaller internal blocks. " +
+      "Current internal blocks are 160216 × 1 pixels (width × height); each " +
+      "edge must be 1024 pixels or smaller.",
+    block_shapes: [[1, 160216], [1, 160216]],
+  };
+
+  assert.equal(
+    formatCatalogVisualizationReason(item, renderingMetadata.reason),
+    "Visualization for barley_N_increase.tif unavailable: this raster " +
+      "needs smaller internal blocks. Current internal blocks are " +
+      "160216 × 1 pixels (width × height); each edge must be 1024 pixels " +
+      "or smaller.",
+  );
+});
+
+test("Catalog visualization reasons use safe fallbacks without invented detail", () => {
+  assert.equal(
+    formatCatalogVisualizationReason(
+      {
+        id: "safe-item-id",
+        properties: { title: "nested\\grassland_c_2022.tif" },
+        assets: { data: {} },
+      },
+      "Visualization unavailable: this raster needs an internal overview pyramid.",
+    ),
+    "Visualization for grassland_c_2022.tif unavailable: this raster needs " +
+      "an internal overview pyramid.",
+  );
+  assert.equal(formatCatalogVisualizationReason(null, undefined), "");
+  assert.equal(
+    formatCatalogVisualizationReason(
+      { properties: { title: "ignored.tif" } },
+      "Rendering request failed (404)",
+    ),
+    "Rendering request failed (404)",
+  );
+  const contextualReason =
+    "Visualization for grassland_c_2022.tif unavailable: reader failed.";
+  assert.equal(
+    formatCatalogVisualizationReason(
+      { properties: { title: "grassland_c_2022.tif" } },
+      contextualReason,
+    ),
+    contextualReason,
   );
 });
 

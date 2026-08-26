@@ -7,7 +7,10 @@ import {
   CatalogMapActionRegistry,
   CatalogVisualizationAssessmentCache,
 } from "../src/catalog-map-actions.js";
-import { getCatalogVisualization } from "../src/catalog.js";
+import {
+  formatCatalogVisualizationReason,
+  getCatalogVisualization,
+} from "../src/catalog.js";
 
 const MAIN_SOURCE = readFileSync(
   new URL("../src/main.js", import.meta.url),
@@ -15,6 +18,10 @@ const MAIN_SOURCE = readFileSync(
 );
 const MARKUP = readFileSync(
   new URL("../index.html", import.meta.url),
+  "utf8",
+);
+const STYLE = readFileSync(
+  new URL("../src/style.css", import.meta.url),
   "utf8",
 );
 const ATTEMPT_SOURCE = sourceBetween(
@@ -68,9 +75,11 @@ function assertOrdered(source, fragments) {
  * @param {string} id Stable Item identifier.
  * @param {boolean} eligible Current rendering eligibility.
  * @param {string|null} [reason=null] Backend-owned rejection reason.
+ * @param {string} [title] Scanner-owned display title, defaulting to the Item
+ * identifier with a TIFF suffix.
  * @return {Object} Minimal authoritative raster Item.
  */
-function createRasterItem(id, eligible, reason = null) {
+function createRasterItem(id, eligible, reason = null, title = `${id}.tif`) {
   const rendering = {
     policy: "raster-v3",
     eligible,
@@ -83,7 +92,7 @@ function createRasterItem(id, eligible, reason = null) {
     collection: "eolab-mounted-geotiffs",
     id,
     assets: { data: { "eolab:rendering": rendering } },
-    properties: { title: `${id}.tif` },
+    properties: { title },
   };
 }
 
@@ -202,7 +211,10 @@ function createAttemptHarness({
     layerButton.textContent = isRetained
       ? "Remove from map layers"
       : "Add to map layers";
-    status.textContent = current?.metadata?.reason ?? "";
+    status.textContent = formatCatalogVisualizationReason(
+      state.selectedItem,
+      current?.metadata?.reason,
+    );
   };
   const factory = new Function(
     "catalogState",
@@ -218,6 +230,7 @@ function createAttemptHarness({
     "catalogMapActionStatus",
     "catalogLayerStatus",
     "onRenderingWorkspaceRequested",
+    "formatCatalogVisualizationReason",
     `${ATTEMPT_SOURCE}; return toggleCatalogLayer;`,
   );
   const run = factory(
@@ -234,6 +247,7 @@ function createAttemptHarness({
     actionStatus,
     status,
     () => calls.push(["open-rendering"]),
+    formatCatalogVisualizationReason,
   );
   return {
     run,
@@ -299,7 +313,7 @@ test("attempt feedback remains visible and stale selections cannot publish", () 
   );
   assert.match(
     attempt,
-    /catch \(visualizationError\)[\s\S]*?catalogMapActionStatus\.textContent =\s*visualizationError\.message;/s,
+    /catch \(visualizationError\)[\s\S]*?catalogMapActionStatus\.textContent =\s*formatCatalogVisualizationReason\(\s*selectedItem,\s*visualizationError\.message\s*\);/s,
   );
   assert.match(
     presentation,
@@ -342,6 +356,10 @@ test("Catalog action feedback is local, live, and cleared with selection", () =>
   );
   assert.match(clearSelection, /catalogMapActionStatus\.textContent = "";/);
   assert.match(selectItem, /catalogMapActionStatus\.textContent = "";/);
+  assert.match(
+    STYLE,
+    /\.catalog-map-action-status:not\(:empty\)\s*\{[^}]*min-width:\s*0;[^}]*overflow-wrap:\s*anywhere;/s,
+  );
 });
 
 test("map-local failures use a separate live announcement", () => {
@@ -435,11 +453,19 @@ test("retained-layer removal reports beside the Catalog action", async () => {
 
 test("ineligible raster preserves its reason and never publishes", async () => {
   const reason =
-    "Visualization unavailable: this raster needs an internal overview pyramid.";
-  const selected = createRasterItem("ineligible", true);
+    "Visualization unavailable: this raster needs smaller internal blocks. " +
+    "Current internal blocks are 160216 × 1 pixels (width × height); each " +
+    "edge must be 1024 pixels or smaller.";
+  const contextualReason =
+    "Visualization for ineligible.tif unavailable: this raster needs smaller " +
+    "internal blocks. Current internal blocks are 160216 × 1 pixels " +
+    "(width × height); each edge must be 1024 pixels or smaller.";
+  const nestedTitle = "Mounted/Model_outputs/ineligible.tif";
+  const selected = createRasterItem("ineligible", true, null, nestedTitle);
   const harness = createAttemptHarness({
     selectedItem: selected,
-    assess: async () => createRasterItem("ineligible", false, reason),
+    assess: async () =>
+      createRasterItem("ineligible", false, reason, nestedTitle),
   });
 
   await harness.run();
@@ -450,17 +476,20 @@ test("ineligible raster preserves its reason and never publishes", async () => {
     false,
   );
   assert.equal(harness.layerButton.textContent, "Add to map layers");
-  assert.equal(harness.actionStatus.textContent, reason);
-  assert.equal(harness.status.textContent, reason);
+  assert.equal(harness.actionStatus.textContent, contextualReason);
+  assert.equal(harness.status.textContent, contextualReason);
+  assert.doesNotMatch(harness.actionStatus.textContent, /Mounted|Model_outputs/);
   assert.equal(harness.registry.get(selected), null);
 });
 
-test("assessment errors restore Add and expose the exact failure", async () => {
+test("assessment errors restore Add and contextualize standard failures", async () => {
   const selected = createRasterItem("broken", true);
   const harness = createAttemptHarness({
     selectedItem: selected,
     assess: async () => {
-      throw new Error("Raster metadata could not be read.");
+      throw new Error(
+        "Visualization unavailable: the raster metadata could not be read.",
+      );
     },
   });
 
@@ -470,7 +499,8 @@ test("assessment errors restore Add and expose the exact failure", async () => {
   assert.equal(harness.layerButton.textContent, "Add to map layers");
   assert.equal(
     harness.actionStatus.textContent,
-    "Raster metadata could not be read.",
+    "Visualization for broken.tif unavailable: the raster metadata could " +
+      "not be read.",
   );
   assert.equal(harness.status.textContent, "");
   assert.equal(harness.registry.get(selected), null);

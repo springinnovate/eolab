@@ -155,9 +155,15 @@ def assess_raster_renderability(
     elif not bounded_blocks:
         eligible = False
         reason_code = "blocks_too_large"
+        block_shapes_text = "; ".join(
+            f"{block_width} × {block_height}"
+            for block_height, block_width in block_shapes
+        )
         reason = (
             "Visualization unavailable: this raster needs smaller internal "
-            "blocks."
+            f"blocks. Current internal blocks are {block_shapes_text} pixels "
+            "(width × height); each edge must be "
+            f"{RENDERING_MAX_BLOCK_EDGE} pixels or smaller."
         )
     elif overview_storage != "internal":
         eligible = False

@@ -88,6 +88,52 @@ export function getCatalogVisualization(item) {
 }
 
 /**
+ * Return a filename-safe label from scanner-owned Catalog display metadata.
+ *
+ * Asset and Item titles may include a mounted-relative directory prefix. This
+ * formatter deliberately ignores the Asset URL so a browser diagnostic never
+ * exposes or depends on a server filesystem path.
+ *
+ * @param {Object|null} item Selected STAC Item.
+ * @return {string} Basename-like display label or a stable generic fallback.
+ */
+function getCatalogDisplayBasename(item) {
+    const candidate = [
+        item?.properties?.title,
+        item?.assets?.data?.title,
+        item?.id,
+    ].find((value) => typeof value === "string" && value.trim() !== "") ??
+        "selected item";
+    const segments = candidate.trim().split(/[\\/]/).filter(Boolean);
+    return segments.at(-1) ?? "selected item";
+}
+
+/**
+ * Format backend-owned visualization feedback for Catalog presentation.
+ *
+ * The underlying reason remains unchanged diagnostic evidence. This adds only
+ * filename-safe display context to the standard generic prefix;
+ * already-contextualized or otherwise nonstandard reasons are preserved.
+ *
+ * @param {Object|null} item Selected STAC Item.
+ * @param {string|null|undefined} rawReason Backend-owned visualization reason.
+ * @return {string} Contextual unavailability reason, or an empty string when
+ * no reason is supplied.
+ */
+export function formatCatalogVisualizationReason(item, rawReason) {
+    if (typeof rawReason !== "string" || rawReason.trim() === "") {
+        return "";
+    }
+    const reasonPrefix = "Visualization unavailable:";
+    const trimmedReason = rawReason.trim();
+    if (!trimmedReason.startsWith(reasonPrefix)) {
+        return trimmedReason;
+    }
+    return `Visualization for ${getCatalogDisplayBasename(item)} unavailable: ` +
+        trimmedReason.slice(reasonPrefix.length).trim();
+}
+
+/**
  * Return whether one assessed raster may use bounded detail-only previews.
  *
  * @param {Object|null} item Selected STAC Item.

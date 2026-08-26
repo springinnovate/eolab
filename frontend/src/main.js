@@ -18,6 +18,7 @@ import {
     createDebouncedAction,
     formatCatalogItemCount,
     formatCatalogRasterStatus,
+    formatCatalogVisualizationReason,
     formatScanReconciliation,
     formatScanProgressCounts,
     formatScanTiming,
@@ -717,7 +718,10 @@ async function initializeCatalog(
                 ? "Remove from map layers"
                 : "Add to map layers"
         );
-        const fullVisualizationReason = visualization?.metadata?.reason ?? "";
+        const fullVisualizationReason = formatCatalogVisualizationReason(
+            item,
+            visualization?.metadata?.reason
+        );
         let defaultStatus = visualization?.kind === "vector"
             ? [
                 fullVisualizationReason,
@@ -1224,7 +1228,10 @@ async function initializeCatalog(
             if (currentVisualization?.metadata?.eligible !== true) {
                 finishCatalogMapAction(pendingAction);
                 catalogMapActionStatus.textContent =
-                    currentVisualization?.metadata?.reason ??
+                    formatCatalogVisualizationReason(
+                        currentItem,
+                        currentVisualization?.metadata?.reason
+                    ) ||
                     "Visualization is unavailable for this item.";
                 return;
             }
@@ -1250,7 +1257,10 @@ async function initializeCatalog(
                 finishCatalogMapAction(pendingAction);
                 catalogLayerToggle.textContent = "Add to map layers";
                 catalogMapActionStatus.textContent =
-                    visualizationError.message;
+                    formatCatalogVisualizationReason(
+                        selectedItem,
+                        visualizationError.message
+                    );
             }
         } finally {
             finishCatalogMapAction(pendingAction);
