@@ -8,13 +8,16 @@ const STYLE = readFileSync(
   "utf8",
 );
 
-test("adaptive raster detail explains sampling and exact-view handoff", () => {
-  assert.match(MARKUP, /<strong>Adaptive bounded raster detail<\/strong>/);
-  assert.match(MARKUP, /Broad views always use one center sample in each sample-grid cell/);
-  assert.match(MARKUP, /127 cells on the longest displayed edge/);
-  assert.match(MARKUP, /complete bounded source-window read reprojected for the map at the same dimensions/);
+test("low-resolution raster rendering explains its bounded detail handoff", () => {
+  assert.match(MARKUP, /<strong>Low-resolution raster rendering<\/strong>/);
+  assert.match(MARKUP, /too large for standard whole-raster rendering/);
+  assert.match(MARKUP, /show a bounded sample grid/);
+  assert.match(MARKUP, /Close views automatically use complete source-window detail/);
+  assert.match(MARKUP, /visible area satisfies server-owned limits/);
   assert.doesNotMatch(MARKUP, /raster-detail-preview-mode/);
   assert.doesNotMatch(MARKUP, /raster-detail-preview-density/);
+  assert.doesNotMatch(MARKUP, /Adaptive bounded raster detail/);
+  assert.doesNotMatch(MARKUP, /Show adaptive raster|Remove adaptive raster/);
   assert.match(MARKUP, /Sample grids use smooth display interpolation/);
   assert.match(MARKUP, /exact close-view windows use crisp nearest-neighbor presentation/);
   assert.match(MARKUP, /active map area, source window, native blocks, and decoded work/);
@@ -30,9 +33,11 @@ test("adaptive raster detail explains sampling and exact-view handoff", () => {
   assert.match(MARKUP, /Processing raster detail…/);
   assert.match(MARKUP, /The displayed raster will\s+update when it is ready/);
   assert.match(MARKUP, /id="show-raster-detail-preview"[^>]*type="button"/s);
-  assert.match(MARKUP, /Show adaptive raster/);
+  assert.match(MARKUP, /Show low-resolution rendering/);
   assert.match(MARKUP, /id="remove-raster-detail-preview"[^>]*type="button"/s);
-  assert.match(MARKUP, /Remove adaptive raster/);
+  assert.match(MARKUP, /Remove low-resolution rendering/);
+  assert.match(MARKUP, /id="reassess-detail-raster"[^>]*type="button"/s);
+  assert.match(MARKUP, /Check for full visualization/);
   assert.match(
     STYLE,
     /\.raster-sample-grid\s*\{[^}]*image-rendering:\s*auto;/s,
@@ -52,5 +57,19 @@ test("adaptive raster detail explains sampling and exact-view handoff", () => {
   assert.match(
     STYLE,
     /\.raster-detail-processing-spinner\s*\{[^}]*animation:\s*raster-detail-processing-spin 800ms linear infinite/s,
+  );
+});
+
+test("low-resolution controls are owned by the Rendering workspace", () => {
+  const renderingStart = MARKUP.indexOf('id="eomap-map-layers-region"');
+  const previewStart = MARKUP.indexOf('id="raster-detail-preview-controls"');
+  const analysisStart = MARKUP.indexOf('id="eomap-raster-interpretation-region"');
+
+  assert.ok(renderingStart >= 0);
+  assert.ok(renderingStart < previewStart);
+  assert.ok(previewStart < analysisStart);
+  assert.match(
+    MARKUP,
+    /id="eomap-map-layers-region"[^>]*role="tabpanel"[^>]*aria-labelledby="toggle-map-layers eomap-map-layers-heading"/s,
   );
 });

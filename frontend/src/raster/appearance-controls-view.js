@@ -43,6 +43,10 @@ export class RasterAppearanceControlsView {
             documentContext,
             "#close-raster-appearance-widget"
         );
+        this.activeLayerLabel = requireRasterControl(
+            documentContext,
+            "#raster-appearance-layer"
+        );
         this.palette = requireRasterControl(documentContext, "#raster-palette");
         this.styleInputs = {
             minimum: requireRasterControl(documentContext, "#raster-minimum"),
@@ -174,6 +178,19 @@ export class RasterAppearanceControlsView {
         if (!isAvailable) {
             this.hideWidget();
         }
+    }
+
+    /**
+     * Identify the rendered raster edited by these appearance controls.
+     *
+     * @param {string} label Readable raster label.
+     * @param {boolean} visible Whether the retained layer is map-visible.
+     * @return {void}
+     */
+    setActiveLayer(label, visible) {
+        this.activeLayerLabel.textContent = visible
+            ? label
+            : `${label} — currently hidden on the map`;
     }
 
     /**

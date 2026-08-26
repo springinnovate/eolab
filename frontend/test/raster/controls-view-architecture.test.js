@@ -9,6 +9,7 @@ const FOCUSED_VIEW_IMPORTS = {
         "./histogram-view.js",
         "./required-control.js",
     ],
+    "percentile-controls-view.js": ["./required-control.js"],
     "pixel-probe-view.js": ["./required-control.js"],
 };
 
@@ -48,7 +49,10 @@ test("RasterControlsView owns only composite DOM while composing focused views",
     assert.match(source, /"#raster-style-controls"/);
     assert.match(source, /"#raster-active-layer-label"/);
     assert.doesNotMatch(source, /querySelector|addEventListener|removeEventListener/);
-    assert.doesNotMatch(source, /"#raster-(palette|histogram|sample-window)/);
+    assert.doesNotMatch(
+        source,
+        /"#raster-(palette|histogram|percentile|sample-window)/
+    );
 });
 
 test("focused raster views validate only their semantic subgroup roots", async () => {
@@ -73,26 +77,21 @@ test("focused raster views validate only their semantic subgroup roots", async (
         ),
         "utf8"
     );
+    const percentileSource = await readFile(
+        new URL(
+            "../../src/raster/percentile-controls-view.js",
+            import.meta.url
+        ),
+        "utf8"
+    );
 
     assert.match(appearanceSource, /"#raster-appearance-controls"/);
     assert.doesNotMatch(appearanceSource, /"#raster-style-controls"/);
     assert.doesNotMatch(appearanceSource, /"#raster-active-layer-label"/);
     assert.match(samplingSource, /"#raster-sampling-area-controls"/);
     assert.match(histogramSource, /"#raster-histogram"/);
-});
-
-test("histogram connector depends only on neutral geometry and DOM providers", async () => {
-    const source = await readFile(
-        new URL(
-            "../../src/raster/histogram-connector-view.js",
-            import.meta.url
-        ),
-        "utf8"
-    );
-    const imports = [...source.matchAll(/from\s+["']([^"']+)["']/g)]
-        .map((match) => match[1])
-        .sort();
-
-    assert.deepEqual(imports, ["./geometry.js", "./required-control.js"]);
-    assert.doesNotMatch(source, /from\s+["'][^"']*(temporary-aoi|statistics)/i);
+    assert.doesNotMatch(histogramSource, /"#raster-percentile/);
+    assert.doesNotMatch(histogramSource, /"#apply-raster-percentiles"/);
+    assert.match(percentileSource, /"#raster-percentile-controls"/);
+    assert.doesNotMatch(percentileSource, /"#raster-histogram"/);
 });

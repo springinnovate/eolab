@@ -102,7 +102,6 @@ export function createRasterSampleWindowLayer(leaflet, bounds, layerKind) {
         }
         : {
             pane: RASTER_SAMPLE_WINDOW_PANE,
-            className: "raster-sample-window-selection",
             color: "#2563eb",
             weight: 2,
             fillColor: "#3b82f6",

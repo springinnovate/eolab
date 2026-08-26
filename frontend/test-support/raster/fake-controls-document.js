@@ -18,6 +18,7 @@ export class FakeRasterControlElement extends EventTarget {
         this.children = [];
         this.attributes = new Map();
         this.classNames = [];
+        this.scrollRequests = [];
         this.classList = {
             add: (className) => {
                 if (!this.classNames.includes(className)) {
@@ -99,6 +100,16 @@ export class FakeRasterControlElement extends EventTarget {
             this.ownerDocument.activeElement = this;
         }
     }
+
+    /**
+     * Retain a requested scroll presentation for focused view assertions.
+     *
+     * @param {{block?: string, inline?: string}} options Scroll alignment.
+     * @return {void}
+     */
+    scrollIntoView(options) {
+        this.scrollRequests.push(options);
+    }
 }
 
 /** Minimal selector and element factory used by focused adapter tests. */
@@ -117,9 +128,14 @@ export class FakeRasterControlDocument {
      */
     querySelector(selector) {
         if (!this.elements.has(selector)) {
+            const isPercentileInput = [
+                "#raster-lower-percentile",
+                "#raster-middle-percentile",
+                "#raster-upper-percentile",
+            ].includes(selector);
             const type = selector.endsWith("-color")
                 ? "color"
-                : selector.includes("percentile") || selector.endsWith("-range")
+                : isPercentileInput || selector.endsWith("-range")
                     ? "range"
                     : selector.includes("minimum") ||
                         selector.includes("midpoint") ||

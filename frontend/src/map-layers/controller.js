@@ -17,8 +17,6 @@ import { MapLayerStackView } from "./layer-stack-view.js";
  * Leaflet-compatible layer for one publication.
  * @property {(record:Object)=>Object} snapshot Return presentation-ready legend
  * and optional feature-owned snapshot fields.
- * @property {(record:Object,toolId:string)=>void} [handleTool] Handle one
- * feature-owned tool selected from a neutral layer row.
  * @property {(record:Object)=>void} [prepare] Prepare an existing record before
  * activation.
  * @property {(record:Object,next:Object)=>void} [deactivate] Release this
@@ -74,7 +72,6 @@ export class MapLayerController {
             onOpacity: (key, opacity) => this.setOpacity(key, opacity),
             onMove: (key, direction) => this.move(key, direction),
             onRemove: (key) => this.removeKey(key),
-            onTool: (key, toolId) => this.useTool(key, toolId),
         });
         this.render();
     }
@@ -250,21 +247,6 @@ export class MapLayerController {
         this.view.setStatus(
             `${entry.label} opacity is ${Math.round(opacity * 100)} percent.`
         );
-    }
-
-    /**
-     * Forward one optional layer-row tool to the feature adapter that owns it.
-     *
-     * The neutral stack does not interpret the tool identifier or feature
-     * state. Adapters expose only the presentation descriptors they support.
-     *
-     * @param {string} key Stable retained-layer key.
-     * @param {string} toolId Adapter-owned tool identifier.
-     * @return {void}
-     */
-    useTool(key, toolId) {
-        const record = this.#requireRecord(key);
-        record.adapter.handleTool?.(record, toolId);
     }
 
     /**

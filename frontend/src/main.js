@@ -442,13 +442,16 @@ function renderCatalogItemInspector(
  * asynchronous catalog loading begins.
  * @param {import("./catalog-pane-controller.js").CatalogPaneControls}
  * catalogPaneControls Catalog-owned progressive inspector presentation.
+ * @param {() => void} [onHistogramRequested=() => {}] Reveals the semantic
+ * raster-analysis workspace after an explicit histogram action.
  * @return {Promise<Function>} Function that reloads the active catalog search.
  */
 async function initializeCatalog(
     appGlobalConfiguration,
     leafletMap,
     onRasterViewerReady = () => {},
-    catalogPaneControls
+    catalogPaneControls,
+    onHistogramRequested = () => {}
 ) {
     const catalogSystemStateElements = {
         disclosure: document.querySelector("#system-state"),
@@ -631,6 +634,7 @@ async function initializeCatalog(
         leafletMap,
         leaflet: L,
         onTileError: reportMapTileError,
+        onHistogramRequested,
     }, { mapLayerController });
     const catalogVisualization = new CatalogVisualizationCoordinator(
         rasterVisualization,
@@ -691,8 +695,8 @@ async function initializeCatalog(
         reassessDetailRaster.disabled = pendingAction !== null;
         showRasterDetailPreview.textContent = pendingAction?.buttonText ??
             (hasDetailPreview
-                ? "Update adaptive raster"
-                : "Show adaptive raster");
+                ? "Update low-resolution rendering"
+                : "Show low-resolution rendering");
         removeRasterDetailPreview.hidden = !hasDetailPreview;
         removeRasterDetailPreview.disabled = pendingAction !== null;
         renderRasterDetailPreviewResolution(detailPreviewState);
@@ -1503,12 +1507,17 @@ async function initializeScanner(refreshCatalog) {
  * @return {Promise<void>} Resolves after the interface is initialized.
  */
 async function startApplication() {
-    const catalogPaneControls = initializeCatalogPaneControls();
+    /** @type {EomapLayoutController|null} */
+    let layoutController = null;
+    const catalogPaneControls = initializeCatalogPaneControls(
+        document,
+        () => layoutController?.notifyLayoutChange()
+    );
     const appGlobalConfiguration = await loadAppGlobalConfiguration();
     applyAppGlobalConfiguration(appGlobalConfiguration);
     initializeRenderingDiagnostics();
     const leafletMap = initializeMap(appGlobalConfiguration);
-    new EomapLayoutController({
+    layoutController = new EomapLayoutController({
         documentContext: document,
         schedule: window.setTimeout.bind(window),
         invalidateMapSize: () => leafletMap.invalidateSize(),
@@ -1522,7 +1531,8 @@ async function startApplication() {
                 rasterViewer.setTemporaryAoi
             );
         },
-        catalogPaneControls
+        catalogPaneControls,
+        () => layoutController.showWorkspace("raster-analysis")
     );
     await initializeScanner(refreshCatalog);
 }

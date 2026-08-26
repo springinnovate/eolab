@@ -16,9 +16,7 @@ import {
 import {
     DEFAULT_RASTER_SAMPLE_WINDOW_SIZE_KM,
     isCanonicalWgs84Position,
-    validateRasterSelectedBounds,
 } from "./geometry.js";
-import { RasterHistogramConnectorView } from "./histogram-connector-view.js";
 import {
     createRasterSampleWindowLayer,
     createRasterWmsLayer,
@@ -111,15 +109,14 @@ function canRetryRasterStatistics(error) {
  * layer-specific tile error.
  * @property {(layers: Object[]) => void} [onLayersChange] Receives retained
  * layer snapshots after state changes.
+ * @property {() => void} [onHistogramRequested] Notifies the composition root
+ * that an explicit analysis action should reveal its presentation workspace.
  */
 
 /**
  * @typedef {Object} RasterViewerDependencies
  * @property {RasterControlsView|null} [controlsView=null] Raster-control DOM
  * adapter; null constructs the application view.
- * @property {RasterHistogramConnectorView|null} [histogramConnectorView=null]
- * Optional sampled-area connector; the application view creates one by
- * default while injected control fixtures may omit it.
  * @property {MapLayerStackView|null} [layerStackView=null] Layer-list DOM
  * adapter created only when the viewer owns its neutral controller.
  * @property {MapLayerController|null} [mapLayerController=null] Neutral shared
@@ -158,10 +155,10 @@ export function initializeRasterViewer(
         leaflet,
         onTileError,
         onLayersChange = () => {},
+        onHistogramRequested = () => {},
     },
     {
         controlsView = null,
-        histogramConnectorView = null,
         layerStackView = null,
         mapLayerController = null,
         publishRaster = publishCatalogRaster,
@@ -171,13 +168,10 @@ export function initializeRasterViewer(
         viewport = globalThis,
     } = {}
 ) {
-    const ownsControlsView = controlsView === null;
+    if (typeof onHistogramRequested !== "function") {
+        throw new TypeError("Histogram presentation callback must be callable");
+    }
     controlsView ??= new RasterControlsView();
-    const histogramConnector = histogramConnectorView ??
-        (ownsControlsView
-            ? new RasterHistogramConnectorView(leafletMap)
-            : null);
-    histogramConnector?.bind();
     ensureRasterSampleWindowPane(leafletMap);
     const ownsMapLayerController = mapLayerController === null;
     const mapLayers = mapLayerController ?? new MapLayerController({
@@ -485,6 +479,7 @@ export function initializeRasterViewer(
             } else {
                 renderSelectedRasterStatisticsLoading();
             }
+            renderLayerHistogramSummaries();
         },
         (statistics, _, samplingArea) => {
             if (samplingArea.kind === "wholeRaster") {
@@ -492,6 +487,7 @@ export function initializeRasterViewer(
             } else {
                 renderSelectedRasterStatistics(statistics);
             }
+            renderLayerHistogramSummaries();
         },
         (error, _, samplingArea) => {
             if (samplingArea.kind === "wholeRaster") {
@@ -499,6 +495,7 @@ export function initializeRasterViewer(
             } else {
                 renderSelectedRasterStatisticsError(error);
             }
+            renderLayerHistogramSummaries();
         }
     );
 
@@ -508,7 +505,7 @@ export function initializeRasterViewer(
      *
      * @param {Object} session Raster-owned retained interaction state.
      * @return {{state:string,statistics:Object|null,scope:string}} Compact
-     * presentation state for the neutral layer-row tool descriptor.
+     * presentation state for the raster-analysis summary view.
      */
     function getLayerHistogramPresentation(session) {
         if (session.selectedTemporaryAoi !== null) {
@@ -535,36 +532,39 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Build neutral tool descriptors for one retained raster row.
+     * Build one presentation-ready histogram summary for a retained raster.
      *
      * @param {Object} session Raster-owned retained interaction state.
-     * @return {Object[]} Histogram preview and raster-style action descriptors.
+     * @return {{key:string,label:string,state:string,scope:string,
+     * counts:number[]|null}} Histogram summary view model.
      */
-    function buildRasterLayerTools(session) {
+    function buildLayerHistogramSummary(session) {
         const presentation = getLayerHistogramPresentation(session);
-        let status = presentation.scope;
-        if (presentation.state === "loading") {
-            status = `Updating ${presentation.scope.toLowerCase()}…`;
-        } else if (presentation.state === "error") {
-            status = `${presentation.scope} unavailable`;
-        }
-        const histogramTool = {
-            id: "histogram",
-            label: "Histogram",
-            status,
-        };
         const counts = presentation.statistics?.histogram?.counts;
-        if (Array.isArray(counts)) {
-            histogramTool.preview = {
-                kind: "bars",
-                values: counts,
-                label: `${presentation.scope} histogram for ${session.label}`,
-            };
-        }
-        return [
-            histogramTool,
-            { id: "appearance", label: "Raster style" },
-        ];
+        return {
+            key: session.key,
+            label: session.label,
+            state: presentation.state,
+            scope: presentation.scope,
+            counts: Array.isArray(counts) ? [...counts] : null,
+        };
+    }
+
+    /**
+     * Publish raster-owned summary state to the focused histogram view.
+     *
+     * @return {void}
+     */
+    function renderLayerHistogramSummaries() {
+        const summaries = mapLayers.retainedRecords
+            .filter(({ adapter }) => adapter === rasterMapLayerAdapter)
+            .map(({ state }) => buildLayerHistogramSummary(state));
+        const activeRetainedKey = summaries.some(
+            ({ key }) => key === activeLayerKey
+        )
+            ? activeLayerKey
+            : null;
+        controlsView.renderLayerHistograms(summaries, activeRetainedKey);
     }
 
     /**
@@ -783,12 +783,6 @@ export function initializeRasterViewer(
                   selectedTemporaryAoi.selectedDataset
                 : "Whole raster";
         controlsView.setSamplingAreaMode(samplingMode, samplingLabel);
-        const connectorBounds = samplingMode === "selectedArea"
-            ? selectedRasterBounds
-            : samplingMode === "temporaryAoi"
-                ? selectedTemporaryAoi?.bounds ?? null
-                : null;
-        histogramConnector?.setSamplingArea(connectorBounds, samplingMode);
     }
 
     /**
@@ -843,31 +837,7 @@ export function initializeRasterViewer(
                         record.state.rasterStyle.maximum,
                     ],
                 },
-                tools: buildRasterLayerTools(record.state),
             };
-        },
-        /**
-         * Activate a retained raster and reveal one raster-owned detail tool.
-         *
-         * @param {Object} record Retained raster map-layer record.
-         * @param {string} toolId Raster-owned tool identifier.
-         * @return {void}
-         * @throws {RangeError} If the neutral view forwards an unknown tool.
-         */
-        handleTool(record, toolId) {
-            if (!["histogram", "appearance"].includes(toolId)) {
-                throw new RangeError(`Unsupported raster layer tool: ${toolId}`);
-            }
-            mapLayers.activate(record.entry.key, {
-                key: record.entry.key,
-                action: `tool-${toolId}`,
-            });
-            if (toolId === "histogram") {
-                controlsView.showHistogramWidget();
-                refreshRetainedLayerHistograms(currentRasterSamplingArea());
-            } else if (toolId === "appearance") {
-                controlsView.showAppearanceWidget();
-            }
         },
         prepare(record) {
             const analysisSession = matchingAnalysisSession(record.entry.item);
@@ -928,11 +898,38 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function renderLayerStack(requestedFocus = null) {
+        renderLayerHistogramSummaries();
         if (activeDetachedRasterSession() !== null) {
             mapLayers.deactivatePresentation();
             return;
         }
         mapLayers.render(requestedFocus);
+    }
+
+    /**
+     * Reveal the detailed histogram and notify the composition root that its
+     * semantic workspace should be visible.
+     *
+     * @return {void}
+     */
+    function showHistogramWorkspace() {
+        onHistogramRequested();
+        controlsView.showHistogramWidget();
+    }
+
+    /**
+     * Activate the retained raster selected from an analysis summary.
+     *
+     * @param {string} key Opaque retained-layer identity.
+     * @return {void}
+     */
+    function handleSelectLayerHistogram(key) {
+        mapLayers.activate(key, {
+            key,
+            action: "analysis-histogram",
+        });
+        renderLayerHistogramSummaries();
+        showHistogramWorkspace();
     }
 
     /**
@@ -1014,6 +1011,7 @@ export function initializeRasterViewer(
         }
         loadActiveLayerSession(session);
         controlsView.setControlsVisible(true);
+        controlsView.setRenderingControlsAvailable(true);
         controlsView.setActiveLayer(entry.label, entry.visible);
         controlsView.setStyle(rasterStyle, session.paletteName);
         controlsView.renderLegend(rasterStyle);
@@ -1051,6 +1049,7 @@ export function initializeRasterViewer(
      */
     function activateLayer(key, requestedFocus = null) {
         mapLayers.activate(key, requestedFocus);
+        renderLayerHistogramSummaries();
     }
 
     /**
@@ -1064,6 +1063,9 @@ export function initializeRasterViewer(
         loadActiveLayerSession(session);
         pixelProbeController.activate(session.item);
         controlsView.setControlsVisible(true);
+        controlsView.setRenderingControlsAvailable(
+            session === sampledRasterSession
+        );
         controlsView.setActiveLayer(session.label, true);
         controlsView.setStyle(rasterStyle, session.paletteName);
         controlsView.renderLegend(rasterStyle);
@@ -1483,8 +1485,8 @@ export function initializeRasterViewer(
         controlsView.setStatisticsBusy(true);
         controlsView.setStatisticsStatus(
             scope === "selectedArea"
-                ? "Calculating a bounded distribution for the selected area..."
-                : "Calculating a bounded whole-raster distribution..."
+                ? "Calculating a bounded histogram for the selected area..."
+                : "Calculating a bounded whole-raster histogram..."
         );
         saveActiveLayerSession();
     }
@@ -1558,10 +1560,10 @@ export function initializeRasterViewer(
         const scopeDescription = statistics.scope === "temporaryAoi"
             ? `Uploaded AOI ${selectedTemporaryAoi?.filename ?? "area"}, ` +
               `layer ${selectedTemporaryAoi?.selectedDataset ?? "selected"}, ` +
-              `${approximation} bounded distribution`
+              `${approximation} bounded histogram`
             : statistics.scope === "selectedArea"
-                ? `Selected-area ${approximation} bounded distribution`
-                : `Whole-raster ${approximation} bounded distribution`;
+                ? `Selected-area ${approximation} bounded histogram`
+                : `Whole-raster ${approximation} bounded histogram`;
         const provenance = usesSampleGrid
             ? `${statistics.validSampleCount.toLocaleString()} finite values ` +
               `from a ${statistics.sampleWidth.toLocaleString()} × ` +
@@ -1607,7 +1609,7 @@ export function initializeRasterViewer(
         );
         controlsView.setStatisticsStatus(
             `${scope === "selectedArea" ? "Selected-area" : "Whole-raster"} ` +
-            `distribution unavailable: ${error.message} ` +
+            `histogram unavailable: ${error.message} ` +
             "Manual appearance controls remain available."
         );
         saveActiveLayerSession();
@@ -1677,7 +1679,7 @@ export function initializeRasterViewer(
             rasterStatistics === null
                 ? selectedRasterStatisticsLoadingMessage()
                 : selectedRasterStatisticsLoadingMessage() + " " +
-                  "The previous distribution remains visible for reference and " +
+                  "The previous histogram remains visible for reference and " +
                   "cannot be applied to this selection."
         );
         saveActiveLayerSession();
@@ -1690,10 +1692,10 @@ export function initializeRasterViewer(
      */
     function selectedRasterStatisticsLoadingMessage() {
         if (selectedTemporaryAoi === null) {
-            return "Calculating a bounded distribution for the selected area...";
+            return "Calculating a bounded histogram for the selected area...";
         }
         return (
-            `Calculating a bounded distribution for uploaded AOI ` +
+            `Calculating a bounded histogram for uploaded AOI ` +
             `${selectedTemporaryAoi.filename}, layer ` +
             `${selectedTemporaryAoi.selectedDataset}...`
         );
@@ -1736,10 +1738,10 @@ export function initializeRasterViewer(
               selectedTemporaryAoi.selectedDataset;
         controlsView.setStatisticsStatus(
             rasterStatistics === null
-                ? `${areaName} distribution unavailable: ${error.message} ` +
+                ? `${areaName} histogram unavailable: ${error.message} ` +
                   "Manual appearance controls remain available."
-                : `${areaName} distribution unavailable: ${error.message} ` +
-                  "The previous distribution remains visible for reference but " +
+                : `${areaName} histogram unavailable: ${error.message} ` +
+                  "The previous histogram remains visible for reference but " +
                   "cannot be applied to this selection. Your appearance was " +
                   "preserved."
         );
@@ -1809,7 +1811,7 @@ export function initializeRasterViewer(
                 `layer ${selectedTemporaryAoi.selectedDataset}. Map overlay ` +
                 "visibility does not change this histogram selection.";
         } else {
-            nextStatus = "Whole-raster distribution selected. Move over the " +
+            nextStatus = "Whole-raster histogram selected. Move over the " +
                 "map and click to display this window's histogram.";
         }
         controlsView.setSampleWindowStatus(nextStatus);
@@ -1830,7 +1832,7 @@ export function initializeRasterViewer(
         selectedRasterWindowSizeKm = rasterSampleWindowController.windowSizeKm;
         renderRasterSamplingAreaControls();
         renderRasterSampleWindowGuidance("");
-        controlsView.showHistogramWidget();
+        showHistogramWorkspace();
         refreshRetainedLayerHistograms(currentRasterSamplingArea());
         void rasterStatisticsController.activate(
             activeRasterItem,
@@ -1906,7 +1908,7 @@ export function initializeRasterViewer(
         rasterSampleWindowController.clear();
         renderRasterSamplingAreaControls();
         renderRasterSampleWindowGuidance("");
-        controlsView.showHistogramWidget();
+        showHistogramWorkspace();
         refreshRetainedLayerHistograms(currentRasterSamplingArea());
         if (canUseActiveRasterMapInteractions()) {
             void rasterStatisticsController.activate(
@@ -2068,10 +2070,10 @@ export function initializeRasterViewer(
                     rasterStatistics.samplingMethod === "sampleGrid"
                         ? "approximate sampled-grid"
                         : "exact bounded"
-                } distribution.`;
+                } histogram.`;
             controlsView.setStatisticsStatus(
-                "Reset appearance to the adaptive raster's initial minimum, " +
-                `median, and maximum.${provenance}`
+                "Reset appearance to the initial minimum, median, and " +
+                `maximum for the low-resolution rendering.${provenance}`
             );
         } else if (wholeRasterStatistics !== null) {
             resetRasterPercentileControls();
@@ -2079,8 +2081,8 @@ export function initializeRasterViewer(
             const scopeNote = !hasSelectedRasterSamplingArea()
                 ? ""
                 : rasterStatisticsIsApplicable
-                    ? " The selected-area distribution remains available."
-                    : " The previous distribution remains reference-only " +
+                    ? " The selected-area histogram remains available."
+                    : " The previous histogram remains reference-only " +
                       "and cannot be applied to the current selected area.";
             const provenance = wholeRasterStatistics.estimated
                 ? "sampled-grid"
@@ -2088,7 +2090,7 @@ export function initializeRasterViewer(
             controlsView.setStatisticsStatus(
                 "Reset appearance to the histogram-estimated whole-raster " +
                 `5th, 50th, and 95th percentile range from the ${provenance} ` +
-                `distribution.${scopeNote}`
+                `histogram.${scopeNote}`
             );
         }
     }
@@ -2127,7 +2129,7 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function handleRetryStatistics() {
-        controlsView.showHistogramWidget();
+        showHistogramWorkspace();
         refreshRetainedLayerHistograms(currentRasterSamplingArea());
         if (hasSelectedRasterSamplingArea()) {
             selectedRasterStatisticsState = "idle";
@@ -2165,7 +2167,7 @@ export function initializeRasterViewer(
     function handleClearSampleWindow() {
         restoreWholeRasterStatistics();
         refreshRetainedLayerHistograms(WHOLE_RASTER_SAMPLING_AREA);
-        controlsView.showHistogramWidget();
+        showHistogramWorkspace();
     }
 
     /**
@@ -2233,6 +2235,7 @@ export function initializeRasterViewer(
      */
     function remove(item) {
         mapLayers.remove(item);
+        renderLayerHistogramSummaries();
     }
 
     /**
@@ -2271,6 +2274,7 @@ export function initializeRasterViewer(
         pixelProbeClientPosition = null;
         rasterPixelProbeLabel = "";
         controlsView.setControlsVisible(false);
+        controlsView.renderLayerHistograms([], null);
         controlsView.hidePixelProbe();
     }
 
@@ -2292,7 +2296,9 @@ export function initializeRasterViewer(
      * @throws {Error} If publication or Leaflet layer construction fails.
      */
     async function show(item) {
-        return mapLayers.show(item, rasterMapLayerAdapter);
+        const publication = await mapLayers.show(item, rasterMapLayerAdapter);
+        renderLayerHistogramSummaries();
+        return publication;
     }
 
     /**
@@ -2319,17 +2325,11 @@ export function initializeRasterViewer(
         ) {
             throw new TypeError("Temporary AOI sampling snapshot is invalid.");
         }
-        const bounds = temporaryAoi.bounds === undefined
-            ? null
-            : Object.freeze({
-                ...validateRasterSelectedBounds(temporaryAoi.bounds),
-            });
         return Object.freeze({
             id: temporaryAoi.id,
             filename: temporaryAoi.filename,
             selectedDataset: temporaryAoi.selectedDataset,
             expiresAt: temporaryAoi.expiresAt,
-            bounds,
         });
     }
 
@@ -2429,7 +2429,6 @@ export function initializeRasterViewer(
      */
     function destroy() {
         clear();
-        histogramConnector?.unbind();
         controlsView.unbind();
         if (ownsMapLayerController) {
             mapLayers.destroy();
@@ -2448,6 +2447,7 @@ export function initializeRasterViewer(
         onPercentileInput: updateRasterPercentileValues,
         onApplyPercentiles: handleApplyPercentiles,
         onRetryStatistics: handleRetryStatistics,
+        onSelectHistogram: handleSelectLayerHistogram,
         onSampleWindowRangeInput: setRasterSampleWindowSize,
         onSampleWindowNumberInput: setRasterSampleWindowSize,
         onSampleWindowNumberChange: handleSampleWindowNumberChange,

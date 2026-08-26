@@ -365,6 +365,36 @@ test("RasterControlsView reports renderer visibility without gating analysis", (
     );
 });
 
+test("RasterControlsView delegates retained histogram summaries", () => {
+    const documentContext = new FakeRasterDocument();
+    const view = new RasterControlsView(documentContext);
+
+    view.renderLayerHistograms([
+        {
+            key: "retained-raster",
+            label: "retained-raster.tif",
+            state: "ready",
+            scope: "Whole raster",
+            counts: [1, 3, 2],
+        },
+    ], "retained-raster");
+    view.setActiveLayer("retained-raster.tif", true);
+
+    assert.equal(
+        documentContext.querySelector("#raster-histogram-list").children.length,
+        1
+    );
+    assert.equal(
+        documentContext.querySelector("#raster-histogram-detail-layer")
+            .textContent,
+        "retained-raster.tif"
+    );
+    assert.equal(
+        documentContext.querySelector("#raster-appearance-layer").textContent,
+        "retained-raster.tif"
+    );
+});
+
 test("RasterControlsView owns composite visibility without clearing subgroup state", () => {
     const documentContext = new FakeRasterDocument();
     const view = new RasterControlsView(documentContext);
@@ -378,7 +408,7 @@ test("RasterControlsView owns composite visibility without clearing subgroup sta
     );
 
     view.setStatisticsBusy(true);
-    view.setStatisticsStatus("Calculating selected-area distribution...");
+    view.setStatisticsStatus("Calculating selected-area histogram...");
     view.setSampleWindowStatus("Selected geographic map window.");
     view.setControlsVisible(false);
 
@@ -391,7 +421,7 @@ test("RasterControlsView owns composite visibility without clearing subgroup sta
     assert.equal(histogram.getAttribute("aria-busy"), "true");
     assert.equal(
         documentContext.querySelector("#raster-histogram-status").textContent,
-        "Calculating selected-area distribution..."
+        "Calculating selected-area histogram..."
     );
     assert.equal(samplingStatus.textContent, "Selected geographic map window.");
     assert.equal(appearance.hidden, true);
@@ -406,6 +436,11 @@ test("RasterControlsView owns composite visibility without clearing subgroup sta
         documentContext.querySelector("#open-raster-histogram-widget").hidden,
         false
     );
+    assert.equal(
+        documentContext.querySelector("#open-raster-appearance-widget").hidden,
+        true
+    );
+    view.setRenderingControlsAvailable(true);
     assert.equal(
         documentContext.querySelector("#open-raster-appearance-widget").hidden,
         false
@@ -496,6 +531,7 @@ test("RasterControlsView preserves the raster viewer compatibility surface", () 
     const expectedMethods = [
         "populatePalettes",
         "setActiveLayer",
+        "renderLayerHistograms",
         "bind",
         "unbind",
         "readStyle",
@@ -526,6 +562,7 @@ test("RasterControlsView preserves the raster viewer compatibility surface", () 
         "setSamplingAreaMode",
         "showHistogramWidget",
         "showAppearanceWidget",
+        "setRenderingControlsAvailable",
         "setControlsVisible",
         "isPixelProbeVisible",
         "setPixelProbeContent",

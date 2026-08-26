@@ -26,11 +26,20 @@
  * Connects Catalog result disclosure and progressive inspector navigation.
  *
  * @param {Document} documentContext Document containing the Catalog workspace.
+ * @param {() => void} [onLayoutChange=() => {}] Notifies the composition root
+ * when progressive inspector visibility changes the workspace allocation.
  * @return {CatalogPaneControls} Narrow presentation contract used by Catalog
  * selection without exposing layout or breakpoint decisions.
+ * @throws {TypeError} When the layout-change notifier is not callable.
  * @throws {Error} When required Catalog pane markup is absent.
  */
-export function initializeCatalogPaneControls(documentContext = document) {
+export function initializeCatalogPaneControls(
+    documentContext = document,
+    onLayoutChange = () => {}
+) {
+    if (typeof onLayoutChange !== "function") {
+        throw new TypeError("Catalog layout-change notifier must be callable");
+    }
     const requiredElements = {
         layout: "#catalog-layout",
         resultsPane: "#catalog-results-pane",
@@ -88,6 +97,7 @@ export function initializeCatalogPaneControls(documentContext = document) {
      * @return {void}
      */
     function setInspectorVisible(isVisible, { moveFocus = false } = {}) {
+        const visibilityChanged = elements.inspectorPane.hidden === isVisible;
         elements.inspectorPane.hidden = !isVisible;
         elements.inspectorPane.setAttribute(
             "aria-hidden",
@@ -116,6 +126,9 @@ export function initializeCatalogPaneControls(documentContext = document) {
                 ? elements.inspectorHeading
                 : elements.resultsHeading;
             target.focus();
+        }
+        if (visibilityChanged) {
+            onLayoutChange();
         }
     }
 

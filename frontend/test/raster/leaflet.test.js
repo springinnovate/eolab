@@ -118,7 +118,6 @@ test("Leaflet adapters own WMS and sample-window presentation options", () => {
     bounds: [[10, 20], [11, 21]],
     options: {
       pane: RASTER_SAMPLE_WINDOW_PANE,
-      className: "raster-sample-window-selection",
       color: "#2563eb",
       weight: 2,
       fillColor: "#3b82f6",

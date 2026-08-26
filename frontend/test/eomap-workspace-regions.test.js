@@ -60,8 +60,7 @@ function requireElementRange(identifier) {
     tagPattern.lastIndex = openingMatch.index;
     let depth = 0;
     for (const tagMatch of MARKUP.matchAll(tagPattern)) {
-        const isClosingTag = tagMatch[0].startsWith("</");
-        depth += isClosingTag ? -1 : 1;
+        depth += tagMatch[0].startsWith("</") ? -1 : 1;
         if (depth === 0) {
             const end = tagMatch.index + tagMatch[0].length;
             return {
@@ -74,22 +73,85 @@ function requireElementRange(identifier) {
     throw new Error(`Required markup element is not closed: ${identifier}`);
 }
 
-test("operational status region groups scanning and rendering diagnostics", () => {
-    const region = requireMarkupPosition("eomap-operational-status-region");
+test("one sidebar owns the workspace tablist and compact status", () => {
+    const panel = requireElementRange("control-panel");
+    const operationalStatus = requireElementRange(
+        "eomap-operational-status-region"
+    );
     const catalogState = requireMarkupPosition("system-state");
     const renderingState = requireMarkupPosition("rendering-diagnostics");
-    const panelContent = MARKUP.indexOf('<div class="panel-content">');
 
-    assert.ok(region < catalogState);
+    assert.ok(panel.start < operationalStatus.start);
+    assert.ok(operationalStatus.start < catalogState);
     assert.ok(catalogState < renderingState);
-    assert.ok(renderingState < panelContent);
+    assert.ok(renderingState < operationalStatus.end);
     assert.match(
-        MARKUP,
-        /id="eomap-operational-status-region"[^>]*aria-labelledby="eomap-operational-status-heading"/s
+        panel.source,
+        /class="workspace-tabs"[^>]*role="tablist"[^>]*aria-label="EOMap workspaces"/s
+    );
+    assert.match(
+        panel.source,
+        /id="toggle-operational-status"[^>]*aria-controls="eomap-operational-status-body"[^>]*aria-expanded="false"[^>]*>\s*Show status details/s
+    );
+    assert.match(
+        panel.source,
+        /id="eomap-operational-status-body"[^>]*aria-hidden="true"[^>]*hidden/s
     );
 });
 
-test("Catalog owns only discovery, inspection, and its explicit layer action", () => {
+test("Catalog, Rendering, and Raster analysis are accessible sibling tabs", () => {
+    const panel = requireElementRange("control-panel");
+    const catalogRegion = requireElementRange("eomap-catalog-region");
+    const renderingRegion = requireElementRange("eomap-map-layers-region");
+    const analysisRegion = requireElementRange(
+        "eomap-raster-interpretation-region"
+    );
+    const tabs = [
+        ["toggle-catalog-workspace", "eomap-catalog-region", "true"],
+        ["toggle-map-layers", "eomap-map-layers-region", "false"],
+        [
+            "toggle-raster-interpretation",
+            "eomap-raster-interpretation-region",
+            "false",
+        ],
+    ];
+
+    for (const [tab, region, selected] of tabs) {
+        assert.match(
+            panel.source,
+            new RegExp(
+                `id="${tab}"[^>]*role="tab"[^>]*aria-controls="${region}"[^>]*aria-selected="${selected}"`,
+                "s"
+            )
+        );
+    }
+    assert.ok(catalogRegion.end < renderingRegion.start);
+    assert.ok(renderingRegion.end < analysisRegion.start);
+    for (const [region, tab] of [
+        [catalogRegion.source, "toggle-catalog-workspace"],
+        [renderingRegion.source, "toggle-map-layers"],
+        [analysisRegion.source, "toggle-raster-interpretation"],
+    ]) {
+        assert.match(region, /role="tabpanel"/);
+        assert.match(region, new RegExp(`aria-labelledby="${tab} `));
+    }
+    assert.match(renderingRegion.source, /hidden/);
+    assert.match(analysisRegion.source, /hidden/);
+    assert.match(
+        MARKUP,
+        /id="collapse-panel"[^>]*aria-controls="control-panel"[^>]*aria-expanded="true"/s
+    );
+    assert.match(
+        MARKUP,
+        /id="open-panel"[^>]*aria-controls="control-panel"[^>]*aria-expanded="false"[^>]*hidden/s
+    );
+    assert.doesNotMatch(MARKUP, /id="show-temporary-aoi-workspace"/);
+    assert.doesNotMatch(MARKUP, /class="map-workspace-dock"/);
+    assert.doesNotMatch(MARKUP, /class="workspace-dock"/);
+    assert.doesNotMatch(MARKUP, /id="raster-histogram-connector/);
+});
+
+test("Catalog owns discovery, inspection, and its explicit layer action only", () => {
     const catalogRegion = requireElementRange("eomap-catalog-region");
     const catalogInspector = requireElementRange("catalog-item-inspector");
 
@@ -99,209 +161,188 @@ test("Catalog owns only discovery, inspection, and its explicit layer action", (
     assert.match(catalogInspector.source, /id="toggle-catalog-layer"/);
     assert.match(catalogInspector.source, />\s*Add to map layers\s*</);
     assert.match(catalogInspector.source, /id="catalog-inspector-content"/);
-    assert.doesNotMatch(catalogInspector.source, /id="catalog-layer-status"/);
-    assert.doesNotMatch(catalogInspector.source, /id="raster-layer-stack"/);
-    assert.doesNotMatch(
-        catalogInspector.source,
-        /id="raster-detail-preview-controls"/
-    );
-    assert.doesNotMatch(
-        catalogInspector.source,
-        /id="raster-style-controls"/
-    );
-});
-
-test("layout shell owns three physically separate sibling workspaces", () => {
-    const catalogRegion = requireElementRange("eomap-catalog-region");
-    const mapRegion = requireElementRange("eomap-map-layers-region");
-    const rasterRegion = requireElementRange(
-        "eomap-raster-interpretation-region"
-    );
-
-    assert.equal(MARKUP.slice(catalogRegion.end, mapRegion.start).trim(), "");
-    assert.equal(MARKUP.slice(mapRegion.end, rasterRegion.start).trim(), "");
-    assert.ok(catalogRegion.end < mapRegion.start);
-    assert.ok(mapRegion.end < rasterRegion.start);
-});
-
-test("map rendering, layer widget, and raster controls retain focused ownership", () => {
-    const mapRegion = requireElementRange("eomap-map-layers-region");
-    const rasterRegion = requireElementRange(
-        "eomap-raster-interpretation-region"
-    );
-    const layerWidget = requireElementRange("raster-layer-stack");
-    const histogramWidget = requireElementRange("raster-histogram");
-    const appearanceWidget = requireElementRange("raster-appearance-controls");
-
-    assert.match(mapRegion.source, /id="raster-detail-preview-controls"/);
-    assert.match(mapRegion.source, /id="catalog-layer-status"/);
-    assert.doesNotMatch(mapRegion.source, /id="raster-layer-stack"/);
-    assert.match(layerWidget.source, /id="raster-layer-stack-status"/);
-    assert.match(
-        MARKUP,
-        /class="map-workspace-toolbar"[\s\S]*?id="toggle-map-layer-widget"/
-    );
-    assert.match(layerWidget.source, /data-eomap-region="map-layers"/);
-    assert.match(rasterRegion.source, /id="raster-style-controls"/);
-    assert.doesNotMatch(rasterRegion.source, /id="raster-histogram"/);
-    assert.doesNotMatch(rasterRegion.source, /id="raster-appearance-controls"/);
-    assert.match(histogramWidget.source, /id="raster-percentile-controls"/);
-    assert.match(appearanceWidget.source, /id="raster-palette"/);
-    assert.match(
-        appearanceWidget.source,
-        /data-eomap-region="raster-interpretation"/
-    );
-    assert.match(
-        histogramWidget.source,
-        /data-eomap-region="raster-interpretation"/
-    );
-    assert.match(
-        MARKUP,
-        /id="eomap-map-layers-region"[^>]*role="tabpanel"[^>]*aria-labelledby="toggle-map-layers eomap-map-layers-heading"[^>]*aria-controls="map"/s
-    );
-    assert.match(
-        MARKUP,
-        /id="eomap-raster-interpretation-region"[^>]*role="tabpanel"[^>]*aria-labelledby="toggle-raster-interpretation eomap-raster-interpretation-heading"[^>]*hidden/s
-    );
-});
-
-test("layout exposes compact status, rail, and map-tools tab contracts", () => {
-    assert.match(
-        MARKUP,
-        /id="toggle-operational-status"[^>]*aria-controls="eomap-operational-status-body"[^>]*aria-expanded="false"[^>]*>\s*Show status details/s
-    );
-    assert.match(
-        MARKUP,
-        /id="eomap-operational-status-body"[^>]*aria-hidden="true"[^>]*hidden/s
-    );
-    assert.match(
-        MARKUP,
-        /id="toggle-catalog-workspace"[^>]*aria-label="Hide Catalog workspace"[^>]*aria-controls="eomap-catalog-region"[^>]*aria-expanded="true"/s
-    );
-    assert.match(
-        MARKUP,
-        /id="eomap-tools-workbench"[^>]*aria-labelledby="map-tools-heading"/s
-    );
-    for (const [tab, panel] of [
-        ["toggle-map-layers", "eomap-map-layers-region"],
-        ["toggle-raster-interpretation", "eomap-raster-interpretation-region"],
-        ["show-temporary-aoi-workspace", "temporary-aoi"],
+    for (const foreignControl of [
+        "catalog-layer-status",
+        "raster-layer-stack",
+        "raster-detail-preview-controls",
+        "raster-style-controls",
+        "raster-histogram",
+        "temporary-aoi",
     ]) {
-        assert.match(
-            MARKUP,
-            new RegExp(
-                'id="' + tab + '"[^>]*role="tab"[^>]*aria-controls="' + panel + '"',
-                "s"
-            )
+        assert.doesNotMatch(
+            catalogInspector.source,
+            new RegExp(`id="${foreignControl}"`)
         );
     }
-    assert.match(
-        MARKUP,
-        /id="collapse-panel"[^>]*aria-controls="control-panel"[^>]*aria-expanded="true"/s
-    );
-    assert.match(
-        MARKUP,
-        /id="open-panel"[^>]*aria-controls="control-panel"[^>]*aria-expanded="false"[^>]*hidden/s
-    );
-    assert.match(
-        MARKUP,
-        /id="open-catalog-workspace"[^>]*aria-controls="eomap-catalog-region"[^>]*aria-expanded="true"/s
-    );
-    assert.match(
-        MARKUP,
-        /id="open-tools-workspace"[^>]*aria-controls="eomap-tools-workbench"[^>]*aria-expanded="true"/s
-    );
 });
 
-test("raster controls retain groups while distribution is map-associated", () => {
-    const composite = requireElementRange("raster-style-controls");
-    const active = requireElementRange("raster-active-controls");
-    const sampling = requireElementRange("raster-sampling-area-controls");
-    const distribution = requireElementRange("raster-histogram");
+test("Rendering owns retained layers, appearance, cutoffs, and availability", () => {
+    const renderingRegion = requireElementRange("eomap-map-layers-region");
+    const layerStack = requireElementRange("raster-layer-stack");
     const appearance = requireElementRange("raster-appearance-controls");
+    const percentileControls = requireElementRange(
+        "raster-percentile-controls"
+    );
 
-    assert.ok(composite.start < active.start);
-    assert.ok(active.end < sampling.start);
-    assert.ok(sampling.end < composite.end);
-    assert.ok(composite.end < appearance.start);
-    assert.ok(appearance.end < distribution.start);
-    assert.match(active.source, /id="raster-active-layer-label"/);
+    for (const ownedControl of [
+        "raster-layer-stack",
+        "raster-layer-stack-status",
+        "raster-appearance-controls",
+        "raster-percentile-controls",
+        "raster-palette",
+        "raster-detail-preview-controls",
+        "catalog-layer-status",
+    ]) {
+        assert.match(
+            renderingRegion.source,
+            new RegExp(`id="${ownedControl}"`)
+        );
+    }
+    assert.match(layerStack.source, /data-eomap-region="map-layers"/);
+    assert.match(appearance.source, /data-eomap-region="map-layers"/);
     assert.match(
-        active.source,
-        /aria-describedby="raster-sample-window-status raster-histogram-status"/
-    );
-    assert.match(sampling.source, /id="clear-raster-sample-window"/);
-    assert.match(sampling.source, /id="sample-raster-map-center"/);
-    assert.match(sampling.source, /id="select-raster-sample-window"/);
-    assert.match(sampling.source, /id="raster-sample-window-range"/);
-    assert.match(sampling.source, /id="use-temporary-aoi-for-raster"/);
-    assert.match(distribution.source, /id="raster-histogram-status"/);
-    assert.match(distribution.source, /id="raster-percentile-controls"/);
-    assert.match(distribution.source, /id="raster-histogram-scope"/);
-    assert.match(distribution.source, /id="close-raster-histogram-widget"/);
-    assert.match(
-        MARKUP,
-        /id="open-raster-histogram-widget"[^>]*aria-controls="raster-histogram"[^>]*aria-expanded="false"[^>]*hidden/s
+        percentileControls.source,
+        /Histogram percentile cutoffs/
     );
     assert.match(
-        MARKUP,
-        /id="open-raster-appearance-widget"[^>]*aria-controls="raster-appearance-controls"[^>]*aria-expanded="false"[^>]*hidden/s
+        percentileControls.source,
+        />\s*Apply cutoffs to color thresholds\s*</
     );
-    assert.match(appearance.source, /id="raster-palette"/);
-    assert.match(appearance.source, /id="raster-minimum"/);
-    assert.match(appearance.source, /id="raster-midpoint"/);
-    assert.match(appearance.source, /id="raster-maximum"/);
-    assert.match(appearance.source, /id="raster-legend"/);
-    assert.match(appearance.source, /id="reset-raster-style"/);
+    assert.match(
+        renderingRegion.source,
+        /<strong>Low-resolution raster rendering<\/strong>/
+    );
+    for (const analysisControl of [
+        "raster-style-controls",
+        "raster-histogram-list",
+        "raster-histogram",
+        "temporary-aoi",
+    ]) {
+        assert.doesNotMatch(
+            renderingRegion.source,
+            new RegExp(`id="${analysisControl}"`)
+        );
+    }
+});
+
+test("Raster analysis owns shared sampling, histograms, AOI, and pixel guidance", () => {
+    const analysisRegion = requireElementRange(
+        "eomap-raster-interpretation-region"
+    );
+    const composite = requireElementRange("raster-style-controls");
+    const sampling = requireElementRange("raster-sampling-area-controls");
+    const histogramList = requireElementRange("raster-histogram-list");
+    const histogram = requireElementRange("raster-histogram");
+    const temporaryAoi = requireElementRange("temporary-aoi");
+
+    assert.match(composite.source, /Analysis target and sampling area/);
+    assert.match(composite.source, /id="raster-active-controls"/);
+    assert.match(composite.source, /id="raster-sampling-area-controls"/);
     assert.match(
         sampling.source,
-        /geographic area represented by the distribution/
+        /geographic area represented by every raster histogram/
     );
+    for (const action of [
+        "clear-raster-sample-window",
+        "sample-raster-map-center",
+        "select-raster-sample-window",
+        "use-temporary-aoi-for-raster",
+    ]) {
+        assert.match(sampling.source, new RegExp(`id="${action}"`));
+    }
+    assert.match(histogramList.source, /aria-label="Raster histograms"/);
+    assert.match(analysisRegion.source, /All retained rasters/);
     assert.match(
-        appearance.source,
-        /numeric display thresholds.*independently of the geographic sampling area/s
+        analysisRegion.source,
+        /Each retained raster uses the same sampling area above/
     );
+    assert.match(histogram.source, /<h3 id="raster-histogram-heading">Histogram<\/h3>/);
+    assert.match(histogram.source, /id="raster-histogram-detail-layer"/);
+    assert.match(histogram.source, /id="raster-histogram-status"/);
+    assert.match(histogram.source, /id="raster-histogram-chart"/);
+    assert.match(analysisRegion.source, /id="pixel-probe-guidance-heading"/);
+    assert.match(
+        analysisRegion.source,
+        /Move over the map to inspect the active raster's value/
+    );
+    assert.match(temporaryAoi.source, /data-eomap-region="raster-interpretation"/);
+    assert.match(temporaryAoi.source, /aria-labelledby="temporary-aoi-heading"/);
+    for (const renderingControl of [
+        "raster-layer-stack",
+        "raster-appearance-controls",
+        "raster-percentile-controls",
+        "raster-detail-preview-controls",
+    ]) {
+        assert.doesNotMatch(
+            analysisRegion.source,
+            new RegExp(`id="${renderingControl}"`)
+        );
+    }
 });
 
-test("each sibling workspace receives an independent bounded scroll budget", () => {
+test("sidebar panels own deliberate, independent scrolling", () => {
     assert.match(
         STYLESHEET,
-        /\.catalog-panel\s*\{[^}]*container-name:\s*eomap-catalog[^}]*grid-column:\s*1[^}]*grid-row:\s*3[^}]*overflow:\s*hidden/s
+        /\.control-panel\s*\{[^}]*width:\s*var\(--active-workspace-width\)[^}]*grid-template-columns:\s*minmax\(0, 1fr\)[^}]*overflow:\s*hidden/s
     );
     assert.match(
         STYLESHEET,
-        /\.panel-content\s*\{[^}]*display:\s*contents/s
+        /\.panel-content\s*\{[^}]*display:\s*grid[^}]*grid-template-rows:\s*auto minmax\(0, 1fr\)[^}]*overflow:\s*hidden/s
     );
     assert.match(
         STYLESHEET,
-        /\.map-layers-body,\s*\.raster-interpretation-body\s*\{[^}]*max-height:\s*none[^}]*overflow-y:\s*auto[^}]*overscroll-behavior:\s*contain/s
+        /\.catalog-panel,\s*\.map-layers-region,\s*\.raster-interpretation-region\s*\{[^}]*grid-row:\s*2[^}]*overflow:\s*hidden/s
+    );
+    assert.match(
+        STYLESHEET,
+        /\.map-layers-region,\s*\.raster-interpretation-region\s*\{[^}]*overflow-y:\s*auto[^}]*overscroll-behavior:\s*contain/s
+    );
+    assert.match(
+        STYLESHEET,
+        /\.catalog-results-scroll\s*\{[^}]*overflow:\s*auto[^}]*overscroll-behavior:\s*contain/s
     );
     assert.match(
         STYLESHEET,
         /\.catalog-inspector-body\s*\{[^}]*overflow-y:\s*auto/s
     );
+    assert.match(
+        STYLESHEET,
+        /\.catalog-panel\[hidden\],\s*\.map-layers-region\[hidden\],\s*\.raster-interpretation-region\[hidden\]\s*\{[^}]*display:\s*none/s
+    );
 });
 
-test("CSS owns deliberate wide, intermediate, narrow, and short reflow", () => {
+test("CSS allocates wide space and intentional medium and narrow overlays", () => {
     assert.match(
         STYLESHEET,
-        /\.control-panel\s*\{[^}]*grid-template-columns:[^}]*var\(--catalog-workspace-width\)[^}]*var\(--tools-workspace-width\)[^}]*pointer-events:\s*none/s
+        /#map\s*\{[^}]*inset:[^}]*var\(--active-workspace-width\)[^}]*transition:\s*left 220ms ease/s
     );
     assert.match(
         STYLESHEET,
-        /@media \(max-width: 1279px\)\s*\{[^}]*#map,[^}]*inset:\s*0/s
+        /#app\.is-control-panel-collapsed #map\s*\{[^}]*left:\s*var\(--workspace-edge\)/s
     );
     assert.match(
         STYLESHEET,
-        /@media \(max-width: 820px\)\s*\{[\s\S]*?\.control-panel\s*\{[^}]*height:\s*min\(72dvh, 680px\)[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/s
+        /@media \(min-width: 1200px\)\s*\{[\s\S]*?#app\.is-active-catalog-workspace:has\([\s\S]*?\.catalog-layout\.is-catalog-inspector-visible[\s\S]*?--active-workspace-width:\s*var\(--workspace-catalog-expanded-width\)/s
     );
     assert.match(
         STYLESHEET,
-        /@media \(max-width: 820px\)\s*\{[\s\S]*?#app\.is-active-catalog-workspace \.map-tools-navigation,[\s\S]*?#app\.is-active-tools-workspace \.catalog-panel\s*\{[^}]*display:\s*none/s
+        /@media \(max-width: 1199px\)\s*\{[\s\S]*?#map\s*\{[^}]*inset:\s*0/s
     );
     assert.match(
         STYLESHEET,
-        /#app\.is-catalog-workspace #map\s*\{[^}]*left:\s*calc\([\s\S]*?var\(--catalog-workspace-width\)/s
+        /@media \(max-width: 699px\)\s*\{[\s\S]*?\.control-panel\s*\{[^}]*inset:\s*auto 8px 8px[^}]*height:\s*min\(76dvh, 680px\)/s
+    );
+    assert.match(
+        STYLESHEET,
+        /\.panel-opener\s*\{[^}]*top:\s*auto[^}]*bottom:\s*var\(--workspace-edge\)/s
+    );
+    assert.match(
+        STYLESHEET,
+        /@media \(max-width: 1199px\) and \(max-height: 480px\)\s*\{[\s\S]*?\.control-panel\s*\{[^}]*inset:\s*8px[^}]*height:\s*auto/s
+    );
+    assert.match(
+        STYLESHEET,
+        /#app:not\(\.is-control-panel-collapsed\) \.map-position\s*\{[^}]*display:\s*none/s
     );
     assert.doesNotMatch(STYLESHEET, /min-height:\s*720px/);
     assert.match(
@@ -310,72 +351,33 @@ test("CSS owns deliberate wide, intermediate, narrow, and short reflow", () => {
     );
 });
 
-test("raster interpretation groups retain compact visual separation", () => {
+test("former map widgets are bounded sections inside their owning panel", () => {
     assert.match(
         STYLESHEET,
-        /\.raster-control-group\s*\{[^}]*display:\s*grid[^}]*gap:\s*8px/s
+        /\.raster-layer-stack\s*\{[^}]*position:\s*static[^}]*width:\s*100%[^}]*max-height:\s*none[^}]*box-shadow:\s*none/s
     );
     assert.match(
         STYLESHEET,
-        /\.raster-control-group \+ \.raster-control-group\s*\{[^}]*border-top:\s*1px solid var\(--border-2\)[^}]*padding-top:\s*12px/s
+        /\.raster-appearance-controls\s*\{[^}]*position:\s*static[^}]*width:\s*100%[^}]*max-height:\s*none[^}]*box-shadow:\s*none/s
     );
     assert.match(
         STYLESHEET,
-        /\.raster-appearance-body > \.secondary-button\s*\{[^}]*justify-self:\s*start/s
-    );
-});
-
-test("map widgets stay bounded and visually link distribution to sampling", () => {
-    assert.match(
-        STYLESHEET,
-        /\.map-workspace-dock\s*\{[^}]*position:\s*fixed[^}]*pointer-events:\s*none/s
+        /\.raster-histogram\s*\{[^}]*position:\s*static[^}]*width:\s*100%[^}]*max-height:\s*none[^}]*box-shadow:\s*none/s
     );
     assert.match(
         STYLESHEET,
-        /\.map-workspace-toolbar\s*\{[^}]*display:\s*flex[^}]*overflow-x:\s*auto/s
-    );
-    assert.match(
-        STYLESHEET,
-        /\.raster-layer-stack\s*\{[^}]*width:\s*min\(340px,[^}]*max-height:\s*min\(52dvh, 480px\)/s
-    );
-    assert.match(
-        STYLESHEET,
-        /\.raster-histogram\s*\{[^}]*--histogram-link-color:\s*var\(--brand\)[^}]*position:\s*static[^}]*width:\s*min\(440px,[^}]*max-height:\s*min\(52dvh, 480px\)/s
-    );
-    assert.match(
-        STYLESHEET,
-        /\.raster-histogram\[data-sampling-area="selectedArea"\]\s*\{[^}]*--histogram-link-color:\s*#2563eb/s
-    );
-    assert.match(
-        STYLESHEET,
-        /\.raster-histogram\[data-sampling-area="temporaryAoi"\]\s*\{[^}]*--histogram-link-color:\s*#6d1b7b/s
-    );
-    assert.match(
-        STYLESHEET,
-        /\.raster-histogram-connector\s*\{[^}]*position:\s*fixed[^}]*pointer-events:\s*none/s
-    );
-    assert.match(
-        STYLESHEET,
-        /#raster-histogram-connector-line\s*\{[^}]*stroke:\s*currentColor[^}]*stroke-dasharray:\s*7 4[^}]*stroke-width:\s*3px/s
-    );
-    assert.match(
-        STYLESHEET,
-        /#raster-histogram-connector-target\s*\{[^}]*stroke:\s*currentColor[^}]*stroke-dasharray:\s*6 5/s
-    );
-    assert.match(
-        STYLESHEET,
-        /\.raster-sample-window-selection\s*\{[^}]*drop-shadow\(0 0 3px rgb\(37 99 235 \/ 62%\)\)/s
+        /\.raster-histogram-list\s*\{[^}]*display:\s*grid[^}]*gap:\s*8px/s
     );
 });
 
-test("viewport overlays retain explicit non-reparenting region ownership", () => {
+test("map overlays retain explicit non-reparenting region ownership", () => {
     assert.match(
         MARKUP,
         /id="map"[^>]*role="region"[^>]*data-eomap-region="map-layers"/s
     );
     assert.match(
         MARKUP,
-        /id="temporary-aoi"[^>]*data-eomap-region="map-layers"/s
+        /id="temporary-aoi"[^>]*data-eomap-region="raster-interpretation"/s
     );
     assert.match(
         MARKUP,
@@ -385,47 +387,49 @@ test("viewport overlays retain explicit non-reparenting region ownership", () =>
 
 test("semantic regions preserve one DOM instance of every owned control", () => {
     const uniqueIdentifiers = [
+        "control-panel",
         "system-state",
         "rendering-diagnostics",
         "toggle-operational-status",
         "eomap-operational-status-body",
+        "toggle-catalog-workspace",
+        "eomap-catalog-region",
         "catalog-search",
         "catalog-results",
         "catalog-item-inspector",
         "toggle-catalog-layer",
-        "temporary-aoi",
+        "toggle-map-layers",
+        "eomap-map-layers-region",
         "raster-layer-stack",
         "raster-layer-stack-body",
         "toggle-map-layer-widget",
         "raster-layer-widget-count",
-        "toggle-map-layers",
-        "eomap-map-layers-body",
-        "raster-style-controls",
+        "raster-appearance-controls",
+        "raster-appearance-layer",
+        "raster-percentile-controls",
+        "raster-detail-preview-controls",
         "toggle-raster-interpretation",
-        "eomap-raster-interpretation-body",
+        "eomap-raster-interpretation-region",
+        "raster-style-controls",
         "raster-active-controls",
         "raster-sampling-area-controls",
         "raster-sample-window-range",
+        "raster-histogram-list",
         "raster-histogram",
-        "open-raster-histogram-widget",
-        "close-raster-histogram-widget",
+        "raster-histogram-detail-layer",
         "raster-histogram-scope",
-        "raster-histogram-connector",
-        "raster-histogram-connector-line",
-        "raster-histogram-connector-target",
-        "raster-histogram-connector-arrow",
-        "raster-appearance-controls",
-        "open-raster-appearance-widget",
-        "close-raster-appearance-widget",
+        "analysis-aoi-disclosure",
+        "toggle-analysis-aoi",
+        "temporary-aoi",
         "raster-pixel-probe",
     ];
 
     for (const identifier of uniqueIdentifiers) {
         assert.equal(countMarkupId(identifier), 1, identifier);
     }
-    const allIdentifiers = [
-        ...MARKUP.matchAll(/id="([^"]+)"/g),
-    ].map((match) => match[1]);
+    const allIdentifiers = [...MARKUP.matchAll(/id="([^"]+)"/g)].map(
+        (match) => match[1]
+    );
     const duplicateIdentifiers = allIdentifiers.filter(
         (identifier, index) => allIdentifiers.indexOf(identifier) !== index
     );

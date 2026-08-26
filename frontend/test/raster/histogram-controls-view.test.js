@@ -11,13 +11,11 @@ import {
     FakeRasterControlElement,
 } from "../../test-support/raster/fake-controls-document.js";
 
-test("histogram adapter owns status, chart, percentiles, and listeners", () => {
+test("histogram adapter owns status, chart, retry, and disclosure", () => {
     const documentContext = new FakeRasterControlDocument();
     const view = new RasterHistogramControlsView(documentContext);
     const received = [];
     view.bind({
-        onPercentileInput: () => received.push("percentile"),
-        onApplyPercentiles: () => received.push("apply"),
         onRetryStatistics: () => received.push("retry"),
     });
     const launcher = documentContext.querySelector(
@@ -27,39 +25,26 @@ test("histogram adapter owns status, chart, percentiles, and listeners", () => {
     view.setActiveRasterAvailable(true);
     view.setSamplingAreaMode("selectedArea");
     view.showWidget();
-    view.resetPercentiles({ lower: 5, middle: 50, upper: 95 });
     view.setStatisticsBusy(true);
     view.setStatisticsStatus("Ready.");
     view.renderHistogram(RASTER_STATISTICS, DEFAULT_RASTER_STYLE);
     view.showHistogramAxis("≈ -10", "≈ 30");
-    view.setPercentileControlsVisible(true);
     view.setStatisticsRetryVisible(true);
     view.enableActiveRasterActions();
-    view.renderPercentileValues(
-        { lower: 5, middle: 50, upper: 95 },
-        { lower: "-4", middle: "3", upper: "20" },
-        true,
-        true
-    );
 
-    documentContext.querySelector("#raster-lower-percentile")
-        .dispatchEvent(new Event("input"));
-    documentContext.querySelector("#apply-raster-percentiles")
-        .dispatchEvent(new Event("click"));
     documentContext.querySelector("#retry-raster-statistics")
         .dispatchEvent(new Event("click"));
 
-    assert.deepEqual(view.readPercentiles(), {
-        lower: 5,
-        middle: 50,
-        upper: 95,
-    });
-    assert.deepEqual(received, ["percentile", "apply", "retry"]);
+    assert.deepEqual(received, ["retry"]);
     assert.equal(launcher.hidden, false);
     assert.equal(launcher.getAttribute("aria-expanded"), "true");
     assert.equal(
         documentContext.querySelector("#raster-histogram").hidden,
         false
+    );
+    assert.deepEqual(
+        documentContext.querySelector("#raster-histogram").scrollRequests,
+        [{ block: "nearest", inline: "nearest" }]
     );
     assert.equal(
         documentContext.querySelector("#raster-histogram")
@@ -79,22 +64,6 @@ test("histogram adapter owns status, chart, percentiles, and listeners", () => {
         documentContext.querySelector("#raster-histogram-chart")
             .getAttribute("hidden"),
         null
-    );
-    assert.equal(
-        documentContext.querySelector("#raster-middle-percentile-value")
-            .textContent,
-        "50% ≈ 3"
-    );
-
-    view.renderPercentileValues(
-        { lower: 50, middle: 5, upper: 95 },
-        { lower: "3", middle: "-4", upper: "20" },
-        false,
-        true
-    );
-    assert.equal(
-        documentContext.querySelector("#apply-raster-percentiles").disabled,
-        true
     );
     view.clearStatistics();
     assert.equal(
@@ -126,7 +95,7 @@ test("histogram adapter owns status, chart, percentiles, and listeners", () => {
     view.unbind();
     documentContext.querySelector("#retry-raster-statistics")
         .dispatchEvent(new Event("click"));
-    assert.equal(received.length, 3);
+    assert.equal(received.length, 1);
 });
 
 test("histogram adapter clears an independently populated chart", () => {
@@ -139,4 +108,72 @@ test("histogram adapter clears an independently populated chart", () => {
 
     assert.equal(chart.children.length, 0);
     assert.equal(chart.getAttribute("hidden"), "");
+});
+
+test("histogram adapter owns labeled per-raster summaries without double binding", () => {
+    const documentContext = new FakeRasterControlDocument();
+    const view = new RasterHistogramControlsView(documentContext);
+    const selected = [];
+    view.bind({
+        onRetryStatistics() {},
+        onSelectHistogram: (key) => selected.push(key),
+    });
+    view.setActiveRasterAvailable(true);
+    view.setActiveLayer("second-raster.tif");
+    const summaries = [
+        {
+            key: "first",
+            label: "first-raster.tif",
+            state: "ready",
+            scope: "200 km map sample",
+            counts: [1, 4, 2],
+        },
+        {
+            key: "second",
+            label: "second-raster.tif",
+            state: "loading",
+            scope: "200 km map sample",
+            counts: null,
+        },
+    ];
+
+    view.renderLayerHistograms(summaries, "second");
+    const list = documentContext.querySelector("#raster-histogram-list");
+    const firstButton = list.children[0];
+    const secondButton = list.children[1];
+    firstButton.dispatchEvent(new Event("click"));
+    view.showWidget();
+
+    assert.deepEqual(selected, ["first"]);
+    assert.equal(list.children.length, 2);
+    assert.equal(firstButton.getAttribute("aria-label"),
+        "Histogram — first-raster.tif");
+    assert.equal(
+        firstButton.getAttribute("aria-controls"),
+        "raster-histogram"
+    );
+    assert.equal(firstButton.children.at(-1).classNames.includes(
+        "raster-histogram-summary-preview"
+    ), true);
+    assert.equal(secondButton.getAttribute("aria-expanded"), "true");
+    assert.equal(
+        documentContext.querySelector("#raster-histogram-empty").hidden,
+        true
+    );
+    assert.equal(
+        documentContext.querySelector("#raster-histogram-detail-layer")
+            .textContent,
+        "second-raster.tif"
+    );
+
+    secondButton.focus();
+    view.renderLayerHistograms(summaries, "first");
+    assert.equal(documentContext.activeElement, list.children[1]);
+    firstButton.dispatchEvent(new Event("click"));
+    list.children[0].dispatchEvent(new Event("click"));
+    assert.deepEqual(selected, ["first", "first"]);
+
+    view.unbind();
+    list.children[0].dispatchEvent(new Event("click"));
+    assert.deepEqual(selected, ["first", "first"]);
 });

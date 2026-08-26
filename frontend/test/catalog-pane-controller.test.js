@@ -97,7 +97,11 @@ function createCatalogPaneFixture() {
 
 test("Catalog starts with results visible and reveals selection progressively", () => {
   const fixture = createCatalogPaneFixture();
-  const controls = initializeCatalogPaneControls(fixture.document);
+  let layoutChanges = 0;
+  const controls = initializeCatalogPaneControls(
+    fixture.document,
+    () => layoutChanges += 1,
+  );
 
   assert.equal(fixture.resultsBody.hidden, false);
   assert.equal(fixture.inspectorPane.hidden, true);
@@ -105,6 +109,7 @@ test("Catalog starts with results visible and reveals selection progressively", 
   assert.equal(fixture.resultsToggle.textContent, "Collapse Catalog results");
   assert.equal(fixture.inspectorToggle.textContent, "Expand Selected record");
   assert.equal(controls.isInspectorVisible(), false);
+  assert.equal(layoutChanges, 0);
 
   controls.showInspector({ moveFocus: true });
 
@@ -119,6 +124,10 @@ test("Catalog starts with results visible and reveals selection progressively", 
   );
   assert.equal(fixture.document.activeElement, fixture.inspectorHeading);
   assert.equal(controls.isInspectorVisible(), true);
+  assert.equal(layoutChanges, 1);
+
+  controls.showInspector();
+  assert.equal(layoutChanges, 1);
 
   fixture.resultsToggle.dispatchEvent(new Event("click"));
 
@@ -132,6 +141,17 @@ test("Catalog starts with results visible and reveals selection progressively", 
   );
   assert.equal(fixture.inspectorBody.hidden, false);
   assert.equal(fixture.inspectorToggle.getAttribute("aria-expanded"), "true");
+
+  controls.showResults();
+  assert.equal(layoutChanges, 2);
+});
+
+test("Catalog validates its feature-neutral layout-change boundary", () => {
+  const fixture = createCatalogPaneFixture();
+  assert.throws(
+    () => initializeCatalogPaneControls(fixture.document, null),
+    /layout-change notifier must be callable/,
+  );
 });
 
 test("Back and inspector collapse return focus to Catalog results", () => {
@@ -227,11 +247,11 @@ test("Catalog layout owns independent scroll regions and expansion rules", () =>
     stylesheet,
     /\.catalog-pane\.is-collapsed \.catalog-pane-heading\s*\{[^}]*flex-direction:\s*column/s,
   );
-  assert.match(stylesheet, /--catalog-progressive-width:/);
-  assert.match(stylesheet, /@media \(min-width: 1280px\)/);
+  assert.match(stylesheet, /--workspace-catalog-expanded-width:/);
+  assert.match(stylesheet, /@media \(min-width: 1200px\)/);
   assert.match(
     stylesheet,
-    /@media \(max-width: 1279px\)[\s\S]*?\.catalog-layout\.is-catalog-inspector-visible \.catalog-browser\s*\{[^}]*display:\s*none/s,
+    /@media \(max-width: 1199px\)[\s\S]*?\.catalog-layout\.is-catalog-inspector-visible \.catalog-browser\s*\{[^}]*display:\s*none/s,
   );
   assert.match(
     stylesheet,
@@ -261,6 +281,10 @@ test("Catalog selection delegates progressive presentation without feature coupl
   assert.match(
     selectItem,
     /catalogPaneControls\.showInspector\(\{ moveFocus: true \}\)/,
+  );
+  assert.match(
+    mainSource,
+    /initializeCatalogPaneControls\(\s*document,\s*\(\) => layoutController\?\.notifyLayoutChange\(\)/s,
   );
   assert.doesNotMatch(
     controllerSource,
