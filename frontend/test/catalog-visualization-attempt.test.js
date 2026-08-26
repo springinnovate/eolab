@@ -136,6 +136,7 @@ function createAttemptHarness({
   const calls = [];
   const registry = new CatalogMapActionRegistry();
   const layerButton = { textContent: "Add to map layers" };
+  const actionStatus = { textContent: "" };
   const status = { textContent: "" };
   const state = {
     selectedItem,
@@ -214,6 +215,7 @@ function createAttemptHarness({
     "renderCatalogItemInspector",
     "appGlobalConfiguration",
     "catalogLayerToggle",
+    "catalogMapActionStatus",
     "catalogLayerStatus",
     "onRenderingWorkspaceRequested",
     `${ATTEMPT_SOURCE}; return toggleCatalogLayer;`,
@@ -229,14 +231,27 @@ function createAttemptHarness({
     (item) => calls.push(["render-inspector", item.id]),
     { scanDisplayPathPrefix: "Mounted" },
     layerButton,
+    actionStatus,
     status,
     () => calls.push(["open-rendering"]),
   );
-  return { run, state, calls, registry, layerButton, status };
+  return {
+    run,
+    state,
+    calls,
+    registry,
+    layerButton,
+    actionStatus,
+    status,
+  };
 }
 
 test("visualization assessment is internal rather than a user action", () => {
   assert.match(MARKUP, /id="toggle-catalog-layer"[\s\S]*?>\s*Add to map layers\s*</);
+  assert.match(
+    MARKUP,
+    /id="catalog-map-actions"[\s\S]*?id="toggle-catalog-layer"[\s\S]*?aria-describedby="catalog-map-action-status"[\s\S]*?id="catalog-map-action-status"/,
+  );
   assert.match(MARKUP, /id="show-raster-detail-preview"[\s\S]*?>\s*Use low-resolution rendering\s*</);
   assert.doesNotMatch(MARKUP, /id="reassess-detail-raster"/);
   assert.doesNotMatch(
@@ -250,7 +265,6 @@ test("every non-retained Add attempt assesses then publishes when eligible", () 
 
   assertOrdered(attempt, [
     "catalogVisualization.contains(selectedItem)",
-    "onRenderingWorkspaceRequested();",
     "beginCatalogMapAction(",
     "await catalogVisualization.assess(",
     "catalogState.visualizationAssessments.record(",
@@ -281,11 +295,15 @@ test("attempt feedback remains visible and stale selections cannot publish", () 
   );
   assert.match(
     attempt,
-    /currentVisualization\?\.metadata\?\.eligible !== true[\s\S]*?finishCatalogMapAction\(pendingAction\);\s*return;/s,
+    /currentVisualization\?\.metadata\?\.eligible !== true[\s\S]*?finishCatalogMapAction\(pendingAction\);[\s\S]*?catalogMapActionStatus\.textContent[\s\S]*?return;/s,
   );
   assert.match(
     attempt,
-    /catch \(visualizationError\)[\s\S]*?catalogLayerStatus\.textContent = visualizationError\.message/s,
+    /catch \(visualizationError\)[\s\S]*?catalogMapActionStatus\.textContent =\s*visualizationError\.message;/s,
+  );
+  assert.match(
+    presentation,
+    /catalogLayerStatus\.textContent = defaultStatus;/,
   );
   assert.match(presentation, /catalogLayerToggle\.hidden = false/);
   assert.match(
@@ -296,6 +314,80 @@ test("attempt feedback remains visible and stale selections cannot publish", () 
     MAIN_SOURCE,
     /\(\) => layoutController\.showWorkspace\("map-layers"\)/,
   );
+});
+
+test("Catalog action feedback is local, live, and cleared with selection", () => {
+  const clearSelection = sourceBetween(
+    MAIN_SOURCE,
+    "function clearCatalogSelection()",
+    "function selectCatalogItem(",
+  );
+  const selectItem = sourceBetween(
+    MAIN_SOURCE,
+    "function selectCatalogItem(",
+    "function appendCatalogPage(",
+  );
+
+  assert.match(
+    MARKUP,
+    /id="catalog-map-action-status"[\s\S]*?role="status"[\s\S]*?aria-live="polite"/,
+  );
+  assert.doesNotMatch(
+    MARKUP,
+    /id="catalog-layer-status"[\s\S]{0,160}?aria-live=/,
+  );
+  assert.match(
+    MARKUP,
+    /id="map-layer-rendering-announcement"[\s\S]*?role="status"[\s\S]*?aria-live="polite"/,
+  );
+  assert.match(clearSelection, /catalogMapActionStatus\.textContent = "";/);
+  assert.match(selectItem, /catalogMapActionStatus\.textContent = "";/);
+});
+
+test("map-local failures use a separate live announcement", () => {
+  const tileFailure = sourceBetween(
+    MAIN_SOURCE,
+    "function reportMapTileError(",
+    "function refreshCatalogMapAction()",
+  );
+  const previewActions = sourceBetween(
+    MAIN_SOURCE,
+    'showRasterDetailPreview.addEventListener("click"',
+    "await loadCatalog(true)",
+  );
+
+  assert.match(
+    tileFailure,
+    /catalogLayerStatus\.textContent = message;\s*mapLayerRenderingAnnouncement\.textContent = message;/s,
+  );
+  assert.match(
+    previewActions,
+    /mapLayerRenderingAnnouncement\.textContent =\s*previewError\.message;/s,
+  );
+  assert.match(
+    previewActions,
+    /mapLayerRenderingAnnouncement\.textContent =\s*"Sampled raster removed from the map\.";/s,
+  );
+});
+
+test("pending assessment feedback appears beside Add before completion", async () => {
+  const selected = createRasterItem("pending", true);
+  let completeAssessment;
+  const assessment = new Promise((resolve) => {
+    completeAssessment = resolve;
+  });
+  const harness = createAttemptHarness({
+    selectedItem: selected,
+    assess: () => assessment,
+  });
+
+  const attempt = harness.run();
+  assert.equal(
+    harness.actionStatus.textContent,
+    "Checking whether the selected raster can be rendered.",
+  );
+  completeAssessment(createRasterItem("pending", true));
+  await attempt;
 });
 
 test("eligible raster assessment publishes in the same pending action", async () => {
@@ -314,11 +406,31 @@ test("eligible raster assessment publishes in the same pending action", async ()
   );
   assert.deepEqual(
     harness.calls.filter(([call]) => call === "open-rendering"),
-    [["open-rendering"], ["open-rendering"]],
+    [["open-rendering"]],
   );
   assert.equal(harness.layerButton.textContent, "Remove from map layers");
-  assert.equal(harness.status.textContent, "Raster added to Map layers.");
+  assert.equal(harness.actionStatus.textContent, "Raster added to Map layers.");
+  assert.equal(harness.status.textContent, "");
   assert.equal(harness.registry.get(selected), null);
+});
+
+test("retained-layer removal reports beside the Catalog action", async () => {
+  const selected = createRasterItem("retained", true);
+  const harness = createAttemptHarness({
+    selectedItem: selected,
+    assess: async () => selected,
+    retained: true,
+  });
+
+  await harness.run();
+
+  assert.equal(harness.calls.some(([call]) => call === "assess"), false);
+  assert.equal(harness.calls.some(([call]) => call === "show"), false);
+  assert.equal(harness.layerButton.textContent, "Add to map layers");
+  assert.equal(
+    harness.actionStatus.textContent,
+    "Raster removed from Map layers.",
+  );
 });
 
 test("ineligible raster preserves its reason and never publishes", async () => {
@@ -333,7 +445,12 @@ test("ineligible raster preserves its reason and never publishes", async () => {
   await harness.run();
 
   assert.equal(harness.calls.some(([call]) => call === "show"), false);
+  assert.equal(
+    harness.calls.some(([call]) => call === "open-rendering"),
+    false,
+  );
   assert.equal(harness.layerButton.textContent, "Add to map layers");
+  assert.equal(harness.actionStatus.textContent, reason);
   assert.equal(harness.status.textContent, reason);
   assert.equal(harness.registry.get(selected), null);
 });
@@ -351,7 +468,11 @@ test("assessment errors restore Add and expose the exact failure", async () => {
 
   assert.equal(harness.calls.some(([call]) => call === "show"), false);
   assert.equal(harness.layerButton.textContent, "Add to map layers");
-  assert.equal(harness.status.textContent, "Raster metadata could not be read.");
+  assert.equal(
+    harness.actionStatus.textContent,
+    "Raster metadata could not be read.",
+  );
+  assert.equal(harness.status.textContent, "");
   assert.equal(harness.registry.get(selected), null);
 });
 

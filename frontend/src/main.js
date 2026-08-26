@@ -500,8 +500,14 @@ async function initializeCatalog(
     const catalogLayerToggle = document.querySelector(
         "#toggle-catalog-layer"
     );
+    const catalogMapActionStatus = document.querySelector(
+        "#catalog-map-action-status"
+    );
     const catalogLayerStatus = document.querySelector(
         "#catalog-layer-status"
+    );
+    const mapLayerRenderingAnnouncement = document.querySelector(
+        "#map-layer-rendering-announcement"
     );
     const rasterDetailPreviewControls = document.querySelector(
         "#raster-detail-preview-controls"
@@ -545,7 +551,7 @@ async function initializeCatalog(
     };
 
     /**
-     * Report one layer-specific raster tile failure in the Catalog action.
+     * Report one layer-specific tile failure in Map layers.
      *
      * @param {string} message User-facing raster tile failure.
      * @param {Object} item Affected Catalog Item.
@@ -554,6 +560,7 @@ async function initializeCatalog(
     function reportMapTileError(message, item) {
         if (catalogItemsMatch(catalogState.selectedItem, item)) {
             catalogLayerStatus.textContent = message;
+            mapLayerRenderingAnnouncement.textContent = message;
         }
     }
 
@@ -748,8 +755,7 @@ async function initializeCatalog(
                     " No finite data was found at the bounded base positions.";
             }
         }
-        catalogLayerStatus.textContent =
-            pendingAction?.statusText ?? defaultStatus;
+        catalogLayerStatus.textContent = defaultStatus;
     }
 
     /**
@@ -770,6 +776,7 @@ async function initializeCatalog(
         footprintController.clear();
         catalogState.selectedButton = null;
         catalogState.selectedItem = null;
+        catalogMapActionStatus.textContent = "";
         updateCatalogMapAction(null);
         renderCatalogItemInspector(
             null,
@@ -807,6 +814,7 @@ async function initializeCatalog(
         }
         catalogState.selectedButton = itemButton;
         catalogState.selectedItem = item;
+        catalogMapActionStatus.textContent = "";
         itemButton?.classList.add("is-selected");
         itemButton?.setAttribute("aria-pressed", "true");
         footprintController.select(item);
@@ -1168,13 +1176,15 @@ async function initializeCatalog(
                 rasterVisualization.activateAnalysis(selectedItem);
             }
             catalogLayerToggle.textContent = "Add to map layers";
-            catalogLayerStatus.textContent =
+            const removalStatus =
                 `${datasetNoun[0].toUpperCase()}${datasetNoun.slice(1)} ` +
                 "removed from Map layers.";
+            catalogMapActionStatus.textContent = removalStatus;
             return;
         }
 
-        onRenderingWorkspaceRequested();
+        catalogMapActionStatus.textContent =
+            `Checking whether the selected ${datasetNoun} can be rendered.`;
         const pendingAction = beginCatalogMapAction(
             selectedItem,
             "Adding to map…",
@@ -1213,6 +1223,9 @@ async function initializeCatalog(
             );
             if (currentVisualization?.metadata?.eligible !== true) {
                 finishCatalogMapAction(pendingAction);
+                catalogMapActionStatus.textContent =
+                    currentVisualization?.metadata?.reason ??
+                    "Visualization is unavailable for this item.";
                 return;
             }
 
@@ -1227,15 +1240,17 @@ async function initializeCatalog(
             }
             finishCatalogMapAction(pendingAction);
             catalogLayerToggle.textContent = "Remove from map layers";
-            catalogLayerStatus.textContent =
+            const successStatus =
                 `${datasetNoun[0].toUpperCase()}${datasetNoun.slice(1)} ` +
                 "added to Map layers.";
+            catalogMapActionStatus.textContent = successStatus;
             onRenderingWorkspaceRequested();
         } catch (visualizationError) {
             if (catalogItemsMatch(catalogState.selectedItem, selectedItem)) {
                 finishCatalogMapAction(pendingAction);
                 catalogLayerToggle.textContent = "Add to map layers";
-                catalogLayerStatus.textContent = visualizationError.message;
+                catalogMapActionStatus.textContent =
+                    visualizationError.message;
             }
         } finally {
             finishCatalogMapAction(pendingAction);
@@ -1278,6 +1293,8 @@ async function initializeCatalog(
             ) {
                 finishCatalogMapAction(pendingAction);
                 catalogLayerStatus.textContent = previewError.message;
+                mapLayerRenderingAnnouncement.textContent =
+                    previewError.message;
                 if (!rasterDetailPreview.contains(selectedItem)) {
                     renderRasterDetailPreviewResolution(null, "error");
                 }
@@ -1292,6 +1309,8 @@ async function initializeCatalog(
         rasterDetailPreview.remove(selectedItem);
         rasterVisualization.activateAnalysis(selectedItem);
         catalogLayerStatus.textContent =
+            "Sampled raster removed from the map.";
+        mapLayerRenderingAnnouncement.textContent =
             "Sampled raster removed from the map.";
     });
 

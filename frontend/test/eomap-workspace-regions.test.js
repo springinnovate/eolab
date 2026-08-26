@@ -177,15 +177,22 @@ test("Catalog, Map layers, and Histograms are independent sibling disclosures", 
 test("Catalog owns discovery, inspection, and its explicit layer action only", () => {
     const catalogRegion = requireElementRange("eomap-catalog-region");
     const catalogInspector = requireElementRange("catalog-item-inspector");
+    const catalogActions = requireElementRange("catalog-map-actions");
 
     assert.match(catalogRegion.source, /id="catalog-results-pane"/);
     assert.match(catalogRegion.source, /id="catalog-search"/);
     assert.match(catalogRegion.source, /id="catalog-item-inspector"/);
     assert.match(catalogInspector.source, /id="toggle-catalog-layer"/);
     assert.match(catalogInspector.source, />\s*Add to map layers\s*</);
+    assert.match(catalogActions.source, /id="catalog-map-action-status"/);
+    assert.match(
+        catalogActions.source,
+        /id="toggle-catalog-layer"[\s\S]*aria-describedby="catalog-map-action-status"/
+    );
     assert.match(catalogInspector.source, /id="catalog-inspector-content"/);
     for (const foreignControl of [
         "catalog-layer-status",
+        "map-layer-rendering-announcement",
         "raster-layer-stack",
         "raster-detail-preview-controls",
         "raster-style-controls",
@@ -216,6 +223,7 @@ test("Map layers owns layer presentation, appearance, cutoffs, and limitations",
         "raster-palette",
         "raster-detail-preview-controls",
         "catalog-layer-status",
+        "map-layer-rendering-announcement",
     ]) {
         assert.match(
             renderingRegion.source,
@@ -257,10 +265,10 @@ test("Map layers owns layer presentation, appearance, cutoffs, and limitations",
     }
 });
 
-test("Catalog visualization attempts reveal Map layers through composition", () => {
+test("successful visualization and previews reveal Map layers through composition", () => {
     assert.match(
         COMPOSITION_SOURCE,
-        /onRenderingWorkspaceRequested\(\);\s*const pendingAction = beginCatalogMapAction\(/
+        /catalogMapActionStatus\.textContent = successStatus;\s*onRenderingWorkspaceRequested\(\);/
     );
     assert.match(
         COMPOSITION_SOURCE,

@@ -334,9 +334,17 @@
                       class="secondary-button"
                       id="toggle-catalog-layer"
                       type="button"
+                      aria-describedby="catalog-map-action-status"
                     >
                       Add to map layers
                     </button>
+                    <p
+                      class="catalog-map-action-status"
+                      id="catalog-map-action-status"
+                      role="status"
+                      aria-live="polite"
+                      aria-atomic="true"
+                    ></p>
                   </div>
                   <div id="catalog-inspector-content">
                     <div class="catalog-inspector-empty">
@@ -393,6 +401,10 @@
                     <p
                       class="map-layer-action-status"
                       id="catalog-layer-status"
+                    ></p>
+                    <p
+                      class="visually-hidden"
+                      id="map-layer-rendering-announcement"
                       role="status"
                       aria-live="polite"
                       aria-atomic="true"
