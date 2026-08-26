@@ -1150,8 +1150,8 @@ test("Catalog raster status explains the low-resolution fallback", () => {
   assert.equal(
     formatCatalogRasterStatus(rejection, false, true, false),
     rejection +
-      " Standard whole-raster rendering is unavailable. The low-resolution " +
-      "fallback uses a fixed 127-longest-edge center sample for broad " +
+      " Standard whole-raster rendering is unavailable. Use low-resolution " +
+      "rendering to show a fixed 127-longest-edge center sample for broad " +
       "views; close views automatically use exact bounded source detail.",
   );
   assert.equal(

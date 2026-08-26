@@ -1034,6 +1034,16 @@ h5 {
   display: none;
 }
 
+.map-layer-action-status:not(:empty) {
+  border-left: 3px solid var(--brand);
+  border-radius: var(--radius-sm);
+  background: var(--surface-selected);
+  padding: 10px 12px;
+  color: var(--text-1);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
 .raster-layer-stack {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);

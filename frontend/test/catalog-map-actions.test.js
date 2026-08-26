@@ -28,8 +28,8 @@ test("pending map actions follow their Item across selection changes", () => {
     const second = createItem("second");
     const firstAction = registry.begin(
         first,
-        "Assessing...",
-        "Inspecting the first raster."
+        "Adding to map…",
+        "Checking whether the first raster can be rendered."
     );
     const secondAction = registry.begin(
         second,
@@ -40,7 +40,7 @@ test("pending map actions follow their Item across selection changes", () => {
     assert.equal(registry.get(equivalentFirst), firstAction);
     assert.equal(registry.get(second), secondAction);
     assert.throws(
-        () => registry.begin(first, "Assessing...", "Duplicate"),
+        () => registry.begin(first, "Adding to map…", "Duplicate"),
         /already pending/
     );
 
@@ -54,7 +54,7 @@ test("pending map actions follow their Item across selection changes", () => {
 test("an obsolete token cannot finish a replacement action", () => {
     const registry = new CatalogMapActionRegistry();
     const item = createItem("raster");
-    const firstAction = registry.begin(item, "Assessing...", "Inspecting");
+    const firstAction = registry.begin(item, "Adding to map…", "Checking");
 
     assert.equal(registry.finish(firstAction), true);
     const replacement = registry.begin(item, "Adding…", "Preparing");

@@ -112,8 +112,9 @@ export function supportsRasterDetailOnlyPreview(item) {
  *
  * @param {string} fullVisualizationReason Scanner-owned rejection reason.
  * @param {boolean} isRetained Whether normal rendering is retained on the map.
- * @param {boolean} supportsDetailPreview Whether adaptive rendering is offered.
- * @param {boolean} hasDetailPreview Whether adaptive rendering is active.
+ * @param {boolean} supportsDetailPreview Whether low-resolution rendering is
+ * offered.
+ * @param {boolean} hasDetailPreview Whether low-resolution rendering is active.
  * @return {string} Catalog status preserving the assessment and map state.
  */
 export function formatCatalogRasterStatus(
@@ -129,10 +130,10 @@ export function formatCatalogRasterStatus(
     }
     if (supportsDetailPreview) {
         renderingExplanation =
-            "Standard whole-raster rendering is unavailable. The " +
-            "low-resolution fallback uses a fixed 127-longest-edge center " +
-            "sample for broad views; close views automatically use exact " +
-            "bounded source detail.";
+            "Standard whole-raster rendering is unavailable. Use " +
+            "low-resolution rendering to show a fixed 127-longest-edge " +
+            "center sample for broad views; close views automatically use " +
+            "exact bounded source detail.";
     }
     if (hasDetailPreview) {
         renderingExplanation =

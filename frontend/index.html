@@ -389,6 +389,48 @@
                       id="eomap-map-layers-body"
                       aria-hidden="false"
                     >
+                    <section class="rendering-availability">
+                    <p
+                      class="map-layer-action-status"
+                      id="catalog-layer-status"
+                      role="status"
+                      aria-live="polite"
+                      aria-atomic="true"
+                    ></p>
+                    <div
+                      class="raster-detail-preview-controls"
+                      id="raster-detail-preview-controls"
+                      hidden
+                    >
+                      <p>
+                        <strong>Low-resolution raster rendering</strong>
+                        <span>When a raster is too large for standard whole-raster rendering, EOLab can show a bounded sample grid. Close views automatically use complete source-window detail when the visible area satisfies server-owned limits.</span>
+                      </p>
+                      <small>Sample grids use smooth display interpolation; exact close-view windows use crisp nearest-neighbor presentation. This overview-limited raster is never published to GeoServer. The status below reports the active map area, source window, native blocks, and decoded work.</small>
+                      <output
+                        class="raster-detail-preview-resolution"
+                        id="raster-detail-preview-resolution"
+                        aria-live="polite"
+                      >Base raster detail: —; active view: —</output>
+                      <div class="raster-detail-preview-actions">
+                        <button
+                          class="secondary-button"
+                          id="show-raster-detail-preview"
+                          type="button"
+                        >
+                              Use low-resolution rendering
+                        </button>
+                        <button
+                          class="secondary-button"
+                          id="remove-raster-detail-preview"
+                          type="button"
+                          hidden
+                        >
+                              Remove low-resolution rendering
+                        </button>
+                      </div>
+                    </div>
+                    </section>
                     <p class="map-layers-empty-state">
                       No map layers yet. Add an item from Catalog.
                     </p>
@@ -543,56 +585,6 @@
                           </button>
                         </div>
                       </section>
-
-                    <section class="rendering-availability">
-                    <div
-                      class="raster-detail-preview-controls"
-                      id="raster-detail-preview-controls"
-                      hidden
-                    >
-                      <p>
-                        <strong>Low-resolution raster rendering</strong>
-                        <span>When a raster is too large for standard whole-raster rendering, EOLab can show a bounded sample grid. Close views automatically use complete source-window detail when the visible area satisfies server-owned limits.</span>
-                      </p>
-                      <small>Sample grids use smooth display interpolation; exact close-view windows use crisp nearest-neighbor presentation. This overview-limited raster is never published to GeoServer. The status below reports the active map area, source window, native blocks, and decoded work.</small>
-                      <output
-                        class="raster-detail-preview-resolution"
-                        id="raster-detail-preview-resolution"
-                        aria-live="polite"
-                      >Base raster detail: —; active view: —</output>
-                      <div class="raster-detail-preview-actions">
-                        <button
-                          class="secondary-button"
-                          id="show-raster-detail-preview"
-                          type="button"
-                        >
-                              Show low-resolution rendering
-                        </button>
-                        <button
-                          class="secondary-button"
-                          id="remove-raster-detail-preview"
-                          type="button"
-                          hidden
-                        >
-                              Remove low-resolution rendering
-                        </button>
-                        <button
-                          class="secondary-button"
-                          id="reassess-detail-raster"
-                          type="button"
-                        >
-                          Check for full visualization
-                        </button>
-                      </div>
-                    </div>
-                    <p
-                      class="map-layer-action-status"
-                      id="catalog-layer-status"
-                      role="status"
-                      aria-live="polite"
-                      aria-atomic="true"
-                    ></p>
-                    </section>
                     </div>
           </section>
           <button

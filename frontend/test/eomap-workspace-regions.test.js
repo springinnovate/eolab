@@ -203,6 +203,7 @@ test("Map layers owns layer presentation, appearance, cutoffs, and limitations",
     const renderingRegion = requireElementRange("eomap-map-layers-region");
     const layerStack = requireElementRange("raster-layer-stack");
     const appearance = requireElementRange("raster-appearance-controls");
+    const renderingFeedback = requireElementRange("catalog-layer-status");
     const percentileControls = requireElementRange(
         "raster-percentile-controls"
     );
@@ -223,6 +224,14 @@ test("Map layers owns layer presentation, appearance, cutoffs, and limitations",
     }
     assert.match(layerStack.source, /data-eomap-region="map-layers"/);
     assert.match(appearance.source, /data-eomap-region="map-layers"/);
+    assert.ok(
+        renderingFeedback.start < layerStack.start,
+        "Rendering feedback should precede the retained layer list"
+    );
+    assert.match(
+        STYLESHEET,
+        /\.map-layer-action-status:not\(:empty\)\s*\{[^}]*border-left:\s*3px solid var\(--brand\)[^}]*background:\s*var\(--surface-selected\)[^}]*padding:\s*10px 12px/s
+    );
     assert.match(
         percentileControls.source,
         /Set the color range from the histogram/
@@ -248,10 +257,14 @@ test("Map layers owns layer presentation, appearance, cutoffs, and limitations",
     }
 });
 
-test("successful Catalog additions advance to Map layers through composition", () => {
+test("Catalog visualization attempts reveal Map layers through composition", () => {
     assert.match(
         COMPOSITION_SOURCE,
-        /onMapLayerAdded\(\);[\s\S]*catch \(renderingError\)/
+        /onRenderingWorkspaceRequested\(\);\s*const pendingAction = beginCatalogMapAction\(/
+    );
+    assert.match(
+        COMPOSITION_SOURCE,
+        /preview === null[\s\S]*onRenderingWorkspaceRequested\(\);[\s\S]*catch \(previewError\)/
     );
     assert.match(
         COMPOSITION_SOURCE,

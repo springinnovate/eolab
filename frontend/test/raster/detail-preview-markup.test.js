@@ -33,11 +33,14 @@ test("low-resolution raster rendering explains its bounded detail handoff", () =
   assert.match(MARKUP, /Processing raster detail…/);
   assert.match(MARKUP, /The displayed raster will\s+update when it is ready/);
   assert.match(MARKUP, /id="show-raster-detail-preview"[^>]*type="button"/s);
-  assert.match(MARKUP, /Show low-resolution rendering/);
+  assert.match(MARKUP, /Use low-resolution rendering/);
   assert.match(MARKUP, /id="remove-raster-detail-preview"[^>]*type="button"/s);
   assert.match(MARKUP, /Remove low-resolution rendering/);
-  assert.match(MARKUP, /id="reassess-detail-raster"[^>]*type="button"/s);
-  assert.match(MARKUP, /Check for full visualization/);
+  assert.doesNotMatch(MARKUP, /id="reassess-detail-raster"/);
+  assert.doesNotMatch(
+    MARKUP,
+    /Assess for visualization|Reassess visualization|Check for full visualization/,
+  );
   assert.match(
     STYLE,
     /\.raster-sample-grid\s*\{[^}]*image-rendering:\s*auto;/s,
