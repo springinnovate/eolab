@@ -70,6 +70,6 @@ test("low-resolution controls are owned by the Rendering workspace", () => {
   assert.ok(previewStart < analysisStart);
   assert.match(
     MARKUP,
-    /id="eomap-map-layers-region"[^>]*role="tabpanel"[^>]*aria-labelledby="toggle-map-layers eomap-map-layers-heading"/s,
+    /id="eomap-map-layers-region"[^>]*role="region"[^>]*aria-labelledby="toggle-map-layers"/s,
   );
 });

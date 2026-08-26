@@ -191,17 +191,17 @@ function createLayoutFixture() {
     operationalRegion.addDescendant(operationalToggle);
     operationalRegion.addDescendant(operationalBody);
 
-    const catalogTab = new FakeLayoutElement({ "aria-selected": "true" });
+    const catalogTab = new FakeLayoutElement({ "aria-expanded": "true" });
     const catalogRegion = new FakeLayoutElement();
     const catalogContent = new FakeLayoutElement();
     catalogRegion.addDescendant(catalogContent);
-    const renderingTab = new FakeLayoutElement({ "aria-selected": "false" });
+    const renderingTab = new FakeLayoutElement({ "aria-expanded": "false" });
     const renderingRegion = new FakeLayoutElement();
     const renderingContent = new FakeLayoutElement();
     renderingRegion.addDescendant(renderingContent);
     renderingRegion.hidden = true;
     const rasterAnalysisTab = new FakeLayoutElement({
-        "aria-selected": "false",
+        "aria-expanded": "false",
     });
     const rasterAnalysisRegion = new FakeLayoutElement();
     const rasterAnalysisContent = new FakeLayoutElement();
@@ -279,7 +279,7 @@ function createLayoutFixture() {
     };
 }
 
-test("workspace tabs expose one selected semantic panel", () => {
+test("workspace disclosures expose independent initial panel states", () => {
     const fixture = createLayoutFixture();
     const controller = new EomapLayoutController({
         documentContext: fixture.document,
@@ -289,25 +289,23 @@ test("workspace tabs expose one selected semantic panel", () => {
 
     assert.equal(fixture.catalogRegion.hidden, false);
     assert.equal(fixture.catalogRegion.getAttribute("aria-hidden"), "false");
-    assert.equal(fixture.catalogTab.getAttribute("aria-selected"), "true");
-    assert.equal(fixture.catalogTab.getAttribute("tabindex"), "0");
+    assert.equal(fixture.catalogTab.getAttribute("aria-expanded"), "true");
     assert.equal(fixture.renderingRegion.hidden, true);
-    assert.equal(fixture.renderingTab.getAttribute("aria-selected"), "false");
-    assert.equal(fixture.renderingTab.getAttribute("tabindex"), "-1");
+    assert.equal(fixture.renderingTab.getAttribute("aria-expanded"), "false");
     assert.equal(fixture.rasterAnalysisRegion.hidden, true);
     assert.equal(
-        fixture.app.classList.contains("is-active-catalog-workspace"),
+        fixture.app.classList.contains("is-expanded-catalog-workspace"),
         true
     );
     assert.equal(
-        fixture.app.classList.contains("is-active-map-layers-workspace"),
+        fixture.app.classList.contains("is-expanded-map-layers-workspace"),
         false
     );
     assert.equal(fixture.timers.length, 0);
     controller.destroy();
 });
 
-test("click and roving keyboard navigation select workspaces", () => {
+test("click toggles each workspace without changing its siblings", () => {
     const fixture = createLayoutFixture();
     let invalidationCount = 0;
     const controller = new EomapLayoutController({
@@ -318,13 +316,12 @@ test("click and roving keyboard navigation select workspaces", () => {
 
     fixture.renderingTab.dispatchEvent(new Event("click"));
 
-    assert.equal(fixture.catalogRegion.hidden, true);
+    assert.equal(fixture.catalogRegion.hidden, false);
     assert.equal(fixture.renderingRegion.hidden, false);
     assert.equal(fixture.rasterAnalysisRegion.hidden, true);
-    assert.equal(fixture.renderingTab.getAttribute("aria-selected"), "true");
-    assert.equal(fixture.renderingTab.getAttribute("tabindex"), "0");
+    assert.equal(fixture.renderingTab.getAttribute("aria-expanded"), "true");
     assert.equal(
-        fixture.app.classList.contains("is-active-map-layers-workspace"),
+        fixture.app.classList.contains("is-expanded-map-layers-workspace"),
         true
     );
     assert.equal(fixture.timers.length, 1);
@@ -333,22 +330,19 @@ test("click and roving keyboard navigation select workspaces", () => {
         CONTROL_PANEL_TRANSITION_MILLISECONDS
     );
 
-    const arrowEvent = new FakeKeyboardEvent("ArrowRight");
-    fixture.renderingTab.dispatchEvent(arrowEvent);
-    assert.equal(arrowEvent.defaultPrevented, true);
-    assert.equal(fixture.renderingRegion.hidden, true);
+    fixture.rasterAnalysisTab.dispatchEvent(new Event("click"));
+    assert.equal(fixture.catalogRegion.hidden, false);
+    assert.equal(fixture.renderingRegion.hidden, false);
     assert.equal(fixture.rasterAnalysisRegion.hidden, false);
-    assert.equal(fixture.rasterAnalysisTab.focused, true);
     assert.equal(
-        fixture.app.classList.contains("is-active-histogram-workspace"),
+        fixture.app.classList.contains("is-expanded-histogram-workspace"),
         true
     );
 
-    const homeEvent = new FakeKeyboardEvent("Home");
-    fixture.rasterAnalysisTab.dispatchEvent(homeEvent);
-    assert.equal(homeEvent.defaultPrevented, true);
+    fixture.renderingTab.dispatchEvent(new Event("click"));
     assert.equal(fixture.catalogRegion.hidden, false);
-    assert.equal(fixture.catalogTab.focused, true);
+    assert.equal(fixture.renderingRegion.hidden, true);
+    assert.equal(fixture.rasterAnalysisRegion.hidden, false);
     assert.equal(fixture.timers.length, 3);
     for (const timer of fixture.timers) {
         timer.callback();
@@ -357,7 +351,7 @@ test("click and roving keyboard navigation select workspaces", () => {
     controller.destroy();
 });
 
-test("composition can reveal a named workspace without stealing focus", () => {
+test("composition can expand a named workspace without closing siblings", () => {
     const fixture = createLayoutFixture();
     const controller = new EomapLayoutController({
         documentContext: fixture.document,
@@ -372,8 +366,9 @@ test("composition can reveal a named workspace without stealing focus", () => {
 
     assert.equal(fixture.panel.classList.contains("is-collapsed"), false);
     assert.equal(fixture.openPanel.hidden, true);
+    assert.equal(fixture.catalogRegion.hidden, false);
     assert.equal(fixture.rasterAnalysisRegion.hidden, false);
-    assert.equal(fixture.rasterAnalysisTab.getAttribute("aria-selected"), "true");
+    assert.equal(fixture.rasterAnalysisTab.getAttribute("aria-expanded"), "true");
     assert.equal(fixture.rasterAnalysisTab.focused, false);
     assert.equal(fixture.rasterAnalysisContent.scrollTop, 0);
     assert.equal(fixture.timers.length, 3);
@@ -384,7 +379,7 @@ test("composition can reveal a named workspace without stealing focus", () => {
     controller.destroy();
 });
 
-test("workspace task links move between Map layers and Histograms", () => {
+test("workspace task links expand Map layers and Histograms independently", () => {
     const fixture = createLayoutFixture();
     const controller = new EomapLayoutController({
         documentContext: fixture.document,
@@ -392,13 +387,16 @@ test("workspace task links move between Map layers and Histograms", () => {
         schedule: fixture.schedule,
     });
 
-    fixture.renderingTab.dispatchEvent(new Event("click"));
     fixture.openMapLayerHistograms.dispatchEvent(new Event("click"));
+    assert.equal(fixture.catalogRegion.hidden, false);
+    assert.equal(fixture.renderingRegion.hidden, true);
     assert.equal(fixture.rasterAnalysisRegion.hidden, false);
     assert.equal(fixture.rasterAnalysisTab.focused, true);
 
     fixture.openHistogramMapLayers.dispatchEvent(new Event("click"));
+    assert.equal(fixture.catalogRegion.hidden, false);
     assert.equal(fixture.renderingRegion.hidden, false);
+    assert.equal(fixture.rasterAnalysisRegion.hidden, false);
     assert.equal(fixture.renderingTab.focused, true);
     controller.destroy();
 });
@@ -478,6 +476,7 @@ test("whole sidebar collapse preserves workspace state, inertness, and focus", (
     assert.equal(fixture.openPanel.getAttribute("aria-expanded"), "false");
     assert.equal(fixture.collapsePanel.getAttribute("aria-expanded"), "false");
     assert.equal(fixture.openPanel.focused, true);
+    assert.equal(fixture.catalogRegion.hidden, false);
     assert.equal(fixture.renderingRegion.hidden, false);
 
     fixture.openPanel.dispatchEvent(new Event("click"));
@@ -489,6 +488,7 @@ test("whole sidebar collapse preserves workspace state, inertness, and focus", (
     assert.equal(fixture.openPanel.getAttribute("aria-expanded"), "true");
     assert.equal(fixture.collapsePanel.getAttribute("aria-expanded"), "true");
     assert.equal(fixture.collapsePanel.focused, true);
+    assert.equal(fixture.catalogRegion.hidden, false);
     assert.equal(fixture.renderingRegion.hidden, false);
     assert.equal(fixture.timers.length, 3);
     for (const timer of fixture.timers) {
@@ -498,7 +498,7 @@ test("whole sidebar collapse preserves workspace state, inertness, and focus", (
     controller.destroy();
 });
 
-test("Escape inside a workspace collapses only the whole sidebar", () => {
+test("Escape inside a workspace collapses that panel and restores focus", () => {
     const fixture = createLayoutFixture();
     const controller = new EomapLayoutController({
         documentContext: fixture.document,
@@ -511,9 +511,10 @@ test("Escape inside a workspace collapses only the whole sidebar", () => {
     fixture.document.dispatchEvent(escapeEvent);
 
     assert.equal(escapeEvent.defaultPrevented, true);
-    assert.equal(fixture.panel.classList.contains("is-collapsed"), true);
-    assert.equal(fixture.openPanel.focused, true);
-    assert.equal(fixture.catalogRegion.hidden, false);
+    assert.equal(fixture.panel.classList.contains("is-collapsed"), false);
+    assert.equal(fixture.catalogTab.focused, true);
+    assert.equal(fixture.catalogTab.getAttribute("aria-expanded"), "false");
+    assert.equal(fixture.catalogRegion.hidden, true);
     assert.equal(fixture.timers.length, 1);
     controller.destroy();
 });

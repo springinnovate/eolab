@@ -65,7 +65,7 @@ test("Catalog scan controls use a native system-state disclosure", () => {
   const renderingStart = markup.indexOf(
     '<details class="system-state rendering-diagnostics"',
   );
-  const panelContentStart = markup.indexOf('<div class="panel-content">');
+  const panelContentStart = markup.indexOf('id="eomap-tools-workbench"');
   const catalogDisclosureMarkup = markup.slice(catalogStart, renderingStart);
 
   assert.ok(catalogStart >= 0);

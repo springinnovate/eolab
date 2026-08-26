@@ -2388,7 +2388,7 @@ h5 {
 }
 
 @media (min-width: 1200px) {
-  #app.is-active-catalog-workspace:has(
+  #app.is-expanded-catalog-workspace:has(
       .catalog-layout.is-catalog-inspector-visible
     ) {
     --active-workspace-width: var(--workspace-catalog-expanded-width);
@@ -2465,56 +2465,64 @@ h5 {
 }
 
 .panel-content {
-  display: grid;
+  display: flex;
   min-width: 0;
   min-height: 0;
   grid-column: 1;
   grid-row: 3;
-  grid-template-rows: auto minmax(0, 1fr);
+  flex-direction: column;
   overflow: hidden;
-}
-
-.workspace-navigation {
-  grid-row: 1;
-  min-width: 0;
-  border-bottom: 1px solid var(--border-2);
   background: var(--surface-3);
-  padding: 7px;
 }
 
-.workspace-tabs {
-  display: grid;
+.workspace-disclosure {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+  width: 100%;
   min-width: 0;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 3px;
-  border-radius: 6px;
-  background: var(--surface-4);
-  padding: 3px;
-}
-
-.workspace-tab {
-  min-width: 0;
-  min-height: 38px;
+  min-height: 42px;
+  align-items: center;
+  justify-content: space-between;
   cursor: pointer;
   border: 0;
-  border-radius: 4px;
-  background: transparent;
-  padding: 7px 5px;
+  border-bottom: 1px solid var(--border-2);
+  border-radius: 0;
+  background: var(--surface-3);
+  padding: 9px 38px 9px 14px;
   color: var(--text-2);
-  font-size: 0.74rem;
-  font-weight: 650;
+  font-size: 0.78rem;
+  font-weight: 700;
   line-height: 1.2;
+  text-align: left;
 }
 
-.workspace-tab:hover {
+.workspace-disclosure::after {
+  position: absolute;
+  right: 15px;
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentcolor;
+  border-bottom: 1.5px solid currentcolor;
+  color: var(--text-3);
+  content: "";
+  transform: rotate(-45deg);
+  transition: transform 160ms ease;
+}
+
+.workspace-disclosure:hover {
   background: var(--surface-hover);
   color: var(--brand-hover);
 }
 
-.workspace-tab[aria-selected="true"] {
+.workspace-disclosure[aria-expanded="true"] {
   background: var(--surface-2);
   color: var(--brand-press);
-  box-shadow: var(--elevation-control);
+  box-shadow: inset 3px 0 0 var(--brand);
+}
+
+.workspace-disclosure[aria-expanded="true"]::after {
+  transform: rotate(45deg);
 }
 
 .catalog-panel,
@@ -2525,8 +2533,7 @@ h5 {
   width: auto;
   min-width: 0;
   min-height: 0;
-  grid-column: 1;
-  grid-row: 2;
+  flex: 1 1 0;
   flex-direction: column;
   overflow: hidden;
   pointer-events: auto;
@@ -2560,7 +2567,7 @@ h5 {
 }
 
 @media (min-width: 1200px) {
-  #app.is-active-catalog-workspace
+  #app.is-expanded-catalog-workspace
     .catalog-layout.is-catalog-inspector-visible {
     grid-template-columns:
       minmax(280px, var(--catalog-results-width))
@@ -2568,12 +2575,12 @@ h5 {
     gap: 18px;
   }
 
-  #app.is-active-catalog-workspace
+  #app.is-expanded-catalog-workspace
     .catalog-layout.is-catalog-inspector-visible.is-catalog-browser-collapsed {
     grid-template-columns: minmax(180px, 0.25fr) minmax(320px, 1.75fr);
   }
 
-  #app.is-active-catalog-workspace
+  #app.is-expanded-catalog-workspace
     .catalog-layout.is-catalog-inspector-visible
     .catalog-inspector {
     display: flex;
@@ -2931,7 +2938,7 @@ h5 {
     display: none;
   }
 
-  #app.is-active-catalog-workspace
+  #app.is-expanded-catalog-workspace
     .catalog-layout.is-catalog-inspector-visible
     .catalog-inspector {
     display: flex;
@@ -2972,11 +2979,7 @@ h5 {
     display: none;
   }
 
-  .workspace-navigation {
-    padding: 5px;
-  }
-
-  .workspace-tab {
+  .workspace-disclosure {
     min-height: 40px;
     font-size: 0.7rem;
   }
@@ -3049,13 +3052,9 @@ h5 {
     padding: 4px 6px;
   }
 
-  .workspace-navigation {
-    padding: 3px;
-  }
-
-  .workspace-tab {
+  .workspace-disclosure {
     min-height: 32px;
-    padding: 4px 3px;
+    padding-block: 4px;
   }
 
   #app:not(.is-control-panel-collapsed) .map-position {
