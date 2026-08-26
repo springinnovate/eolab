@@ -1030,8 +1030,28 @@ h5 {
   font-size: 0.76rem;
 }
 
+.catalog-map-action-status:empty,
 .map-layer-action-status:empty {
   display: none;
+}
+
+.catalog-map-action-status:not(:empty) {
+  flex: 1 1 100%;
+  min-width: 0;
+  border-top: 1px solid var(--border-2);
+  padding-top: 10px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.map-layer-action-status:not(:empty) {
+  border-left: 3px solid var(--brand);
+  border-radius: var(--radius-sm);
+  background: var(--surface-selected);
+  padding: 10px 12px;
+  color: var(--text-1);
+  font-size: 0.8rem;
+  line-height: 1.45;
 }
 
 .raster-layer-stack {

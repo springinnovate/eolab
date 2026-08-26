@@ -147,10 +147,10 @@ control-flow queue time. The exporter endpoint is not published outside the
 Compose network, and the diagnostics panel never exposes metric labels,
 internal URLs, request parameters, or upstream error text.
 
-The scanner assesses mounted GeoTIFFs before offering **Add to map layers**. The policy first accepts supported one-band rasters that are small enough for direct rendering, or larger rasters with bounded base-resolution blocks and a complete internal overview pyramid. A structurally eligible raster is then acquired through a private, read-only endpoint inside the deployed GeoServer 3.0.1 / GeoTools 35.1 image. That endpoint uses the same `GeoTiffReader` and repository hints as publication without creating a coverage store or layer. Other rasters remain fully searchable and inspectable with an explanation of why visualization is unavailable. For existing Items created before this policy, **Assess for visualization** inspects and updates only the selected raster.
+The scanner assesses mounted GeoTIFFs before offering **Add to map layers**. The policy first accepts supported one-band rasters that are small enough for direct rendering, or larger rasters with bounded base-resolution blocks and a complete internal overview pyramid. A structurally eligible raster is then acquired through a private, read-only endpoint inside the deployed GeoServer 3.0.1 / GeoTools 35.1 image. That endpoint uses the same `GeoTiffReader` and repository hints as publication without creating a coverage store or layer. Other rasters remain fully searchable and inspectable with an explanation of why visualization is unavailable. Every Add attempt refreshes the selected Item's assessment and immediately publishes it when eligible, so assessment is not a separate user action.
 
 Large rasters rejected only because internal overviews or the coarsest overview
-scale are inadequate can instead offer an explicit **adaptive bounded raster**
+scale are inadequate can instead offer **Use low-resolution rendering**
 after the current deployed reader accepts their CRS. EOLab builds a map-aligned
 raster-extent sample grid with exactly 127 cells on the projected rectangle's longest
 edge, derives the other edge from its aspect ratio, and observes the source at
@@ -167,19 +167,19 @@ and reports its dimensions. Broad sample grids use smooth display
 interpolation, while exact windows use crisp nearest-neighbor presentation.
 The shared color controls recolor these numeric images in the browser. A
 separate catalog-authorized analysis path supplies the whole-raster or selected
-bounded distribution whether the map uses WMS, adaptive visualization, or no
+bounded distribution whether the map uses WMS, low-resolution rendering, or no
 raster renderer.
 Broad areas use a fixed 127-longest-edge center sample; safely small areas use
 an exact native source window. Hover probing is an independent sibling path:
 it opens the mounted source directly, requests one band-one source cell, and
 never consults GeoServer or WMS publication state. Nodata stays nodata, and the
 raster extent is not presented as a valid-data footprint. See
-[Adaptive bounded raster visualization](docs/raster-detail-only-preview.md) for
+[Low-resolution bounded raster visualization](docs/raster-detail-only-preview.md) for
 applicability, exact resource bounds, cache identity, and approximation
 semantics, and [Rendering-independent raster analysis](docs/raster-analysis.md)
 for statistics authorization, sampling, lifecycle, and cache contracts.
 
-An unavailable raster offers **Reassess visualization**. Reassessment rebuilds the selected Item from the current read-only source, repeats the deployed-reader acquisition, and replaces the prior assessment. Use it after repairing the source metadata. A GeoServer/GeoTools reader upgrade must update the shared reader-contract identifier and rendering policy so stored results cannot be mistaken for assessments made by the new reader. Publication requires both the recorded source identity and reader contract to remain current; it does not create an assessment. Publication rollback and runtime recovery remain governed by the separate recovery contract below.
+Each **Add to map layers** attempt rebuilds the selected Item from the current read-only source, repeats the deployed-reader acquisition, and replaces the prior assessment before publication. A repaired source can therefore be retried with the same Add action. If full rendering remains unavailable, EOLab presents the current reason and offers low-resolution rendering only when the bounded-preview policy permits it. A GeoServer/GeoTools reader upgrade must update the shared reader-contract identifier and rendering policy so stored results cannot be mistaken for assessments made by the new reader. Publication still requires both the recorded source identity and reader contract to remain current. Publication rollback and runtime recovery remain governed by the separate recovery contract below.
 
 Raster publication is a recoverable state transition rather than a blind
 GeoServer create. EOLab preserves complete existing publications, removes and

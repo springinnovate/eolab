@@ -18,6 +18,7 @@ import {
     createDebouncedAction,
     formatCatalogItemCount,
     formatCatalogRasterStatus,
+    formatCatalogVisualizationReason,
     formatScanReconciliation,
     formatScanProgressCounts,
     formatScanTiming,
@@ -444,9 +445,10 @@ function renderCatalogItemInspector(
  * catalogPaneControls Catalog-owned progressive inspector presentation.
  * @param {() => void} [onHistogramRequested=() => {}] Reveals the semantic
  * Histograms workspace after an explicit histogram action.
- * @param {() => void} [onMapLayerAdded=() => {}] Reveals Map layers after a
- * successful add or low-resolution map presentation.
+ * @param {() => void} [onRenderingWorkspaceRequested=() => {}] Reveals Map
+ * layers when a visualization attempt or low-resolution presentation starts.
  * @return {Promise<Function>} Function that reloads the active catalog search.
+ * @throws {TypeError} If the rendering-workspace callback is not callable.
  */
 async function initializeCatalog(
     appGlobalConfiguration,
@@ -454,10 +456,12 @@ async function initializeCatalog(
     onRasterViewerReady = () => {},
     catalogPaneControls,
     onHistogramRequested = () => {},
-    onMapLayerAdded = () => {}
+    onRenderingWorkspaceRequested = () => {}
 ) {
-    if (typeof onMapLayerAdded !== "function") {
-        throw new TypeError("Map-layer presentation callback must be callable");
+    if (typeof onRenderingWorkspaceRequested !== "function") {
+        throw new TypeError(
+            "Rendering-workspace presentation callback must be callable"
+        );
     }
     const catalogSystemStateElements = {
         disclosure: document.querySelector("#system-state"),
@@ -497,8 +501,14 @@ async function initializeCatalog(
     const catalogLayerToggle = document.querySelector(
         "#toggle-catalog-layer"
     );
+    const catalogMapActionStatus = document.querySelector(
+        "#catalog-map-action-status"
+    );
     const catalogLayerStatus = document.querySelector(
         "#catalog-layer-status"
+    );
+    const mapLayerRenderingAnnouncement = document.querySelector(
+        "#map-layer-rendering-announcement"
     );
     const rasterDetailPreviewControls = document.querySelector(
         "#raster-detail-preview-controls"
@@ -517,9 +527,6 @@ async function initializeCatalog(
     );
     const removeRasterDetailPreview = document.querySelector(
         "#remove-raster-detail-preview"
-    );
-    const reassessDetailRaster = document.querySelector(
-        "#reassess-detail-raster"
     );
     const catalogUrl = appGlobalConfiguration.catalogUrl.replace(/\/$/, "");
     const resultStream = new CatalogResultStream(
@@ -545,7 +552,7 @@ async function initializeCatalog(
     };
 
     /**
-     * Report one layer-specific raster tile failure in the Catalog action.
+     * Report one layer-specific tile failure in Map layers.
      *
      * @param {string} message User-facing raster tile failure.
      * @param {Object} item Affected Catalog Item.
@@ -554,6 +561,7 @@ async function initializeCatalog(
     function reportMapTileError(message, item) {
         if (catalogItemsMatch(catalogState.selectedItem, item)) {
             catalogLayerStatus.textContent = message;
+            mapLayerRenderingAnnouncement.textContent = message;
         }
     }
 
@@ -695,27 +703,25 @@ async function initializeCatalog(
             String(pendingAction !== null)
         );
         catalogLayerToggle.disabled = pendingAction !== null;
-        catalogLayerToggle.hidden = supportsDetailPreview;
+        catalogLayerToggle.hidden = false;
         rasterDetailPreviewControls.hidden = !supportsDetailPreview;
         showRasterDetailPreview.disabled = pendingAction !== null;
-        reassessDetailRaster.disabled = pendingAction !== null;
         showRasterDetailPreview.textContent = pendingAction?.buttonText ??
             (hasDetailPreview
                 ? "Update low-resolution rendering"
-                : "Show low-resolution rendering");
+                : "Use low-resolution rendering");
         removeRasterDetailPreview.hidden = !hasDetailPreview;
         removeRasterDetailPreview.disabled = pendingAction !== null;
         renderRasterDetailPreviewResolution(detailPreviewState);
         catalogLayerToggle.textContent = pendingAction?.buttonText ?? (
-            visualization?.metadata === undefined
-                ? "Assess for visualization"
-                : visualization?.metadata?.eligible === false
-                    ? "Reassess visualization"
-                    : isRetained
-                        ? "Remove from map layers"
-                        : "Add to map layers"
+            isRetained
+                ? "Remove from map layers"
+                : "Add to map layers"
         );
-        const fullVisualizationReason = visualization?.metadata?.reason ?? "";
+        const fullVisualizationReason = formatCatalogVisualizationReason(
+            item,
+            visualization?.metadata?.reason
+        );
         let defaultStatus = visualization?.kind === "vector"
             ? [
                 fullVisualizationReason,
@@ -753,8 +759,7 @@ async function initializeCatalog(
                     " No finite data was found at the bounded base positions.";
             }
         }
-        catalogLayerStatus.textContent =
-            pendingAction?.statusText ?? defaultStatus;
+        catalogLayerStatus.textContent = defaultStatus;
     }
 
     /**
@@ -775,6 +780,7 @@ async function initializeCatalog(
         footprintController.clear();
         catalogState.selectedButton = null;
         catalogState.selectedItem = null;
+        catalogMapActionStatus.textContent = "";
         updateCatalogMapAction(null);
         renderCatalogItemInspector(
             null,
@@ -812,6 +818,7 @@ async function initializeCatalog(
         }
         catalogState.selectedButton = itemButton;
         catalogState.selectedItem = item;
+        catalogMapActionStatus.textContent = "";
         itemButton?.classList.add("is-selected");
         itemButton?.setAttribute("aria-pressed", "true");
         footprintController.select(item);
@@ -1155,70 +1162,17 @@ async function initializeCatalog(
     );
     retryPageButton.addEventListener("click", prefetchNextCatalogPage);
     /**
-     * Assess, reassess, add, or remove the selected Catalog map layer.
+     * Add or remove the selected Catalog map layer.
+     *
+     * Every add attempt refreshes the authoritative visualization assessment
+     * before publication. The persisted assessment remains an internal
+     * rendering-authorization contract rather than a separate user action.
      *
      * @return {Promise<void>} Completion after the selected action settles.
      */
     async function toggleCatalogLayer() {
         const selectedItem = catalogState.selectedItem;
         const visualization = catalogVisualization.describe(selectedItem);
-        if (
-            visualization?.metadata === undefined ||
-            visualization.metadata.eligible === false
-        ) {
-            const pendingAction = beginCatalogMapAction(
-                selectedItem,
-                "Assessing...",
-                "Inspecting the selected dataset."
-            );
-            try {
-                const assessedItem = await catalogVisualization.assess(
-                    selectedItem
-                );
-                catalogState.visualizationAssessments.record(
-                    selectedItem,
-                    assessedItem
-                );
-                rasterVisualization.removeSampled(selectedItem);
-                rasterDetailPreview.remove(selectedItem);
-                if (!catalogItemsMatch(
-                    catalogState.selectedItem,
-                    selectedItem
-                )) {
-                    return;
-                }
-                catalogState.visualizationAssessments.apply(
-                    catalogState.selectedItem
-                );
-                if (visualization?.kind === "raster") {
-                    rasterVisualization.activateAnalysis(
-                        catalogState.selectedItem
-                    );
-                }
-                renderCatalogItemInspector(
-                    catalogState.selectedItem,
-                    catalogState.collectionsDocument.collections,
-                    appGlobalConfiguration.scanDisplayPathPrefix
-                );
-                finishCatalogMapAction(pendingAction);
-            } catch (assessmentError) {
-                if (catalogItemsMatch(
-                    catalogState.selectedItem,
-                    selectedItem
-                )) {
-                    finishCatalogMapAction(pendingAction);
-                    catalogLayerToggle.textContent =
-                        visualization?.metadata === undefined
-                            ? "Assess for visualization"
-                            : "Reassess visualization";
-                    catalogLayerStatus.textContent = assessmentError.message;
-                }
-            } finally {
-                finishCatalogMapAction(pendingAction);
-            }
-            return;
-        }
-
         const datasetNoun = catalogVisualization.noun(selectedItem);
         if (catalogVisualization.contains(selectedItem)) {
             catalogVisualization.remove(selectedItem);
@@ -1226,20 +1180,64 @@ async function initializeCatalog(
                 rasterVisualization.activateAnalysis(selectedItem);
             }
             catalogLayerToggle.textContent = "Add to map layers";
-            catalogLayerStatus.textContent =
+            const removalStatus =
                 `${datasetNoun[0].toUpperCase()}${datasetNoun.slice(1)} ` +
                 "removed from Map layers.";
+            catalogMapActionStatus.textContent = removalStatus;
             return;
         }
 
+        catalogMapActionStatus.textContent =
+            `Checking whether the selected ${datasetNoun} can be rendered.`;
         const pendingAction = beginCatalogMapAction(
             selectedItem,
             "Adding to map…",
-            `Preparing the selected ${datasetNoun}.`
+            `Checking whether the selected ${datasetNoun} can be rendered.`
         );
         try {
-            const publication = await catalogVisualization.show(
+            const assessedItem = await catalogVisualization.assess(
                 selectedItem
+            );
+            catalogState.visualizationAssessments.record(
+                selectedItem,
+                assessedItem
+            );
+            rasterVisualization.removeSampled(selectedItem);
+            rasterDetailPreview.remove(selectedItem);
+            if (!catalogItemsMatch(
+                catalogState.selectedItem,
+                selectedItem
+            )) {
+                return;
+            }
+            catalogState.visualizationAssessments.apply(
+                catalogState.selectedItem
+            );
+            const currentItem = catalogState.selectedItem;
+            const currentVisualization = catalogVisualization.describe(
+                currentItem
+            );
+            if (currentVisualization?.kind === "raster") {
+                rasterVisualization.activateAnalysis(currentItem);
+            }
+            renderCatalogItemInspector(
+                currentItem,
+                catalogState.collectionsDocument.collections,
+                appGlobalConfiguration.scanDisplayPathPrefix
+            );
+            if (currentVisualization?.metadata?.eligible !== true) {
+                finishCatalogMapAction(pendingAction);
+                catalogMapActionStatus.textContent =
+                    formatCatalogVisualizationReason(
+                        currentItem,
+                        currentVisualization?.metadata?.reason
+                    ) ||
+                    "Visualization is unavailable for this item.";
+                return;
+            }
+
+            const publication = await catalogVisualization.show(
+                currentItem
             );
             if (
                 publication === null ||
@@ -1249,22 +1247,26 @@ async function initializeCatalog(
             }
             finishCatalogMapAction(pendingAction);
             catalogLayerToggle.textContent = "Remove from map layers";
-            catalogLayerStatus.textContent =
+            const successStatus =
                 `${datasetNoun[0].toUpperCase()}${datasetNoun.slice(1)} ` +
                 "added to Map layers.";
-            onMapLayerAdded();
-        } catch (renderingError) {
+            catalogMapActionStatus.textContent = successStatus;
+            onRenderingWorkspaceRequested();
+        } catch (visualizationError) {
             if (catalogItemsMatch(catalogState.selectedItem, selectedItem)) {
                 finishCatalogMapAction(pendingAction);
                 catalogLayerToggle.textContent = "Add to map layers";
-                catalogLayerStatus.textContent = renderingError.message;
+                catalogMapActionStatus.textContent =
+                    formatCatalogVisualizationReason(
+                        selectedItem,
+                        visualizationError.message
+                    );
             }
         } finally {
             finishCatalogMapAction(pendingAction);
         }
     }
     catalogLayerToggle.addEventListener("click", toggleCatalogLayer);
-    reassessDetailRaster.addEventListener("click", toggleCatalogLayer);
     showRasterDetailPreview.addEventListener("click", async () => {
         const selectedItem = catalogState.selectedItem;
         const pendingAction = beginCatalogMapAction(
@@ -1293,7 +1295,7 @@ async function initializeCatalog(
             );
             finishCatalogMapAction(pendingAction);
             updateCatalogMapAction(selectedItem);
-            onMapLayerAdded();
+            onRenderingWorkspaceRequested();
         } catch (previewError) {
             if (
                 previewError.name !== "AbortError" &&
@@ -1301,6 +1303,8 @@ async function initializeCatalog(
             ) {
                 finishCatalogMapAction(pendingAction);
                 catalogLayerStatus.textContent = previewError.message;
+                mapLayerRenderingAnnouncement.textContent =
+                    previewError.message;
                 if (!rasterDetailPreview.contains(selectedItem)) {
                     renderRasterDetailPreviewResolution(null, "error");
                 }
@@ -1315,6 +1319,8 @@ async function initializeCatalog(
         rasterDetailPreview.remove(selectedItem);
         rasterVisualization.activateAnalysis(selectedItem);
         catalogLayerStatus.textContent =
+            "Sampled raster removed from the map.";
+        mapLayerRenderingAnnouncement.textContent =
             "Sampled raster removed from the map.";
     });
 

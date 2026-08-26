@@ -545,6 +545,25 @@ def test_raster_renderability_policy(
         assert reason_fragment in assessment["reason"]
 
 
+def test_oversized_block_reason_reports_shape_orientation_and_limit() -> None:
+    """Explain an oversized block using display-oriented dimensions."""
+    assessment = assess_raster_renderability(
+        RasterLayout(
+            width=160_216,
+            height=1_000,
+            block_shapes=((1, 160_216),),
+        )
+    )
+
+    assert assessment["eligible"] is False
+    assert assessment["reason_code"] == "blocks_too_large"
+    assert assessment["reason"] == (
+        "Visualization unavailable: this raster needs smaller internal "
+        "blocks. Current internal blocks are 160216 × 1 pixels "
+        "(width × height); each edge must be 1024 pixels or smaller."
+    )
+
+
 @pytest.mark.parametrize("sidecar_suffix", (".ovr", ".aux", ".rrd"))
 def test_large_raster_requires_internal_overviews(
     sidecar_suffix: str,
