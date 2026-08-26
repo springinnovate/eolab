@@ -15,8 +15,9 @@ class FakeControlElement extends EventTarget {
      *
      * @param {string} [type] Input type exposed to event handlers.
      */
-    constructor(type = "") {
+    constructor(type = "", ownerDocument = null) {
         super();
+        this.ownerDocument = ownerDocument;
         this.type = type;
         this.value = "";
         this.textContent = "";
@@ -101,12 +102,20 @@ class FakeControlElement extends EventTarget {
     getBoundingClientRect() {
         return { width: 120, height: 48 };
     }
+
+    /** Give this control focus in its fake document. @return {void} */
+    focus() {
+        if (this.ownerDocument !== null) {
+            this.ownerDocument.activeElement = this;
+        }
+    }
 }
 
 /** Minimal selector and element factory contract used by the controls view. */
 class FakeRasterDocument {
     /** Create an empty document-backed selector registry. */
     constructor() {
+        this.activeElement = null;
         this.elements = new Map();
     }
 
@@ -128,7 +137,7 @@ class FakeRasterDocument {
                         selector.endsWith("-number")
                         ? "number"
                         : "";
-            this.elements.set(selector, new FakeControlElement(type));
+            this.elements.set(selector, new FakeControlElement(type, this));
         }
         return this.elements.get(selector);
     }
@@ -139,7 +148,7 @@ class FakeRasterDocument {
      * @return {FakeControlElement} New fake element.
      */
     createElement() {
-        return new FakeControlElement();
+        return new FakeControlElement("", this);
     }
 
     /**
@@ -148,7 +157,7 @@ class FakeRasterDocument {
      * @return {FakeControlElement} New fake SVG element.
      */
     createElementNS() {
-        return new FakeControlElement();
+        return new FakeControlElement("", this);
     }
 }
 
@@ -171,8 +180,13 @@ test("RasterControlsView owns style values and semantic control events", () => {
         maximumColor: "#ffffff",
     };
     view.setStyle(style, "viridis");
+    view.setAppearanceStatus("Applied the Viridis palette.");
     assert.deepEqual(view.readStyle(), style);
     assert.equal(view.getPaletteName(), "viridis");
+    assert.equal(
+        documentContext.querySelector("#raster-appearance-status").textContent,
+        "Applied the Viridis palette."
+    );
     assert.match(
         documentContext.querySelector("#raster-legend").style.background,
         /#000000/
@@ -203,6 +217,18 @@ test("RasterControlsView owns style values and semantic control events", () => {
         .querySelector("#raster-sample-window-range")
         .dispatchEvent(new Event("input"));
     assert.deepEqual(received, [["style", true], ["range", "80"]]);
+
+    documentContext.querySelector("#raster-histogram").hidden = true;
+    documentContext.querySelector("#raster-appearance-controls").hidden = true;
+    view.setControlsVisible(true);
+    view.showHistogramWidget();
+    assert.equal(documentContext.querySelector("#raster-histogram").hidden, false);
+    view.setRenderingControlsAvailable(true);
+    assert.equal(documentContext.querySelector("#raster-histogram").hidden, false);
+    assert.equal(
+        documentContext.querySelector("#raster-appearance-controls").hidden,
+        false
+    );
 
     view.unbind();
     documentContext
@@ -239,6 +265,11 @@ test("RasterControlsView exposes accessible exclusive histogram-area choices", (
 
     view.setTemporaryAoiAvailability(temporaryAoi);
     view.setSamplingAreaMode("temporaryAoi");
+    assert.equal(
+        documentContext.querySelector("#raster-histogram")
+            .getAttribute("data-sampling-area"),
+        "temporaryAoi"
+    );
     documentContext
         .querySelector("#select-raster-sample-window")
         .dispatchEvent(new Event("click"));
@@ -311,7 +342,7 @@ test("RasterControlsView reports renderer visibility without gating analysis", (
 
     assert.match(
         documentContext.querySelector("#raster-active-layer-label").textContent,
-        /global-temperature\.tif; this layer is hidden/
+        /global-temperature\.tif — not visible on the map/
     );
     assert.equal(
         documentContext.querySelector("#sample-raster-map-center").disabled,
@@ -338,6 +369,36 @@ test("RasterControlsView reports renderer visibility without gating analysis", (
     );
 });
 
+test("RasterControlsView delegates retained histogram summaries", () => {
+    const documentContext = new FakeRasterDocument();
+    const view = new RasterControlsView(documentContext);
+
+    view.renderLayerHistograms([
+        {
+            key: "retained-raster",
+            label: "retained-raster.tif",
+            state: "ready",
+            scope: "Whole raster",
+            counts: [1, 3, 2],
+        },
+    ], "retained-raster");
+    view.setActiveLayer("retained-raster.tif", true);
+
+    assert.equal(
+        documentContext.querySelector("#raster-histogram-list").children.length,
+        1
+    );
+    assert.equal(
+        documentContext.querySelector("#raster-histogram-detail-layer")
+            .textContent,
+        "retained-raster.tif"
+    );
+    assert.equal(
+        documentContext.querySelector("#raster-appearance-layer").textContent,
+        "retained-raster.tif"
+    );
+});
+
 test("RasterControlsView owns composite visibility without clearing subgroup state", () => {
     const documentContext = new FakeRasterDocument();
     const view = new RasterControlsView(documentContext);
@@ -351,21 +412,28 @@ test("RasterControlsView owns composite visibility without clearing subgroup sta
     );
 
     view.setStatisticsBusy(true);
-    view.setStatisticsStatus("Calculating selected-area distribution...");
+    view.setStatisticsStatus("Calculating selected-area histogram...");
     view.setSampleWindowStatus("Selected geographic map window.");
     view.setControlsVisible(false);
 
     assert.equal(root.hidden, true);
+    assert.equal(histogram.hidden, true);
     assert.equal(histogram.getAttribute("aria-busy"), "true");
     assert.equal(
         documentContext.querySelector("#raster-histogram-status").textContent,
-        "Calculating selected-area distribution..."
+        "Calculating selected-area histogram..."
     );
     assert.equal(samplingStatus.textContent, "Selected geographic map window.");
-    assert.equal(appearance.hidden, false);
+    assert.equal(appearance.hidden, true);
 
     view.setControlsVisible(true);
     assert.equal(root.hidden, false);
+    assert.equal(histogram.hidden, false);
+    assert.equal(appearance.hidden, true);
+    view.setRenderingControlsAvailable(true);
+    assert.equal(appearance.hidden, false);
+    view.showHistogramWidget();
+    assert.equal(histogram.hidden, false);
     assert.equal(histogram.getAttribute("aria-busy"), "true");
     assert.equal(samplingStatus.textContent, "Selected geographic map window.");
 });
@@ -450,6 +518,7 @@ test("RasterControlsView preserves the raster viewer compatibility surface", () 
     const expectedMethods = [
         "populatePalettes",
         "setActiveLayer",
+        "renderLayerHistograms",
         "bind",
         "unbind",
         "readStyle",
@@ -478,6 +547,9 @@ test("RasterControlsView preserves the raster viewer compatibility surface", () 
         "setClearSampleWindowLabel",
         "setTemporaryAoiAvailability",
         "setSamplingAreaMode",
+        "showHistogramWidget",
+        "showAppearanceWidget",
+        "setRenderingControlsAvailable",
         "setControlsVisible",
         "isPixelProbeVisible",
         "setPixelProbeContent",

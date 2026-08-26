@@ -440,13 +440,25 @@ function renderCatalogItemInspector(
  * @param {(viewer: import("./raster/raster-viewer.js").RasterViewer) => void}
  * [onRasterViewerReady=() => {}] Receives the raster public boundary before
  * asynchronous catalog loading begins.
+ * @param {import("./catalog-pane-controller.js").CatalogPaneControls}
+ * catalogPaneControls Catalog-owned progressive inspector presentation.
+ * @param {() => void} [onHistogramRequested=() => {}] Reveals the semantic
+ * Histograms workspace after an explicit histogram action.
+ * @param {() => void} [onMapLayerAdded=() => {}] Reveals Map layers after a
+ * successful add or low-resolution map presentation.
  * @return {Promise<Function>} Function that reloads the active catalog search.
  */
 async function initializeCatalog(
     appGlobalConfiguration,
     leafletMap,
-    onRasterViewerReady = () => {}
+    onRasterViewerReady = () => {},
+    catalogPaneControls,
+    onHistogramRequested = () => {},
+    onMapLayerAdded = () => {}
 ) {
+    if (typeof onMapLayerAdded !== "function") {
+        throw new TypeError("Map-layer presentation callback must be callable");
+    }
     const catalogSystemStateElements = {
         disclosure: document.querySelector("#system-state"),
         stateText: document.querySelector("#system-state-text"),
@@ -628,6 +640,7 @@ async function initializeCatalog(
         leafletMap,
         leaflet: L,
         onTileError: reportMapTileError,
+        onHistogramRequested,
     }, { mapLayerController });
     const catalogVisualization = new CatalogVisualizationCoordinator(
         rasterVisualization,
@@ -688,8 +701,8 @@ async function initializeCatalog(
         reassessDetailRaster.disabled = pendingAction !== null;
         showRasterDetailPreview.textContent = pendingAction?.buttonText ??
             (hasDetailPreview
-                ? "Update adaptive raster"
-                : "Show adaptive raster");
+                ? "Update low-resolution rendering"
+                : "Show low-resolution rendering");
         removeRasterDetailPreview.hidden = !hasDetailPreview;
         removeRasterDetailPreview.disabled = pendingAction !== null;
         renderRasterDetailPreviewResolution(detailPreviewState);
@@ -707,7 +720,7 @@ async function initializeCatalog(
             ? [
                 fullVisualizationReason,
                 isRetained
-                    ? "This vector layer is retained in the map layer stack."
+                    ? "This vector is already in Map layers."
                     : "",
             ].filter((message) => message !== "").join(" ")
             : formatCatalogRasterStatus(
@@ -768,6 +781,7 @@ async function initializeCatalog(
             catalogState.collectionsDocument?.collections ?? [],
             appGlobalConfiguration.scanDisplayPathPrefix
         );
+        catalogPaneControls.showResults();
     }
 
     /**
@@ -812,6 +826,7 @@ async function initializeCatalog(
             rasterVisualization.activateAnalysis(item);
         }
         updateCatalogMapAction(item);
+        catalogPaneControls.showInspector({ moveFocus: true });
     }
 
     /**
@@ -1213,7 +1228,7 @@ async function initializeCatalog(
             catalogLayerToggle.textContent = "Add to map layers";
             catalogLayerStatus.textContent =
                 `${datasetNoun[0].toUpperCase()}${datasetNoun.slice(1)} ` +
-                "removed from the map layer stack.";
+                "removed from Map layers.";
             return;
         }
 
@@ -1236,7 +1251,8 @@ async function initializeCatalog(
             catalogLayerToggle.textContent = "Remove from map layers";
             catalogLayerStatus.textContent =
                 `${datasetNoun[0].toUpperCase()}${datasetNoun.slice(1)} ` +
-                "retained in map layers.";
+                "added to Map layers.";
+            onMapLayerAdded();
         } catch (renderingError) {
             if (catalogItemsMatch(catalogState.selectedItem, selectedItem)) {
                 finishCatalogMapAction(pendingAction);
@@ -1277,6 +1293,7 @@ async function initializeCatalog(
             );
             finishCatalogMapAction(pendingAction);
             updateCatalogMapAction(selectedItem);
+            onMapLayerAdded();
         } catch (previewError) {
             if (
                 previewError.name !== "AbortError" &&
@@ -1498,12 +1515,17 @@ async function initializeScanner(refreshCatalog) {
  * @return {Promise<void>} Resolves after the interface is initialized.
  */
 async function startApplication() {
-    initializeCatalogPaneControls();
+    /** @type {EomapLayoutController|null} */
+    let layoutController = null;
+    const catalogPaneControls = initializeCatalogPaneControls(
+        document,
+        () => layoutController?.notifyLayoutChange()
+    );
     const appGlobalConfiguration = await loadAppGlobalConfiguration();
     applyAppGlobalConfiguration(appGlobalConfiguration);
     initializeRenderingDiagnostics();
     const leafletMap = initializeMap(appGlobalConfiguration);
-    new EomapLayoutController({
+    layoutController = new EomapLayoutController({
         documentContext: document,
         schedule: window.setTimeout.bind(window),
         invalidateMapSize: () => leafletMap.invalidateSize(),
@@ -1516,7 +1538,10 @@ async function startApplication() {
             temporaryAoi.subscribeSamplingArea(
                 rasterViewer.setTemporaryAoi
             );
-        }
+        },
+        catalogPaneControls,
+        () => layoutController.showWorkspace("histogram"),
+        () => layoutController.showWorkspace("map-layers")
     );
     await initializeScanner(refreshCatalog);
 }

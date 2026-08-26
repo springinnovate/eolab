@@ -125,19 +125,20 @@ export function formatCatalogRasterStatus(
     let renderingExplanation = "";
     if (isRetained) {
         renderingExplanation =
-            "This raster is retained in the map layer stack.";
+            "This raster is already in Map layers.";
     }
     if (supportsDetailPreview) {
         renderingExplanation =
-            "Normal full visualization is unavailable. Broad views use " +
-            "a fixed 127-longest-edge center sample; close views " +
-            "automatically use exact bounded source detail.";
+            "Standard whole-raster rendering is unavailable. The " +
+            "low-resolution fallback uses a fixed 127-longest-edge center " +
+            "sample for broad views; close views automatically use exact " +
+            "bounded source detail.";
     }
     if (hasDetailPreview) {
         renderingExplanation =
-            "Adaptive detail-only raster — not a whole-raster rendering. " +
-            "The orange dashed outline is the raster extent; zooming " +
-            "requests a bounded current-view layer.";
+            "Low-resolution rendering active — not a whole-raster " +
+            "rendering. The orange dashed outline is the raster extent; " +
+            "zooming requests a bounded current-view layer.";
     }
     return [fullVisualizationReason, renderingExplanation]
         .filter((message) => message !== "")

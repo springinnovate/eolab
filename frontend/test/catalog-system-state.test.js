@@ -103,7 +103,7 @@ test("Catalog and Rendering disclosures share bounded responsive details styling
   );
   assert.match(
     styles,
-    /@media \(max-width: 700px\) \{[\s\S]*?\.system-state > summary,\s*\.system-state-details-body \{\s*padding-right: 20px;\s*padding-left: 20px;/,
+    /@media \(max-width: 820px\) \{[\s\S]*?\.system-state > summary,\s*\.system-state-details-body \{\s*padding-right: 12px;\s*padding-left: 12px;/,
   );
   assert.match(styles, /\.system-state-details-body:focus-visible/);
 });

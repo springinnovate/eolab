@@ -3,13 +3,16 @@
  *
  * RasterControlsView preserves the viewer-facing contract while delegating
  * subgroup element lookup, direct event listeners, control reads, and
- * presentation to focused appearance, sampling-area, histogram, and
- * pixel-probe adapters. The façade owns only its composite root visibility and
- * active-raster identity presentation. It contains no fetch, Leaflet,
+ * presentation to focused appearance, sampling-area, histogram, percentile,
+ * and pixel-probe adapters. The façade owns only its composite root visibility
+ * and active-raster identity presentation. It contains no fetch, Leaflet,
  * rendering, statistics, or lifecycle decisions.
  */
 import { RasterAppearanceControlsView } from "./appearance-controls-view.js";
 import { RasterHistogramControlsView } from "./histogram-controls-view.js";
+import {
+    RasterPercentileControlsView,
+} from "./percentile-controls-view.js";
 import { RasterPixelProbeView } from "./pixel-probe-view.js";
 import { requireRasterControl } from "./required-control.js";
 import {
@@ -25,6 +28,8 @@ import {
  * @property {() => void} onPercentileInput Updates percentile estimates.
  * @property {() => void} onApplyPercentiles Applies the percentile range.
  * @property {() => void} onRetryStatistics Retries raster statistics.
+ * @property {(key: string) => void} onSelectHistogram Activates one retained
+ * raster selected from the histogram summaries.
  * @property {(value: string) => void} onSampleWindowRangeInput Changes the
  * sample-window size from the range control.
  * @property {(value: string) => void} onSampleWindowNumberInput Changes the
@@ -45,6 +50,7 @@ export class RasterControlsView {
     #activeLayerLabel;
     #appearanceView;
     #histogramView;
+    #percentileView;
     #pixelProbeView;
     #root;
     #samplingAreaView;
@@ -65,10 +71,11 @@ export class RasterControlsView {
             documentContext,
             "#raster-active-layer-label"
         );
-        this.#appearanceView = new RasterAppearanceControlsView(
+        this.#appearanceView = new RasterAppearanceControlsView(documentContext);
+        this.#histogramView = new RasterHistogramControlsView(documentContext);
+        this.#percentileView = new RasterPercentileControlsView(
             documentContext
         );
-        this.#histogramView = new RasterHistogramControlsView(documentContext);
         this.#samplingAreaView = new RasterSamplingAreaControlsView(
             documentContext
         );
@@ -94,10 +101,23 @@ export class RasterControlsView {
      */
     setActiveLayer(label, visible) {
         this.#activeLayerLabel.textContent = visible
-            ? `Editing ${label}.`
-            : `Editing ${label}; this layer is hidden from the map.`;
+            ? label
+            : `${label} — not visible on the map`;
         this.#samplingAreaView.enableActiveRasterActions();
+        this.#appearanceView.setActiveLayer(label, visible);
+        this.#histogramView.setActiveLayer(label);
         this.#histogramView.enableActiveRasterActions();
+    }
+
+    /**
+     * Render one summary per retained raster without exposing layer-stack DOM.
+     *
+     * @param {Object[]} summaries Presentation-ready histogram summaries.
+     * @param {string|null} activeKey Active retained raster key, or null.
+     * @return {void}
+     */
+    renderLayerHistograms(summaries, activeKey) {
+        this.#histogramView.renderLayerHistograms(summaries, activeKey);
     }
 
     /**
@@ -109,6 +129,7 @@ export class RasterControlsView {
     bind(handlers) {
         this.#appearanceView.bind(handlers);
         this.#histogramView.bind(handlers);
+        this.#percentileView.bind(handlers);
         this.#samplingAreaView.bind(handlers);
     }
 
@@ -116,6 +137,7 @@ export class RasterControlsView {
     unbind() {
         this.#appearanceView.unbind();
         this.#histogramView.unbind();
+        this.#percentileView.unbind();
         this.#samplingAreaView.unbind();
     }
 
@@ -165,6 +187,17 @@ export class RasterControlsView {
     }
 
     /**
+     * Announce one completed appearance action beside the style controls.
+     *
+     * @param {string} message Concise result, or an empty string to clear it.
+     * @return {void}
+     * @throws {TypeError} If the message is not a string.
+     */
+    setAppearanceStatus(message) {
+        this.#appearanceView.setStatus(message);
+    }
+
+    /**
      * Render the accessible legend for one committed raster style.
      *
      * @param {Object} style Committed numeric thresholds and color stops.
@@ -180,7 +213,7 @@ export class RasterControlsView {
      * @return {{lower: number, middle: number, upper: number}} Percentiles.
      */
     readPercentiles() {
-        return this.#histogramView.readPercentiles();
+        return this.#percentileView.readPercentiles();
     }
 
     /**
@@ -190,7 +223,7 @@ export class RasterControlsView {
      * @return {void}
      */
     resetPercentiles(defaults) {
-        this.#histogramView.resetPercentiles(defaults);
+        this.#percentileView.resetPercentiles(defaults);
     }
 
     /**
@@ -201,11 +234,11 @@ export class RasterControlsView {
      * @param {{lower: string, middle: string, upper: string}} values Formatted
      * approximate raster values.
      * @param {boolean} isOrdered Whether the positions increase strictly.
-     * @param {boolean} isApplicable Whether the current distribution applies.
+     * @param {boolean} isApplicable Whether the current histogram applies.
      * @return {void}
      */
     renderPercentileValues(percentiles, values, isOrdered, isApplicable) {
-        this.#histogramView.renderPercentileValues(
+        this.#percentileView.renderPercentileValues(
             percentiles,
             values,
             isOrdered,
@@ -213,9 +246,10 @@ export class RasterControlsView {
         );
     }
 
-    /** Remove histogram content and distribution-only controls. @return {void} */
+    /** Remove histogram content and hide result-only controls. @return {void} */
     clearStatistics() {
         this.#histogramView.clearStatistics();
+        this.#percentileView.setPercentileControlsVisible(false);
     }
 
     /**
@@ -277,7 +311,7 @@ export class RasterControlsView {
      * @return {void}
      */
     setPercentileControlsVisible(isVisible) {
-        this.#histogramView.setPercentileControlsVisible(isVisible);
+        this.#percentileView.setPercentileControlsVisible(isVisible);
     }
 
     /**
@@ -297,7 +331,7 @@ export class RasterControlsView {
      * @return {void}
      */
     setApplyPercentilesEnabled(isEnabled) {
-        this.#histogramView.setApplyPercentilesEnabled(isEnabled);
+        this.#percentileView.setApplyPercentilesEnabled(isEnabled);
     }
 
     /**
@@ -366,10 +400,43 @@ export class RasterControlsView {
      *
      * @param {"none"|"wholeRaster"|"selectedArea"|"temporaryAoi"} mode
      * Active area, or no selected histogram area for a sampled raster.
+     * @param {string} [label=""] Optional semantic histogram scope label.
      * @return {void}
      */
-    setSamplingAreaMode(mode) {
+    setSamplingAreaMode(mode, label = "") {
         this.#samplingAreaView.setSamplingAreaMode(mode);
+        this.#histogramView.setSamplingAreaMode(mode, label);
+    }
+
+    /**
+     * Reveal the contextual histogram for an explicit sampling request.
+     * The current result remains owned by the histogram adapter.
+     *
+     * @return {void}
+     */
+    showHistogramWidget() {
+        this.#histogramView.showWidget();
+    }
+
+    /**
+     * Reveal the contextual appearance editor without changing raster style.
+     *
+     * @return {void}
+     */
+    showAppearanceWidget() {
+        this.#appearanceView.showWidget();
+    }
+
+    /**
+     * Set whether the active analysis target has a map renderer whose style
+     * can be edited. Analysis and histogram visibility remain independent.
+     *
+     * @param {boolean} isAvailable Whether rendering controls have a target.
+     * @return {void}
+     */
+    setRenderingControlsAvailable(isAvailable) {
+        this.#appearanceView.setActiveRasterAvailable(isAvailable);
+        this.#percentileView.setRenderingAvailable(isAvailable);
     }
 
     /**
@@ -380,6 +447,10 @@ export class RasterControlsView {
      */
     setControlsVisible(isVisible) {
         this.#root.hidden = !isVisible;
+        this.#histogramView.setActiveRasterAvailable(isVisible);
+        if (!isVisible) {
+            this.setRenderingControlsAvailable(false);
+        }
     }
 
     /** Return whether the pointer probe is visible. @return {boolean} Visibility. */

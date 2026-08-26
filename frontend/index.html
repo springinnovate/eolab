@@ -7,7 +7,10 @@
     <title>TITLE TO BE SET BY CONFIGURATION</title>
   </head>
   <body>
-    <main id="app" class="is-catalog-workspace">
+    <main
+      id="app"
+      class="is-active-catalog-workspace"
+    >
       <div
         id="map"
         role="region"
@@ -59,7 +62,14 @@
               SUBTITLE TO BE SET BY CONFIGURATION
             </p>
           </div>
-          <button class="icon-button" id="collapse-panel" type="button" aria-label="Collapse control panel">
+          <button
+            class="icon-button"
+            id="collapse-panel"
+            type="button"
+            aria-label="Collapse control panel"
+            aria-controls="control-panel"
+            aria-expanded="true"
+          >
             <span aria-hidden="true">&#10005;</span>
           </button>
         </header>
@@ -67,7 +77,25 @@
         <section
           class="eomap-workspace-region operational-status-region"
           id="eomap-operational-status-region"
-          aria-label="Operational status"
+          aria-labelledby="eomap-operational-status-heading"
+        >
+        <div class="workspace-region-heading operational-status-heading">
+          <h2 id="eomap-operational-status-heading">Operational status</h2>
+          <button
+            class="secondary-button workspace-region-toggle"
+            id="toggle-operational-status"
+            type="button"
+            aria-controls="eomap-operational-status-body"
+            aria-expanded="false"
+          >
+            Show status details
+          </button>
+        </div>
+        <div
+          class="workspace-region-body operational-status-body"
+          id="eomap-operational-status-body"
+          aria-hidden="true"
+          hidden
         >
         <details class="system-state catalog-system-state" id="system-state">
           <summary>
@@ -175,170 +203,65 @@
           aria-live="polite"
           aria-atomic="true"
         ></p>
+        </div>
         </section>
 
         <div class="panel-content">
-          <section
-            class="temporary-aoi-card"
-            id="temporary-aoi"
-            data-eomap-region="map-layers"
-            aria-labelledby="temporary-aoi-heading"
-            aria-busy="false"
+          <nav
+            class="workspace-navigation"
+            id="eomap-tools-workbench"
+            aria-label="EOMap workspaces"
           >
-            <div class="temporary-aoi-heading">
-              <div>
-                <p class="section-label">Map overlay</p>
-                <h2 id="temporary-aoi-heading">Temporary AOI</h2>
-              </div>
-              <p>Not added to the Catalog</p>
-            </div>
-            <p class="temporary-aoi-copy" id="temporary-aoi-help">
-              Upload one GeoPackage or zipped Shapefile. Files are validated,
-              displayed temporarily, and removed automatically after expiration.
-            </p>
-            <form class="temporary-aoi-upload" id="temporary-aoi-upload-form">
-              <label for="temporary-aoi-file">
-                <span>AOI file</span>
-                <input
-                  id="temporary-aoi-file"
-                  name="file"
-                  type="file"
-                  accept=".gpkg,.zip,application/geopackage+sqlite3,application/zip"
-                  aria-describedby="temporary-aoi-help temporary-aoi-status temporary-aoi-error"
-                  required
-                />
-              </label>
-              <button
-                class="secondary-button"
-                id="upload-temporary-aoi"
-                type="submit"
-              >
-                Upload AOI
-              </button>
-            </form>
             <div
-              class="temporary-aoi-upload-progress"
-              id="temporary-aoi-upload-progress-container"
-              hidden
-            >
-              <label for="temporary-aoi-upload-progress">
-                Approximate upload progress
-              </label>
-              <progress
-                id="temporary-aoi-upload-progress"
-                max="100"
-                value="0"
-                aria-describedby="temporary-aoi-upload-progress-detail temporary-aoi-status"
-              ></progress>
-              <p id="temporary-aoi-upload-progress-detail"></p>
-            </div>
-            <form
-              class="temporary-aoi-selection"
-              id="temporary-aoi-selection-form"
-              aria-labelledby="temporary-aoi-selection-heading"
-              hidden
-            >
-              <strong id="temporary-aoi-selection-heading">Choose a spatial dataset</strong>
-              <p>
-                <span id="temporary-aoi-selection-filename"></span> contains
-                more than one usable spatial dataset. Nothing will be displayed
-                until you choose one.
-              </p>
-              <label for="temporary-aoi-dataset">
-                <span>Dataset or layer</span>
-                <select
-                  id="temporary-aoi-dataset"
-                  aria-describedby="temporary-aoi-status temporary-aoi-error"
-                ></select>
-              </label>
-              <div class="temporary-aoi-selection-actions">
-                <button class="secondary-button" type="submit">Display dataset</button>
-                <button
-                  class="secondary-button"
-                  id="cancel-temporary-aoi-selection"
-                  type="button"
-                >
-                  Cancel upload
-                </button>
-              </div>
-            </form>
-            <dl class="temporary-aoi-details" id="temporary-aoi-details" hidden>
-              <div>
-                <dt>File</dt>
-                <dd id="temporary-aoi-filename"></dd>
-              </div>
-              <div>
-                <dt>Layer</dt>
-                <dd id="temporary-aoi-layer"></dd>
-              </div>
-              <div>
-                <dt>Expires</dt>
-                <dd><time id="temporary-aoi-expiration"></time></dd>
-              </div>
-            </dl>
-            <div
-              class="temporary-aoi-actions"
-              id="temporary-aoi-actions"
-              role="group"
-              aria-label="Temporary AOI map actions"
-              hidden
+              class="workspace-tabs"
+              role="tablist"
+              aria-label="EOMap workspaces"
             >
               <button
-                class="secondary-button"
-                id="toggle-temporary-aoi"
+                class="workspace-tab"
+                id="toggle-catalog-workspace"
                 type="button"
-                aria-pressed="true"
+                role="tab"
+                aria-controls="eomap-catalog-region"
+                aria-selected="true"
               >
-                Hide
+                Catalog
               </button>
               <button
-                class="secondary-button"
-                id="zoom-temporary-aoi"
+                class="workspace-tab"
+                id="toggle-map-layers"
                 type="button"
+                role="tab"
+                aria-controls="eomap-map-layers-region"
+                aria-selected="false"
+                tabindex="-1"
               >
-                Zoom to AOI
+                Map layers
               </button>
               <button
-                class="secondary-button is-danger"
-                id="remove-temporary-aoi"
+                class="workspace-tab"
+                id="toggle-raster-interpretation"
                 type="button"
+                role="tab"
+                aria-controls="eomap-raster-interpretation-region"
+                aria-selected="false"
+                tabindex="-1"
               >
-                Remove
+                Histograms
               </button>
             </div>
-            <p
-              class="temporary-aoi-status"
-              id="temporary-aoi-status"
-              role="status"
-              aria-live="polite"
-              aria-atomic="true"
-            ></p>
-            <p
-              class="temporary-aoi-error"
-              id="temporary-aoi-error"
-              role="alert"
-              aria-atomic="true"
-            ></p>
-          </section>
+          </nav>
           <section
             class="catalog-panel eomap-workspace-region"
             id="eomap-catalog-region"
-            aria-labelledby="eomap-catalog-heading"
+            role="tabpanel"
+            aria-labelledby="toggle-catalog-workspace eomap-catalog-heading"
           >
             <div class="catalog-heading">
               <div>
                 <p class="section-label">Data discovery</p>
                 <h2 id="eomap-catalog-heading">Catalog</h2>
               </div>
-              <button
-                class="secondary-button"
-                id="toggle-catalog-workspace"
-                type="button"
-                aria-controls="catalog-item-inspector"
-                aria-expanded="true"
-              >
-                Minimize catalog
-              </button>
             </div>
             <p class="section-copy" id="catalog-message">Checking catalog configuration.</p>
             <div class="catalog-layout" id="catalog-layout">
@@ -348,7 +271,7 @@
                 aria-labelledby="catalog-results-heading"
               >
                 <div class="catalog-pane-heading">
-                  <h3 id="catalog-results-heading">Catalog results</h3>
+                  <h3 id="catalog-results-heading" tabindex="-1">Catalog results</h3>
                   <button
                     class="secondary-button catalog-pane-toggle"
                     id="toggle-catalog-results"
@@ -408,23 +331,33 @@
               <aside
                 class="catalog-inspector catalog-pane"
                 id="catalog-item-inspector"
-                aria-hidden="false"
+                aria-hidden="true"
                 aria-labelledby="catalog-inspector-heading"
+                hidden
               >
                 <div class="catalog-pane-heading">
                   <div>
                     <p class="section-label">Selected record</p>
-                    <h3 id="catalog-inspector-heading">Item inspector</h3>
+                    <h3 id="catalog-inspector-heading" tabindex="-1">Item inspector</h3>
                   </div>
-                  <button
-                    class="secondary-button catalog-pane-toggle"
-                    id="toggle-catalog-inspector"
-                    type="button"
-                    aria-controls="catalog-inspector-body"
-                    aria-expanded="true"
-                  >
-                    Collapse Selected record
-                  </button>
+                  <div class="catalog-inspector-navigation">
+                    <button
+                      class="secondary-button catalog-inspector-back"
+                      id="back-to-catalog-results"
+                      type="button"
+                    >
+                      Back to results
+                    </button>
+                    <button
+                      class="secondary-button catalog-pane-toggle"
+                      id="toggle-catalog-inspector"
+                      type="button"
+                      aria-controls="catalog-inspector-body"
+                      aria-expanded="false"
+                    >
+                      Expand Selected record
+                    </button>
+                  </div>
                 </div>
                 <div class="catalog-pane-body catalog-inspector-body" id="catalog-inspector-body">
                   <div class="catalog-map-actions" id="catalog-map-actions" hidden>
@@ -455,17 +388,192 @@
                   <section
                     class="eomap-workspace-region map-layers-region"
                     id="eomap-map-layers-region"
-                    aria-label="Map and layers"
+                    role="tabpanel"
+                    aria-labelledby="toggle-map-layers eomap-map-layers-heading"
                     aria-controls="map"
+                    hidden
                   >
+                    <div class="workspace-region-heading">
+                      <div>
+                        <h2 id="eomap-map-layers-heading">Map layers</h2>
+                      </div>
+                      <button
+                        class="secondary-button"
+                        id="open-map-layer-histograms"
+                        type="button"
+                      >
+                        Histograms
+                      </button>
+                    </div>
+                    <div
+                      class="workspace-region-body map-layers-body"
+                      id="eomap-map-layers-body"
+                      aria-hidden="false"
+                    >
+                    <p class="map-layers-empty-state">
+                      No map layers yet. Add an item from Catalog.
+                    </p>
+                    <section
+                      class="map-layer-widget raster-layer-stack"
+                      id="raster-layer-stack"
+                      data-eomap-region="map-layers"
+                      aria-labelledby="raster-layer-stack-heading"
+                      hidden
+                    >
+                      <div class="raster-layer-stack-heading">
+                        <div>
+                          <h3 id="raster-layer-stack-heading">Layers on this map</h3>
+                        </div>
+                        <button
+                          class="secondary-button"
+                          id="toggle-map-layer-widget"
+                          type="button"
+                          aria-controls="raster-layer-stack-body"
+                          aria-expanded="true"
+                          hidden
+                        >
+                          Hide layer list <span id="raster-layer-widget-count">0</span>
+                        </button>
+                      </div>
+                      <div class="map-layer-widget-body" id="raster-layer-stack-body">
+                        <p id="raster-layer-stack-limit"></p>
+                        <ol class="raster-layer-list" id="raster-layer-list"></ol>
+                        <p
+                          class="raster-layer-stack-status"
+                          id="raster-layer-stack-status"
+                          role="status"
+                          aria-live="polite"
+                          aria-atomic="true"
+                          tabindex="-1"
+                        ></p>
+                      </div>
+                    </section>
+
+                      <section
+                        class="raster-appearance-controls"
+                        id="raster-appearance-controls"
+                        data-eomap-region="map-layers"
+                        aria-labelledby="raster-appearance-heading"
+                        aria-hidden="true"
+                        hidden
+                      >
+                        <div class="raster-appearance-heading">
+                          <div>
+                            <h3 id="raster-appearance-heading">Style this layer</h3>
+                            <p class="raster-appearance-layer" id="raster-appearance-layer"></p>
+                          </div>
+                        </div>
+                        <div class="raster-appearance-body">
+                          <div
+                            class="raster-percentile-controls"
+                            id="raster-percentile-controls"
+                            role="group"
+                            aria-labelledby="raster-percentile-heading"
+                            hidden
+                          >
+                            <strong id="raster-percentile-heading">Set the color range from the histogram</strong>
+                            <label for="raster-lower-percentile">
+                              <span>Lower</span>
+                              <input
+                                id="raster-lower-percentile"
+                                type="range"
+                                min="0"
+                                max="100"
+                                step="1"
+                                value="5"
+                                aria-describedby="raster-lower-percentile-value raster-percentile-error"
+                              />
+                              <output id="raster-lower-percentile-value" for="raster-lower-percentile"></output>
+                            </label>
+                            <label for="raster-middle-percentile">
+                              <span>Middle</span>
+                              <input
+                                id="raster-middle-percentile"
+                                type="range"
+                                min="0"
+                                max="100"
+                                step="1"
+                                value="50"
+                                aria-describedby="raster-middle-percentile-value raster-percentile-error"
+                              />
+                              <output id="raster-middle-percentile-value" for="raster-middle-percentile"></output>
+                            </label>
+                            <label for="raster-upper-percentile">
+                              <span>Upper</span>
+                              <input
+                                id="raster-upper-percentile"
+                                type="range"
+                                min="0"
+                                max="100"
+                                step="1"
+                                value="95"
+                                aria-describedby="raster-upper-percentile-value raster-percentile-error"
+                              />
+                              <output id="raster-upper-percentile-value" for="raster-upper-percentile"></output>
+                            </label>
+                            <p
+                              class="raster-style-error"
+                              id="raster-percentile-error"
+                              role="status"
+                            ></p>
+                            <button
+                              class="secondary-button"
+                              id="apply-raster-percentiles"
+                              type="button"
+                            >
+                              Apply histogram range
+                            </button>
+                          </div>
+                          <label class="raster-palette" for="raster-palette">
+                            <span>Color palette</span>
+                            <select id="raster-palette"></select>
+                          </label>
+                          <div class="raster-style-stops">
+                            <label for="raster-minimum">
+                              <span>Display minimum</span>
+                              <input id="raster-minimum" type="number" step="any" aria-describedby="raster-style-error" />
+                            </label>
+                            <input id="raster-minimum-color" type="color" aria-label="Minimum color" aria-describedby="raster-style-error" />
+                            <label for="raster-midpoint">
+                              <span>Display midpoint</span>
+                              <input id="raster-midpoint" type="number" step="any" aria-describedby="raster-style-error" />
+                            </label>
+                            <input id="raster-midpoint-color" type="color" aria-label="Midpoint color" aria-describedby="raster-style-error" />
+                            <label for="raster-maximum">
+                              <span>Display maximum</span>
+                              <input id="raster-maximum" type="number" step="any" aria-describedby="raster-style-error" />
+                            </label>
+                            <input id="raster-maximum-color" type="color" aria-label="Maximum color" aria-describedby="raster-style-error" />
+                          </div>
+                          <div class="raster-legend" id="raster-legend" role="img"></div>
+                          <div class="raster-legend-labels" aria-hidden="true">
+                            <span id="raster-legend-minimum"></span>
+                            <span id="raster-legend-midpoint"></span>
+                            <span id="raster-legend-maximum"></span>
+                          </div>
+                          <p class="raster-style-error" id="raster-style-error" role="status"></p>
+                          <p
+                            class="raster-appearance-status"
+                            id="raster-appearance-status"
+                            role="status"
+                            aria-live="polite"
+                            aria-atomic="true"
+                          ></p>
+                          <button class="secondary-button" id="reset-raster-style" type="button">
+                            Reset colors and range
+                          </button>
+                        </div>
+                      </section>
+
+                    <section class="rendering-availability">
                     <div
                       class="raster-detail-preview-controls"
                       id="raster-detail-preview-controls"
                       hidden
                     >
                       <p>
-                        <strong>Adaptive bounded raster detail</strong>
-                        <span>Broad views always use one center sample in each sample-grid cell, with 127 cells on the longest displayed edge and an aspect-preserving shorter edge. Once the visible source window satisfies strict server-owned limits, EOLab automatically replaces that grid with a complete bounded source-window read reprojected for the map at the same dimensions.</span>
+                        <strong>Low-resolution raster rendering</strong>
+                        <span>When a raster is too large for standard whole-raster rendering, EOLab can show a bounded sample grid. Close views automatically use complete source-window detail when the visible area satisfies server-owned limits.</span>
                       </p>
                       <small>Sample grids use smooth display interpolation; exact close-view windows use crisp nearest-neighbor presentation. This overview-limited raster is never published to GeoServer. The status below reports the active map area, source window, native blocks, and decoded work.</small>
                       <output
@@ -479,7 +587,7 @@
                           id="show-raster-detail-preview"
                           type="button"
                         >
-                              Show adaptive raster
+                              Show low-resolution rendering
                         </button>
                         <button
                           class="secondary-button"
@@ -487,7 +595,7 @@
                           type="button"
                           hidden
                         >
-                              Remove adaptive raster
+                              Remove low-resolution rendering
                         </button>
                         <button
                           class="secondary-button"
@@ -505,48 +613,46 @@
                       aria-live="polite"
                       aria-atomic="true"
                     ></p>
-                    <section
-                      class="raster-layer-stack"
-                      id="raster-layer-stack"
-                      aria-labelledby="raster-layer-stack-heading"
-                      hidden
-                    >
-                      <div class="raster-layer-stack-heading">
-                        <div>
-                          <p class="section-label">Map display</p>
-                          <h4 id="raster-layer-stack-heading">Map layers</h4>
-                        </div>
-                        <p id="raster-layer-stack-limit"></p>
-                      </div>
-                      <ol class="raster-layer-list" id="raster-layer-list"></ol>
                     </section>
-                    <p
-                      class="raster-layer-stack-status"
-                      id="raster-layer-stack-status"
-                      role="status"
-                      aria-live="polite"
-                      aria-atomic="true"
-                      tabindex="-1"
-                    ></p>
+                    </div>
                   </section>
                 <section
                   class="eomap-workspace-region raster-interpretation-region"
                   id="eomap-raster-interpretation-region"
-                  aria-label="Raster interpretation"
+                  role="tabpanel"
+                  aria-labelledby="toggle-raster-interpretation eomap-raster-interpretation-heading"
+                  hidden
                 >
+                  <div class="workspace-region-heading">
+                    <div>
+                      <h2 id="eomap-raster-interpretation-heading">Histograms</h2>
+                    </div>
+                    <button
+                      class="secondary-button"
+                      id="open-histogram-map-layers"
+                      type="button"
+                    >
+                      Style layer
+                    </button>
+                  </div>
+                  <div
+                    class="workspace-region-body raster-interpretation-body"
+                    id="eomap-raster-interpretation-body"
+                    aria-hidden="false"
+                  >
                   <fieldset
                     class="raster-style-controls"
                     id="raster-style-controls"
                     hidden
                   >
-                  <legend>Raster interpretation</legend>
+                  <legend>Sample area</legend>
                   <section
                     class="raster-control-group raster-active-raster"
                     id="raster-active-controls"
                     aria-labelledby="raster-active-raster-heading"
                     aria-describedby="raster-sample-window-status raster-histogram-status"
                   >
-                    <strong id="raster-active-raster-heading">Active raster</strong>
+                    <strong id="raster-active-raster-heading">Selected layer</strong>
                     <p
                       class="raster-active-layer-label"
                       id="raster-active-layer-label"
@@ -559,11 +665,11 @@
                   >
                     <strong id="raster-sampling-area-heading">Sampling area</strong>
                     <p id="raster-sample-window-description">
-                      Choose the geographic area represented by the distribution. Move over the map to position a window, then click or tap to select its bounds.
+                      Choose the geographic area used by every map-layer histogram.
                     </p>
                     <div class="raster-sample-window-size">
                       <label for="raster-sample-window-range">
-                        <span>Window size</span>
+                        <span>Window size (1–300 km)</span>
                         <input
                           id="raster-sample-window-range"
                           type="range"
@@ -631,195 +737,242 @@
                       aria-live="polite"
                       aria-atomic="true"
                     >
-                      Move over the map and click to display this window's histogram.
+                      Whole-raster histogram selected. Choose Select map window or Sample map center to analyze a smaller area.
                     </p>
-                  </section>
-                  <section
-                    class="raster-control-group raster-histogram"
-                    id="raster-histogram"
-                    aria-labelledby="raster-histogram-heading"
-                  >
-                    <div class="raster-histogram-heading">
-                      <strong id="raster-histogram-heading">Bounded distribution</strong>
-                      <button
-                        class="secondary-button"
-                        id="retry-raster-statistics"
-                        type="button"
-                        hidden
-                      >
-                        Retry
-                      </button>
-                    </div>
-                    <p
-                      class="raster-histogram-status"
-                      id="raster-histogram-status"
-                      role="status"
-                      aria-live="polite"
-                      aria-atomic="true"
-                    ></p>
-                    <svg
-                      class="raster-histogram-chart"
-                      id="raster-histogram-chart"
-                      viewBox="0 0 640 112"
-                      preserveAspectRatio="none"
-                      role="img"
-                      hidden
-                    ></svg>
-                    <div
-                      class="raster-histogram-axis"
-                      id="raster-histogram-axis"
-                      aria-hidden="true"
-                      hidden
-                    >
-                      <span id="raster-histogram-minimum"></span>
-                      <span id="raster-histogram-maximum"></span>
-                    </div>
-                    <div
-                      class="raster-percentile-controls"
-                      id="raster-percentile-controls"
-                      role="group"
-                      aria-labelledby="raster-percentile-heading"
-                      hidden
-                    >
-                      <strong id="raster-percentile-heading">Display percentiles</strong>
-                      <p>Choose three ordered positions in this distribution, then apply them to the numeric display thresholds below.</p>
-                      <label for="raster-lower-percentile">
-                        <span>Lower</span>
-                        <input
-                          id="raster-lower-percentile"
-                          type="range"
-                          min="0"
-                          max="100"
-                          step="1"
-                          value="5"
-                          aria-describedby="raster-lower-percentile-value raster-percentile-error"
-                        />
-                        <output id="raster-lower-percentile-value" for="raster-lower-percentile"></output>
-                      </label>
-                      <label for="raster-middle-percentile">
-                        <span>Middle</span>
-                        <input
-                          id="raster-middle-percentile"
-                          type="range"
-                          min="0"
-                          max="100"
-                          step="1"
-                          value="50"
-                          aria-describedby="raster-middle-percentile-value raster-percentile-error"
-                        />
-                        <output id="raster-middle-percentile-value" for="raster-middle-percentile"></output>
-                      </label>
-                      <label for="raster-upper-percentile">
-                        <span>Upper</span>
-                        <input
-                          id="raster-upper-percentile"
-                          type="range"
-                          min="0"
-                          max="100"
-                          step="1"
-                          value="95"
-                          aria-describedby="raster-upper-percentile-value raster-percentile-error"
-                        />
-                        <output id="raster-upper-percentile-value" for="raster-upper-percentile"></output>
-                      </label>
-                      <p
-                        class="raster-style-error"
-                        id="raster-percentile-error"
-                        role="status"
-                      ></p>
-                      <button
-                        class="secondary-button"
-                        id="apply-raster-percentiles"
-                        type="button"
-                      >
-                        Rescale colors to this range
-                      </button>
-                    </div>
-                  </section>
-                  <section
-                    class="raster-control-group raster-appearance-controls"
-                    id="raster-appearance-controls"
-                    aria-labelledby="raster-appearance-heading"
-                  >
-                    <strong id="raster-appearance-heading">Display appearance</strong>
-                    <p class="raster-appearance-description">
-                      Set numeric display thresholds and their colors independently of the geographic sampling area above.
-                    </p>
-                    <label class="raster-palette" for="raster-palette">
-                      <span>Color palette</span>
-                      <select id="raster-palette"></select>
-                    </label>
-                    <div class="raster-style-stops">
-                      <label for="raster-minimum">
-                        <span>Display minimum</span>
-                        <input
-                          id="raster-minimum"
-                          type="number"
-                          step="any"
-                          aria-describedby="raster-style-error"
-                        />
-                      </label>
-                      <input
-                        id="raster-minimum-color"
-                        type="color"
-                        aria-label="Minimum color"
-                        aria-describedby="raster-style-error"
-                      />
-                      <label for="raster-midpoint">
-                        <span>Display midpoint</span>
-                        <input
-                          id="raster-midpoint"
-                          type="number"
-                          step="any"
-                          aria-describedby="raster-style-error"
-                        />
-                      </label>
-                      <input
-                        id="raster-midpoint-color"
-                        type="color"
-                        aria-label="Midpoint color"
-                        aria-describedby="raster-style-error"
-                      />
-                      <label for="raster-maximum">
-                        <span>Display maximum</span>
-                        <input
-                          id="raster-maximum"
-                          type="number"
-                          step="any"
-                          aria-describedby="raster-style-error"
-                        />
-                      </label>
-                      <input
-                        id="raster-maximum-color"
-                        type="color"
-                        aria-label="Maximum color"
-                        aria-describedby="raster-style-error"
-                      />
-                    </div>
-                    <div
-                      class="raster-legend"
-                      id="raster-legend"
-                      role="img"
-                    ></div>
-                    <div class="raster-legend-labels" aria-hidden="true">
-                      <span id="raster-legend-minimum"></span>
-                      <span id="raster-legend-midpoint"></span>
-                      <span id="raster-legend-maximum"></span>
-                    </div>
-                    <p
-                      class="raster-style-error"
-                      id="raster-style-error"
-                      role="status"
-                    ></p>
-                    <button
-                      class="secondary-button"
-                      id="reset-raster-style"
-                      type="button"
-                    >
-                      Reset colors and range
-                    </button>
                   </section>
                   </fieldset>
+
+                  <section class="raster-histogram-overview" aria-labelledby="raster-histogram-list-heading">
+                    <div class="raster-histogram-overview-heading">
+                      <div>
+                        <h3 id="raster-histogram-list-heading">Map layer histograms</h3>
+                      </div>
+                    </div>
+                    <p class="raster-histogram-empty" id="raster-histogram-empty">
+                      No raster layers yet. Add one in Catalog.
+                    </p>
+                    <div
+                      class="raster-histogram-list"
+                      id="raster-histogram-list"
+                      role="group"
+                      aria-label="Raster histograms"
+                    ></div>
+                  </section>
+
+                  <section
+                    class="raster-histogram"
+                    id="raster-histogram"
+                    data-eomap-region="raster-interpretation"
+                    data-sampling-area="wholeRaster"
+                    aria-labelledby="raster-histogram-heading"
+                    aria-hidden="true"
+                    aria-busy="false"
+                    hidden
+                  >
+                    <div class="raster-histogram-heading">
+                      <div>
+                        <h3 id="raster-histogram-heading">Histogram</h3>
+                        <p class="raster-histogram-detail-layer" id="raster-histogram-detail-layer"></p>
+                      </div>
+                      <div class="raster-histogram-actions">
+                        <button
+                          class="secondary-button"
+                          id="retry-raster-statistics"
+                          type="button"
+                          hidden
+                        >
+                          Retry
+                        </button>
+                      </div>
+                    </div>
+                    <div class="raster-histogram-body">
+                      <p class="raster-histogram-scope" id="raster-histogram-scope">
+                        Whole raster
+                      </p>
+                      <p
+                        class="raster-histogram-status"
+                        id="raster-histogram-status"
+                        role="status"
+                        aria-live="polite"
+                        aria-atomic="true"
+                      ></p>
+                      <svg
+                        class="raster-histogram-chart"
+                        id="raster-histogram-chart"
+                        viewBox="0 0 640 112"
+                        preserveAspectRatio="none"
+                        role="img"
+                        hidden
+                      ></svg>
+                      <div
+                        class="raster-histogram-axis"
+                        id="raster-histogram-axis"
+                        aria-hidden="true"
+                        hidden
+                      >
+                        <span id="raster-histogram-minimum"></span>
+                        <span id="raster-histogram-maximum"></span>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section class="pixel-probe-guidance" aria-labelledby="pixel-probe-guidance-heading">
+                    <h3 id="pixel-probe-guidance-heading">Pixel values</h3>
+                    <p>Move over the map to inspect the selected layer's value.</p>
+                  </section>
+
+                  <details class="analysis-aoi-disclosure" id="analysis-aoi-disclosure">
+                    <summary
+                      id="toggle-analysis-aoi"
+                      aria-controls="temporary-aoi"
+                      aria-expanded="false"
+                    >
+                      Upload or manage a sampling AOI
+                    </summary>
+                    <section
+                      class="temporary-aoi-card"
+                      id="temporary-aoi"
+                      data-eomap-region="raster-interpretation"
+                      aria-labelledby="temporary-aoi-heading"
+                      aria-busy="false"
+                    >
+                      <div class="temporary-aoi-heading">
+                        <div>
+                          <p class="section-label">Sampling area</p>
+                          <h3 id="temporary-aoi-heading">Temporary AOI</h3>
+                        </div>
+                        <p>Not added to the Catalog</p>
+                      </div>
+                      <p class="temporary-aoi-copy" id="temporary-aoi-help">
+                        Upload one GeoPackage or zipped Shapefile. Files are validated,
+                        displayed temporarily, and removed automatically after expiration.
+                      </p>
+                      <form class="temporary-aoi-upload" id="temporary-aoi-upload-form">
+                        <label for="temporary-aoi-file">
+                          <span>AOI file</span>
+                          <input
+                            id="temporary-aoi-file"
+                            name="file"
+                            type="file"
+                            accept=".gpkg,.zip,application/geopackage+sqlite3,application/zip"
+                            aria-describedby="temporary-aoi-help temporary-aoi-status temporary-aoi-error"
+                            required
+                          />
+                        </label>
+                        <button
+                          class="secondary-button"
+                          id="upload-temporary-aoi"
+                          type="submit"
+                        >
+                          Upload AOI
+                        </button>
+                      </form>
+                      <div
+                        class="temporary-aoi-upload-progress"
+                        id="temporary-aoi-upload-progress-container"
+                        hidden
+                      >
+                        <label for="temporary-aoi-upload-progress">
+                          Approximate upload progress
+                        </label>
+                        <progress
+                          id="temporary-aoi-upload-progress"
+                          max="100"
+                          value="0"
+                          aria-describedby="temporary-aoi-upload-progress-detail temporary-aoi-status"
+                        ></progress>
+                        <p id="temporary-aoi-upload-progress-detail"></p>
+                      </div>
+                      <form
+                        class="temporary-aoi-selection"
+                        id="temporary-aoi-selection-form"
+                        aria-labelledby="temporary-aoi-selection-heading"
+                        hidden
+                      >
+                        <strong id="temporary-aoi-selection-heading">Choose a spatial dataset</strong>
+                        <p>
+                          <span id="temporary-aoi-selection-filename"></span> contains
+                          more than one usable spatial dataset. Nothing will be displayed
+                          until you choose one.
+                        </p>
+                        <label for="temporary-aoi-dataset">
+                          <span>Dataset or layer</span>
+                          <select
+                            id="temporary-aoi-dataset"
+                            aria-describedby="temporary-aoi-status temporary-aoi-error"
+                          ></select>
+                        </label>
+                        <div class="temporary-aoi-selection-actions">
+                          <button class="secondary-button" type="submit">Display dataset</button>
+                          <button
+                            class="secondary-button"
+                            id="cancel-temporary-aoi-selection"
+                            type="button"
+                          >
+                            Cancel upload
+                          </button>
+                        </div>
+                      </form>
+                      <dl class="temporary-aoi-details" id="temporary-aoi-details" hidden>
+                        <div>
+                          <dt>File</dt>
+                          <dd id="temporary-aoi-filename"></dd>
+                        </div>
+                        <div>
+                          <dt>Layer</dt>
+                          <dd id="temporary-aoi-layer"></dd>
+                        </div>
+                        <div>
+                          <dt>Expires</dt>
+                          <dd><time id="temporary-aoi-expiration"></time></dd>
+                        </div>
+                      </dl>
+                      <div
+                        class="temporary-aoi-actions"
+                        id="temporary-aoi-actions"
+                        role="group"
+                        aria-label="Temporary AOI map actions"
+                        hidden
+                      >
+                        <button
+                          class="secondary-button"
+                          id="toggle-temporary-aoi"
+                          type="button"
+                          aria-pressed="true"
+                        >
+                          Hide
+                        </button>
+                        <button
+                          class="secondary-button"
+                          id="zoom-temporary-aoi"
+                          type="button"
+                        >
+                          Zoom to AOI
+                        </button>
+                        <button
+                          class="secondary-button is-danger"
+                          id="remove-temporary-aoi"
+                          type="button"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                      <p
+                        class="temporary-aoi-status"
+                        id="temporary-aoi-status"
+                        role="status"
+                        aria-live="polite"
+                        aria-atomic="true"
+                      ></p>
+                      <p
+                        class="temporary-aoi-error"
+                        id="temporary-aoi-error"
+                        role="alert"
+                        aria-atomic="true"
+                      ></p>
+                    </section>
+                  </details>
+                  </div>
                 </section>
         </div>
 
@@ -829,7 +982,14 @@
         </footer>
       </section>
 
-      <button class="panel-opener" id="open-panel" type="button" hidden>
+      <button
+        class="panel-opener"
+        id="open-panel"
+        type="button"
+        aria-controls="control-panel"
+        aria-expanded="false"
+        hidden
+      >
         OPEN LABEL TO BE SET BY CONFIGURATION
       </button>
       <div class="map-position" id="map-position">0.000, 0.000</div>

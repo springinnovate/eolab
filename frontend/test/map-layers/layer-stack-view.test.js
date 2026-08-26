@@ -113,10 +113,16 @@ class FakeLayerStackDocument {
     this.activeElement = null;
     this.elements = new Map([
       ["#raster-layer-stack", new FakeLayerStackElement("section", this)],
+      ["#raster-layer-stack-body", new FakeLayerStackElement("div", this)],
+      ["#toggle-map-layer-widget", new FakeLayerStackElement("button", this)],
+      ["#raster-layer-widget-count", new FakeLayerStackElement("span", this)],
       ["#raster-layer-list", new FakeLayerStackElement("ol", this)],
       ["#raster-layer-stack-status", new FakeLayerStackElement("p", this)],
       ["#raster-layer-stack-limit", new FakeLayerStackElement("p", this)],
     ]);
+    this.elements.get("#raster-layer-stack").hidden = true;
+    this.elements.get("#toggle-map-layer-widget")
+      .setAttribute("aria-expanded", "true");
   }
 
   /**
@@ -279,11 +285,20 @@ test("MapLayerStackView renders semantic, accessible independent rows", () => {
   const list = documentContext.querySelector("#raster-layer-list");
   const limit = documentContext.querySelector("#raster-layer-stack-limit");
   assert.equal(root.hidden, false);
+  assert.equal(
+    documentContext.querySelector("#raster-layer-widget-count").textContent,
+    "3",
+  );
+  assert.equal(
+    documentContext.querySelector("#toggle-map-layer-widget")
+      .getAttribute("aria-label"),
+    "Hide layers",
+  );
   assert.equal(list.tagName, "OL");
   assert.deepEqual(list.children.map((row) => row.tagName), ["LI", "LI", "LI"]);
   assert.equal(
     limit.textContent,
-    "Two map layers are visible. Hide one before showing another.",
+    "Two layers are visible. Hide one before showing another.",
   );
 
   const [temperatureRow, vegetationRow, moistureRow] = list.children;
@@ -317,7 +332,7 @@ test("MapLayerStackView renders semantic, accessible independent rows", () => {
   );
   assert.equal(
     actionControl(temperatureRow, "visibility").getAttribute("aria-label"),
-    `Hide ${temperatureAccessibleName}`,
+    `${temperatureAccessibleName} visible`,
   );
   assert.equal(
     actionControl(temperatureRow, "remove").getAttribute("aria-label"),
@@ -325,7 +340,7 @@ test("MapLayerStackView renders semantic, accessible independent rows", () => {
   );
   assert.equal(
     actionControl(moistureRow, "visibility").getAttribute("aria-label"),
-    `Show ${LAYERS[2].label}; Catalog Item soil / moisture-anomaly`,
+    `${LAYERS[2].label}; Catalog Item soil / moisture-anomaly visible`,
   );
 
   const legends = list.children.map(
@@ -387,6 +402,14 @@ test("MapLayerStackView forwards controls and updates opacity output", () => {
     onRemove: (key) => received.push(["remove", key]),
   });
   view.render(LAYERS, "vegetation");
+  const widgetBody = documentContext.querySelector("#raster-layer-stack-body");
+  const widgetToggle = documentContext.querySelector("#toggle-map-layer-widget");
+  widgetToggle.dispatchEvent(new Event("click"));
+  assert.equal(widgetBody.hidden, true);
+  assert.equal(widgetToggle.getAttribute("aria-expanded"), "false");
+  assert.equal(widgetToggle.getAttribute("aria-label"), "Show layers");
+  widgetToggle.dispatchEvent(new Event("click"));
+  assert.equal(widgetBody.hidden, false);
   const [temperatureRow, vegetationRow, moistureRow] = documentContext
     .querySelector("#raster-layer-list").children;
 
@@ -426,6 +449,32 @@ test("MapLayerStackView forwards controls and updates opacity output", () => {
   view.unbind();
   actionControl(moistureRow, "remove").dispatchEvent(new Event("click"));
   assert.equal(received.length, 5);
+});
+
+test("MapLayerStackView Escape collapses only its sidebar section", () => {
+  const documentContext = new FakeLayerStackDocument();
+  const view = new MapLayerStackView(documentContext);
+  view.bind({
+    onActivate() {},
+    onVisibility() {},
+    onOpacity() {},
+    onMove() {},
+    onRemove() {},
+  });
+  view.render([LAYERS[0]], LAYERS[0].key);
+  const root = documentContext.querySelector("#raster-layer-stack");
+  const toggle = documentContext.querySelector("#toggle-map-layer-widget");
+  const escapeEvent = new Event("keydown", { cancelable: true });
+  Object.defineProperty(escapeEvent, "key", { value: "Escape" });
+
+  root.dispatchEvent(escapeEvent);
+
+  assert.equal(escapeEvent.defaultPrevented, true);
+  assert.equal(
+    documentContext.querySelector("#raster-layer-stack-body").hidden,
+    true,
+  );
+  assert.equal(documentContext.activeElement, toggle);
 });
 
 test("MapLayerStackView announces status and retains stable action focus", () => {
@@ -473,6 +522,6 @@ test("MapLayerStackView announces status and retains stable action focus", () =>
   );
   assert.equal(
     documentContext.querySelector("#raster-layer-stack-limit").textContent,
-    "0 of 2 map layers visible.",
+    "",
   );
 });

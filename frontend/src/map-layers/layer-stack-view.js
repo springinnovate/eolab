@@ -61,8 +61,22 @@ export class MapLayerStackView {
             documentContext,
             "#raster-layer-stack-limit"
         );
+        this.body = requireLayerStackElement(
+            documentContext,
+            "#raster-layer-stack-body"
+        );
+        this.toggle = requireLayerStackElement(
+            documentContext,
+            "#toggle-map-layer-widget"
+        );
+        this.count = requireLayerStackElement(
+            documentContext,
+            "#raster-layer-widget-count"
+        );
         /** @type {MapLayerStackViewHandlers|null} */
         this.handlers = null;
+        this.boundToggle = this.#handleToggle.bind(this);
+        this.boundKeydown = this.#handleKeydown.bind(this);
     }
 
     /**
@@ -70,9 +84,15 @@ export class MapLayerStackView {
      *
      * @param {MapLayerStackViewHandlers} handlers Stack intent handlers.
      * @return {void}
+     * @throws {Error} If listeners are already bound.
      */
     bind(handlers) {
+        if (this.handlers !== null) {
+            throw new Error("Map layer-stack view is already bound");
+        }
         this.handlers = handlers;
+        this.toggle.addEventListener("click", this.boundToggle);
+        this.root.addEventListener("keydown", this.boundKeydown);
     }
 
     /**
@@ -81,6 +101,8 @@ export class MapLayerStackView {
      * @return {void}
      */
     unbind() {
+        this.toggle.removeEventListener("click", this.boundToggle);
+        this.root.removeEventListener("keydown", this.boundKeydown);
         this.handlers = null;
     }
 
@@ -94,6 +116,7 @@ export class MapLayerStackView {
      * @return {void}
      */
     render(layers, activeKey, requestedFocus = null) {
+        const wasEmpty = this.root.hidden;
         const retainedFocus = requestedFocus ?? this.#readFocusedAction();
         const visibleCount = layers.filter((layer) => layer.visible).length;
         const focusTargets = new Map();
@@ -107,9 +130,14 @@ export class MapLayerStackView {
         ));
         this.list.replaceChildren(...rows);
         this.root.hidden = layers.length === 0;
+        this.toggle.hidden = layers.length === 0;
+        this.count.textContent = String(layers.length);
+        if (layers.length > 0 && wasEmpty) {
+            this.#setExpanded(true);
+        }
         this.limit.textContent = visibleCount >= MAX_VISIBLE_MAP_LAYERS
-            ? "Two map layers are visible. Hide one before showing another."
-            : `${visibleCount} of ${MAX_VISIBLE_MAP_LAYERS} map layers visible.`;
+            ? "Two layers are visible. Hide one before showing another."
+            : "";
         if (retainedFocus !== null) {
             let focusTarget = focusTargets.get(
                 `${retainedFocus.key}\u0000${retainedFocus.action}`
@@ -229,7 +257,7 @@ export class MapLayerStackView {
         visibilityInput.dataset.layerAction = "visibility";
         visibilityInput.setAttribute(
             "aria-label",
-            `${layer.visible ? "Hide" : "Show"} ${accessibleName}`
+            `${accessibleName} visible`
         );
         visibilityInput.setAttribute("aria-describedby", "raster-layer-stack-limit");
         visibilityInput.addEventListener("change", () => {
@@ -238,7 +266,7 @@ export class MapLayerStackView {
         this.#rememberFocusTarget(focusTargets, visibilityInput);
         visibilityLabel.append(
             visibilityInput,
-            this.documentContext.createTextNode(" Show")
+            this.documentContext.createTextNode(" Visible")
         );
 
         const opacityLabel = this.documentContext.createElement("label");
@@ -415,5 +443,47 @@ export class MapLayerStackView {
         return typeof key === "string" && typeof action === "string"
             ? { key, action }
             : null;
+    }
+
+    /**
+     * Apply sidebar layer-section disclosure without changing retained layers.
+     *
+     * @param {boolean} isExpanded Whether layer controls are displayed.
+     * @return {void}
+     */
+    #setExpanded(isExpanded) {
+        this.body.hidden = !isExpanded;
+        this.root.classList.toggle("is-collapsed", !isExpanded);
+        this.toggle.setAttribute("aria-expanded", String(isExpanded));
+        this.toggle.setAttribute(
+            "aria-label",
+            isExpanded ? "Hide layers" : "Show layers"
+        );
+    }
+
+    /** Toggle the sidebar layer section. @return {void} */
+    #handleToggle() {
+        this.#setExpanded(
+            this.toggle.getAttribute("aria-expanded") !== "true"
+        );
+    }
+
+    /**
+     * Collapse only the sidebar layer section when Escape originates within it.
+     *
+     * @param {KeyboardEvent} event Widget keyboard event.
+     * @return {void}
+     */
+    #handleKeydown(event) {
+        if (
+            event.key !== "Escape" ||
+            this.toggle.getAttribute("aria-expanded") !== "true"
+        ) {
+            return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        this.#setExpanded(false);
+        this.toggle.focus();
     }
 }

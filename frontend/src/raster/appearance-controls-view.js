@@ -35,6 +35,10 @@ export class RasterAppearanceControlsView {
             documentContext,
             "#raster-appearance-controls"
         );
+        this.activeLayerLabel = requireRasterControl(
+            documentContext,
+            "#raster-appearance-layer"
+        );
         this.palette = requireRasterControl(documentContext, "#raster-palette");
         this.styleInputs = {
             minimum: requireRasterControl(documentContext, "#raster-minimum"),
@@ -72,6 +76,10 @@ export class RasterAppearanceControlsView {
             documentContext,
             "#raster-style-error"
         );
+        this.status = requireRasterControl(
+            documentContext,
+            "#raster-appearance-status"
+        );
         this.resetStyleButton = requireRasterControl(
             documentContext,
             "#reset-raster-style"
@@ -81,6 +89,7 @@ export class RasterAppearanceControlsView {
         this.boundStyleChange = this.#handleStyleChange.bind(this);
         this.boundPaletteChange = this.#handlePaletteChange.bind(this);
         this.boundResetStyle = this.#handleResetStyle.bind(this);
+        this.isAvailable = false;
     }
 
     /**
@@ -131,6 +140,60 @@ export class RasterAppearanceControlsView {
         this.palette.removeEventListener("change", this.boundPaletteChange);
         this.resetStyleButton.removeEventListener("click", this.boundResetStyle);
         this.handlers = null;
+    }
+
+    /**
+     * Show appearance controls for a styleable raster, or hide them when no
+     * raster owns the shared controls.
+     *
+     * @param {boolean} isAvailable Whether an active raster can be styled.
+     * @return {void}
+     */
+    setActiveRasterAvailable(isAvailable) {
+        this.isAvailable = isAvailable;
+        this.#root.hidden = !isAvailable;
+        this.#root.setAttribute("aria-hidden", String(!isAvailable));
+    }
+
+    /**
+     * Identify the rendered raster edited by these appearance controls.
+     *
+     * @param {string} label Readable raster label.
+     * @param {boolean} visible Whether the retained layer is map-visible.
+     * @return {void}
+     */
+    setActiveLayer(label, visible) {
+        this.activeLayerLabel.textContent = visible
+            ? label
+            : `${label} — currently hidden on the map`;
+        this.setStatus("");
+    }
+
+    /**
+     * Reveal the contextual appearance editor without changing raster style.
+     *
+     * @param {boolean} [moveFocus=false] Whether to focus the palette control.
+     * @return {void}
+     */
+    showWidget(moveFocus = false) {
+        if (!this.isAvailable) {
+            return;
+        }
+        this.#root.hidden = false;
+        this.#root.setAttribute("aria-hidden", "false");
+        if (moveFocus) {
+            this.palette.focus();
+        }
+    }
+
+    /**
+     * Hide the appearance editor while retaining every committed style value.
+     *
+     * @return {void}
+     */
+    hideWidget() {
+        this.#root.hidden = true;
+        this.#root.setAttribute("aria-hidden", "true");
     }
 
     /**
@@ -253,4 +316,19 @@ export class RasterAppearanceControlsView {
     #handleResetStyle() {
         this.handlers.onResetStyle();
     }
+
+    /**
+     * Announce the result of an appearance action beside the style controls.
+     *
+     * @param {string} message Concise result, or an empty string to clear it.
+     * @return {void}
+     * @throws {TypeError} If the message is not a string.
+     */
+    setStatus(message) {
+        if (typeof message !== "string") {
+            throw new TypeError("Raster appearance status must be a string");
+        }
+        this.status.textContent = message;
+    }
+
 }

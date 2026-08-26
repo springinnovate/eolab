@@ -1,10 +1,10 @@
 /**
- * DOM presentation adapter for raster histograms and percentile controls.
+ * DOM presentation adapter for raster histograms.
  *
- * This adapter owns the histogram region, status, axis, percentile inputs,
- * and their direct listeners. The neutral SVG construction functions remain
- * in histogram-view.js; this class only supplies their owned chart element and
- * presents coordinator-provided state.
+ * This adapter owns the histogram region, status, chart, axis, retry and
+ * result visibility, and its direct listeners. The neutral SVG
+ * construction functions remain in histogram-view.js; this class only
+ * supplies their owned chart element and presents coordinator-provided state.
  */
 import {
     clearRasterHistogramChart,
@@ -14,15 +14,24 @@ import { requireRasterControl } from "./required-control.js";
 
 /**
  * @typedef {Object} RasterHistogramHandlers
- * @property {() => void} onPercentileInput Updates percentile estimates.
- * @property {() => void} onApplyPercentiles Applies the percentile range.
  * @property {() => void} onRetryStatistics Retries raster statistics.
+ * @property {(key: string) => void} onSelectHistogram Activates one retained
+ * raster whose histogram summary was selected.
+ */
+
+/**
+ * @typedef {Object} RasterHistogramSummary
+ * @property {string} key Opaque retained-layer identity.
+ * @property {string} label Readable raster basename.
+ * @property {"idle"|"loading"|"ready"|"error"} state Statistics lifecycle.
+ * @property {string} scope Readable geographic sampling scope.
+ * @property {number[]|null} counts Histogram bin counts when ready.
  */
 
 /** Own direct DOM interaction and presentation for raster histograms. */
 export class RasterHistogramControlsView {
     /**
-     * Resolve the required histogram and percentile elements once at startup.
+     * Resolve the required histogram elements once at startup.
      *
      * @param {Document} [documentContext=globalThis.document] Document that
      * owns the controls and creates histogram SVG nodes.
@@ -33,6 +42,10 @@ export class RasterHistogramControlsView {
         this.histogram = requireRasterControl(
             documentContext,
             "#raster-histogram"
+        );
+        this.histogramScope = requireRasterControl(
+            documentContext,
+            "#raster-histogram-scope"
         );
         this.histogramStatus = requireRasterControl(
             documentContext,
@@ -54,54 +67,27 @@ export class RasterHistogramControlsView {
             documentContext,
             "#raster-histogram-maximum"
         );
-        this.percentileControls = requireRasterControl(
-            documentContext,
-            "#raster-percentile-controls"
-        );
-        this.percentileInputs = {
-            lower: requireRasterControl(
-                documentContext,
-                "#raster-lower-percentile"
-            ),
-            middle: requireRasterControl(
-                documentContext,
-                "#raster-middle-percentile"
-            ),
-            upper: requireRasterControl(
-                documentContext,
-                "#raster-upper-percentile"
-            ),
-        };
-        this.percentileValues = {
-            lower: requireRasterControl(
-                documentContext,
-                "#raster-lower-percentile-value"
-            ),
-            middle: requireRasterControl(
-                documentContext,
-                "#raster-middle-percentile-value"
-            ),
-            upper: requireRasterControl(
-                documentContext,
-                "#raster-upper-percentile-value"
-            ),
-        };
-        this.percentileError = requireRasterControl(
-            documentContext,
-            "#raster-percentile-error"
-        );
-        this.applyPercentilesButton = requireRasterControl(
-            documentContext,
-            "#apply-raster-percentiles"
-        );
         this.retryStatisticsButton = requireRasterControl(
             documentContext,
             "#retry-raster-statistics"
         );
+        this.histogramList = requireRasterControl(
+            documentContext,
+            "#raster-histogram-list"
+        );
+        this.histogramEmpty = requireRasterControl(
+            documentContext,
+            "#raster-histogram-empty"
+        );
+        this.histogramDetailLayer = requireRasterControl(
+            documentContext,
+            "#raster-histogram-detail-layer"
+        );
+        this.summaryButtons = [];
+        this.activeHistogramKey = null;
         this.handlers = null;
-        this.boundPercentileInput = this.#handlePercentileInput.bind(this);
-        this.boundApplyPercentiles = this.#handleApplyPercentiles.bind(this);
         this.boundRetryStatistics = this.#handleRetryStatistics.bind(this);
+        this.isAvailable = false;
     }
 
     /**
@@ -112,13 +98,6 @@ export class RasterHistogramControlsView {
      */
     bind(handlers) {
         this.handlers = handlers;
-        for (const input of Object.values(this.percentileInputs)) {
-            input.addEventListener("input", this.boundPercentileInput);
-        }
-        this.applyPercentilesButton.addEventListener(
-            "click",
-            this.boundApplyPercentiles
-        );
         this.retryStatisticsButton.addEventListener(
             "click",
             this.boundRetryStatistics
@@ -127,18 +106,128 @@ export class RasterHistogramControlsView {
 
     /** Remove every direct listener installed by {@link bind}. @return {void} */
     unbind() {
-        for (const input of Object.values(this.percentileInputs)) {
-            input.removeEventListener("input", this.boundPercentileInput);
-        }
-        this.applyPercentilesButton.removeEventListener(
-            "click",
-            this.boundApplyPercentiles
-        );
         this.retryStatisticsButton.removeEventListener(
             "click",
             this.boundRetryStatistics
         );
+        this.#clearSummaryButtonListeners();
         this.handlers = null;
+    }
+
+    /**
+     * Render one clearly labeled histogram summary for every retained raster.
+     * Dynamic buttons own their direct listeners and are replaced atomically,
+     * so repeated lifecycle renders cannot double-bind an action.
+     *
+     * @param {RasterHistogramSummary[]} summaries Presentation-ready summaries.
+     * @param {string|null} activeKey Active retained raster key, or null when
+     * analysis is detached from the layer stack.
+     * @return {void}
+     * @throws {TypeError} If a summary violates the view boundary contract.
+     */
+    renderLayerHistograms(summaries, activeKey) {
+        if (!Array.isArray(summaries)) {
+            throw new TypeError("Raster histogram summaries must be an array");
+        }
+        const focusedKey = this.summaryButtons.find(
+            ({ button }) => button === this.documentContext.activeElement
+        )?.key ?? null;
+        this.#clearSummaryButtonListeners();
+        this.activeHistogramKey = activeKey;
+        const buttons = summaries.map((summary) =>
+            this.#createSummaryButton(summary)
+        );
+        this.histogramList.replaceChildren(...buttons);
+        this.histogramEmpty.hidden = summaries.length > 0;
+        this.#synchronizeSummaryExpansion();
+        if (focusedKey !== null) {
+            this.summaryButtons.find(({ key }) => key === focusedKey)
+                ?.button.focus();
+        }
+    }
+
+    /**
+     * Identify the raster represented by the detailed histogram.
+     *
+     * @param {string} label Readable raster label.
+     * @return {void}
+     */
+    setActiveLayer(label) {
+        this.histogramDetailLayer.textContent = label;
+    }
+
+    /**
+     * Show the detailed histogram for an active raster, or hide it when no
+     * raster owns the controls.
+     *
+     * @param {boolean} isAvailable Whether an active raster can own a result.
+     * @return {void}
+     */
+    setActiveRasterAvailable(isAvailable) {
+        this.isAvailable = isAvailable;
+        this.histogram.hidden = !isAvailable;
+        this.histogram.setAttribute("aria-hidden", String(!isAvailable));
+        this.#synchronizeSummaryExpansion();
+    }
+
+    /**
+     * Reveal the contextual histogram. By default this preserves focus on the
+     * action that initiated sampling; callers may instead focus the chart.
+     * The presentation scrolls only its containing workspace enough to keep
+     * the requested result in view.
+     *
+     * @param {boolean} [moveFocus=false] Whether to focus the chart.
+     * @return {void}
+     */
+    showWidget(moveFocus = false) {
+        if (!this.isAvailable) {
+            return;
+        }
+        this.histogram.hidden = false;
+        this.histogram.setAttribute("aria-hidden", "false");
+        this.#synchronizeSummaryExpansion();
+        this.histogram.scrollIntoView?.({
+            block: "nearest",
+            inline: "nearest",
+        });
+        if (moveFocus) {
+            this.histogramChart.focus?.();
+        }
+    }
+
+    /**
+     * Hide the histogram presentation while retaining its current result.
+     *
+     * @return {void}
+     */
+    hideWidget() {
+        this.histogram.hidden = true;
+        this.histogram.setAttribute("aria-hidden", "true");
+        this.#synchronizeSummaryExpansion();
+    }
+
+    /**
+     * Label the histogram with the geographic area that produced it.
+     * Matching map-overlay and widget colors provide the visual connection.
+     *
+     * @param {"none"|"wholeRaster"|"selectedArea"|"temporaryAoi"} mode
+     * Active sampling-area discriminator.
+     * @param {string} [label=""] Optional semantic sampling-area description.
+     * @return {void}
+     * @throws {TypeError} If the mode is outside the sampling-area contract.
+     */
+    setSamplingAreaMode(mode, label = "") {
+        const labels = {
+            none: "No sampled area",
+            wholeRaster: "Whole raster",
+            selectedArea: "Map sample",
+            temporaryAoi: "Uploaded AOI"
+        };
+        if (!(mode in labels)) {
+            throw new TypeError(`Unsupported histogram sampling area: ${mode}`);
+        }
+        this.histogram.setAttribute("data-sampling-area", mode);
+        this.histogramScope.textContent = label || labels[mode];
     }
 
     /** Enable statistics retry for an active raster. @return {void} */
@@ -146,73 +235,12 @@ export class RasterHistogramControlsView {
         this.retryStatisticsButton.disabled = false;
     }
 
-    /**
-     * Read the three selected histogram positions as percentages.
-     *
-     * @return {{lower: number, middle: number, upper: number}} Percentiles.
-     */
-    readPercentiles() {
-        return {
-            lower: Number(this.percentileInputs.lower.value),
-            middle: Number(this.percentileInputs.middle.value),
-            upper: Number(this.percentileInputs.upper.value),
-        };
-    }
-
-    /**
-     * Restore percentile controls to the application defaults.
-     *
-     * @param {{lower: number, middle: number, upper: number}} defaults Default
-     * ordered histogram positions.
-     * @return {void}
-     */
-    resetPercentiles(defaults) {
-        for (const percentileName of ["lower", "middle", "upper"]) {
-            this.percentileInputs[percentileName].value =
-                defaults[percentileName];
-            this.percentileInputs[percentileName].removeAttribute(
-                "aria-invalid"
-            );
-        }
-        this.percentileError.textContent = "";
-        this.applyPercentilesButton.disabled = false;
-    }
-
-    /**
-     * Present approximate values and ordered-input feedback for percentiles.
-     *
-     * @param {{lower: number, middle: number, upper: number}} percentiles
-     * Selected histogram positions.
-     * @param {{lower: string, middle: string, upper: string}} values Formatted
-     * approximate raster values.
-     * @param {boolean} isOrdered Whether the positions increase strictly.
-     * @param {boolean} isApplicable Whether the current distribution applies.
-     * @return {void}
-     */
-    renderPercentileValues(percentiles, values, isOrdered, isApplicable) {
-        for (const percentileName of ["lower", "middle", "upper"]) {
-            const input = this.percentileInputs[percentileName];
-            if (isOrdered) {
-                input.removeAttribute("aria-invalid");
-            } else {
-                input.setAttribute("aria-invalid", "true");
-            }
-            this.percentileValues[percentileName].textContent =
-                `${percentiles[percentileName]}% ≈ ` + values[percentileName];
-        }
-        this.percentileError.textContent = isOrdered
-            ? ""
-            : "Choose lower, middle, and upper percentiles in increasing order.";
-        this.applyPercentilesButton.disabled = !isOrdered || !isApplicable;
-    }
-
-    /** Remove histogram content and hide distribution-only controls. @return {void} */
+    /** Remove histogram content and hide result-only controls. @return {void} */
     clearStatistics() {
         this.histogram.setAttribute("aria-busy", "false");
         this.histogramStatus.textContent = "";
         clearRasterHistogramChart(this.histogramChart);
         this.histogramAxis.hidden = true;
-        this.percentileControls.hidden = true;
         this.retryStatisticsButton.hidden = true;
     }
 
@@ -276,16 +304,6 @@ export class RasterHistogramControlsView {
     }
 
     /**
-     * Set whether the percentile controls are available.
-     *
-     * @param {boolean} isVisible Whether the controls should be visible.
-     * @return {void}
-     */
-    setPercentileControlsVisible(isVisible) {
-        this.percentileControls.hidden = !isVisible;
-    }
-
-    /**
      * Set whether the statistics retry action is available.
      *
      * @param {boolean} isVisible Whether the retry action should be visible.
@@ -296,27 +314,121 @@ export class RasterHistogramControlsView {
     }
 
     /**
-     * Set whether the current percentile range can be applied.
+     * Construct one retained-raster histogram summary button.
      *
-     * @param {boolean} isEnabled Whether the apply action should be enabled.
-     * @return {void}
+     * @param {RasterHistogramSummary} summary Validated view model.
+     * @return {HTMLButtonElement} Bound accessible summary button.
+     * @throws {TypeError} If required identity or presentation fields are bad.
      */
-    setApplyPercentilesEnabled(isEnabled) {
-        this.applyPercentilesButton.disabled = !isEnabled;
+    #createSummaryButton(summary) {
+        const allowedStates = new Set(["idle", "loading", "ready", "error"]);
+        if (
+            summary === null ||
+            typeof summary !== "object" ||
+            typeof summary.key !== "string" ||
+            summary.key === "" ||
+            typeof summary.label !== "string" ||
+            summary.label === "" ||
+            typeof summary.scope !== "string" ||
+            summary.scope === "" ||
+            !allowedStates.has(summary.state) ||
+            !(
+                summary.counts === null ||
+                (
+                    Array.isArray(summary.counts) &&
+                    summary.counts.every(
+                        (count) => Number.isFinite(count) && count >= 0
+                    )
+                )
+            )
+        ) {
+            throw new TypeError("Raster histogram summary is invalid");
+        }
+        const button = this.documentContext.createElement("button");
+        button.type = "button";
+        button.className = "raster-histogram-summary";
+        button.setAttribute("aria-label", `Histogram — ${summary.label}`);
+        button.setAttribute("aria-controls", "raster-histogram");
+        button.setAttribute("aria-expanded", "false");
+
+        const name = this.documentContext.createElement("span");
+        name.className = "raster-histogram-summary-name";
+        name.textContent = summary.label;
+        const scope = this.documentContext.createElement("span");
+        scope.className = "raster-histogram-summary-scope";
+        scope.textContent = summary.scope;
+        const status = this.documentContext.createElement("span");
+        status.className = "raster-histogram-summary-status";
+        status.textContent = {
+            idle: "Waiting for histogram",
+            loading: "Updating histogram…",
+            ready: "Histogram ready",
+            error: "Histogram unavailable",
+        }[summary.state];
+        button.append(name, scope, status);
+        if (summary.counts !== null && summary.counts.length > 0) {
+            button.append(this.#createSummaryPreview(summary));
+        }
+        const handleSelect = () => {
+            this.handlers?.onSelectHistogram(summary.key);
+        };
+        button.addEventListener("click", handleSelect);
+        this.summaryButtons.push({ button, handleSelect, key: summary.key });
+        return button;
     }
 
-    /** Forward one percentile edit to the raster viewer. @return {void} */
-    #handlePercentileInput() {
-        this.handlers.onPercentileInput();
+    /**
+     * Draw a compact, non-interactive bar preview for one summary.
+     *
+     * @param {RasterHistogramSummary} summary Ready histogram summary.
+     * @return {SVGElement} Accessible-hidden preview SVG.
+     */
+    #createSummaryPreview(summary) {
+        const preview = this.documentContext.createElementNS(
+            "http://www.w3.org/2000/svg",
+            "svg"
+        );
+        preview.classList.add("raster-histogram-summary-preview");
+        preview.setAttribute("viewBox", `0 0 ${summary.counts.length} 24`);
+        preview.setAttribute("preserveAspectRatio", "none");
+        preview.setAttribute("aria-hidden", "true");
+        const maximum = Math.max(...summary.counts, 1);
+        for (const [index, count] of summary.counts.entries()) {
+            const height = 22 * count / maximum;
+            const bar = this.documentContext.createElementNS(
+                "http://www.w3.org/2000/svg",
+                "rect"
+            );
+            bar.setAttribute("x", String(index));
+            bar.setAttribute("y", String(23 - height));
+            bar.setAttribute("width", "0.8");
+            bar.setAttribute("height", String(height));
+            preview.append(bar);
+        }
+        return preview;
     }
 
-    /** Forward the apply-percentiles action. @return {void} */
-    #handleApplyPercentiles() {
-        this.handlers.onApplyPercentiles();
+    /** Remove listeners owned by superseded summary buttons. @return {void} */
+    #clearSummaryButtonListeners() {
+        for (const { button, handleSelect } of this.summaryButtons) {
+            button.removeEventListener("click", handleSelect);
+        }
+        this.summaryButtons = [];
+    }
+
+    /** Synchronize active-summary disclosure state. @return {void} */
+    #synchronizeSummaryExpansion() {
+        for (const { button, key } of this.summaryButtons) {
+            button.setAttribute(
+                "aria-expanded",
+                String(key === this.activeHistogramKey && !this.histogram.hidden)
+            );
+        }
     }
 
     /** Forward the retry-statistics action. @return {void} */
     #handleRetryStatistics() {
         this.handlers.onRetryStatistics();
     }
+
 }

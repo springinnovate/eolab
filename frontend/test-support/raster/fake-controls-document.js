@@ -5,8 +5,9 @@ export class FakeRasterControlElement extends EventTarget {
      *
      * @param {string} [type=""] Input type exposed to event handlers.
      */
-    constructor(type = "") {
+    constructor(type = "", ownerDocument = null) {
         super();
+        this.ownerDocument = ownerDocument;
         this.type = type;
         this.value = "";
         this.textContent = "";
@@ -17,6 +18,7 @@ export class FakeRasterControlElement extends EventTarget {
         this.children = [];
         this.attributes = new Map();
         this.classNames = [];
+        this.scrollRequests = [];
         this.classList = {
             add: (className) => {
                 if (!this.classNames.includes(className)) {
@@ -91,12 +93,30 @@ export class FakeRasterControlElement extends EventTarget {
     getBoundingClientRect() {
         return { width: 120, height: 48 };
     }
+
+    /** Give this control focus in its fake document. @return {void} */
+    focus() {
+        if (this.ownerDocument !== null) {
+            this.ownerDocument.activeElement = this;
+        }
+    }
+
+    /**
+     * Retain a requested scroll presentation for focused view assertions.
+     *
+     * @param {{block?: string, inline?: string}} options Scroll alignment.
+     * @return {void}
+     */
+    scrollIntoView(options) {
+        this.scrollRequests.push(options);
+    }
 }
 
 /** Minimal selector and element factory used by focused adapter tests. */
 export class FakeRasterControlDocument {
     /** Create an empty document-backed selector registry. */
     constructor() {
+        this.activeElement = null;
         this.elements = new Map();
     }
 
@@ -108,9 +128,14 @@ export class FakeRasterControlDocument {
      */
     querySelector(selector) {
         if (!this.elements.has(selector)) {
+            const isPercentileInput = [
+                "#raster-lower-percentile",
+                "#raster-middle-percentile",
+                "#raster-upper-percentile",
+            ].includes(selector);
             const type = selector.endsWith("-color")
                 ? "color"
-                : selector.includes("percentile") || selector.endsWith("-range")
+                : isPercentileInput || selector.endsWith("-range")
                     ? "range"
                     : selector.includes("minimum") ||
                         selector.includes("midpoint") ||
@@ -118,7 +143,10 @@ export class FakeRasterControlDocument {
                         selector.endsWith("-number")
                         ? "number"
                         : "";
-            this.elements.set(selector, new FakeRasterControlElement(type));
+            this.elements.set(
+                selector,
+                new FakeRasterControlElement(type, this)
+            );
         }
         return this.elements.get(selector);
     }
@@ -129,7 +157,7 @@ export class FakeRasterControlDocument {
      * @return {FakeRasterControlElement} New fake element.
      */
     createElement() {
-        return new FakeRasterControlElement();
+        return new FakeRasterControlElement("", this);
     }
 
     /**
@@ -138,6 +166,6 @@ export class FakeRasterControlDocument {
      * @return {FakeRasterControlElement} New fake SVG element.
      */
     createElementNS() {
-        return new FakeRasterControlElement();
+        return new FakeRasterControlElement("", this);
     }
 }

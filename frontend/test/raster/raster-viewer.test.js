@@ -193,6 +193,7 @@ function createFakeControlsView() {
         percentilePresentation: null,
         applyPercentilesEnabled: true,
         statisticsStatus: "",
+        appearanceStatus: "",
         populatePalettes() {},
         bind(handlers) {
             this.handlers = handlers;
@@ -214,6 +215,9 @@ function createFakeControlsView() {
             this.paletteName = paletteName;
         },
         renderStyleError() {},
+        setAppearanceStatus(message) {
+            this.appearanceStatus = message;
+        },
         renderLegend(style) {
             this.legendStyle = { ...style };
         },
@@ -280,6 +284,26 @@ function createFakeControlsView() {
         },
         setSamplingAreaMode(mode) {
             this.samplingAreaMode = mode;
+        },
+        showHistogramWidget() {
+            this.histogramWidgetOpenCount =
+                (this.histogramWidgetOpenCount ?? 0) + 1;
+        },
+        showAppearanceWidget() {
+            this.appearanceWidgetOpenCount =
+                (this.appearanceWidgetOpenCount ?? 0) + 1;
+        },
+        renderLayerHistograms(summaries, activeKey) {
+            this.layerHistograms = summaries.map((summary) => ({
+                ...summary,
+                counts: summary.counts === null
+                    ? null
+                    : [...summary.counts],
+            }));
+            this.activeHistogramKey = activeKey;
+        },
+        setRenderingControlsAvailable(isAvailable) {
+            this.renderingControlsAvailable = isAvailable;
         },
         setControlsVisible(isVisible) {
             this.controlsVisible = isVisible;
@@ -496,7 +520,8 @@ test("renderer-independent analysis supports exact windows without publication",
     assert.equal(publicationCalls, 0);
     assert.equal(wmsLayers.length, 0);
     assert.equal(controlsView.controlsVisible, true);
-    assert.match(controlsView.activeLayer.label, /analysis only/);
+    assert.equal(controlsView.renderingControlsAvailable, false);
+    assert.equal(controlsView.activeLayer.label, "annual temperature.tif");
     assert.deepEqual(
         statisticsRequests.map(({ samplingArea }) => samplingArea.kind),
         ["wholeRaster"]
@@ -513,16 +538,23 @@ test("renderer-independent analysis supports exact windows without publication",
     }]);
     leafletMap.emit("click", { latlng: { lng: -122, lat: 48.5 } });
     await flushPromises();
+    assert.equal(controlsView.histogramWidgetOpenCount, 1);
     assert.equal(statisticsRequests.at(-1).samplingArea.kind, "selectedArea");
     assert.match(controlsView.statisticsStatus, /Selected-area exact/);
 
     controlsView.setPaletteName("viridis");
     controlsView.handlers.onPaletteChange();
     assert.equal(controlsView.legendStyle.minimumColor, "#440154");
+    assert.equal(controlsView.appearanceStatus, "Applied the Viridis palette.");
     controlsView.handlers.onApplyPercentiles();
     assert.match(controlsView.statisticsStatus, /selected exact percentile/);
+    assert.match(controlsView.appearanceStatus, /Applied histogram range:/);
     controlsView.handlers.onResetStyle();
-    assert.match(controlsView.statisticsStatus, /exact bounded distribution/);
+    assert.match(controlsView.statisticsStatus, /exact bounded histogram/);
+    assert.equal(
+        controlsView.appearanceStatus,
+        "Restored the initial colors and range."
+    );
 
     viewer.deactivateAnalysis(MOUNTED_GEOTIFF_ITEM);
     assert.equal(controlsView.controlsVisible, false);
@@ -560,14 +592,15 @@ test("WMS activation adopts the existing renderer-neutral analysis session", asy
     viewer.activateAnalysis(MOUNTED_GEOTIFF_ITEM);
     await flushPromises();
     assert.equal(statisticsRequests, 1);
-    assert.match(controlsView.activeLayer.label, /analysis only/);
+    assert.equal(controlsView.activeLayer.label, "annual temperature.tif");
 
     await viewer.show(MOUNTED_GEOTIFF_ITEM);
 
     assert.equal(statisticsRequests, 1);
     assert.equal(wmsLayers.length, 1);
     assert.equal(viewer.isDisplayed, true);
-    assert.doesNotMatch(controlsView.activeLayer.label, /analysis only/);
+    assert.equal(controlsView.renderingControlsAvailable, true);
+    assert.equal(controlsView.activeLayer.visible, true);
     assert.equal(controlsView.displayedStatistics, RASTER_STATISTICS);
     viewer.destroy();
 });
@@ -616,7 +649,7 @@ test("a pending WMS publication cannot steal newer Catalog analysis", async () =
     assert.equal(viewer.contains(publishing), true);
     assert.equal(layerStackView.activeKey, null);
     assert.match(controlsView.activeLayer.label, /newer-analysis/);
-    assert.match(controlsView.activeLayer.label, /analysis only/);
+    assert.equal(controlsView.activeLayer.label, "newer-analysis.tif");
     assert.equal(controlsView.displayedStatistics.itemId, selected.id);
     viewer.destroy();
 });
@@ -662,7 +695,7 @@ test("reaffirming Catalog analysis invalidates a pending WMS activation", async 
     assert.equal(viewer.contains(item), true);
     assert.equal(layerStackView.activeKey, null);
     assert.match(controlsView.activeLayer.label, /reaffirmed-analysis/);
-    assert.match(controlsView.activeLayer.label, /analysis only/);
+    assert.equal(controlsView.activeLayer.label, "reaffirmed-analysis.tif");
     assert.equal(controlsView.displayedStatistics.itemId, item.id);
     viewer.destroy();
 });
@@ -754,7 +787,7 @@ test("renderer changes abort and ignore obsolete analysis responses", async () =
     assert.equal(controlsView.displayedStatistics, EXACT_RASTER_STATISTICS);
     assert.match(controlsView.activeLayer.label, /sampled raster/);
     controlsView.handlers.onResetStyle();
-    assert.match(controlsView.statisticsStatus, /exact bounded distribution/);
+    assert.match(controlsView.statisticsStatus, /exact bounded histogram/);
     viewer.destroy();
 });
 
@@ -886,6 +919,7 @@ test("sampled rasters reuse color controls and bounded click histograms", async 
     await flushPromises();
     assert.equal(viewer.isDisplayed, true);
     assert.equal(controlsView.controlsVisible, true);
+    assert.equal(controlsView.renderingControlsAvailable, true);
     assert.match(controlsView.activeLayer.label, /sampled raster/);
     assert.equal(controlsView.samplingAreaMode, "wholeRaster");
     assert.equal(controlsView.clearSampleWindowLabel, "Use whole raster");
@@ -942,7 +976,7 @@ test("sampled rasters reuse color controls and bounded click histograms", async 
     viewer.removeSampled(MOUNTED_GEOTIFF_ITEM);
     assert.equal(viewer.isDisplayed, false);
     assert.equal(controlsView.controlsVisible, true);
-    assert.match(controlsView.activeLayer.label, /analysis only/);
+    assert.equal(controlsView.activeLayer.label, "annual temperature.tif");
     assert.equal(controlsView.displayedStatistics, RASTER_STATISTICS);
     assert.equal(wholeStatisticsRequests, 1);
     viewer.destroy();
@@ -1365,6 +1399,72 @@ test("active layers restore isolated styles and completed statistics", async () 
     viewer.destroy();
 });
 
+test("raster analysis summaries select a labeled retained histogram", async () => {
+    const leafletMap = createFakeMap();
+    const { leaflet } = createFakeLeaflet();
+    const controlsView = createFakeControlsView();
+    const layerStackView = createFakeLayerStackView();
+    const statisticsCounts = new Map();
+    let histogramPresentationRequests = 0;
+    const viewer = initializeRasterViewer(
+        {
+            wmsUrl: "/geoserver/eolab/wms",
+            leafletMap,
+            leaflet,
+            onTileError() {},
+            onHistogramRequested() {
+                histogramPresentationRequests += 1;
+            },
+        },
+        {
+            controlsView,
+            layerStackView,
+            publishRaster: async (item) => ({
+                layerName: `eolab:${item.id}`,
+                bbox: [-180, -90, 180, 90],
+            }),
+            loadStatistics: async (item, samplingArea) => {
+                statisticsCounts.set(
+                    item.id,
+                    (statisticsCounts.get(item.id) ?? 0) + 1
+                );
+                return createLayerStatistics(
+                    item,
+                    selectedBoundsFromArea(samplingArea)
+                );
+            },
+            samplePixel: async () => ({ inBounds: true, value: 1 }),
+            viewport: { innerWidth: 1280, innerHeight: 720 },
+        }
+    );
+    const first = createRasterItem("tool-first");
+    const second = createRasterItem("tool-second");
+    await viewer.show(first);
+    await flushPromises();
+    await viewer.show(second);
+    await flushPromises();
+    const firstLayer = layerStackView.layers.find(({ item }) => item === first);
+    const firstHistogram = controlsView.layerHistograms.find(
+        ({ key }) => key === firstLayer.key
+    );
+
+    assert.equal(controlsView.layerHistograms.length, 2);
+    assert.equal(firstHistogram.scope, "Whole raster");
+    assert.equal(firstHistogram.state, "ready");
+    assert.equal(firstHistogram.counts.length, 64);
+
+    controlsView.handlers.onSelectHistogram(firstLayer.key);
+    await flushPromises();
+
+    assert.equal(layerStackView.activeKey, firstLayer.key);
+    assert.equal(controlsView.activeHistogramKey, firstLayer.key);
+    assert.equal(controlsView.histogramWidgetOpenCount, 1);
+    assert.equal(histogramPresentationRequests, 1);
+    assert.equal(statisticsCounts.get(first.id), 1);
+    assert.equal(statisticsCounts.get(second.id), 1);
+    viewer.destroy();
+});
+
 test("a restored whole-raster statistics error retries the active layer", async () => {
     const leafletMap = createFakeMap();
     const { leaflet } = createFakeLeaflet();
@@ -1394,7 +1494,7 @@ test("a restored whole-raster statistics error retries the active layer", async 
                     (request) => request.item === first
                 ).length;
                 if (item === first && firstAttemptCount === 1) {
-                    throw new Error("First distribution failed");
+                    throw new Error("First histogram failed");
                 }
                 return createLayerStatistics(item, selectedBounds);
             },
@@ -1406,14 +1506,14 @@ test("a restored whole-raster statistics error retries the active layer", async 
     await viewer.show(first);
     await flushPromises();
     const firstKey = layerStackView.activeKey;
-    assert.match(controlsView.statisticsStatus, /First distribution failed/);
+    assert.match(controlsView.statisticsStatus, /First histogram failed/);
     assert.equal(controlsView.statisticsRetryVisible, true);
 
     await viewer.show(second);
     await flushPromises();
     assert.equal(controlsView.displayedStatistics.itemId, second.id);
     layerStackView.handlers.onActivate(firstKey);
-    assert.match(controlsView.statisticsStatus, /First distribution failed/);
+    assert.match(controlsView.statisticsStatus, /First histogram failed/);
     assert.equal(controlsView.statisticsRetryVisible, true);
 
     controlsView.handlers.onRetryStatistics();
@@ -1701,7 +1801,7 @@ test("hidden WMS renderers do not gate active Catalog analysis", async () => {
     viewer.destroy();
 });
 
-test("active layers restore their selected-area statistics, size, and rectangle", async () => {
+test("explicit sampling refreshes every raster layer to one shared area", async () => {
     const leafletMap = createFakeMap();
     const { leaflet, rectangleLayers } = createFakeLeaflet();
     const controlsView = createFakeControlsView();
@@ -1749,9 +1849,13 @@ test("active layers restore their selected-area statistics, size, and rectangle"
             leafletMap.layers.has(layer)
     );
     assert.ok(firstSelectionLayer);
-    const firstLeafletBounds = firstSelectionLayer.boundsHistory.at(-1);
     assert.equal(controlsView.displayedStatistics.itemId, first.id);
     assert.equal(controlsView.displayedStatistics.scope, "selectedArea");
+    controlsView.handlers.onSampleWindowNumberInput("55");
+    assert.match(
+        controlsView.sampleWindowStatus,
+        /current histogram still uses the 42 km window/
+    );
 
     await viewer.show(second);
     await flushPromises();
@@ -1761,25 +1865,35 @@ test("active layers restore their selected-area statistics, size, and rectangle"
     assert.equal(controlsView.displayedStatistics.itemId, second.id);
     assert.equal(controlsView.sampleWindowSizeKm, 80);
 
-    const firstSelectedRequestCount = statisticsRequests.filter(
+    const firstSelectedRequests = statisticsRequests.filter(
         ({ item, selectedBounds }) =>
             item === first && selectedBounds !== null
-    ).length;
+    );
+    assert.equal(firstSelectedRequests.length, 2);
+    const sharedFirstRequest = firstSelectedRequests.at(-1);
+    const secondSelectedRequest = statisticsRequests.findLast(
+        ({ item, selectedBounds }) =>
+            item === second && selectedBounds !== null
+    );
+    assert.deepEqual(
+        sharedFirstRequest.selectedBounds,
+        secondSelectedRequest.selectedBounds
+    );
     layerStackView.handlers.onActivate(firstKey);
 
-    assert.equal(controlsView.sampleWindowSizeKm, 42);
+    assert.equal(controlsView.sampleWindowSizeKm, 80);
     assert.equal(controlsView.displayedStatistics.itemId, first.id);
     assert.equal(controlsView.displayedStatistics.scope, "selectedArea");
     assert.deepEqual(
         controlsView.displayedStatistics.selectedBounds,
-        firstSelectedRequest.selectedBounds
+        sharedFirstRequest.selectedBounds
     );
     assert.equal(
         statisticsRequests.filter(
             ({ item, selectedBounds }) =>
                 item === first && selectedBounds !== null
         ).length,
-        firstSelectedRequestCount
+        firstSelectedRequests.length
     );
     const attachedSelections = rectangleLayers.filter(
         (layer) => layer.kind === "selection" && leafletMap.layers.has(layer)
@@ -1787,7 +1901,16 @@ test("active layers restore their selected-area statistics, size, and rectangle"
     assert.equal(attachedSelections.length, 1);
     assert.deepEqual(
         attachedSelections[0].boundsHistory.at(-1),
-        firstLeafletBounds
+        [
+            [
+                sharedFirstRequest.selectedBounds.south,
+                sharedFirstRequest.selectedBounds.west,
+            ],
+            [
+                sharedFirstRequest.selectedBounds.north,
+                sharedFirstRequest.selectedBounds.east,
+            ],
+        ]
     );
     assert.equal(leafletMap.layers.has(firstSelectionLayer), false);
     viewer.destroy();
@@ -1850,7 +1973,7 @@ test("removing an active WMS renderer preserves analysis before adjacent restore
     layerStackView.handlers.onRemove(keys.get(third));
     assert.equal(layerStackView.activeKey, null);
     assert.match(controlsView.activeLayer.label, /remove-third/);
-    assert.match(controlsView.activeLayer.label, /analysis only/);
+    assert.equal(controlsView.activeLayer.label, "remove-third.tif");
     assert.equal(controlsView.displayedStatistics.itemId, third.id);
     assert.equal(controlsView.displayedStatistics.scope, "selectedArea");
     assert.equal(controlsView.paletteName, "viridis");
@@ -1873,14 +1996,14 @@ test("removing an active WMS renderer preserves analysis before adjacent restore
     layerStackView.handlers.onRemove(keys.get(second));
     assert.equal(layerStackView.activeKey, null);
     assert.match(controlsView.activeLayer.label, /remove-second/);
-    assert.match(controlsView.activeLayer.label, /analysis only/);
+    assert.equal(controlsView.activeLayer.label, "remove-second.tif");
     viewer.deactivateAnalysis(second);
     assert.equal(layerStackView.activeKey, keys.get(first));
     assert.equal(controlsView.displayedStatistics.itemId, first.id);
     layerStackView.handlers.onRemove(keys.get(first));
     assert.equal(layerStackView.layers.length, 0);
     assert.equal(controlsView.controlsVisible, true);
-    assert.match(controlsView.activeLayer.label, /analysis only/);
+    assert.equal(controlsView.activeLayer.label, "remove-first.tif");
     viewer.deactivateAnalysis(first);
     assert.equal(controlsView.controlsVisible, false);
     assert.equal(
