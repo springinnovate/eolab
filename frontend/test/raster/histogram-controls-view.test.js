@@ -11,17 +11,13 @@ import {
     FakeRasterControlElement,
 } from "../../test-support/raster/fake-controls-document.js";
 
-test("histogram adapter owns status, chart, retry, and disclosure", () => {
+test("histogram adapter owns status, chart, retry, and direct presentation", () => {
     const documentContext = new FakeRasterControlDocument();
     const view = new RasterHistogramControlsView(documentContext);
     const received = [];
     view.bind({
         onRetryStatistics: () => received.push("retry"),
     });
-    const launcher = documentContext.querySelector(
-        "#open-raster-histogram-widget"
-    );
-    launcher.hidden = true;
     view.setActiveRasterAvailable(true);
     view.setSamplingAreaMode("selectedArea");
     view.showWidget();
@@ -36,8 +32,6 @@ test("histogram adapter owns status, chart, retry, and disclosure", () => {
         .dispatchEvent(new Event("click"));
 
     assert.deepEqual(received, ["retry"]);
-    assert.equal(launcher.hidden, false);
-    assert.equal(launcher.getAttribute("aria-expanded"), "true");
     assert.equal(
         documentContext.querySelector("#raster-histogram").hidden,
         false
@@ -72,24 +66,16 @@ test("histogram adapter owns status, chart, retry, and disclosure", () => {
         ""
     );
 
-    documentContext.querySelector("#close-raster-histogram-widget")
-        .dispatchEvent(new Event("click"));
+    view.setActiveRasterAvailable(false);
     assert.equal(
         documentContext.querySelector("#raster-histogram").hidden,
         true
     );
-    assert.equal(launcher.getAttribute("aria-expanded"), "false");
-    assert.equal(documentContext.activeElement, launcher);
-
-    launcher.dispatchEvent(new Event("click"));
-    const escapeEvent = new Event("keydown", { cancelable: true });
-    Object.defineProperty(escapeEvent, "key", { value: "Escape" });
-    documentContext.querySelector("#raster-histogram")
-        .dispatchEvent(escapeEvent);
-    assert.equal(escapeEvent.defaultPrevented, true);
+    view.setActiveRasterAvailable(true);
+    view.showWidget(true);
     assert.equal(
-        documentContext.querySelector("#raster-histogram").hidden,
-        true
+        documentContext.activeElement,
+        documentContext.querySelector("#raster-histogram-chart")
     );
 
     view.unbind();

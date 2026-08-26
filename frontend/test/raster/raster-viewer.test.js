@@ -193,6 +193,7 @@ function createFakeControlsView() {
         percentilePresentation: null,
         applyPercentilesEnabled: true,
         statisticsStatus: "",
+        appearanceStatus: "",
         populatePalettes() {},
         bind(handlers) {
             this.handlers = handlers;
@@ -214,6 +215,9 @@ function createFakeControlsView() {
             this.paletteName = paletteName;
         },
         renderStyleError() {},
+        setAppearanceStatus(message) {
+            this.appearanceStatus = message;
+        },
         renderLegend(style) {
             this.legendStyle = { ...style };
         },
@@ -517,7 +521,7 @@ test("renderer-independent analysis supports exact windows without publication",
     assert.equal(wmsLayers.length, 0);
     assert.equal(controlsView.controlsVisible, true);
     assert.equal(controlsView.renderingControlsAvailable, false);
-    assert.match(controlsView.activeLayer.label, /analysis only/);
+    assert.equal(controlsView.activeLayer.label, "annual temperature.tif");
     assert.deepEqual(
         statisticsRequests.map(({ samplingArea }) => samplingArea.kind),
         ["wholeRaster"]
@@ -541,10 +545,16 @@ test("renderer-independent analysis supports exact windows without publication",
     controlsView.setPaletteName("viridis");
     controlsView.handlers.onPaletteChange();
     assert.equal(controlsView.legendStyle.minimumColor, "#440154");
+    assert.equal(controlsView.appearanceStatus, "Applied the Viridis palette.");
     controlsView.handlers.onApplyPercentiles();
     assert.match(controlsView.statisticsStatus, /selected exact percentile/);
+    assert.match(controlsView.appearanceStatus, /Applied histogram range:/);
     controlsView.handlers.onResetStyle();
     assert.match(controlsView.statisticsStatus, /exact bounded histogram/);
+    assert.equal(
+        controlsView.appearanceStatus,
+        "Restored the initial colors and range."
+    );
 
     viewer.deactivateAnalysis(MOUNTED_GEOTIFF_ITEM);
     assert.equal(controlsView.controlsVisible, false);
@@ -582,7 +592,7 @@ test("WMS activation adopts the existing renderer-neutral analysis session", asy
     viewer.activateAnalysis(MOUNTED_GEOTIFF_ITEM);
     await flushPromises();
     assert.equal(statisticsRequests, 1);
-    assert.match(controlsView.activeLayer.label, /analysis only/);
+    assert.equal(controlsView.activeLayer.label, "annual temperature.tif");
 
     await viewer.show(MOUNTED_GEOTIFF_ITEM);
 
@@ -590,7 +600,7 @@ test("WMS activation adopts the existing renderer-neutral analysis session", asy
     assert.equal(wmsLayers.length, 1);
     assert.equal(viewer.isDisplayed, true);
     assert.equal(controlsView.renderingControlsAvailable, true);
-    assert.doesNotMatch(controlsView.activeLayer.label, /analysis only/);
+    assert.equal(controlsView.activeLayer.visible, true);
     assert.equal(controlsView.displayedStatistics, RASTER_STATISTICS);
     viewer.destroy();
 });
@@ -639,7 +649,7 @@ test("a pending WMS publication cannot steal newer Catalog analysis", async () =
     assert.equal(viewer.contains(publishing), true);
     assert.equal(layerStackView.activeKey, null);
     assert.match(controlsView.activeLayer.label, /newer-analysis/);
-    assert.match(controlsView.activeLayer.label, /analysis only/);
+    assert.equal(controlsView.activeLayer.label, "newer-analysis.tif");
     assert.equal(controlsView.displayedStatistics.itemId, selected.id);
     viewer.destroy();
 });
@@ -685,7 +695,7 @@ test("reaffirming Catalog analysis invalidates a pending WMS activation", async 
     assert.equal(viewer.contains(item), true);
     assert.equal(layerStackView.activeKey, null);
     assert.match(controlsView.activeLayer.label, /reaffirmed-analysis/);
-    assert.match(controlsView.activeLayer.label, /analysis only/);
+    assert.equal(controlsView.activeLayer.label, "reaffirmed-analysis.tif");
     assert.equal(controlsView.displayedStatistics.itemId, item.id);
     viewer.destroy();
 });
@@ -966,7 +976,7 @@ test("sampled rasters reuse color controls and bounded click histograms", async 
     viewer.removeSampled(MOUNTED_GEOTIFF_ITEM);
     assert.equal(viewer.isDisplayed, false);
     assert.equal(controlsView.controlsVisible, true);
-    assert.match(controlsView.activeLayer.label, /analysis only/);
+    assert.equal(controlsView.activeLayer.label, "annual temperature.tif");
     assert.equal(controlsView.displayedStatistics, RASTER_STATISTICS);
     assert.equal(wholeStatisticsRequests, 1);
     viewer.destroy();
@@ -1841,6 +1851,11 @@ test("explicit sampling refreshes every raster layer to one shared area", async 
     assert.ok(firstSelectionLayer);
     assert.equal(controlsView.displayedStatistics.itemId, first.id);
     assert.equal(controlsView.displayedStatistics.scope, "selectedArea");
+    controlsView.handlers.onSampleWindowNumberInput("55");
+    assert.match(
+        controlsView.sampleWindowStatus,
+        /current histogram still uses the 42 km window/
+    );
 
     await viewer.show(second);
     await flushPromises();
@@ -1958,7 +1973,7 @@ test("removing an active WMS renderer preserves analysis before adjacent restore
     layerStackView.handlers.onRemove(keys.get(third));
     assert.equal(layerStackView.activeKey, null);
     assert.match(controlsView.activeLayer.label, /remove-third/);
-    assert.match(controlsView.activeLayer.label, /analysis only/);
+    assert.equal(controlsView.activeLayer.label, "remove-third.tif");
     assert.equal(controlsView.displayedStatistics.itemId, third.id);
     assert.equal(controlsView.displayedStatistics.scope, "selectedArea");
     assert.equal(controlsView.paletteName, "viridis");
@@ -1981,14 +1996,14 @@ test("removing an active WMS renderer preserves analysis before adjacent restore
     layerStackView.handlers.onRemove(keys.get(second));
     assert.equal(layerStackView.activeKey, null);
     assert.match(controlsView.activeLayer.label, /remove-second/);
-    assert.match(controlsView.activeLayer.label, /analysis only/);
+    assert.equal(controlsView.activeLayer.label, "remove-second.tif");
     viewer.deactivateAnalysis(second);
     assert.equal(layerStackView.activeKey, keys.get(first));
     assert.equal(controlsView.displayedStatistics.itemId, first.id);
     layerStackView.handlers.onRemove(keys.get(first));
     assert.equal(layerStackView.layers.length, 0);
     assert.equal(controlsView.controlsVisible, true);
-    assert.match(controlsView.activeLayer.label, /analysis only/);
+    assert.equal(controlsView.activeLayer.label, "remove-first.tif");
     viewer.deactivateAnalysis(first);
     assert.equal(controlsView.controlsVisible, false);
     assert.equal(

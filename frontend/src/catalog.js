@@ -125,7 +125,7 @@ export function formatCatalogRasterStatus(
     let renderingExplanation = "";
     if (isRetained) {
         renderingExplanation =
-            "This raster is retained in the map layer stack.";
+            "This raster is already in Map layers.";
     }
     if (supportsDetailPreview) {
         renderingExplanation =

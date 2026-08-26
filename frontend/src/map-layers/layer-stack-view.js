@@ -136,8 +136,8 @@ export class MapLayerStackView {
             this.#setExpanded(true);
         }
         this.limit.textContent = visibleCount >= MAX_VISIBLE_MAP_LAYERS
-            ? "Two map layers are visible. Hide one before showing another."
-            : `${visibleCount} of ${MAX_VISIBLE_MAP_LAYERS} map layers visible.`;
+            ? "Two layers are visible. Hide one before showing another."
+            : "";
         if (retainedFocus !== null) {
             let focusTarget = focusTargets.get(
                 `${retainedFocus.key}\u0000${retainedFocus.action}`
@@ -257,7 +257,7 @@ export class MapLayerStackView {
         visibilityInput.dataset.layerAction = "visibility";
         visibilityInput.setAttribute(
             "aria-label",
-            `${layer.visible ? "Hide" : "Show"} ${accessibleName}`
+            `${accessibleName} visible`
         );
         visibilityInput.setAttribute("aria-describedby", "raster-layer-stack-limit");
         visibilityInput.addEventListener("change", () => {
@@ -266,7 +266,7 @@ export class MapLayerStackView {
         this.#rememberFocusTarget(focusTargets, visibilityInput);
         visibilityLabel.append(
             visibilityInput,
-            this.documentContext.createTextNode(" Show")
+            this.documentContext.createTextNode(" Visible")
         );
 
         const opacityLabel = this.documentContext.createElement("label");

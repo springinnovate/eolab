@@ -280,7 +280,7 @@ export function initializeRasterViewer(
         return {
             key: `analysis:${getCatalogItemKey(item)}`,
             item,
-            label: `${getCatalogRasterBasename(item)} (analysis only)`,
+            label: getCatalogRasterBasename(item),
             rasterStyle: { ...DEFAULT_RASTER_STYLE },
             paletteName: "blue-yellow-red",
             rasterStyleWasEdited: false,
@@ -1587,6 +1587,11 @@ export function initializeRasterViewer(
                 : `${scopeDescription}: ${provenance}${excluded}. ` +
                   "Your current appearance was preserved."
         );
+        if (initialRangeApplied) {
+            controlsView.setAppearanceStatus(
+                "Initialized the color range from the whole-raster histogram."
+            );
+        }
         saveActiveLayerSession();
     }
 
@@ -1811,8 +1816,8 @@ export function initializeRasterViewer(
                 `layer ${selectedTemporaryAoi.selectedDataset}. Map overlay ` +
                 "visibility does not change this histogram selection.";
         } else {
-            nextStatus = "Whole-raster histogram selected. Move over the " +
-                "map and click to display this window's histogram.";
+            nextStatus = "Whole-raster histogram selected. Choose Select " +
+                "map window or Sample map center to analyze a smaller area.";
         }
         controlsView.setSampleWindowStatus(nextStatus);
     }
@@ -1860,7 +1865,18 @@ export function initializeRasterViewer(
         }
         controlsView.setSampleWindowInvalid(false);
         controlsView.setSampleWindowSize(sideLengthKm);
-        renderRasterSampleWindowGuidance("");
+        if (
+            selectedRasterBounds !== null &&
+            selectedRasterWindowSizeKm !== sideLengthKm
+        ) {
+            controlsView.setSampleWindowStatus(
+                `Window size set to ${sideLengthKm} km. The current ` +
+                `histogram still uses the ${selectedRasterWindowSizeKm} km ` +
+                "window; sample the map again to update it."
+            );
+        } else {
+            renderRasterSampleWindowGuidance("");
+        }
         saveActiveLayerSession();
         return true;
     }
@@ -2052,6 +2068,9 @@ export function initializeRasterViewer(
             paletteName
         );
         commitRasterStyle();
+        controlsView.setAppearanceStatus(
+            `Applied the ${RASTER_COLOR_PALETTES[paletteName].label} palette.`
+        );
     }
 
     /**
@@ -2063,6 +2082,9 @@ export function initializeRasterViewer(
         rasterStyleWasEdited = true;
         resetRasterStyle();
         commitRasterStyle();
+        controlsView.setAppearanceStatus(
+            "Restored the initial colors and range."
+        );
         if (isActiveSampledRaster()) {
             const provenance = rasterStatistics === null
                 ? ""
@@ -2116,6 +2138,12 @@ export function initializeRasterViewer(
             controlsView.getPaletteName()
         );
         commitRasterStyle();
+        controlsView.setAppearanceStatus(
+            "Applied histogram range: " +
+            `${formatRasterPixelValue(rasterStyle.minimum)}, ` +
+            `${formatRasterPixelValue(rasterStyle.midpoint)}, and ` +
+            `${formatRasterPixelValue(rasterStyle.maximum)}.`
+        );
         controlsView.setStatisticsStatus(
             `Rescaled the colors to the selected ${
                 rasterStatistics.estimated ? "approximate" : "exact"

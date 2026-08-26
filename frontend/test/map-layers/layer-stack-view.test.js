@@ -298,7 +298,7 @@ test("MapLayerStackView renders semantic, accessible independent rows", () => {
   assert.deepEqual(list.children.map((row) => row.tagName), ["LI", "LI", "LI"]);
   assert.equal(
     limit.textContent,
-    "Two map layers are visible. Hide one before showing another.",
+    "Two layers are visible. Hide one before showing another.",
   );
 
   const [temperatureRow, vegetationRow, moistureRow] = list.children;
@@ -332,7 +332,7 @@ test("MapLayerStackView renders semantic, accessible independent rows", () => {
   );
   assert.equal(
     actionControl(temperatureRow, "visibility").getAttribute("aria-label"),
-    `Hide ${temperatureAccessibleName}`,
+    `${temperatureAccessibleName} visible`,
   );
   assert.equal(
     actionControl(temperatureRow, "remove").getAttribute("aria-label"),
@@ -340,7 +340,7 @@ test("MapLayerStackView renders semantic, accessible independent rows", () => {
   );
   assert.equal(
     actionControl(moistureRow, "visibility").getAttribute("aria-label"),
-    `Show ${LAYERS[2].label}; Catalog Item soil / moisture-anomaly`,
+    `${LAYERS[2].label}; Catalog Item soil / moisture-anomaly visible`,
   );
 
   const legends = list.children.map(
@@ -522,6 +522,6 @@ test("MapLayerStackView announces status and retains stable action focus", () =>
   );
   assert.equal(
     documentContext.querySelector("#raster-layer-stack-limit").textContent,
-    "0 of 2 map layers visible.",
+    "",
   );
 });

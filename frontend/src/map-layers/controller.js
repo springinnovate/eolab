@@ -92,7 +92,7 @@ export class MapLayerController {
         if (retainedRecord !== undefined) {
             retainedRecord.adapter.prepare?.(retainedRecord);
             this.activate(key);
-            this.view.setStatus(`${retainedRecord.entry.label} is active.`);
+            this.view.setStatus(`${retainedRecord.entry.label} selected.`);
             return retainedRecord.publication;
         }
         const pendingPublication = this.pendingPublications.get(key);

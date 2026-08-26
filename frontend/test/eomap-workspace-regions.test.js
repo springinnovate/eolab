@@ -10,6 +10,10 @@ const STYLESHEET = readFileSync(
     new URL("../src/style.css", import.meta.url),
     "utf8"
 );
+const COMPOSITION_SOURCE = readFileSync(
+    new URL("../src/main.js", import.meta.url),
+    "utf8"
+);
 
 /**
  * Find one stable ID's byte position in the application markup.
@@ -99,7 +103,7 @@ test("one sidebar owns the workspace tablist and compact status", () => {
     );
 });
 
-test("Catalog, Rendering, and Raster analysis are accessible sibling tabs", () => {
+test("Catalog, Map layers, and Histograms are accessible sibling tabs", () => {
     const panel = requireElementRange("control-panel");
     const catalogRegion = requireElementRange("eomap-catalog-region");
     const renderingRegion = requireElementRange("eomap-map-layers-region");
@@ -176,7 +180,7 @@ test("Catalog owns discovery, inspection, and its explicit layer action only", (
     }
 });
 
-test("Rendering owns retained layers, appearance, cutoffs, and availability", () => {
+test("Map layers owns layer presentation, appearance, cutoffs, and limitations", () => {
     const renderingRegion = requireElementRange("eomap-map-layers-region");
     const layerStack = requireElementRange("raster-layer-stack");
     const appearance = requireElementRange("raster-appearance-controls");
@@ -202,11 +206,11 @@ test("Rendering owns retained layers, appearance, cutoffs, and availability", ()
     assert.match(appearance.source, /data-eomap-region="map-layers"/);
     assert.match(
         percentileControls.source,
-        /Histogram percentile cutoffs/
+        /Set the color range from the histogram/
     );
     assert.match(
         percentileControls.source,
-        />\s*Apply cutoffs to color thresholds\s*</
+        />\s*Apply histogram range\s*</
     );
     assert.match(
         renderingRegion.source,
@@ -225,7 +229,22 @@ test("Rendering owns retained layers, appearance, cutoffs, and availability", ()
     }
 });
 
-test("Raster analysis owns shared sampling, histograms, AOI, and pixel guidance", () => {
+test("successful Catalog additions advance to Map layers through composition", () => {
+    assert.match(
+        COMPOSITION_SOURCE,
+        /onMapLayerAdded\(\);[\s\S]*catch \(renderingError\)/
+    );
+    assert.match(
+        COMPOSITION_SOURCE,
+        /\(\) => layoutController\.showWorkspace\("map-layers"\)/
+    );
+    assert.match(
+        COMPOSITION_SOURCE,
+        /\(\) => layoutController\.showWorkspace\("histogram"\)/
+    );
+});
+
+test("Histograms own shared sampling, per-layer histograms, AOI, and pixel guidance", () => {
     const analysisRegion = requireElementRange(
         "eomap-raster-interpretation-region"
     );
@@ -235,12 +254,12 @@ test("Raster analysis owns shared sampling, histograms, AOI, and pixel guidance"
     const histogram = requireElementRange("raster-histogram");
     const temporaryAoi = requireElementRange("temporary-aoi");
 
-    assert.match(composite.source, /Analysis target and sampling area/);
+    assert.match(composite.source, /<legend>Sample area<\/legend>/);
     assert.match(composite.source, /id="raster-active-controls"/);
     assert.match(composite.source, /id="raster-sampling-area-controls"/);
     assert.match(
         sampling.source,
-        /geographic area represented by every raster histogram/
+        /geographic area used by every map-layer histogram/
     );
     for (const action of [
         "clear-raster-sample-window",
@@ -251,11 +270,8 @@ test("Raster analysis owns shared sampling, histograms, AOI, and pixel guidance"
         assert.match(sampling.source, new RegExp(`id="${action}"`));
     }
     assert.match(histogramList.source, /aria-label="Raster histograms"/);
-    assert.match(analysisRegion.source, /All retained rasters/);
-    assert.match(
-        analysisRegion.source,
-        /Each retained raster uses the same sampling area above/
-    );
+    assert.match(analysisRegion.source, /Map layer histograms/);
+    assert.doesNotMatch(analysisRegion.source, /retained/i);
     assert.match(histogram.source, /<h3 id="raster-histogram-heading">Histogram<\/h3>/);
     assert.match(histogram.source, /id="raster-histogram-detail-layer"/);
     assert.match(histogram.source, /id="raster-histogram-status"/);
@@ -263,7 +279,7 @@ test("Raster analysis owns shared sampling, histograms, AOI, and pixel guidance"
     assert.match(analysisRegion.source, /id="pixel-probe-guidance-heading"/);
     assert.match(
         analysisRegion.source,
-        /Move over the map to inspect the active raster's value/
+        /Move over the map to inspect the selected layer's value/
     );
     assert.match(temporaryAoi.source, /data-eomap-region="raster-interpretation"/);
     assert.match(temporaryAoi.source, /aria-labelledby="temporary-aoi-heading"/);

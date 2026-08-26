@@ -9,7 +9,7 @@ import {
     FakeRasterControlDocument,
 } from "../../test-support/raster/fake-controls-document.js";
 
-test("appearance adapter owns style reads, presentation, and listeners", () => {
+test("appearance adapter owns style reads, direct presentation, and listeners", () => {
     const documentContext = new FakeRasterControlDocument();
     const view = new RasterAppearanceControlsView(documentContext);
     const received = [];
@@ -21,21 +21,16 @@ test("appearance adapter owns style reads, presentation, and listeners", () => {
         onPaletteChange: () => received.push(["palette"]),
         onResetStyle: () => received.push(["reset"]),
     });
-    const launcher = documentContext.querySelector(
-        "#open-raster-appearance-widget"
-    );
     documentContext.querySelector("#raster-appearance-controls").hidden = true;
-    launcher.hidden = true;
     view.setActiveRasterAvailable(true);
-    launcher.dispatchEvent(new Event("click"));
     assert.equal(
         documentContext.querySelector("#raster-appearance-controls").hidden,
         false
     );
-    assert.equal(launcher.getAttribute("aria-expanded"), "true");
     assert.equal(
-        documentContext.activeElement,
-        documentContext.querySelector("#close-raster-appearance-widget")
+        documentContext.querySelector("#raster-appearance-controls")
+            .getAttribute("aria-hidden"),
+        "false"
     );
 
     documentContext.querySelector("#raster-minimum-color")
@@ -60,16 +55,17 @@ test("appearance adapter owns style reads, presentation, and listeners", () => {
         ["reset"],
     ]);
 
-    const escapeEvent = new Event("keydown", { cancelable: true });
-    Object.defineProperty(escapeEvent, "key", { value: "Escape" });
-    documentContext.querySelector("#raster-appearance-controls")
-        .dispatchEvent(escapeEvent);
-    assert.equal(escapeEvent.defaultPrevented, true);
+    view.setActiveRasterAvailable(false);
     assert.equal(
         documentContext.querySelector("#raster-appearance-controls").hidden,
         true
     );
-    assert.equal(documentContext.activeElement, launcher);
+    view.setActiveRasterAvailable(true);
+    view.showWidget(true);
+    assert.equal(
+        documentContext.activeElement,
+        documentContext.querySelector("#raster-palette")
+    );
 
     const error = Object.assign(new Error("Invalid colors"), {
         fieldGroup: "colors",
@@ -79,6 +75,15 @@ test("appearance adapter owns style reads, presentation, and listeners", () => {
         documentContext.querySelector("#raster-minimum-color")
             .getAttribute("aria-invalid"),
         "true"
+    );
+    view.setStatus("Applied the Viridis palette.");
+    assert.equal(
+        documentContext.querySelector("#raster-appearance-status").textContent,
+        "Applied the Viridis palette."
+    );
+    assert.throws(
+        () => view.setStatus(null),
+        /Raster appearance status must be a string/
     );
     view.unbind();
     documentContext.querySelector("#reset-raster-style")

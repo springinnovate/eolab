@@ -443,7 +443,9 @@ function renderCatalogItemInspector(
  * @param {import("./catalog-pane-controller.js").CatalogPaneControls}
  * catalogPaneControls Catalog-owned progressive inspector presentation.
  * @param {() => void} [onHistogramRequested=() => {}] Reveals the semantic
- * raster-analysis workspace after an explicit histogram action.
+ * Histograms workspace after an explicit histogram action.
+ * @param {() => void} [onMapLayerAdded=() => {}] Reveals Map layers after a
+ * successful add or low-resolution map presentation.
  * @return {Promise<Function>} Function that reloads the active catalog search.
  */
 async function initializeCatalog(
@@ -451,8 +453,12 @@ async function initializeCatalog(
     leafletMap,
     onRasterViewerReady = () => {},
     catalogPaneControls,
-    onHistogramRequested = () => {}
+    onHistogramRequested = () => {},
+    onMapLayerAdded = () => {}
 ) {
+    if (typeof onMapLayerAdded !== "function") {
+        throw new TypeError("Map-layer presentation callback must be callable");
+    }
     const catalogSystemStateElements = {
         disclosure: document.querySelector("#system-state"),
         stateText: document.querySelector("#system-state-text"),
@@ -714,7 +720,7 @@ async function initializeCatalog(
             ? [
                 fullVisualizationReason,
                 isRetained
-                    ? "This vector layer is retained in the map layer stack."
+                    ? "This vector is already in Map layers."
                     : "",
             ].filter((message) => message !== "").join(" ")
             : formatCatalogRasterStatus(
@@ -1222,7 +1228,7 @@ async function initializeCatalog(
             catalogLayerToggle.textContent = "Add to map layers";
             catalogLayerStatus.textContent =
                 `${datasetNoun[0].toUpperCase()}${datasetNoun.slice(1)} ` +
-                "removed from the map layer stack.";
+                "removed from Map layers.";
             return;
         }
 
@@ -1245,7 +1251,8 @@ async function initializeCatalog(
             catalogLayerToggle.textContent = "Remove from map layers";
             catalogLayerStatus.textContent =
                 `${datasetNoun[0].toUpperCase()}${datasetNoun.slice(1)} ` +
-                "retained in map layers.";
+                "added to Map layers.";
+            onMapLayerAdded();
         } catch (renderingError) {
             if (catalogItemsMatch(catalogState.selectedItem, selectedItem)) {
                 finishCatalogMapAction(pendingAction);
@@ -1286,6 +1293,7 @@ async function initializeCatalog(
             );
             finishCatalogMapAction(pendingAction);
             updateCatalogMapAction(selectedItem);
+            onMapLayerAdded();
         } catch (previewError) {
             if (
                 previewError.name !== "AbortError" &&
@@ -1532,7 +1540,8 @@ async function startApplication() {
             );
         },
         catalogPaneControls,
-        () => layoutController.showWorkspace("raster-analysis")
+        () => layoutController.showWorkspace("histogram"),
+        () => layoutController.showWorkspace("map-layers")
     );
     await initializeScanner(refreshCatalog);
 }

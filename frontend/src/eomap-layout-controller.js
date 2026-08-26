@@ -15,6 +15,7 @@ export const CONTROL_PANEL_TRANSITION_MILLISECONDS = 240;
  * @property {string} name Stable layout-only workspace name.
  * @property {string} tabSelector Selector for the workspace tab.
  * @property {string} panelSelector Selector for the tab's semantic panel.
+ * @property {string} scrollSelector Selector for the workspace scroll owner.
  */
 
 /**
@@ -22,6 +23,7 @@ export const CONTROL_PANEL_TRANSITION_MILLISECONDS = 240;
  * @property {WorkspaceTabConfiguration} configuration Static tab contract.
  * @property {Element} tab Workspace tab element.
  * @property {Element} panel Semantic panel selected by the tab.
+ * @property {Element} scrollElement Workspace's layout-owned scroll element.
  * @property {() => void} handleClick Bound selection listener.
  * @property {(event: KeyboardEvent) => void} handleKeydown Bound keyboard
  * listener.
@@ -33,16 +35,19 @@ const WORKSPACE_TABS = [
         name: "catalog",
         tabSelector: "#toggle-catalog-workspace",
         panelSelector: "#eomap-catalog-region",
+        scrollSelector: "#eomap-catalog-region",
     },
     {
-        name: "rendering",
+        name: "map-layers",
         tabSelector: "#toggle-map-layers",
         panelSelector: "#eomap-map-layers-region",
+        scrollSelector: "#eomap-map-layers-body",
     },
     {
-        name: "raster-analysis",
+        name: "histogram",
         tabSelector: "#toggle-raster-interpretation",
         panelSelector: "#eomap-raster-interpretation-region",
+        scrollSelector: "#eomap-raster-interpretation-body",
     },
 ];
 
@@ -127,6 +132,14 @@ export class EomapLayoutController {
             documentContext,
             "#toggle-analysis-aoi"
         );
+        this.openMapLayerHistograms = requireLayoutElement(
+            documentContext,
+            "#open-map-layer-histograms"
+        );
+        this.openHistogramMapLayers = requireLayoutElement(
+            documentContext,
+            "#open-histogram-map-layers"
+        );
         this.operationalStatusIsExpanded =
             this.operationalToggle.getAttribute("aria-expanded") !== "false";
         this.controlPanelIsCollapsed =
@@ -141,6 +154,10 @@ export class EomapLayoutController {
             this.#handleAnalysisAoiToggle.bind(this);
         this.boundAnalysisAoiKeydown =
             this.#handleAnalysisAoiKeydown.bind(this);
+        this.boundOpenMapLayerHistograms = () =>
+            this.showWorkspace("histogram", true);
+        this.boundOpenHistogramMapLayers = () =>
+            this.showWorkspace("map-layers", true);
         this.operationalToggle.addEventListener(
             "click",
             this.boundOperationalToggle
@@ -161,6 +178,14 @@ export class EomapLayoutController {
         this.analysisAoiDisclosure.addEventListener(
             "keydown",
             this.boundAnalysisAoiKeydown
+        );
+        this.openMapLayerHistograms.addEventListener(
+            "click",
+            this.boundOpenMapLayerHistograms
+        );
+        this.openHistogramMapLayers.addEventListener(
+            "click",
+            this.boundOpenHistogramMapLayers
         );
 
         this.workspaceTabs = WORKSPACE_TABS.map((configuration, index) =>
@@ -210,7 +235,7 @@ export class EomapLayoutController {
      * feature presentation request without giving this controller feature
      * state or sibling implementation knowledge.
      *
-     * @param {"catalog"|"rendering"|"raster-analysis"} name Workspace name.
+     * @param {"catalog"|"map-layers"|"histogram"} name Workspace name.
      * @param {boolean} [moveFocus=false] Whether its tab receives focus.
      * @return {void}
      * @throws {RangeError} If the name is outside the static layout contract.
@@ -227,7 +252,11 @@ export class EomapLayoutController {
             this.#synchronizeControlPanelPresentation();
             this.#scheduleMapInvalidation();
         }
+        const selectionChanged = index !== this.selectedWorkspaceIndex;
         this.#selectWorkspace(index, moveFocus);
+        if (selectionChanged) {
+            this.workspaceTabs[index].scrollElement.scrollTop = 0;
+        }
     }
 
     /**
@@ -273,6 +302,14 @@ export class EomapLayoutController {
             "keydown",
             this.boundAnalysisAoiKeydown
         );
+        this.openMapLayerHistograms.removeEventListener(
+            "click",
+            this.boundOpenMapLayerHistograms
+        );
+        this.openHistogramMapLayers.removeEventListener(
+            "click",
+            this.boundOpenHistogramMapLayers
+        );
         for (const workspaceTab of this.workspaceTabs) {
             workspaceTab.tab.removeEventListener(
                 "click",
@@ -303,10 +340,15 @@ export class EomapLayoutController {
             this.documentContext,
             configuration.panelSelector
         );
+        const scrollElement = requireLayoutElement(
+            this.documentContext,
+            configuration.scrollSelector
+        );
         const workspaceTab = {
             configuration,
             tab,
             panel,
+            scrollElement,
             handleClick: () => this.#selectWorkspace(index, false),
             handleKeydown: (event) =>
                 this.#handleWorkspaceTabKeydown(event, index),

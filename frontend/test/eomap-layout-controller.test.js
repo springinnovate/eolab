@@ -57,6 +57,7 @@ class FakeLayoutElement extends EventTarget {
         this.hidden = false;
         this.inert = false;
         this.open = false;
+        this.scrollTop = 0;
         this.textContent = "";
         this.focused = false;
         this.ownerDocument = null;
@@ -212,6 +213,8 @@ function createLayoutFixture() {
     rasterAnalysisRegion.addDescendant(analysisAoiDisclosure);
     rasterAnalysisRegion.addDescendant(rasterAnalysisContent);
     rasterAnalysisRegion.hidden = true;
+    const openMapLayerHistograms = new FakeLayoutElement();
+    const openHistogramMapLayers = new FakeLayoutElement();
 
     for (const child of [
         collapsePanel,
@@ -237,8 +240,12 @@ function createLayoutFixture() {
         ["#eomap-catalog-region", catalogRegion],
         ["#toggle-map-layers", renderingTab],
         ["#eomap-map-layers-region", renderingRegion],
+        ["#eomap-map-layers-body", renderingContent],
         ["#toggle-raster-interpretation", rasterAnalysisTab],
         ["#eomap-raster-interpretation-region", rasterAnalysisRegion],
+        ["#eomap-raster-interpretation-body", rasterAnalysisContent],
+        ["#open-map-layer-histograms", openMapLayerHistograms],
+        ["#open-histogram-map-layers", openHistogramMapLayers],
         ["#analysis-aoi-disclosure", analysisAoiDisclosure],
         ["#toggle-analysis-aoi", analysisAoiToggle],
     ]);
@@ -256,6 +263,8 @@ function createLayoutFixture() {
         operationalBody,
         operationalRegion,
         operationalToggle,
+        openHistogramMapLayers,
+        openMapLayerHistograms,
         panel,
         rasterAnalysisContent,
         rasterAnalysisRegion,
@@ -291,7 +300,7 @@ test("workspace tabs expose one selected semantic panel", () => {
         true
     );
     assert.equal(
-        fixture.app.classList.contains("is-active-rendering-workspace"),
+        fixture.app.classList.contains("is-active-map-layers-workspace"),
         false
     );
     assert.equal(fixture.timers.length, 0);
@@ -315,7 +324,7 @@ test("click and roving keyboard navigation select workspaces", () => {
     assert.equal(fixture.renderingTab.getAttribute("aria-selected"), "true");
     assert.equal(fixture.renderingTab.getAttribute("tabindex"), "0");
     assert.equal(
-        fixture.app.classList.contains("is-active-rendering-workspace"),
+        fixture.app.classList.contains("is-active-map-layers-workspace"),
         true
     );
     assert.equal(fixture.timers.length, 1);
@@ -331,7 +340,7 @@ test("click and roving keyboard navigation select workspaces", () => {
     assert.equal(fixture.rasterAnalysisRegion.hidden, false);
     assert.equal(fixture.rasterAnalysisTab.focused, true);
     assert.equal(
-        fixture.app.classList.contains("is-active-raster-analysis-workspace"),
+        fixture.app.classList.contains("is-active-histogram-workspace"),
         true
     );
 
@@ -358,18 +367,39 @@ test("composition can reveal a named workspace without stealing focus", () => {
     fixture.collapsePanel.dispatchEvent(new Event("click"));
     fixture.openPanel.focused = false;
 
-    controller.showWorkspace("raster-analysis");
+    fixture.rasterAnalysisContent.scrollTop = 240;
+    controller.showWorkspace("histogram");
 
     assert.equal(fixture.panel.classList.contains("is-collapsed"), false);
     assert.equal(fixture.openPanel.hidden, true);
     assert.equal(fixture.rasterAnalysisRegion.hidden, false);
     assert.equal(fixture.rasterAnalysisTab.getAttribute("aria-selected"), "true");
     assert.equal(fixture.rasterAnalysisTab.focused, false);
+    assert.equal(fixture.rasterAnalysisContent.scrollTop, 0);
     assert.equal(fixture.timers.length, 3);
     assert.throws(
         () => controller.showWorkspace("statistics"),
         /Unknown EOMap workspace: statistics/
     );
+    controller.destroy();
+});
+
+test("workspace task links move between Map layers and Histograms", () => {
+    const fixture = createLayoutFixture();
+    const controller = new EomapLayoutController({
+        documentContext: fixture.document,
+        invalidateMapSize() {},
+        schedule: fixture.schedule,
+    });
+
+    fixture.renderingTab.dispatchEvent(new Event("click"));
+    fixture.openMapLayerHistograms.dispatchEvent(new Event("click"));
+    assert.equal(fixture.rasterAnalysisRegion.hidden, false);
+    assert.equal(fixture.rasterAnalysisTab.focused, true);
+
+    fixture.openHistogramMapLayers.dispatchEvent(new Event("click"));
+    assert.equal(fixture.renderingRegion.hidden, false);
+    assert.equal(fixture.renderingTab.focused, true);
     controller.destroy();
 });
 

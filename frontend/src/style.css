@@ -600,6 +600,11 @@ h5 {
   scrollbar-gutter: stable;
 }
 
+.raster-interpretation-body {
+  display: flex;
+  flex-direction: column;
+}
+
 .temporary-aoi-card {
   grid-column: 3;
   grid-row: 2 / 5;
@@ -1686,6 +1691,17 @@ h5 {
   display: none;
 }
 
+.raster-appearance-status {
+  margin: 9px 0 0;
+  color: var(--text-2);
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.raster-appearance-status:empty {
+  display: none;
+}
+
 .raster-appearance-body > .secondary-button {
   margin-top: 11px;
   justify-self: start;
@@ -2607,7 +2623,6 @@ h5 {
   scrollbar-gutter: stable;
 }
 
-.rendering-style-section,
 .rendering-availability,
 .raster-histogram-overview,
 .raster-histogram,
@@ -2620,7 +2635,21 @@ h5 {
   padding: 12px;
 }
 
-.rendering-style-heading,
+.map-layers-empty-state {
+  margin: 0;
+  border: 1px dashed var(--border-2);
+  border-radius: 6px;
+  padding: 18px 12px;
+  color: var(--text-3);
+  font-size: 0.78rem;
+  text-align: center;
+}
+
+.map-layers-region:has(#raster-layer-stack:not([hidden]))
+  .map-layers-empty-state {
+  display: none;
+}
+
 .raster-histogram-overview-heading {
   display: flex;
   align-items: flex-start;
@@ -2628,8 +2657,6 @@ h5 {
   gap: 10px;
 }
 
-.rendering-style-heading h3,
-.rendering-style-heading .section-label,
 .raster-histogram-overview-heading h3,
 .raster-histogram-overview-heading .section-label,
 .rendering-availability h3,
@@ -2637,20 +2664,12 @@ h5 {
   margin-bottom: 0;
 }
 
-.rendering-style-empty,
 .raster-histogram-overview > p,
 .pixel-probe-guidance p {
   margin: 8px 0 0;
   color: var(--text-3);
   font-size: 0.74rem;
   line-height: 1.45;
-}
-
-.rendering-style-section:has(
-    #open-raster-appearance-widget:not([hidden])
-  )
-  .rendering-style-empty {
-  display: none;
 }
 
 .raster-appearance-controls {
@@ -2661,13 +2680,12 @@ h5 {
   order: initial;
   grid-template-rows: auto auto;
   gap: 12px;
-  margin-top: 12px;
+  margin: 0 0 14px;
   overflow: visible;
-  border: 0;
-  border-top: 1px solid var(--border-2);
-  border-radius: 0;
-  background: transparent;
-  padding: 12px 0 0;
+  border: 1px solid var(--border-2);
+  border-radius: 6px;
+  background: var(--surface-2);
+  padding: 12px;
   box-shadow: none;
 }
 
@@ -2695,11 +2713,43 @@ h5 {
 
 .raster-style-controls {
   flex: 0 0 auto;
+  order: 3;
   margin-bottom: 14px;
 }
 
 .raster-histogram-overview {
+  order: 1;
   background: var(--surface-3);
+}
+
+.raster-histogram {
+  order: 2;
+}
+
+.pixel-probe-guidance {
+  order: 4;
+}
+
+.analysis-aoi-disclosure {
+  order: 5;
+}
+
+.rendering-availability {
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.rendering-availability:has(#raster-detail-preview-controls:not([hidden])) {
+  border: 1px solid var(--border-2);
+  background: var(--surface-2);
+  padding: 12px;
+}
+
+.rendering-availability:has(#raster-detail-preview-controls[hidden]):has(
+    .map-layer-action-status:empty
+  ) {
+  display: none;
 }
 
 .raster-histogram-empty[hidden] {

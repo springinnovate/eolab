@@ -2,7 +2,7 @@
  * DOM presentation adapter for raster histograms.
  *
  * This adapter owns the histogram region, status, chart, axis, retry and
- * disclosure controls, and their direct listeners. The neutral SVG
+ * result visibility, and its direct listeners. The neutral SVG
  * construction functions remain in histogram-view.js; this class only
  * supplies their owned chart element and presents coordinator-provided state.
  */
@@ -42,14 +42,6 @@ export class RasterHistogramControlsView {
         this.histogram = requireRasterControl(
             documentContext,
             "#raster-histogram"
-        );
-        this.openHistogramButton = requireRasterControl(
-            documentContext,
-            "#open-raster-histogram-widget"
-        );
-        this.closeHistogramButton = requireRasterControl(
-            documentContext,
-            "#close-raster-histogram-widget"
         );
         this.histogramScope = requireRasterControl(
             documentContext,
@@ -95,9 +87,7 @@ export class RasterHistogramControlsView {
         this.activeHistogramKey = null;
         this.handlers = null;
         this.boundRetryStatistics = this.#handleRetryStatistics.bind(this);
-        this.boundToggleWidget = this.#handleToggleWidget.bind(this);
-        this.boundCloseWidget = this.#handleCloseWidget.bind(this);
-        this.boundWidgetKeydown = this.#handleWidgetKeydown.bind(this);
+        this.isAvailable = false;
     }
 
     /**
@@ -112,18 +102,6 @@ export class RasterHistogramControlsView {
             "click",
             this.boundRetryStatistics
         );
-        this.openHistogramButton.addEventListener(
-            "click",
-            this.boundToggleWidget
-        );
-        this.closeHistogramButton.addEventListener(
-            "click",
-            this.boundCloseWidget
-        );
-        this.histogram.addEventListener(
-            "keydown",
-            this.boundWidgetKeydown
-        );
     }
 
     /** Remove every direct listener installed by {@link bind}. @return {void} */
@@ -131,18 +109,6 @@ export class RasterHistogramControlsView {
         this.retryStatisticsButton.removeEventListener(
             "click",
             this.boundRetryStatistics
-        );
-        this.openHistogramButton.removeEventListener(
-            "click",
-            this.boundToggleWidget
-        );
-        this.closeHistogramButton.removeEventListener(
-            "click",
-            this.boundCloseWidget
-        );
-        this.histogram.removeEventListener(
-            "keydown",
-            this.boundWidgetKeydown
         );
         this.#clearSummaryButtonListeners();
         this.handlers = null;
@@ -191,60 +157,53 @@ export class RasterHistogramControlsView {
     }
 
     /**
-     * Make the map-associated histogram launcher available for an active
-     * raster, or close and hide it when no raster owns the controls.
+     * Show the detailed histogram for an active raster, or hide it when no
+     * raster owns the controls.
      *
      * @param {boolean} isAvailable Whether an active raster can own a result.
      * @return {void}
      */
     setActiveRasterAvailable(isAvailable) {
-        this.openHistogramButton.hidden = !isAvailable;
-        if (!isAvailable) {
-            this.hideWidget();
-        }
+        this.isAvailable = isAvailable;
+        this.histogram.hidden = !isAvailable;
+        this.histogram.setAttribute("aria-hidden", String(!isAvailable));
+        this.#synchronizeSummaryExpansion();
     }
 
     /**
-     * Open the contextual histogram without moving focus from the map action
-     * that initiated sampling. The presentation scrolls only its containing
-     * workspace enough to keep the requested result in view.
+     * Reveal the contextual histogram. By default this preserves focus on the
+     * action that initiated sampling; callers may instead focus the chart.
+     * The presentation scrolls only its containing workspace enough to keep
+     * the requested result in view.
      *
-     * @param {boolean} [moveFocus=false] Whether to focus the close control.
+     * @param {boolean} [moveFocus=false] Whether to focus the chart.
      * @return {void}
      */
     showWidget(moveFocus = false) {
-        if (this.openHistogramButton.hidden) {
+        if (!this.isAvailable) {
             return;
         }
         this.histogram.hidden = false;
         this.histogram.setAttribute("aria-hidden", "false");
-        this.openHistogramButton.setAttribute("aria-expanded", "true");
-        this.openHistogramButton.setAttribute("aria-label", "Hide histogram");
         this.#synchronizeSummaryExpansion();
         this.histogram.scrollIntoView?.({
             block: "nearest",
             inline: "nearest",
         });
         if (moveFocus) {
-            this.closeHistogramButton.focus();
+            this.histogramChart.focus?.();
         }
     }
 
     /**
      * Hide the histogram presentation while retaining its current result.
      *
-     * @param {boolean} [returnFocus=false] Whether to focus its launcher.
      * @return {void}
      */
-    hideWidget(returnFocus = false) {
+    hideWidget() {
         this.histogram.hidden = true;
         this.histogram.setAttribute("aria-hidden", "true");
-        this.openHistogramButton.setAttribute("aria-expanded", "false");
-        this.openHistogramButton.setAttribute("aria-label", "Show histogram");
         this.#synchronizeSummaryExpansion();
-        if (returnFocus && !this.openHistogramButton.hidden) {
-            this.openHistogramButton.focus();
-        }
     }
 
     /**
@@ -472,32 +431,4 @@ export class RasterHistogramControlsView {
         this.handlers.onRetryStatistics();
     }
 
-    /** Toggle the retained histogram result from its map control. @return {void} */
-    #handleToggleWidget() {
-        if (this.histogram.hidden) {
-            this.showWidget(true);
-        } else {
-            this.hideWidget(true);
-        }
-    }
-
-    /** Close the widget without clearing statistics. @return {void} */
-    #handleCloseWidget() {
-        this.hideWidget(true);
-    }
-
-    /**
-     * Close only the histogram widget when Escape originates within it.
-     *
-     * @param {KeyboardEvent} event Widget keyboard event.
-     * @return {void}
-     */
-    #handleWidgetKeydown(event) {
-        if (event.key !== "Escape") {
-            return;
-        }
-        event.preventDefault();
-        event.stopPropagation();
-        this.hideWidget(true);
-    }
 }

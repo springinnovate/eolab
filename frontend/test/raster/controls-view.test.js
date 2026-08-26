@@ -180,8 +180,13 @@ test("RasterControlsView owns style values and semantic control events", () => {
         maximumColor: "#ffffff",
     };
     view.setStyle(style, "viridis");
+    view.setAppearanceStatus("Applied the Viridis palette.");
     assert.deepEqual(view.readStyle(), style);
     assert.equal(view.getPaletteName(), "viridis");
+    assert.equal(
+        documentContext.querySelector("#raster-appearance-status").textContent,
+        "Applied the Viridis palette."
+    );
     assert.match(
         documentContext.querySelector("#raster-legend").style.background,
         /#000000/
@@ -218,8 +223,7 @@ test("RasterControlsView owns style values and semantic control events", () => {
     view.setControlsVisible(true);
     view.showHistogramWidget();
     assert.equal(documentContext.querySelector("#raster-histogram").hidden, false);
-    documentContext.querySelector("#open-raster-appearance-widget")
-        .dispatchEvent(new Event("click"));
+    view.setRenderingControlsAvailable(true);
     assert.equal(documentContext.querySelector("#raster-histogram").hidden, false);
     assert.equal(
         documentContext.querySelector("#raster-appearance-controls").hidden,
@@ -338,7 +342,7 @@ test("RasterControlsView reports renderer visibility without gating analysis", (
 
     assert.match(
         documentContext.querySelector("#raster-active-layer-label").textContent,
-        /global-temperature\.tif; this layer is hidden/
+        /global-temperature\.tif — not visible on the map/
     );
     assert.equal(
         documentContext.querySelector("#sample-raster-map-center").disabled,
@@ -414,10 +418,6 @@ test("RasterControlsView owns composite visibility without clearing subgroup sta
 
     assert.equal(root.hidden, true);
     assert.equal(histogram.hidden, true);
-    assert.equal(
-        documentContext.querySelector("#open-raster-histogram-widget").hidden,
-        true
-    );
     assert.equal(histogram.getAttribute("aria-busy"), "true");
     assert.equal(
         documentContext.querySelector("#raster-histogram-status").textContent,
@@ -425,26 +425,13 @@ test("RasterControlsView owns composite visibility without clearing subgroup sta
     );
     assert.equal(samplingStatus.textContent, "Selected geographic map window.");
     assert.equal(appearance.hidden, true);
-    assert.equal(
-        documentContext.querySelector("#open-raster-appearance-widget").hidden,
-        true
-    );
 
     view.setControlsVisible(true);
     assert.equal(root.hidden, false);
-    assert.equal(
-        documentContext.querySelector("#open-raster-histogram-widget").hidden,
-        false
-    );
-    assert.equal(
-        documentContext.querySelector("#open-raster-appearance-widget").hidden,
-        true
-    );
+    assert.equal(histogram.hidden, false);
+    assert.equal(appearance.hidden, true);
     view.setRenderingControlsAvailable(true);
-    assert.equal(
-        documentContext.querySelector("#open-raster-appearance-widget").hidden,
-        false
-    );
+    assert.equal(appearance.hidden, false);
     view.showHistogramWidget();
     assert.equal(histogram.hidden, false);
     assert.equal(histogram.getAttribute("aria-busy"), "true");

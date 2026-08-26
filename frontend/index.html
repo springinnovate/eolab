@@ -236,7 +236,7 @@
                 aria-selected="false"
                 tabindex="-1"
               >
-                Rendering
+                Map layers
               </button>
               <button
                 class="workspace-tab"
@@ -247,7 +247,7 @@
                 aria-selected="false"
                 tabindex="-1"
               >
-                Raster analysis
+                Histograms
               </button>
             </div>
           </nav>
@@ -395,17 +395,23 @@
                   >
                     <div class="workspace-region-heading">
                       <div>
-                        <p class="section-label">Map display</p>
-                        <h2 id="eomap-map-layers-heading">Rendering</h2>
+                        <h2 id="eomap-map-layers-heading">Map layers</h2>
                       </div>
+                      <button
+                        class="secondary-button"
+                        id="open-map-layer-histograms"
+                        type="button"
+                      >
+                        Histograms
+                      </button>
                     </div>
                     <div
                       class="workspace-region-body map-layers-body"
                       id="eomap-map-layers-body"
                       aria-hidden="false"
                     >
-                    <p class="section-copy">
-                      Choose which retained items are visible and adjust how the active raster is drawn.
+                    <p class="map-layers-empty-state">
+                      No map layers yet. Add an item from Catalog.
                     </p>
                     <section
                       class="map-layer-widget raster-layer-stack"
@@ -416,8 +422,7 @@
                     >
                       <div class="raster-layer-stack-heading">
                         <div>
-                          <p class="section-label">Retained on the map</p>
-                          <h3 id="raster-layer-stack-heading">Layers</h3>
+                          <h3 id="raster-layer-stack-heading">Layers on this map</h3>
                         </div>
                         <button
                           class="secondary-button"
@@ -427,7 +432,7 @@
                           aria-expanded="true"
                           hidden
                         >
-                          Hide layers <span id="raster-layer-widget-count">0</span>
+                          Hide layer list <span id="raster-layer-widget-count">0</span>
                         </button>
                       </div>
                       <div class="map-layer-widget-body" id="raster-layer-stack-body">
@@ -444,28 +449,7 @@
                       </div>
                     </section>
 
-                    <section class="rendering-style-section" aria-labelledby="rendering-style-heading">
-                      <div class="rendering-style-heading">
-                        <div>
-                          <p class="section-label">Active raster</p>
-                          <h3 id="rendering-style-heading">Raster style</h3>
-                        </div>
-                        <button
-                          class="secondary-button"
-                          id="open-raster-appearance-widget"
-                          type="button"
-                          aria-controls="raster-appearance-controls"
-                          aria-expanded="false"
-                          aria-label="Show raster style"
-                          hidden
-                        >
-                          Edit raster style
-                        </button>
-                      </div>
-                      <p class="rendering-style-empty">
-                        Select a renderable raster layer above to edit its palette, thresholds, and colors.
-                      </p>
-                      <div
+                      <section
                         class="raster-appearance-controls"
                         id="raster-appearance-controls"
                         data-eomap-region="map-layers"
@@ -475,23 +459,11 @@
                       >
                         <div class="raster-appearance-heading">
                           <div>
-                            <p class="section-label">Rendering controls</p>
-                            <h3 id="raster-appearance-heading">Display appearance</h3>
+                            <h3 id="raster-appearance-heading">Style this layer</h3>
                             <p class="raster-appearance-layer" id="raster-appearance-layer"></p>
                           </div>
-                          <button
-                            class="icon-button"
-                            id="close-raster-appearance-widget"
-                            type="button"
-                            aria-label="Close raster appearance"
-                          >
-                            <span aria-hidden="true">&#10005;</span>
-                          </button>
                         </div>
                         <div class="raster-appearance-body">
-                          <p class="raster-appearance-description">
-                            Set the palette, numeric display thresholds, and colors independently of the geographic sampling area.
-                          </p>
                           <div
                             class="raster-percentile-controls"
                             id="raster-percentile-controls"
@@ -499,8 +471,7 @@
                             aria-labelledby="raster-percentile-heading"
                             hidden
                           >
-                            <strong id="raster-percentile-heading">Histogram percentile cutoffs</strong>
-                            <p>Use values estimated from the current histogram as display thresholds for this raster.</p>
+                            <strong id="raster-percentile-heading">Set the color range from the histogram</strong>
                             <label for="raster-lower-percentile">
                               <span>Lower</span>
                               <input
@@ -550,7 +521,7 @@
                               id="apply-raster-percentiles"
                               type="button"
                             >
-                              Apply cutoffs to color thresholds
+                              Apply histogram range
                             </button>
                           </div>
                           <label class="raster-palette" for="raster-palette">
@@ -581,16 +552,20 @@
                             <span id="raster-legend-maximum"></span>
                           </div>
                           <p class="raster-style-error" id="raster-style-error" role="status"></p>
+                          <p
+                            class="raster-appearance-status"
+                            id="raster-appearance-status"
+                            role="status"
+                            aria-live="polite"
+                            aria-atomic="true"
+                          ></p>
                           <button class="secondary-button" id="reset-raster-style" type="button">
                             Reset colors and range
                           </button>
                         </div>
-                      </div>
-                    </section>
+                      </section>
 
-                    <section class="rendering-availability" aria-labelledby="rendering-availability-heading">
-                      <h3 id="rendering-availability-heading">Rendering availability</h3>
-                      <p class="section-copy">Details and fallback controls for the raster selected in Catalog.</p>
+                    <section class="rendering-availability">
                     <div
                       class="raster-detail-preview-controls"
                       id="raster-detail-preview-controls"
@@ -650,9 +625,15 @@
                 >
                   <div class="workspace-region-heading">
                     <div>
-                      <p class="section-label">Raster analysis</p>
-                      <h2 id="eomap-raster-interpretation-heading">Raster analysis</h2>
+                      <h2 id="eomap-raster-interpretation-heading">Histograms</h2>
                     </div>
+                    <button
+                      class="secondary-button"
+                      id="open-histogram-map-layers"
+                      type="button"
+                    >
+                      Style layer
+                    </button>
                   </div>
                   <div
                     class="workspace-region-body raster-interpretation-body"
@@ -664,14 +645,14 @@
                     id="raster-style-controls"
                     hidden
                   >
-                  <legend>Analysis target and sampling area</legend>
+                  <legend>Sample area</legend>
                   <section
                     class="raster-control-group raster-active-raster"
                     id="raster-active-controls"
                     aria-labelledby="raster-active-raster-heading"
                     aria-describedby="raster-sample-window-status raster-histogram-status"
                   >
-                    <strong id="raster-active-raster-heading">Active raster</strong>
+                    <strong id="raster-active-raster-heading">Selected layer</strong>
                     <p
                       class="raster-active-layer-label"
                       id="raster-active-layer-label"
@@ -684,11 +665,11 @@
                   >
                     <strong id="raster-sampling-area-heading">Sampling area</strong>
                     <p id="raster-sample-window-description">
-                      Choose the geographic area represented by every raster histogram. Move over the map to position a window, then click or tap to select its bounds.
+                      Choose the geographic area used by every map-layer histogram.
                     </p>
                     <div class="raster-sample-window-size">
                       <label for="raster-sample-window-range">
-                        <span>Window size</span>
+                        <span>Window size (1–300 km)</span>
                         <input
                           id="raster-sample-window-range"
                           type="range"
@@ -756,7 +737,7 @@
                       aria-live="polite"
                       aria-atomic="true"
                     >
-                      Move over the map and click to display this window's histogram.
+                      Whole-raster histogram selected. Choose Select map window or Sample map center to analyze a smaller area.
                     </p>
                   </section>
                   </fieldset>
@@ -764,26 +745,11 @@
                   <section class="raster-histogram-overview" aria-labelledby="raster-histogram-list-heading">
                     <div class="raster-histogram-overview-heading">
                       <div>
-                        <p class="section-label">All retained rasters</p>
-                        <h3 id="raster-histogram-list-heading">Histograms</h3>
+                        <h3 id="raster-histogram-list-heading">Map layer histograms</h3>
                       </div>
-                      <button
-                        class="secondary-button"
-                        id="open-raster-histogram-widget"
-                        type="button"
-                        aria-controls="raster-histogram"
-                        aria-expanded="false"
-                        aria-label="Show histogram"
-                        hidden
-                      >
-                        View active histogram
-                      </button>
                     </div>
-                    <p>
-                      Each retained raster uses the same sampling area above. Select a histogram to inspect its values and provenance.
-                    </p>
                     <p class="raster-histogram-empty" id="raster-histogram-empty">
-                      Add a raster to map layers to compare histograms.
+                      No raster layers yet. Add one in Catalog.
                     </p>
                     <div
                       class="raster-histogram-list"
@@ -805,7 +771,6 @@
                   >
                     <div class="raster-histogram-heading">
                       <div>
-                        <p class="section-label">Selected raster</p>
                         <h3 id="raster-histogram-heading">Histogram</h3>
                         <p class="raster-histogram-detail-layer" id="raster-histogram-detail-layer"></p>
                       </div>
@@ -817,14 +782,6 @@
                           hidden
                         >
                           Retry
-                        </button>
-                        <button
-                          class="icon-button"
-                          id="close-raster-histogram-widget"
-                          type="button"
-                          aria-label="Close histogram"
-                        >
-                          <span aria-hidden="true">&#10005;</span>
                         </button>
                       </div>
                     </div>
@@ -861,7 +818,7 @@
 
                   <section class="pixel-probe-guidance" aria-labelledby="pixel-probe-guidance-heading">
                     <h3 id="pixel-probe-guidance-heading">Pixel values</h3>
-                    <p>Move over the map to inspect the active raster's value at the pointer.</p>
+                    <p>Move over the map to inspect the selected layer's value.</p>
                   </section>
 
                   <details class="analysis-aoi-disclosure" id="analysis-aoi-disclosure">

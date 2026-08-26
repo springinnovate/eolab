@@ -101,8 +101,8 @@ export class RasterControlsView {
      */
     setActiveLayer(label, visible) {
         this.#activeLayerLabel.textContent = visible
-            ? `Editing ${label}.`
-            : `Editing ${label}; this layer is hidden from the map.`;
+            ? label
+            : `${label} — not visible on the map`;
         this.#samplingAreaView.enableActiveRasterActions();
         this.#appearanceView.setActiveLayer(label, visible);
         this.#histogramView.setActiveLayer(label);
@@ -184,6 +184,17 @@ export class RasterControlsView {
      */
     renderStyleError(styleError = null) {
         this.#appearanceView.renderStyleError(styleError);
+    }
+
+    /**
+     * Announce one completed appearance action beside the style controls.
+     *
+     * @param {string} message Concise result, or an empty string to clear it.
+     * @return {void}
+     * @throws {TypeError} If the message is not a string.
+     */
+    setAppearanceStatus(message) {
+        this.#appearanceView.setStatus(message);
     }
 
     /**
