@@ -1,51 +1,52 @@
 /**
  * EOMap workspace-sidebar presentation controller.
  *
- * This component owns only the selected workspace tab, the operational-status
- * disclosure, whole-sidebar visibility, accessible focus behavior, layout
- * classes, and delayed map-size invalidation. It has no knowledge of Catalog
- * Items, map layers, rasters, rendering, APIs, or source data.
+ * This component owns only independent workspace disclosures, the
+ * operational-status disclosure, whole-sidebar visibility, accessible focus
+ * behavior, layout classes, and delayed map-size invalidation. It has no
+ * knowledge of Catalog Items, map layers, rasters, rendering, APIs, or source
+ * data.
  */
 
 /** Delay matching the workspace-sidebar transition. */
 export const CONTROL_PANEL_TRANSITION_MILLISECONDS = 240;
 
 /**
- * @typedef {Object} WorkspaceTabConfiguration
+ * @typedef {Object} WorkspaceDisclosureConfiguration
  * @property {string} name Stable layout-only workspace name.
- * @property {string} tabSelector Selector for the workspace tab.
- * @property {string} panelSelector Selector for the tab's semantic panel.
+ * @property {string} toggleSelector Selector for the disclosure button.
+ * @property {string} panelSelector Selector for the semantic panel.
  * @property {string} scrollSelector Selector for the workspace scroll owner.
  */
 
 /**
- * @typedef {Object} WorkspaceTabState
- * @property {WorkspaceTabConfiguration} configuration Static tab contract.
- * @property {Element} tab Workspace tab element.
- * @property {Element} panel Semantic panel selected by the tab.
+ * @typedef {Object} WorkspaceDisclosureState
+ * @property {WorkspaceDisclosureConfiguration} configuration Static
+ * disclosure contract.
+ * @property {Element} toggle Workspace disclosure button.
+ * @property {Element} panel Semantic panel controlled by the button.
  * @property {Element} scrollElement Workspace's layout-owned scroll element.
- * @property {() => void} handleClick Bound selection listener.
- * @property {(event: KeyboardEvent) => void} handleKeydown Bound keyboard
- * listener.
+ * @property {boolean} isExpanded Whether the panel is currently expanded.
+ * @property {() => void} handleClick Bound disclosure listener.
  */
 
-/** @type {WorkspaceTabConfiguration[]} */
-const WORKSPACE_TABS = [
+/** @type {WorkspaceDisclosureConfiguration[]} */
+const WORKSPACE_DISCLOSURES = [
     {
         name: "catalog",
-        tabSelector: "#toggle-catalog-workspace",
+        toggleSelector: "#toggle-catalog-workspace",
         panelSelector: "#eomap-catalog-region",
         scrollSelector: "#eomap-catalog-region",
     },
     {
         name: "map-layers",
-        tabSelector: "#toggle-map-layers",
+        toggleSelector: "#toggle-map-layers",
         panelSelector: "#eomap-map-layers-region",
         scrollSelector: "#eomap-map-layers-body",
     },
     {
         name: "histogram",
-        tabSelector: "#toggle-raster-interpretation",
+        toggleSelector: "#toggle-raster-interpretation",
         panelSelector: "#eomap-raster-interpretation-region",
         scrollSelector: "#eomap-raster-interpretation-body",
     },
@@ -75,7 +76,7 @@ function requireLayoutElement(documentContext, selector) {
  * Transition scheduler; defaults to the browser timer.
  */
 
-/** Own the EOMap workspace-sidebar disclosure and tab presentation. */
+/** Own the EOMap workspace-sidebar disclosure presentation. */
 export class EomapLayoutController {
     /**
      * Resolve and bind the static EOMap layout controls.
@@ -188,15 +189,10 @@ export class EomapLayoutController {
             this.boundOpenHistogramMapLayers
         );
 
-        this.workspaceTabs = WORKSPACE_TABS.map((configuration, index) =>
-            this.#createWorkspaceTab(configuration, index)
+        this.workspaceDisclosures = WORKSPACE_DISCLOSURES.map(
+            (configuration, index) =>
+                this.#createWorkspaceDisclosure(configuration, index)
         );
-        const selectedWorkspaceIndex = this.workspaceTabs.findIndex(
-            ({ tab }) => tab.getAttribute("aria-selected") === "true"
-        );
-        this.selectedWorkspaceIndex = selectedWorkspaceIndex < 0
-            ? 0
-            : selectedWorkspaceIndex;
         this.#synchronizeOperationalStatusPresentation();
         this.#synchronizeAnalysisAoiPresentation();
         this.#synchronizeWorkspacePresentation();
@@ -206,9 +202,9 @@ export class EomapLayoutController {
     /**
      * Set whether the complete workspace sidebar is visually collapsed.
      *
-     * The selected workspace and operational disclosure state are retained so
-     * reopening restores the user's context. A changed state schedules one
-     * map invalidation after the layout transition and moves focus to the
+     * Workspace and operational disclosure states are retained so reopening
+     * restores the user's context. A changed state schedules one map
+     * invalidation after the layout transition and moves focus to the
      * corresponding persistent disclosure control.
      *
      * @param {boolean} isCollapsed Whether the sidebar should be collapsed.
@@ -229,19 +225,19 @@ export class EomapLayoutController {
     }
 
     /**
-     * Reveal one semantic workspace by its layout-only name.
+     * Ensure one semantic workspace is expanded by its layout-only name.
      *
      * This method lets the browser composition root respond to an explicit
      * feature presentation request without giving this controller feature
      * state or sibling implementation knowledge.
      *
      * @param {"catalog"|"map-layers"|"histogram"} name Workspace name.
-     * @param {boolean} [moveFocus=false] Whether its tab receives focus.
+     * @param {boolean} [moveFocus=false] Whether its disclosure receives focus.
      * @return {void}
      * @throws {RangeError} If the name is outside the static layout contract.
      */
     showWorkspace(name, moveFocus = false) {
-        const index = this.workspaceTabs.findIndex(
+        const index = this.workspaceDisclosures.findIndex(
             ({ configuration }) => configuration.name === name
         );
         if (index < 0) {
@@ -252,10 +248,10 @@ export class EomapLayoutController {
             this.#synchronizeControlPanelPresentation();
             this.#scheduleMapInvalidation();
         }
-        const selectionChanged = index !== this.selectedWorkspaceIndex;
-        this.#selectWorkspace(index, moveFocus);
-        if (selectionChanged) {
-            this.workspaceTabs[index].scrollElement.scrollTop = 0;
+        const wasExpanded = this.workspaceDisclosures[index].isExpanded;
+        this.#setWorkspaceExpanded(index, true, moveFocus);
+        if (!wasExpanded) {
+            this.workspaceDisclosures[index].scrollElement.scrollTop = 0;
         }
     }
 
@@ -310,31 +306,27 @@ export class EomapLayoutController {
             "click",
             this.boundOpenHistogramMapLayers
         );
-        for (const workspaceTab of this.workspaceTabs) {
-            workspaceTab.tab.removeEventListener(
+        for (const workspaceDisclosure of this.workspaceDisclosures) {
+            workspaceDisclosure.toggle.removeEventListener(
                 "click",
-                workspaceTab.handleClick
-            );
-            workspaceTab.tab.removeEventListener(
-                "keydown",
-                workspaceTab.handleKeydown
+                workspaceDisclosure.handleClick
             );
         }
     }
 
     /**
-     * Resolve and bind one tab in the layout-owned workspace navigation.
+     * Resolve and bind one layout-owned workspace disclosure.
      *
-     * @param {WorkspaceTabConfiguration} configuration Static tab/panel
-     * contract.
-     * @param {number} index Zero-based tab position used by keyboard navigation.
-     * @return {WorkspaceTabState} Bound tab and semantic panel state.
-     * @throws {Error} If either required element is absent.
+     * @param {WorkspaceDisclosureConfiguration} configuration Static
+     * disclosure/panel contract.
+     * @param {number} index Zero-based disclosure position.
+     * @return {WorkspaceDisclosureState} Bound disclosure and panel state.
+     * @throws {Error} If a required element is absent.
      */
-    #createWorkspaceTab(configuration, index) {
-        const tab = requireLayoutElement(
+    #createWorkspaceDisclosure(configuration, index) {
+        const toggle = requireLayoutElement(
             this.documentContext,
-            configuration.tabSelector
+            configuration.toggleSelector
         );
         const panel = requireLayoutElement(
             this.documentContext,
@@ -344,93 +336,76 @@ export class EomapLayoutController {
             this.documentContext,
             configuration.scrollSelector
         );
-        const workspaceTab = {
+        const workspaceDisclosure = {
             configuration,
-            tab,
+            toggle,
             panel,
             scrollElement,
-            handleClick: () => this.#selectWorkspace(index, false),
-            handleKeydown: (event) =>
-                this.#handleWorkspaceTabKeydown(event, index),
+            isExpanded: toggle.getAttribute("aria-expanded") !== "false",
+            handleClick: () => this.#setWorkspaceExpanded(
+                index,
+                !this.workspaceDisclosures[index].isExpanded,
+                false
+            ),
         };
-        tab.addEventListener("click", workspaceTab.handleClick);
-        tab.addEventListener("keydown", workspaceTab.handleKeydown);
-        return workspaceTab;
+        toggle.addEventListener("click", workspaceDisclosure.handleClick);
+        return workspaceDisclosure;
     }
 
     /**
-     * Select one semantic workspace and preserve every feature-owned state.
+     * Set one workspace's independent disclosure state.
      *
-     * A changed selection schedules map remeasurement because the Catalog's
-     * progressive inspector can give that tab a different wide-screen width.
+     * Other workspaces retain their current state. A changed disclosure
+     * schedules map remeasurement because available sidebar allocation changed.
      *
-     * @param {number} index Zero-based workspace-tab position.
-     * @param {boolean} moveFocus Whether the selected tab receives focus.
+     * @param {number} index Zero-based workspace-disclosure position.
+     * @param {boolean} isExpanded Whether its semantic panel is visible.
+     * @param {boolean} moveFocus Whether its disclosure receives focus.
      * @return {void}
      * @throws {RangeError} If the position is outside the static contract.
      */
-    #selectWorkspace(index, moveFocus) {
+    #setWorkspaceExpanded(index, isExpanded, moveFocus) {
         if (
             !Number.isInteger(index) ||
             index < 0 ||
-            index >= this.workspaceTabs.length
+            index >= this.workspaceDisclosures.length
         ) {
             throw new RangeError(
-                "Workspace tab index is outside the layout contract"
+                "Workspace disclosure index is outside the layout contract"
             );
         }
-        const selectionChanged = index !== this.selectedWorkspaceIndex;
-        this.selectedWorkspaceIndex = index;
+        const workspaceDisclosure = this.workspaceDisclosures[index];
+        const stateChanged = workspaceDisclosure.isExpanded !== isExpanded;
+        workspaceDisclosure.isExpanded = isExpanded;
         this.#synchronizeWorkspacePresentation();
-        if (selectionChanged) {
+        if (stateChanged) {
             this.#scheduleMapInvalidation();
         }
         if (moveFocus) {
-            this.workspaceTabs[index].tab.focus();
+            workspaceDisclosure.toggle.focus();
         }
     }
 
     /**
-     * Support the standard horizontal tab-list arrow, Home, and End keys.
-     *
-     * @param {KeyboardEvent} event Tab keyboard event.
-     * @param {number} currentIndex Zero-based position of the focused tab.
-     * @return {void}
-     */
-    #handleWorkspaceTabKeydown(event, currentIndex) {
-        const finalIndex = this.workspaceTabs.length - 1;
-        const destinations = {
-            ArrowLeft:
-                (currentIndex + finalIndex) % this.workspaceTabs.length,
-            ArrowRight: (currentIndex + 1) % this.workspaceTabs.length,
-            Home: 0,
-            End: finalIndex,
-        };
-        if (!(event.key in destinations)) {
-            return;
-        }
-        event.preventDefault();
-        this.#selectWorkspace(destinations[event.key], true);
-    }
-
-    /**
-     * Synchronize the selected tab, its panel, and active-layout class.
+     * Synchronize every independent disclosure and expanded-layout class.
      *
      * @return {void}
      */
     #synchronizeWorkspacePresentation() {
-        for (const [index, workspaceTab] of this.workspaceTabs.entries()) {
-            const isSelected = index === this.selectedWorkspaceIndex;
-            workspaceTab.tab.setAttribute("aria-selected", String(isSelected));
-            workspaceTab.tab.setAttribute("tabindex", isSelected ? "0" : "-1");
-            workspaceTab.panel.hidden = !isSelected;
-            workspaceTab.panel.setAttribute(
+        for (const workspaceDisclosure of this.workspaceDisclosures) {
+            const { isExpanded } = workspaceDisclosure;
+            workspaceDisclosure.toggle.setAttribute(
+                "aria-expanded",
+                String(isExpanded)
+            );
+            workspaceDisclosure.panel.hidden = !isExpanded;
+            workspaceDisclosure.panel.setAttribute(
                 "aria-hidden",
-                String(!isSelected)
+                String(!isExpanded)
             );
             this.appElement.classList.toggle(
-                `is-active-${workspaceTab.configuration.name}-workspace`,
-                isSelected
+                `is-expanded-${workspaceDisclosure.configuration.name}-workspace`,
+                isExpanded
             );
         }
     }
@@ -547,9 +522,9 @@ export class EomapLayoutController {
     /**
      * Collapse the closest active layout disclosure when Escape is pressed.
      *
-     * Native form controls retain Escape. Expanded operational details close
-     * before the complete sidebar. Nested presentation controls can stop the
-     * event before it reaches this document-level handler.
+     * Native form controls retain Escape. The focused expanded disclosure
+     * closes before the complete sidebar. Nested presentation controls can
+     * stop the event before it reaches this document-level handler.
      *
      * @param {KeyboardEvent} keyboardEvent Document keyboard event.
      * @return {void}
@@ -573,6 +548,20 @@ export class EomapLayoutController {
             this.#synchronizeOperationalStatusPresentation();
             this.#scheduleMapInvalidation();
             this.operationalToggle.focus();
+            return;
+        }
+        const focusedWorkspaceIndex = this.workspaceDisclosures.findIndex(
+            ({ isExpanded, panel, toggle }) =>
+                isExpanded &&
+                (toggle === focusedElement || panel.contains(focusedElement))
+        );
+        if (focusedWorkspaceIndex >= 0) {
+            keyboardEvent.preventDefault();
+            this.#setWorkspaceExpanded(
+                focusedWorkspaceIndex,
+                false,
+                true
+            );
             return;
         }
         if (

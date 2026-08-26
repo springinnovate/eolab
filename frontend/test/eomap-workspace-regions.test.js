@@ -77,7 +77,7 @@ function requireElementRange(identifier) {
     throw new Error(`Required markup element is not closed: ${identifier}`);
 }
 
-test("one sidebar owns the workspace tablist and compact status", () => {
+test("one sidebar owns the workspace disclosures and compact status", () => {
     const panel = requireElementRange("control-panel");
     const operationalStatus = requireElementRange(
         "eomap-operational-status-region"
@@ -91,8 +91,9 @@ test("one sidebar owns the workspace tablist and compact status", () => {
     assert.ok(renderingState < operationalStatus.end);
     assert.match(
         panel.source,
-        /class="workspace-tabs"[^>]*role="tablist"[^>]*aria-label="EOMap workspaces"/s
+        /class="panel-content workspace-disclosures"[^>]*id="eomap-tools-workbench"[^>]*aria-label="EOMap workspaces"/s
     );
+    assert.doesNotMatch(panel.source, /role="tab(?:list|panel)?"/);
     assert.match(
         panel.source,
         /id="toggle-operational-status"[^>]*aria-controls="eomap-operational-status-body"[^>]*aria-expanded="false"[^>]*>\s*Show status details/s
@@ -103,14 +104,14 @@ test("one sidebar owns the workspace tablist and compact status", () => {
     );
 });
 
-test("Catalog, Map layers, and Histograms are accessible sibling tabs", () => {
+test("Catalog, Map layers, and Histograms are independent sibling disclosures", () => {
     const panel = requireElementRange("control-panel");
     const catalogRegion = requireElementRange("eomap-catalog-region");
     const renderingRegion = requireElementRange("eomap-map-layers-region");
     const analysisRegion = requireElementRange(
         "eomap-raster-interpretation-region"
     );
-    const tabs = [
+    const disclosures = [
         ["toggle-catalog-workspace", "eomap-catalog-region", "true"],
         ["toggle-map-layers", "eomap-map-layers-region", "false"],
         [
@@ -120,26 +121,44 @@ test("Catalog, Map layers, and Histograms are accessible sibling tabs", () => {
         ],
     ];
 
-    for (const [tab, region, selected] of tabs) {
+    for (const [toggle, region, expanded] of disclosures) {
         assert.match(
             panel.source,
             new RegExp(
-                `id="${tab}"[^>]*role="tab"[^>]*aria-controls="${region}"[^>]*aria-selected="${selected}"`,
+                `class="workspace-disclosure"[^>]*id="${toggle}"[^>]*aria-controls="${region}"[^>]*aria-expanded="${expanded}"`,
                 "s"
             )
         );
     }
-    assert.ok(catalogRegion.end < renderingRegion.start);
-    assert.ok(renderingRegion.end < analysisRegion.start);
-    for (const [region, tab] of [
+    const catalogToggle = requireMarkupPosition("toggle-catalog-workspace");
+    const renderingToggle = requireMarkupPosition("toggle-map-layers");
+    const analysisToggle = requireMarkupPosition(
+        "toggle-raster-interpretation"
+    );
+    assert.ok(catalogToggle < catalogRegion.start);
+    assert.ok(catalogRegion.end < renderingToggle);
+    assert.ok(renderingToggle < renderingRegion.start);
+    assert.ok(renderingRegion.end < analysisToggle);
+    assert.ok(analysisToggle < analysisRegion.start);
+    for (const [region, toggle] of [
         [catalogRegion.source, "toggle-catalog-workspace"],
         [renderingRegion.source, "toggle-map-layers"],
         [analysisRegion.source, "toggle-raster-interpretation"],
     ]) {
-        assert.match(region, /role="tabpanel"/);
-        assert.match(region, new RegExp(`aria-labelledby="${tab} `));
+        assert.match(region, /role="region"/);
+        assert.match(region, new RegExp(`aria-labelledby="${toggle}"`));
     }
+    assert.match(
+        catalogRegion.source,
+        /id="eomap-catalog-region"[^>]*role="region"[^>]*aria-labelledby="toggle-catalog-workspace"[^>]*>/s
+    );
+    assert.doesNotMatch(
+        catalogRegion.source.match(/<section\b[^>]*>/)?.[0] ?? "",
+        /aria-hidden="true"|hidden/
+    );
+    assert.match(renderingRegion.source, /aria-hidden="true"/);
     assert.match(renderingRegion.source, /hidden/);
+    assert.match(analysisRegion.source, /aria-hidden="true"/);
     assert.match(analysisRegion.source, /hidden/);
     assert.match(
         MARKUP,
@@ -303,11 +322,19 @@ test("sidebar panels own deliberate, independent scrolling", () => {
     );
     assert.match(
         STYLESHEET,
-        /\.panel-content\s*\{[^}]*display:\s*grid[^}]*grid-template-rows:\s*auto minmax\(0, 1fr\)[^}]*overflow:\s*hidden/s
+        /\.panel-content\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:[^}]*var\(--workspace-column-rail-width\)[^}]*var\(--workspace-catalog-track\)[^}]*var\(--workspace-map-layers-track\)[^}]*var\(--workspace-histogram-track\)[^}]*overflow:\s*hidden/s
     );
     assert.match(
         STYLESHEET,
-        /\.catalog-panel,\s*\.map-layers-region,\s*\.raster-interpretation-region\s*\{[^}]*grid-row:\s*2[^}]*overflow:\s*hidden/s
+        /\.workspace-disclosure\s*\{[^}]*width:\s*var\(--workspace-column-rail-width\)[^}]*writing-mode:\s*vertical-rl/s
+    );
+    assert.match(
+        STYLESHEET,
+        /\.workspace-disclosure\[aria-expanded="true"\]\s*\{[^}]*width:\s*100%[^}]*grid-row:\s*1[^}]*box-shadow:\s*inset 0 3px 0 var\(--brand\)[^}]*writing-mode:\s*horizontal-tb/s
+    );
+    assert.match(
+        STYLESHEET,
+        /\.catalog-panel,\s*\.map-layers-region,\s*\.raster-interpretation-region\s*\{[^}]*overflow:\s*hidden/s
     );
     assert.match(
         STYLESHEET,
@@ -330,6 +357,36 @@ test("sidebar panels own deliberate, independent scrolling", () => {
 test("CSS allocates wide space and intentional medium and narrow overlays", () => {
     assert.match(
         STYLESHEET,
+        /#app\s*\{[^}]*--workspace-column-rail-width:\s*44px[^}]*--active-workspace-width:\s*clamp\([^}]*--workspace-maximum-width/s
+    );
+    for (const [className, allocation] of [
+        ["catalog", "catalog"],
+        ["map-layers", "map-layers"],
+        ["histogram", "histogram"],
+    ]) {
+        assert.match(
+            STYLESHEET,
+            new RegExp(
+                `#app\\.is-expanded-${className}-workspace\\s*\\{[^}]*--workspace-${allocation}-allocation:`,
+                "s"
+            )
+        );
+    }
+    for (const [identifier, column] of [
+        ["toggle-catalog-workspace", 1],
+        ["eomap-catalog-region", 1],
+        ["toggle-map-layers", 2],
+        ["eomap-map-layers-region", 2],
+        ["toggle-raster-interpretation", 3],
+        ["eomap-raster-interpretation-region", 3],
+    ]) {
+        assert.match(
+            STYLESHEET,
+            new RegExp(`#${identifier}\\s*\\{[^}]*grid-column:\\s*${column}`, "s")
+        );
+    }
+    assert.match(
+        STYLESHEET,
         /#map\s*\{[^}]*inset:[^}]*var\(--active-workspace-width\)[^}]*transition:\s*left 220ms ease/s
     );
     assert.match(
@@ -338,7 +395,11 @@ test("CSS allocates wide space and intentional medium and narrow overlays", () =
     );
     assert.match(
         STYLESHEET,
-        /@media \(min-width: 1200px\)\s*\{[\s\S]*?#app\.is-active-catalog-workspace:has\([\s\S]*?\.catalog-layout\.is-catalog-inspector-visible[\s\S]*?--active-workspace-width:\s*var\(--workspace-catalog-expanded-width\)/s
+        /#app\.is-expanded-catalog-workspace:has\([\s\S]*?\.catalog-layout\.is-catalog-inspector-visible[\s\S]*?--workspace-catalog-allocation:\s*var\(--workspace-catalog-inspector-width\)/s
+    );
+    assert.match(
+        STYLESHEET,
+        /@container catalog-workspace \(max-width: 639px\)\s*\{[\s\S]*?\.catalog-layout\.is-catalog-inspector-visible \.catalog-browser\s*\{[^}]*display:\s*none/s
     );
     assert.match(
         STYLESHEET,
@@ -347,6 +408,10 @@ test("CSS allocates wide space and intentional medium and narrow overlays", () =
     assert.match(
         STYLESHEET,
         /@media \(max-width: 699px\)\s*\{[\s\S]*?\.control-panel\s*\{[^}]*inset:\s*auto 8px 8px[^}]*height:\s*min\(76dvh, 680px\)/s
+    );
+    assert.match(
+        STYLESHEET,
+        /@media \(max-width: 899px\)\s*\{[\s\S]*?\.panel-content\s*\{[^}]*display:\s*flex[^}]*flex-direction:\s*column[\s\S]*?\.workspace-disclosure\s*\{[^}]*width:\s*100%[^}]*writing-mode:\s*horizontal-tb/s
     );
     assert.match(
         STYLESHEET,

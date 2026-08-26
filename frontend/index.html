@@ -9,7 +9,7 @@
   <body>
     <main
       id="app"
-      class="is-active-catalog-workspace"
+      class="is-expanded-catalog-workspace"
     >
       <div
         id="map"
@@ -206,56 +206,25 @@
         </div>
         </section>
 
-        <div class="panel-content">
-          <nav
-            class="workspace-navigation"
-            id="eomap-tools-workbench"
-            aria-label="EOMap workspaces"
+        <div
+          class="panel-content workspace-disclosures"
+          id="eomap-tools-workbench"
+          aria-label="EOMap workspaces"
+        >
+          <button
+            class="workspace-disclosure"
+            id="toggle-catalog-workspace"
+            type="button"
+            aria-controls="eomap-catalog-region"
+            aria-expanded="true"
           >
-            <div
-              class="workspace-tabs"
-              role="tablist"
-              aria-label="EOMap workspaces"
-            >
-              <button
-                class="workspace-tab"
-                id="toggle-catalog-workspace"
-                type="button"
-                role="tab"
-                aria-controls="eomap-catalog-region"
-                aria-selected="true"
-              >
-                Catalog
-              </button>
-              <button
-                class="workspace-tab"
-                id="toggle-map-layers"
-                type="button"
-                role="tab"
-                aria-controls="eomap-map-layers-region"
-                aria-selected="false"
-                tabindex="-1"
-              >
-                Map layers
-              </button>
-              <button
-                class="workspace-tab"
-                id="toggle-raster-interpretation"
-                type="button"
-                role="tab"
-                aria-controls="eomap-raster-interpretation-region"
-                aria-selected="false"
-                tabindex="-1"
-              >
-                Histograms
-              </button>
-            </div>
-          </nav>
+            Catalog
+          </button>
           <section
             class="catalog-panel eomap-workspace-region"
             id="eomap-catalog-region"
-            role="tabpanel"
-            aria-labelledby="toggle-catalog-workspace eomap-catalog-heading"
+            role="region"
+            aria-labelledby="toggle-catalog-workspace"
           >
             <div class="catalog-heading">
               <div>
@@ -385,14 +354,24 @@
               </aside>
             </div>
           </section>
-                  <section
-                    class="eomap-workspace-region map-layers-region"
-                    id="eomap-map-layers-region"
-                    role="tabpanel"
-                    aria-labelledby="toggle-map-layers eomap-map-layers-heading"
-                    aria-controls="map"
-                    hidden
-                  >
+          <button
+            class="workspace-disclosure"
+            id="toggle-map-layers"
+            type="button"
+            aria-controls="eomap-map-layers-region"
+            aria-expanded="false"
+          >
+            Map layers
+          </button>
+          <section
+            class="eomap-workspace-region map-layers-region"
+            id="eomap-map-layers-region"
+            role="region"
+            aria-labelledby="toggle-map-layers"
+            aria-controls="map"
+            aria-hidden="true"
+            hidden
+          >
                     <div class="workspace-region-heading">
                       <div>
                         <h2 id="eomap-map-layers-heading">Map layers</h2>
@@ -615,14 +594,24 @@
                     ></p>
                     </section>
                     </div>
-                  </section>
-                <section
-                  class="eomap-workspace-region raster-interpretation-region"
-                  id="eomap-raster-interpretation-region"
-                  role="tabpanel"
-                  aria-labelledby="toggle-raster-interpretation eomap-raster-interpretation-heading"
-                  hidden
-                >
+          </section>
+          <button
+            class="workspace-disclosure"
+            id="toggle-raster-interpretation"
+            type="button"
+            aria-controls="eomap-raster-interpretation-region"
+            aria-expanded="false"
+          >
+            Histograms
+          </button>
+          <section
+            class="eomap-workspace-region raster-interpretation-region"
+            id="eomap-raster-interpretation-region"
+            role="region"
+            aria-labelledby="toggle-raster-interpretation"
+            aria-hidden="true"
+            hidden
+          >
                   <div class="workspace-region-heading">
                     <div>
                       <h2 id="eomap-raster-interpretation-heading">Histograms</h2>

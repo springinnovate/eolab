@@ -247,8 +247,12 @@ test("Catalog layout owns independent scroll regions and expansion rules", () =>
     stylesheet,
     /\.catalog-pane\.is-collapsed \.catalog-pane-heading\s*\{[^}]*flex-direction:\s*column/s,
   );
-  assert.match(stylesheet, /--workspace-catalog-expanded-width:/);
+  assert.match(stylesheet, /--workspace-catalog-inspector-width:/);
   assert.match(stylesheet, /@media \(min-width: 1200px\)/);
+  assert.match(
+    stylesheet,
+    /@container catalog-workspace \(max-width: 639px\)[\s\S]*?\.catalog-layout\.is-catalog-inspector-visible \.catalog-browser\s*\{[^}]*display:\s*none/s,
+  );
   assert.match(
     stylesheet,
     /@media \(max-width: 1199px\)[\s\S]*?\.catalog-layout\.is-catalog-inspector-visible \.catalog-browser\s*\{[^}]*display:\s*none/s,
