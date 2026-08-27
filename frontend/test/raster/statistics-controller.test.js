@@ -1,10 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-  RasterPairedStatisticsController,
-  RasterStatisticsController,
-} from "../../src/raster/statistics-controller.js";
+import { RasterStatisticsController } from "../../src/raster/statistics-controller.js";
+import { normalizeRasterPairedSamplingArea } from "../../src/raster/paired-statistics.js";
 import {
   MOUNTED_GEOTIFF_ITEM,
   RASTER_STATISTICS,
@@ -170,28 +168,27 @@ test("RasterStatisticsController aborts and ignores a replaced AOI lifecycle", a
   }]);
 });
 
-test("RasterPairedStatisticsController invalidates swapped reference roles", async () => {
+test("RasterStatisticsController invalidates swapped pair roles", async () => {
   const xItem = { collection: "rasters", id: "x" };
   const yItem = { collection: "rasters", id: "y" };
   const requests = [];
   const results = [];
-  const controller = new RasterPairedStatisticsController(
-    (x, y, area, signal) => new Promise((resolve) => {
-      requests.push({ x, y, area, signal, resolve });
+  const controller = new RasterStatisticsController(
+    (pair, area, signal) => new Promise((resolve) => {
+      requests.push({ pair, area, signal, resolve });
     }),
     () => {},
-    (statistics, x, y) => results.push({ statistics, x, y }),
+    (statistics, pair) => results.push({ statistics, pair }),
     () => assert.fail("Unexpected paired statistics error"),
+    normalizeRasterPairedSamplingArea,
   );
 
   const first = controller.activate(
-    xItem,
-    yItem,
+    { xItem, yItem },
     { kind: "wholeOverlap" },
   );
   const swapped = controller.activate(
-    yItem,
-    xItem,
+    { xItem: yItem, yItem: xItem },
     { kind: "wholeOverlap" },
   );
   assert.equal(requests[0].signal.aborted, true);
@@ -201,10 +198,9 @@ test("RasterPairedStatisticsController invalidates swapped reference roles", asy
 
   assert.deepEqual(results, [{
     statistics: { revision: "current" },
-    x: yItem,
-    y: xItem,
+    pair: { xItem: yItem, yItem: xItem },
   }]);
-  assert.deepEqual(requests.map(({ x, y }) => [x.id, y.id]), [
+  assert.deepEqual(requests.map(({ pair }) => [pair.xItem.id, pair.yItem.id]), [
     ["x", "y"],
     ["y", "x"],
   ]);

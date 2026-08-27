@@ -45,11 +45,9 @@ import {
     rasterStatisticsMatchesSelection,
     WHOLE_RASTER_SAMPLING_AREA,
 } from "./statistics.js";
+import { RasterStatisticsController } from "./statistics-controller.js";
 import {
-    RasterPairedStatisticsController,
-    RasterStatisticsController,
-} from "./statistics-controller.js";
-import {
+    normalizeRasterPairedSamplingArea,
     WHOLE_RASTER_OVERLAP_SAMPLING_AREA,
 } from "./paired-statistics.js";
 import {
@@ -224,6 +222,8 @@ export function initializeRasterViewer(
     const bivariateMode = new BivariateRasterMode();
     let bivariateCandidates = [];
     let bivariateStatistics = null;
+    let bivariateSelectedBounds = null;
+    let bivariateSelectedWindowSizeKm = null;
 
     /**
      * Return whether the shared controls currently own a sampled raster.
@@ -409,6 +409,20 @@ export function initializeRasterViewer(
     }
 
     /**
+     * Return whether one unedited candidate still has placeholder thresholds.
+     *
+     * @param {Object} style Candidate ordinary raster style.
+     * @param {boolean} wasEdited Whether the user changed its appearance.
+     * @return {boolean} Whether paired ranges may replace the placeholder.
+     */
+    function hasDefaultRasterRange(style, wasEdited) {
+        return !wasEdited &&
+            style.minimum === DEFAULT_RASTER_STYLE.minimum &&
+            style.midpoint === DEFAULT_RASTER_STYLE.midpoint &&
+            style.maximum === DEFAULT_RASTER_STYLE.maximum;
+    }
+
+    /**
      * Preserve the latest renderer-neutral state for one paired candidate.
      *
      * @param {Object} session Raster interaction session to snapshot.
@@ -424,7 +438,17 @@ export function initializeRasterViewer(
         }
         candidate.item = session.item;
         candidate.label = getCatalogRasterBasename(session.item);
-        candidate.rasterStyle = { ...session.rasterStyle };
+        const sessionRangeResolved = !hasDefaultRasterRange(
+            session.rasterStyle,
+            session.rasterStyleWasEdited
+        );
+        if (
+            sessionRangeResolved ||
+            candidate.rasterRangeResolved !== true
+        ) {
+            candidate.rasterStyle = { ...session.rasterStyle };
+            candidate.rasterRangeResolved = sessionRangeResolved;
+        }
     }
 
     /**
@@ -443,15 +467,26 @@ export function initializeRasterViewer(
             (candidate) => candidate.key === key
         );
         const liveSession = getBivariateCandidateSession(key);
+        const liveSessionRangeResolved = liveSession !== null &&
+            !hasDefaultRasterRange(
+                liveSession.rasterStyle,
+                liveSession.rasterStyleWasEdited
+            );
+        const preserveExistingRange =
+            existing?.rasterRangeResolved === true &&
+            !liveSessionRangeResolved;
+        const styleSource = preserveExistingRange
+            ? existing
+            : liveSession ?? existing;
         const candidate = {
             key,
             item,
             label: getCatalogRasterBasename(item),
             rasterStyle: {
-                ...(liveSession?.rasterStyle ??
-                    existing?.rasterStyle ??
-                    DEFAULT_RASTER_STYLE),
+                ...(styleSource?.rasterStyle ?? DEFAULT_RASTER_STYLE),
             },
+            rasterRangeResolved:
+                preserveExistingRange || liveSessionRangeResolved,
         };
         bivariateCandidates = [
             candidate,
@@ -604,20 +639,40 @@ export function initializeRasterViewer(
             renderLayerHistogramSummaries();
         }
     );
-    const pairedStatisticsController = new RasterPairedStatisticsController(
-        loadPairedStatistics,
+    const pairedStatisticsController = new RasterStatisticsController(
+        (pair, samplingArea, signal) => loadPairedStatistics(
+            pair.xItem,
+            pair.yItem,
+            samplingArea,
+            signal
+        ),
         () => {
             controlsView.setPairedStatisticsLoading?.(
-                "Calculating a bounded paired distribution..."
+                "Calculating the 2D histogram..."
             );
         },
         (statistics) => {
             if (!bivariateMode.active) return;
             bivariateStatistics = statistics;
-            controlsView.renderPairedStatistics?.(
-                statistics,
-                getBivariatePresentation()
-            );
+            const candidates = getBivariatePairCandidates();
+            if (candidates === null) return;
+            for (const [candidate, edges] of [
+                [candidates.xCandidate, statistics.histogram.xEdges],
+                [candidates.yCandidate, statistics.histogram.yEdges],
+            ]) {
+                const style = candidate.rasterStyle;
+                if (candidate.rasterRangeResolved !== true) {
+                    candidate.rasterStyle = {
+                        ...style,
+                        minimum: edges[0],
+                        midpoint: edges[Math.floor(edges.length / 2)],
+                        maximum: edges.at(-1),
+                    };
+                    candidate.rasterRangeResolved = true;
+                }
+            }
+            applyBivariatePresentation();
+            renderLayerStack();
         },
         (error) => {
             if (!bivariateMode.active) return;
@@ -625,7 +680,8 @@ export function initializeRasterViewer(
                 error,
                 canRetryRasterStatistics(error)
             );
-        }
+        },
+        normalizeRasterPairedSamplingArea
     );
 
     /**
@@ -887,12 +943,25 @@ export function initializeRasterViewer(
     }
 
     /**
+     * Return the sampling window presented by the current histogram mode.
+     *
+     * @return {[Object|null,number|null]} Bounds and committed side length.
+     */
+    function getPresentedSampleWindow() {
+        return bivariateMode.active
+            ? [bivariateSelectedBounds, bivariateSelectedWindowSizeKm]
+            : [selectedRasterBounds, selectedRasterWindowSizeKm];
+    }
+
+    /**
      * Synchronize explicit histogram-area choices with lifecycle state.
      *
      * @return {void}
      */
     function renderRasterSamplingAreaControls() {
         const samplingMode = getRasterSamplingAreaMode();
+        const [presentedBounds, presentedWindowSizeKm] =
+            getPresentedSampleWindow();
         controlsView.setTemporaryAoiAvailability(
             availableTemporaryAoi
         );
@@ -902,17 +971,17 @@ export function initializeRasterViewer(
         );
         controlsView.setClearSampleWindowEnabled(
             bivariateMode.active
-                ? selectedRasterBounds !== null
+                ? bivariateSelectedBounds !== null
                 : hasSelectedRasterSamplingArea()
         );
         const presentedMode = bivariateMode.active
-            ? (selectedRasterBounds === null ? "wholeRaster" : "selectedArea")
+            ? (presentedBounds === null ? "wholeRaster" : "selectedArea")
             : samplingMode;
         const samplingLabel = presentedMode === "selectedArea"
-            ? selectedRasterWindowSizeKm === null
+            ? presentedWindowSizeKm === null
                 ? "Map sample"
-                : `Map sample · ${selectedRasterWindowSizeKm} km × ` +
-                  `${selectedRasterWindowSizeKm} km`
+                : `Map sample · ${presentedWindowSizeKm} km × ` +
+                  `${presentedWindowSizeKm} km`
             : presentedMode === "temporaryAoi"
                 ? `Uploaded AOI · ${selectedTemporaryAoi.filename} · ` +
                   selectedTemporaryAoi.selectedDataset
@@ -923,26 +992,18 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Return whether one active Catalog raster can receive analysis inputs.
+     * Return whether the current analysis target can receive map inputs.
      *
      * Renderer visibility is presentation-only. The basemap remains available
      * for bounds selection and pixel positions with WMS, adaptive detail, or
      * no renderer.
      *
-     * @return {boolean} Whether a Catalog raster owns the shared controls.
+     * @return {boolean} Whether an ordered pair or one raster owns map input.
      */
-    function canUseActiveRasterMapInteractions() {
-        return activeRasterItem !== null;
-    }
-
-    /**
-     * Return catalog-selected rasters eligible for explicit bivariate mode.
-     *
-     * @return {Object[]} At most two renderer-independent candidates in
-     * top-first selection order.
-     */
-    function getEligibleBivariateCandidates() {
-        return [...bivariateCandidates];
+    function canUseRasterMapInteractions() {
+        return bivariateMode.active
+            ? getBivariatePairCandidates() !== null
+            : activeRasterItem !== null;
     }
 
     /**
@@ -965,17 +1026,6 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Return one candidate's current style without making it renderer-owned.
-     *
-     * @param {Object} candidate Catalog-owned bivariate candidate.
-     * @return {Object} Current ordinary raster style.
-     */
-    function getBivariateCandidateStyle(candidate) {
-        return getBivariateCandidateSession(candidate.key)?.rasterStyle ??
-            candidate.rasterStyle;
-    }
-
-    /**
      * Build the single presentation contract shared by map, legend, histogram,
      * and probe.
      *
@@ -989,8 +1039,8 @@ export function initializeRasterViewer(
         }
         const axisStyles = getBivariateAxisStyles(
             bivariateMode.paletteName,
-            getBivariateCandidateStyle(candidates.xCandidate),
-            getBivariateCandidateStyle(candidates.yCandidate)
+            candidates.xCandidate.rasterStyle,
+            candidates.yCandidate.rasterStyle
         );
         return {
             paletteName: bivariateMode.paletteName,
@@ -1009,11 +1059,11 @@ export function initializeRasterViewer(
      * @return {Object} Whole-overlap or selected-bounds paired area.
      */
     function currentBivariateSamplingArea() {
-        return selectedRasterBounds === null
+        return bivariateSelectedBounds === null
             ? WHOLE_RASTER_OVERLAP_SAMPLING_AREA
             : {
                 kind: "selectedArea",
-                selectedBounds: selectedRasterBounds,
+                selectedBounds: bivariateSelectedBounds,
             };
     }
 
@@ -1024,7 +1074,7 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function renderBivariateAvailability(message = null) {
-        const eligible = getEligibleBivariateCandidates();
+        const eligible = bivariateCandidates;
         const canEnter = eligible.length === 2;
         const guidance = message ?? (
             bivariateMode.active
@@ -1053,7 +1103,11 @@ export function initializeRasterViewer(
         ]) {
             const record = mapLayers.getRecord(candidate.key);
             const layer = mapLayers.getLeafletLayer(candidate.key);
-            if (record === null || layer === null) continue;
+            if (
+                record === null ||
+                layer === null ||
+                !mapLayers.isAttached(candidate.key)
+            ) continue;
             layer.setParams({
                 styles: "dynamic-raster",
                 env: buildRasterStyleEnvironment(style),
@@ -1064,7 +1118,8 @@ export function initializeRasterViewer(
         }
         const topRecord = renderedRecords.length === 2
             ? mapLayers.retainedRecords.find(
-                (record) => bivariateMode.contains(record.entry.key)
+                (record) => bivariateMode.contains(record.entry.key) &&
+                    mapLayers.isAttached(record.entry.key)
             )
             : undefined;
         if (topRecord !== undefined) {
@@ -1101,7 +1156,9 @@ export function initializeRasterViewer(
                 env: buildRasterStyleEnvironment(record.state.rasterStyle),
             });
             layer.setOpacity(record.entry.opacity);
-            setRasterLayerAdditiveBlend(layer, false);
+            if (mapLayers.isAttached(key)) {
+                setRasterLayerAdditiveBlend(layer, false);
+            }
         }
     }
 
@@ -1114,9 +1171,12 @@ export function initializeRasterViewer(
         if (!bivariateMode.active) return;
         const presentation = getBivariatePresentation();
         bivariateStatistics = null;
+        controlsView.clearPairedStatistics?.();
         void pairedStatisticsController.activate(
-            presentation.xItem,
-            presentation.yItem,
+            {
+                xItem: presentation.xItem,
+                yItem: presentation.yItem,
+            },
             currentBivariateSamplingArea()
         );
     }
@@ -1127,7 +1187,7 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function enterBivariateMode() {
-        const eligible = getEligibleBivariateCandidates();
+        const eligible = bivariateCandidates;
         if (eligible.length !== 2) {
             renderBivariateAvailability(
                 "The 2D histogram requires two selected single-band catalog " +
@@ -1140,16 +1200,16 @@ export function initializeRasterViewer(
             commitRasterStyle();
         }
         saveActiveLayerSession();
+        bivariateSelectedBounds = selectedRasterBounds === null
+            ? null
+            : { ...selectedRasterBounds };
+        bivariateSelectedWindowSizeKm = selectedRasterWindowSizeKm;
         rasterStatisticsController.clear();
         pixelProbeController.clear();
         bivariateMode.enter(eligible.map((candidate) => candidate.key));
         controlsView.setAppearanceEnabled?.(false);
         controlsView.setUnivariateHistogramVisible?.(false);
-        controlsView.setTemporaryAoiCompatible?.(false);
-        controlsView.setSamplingAreaMode(
-            selectedRasterBounds === null ? "wholeRaster" : "selectedArea"
-        );
-        controlsView.setClearSampleWindowLabel("Use whole overlap");
+        renderRasterSamplingAreaControls();
         rasterSampleWindowController.enable();
         showHistogramWorkspace();
         requestBivariateStatistics();
@@ -1180,15 +1240,26 @@ export function initializeRasterViewer(
         bivariateStatistics = null;
         restoreOrdinaryRasterPresentation(keys);
         bivariateMode.leave();
+        bivariateSelectedBounds = null;
+        bivariateSelectedWindowSizeKm = null;
         controlsView.renderBivariateMode?.({ active: false });
         controlsView.clearPairedStatistics?.();
         controlsView.setAppearanceEnabled?.(true);
         controlsView.setUnivariateHistogramVisible?.(true);
-        controlsView.setTemporaryAoiCompatible?.(true);
         renderRasterSamplingAreaControls();
+        rasterSampleWindowController.clearSelection();
+        if (selectedRasterBounds !== null) {
+            rasterSampleWindowController.restoreSelection(
+                selectedRasterBounds
+            );
+        }
         if (restoreAnalysis && activeRasterItem !== null) {
             pixelProbeController.activate(activeRasterItem);
             restoreActiveLayerStatistics();
+        } else if (restoreAnalysis) {
+            rasterSampleWindowController.clear();
+            controlsView.hidePixelProbe();
+            controlsView.setControlsVisible(false);
         }
         renderLayerStack();
         renderBivariateAvailability(message);
@@ -1287,6 +1358,9 @@ export function initializeRasterViewer(
             renderBivariateAvailability();
         },
         visibilityChanged(record, visible) {
+            if (bivariateMode.contains(record.entry.key)) {
+                applyBivariatePresentation();
+            }
             if (activeLayerKey !== record.entry.key) {
                 renderBivariateAvailability();
                 return;
@@ -1300,14 +1374,31 @@ export function initializeRasterViewer(
         tileError(record) {
             onTileError(record.error, record.entry.item);
         },
-        added() {
+        /**
+         * Synchronize a newly retained pair renderer with 2D presentation.
+         *
+         * @param {Object} record Newly retained raster layer record.
+         * @return {void}
+         */
+        added(record) {
+            if (bivariateMode.contains(record.entry.key)) {
+                syncBivariateCandidate(record.state);
+                applyBivariatePresentation();
+            }
             renderBivariateAvailability();
         },
+        /**
+         * Restore coordinated opacity after a retained opacity change.
+         *
+         * @param {Object} record Updated raster layer record.
+         * @return {void}
+         */
         opacityChanged(record) {
             if (bivariateMode.contains(record.entry.key)) {
                 applyBivariatePresentation();
             }
         },
+        /** Reapply blending after stack reordering. @return {void} */
         orderChanged() {
             if (bivariateMode.active) {
                 applyBivariatePresentation();
@@ -1444,17 +1535,23 @@ export function initializeRasterViewer(
         controlsView.renderLegend(rasterStyle);
         resetRasterPercentileControls();
 
-        rasterSampleWindowController.setWindowSize(
-            selectedRasterWindowSizeKm ?? DEFAULT_RASTER_SAMPLE_WINDOW_SIZE_KM
-        );
+        if (!bivariateMode.active) {
+            rasterSampleWindowController.setWindowSize(
+                selectedRasterWindowSizeKm ??
+                    DEFAULT_RASTER_SAMPLE_WINDOW_SIZE_KM
+            );
+        }
         controlsView.setSampleWindowSize(
             rasterSampleWindowController.windowSizeKm
         );
         controlsView.setSampleWindowInvalid(false);
         renderRasterSamplingAreaControls();
-        if (selectedRasterBounds !== null) {
+        const [presentedBounds] = getPresentedSampleWindow();
+        if (presentedBounds === null) {
+            rasterSampleWindowController.clearSelection();
+        } else {
             rasterSampleWindowController.restoreSelection(
-                selectedRasterBounds
+                presentedBounds
             );
         }
         if (selectedTemporaryAoi === null) {
@@ -1463,15 +1560,10 @@ export function initializeRasterViewer(
         if (bivariateMode.active) {
             controlsView.setAppearanceEnabled?.(false);
             controlsView.setUnivariateHistogramVisible?.(false);
-            controlsView.setTemporaryAoiCompatible?.(false);
-            controlsView.setSamplingAreaMode(
-                selectedRasterBounds === null ? "wholeRaster" : "selectedArea"
-            );
-            controlsView.setClearSampleWindowLabel("Use whole overlap");
             rasterSampleWindowController.enable();
+            saveActiveLayerSession();
             applyBivariatePresentation();
             renderRasterSampleWindowGuidance("");
-            saveActiveLayerSession();
             return;
         }
         pixelProbeController.activate(activeRasterItem);
@@ -1510,16 +1602,22 @@ export function initializeRasterViewer(
         controlsView.setStyle(rasterStyle, session.paletteName);
         controlsView.renderLegend(rasterStyle);
         resetRasterPercentileControls();
-        rasterSampleWindowController.setWindowSize(
-            selectedRasterWindowSizeKm ?? DEFAULT_RASTER_SAMPLE_WINDOW_SIZE_KM
-        );
+        if (!bivariateMode.active) {
+            rasterSampleWindowController.setWindowSize(
+                selectedRasterWindowSizeKm ??
+                    DEFAULT_RASTER_SAMPLE_WINDOW_SIZE_KM
+            );
+        }
         controlsView.setSampleWindowSize(
             rasterSampleWindowController.windowSizeKm
         );
         controlsView.setSampleWindowInvalid(false);
-        if (selectedRasterBounds !== null) {
+        const [presentedBounds] = getPresentedSampleWindow();
+        if (presentedBounds === null) {
+            rasterSampleWindowController.clearSelection();
+        } else {
             rasterSampleWindowController.restoreSelection(
-                selectedRasterBounds
+                presentedBounds
             );
         }
         if (selectedTemporaryAoi === null) {
@@ -1530,15 +1628,10 @@ export function initializeRasterViewer(
             pixelProbeController.clear();
             controlsView.setAppearanceEnabled?.(false);
             controlsView.setUnivariateHistogramVisible?.(false);
-            controlsView.setTemporaryAoiCompatible?.(false);
-            controlsView.setSamplingAreaMode(
-                selectedRasterBounds === null ? "wholeRaster" : "selectedArea"
-            );
-            controlsView.setClearSampleWindowLabel("Use whole overlap");
             rasterSampleWindowController.enable();
+            saveActiveLayerSession();
             applyBivariatePresentation();
             renderRasterSampleWindowGuidance("");
-            saveActiveLayerSession();
             renderLayerStack();
             return;
         }
@@ -1561,14 +1654,15 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function activateAnalysis(item) {
-        if (bivariateMode.active) {
+        const catalogKey = getCatalogItemKey(item);
+        if (bivariateMode.active && !bivariateMode.contains(catalogKey)) {
             leaveBivariateMode(
                 "A different raster analysis was selected; bivariate mode ended."
             );
         }
         rememberBivariateCandidate(item);
         mapLayers.recordIntent();
-        const retainedKey = getCatalogItemKey(item);
+        const retainedKey = catalogKey;
         const existingSession = matchingAnalysisSession(item);
         if (existingSession !== null && isActiveAnalysisRaster()) {
             return;
@@ -1622,6 +1716,17 @@ export function initializeRasterViewer(
         }
         if (mapLayers.activeKey !== null) {
             activateLayer(mapLayers.activeKey);
+        } else if (bivariateMode.active) {
+            controlsView.setControlsVisible(true);
+            rasterSampleWindowController.enable();
+            const [presentedBounds] = getPresentedSampleWindow();
+            if (presentedBounds !== null) {
+                rasterSampleWindowController.restoreSelection(presentedBounds);
+            }
+            renderRasterSamplingAreaControls();
+            renderRasterSampleWindowGuidance("");
+            applyBivariatePresentation();
+            renderLayerStack();
         } else {
             controlsView.setControlsVisible(false);
             controlsView.hidePixelProbe();
@@ -1650,13 +1755,6 @@ export function initializeRasterViewer(
             throw new TypeError("Sampled raster recoloring callback is required");
         }
         buildRasterStyleEnvironment(style);
-        const catalogKey = getCatalogItemKey(item);
-        if (bivariateMode.active && !bivariateMode.contains(catalogKey)) {
-            leaveBivariateMode(
-                "A different catalog raster was selected; bivariate mode ended."
-            );
-        }
-        rememberBivariateCandidate(item);
         mapLayers.recordIntent();
         const analysisSession = matchingAnalysisSession(item);
         deactivateActiveLayer();
@@ -1735,6 +1833,10 @@ export function initializeRasterViewer(
             controlsView.renderHistogram(rasterStatistics, rasterStyle);
         }
         saveActiveLayerSession();
+        if (bivariateMode.contains(getCatalogItemKey(item))) {
+            applyBivariatePresentation();
+            renderLayerStack();
+        }
     }
 
     /**
@@ -2232,10 +2334,19 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function restoreWholeRasterStatistics() {
-        rasterStatisticsController.clear();
         if (bivariateMode.active) {
-            pairedStatisticsController.clear();
+            bivariateSelectedBounds = null;
+            bivariateSelectedWindowSizeKm = null;
+            rasterSampleWindowController.clearSelection();
+            if (canUseRasterMapInteractions()) {
+                rasterSampleWindowController.enable();
+            }
+            renderRasterSamplingAreaControls();
+            renderRasterSampleWindowGuidance("");
+            requestBivariateStatistics();
+            return;
         }
+        rasterStatisticsController.clear();
         resetPendingRasterStatisticsState();
         selectedRasterBounds = null;
         selectedTemporaryAoi = null;
@@ -2244,16 +2355,11 @@ export function initializeRasterViewer(
         selectedRasterStatisticsState = "idle";
         selectedRasterStatisticsError = null;
         rasterSampleWindowController.clearSelection();
-        if (canUseActiveRasterMapInteractions()) {
+        if (canUseRasterMapInteractions()) {
             rasterSampleWindowController.enable();
         }
         renderRasterSamplingAreaControls();
         renderRasterSampleWindowGuidance("");
-        if (bivariateMode.active) {
-            requestBivariateStatistics();
-            saveActiveLayerSession();
-            return;
-        }
         if (wholeRasterStatisticsState === "ready") {
             renderRasterStatistics(wholeRasterStatistics);
         } else if (wholeRasterStatisticsState === "error") {
@@ -2263,7 +2369,7 @@ export function initializeRasterViewer(
             );
         } else {
             clearRasterStatisticsPresentation();
-            if (canUseActiveRasterMapInteractions()) {
+            if (canUseRasterMapInteractions()) {
                 void rasterStatisticsController.activate(
                     activeRasterItem,
                     WHOLE_RASTER_SAMPLING_AREA
@@ -2280,14 +2386,16 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function renderRasterSampleWindowGuidance(guidance) {
+        const [presentedBounds, presentedWindowSizeKm] =
+            getPresentedSampleWindow();
         let nextStatus;
         if (guidance) {
             nextStatus = guidance;
-        } else if (selectedRasterBounds !== null) {
-            const { west, south, east, north } = selectedRasterBounds;
+        } else if (presentedBounds !== null) {
+            const { west, south, east, north } = presentedBounds;
             nextStatus =
-                `Approximately ${selectedRasterWindowSizeKm} km × ` +
-                `${selectedRasterWindowSizeKm} km window selected: ` +
+                `Approximately ${presentedWindowSizeKm} km × ` +
+                `${presentedWindowSizeKm} km window selected: ` +
                 `W ${west.toFixed(3)}, S ${south.toFixed(3)}, ` +
                 `E ${east.toFixed(3)}, N ${north.toFixed(3)}. ` +
                 `Move and click again to replace it.${
@@ -2317,7 +2425,17 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function selectRasterSampleWindow(bounds) {
-        if (!canUseActiveRasterMapInteractions()) {
+        if (!canUseRasterMapInteractions()) {
+            return;
+        }
+        if (bivariateMode.active) {
+            bivariateSelectedBounds = bounds;
+            bivariateSelectedWindowSizeKm =
+                rasterSampleWindowController.windowSizeKm;
+            renderRasterSamplingAreaControls();
+            renderRasterSampleWindowGuidance("");
+            showHistogramWorkspace();
+            requestBivariateStatistics();
             return;
         }
         selectedRasterBounds = bounds;
@@ -2326,11 +2444,6 @@ export function initializeRasterViewer(
         renderRasterSamplingAreaControls();
         renderRasterSampleWindowGuidance("");
         showHistogramWorkspace();
-        if (bivariateMode.active) {
-            requestBivariateStatistics();
-            saveActiveLayerSession();
-            return;
-        }
         refreshRetainedLayerHistograms(currentRasterSamplingArea());
         void rasterStatisticsController.activate(
             activeRasterItem,
@@ -2358,13 +2471,15 @@ export function initializeRasterViewer(
         }
         controlsView.setSampleWindowInvalid(false);
         controlsView.setSampleWindowSize(sideLengthKm);
+        const [presentedBounds, presentedWindowSizeKm] =
+            getPresentedSampleWindow();
         if (
-            selectedRasterBounds !== null &&
-            selectedRasterWindowSizeKm !== sideLengthKm
+            presentedBounds !== null &&
+            presentedWindowSizeKm !== sideLengthKm
         ) {
             controlsView.setSampleWindowStatus(
                 `Window size set to ${sideLengthKm} km. The current ` +
-                `histogram still uses the ${selectedRasterWindowSizeKm} km ` +
+                `histogram still uses the ${presentedWindowSizeKm} km ` +
                 "window; sample the map again to update it."
             );
         } else {
@@ -2426,7 +2541,7 @@ export function initializeRasterViewer(
         renderRasterSampleWindowGuidance("");
         showHistogramWorkspace();
         refreshRetainedLayerHistograms(currentRasterSamplingArea());
-        if (canUseActiveRasterMapInteractions()) {
+        if (canUseRasterMapInteractions()) {
             void rasterStatisticsController.activate(
                 activeRasterItem,
                 currentRasterSamplingArea()
@@ -2445,7 +2560,7 @@ export function initializeRasterViewer(
      */
     function enableRasterSampleWindowSelection() {
         restoreWholeRasterStatistics();
-        if (!canUseActiveRasterMapInteractions()) {
+        if (!canUseRasterMapInteractions()) {
             return;
         }
         rasterSampleWindowController.enable();
@@ -2720,7 +2835,6 @@ export function initializeRasterViewer(
      */
     function handleBivariateSwapAxes() {
         if (!bivariateMode.active) return;
-        pairedStatisticsController.clear();
         pairedPixelProbeController.clear();
         bivariateStatistics = null;
         bivariateMode.swap();
@@ -2817,7 +2931,9 @@ export function initializeRasterViewer(
      */
     function handleClearSampleWindow() {
         restoreWholeRasterStatistics();
-        refreshRetainedLayerHistograms(WHOLE_RASTER_SAMPLING_AREA);
+        if (!bivariateMode.active) {
+            refreshRetainedLayerHistograms(WHOLE_RASTER_SAMPLING_AREA);
+        }
         showHistogramWorkspace();
     }
 
@@ -2828,7 +2944,7 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function handleMapPointerMove(pointerEvent) {
-        if (canUseActiveRasterMapInteractions()) {
+        if (canUseRasterMapInteractions()) {
             pixelProbeClientPosition = {
                 x: pointerEvent.clientX,
                 y: pointerEvent.clientY,
@@ -2844,7 +2960,7 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function handleMapMouseMove(mapEvent) {
-        if (!canUseActiveRasterMapInteractions()) {
+        if (!canUseRasterMapInteractions()) {
             return;
         }
         const point = {
@@ -2944,6 +3060,8 @@ export function initializeRasterViewer(
         selectedRasterStatisticsError = null;
         bivariateStatistics = null;
         bivariateCandidates = [];
+        bivariateSelectedBounds = null;
+        bivariateSelectedWindowSizeKm = null;
         pixelProbeClientPosition = null;
         rasterPixelProbeLabel = "";
         controlsView.setControlsVisible(false);
@@ -2974,7 +3092,6 @@ export function initializeRasterViewer(
      * @throws {Error} If publication or Leaflet layer construction fails.
      */
     async function show(item) {
-        rememberBivariateCandidate(item);
         const publication = await mapLayers.show(item, rasterMapLayerAdapter);
         renderLayerHistogramSummaries();
         return publication;
@@ -3086,7 +3203,7 @@ export function initializeRasterViewer(
         resetPendingRasterStatisticsState();
         if (selectedTemporaryAoi !== null) {
             rasterSampleWindowController.clear();
-        } else if (canUseActiveRasterMapInteractions()) {
+        } else if (canUseRasterMapInteractions()) {
             rasterSampleWindowController.enable();
         }
         renderRasterSamplingAreaControls();
@@ -3136,7 +3253,7 @@ export function initializeRasterViewer(
         onSampleWindowNumberInput: setRasterSampleWindowSize,
         onSampleWindowNumberChange: handleSampleWindowNumberChange,
         onSampleMapCenter: () => {
-            if (canUseActiveRasterMapInteractions()) {
+            if (canUseRasterMapInteractions()) {
                 if (selectedTemporaryAoi !== null) {
                     restoreWholeRasterStatistics();
                 }

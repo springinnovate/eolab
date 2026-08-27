@@ -10,6 +10,7 @@ from rasterio.transform import array_bounds, xy
 from rasterio.warp import transform, transform_bounds
 
 from eolab_app.raster.bounded_window import (
+    BOUNDED_SOURCE_WINDOW_PADDING_PIXELS,
     BOUNDED_WGS84_DENSIFY_POINTS,
     NoRasterBoundsOverlapError,
     selected_raster_area_for_wgs84_bounds,
@@ -26,14 +27,12 @@ from eolab_app.raster.read_cancellation import (
     require_active_raster_read,
 )
 from eolab_app.raster.sample_grid import (
-    SAMPLE_GRID_MAX_DECODED_SOURCE_BYTES,
-    SAMPLE_GRID_MAX_DIMENSION,
-    SAMPLE_GRID_MAX_SOURCE_BLOCK_READS,
     SAMPLE_GRID_MAX_TRANSFORMED_POSITIONS,
     SourcePosition,
     plan_sample_grid_for_source_positions,
     plan_source_window_sample_grid,
     read_planned_sample_grid,
+    sample_grid_policy_parameters,
 )
 from eolab_app.raster.source_contract import (
     BOUNDED_RASTER_MAX_NATIVE_BLOCK_DECODED_BYTES,
@@ -44,7 +43,6 @@ from eolab_app.raster.statistics import NoValidRasterSamplesError
 
 
 RASTER_PAIRED_STATISTICS_ALGORITHM = "x-reference-nearest-paired-v1"
-RASTER_PAIRED_STATISTICS_RESAMPLING = "nearest"
 
 
 def raster_paired_statistics_policy_parameters() -> tuple[int, ...]:
@@ -56,10 +54,8 @@ def raster_paired_statistics_policy_parameters() -> tuple[int, ...]:
     return (
         RASTER_PAIRED_STATISTICS_BIN_COUNT,
         BOUNDED_WGS84_DENSIFY_POINTS,
-        SAMPLE_GRID_MAX_DIMENSION,
-        SAMPLE_GRID_MAX_TRANSFORMED_POSITIONS,
-        SAMPLE_GRID_MAX_SOURCE_BLOCK_READS,
-        SAMPLE_GRID_MAX_DECODED_SOURCE_BYTES,
+        BOUNDED_SOURCE_WINDOW_PADDING_PIXELS,
+        *sample_grid_policy_parameters(),
         BOUNDED_RASTER_MAX_NATIVE_BLOCK_DECODED_BYTES,
     )
 
@@ -237,7 +233,11 @@ def _strict_histogram_range(
     padding = max(abs(minimum) * 1e-6, 1e-12)
     lower = minimum - padding
     upper = maximum + padding
-    if math.isfinite(lower) and math.isfinite(upper) and lower < upper:
+    if not math.isfinite(lower):
+        lower = minimum
+    if not math.isfinite(upper):
+        upper = maximum
+    if lower < upper:
         return lower, upper
     return (
         math.nextafter(minimum, -math.inf),
@@ -300,11 +300,6 @@ def read_raster_paired_statistics(
         )
         x_window = x_area.source_window
         x_plan = plan_source_window_sample_grid(x_dataset, x_window)
-        x_sample = read_planned_sample_grid(
-            x_dataset,
-            x_plan,
-            cancellation_requested,
-        )
         y_positions = _aligned_y_positions(
             x_dataset,
             y_dataset,
@@ -316,6 +311,11 @@ def read_raster_paired_statistics(
             x_plan.width,
             x_plan.height,
             y_positions,
+        )
+        x_sample = read_planned_sample_grid(
+            x_dataset,
+            x_plan,
+            cancellation_requested,
         )
         y_sample = read_planned_sample_grid(
             y_dataset,

@@ -433,6 +433,7 @@ export class BivariateRasterControlsView {
                     count
                 );
                 cell.setAttribute("aria-label", description);
+                /** Select and announce this histogram cell. @return {void} */
                 const select = () => this.#selectCell(
                     xBin,
                     yBin,

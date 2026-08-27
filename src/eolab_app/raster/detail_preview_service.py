@@ -14,13 +14,7 @@ from eolab_app.raster.detail_preview import (
     DETAIL_PREVIEW_POLICY_VERSION,
     read_raster_detail_preview,
 )
-from eolab_app.raster.sample_grid import (
-    SAMPLE_GRID_CENTER_OFFSETS,
-    SAMPLE_GRID_MAX_DECODED_SOURCE_BYTES,
-    SAMPLE_GRID_MAX_DIMENSION,
-    SAMPLE_GRID_MAX_SOURCE_BLOCK_READS,
-    SAMPLE_GRID_MAX_TRANSFORMED_POSITIONS,
-)
+from eolab_app.raster.sample_grid import sample_grid_policy_parameters
 from eolab_app.raster.eligibility import (
     DETAIL_ONLY_PREVIEW_REASON_CODES,
     RENDERING_METADATA_KEY,
@@ -140,22 +134,13 @@ class RasterDetailPreviewService:
         Returns:
             Center-grid, exact-window, and location-policy inputs.
         """
-        # Deterministic fractional locations are encoded in thousandths.
         return (
-            SAMPLE_GRID_MAX_DIMENSION,
-            SAMPLE_GRID_MAX_SOURCE_BLOCK_READS,
-            SAMPLE_GRID_MAX_DECODED_SOURCE_BYTES,
-            SAMPLE_GRID_MAX_TRANSFORMED_POSITIONS,
+            *sample_grid_policy_parameters(),
             EXACT_DETAIL_MAX_DIMENSION,
             EXACT_DETAIL_MAX_SOURCE_BLOCK_READS,
             EXACT_DETAIL_MAX_DECODED_SOURCE_BYTES,
             EXACT_DETAIL_EDGE_DENSIFY_POINTS,
             EXACT_DETAIL_WINDOW_PADDING_PIXELS,
-            *(
-                round(value * 1000)
-                for offset in SAMPLE_GRID_CENTER_OFFSETS
-                for value in offset
-            ),
         )
 
     @staticmethod

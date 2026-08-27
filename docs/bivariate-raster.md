@@ -81,7 +81,7 @@ source grids differ.
 The X envelope keeps at most 127 cells on its longest edge and one source
 position per grid cell. Each source separately satisfies the neutral native
 block limit of 16,129 reads, the 9 GiB cumulative decoded-work limit, supported
-scalar and one-band contracts, and the 1,024-pixel maximum native block edge.
+scalar and one-band contracts, and the 64 MiB decoded native-block limit.
 The response is fixed at 32 by 32 bins and contains strictly increasing X/Y
 edges, a documented Y-row/X-column count matrix, both marginals, paired count,
 X-envelope and sample dimensions, reference-grid and resampling identities,

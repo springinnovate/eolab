@@ -45,6 +45,26 @@ SAMPLE_GRID_MAX_TRANSFORMED_POSITIONS = (
 SourcePosition = tuple[int, int]
 
 
+def sample_grid_policy_parameters() -> tuple[int, ...]:
+    """Return fixed limits and positions affecting every sample-grid read.
+
+    Returns:
+        Dimension, block, decoded-work, transformation, and center-location
+        parameters encoded for stable cache identities.
+    """
+    return (
+        SAMPLE_GRID_MAX_DIMENSION,
+        SAMPLE_GRID_MAX_SOURCE_BLOCK_READS,
+        SAMPLE_GRID_MAX_DECODED_SOURCE_BYTES,
+        SAMPLE_GRID_MAX_TRANSFORMED_POSITIONS,
+        *(
+            round(value * 1000)
+            for offset in SAMPLE_GRID_CENTER_OFFSETS
+            for value in offset
+        ),
+    )
+
+
 @dataclass(frozen=True)
 class SampleGridPlan:
     """Immutable source sampling plan that satisfies the native-block budget.

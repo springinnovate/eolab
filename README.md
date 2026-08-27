@@ -199,7 +199,7 @@ active layer chooses which raster the shared appearance, histogram, sampling,
 and pixel-probe controls edit. Visibility and active selection are independent,
 and showing a hidden layer reuses its existing GeoServer publication.
 
-After two distinct catalog rasters are selected, **Raster comparison** offers
+After two distinct catalog rasters are selected, **Raster histograms** offers
 an explicit **2D - bivariate rasters** histogram mode. Catalog identities make
 paired statistics and pixel analysis available without GeoServer, WMS
 publication, or visible map layers. When both WMS layers exist, rendering also

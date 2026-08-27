@@ -154,6 +154,14 @@ function hslToRgb(hue, saturation, lightness) {
         const gray = lightness * 255;
         return [gray, gray, gray];
     }
+    /**
+     * Convert one normalized hue offset into its RGB channel value.
+     *
+     * @param {number} p Lower channel interpolation endpoint.
+     * @param {number} q Upper channel interpolation endpoint.
+     * @param {number} candidate Normalized hue offset.
+     * @return {number} Interpolated normalized channel value.
+     */
     const hueToRgb = (p, q, candidate) => {
         let value = candidate;
         if (value < 0) value += 1;
@@ -214,8 +222,22 @@ function requirePalette(paletteName) {
 export function createBivariateColormap(palette) {
     const baseColors = palette.baseRamp.map(hexToRgb);
     const lightener = hexToRgb(palette.lightenerColor);
+    /**
+     * Interpolate one numeric channel between two endpoints.
+     *
+     * @param {number} start Lower interpolation endpoint.
+     * @param {number} end Upper interpolation endpoint.
+     * @param {number} amount Normalized interpolation amount.
+     * @return {number} Interpolated channel value.
+     */
     const interpolate = (start, end, amount) =>
         start + (end - start) * amount;
+    /**
+     * Sample the palette's three-color base ramp.
+     *
+     * @param {number} amount Normalized ramp position.
+     * @return {number[]} Red, green, and blue channels.
+     */
     const ramp = (amount) => {
         const position = clamp01(amount);
         const lower = position <= 0.5 ? baseColors[0] : baseColors[1];

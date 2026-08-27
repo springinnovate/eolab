@@ -12,10 +12,11 @@ from pydantic import ValidationError
 from rasterio.enums import MaskFlags
 from rasterio.features import geometry_mask
 from rasterio.transform import Affine, from_bounds, from_origin
-from rasterio.warp import transform as transform_coordinates
+from rasterio.warp import transform as transform_coordinates, transform_bounds
 from rasterio.windows import Window
 
 from eolab_app.raster.errors import RasterConflictError
+from eolab_app.raster import paired_statistics
 from eolab_app.rendering.errors import PublishedLayerChangedError
 from eolab_app.raster.models import (
     AuthorizedRaster,
@@ -460,6 +461,9 @@ def test_paired_statistics_use_x_reference_grid_and_filter_pairwise_nodata(
 
     Args:
         tmp_path: Temporary directory for two controlled GeoTIFF sources.
+
+    Returns:
+        None after verifying X-grid alignment and pairwise validity filtering.
     """
     x_path = tmp_path / "x.tif"
     y_path = tmp_path / "y.tif"
@@ -490,6 +494,153 @@ def test_paired_statistics_use_x_reference_grid_and_filter_pairwise_nodata(
     assert sum(map(sum, statistics.histogram.counts)) == 8
 
 
+def test_paired_statistics_accept_constant_extreme_float64_values(
+    tmp_path: Path,
+) -> None:
+    """Keep histogram bounds finite at both supported float64 extremes.
+
+    Args:
+        tmp_path: Temporary directory for two controlled GeoTIFF sources.
+
+    Returns:
+        None after verifying the public paired-statistics result.
+    """
+    x_path = tmp_path / "maximum-float64.tif"
+    y_path = tmp_path / "minimum-float64.tif"
+    extreme = numpy.finfo(numpy.float64).max
+    transform = from_origin(0, 1, 1, 1)
+    _write_raster(
+        x_path,
+        numpy.full((1, 1), extreme, dtype=numpy.float64),
+        transform=transform,
+    )
+    _write_raster(
+        y_path,
+        numpy.full((1, 1), -extreme, dtype=numpy.float64),
+        transform=transform,
+    )
+
+    statistics = read_raster_paired_statistics(x_path, y_path, None)
+
+    assert statistics.x_minimum == statistics.x_maximum == extreme
+    assert statistics.y_minimum == statistics.y_maximum == -extreme
+    assert numpy.isfinite(statistics.histogram.x_edges).all()
+    assert numpy.isfinite(statistics.histogram.y_edges).all()
+    assert sum(map(sum, statistics.histogram.counts)) == 1
+
+
+def test_paired_statistics_admit_both_plans_before_pixel_reads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reject Y planning before performing any admitted X pixel read.
+
+    Args:
+        tmp_path: Temporary directory for controlled GeoTIFF sources.
+        monkeypatch: Pytest collaborator for isolating plan/read order.
+
+    Returns:
+        None after verifying both plans are admitted before either source read.
+    """
+    x_path = tmp_path / "plan-first-x.tif"
+    y_path = tmp_path / "plan-first-y.tif"
+    values = numpy.arange(9, dtype=numpy.float32).reshape(3, 3)
+    _write_raster(x_path, values, transform=from_origin(0, 3, 1, 1))
+    _write_raster(y_path, values, transform=from_origin(0, 3, 1, 1))
+    read_calls = []
+
+    def reject_y_plan(*_: object) -> None:
+        """Represent a Y source whose bounded work cannot be admitted.
+
+        Args:
+            *_: Ignored planner arguments supplied by the paired reader.
+
+        Returns:
+            None because the controlled planner always rejects the request.
+
+        Raises:
+            ValueError: Always, before either source may be read.
+        """
+        raise ValueError("controlled Y plan rejection")
+
+    def record_unexpected_read(*_: object) -> None:
+        """Record an invalid early source read.
+
+        Args:
+            *_: Ignored read arguments supplied by the paired reader.
+
+        Returns:
+            None because an unexpected source read always fails the test.
+
+        Raises:
+            AssertionError: Always, because planning must finish first.
+        """
+        read_calls.append(True)
+        raise AssertionError("source read occurred before both plans")
+
+    monkeypatch.setattr(
+        paired_statistics,
+        "plan_sample_grid_for_source_positions",
+        reject_y_plan,
+    )
+    monkeypatch.setattr(
+        paired_statistics,
+        "read_planned_sample_grid",
+        record_unexpected_read,
+    )
+
+    with pytest.raises(ValueError, match="controlled Y plan rejection"):
+        read_raster_paired_statistics(x_path, y_path, None)
+    assert read_calls == []
+
+
+def test_paired_statistics_cross_crs_nearest_alignment_and_orientation(
+    tmp_path: Path,
+) -> None:
+    """Map X centers across CRSs and retain Y-row/X-column orientation.
+
+    Args:
+        tmp_path: Temporary directory for controlled GeoTIFF sources.
+
+    Returns:
+        None after verifying cross-CRS alignment and matrix orientation.
+    """
+    x_path = tmp_path / "geographic-x.tif"
+    y_path = tmp_path / "mercator-y.tif"
+    x_values = numpy.arange(1, 10, dtype=numpy.float32).reshape(3, 3)
+    y_values = numpy.arange(90, 0, -10, dtype=numpy.float32).reshape(3, 3)
+    _write_raster(
+        x_path,
+        x_values,
+        transform=from_origin(0, 3, 1, 1),
+        crs="EPSG:4326",
+    )
+    mercator_bounds = transform_bounds(
+        "EPSG:4326",
+        "EPSG:3857",
+        0,
+        0,
+        3,
+        3,
+    )
+    _write_raster(
+        y_path,
+        y_values,
+        transform=from_bounds(*mercator_bounds, 3, 3),
+        crs="EPSG:3857",
+    )
+
+    statistics = read_raster_paired_statistics(x_path, y_path, None)
+
+    assert statistics.paired_sample_count == 9
+    assert statistics.histogram.counts[31][0] == 1
+    assert statistics.histogram.counts[0][31] == 1
+    assert statistics.histogram.x_marginal_counts[0] == 1
+    assert statistics.histogram.x_marginal_counts[31] == 1
+    assert statistics.histogram.y_marginal_counts[0] == 1
+    assert statistics.histogram.y_marginal_counts[31] == 1
+
+
 def test_paired_statistics_bounds_nonoverlap_and_xy_swap_are_explicit(
     tmp_path: Path,
 ) -> None:
@@ -497,6 +648,9 @@ def test_paired_statistics_bounds_nonoverlap_and_xy_swap_are_explicit(
 
     Args:
         tmp_path: Temporary directory for controlled source grids.
+
+    Returns:
+        None after verifying bounds, misses, and asymmetric X/Y roles.
     """
     fine_path = tmp_path / "fine-x.tif"
     coarse_path = tmp_path / "coarse-y.tif"
@@ -550,6 +704,9 @@ def test_paired_statistics_bound_large_grids_and_reject_empty_pairs(
 
     Args:
         tmp_path: Temporary directory for bounded and nodata GeoTIFF sources.
+
+    Returns:
+        None after verifying the grid ceiling and empty-pair rejection.
     """
     x_path = tmp_path / "large-x.tif"
     y_path = tmp_path / "large-y.tif"
@@ -577,7 +734,11 @@ def test_paired_statistics_bound_large_grids_and_reject_empty_pairs(
 
 
 def test_paired_request_forbids_paths_and_duplicate_identities() -> None:
-    """Keep the public paired contract limited to two catalog identities."""
+    """Keep the public paired contract limited to two catalog identities.
+
+    Returns:
+        None after rejecting duplicate identities and arbitrary paths.
+    """
     identity = {
         "collectionId": "eolab-mounted-geotiffs",
         "itemId": ITEM_ID,

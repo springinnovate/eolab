@@ -380,7 +380,7 @@ test("bivariate snapshots lock opacity at 100 percent", () => {
   const opacity = actionControl(row, "opacity");
   assert.equal(opacity.value, "100");
   assert.equal(opacity.disabled, true);
-  assert.match(opacity.getAttribute("aria-label"), /locked for bivariate mode/);
+  assert.match(opacity.getAttribute("aria-label"), /opacity is currently locked/);
 });
 
 test("MapLayerStackView renders a neutral fixed-swatch legend", () => {

@@ -48,6 +48,9 @@ from eolab_app.sampling_area import (
 )
 
 
+_StatisticsResult = RasterStatistics | RasterPairedStatistics
+
+
 @dataclass
 class _InflightStatistics:
     """Track one shared worker and the request waiters that still own it.
@@ -60,26 +63,7 @@ class _InflightStatistics:
         finished: Whether computation completed its cache/error lifecycle.
     """
 
-    task: asyncio.Task[RasterStatistics]
-    cancellation_requested: threading.Event
-    waiter_count: int = 0
-    started: bool = False
-    finished: bool = False
-
-
-@dataclass
-class _InflightPairedStatistics:
-    """Track one shared paired worker and its active request waiters.
-
-    Attributes:
-        task: Shared asynchronous paired computation.
-        cancellation_requested: Thread-safe last-waiter cancellation signal.
-        waiter_count: Active callers awaiting the same ordered pair and bounds.
-        started: Whether the task acquired shared bounded read capacity.
-        finished: Whether computation completed its cache/error lifecycle.
-    """
-
-    task: asyncio.Task[RasterPairedStatistics]
+    task: asyncio.Task[_StatisticsResult]
     cancellation_requested: threading.Event
     waiter_count: int = 0
     started: bool = False
@@ -143,17 +127,10 @@ class RasterStatisticsService:
         self._paired_statistics_reader = paired_statistics_reader
         self._cache: OrderedDict[
             tuple[object, ...],
-            RasterStatistics | RasterPairedStatistics,
+            _StatisticsResult,
         ] = OrderedDict()
-        self._inflight: dict[
-            RasterStatisticsCacheKey,
-            _InflightStatistics,
-        ] = {}
+        self._inflight: dict[tuple[object, ...], _InflightStatistics] = {}
         self._state_lock = asyncio.Lock()
-        self._paired_inflight: dict[
-            tuple[object, ...],
-            _InflightPairedStatistics,
-        ] = {}
 
     async def get(
         self,
@@ -192,16 +169,13 @@ class RasterStatisticsService:
             else:
                 work = self._inflight.get(cache_key)
                 if work is None:
-                    if (
-                        len(self._inflight) + len(self._paired_inflight)
-                        >= self._maximum_inflight
-                    ):
+                    if len(self._inflight) >= self._maximum_inflight:
                         raise RasterConflictError(
                             "Raster statistics capacity is busy; retry after "
                             "the current bounded read finishes."
                         )
                     cancellation_requested = threading.Event()
-                    task = asyncio.create_task(
+                    task: asyncio.Task[_StatisticsResult] = asyncio.create_task(
                         self._compute(
                             authorized_raster,
                             cache_key,
@@ -230,7 +204,7 @@ class RasterStatisticsService:
         if work is None:
             raise RuntimeError("Raster statistics work was not established")
         try:
-            return await asyncio.shield(work.task)
+            return cast(RasterStatistics, await asyncio.shield(work.task))
         except NoRasterBoundsOverlapError as error:
             detail = (
                 "The uploaded AOI does not overlap the raster. Choose another "
@@ -311,18 +285,15 @@ class RasterStatisticsService:
                 self._cache.move_to_end(cache_key)
                 work = None
             else:
-                work = self._paired_inflight.get(cache_key)
+                work = self._inflight.get(cache_key)
                 if work is None:
-                    if (
-                        len(self._inflight) + len(self._paired_inflight)
-                        >= self._maximum_inflight
-                    ):
+                    if len(self._inflight) >= self._maximum_inflight:
                         raise RasterConflictError(
                             "Raster statistics capacity is busy; retry after "
                             "the current bounded read finishes."
                         )
                     cancellation_requested = threading.Event()
-                    task = asyncio.create_task(
+                    task: asyncio.Task[_StatisticsResult] = asyncio.create_task(
                         self._compute_paired(
                             authorized_x,
                             authorized_y,
@@ -331,14 +302,12 @@ class RasterStatisticsService:
                             cancellation_requested,
                         )
                     )
-                    task.add_done_callback(
-                        self._retrieve_paired_task_exception
-                    )
-                    work = _InflightPairedStatistics(
+                    task.add_done_callback(self._retrieve_task_exception)
+                    work = _InflightStatistics(
                         task,
                         cancellation_requested,
                     )
-                    self._paired_inflight[cache_key] = work
+                    self._inflight[cache_key] = work
                 elif work.cancellation_requested.is_set():
                     raise RasterConflictError(
                         "Raster statistics capacity is finishing canceled work; "
@@ -355,7 +324,10 @@ class RasterStatisticsService:
         if work is None:
             raise RuntimeError("Paired raster statistics work was not established")
         try:
-            return await asyncio.shield(work.task)
+            return cast(
+                RasterPairedStatistics,
+                await asyncio.shield(work.task),
+            )
         except NoRasterBoundsOverlapError as error:
             raise RasterConflictError(
                 "The selected rasters and bounds have no geographic overlap"
@@ -376,35 +348,7 @@ class RasterStatisticsService:
                 "The selected paired raster statistics could not be read"
             ) from error
         finally:
-            await self._release_paired_waiter(cache_key, work)
-
-    async def _release_paired_waiter(
-        self,
-        cache_key: tuple[object, ...],
-        work: _InflightPairedStatistics,
-    ) -> None:
-        """Release one paired caller and cancel after its last waiter leaves.
-
-        Args:
-            cache_key: Complete ordered-pair computation identity.
-            work: Exact in-flight paired state joined by the caller.
-
-        Returns:
-            None after detaching the caller and updating worker ownership.
-        """
-        async with self._state_lock:
-            work.waiter_count -= 1
-            if work.waiter_count != 0:
-                return
-            if work.finished:
-                if self._paired_inflight.get(cache_key) is work:
-                    self._paired_inflight.pop(cache_key)
-                return
-            work.cancellation_requested.set()
-            if not work.started:
-                if self._paired_inflight.get(cache_key) is work:
-                    self._paired_inflight.pop(cache_key)
-                work.task.cancel()
+            await self._release_waiter(cache_key, work)
 
     async def _compute_paired(
         self,
@@ -438,7 +382,7 @@ class RasterStatisticsService:
         try:
             async with self._read_semaphore:
                 async with self._state_lock:
-                    work = self._paired_inflight.get(cache_key)
+                    work = self._inflight.get(cache_key)
                     if work is None or work.task is not asyncio.current_task():
                         raise RasterReadCancelled
                     work.started = True
@@ -460,7 +404,7 @@ class RasterStatisticsService:
                     self._source_authorizer.require_current(authorized_y),
                 )
                 async with self._state_lock:
-                    work = self._paired_inflight.get(cache_key)
+                    work = self._inflight.get(cache_key)
                     if (
                         work is None
                         or work.task is not asyncio.current_task()
@@ -472,15 +416,15 @@ class RasterStatisticsService:
                 return statistics
         finally:
             async with self._state_lock:
-                work = self._paired_inflight.get(cache_key)
+                work = self._inflight.get(cache_key)
                 if work is not None and work.task is asyncio.current_task():
                     work.finished = True
                     if work.waiter_count == 0:
-                        self._paired_inflight.pop(cache_key)
+                        self._inflight.pop(cache_key)
 
     async def _release_waiter(
         self,
-        cache_key: RasterStatisticsCacheKey,
+        cache_key: tuple[object, ...],
         work: _InflightStatistics,
     ) -> None:
         """Release a caller and stop work after its final waiter disconnects.
@@ -657,27 +601,12 @@ class RasterStatisticsService:
 
     @staticmethod
     def _retrieve_task_exception(
-        completed_task: asyncio.Task[RasterStatistics],
+        completed_task: asyncio.Task[_StatisticsResult],
     ) -> None:
-        """Retrieve failures from coalesced work after HTTP cancellation.
+        """Retrieve failures from shared work even when its waiters have left.
 
         Args:
-            completed_task: Finished or canceled statistics task.
-
-        Returns:
-            None after consuming any worker exception.
-        """
-        if not completed_task.cancelled():
-            completed_task.exception()
-
-    @staticmethod
-    def _retrieve_paired_task_exception(
-        completed_task: asyncio.Task[RasterPairedStatistics],
-    ) -> None:
-        """Retrieve paired failures after every HTTP waiter disconnects.
-
-        Args:
-            completed_task: Finished or canceled paired-statistics task.
+            completed_task: Finished or canceled ordinary or paired task.
 
         Returns:
             None after consuming any worker exception.

@@ -246,6 +246,13 @@ export async function sampleCatalogRasterPairPixels(
         abortError.name = "AbortError";
         throw abortError;
     }
+    /**
+     * Convert one settled pixel request into its axis-scoped outcome.
+     *
+     * @param {PromiseSettledResult<Object>} outcome Settled pixel request.
+     * @return {{available:boolean,pixel:Object|null,error:string|null}}
+     * Browser-safe pixel availability.
+     */
     const axisOutcome = (outcome) => outcome.status === "fulfilled"
         ? { available: true, pixel: outcome.value, error: null }
         : {

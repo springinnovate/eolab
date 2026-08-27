@@ -34,7 +34,17 @@ class _ConflictService:
         raise RasterConflictError("controlled raster conflict")
 
     async def get_paired(self, _: object) -> None:
-        """Fail paired analysis with the same browser-safe conflict."""
+        """Fail paired analysis with the same browser-safe conflict.
+
+        Args:
+            _: Ignored validated paired-statistics request.
+
+        Returns:
+            None because the controlled request always fails.
+
+        Raises:
+            RasterConflictError: Always, with the controlled conflict.
+        """
         raise RasterConflictError("controlled raster conflict")
 
 class _PublicationFailureService:

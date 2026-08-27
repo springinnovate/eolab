@@ -287,7 +287,7 @@ export class MapLayerStackView {
         opacityInput.setAttribute(
             "aria-label",
             layer.opacityLocked === true
-                ? `${accessibleName} opacity locked for bivariate mode`
+                ? `${accessibleName} opacity is currently locked`
                 : `${accessibleName} opacity`
         );
         opacityInput.setAttribute(

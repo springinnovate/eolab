@@ -237,9 +237,6 @@ export class RasterSamplingAreaControlsView {
     /**
      * Set whether the active analysis mode accepts temporary AOI lifecycle IDs.
      *
-     * Paired statistics currently accepts only whole-overlap or WGS 84 bounds,
-     * so bivariate mode disables this peer capability without changing it.
-     *
      * @param {boolean} isCompatible Whether temporary AOI selection is allowed.
      * @return {void}
      */
@@ -260,7 +257,7 @@ export class RasterSamplingAreaControlsView {
         if (!this.temporaryAoiCompatible) {
             this.useTemporaryAoiButton.removeAttribute("aria-label");
             this.useTemporaryAoiButton.title =
-                "Uploaded AOI sampling is unavailable in bivariate mode.";
+                "This histogram does not support uploaded AOI sampling.";
             return;
         }
         if (temporaryAoi === null) {

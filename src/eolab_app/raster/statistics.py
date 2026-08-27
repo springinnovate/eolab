@@ -37,12 +37,8 @@ from eolab_app.raster.read_cancellation import (
     require_active_raster_read,
 )
 from eolab_app.raster.sample_grid import (
-    SAMPLE_GRID_CENTER_OFFSETS,
-    SAMPLE_GRID_MAX_DECODED_SOURCE_BYTES,
-    SAMPLE_GRID_MAX_DIMENSION,
-    SAMPLE_GRID_MAX_SOURCE_BLOCK_READS,
-    SAMPLE_GRID_MAX_TRANSFORMED_POSITIONS,
     read_source_window_sample_grid,
+    sample_grid_policy_parameters,
 )
 from eolab_app.raster.source_contract import (
     BOUNDED_RASTER_MAX_NATIVE_BLOCK_DECODED_BYTES,
@@ -79,18 +75,10 @@ def raster_statistics_policy_parameters() -> tuple[int, ...]:
         RASTER_STATISTICS_SOURCE_WINDOW_PADDING_PIXELS,
         int(RASTER_STATISTICS_SELECTION_ALL_TOUCHED),
         BOUNDED_RASTER_MAX_NATIVE_BLOCK_DECODED_BYTES,
-        SAMPLE_GRID_MAX_DIMENSION,
-        SAMPLE_GRID_MAX_SOURCE_BLOCK_READS,
-        SAMPLE_GRID_MAX_DECODED_SOURCE_BYTES,
-        SAMPLE_GRID_MAX_TRANSFORMED_POSITIONS,
+        *sample_grid_policy_parameters(),
         EXACT_SOURCE_MAX_DIMENSION,
         EXACT_SOURCE_MAX_BLOCK_READS,
         EXACT_SOURCE_MAX_DECODED_BYTES,
-        *(
-            round(value * 1000)
-            for offset in SAMPLE_GRID_CENTER_OFFSETS
-            for value in offset
-        ),
     )
 
 
