@@ -10,9 +10,15 @@ import { getCatalogItemKey } from "../catalog-item-identity.js";
 import { publishCatalogRaster } from "./api.js";
 import {
     loadCatalogRasterStatistics,
+    loadCatalogRasterPairedStatistics,
     RasterAnalysisRequestError,
     sampleCatalogRasterPixel,
+    sampleCatalogRasterPairPixels,
 } from "./analysis-api.js";
+import {
+    BivariateRasterMode,
+    getBivariateAxisStyles,
+} from "./bivariate.js";
 import {
     DEFAULT_RASTER_SAMPLE_WINDOW_SIZE_KM,
     isCanonicalWgs84Position,
@@ -21,6 +27,7 @@ import {
     createRasterSampleWindowLayer,
     createRasterWmsLayer,
     ensureRasterSampleWindowPane,
+    setRasterLayerAdditiveBlend,
 } from "./leaflet.js";
 import { MapLayerController } from "../map-layers/controller.js";
 import { MapLayerStackView } from "../map-layers/layer-stack-view.js";
@@ -38,7 +45,13 @@ import {
     rasterStatisticsMatchesSelection,
     WHOLE_RASTER_SAMPLING_AREA,
 } from "./statistics.js";
-import { RasterStatisticsController } from "./statistics-controller.js";
+import {
+    RasterPairedStatisticsController,
+    RasterStatisticsController,
+} from "./statistics-controller.js";
+import {
+    WHOLE_RASTER_OVERLAP_SAMPLING_AREA,
+} from "./paired-statistics.js";
 import {
     applyRasterColorPalette,
     DEFAULT_RASTER_STYLE,
@@ -129,6 +142,11 @@ function canRetryRasterStatistics(error) {
  * @property {(item: Object, point: Object, signal: AbortSignal)
  * => Promise<Object>} [samplePixel=sampleCatalogRasterPixel] Samples one raster
  * pixel.
+ * @property {(xItem:Object,yItem:Object,area:Object,signal:AbortSignal)
+ * =>Promise<Object>} [loadPairedStatistics=loadCatalogRasterPairedStatistics]
+ * Loads paired X-reference statistics.
+ * @property {(pair:Object,point:Object,signal:AbortSignal)=>Promise<Object>}
+ * [samplePairPixels=sampleCatalogRasterPairPixels] Samples both axis rasters.
  * @property {{setTimeout: (callback: () => void, delay: number) => *,
  * clearTimeout: (identifier: *) => void}} [clock=globalThis] Timer
  * implementation.
@@ -164,6 +182,8 @@ export function initializeRasterViewer(
         publishRaster = publishCatalogRaster,
         loadStatistics = loadCatalogRasterStatistics,
         samplePixel = sampleCatalogRasterPixel,
+        loadPairedStatistics = loadCatalogRasterPairedStatistics,
+        samplePairPixels = sampleCatalogRasterPairPixels,
         clock = globalThis,
         viewport = globalThis,
     } = {}
@@ -201,6 +221,8 @@ export function initializeRasterViewer(
     let selectedRasterStatistics = null;
     let selectedRasterStatisticsState = "idle";
     let selectedRasterStatisticsError = null;
+    const bivariateMode = new BivariateRasterMode();
+    let bivariateStatistics = null;
 
     /**
      * Return whether the shared controls currently own a sampled raster.
@@ -464,6 +486,11 @@ export function initializeRasterViewer(
         renderRasterPixel,
         renderRasterPixelError
     );
+    const pairedPixelProbeController = new RasterPixelProbeController(
+        samplePairPixels,
+        renderBivariatePixels,
+        renderBivariatePixelError
+    );
     const rasterSampleWindowController = new RasterSampleWindowController(
         leafletMap,
         createSampleWindowLayer,
@@ -496,6 +523,29 @@ export function initializeRasterViewer(
                 renderSelectedRasterStatisticsError(error);
             }
             renderLayerHistogramSummaries();
+        }
+    );
+    const pairedStatisticsController = new RasterPairedStatisticsController(
+        loadPairedStatistics,
+        () => {
+            controlsView.setPairedStatisticsLoading?.(
+                "Calculating a bounded paired distribution..."
+            );
+        },
+        (statistics) => {
+            if (!bivariateMode.active) return;
+            bivariateStatistics = statistics;
+            controlsView.renderPairedStatistics?.(
+                statistics,
+                getBivariatePresentation()
+            );
+        },
+        (error) => {
+            if (!bivariateMode.active) return;
+            controlsView.renderPairedStatisticsError?.(
+                error,
+                canRetryRasterStatistics(error)
+            );
         }
     );
 
@@ -767,22 +817,30 @@ export function initializeRasterViewer(
         controlsView.setTemporaryAoiAvailability(
             availableTemporaryAoi
         );
+        controlsView.setTemporaryAoiCompatible?.(!bivariateMode.active);
         controlsView.setClearSampleWindowLabel(
-            "Use whole raster"
+            bivariateMode.active ? "Use whole overlap" : "Use whole raster"
         );
         controlsView.setClearSampleWindowEnabled(
-            hasSelectedRasterSamplingArea()
+            bivariateMode.active
+                ? selectedRasterBounds !== null
+                : hasSelectedRasterSamplingArea()
         );
-        const samplingLabel = samplingMode === "selectedArea"
+        const presentedMode = bivariateMode.active
+            ? (selectedRasterBounds === null ? "wholeRaster" : "selectedArea")
+            : samplingMode;
+        const samplingLabel = presentedMode === "selectedArea"
             ? selectedRasterWindowSizeKm === null
                 ? "Map sample"
                 : `Map sample · ${selectedRasterWindowSizeKm} km × ` +
                   `${selectedRasterWindowSizeKm} km`
-            : samplingMode === "temporaryAoi"
+            : presentedMode === "temporaryAoi"
                 ? `Uploaded AOI · ${selectedTemporaryAoi.filename} · ` +
                   selectedTemporaryAoi.selectedDataset
-                : "Whole raster";
-        controlsView.setSamplingAreaMode(samplingMode, samplingLabel);
+                : bivariateMode.active
+                    ? "Whole overlap"
+                    : "Whole raster";
+        controlsView.setSamplingAreaMode(presentedMode, samplingLabel);
     }
 
     /**
@@ -796,6 +854,252 @@ export function initializeRasterViewer(
      */
     function canUseActiveRasterMapInteractions() {
         return activeRasterItem !== null;
+    }
+
+    /**
+     * Return visible published WMS rasters eligible for explicit bivariate mode.
+     *
+     * Successful raster publication already proves the backend's continuous,
+     * supported, single-band rendering contract. Detached detail/analysis
+     * sessions are excluded because they are not ordinary WMS stack layers.
+     *
+     * @return {Object[]} Eligible retained records in top-first stack order.
+     */
+    function getEligibleBivariateRecords() {
+        if (activeDetachedRasterSession() !== null) return [];
+        return mapLayers.retainedRecords.filter((record) =>
+            record.adapter === rasterMapLayerAdapter &&
+            record.entry.visible &&
+            record.error === null &&
+            mapLayers.isAttached(record.entry.key)
+        );
+    }
+
+    /**
+     * Return the two records currently assigned to X and Y, in role order.
+     *
+     * @return {{xRecord:Object,yRecord:Object}|null} Current pair or null.
+     */
+    function getBivariatePairRecords() {
+        if (!bivariateMode.active) return null;
+        const xRecord = mapLayers.getRecord(bivariateMode.xKey);
+        const yRecord = mapLayers.getRecord(bivariateMode.yKey);
+        return xRecord === null || yRecord === null
+            ? null
+            : { xRecord, yRecord };
+    }
+
+    /**
+     * Build the single presentation contract shared by map, legend, histogram,
+     * and probe.
+     *
+     * @return {Object} Current labels, retained ranges, coordinated styles,
+     * palette identity, and Catalog Items.
+     */
+    function getBivariatePresentation() {
+        const records = getBivariatePairRecords();
+        if (records === null) {
+            throw new Error("Bivariate raster pair is no longer available.");
+        }
+        const axisStyles = getBivariateAxisStyles(
+            bivariateMode.paletteName,
+            records.xRecord.state.rasterStyle,
+            records.yRecord.state.rasterStyle
+        );
+        return {
+            paletteName: bivariateMode.paletteName,
+            xLabel: records.xRecord.entry.label,
+            yLabel: records.yRecord.entry.label,
+            xStyle: axisStyles.xStyle,
+            yStyle: axisStyles.yStyle,
+            xItem: records.xRecord.entry.item,
+            yItem: records.yRecord.entry.item,
+        };
+    }
+
+    /**
+     * Return the paired request area without accepting temporary AOI state.
+     *
+     * @return {Object} Whole-overlap or selected-bounds paired area.
+     */
+    function currentBivariateSamplingArea() {
+        return selectedRasterBounds === null
+            ? WHOLE_RASTER_OVERLAP_SAMPLING_AREA
+            : {
+                kind: "selectedArea",
+                selectedBounds: selectedRasterBounds,
+            };
+    }
+
+    /**
+     * Present current bivariate eligibility or a transition-specific message.
+     *
+     * @param {string|null} [message=null] Optional transition guidance.
+     * @return {void}
+     */
+    function renderBivariateAvailability(message = null) {
+        const eligible = getEligibleBivariateRecords();
+        const canEnter = eligible.length === 2;
+        const guidance = message ?? (
+            bivariateMode.active
+                ? "Bivariate mode is active with two visible WMS rasters."
+                : canEnter
+                    ? "Two visible WMS rasters are ready for bivariate mode."
+                    : "Show exactly two renderable single-band WMS rasters " +
+                      "to enable bivariate mode."
+        );
+        controlsView.setBivariateAvailability?.(canEnter, guidance);
+    }
+
+    /**
+     * Apply coordinated axis ramps, 100% opacity, and ESOS-C compositing.
+     *
+     * @return {void}
+     */
+    function applyBivariatePresentation() {
+        const records = getBivariatePairRecords();
+        if (records === null) return;
+        const presentation = getBivariatePresentation();
+        for (const [record, style] of [
+            [records.xRecord, presentation.xStyle],
+            [records.yRecord, presentation.yStyle],
+        ]) {
+            const layer = mapLayers.getLeafletLayer(record.entry.key);
+            layer.setParams({
+                styles: "dynamic-raster",
+                env: buildRasterStyleEnvironment(style),
+            });
+            layer.setOpacity(1);
+            setRasterLayerAdditiveBlend(layer, false);
+        }
+        const topRecord = mapLayers.retainedRecords.find(
+            (record) => bivariateMode.contains(record.entry.key)
+        );
+        if (topRecord !== undefined) {
+            setRasterLayerAdditiveBlend(
+                mapLayers.getLeafletLayer(topRecord.entry.key),
+                true
+            );
+        }
+        controlsView.renderBivariateMode?.({
+            active: true,
+            ...presentation,
+        });
+        if (bivariateStatistics !== null) {
+            controlsView.renderPairedStatistics?.(
+                bivariateStatistics,
+                presentation
+            );
+        }
+    }
+
+    /**
+     * Restore ordinary retained style, opacity, and normal CSS blending.
+     *
+     * @param {string[]} keys Retained raster keys to restore when available.
+     * @return {void}
+     */
+    function restoreOrdinaryRasterPresentation(keys) {
+        for (const key of keys) {
+            const record = mapLayers.getRecord(key);
+            const layer = mapLayers.getLeafletLayer(key);
+            if (record === null || layer === null) continue;
+            layer.setParams({
+                styles: "dynamic-raster",
+                env: buildRasterStyleEnvironment(record.state.rasterStyle),
+            });
+            layer.setOpacity(record.entry.opacity);
+            setRasterLayerAdditiveBlend(layer, false);
+        }
+    }
+
+    /**
+     * Request paired statistics for the current ordered roles and area.
+     *
+     * @return {void}
+     */
+    function requestBivariateStatistics() {
+        if (!bivariateMode.active) return;
+        const presentation = getBivariatePresentation();
+        bivariateStatistics = null;
+        void pairedStatisticsController.activate(
+            presentation.xItem,
+            presentation.yItem,
+            currentBivariateSamplingArea()
+        );
+    }
+
+    /**
+     * Enter explicit bivariate mode with the two current eligible rasters.
+     *
+     * @return {void}
+     */
+    function enterBivariateMode() {
+        const eligible = getEligibleBivariateRecords();
+        if (eligible.length !== 2) {
+            renderBivariateAvailability(
+                "Bivariate mode requires exactly two visible, available WMS " +
+                "rasters."
+            );
+            controlsView.renderBivariateMode?.({ active: false });
+            return;
+        }
+        if (rasterStyleCommitTimeout !== null) {
+            commitRasterStyle();
+        }
+        saveActiveLayerSession();
+        rasterStatisticsController.clear();
+        pixelProbeController.clear();
+        bivariateMode.enter(eligible.map((record) => record.entry.key));
+        controlsView.setAppearanceEnabled?.(false);
+        controlsView.setUnivariateHistogramVisible?.(false);
+        controlsView.setTemporaryAoiCompatible?.(false);
+        controlsView.setSamplingAreaMode(
+            selectedRasterBounds === null ? "wholeRaster" : "selectedArea"
+        );
+        controlsView.setClearSampleWindowLabel("Use whole overlap");
+        rasterSampleWindowController.enable();
+        applyBivariatePresentation();
+        pairedPixelProbeController.activate({
+            xItem: eligible[0].entry.item,
+            yItem: eligible[1].entry.item,
+        });
+        renderLayerStack();
+        renderBivariateAvailability();
+        showHistogramWorkspace();
+        requestBivariateStatistics();
+    }
+
+    /**
+     * Leave bivariate mode, restoring both retained ordinary presentations.
+     *
+     * @param {string|null} [message=null] Transition-specific guidance.
+     * @param {boolean} [restoreAnalysis=true] Whether to resume single analysis.
+     * @return {void}
+     */
+    function leaveBivariateMode(message = null, restoreAnalysis = true) {
+        if (!bivariateMode.active) {
+            renderBivariateAvailability(message);
+            return;
+        }
+        const keys = [bivariateMode.xKey, bivariateMode.yKey];
+        pairedStatisticsController.clear();
+        pairedPixelProbeController.clear();
+        bivariateStatistics = null;
+        restoreOrdinaryRasterPresentation(keys);
+        bivariateMode.leave();
+        controlsView.renderBivariateMode?.({ active: false });
+        controlsView.clearPairedStatistics?.();
+        controlsView.setAppearanceEnabled?.(true);
+        controlsView.setUnivariateHistogramVisible?.(true);
+        controlsView.setTemporaryAoiCompatible?.(true);
+        renderRasterSamplingAreaControls();
+        if (restoreAnalysis && activeRasterItem !== null) {
+            pixelProbeController.activate(activeRasterItem);
+            restoreActiveLayerStatistics();
+        }
+        renderLayerStack();
+        renderBivariateAvailability(message);
     }
 
     /** Feature-owned adapter consumed by the neutral map-layer controller. */
@@ -825,16 +1129,26 @@ export function initializeRasterViewer(
             if (activeLayerKey === record.entry.key) {
                 saveActiveLayerSession();
             }
-            const definition = buildRasterLegend(record.state.rasterStyle);
+            let presentationStyle = record.state.rasterStyle;
+            const opacityLocked = bivariateMode.contains(record.entry.key);
+            if (opacityLocked) {
+                const presentation = getBivariatePresentation();
+                presentationStyle = record.entry.key === bivariateMode.xKey
+                    ? presentation.xStyle
+                    : presentation.yStyle;
+            }
+            const definition = buildRasterLegend(presentationStyle);
             return {
+                opacityLocked,
+                effectiveOpacity: opacityLocked ? 1 : record.entry.opacity,
                 legend: {
                     kind: "gradient",
                     gradient: definition.gradient,
                     description: definition.description,
                     labels: [
-                        record.state.rasterStyle.minimum,
-                        record.state.rasterStyle.midpoint,
-                        record.state.rasterStyle.maximum,
+                        presentationStyle.minimum,
+                        presentationStyle.midpoint,
+                        presentationStyle.maximum,
                     ],
                 },
             };
@@ -863,6 +1177,12 @@ export function initializeRasterViewer(
             activateRasterSession(record.entry, record.state);
         },
         beforeRemove(record, { wasActive }) {
+            if (bivariateMode.contains(record.entry.key)) {
+                leaveBivariateMode(
+                    `${record.entry.label} was removed; bivariate mode ended.`,
+                    false
+                );
+            }
             if (!wasActive) {
                 return undefined;
             }
@@ -875,18 +1195,45 @@ export function initializeRasterViewer(
             if (wasActive && analysisRasterSession !== null) {
                 activateDetachedSession(analysisRasterSession);
             }
+            renderBivariateAvailability();
         },
         visibilityChanged(record, visible) {
+            if (!visible && bivariateMode.contains(record.entry.key)) {
+                leaveBivariateMode(
+                    `${record.entry.label} was hidden; bivariate mode ended.`
+                );
+            }
             if (activeLayerKey !== record.entry.key) {
+                renderBivariateAvailability();
                 return;
             }
             saveActiveLayerSession();
             controlsView.setActiveLayer(record.entry.label, visible);
             renderRasterSampleWindowGuidance("");
             saveActiveLayerSession();
+            renderBivariateAvailability();
         },
         tileError(record) {
+            if (bivariateMode.contains(record.entry.key)) {
+                leaveBivariateMode(
+                    `${record.entry.label} became unavailable; bivariate ` +
+                    "mode ended."
+                );
+            }
             onTileError(record.error, record.entry.item);
+        },
+        added() {
+            renderBivariateAvailability();
+        },
+        opacityChanged(record) {
+            if (bivariateMode.contains(record.entry.key)) {
+                applyBivariatePresentation();
+            }
+        },
+        orderChanged() {
+            if (bivariateMode.active) {
+                applyBivariatePresentation();
+            }
         },
     };
 
@@ -901,9 +1248,11 @@ export function initializeRasterViewer(
         renderLayerHistogramSummaries();
         if (activeDetachedRasterSession() !== null) {
             mapLayers.deactivatePresentation();
+            renderBivariateAvailability();
             return;
         }
         mapLayers.render(requestedFocus);
+        renderBivariateAvailability();
     }
 
     /**
@@ -1033,6 +1382,20 @@ export function initializeRasterViewer(
         if (selectedTemporaryAoi === null) {
             rasterSampleWindowController.enable();
         }
+        if (bivariateMode.active) {
+            controlsView.setAppearanceEnabled?.(false);
+            controlsView.setUnivariateHistogramVisible?.(false);
+            controlsView.setTemporaryAoiCompatible?.(false);
+            controlsView.setSamplingAreaMode(
+                selectedRasterBounds === null ? "wholeRaster" : "selectedArea"
+            );
+            controlsView.setClearSampleWindowLabel("Use whole overlap");
+            rasterSampleWindowController.enable();
+            applyBivariatePresentation();
+            renderRasterSampleWindowGuidance("");
+            saveActiveLayerSession();
+            return;
+        }
         pixelProbeController.activate(activeRasterItem);
         renderRasterSampleWindowGuidance("");
 
@@ -1104,6 +1467,11 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function activateAnalysis(item) {
+        if (bivariateMode.active) {
+            leaveBivariateMode(
+                "A different raster analysis was selected; bivariate mode ended."
+            );
+        }
         mapLayers.recordIntent();
         const retainedKey = getCatalogItemKey(item);
         const existingSession = matchingAnalysisSession(item);
@@ -1187,6 +1555,11 @@ export function initializeRasterViewer(
             throw new TypeError("Sampled raster recoloring callback is required");
         }
         buildRasterStyleEnvironment(style);
+        if (bivariateMode.active) {
+            leaveBivariateMode(
+                "Detail-only rendering was selected; bivariate mode ended."
+            );
+        }
         mapLayers.recordIntent();
         const analysisSession = matchingAnalysisSession(item);
         deactivateActiveLayer();
@@ -1329,6 +1702,9 @@ export function initializeRasterViewer(
         if (rasterStyleCommitTimeout !== null) {
             clock.clearTimeout(rasterStyleCommitTimeout);
             rasterStyleCommitTimeout = null;
+        }
+        if (bivariateMode.active) {
+            return;
         }
         const candidate = validateRasterStyleControls();
         if (candidate === null) {
@@ -1760,6 +2136,9 @@ export function initializeRasterViewer(
      */
     function restoreWholeRasterStatistics() {
         rasterStatisticsController.clear();
+        if (bivariateMode.active) {
+            pairedStatisticsController.clear();
+        }
         resetPendingRasterStatisticsState();
         selectedRasterBounds = null;
         selectedTemporaryAoi = null;
@@ -1773,6 +2152,11 @@ export function initializeRasterViewer(
         }
         renderRasterSamplingAreaControls();
         renderRasterSampleWindowGuidance("");
+        if (bivariateMode.active) {
+            requestBivariateStatistics();
+            saveActiveLayerSession();
+            return;
+        }
         if (wholeRasterStatisticsState === "ready") {
             renderRasterStatistics(wholeRasterStatistics);
         } else if (wholeRasterStatisticsState === "error") {
@@ -1809,7 +2193,14 @@ export function initializeRasterViewer(
                 `${selectedRasterWindowSizeKm} km window selected: ` +
                 `W ${west.toFixed(3)}, S ${south.toFixed(3)}, ` +
                 `E ${east.toFixed(3)}, N ${north.toFixed(3)}. ` +
-                "Move and click again to replace it.";
+                `Move and click again to replace it.${
+                    bivariateMode.active
+                        ? " The paired distribution uses this shared area."
+                        : ""
+                }`;
+        } else if (bivariateMode.active) {
+            nextStatus = "Whole-overlap paired distribution selected. Move " +
+                "over the map and click to use one shared WGS 84 window.";
         } else if (selectedTemporaryAoi !== null) {
             nextStatus =
                 `Uploaded AOI selected: ${selectedTemporaryAoi.filename}, ` +
@@ -1838,6 +2229,11 @@ export function initializeRasterViewer(
         renderRasterSamplingAreaControls();
         renderRasterSampleWindowGuidance("");
         showHistogramWorkspace();
+        if (bivariateMode.active) {
+            requestBivariateStatistics();
+            saveActiveLayerSession();
+            return;
+        }
         refreshRetainedLayerHistograms(currentRasterSamplingArea());
         void rasterStatisticsController.activate(
             activeRasterItem,
@@ -1907,6 +2303,13 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function useTemporaryAoiForRasterStatistics() {
+        if (bivariateMode.active) {
+            controlsView.setSampleWindowStatus(
+                "Uploaded AOI sampling is unavailable in bivariate mode; " +
+                "select a shared map window instead."
+            );
+            return;
+        }
         if (
             availableTemporaryAoi === null ||
             activeRasterItem === null
@@ -2034,6 +2437,71 @@ export function initializeRasterViewer(
     }
 
     /**
+     * Format one axis-scoped paired pixel outcome without hiding its peer.
+     *
+     * @param {string} label Raster label assigned to the axis.
+     * @param {Object} outcome Axis-scoped available pixel or failure.
+     * @return {string} Readable axis sample outcome.
+     */
+    function formatBivariatePixelOutcome(label, outcome) {
+        if (!outcome.available) {
+            return `${label}: unavailable (${outcome.error})`;
+        }
+        const pixel = outcome.pixel;
+        if (!pixel.inBounds) return `${label}: outside raster`;
+        return `${label}: ${pixel.value === null
+            ? "no data"
+            : formatRasterPixelValue(pixel.value)}`;
+    }
+
+    /**
+     * Display two independent current pixel outcomes and mark their paired bin.
+     *
+     * @param {{x:Object,y:Object}} outcomes Axis-scoped sampling outcomes.
+     * @param {{longitude:number,latitude:number}} point Sampled WGS 84 point.
+     * @return {void}
+     */
+    function renderBivariatePixels(outcomes, point) {
+        if (!bivariateMode.active) return;
+        const presentation = getBivariatePresentation();
+        controlsView.setPixelProbeContent(
+            "Bivariate pair",
+            `Lon ${point.longitude.toFixed(5)} · ` +
+            `Lat ${point.latitude.toFixed(5)}\n` +
+            `${formatBivariatePixelOutcome(presentation.xLabel, outcomes.x)}\n` +
+            formatBivariatePixelOutcome(presentation.yLabel, outcomes.y)
+        );
+        const xValue = outcomes.x.available && outcomes.x.pixel.inBounds
+            ? outcomes.x.pixel.value
+            : null;
+        const yValue = outcomes.y.available && outcomes.y.pixel.inBounds
+            ? outcomes.y.pixel.value
+            : null;
+        if (Number.isFinite(xValue) && Number.isFinite(yValue)) {
+            controlsView.highlightPairedStatistics?.(xValue, yValue);
+        }
+        showRasterPixelProbe();
+    }
+
+    /**
+     * Present an unexpected total dual-probe failure without ending the mode.
+     *
+     * @param {Error} error Unexpected paired request failure.
+     * @param {{longitude:number,latitude:number}} point Sampled WGS 84 point.
+     * @return {void}
+     */
+    function renderBivariatePixelError(error, point) {
+        if (!bivariateMode.active) return;
+        controlsView.setPixelProbeContent(
+            "Bivariate pair",
+            `Lon ${point.longitude.toFixed(5)} · ` +
+            `Lat ${point.latitude.toFixed(5)}\n` +
+            `Paired pixels unavailable: ${error.message}`
+        );
+        showRasterPixelProbe();
+    }
+
+    /**
      * Mark a manual style input and schedule its WMS commit.
      *
      * @param {boolean} isColor Whether a color input changed.
@@ -2115,6 +2583,64 @@ export function initializeRasterViewer(
                 `histogram.${scopeNote}`
             );
         }
+    }
+
+    /**
+     * Switch explicitly between ordinary overlay and bivariate modes.
+     *
+     * @param {string} mode Explicit mode identity.
+     * @return {void}
+     */
+    function handleBivariateModeChange(mode) {
+        if (mode === "bivariate") {
+            enterBivariateMode();
+            return;
+        }
+        if (mode === "overlay") {
+            leaveBivariateMode();
+            return;
+        }
+        throw new Error(`Unknown raster comparison mode: ${mode}`);
+    }
+
+    /**
+     * Apply one of the eight shared ESOS-C coordinated palettes.
+     *
+     * @param {string} paletteName Registered bivariate palette identity.
+     * @return {void}
+     */
+    function handleBivariatePaletteChange(paletteName) {
+        if (!bivariateMode.active) return;
+        bivariateMode.setPalette(paletteName);
+        applyBivariatePresentation();
+        renderLayerStack();
+    }
+
+    /**
+     * Swap X/Y roles, including reference-grid statistics and dual probing.
+     *
+     * @return {void}
+     */
+    function handleBivariateSwapAxes() {
+        if (!bivariateMode.active) return;
+        pairedStatisticsController.clear();
+        pairedPixelProbeController.clear();
+        bivariateStatistics = null;
+        bivariateMode.swap();
+        applyBivariatePresentation();
+        const presentation = getBivariatePresentation();
+        pairedPixelProbeController.activate({
+            xItem: presentation.xItem,
+            yItem: presentation.yItem,
+        });
+        renderLayerStack();
+        requestBivariateStatistics();
+    }
+
+    /** Retry the exact current ordered pair and bounded area. @return {void} */
+    function handleRetryPairedStatistics() {
+        if (!bivariateMode.active) return;
+        void pairedStatisticsController.retry();
     }
 
     /**
@@ -2229,19 +2755,35 @@ export function initializeRasterViewer(
             latitude: mapEvent.latlng.lat,
         };
         if (!isCanonicalWgs84Position(point)) {
-            pixelProbeController.cancel();
+            if (bivariateMode.active) {
+                pairedPixelProbeController.cancel();
+            } else {
+                pixelProbeController.cancel();
+            }
             pixelProbeClientPosition = null;
             controlsView.hidePixelProbe();
             return;
         }
         if (!controlsView.isPixelProbeVisible()) {
-            setRasterPixelProbeContent(
-                `Lon ${point.longitude.toFixed(5)} · ` +
-                `Lat ${point.latitude.toFixed(5)}\nPixel: Reading…`
-            );
+            if (bivariateMode.active) {
+                controlsView.setPixelProbeContent(
+                    "Bivariate pair",
+                    `Lon ${point.longitude.toFixed(5)} · ` +
+                    `Lat ${point.latitude.toFixed(5)}\nPixels: Reading…`
+                );
+            } else {
+                setRasterPixelProbeContent(
+                    `Lon ${point.longitude.toFixed(5)} · ` +
+                    `Lat ${point.latitude.toFixed(5)}\nPixel: Reading…`
+                );
+            }
             showRasterPixelProbe();
         }
-        pixelProbeController.move(point);
+        if (bivariateMode.active) {
+            pairedPixelProbeController.move(point);
+        } else {
+            pixelProbeController.move(point);
+        }
     }
 
     /**
@@ -2251,6 +2793,7 @@ export function initializeRasterViewer(
      */
     function handleMapMouseLeave() {
         pixelProbeController.cancel();
+        pairedPixelProbeController.cancel();
         pixelProbeClientPosition = null;
         controlsView.hidePixelProbe();
     }
@@ -2276,13 +2819,16 @@ export function initializeRasterViewer(
             clock.clearTimeout(rasterStyleCommitTimeout);
             rasterStyleCommitTimeout = null;
         }
+        leaveBivariateMode(null, false);
         deactivateActiveLayer();
         mapLayers.deactivatePresentation();
         sampledRasterSession = null;
         analysisRasterSession = null;
         mapLayers.removeOwned(rasterMapLayerAdapter);
         pixelProbeController.clear();
+        pairedPixelProbeController.clear();
         rasterStatisticsController.clear();
+        pairedStatisticsController.clear();
         rasterSampleWindowController.clear();
         activeRasterItem = null;
         activeLayerKey = null;
@@ -2299,11 +2845,17 @@ export function initializeRasterViewer(
         selectedRasterStatistics = null;
         selectedRasterStatisticsState = "idle";
         selectedRasterStatisticsError = null;
+        bivariateStatistics = null;
         pixelProbeClientPosition = null;
         rasterPixelProbeLabel = "";
         controlsView.setControlsVisible(false);
         controlsView.renderLayerHistograms([], null);
         controlsView.hidePixelProbe();
+        controlsView.renderBivariateMode?.({ active: false });
+        controlsView.setAppearanceEnabled?.(true);
+        controlsView.setUnivariateHistogramVisible?.(true);
+        controlsView.setTemporaryAoiCompatible?.(true);
+        renderBivariateAvailability();
     }
 
     /**
@@ -2420,6 +2972,11 @@ export function initializeRasterViewer(
             }
         }
         controlsView.setTemporaryAoiAvailability(availableTemporaryAoi);
+        if (bivariateMode.active) {
+            renderRasterSamplingAreaControls();
+            renderRasterSampleWindowGuidance("");
+            return;
+        }
         if (activeLayerKey === null) {
             return;
         }
@@ -2490,6 +3047,10 @@ export function initializeRasterViewer(
         onSelectSampleWindow: enableRasterSampleWindowSelection,
         onClearSampleWindow: handleClearSampleWindow,
         onUseTemporaryAoi: useTemporaryAoiForRasterStatistics,
+        onBivariateModeChange: handleBivariateModeChange,
+        onBivariatePaletteChange: handleBivariatePaletteChange,
+        onBivariateSwapAxes: handleBivariateSwapAxes,
+        onRetryPairedStatistics: handleRetryPairedStatistics,
     });
     const mapContainer = leafletMap.getContainer();
     mapContainer.addEventListener("pointermove", handleMapPointerMove);
@@ -2498,6 +3059,8 @@ export function initializeRasterViewer(
 
     resetRasterSampleWindow();
     resetRasterStyle();
+    controlsView.renderBivariateMode?.({ active: false });
+    renderBivariateAvailability();
     return {
         clear,
         reset,

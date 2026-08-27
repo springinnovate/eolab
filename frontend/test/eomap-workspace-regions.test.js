@@ -220,6 +220,9 @@ test("Map layers owns layer presentation, appearance, cutoffs, and limitations",
         "raster-layer-stack-status",
         "raster-appearance-controls",
         "raster-percentile-controls",
+        "raster-bivariate-controls",
+        "raster-comparison-mode",
+        "raster-bivariate-legend",
         "raster-palette",
         "raster-detail-preview-controls",
         "catalog-layer-status",
@@ -254,6 +257,7 @@ test("Map layers owns layer presentation, appearance, cutoffs, and limitations",
     );
     for (const analysisControl of [
         "raster-style-controls",
+        "raster-bivariate-statistics",
         "raster-histogram-list",
         "raster-histogram",
         "temporary-aoi",
@@ -292,6 +296,9 @@ test("Histograms own shared sampling, per-layer histograms, AOI, and pixel guida
     const sampling = requireElementRange("raster-sampling-area-controls");
     const histogramList = requireElementRange("raster-histogram-list");
     const histogram = requireElementRange("raster-histogram");
+    const pairedHistogram = requireElementRange(
+        "raster-bivariate-statistics"
+    );
     const temporaryAoi = requireElementRange("temporary-aoi");
 
     assert.match(composite.source, /<legend>Sample area<\/legend>/);
@@ -316,6 +323,15 @@ test("Histograms own shared sampling, per-layer histograms, AOI, and pixel guida
     assert.match(histogram.source, /id="raster-histogram-detail-layer"/);
     assert.match(histogram.source, /id="raster-histogram-status"/);
     assert.match(histogram.source, /id="raster-histogram-chart"/);
+    assert.match(
+        pairedHistogram.source,
+        /<h3 id="raster-bivariate-statistics-heading">Paired distribution<\/h3>/
+    );
+    assert.match(pairedHistogram.source, /id="raster-bivariate-histogram"/);
+    assert.match(
+        pairedHistogram.source,
+        /data-eomap-region="raster-interpretation"/
+    );
     assert.match(analysisRegion.source, /id="pixel-probe-guidance-heading"/);
     assert.match(
         analysisRegion.source,
@@ -327,6 +343,7 @@ test("Histograms own shared sampling, per-layer histograms, AOI, and pixel guida
         "raster-layer-stack",
         "raster-appearance-controls",
         "raster-percentile-controls",
+        "raster-bivariate-controls",
         "raster-detail-preview-controls",
     ]) {
         assert.doesNotMatch(

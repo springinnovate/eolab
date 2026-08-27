@@ -293,6 +293,20 @@ export class RasterAppearanceControlsView {
     }
 
     /**
+     * Set whether ordinary single-raster appearance editing is available.
+     *
+     * @param {boolean} isEnabled Whether ordinary appearance inputs may edit.
+     * @return {void}
+     */
+    setEnabled(isEnabled) {
+        for (const input of Object.values(this.styleInputs)) {
+            input.disabled = !isEnabled;
+        }
+        this.palette.disabled = !isEnabled;
+        this.resetStyleButton.disabled = !isEnabled;
+    }
+
+    /**
      * Forward one style-input event to the raster viewer.
      *
      * @param {Event} event Style input event.

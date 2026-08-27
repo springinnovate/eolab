@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { RasterStatisticsController } from "../../src/raster/statistics-controller.js";
+import {
+  RasterPairedStatisticsController,
+  RasterStatisticsController,
+} from "../../src/raster/statistics-controller.js";
 import {
   MOUNTED_GEOTIFF_ITEM,
   RASTER_STATISTICS,
@@ -165,4 +168,44 @@ test("RasterStatisticsController aborts and ignores a replaced AOI lifecycle", a
     ...TEMPORARY_AOI_RASTER_STATISTICS,
     temporaryAoiId: replacementId,
   }]);
+});
+
+test("RasterPairedStatisticsController invalidates swapped reference roles", async () => {
+  const xItem = { collection: "rasters", id: "x" };
+  const yItem = { collection: "rasters", id: "y" };
+  const requests = [];
+  const results = [];
+  const controller = new RasterPairedStatisticsController(
+    (x, y, area, signal) => new Promise((resolve) => {
+      requests.push({ x, y, area, signal, resolve });
+    }),
+    () => {},
+    (statistics, x, y) => results.push({ statistics, x, y }),
+    () => assert.fail("Unexpected paired statistics error"),
+  );
+
+  const first = controller.activate(
+    xItem,
+    yItem,
+    { kind: "wholeOverlap" },
+  );
+  const swapped = controller.activate(
+    yItem,
+    xItem,
+    { kind: "wholeOverlap" },
+  );
+  assert.equal(requests[0].signal.aborted, true);
+  requests[0].resolve({ revision: "obsolete" });
+  requests[1].resolve({ revision: "current" });
+  await Promise.all([first, swapped]);
+
+  assert.deepEqual(results, [{
+    statistics: { revision: "current" },
+    x: yItem,
+    y: xItem,
+  }]);
+  assert.deepEqual(requests.map(({ x, y }) => [x.id, y.id]), [
+    ["x", "y"],
+    ["y", "x"],
+  ]);
 });

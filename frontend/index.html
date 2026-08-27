@@ -482,6 +482,74 @@
                       </div>
                     </section>
 
+                    <section
+                      class="raster-bivariate-controls"
+                      id="raster-bivariate-controls"
+                      data-eomap-region="map-layers"
+                      aria-labelledby="raster-bivariate-heading"
+                    >
+                      <div class="raster-bivariate-heading">
+                        <div>
+                          <h3 id="raster-bivariate-heading">Compare raster layers</h3>
+                        </div>
+                      </div>
+                      <label for="raster-comparison-mode">
+                        <span>Comparison mode</span>
+                        <select
+                          id="raster-comparison-mode"
+                          aria-describedby="raster-bivariate-status"
+                        >
+                          <option value="overlay">Overlay</option>
+                          <option value="bivariate">Bivariate</option>
+                        </select>
+                      </label>
+                      <p
+                        class="raster-bivariate-status"
+                        id="raster-bivariate-status"
+                        role="status"
+                        aria-live="polite"
+                        aria-atomic="true"
+                      ></p>
+                      <div id="raster-bivariate-panel" hidden>
+                        <div class="raster-bivariate-roles">
+                          <span id="raster-bivariate-x-label"></span>
+                          <span id="raster-bivariate-y-label"></span>
+                          <button
+                            class="secondary-button"
+                            id="swap-raster-bivariate-axes"
+                            type="button"
+                          >
+                            Swap X/Y
+                          </button>
+                        </div>
+                        <label for="raster-bivariate-palette">
+                          <span>Coordinated palette</span>
+                          <select id="raster-bivariate-palette"></select>
+                        </label>
+                        <figure class="raster-bivariate-legend-figure">
+                          <svg
+                            class="raster-bivariate-legend"
+                            id="raster-bivariate-legend"
+                            viewBox="0 0 100 100"
+                            role="img"
+                          ></svg>
+                          <figcaption>
+                            <span id="raster-bivariate-legend-x-range"></span>
+                            <span id="raster-bivariate-legend-y-range"></span>
+                          </figcaption>
+                        </figure>
+                        <p class="raster-bivariate-explanation">
+                          Both rasters render at 100% opacity using additive
+                          <code>plus-lighter</code> compositing. Clipped RGB
+                          channels mean displayed colors are not one-to-one value
+                          identifiers; use the dual probe for exact samples.
+                        </p>
+                        <p class="raster-bivariate-histogram-guidance">
+                          Open Histograms to inspect the paired distribution.
+                        </p>
+                      </div>
+                    </section>
+
                       <section
                         class="raster-appearance-controls"
                         id="raster-appearance-controls"
@@ -750,6 +818,54 @@
                       role="group"
                       aria-label="Raster histograms"
                     ></div>
+                  </section>
+
+                  <section
+                    class="raster-bivariate-statistics"
+                    id="raster-bivariate-statistics"
+                    data-eomap-region="raster-interpretation"
+                    aria-labelledby="raster-bivariate-statistics-heading"
+                    hidden
+                  >
+                    <div class="raster-histogram-heading">
+                      <div>
+                        <h3 id="raster-bivariate-statistics-heading">Paired distribution</h3>
+                      </div>
+                      <button
+                        class="secondary-button"
+                        id="retry-raster-paired-statistics"
+                        type="button"
+                        hidden
+                      >
+                        Retry
+                      </button>
+                    </div>
+                    <p
+                      class="raster-histogram-status"
+                      id="raster-bivariate-statistics-status"
+                      role="status"
+                      aria-live="polite"
+                      aria-atomic="true"
+                    ></p>
+                    <p class="raster-bivariate-density-legend">
+                      Histogram hue starts from the paired map color. As in
+                      ESOS-C, cell size, saturation, and lightness emphasize
+                      log-weighted density; the marginals retain their axis
+                      ramp colors.
+                    </p>
+                    <svg
+                      class="raster-bivariate-histogram"
+                      id="raster-bivariate-histogram"
+                      viewBox="0 0 620 570"
+                      preserveAspectRatio="xMinYMin meet"
+                      role="img"
+                      hidden
+                    ></svg>
+                    <output
+                      class="raster-bivariate-histogram-summary"
+                      id="raster-bivariate-histogram-summary"
+                      aria-live="polite"
+                    ></output>
                   </section>
 
                   <section

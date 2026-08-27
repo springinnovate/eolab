@@ -365,6 +365,24 @@ test("MapLayerStackView renders semantic, accessible independent rows", () => {
   assert.equal(elementsByClass(moistureRow, "raster-layer-error")[0].hidden, false);
 });
 
+test("bivariate snapshots lock opacity at 100 percent", () => {
+  const documentContext = new FakeLayerStackDocument();
+  const view = new MapLayerStackView(documentContext);
+  view.render([
+    {
+      ...LAYERS[0],
+      opacityLocked: true,
+      effectiveOpacity: 1,
+    },
+  ], LAYERS[0].key);
+
+  const row = documentContext.querySelector("#raster-layer-list").children[0];
+  const opacity = actionControl(row, "opacity");
+  assert.equal(opacity.value, "100");
+  assert.equal(opacity.disabled, true);
+  assert.match(opacity.getAttribute("aria-label"), /locked for bivariate mode/);
+});
+
 test("MapLayerStackView renders a neutral fixed-swatch legend", () => {
   const documentContext = new FakeLayerStackDocument();
   const view = new MapLayerStackView(documentContext);

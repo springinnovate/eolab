@@ -77,6 +77,8 @@ function createAdapter(owner, publish = async (item) => ({ id: item.id })) {
         activate: (record) => events.push(["activate", record.entry.key]),
         visibilityChanged: (record, visible) =>
             events.push(["visibility", record.entry.key, visible]),
+        orderChanged: (record) =>
+            events.push(["order", record.entry.key]),
         tileErrorMessage: `${owner} tiles unavailable`,
     };
 }
@@ -115,6 +117,10 @@ test("controller owns cross-adapter visibility, ordering, and removal", async ()
     view.handlers.onMove(getCatalogItemKey(first), "up");
 
     assert.equal(controller.getLeafletLayer(getCatalogItemKey(third)).opacity, 0.35);
+    assert.deepEqual(firstOwner.events.at(-1), [
+        "order",
+        getCatalogItemKey(first),
+    ]);
     assert.deepEqual(
         controller.snapshots().map(({ item }) => item.id),
         ["three", "one", "two"],

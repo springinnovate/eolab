@@ -6,6 +6,7 @@
  * injected; histogram math and DOM rendering are out of scope.
  */
 import { normalizeRasterSamplingArea } from "./statistics.js";
+import { normalizeRasterPairedSamplingArea } from "./paired-statistics.js";
 
 /**
  * Load statistics for one raster scope.
@@ -143,6 +144,119 @@ export class RasterStatisticsController {
         this.abortController?.abort();
         this.abortController = null;
         this.item = null;
+        this.samplingArea = null;
+    }
+}
+
+/** Manage one ordered-pair lifecycle and ignore every stale pair response. */
+export class RasterPairedStatisticsController {
+    /**
+     * Create a paired statistics request lifecycle controller.
+     *
+     * @param {(xItem:Object,yItem:Object,area:Object,signal:AbortSignal)
+     * =>Promise<Object>} loadStatistics Loads one ordered pair and scope.
+     * @param {(xItem:Object,yItem:Object,area:Object,context:*)=>void} onLoading
+     * Receives request start.
+     * @param {(statistics:Object,xItem:Object,yItem:Object,area:Object,
+     * context:*)=>void} onResult Receives current results.
+     * @param {(error:Error,xItem:Object,yItem:Object,area:Object,context:*)
+     * =>void} onError Receives current failures.
+     */
+    constructor(loadStatistics, onLoading, onResult, onError) {
+        this.loadStatistics = loadStatistics;
+        this.onLoading = onLoading;
+        this.onResult = onResult;
+        this.onError = onError;
+        this.xItem = null;
+        this.yItem = null;
+        this.samplingArea = null;
+        this.abortController = null;
+        this.requestSequence = 0;
+    }
+
+    /**
+     * Start a request scoped to both identities and one normalized area.
+     *
+     * @param {Object} xItem Catalog Item assigned to X.
+     * @param {Object} yItem Catalog Item assigned to Y.
+     * @param {Object} samplingArea Whole overlap or selected bounds.
+     * @param {*} [context] Opaque request context returned to callbacks.
+     * @return {Promise<Object|null>} Current result or null after failure/stale.
+     */
+    async activate(xItem, yItem, samplingArea, context = undefined) {
+        const normalizedArea = normalizeRasterPairedSamplingArea(samplingArea);
+        this.clear();
+        this.xItem = xItem;
+        this.yItem = yItem;
+        this.samplingArea = normalizedArea;
+        const requestSequence = ++this.requestSequence;
+        const abortController = new AbortController();
+        this.abortController = abortController;
+        this.onLoading(xItem, yItem, normalizedArea, context);
+        let statistics;
+        try {
+            statistics = await this.loadStatistics(
+                xItem,
+                yItem,
+                normalizedArea,
+                abortController.signal
+            );
+        } catch (error) {
+            if (
+                error.name !== "AbortError" &&
+                requestSequence === this.requestSequence
+            ) {
+                this.onError(
+                    error,
+                    xItem,
+                    yItem,
+                    normalizedArea,
+                    context
+                );
+            }
+            return null;
+        } finally {
+            if (this.abortController === abortController) {
+                this.abortController = null;
+            }
+        }
+        if (requestSequence !== this.requestSequence) {
+            return null;
+        }
+        this.onResult(
+            statistics,
+            xItem,
+            yItem,
+            normalizedArea,
+            context
+        );
+        return statistics;
+    }
+
+    /**
+     * Repeat the current ordered pair after a recoverable failure.
+     *
+     * @param {*} [context] Opaque request context returned to callbacks.
+     * @return {Promise<Object|null>} Retried result or null without a pair.
+     */
+    retry(context = undefined) {
+        return this.xItem === null || this.yItem === null
+            ? Promise.resolve(null)
+            : this.activate(
+                this.xItem,
+                this.yItem,
+                this.samplingArea,
+                context
+            );
+    }
+
+    /** Abort pending work and forget both identities and their area. @return {void} */
+    clear() {
+        this.requestSequence += 1;
+        this.abortController?.abort();
+        this.abortController = null;
+        this.xItem = null;
+        this.yItem = null;
         this.samplingArea = null;
     }
 }

@@ -7,6 +7,7 @@ import {
     ensureRasterSampleWindowPane,
     RASTER_SAMPLE_WINDOW_PANE,
     rasterSampleBoundsToLeaflet,
+    setRasterLayerAdditiveBlend,
 } from "../../src/raster/leaflet.js";
 import { SELECTED_BOUNDS } from "../../test-support/raster/fixtures.js";
 
@@ -125,4 +126,18 @@ test("Leaflet adapters own WMS and sample-window presentation options", () => {
       interactive: false,
     },
   });
+});
+
+test("raster WMS blending uses the ESOS-C plus-lighter mode", () => {
+  const container = { style: {} };
+  const layer = { getContainer: () => container };
+
+  setRasterLayerAdditiveBlend(layer, true);
+  assert.equal(container.style.mixBlendMode, "plus-lighter");
+  setRasterLayerAdditiveBlend(layer, false);
+  assert.equal(container.style.mixBlendMode, "normal");
+  assert.throws(
+    () => setRasterLayerAdditiveBlend({}, true),
+    /container is unavailable/,
+  );
 });

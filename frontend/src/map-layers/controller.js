@@ -30,6 +30,8 @@ import { MapLayerStackView } from "./layer-stack-view.js";
  * @property {(record:Object,boolean)=>void} [visibilityChanged] Observe
  * visibility after the neutral transition.
  * @property {(record:Object,number)=>void} [opacityChanged] Observe opacity.
+ * @property {(record:Object)=>void} [orderChanged] Observe completed stack
+ * movement when feature-owned presentation depends on drawing order.
  * @property {(record:Object)=>void} [added] Observe successful layer creation.
  * @property {(record:Object)=>void} [tileError] Observe an owned tile failure.
  * @property {string} tileErrorMessage Browser-safe tile failure message.
@@ -262,6 +264,7 @@ export class MapLayerController {
         }
         this.#applyLeafletOrder();
         const record = this.#requireRecord(key);
+        record.adapter.orderChanged?.(record);
         this.view.setStatus(
             `${record.entry.label} moved ${direction} in the map drawing order.`
         );

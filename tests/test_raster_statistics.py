@@ -20,6 +20,7 @@ from eolab_app.rendering.errors import PublishedLayerChangedError
 from eolab_app.raster.models import (
     AuthorizedRaster,
     CatalogPixelRequest,
+    CatalogRasterPairRequest,
     CatalogRasterRequest,
     CatalogRasterStatisticsRequest,
     RasterHistogram,
@@ -29,6 +30,7 @@ from eolab_app.raster.models import (
     RasterValueRange,
     Wgs84Bounds,
 )
+from eolab_app.raster.paired_statistics import read_raster_paired_statistics
 from eolab_app.raster.pixel import read_raster_pixel
 from eolab_app.raster.pixel_service import RasterPixelService
 from eolab_app.raster.sources import PublishedRasterRegistry, source_signature
@@ -449,6 +451,151 @@ def _write_raster(
         transform=transform,
     ) as dataset:
         dataset.write(values, 1)
+
+
+def test_paired_statistics_use_x_reference_grid_and_filter_pairwise_nodata(
+    tmp_path: Path,
+) -> None:
+    """Align Y to X with nearest neighbor and retain only jointly valid cells.
+
+    Args:
+        tmp_path: Temporary directory for two controlled GeoTIFF sources.
+    """
+    x_path = tmp_path / "x.tif"
+    y_path = tmp_path / "y.tif"
+    _write_raster(
+        x_path,
+        numpy.arange(16, dtype=numpy.float32).reshape(4, 4),
+        transform=from_origin(0, 4, 1, 1),
+    )
+    _write_raster(
+        y_path,
+        numpy.array([[10, 20], [30, -999]], dtype=numpy.float32),
+        transform=from_origin(0, 4, 2, 2),
+        nodata=-999,
+    )
+
+    statistics = read_raster_paired_statistics(x_path, y_path, None)
+
+    assert statistics.reference_grid == "x"
+    assert statistics.resampling == "nearest"
+    assert statistics.sampling_method == "sampleGrid"
+    assert statistics.approximate is True
+    assert (statistics.source_width, statistics.source_height) == (4, 4)
+    assert (statistics.sample_width, statistics.sample_height) == (3, 3)
+    assert statistics.sampled_cell_count == 9
+    assert statistics.paired_sample_count == 8
+    assert sum(statistics.histogram.x_marginal_counts) == 8
+    assert sum(statistics.histogram.y_marginal_counts) == 8
+    assert sum(map(sum, statistics.histogram.counts)) == 8
+
+
+def test_paired_statistics_bounds_nonoverlap_and_xy_swap_are_explicit(
+    tmp_path: Path,
+) -> None:
+    """Echo selected bounds, reject misses, and expose X-grid asymmetry.
+
+    Args:
+        tmp_path: Temporary directory for controlled source grids.
+    """
+    fine_path = tmp_path / "fine-x.tif"
+    coarse_path = tmp_path / "coarse-y.tif"
+    outside_path = tmp_path / "outside.tif"
+    _write_raster(
+        fine_path,
+        numpy.arange(25, dtype=numpy.float32).reshape(5, 5),
+        transform=from_origin(0, 5, 1, 1),
+    )
+    _write_raster(
+        coarse_path,
+        numpy.arange(9, dtype=numpy.float32).reshape(3, 3),
+        transform=from_origin(0, 5, 5 / 3, 5 / 3),
+    )
+    _write_raster(
+        outside_path,
+        numpy.ones((3, 3), dtype=numpy.float32),
+        transform=from_origin(20, 25, 1, 1),
+    )
+    bounds = (1.0, 1.0, 4.0, 4.0)
+
+    selected = read_raster_paired_statistics(
+        fine_path,
+        coarse_path,
+        bounds,
+    )
+    fine_reference = read_raster_paired_statistics(
+        fine_path,
+        coarse_path,
+        None,
+    )
+    coarse_reference = read_raster_paired_statistics(
+        coarse_path,
+        fine_path,
+        None,
+    )
+
+    assert selected.scope == "selectedArea"
+    assert selected.selected_bounds is not None
+    assert selected.selected_bounds.canonical_tuple() == bounds
+    assert fine_reference.sampled_cell_count == 25
+    assert coarse_reference.sampled_cell_count == 9
+    with pytest.raises(NoRasterBoundsOverlapError):
+        read_raster_paired_statistics(fine_path, outside_path, None)
+
+
+def test_paired_statistics_bound_large_grids_and_reject_empty_pairs(
+    tmp_path: Path,
+) -> None:
+    """Cap the X reference grid and require at least one jointly valid cell.
+
+    Args:
+        tmp_path: Temporary directory for bounded and nodata GeoTIFF sources.
+    """
+    x_path = tmp_path / "large-x.tif"
+    y_path = tmp_path / "large-y.tif"
+    empty_path = tmp_path / "empty-y.tif"
+    shape = (129, 129)
+    transform = from_origin(0, 64.5, 0.5, 0.5)
+    values = numpy.arange(129 * 129, dtype=numpy.float32).reshape(shape)
+    _write_raster(x_path, values, transform=transform)
+    _write_raster(y_path, values + 10, transform=transform)
+    _write_raster(
+        empty_path,
+        numpy.full(shape, -999, dtype=numpy.float32),
+        transform=transform,
+        nodata=-999,
+    )
+
+    statistics = read_raster_paired_statistics(x_path, y_path, None)
+
+    assert (statistics.sample_width, statistics.sample_height) == (127, 127)
+    assert statistics.sampled_cell_count == 127 * 127
+    assert statistics.paired_sample_count == 127 * 127
+    assert statistics.approximate is True
+    with pytest.raises(NoValidRasterSamplesError):
+        read_raster_paired_statistics(x_path, empty_path, None)
+
+
+def test_paired_request_forbids_paths_and_duplicate_identities() -> None:
+    """Keep the public paired contract limited to two catalog identities."""
+    identity = {
+        "collectionId": "eolab-mounted-geotiffs",
+        "itemId": ITEM_ID,
+    }
+    with pytest.raises(ValidationError):
+        CatalogRasterPairRequest.model_validate({
+            "xRaster": identity,
+            "yRaster": identity,
+        })
+    with pytest.raises(ValidationError):
+        CatalogRasterPairRequest.model_validate({
+            "xRaster": identity,
+            "yRaster": {
+                **identity,
+                "itemId": "geotiff-abcdef0123456789abcdef01",
+                "path": "file:///untrusted.tif",
+            },
+        })
 
 
 def test_pixel_reader_requests_only_band_one_and_its_source_cell(

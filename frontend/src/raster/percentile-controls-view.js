@@ -68,6 +68,7 @@ export class RasterPercentileControlsView {
         );
         this.renderingIsAvailable = true;
         this.statisticsAreAvailable = !this.percentileControls.hidden;
+        this.modeIsCompatible = true;
         this.handlers = null;
         this.boundPercentileInput = this.#handlePercentileInput.bind(this);
         this.boundApplyPercentiles = this.#handleApplyPercentiles.bind(this);
@@ -186,6 +187,17 @@ export class RasterPercentileControlsView {
     }
 
     /**
+     * Set whether the active comparison mode accepts univariate percentiles.
+     *
+     * @param {boolean} isCompatible Whether percentile editing is compatible.
+     * @return {void}
+     */
+    setModeCompatible(isCompatible) {
+        this.modeIsCompatible = isCompatible;
+        this.#synchronizeVisibility();
+    }
+
+    /**
      * Set whether the current percentile range can be applied.
      *
      * @param {boolean} isEnabled Whether the apply action should be enabled.
@@ -208,7 +220,9 @@ export class RasterPercentileControlsView {
     /** Apply independent statistics and rendering availability. @return {void} */
     #synchronizeVisibility() {
         this.percentileControls.hidden = !(
-            this.renderingIsAvailable && this.statisticsAreAvailable
+            this.renderingIsAvailable &&
+            this.statisticsAreAvailable &&
+            this.modeIsCompatible
         );
     }
 }

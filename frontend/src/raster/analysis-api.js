@@ -4,6 +4,10 @@ import {
     normalizeRasterSamplingArea,
     validateRasterStatisticsForSelection,
 } from "./statistics.js";
+import {
+    normalizeRasterPairedSamplingArea,
+    validateRasterPairedStatisticsForSelection,
+} from "./paired-statistics.js";
 
 /**
  * Represent one browser-safe raster-analysis failure.
@@ -144,4 +148,115 @@ export async function loadCatalogRasterStatistics(
         await response.json(),
         normalizedArea
     );
+}
+
+/**
+ * Load bounded paired statistics for two ordered catalog rasters.
+ *
+ * @param {Object} xItem Catalog Item assigned to the X reference grid.
+ * @param {Object} yItem Distinct Catalog Item aligned to X.
+ * @param {Object} samplingArea Whole overlap or selected WGS 84 bounds.
+ * @param {AbortSignal} signal Cancellation signal for stale pair intent.
+ * @param {typeof globalThis.fetch} [fetchImplementation=globalThis.fetch]
+ * Browser fetch implementation.
+ * @return {Promise<Object>} Validated 2D histogram and marginals.
+ * @throws {Error} If request or response violates the paired contract.
+ */
+export async function loadCatalogRasterPairedStatistics(
+    xItem,
+    yItem,
+    samplingArea,
+    signal,
+    fetchImplementation = globalThis.fetch
+) {
+    const normalizedArea = normalizeRasterPairedSamplingArea(samplingArea);
+    const requestDocument = {
+        xRaster: {
+            collectionId: xItem.collection,
+            itemId: xItem.id,
+        },
+        yRaster: {
+            collectionId: yItem.collection,
+            itemId: yItem.id,
+        },
+    };
+    if (normalizedArea.kind === "selectedArea") {
+        requestDocument.selectedBounds = normalizedArea.selectedBounds;
+    }
+    const response = await fetchImplementation.call(
+        globalThis,
+        "/api/raster-analysis/paired-statistics",
+        {
+            method: "POST",
+            headers: {
+                Accept: "application/json",
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify(requestDocument),
+            signal,
+        }
+    );
+    if (!response.ok) {
+        throw await analysisRequestError(
+            response,
+            "Paired raster statistics request"
+        );
+    }
+    return validateRasterPairedStatisticsForSelection(
+        await response.json(),
+        normalizedArea
+    );
+}
+
+/**
+ * Sample both axis rasters through the existing independent pixel contract.
+ *
+ * Partial failure remains axis-scoped so one usable value is still reported.
+ * A shared abort remains cancellation rather than a visible dual failure.
+ *
+ * @param {{xItem:Object,yItem:Object}} pair Ordered Catalog Items.
+ * @param {{longitude:number,latitude:number}} position WGS 84 position.
+ * @param {AbortSignal} signal Cancellation signal for stale hover intent.
+ * @param {typeof globalThis.fetch} [fetchImplementation=globalThis.fetch]
+ * Browser fetch implementation.
+ * @return {Promise<{x:Object,y:Object}>} Axis-scoped pixel outcomes.
+ */
+export async function sampleCatalogRasterPairPixels(
+    pair,
+    position,
+    signal,
+    fetchImplementation = globalThis.fetch
+) {
+    const outcomes = await Promise.allSettled([
+        sampleCatalogRasterPixel(
+            pair.xItem,
+            position,
+            signal,
+            fetchImplementation
+        ),
+        sampleCatalogRasterPixel(
+            pair.yItem,
+            position,
+            signal,
+            fetchImplementation
+        ),
+    ]);
+    if (signal.aborted) {
+        const abortError = new Error("Paired pixel sampling was canceled");
+        abortError.name = "AbortError";
+        throw abortError;
+    }
+    const axisOutcome = (outcome) => outcome.status === "fulfilled"
+        ? { available: true, pixel: outcome.value, error: null }
+        : {
+            available: false,
+            pixel: null,
+            error: outcome.reason instanceof Error
+                ? outcome.reason.message
+                : "Pixel unavailable",
+        };
+    return {
+        x: axisOutcome(outcomes[0]),
+        y: axisOutcome(outcomes[1]),
+    };
 }

@@ -88,6 +88,7 @@ export class RasterHistogramControlsView {
         this.handlers = null;
         this.boundRetryStatistics = this.#handleRetryStatistics.bind(this);
         this.isAvailable = false;
+        this.modeIsCompatible = true;
     }
 
     /**
@@ -165,8 +166,23 @@ export class RasterHistogramControlsView {
      */
     setActiveRasterAvailable(isAvailable) {
         this.isAvailable = isAvailable;
-        this.histogram.hidden = !isAvailable;
-        this.histogram.setAttribute("aria-hidden", String(!isAvailable));
+        const isVisible = isAvailable && this.modeIsCompatible;
+        this.histogram.hidden = !isVisible;
+        this.histogram.setAttribute("aria-hidden", String(!isVisible));
+        this.#synchronizeSummaryExpansion();
+    }
+
+    /**
+     * Set whether the active comparison mode accepts a univariate histogram.
+     *
+     * @param {boolean} isCompatible Whether the detailed histogram may show.
+     * @return {void}
+     */
+    setModeCompatible(isCompatible) {
+        this.modeIsCompatible = isCompatible;
+        const isVisible = isCompatible && this.isAvailable;
+        this.histogram.hidden = !isVisible;
+        this.histogram.setAttribute("aria-hidden", String(!isVisible));
         this.#synchronizeSummaryExpansion();
     }
 
@@ -180,7 +196,7 @@ export class RasterHistogramControlsView {
      * @return {void}
      */
     showWidget(moveFocus = false) {
-        if (!this.isAvailable) {
+        if (!this.isAvailable || !this.modeIsCompatible) {
             return;
         }
         this.histogram.hidden = false;

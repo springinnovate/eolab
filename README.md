@@ -199,6 +199,16 @@ active layer chooses which raster the shared appearance, histogram, sampling,
 and pixel-probe controls edit. Visibility and active selection are independent,
 and showing a hidden layer reuses its existing GeoServer publication.
 
+When exactly two eligible raster WMS layers are visible, **Raster comparison**
+offers an explicit **Bivariate** mode. It assigns deterministic X/Y roles,
+locks both displayed opacities to 100%, and applies the coordinated palette,
+additive browser compositing, two-dimensional legend, paired histogram, and
+dual pixel probe carried forward from ESOS-C. Ordinary overlay remains the
+default, and leaving bivariate mode restores both layers' retained styles and
+opacities without republishing. The color, alignment, bounded-read, and
+accessibility contracts are documented in
+[Bivariate raster comparison](docs/bivariate-raster.md).
+
 The retained browser lifecycle and restricted WMS delivery contracts are
 dataset-neutral; raster keeps ownership of its assessment, source validation,
 publication reconciliation, dynamic appearance, and analysis behavior. The
