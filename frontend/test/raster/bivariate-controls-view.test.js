@@ -78,6 +78,8 @@ class FakeBivariateDocument {
       "#raster-bivariate-legend-y-range",
       "#raster-bivariate-statistics",
       "#raster-bivariate-statistics-status",
+      "#raster-bivariate-statistics-x-label",
+      "#raster-bivariate-statistics-y-label",
       "#retry-raster-paired-statistics",
       "#raster-bivariate-histogram",
       "#raster-bivariate-histogram-summary",
@@ -171,6 +173,8 @@ test("bivariate controls render labeled legend and inspectable ESOS-C histogram"
   assert.equal(view.palette.children.length, 8);
   assert.equal(view.panel.hidden, false);
   assert.equal(view.statisticsPanel.hidden, false);
+  assert.equal(view.statisticsXLabel.textContent, "temperature.tif");
+  assert.equal(view.statisticsYLabel.textContent, "moisture.tif");
   assert.equal(view.legend.children.length, 145);
   assert.match(view.legend.getAttribute("aria-label"), /temperature\.tif/);
   assert.match(view.legend.getAttribute("aria-label"), /moisture\.tif/);
@@ -178,19 +182,21 @@ test("bivariate controls render labeled legend and inspectable ESOS-C histogram"
   const cell = view.cells.get("6:4");
   assert.equal(cell.getAttribute("tabindex"), "0");
   assert.equal(cell.getAttribute("role"), "button");
-  assert.match(cell.getAttribute("aria-label"), /9 paired samples/);
-  assert.match(view.histogram.getAttribute("aria-label"), /log-weighted density/);
-  assert.match(view.histogram.getAttribute("aria-label"), /Highest-density region/);
+  assert.match(cell.getAttribute("aria-label"), /9 pixels/);
+  assert.match(view.histogram.getAttribute("aria-label"), /Raster A/);
+  assert.match(view.histogram.getAttribute("aria-label"), /Densest bin/);
+  assert.match(view.histogramSummary.textContent, /^Densest · A /);
+  assert.doesNotMatch(view.histogramSummary.textContent, /temperature\.tif/);
 
   const keyboardEvent = new Event("keydown");
   Object.defineProperty(keyboardEvent, "key", { value: "Enter" });
   cell.dispatchEvent(keyboardEvent);
   assert.equal(cell.classList.contains("is-selected"), true);
-  assert.match(view.histogramSummary.textContent, /100\.00 percent/);
+  assert.match(view.histogramSummary.textContent, /100\.0%/);
 
   view.highlightPair(6.5, 4.5);
   assert.equal(cell.classList.contains("is-probed"), true);
-  assert.match(view.histogramSummary.textContent, /Current probe/);
+  assert.match(view.histogramSummary.textContent, /Probe/);
 });
 
 test("bivariate controls forward native mode, palette, swap, and retry actions", () => {

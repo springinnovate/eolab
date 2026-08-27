@@ -16,10 +16,10 @@ import { formatRasterPixelValue } from "./pixel-probe.js";
 
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 const LEGEND_GRID_SIZE = 12;
-const HISTOGRAM_PLOT_X = 84;
-const HISTOGRAM_PLOT_Y = 88;
-const HISTOGRAM_PLOT_SIZE = 448;
-const HISTOGRAM_MARGINAL_SIZE = 64;
+const HISTOGRAM_PLOT_X = 92;
+const HISTOGRAM_PLOT_Y = 74;
+const HISTOGRAM_PLOT_SIZE = 420;
+const HISTOGRAM_MARGINAL_SIZE = 54;
 
 /**
  * Create one SVG element with a compact attribute mapping.
@@ -109,6 +109,14 @@ export class BivariateRasterControlsView {
         this.statisticsStatus = requireRasterControl(
             documentContext,
             "#raster-bivariate-statistics-status"
+        );
+        this.statisticsXLabel = requireRasterControl(
+            documentContext,
+            "#raster-bivariate-statistics-x-label"
+        );
+        this.statisticsYLabel = requireRasterControl(
+            documentContext,
+            "#raster-bivariate-statistics-y-label"
         );
         this.retryButton = requireRasterControl(
             documentContext,
@@ -205,6 +213,8 @@ export class BivariateRasterControlsView {
         this.palette.value = state.paletteName;
         this.xLabel.textContent = `X axis: ${state.xLabel}`;
         this.yLabel.textContent = `Y axis: ${state.yLabel}`;
+        this.statisticsXLabel.textContent = state.xLabel;
+        this.statisticsYLabel.textContent = state.yLabel;
         this.swapButton.setAttribute(
             "aria-label",
             `Swap X axis ${state.xLabel} with Y axis ${state.yLabel}`
@@ -262,23 +272,51 @@ export class BivariateRasterControlsView {
             highest.count
         );
         const provenance = statistics.approximate
-            ? "Approximate bounded sample grid"
-            : "Exact bounded X reference grid";
+            ? "Approximate bounded sample"
+            : "Exact X-reference sample";
         const summary =
-            `${provenance} for X ${presentation.xLabel}, range ${formatRange(
+            `Raster A, ${presentation.xLabel}, range ${formatRange(
                 statistics.xMinimum,
                 statistics.xMaximum
-            )}, and Y ${presentation.yLabel}, range ${formatRange(
+            )}. Raster B, ${presentation.yLabel}, range ${formatRange(
                 statistics.yMinimum,
                 statistics.yMaximum
             )}. ${statistics.pairedSampleCount.toLocaleString()} paired ` +
-            `finite, non-nodata samples. Highest-density region: ` +
-            highestDescription + " Histogram hue starts from the paired map " +
-            "color; cell size, saturation, and lightness encode ESOS-C " +
-            "log-weighted density.";
+            `pixels. ${provenance}; Raster B uses nearest-neighbor alignment. ` +
+            `Densest bin: ${highestDescription}`;
         const title = svgElement(this.documentContext, "title");
         title.textContent = summary;
-        const children = [title];
+        const plotRight = HISTOGRAM_PLOT_X + HISTOGRAM_PLOT_SIZE;
+        const plotBottom = HISTOGRAM_PLOT_Y + HISTOGRAM_PLOT_SIZE;
+        const children = [
+            title,
+            svgElement(this.documentContext, "rect", {
+                x: HISTOGRAM_PLOT_X,
+                y: HISTOGRAM_PLOT_Y,
+                width: HISTOGRAM_PLOT_SIZE,
+                height: HISTOGRAM_PLOT_SIZE,
+                class: "raster-bivariate-plot",
+            }),
+        ];
+        for (const fraction of [0.25, 0.5, 0.75]) {
+            const offset = HISTOGRAM_PLOT_SIZE * fraction;
+            children.push(
+                svgElement(this.documentContext, "line", {
+                    x1: HISTOGRAM_PLOT_X + offset,
+                    y1: HISTOGRAM_PLOT_Y,
+                    x2: HISTOGRAM_PLOT_X + offset,
+                    y2: plotBottom,
+                    class: "raster-bivariate-grid-line",
+                }),
+                svgElement(this.documentContext, "line", {
+                    x1: HISTOGRAM_PLOT_X,
+                    y1: HISTOGRAM_PLOT_Y + offset,
+                    x2: plotRight,
+                    y2: HISTOGRAM_PLOT_Y + offset,
+                    class: "raster-bivariate-grid-line",
+                })
+            );
+        }
 
         histogram.counts.forEach((row, yBin) => {
             row.forEach((count, xBin) => {
@@ -322,11 +360,16 @@ export class BivariateRasterControlsView {
                     0.15 * Math.pow(density, 0.7)
                 );
                 const description = this.#cellDescription(xBin, yBin, count);
+                const compactDescription = this.#compactCellDescription(
+                    xBin,
+                    yBin,
+                    count
+                );
                 cell.setAttribute("aria-label", description);
                 const select = () => this.#selectCell(
                     xBin,
                     yBin,
-                    description,
+                    compactDescription,
                     cell
                 );
                 cell.addEventListener("pointerenter", select);
@@ -380,8 +423,6 @@ export class BivariateRasterControlsView {
             children.push(bar);
         });
 
-        const plotRight = HISTOGRAM_PLOT_X + HISTOGRAM_PLOT_SIZE;
-        const plotBottom = HISTOGRAM_PLOT_Y + HISTOGRAM_PLOT_SIZE;
         children.push(
             svgElement(this.documentContext, "line", {
                 x1: HISTOGRAM_PLOT_X,
@@ -398,38 +439,47 @@ export class BivariateRasterControlsView {
                 class: "raster-bivariate-axis",
             })
         );
-        const axisLabels = [
-            [
-                formatRasterPixelValue(statistics.xMinimum),
-                HISTOGRAM_PLOT_X,
-                plotBottom + 16,
-                "start",
-            ],
-            [
-                formatRasterPixelValue(statistics.xMaximum),
-                plotRight,
-                plotBottom + 16,
+        const axisLabels = [];
+        for (const [fraction, value, anchor] of [
+            [0, statistics.xMinimum, "start"],
+            [0.5, (statistics.xMinimum + statistics.xMaximum) / 2, "middle"],
+            [1, statistics.xMaximum, "end"],
+        ]) {
+            const x = HISTOGRAM_PLOT_X + HISTOGRAM_PLOT_SIZE * fraction;
+            children.push(svgElement(this.documentContext, "line", {
+                x1: x,
+                y1: plotBottom,
+                x2: x,
+                y2: plotBottom + 7,
+                class: "raster-bivariate-axis",
+            }));
+            axisLabels.push([
+                formatRasterPixelValue(value),
+                x,
+                plotBottom + 25,
+                anchor,
+            ]);
+        }
+        for (const [fraction, value] of [
+            [0, statistics.yMinimum],
+            [0.5, (statistics.yMinimum + statistics.yMaximum) / 2],
+            [1, statistics.yMaximum],
+        ]) {
+            const y = plotBottom - HISTOGRAM_PLOT_SIZE * fraction;
+            children.push(svgElement(this.documentContext, "line", {
+                x1: HISTOGRAM_PLOT_X - 7,
+                y1: y,
+                x2: HISTOGRAM_PLOT_X,
+                y2: y,
+                class: "raster-bivariate-axis",
+            }));
+            axisLabels.push([
+                formatRasterPixelValue(value),
+                HISTOGRAM_PLOT_X - 12,
+                y + 5,
                 "end",
-            ],
-            [
-                formatRasterPixelValue(statistics.yMinimum),
-                HISTOGRAM_PLOT_X - 8,
-                plotBottom,
-                "end",
-            ],
-            [
-                formatRasterPixelValue(statistics.yMaximum),
-                HISTOGRAM_PLOT_X - 8,
-                HISTOGRAM_PLOT_Y + 4,
-                "end",
-            ],
-            [
-                presentation.xLabel,
-                HISTOGRAM_PLOT_X + HISTOGRAM_PLOT_SIZE / 2,
-                plotBottom + 38,
-                "middle",
-            ],
-        ];
+            ]);
+        }
         for (const [text, x, y, anchor] of axisLabels) {
             const label = svgElement(this.documentContext, "text", {
                 x,
@@ -440,26 +490,38 @@ export class BivariateRasterControlsView {
             label.textContent = text;
             children.push(label);
         }
+        const xAxisLabel = svgElement(this.documentContext, "text", {
+            x: HISTOGRAM_PLOT_X + HISTOGRAM_PLOT_SIZE / 2,
+            y: plotBottom + 58,
+            "text-anchor": "middle",
+            class: "raster-bivariate-axis-title",
+        });
+        xAxisLabel.textContent = "Raster A";
+        children.push(xAxisLabel);
         const yAxisLabel = svgElement(this.documentContext, "text", {
-            x: HISTOGRAM_PLOT_X - 54,
+            x: HISTOGRAM_PLOT_X - 66,
             y: HISTOGRAM_PLOT_Y + HISTOGRAM_PLOT_SIZE / 2,
             "text-anchor": "middle",
-            class: "raster-bivariate-axis-label",
-            transform: `rotate(-90 ${HISTOGRAM_PLOT_X - 54} ` +
+            class: "raster-bivariate-axis-title",
+            transform: `rotate(-90 ${HISTOGRAM_PLOT_X - 66} ` +
                 `${HISTOGRAM_PLOT_Y + HISTOGRAM_PLOT_SIZE / 2})`,
         });
-        yAxisLabel.textContent = presentation.yLabel;
+        yAxisLabel.textContent = "Raster B";
         children.push(yAxisLabel);
 
         this.histogram.replaceChildren(...children);
         this.histogram.setAttribute("aria-label", summary);
         this.histogram.removeAttribute("aria-busy");
         this.histogram.removeAttribute("hidden");
-        this.histogramSummary.textContent = summary;
+        this.histogramSummary.textContent =
+            `Densest · ${this.#compactCellDescription(
+                highest.xBin,
+                highest.yBin,
+                highest.count
+            )}`;
         this.statisticsStatus.textContent =
-            `${statistics.pairedSampleCount.toLocaleString()} paired samples · ` +
-            `${statistics.approximate ? "approximate" : "exact"} · ` +
-            "X-reference grid, nearest-neighbor Y alignment.";
+            `${statistics.pairedSampleCount.toLocaleString()} paired pixels · ` +
+            `${statistics.approximate ? "approximate" : "exact"}`;
         this.retryButton.hidden = true;
     }
 
@@ -483,7 +545,7 @@ export class BivariateRasterControlsView {
         this.#selectCell(
             bin.xBin,
             bin.yBin,
-            `Current probe. ${this.#cellDescription(
+            `Probe · ${this.#compactCellDescription(
                 bin.xBin,
                 bin.yBin,
                 this.statistics.histogram.counts[bin.yBin][bin.xBin]
@@ -571,14 +633,31 @@ export class BivariateRasterControlsView {
     #cellDescription(xBin, yBin, count) {
         const histogram = this.statistics.histogram;
         const percentage = count / this.statistics.pairedSampleCount * 100;
-        return `X ${this.labels.xLabel} ${formatRange(
+        return `Raster A (${this.labels.xLabel}) ${formatRange(
             histogram.xEdges[xBin],
             histogram.xEdges[xBin + 1]
-        )}; Y ${this.labels.yLabel} ${formatRange(
+        )}; Raster B (${this.labels.yLabel}) ${formatRange(
             histogram.yEdges[yBin],
             histogram.yEdges[yBin + 1]
-        )}; ${count.toLocaleString()} paired samples, ` +
-            `${percentage.toFixed(2)} percent.`;
+        )}; ${count.toLocaleString()} pixels (${percentage.toFixed(2)}%).`;
+    }
+
+    /**
+     * Build the compact visible A/B readout for one populated cell.
+     *
+     * @param {number} xBin Zero-based Raster A histogram bin.
+     * @param {number} yBin Zero-based Raster B histogram bin.
+     * @param {number} count Paired pixels in the cell.
+     * @return {string} Direct A/B ranges, count, and percentage.
+     */
+    #compactCellDescription(xBin, yBin, count) {
+        const histogram = this.statistics.histogram;
+        const percentage = count / this.statistics.pairedSampleCount * 100;
+        return `A ${formatRasterPixelValue(histogram.xEdges[xBin])}–` +
+            `${formatRasterPixelValue(histogram.xEdges[xBin + 1])} · ` +
+            `B ${formatRasterPixelValue(histogram.yEdges[yBin])}–` +
+            `${formatRasterPixelValue(histogram.yEdges[yBin + 1])} · ` +
+            `${count.toLocaleString()} pixels (${percentage.toFixed(1)}%)`;
     }
 
     /**
@@ -586,17 +665,17 @@ export class BivariateRasterControlsView {
      *
      * @param {number} xBin Zero-based X histogram bin.
      * @param {number} yBin Zero-based Y histogram bin.
-     * @param {string} description Accessible selected-cell description.
+     * @param {string} summary Compact selected-cell summary.
      * @param {SVGElement} cell Selected SVG rectangle.
      * @return {void}
      */
-    #selectCell(xBin, yBin, description, cell) {
+    #selectCell(xBin, yBin, summary, cell) {
         this.activeCell?.classList.remove("is-selected", "is-probed");
         this.activeCell = cell;
         cell.classList.add("is-selected");
         cell.dataset.xBin = String(xBin);
         cell.dataset.yBin = String(yBin);
-        this.histogramSummary.textContent = description;
+        this.histogramSummary.textContent = summary;
     }
 
     /** Forward explicit overlay/bivariate selection. @return {void} */
