@@ -325,7 +325,7 @@ test("Histograms own shared sampling, per-layer histograms, AOI, and pixel guida
     assert.match(histogram.source, /id="raster-histogram-chart"/);
     assert.match(
         pairedHistogram.source,
-        /<h3 id="raster-bivariate-statistics-heading">Raster A vs\. Raster B<\/h3>/
+        /<h3 id="raster-bivariate-statistics-heading">Paired raster distribution<\/h3>/
     );
     assert.match(pairedHistogram.source, /id="raster-bivariate-histogram"/);
     assert.match(

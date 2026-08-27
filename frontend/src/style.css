@@ -3353,6 +3353,11 @@ h5 {
   overflow-wrap: anywhere;
 }
 
+#raster-bivariate-statistics-heading,
+.raster-bivariate-histogram-summary {
+  overflow-wrap: anywhere;
+}
+
 .raster-bivariate-status:empty,
 .raster-bivariate-histogram-summary:empty {
   display: none;
@@ -3468,6 +3473,6 @@ h5 {
 .raster-bivariate-axis-title {
   fill: var(--text-1);
   font-family: var(--font-sans);
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 650;
 }

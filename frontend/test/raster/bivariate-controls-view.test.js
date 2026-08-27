@@ -77,6 +77,7 @@ class FakeBivariateDocument {
       "#raster-bivariate-legend-x-range",
       "#raster-bivariate-legend-y-range",
       "#raster-bivariate-statistics",
+      "#raster-bivariate-statistics-heading",
       "#raster-bivariate-statistics-status",
       "#raster-bivariate-statistics-x-label",
       "#raster-bivariate-statistics-y-label",
@@ -173,6 +174,10 @@ test("bivariate controls render labeled legend and inspectable ESOS-C histogram"
   assert.equal(view.palette.children.length, 8);
   assert.equal(view.panel.hidden, false);
   assert.equal(view.statisticsPanel.hidden, false);
+  assert.equal(
+    view.statisticsHeading.textContent,
+    "temperature.tif vs. moisture.tif",
+  );
   assert.equal(view.statisticsXLabel.textContent, "temperature.tif");
   assert.equal(view.statisticsYLabel.textContent, "moisture.tif");
   assert.equal(view.legend.children.length, 145);
@@ -183,10 +188,22 @@ test("bivariate controls render labeled legend and inspectable ESOS-C histogram"
   assert.equal(cell.getAttribute("tabindex"), "0");
   assert.equal(cell.getAttribute("role"), "button");
   assert.match(cell.getAttribute("aria-label"), /9 pixels/);
-  assert.match(view.histogram.getAttribute("aria-label"), /Raster A/);
+  assert.match(view.histogram.getAttribute("aria-label"), /temperature\.tif/);
+  assert.doesNotMatch(view.histogram.getAttribute("aria-label"), /Raster A/);
   assert.match(view.histogram.getAttribute("aria-label"), /Densest bin/);
-  assert.match(view.histogramSummary.textContent, /^Densest · A /);
-  assert.doesNotMatch(view.histogramSummary.textContent, /temperature\.tif/);
+  assert.match(view.histogramSummary.textContent, /^Densest · temperature\.tif /);
+  const xAxisTitles = view.histogram.children.filter(
+    (child) => child.getAttribute("data-axis") === "x",
+  );
+  const yAxisTitles = view.histogram.children.filter(
+    (child) => child.getAttribute("data-axis") === "y",
+  );
+  assert.deepEqual(xAxisTitles.map((title) => title.textContent), [
+    "temperature.tif",
+  ]);
+  assert.deepEqual(yAxisTitles.map((title) => title.textContent), [
+    "moisture.tif",
+  ]);
 
   const keyboardEvent = new Event("keydown");
   Object.defineProperty(keyboardEvent, "key", { value: "Enter" });
@@ -197,6 +214,42 @@ test("bivariate controls render labeled legend and inspectable ESOS-C histogram"
   view.highlightPair(6.5, 4.5);
   assert.equal(cell.classList.contains("is-probed"), true);
   assert.match(view.histogramSummary.textContent, /Probe/);
+});
+
+test("bivariate histogram wraps long raster basenames clear of Y ticks", () => {
+  const documentContext = new FakeBivariateDocument();
+  const view = new BivariateRasterControlsView(documentContext);
+  const longPresentation = {
+    ...PRESENTATION,
+    xLabel: "barley_NitrogenApplication_Rate_for_2026_scenario_output.tif",
+    yLabel: "grassland_carbon_sequestration_reference_projection_2026.tif",
+  };
+  view.renderMode({ active: true, ...longPresentation });
+  view.renderStatistics(pairedStatistics(), longPresentation);
+
+  const xAxisTitles = view.histogram.children.filter(
+    (child) => child.getAttribute("data-axis") === "x",
+  );
+  const yAxisTitles = view.histogram.children.filter(
+    (child) => child.getAttribute("data-axis") === "y",
+  );
+  assert.ok(xAxisTitles.length > 1);
+  assert.ok(yAxisTitles.length > 1);
+  assert.equal(
+    xAxisTitles.map((title) => title.textContent).join(""),
+    longPresentation.xLabel,
+  );
+  assert.equal(
+    yAxisTitles.map((title) => title.textContent).join(""),
+    longPresentation.yLabel,
+  );
+  assert.ok(
+    yAxisTitles.every((title) => Number(title.getAttribute("x")) < 100),
+  );
+  assert.equal(
+    view.statisticsHeading.textContent,
+    `${longPresentation.xLabel} vs. ${longPresentation.yLabel}`,
+  );
 });
 
 test("bivariate controls forward native mode, palette, swap, and retry actions", () => {
