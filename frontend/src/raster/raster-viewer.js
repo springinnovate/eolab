@@ -942,11 +942,11 @@ export function initializeRasterViewer(
         const canEnter = eligible.length === 2;
         const guidance = message ?? (
             bivariateMode.active
-                ? "Bivariate mode is active with two visible WMS rasters."
+                ? "2D histogram mode is active for the two raster layers."
                 : canEnter
-                    ? "Two visible WMS rasters are ready for bivariate mode."
-                    : "Show exactly two renderable single-band WMS rasters " +
-                      "to enable bivariate mode."
+                    ? "Choose 2D to calculate and open the paired histogram."
+                    : "Add exactly two visible single-band raster layers to " +
+                      "enable the 2D histogram."
         );
         controlsView.setBivariateAvailability?.(canEnter, guidance);
     }
@@ -1038,8 +1038,8 @@ export function initializeRasterViewer(
         const eligible = getEligibleBivariateRecords();
         if (eligible.length !== 2) {
             renderBivariateAvailability(
-                "Bivariate mode requires exactly two visible, available WMS " +
-                "rasters."
+                "The 2D histogram requires exactly two visible, available " +
+                "single-band raster layers."
             );
             controlsView.renderBivariateMode?.({ active: false });
             return;
@@ -1059,6 +1059,8 @@ export function initializeRasterViewer(
         );
         controlsView.setClearSampleWindowLabel("Use whole overlap");
         rasterSampleWindowController.enable();
+        showHistogramWorkspace();
+        requestBivariateStatistics();
         applyBivariatePresentation();
         pairedPixelProbeController.activate({
             xItem: eligible[0].entry.item,
@@ -1066,8 +1068,6 @@ export function initializeRasterViewer(
         });
         renderLayerStack();
         renderBivariateAvailability();
-        showHistogramWorkspace();
-        requestBivariateStatistics();
     }
 
     /**
@@ -2586,7 +2586,7 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Switch explicitly between ordinary overlay and bivariate modes.
+     * Switch explicitly between one- and two-dimensional histogram modes.
      *
      * @param {string} mode Explicit mode identity.
      * @return {void}
@@ -2600,7 +2600,7 @@ export function initializeRasterViewer(
             leaveBivariateMode();
             return;
         }
-        throw new Error(`Unknown raster comparison mode: ${mode}`);
+        throw new Error(`Unknown raster histogram mode: ${mode}`);
     }
 
     /**

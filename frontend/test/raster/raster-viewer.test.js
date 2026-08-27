@@ -462,7 +462,7 @@ function flushPromises() {
     return new Promise((resolve) => setImmediate(resolve));
 }
 
-test("bivariate mode coordinates ESOS-C blending, paired analysis, and exit", async () => {
+test("selecting 2D opens paired analysis without a map interaction", async () => {
     const leafletMap = createFakeMap();
     const { leaflet, wmsLayers } = createFakeLeaflet();
     const controlsView = createFakeControlsView();
@@ -533,6 +533,11 @@ test("bivariate mode coordinates ESOS-C blending, paired analysis, and exit", as
     );
     assert.equal(controlsView.bivariateMode.active, true);
     assert.equal(histogramPresentationRequests, 1);
+    assert.equal(pairedPixelRequests.length, 0);
+    assert.match(
+        controlsView.bivariateAvailability.guidance,
+        /2D histogram mode is active/
+    );
     assert.equal(controlsView.appearanceEnabled, false);
     assert.equal(controlsView.univariateHistogramVisible, false);
     assert.equal(controlsView.temporaryAoiCompatible, false);

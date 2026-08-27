@@ -211,6 +211,7 @@ test("Map layers owns layer presentation, appearance, cutoffs, and limitations",
     const layerStack = requireElementRange("raster-layer-stack");
     const appearance = requireElementRange("raster-appearance-controls");
     const renderingFeedback = requireElementRange("catalog-layer-status");
+    const bivariateControls = requireElementRange("raster-bivariate-controls");
     const percentileControls = requireElementRange(
         "raster-percentile-controls"
     );
@@ -235,6 +236,20 @@ test("Map layers owns layer presentation, appearance, cutoffs, and limitations",
     }
     assert.match(layerStack.source, /data-eomap-region="map-layers"/);
     assert.match(appearance.source, /data-eomap-region="map-layers"/);
+    assert.match(
+        bivariateControls.source,
+        /<h3 id="raster-bivariate-heading">Raster histograms<\/h3>/
+    );
+    assert.match(bivariateControls.source, /<span>Histogram mode<\/span>/);
+    assert.match(bivariateControls.source, />1D – single raster<\/option>/);
+    assert.match(
+        bivariateControls.source,
+        />2D – bivariate rasters<\/option>/
+    );
+    assert.match(
+        bivariateControls.source,
+        /Selecting 2D opens Histograms and calculates the paired\s+distribution automatically\./
+    );
     assert.ok(
         renderingFeedback.start < layerStack.start,
         "Rendering feedback should precede the retained layer list"

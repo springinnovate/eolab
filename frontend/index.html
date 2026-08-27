@@ -490,17 +490,17 @@
                     >
                       <div class="raster-bivariate-heading">
                         <div>
-                          <h3 id="raster-bivariate-heading">Compare raster layers</h3>
+                          <h3 id="raster-bivariate-heading">Raster histograms</h3>
                         </div>
                       </div>
                       <label for="raster-comparison-mode">
-                        <span>Comparison mode</span>
+                        <span>Histogram mode</span>
                         <select
                           id="raster-comparison-mode"
                           aria-describedby="raster-bivariate-status"
                         >
-                          <option value="overlay">Overlay</option>
-                          <option value="bivariate">Bivariate</option>
+                          <option value="overlay">1D – single raster</option>
+                          <option value="bivariate">2D – bivariate rasters</option>
                         </select>
                       </label>
                       <p
@@ -545,7 +545,8 @@
                           identifiers; use the dual probe for exact samples.
                         </p>
                         <p class="raster-bivariate-histogram-guidance">
-                          Open Histograms to inspect the paired distribution.
+                          Selecting 2D opens Histograms and calculates the paired
+                          distribution automatically.
                         </p>
                       </div>
                     </section>
