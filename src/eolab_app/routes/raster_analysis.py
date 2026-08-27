@@ -7,8 +7,10 @@ from fastapi import APIRouter, HTTPException, Request
 from eolab_app.raster.errors import RasterFeatureError
 from eolab_app.raster.models import (
     CatalogPixelRequest,
+    CatalogRasterPairRequest,
     CatalogRasterStatisticsRequest,
     RasterPixel,
+    RasterPairedStatistics,
     RasterStatistics,
 )
 from eolab_app.raster.pixel_service import RasterPixelService
@@ -97,6 +99,55 @@ def create_raster_analysis_router(
             raise HTTPException(
                 status_code=499,
                 detail="The raster statistics request was canceled",
+            )
+        finally:
+            disconnect_task.cancel()
+            statistics_task.cancel()
+            await asyncio.gather(
+                statistics_task,
+                disconnect_task,
+                return_exceptions=True,
+            )
+
+    @router.post(
+        "/paired-statistics",
+        response_model=RasterPairedStatistics,
+    )
+    async def sample_paired_raster_statistics(
+        request: CatalogRasterPairRequest,
+        http_request: Request,
+    ) -> RasterPairedStatistics:
+        """Summarize valid paired cells on the ordered X reference grid.
+
+        Args:
+            request: Two catalog identities and optional canonical bounds.
+            http_request: Incoming request used to detect cancellation.
+
+        Returns:
+            Bounded two-dimensional histogram, marginals, and provenance.
+
+        Raises:
+            HTTPException: If analysis fails or the browser disconnects.
+        """
+        statistics_task = asyncio.create_task(
+            statistics_service.get_paired(request)
+        )
+        disconnect_task = asyncio.create_task(
+            wait_for_http_disconnect(http_request)
+        )
+        try:
+            completed_tasks, _ = await asyncio.wait(
+                (statistics_task, disconnect_task),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if statistics_task in completed_tasks:
+                try:
+                    return statistics_task.result()
+                except RasterFeatureError as error:
+                    raise raster_http_exception(error) from error
+            raise HTTPException(
+                status_code=499,
+                detail="The paired raster statistics request was canceled",
             )
         finally:
             disconnect_task.cancel()

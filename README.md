@@ -199,6 +199,18 @@ active layer chooses which raster the shared appearance, histogram, sampling,
 and pixel-probe controls edit. Visibility and active selection are independent,
 and showing a hidden layer reuses its existing GeoServer publication.
 
+After two distinct catalog rasters are selected, **Raster histograms** offers
+an explicit **2D - bivariate rasters** histogram mode. Catalog identities make
+paired statistics and pixel analysis available without GeoServer, WMS
+publication, or visible map layers. When both WMS layers exist, rendering also
+locks their displayed opacities to 100% and applies the coordinated palette and
+additive browser compositing carried forward from ESOS-C. The two-dimensional
+legend, paired histogram, and dual pixel probe use the same palette contract.
+Ordinary overlay remains the default, and leaving bivariate mode restores any
+retained layers' styles and opacities without republishing. The color,
+alignment, bounded-read, and accessibility contracts are documented in
+[Bivariate raster comparison](docs/bivariate-raster.md).
+
 The retained browser lifecycle and restricted WMS delivery contracts are
 dataset-neutral; raster keeps ownership of its assessment, source validation,
 publication reconciliation, dynamic appearance, and analysis behavior. The

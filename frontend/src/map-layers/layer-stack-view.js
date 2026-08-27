@@ -279,10 +279,17 @@ export class MapLayerStackView {
         opacityInput.min = "0";
         opacityInput.max = "100";
         opacityInput.step = "1";
-        opacityInput.value = String(Math.round(layer.opacity * 100));
+        const displayedOpacity = layer.effectiveOpacity ?? layer.opacity;
+        opacityInput.value = String(Math.round(displayedOpacity * 100));
+        opacityInput.disabled = layer.opacityLocked === true;
         opacityInput.dataset.layerKey = layer.key;
         opacityInput.dataset.layerAction = "opacity";
-        opacityInput.setAttribute("aria-label", `${accessibleName} opacity`);
+        opacityInput.setAttribute(
+            "aria-label",
+            layer.opacityLocked === true
+                ? `${accessibleName} opacity is currently locked`
+                : `${accessibleName} opacity`
+        );
         opacityInput.setAttribute(
             "aria-valuetext",
             `${opacityInput.value} percent`

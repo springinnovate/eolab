@@ -45,6 +45,26 @@ SAMPLE_GRID_MAX_TRANSFORMED_POSITIONS = (
 SourcePosition = tuple[int, int]
 
 
+def sample_grid_policy_parameters() -> tuple[int, ...]:
+    """Return fixed limits and positions affecting every sample-grid read.
+
+    Returns:
+        Dimension, block, decoded-work, transformation, and center-location
+        parameters encoded for stable cache identities.
+    """
+    return (
+        SAMPLE_GRID_MAX_DIMENSION,
+        SAMPLE_GRID_MAX_SOURCE_BLOCK_READS,
+        SAMPLE_GRID_MAX_DECODED_SOURCE_BYTES,
+        SAMPLE_GRID_MAX_TRANSFORMED_POSITIONS,
+        *(
+            round(value * 1000)
+            for offset in SAMPLE_GRID_CENTER_OFFSETS
+            for value in offset
+        ),
+    )
+
+
 @dataclass(frozen=True)
 class SampleGridPlan:
     """Immutable source sampling plan that satisfies the native-block budget.
@@ -447,32 +467,12 @@ def plan_source_window_sample_grid(
         sample_width,
         sample_height,
     )
-    block_shape = tuple(int(value) for value in dataset.block_shapes[0])
-    block_indexes = tuple(sorted({
-        _block_index(position, block_shape)
-        for cell in positions
-        for position in cell
-    }))
-    decoded_source_bytes = decoded_source_bytes_for_blocks(dataset, block_indexes)
-    plan = SampleGridPlan(
-        width=sample_width,
-        height=sample_height,
-        cell_positions=positions,
-        block_indexes=block_indexes,
-        decoded_source_bytes=decoded_source_bytes,
-        points_per_cell=SAMPLE_GRID_MAX_POINTS_PER_CELL,
+    return plan_sample_grid_for_source_positions(
+        dataset,
+        sample_width,
+        sample_height,
+        positions,
     )
-    if len(block_indexes) > SAMPLE_GRID_MAX_SOURCE_BLOCK_READS:
-        raise ValueError(
-            "The raster analysis sample grid exceeds the native source-block "
-            "limit"
-        )
-    if decoded_source_bytes > SAMPLE_GRID_MAX_DECODED_SOURCE_BYTES:
-        raise ValueError(
-            "The raster analysis sample grid exceeds the decoded source-work "
-            "limit"
-        )
-    return plan
 
 
 def plan_sample_grid(
@@ -548,7 +548,91 @@ def _finite_block_value(
     return finite_value if math.isfinite(finite_value) else None
 
 
-def _read_planned_sample_grid(
+def plan_sample_grid_for_source_positions(
+    dataset: rasterio.io.DatasetReader,
+    width: int,
+    height: int,
+    cell_positions: tuple[tuple[SourcePosition, ...], ...],
+) -> SampleGridPlan:
+    """Admit an explicit bounded grid of source-pixel positions.
+
+    The caller owns the spatial meaning of the positions. This neutral
+    boundary validates only grid shape, source containment, native-block work,
+    and decoded-byte limits before any source read occurs.
+
+    Args:
+        dataset: Open structurally authorized one-band raster.
+        width: Positive output-grid width no larger than the fixed limit.
+        height: Positive output-grid height no larger than the fixed limit.
+        cell_positions: Row-major source positions, with an empty tuple for a
+            cell outside the source.
+
+    Returns:
+        Admitted immutable sample-grid plan.
+
+    Raises:
+        ValueError: If shape, positions, or source-work limits are invalid.
+    """
+    require_bounded_source_structure(dataset)
+    if (
+        not isinstance(width, int)
+        or isinstance(width, bool)
+        or not isinstance(height, int)
+        or isinstance(height, bool)
+        or width < 1
+        or height < 1
+        or width > SAMPLE_GRID_MAX_DIMENSION
+        or height > SAMPLE_GRID_MAX_DIMENSION
+        or len(cell_positions) != width * height
+    ):
+        raise ValueError("Raster sample-grid dimensions are invalid")
+    for cell in cell_positions:
+        if len(cell) > SAMPLE_GRID_MAX_POINTS_PER_CELL:
+            raise ValueError("Raster sample-grid cell exceeds its point limit")
+        for row, column in cell:
+            if (
+                not isinstance(row, int)
+                or isinstance(row, bool)
+                or not isinstance(column, int)
+                or isinstance(column, bool)
+                or row < 0
+                or row >= dataset.height
+                or column < 0
+                or column >= dataset.width
+            ):
+                raise ValueError("Raster sample-grid position is outside the source")
+
+    block_shape = tuple(int(value) for value in dataset.block_shapes[0])
+    block_indexes = tuple(sorted({
+        _block_index(position, block_shape)
+        for cell in cell_positions
+        for position in cell
+    }))
+    decoded_source_bytes = decoded_source_bytes_for_blocks(
+        dataset,
+        block_indexes,
+    )
+    if len(block_indexes) > SAMPLE_GRID_MAX_SOURCE_BLOCK_READS:
+        raise ValueError(
+            "The raster analysis sample grid exceeds the native source-block "
+            "limit"
+        )
+    if decoded_source_bytes > SAMPLE_GRID_MAX_DECODED_SOURCE_BYTES:
+        raise ValueError(
+            "The raster analysis sample grid exceeds the decoded source-work "
+            "limit"
+        )
+    return SampleGridPlan(
+        width=width,
+        height=height,
+        cell_positions=cell_positions,
+        block_indexes=block_indexes,
+        decoded_source_bytes=decoded_source_bytes,
+        points_per_cell=SAMPLE_GRID_MAX_POINTS_PER_CELL,
+    )
+
+
+def read_planned_sample_grid(
     dataset: rasterio.io.DatasetReader,
     plan: SampleGridPlan,
     cancellation_requested: RasterReadCancellationCheck | None,
@@ -635,7 +719,7 @@ def read_sample_grid(
     """
     plan = plan_sample_grid(dataset, projected_bounds)
     return (
-        _read_planned_sample_grid(dataset, plan, cancellation_requested),
+        read_planned_sample_grid(dataset, plan, cancellation_requested),
         plan,
     )
 
@@ -662,6 +746,6 @@ def read_source_window_sample_grid(
     """
     plan = plan_source_window_sample_grid(dataset, source_window)
     return (
-        _read_planned_sample_grid(dataset, plan, cancellation_requested),
+        read_planned_sample_grid(dataset, plan, cancellation_requested),
         plan,
     )

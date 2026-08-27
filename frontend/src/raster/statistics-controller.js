@@ -8,10 +8,10 @@
 import { normalizeRasterSamplingArea } from "./statistics.js";
 
 /**
- * Load statistics for one raster scope.
+ * Load statistics for one request target and sampling area.
  *
  * @callback LoadRasterStatistics
- * @param {Object} item Active STAC Item.
+ * @param {Object} target Active analysis target.
  * @param {Object} samplingArea Normalized whole/bounds/AOI area.
  * @param {AbortSignal} signal Cancellation signal for stale work.
  * @return {Promise<Object>} Validated raster statistics.
@@ -21,7 +21,7 @@ import { normalizeRasterSamplingArea } from "./statistics.js";
  * Receive the start of a statistics request.
  *
  * @callback RasterStatisticsLoadingHandler
- * @param {Object} item Active STAC Item.
+ * @param {Object} target Active analysis target.
  * @param {Object} samplingArea Normalized request area.
  * @param {*} context Opaque request context.
  * @return {void}
@@ -32,7 +32,7 @@ import { normalizeRasterSamplingArea } from "./statistics.js";
  *
  * @callback RasterStatisticsResultHandler
  * @param {Object} statistics Validated response.
- * @param {Object} item Active STAC Item.
+ * @param {Object} target Active analysis target.
  * @param {Object} samplingArea Normalized request area.
  * @param {*} context Opaque request context.
  * @return {void}
@@ -43,59 +43,69 @@ import { normalizeRasterSamplingArea } from "./statistics.js";
  *
  * @callback RasterStatisticsErrorHandler
  * @param {Error} error Non-abort statistics error.
- * @param {Object} item Active STAC Item.
+ * @param {Object} target Active analysis target.
  * @param {Object} samplingArea Normalized request area.
  * @param {*} context Opaque request context.
  * @return {void}
  */
 
-/** Manage one statistics lifecycle and ignore stale raster responses. */
+/** Manage one statistics lifecycle and ignore stale responses. */
 export class RasterStatisticsController {
     /**
      * Create a statistics request lifecycle controller.
      *
-     * @param {LoadRasterStatistics} loadStatistics Loads one Item and scope.
+     * @param {LoadRasterStatistics} loadStatistics Loads one target and scope.
      * @param {RasterStatisticsLoadingHandler} onLoading Receives request start.
      * @param {RasterStatisticsResultHandler} onResult Receives current results.
      * @param {RasterStatisticsErrorHandler} onError Receives current failures.
+     * @param {(samplingArea:Object)=>Readonly<Object>}
+     * [normalizeSamplingArea=normalizeRasterSamplingArea] Validates and
+     * normalizes the sampling-area contract owned by the caller.
      */
-    constructor(loadStatistics, onLoading, onResult, onError) {
+    constructor(
+        loadStatistics,
+        onLoading,
+        onResult,
+        onError,
+        normalizeSamplingArea = normalizeRasterSamplingArea
+    ) {
         this.loadStatistics = loadStatistics;
         this.onLoading = onLoading;
         this.onResult = onResult;
         this.onError = onError;
-        this.item = null;
+        this.normalizeSamplingArea = normalizeSamplingArea;
+        this.target = null;
         this.samplingArea = null;
         this.abortController = null;
         this.requestSequence = 0;
     }
 
     /**
-     * Start a new statistics request for the active catalog Item.
+     * Start a new statistics request for one analysis target.
      *
-     * @param {Object} item Selected STAC Item.
+     * @param {Object} target Catalog Item or ordered Item pair.
      * @param {Object} samplingArea Normalized whole/bounds/AOI area.
      * @param {*} [context] Opaque request context returned to callbacks.
      * @return {Promise<Object|null>} Current statistics, or null after failure
      * or invalidation.
      */
     async activate(
-        item,
+        target,
         samplingArea,
         context = undefined
     ) {
-        const normalizedArea = normalizeRasterSamplingArea(samplingArea);
+        const normalizedArea = this.normalizeSamplingArea(samplingArea);
         this.clear();
-        this.item = item;
+        this.target = target;
         this.samplingArea = normalizedArea;
         const requestSequence = ++this.requestSequence;
         const abortController = new AbortController();
         this.abortController = abortController;
-        this.onLoading(item, normalizedArea, context);
+        this.onLoading(target, normalizedArea, context);
         let statistics;
         try {
             statistics = await this.loadStatistics(
-                item,
+                target,
                 normalizedArea,
                 abortController.signal
             );
@@ -104,7 +114,7 @@ export class RasterStatisticsController {
                 error.name !== "AbortError" &&
                 requestSequence === this.requestSequence
             ) {
-                this.onError(error, item, normalizedArea, context);
+                this.onError(error, target, normalizedArea, context);
             }
             return null;
         } finally {
@@ -115,26 +125,26 @@ export class RasterStatisticsController {
         if (requestSequence !== this.requestSequence) {
             return null;
         }
-        this.onResult(statistics, item, normalizedArea, context);
+        this.onResult(statistics, target, normalizedArea, context);
         return statistics;
     }
 
     /**
-     * Repeat the active Item's request after a recoverable failure.
+     * Repeat the active target's request after a recoverable failure.
      *
      * @param {*} [context] Opaque request context returned to callbacks.
-     * @return {Promise<Object|null>} Retried statistics or null without an Item.
+     * @return {Promise<Object|null>} Retried result or null without a target.
      */
     retry(context = undefined) {
-        const item = this.item;
+        const target = this.target;
         const samplingArea = this.samplingArea;
-        return item === null
+        return target === null
             ? Promise.resolve(null)
-            : this.activate(item, samplingArea, context);
+            : this.activate(target, samplingArea, context);
     }
 
     /**
-     * Abort and invalidate pending work and forget the active Item.
+     * Abort pending work and forget the active analysis target.
      *
      * @return {void}
      */
@@ -142,7 +152,7 @@ export class RasterStatisticsController {
         this.requestSequence += 1;
         this.abortController?.abort();
         this.abortController = null;
-        this.item = null;
+        this.target = null;
         this.samplingArea = null;
     }
 }

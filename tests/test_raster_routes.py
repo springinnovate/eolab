@@ -33,6 +33,20 @@ class _ConflictService:
         """Fail analysis with a browser-safe conflict."""
         raise RasterConflictError("controlled raster conflict")
 
+    async def get_paired(self, _: object) -> None:
+        """Fail paired analysis with the same browser-safe conflict.
+
+        Args:
+            _: Ignored validated paired-statistics request.
+
+        Returns:
+            None because the controlled request always fails.
+
+        Raises:
+            RasterConflictError: Always, with the controlled conflict.
+        """
+        raise RasterConflictError("controlled raster conflict")
+
 class _PublicationFailureService:
     """Raise one controlled categorized publication failure."""
 
@@ -132,6 +146,23 @@ def test_raster_routes_translate_application_errors_at_http_boundary() -> None:
     )
     assert statistics_response.status_code == 409
     assert statistics_response.json() == {
+        "detail": "controlled raster conflict"
+    }
+    paired_response = TestClient(application).post(
+        "/api/raster-analysis/paired-statistics",
+        json={
+            "xRaster": {
+                "collectionId": "eolab-mounted-geotiffs",
+                "itemId": "geotiff-0123456789abcdef01234567",
+            },
+            "yRaster": {
+                "collectionId": "eolab-mounted-geotiffs",
+                "itemId": "geotiff-abcdef0123456789abcdef01",
+            },
+        },
+    )
+    assert paired_response.status_code == 409
+    assert paired_response.json() == {
         "detail": "controlled raster conflict"
     }
     assert TestClient(application).post(

@@ -1,6 +1,7 @@
 """Test rendering-independent catalog raster source authorization."""
 
 import asyncio
+import ast
 from pathlib import Path
 from typing import Any
 
@@ -175,3 +176,61 @@ def test_source_authorization_rejects_missing_and_stale_scan_identity(
     )
     with pytest.raises(RasterConflictError, match="scan this source again"):
         asyncio.run(missing_authorizer.authorize(request))
+
+
+def test_paired_analysis_has_no_rendering_or_publication_dependency() -> None:
+    """Prevent paired statistics from acquiring WMS publication knowledge.
+
+    Returns:
+        None after checking every paired-analysis module import.
+    """
+    paired_modules = (
+        Path("src/eolab_app/raster/paired_statistics.py"),
+        Path("src/eolab_app/raster/source_authorization.py"),
+        Path("src/eolab_app/raster/statistics_service.py"),
+        Path("src/eolab_app/routes/raster_analysis.py"),
+    )
+    forbidden_prefixes = (
+        "eolab_app.rendering",
+        "eolab_app.raster.assessment",
+        "eolab_app.raster.detail_preview",
+        "eolab_app.raster.detail_preview_service",
+        "eolab_app.raster.eligibility",
+        "eolab_app.raster.exact_detail",
+        "eolab_app.raster.geoserver",
+        "eolab_app.raster.publication",
+        "eolab_app.raster.wms_authorization",
+    )
+
+    for source_path in paired_modules:
+        source = source_path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(source_path))
+        imported_modules = {
+            node.module
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module is not None
+        } | {
+            alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Import)
+            for alias in node.names
+        }
+        imported_symbols = {
+            (node.module, alias.name)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module is not None
+            for alias in node.names
+        }
+        assert not {
+            imported_module
+            for imported_module in imported_modules
+            if any(
+                imported_module == prefix
+                or imported_module.startswith(f"{prefix}.")
+                for prefix in forbidden_prefixes
+            )
+        }
+        assert (
+            "eolab_app.raster.sources",
+            "PublishedRasterRegistry",
+        ) not in imported_symbols

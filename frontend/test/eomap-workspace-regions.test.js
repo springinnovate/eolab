@@ -211,6 +211,7 @@ test("Map layers owns layer presentation, appearance, cutoffs, and limitations",
     const layerStack = requireElementRange("raster-layer-stack");
     const appearance = requireElementRange("raster-appearance-controls");
     const renderingFeedback = requireElementRange("catalog-layer-status");
+    const bivariateControls = requireElementRange("raster-bivariate-controls");
     const percentileControls = requireElementRange(
         "raster-percentile-controls"
     );
@@ -220,6 +221,9 @@ test("Map layers owns layer presentation, appearance, cutoffs, and limitations",
         "raster-layer-stack-status",
         "raster-appearance-controls",
         "raster-percentile-controls",
+        "raster-bivariate-controls",
+        "raster-comparison-mode",
+        "raster-bivariate-legend",
         "raster-palette",
         "raster-detail-preview-controls",
         "catalog-layer-status",
@@ -232,6 +236,20 @@ test("Map layers owns layer presentation, appearance, cutoffs, and limitations",
     }
     assert.match(layerStack.source, /data-eomap-region="map-layers"/);
     assert.match(appearance.source, /data-eomap-region="map-layers"/);
+    assert.match(
+        bivariateControls.source,
+        /<h3 id="raster-bivariate-heading">Raster histograms<\/h3>/
+    );
+    assert.match(bivariateControls.source, /<span>Histogram mode<\/span>/);
+    assert.match(bivariateControls.source, />1D – single raster<\/option>/);
+    assert.match(
+        bivariateControls.source,
+        />2D – bivariate rasters<\/option>/
+    );
+    assert.match(
+        bivariateControls.source,
+        /Selecting 2D opens Histograms and calculates the paired\s+distribution automatically\./
+    );
     assert.ok(
         renderingFeedback.start < layerStack.start,
         "Rendering feedback should precede the retained layer list"
@@ -254,6 +272,7 @@ test("Map layers owns layer presentation, appearance, cutoffs, and limitations",
     );
     for (const analysisControl of [
         "raster-style-controls",
+        "raster-bivariate-statistics",
         "raster-histogram-list",
         "raster-histogram",
         "temporary-aoi",
@@ -292,6 +311,9 @@ test("Histograms own shared sampling, per-layer histograms, AOI, and pixel guida
     const sampling = requireElementRange("raster-sampling-area-controls");
     const histogramList = requireElementRange("raster-histogram-list");
     const histogram = requireElementRange("raster-histogram");
+    const pairedHistogram = requireElementRange(
+        "raster-bivariate-statistics"
+    );
     const temporaryAoi = requireElementRange("temporary-aoi");
 
     assert.match(composite.source, /<legend>Sample area<\/legend>/);
@@ -316,6 +338,15 @@ test("Histograms own shared sampling, per-layer histograms, AOI, and pixel guida
     assert.match(histogram.source, /id="raster-histogram-detail-layer"/);
     assert.match(histogram.source, /id="raster-histogram-status"/);
     assert.match(histogram.source, /id="raster-histogram-chart"/);
+    assert.match(
+        pairedHistogram.source,
+        /<h3 id="raster-bivariate-statistics-heading">Paired raster distribution<\/h3>/
+    );
+    assert.match(pairedHistogram.source, /id="raster-bivariate-histogram"/);
+    assert.match(
+        pairedHistogram.source,
+        /data-eomap-region="raster-interpretation"/
+    );
     assert.match(analysisRegion.source, /id="pixel-probe-guidance-heading"/);
     assert.match(
         analysisRegion.source,
@@ -327,6 +358,7 @@ test("Histograms own shared sampling, per-layer histograms, AOI, and pixel guida
         "raster-layer-stack",
         "raster-appearance-controls",
         "raster-percentile-controls",
+        "raster-bivariate-controls",
         "raster-detail-preview-controls",
     ]) {
         assert.doesNotMatch(

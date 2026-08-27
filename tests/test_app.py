@@ -1134,25 +1134,117 @@ def test_raster_statistics_sample_a_rendering_ineligible_projected_raster(
     }
 
 
+@pytest.mark.parametrize(
+    ("service_method", "request_path", "request_document"),
+    (
+        (
+            "get",
+            "/api/raster-analysis/statistics",
+            {
+                "collectionId": "eolab-mounted-geotiffs",
+                "itemId": TEST_GEOTIFF_ITEM_ID,
+            },
+        ),
+        (
+            "get_paired",
+            "/api/raster-analysis/paired-statistics",
+            {
+                "xRaster": {
+                    "collectionId": "eolab-mounted-geotiffs",
+                    "itemId": TEST_GEOTIFF_ITEM_ID,
+                },
+                "yRaster": {
+                    "collectionId": "eolab-mounted-geotiffs",
+                    "itemId": "geotiff-abcdef0123456789abcdef01",
+                },
+            },
+        ),
+    ),
+    ids=("single-raster", "paired-rasters"),
+)
 def test_raster_statistics_disconnect_cancels_the_service_waiter(
     configured_environment: None,
     monkeypatch: pytest.MonkeyPatch,
     version_file_path: Path,
+    service_method: str,
+    request_path: str,
+    request_document: dict[str, object],
 ) -> None:
-    """Discard queued statistics work when an aborted fetch disconnects."""
+    """Discard queued statistics work when an aborted fetch disconnects.
+
+    Args:
+        configured_environment: Fixture configuring all application providers.
+        monkeypatch: Fixture replacing the real bounded statistics service.
+        version_file_path: Controlled application version file.
+        service_method: Service method owned by the requested endpoint.
+        request_path: Raster-analysis endpoint under test.
+        request_document: Valid catalog-identity request document.
+
+    Returns:
+        None after asserting route-level cancellation behavior.
+    """
 
     class BlockingStatisticsService:
+        """Expose route cancellation through either statistics method.
+
+        Attributes:
+            started: Signal set when the expected service method begins.
+            canceled: Signal set when request cancellation reaches the method.
+        """
+
         def __init__(self) -> None:
+            """Create route-observation and cancellation signals."""
             self.started = asyncio.Event()
             self.canceled = asyncio.Event()
 
-        async def get(self, _request: object) -> None:
+        async def _block(self, method: str) -> None:
+            """Block the expected route method until its task is canceled.
+
+            Args:
+                method: Name of the service method invoked by the route.
+
+            Returns:
+                None if the controlled request were allowed to finish.
+
+            Raises:
+                AssertionError: If the endpoint invokes the wrong service API.
+                asyncio.CancelledError: When the browser disconnects.
+            """
+            assert method == service_method
             self.started.set()
             try:
                 await asyncio.Event().wait()
             except asyncio.CancelledError:
                 self.canceled.set()
                 raise
+
+        async def get(self, _request: object) -> None:
+            """Block one ordinary-statistics request until cancellation.
+
+            Args:
+                _request: Validated ordinary-statistics request.
+
+            Returns:
+                None if the request were allowed to finish.
+
+            Raises:
+                asyncio.CancelledError: When the browser disconnects.
+            """
+            await self._block("get")
+
+        async def get_paired(self, _request: object) -> None:
+            """Block one paired-statistics request until cancellation.
+
+            Args:
+                _request: Validated paired-statistics request.
+
+            Returns:
+                None if the request were allowed to finish.
+
+            Raises:
+                asyncio.CancelledError: When the browser disconnects.
+            """
+            await self._block("get_paired")
 
     statistics_service = BlockingStatisticsService()
     monkeypatch.setattr(
@@ -1162,20 +1254,15 @@ def test_raster_statistics_disconnect_cancels_the_service_waiter(
         ),
     )
     application = create_app(version_file_path)
-    request_body = json.dumps(
-        {
-            "collectionId": "eolab-mounted-geotiffs",
-            "itemId": TEST_GEOTIFF_ITEM_ID,
-        }
-    ).encode()
+    request_body = json.dumps(request_document).encode()
     scope = {
         "type": "http",
         "asgi": {"version": "3.0", "spec_version": "2.3"},
         "http_version": "1.1",
         "method": "POST",
         "scheme": "http",
-        "path": "/api/raster-analysis/statistics",
-        "raw_path": b"/api/raster-analysis/statistics",
+        "path": request_path,
+        "raw_path": request_path.encode(),
         "query_string": b"",
         "headers": [
             (b"host", b"testserver"),
@@ -1189,6 +1276,11 @@ def test_raster_statistics_disconnect_cancels_the_service_waiter(
     }
 
     async def exercise_disconnect() -> list[dict[str, object]]:
+        """Send an ASGI disconnect while statistics work is pending.
+
+        Returns:
+            ASGI response messages emitted after route cancellation.
+        """
         request_messages: asyncio.Queue[dict[str, object]] = asyncio.Queue()
         await request_messages.put(
             {
@@ -1200,9 +1292,22 @@ def test_raster_statistics_disconnect_cancels_the_service_waiter(
         response_messages: list[dict[str, object]] = []
 
         async def receive() -> dict[str, object]:
+            """Return the next controlled ASGI request message.
+
+            Returns:
+                Request body or disconnect message queued by this test.
+            """
             return await request_messages.get()
 
         async def send(message: dict[str, object]) -> None:
+            """Record one ASGI response message.
+
+            Args:
+                message: Response message emitted by the application.
+
+            Returns:
+                None after recording the response message.
+            """
             response_messages.append(message)
 
         async with application.router.lifespan_context(application):

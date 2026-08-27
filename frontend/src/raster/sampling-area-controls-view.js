@@ -65,6 +65,8 @@ export class RasterSamplingAreaControlsView {
             documentContext,
             "#raster-sample-window-status"
         );
+        this.temporaryAoi = null;
+        this.temporaryAoiCompatible = true;
         this.handlers = null;
         this.boundSampleWindowRangeInput =
             this.#handleSampleWindowRangeInput.bind(this);
@@ -228,7 +230,36 @@ export class RasterSamplingAreaControlsView {
      * @return {void}
      */
     setTemporaryAoiAvailability(temporaryAoi) {
-        this.useTemporaryAoiButton.disabled = temporaryAoi === null;
+        this.temporaryAoi = temporaryAoi;
+        this.#synchronizeTemporaryAoiAvailability();
+    }
+
+    /**
+     * Set whether the active analysis mode accepts temporary AOI lifecycle IDs.
+     *
+     * @param {boolean} isCompatible Whether temporary AOI selection is allowed.
+     * @return {void}
+     */
+    setTemporaryAoiCompatible(isCompatible) {
+        this.temporaryAoiCompatible = isCompatible;
+        this.#synchronizeTemporaryAoiAvailability();
+    }
+
+    /**
+     * Synchronize retained AOI availability with active-mode compatibility.
+     *
+     * @return {void}
+     */
+    #synchronizeTemporaryAoiAvailability() {
+        const temporaryAoi = this.temporaryAoi;
+        this.useTemporaryAoiButton.disabled =
+            temporaryAoi === null || !this.temporaryAoiCompatible;
+        if (!this.temporaryAoiCompatible) {
+            this.useTemporaryAoiButton.removeAttribute("aria-label");
+            this.useTemporaryAoiButton.title =
+                "This histogram does not support uploaded AOI sampling.";
+            return;
+        }
         if (temporaryAoi === null) {
             this.useTemporaryAoiButton.removeAttribute("aria-label");
             this.useTemporaryAoiButton.title =

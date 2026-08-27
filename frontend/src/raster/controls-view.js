@@ -9,6 +9,7 @@
  * rendering, statistics, or lifecycle decisions.
  */
 import { RasterAppearanceControlsView } from "./appearance-controls-view.js";
+import { BivariateRasterControlsView } from "./bivariate-controls-view.js";
 import { RasterHistogramControlsView } from "./histogram-controls-view.js";
 import {
     RasterPercentileControlsView,
@@ -40,6 +41,12 @@ import {
  * @property {() => void} onSelectSampleWindow Enables pointer window selection.
  * @property {() => void} onClearSampleWindow Restores whole-raster statistics.
  * @property {() => void} onUseTemporaryAoi Selects the retained uploaded AOI.
+ * @property {(mode: string) => void} onBivariateModeChange Changes explicit
+ * overlay/bivariate mode.
+ * @property {(paletteName: string) => void} onBivariatePaletteChange Changes
+ * the coordinated two-axis palette.
+ * @property {() => void} onBivariateSwapAxes Swaps deterministic X/Y roles.
+ * @property {() => void} onRetryPairedStatistics Retries paired statistics.
  */
 
 /**
@@ -49,6 +56,7 @@ import {
 export class RasterControlsView {
     #activeLayerLabel;
     #appearanceView;
+    #bivariateView;
     #histogramView;
     #percentileView;
     #pixelProbeView;
@@ -72,6 +80,7 @@ export class RasterControlsView {
             "#raster-active-layer-label"
         );
         this.#appearanceView = new RasterAppearanceControlsView(documentContext);
+        this.#bivariateView = new BivariateRasterControlsView(documentContext);
         this.#histogramView = new RasterHistogramControlsView(documentContext);
         this.#percentileView = new RasterPercentileControlsView(
             documentContext
@@ -90,6 +99,7 @@ export class RasterControlsView {
      */
     populatePalettes(palettes) {
         this.#appearanceView.populatePalettes(palettes);
+        this.#bivariateView.populatePalettes();
     }
 
     /**
@@ -128,6 +138,7 @@ export class RasterControlsView {
      */
     bind(handlers) {
         this.#appearanceView.bind(handlers);
+        this.#bivariateView.bind(handlers);
         this.#histogramView.bind(handlers);
         this.#percentileView.bind(handlers);
         this.#samplingAreaView.bind(handlers);
@@ -136,6 +147,7 @@ export class RasterControlsView {
     /** Remove every listener installed by {@link bind}. @return {void} */
     unbind() {
         this.#appearanceView.unbind();
+        this.#bivariateView.unbind();
         this.#histogramView.unbind();
         this.#percentileView.unbind();
         this.#samplingAreaView.unbind();
@@ -451,6 +463,96 @@ export class RasterControlsView {
         if (!isVisible) {
             this.setRenderingControlsAvailable(false);
         }
+    }
+
+    /**
+     * Set whether ordinary single-raster appearance editing is available.
+     *
+     * @param {boolean} isEnabled Whether ordinary appearance is editable.
+     * @return {void}
+     */
+    setAppearanceEnabled(isEnabled) {
+        this.#appearanceView.setEnabled(isEnabled);
+        this.#percentileView.setModeCompatible(isEnabled);
+    }
+
+    /**
+     * Show the ordinary detailed histogram only in overlay mode.
+     *
+     * @param {boolean} isVisible Whether the histogram region is compatible.
+     * @return {void}
+     */
+    setUnivariateHistogramVisible(isVisible) {
+        this.#histogramView.setModeCompatible(isVisible);
+    }
+
+    /**
+     * Present current eligibility for explicit bivariate mode.
+     *
+     * @param {boolean} canEnter Whether two catalog raster candidates exist.
+     * @param {string} guidance User-facing eligibility or active guidance.
+     * @return {void}
+     */
+    setBivariateAvailability(canEnter, guidance) {
+        this.#bivariateView.setAvailability(canEnter, guidance);
+    }
+
+    /**
+     * Render explicit bivariate mode, roles, palette, and 2D legend.
+     *
+     * @param {Object} state Viewer-owned bivariate presentation state.
+     * @return {void}
+     */
+    renderBivariateMode(state) {
+        this.#bivariateView.renderMode(state);
+    }
+
+    /**
+     * Present paired-statistics loading without discarding a current chart.
+     *
+     * @param {string} message Loading guidance.
+     * @return {void}
+     */
+    setPairedStatisticsLoading(message) {
+        this.#bivariateView.setStatisticsLoading(message);
+    }
+
+    /**
+     * Present a paired-statistics failure and optional retry action.
+     *
+     * @param {Error} error Current paired request failure.
+     * @param {boolean} canRetry Whether retry is useful.
+     * @return {void}
+     */
+    renderPairedStatisticsError(error, canRetry) {
+        this.#bivariateView.renderStatisticsError(error, canRetry);
+    }
+
+    /**
+     * Render the ESOS-C-compatible 2D histogram and colored marginals.
+     *
+     * @param {Object} statistics Validated paired-statistics response.
+     * @param {Object} presentation Current X/Y labels, styles, and palette.
+     * @return {void}
+     */
+    renderPairedStatistics(statistics, presentation) {
+        this.#bivariateView.renderStatistics(statistics, presentation);
+    }
+
+    /** Clear paired-statistics presentation. @return {void} */
+    clearPairedStatistics() {
+        this.#bivariateView.clearStatistics();
+    }
+
+    /**
+     * Mark the paired histogram bin containing a dual probe result.
+     *
+     * @param {number} xValue Finite X sample.
+     * @param {number} yValue Finite Y sample.
+     * @return {void}
+     */
+    highlightPairedStatistics(xValue, yValue) {
+        this.#bivariateView.highlightPair(xValue, yValue);
     }
 
     /** Return whether the pointer probe is visible. @return {boolean} Visibility. */

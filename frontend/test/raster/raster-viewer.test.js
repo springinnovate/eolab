@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { initializeRasterViewer } from "../../src/raster/raster-viewer.js";
 import { RasterAnalysisRequestError } from "../../src/raster/analysis-api.js";
+import { DEFAULT_RASTER_STYLE } from "../../src/raster/style.js";
 import {
     EXACT_RASTER_STATISTICS,
     MOUNTED_GEOTIFF_ITEM,
@@ -99,6 +100,7 @@ function createFakeMap() {
         },
         removeLayer(layer) {
             layers.delete(layer);
+            layer.detach?.();
         },
     };
 }
@@ -110,15 +112,26 @@ function createFakeMap() {
  * @return {Object} Fake WMS or rectangle layer.
  */
 function createFakeLayer(details = {}) {
+    let container = { style: {} };
     return {
         ...details,
         eventHandlers: new Map(),
         parameters: null,
         parameterUpdates: [],
         boundsHistory: details.bounds === undefined ? [] : [details.bounds],
+        get container() {
+            return container;
+        },
+        getContainer() {
+            return container;
+        },
         addTo(map) {
+            container ??= { style: {} };
             map.layers.add(this);
             return this;
+        },
+        detach() {
+            container = null;
         },
         once(type, handler) {
             this.eventHandlers.set(type, handler);
@@ -135,6 +148,21 @@ function createFakeLayer(details = {}) {
         },
         setZIndex(zIndex) {
             this.zIndex = zIndex;
+        },
+    };
+}
+
+/**
+ * Build the paired-result fields consumed by composition tests.
+ *
+ * @return {Object} Contract-shaped paired ranges and fixed histogram edges.
+ */
+function pairedStatistics() {
+    return {
+        pairedSampleCount: 1,
+        histogram: {
+            xEdges: Array.from({ length: 33 }, (_, index) => index),
+            yEdges: Array.from({ length: 33 }, (_, index) => index + 100),
         },
     };
 }
@@ -282,6 +310,9 @@ function createFakeControlsView() {
         setTemporaryAoiAvailability(temporaryAoi) {
             this.availableTemporaryAoi = temporaryAoi;
         },
+        setTemporaryAoiCompatible(isCompatible) {
+            this.temporaryAoiCompatible = isCompatible;
+        },
         setSamplingAreaMode(mode) {
             this.samplingAreaMode = mode;
         },
@@ -307,6 +338,36 @@ function createFakeControlsView() {
         },
         setControlsVisible(isVisible) {
             this.controlsVisible = isVisible;
+        },
+        setAppearanceEnabled(isEnabled) {
+            this.appearanceEnabled = isEnabled;
+        },
+        setUnivariateHistogramVisible(isVisible) {
+            this.univariateHistogramVisible = isVisible;
+        },
+        setBivariateAvailability(canEnter, guidance) {
+            this.bivariateAvailability = { canEnter, guidance };
+        },
+        renderBivariateMode(state) {
+            this.bivariateMode = state;
+        },
+        setPairedStatisticsLoading(message) {
+            this.pairedStatisticsLoading = message;
+        },
+        renderPairedStatistics(statistics, presentation) {
+            this.pairedStatistics = statistics;
+            this.pairedPresentation = presentation;
+        },
+        renderPairedStatisticsError(error, canRetry) {
+            this.pairedStatisticsError = { error, canRetry };
+        },
+        clearPairedStatistics() {
+            this.pairedStatistics = null;
+            this.pairedStatisticsClearCount =
+                (this.pairedStatisticsClearCount ?? 0) + 1;
+        },
+        highlightPairedStatistics(xValue, yValue) {
+            this.pairedHighlight = { xValue, yValue };
         },
         setActiveLayer(label, visible) {
             this.activeLayer = { label, visible };
@@ -425,6 +486,398 @@ function selectedBoundsFromArea(samplingArea) {
 function flushPromises() {
     return new Promise((resolve) => setImmediate(resolve));
 }
+
+test("selecting 2D opens paired analysis without a map interaction", async () => {
+    const leafletMap = createFakeMap();
+    const { leaflet, wmsLayers } = createFakeLeaflet();
+    const controlsView = createFakeControlsView();
+    const layerStackView = createFakeLayerStackView();
+    const pairedRequests = [];
+    const pairedPixelRequests = [];
+    let histogramPresentationRequests = 0;
+    const firstItem = createRasterItem("first");
+    const secondItem = createRasterItem("second");
+    const viewer = initializeRasterViewer(
+        {
+            wmsUrl: "/geoserver/eolab/wms",
+            leafletMap,
+            leaflet,
+            onTileError() {},
+            onHistogramRequested() {
+                histogramPresentationRequests += 1;
+            },
+        },
+        {
+            controlsView,
+            layerStackView,
+            publishRaster: async (item) => ({
+                layerName: `eolab:${item.id}`,
+                bbox: [-180, -90, 180, 90],
+            }),
+            loadStatistics: async () => RASTER_STATISTICS,
+            loadPairedStatistics: async (xItem, yItem, area) => {
+                pairedRequests.push({ xItem, yItem, area });
+                return pairedStatistics();
+            },
+            samplePixel: async () => ({ inBounds: true, value: 1 }),
+            samplePairPixels: async (pair, point) => {
+                pairedPixelRequests.push({ pair, point });
+                return {
+                    x: {
+                        available: true,
+                        pixel: { inBounds: true, value: 9 },
+                        error: null,
+                    },
+                    y: {
+                        available: true,
+                        pixel: { inBounds: true, value: 4 },
+                        error: null,
+                    },
+                };
+            },
+            viewport: { innerWidth: 1280, innerHeight: 720 },
+        },
+    );
+
+    viewer.activateAnalysis(firstItem);
+    await flushPromises();
+    await viewer.show(firstItem);
+    await flushPromises();
+    viewer.activateAnalysis(secondItem);
+    await flushPromises();
+    await viewer.show(secondItem);
+    await flushPromises();
+    assert.equal(controlsView.bivariateAvailability.canEnter, true);
+    const [top, bottom] = layerStackView.layers;
+    layerStackView.handlers.onOpacity(bottom.key, 0.4);
+    controlsView.handlers.onBivariateModeChange("bivariate");
+    await flushPromises();
+
+    assert.deepEqual(
+        pairedRequests.map(({ xItem, yItem, area }) => ({
+            x: xItem.id,
+            y: yItem.id,
+            area: area.kind,
+        })),
+        [{ x: secondItem.id, y: firstItem.id, area: "wholeOverlap" }],
+    );
+    assert.equal(controlsView.bivariateMode.active, true);
+    assert.equal(histogramPresentationRequests, 1);
+    assert.equal(pairedPixelRequests.length, 0);
+    assert.match(
+        controlsView.bivariateAvailability.guidance,
+        /2D histogram mode is active/
+    );
+    assert.equal(controlsView.appearanceEnabled, false);
+    assert.equal(controlsView.univariateHistogramVisible, false);
+    assert.equal(controlsView.temporaryAoiCompatible, false);
+    assert.ok(layerStackView.layers.every((layer) => layer.opacityLocked));
+    assert.ok(layerStackView.layers.every(
+        (layer) => layer.effectiveOpacity === 1,
+    ));
+    assert.equal(wmsLayers[0].opacity, 1);
+    assert.equal(wmsLayers[1].opacity, 1);
+    assert.equal(wmsLayers[0].container.style.mixBlendMode, "normal");
+    assert.equal(wmsLayers[1].container.style.mixBlendMode, "plus-lighter");
+    assert.deepEqual(
+        [
+            controlsView.bivariateMode.xStyle.minimum,
+            controlsView.bivariateMode.xStyle.midpoint,
+            controlsView.bivariateMode.xStyle.maximum,
+        ],
+        [-4, 3, 20],
+    );
+    assert.deepEqual(
+        [
+            controlsView.bivariateMode.yStyle.minimum,
+            controlsView.bivariateMode.yStyle.midpoint,
+            controlsView.bivariateMode.yStyle.maximum,
+        ],
+        [-4, 3, 20],
+    );
+
+    controlsView.handlers.onBivariatePaletteChange("steelRose");
+    assert.equal(controlsView.bivariateMode.paletteName, "steelRose");
+    assert.match(wmsLayers[0].parameters.env, /cmin:#111827/);
+    assert.match(wmsLayers[1].parameters.env, /cmin:#111827/);
+
+    leafletMap.emit("mousemove", { latlng: { lng: -122, lat: 49 } });
+    await flushPromises();
+    assert.equal(pairedPixelRequests.length, 1);
+    assert.deepEqual(controlsView.pairedHighlight, { xValue: 9, yValue: 4 });
+    assert.match(controlsView.pixelProbeContent.detail, /second\.tif: 9/);
+    assert.match(controlsView.pixelProbeContent.detail, /first\.tif: 4/);
+
+    wmsLayers[0].eventHandlers.get("tileerror")();
+    assert.equal(controlsView.bivariateMode.active, true);
+    assert.equal(controlsView.bivariateAvailability.canEnter, true);
+
+    layerStackView.handlers.onVisibility(top.key, false);
+    assert.equal(controlsView.bivariateMode.active, true);
+    assert.equal(controlsView.bivariateAvailability.canEnter, true);
+    assert.equal(controlsView.appearanceEnabled, false);
+    assert.equal(controlsView.univariateHistogramVisible, false);
+    assert.equal(wmsLayers[0].opacity, 1);
+    assert.equal(wmsLayers[0].container.style.mixBlendMode, "normal");
+    assert.equal(wmsLayers[1].container, null);
+
+    controlsView.handlers.onBivariateModeChange("overlay");
+    assert.equal(controlsView.bivariateMode.active, false);
+    controlsView.handlers.onBivariateModeChange("bivariate");
+    await flushPromises();
+    assert.equal(wmsLayers[0].container.style.mixBlendMode, "normal");
+    assert.equal(wmsLayers[1].container, null);
+
+    layerStackView.handlers.onVisibility(top.key, true);
+    assert.equal(controlsView.bivariateMode.active, true);
+    assert.equal(wmsLayers[1].container.style.mixBlendMode, "plus-lighter");
+    layerStackView.handlers.onRemove(bottom.key);
+    assert.equal(controlsView.bivariateMode.active, true);
+    assert.equal(controlsView.bivariateAvailability.canEnter, true);
+    assert.equal(wmsLayers[1].container.style.mixBlendMode, "normal");
+    assert.equal(viewer.contains(firstItem), false);
+    assert.equal(viewer.contains(secondItem), true);
+    controlsView.handlers.onBivariateModeChange("overlay");
+    assert.equal(controlsView.bivariateMode.active, false);
+    viewer.destroy();
+});
+
+test("catalog selections enable paired analysis without publication", async () => {
+    const leafletMap = createFakeMap();
+    const { leaflet, wmsLayers } = createFakeLeaflet();
+    const controlsView = createFakeControlsView();
+    const pairedRequests = [];
+    const firstItem = createRasterItem("analysis-only-first");
+    const secondItem = createRasterItem("analysis-only-second");
+    const viewer = initializeRasterViewer(
+        {
+            wmsUrl: "/geoserver/eolab/wms",
+            leafletMap,
+            leaflet,
+            onTileError() {},
+        },
+        {
+            controlsView,
+            layerStackView: createFakeLayerStackView(),
+            publishRaster: async () => {
+                throw new Error("paired analysis must not publish WMS");
+            },
+            loadStatistics: () => new Promise(() => {}),
+            loadPairedStatistics: async (xItem, yItem, area) => {
+                pairedRequests.push({ xItem, yItem, area });
+                const statistics = pairedStatistics();
+                statistics.histogram.xEdges = Array.from(
+                    { length: 33 },
+                    (_, index) => index * 100 / 32,
+                );
+                return statistics;
+            },
+            samplePixel: async () => ({ inBounds: true, value: 1 }),
+            samplePairPixels: async () => ({
+                x: { available: true, pixel: { value: 1 }, error: null },
+                y: { available: true, pixel: { value: 2 }, error: null },
+            }),
+            viewport: { innerWidth: 1280, innerHeight: 720 },
+        },
+    );
+
+    viewer.activateAnalysis(firstItem);
+    await flushPromises();
+    viewer.activateAnalysis(secondItem);
+    await flushPromises();
+
+    assert.equal(wmsLayers.length, 0);
+    assert.equal(controlsView.bivariateAvailability.canEnter, true);
+    controlsView.handlers.onBivariateModeChange("bivariate");
+    await flushPromises();
+
+    assert.equal(controlsView.bivariateMode.active, true);
+    assert.deepEqual(
+        pairedRequests.map(({ xItem, yItem, area }) => ({
+            x: xItem.id,
+            y: yItem.id,
+            area: area.kind,
+        })),
+        [{
+            x: secondItem.id,
+            y: firstItem.id,
+            area: "wholeOverlap",
+        }],
+    );
+    assert.equal(
+        controlsView.pairedPresentation.xLabel,
+        "analysis-only-second.tif",
+    );
+    assert.equal(
+        controlsView.pairedPresentation.yLabel,
+        "analysis-only-first.tif",
+    );
+    assert.deepEqual(
+        [
+            controlsView.bivariateMode.xStyle.minimum,
+            controlsView.bivariateMode.xStyle.midpoint,
+            controlsView.bivariateMode.xStyle.maximum,
+        ],
+        [0, 50, 100],
+    );
+    assert.deepEqual(
+        [
+            controlsView.bivariateMode.yStyle.minimum,
+            controlsView.bivariateMode.yStyle.midpoint,
+            controlsView.bivariateMode.yStyle.maximum,
+        ],
+        [100, 116, 132],
+    );
+    viewer.activateAnalysis(secondItem);
+    await flushPromises();
+    assert.deepEqual(
+        [
+            controlsView.bivariateMode.xStyle.minimum,
+            controlsView.bivariateMode.xStyle.midpoint,
+            controlsView.bivariateMode.xStyle.maximum,
+        ],
+        [0, 50, 100],
+    );
+    viewer.activateSampled(secondItem, DEFAULT_RASTER_STYLE, () => {});
+    const firstFiniteStyle = {
+        ...DEFAULT_RASTER_STYLE,
+        minimum: -10,
+        midpoint: 10,
+        maximum: 30,
+    };
+    viewer.updateSampledInitialStyle(secondItem, firstFiniteStyle);
+    assert.deepEqual(
+        [
+            controlsView.pairedPresentation.xStyle.minimum,
+            controlsView.pairedPresentation.xStyle.midpoint,
+            controlsView.pairedPresentation.xStyle.maximum,
+        ],
+        [-10, 10, 30],
+    );
+    viewer.removeSampled(secondItem);
+    viewer.deactivateAnalysis(secondItem);
+    assert.equal(controlsView.controlsVisible, true);
+    leafletMap.emit("click", { latlng: { lng: -100, lat: 40 } });
+    await flushPromises();
+    assert.equal(pairedRequests.at(-1).area.kind, "selectedArea");
+    controlsView.handlers.onBivariateModeChange("overlay");
+    assert.equal(controlsView.controlsVisible, false);
+    assert.equal(wmsLayers.length, 0);
+    viewer.destroy();
+});
+
+test("2D sampling remains independent from raster sessions and renderers", async () => {
+    const leafletMap = createFakeMap();
+    const { leaflet } = createFakeLeaflet();
+    const controlsView = createFakeControlsView();
+    const layerStackView = createFakeLayerStackView();
+    const pairedRequests = [];
+    const ordinaryRequests = [];
+    let resolveSelectedPair;
+    const firstItem = createRasterItem("sampling-first");
+    const secondItem = createRasterItem("sampling-second");
+    const renderingOnlyItem = createRasterItem("rendering-only");
+    const viewer = initializeRasterViewer(
+        {
+            wmsUrl: "/geoserver/eolab/wms",
+            leafletMap,
+            leaflet,
+            onTileError() {},
+        },
+        {
+            controlsView,
+            layerStackView,
+            publishRaster: async (item) => ({
+                layerName: `eolab:${item.id}`,
+                bbox: [-180, -90, 180, 90],
+            }),
+            loadStatistics: async (item, area) => {
+                ordinaryRequests.push({ item, area });
+                return RASTER_STATISTICS;
+            },
+            loadPairedStatistics: async (xItem, yItem, area) => {
+                pairedRequests.push({ xItem, yItem, area });
+                if (pairedRequests.length === 2) {
+                    return new Promise((resolve) => {
+                        resolveSelectedPair = resolve;
+                    });
+                }
+                return pairedStatistics();
+            },
+            samplePixel: async () => ({ inBounds: true, value: 1 }),
+            samplePairPixels: async () => ({
+                x: { available: true, pixel: { value: 1 }, error: null },
+                y: { available: true, pixel: { value: 2 }, error: null },
+            }),
+            viewport: { innerWidth: 1280, innerHeight: 720 },
+        },
+    );
+
+    viewer.activateAnalysis(firstItem);
+    await flushPromises();
+    viewer.activateAnalysis(secondItem);
+    await flushPromises();
+    leafletMap.emit("click", { latlng: { lng: -80, lat: 20 } });
+    await flushPromises();
+    const ordinaryBounds = ordinaryRequests.at(-1).area.selectedBounds;
+    controlsView.handlers.onBivariateModeChange("bivariate");
+    await flushPromises();
+    assert.equal(controlsView.pairedStatistics.pairedSampleCount, 1);
+
+    const clearsBeforeSelection = controlsView.pairedStatisticsClearCount;
+    leafletMap.emit("click", { latlng: { lng: -100, lat: 40 } });
+    assert.equal(pairedRequests.length, 2);
+    assert.equal(pairedRequests[1].area.kind, "selectedArea");
+    assert.equal(controlsView.pairedStatistics, null);
+    assert.equal(
+        controlsView.pairedStatisticsClearCount,
+        clearsBeforeSelection + 1,
+    );
+
+    resolveSelectedPair(pairedStatistics());
+    await flushPromises();
+    assert.equal(controlsView.pairedStatistics.pairedSampleCount, 1);
+
+    controlsView.handlers.onBivariateModeChange("overlay");
+    assert.equal(controlsView.samplingAreaMode, "selectedArea");
+    controlsView.handlers.onBivariateModeChange("bivariate");
+    await flushPromises();
+    assert.deepEqual(
+        pairedRequests.at(-1).area.selectedBounds,
+        ordinaryBounds,
+    );
+    viewer.activateAnalysis(firstItem);
+    await flushPromises();
+    assert.equal(controlsView.bivariateMode.active, true);
+    assert.equal(controlsView.samplingAreaMode, "selectedArea");
+    assert.equal(pairedRequests.length, 3);
+
+    const ordinaryCountBeforeClear = ordinaryRequests.length;
+    controlsView.handlers.onClearSampleWindow();
+    await flushPromises();
+    assert.equal(pairedRequests.at(-1).area.kind, "wholeOverlap");
+    assert.equal(controlsView.samplingAreaMode, "wholeRaster");
+    assert.equal(ordinaryRequests.length, ordinaryCountBeforeClear);
+
+    viewer.activateSampled(
+        renderingOnlyItem,
+        {
+            minimum: 0,
+            midpoint: 1,
+            maximum: 2,
+            minimumColor: "#000000",
+            midpointColor: "#777777",
+            maximumColor: "#ffffff",
+        },
+        () => {},
+    );
+    await viewer.show(renderingOnlyItem);
+    await flushPromises();
+    assert.equal(controlsView.bivariateMode.active, true);
+    assert.equal(controlsView.bivariateMode.xLabel, "sampling-second.tif");
+    assert.equal(controlsView.bivariateMode.yLabel, "sampling-first.tif");
+    viewer.destroy();
+});
 
 test("raster viewer owns the displayed layer lifecycle and detaches cleanly", async () => {
     const leafletMap = createFakeMap();

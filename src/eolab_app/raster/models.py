@@ -43,6 +43,8 @@ SAMPLE_GRID_MAX_SOURCE_BLOCK_READS = 127 * 127
 SAMPLE_GRID_MAX_DECODED_SOURCE_BYTES = 9 * 1024 * 1024 * 1024
 RASTER_STATISTICS_BIN_COUNT = 64
 RASTER_STATISTICS_SAMPLE_GRID_MAX_DIMENSION = 127
+RASTER_PAIRED_STATISTICS_BIN_COUNT = 32
+RASTER_PAIRED_STATISTICS_SAMPLE_GRID_MAX_DIMENSION = 127
 RasterDetailPreviewCacheKey = tuple[
     str,
     str,
@@ -226,6 +228,47 @@ class CatalogRasterStatisticsRequest(CatalogRasterRequest):
             raise ValueError(
                 "selectedBounds and temporaryAoiId are mutually exclusive"
             )
+        return self
+
+
+class CatalogRasterPairRequest(BaseModel):
+    """Identify two ordered catalog rasters and optional selected bounds.
+
+    The X and Y identities are intentionally nested catalog requests so the
+    public contract cannot accept paths, publication names, or renderer state.
+
+    Attributes:
+        x_raster: Catalog identity assigned to the reference X grid.
+        y_raster: Distinct catalog identity aligned to X with nearest-neighbor
+            resampling.
+        selected_bounds: Optional canonical WGS 84 rectangle intersected with
+            the rasters' geographic overlap.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    x_raster: CatalogRasterRequest = Field(alias="xRaster")
+    y_raster: CatalogRasterRequest = Field(alias="yRaster")
+    selected_bounds: Wgs84Bounds | None = Field(
+        default=None,
+        alias="selectedBounds",
+    )
+
+    @model_validator(mode="after")
+    def require_distinct_rasters(self) -> "CatalogRasterPairRequest":
+        """Require two different catalog identities for bivariate analysis.
+
+        Returns:
+            Validated ordered pair request.
+
+        Raises:
+            ValueError: If X and Y identify the same catalog Item.
+        """
+        if (
+            self.x_raster.collection_id == self.y_raster.collection_id
+            and self.x_raster.item_id == self.y_raster.item_id
+        ):
+            raise ValueError("xRaster and yRaster must identify different Items")
         return self
 
 
@@ -554,6 +597,150 @@ class RasterHistogram(BaseModel):
 
     counts: list[int]
     edges: list[FiniteFloat]
+
+
+class RasterPairedHistogram(BaseModel):
+    """Fixed two-dimensional histogram and its marginal distributions.
+
+    Matrix rows increase along Y and columns increase along X. This explicit
+    orientation lets the browser render the lowest Y bin at the visual bottom
+    without inferring array semantics.
+
+    Attributes:
+        x_edges: Strictly increasing X bin edges.
+        y_edges: Strictly increasing Y bin edges.
+        counts: Y-major rows containing X-bin paired counts.
+        x_marginal_counts: Counts collapsed across every Y row.
+        y_marginal_counts: Counts collapsed across every X column.
+    """
+
+    x_edges: list[FiniteFloat] = Field(alias="xEdges")
+    y_edges: list[FiniteFloat] = Field(alias="yEdges")
+    counts: list[list[int]]
+    x_marginal_counts: list[int] = Field(alias="xMarginalCounts")
+    y_marginal_counts: list[int] = Field(alias="yMarginalCounts")
+
+
+class RasterPairedStatistics(BaseModel):
+    """Bounded paired-raster distribution on the documented X reference grid.
+
+    Attributes:
+        scope: Whole geographic overlap or a selected WGS 84 rectangle.
+        selected_bounds: Requested rectangle for ``selectedArea`` only.
+        reference_grid: Fixed declaration that X owns cell locations.
+        resampling: Fixed nearest-neighbor alignment applied to Y.
+        source_width: Width of the bounded X reference envelope.
+        source_height: Height of the bounded X reference envelope.
+        source_pixel_count: Cell count of that X envelope.
+        sample_width: Width of the admitted paired grid.
+        sample_height: Height of the admitted paired grid.
+        sampled_cell_count: Total admitted grid cells before validity masks.
+        paired_sample_count: Cells finite and non-nodata in both rasters.
+        sampling_method: Exact small X grid or bounded center-sample grid.
+        approximate: Whether the X envelope was downsampled.
+        x_minimum: Minimum valid paired X value.
+        x_maximum: Maximum valid paired X value.
+        y_minimum: Minimum valid paired Y value.
+        y_maximum: Maximum valid paired Y value.
+        histogram: Fixed 32-by-32 paired histogram with marginals.
+    """
+
+    scope: Literal["wholeOverlap", "selectedArea"]
+    selected_bounds: Wgs84Bounds | None = Field(alias="selectedBounds")
+    reference_grid: Literal["x"] = Field(default="x", alias="referenceGrid")
+    resampling: Literal["nearest"] = "nearest"
+    source_width: int = Field(alias="sourceWidth", gt=0)
+    source_height: int = Field(alias="sourceHeight", gt=0)
+    source_pixel_count: int = Field(alias="sourcePixelCount", gt=0)
+    sample_width: int = Field(alias="sampleWidth", gt=0)
+    sample_height: int = Field(alias="sampleHeight", gt=0)
+    sampled_cell_count: int = Field(alias="sampledCellCount", gt=0)
+    paired_sample_count: int = Field(alias="pairedSampleCount", gt=0)
+    sampling_method: Literal["sampleGrid", "exactReferenceGrid"] = Field(
+        alias="samplingMethod"
+    )
+    approximate: bool
+    x_minimum: FiniteFloat = Field(alias="xMinimum")
+    x_maximum: FiniteFloat = Field(alias="xMaximum")
+    y_minimum: FiniteFloat = Field(alias="yMinimum")
+    y_maximum: FiniteFloat = Field(alias="yMaximum")
+    histogram: RasterPairedHistogram
+
+    @model_validator(mode="after")
+    def require_paired_provenance(self) -> "RasterPairedStatistics":
+        """Keep grid, validity, orientation, and histogram totals coherent.
+
+        Returns:
+            Validated paired statistics response.
+
+        Raises:
+            ValueError: If provenance, dimensions, edges, matrix, or marginals
+                violate the bounded public response contract.
+        """
+        if (self.scope == "selectedArea") != (self.selected_bounds is not None):
+            raise ValueError("paired statistics scope and bounds disagree")
+        if self.source_pixel_count != self.source_width * self.source_height:
+            raise ValueError("paired source pixel count is inconsistent")
+        if self.sampled_cell_count != self.sample_width * self.sample_height:
+            raise ValueError("paired sampled cell count is inconsistent")
+        if (
+            self.sample_width > RASTER_PAIRED_STATISTICS_SAMPLE_GRID_MAX_DIMENSION
+            or self.sample_height
+            > RASTER_PAIRED_STATISTICS_SAMPLE_GRID_MAX_DIMENSION
+            or self.sample_width > self.source_width
+            or self.sample_height > self.source_height
+            or self.paired_sample_count > self.sampled_cell_count
+        ):
+            raise ValueError("paired sample dimensions exceed fixed limits")
+        expected_approximate = self.sampling_method == "sampleGrid"
+        if self.approximate != expected_approximate:
+            raise ValueError("paired sampling provenance is inconsistent")
+        if self.sampling_method == "exactReferenceGrid" and (
+            self.sample_width != self.source_width
+            or self.sample_height != self.source_height
+        ):
+            raise ValueError("exact paired sampling must cover the X envelope")
+        if self.x_minimum > self.x_maximum or self.y_minimum > self.y_maximum:
+            raise ValueError("paired sample ranges are reversed")
+
+        bin_count = RASTER_PAIRED_STATISTICS_BIN_COUNT
+        histogram = self.histogram
+        if (
+            len(histogram.x_edges) != bin_count + 1
+            or len(histogram.y_edges) != bin_count + 1
+            or len(histogram.counts) != bin_count
+            or any(len(row) != bin_count for row in histogram.counts)
+            or len(histogram.x_marginal_counts) != bin_count
+            or len(histogram.y_marginal_counts) != bin_count
+        ):
+            raise ValueError("paired histogram dimensions are inconsistent")
+        if not all(
+            left < right
+            for edges in (histogram.x_edges, histogram.y_edges)
+            for left, right in zip(edges, edges[1:])
+        ):
+            raise ValueError("paired histogram edges are not increasing")
+        if (
+            histogram.x_edges[0] > self.x_minimum
+            or histogram.x_edges[-1] < self.x_maximum
+            or histogram.y_edges[0] > self.y_minimum
+            or histogram.y_edges[-1] < self.y_maximum
+        ):
+            raise ValueError("paired histogram edges exclude sample values")
+        if any(count < 0 for row in histogram.counts for count in row):
+            raise ValueError("paired histogram counts cannot be negative")
+        x_marginals = [
+            sum(row[column] for row in histogram.counts)
+            for column in range(bin_count)
+        ]
+        y_marginals = [sum(row) for row in histogram.counts]
+        if (
+            x_marginals != histogram.x_marginal_counts
+            or y_marginals != histogram.y_marginal_counts
+            or sum(x_marginals) != self.paired_sample_count
+        ):
+            raise ValueError("paired histogram marginals are inconsistent")
+        return self
 
 
 class RasterStatistics(BaseModel):

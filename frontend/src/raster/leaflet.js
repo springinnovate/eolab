@@ -84,6 +84,22 @@ export function createRasterWmsLayer(
 }
 
 /**
+ * Apply or clear the ESOS-C additive compositing mode on one WMS tile layer.
+ *
+ * @param {Object} rasterLayer Leaflet-compatible WMS tile layer.
+ * @param {boolean} isAdditive Whether this is the top additive raster.
+ * @return {void}
+ * @throws {Error} If Leaflet cannot provide its rendered container.
+ */
+export function setRasterLayerAdditiveBlend(rasterLayer, isAdditive) {
+    const container = rasterLayer?.getContainer?.();
+    if (container === undefined || container === null || !container.style) {
+        throw new Error("Raster WMS layer container is unavailable.");
+    }
+    container.style.mixBlendMode = isAdditive ? "plus-lighter" : "normal";
+}
+
+/**
  * Create one Leaflet rectangle for sample preview or committed selection.
  *
  * @param {Object} leaflet Leaflet namespace with a rectangle factory.
