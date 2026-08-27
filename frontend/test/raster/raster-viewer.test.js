@@ -514,10 +514,15 @@ test("selecting 2D opens paired analysis without a map interaction", async () =>
         },
     );
 
+    viewer.activateAnalysis(firstItem);
+    await flushPromises();
     await viewer.show(firstItem);
+    await flushPromises();
+    viewer.activateAnalysis(secondItem);
     await flushPromises();
     await viewer.show(secondItem);
     await flushPromises();
+    assert.equal(controlsView.bivariateAvailability.canEnter, true);
     const [top, bottom] = layerStackView.layers;
     layerStackView.handlers.onOpacity(bottom.key, 0.4);
     controlsView.handlers.onBivariateModeChange("bivariate");
@@ -562,17 +567,20 @@ test("selecting 2D opens paired analysis without a map interaction", async () =>
     assert.match(controlsView.pixelProbeContent.detail, /second\.tif: 9/);
     assert.match(controlsView.pixelProbeContent.detail, /first\.tif: 4/);
 
+    wmsLayers[0].eventHandlers.get("tileerror")();
+    assert.equal(controlsView.bivariateMode.active, true);
+    assert.equal(controlsView.bivariateAvailability.canEnter, true);
+
     layerStackView.handlers.onVisibility(top.key, false);
-    assert.equal(controlsView.bivariateMode.active, false);
-    assert.equal(controlsView.appearanceEnabled, true);
-    assert.equal(controlsView.univariateHistogramVisible, true);
-    assert.equal(wmsLayers[0].opacity, 0.4);
+    assert.equal(controlsView.bivariateMode.active, true);
+    assert.equal(controlsView.bivariateAvailability.canEnter, true);
+    assert.equal(controlsView.appearanceEnabled, false);
+    assert.equal(controlsView.univariateHistogramVisible, false);
+    assert.equal(wmsLayers[0].opacity, 1);
     assert.equal(wmsLayers[0].container.style.mixBlendMode, "normal");
-    assert.equal(wmsLayers[1].container.style.mixBlendMode, "normal");
+    assert.equal(wmsLayers[1].container.style.mixBlendMode, "plus-lighter");
 
     layerStackView.handlers.onVisibility(top.key, true);
-    controlsView.handlers.onBivariateModeChange("bivariate");
-    await flushPromises();
     assert.equal(controlsView.bivariateMode.active, true);
     layerStackView.handlers.onRemove(bottom.key);
     assert.equal(controlsView.bivariateMode.active, false);

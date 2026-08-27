@@ -857,21 +857,19 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Return visible published WMS rasters eligible for explicit bivariate mode.
+     * Return retained Catalog rasters eligible for explicit bivariate mode.
      *
-     * Successful raster publication already proves the backend's continuous,
-     * supported, single-band rendering contract. Detached detail/analysis
-     * sessions are excluded because they are not ordinary WMS stack layers.
+     * Visibility, map attachment, and tile health are rendering concerns and
+     * must not gate paired statistics or pixel analysis. A detached session is
+     * still excluded because it currently owns the shared analysis controls
+     * instead of either retained member of the pair.
      *
      * @return {Object[]} Eligible retained records in top-first stack order.
      */
     function getEligibleBivariateRecords() {
         if (activeDetachedRasterSession() !== null) return [];
         return mapLayers.retainedRecords.filter((record) =>
-            record.adapter === rasterMapLayerAdapter &&
-            record.entry.visible &&
-            record.error === null &&
-            mapLayers.isAttached(record.entry.key)
+            record.adapter === rasterMapLayerAdapter
         );
     }
 
@@ -945,7 +943,7 @@ export function initializeRasterViewer(
                 ? "2D histogram mode is active for the two raster layers."
                 : canEnter
                     ? "Choose 2D to calculate and open the paired histogram."
-                    : "Add exactly two visible single-band raster layers to " +
+                    : "Add exactly two single-band raster layers to " +
                       "enable the 2D histogram."
         );
         controlsView.setBivariateAvailability?.(canEnter, guidance);
@@ -1038,8 +1036,8 @@ export function initializeRasterViewer(
         const eligible = getEligibleBivariateRecords();
         if (eligible.length !== 2) {
             renderBivariateAvailability(
-                "The 2D histogram requires exactly two visible, available " +
-                "single-band raster layers."
+                "The 2D histogram requires exactly two retained single-band " +
+                "raster layers."
             );
             controlsView.renderBivariateMode?.({ active: false });
             return;
@@ -1175,6 +1173,7 @@ export function initializeRasterViewer(
                 record.state.selectedRasterStatisticsState = "idle";
             }
             activateRasterSession(record.entry, record.state);
+            renderBivariateAvailability();
         },
         beforeRemove(record, { wasActive }) {
             if (bivariateMode.contains(record.entry.key)) {
@@ -1198,11 +1197,6 @@ export function initializeRasterViewer(
             renderBivariateAvailability();
         },
         visibilityChanged(record, visible) {
-            if (!visible && bivariateMode.contains(record.entry.key)) {
-                leaveBivariateMode(
-                    `${record.entry.label} was hidden; bivariate mode ended.`
-                );
-            }
             if (activeLayerKey !== record.entry.key) {
                 renderBivariateAvailability();
                 return;
@@ -1214,12 +1208,6 @@ export function initializeRasterViewer(
             renderBivariateAvailability();
         },
         tileError(record) {
-            if (bivariateMode.contains(record.entry.key)) {
-                leaveBivariateMode(
-                    `${record.entry.label} became unavailable; bivariate ` +
-                    "mode ended."
-                );
-            }
             onTileError(record.error, record.entry.item);
         },
         added() {
