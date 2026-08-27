@@ -583,9 +583,82 @@ test("selecting 2D opens paired analysis without a map interaction", async () =>
     layerStackView.handlers.onVisibility(top.key, true);
     assert.equal(controlsView.bivariateMode.active, true);
     layerStackView.handlers.onRemove(bottom.key);
-    assert.equal(controlsView.bivariateMode.active, false);
+    assert.equal(controlsView.bivariateMode.active, true);
+    assert.equal(controlsView.bivariateAvailability.canEnter, true);
+    assert.equal(wmsLayers[1].container.style.mixBlendMode, "normal");
     assert.equal(viewer.contains(firstItem), false);
     assert.equal(viewer.contains(secondItem), true);
+    controlsView.handlers.onBivariateModeChange("overlay");
+    assert.equal(controlsView.bivariateMode.active, false);
+    viewer.destroy();
+});
+
+test("catalog selections enable paired analysis without publication", async () => {
+    const leafletMap = createFakeMap();
+    const { leaflet, wmsLayers } = createFakeLeaflet();
+    const controlsView = createFakeControlsView();
+    const pairedRequests = [];
+    const firstItem = createRasterItem("analysis-only-first");
+    const secondItem = createRasterItem("analysis-only-second");
+    const viewer = initializeRasterViewer(
+        {
+            wmsUrl: "/geoserver/eolab/wms",
+            leafletMap,
+            leaflet,
+            onTileError() {},
+        },
+        {
+            controlsView,
+            layerStackView: createFakeLayerStackView(),
+            publishRaster: async () => {
+                throw new Error("paired analysis must not publish WMS");
+            },
+            loadStatistics: async () => RASTER_STATISTICS,
+            loadPairedStatistics: async (xItem, yItem, area) => {
+                pairedRequests.push({ xItem, yItem, area });
+                return { pairedSampleCount: 1 };
+            },
+            samplePixel: async () => ({ inBounds: true, value: 1 }),
+            samplePairPixels: async () => ({
+                x: { available: true, pixel: { value: 1 }, error: null },
+                y: { available: true, pixel: { value: 2 }, error: null },
+            }),
+            viewport: { innerWidth: 1280, innerHeight: 720 },
+        },
+    );
+
+    viewer.activateAnalysis(firstItem);
+    await flushPromises();
+    viewer.activateAnalysis(secondItem);
+    await flushPromises();
+
+    assert.equal(wmsLayers.length, 0);
+    assert.equal(controlsView.bivariateAvailability.canEnter, true);
+    controlsView.handlers.onBivariateModeChange("bivariate");
+    await flushPromises();
+
+    assert.equal(controlsView.bivariateMode.active, true);
+    assert.deepEqual(
+        pairedRequests.map(({ xItem, yItem, area }) => ({
+            x: xItem.id,
+            y: yItem.id,
+            area: area.kind,
+        })),
+        [{
+            x: secondItem.id,
+            y: firstItem.id,
+            area: "wholeOverlap",
+        }],
+    );
+    assert.equal(
+        controlsView.pairedPresentation.xLabel,
+        "analysis-only-second.tif",
+    );
+    assert.equal(
+        controlsView.pairedPresentation.yLabel,
+        "analysis-only-first.tif",
+    );
+    assert.equal(wmsLayers.length, 0);
     viewer.destroy();
 });
 

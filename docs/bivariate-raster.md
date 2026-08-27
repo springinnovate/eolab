@@ -1,11 +1,12 @@
 # Bivariate raster comparison
 
-Bivariate mode compares exactly two visible, renderable, continuous one-band
-raster WMS layers. It is an explicit alternative to ordinary overlay mode;
-merely showing two layers does not change their styles or interpretation. The
-browser composition root coordinates the retained layer stack, raster styling,
-paired analysis, and controls. Those sibling components do not import or use
-one another's implementation state.
+Bivariate mode compares the two most recently selected distinct, continuous
+one-band catalog rasters. The most recent selection starts as X and the prior
+selection starts as Y. Catalog identities—not WMS publications, layer
+visibility, or renderer state—authorize the paired analysis. The browser
+composition root coordinates catalog selection, optional raster rendering,
+styling, paired analysis, and controls. Those sibling components do not import
+or use one another's implementation state.
 
 In the collapsible workspace layout, the mode selector, raster role controls,
 and two-dimensional palette legend are presented in **Map layers**. The paired
@@ -13,12 +14,14 @@ density histogram is presented in **Histograms**. Entering bivariate mode asks
 the existing browser composition callback to reveal the Histograms workspace;
 neither workspace component imports or controls the other.
 
-The initial X role is the top visible raster and Y is the other visible raster.
 **Swap X/Y** reverses both roles and requests a new result because X owns the
 reference grid. Both role labels and the two-dimensional legend name the
-raster basenames and ranges. Hiding, removing, or losing either layer ends the
-mode and preserves the remaining usable layer. Exiting restores each layer's
-ordinary style and retained opacity without another publication request.
+raster basenames and ranges. Selecting a third catalog raster updates the
+available pair. Hiding a map layer, losing WMS tiles, removing a publication,
+or using detail-only rendering changes only the optional map presentation; the
+catalog pair and its pixel/statistics analysis remain available. Exiting
+restores every retained WMS layer's ordinary style and opacity without another
+publication request.
 
 ## ESOS-C color and rendering contract
 
@@ -33,10 +36,12 @@ lookup. The available palettes are Orange / Blue, Gray / White, Teal /
 Magenta, Green / Purple, Red / Cyan, Indigo / Gold, Brown / Sky, and Steel /
 Rose.
 
-Each raster remains a separate one-layer WMS request. Both render at 100%
-opacity, and the top raster's browser tile container uses CSS
-`mix-blend-mode: plus-lighter`, matching ESOS-C. Legend and probe calculations
-use the equivalent deterministic operation: add the two RGB channel values and
+When both catalog rasters have WMS presentations, each remains a separate
+one-layer request. Both render at 100% opacity, and the top raster's browser
+tile container uses CSS `mix-blend-mode: plus-lighter`, matching ESOS-C. If one
+or both WMS presentations are unavailable, the paired histogram and probe keep
+working without a substitute publication. Legend and probe calculations use
+the equivalent deterministic operation: add the two RGB channel values and
 clamp each result to 255. Addition is commutative before clipping, but drawing
 order stays deterministic. The UI does not expose other blend equations.
 
@@ -83,11 +88,12 @@ X-envelope and sample dimensions, reference-grid and resampling identities,
 and exact/approximate provenance.
 
 Paired and ordinary statistics share the configured read-concurrency admission
-limit. Paired cache and coalescing identity includes both ordered Collection
-and Item IDs, both source signatures, selected bounds, algorithm version, and
-all fixed policy parameters. Browser cancellation and sequence identity cover
-the complete pair, so swapping roles, changing the window, or leaving the mode
-cannot display an obsolete response.
+limit and one combined completed-result cache budget. Paired cache and
+coalescing identity includes both ordered Collection and Item IDs, both source
+signatures, selected bounds, algorithm version, and all fixed policy
+parameters. Browser cancellation and sequence identity cover the complete
+pair, so swapping roles, changing the window, or leaving the mode cannot
+display an obsolete response.
 
 Temporary AOI lifecycle storage remains independent. Bivariate mode currently
 supports whole overlap and a shared rectangular sample window only, so the

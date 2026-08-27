@@ -222,6 +222,7 @@ export function initializeRasterViewer(
     let selectedRasterStatisticsState = "idle";
     let selectedRasterStatisticsError = null;
     const bivariateMode = new BivariateRasterMode();
+    let bivariateCandidates = [];
     let bivariateStatistics = null;
 
     /**
@@ -383,6 +384,83 @@ export function initializeRasterViewer(
     }
 
     /**
+     * Return the renderer or detached session for one catalog candidate.
+     *
+     * Rendering state is consulted only for the candidate's current style; it
+     * never determines whether paired analysis is available.
+     *
+     * @param {string} key Catalog-owned collection and Item identity.
+     * @return {Object|null} Current raster session or null.
+     */
+    function getBivariateCandidateSession(key) {
+        const retainedSession = mapLayers.getRecord(key)?.state ?? null;
+        if (retainedSession !== null) {
+            return retainedSession;
+        }
+        for (const session of [sampledRasterSession, analysisRasterSession]) {
+            if (
+                session !== null &&
+                getCatalogItemKey(session.item) === key
+            ) {
+                return session;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Preserve the latest renderer-neutral state for one paired candidate.
+     *
+     * @param {Object} session Raster interaction session to snapshot.
+     * @return {void}
+     */
+    function syncBivariateCandidate(session) {
+        const key = getCatalogItemKey(session.item);
+        const candidate = bivariateCandidates.find(
+            (current) => current.key === key
+        );
+        if (candidate === undefined) {
+            return;
+        }
+        candidate.item = session.item;
+        candidate.label = getCatalogRasterBasename(session.item);
+        candidate.rasterStyle = { ...session.rasterStyle };
+    }
+
+    /**
+     * Add one catalog-selected raster to the ordered analysis pair.
+     *
+     * The two most recently selected distinct catalog rasters are retained in
+     * top-first X/Y order. WMS publication, map visibility, and renderer type
+     * are deliberately absent from this contract.
+     *
+     * @param {Object} item Selected Catalog raster Item.
+     * @return {void}
+     */
+    function rememberBivariateCandidate(item) {
+        const key = getCatalogItemKey(item);
+        const existing = bivariateCandidates.find(
+            (candidate) => candidate.key === key
+        );
+        const liveSession = getBivariateCandidateSession(key);
+        const candidate = {
+            key,
+            item,
+            label: getCatalogRasterBasename(item),
+            rasterStyle: {
+                ...(liveSession?.rasterStyle ??
+                    existing?.rasterStyle ??
+                    DEFAULT_RASTER_STYLE),
+            },
+        };
+        bivariateCandidates = [
+            candidate,
+            ...bivariateCandidates.filter((current) => current.key !== key),
+        ].slice(0, 2);
+        renderBivariateAvailability();
+    }
+
+    /**
      * Require the retained session paired with one stack entry.
      *
      * @param {string} key Stable retained layer key.
@@ -424,6 +502,7 @@ export function initializeRasterViewer(
             selectedRasterStatisticsState,
             selectedRasterStatisticsError,
         });
+        syncBivariateCandidate(session);
     }
 
     /**
@@ -857,61 +936,70 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Return retained Catalog rasters eligible for explicit bivariate mode.
+     * Return catalog-selected rasters eligible for explicit bivariate mode.
      *
-     * Visibility, map attachment, and tile health are rendering concerns and
-     * must not gate paired statistics or pixel analysis. A detached session is
-     * still excluded because it currently owns the shared analysis controls
-     * instead of either retained member of the pair.
-     *
-     * @return {Object[]} Eligible retained records in top-first stack order.
+     * @return {Object[]} At most two renderer-independent candidates in
+     * top-first selection order.
      */
-    function getEligibleBivariateRecords() {
-        if (activeDetachedRasterSession() !== null) return [];
-        return mapLayers.retainedRecords.filter((record) =>
-            record.adapter === rasterMapLayerAdapter
-        );
+    function getEligibleBivariateCandidates() {
+        return [...bivariateCandidates];
     }
 
     /**
-     * Return the two records currently assigned to X and Y, in role order.
+     * Return the two catalog candidates currently assigned to X and Y.
      *
-     * @return {{xRecord:Object,yRecord:Object}|null} Current pair or null.
+     * @return {{xCandidate:Object,yCandidate:Object}|null} Current pair or
+     * null when mode is inactive or its identities are no longer retained.
      */
-    function getBivariatePairRecords() {
+    function getBivariatePairCandidates() {
         if (!bivariateMode.active) return null;
-        const xRecord = mapLayers.getRecord(bivariateMode.xKey);
-        const yRecord = mapLayers.getRecord(bivariateMode.yKey);
-        return xRecord === null || yRecord === null
+        const xCandidate = bivariateCandidates.find(
+            (candidate) => candidate.key === bivariateMode.xKey
+        );
+        const yCandidate = bivariateCandidates.find(
+            (candidate) => candidate.key === bivariateMode.yKey
+        );
+        return xCandidate === undefined || yCandidate === undefined
             ? null
-            : { xRecord, yRecord };
+            : { xCandidate, yCandidate };
+    }
+
+    /**
+     * Return one candidate's current style without making it renderer-owned.
+     *
+     * @param {Object} candidate Catalog-owned bivariate candidate.
+     * @return {Object} Current ordinary raster style.
+     */
+    function getBivariateCandidateStyle(candidate) {
+        return getBivariateCandidateSession(candidate.key)?.rasterStyle ??
+            candidate.rasterStyle;
     }
 
     /**
      * Build the single presentation contract shared by map, legend, histogram,
      * and probe.
      *
-     * @return {Object} Current labels, retained ranges, coordinated styles,
+     * @return {Object} Current labels, catalog ranges, coordinated styles,
      * palette identity, and Catalog Items.
      */
     function getBivariatePresentation() {
-        const records = getBivariatePairRecords();
-        if (records === null) {
+        const candidates = getBivariatePairCandidates();
+        if (candidates === null) {
             throw new Error("Bivariate raster pair is no longer available.");
         }
         const axisStyles = getBivariateAxisStyles(
             bivariateMode.paletteName,
-            records.xRecord.state.rasterStyle,
-            records.yRecord.state.rasterStyle
+            getBivariateCandidateStyle(candidates.xCandidate),
+            getBivariateCandidateStyle(candidates.yCandidate)
         );
         return {
             paletteName: bivariateMode.paletteName,
-            xLabel: records.xRecord.entry.label,
-            yLabel: records.yRecord.entry.label,
+            xLabel: candidates.xCandidate.label,
+            yLabel: candidates.yCandidate.label,
             xStyle: axisStyles.xStyle,
             yStyle: axisStyles.yStyle,
-            xItem: records.xRecord.entry.item,
-            yItem: records.yRecord.entry.item,
+            xItem: candidates.xCandidate.item,
+            yItem: candidates.yCandidate.item,
         };
     }
 
@@ -936,15 +1024,15 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function renderBivariateAvailability(message = null) {
-        const eligible = getEligibleBivariateRecords();
+        const eligible = getEligibleBivariateCandidates();
         const canEnter = eligible.length === 2;
         const guidance = message ?? (
             bivariateMode.active
-                ? "2D histogram mode is active for the two raster layers."
+                ? "2D histogram mode is active for the two selected rasters."
                 : canEnter
                     ? "Choose 2D to calculate and open the paired histogram."
-                    : "Add exactly two single-band raster layers to " +
-                      "enable the 2D histogram."
+                    : "Select two single-band catalog rasters to enable the " +
+                      "2D histogram."
         );
         controlsView.setBivariateAvailability?.(canEnter, guidance);
     }
@@ -955,24 +1043,30 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function applyBivariatePresentation() {
-        const records = getBivariatePairRecords();
-        if (records === null) return;
+        const candidates = getBivariatePairCandidates();
+        if (candidates === null) return;
         const presentation = getBivariatePresentation();
-        for (const [record, style] of [
-            [records.xRecord, presentation.xStyle],
-            [records.yRecord, presentation.yStyle],
+        const renderedRecords = [];
+        for (const [candidate, style] of [
+            [candidates.xCandidate, presentation.xStyle],
+            [candidates.yCandidate, presentation.yStyle],
         ]) {
-            const layer = mapLayers.getLeafletLayer(record.entry.key);
+            const record = mapLayers.getRecord(candidate.key);
+            const layer = mapLayers.getLeafletLayer(candidate.key);
+            if (record === null || layer === null) continue;
             layer.setParams({
                 styles: "dynamic-raster",
                 env: buildRasterStyleEnvironment(style),
             });
             layer.setOpacity(1);
             setRasterLayerAdditiveBlend(layer, false);
+            renderedRecords.push(record);
         }
-        const topRecord = mapLayers.retainedRecords.find(
-            (record) => bivariateMode.contains(record.entry.key)
-        );
+        const topRecord = renderedRecords.length === 2
+            ? mapLayers.retainedRecords.find(
+                (record) => bivariateMode.contains(record.entry.key)
+            )
+            : undefined;
         if (topRecord !== undefined) {
             setRasterLayerAdditiveBlend(
                 mapLayers.getLeafletLayer(topRecord.entry.key),
@@ -1028,16 +1122,16 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Enter explicit bivariate mode with the two current eligible rasters.
+     * Enter explicit bivariate mode with the two current catalog candidates.
      *
      * @return {void}
      */
     function enterBivariateMode() {
-        const eligible = getEligibleBivariateRecords();
+        const eligible = getEligibleBivariateCandidates();
         if (eligible.length !== 2) {
             renderBivariateAvailability(
-                "The 2D histogram requires exactly two retained single-band " +
-                "raster layers."
+                "The 2D histogram requires two selected single-band catalog " +
+                "rasters."
             );
             controlsView.renderBivariateMode?.({ active: false });
             return;
@@ -1048,7 +1142,7 @@ export function initializeRasterViewer(
         saveActiveLayerSession();
         rasterStatisticsController.clear();
         pixelProbeController.clear();
-        bivariateMode.enter(eligible.map((record) => record.entry.key));
+        bivariateMode.enter(eligible.map((candidate) => candidate.key));
         controlsView.setAppearanceEnabled?.(false);
         controlsView.setUnivariateHistogramVisible?.(false);
         controlsView.setTemporaryAoiCompatible?.(false);
@@ -1061,8 +1155,8 @@ export function initializeRasterViewer(
         requestBivariateStatistics();
         applyBivariatePresentation();
         pairedPixelProbeController.activate({
-            xItem: eligible[0].entry.item,
-            yItem: eligible[1].entry.item,
+            xItem: eligible[0].item,
+            yItem: eligible[1].item,
         });
         renderLayerStack();
         renderBivariateAvailability();
@@ -1176,12 +1270,6 @@ export function initializeRasterViewer(
             renderBivariateAvailability();
         },
         beforeRemove(record, { wasActive }) {
-            if (bivariateMode.contains(record.entry.key)) {
-                leaveBivariateMode(
-                    `${record.entry.label} was removed; bivariate mode ended.`,
-                    false
-                );
-            }
             if (!wasActive) {
                 return undefined;
             }
@@ -1193,6 +1281,8 @@ export function initializeRasterViewer(
             record.state.layerHistogramController?.clear();
             if (wasActive && analysisRasterSession !== null) {
                 activateDetachedSession(analysisRasterSession);
+            } else if (bivariateMode.active) {
+                applyBivariatePresentation();
             }
             renderBivariateAvailability();
         },
@@ -1412,7 +1502,6 @@ export function initializeRasterViewer(
      */
     function activateDetachedSession(session) {
         loadActiveLayerSession(session);
-        pixelProbeController.activate(session.item);
         controlsView.setControlsVisible(true);
         controlsView.setRenderingControlsAvailable(
             session === sampledRasterSession
@@ -1437,6 +1526,23 @@ export function initializeRasterViewer(
             rasterSampleWindowController.enable();
         }
         renderRasterSamplingAreaControls();
+        if (bivariateMode.active) {
+            pixelProbeController.clear();
+            controlsView.setAppearanceEnabled?.(false);
+            controlsView.setUnivariateHistogramVisible?.(false);
+            controlsView.setTemporaryAoiCompatible?.(false);
+            controlsView.setSamplingAreaMode(
+                selectedRasterBounds === null ? "wholeRaster" : "selectedArea"
+            );
+            controlsView.setClearSampleWindowLabel("Use whole overlap");
+            rasterSampleWindowController.enable();
+            applyBivariatePresentation();
+            renderRasterSampleWindowGuidance("");
+            saveActiveLayerSession();
+            renderLayerStack();
+            return;
+        }
+        pixelProbeController.activate(session.item);
         renderRasterSampleWindowGuidance("");
         restoreActiveLayerStatistics();
         saveActiveLayerSession();
@@ -1460,6 +1566,7 @@ export function initializeRasterViewer(
                 "A different raster analysis was selected; bivariate mode ended."
             );
         }
+        rememberBivariateCandidate(item);
         mapLayers.recordIntent();
         const retainedKey = getCatalogItemKey(item);
         const existingSession = matchingAnalysisSession(item);
@@ -1543,11 +1650,13 @@ export function initializeRasterViewer(
             throw new TypeError("Sampled raster recoloring callback is required");
         }
         buildRasterStyleEnvironment(style);
-        if (bivariateMode.active) {
+        const catalogKey = getCatalogItemKey(item);
+        if (bivariateMode.active && !bivariateMode.contains(catalogKey)) {
             leaveBivariateMode(
-                "Detail-only rendering was selected; bivariate mode ended."
+                "A different catalog raster was selected; bivariate mode ended."
             );
         }
+        rememberBivariateCandidate(item);
         mapLayers.recordIntent();
         const analysisSession = matchingAnalysisSession(item);
         deactivateActiveLayer();
@@ -2834,6 +2943,7 @@ export function initializeRasterViewer(
         selectedRasterStatisticsState = "idle";
         selectedRasterStatisticsError = null;
         bivariateStatistics = null;
+        bivariateCandidates = [];
         pixelProbeClientPosition = null;
         rasterPixelProbeLabel = "";
         controlsView.setControlsVisible(false);
@@ -2864,6 +2974,7 @@ export function initializeRasterViewer(
      * @throws {Error} If publication or Leaflet layer construction fails.
      */
     async function show(item) {
+        rememberBivariateCandidate(item);
         const publication = await mapLayers.show(item, rasterMapLayerAdapter);
         renderLayerHistogramSummaries();
         return publication;

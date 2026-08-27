@@ -244,3 +244,74 @@ def test_statistics_service_keys_pairs_by_ordered_identities_and_signatures(
 
     asyncio.run(exercise_cache())
     assert read_count == 2
+
+
+def test_statistics_service_shares_one_completed_cache_budget(
+    tmp_path: Path,
+) -> None:
+    """Evict ordinary and paired results through one configured LRU limit.
+
+    Args:
+        tmp_path: Directory used for controlled source path identities.
+    """
+    source_authorizer = _PairSourceAuthorizer(tmp_path)
+    ordinary_read_count = 0
+    paired_read_count = 0
+
+    def ordinary_reader(
+        _: Path,
+        __: object,
+        ___: object,
+    ) -> RasterStatistics:
+        """Return a distinguishable ordinary result for each cache miss."""
+        nonlocal ordinary_read_count
+        ordinary_read_count += 1
+        return _statistics(float(ordinary_read_count))
+
+    def paired_reader(
+        _: Path,
+        __: Path,
+        ___: object,
+        ____: object,
+    ) -> RasterPairedStatistics:
+        """Return a distinguishable paired result for each cache miss."""
+        nonlocal paired_read_count
+        paired_read_count += 1
+        return _paired_statistics(float(paired_read_count))
+
+    service = RasterStatisticsService(
+        source_authorizer,
+        read_concurrency=1,
+        cache_entries=1,
+        statistics_reader=ordinary_reader,
+        paired_statistics_reader=paired_reader,
+    )
+    ordinary_request = CatalogRasterStatisticsRequest.model_validate({
+        "collectionId": "eolab-mounted-geotiffs",
+        "itemId": "geotiff-0123456789abcdef01234567",
+    })
+    paired_request = CatalogRasterPairRequest.model_validate({
+        "xRaster": {
+            "collectionId": "eolab-mounted-geotiffs",
+            "itemId": "geotiff-0123456789abcdef01234567",
+        },
+        "yRaster": {
+            "collectionId": "eolab-mounted-geotiffs",
+            "itemId": "geotiff-abcdef0123456789abcdef01",
+        },
+    })
+
+    async def exercise_combined_limit() -> None:
+        """Prove each result type evicts the other at a one-entry limit."""
+        first_ordinary = await service.get(ordinary_request)
+        assert await service.get(ordinary_request) is first_ordinary
+        first_paired = await service.get_paired(paired_request)
+        assert await service.get_paired(paired_request) is first_paired
+        second_ordinary = await service.get(ordinary_request)
+        assert second_ordinary is not first_ordinary
+        second_paired = await service.get_paired(paired_request)
+        assert second_paired is not first_paired
+
+    asyncio.run(exercise_combined_limit())
+    assert ordinary_read_count == 2
+    assert paired_read_count == 2

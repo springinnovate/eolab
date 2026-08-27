@@ -234,7 +234,7 @@ export class BivariateRasterControlsView {
     /**
      * Present whether the explicit bivariate choice can currently start.
      *
-     * @param {boolean} canEnter Whether exactly two eligible layers exist.
+     * @param {boolean} canEnter Whether two catalog raster candidates exist.
      * @param {string} guidance Concise eligibility guidance.
      * @return {void}
      */

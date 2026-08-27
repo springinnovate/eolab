@@ -6,6 +6,7 @@ from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import rasterio
 
@@ -90,6 +91,7 @@ class RasterStatisticsService:
 
     Distinct in-flight computations are limited to configured read capacity;
     callers requesting an identical cache identity share one admitted worker.
+    Ordinary and paired completed results share one configured cache budget.
     """
 
     def __init__(
@@ -118,7 +120,8 @@ class RasterStatisticsService:
             source_authorizer: Catalog-owned mounted-source authorization.
             read_concurrency: Maximum simultaneous Rasterio reads and admitted
                 distinct statistics computations.
-            cache_entries: Maximum completed statistics documents retained.
+            cache_entries: Maximum completed ordinary and paired statistics
+                documents retained in one combined cache.
             temporary_aoi_reader: Narrow resolver for opaque ready AOIs. It is
                 optional only for compositions that reject AOI requests.
             statistics_reader: Synchronous bounded Rasterio reader boundary.
@@ -139,18 +142,14 @@ class RasterStatisticsService:
         self._statistics_reader = statistics_reader
         self._paired_statistics_reader = paired_statistics_reader
         self._cache: OrderedDict[
-            RasterStatisticsCacheKey,
-            RasterStatistics,
+            tuple[object, ...],
+            RasterStatistics | RasterPairedStatistics,
         ] = OrderedDict()
         self._inflight: dict[
             RasterStatisticsCacheKey,
             _InflightStatistics,
         ] = {}
         self._state_lock = asyncio.Lock()
-        self._paired_cache: OrderedDict[
-            tuple[object, ...],
-            RasterPairedStatistics,
-        ] = OrderedDict()
         self._paired_inflight: dict[
             tuple[object, ...],
             _InflightPairedStatistics,
@@ -226,7 +225,7 @@ class RasterStatisticsService:
                 await self._require_current_sampling_area(sampling_area)
             except SamplingAreaUnavailableError as error:
                 raise RasterConflictError(error.detail) from error
-            return cached
+            return cast(RasterStatistics, cached)
 
         if work is None:
             raise RuntimeError("Raster statistics work was not established")
@@ -307,9 +306,9 @@ class RasterStatisticsService:
             raster_paired_statistics_policy_parameters(),
         )
         async with self._state_lock:
-            cached = self._paired_cache.get(cache_key)
+            cached = self._cache.get(cache_key)
             if cached is not None:
-                self._paired_cache.move_to_end(cache_key)
+                self._cache.move_to_end(cache_key)
                 work = None
             else:
                 work = self._paired_inflight.get(cache_key)
@@ -352,7 +351,7 @@ class RasterStatisticsService:
                 self._source_authorizer.require_current(authorized_x),
                 self._source_authorizer.require_current(authorized_y),
             )
-            return cached
+            return cast(RasterPairedStatistics, cached)
         if work is None:
             raise RuntimeError("Paired raster statistics work was not established")
         try:
@@ -469,10 +468,7 @@ class RasterStatisticsService:
                         or cancellation_requested.is_set()
                     ):
                         raise RasterReadCancelled
-                    self._paired_cache[cache_key] = statistics
-                    self._paired_cache.move_to_end(cache_key)
-                    while len(self._paired_cache) > self._cache_entries:
-                        self._paired_cache.popitem(last=False)
+                    self._remember_completed(cache_key, statistics)
                 return statistics
         finally:
             async with self._state_lock:
@@ -566,10 +562,7 @@ class RasterStatisticsService:
                         or cancellation_requested.is_set()
                     ):
                         raise RasterReadCancelled
-                    self._cache[cache_key] = statistics
-                    self._cache.move_to_end(cache_key)
-                    while len(self._cache) > self._cache_entries:
-                        self._cache.popitem(last=False)
+                    self._remember_completed(cache_key, statistics)
                 return statistics
         finally:
             async with self._state_lock:
@@ -578,6 +571,28 @@ class RasterStatisticsService:
                     work.finished = True
                     if work.waiter_count == 0:
                         self._inflight.pop(cache_key)
+
+    def _remember_completed(
+        self,
+        cache_key: tuple[object, ...],
+        statistics: RasterStatistics | RasterPairedStatistics,
+    ) -> None:
+        """Retain one completed result within the combined LRU budget.
+
+        The caller must hold ``_state_lock`` so ordinary and paired workers
+        cannot transiently exceed the configured process-wide limit.
+
+        Args:
+            cache_key: Complete ordinary or paired computation identity.
+            statistics: Valid completed result for that identity.
+
+        Returns:
+            None after retaining the result and evicting older entries.
+        """
+        self._cache[cache_key] = statistics
+        self._cache.move_to_end(cache_key)
+        while len(self._cache) > self._cache_entries:
+            self._cache.popitem(last=False)
 
     async def _resolve_sampling_area(
         self,

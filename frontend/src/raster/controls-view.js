@@ -489,7 +489,7 @@ export class RasterControlsView {
     /**
      * Present current eligibility for explicit bivariate mode.
      *
-     * @param {boolean} canEnter Whether exactly two eligible rasters exist.
+     * @param {boolean} canEnter Whether two catalog raster candidates exist.
      * @param {string} guidance User-facing eligibility or active guidance.
      * @return {void}
      */

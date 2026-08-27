@@ -399,11 +399,11 @@ export class BivariateRasterMode {
     }
 
     /**
-     * Enter with exactly two eligible keys in deterministic top-first order.
+     * Enter with exactly two catalog keys in deterministic selection order.
      *
-     * @param {string[]} eligibleKeys Two distinct visible raster keys.
+     * @param {string[]} eligibleKeys Two distinct catalog raster keys.
      * @return {void}
-     * @throws {Error} If the exact two-layer contract is not satisfied.
+     * @throws {Error} If the exact two-raster contract is not satisfied.
      */
     enter(eligibleKeys) {
         if (
@@ -413,7 +413,7 @@ export class BivariateRasterMode {
             eligibleKeys[0] === eligibleKeys[1]
         ) {
             throw new Error(
-                "Bivariate mode requires exactly two eligible visible rasters."
+                "Bivariate mode requires exactly two selected catalog rasters."
             );
         }
         this.active = true;
