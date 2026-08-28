@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -1870,6 +1871,58 @@ def test_scan_continues_after_an_unreadable_shapefile(tmp_path: Path) -> None:
     assert status["errors"][0]["error"]
 
 
+def test_scan_continues_after_item_finalization_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Write successful pending Items when one external assessment fails."""
+    for filename in ("accepted.tif", "rejected.tif"):
+        (tmp_path / filename).touch()
+
+    def build_item(source_root: Path, dataset_path: Path) -> dict[str, Any]:
+        return {
+            "id": dataset_path.stem,
+            "collection": "eolab-mounted-geotiffs",
+            "geometry": {"type": "Point", "coordinates": [0, 0]},
+        }
+
+    class SelectiveFinalizer:
+        async def finalize(self, item: dict[str, Any]) -> dict[str, Any]:
+            if item["id"] == "rejected":
+                raise RuntimeError("GeoServer rejected this assessment")
+            return item
+
+    monkeypatch.setitem(DATASET_ITEM_BUILDERS, ".tif", build_item)
+    catalog_writer = RecordingCatalogWriter()
+    scan_manager = ScanManager(
+        tmp_path,
+        (tmp_path,),
+        catalog_writer,
+        RecordingCatalogDatabase(catalog_writer),
+        2,
+        1,
+        100,
+        item_finalizer=SelectiveFinalizer(),
+    )
+
+    async def run_scan() -> dict[str, Any]:
+        await scan_manager.start()
+        while scan_manager.status()["state"] in {"discovering", "scanning"}:
+            await asyncio.sleep(0)
+        return scan_manager.status()
+
+    status = asyncio.run(run_scan())
+
+    assert status["state"] == "completed"
+    assert status["processed"] == 2
+    assert status["indexed"] == 1
+    assert status["failed"] == 1
+    assert status["errors"] == [{
+        "path": "rejected.tif",
+        "error": "GeoServer rejected this assessment",
+    }]
+
+
 def test_existing_items_are_classified_by_collection_and_identifier(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2182,6 +2235,7 @@ def test_scan_caps_error_details_without_losing_failure_count(
 def test_scan_stops_after_a_bulk_catalog_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Stop and cancel queued work after a systemic catalog failure."""
     for item_index in range(500):
@@ -2209,6 +2263,7 @@ def test_scan_stops_after_a_bulk_catalog_failure(
         1,
         100,
     )
+    caplog.set_level(logging.ERROR, logger="eolab_app.catalog.scanner")
 
     async def run_scan() -> dict[str, Any]:
         await scan_manager.start()
@@ -2228,6 +2283,8 @@ def test_scan_stops_after_a_bulk_catalog_failure(
         "path": None,
         "error": "Scan stopped: catalog unavailable",
     }
+    assert "Catalog scan stopped unexpectedly" in caplog.text
+    assert "RuntimeError: catalog unavailable" in caplog.text
     assert catalog_database.search_count_cache_invalidations == 0
 
 

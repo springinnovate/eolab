@@ -1,6 +1,7 @@
 """Single-active-scan coordinator expressed as named pipeline phases."""
 
 import asyncio
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
@@ -36,6 +37,7 @@ from eolab_app.catalog.reconciliation import MissingItemReconciler
 
 
 DEFAULT_SCAN_ERROR_DETAIL_LIMIT = 100
+LOGGER = logging.getLogger(__name__)
 
 
 class ScanManager:
@@ -296,12 +298,19 @@ class ScanManager:
                 if metadata_result.error is not None:
                     continue
 
-                for extracted_item in metadata_result.items:
-                    item = (
-                        await self.item_finalizer.finalize(extracted_item)
-                        if self.item_finalizer is not None
-                        else extracted_item
-                    )
+                finalized_items: list[dict[str, Any]] = []
+                try:
+                    for extracted_item in metadata_result.items:
+                        finalized_items.append(
+                            await self.item_finalizer.finalize(extracted_item)
+                            if self.item_finalizer is not None
+                            else extracted_item
+                        )
+                except Exception as error:
+                    self._record_dataset_error(metadata_result.path, str(error))
+                    continue
+
+                for item in finalized_items:
                     pending_items = pending_items_by_collection[
                         item["collection"]
                     ]
@@ -367,11 +376,22 @@ class ScanManager:
         self._status.items_produced += len(metadata_result.items)
         if metadata_result.error is None:
             return
+        self._record_dataset_error(metadata_result.path, metadata_result.error)
+
+    def _record_dataset_error(self, dataset_path: Path, error: str) -> None:
+        """Record one bounded source-dataset failure.
+
+        Args:
+            dataset_path: Dataset whose metadata or finalization failed.
+            error: Browser-safe failure detail.
+        """
         self._status.failed += 1
         if len(self._status.errors) < self.error_detail_limit:
             self._status.errors.append({
-                "path": relative_path,
-                "error": metadata_result.error,
+                "path": dataset_path.relative_to(
+                    self.source_root
+                ).as_posix(),
+                "error": error,
             })
         else:
             self._status.errors_truncated = True
@@ -506,6 +526,12 @@ class ScanManager:
             error: Failure that stopped the primary scan pipeline.
             reconciliation_task: Concurrent cleanup task, if it was started.
         """
+        LOGGER.error(
+            "Catalog scan stopped unexpectedly: scan_id=%s error_type=%s",
+            self._status.id,
+            type(error).__name__,
+            exc_info=(type(error), error, error.__traceback__),
+        )
         removed_items = 0
         if reconciliation_task is not None:
             removed_items = await reconciliation_task

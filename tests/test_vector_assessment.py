@@ -3,8 +3,10 @@
 import asyncio
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs
 
 import fiona
+import httpx2
 
 from eolab_app.catalog.geojson import build_stac_item as build_geojson_item
 from eolab_app.catalog.geopackage import build_stac_items as build_geopackage_items
@@ -13,6 +15,7 @@ from eolab_app.vector.assessment import (
     VectorAssessmentFinalizer,
     VectorAssessmentService,
 )
+from eolab_app.vector.geoserver import GeoServerVectorReaderAssessor
 from eolab_app.vector.models import (
     CatalogVectorRequest,
     VECTOR_READER_CONTRACT,
@@ -158,6 +161,49 @@ def compatible_reader(geometry_kind: str) -> VectorReaderAssessment:
         "reasonCode": None,
         "geometryKind": geometry_kind,
     })
+
+
+def test_geoserver_assessment_uses_form_parameters_without_json_binding(
+    tmp_path: Path,
+) -> None:
+    """Avoid GeoServer's XStream decoder for exact-layer assessment."""
+    source_path = tmp_path / "habitats.gpkg"
+    captured_requests: list[httpx2.Request] = []
+
+    def assessment_response(request: httpx2.Request) -> httpx2.Response:
+        captured_requests.append(request)
+        return httpx2.Response(200, json={
+            "contract": VECTOR_READER_CONTRACT,
+            "compatible": True,
+            "reasonCode": None,
+            "geometryKind": "polygon",
+        })
+
+    async def assess() -> VectorReaderAssessment:
+        async with httpx2.AsyncClient(
+            transport=httpx2.MockTransport(assessment_response)
+        ) as client:
+            return await GeoServerVectorReaderAssessor(
+                client,
+                "http://geoserver:8080/geoserver",
+            ).assess("geopackage", source_path, "Chosen Areas")
+
+    result = asyncio.run(assess())
+
+    assert result.compatible is True
+    assert len(captured_requests) == 1
+    request = captured_requests[0]
+    assert request.url.path == (
+        "/geoserver/rest/eolab/vector-reader-assessments"
+    )
+    assert request.headers["content-type"] == (
+        "application/x-www-form-urlencoded"
+    )
+    assert parse_qs(request.content.decode()) == {
+        "sourceUri": [source_path.as_uri()],
+        "sourceFormat": ["geopackage"],
+        "layerName": ["Chosen Areas"],
+    }
 
 
 def test_shapefile_assessment_preserves_all_components_and_native_layer(
