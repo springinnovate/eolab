@@ -2751,18 +2751,15 @@ h5 {
   container-type: inline-size;
 }
 
-@media (min-width: 1200px) {
-  #app.is-expanded-catalog-workspace
-    .catalog-layout.is-catalog-inspector-visible {
+@container catalog-workspace (min-width: 640px) {
+  .catalog-layout.is-catalog-inspector-visible {
     grid-template-columns:
       minmax(280px, var(--catalog-results-width))
       minmax(320px, var(--catalog-inspector-width));
     gap: 18px;
   }
 
-  #app.is-expanded-catalog-workspace
-    .catalog-layout.is-catalog-inspector-visible
-    .catalog-inspector {
+  .catalog-layout.is-catalog-inspector-visible .catalog-inspector {
     display: flex;
     min-width: 0;
     min-height: 0;

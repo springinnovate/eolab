@@ -242,7 +242,10 @@ test("Catalog layout reserves its height for compact searchable results", () => 
     /\.catalog-result-name\s*\{[^}]*text-overflow:\s*ellipsis/s,
   );
   assert.match(stylesheet, /--workspace-catalog-inspector-width:/);
-  assert.match(stylesheet, /@media \(min-width: 1200px\)/);
+  assert.match(
+    stylesheet,
+    /@container catalog-workspace \(min-width: 640px\)[\s\S]*?\.catalog-layout\.is-catalog-inspector-visible\s*\{[^}]*grid-template-columns:\s*minmax\(280px, var\(--catalog-results-width\)\)\s*minmax\(320px, var\(--catalog-inspector-width\)\)/s,
+  );
   assert.match(
     stylesheet,
     /@container catalog-workspace \(max-width: 639px\)[\s\S]*?\.catalog-layout\.is-catalog-inspector-visible \.catalog-browser\s*\{[^}]*display:\s*none/s,
