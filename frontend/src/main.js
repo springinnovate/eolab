@@ -30,6 +30,10 @@ import {
 import { CatalogVisualizationCoordinator } from "./catalog-visualization.js";
 import { initializeCatalogPaneControls } from "./catalog-pane-controller.js";
 import { getCatalogItemKey } from "./catalog-item-identity.js";
+import {
+    buildCatalogResultPresentation,
+    formatCatalogResultCount,
+} from "./catalog-result-presentation.js";
 import { EomapLayoutController } from "./eomap-layout-controller.js";
 import {
     applyCatalogSystemState,
@@ -851,21 +855,14 @@ async function initializeCatalog(
                 itemCollection,
                 isFiltered
             );
-            const collections = catalogState.collectionsDocument.collections;
-            const collectionLabel =
-                collections.length === 1
-                    ? (collections[0].title ?? collections[0].id)
-                    : `${collections.length} collections`;
+            const resultCountLabel = formatCatalogResultCount(itemCollection);
             applyCatalogSystemState(
                 catalogSystemStateElements,
                 `Catalog: connected · ${itemCountLabel}`,
                 "is-connected"
             );
-            catalogMessageElement.textContent = isFiltered
-                ? "Matching records were returned from the complete STAC catalog."
-                : "Records were returned from the deployed STAC catalog.";
-            catalogSummaryElement.textContent =
-                `${collectionLabel} · ${itemCountLabel}`;
+            catalogMessageElement.textContent = `${resultCountLabel} available.`;
+            catalogSummaryElement.textContent = resultCountLabel;
 
             const pageBounds = L.geoJSON(itemCollection).getBounds();
             if (pageBounds.isValid()) {
@@ -880,20 +877,28 @@ async function initializeCatalog(
             itemButton.type = "button";
             itemButton.setAttribute("aria-pressed", "false");
 
+            const presentation = buildCatalogResultPresentation(
+                item,
+                MOUNTED_DATASET_TYPES.get(item.collection)
+            );
             const itemTitle = document.createElement("strong");
-            itemTitle.textContent = item.properties.title ?? item.id;
-            const itemDescription = document.createElement("span");
-            itemDescription.textContent =
-                item.properties.description ?? item.id;
-            const itemSummary = document.createElement("small");
-            const datasetType = MOUNTED_DATASET_TYPES.get(item.collection);
-            const itemDatetime =
-                item.properties.datetime ?? "Datetime unavailable";
-            itemSummary.textContent = datasetType === undefined
-                ? itemDatetime
-                : `${datasetType} · ${itemDatetime}`;
-
-            itemButton.append(itemTitle, itemDescription, itemSummary);
+            itemTitle.className = "catalog-result-name";
+            itemTitle.textContent = presentation.filename;
+            itemButton.append(itemTitle);
+            if (presentation.context !== null) {
+                const itemContext = document.createElement("span");
+                itemContext.className = "catalog-result-context";
+                itemContext.textContent = presentation.context;
+                itemButton.append(itemContext);
+            }
+            if (presentation.datasetType !== null) {
+                const itemType = document.createElement("small");
+                itemType.className = "catalog-result-type";
+                itemType.textContent = presentation.datasetType;
+                itemButton.append(itemType);
+            }
+            itemButton.setAttribute("aria-label", presentation.accessibleLabel);
+            itemButton.title = presentation.fullTitle;
             itemButton.addEventListener("click", () => {
                 selectCatalogItem(item, itemButton);
             });
@@ -997,7 +1002,7 @@ async function initializeCatalog(
         );
         catalogMessageElement.textContent =
             "Requesting Collections and Items from the STAC API.";
-        catalogSummaryElement.textContent = "Loading catalog contents";
+        catalogSummaryElement.textContent = "Loading results…";
         streamStatusElement.textContent = "Loading Catalog Items…";
         refreshCatalogButton.disabled = true;
         surpriseCatalogButton.disabled = true;
@@ -1035,7 +1040,7 @@ async function initializeCatalog(
                 );
                 catalogMessageElement.textContent =
                     "Correct the field filter and try again.";
-                catalogSummaryElement.textContent = catalogError.message;
+                catalogSummaryElement.textContent = "Search needs correction";
                 streamStatusElement.textContent = "Catalog search was not sent.";
                 return;
             }
@@ -1046,7 +1051,7 @@ async function initializeCatalog(
             );
             catalogMessageElement.textContent =
                 "Check the catalog services and try again.";
-            catalogSummaryElement.textContent = catalogError.message;
+            catalogSummaryElement.textContent = "Catalog unavailable";
             streamStatusElement.textContent = "Catalog search failed.";
         } finally {
             if (searchSequence === catalogState.searchSequence) {
