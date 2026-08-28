@@ -77,7 +77,7 @@ class GeoServerVectorReaderAssessor:
         try:
             response = await self._geoserver_client.post(
                 self._assessment_url,
-                json={
+                data={
                     "sourceUri": source_path.as_uri(),
                     "sourceFormat": source_format,
                     "layerName": layer_name,

@@ -11,8 +11,8 @@ import org.geoserver.rest.RestBaseController;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -34,28 +34,31 @@ public final class VectorReaderAssessmentController {
     /**
      * Ask deployed GeoTools to open one exact mounted vector layer.
      *
-     * @param request explicit source URI, format, and layer identity
+     * @param sourceUri exact mounted file URI
+     * @param sourceFormat explicit supported source format
+     * @param layerName exact native layer identity
      * @return stable compatibility result without catalog mutation
      * @throws ResponseStatusException if any source identity field is invalid
      */
     @PostMapping(
-            consumes = MediaType.APPLICATION_JSON_VALUE,
+            consumes = MediaType.APPLICATION_FORM_URLENCODED_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
     public VectorReaderAssessment assess(
-            @RequestBody VectorReaderAssessmentRequest request) {
-        if (request == null
-                || request.sourceUri() == null
-                || request.sourceUri().isBlank()
-                || !SUPPORTED_FORMATS.contains(request.sourceFormat())
-                || request.layerName() == null
-                || request.layerName().isBlank()) {
+            @RequestParam("sourceUri") String sourceUri,
+            @RequestParam("sourceFormat") String sourceFormat,
+            @RequestParam("layerName") String layerName) {
+        if (sourceUri == null
+                || sourceUri.isBlank()
+                || !SUPPORTED_FORMATS.contains(sourceFormat)
+                || layerName == null
+                || layerName.isBlank()) {
             throw invalidSource();
         }
-        Path sourcePath = resolveSource(request.sourceUri(), request.sourceFormat());
+        Path sourcePath = resolveSource(sourceUri, sourceFormat);
         return assessmentService.assess(
-                request.sourceFormat(),
+                sourceFormat,
                 sourcePath,
-                request.layerName());
+                layerName);
     }
 
     /**

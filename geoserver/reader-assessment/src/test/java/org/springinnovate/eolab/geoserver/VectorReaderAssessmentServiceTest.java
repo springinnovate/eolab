@@ -1,11 +1,13 @@
 package org.springinnovate.eolab.geoserver;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
+import java.lang.reflect.Method;
 import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
@@ -21,6 +23,9 @@ import org.locationtech.jts.geom.LineString;
 import org.locationtech.jts.geom.MultiPoint;
 import org.locationtech.jts.geom.Point;
 import org.locationtech.jts.geom.Polygon;
+import org.springframework.http.MediaType;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.server.ResponseStatusException;
 
 /** Exercise the fixed geometry-to-default-style classification. */
@@ -45,14 +50,45 @@ final class VectorReaderAssessmentServiceTest {
     /** Reject a missing source URI at the authenticated controller boundary. */
     @Test
     void rejectsMissingSourceUri() {
-        VectorReaderAssessmentRequest request = new VectorReaderAssessmentRequest(
-                null,
-                "shapefile",
-                "sites");
-
         assertThrows(
                 ResponseStatusException.class,
-                () -> new VectorReaderAssessmentController().assess(request));
+                () -> new VectorReaderAssessmentController().assess(
+                        null,
+                        "shapefile",
+                        "sites"));
+    }
+
+    /**
+     * Bind assessment fields as form parameters before GeoServer's XStream
+     * body decoder.
+     */
+    @Test
+    void bindsAssessmentThroughFormParameters() throws NoSuchMethodException {
+        Method endpoint = VectorReaderAssessmentController.class.getDeclaredMethod(
+                "assess",
+                String.class,
+                String.class,
+                String.class);
+        PostMapping mapping = endpoint.getAnnotation(PostMapping.class);
+
+        assertArrayEquals(
+                new String[] {MediaType.APPLICATION_FORM_URLENCODED_VALUE},
+                mapping.consumes());
+        assertEquals(
+                "sourceUri",
+                endpoint.getParameters()[0]
+                        .getAnnotation(RequestParam.class)
+                        .value());
+        assertEquals(
+                "sourceFormat",
+                endpoint.getParameters()[1]
+                        .getAnnotation(RequestParam.class)
+                        .value());
+        assertEquals(
+                "layerName",
+                endpoint.getParameters()[2]
+                        .getAnnotation(RequestParam.class)
+                        .value());
     }
 
     /**
