@@ -226,65 +226,60 @@
             role="region"
             aria-labelledby="toggle-catalog-workspace"
           >
-            <div class="catalog-heading">
-              <div>
-                <p class="section-label">Data discovery</p>
-                <h2 id="eomap-catalog-heading">Catalog</h2>
-              </div>
-            </div>
-            <p class="section-copy" id="catalog-message">Checking catalog configuration.</p>
+            <p class="visually-hidden" id="catalog-message">Checking catalog configuration.</p>
             <div class="catalog-layout" id="catalog-layout">
               <section
                 class="catalog-browser catalog-pane"
                 id="catalog-results-pane"
                 aria-labelledby="catalog-results-heading"
               >
-                <div class="catalog-pane-heading">
-                  <h3 id="catalog-results-heading" tabindex="-1">Catalog results</h3>
-                  <button
-                    class="secondary-button catalog-pane-toggle"
-                    id="toggle-catalog-results"
-                    type="button"
-                    aria-controls="catalog-results-body"
-                    aria-expanded="true"
-                  >
-                    Collapse Catalog results
-                  </button>
-                </div>
+                <h2 class="visually-hidden" id="catalog-results-heading" tabindex="-1">
+                  Catalog search and results
+                </h2>
                 <div class="catalog-pane-body catalog-browser-body" id="catalog-results-body">
-                  <div class="catalog-toolbar">
-                    <strong id="catalog-summary">Connecting to the STAC API</strong>
-                    <button class="secondary-button" id="refresh-catalog" type="button">Refresh</button>
+                  <div class="catalog-search-toolbar">
+                    <label class="catalog-search" for="catalog-search">
+                      <span class="visually-hidden">Search catalog</span>
+                      <input
+                        id="catalog-search"
+                        type="search"
+                        autocomplete="off"
+                        placeholder="Search filenames, hazards, or formats..."
+                        aria-describedby="catalog-search-help catalog-search-error"
+                      />
+                      <small class="visually-hidden" id="catalog-search-help">
+                        Search text or use format:cog, viewable:true, or date:YYYY-MM-DD.
+                        Example: ESA format:cog viewable:true date:2020-01-01..2020-12-31,
+                        date:2020-01..2020-03.
+                      </small>
+                      <span
+                        class="catalog-search-error"
+                        id="catalog-search-error"
+                        role="status"
+                      ></span>
+                    </label>
+                    <details class="catalog-actions">
+                      <summary aria-label="More catalog actions" title="More catalog actions">
+                        <span aria-hidden="true">•••</span>
+                      </summary>
+                      <div class="catalog-actions-menu">
+                        <button id="refresh-catalog" type="button">Refresh results</button>
+                        <button
+                          id="surprise-catalog"
+                          type="button"
+                          aria-label="Surprise me with a matching Catalog Item"
+                          aria-describedby="catalog-surprise-status"
+                          disabled
+                        >
+                          Surprise me
+                        </button>
+                        <span id="catalog-surprise-status" role="status" aria-live="polite"></span>
+                      </div>
+                    </details>
                   </div>
-                  <label class="catalog-search" for="catalog-search">
-                  <span>Search catalog</span>
-                  <input
-                    id="catalog-search"
-                    type="search"
-                    autocomplete="off"
-                    placeholder="Text, format:cog, viewable:true, or date:YYYY-MM-DD"
-                    aria-describedby="catalog-search-help catalog-search-error"
-                  />
-                  <small id="catalog-search-help">Example: ESA format:cog viewable:true date:2020-01-01..2020-12-31, date:2020-01..2020-03</small>
-                  <span
-                    class="catalog-search-error"
-                    id="catalog-search-error"
-                    role="status"
-                  ></span>
-                  </label>
-                  <div class="catalog-surprise-action">
-                    <button
-                      class="catalog-surprise-button"
-                      id="surprise-catalog"
-                      type="button"
-                      aria-label="Surprise me with a matching Catalog Item"
-                      aria-describedby="catalog-surprise-status"
-                      disabled
-                    >
-                      Surprise me
-                    </button>
-                    <span id="catalog-surprise-status" role="status" aria-live="polite"></span>
-                  </div>
+                  <strong class="catalog-result-count" id="catalog-summary">
+                    Connecting to the STAC API
+                  </strong>
                   <div class="catalog-results-scroll" id="catalog-results-scroll">
                     <div class="catalog-results" id="catalog-results"></div>
                     <div class="catalog-stream-status">

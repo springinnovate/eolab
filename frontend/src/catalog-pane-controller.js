@@ -1,7 +1,7 @@
 /**
  * Catalog pane disclosure and progressive-inspector presentation.
  *
- * Catalog results retain their independent disclosure state. The selected
+ * Catalog search and results remain continuously available. The selected
  * record is revealed only when a result is chosen: CSS presents it as an
  * adjacent column when space permits and as a drill-in view otherwise.
  */
@@ -23,7 +23,7 @@
  */
 
 /**
- * Connects Catalog result disclosure and progressive inspector navigation.
+ * Connects the persistent Catalog results and progressive inspector navigation.
  *
  * @param {Document} documentContext Document containing the Catalog workspace.
  * @param {() => void} [onLayoutChange=() => {}] Notifies the composition root
@@ -44,7 +44,6 @@ export function initializeCatalogPaneControls(
         layout: "#catalog-layout",
         resultsPane: "#catalog-results-pane",
         resultsBody: "#catalog-results-body",
-        resultsToggle: "#toggle-catalog-results",
         resultsHeading: "#catalog-results-heading",
         inspectorPane: "#catalog-item-inspector",
         inspectorBody: "#catalog-inspector-body",
@@ -65,28 +64,6 @@ export function initializeCatalogPaneControls(
         throw new Error(
             `Catalog panes require ${requiredElements[missingElement[0]]}`
         );
-    }
-
-    /**
-     * Applies the Catalog-results disclosure state.
-     *
-     * @param {boolean} isExpanded Whether result controls and cards are shown.
-     * @return {void}
-     */
-    function setResultsExpanded(isExpanded) {
-        elements.resultsBody.hidden = !isExpanded;
-        elements.resultsPane.classList.toggle("is-collapsed", !isExpanded);
-        elements.layout.classList.toggle(
-            "is-catalog-browser-collapsed",
-            !isExpanded
-        );
-        elements.resultsToggle.setAttribute(
-            "aria-expanded",
-            String(isExpanded)
-        );
-        elements.resultsToggle.textContent = `${
-            isExpanded ? "Collapse" : "Expand"
-        } Catalog results`;
     }
 
     /**
@@ -147,16 +124,8 @@ export function initializeCatalogPaneControls(
         setInspectorVisible(false, { moveFocus: true });
     }
 
-    setResultsExpanded(
-        elements.resultsToggle.getAttribute("aria-expanded") !== "false"
-    );
     setInspectorVisible(!elements.inspectorPane.hidden);
 
-    elements.resultsToggle.addEventListener("click", () => {
-        setResultsExpanded(
-            elements.resultsToggle.getAttribute("aria-expanded") !== "true"
-        );
-    });
     elements.inspectorToggle.addEventListener("click", () => {
         setInspectorVisible(false, { moveFocus: true });
     });

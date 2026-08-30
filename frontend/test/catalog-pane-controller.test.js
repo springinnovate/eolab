@@ -50,10 +50,6 @@ function createCatalogPaneFixture() {
   const layout = new FakeElement({}, document);
   const resultsPane = new FakeElement({}, document);
   const resultsBody = new FakeElement({}, document);
-  const resultsToggle = new FakeElement(
-    { "aria-expanded": "true" },
-    document,
-  );
   const resultsHeading = new FakeElement({}, document);
   const inspectorPane = new FakeElement(
     { "aria-hidden": "true" },
@@ -71,7 +67,6 @@ function createCatalogPaneFixture() {
     ["#catalog-layout", layout],
     ["#catalog-results-pane", resultsPane],
     ["#catalog-results-body", resultsBody],
-    ["#toggle-catalog-results", resultsToggle],
     ["#catalog-results-heading", resultsHeading],
     ["#catalog-item-inspector", inspectorPane],
     ["#catalog-inspector-body", inspectorBody],
@@ -91,11 +86,10 @@ function createCatalogPaneFixture() {
     resultsBody,
     resultsHeading,
     resultsPane,
-    resultsToggle,
   };
 }
 
-test("Catalog starts with results visible and reveals selection progressively", () => {
+test("Catalog keeps results visible and reveals selection progressively", () => {
   const fixture = createCatalogPaneFixture();
   let layoutChanges = 0;
   const controls = initializeCatalogPaneControls(
@@ -106,7 +100,6 @@ test("Catalog starts with results visible and reveals selection progressively", 
   assert.equal(fixture.resultsBody.hidden, false);
   assert.equal(fixture.inspectorPane.hidden, true);
   assert.equal(fixture.inspectorBody.hidden, true);
-  assert.equal(fixture.resultsToggle.textContent, "Collapse Catalog results");
   assert.equal(fixture.inspectorToggle.textContent, "Expand Selected record");
   assert.equal(controls.isInspectorVisible(), false);
   assert.equal(layoutChanges, 0);
@@ -129,20 +122,8 @@ test("Catalog starts with results visible and reveals selection progressively", 
   controls.showInspector();
   assert.equal(layoutChanges, 1);
 
-  fixture.resultsToggle.dispatchEvent(new Event("click"));
-
-  assert.equal(fixture.resultsBody.hidden, true);
-  assert.equal(fixture.resultsToggle.getAttribute("aria-expanded"), "false");
-  assert.equal(fixture.resultsToggle.textContent, "Expand Catalog results");
-  assert.equal(fixture.resultsPane.classList.contains("is-collapsed"), true);
-  assert.equal(
-    fixture.layout.classList.contains("is-catalog-browser-collapsed"),
-    true,
-  );
-  assert.equal(fixture.inspectorBody.hidden, false);
-  assert.equal(fixture.inspectorToggle.getAttribute("aria-expanded"), "true");
-
   controls.showResults();
+  assert.equal(fixture.resultsBody.hidden, false);
   assert.equal(layoutChanges, 2);
 });
 
@@ -195,18 +176,16 @@ test("Escape closes only the progressive inspector and restores results focus", 
   assert.equal(fixture.document.activeElement, fixture.resultsHeading);
 });
 
-test("Catalog pane markup uses named native disclosure buttons", () => {
+test("Catalog markup keeps search visible and discloses only the inspector", () => {
   const markup = readFileSync(new URL("../index.html", import.meta.url), "utf8");
 
-  assert.match(
-    markup,
-    /<button\s+class="secondary-button catalog-pane-toggle"\s+id="toggle-catalog-results"\s+type="button"\s+aria-controls="catalog-results-body"\s+aria-expanded="true"\s*>/,
-  );
+  assert.doesNotMatch(markup, /id="toggle-catalog-results"/);
+  assert.doesNotMatch(markup, />Data discovery</);
+  assert.doesNotMatch(markup, />Catalog results</);
   assert.match(
     markup,
     /<button\s+class="secondary-button catalog-pane-toggle"\s+id="toggle-catalog-inspector"\s+type="button"\s+aria-controls="catalog-inspector-body"\s+aria-expanded="false"\s*>/,
   );
-  assert.match(markup, /Collapse Catalog results/);
   assert.match(markup, /Expand Selected record/);
   assert.match(
     markup,
@@ -214,11 +193,32 @@ test("Catalog pane markup uses named native disclosure buttons", () => {
   );
   assert.match(markup, /Back to results/);
   assert.match(markup, /id="catalog-item-inspector"[\s\S]*aria-hidden="true"[\s\S]*hidden/);
-  assert.match(markup, /id="catalog-results-heading" tabindex="-1"/);
+  assert.match(
+    markup,
+    /class="visually-hidden" id="catalog-results-heading" tabindex="-1"/,
+  );
   assert.match(markup, /id="catalog-inspector-heading" tabindex="-1"/);
+  assert.match(markup, /placeholder="Search filenames, hazards, or formats\.\.\."/);
+  assert.match(markup, /<details class="catalog-actions">/);
+  assert.ok(
+    markup.indexOf('id="catalog-search"') <
+      markup.indexOf('id="catalog-results-scroll"'),
+  );
 });
 
-test("Catalog layout owns independent scroll regions and expansion rules", () => {
+test("Catalog loading summary uses ASCII ellipsis punctuation", () => {
+  const mainSource = readFileSync(
+    new URL("../src/main.js", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(
+    mainSource,
+    /catalogSummaryElement\.textContent = "Loading results\.\.\.";/,
+  );
+});
+
+test("Catalog layout reserves its height for compact searchable results", () => {
   const stylesheet = readFileSync(
     new URL("../src/style.css", import.meta.url),
     "utf8",
@@ -241,14 +241,23 @@ test("Catalog layout owns independent scroll regions and expansion rules", () =>
     stylesheet,
     /\.catalog-inspector\s*\{[^}]*overflow:\s*hidden/s,
   );
-  assert.match(stylesheet, /is-catalog-browser-collapsed/);
+  assert.doesNotMatch(stylesheet, /is-catalog-browser-collapsed/);
   assert.match(stylesheet, /is-catalog-inspector-visible/);
+  assert.match(stylesheet, /\.catalog-search-toolbar\s*\{/);
+  assert.match(stylesheet, /\.catalog-result-count\s*\{/);
   assert.match(
     stylesheet,
-    /\.catalog-pane\.is-collapsed \.catalog-pane-heading\s*\{[^}]*flex-direction:\s*column/s,
+    /\.catalog-result\s*\{[^}]*min-height:\s*56px[^}]*grid-template-columns:\s*minmax\(0, 1fr\) auto/s,
+  );
+  assert.match(
+    stylesheet,
+    /\.catalog-result-name\s*\{[^}]*text-overflow:\s*ellipsis/s,
   );
   assert.match(stylesheet, /--workspace-catalog-inspector-width:/);
-  assert.match(stylesheet, /@media \(min-width: 1200px\)/);
+  assert.match(
+    stylesheet,
+    /@container catalog-workspace \(min-width: 640px\)[\s\S]*?\.catalog-layout\.is-catalog-inspector-visible\s*\{[^}]*grid-template-columns:\s*minmax\(280px, var\(--catalog-results-width\)\)\s*minmax\(320px, var\(--catalog-inspector-width\)\)/s,
+  );
   assert.match(
     stylesheet,
     /@container catalog-workspace \(max-width: 639px\)[\s\S]*?\.catalog-layout\.is-catalog-inspector-visible \.catalog-browser\s*\{[^}]*display:\s*none/s,
