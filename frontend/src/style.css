@@ -870,41 +870,41 @@ h5 {
   flex-direction: column;
 }
 
-.catalog-pane-heading {
-  display: flex;
+.catalog-item-heading {
+  display: grid;
+  min-width: 0;
   flex: 0 0 auto;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
+  gap: 7px;
   margin-bottom: 12px;
 }
 
-.catalog-pane-heading h3,
-.catalog-pane-heading .section-label {
-  margin-bottom: 0;
-}
-
-.catalog-pane-heading .section-label + h3 {
-  margin-top: 4px;
-}
-
-.catalog-pane-toggle {
-  flex: 0 0 auto;
-}
-
-.catalog-inspector-navigation {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 8px;
+.catalog-item-heading h3 {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  font-size: 0.82rem;
+  font-weight: 600;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .catalog-inspector-back {
-  display: none;
+  display: inline-flex;
+  justify-self: start;
 }
 
-.catalog-pane.is-collapsed .catalog-pane-heading {
-  flex-direction: column;
+.catalog-item-context {
+  min-width: 0;
+  margin: 0;
+  color: var(--text-3);
+  font-size: 0.7rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.catalog-item-context:empty {
+  display: none;
 }
 
 .catalog-browser-body {
@@ -956,12 +956,40 @@ h5 {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 18px;
-  border: 1px solid var(--border-2);
-  border-radius: var(--radius);
+  gap: 10px;
+  margin-bottom: 12px;
   background: var(--surface-2);
-  padding: 12px;
+  padding: 4px 0 10px;
+}
+
+.catalog-on-map {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--status-success);
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
+.catalog-on-map[hidden] {
+  display: none;
+}
+
+.catalog-map-actions .catalog-add-action {
+  background: var(--brand);
+  padding: 7px 10px;
+  color: var(--surface-1);
+  font-size: 0.78rem;
+}
+
+.catalog-map-actions .catalog-add-action:hover:not(:disabled) {
+  background: var(--brand-hover);
+  color: var(--surface-1);
+}
+
+.catalog-map-actions .catalog-add-action:active:not(:disabled) {
+  background: var(--brand-press);
+  color: var(--surface-1);
 }
 
 .raster-detail-preview-controls {
@@ -2158,16 +2186,14 @@ h5 {
 
 .catalog-result {
   content-visibility: auto;
-  contain-intrinsic-size: auto 56px;
+  contain-intrinsic-size: auto 84px;
   display: grid;
-  min-height: 56px;
+  min-height: 84px;
   grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-rows: auto auto;
   align-content: center;
   column-gap: 12px;
   row-gap: 2px;
   width: 100%;
-  cursor: pointer;
   border: 0;
   border-bottom: 1px solid var(--border-2);
   border-radius: 0;
@@ -2181,11 +2207,7 @@ h5 {
   background: var(--surface-hover);
 }
 
-.catalog-result:active {
-  background: var(--surface-selected);
-}
-
-.catalog-result.is-selected {
+.catalog-result:has(.catalog-result-details.is-selected) {
   background: var(--surface-selected);
   box-shadow: inset 3px 0 0 var(--brand);
 }
@@ -2231,6 +2253,57 @@ h5 {
   color: var(--text-3);
   font-size: 0.7rem;
   font-weight: 500;
+}
+
+.catalog-result-actions {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 5px;
+}
+
+.catalog-result-map-action {
+  padding: 4px 8px;
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.catalog-result-map-action.is-retained {
+  border-color: transparent;
+  padding-inline: 4px;
+  color: var(--text-2);
+}
+
+.catalog-result-on-map {
+  font-size: 0.72rem;
+}
+
+.catalog-result-details {
+  cursor: pointer;
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  padding: 4px;
+  color: var(--text-2);
+  font-size: 0.7rem;
+  line-height: 1.4;
+}
+
+.catalog-result-details:hover,
+.catalog-result-details:focus-visible {
+  color: var(--brand-hover);
+  text-decoration: underline;
+}
+
+.catalog-result-status:not(.visually-hidden) {
+  grid-column: 1 / -1;
+  margin: 6px 0 0;
+  color: var(--status-danger);
+  font-size: 0.73rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
 .catalog-empty {
@@ -2436,10 +2509,6 @@ h5 {
 
   .temporary-aoi-upload .secondary-button {
     justify-self: start;
-  }
-
-  .catalog-pane.is-collapsed .catalog-pane-heading {
-    flex-direction: row;
   }
 }
 
@@ -2788,14 +2857,6 @@ h5 {
     overflow: hidden;
     border: 0;
     padding: 0;
-  }
-
-  .catalog-inspector-back {
-    display: inline-flex;
-  }
-
-  .catalog-inspector .catalog-pane-toggle {
-    display: none;
   }
 }
 
@@ -3174,14 +3235,6 @@ h5 {
     overflow: hidden;
     border: 0;
     padding: 0;
-  }
-
-  .catalog-inspector-back {
-    display: inline-flex;
-  }
-
-  .catalog-inspector .catalog-pane-toggle {
-    display: none;
   }
 }
 

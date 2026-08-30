@@ -183,7 +183,7 @@ test("Catalog owns discovery, inspection, and its explicit layer action only", (
     assert.match(catalogRegion.source, /id="catalog-search"/);
     assert.match(catalogRegion.source, /id="catalog-item-inspector"/);
     assert.match(catalogInspector.source, /id="toggle-catalog-layer"/);
-    assert.match(catalogInspector.source, />\s*Add to map layers\s*</);
+    assert.match(catalogInspector.source, />\s*Add to map\s*</);
     assert.match(catalogActions.source, /id="catalog-map-action-status"/);
     assert.match(
         catalogActions.source,
@@ -284,10 +284,10 @@ test("Map layers owns layer presentation, appearance, cutoffs, and limitations",
     }
 });
 
-test("successful visualization and previews reveal Map layers through composition", () => {
+test("inspector visualization and previews can reveal Map layers through composition", () => {
     assert.match(
         COMPOSITION_SOURCE,
-        /catalogMapActionStatus\.textContent = successStatus;\s*onRenderingWorkspaceRequested\(\);/
+        /setCatalogMapActionFeedback\(item, successStatus\);\s*if \(revealMapLayers && catalogItemsMatch\(catalogState.selectedItem, item\)\) \{\s*onRenderingWorkspaceRequested\(\);/
     );
     assert.match(
         COMPOSITION_SOURCE,

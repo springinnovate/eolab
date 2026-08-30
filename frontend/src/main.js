@@ -34,6 +34,7 @@ import {
     buildCatalogResultPresentation,
     formatCatalogResultCount,
 } from "./catalog-result-presentation.js";
+import { createCatalogResultView } from "./catalog-result-view.js";
 import { EomapLayoutController } from "./eomap-layout-controller.js";
 import {
     applyCatalogSystemState,
@@ -339,11 +340,14 @@ function renderCatalogItemInspector(
     const inspectorStatus = document.querySelector(
         "#catalog-inspector-status"
     );
+    const inspectorContext = document.querySelector("#catalog-item-context");
     inspectorContent.replaceChildren();
 
     // Render the empty state when no Item is selected.
     if (item === null) {
-        inspectorHeading.textContent = "Item inspector";
+        inspectorHeading.textContent = "Selected item";
+        inspectorHeading.removeAttribute("title");
+        inspectorContext.textContent = "";
         const emptyInspector = document.createElement("div");
         emptyInspector.className = "catalog-inspector-empty";
         const emptyHeading = document.createElement("strong");
@@ -363,14 +367,25 @@ function renderCatalogItemInspector(
         collections,
         scanDisplayPathPrefix
     );
-    inspectorHeading.textContent = inspector.title;
+    const presentation = buildCatalogResultPresentation(
+        item,
+        MOUNTED_DATASET_TYPES.get(item.collection)
+    );
+    inspectorHeading.textContent = presentation.filename;
+    inspectorHeading.title = presentation.fullTitle;
+    inspectorContext.textContent = [presentation.datasetType, presentation.context]
+        .filter((label) => label !== null)
+        .join(" · ");
     if (inspector.description !== null) {
         const description = document.createElement("p");
         description.className = "catalog-inspector-description";
         description.textContent = inspector.description;
         inspectorContent.append(description);
     }
-    inspectorContent.append(createCatalogMetadataList(inspector.metadata));
+    inspectorContent.append(createCatalogMetadataList([
+        { label: "Item title", value: inspector.title },
+        ...inspector.metadata,
+    ]));
 
     if (inspector.fields.length > 0) {
         const fieldsHeading = document.createElement("h4");
@@ -434,7 +449,7 @@ function renderCatalogItemInspector(
     }
 
     // Announce the selected Item to assistive technologies.
-    inspectorStatus.textContent = `Showing details for ${inspector.title}.`;
+    inspectorStatus.textContent = `Selected item: ${inspector.title}.`;
 }
 
 /**
@@ -505,6 +520,7 @@ async function initializeCatalog(
     const catalogLayerToggle = document.querySelector(
         "#toggle-catalog-layer"
     );
+    const catalogOnMap = document.querySelector("#catalog-on-map");
     const catalogMapActionStatus = document.querySelector(
         "#catalog-map-action-status"
     );
@@ -543,7 +559,8 @@ async function initializeCatalog(
     );
     const catalogState = {
         collectionsDocument: null,
-        resultButtons: new Map(),
+        resultViews: new Map(),
+        mapActionFeedback: new Map(),
         searchSequence: 0,
         searchText: "",
         selectedButton: null,
@@ -570,12 +587,52 @@ async function initializeCatalog(
     }
 
     /**
-     * Refresh the selected Item action from retained and pending state.
+     * Refresh result rows and the inspector from each Item's own map state.
      *
      * @return {void}
      */
     function refreshCatalogMapAction() {
+        for (const view of catalogState.resultViews.values()) {
+            view.update({
+                supported: getCatalogVisualization(view.item) !== null,
+                retained: catalogVisualization.contains(view.item),
+                pendingAction: catalogState.pendingMapActions.get(view.item),
+                feedback: getCatalogMapActionFeedback(view.item),
+            });
+        }
         updateCatalogMapAction(catalogState.selectedItem);
+    }
+
+    /**
+     * Read feedback only while it describes the Item's current membership.
+     *
+     * @param {Object|null} item Catalog Item or no current selection.
+     * @return {{message:string,isError:boolean}|null} Relevant action feedback.
+     */
+    function getCatalogMapActionFeedback(item) {
+        if (item === null) return null;
+        const key = getCatalogItemKey(item);
+        const feedback = catalogState.mapActionFeedback.get(key);
+        if (feedback && feedback.retained !== catalogVisualization.contains(item)) {
+            catalogState.mapActionFeedback.delete(key);
+            return null;
+        }
+        return feedback ?? null;
+    }
+
+    /**
+     * Publish outcome feedback to this Item's row and matching inspector.
+     *
+     * @param {Object} item Item whose action completed.
+     * @param {string} message Accessible outcome or error text.
+     * @param {boolean} [isError=false] Show failures beside the row action.
+     * @return {void}
+     */
+    function setCatalogMapActionFeedback(item, message, isError = false) {
+        catalogState.mapActionFeedback.set(getCatalogItemKey(item), {
+            message, isError, retained: catalogVisualization.contains(item),
+        });
+        refreshCatalogMapAction();
     }
 
     /**
@@ -607,9 +664,9 @@ async function initializeCatalog(
     }
 
     /**
-     * Begin one assessment or publication action for a selected Item.
+     * Begin one assessment or publication action for an Item.
      *
-     * @param {Object} item Selected Catalog Item.
+     * @param {Object} item Catalog Item owning the action.
      * @param {string} buttonText In-progress action label.
      * @param {string} statusText In-progress status explanation.
      * @return {{item:Object,key:string,buttonText:string,statusText:string}}
@@ -617,17 +674,18 @@ async function initializeCatalog(
      * @throws {Error} If the Item already owns an in-flight action.
      */
     function beginCatalogMapAction(item, buttonText, statusText) {
+        catalogState.mapActionFeedback.delete(getCatalogItemKey(item));
         const pendingAction = catalogState.pendingMapActions.begin(
             item,
             buttonText,
             statusText
         );
-        updateCatalogMapAction(item);
+        refreshCatalogMapAction();
         return pendingAction;
     }
 
     /**
-     * Finish only the action that still owns the selected Item controls.
+     * Finish only the action that still owns this Item's controls.
      *
      * @param {{item:Object,key:string}} pendingAction Action identity returned
      * at start.
@@ -637,9 +695,7 @@ async function initializeCatalog(
         if (!catalogState.pendingMapActions.finish(pendingAction)) {
             return;
         }
-        if (catalogItemsMatch(catalogState.selectedItem, pendingAction.item)) {
-            updateCatalogMapAction(catalogState.selectedItem);
-        }
+        refreshCatalogMapAction();
     }
 
     const mapLayerController = new MapLayerController({
@@ -708,6 +764,13 @@ async function initializeCatalog(
         );
         catalogLayerToggle.disabled = pendingAction !== null;
         catalogLayerToggle.hidden = false;
+        const actionStatus = pendingAction?.statusText ??
+            getCatalogMapActionFeedback(item)?.message ?? "";
+        if (catalogMapActionStatus.textContent !== actionStatus) {
+            catalogMapActionStatus.textContent = actionStatus;
+        }
+        catalogOnMap.hidden = !isRetained;
+        catalogLayerToggle.classList.toggle("catalog-add-action", !isRetained);
         rasterDetailPreviewControls.hidden = !supportsDetailPreview;
         showRasterDetailPreview.disabled = pendingAction !== null;
         showRasterDetailPreview.textContent = pendingAction?.buttonText ??
@@ -719,8 +782,8 @@ async function initializeCatalog(
         renderRasterDetailPreviewResolution(detailPreviewState);
         catalogLayerToggle.textContent = pendingAction?.buttonText ?? (
             isRetained
-                ? "Remove from map layers"
-                : "Add to map layers"
+                ? "Remove from map"
+                : "Add to map"
         );
         const fullVisualizationReason = formatCatalogVisualizationReason(
             item,
@@ -730,7 +793,7 @@ async function initializeCatalog(
             ? [
                 fullVisualizationReason,
                 isRetained
-                    ? "This vector is already in Map layers."
+                    ? "This vector is on the map."
                     : "",
             ].filter((message) => message !== "").join(" ")
             : formatCatalogRasterStatus(
@@ -815,7 +878,7 @@ async function initializeCatalog(
         }
         catalogState.visualizationAssessments.apply(item);
         const itemButton = requestedButton ??
-            catalogState.resultButtons.get(getCatalogItemKey(item)) ?? null;
+            catalogState.resultViews.get(getCatalogItemKey(item))?.detailsButton ?? null;
         if (catalogState.selectedButton !== null) {
             catalogState.selectedButton.classList.remove("is-selected");
             catalogState.selectedButton.setAttribute("aria-pressed", "false");
@@ -837,7 +900,9 @@ async function initializeCatalog(
             rasterVisualization.activateAnalysis(item);
         }
         updateCatalogMapAction(item);
-        catalogPaneControls.showInspector({ moveFocus: true });
+        catalogPaneControls.showInspector({
+            moveFocus: true, returnFocusTarget: itemButton,
+        });
     }
 
     /**
@@ -872,49 +937,20 @@ async function initializeCatalog(
 
         for (const item of itemCollection.features) {
             catalogState.visualizationAssessments.apply(item);
-            const itemButton = document.createElement("button");
-            itemButton.className = "catalog-result";
-            itemButton.type = "button";
-            itemButton.setAttribute("aria-pressed", "false");
-
             const presentation = buildCatalogResultPresentation(
                 item,
                 MOUNTED_DATASET_TYPES.get(item.collection)
             );
-            const itemTitle = document.createElement("strong");
-            itemTitle.className = "catalog-result-name";
-            itemTitle.textContent = presentation.filename;
-            itemButton.append(itemTitle);
-            if (presentation.context !== null) {
-                const itemContext = document.createElement("span");
-                itemContext.className = "catalog-result-context";
-                itemContext.textContent = presentation.context;
-                itemButton.append(itemContext);
-            }
-            if (presentation.datasetType !== null) {
-                const itemType = document.createElement("small");
-                itemType.className = "catalog-result-type";
-                itemType.textContent = presentation.datasetType;
-                itemButton.append(itemType);
-            }
-            itemButton.setAttribute("aria-label", presentation.accessibleLabel);
-            itemButton.title = presentation.fullTitle;
-            itemButton.addEventListener("click", () => {
-                selectCatalogItem(item, itemButton);
+            const view = createCatalogResultView({
+                item, presentation,
+                id: `catalog-result-${catalogState.searchSequence}-${catalogState.resultViews.size}`,
+                onDetails: selectCatalogItem,
+                onMapAction: (requestedItem) => toggleCatalogLayer(requestedItem),
+                onPreview: (previewItem) => footprintController.preview(previewItem),
+                onClearPreview: () => footprintController.clearPreview(),
             });
-            itemButton.addEventListener("pointerenter", () => {
-                footprintController.preview(item);
-            });
-            itemButton.addEventListener("pointerleave", () => {
-                footprintController.clearPreview();
-            });
-            itemButton.addEventListener("focus", () => {
-                footprintController.preview(item);
-            });
-            itemButton.addEventListener("blur", () => {
-                footprintController.clearPreview();
-            });
-            catalogState.resultButtons.set(getCatalogItemKey(item), itemButton);
+            const itemButton = view.detailsButton;
+            catalogState.resultViews.set(getCatalogItemKey(item), view);
             if (
                 catalogState.selectedItem !== null &&
                 getCatalogItemKey(catalogState.selectedItem) ===
@@ -924,8 +960,9 @@ async function initializeCatalog(
                 itemButton.classList.add("is-selected");
                 itemButton.setAttribute("aria-pressed", "true");
             }
-            catalogResultsElement.append(itemButton);
+            catalogResultsElement.append(view.element);
         }
+        refreshCatalogMapAction();
 
         if (catalogResultsElement.childElementCount === 0) {
             const emptyCatalogMessage = document.createElement("p");
@@ -993,7 +1030,8 @@ async function initializeCatalog(
         pageObserver.unobserve(loadSentinelElement);
         retryPageButton.hidden = true;
         clearCatalogSelection();
-        catalogState.resultButtons.clear();
+        catalogState.resultViews.clear();
+        catalogState.mapActionFeedback.clear();
         catalogResultsElement.replaceChildren();
         catalogResultsElement.setAttribute("aria-busy", "true");
         applyCatalogSystemState(
@@ -1167,111 +1205,88 @@ async function initializeCatalog(
     );
     retryPageButton.addEventListener("click", prefetchNextCatalogPage);
     /**
-     * Add or remove the selected Catalog map layer.
+     * Add or remove one explicitly requested Catalog Item independently of selection.
      *
      * Every add attempt refreshes the authoritative visualization assessment
      * before publication. The persisted assessment remains an internal
      * rendering-authorization contract rather than a separate user action.
      *
-     * @return {Promise<void>} Completion after the selected action settles.
+     * @param {Object|null} item Item requested by a row or inspector action.
+     * @param {Object} [options={}] Optional presentation behavior.
+     * @param {boolean} [options.revealMapLayers=false] Inspector actions may
+     * reveal Map layers; row actions leave the browsing layout unchanged.
+     * @return {Promise<void>} Completion after this Item's action settles.
      */
-    async function toggleCatalogLayer() {
-        const selectedItem = catalogState.selectedItem;
-        const visualization = catalogVisualization.describe(selectedItem);
-        const datasetNoun = catalogVisualization.noun(selectedItem);
-        if (catalogVisualization.contains(selectedItem)) {
-            catalogVisualization.remove(selectedItem);
-            if (visualization.kind === "raster") {
-                rasterVisualization.activateAnalysis(selectedItem);
+    async function toggleCatalogLayer(item, { revealMapLayers = false } = {}) {
+        const visualization = catalogVisualization.describe(item);
+        if (visualization === null || catalogState.pendingMapActions.get(item) !== null) {
+            return;
+        }
+        const datasetNoun = catalogVisualization.noun(item);
+        if (catalogVisualization.contains(item)) {
+            catalogVisualization.remove(item);
+            if (visualization.kind === "raster" && catalogItemsMatch(catalogState.selectedItem, item)) {
+                rasterVisualization.activateAnalysis(item);
             }
-            catalogLayerToggle.textContent = "Add to map layers";
             const removalStatus =
                 `${datasetNoun[0].toUpperCase()}${datasetNoun.slice(1)} ` +
-                "removed from Map layers.";
-            catalogMapActionStatus.textContent = removalStatus;
+                "removed from the map.";
+            setCatalogMapActionFeedback(item, removalStatus);
             return;
         }
 
-        catalogMapActionStatus.textContent =
-            `Checking whether the selected ${datasetNoun} can be rendered.`;
         const pendingAction = beginCatalogMapAction(
-            selectedItem,
-            "Adding to map…",
-            `Checking whether the selected ${datasetNoun} can be rendered.`
+            item,
+            "Adding to map...",
+            `Checking whether this ${datasetNoun} can be rendered.`
         );
         try {
-            const assessedItem = await catalogVisualization.assess(
-                selectedItem
-            );
-            catalogState.visualizationAssessments.record(
-                selectedItem,
-                assessedItem
-            );
-            rasterVisualization.removeSampled(selectedItem);
-            rasterDetailPreview.remove(selectedItem);
-            if (!catalogItemsMatch(
-                catalogState.selectedItem,
-                selectedItem
-            )) {
-                return;
+            const assessedItem = await catalogVisualization.assess(item);
+            catalogState.visualizationAssessments.record(item, assessedItem);
+            rasterVisualization.removeSampled(item);
+            rasterDetailPreview.remove(item);
+            const currentVisualization = catalogVisualization.describe(item);
+            if (catalogItemsMatch(catalogState.selectedItem, item)) {
+                catalogState.visualizationAssessments.apply(catalogState.selectedItem);
+                if (currentVisualization?.kind === "raster") {
+                    rasterVisualization.activateAnalysis(catalogState.selectedItem);
+                }
+                renderCatalogItemInspector(
+                    catalogState.selectedItem,
+                    catalogState.collectionsDocument.collections,
+                    appGlobalConfiguration.scanDisplayPathPrefix
+                );
             }
-            catalogState.visualizationAssessments.apply(
-                catalogState.selectedItem
-            );
-            const currentItem = catalogState.selectedItem;
-            const currentVisualization = catalogVisualization.describe(
-                currentItem
-            );
-            if (currentVisualization?.kind === "raster") {
-                rasterVisualization.activateAnalysis(currentItem);
-            }
-            renderCatalogItemInspector(
-                currentItem,
-                catalogState.collectionsDocument.collections,
-                appGlobalConfiguration.scanDisplayPathPrefix
-            );
             if (currentVisualization?.metadata?.eligible !== true) {
-                finishCatalogMapAction(pendingAction);
-                catalogMapActionStatus.textContent =
+                setCatalogMapActionFeedback(item,
                     formatCatalogVisualizationReason(
-                        currentItem,
+                        item,
                         currentVisualization?.metadata?.reason
                     ) ||
-                    "Visualization is unavailable for this item.";
+                    "Visualization is unavailable for this item.", true);
                 return;
             }
 
-            const publication = await catalogVisualization.show(
-                currentItem
-            );
-            if (
-                publication === null ||
-                !catalogItemsMatch(catalogState.selectedItem, selectedItem)
-            ) {
-                return;
-            }
-            finishCatalogMapAction(pendingAction);
-            catalogLayerToggle.textContent = "Remove from map layers";
+            const publication = await catalogVisualization.show(item);
+            if (publication === null) return;
             const successStatus =
                 `${datasetNoun[0].toUpperCase()}${datasetNoun.slice(1)} ` +
-                "added to Map layers.";
-            catalogMapActionStatus.textContent = successStatus;
-            onRenderingWorkspaceRequested();
-        } catch (visualizationError) {
-            if (catalogItemsMatch(catalogState.selectedItem, selectedItem)) {
-                finishCatalogMapAction(pendingAction);
-                catalogLayerToggle.textContent = "Add to map layers";
-                catalogMapActionStatus.textContent =
-                    formatCatalogVisualizationReason(
-                        selectedItem,
-                        visualizationError.message
-                    );
+                "added to the map.";
+            setCatalogMapActionFeedback(item, successStatus);
+            if (revealMapLayers && catalogItemsMatch(catalogState.selectedItem, item)) {
+                onRenderingWorkspaceRequested();
             }
+        } catch (visualizationError) {
+            setCatalogMapActionFeedback(item, formatCatalogVisualizationReason(
+                item, visualizationError.message
+            ), true);
         } finally {
             finishCatalogMapAction(pendingAction);
         }
     }
-    catalogLayerToggle.addEventListener("click", toggleCatalogLayer);
+    catalogLayerToggle.addEventListener("click", () => {
+        void toggleCatalogLayer(catalogState.selectedItem, { revealMapLayers: true });
+    });
     showRasterDetailPreview.addEventListener("click", async () => {
         const selectedItem = catalogState.selectedItem;
         const pendingAction = beginCatalogMapAction(

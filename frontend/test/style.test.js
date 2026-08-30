@@ -26,7 +26,7 @@ test("controls retain distinct interactive and accessibility states", () => {
   assert.match(STYLESHEET, /\.secondary-button:active:not\(:disabled\)/);
   assert.match(STYLESHEET, /\[aria-busy="true"\]/);
   assert.match(STYLESHEET, /\[aria-disabled="true"\]/);
-  assert.match(STYLESHEET, /\.catalog-result\.is-selected/);
+  assert.match(STYLESHEET, /\.catalog-result:has\(\.catalog-result-details\.is-selected\)/);
   assert.match(STYLESHEET, /\.temporary-aoi-error/);
 });
 

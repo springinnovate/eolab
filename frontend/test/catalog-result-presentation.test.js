@@ -28,7 +28,7 @@ test("Catalog results lead with raster filenames and hazard context", () => {
     fullTitle:
       "droughts-historic-speibase-v2-11/drought_frequency_2000.tif",
     accessibleLabel:
-      "Open details for drought_frequency_2000.tif, droughts · historic, " +
+      "More details for drought_frequency_2000.tif, droughts · historic, " +
       "Raster, Source: droughts-historic-speibase-v2-11/" +
       "drought_frequency_2000.tif",
   });
@@ -55,7 +55,7 @@ test("Catalog results retain GeoPackage and geodatabase layer identity", () => {
       datasetType: "Vector",
       fullTitle: "flooding-future/FLOPROS.gpkg — flood_protection",
       accessibleLabel:
-        "Open details for FLOPROS.gpkg, Layer: flood_protection, Vector, " +
+        "More details for FLOPROS.gpkg, Layer: flood_protection, Vector, " +
         "Source: flooding-future/FLOPROS.gpkg — flood_protection",
     },
   );
@@ -90,7 +90,7 @@ test("Catalog result identity safely falls back to titles and Item IDs", () => {
       datasetType: null,
       fullTitle: "Model Outputs\\grassland_2002.tif",
       accessibleLabel:
-        "Open details for grassland_2002.tif, Model Outputs, " +
+        "More details for grassland_2002.tif, Model Outputs, " +
         "Source: Model Outputs\\grassland_2002.tif",
     },
   );
