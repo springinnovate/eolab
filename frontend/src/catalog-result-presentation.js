@@ -20,7 +20,7 @@ function basename(path) {
 }
 
 /** Convert a path slug into compact readable context. */
-function humanizePathSegment(segment) {
+function formatReadablePathSegment(segment) {
     return segment.replaceAll(/[-_]+/g, " ").trim();
 }
 
@@ -78,10 +78,10 @@ function getCatalogPathContext(sourcePath) {
     for (const segment of parentSegments.toReversed()) {
         const hazardPeriod = segment.match(/^(.+?)-(historic|future)(?:-|$)/i);
         if (hazardPeriod !== null) {
-            return `${humanizePathSegment(hazardPeriod[1])} · ${hazardPeriod[2].toLowerCase()}`;
+            return `${formatReadablePathSegment(hazardPeriod[1])} · ${hazardPeriod[2].toLowerCase()}`;
         }
     }
-    return humanizePathSegment(parentSegments.at(-1));
+    return formatReadablePathSegment(parentSegments.at(-1));
 }
 
 /**
