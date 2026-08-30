@@ -1002,7 +1002,7 @@ async function initializeCatalog(
         );
         catalogMessageElement.textContent =
             "Requesting Collections and Items from the STAC API.";
-        catalogSummaryElement.textContent = "Loading results…";
+        catalogSummaryElement.textContent = "Loading results...";
         streamStatusElement.textContent = "Loading Catalog Items…";
         refreshCatalogButton.disabled = true;
         surpriseCatalogButton.disabled = true;

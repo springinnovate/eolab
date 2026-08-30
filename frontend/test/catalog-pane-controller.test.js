@@ -198,11 +198,23 @@ test("Catalog markup keeps search visible and discloses only the inspector", () 
     /class="visually-hidden" id="catalog-results-heading" tabindex="-1"/,
   );
   assert.match(markup, /id="catalog-inspector-heading" tabindex="-1"/);
-  assert.match(markup, /placeholder="Search filenames, hazards, or formats…"/);
+  assert.match(markup, /placeholder="Search filenames, hazards, or formats\.\.\."/);
   assert.match(markup, /<details class="catalog-actions">/);
   assert.ok(
     markup.indexOf('id="catalog-search"') <
       markup.indexOf('id="catalog-results-scroll"'),
+  );
+});
+
+test("Catalog loading summary uses ASCII ellipsis punctuation", () => {
+  const mainSource = readFileSync(
+    new URL("../src/main.js", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(
+    mainSource,
+    /catalogSummaryElement\.textContent = "Loading results\.\.\.";/,
   );
 });
 
