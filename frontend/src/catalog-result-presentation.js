@@ -138,7 +138,7 @@ export function buildCatalogResultPresentation(item, datasetType) {
         context,
         datasetType: normalizedDatasetType,
         fullTitle,
-        accessibleLabel: `Open details for ${accessibleParts.join(", ")}`
+        accessibleLabel: `Select item ${accessibleParts.join(", ")}`
     };
 }
 

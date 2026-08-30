@@ -172,7 +172,7 @@ export function formatCatalogRasterStatus(
     let renderingExplanation = "";
     if (isRetained) {
         renderingExplanation =
-            "This raster is already in Map layers.";
+            "This raster is on the map.";
     }
     if (supportsDetailPreview) {
         renderingExplanation =

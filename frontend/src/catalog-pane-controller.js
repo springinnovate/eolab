@@ -2,18 +2,18 @@
  * Catalog pane disclosure and progressive-inspector presentation.
  *
  * Catalog search and results remain continuously available. The selected
- * record is revealed only when a result is chosen: CSS presents it as an
+ * Item is revealed only when a result is chosen: CSS presents it as an
  * adjacent column when space permits and as a drill-in view otherwise.
  */
 
 /**
  * @typedef {Object} CatalogPaneControls
  * @property {(options?: CatalogPaneFocusOptions) => void} showInspector
- * Reveals and expands the selected-record inspector.
+ * Reveals the selected Item with optional metadata initially collapsed.
  * @property {(options?: CatalogPaneFocusOptions) => void} showResults Hides
- * the selected-record inspector and returns to the results presentation.
+ * the selected-Item inspector and returns to the results presentation.
  * @property {() => boolean} isInspectorVisible Reports whether the selected
- * record is currently presented.
+ * Item is currently presented.
  */
 
 /**
@@ -47,7 +47,7 @@ export function initializeCatalogPaneControls(
         resultsHeading: "#catalog-results-heading",
         inspectorPane: "#catalog-item-inspector",
         inspectorBody: "#catalog-inspector-body",
-        inspectorToggle: "#toggle-catalog-inspector",
+        itemDetails: "#catalog-item-details",
         inspectorHeading: "#catalog-inspector-heading",
         backToResults: "#back-to-catalog-results"
     };
@@ -67,7 +67,7 @@ export function initializeCatalogPaneControls(
     }
 
     /**
-     * Applies selected-record visibility without deciding its CSS placement.
+     * Applies selected-Item visibility without deciding its CSS placement.
      *
      * @param {boolean} isVisible Whether the inspector is presented.
      * @param {CatalogPaneFocusOptions} [options={}] Focus behavior.
@@ -81,7 +81,6 @@ export function initializeCatalogPaneControls(
             String(!isVisible)
         );
         elements.inspectorBody.hidden = !isVisible;
-        elements.inspectorPane.classList.toggle("is-collapsed", !isVisible);
         elements.layout.classList.toggle(
             "is-catalog-inspector-visible",
             isVisible
@@ -90,13 +89,8 @@ export function initializeCatalogPaneControls(
             "is-catalog-inspector-collapsed",
             !isVisible
         );
-        elements.inspectorToggle.setAttribute(
-            "aria-expanded",
-            String(isVisible)
-        );
-        elements.inspectorToggle.textContent = `${
-            isVisible ? "Collapse" : "Expand"
-        } Selected record`;
+        elements.itemDetails.open = false;
+        elements.inspectorBody.scrollTop = 0;
 
         if (moveFocus) {
             const target = isVisible
@@ -126,9 +120,6 @@ export function initializeCatalogPaneControls(
 
     setInspectorVisible(!elements.inspectorPane.hidden);
 
-    elements.inspectorToggle.addEventListener("click", () => {
-        setInspectorVisible(false, { moveFocus: true });
-    });
     elements.backToResults.addEventListener("click", () => {
         setInspectorVisible(false, { moveFocus: true });
     });
@@ -139,7 +130,7 @@ export function initializeCatalogPaneControls(
 
     return Object.freeze({
         /**
-         * Reveals the selected record and optionally focuses its heading.
+         * Reveals the selected Item with details closed and optional focus.
          *
          * @param {CatalogPaneFocusOptions} [options={}] Focus behavior.
          * @return {void}
@@ -161,7 +152,7 @@ export function initializeCatalogPaneControls(
         /**
          * Reports the current inspector presentation state.
          *
-         * @return {boolean} True when the selected-record pane is visible.
+         * @return {boolean} True when the selected-Item pane is visible.
          */
         isInspectorVisible() {
             return !elements.inspectorPane.hidden;

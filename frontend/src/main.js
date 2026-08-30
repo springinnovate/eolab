@@ -339,11 +339,14 @@ function renderCatalogItemInspector(
     const inspectorStatus = document.querySelector(
         "#catalog-inspector-status"
     );
+    const inspectorContext = document.querySelector("#catalog-item-context");
     inspectorContent.replaceChildren();
 
     // Render the empty state when no Item is selected.
     if (item === null) {
-        inspectorHeading.textContent = "Item inspector";
+        inspectorHeading.textContent = "Selected item";
+        inspectorHeading.removeAttribute("title");
+        inspectorContext.textContent = "";
         const emptyInspector = document.createElement("div");
         emptyInspector.className = "catalog-inspector-empty";
         const emptyHeading = document.createElement("strong");
@@ -363,14 +366,25 @@ function renderCatalogItemInspector(
         collections,
         scanDisplayPathPrefix
     );
-    inspectorHeading.textContent = inspector.title;
+    const presentation = buildCatalogResultPresentation(
+        item,
+        MOUNTED_DATASET_TYPES.get(item.collection)
+    );
+    inspectorHeading.textContent = presentation.filename;
+    inspectorHeading.title = presentation.fullTitle;
+    inspectorContext.textContent = [presentation.datasetType, presentation.context]
+        .filter((label) => label !== null)
+        .join(" · ");
     if (inspector.description !== null) {
         const description = document.createElement("p");
         description.className = "catalog-inspector-description";
         description.textContent = inspector.description;
         inspectorContent.append(description);
     }
-    inspectorContent.append(createCatalogMetadataList(inspector.metadata));
+    inspectorContent.append(createCatalogMetadataList([
+        { label: "Item title", value: inspector.title },
+        ...inspector.metadata,
+    ]));
 
     if (inspector.fields.length > 0) {
         const fieldsHeading = document.createElement("h4");
@@ -434,7 +448,7 @@ function renderCatalogItemInspector(
     }
 
     // Announce the selected Item to assistive technologies.
-    inspectorStatus.textContent = `Showing details for ${inspector.title}.`;
+    inspectorStatus.textContent = `Selected item: ${inspector.title}.`;
 }
 
 /**
@@ -505,6 +519,7 @@ async function initializeCatalog(
     const catalogLayerToggle = document.querySelector(
         "#toggle-catalog-layer"
     );
+    const catalogOnMap = document.querySelector("#catalog-on-map");
     const catalogMapActionStatus = document.querySelector(
         "#catalog-map-action-status"
     );
@@ -708,6 +723,12 @@ async function initializeCatalog(
         );
         catalogLayerToggle.disabled = pendingAction !== null;
         catalogLayerToggle.hidden = false;
+        // A removal from Map layers must not leave stale Catalog success text.
+        if (!isRetained && !catalogOnMap.hidden) {
+            catalogMapActionStatus.textContent = "";
+        }
+        catalogOnMap.hidden = !isRetained;
+        catalogLayerToggle.classList.toggle("catalog-add-action", !isRetained);
         rasterDetailPreviewControls.hidden = !supportsDetailPreview;
         showRasterDetailPreview.disabled = pendingAction !== null;
         showRasterDetailPreview.textContent = pendingAction?.buttonText ??
@@ -719,8 +740,8 @@ async function initializeCatalog(
         renderRasterDetailPreviewResolution(detailPreviewState);
         catalogLayerToggle.textContent = pendingAction?.buttonText ?? (
             isRetained
-                ? "Remove from map layers"
-                : "Add to map layers"
+                ? "Remove from map"
+                : "Add to map"
         );
         const fullVisualizationReason = formatCatalogVisualizationReason(
             item,
@@ -730,7 +751,7 @@ async function initializeCatalog(
             ? [
                 fullVisualizationReason,
                 isRetained
-                    ? "This vector is already in Map layers."
+                    ? "This vector is on the map."
                     : "",
             ].filter((message) => message !== "").join(" ")
             : formatCatalogRasterStatus(
@@ -1184,10 +1205,10 @@ async function initializeCatalog(
             if (visualization.kind === "raster") {
                 rasterVisualization.activateAnalysis(selectedItem);
             }
-            catalogLayerToggle.textContent = "Add to map layers";
+            updateCatalogMapAction(selectedItem);
             const removalStatus =
                 `${datasetNoun[0].toUpperCase()}${datasetNoun.slice(1)} ` +
-                "removed from Map layers.";
+                "removed from the map.";
             catalogMapActionStatus.textContent = removalStatus;
             return;
         }
@@ -1196,7 +1217,7 @@ async function initializeCatalog(
             `Checking whether the selected ${datasetNoun} can be rendered.`;
         const pendingAction = beginCatalogMapAction(
             selectedItem,
-            "Adding to map…",
+            "Adding to map...",
             `Checking whether the selected ${datasetNoun} can be rendered.`
         );
         try {
@@ -1251,16 +1272,14 @@ async function initializeCatalog(
                 return;
             }
             finishCatalogMapAction(pendingAction);
-            catalogLayerToggle.textContent = "Remove from map layers";
             const successStatus =
                 `${datasetNoun[0].toUpperCase()}${datasetNoun.slice(1)} ` +
-                "added to Map layers.";
+                "added to the map.";
             catalogMapActionStatus.textContent = successStatus;
             onRenderingWorkspaceRequested();
         } catch (visualizationError) {
             if (catalogItemsMatch(catalogState.selectedItem, selectedItem)) {
                 finishCatalogMapAction(pendingAction);
-                catalogLayerToggle.textContent = "Add to map layers";
                 catalogMapActionStatus.textContent =
                     formatCatalogVisualizationReason(
                         selectedItem,

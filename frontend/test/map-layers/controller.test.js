@@ -136,6 +136,24 @@ test("controller owns cross-adapter visibility, ordering, and removal", async ()
     assert.equal(controller.contains(first), false);
 });
 
+test("on-map membership survives hiding a layer until it is removed", async () => {
+    const map = createMap();
+    const controller = new MapLayerController({ leafletMap: map, view: createView() });
+    const item = catalogItem("membership");
+    const key = getCatalogItemKey(item);
+
+    await controller.show(item, createAdapter("test"));
+    assert.equal(controller.contains(item), true);
+    assert.equal(controller.isAttached(key), true);
+
+    controller.setVisible(key, false);
+    assert.equal(controller.contains(item), true);
+    assert.equal(controller.isAttached(key), false);
+
+    controller.remove(item);
+    assert.equal(controller.contains(item), false);
+});
+
 test("controller coalesces publication and invalidates removed pending work", async () => {
     const map = createMap();
     const view = createView();

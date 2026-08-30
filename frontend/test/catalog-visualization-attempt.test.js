@@ -9,7 +9,9 @@ import {
 } from "../src/catalog-map-actions.js";
 import {
   formatCatalogVisualizationReason,
+  formatCatalogRasterStatus,
   getCatalogVisualization,
+  supportsRasterDetailOnlyPreview,
 } from "../src/catalog.js";
 
 const MAIN_SOURCE = readFileSync(
@@ -28,6 +30,11 @@ const ATTEMPT_SOURCE = sourceBetween(
   MAIN_SOURCE,
   "async function toggleCatalogLayer()",
   'catalogLayerToggle.addEventListener("click", toggleCatalogLayer);',
+);
+const ACTION_VIEW_SOURCE = sourceBetween(
+  MAIN_SOURCE,
+  "function updateCatalogMapAction(item)",
+  "function clearCatalogSelection()",
 );
 
 /**
@@ -144,15 +151,28 @@ function createAttemptHarness({
 }) {
   const calls = [];
   const registry = new CatalogMapActionRegistry();
-  const layerButton = { textContent: "Add to map layers" };
+  const primaryClasses = new Set();
+  const layerButton = {
+    textContent: "Add to map",
+    classList: {
+      toggle(name, enabled) {
+        if (enabled) primaryClasses.add(name);
+        else primaryClasses.delete(name);
+      },
+      contains(name) { return primaryClasses.has(name); },
+    },
+  };
+  const onMap = { hidden: true };
+  const actionContainer = { hidden: true, setAttribute() {} };
   const actionStatus = { textContent: "" };
   const status = { textContent: "" };
   const state = {
     selectedItem,
+    pendingMapActions: registry,
     visualizationAssessments: new CatalogVisualizationAssessmentCache(),
     collectionsDocument: { collections: [] },
   };
-  let isRetained = retained;
+  const retainedItems = new Set(retained ? [selectedItem.id] : []);
   const catalogVisualization = {
     describe: getCatalogVisualization,
     noun(item) {
@@ -160,12 +180,12 @@ function createAttemptHarness({
         ? "raster"
         : "vector layer";
     },
-    contains() {
-      return isRetained;
+    contains(item) {
+      return retainedItems.has(item.id);
     },
     remove(item) {
       calls.push(["remove", item.id]);
-      isRetained = false;
+      retainedItems.delete(item.id);
     },
     async assess(item) {
       calls.push(["assess", item.id]);
@@ -175,7 +195,7 @@ function createAttemptHarness({
       calls.push(["show", item.id]);
       const publication = await show(item);
       if (publication !== null) {
-        isRetained = true;
+        retainedItems.add(item.id);
       }
       return publication;
     },
@@ -189,15 +209,19 @@ function createAttemptHarness({
     },
   };
   const rasterDetailPreview = {
+    contains: () => false,
+    getState: () => null,
     remove(item) {
       calls.push(["remove-preview", item.id]);
     },
   };
+  let update;
   const beginCatalogMapAction = (item, buttonText, statusText) => {
     calls.push(["begin", item.id]);
-    layerButton.textContent = buttonText;
     status.textContent = statusText;
-    return registry.begin(item, buttonText, statusText);
+    const action = registry.begin(item, buttonText, statusText);
+    update(item);
+    return action;
   };
   const finishCatalogMapAction = (action) => {
     if (!registry.finish(action)) {
@@ -207,14 +231,7 @@ function createAttemptHarness({
     if (!catalogItemsMatch(state.selectedItem, action.item)) {
       return;
     }
-    const current = getCatalogVisualization(state.selectedItem);
-    layerButton.textContent = isRetained
-      ? "Remove from map layers"
-      : "Add to map layers";
-    status.textContent = formatCatalogVisualizationReason(
-      state.selectedItem,
-      current?.metadata?.reason,
-    );
+    update(state.selectedItem);
   };
   const factory = new Function(
     "catalogState",
@@ -231,9 +248,20 @@ function createAttemptHarness({
     "catalogLayerStatus",
     "onRenderingWorkspaceRequested",
     "formatCatalogVisualizationReason",
-    `${ATTEMPT_SOURCE}; return toggleCatalogLayer;`,
+    "getCatalogVisualization",
+    "supportsRasterDetailOnlyPreview",
+    "formatCatalogRasterStatus",
+    "catalogMapActionsElement",
+    "catalogOnMap",
+    "rasterDetailPreviewControls",
+    "showRasterDetailPreview",
+    "removeRasterDetailPreview",
+    "renderRasterDetailPreviewResolution",
+    `${ACTION_VIEW_SOURCE}\n${ATTEMPT_SOURCE}; return {
+      run: toggleCatalogLayer, update: updateCatalogMapAction,
+    };`,
   );
-  const run = factory(
+  const actions = factory(
     state,
     catalogVisualization,
     rasterVisualization,
@@ -248,20 +276,36 @@ function createAttemptHarness({
     status,
     () => calls.push(["open-rendering"]),
     formatCatalogVisualizationReason,
+    getCatalogVisualization,
+    supportsRasterDetailOnlyPreview,
+    formatCatalogRasterStatus,
+    actionContainer,
+    onMap,
+    {}, {}, {}, () => {},
   );
+  update = actions.update;
+  update(state.selectedItem);
   return {
-    run,
+    run: actions.run,
+    refresh: () => update(state.selectedItem),
+    removeExternally: (item) => {
+      catalogVisualization.remove(item);
+      update(state.selectedItem);
+    },
     state,
     calls,
     registry,
     layerButton,
+    onMap,
+    actionContainer,
     actionStatus,
     status,
   };
 }
 
 test("visualization assessment is internal rather than a user action", () => {
-  assert.match(MARKUP, /id="toggle-catalog-layer"[\s\S]*?>\s*Add to map layers\s*</);
+  assert.match(MARKUP, /id="toggle-catalog-layer"[\s\S]*?>\s*Add to map\s*</);
+  assert.match(MARKUP, /id="catalog-on-map" hidden[\s\S]*?On map/);
   assert.match(
     MARKUP,
     /id="catalog-map-actions"[\s\S]*?id="toggle-catalog-layer"[\s\S]*?aria-describedby="catalog-map-action-status"[\s\S]*?id="catalog-map-action-status"/,
@@ -322,7 +366,7 @@ test("attempt feedback remains visible and stale selections cannot publish", () 
   assert.match(presentation, /catalogLayerToggle\.hidden = false/);
   assert.match(
     presentation,
-    /isRetained\s*\? "Remove from map layers"\s*:\s*"Add to map layers"/s,
+    /isRetained\s*\? "Remove from map"\s*:\s*"Add to map"/s,
   );
   assert.match(
     MAIN_SOURCE,
@@ -400,6 +444,9 @@ test("pending assessment feedback appears beside Add before completion", async (
   });
 
   const attempt = harness.run();
+  assert.equal(harness.layerButton.disabled, true);
+  assert.equal(harness.layerButton.textContent, "Adding to map...");
+  assert.equal(harness.onMap.hidden, true);
   assert.equal(
     harness.actionStatus.textContent,
     "Checking whether the selected raster can be rendered.",
@@ -426,9 +473,11 @@ test("eligible raster assessment publishes in the same pending action", async ()
     harness.calls.filter(([call]) => call === "open-rendering"),
     [["open-rendering"]],
   );
-  assert.equal(harness.layerButton.textContent, "Remove from map layers");
-  assert.equal(harness.actionStatus.textContent, "Raster added to Map layers.");
-  assert.equal(harness.status.textContent, "");
+  assert.equal(harness.layerButton.textContent, "Remove from map");
+  assert.equal(harness.onMap.hidden, false);
+  assert.equal(harness.layerButton.classList.contains("catalog-add-action"), false);
+  assert.equal(harness.actionStatus.textContent, "Raster added to the map.");
+  assert.equal(harness.status.textContent, "This raster is on the map.");
   assert.equal(harness.registry.get(selected), null);
 });
 
@@ -444,10 +493,12 @@ test("retained-layer removal reports beside the Catalog action", async () => {
 
   assert.equal(harness.calls.some(([call]) => call === "assess"), false);
   assert.equal(harness.calls.some(([call]) => call === "show"), false);
-  assert.equal(harness.layerButton.textContent, "Add to map layers");
+  assert.equal(harness.layerButton.textContent, "Add to map");
+  assert.equal(harness.onMap.hidden, true);
+  assert.equal(harness.layerButton.classList.contains("catalog-add-action"), true);
   assert.equal(
     harness.actionStatus.textContent,
-    "Raster removed from Map layers.",
+    "Raster removed from the map.",
   );
 });
 
@@ -475,8 +526,11 @@ test("ineligible raster preserves its reason and never publishes", async () => {
     harness.calls.some(([call]) => call === "open-rendering"),
     false,
   );
-  assert.equal(harness.layerButton.textContent, "Add to map layers");
+  assert.equal(harness.layerButton.textContent, "Add to map");
   assert.equal(harness.actionStatus.textContent, contextualReason);
+  assert.equal(harness.layerButton.disabled, false);
+  assert.equal(harness.onMap.hidden, true);
+  assert.equal(harness.layerButton.classList.contains("catalog-add-action"), true);
   assert.equal(harness.status.textContent, contextualReason);
   assert.doesNotMatch(harness.actionStatus.textContent, /Mounted|Model_outputs/);
   assert.equal(harness.registry.get(selected), null);
@@ -496,7 +550,7 @@ test("assessment errors restore Add and contextualize standard failures", async 
   await harness.run();
 
   assert.equal(harness.calls.some(([call]) => call === "show"), false);
-  assert.equal(harness.layerButton.textContent, "Add to map layers");
+  assert.equal(harness.layerButton.textContent, "Add to map");
   assert.equal(
     harness.actionStatus.textContent,
     "Visualization for broken.tif unavailable: the raster metadata could " +
@@ -545,5 +599,41 @@ test("eligible vectors share the outcome-oriented Add flow", async () => {
     harness.calls.some(([call]) => call === "activate-analysis"),
     false,
   );
-  assert.equal(harness.layerButton.textContent, "Remove from map layers");
+  assert.equal(harness.layerButton.textContent, "Remove from map");
+  assert.equal(harness.onMap.hidden, false);
+});
+
+test("on-map status follows the selected Item without leaking membership", () => {
+  const selected = createRasterItem("retained", true);
+  const harness = createAttemptHarness({
+    selectedItem: selected,
+    assess: async () => selected,
+    retained: true,
+  });
+  assert.equal(harness.onMap.hidden, false);
+
+  harness.state.selectedItem = createVectorItem("not-on-map", true);
+  harness.refresh();
+  assert.equal(harness.onMap.hidden, true);
+  assert.equal(harness.layerButton.textContent, "Add to map");
+
+  harness.state.selectedItem = selected;
+  harness.refresh();
+  assert.equal(harness.onMap.hidden, false);
+  assert.equal(harness.layerButton.textContent, "Remove from map");
+});
+
+test("removal from Map layers clears stale Catalog success feedback", async () => {
+  const selected = createRasterItem("externally-removed", true);
+  const harness = createAttemptHarness({
+    selectedItem: selected,
+    assess: async () => selected,
+  });
+  await harness.run();
+  assert.equal(harness.actionStatus.textContent, "Raster added to the map.");
+
+  harness.removeExternally(selected);
+  assert.equal(harness.onMap.hidden, true);
+  assert.equal(harness.layerButton.textContent, "Add to map");
+  assert.equal(harness.actionStatus.textContent, "");
 });

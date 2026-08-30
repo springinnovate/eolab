@@ -183,7 +183,7 @@ test("Catalog owns discovery, inspection, and its explicit layer action only", (
     assert.match(catalogRegion.source, /id="catalog-search"/);
     assert.match(catalogRegion.source, /id="catalog-item-inspector"/);
     assert.match(catalogInspector.source, /id="toggle-catalog-layer"/);
-    assert.match(catalogInspector.source, />\s*Add to map layers\s*</);
+    assert.match(catalogInspector.source, />\s*Add to map\s*</);
     assert.match(catalogActions.source, /id="catalog-map-action-status"/);
     assert.match(
         catalogActions.source,
