@@ -9,7 +9,7 @@
 /**
  * @typedef {Object} CatalogPaneControls
  * @property {(options?: CatalogPaneFocusOptions) => void} showInspector
- * Reveals the selected Item with optional metadata initially collapsed.
+ * Reveals the selected Item's metadata on explicit request.
  * @property {(options?: CatalogPaneFocusOptions) => void} showResults Hides
  * the selected-Item inspector and returns to the results presentation.
  * @property {() => boolean} isInspectorVisible Reports whether the selected
@@ -20,6 +20,8 @@
  * @typedef {Object} CatalogPaneFocusOptions
  * @property {boolean} [moveFocus=false] Whether to move focus to the heading
  * of the pane being shown.
+ * @property {HTMLElement|null} [returnFocusTarget=null] Result control to focus
+ * when returning from details, if it still exists in the current results.
  */
 
 /**
@@ -47,7 +49,6 @@ export function initializeCatalogPaneControls(
         resultsHeading: "#catalog-results-heading",
         inspectorPane: "#catalog-item-inspector",
         inspectorBody: "#catalog-inspector-body",
-        itemDetails: "#catalog-item-details",
         inspectorHeading: "#catalog-inspector-heading",
         backToResults: "#back-to-catalog-results"
     };
@@ -65,6 +66,7 @@ export function initializeCatalogPaneControls(
             `Catalog panes require ${requiredElements[missingElement[0]]}`
         );
     }
+    let returnFocusTarget = null;
 
     /**
      * Applies selected-Item visibility without deciding its CSS placement.
@@ -89,13 +91,14 @@ export function initializeCatalogPaneControls(
             "is-catalog-inspector-collapsed",
             !isVisible
         );
-        elements.itemDetails.open = false;
         elements.inspectorBody.scrollTop = 0;
 
         if (moveFocus) {
             const target = isVisible
                 ? elements.inspectorHeading
-                : elements.resultsHeading;
+                : returnFocusTarget?.isConnected
+                    ? returnFocusTarget
+                    : elements.resultsHeading;
             target.focus();
         }
         if (visibilityChanged) {
@@ -130,12 +133,13 @@ export function initializeCatalogPaneControls(
 
     return Object.freeze({
         /**
-         * Reveals the selected Item with details closed and optional focus.
+         * Reveals the requested metadata and remembers its originating control.
          *
          * @param {CatalogPaneFocusOptions} [options={}] Focus behavior.
          * @return {void}
          */
         showInspector(options = {}) {
+            returnFocusTarget = options.returnFocusTarget ?? null;
             setInspectorVisible(true, options);
         },
 

@@ -907,28 +907,6 @@ h5 {
   display: none;
 }
 
-.catalog-item-details > summary {
-  cursor: pointer;
-  border-block: 1px solid var(--border-2);
-  padding: 12px 4px;
-  color: var(--text-2);
-  font-size: 0.78rem;
-  font-weight: 600;
-}
-
-.catalog-item-details > summary:hover {
-  background: var(--surface-hover);
-  color: var(--brand-hover);
-}
-
-.catalog-item-details[open] > summary {
-  background: var(--surface-selected);
-}
-
-.catalog-item-details > #catalog-inspector-content {
-  padding: 14px 0;
-}
-
 .catalog-browser-body {
   display: flex;
   min-height: 0;
@@ -998,11 +976,10 @@ h5 {
 }
 
 .catalog-map-actions .catalog-add-action {
-  flex: 1 1 100%;
   background: var(--brand);
-  padding: 11px 14px;
+  padding: 7px 10px;
   color: var(--surface-1);
-  font-size: 0.88rem;
+  font-size: 0.78rem;
 }
 
 .catalog-map-actions .catalog-add-action:hover:not(:disabled) {
@@ -2209,16 +2186,14 @@ h5 {
 
 .catalog-result {
   content-visibility: auto;
-  contain-intrinsic-size: auto 56px;
+  contain-intrinsic-size: auto 84px;
   display: grid;
-  min-height: 56px;
+  min-height: 84px;
   grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-rows: auto auto;
   align-content: center;
   column-gap: 12px;
   row-gap: 2px;
   width: 100%;
-  cursor: pointer;
   border: 0;
   border-bottom: 1px solid var(--border-2);
   border-radius: 0;
@@ -2232,11 +2207,7 @@ h5 {
   background: var(--surface-hover);
 }
 
-.catalog-result:active {
-  background: var(--surface-selected);
-}
-
-.catalog-result.is-selected {
+.catalog-result:has(.catalog-result-details.is-selected) {
   background: var(--surface-selected);
   box-shadow: inset 3px 0 0 var(--brand);
 }
@@ -2282,6 +2253,57 @@ h5 {
   color: var(--text-3);
   font-size: 0.7rem;
   font-weight: 500;
+}
+
+.catalog-result-actions {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 5px;
+}
+
+.catalog-result-map-action {
+  padding: 4px 8px;
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.catalog-result-map-action.is-retained {
+  border-color: transparent;
+  padding-inline: 4px;
+  color: var(--text-2);
+}
+
+.catalog-result-on-map {
+  font-size: 0.72rem;
+}
+
+.catalog-result-details {
+  cursor: pointer;
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  padding: 4px;
+  color: var(--text-2);
+  font-size: 0.7rem;
+  line-height: 1.4;
+}
+
+.catalog-result-details:hover,
+.catalog-result-details:focus-visible {
+  color: var(--brand-hover);
+  text-decoration: underline;
+}
+
+.catalog-result-status:not(.visually-hidden) {
+  grid-column: 1 / -1;
+  margin: 6px 0 0;
+  color: var(--status-danger);
+  font-size: 0.73rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
 .catalog-empty {

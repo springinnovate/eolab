@@ -284,10 +284,10 @@ test("Map layers owns layer presentation, appearance, cutoffs, and limitations",
     }
 });
 
-test("successful visualization and previews reveal Map layers through composition", () => {
+test("inspector visualization and previews can reveal Map layers through composition", () => {
     assert.match(
         COMPOSITION_SOURCE,
-        /catalogMapActionStatus\.textContent = successStatus;\s*onRenderingWorkspaceRequested\(\);/
+        /setCatalogMapActionFeedback\(item, successStatus\);\s*if \(revealMapLayers && catalogItemsMatch\(catalogState.selectedItem, item\)\) \{\s*onRenderingWorkspaceRequested\(\);/
     );
     assert.match(
         COMPOSITION_SOURCE,
