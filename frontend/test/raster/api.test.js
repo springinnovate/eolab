@@ -12,6 +12,7 @@ import {
 import {
   loadCatalogRasterStatistics,
   RasterAnalysisRequestError,
+  isRasterStatisticsCapacityError,
   sampleCatalogRasterPixel,
 } from "../../src/raster/analysis-api.js";
 import {
@@ -671,6 +672,22 @@ test("loadCatalogRasterStatistics sends only one opaque temporary AOI identity",
     ),
     /sampling area is invalid/,
   );
+});
+
+test("statistics capacity is classified without matching user-facing message text", async () => {
+  for (const code of ["statistics_capacity_busy", "invalid_area", null]) {
+    await assert.rejects(loadCatalogRasterStatistics(
+      MOUNTED_GEOTIFF_ITEM, { kind: "wholeRaster" }, new AbortController().signal,
+      async () => new Response(JSON.stringify({ detail: { code, message: "Server guidance" } }),
+        { status: 409, headers: { "Content-Type": "application/json" } }),
+    ), error => {
+      assert.equal(error.message, "Server guidance");
+      assert.equal(isRasterStatisticsCapacityError(error), code === "statistics_capacity_busy");
+      return true;
+    });
+  }
+  assert.equal(isRasterStatisticsCapacityError(new RasterAnalysisRequestError(
+    "Raster statistics capacity is busy; retry after the current bounded read finishes.", 409)), false);
 });
 
 test("loadCatalogRasterStatistics reports backend and response errors", async () => {

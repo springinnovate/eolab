@@ -13,6 +13,7 @@ import {
  * Represent one browser-safe raster-analysis failure.
  *
  * @property {number} status Analysis API HTTP response status.
+ * @property {string|null} code Machine-readable failure classification.
  */
 export class RasterAnalysisRequestError extends Error {
     /**
@@ -20,12 +21,24 @@ export class RasterAnalysisRequestError extends Error {
      *
      * @param {string} message Concise user-facing failure explanation.
      * @param {number} status Analysis API HTTP response status.
+     * @param {string|null} [code=null] Optional machine-readable failure code.
      */
-    constructor(message, status) {
+    constructor(message, status, code = null) {
         super(message);
         this.name = "RasterAnalysisRequestError";
         this.status = status;
+        this.code = code;
     }
+}
+
+/**
+ * Distinguish temporary statistics admission conflicts from invalid requests.
+ * @param {Error} error Current analysis failure.
+ * @return {boolean} Whether waiting and retrying may acquire read capacity.
+ */
+export function isRasterStatisticsCapacityError(error) {
+    return error instanceof RasterAnalysisRequestError && error.status === 409 &&
+        error.code === "statistics_capacity_busy";
 }
 
 /**
@@ -46,11 +59,13 @@ async function analysisRequestError(response, action) {
     try {
         const errorDocument = await response.json();
         const detail = errorDocument.detail;
+        const message = typeof detail === "string" ? detail : detail?.message;
         return new RasterAnalysisRequestError(
-            typeof detail === "string" && detail.trim() !== ""
-                ? detail
+            typeof message === "string" && message.trim() !== ""
+                ? message
                 : fallbackMessage,
-            response.status
+            response.status,
+            typeof detail?.code === "string" ? detail.code : null
         );
     } catch {
         return new RasterAnalysisRequestError(fallbackMessage, response.status);

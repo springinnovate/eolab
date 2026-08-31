@@ -9,6 +9,7 @@ import pytest
 
 from eolab_app.raster.errors import (
     RasterConflictError,
+    RasterStatisticsCapacityError,
     RasterPublicationError,
     RasterPublicationFailureCategory,
 )
@@ -46,6 +47,35 @@ class _ConflictService:
             RasterConflictError: Always, with the controlled conflict.
         """
         raise RasterConflictError("controlled raster conflict")
+
+
+@pytest.mark.parametrize("paired", [False, True])
+def test_statistics_capacity_conflicts_have_a_retryable_code(paired: bool) -> None:
+    """Expose admission conflicts distinctly on both analysis routes.
+
+    Args:
+        paired: Exercise the two-raster endpoint when true.
+    """
+    class CapacityService:
+        """Simulate an occupied read slot without touching raster data."""
+
+        async def get(self, _request: object) -> None:
+            """Reject a read with a classified, transient admission failure."""
+            raise RasterStatisticsCapacityError("Statistics reader occupied")
+
+        get_paired = get
+
+    service = CapacityService()
+    application = FastAPI()
+    application.include_router(create_raster_analysis_router(service, service))
+    item = {"collectionId": "eolab-mounted-geotiffs", "itemId": "geotiff-0123456789abcdef01234567"}
+    body = {"xRaster": item, "yRaster": {**item, "itemId": "geotiff-abcdef0123456789abcdef01"}} if paired else item
+    endpoint = "paired-statistics" if paired else "statistics"
+    response = TestClient(application).post(f"/api/raster-analysis/{endpoint}", json=body)
+    assert response.status_code == 409
+    assert response.json() == {"detail": {
+        "code": "statistics_capacity_busy", "message": "Statistics reader occupied",
+    }}
 
 class _PublicationFailureService:
     """Raise one controlled categorized publication failure."""

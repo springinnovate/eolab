@@ -71,7 +71,10 @@ Removing, replacing, or expiring the AOI does invalidate that selection.
 Completed results use a process-local LRU and identical in-flight work is
 coalesced. Distinct in-flight computations are admitted only up to the
 configured statistics-read concurrency; another distinct identity receives a
-retryable capacity conflict until one admitted worker finishes. Cache identity
+retryable capacity conflict until one admitted worker finishes. These conflicts
+use HTTP 409 with `detail.code = "statistics_capacity_busy"` and a human-readable
+`detail.message`; ordinary source/area conflicts retain their string detail.
+Cache identity
 includes Collection and Item, source signature, normalized sampling-area
 identity, algorithm version, geometry policy, and every fixed exact/sample-grid
 planning parameter. Source and temporary-AOI lifecycle identities are rechecked
@@ -82,3 +85,14 @@ response cannot replace current viewer state. When the final waiter for one
 coalesced request disconnects, a thread-safe cancellation token stops work
 between native-block reads. GDAL may finish the current block before the
 dataset closes; canceled or stale work is never inserted into the cache.
+
+One per-viewer frontend queue serializes ordinary and paired histogram reads.
+Queued or retrying histograms remain loading. Superseding a sample, changing
+mode, hiding/removing a layer, or teardown cancels obsolete work; queued entries
+are removed immediately. An active loader retains the queue slot until it
+settles. Backend reads may outlive a canceled fetch, and other viewers may
+occupy server capacity, so only explicitly classified capacity conflicts are
+automatically retried: five delays of 250, 500, 1000, 2000, and 4000 ms.
+Cancellation clears the delay timer. If contention persists, the normal error
+state offers Retry; deterministic conflicts are not retried. The queue does
+not change backend concurrency, cache limits, pixel probing, or map rendering.
