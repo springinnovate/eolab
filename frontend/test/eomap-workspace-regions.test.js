@@ -251,6 +251,27 @@ test("Map layers owns compact rows; one floating editor owns all styling", () =>
     assert.match(STYLESHEET, /max-height:\s*70dvh/);
 });
 
+test("Map layers has one heading and collapse control with no nested list widget", () => {
+    const rendering = requireElementRange("eomap-map-layers-region");
+    const stack = requireElementRange("raster-layer-stack");
+    assert.doesNotMatch(rendering.source, /<h[1-6]\b|workspace-region-heading/);
+    assert.match(rendering.source, /aria-labelledby="toggle-map-layers"/);
+    assert.match(rendering.source, /No map layers yet\. Add an item from Catalog\./);
+    assert.match(stack.source, /id="raster-layer-list" aria-label="Map layers"/);
+    assert.match(stack.source, /id="raster-layer-stack-status"[^>]*role="status"/s);
+    assert.match(stack.source, /id="raster-layer-stack-limit"/);
+    assert.doesNotMatch(stack.source, /aria-expanded|aria-controls/);
+    for (const obsolete of [
+        "eomap-map-layers-heading", "open-map-layer-histograms",
+        "raster-layer-stack-heading", "map-layer-widget", "raster-layer-stack-body",
+        "raster-layer-widget-count",
+    ]) {
+        assert.doesNotMatch(MARKUP, new RegExp(obsolete));
+        assert.doesNotMatch(STYLESHEET, new RegExp(obsolete));
+    }
+    assert.doesNotMatch(MARKUP, /Layers on this map|Hide list/);
+});
+
 
 test("inspector visualization and previews can reveal Map layers through composition", () => {
     assert.match(
@@ -505,9 +526,6 @@ test("semantic regions preserve one DOM instance of every owned control", () => 
         "toggle-map-layers",
         "eomap-map-layers-region",
         "raster-layer-stack",
-        "raster-layer-stack-body",
-        "toggle-map-layer-widget",
-        "raster-layer-widget-count",
         "raster-appearance-controls",
         "raster-appearance-layer",
         "raster-percentile-controls",

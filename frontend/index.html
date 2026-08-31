@@ -365,18 +365,6 @@
             aria-hidden="true"
             hidden
           >
-                    <div class="workspace-region-heading">
-                      <div>
-                        <h2 id="eomap-map-layers-heading">Map layers</h2>
-                      </div>
-                      <button
-                        class="secondary-button"
-                        id="open-map-layer-histograms"
-                        type="button"
-                      >
-                        Histograms
-                      </button>
-                    </div>
                     <div
                       class="workspace-region-body map-layers-body"
                       id="eomap-map-layers-body"
@@ -432,41 +420,23 @@
                     <p class="map-layers-empty-state">
                       No map layers yet. Add an item from Catalog.
                     </p>
-                    <section
-                      class="map-layer-widget raster-layer-stack"
+                    <div
+                      class="raster-layer-stack"
                       id="raster-layer-stack"
                       data-eomap-region="map-layers"
-                      aria-labelledby="raster-layer-stack-heading"
                       hidden
                     >
-                      <div class="raster-layer-stack-heading">
-                        <div>
-                          <h3 id="raster-layer-stack-heading">Layers on this map</h3>
-                        </div>
-                        <button
-                          class="secondary-button"
-                          id="toggle-map-layer-widget"
-                          type="button"
-                          aria-controls="raster-layer-stack-body"
-                          aria-expanded="true"
-                          hidden
-                        >
-                          Hide list <span id="raster-layer-widget-count">0</span>
-                        </button>
-                      </div>
-                      <div class="map-layer-widget-body" id="raster-layer-stack-body">
-                        <p id="raster-layer-stack-limit"></p>
-                        <ol class="raster-layer-list" id="raster-layer-list"></ol>
-                        <p
-                          class="raster-layer-stack-status"
-                          id="raster-layer-stack-status"
-                          role="status"
-                          aria-live="polite"
-                          aria-atomic="true"
-                          tabindex="-1"
-                        ></p>
-                      </div>
-                    </section>
+                      <p id="raster-layer-stack-limit"></p>
+                      <ol class="raster-layer-list" id="raster-layer-list" aria-label="Map layers"></ol>
+                      <p
+                        class="raster-layer-stack-status"
+                        id="raster-layer-stack-status"
+                        role="status"
+                        aria-live="polite"
+                        aria-atomic="true"
+                        tabindex="-1"
+                      ></p>
+                    </div>
 
 
 

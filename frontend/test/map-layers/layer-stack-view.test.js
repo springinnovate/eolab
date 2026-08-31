@@ -112,17 +112,12 @@ class FakeLayerStackDocument {
   constructor() {
     this.activeElement = null;
     this.elements = new Map([
-      ["#raster-layer-stack", new FakeLayerStackElement("section", this)],
-      ["#raster-layer-stack-body", new FakeLayerStackElement("div", this)],
-      ["#toggle-map-layer-widget", new FakeLayerStackElement("button", this)],
-      ["#raster-layer-widget-count", new FakeLayerStackElement("span", this)],
+      ["#raster-layer-stack", new FakeLayerStackElement("div", this)],
       ["#raster-layer-list", new FakeLayerStackElement("ol", this)],
       ["#raster-layer-stack-status", new FakeLayerStackElement("p", this)],
       ["#raster-layer-stack-limit", new FakeLayerStackElement("p", this)],
     ]);
     this.elements.get("#raster-layer-stack").hidden = true;
-    this.elements.get("#toggle-map-layer-widget")
-      .setAttribute("aria-expanded", "true");
   }
 
   /**
@@ -295,7 +290,7 @@ test("rows expose filename, visibility, Style and contained actions only", () =>
   assert.equal(actionControl(rows[0], "move-up").disabled, true);
   assert.equal(actionControl(rows[2], "move-down").disabled, true);
   assert.equal(elementsByClass(rows[2], "raster-layer-error")[0].textContent, "Statistics unavailable.");
-  assert.equal(doc.querySelector("#raster-layer-widget-count").textContent, "3");
+  assert.equal(doc.querySelector("#raster-layer-stack").hidden, false);
 });
 
 test("raster and vector rows use the same compact action layout", () => {
@@ -309,7 +304,7 @@ test("raster and vector rows use the same compact action layout", () => {
   }
 });
 
-test("row actions forward stable identity; Escape closes actions before the list", () => {
+test("row actions forward stable identity; Escape closes actions before the workspace", () => {
   const doc = new FakeLayerStackDocument();
   const view = new MapLayerStackView(doc);
   const received = [];
@@ -338,13 +333,15 @@ test("row actions forward stable identity; Escape closes actions before the list
   actions.dispatchEvent(escape);
   assert.equal(actions.open, false);
   assert.equal(doc.activeElement, actionControl(first, "actions"));
-  assert.equal(doc.querySelector("#raster-layer-stack-body").hidden, false);
+  assert.equal(escape.defaultPrevented, true);
+  assert.equal(escape.cancelBubble, true);
+  assert.equal(doc.querySelector("#raster-layer-stack").hidden, false);
   view.unbind();
   actionControl(third, "remove").dispatchEvent(new Event("click"));
   assert.equal(received.length, 4);
 });
 
-test("MapLayerStackView Escape collapses only its sidebar section", () => {
+test("the layer list leaves Escape to its owning workspace", () => {
   const documentContext = new FakeLayerStackDocument();
   const view = new MapLayerStackView(documentContext);
   view.bind({
@@ -355,18 +352,19 @@ test("MapLayerStackView Escape collapses only its sidebar section", () => {
   });
   view.render([LAYERS[0]], LAYERS[0].key);
   const root = documentContext.querySelector("#raster-layer-stack");
-  const toggle = documentContext.querySelector("#toggle-map-layer-widget");
+  const list = documentContext.querySelector("#raster-layer-list");
+  const rows = [...list.children];
   const escapeEvent = new Event("keydown", { cancelable: true });
   Object.defineProperty(escapeEvent, "key", { value: "Escape" });
 
   root.dispatchEvent(escapeEvent);
 
-  assert.equal(escapeEvent.defaultPrevented, true);
-  assert.equal(
-    documentContext.querySelector("#raster-layer-stack-body").hidden,
-    true,
-  );
-  assert.equal(documentContext.activeElement, toggle);
+  assert.equal(escapeEvent.defaultPrevented, false);
+  assert.equal(escapeEvent.cancelBubble, false);
+  assert.equal(root.hidden, false);
+  assert.equal(root.classList.contains("is-collapsed"), false);
+  assert.deepEqual(list.children, rows);
+  view.unbind();
 });
 
 test("MapLayerStackView announces status and retains stable action focus", () => {
