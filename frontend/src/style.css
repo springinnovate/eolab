@@ -1154,133 +1154,56 @@ h5 {
 
 .raster-layer-row {
   display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: start;
+  min-width: 0;
+  border-bottom: 1px solid var(--border-3);
+  padding: 10px 0;
+}
+
+.raster-layer-row.is-hidden .raster-layer-name { color: var(--text-3); }
+.raster-layer-visibility {
+  display: flex;
   gap: 8px;
   min-width: 0;
-  border: 1px solid var(--border-3);
-  border-radius: var(--radius);
-  background: var(--surface-2);
-  padding: 9px;
+  align-items: start;
+  cursor: pointer;
 }
-
-.raster-layer-row.is-active {
-  border-color: var(--brand);
-  background: var(--surface-selected);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--brand) 30%, transparent);
-}
-
-.raster-layer-row.is-hidden {
-  opacity: 0.78;
-}
-
-.raster-layer-heading {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
-  gap: 7px;
-  align-items: center;
-}
-
+.raster-layer-visibility input { flex: none; margin: 4px 0 0; }
 .raster-layer-name {
-  min-width: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   overflow: hidden;
-  font-size: 0.74rem;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.raster-layer-name-block {
-  display: grid;
   min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 0.78rem;
+  line-height: 1.45;
 }
-
-.raster-layer-identity {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text-3);
-  font-size: 0.62rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.raster-layer-state {
-  color: var(--text-3);
-  font-size: 0.65rem;
-  font-weight: 600;
-  text-transform: uppercase;
-}
-
-.raster-layer-heading .secondary-button,
-.raster-layer-order .secondary-button {
+.raster-layer-row .secondary-button,
+.raster-layer-actions summary {
   padding: 5px 7px;
-  font-size: 0.65rem;
+  font-size: 0.72rem;
+  margin: 0;
 }
-
-.raster-layer-presentation {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: auto minmax(120px, 1fr) auto;
-  gap: 10px;
-  align-items: center;
+.raster-layer-actions summary {
+  cursor: pointer;
+  list-style: none;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius);
 }
-
-.raster-layer-visibility,
-.raster-layer-opacity {
-  color: var(--text-2);
-  font-size: 0.68rem;
-}
-
-.raster-layer-visibility {
-  white-space: nowrap;
-}
-
-.raster-layer-opacity {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: auto minmax(55px, 1fr) 34px;
+.raster-layer-actions summary::-webkit-details-marker { display: none; }
+.raster-layer-actions[open] { grid-column: 1 / -1; }
+.raster-layer-actions[open] > summary { width: fit-content; margin-left: auto; }
+.raster-layer-action-list {
+  display: flex;
+  flex-wrap: wrap;
   gap: 6px;
-  align-items: center;
+  padding-top: 6px;
+  justify-content: flex-end;
 }
-
-.raster-layer-opacity input {
-  min-width: 0;
-}
-
-.raster-layer-opacity output {
-  font-variant-numeric: tabular-nums;
-  text-align: right;
-}
-
-.raster-layer-order {
-  display: flex;
-  gap: 4px;
-}
-
-.raster-layer-legend {
-  height: 9px;
-  border: 1px solid rgb(0 0 0 / 24%);
-  border-radius: 2px;
-}
-
-.raster-layer-legend-labels {
-  display: flex;
-  justify-content: space-between;
-  margin-top: -5px;
-  color: var(--text-3);
-  font: 0.62rem/1.3 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-}
-
-.raster-layer-row.has-fixed-legend .raster-layer-legend {
-  width: 34px;
-  height: 12px;
-  border-width: 2px;
-}
-
-.raster-layer-row.has-fixed-legend .raster-layer-legend-labels {
-  justify-content: flex-start;
-  margin-top: -3px;
-  font-family: inherit;
-}
+.raster-layer-error { grid-column: 1 / -1; }
 
 .raster-layer-error,
 .raster-layer-stack-status {
@@ -1400,27 +1323,15 @@ h5 {
 }
 
 .raster-legend-labels {
-  position: relative;
-  height: 0.9rem;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
   margin-top: 4px;
   color: var(--text-3);
-  font: 0.68rem/1.3 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font: 0.72rem/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
-
-.raster-legend-labels span {
-  position: absolute;
-  transform: translateX(-50%);
-}
-
-.raster-legend-labels span:first-child {
-  left: 0;
-  transform: none;
-}
-
-.raster-legend-labels span:last-child {
-  right: 0;
-  transform: none;
-}
+.raster-legend-labels span { overflow-wrap: anywhere; }
+.raster-legend-labels small { display: block; font: inherit; font-family: sans-serif; }
 
 .raster-sample-window {
   min-width: 0;
@@ -2878,10 +2789,10 @@ h5 {
   gap: 10px;
   margin: 0 0 14px;
   overflow: hidden;
-  border: 1px solid var(--border-2);
-  border-radius: 6px;
+  border: 0;
+  border-radius: 0;
   background: var(--surface-2);
-  padding: 12px;
+  padding: 0;
   box-shadow: none;
 }
 
@@ -2889,6 +2800,10 @@ h5 {
 .raster-layer-stack-heading .section-label {
   margin: 0;
 }
+
+.raster-layer-stack-heading h3 { font-size: 0.8rem; }
+#toggle-map-layer-widget { padding: 4px 6px; font-size: 0.68rem; white-space: nowrap; }
+#remove-raster-detail-preview[hidden] + #style-raster-detail-preview { display: none; }
 
 .map-layer-widget-body {
   max-height: min(42dvh, 420px);
@@ -3069,7 +2984,11 @@ h5 {
   text-align: left;
 }
 
-.raster-histogram-summary:hover,
+article.raster-histogram-summary { grid-template-columns: minmax(0, 1fr); cursor: default; }
+.raster-histogram-list[hidden] { display: none; }
+.raster-histogram-overview:has(#raster-histogram-list[hidden]) { display: none; }
+
+button.raster-histogram-summary:hover,
 .raster-histogram-summary[aria-expanded="true"] {
   border-color: var(--brand);
   background: var(--surface-selected);
@@ -3590,4 +3509,47 @@ h5 {
   font-family: var(--font-sans);
   font-size: 18px;
   font-weight: 650;
+}
+
+/* Styling lives in the top layer, outside every sidebar scrolling container. */
+#layer-style-editor {
+  box-sizing: border-box;
+  position: fixed;
+  inset: 20px 20px auto auto;
+  margin: 0;
+  width: min(420px, calc(100vw - 32px));
+  max-height: calc(100dvh - 40px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 18px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius);
+  background: var(--surface-1);
+  color: var(--text-1);
+  box-shadow: var(--elevation-panel);
+}
+#layer-style-editor:not(:popover-open),
+.layer-style-opacity[hidden] { display: none; }
+.layer-style-header { position: sticky; top: 0; z-index: 1; background: var(--surface-1); display: flex; gap: 12px; align-items: center; justify-content: space-between; }
+.layer-style-header h2 { margin: 0; font-size: 1rem; }
+#layer-style-title { overflow-wrap: anywhere; font-weight: 600; font-size: 0.85rem; }
+.layer-style-opacity { display: grid; grid-template-columns: auto minmax(0, 1fr) 3ch; gap: 12px; align-items: center; }
+.layer-style-opacity input { min-width: 0; width: 100%; }
+#layer-style-note { font-size: 0.76rem; color: var(--text-2); }
+#layer-style-editor .raster-appearance-controls {
+  display: block; width: auto; max-height: none; padding: 0;
+  border: 0; box-shadow: none; background: transparent;
+}
+#layer-style-editor .raster-appearance-controls[hidden] { display: none; }
+#layer-style-editor .raster-appearance-body { overflow: visible; padding: 0; }
+#layer-style-editor .raster-appearance-heading { margin: 14px 0 10px; }
+#layer-style-editor h3 { margin: 0; font-size: 0.85rem; }
+.style-percentiles { margin-top: 16px; }
+.style-percentiles summary { cursor: pointer; font-size: 0.8rem; }
+@media (max-width: 600px) {
+  #layer-style-editor {
+    inset: auto 8px 8px 8px;
+    width: auto;
+    max-height: 70dvh;
+  }
 }

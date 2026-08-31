@@ -114,7 +114,6 @@ export class RasterControlsView {
             ? label
             : `${label} — not visible on the map`;
         this.#samplingAreaView.enableActiveRasterActions();
-        this.#appearanceView.setActiveLayer(label, visible);
         this.#histogramView.setActiveLayer(label);
         this.#histogramView.enableActiveRasterActions();
     }
@@ -460,9 +459,6 @@ export class RasterControlsView {
     setControlsVisible(isVisible) {
         this.#root.hidden = !isVisible;
         this.#histogramView.setActiveRasterAvailable(isVisible);
-        if (!isVisible) {
-            this.setRenderingControlsAvailable(false);
-        }
     }
 
     /**

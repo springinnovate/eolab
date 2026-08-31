@@ -2,6 +2,7 @@
 
 import { publishCatalogVector } from "./api.js";
 import { createVectorWmsLayer, VECTOR_DEFAULT_SYMBOLOGY } from "./leaflet.js";
+import { buildCatalogResultPresentation } from "../catalog-result-presentation.js";
 
 /**
  * Create the vector implementation of the neutral external-map-layer contract.
@@ -41,7 +42,9 @@ export function createVectorMapLayerAdapter({
          * @return {string} Item title or stable identifier.
          */
         label(item) {
-            return item.properties?.title ?? item.id;
+            const { filename, context } = buildCatalogResultPresentation(item, "Vector");
+            return context?.startsWith("Layer: ")
+                ? `${filename} — ${context.slice(7)}` : filename;
         },
         /**
          * Create adapter-owned state for one retained vector layer.

@@ -379,7 +379,7 @@ test("composition can expand a named workspace without closing siblings", () => 
     controller.destroy();
 });
 
-test("workspace task links expand Map layers and Histograms independently", () => {
+test("Map layers links to Histograms without a redundant styling shortcut", () => {
     const fixture = createLayoutFixture();
     const controller = new EomapLayoutController({
         documentContext: fixture.document,
@@ -393,11 +393,6 @@ test("workspace task links expand Map layers and Histograms independently", () =
     assert.equal(fixture.rasterAnalysisRegion.hidden, false);
     assert.equal(fixture.rasterAnalysisTab.focused, true);
 
-    fixture.openHistogramMapLayers.dispatchEvent(new Event("click"));
-    assert.equal(fixture.catalogRegion.hidden, false);
-    assert.equal(fixture.renderingRegion.hidden, false);
-    assert.equal(fixture.rasterAnalysisRegion.hidden, false);
-    assert.equal(fixture.renderingTab.focused, true);
     controller.destroy();
 });
 

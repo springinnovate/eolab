@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { MapLayerController } from "../../src/map-layers/controller.js";
 import { initializeRasterViewer } from "../../src/raster/raster-viewer.js";
 import { RasterAnalysisRequestError } from "../../src/raster/analysis-api.js";
 import { DEFAULT_RASTER_STYLE } from "../../src/raster/style.js";
@@ -487,6 +488,153 @@ function flushPromises() {
     return new Promise((resolve) => setImmediate(resolve));
 }
 
+/** Exercise the real application's visible-layer policy and neutral controller. */
+function visibleLayerFixture(loadStatistics = async (item) => createLayerStatistics(item)) {
+    const leafletMap = createFakeMap();
+    const { leaflet, wmsLayers } = createFakeLeaflet();
+    const controlsView = createFakeControlsView();
+    const layerStackView = createFakeLayerStackView();
+    let viewer;
+    const mapLayers = new MapLayerController({ leafletMap, view: layerStackView,
+        onLayersChange: () => viewer?.syncVisibleLayers() });
+    viewer = initializeRasterViewer({ leafletMap, leaflet, wmsUrl: '/geoserver/eolab/wms', onTileError() {} }, {
+        controlsView, mapLayerController: mapLayers, loadStatistics,
+        publishRaster: async item => ({ layerName: `eolab:${item.id}`, bbox: [-180, -90, 180, 90] }),
+        samplePixel: async () => ({ inBounds: true, value: 1 }),
+        loadPairedStatistics: async () => pairedStatistics(),
+        samplePairPixels: async () => ({}),
+        viewport: { innerWidth: 1280, innerHeight: 720 },
+    });
+    viewer.syncVisibleLayers();
+    return { viewer, controlsView, mapLayers, layerStackView, wmsLayers, leaflet,
+        destroy() { viewer.destroy(); mapLayers.destroy(); } };
+}
+
+test('visible raster histograms follow order, skip vectors and never follow the style editor', async () => {
+    const h = visibleLayerFixture();
+    const first = createRasterItem('first'), second = createRasterItem('second');
+    await h.viewer.show(first);
+    await h.viewer.show(second);
+    await flushPromises();
+    const [secondKey, firstKey] = h.mapLayers.snapshots().map(layer => layer.key);
+    assert.deepEqual(h.controlsView.layerHistograms.map(s => s.label), ['second.tif', 'first.tif']);
+    assert.ok(h.controlsView.layerHistograms.every(s => s.automatic && s.state === 'ready'));
+    assert.equal(h.controlsView.bivariateMode.active, false);
+    assert.equal(h.viewer.openStyle(firstKey), true);
+    h.controlsView.style = { ...h.controlsView.style, minimum: -2, midpoint: 4, maximum: 25 };
+    h.controlsView.handlers.onStyleInput(false);
+    h.controlsView.handlers.onStyleChange();
+    assert.equal(h.mapLayers.activeKey, secondKey);
+    assert.equal(h.mapLayers.getRecord(firstKey).state.rasterStyle.minimum, -2);
+    assert.notEqual(h.mapLayers.getRecord(secondKey).state.rasterStyle.minimum, -2);
+    h.mapLayers.move(firstKey, 'up');
+    assert.equal(h.controlsView.style.minimum, -2);
+    assert.deepEqual(h.controlsView.layerHistograms.map(s => s.label), ['first.tif', 'second.tif']);
+    h.mapLayers.setVisible(firstKey, false);
+    assert.deepEqual(h.controlsView.layerHistograms.map(s => s.label), ['second.tif']);
+    h.controlsView.paletteName = 'viridis';
+    h.controlsView.handlers.onPaletteChange();
+    assert.equal(h.mapLayers.getRecord(firstKey).entry.visible, false);
+    assert.equal(h.mapLayers.getRecord(firstKey).state.paletteName, 'viridis');
+    assert.equal(h.mapLayers.getRecord(secondKey).state.paletteName, 'blue-yellow-red');
+    const vector = { collection: 'vectors', id: 'volcanoes' };
+    await h.mapLayers.show(vector, {
+        label: () => 'volcanoes.gpkg', publish: async () => ({}), createState: () => ({}),
+        createLayer: () => h.leaflet.tileLayer.wms('/geoserver/eolab/wms', {}),
+        snapshot: () => ({ legend: { kind: 'fixed' } }), tileErrorMessage: 'Vector tile error',
+    });
+    assert.deepEqual(h.controlsView.layerHistograms.map(s => s.label), ['second.tif']);
+    h.mapLayers.setVisible(secondKey, false);
+    assert.deepEqual(h.controlsView.layerHistograms, []);
+    assert.equal(h.controlsView.controlsVisible, false);
+    h.viewer.activateAnalysis(first);
+    assert.deepEqual(h.controlsView.layerHistograms, [], 'Catalog details cannot steal histogram input');
+    h.mapLayers.removeKey(firstKey);
+    h.viewer.closeStyle();
+    h.destroy();
+});
+
+test('visible policy keeps 2D explicit and restores ordinary opacity when a pair is hidden', async () => {
+    const h = visibleLayerFixture();
+    await h.viewer.show(createRasterItem('x'));
+    await h.viewer.show(createRasterItem('y'));
+    await flushPromises();
+    const [top, bottom] = h.mapLayers.snapshots();
+    h.mapLayers.setOpacity(bottom.key, 0.35);
+    assert.equal(h.controlsView.bivariateMode.active, false);
+    h.controlsView.handlers.onBivariateModeChange('bivariate');
+    await flushPromises();
+    assert.equal(h.controlsView.bivariateMode.active, true);
+    assert.ok(h.mapLayers.snapshots().every(layer => layer.opacityLocked));
+    h.viewer.openStyle(bottom.key);
+    assert.equal(h.controlsView.appearanceEnabled, false);
+    h.mapLayers.setVisible(top.key, false);
+    assert.equal(h.controlsView.bivariateMode.active, false);
+    assert.equal(h.mapLayers.getLeafletLayer(bottom.key).opacity, 0.35);
+    assert.equal(h.controlsView.appearanceEnabled, true);
+    h.destroy();
+});
+
+test('a late histogram cannot overwrite another layer editor or an edited range', async () => {
+    const pending = createDeferred();
+    const h = visibleLayerFixture(item => item.id.endsWith('later')
+        ? pending.promise : Promise.resolve(createLayerStatistics(item)));
+    const first = createRasterItem('first'), later = createRasterItem('later');
+    await h.viewer.show(first);
+    await flushPromises();
+    const firstKey = h.mapLayers.snapshots()[0].key;
+    await h.viewer.show(later);
+    h.viewer.openStyle(firstKey);
+    h.controlsView.style = { ...h.controlsView.style, minimum: -2, midpoint: 4, maximum: 25 };
+    h.controlsView.handlers.onStyleInput(false);
+    pending.resolve(createLayerStatistics(later));
+    await flushPromises();
+    assert.equal(h.controlsView.style.minimum, -2);
+    h.mapLayers.removeKey(firstKey);
+    await new Promise(resolve => setTimeout(resolve, 180));
+    assert.notEqual(h.mapLayers.snapshots()[0].legend.labels[0], -2);
+    h.destroy();
+});
+
+test('explicit low-resolution previews retain styling and histogram access', async () => {
+    const h = visibleLayerFixture();
+    const item = createRasterItem('sampled');
+    const edits = [];
+    h.viewer.activateSampled(item, DEFAULT_RASTER_STYLE, style => edits.push(style));
+    await flushPromises();
+    const summary = h.controlsView.layerHistograms[0];
+    assert.match(summary.label, /sampled/);
+    assert.equal(h.viewer.getSampledStyleTarget(summary.key).sampled, true);
+    assert.equal(h.viewer.openStyle(summary.key), true);
+    h.controlsView.paletteName = 'viridis';
+    h.controlsView.handlers.onPaletteChange();
+    assert.equal(edits.at(-1).minimumColor, '#440154');
+    h.viewer.removeSampled(item);
+    h.viewer.closeStyle();
+    assert.deepEqual(h.controlsView.layerHistograms, []);
+    h.destroy();
+});
+
+test('hidden candidates do not request automatic histograms until made visible', async () => {
+    const requests = [];
+    const h = visibleLayerFixture(async item => {
+        requests.push(item.id);
+        return createLayerStatistics(item);
+    });
+    await h.viewer.show(createRasterItem('first'));
+    await h.viewer.show(createRasterItem('second'));
+    await h.viewer.show(createRasterItem('hidden'));
+    await flushPromises();
+    assert.equal(requests.includes('geotiff-hidden'), false);
+    const [hidden, second] = h.mapLayers.snapshots();
+    h.mapLayers.setVisible(second.key, false);
+    h.mapLayers.setVisible(hidden.key, true);
+    await flushPromises();
+    assert.equal(requests.includes('geotiff-hidden'), true);
+    assert.deepEqual(h.controlsView.layerHistograms.map(s => s.label), ['hidden.tif', 'first.tif']);
+    h.destroy();
+});
+
 test("selecting 2D opens paired analysis without a map interaction", async () => {
     const leafletMap = createFakeMap();
     const { leaflet, wmsLayers } = createFakeLeaflet();
@@ -497,6 +645,7 @@ test("selecting 2D opens paired analysis without a map interaction", async () =>
     let histogramPresentationRequests = 0;
     const firstItem = createRasterItem("first");
     const secondItem = createRasterItem("second");
+    const mapLayerController = new MapLayerController({ leafletMap, view: layerStackView });
     const viewer = initializeRasterViewer(
         {
             wmsUrl: "/geoserver/eolab/wms",
@@ -510,6 +659,7 @@ test("selecting 2D opens paired analysis without a map interaction", async () =>
         {
             controlsView,
             layerStackView,
+            mapLayerController,
             publishRaster: async (item) => ({
                 layerName: `eolab:${item.id}`,
                 bbox: [-180, -90, 180, 90],
@@ -549,7 +699,7 @@ test("selecting 2D opens paired analysis without a map interaction", async () =>
     await flushPromises();
     assert.equal(controlsView.bivariateAvailability.canEnter, true);
     const [top, bottom] = layerStackView.layers;
-    layerStackView.handlers.onOpacity(bottom.key, 0.4);
+    mapLayerController.setOpacity(bottom.key, 0.4);
     controlsView.handlers.onBivariateModeChange("bivariate");
     await flushPromises();
 
@@ -640,6 +790,7 @@ test("selecting 2D opens paired analysis without a map interaction", async () =>
     controlsView.handlers.onBivariateModeChange("overlay");
     assert.equal(controlsView.bivariateMode.active, false);
     viewer.destroy();
+    mapLayerController.destroy();
 });
 
 test("catalog selections enable paired analysis without publication", async () => {
@@ -1000,8 +1151,8 @@ test("renderer-independent analysis supports exact windows without publication",
     assert.equal(controlsView.legendStyle.minimumColor, "#440154");
     assert.equal(controlsView.appearanceStatus, "Applied the Viridis palette.");
     controlsView.handlers.onApplyPercentiles();
-    assert.match(controlsView.statisticsStatus, /selected exact percentile/);
-    assert.match(controlsView.appearanceStatus, /Applied histogram range:/);
+    assert.match(controlsView.appearanceStatus, /histogram percentile range/);
+    assert.match(controlsView.appearanceStatus, /histogram percentile range/);
     controlsView.handlers.onResetStyle();
     assert.match(controlsView.statisticsStatus, /exact bounded histogram/);
     assert.equal(
@@ -1416,7 +1567,7 @@ test("sampled rasters reuse color controls and bounded click histograms", async 
     controlsView.handlers.onResetStyle();
     assert.equal(styleChanges.length, 3);
     assert.deepEqual(styleChanges[2], firstFiniteStyle);
-    assert.match(controlsView.statisticsStatus, /minimum, median, and maximum/);
+    assert.match(controlsView.appearanceStatus, /initial colors and range/);
 
     viewer.updateSampledInitialStyle(MOUNTED_GEOTIFF_ITEM, initialStyle);
     assert.deepEqual(controlsView.style, firstFiniteStyle);
@@ -1694,6 +1845,7 @@ test("raster viewer retains candidates while enforcing two visible layers", asyn
     const controlsView = createFakeControlsView();
     const layerStackView = createFakeLayerStackView();
     const publicationCounts = new Map();
+    const mapLayerController = new MapLayerController({ leafletMap, view: layerStackView });
     const viewer = initializeRasterViewer(
         {
             wmsUrl: "/geoserver/eolab/wms",
@@ -1704,6 +1856,7 @@ test("raster viewer retains candidates while enforcing two visible layers", asyn
         {
             controlsView,
             layerStackView,
+            mapLayerController,
             publishRaster: async (item) => {
                 publicationCounts.set(
                     item.id,
@@ -1758,7 +1911,7 @@ test("raster viewer retains candidates while enforcing two visible layers", asyn
         2
     );
     assert.equal(wmsLayers[2].opacity, 1);
-    layerStackView.handlers.onOpacity(thirdKey, 0.4);
+    mapLayerController.setOpacity(thirdKey, 0.4);
     assert.equal(wmsLayers[2].opacity, 0.4);
     assert.deepEqual(
         [...publicationCounts.values()],
@@ -1769,6 +1922,7 @@ test("raster viewer retains candidates while enforcing two visible layers", asyn
     assert.equal(publicationCounts.get(third.id), 1);
     assert.equal(viewer.contains(third), true);
     viewer.destroy();
+    mapLayerController.destroy();
 });
 
 test("active layers restore isolated styles and completed statistics", async () => {
@@ -1843,7 +1997,7 @@ test("active layers restore isolated styles and completed statistics", async () 
     assert.equal(controlsView.displayedStatistics, statisticsById.get(second.id));
     assert.notDeepEqual(controlsView.style, firstStyle);
 
-    layerStackView.handlers.onActivate(firstKey);
+    viewer.activateAnalysis(layerStackView.layers.find(({ key }) => key === firstKey).item);
     assert.deepEqual(controlsView.style, firstStyle);
     assert.equal(controlsView.displayedStatistics, RASTER_STATISTICS);
     assert.equal(statisticsCounts.get(first.id), 1);
@@ -1965,7 +2119,7 @@ test("a restored whole-raster statistics error retries the active layer", async 
     await viewer.show(second);
     await flushPromises();
     assert.equal(controlsView.displayedStatistics.itemId, second.id);
-    layerStackView.handlers.onActivate(firstKey);
+    viewer.activateAnalysis(layerStackView.layers.find(({ key }) => key === firstKey).item);
     assert.match(controlsView.statisticsStatus, /First histogram failed/);
     assert.equal(controlsView.statisticsRetryVisible, true);
 
@@ -2126,7 +2280,7 @@ test("manual activation outranks an earlier deferred publication", async () => {
     await flushPromises();
     const retainedKey = layerStackView.activeKey;
     const slowRequest = viewer.show(slow);
-    layerStackView.handlers.onActivate(retainedKey);
+    viewer.activateAnalysis(layerStackView.layers.find(({ key }) => key === retainedKey).item);
     slowPublication.resolve({
         layerName: `eolab:${slow.id}`,
         bbox: [-180, -90, 180, 90],
@@ -2332,7 +2486,7 @@ test("explicit sampling refreshes every raster layer to one shared area", async 
         sharedFirstRequest.selectedBounds,
         secondSelectedRequest.selectedBounds
     );
-    layerStackView.handlers.onActivate(firstKey);
+    viewer.activateAnalysis(layerStackView.layers.find(({ key }) => key === firstKey).item);
 
     assert.equal(controlsView.sampleWindowSizeKm, 80);
     assert.equal(controlsView.displayedStatistics.itemId, first.id);

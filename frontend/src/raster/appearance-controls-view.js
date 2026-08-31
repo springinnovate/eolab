@@ -286,7 +286,6 @@ export class RasterAppearanceControlsView {
         const legend = buildRasterLegend(style);
         this.legend.style.background = legend.gradient;
         this.legend.setAttribute("aria-label", legend.description);
-        this.legendLabels.midpoint.style.left = `${legend.midpointPosition}%`;
         for (const thresholdName of ["minimum", "midpoint", "maximum"]) {
             this.legendLabels[thresholdName].textContent = style[thresholdName];
         }

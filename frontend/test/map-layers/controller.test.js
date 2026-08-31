@@ -113,7 +113,7 @@ test("controller owns cross-adapter visibility, ordering, and removal", async ()
 
     view.handlers.onVisibility(getCatalogItemKey(first), false);
     view.handlers.onVisibility(getCatalogItemKey(third), true);
-    view.handlers.onOpacity(getCatalogItemKey(third), 0.35);
+    controller.setOpacity(getCatalogItemKey(third), 0.35);
     view.handlers.onMove(getCatalogItemKey(first), "up");
 
     assert.equal(controller.getLeafletLayer(getCatalogItemKey(third)).opacity, 0.35);

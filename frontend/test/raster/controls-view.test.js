@@ -395,7 +395,7 @@ test("RasterControlsView delegates retained histogram summaries", () => {
     );
     assert.equal(
         documentContext.querySelector("#raster-appearance-layer").textContent,
-        "retained-raster.tif"
+        ""
     );
 });
 
@@ -424,12 +424,12 @@ test("RasterControlsView owns composite visibility without clearing subgroup sta
         "Calculating selected-area histogram..."
     );
     assert.equal(samplingStatus.textContent, "Selected geographic map window.");
-    assert.equal(appearance.hidden, true);
+    assert.equal(appearance.hidden, false);
 
     view.setControlsVisible(true);
     assert.equal(root.hidden, false);
     assert.equal(histogram.hidden, false);
-    assert.equal(appearance.hidden, true);
+    assert.equal(appearance.hidden, false);
     view.setRenderingControlsAvailable(true);
     assert.equal(appearance.hidden, false);
     view.showHistogramWidget();
