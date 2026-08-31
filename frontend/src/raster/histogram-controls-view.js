@@ -1,7 +1,7 @@
 /**
  * DOM presentation adapter for raster histograms.
  *
- * This adapter owns the histogram region, status, chart, axis, retry and
+ * This adapter owns the histogram region, status, chart, retry and
  * result visibility, and its direct listeners. The neutral SVG
  * construction functions remain in histogram-view.js; this class only
  * supplies their owned chart element and presents coordinator-provided state.
@@ -27,6 +27,7 @@ import { requireRasterControl } from "./required-control.js";
  * @property {string} scope Readable geographic sampling scope.
  * @property {number[]|null} counts Histogram bin counts when ready.
  * @property {string} [errorMessage] Reason the current sample is unavailable.
+ * @property {string} [valueLabel] X-axis name with explicit source units.
  */
 
 /** Own direct DOM interaction and presentation for raster histograms. */
@@ -57,18 +58,6 @@ export class RasterHistogramControlsView {
             documentContext,
             "#raster-histogram-chart"
         );
-        this.histogramAxis = requireRasterControl(
-            documentContext,
-            "#raster-histogram-axis"
-        );
-        this.histogramMinimum = requireRasterControl(
-            documentContext,
-            "#raster-histogram-minimum"
-        );
-        this.histogramMaximum = requireRasterControl(
-            documentContext,
-            "#raster-histogram-maximum"
-        );
         this.retryStatisticsButton = requireRasterControl(
             documentContext,
             "#retry-raster-statistics"
@@ -86,6 +75,7 @@ export class RasterHistogramControlsView {
             "#raster-histogram-detail-layer"
         );
         this.summaryButtons = [];
+        this.summaryCharts = [];
         this.activeHistogramKey = null;
         this.handlers = null;
         this.boundRetryStatistics = this.#handleRetryStatistics.bind(this);
@@ -114,6 +104,8 @@ export class RasterHistogramControlsView {
             this.boundRetryStatistics
         );
         this.#clearSummaryButtonListeners();
+        this.#clearSummaryCharts();
+        clearRasterHistogramChart(this.histogramChart);
         this.handlers = null;
     }
 
@@ -136,6 +128,7 @@ export class RasterHistogramControlsView {
             ({ button }) => button === this.documentContext.activeElement
         )?.key ?? null;
         this.#clearSummaryButtonListeners();
+        this.#clearSummaryCharts();
         this.activeHistogramKey = activeKey;
         this.automatic = summaries.some((summary) => summary.automatic);
         this.histogram.hidden = !this.isAvailable || !this.modeIsCompatible || this.automatic;
@@ -261,7 +254,6 @@ export class RasterHistogramControlsView {
         this.histogram.setAttribute("aria-busy", "false");
         this.histogramStatus.textContent = "";
         clearRasterHistogramChart(this.histogramChart);
-        this.histogramAxis.hidden = true;
         this.retryStatisticsButton.hidden = true;
     }
 
@@ -290,38 +282,22 @@ export class RasterHistogramControlsView {
      *
      * @param {Object} statistics Validated raster statistics.
      * @param {Object} style Committed raster style.
+     * @param {string} [valueLabel="Raster value"] Axis label with known units.
      * @return {void}
      */
-    renderHistogram(statistics, style) {
+    renderHistogram(statistics, style, valueLabel = "Raster value") {
         renderRasterHistogramChart(
             this.histogramChart,
             statistics,
             style,
-            this.documentContext
+            this.documentContext,
+            valueLabel
         );
     }
 
     /** Hide and empty the fixed-bin histogram chart. @return {void} */
     clearHistogram() {
         clearRasterHistogramChart(this.histogramChart);
-    }
-
-    /**
-     * Display formatted sampled minimum and maximum labels.
-     *
-     * @param {string} minimumLabel Formatted sampled minimum.
-     * @param {string} maximumLabel Formatted sampled maximum.
-     * @return {void}
-     */
-    showHistogramAxis(minimumLabel, maximumLabel) {
-        this.histogramMinimum.textContent = minimumLabel;
-        this.histogramMaximum.textContent = maximumLabel;
-        this.histogramAxis.hidden = false;
-    }
-
-    /** Hide the sampled minimum and maximum labels. @return {void} */
-    hideHistogramAxis() {
-        this.histogramAxis.hidden = true;
     }
 
     /**
@@ -400,9 +376,9 @@ export class RasterHistogramControlsView {
             );
             chart.classList.add("raster-histogram-chart");
             renderRasterHistogramChart(
-                chart, summary.statistics, summary.style, this.documentContext
+                chart, summary.statistics, summary.style, this.documentContext, summary.valueLabel
             );
-            scope.textContent += ` · Range: ${summary.minimumLabel} to ${summary.maximumLabel}`;
+            this.summaryCharts.push(chart);
             button.append(chart);
         } else if (summary.state === "ready" && summary.counts !== null && summary.counts.length > 0) {
             button.append(this.#createSummaryPreview(summary));
@@ -459,6 +435,12 @@ export class RasterHistogramControlsView {
             preview.append(bar);
         }
         return preview;
+    }
+
+    /** Release resize observers before replacing dynamic charts. @return {void} */
+    #clearSummaryCharts() {
+        for (const chart of this.summaryCharts) clearRasterHistogramChart(chart);
+        this.summaryCharts = [];
     }
 
     /** Remove listeners owned by superseded summary buttons. @return {void} */

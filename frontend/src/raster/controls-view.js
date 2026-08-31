@@ -288,31 +288,16 @@ export class RasterControlsView {
      *
      * @param {Object} statistics Validated raster statistics.
      * @param {Object} style Committed raster style.
+     * @param {string} [valueLabel="Raster value"] Axis label with known units.
      * @return {void}
      */
-    renderHistogram(statistics, style) {
-        this.#histogramView.renderHistogram(statistics, style);
+    renderHistogram(statistics, style, valueLabel = "Raster value") {
+        this.#histogramView.renderHistogram(statistics, style, valueLabel);
     }
 
     /** Hide and empty the fixed-bin histogram chart. @return {void} */
     clearHistogram() {
         this.#histogramView.clearHistogram();
-    }
-
-    /**
-     * Display formatted sampled minimum and maximum labels.
-     *
-     * @param {string} minimumLabel Formatted sampled minimum.
-     * @param {string} maximumLabel Formatted sampled maximum.
-     * @return {void}
-     */
-    showHistogramAxis(minimumLabel, maximumLabel) {
-        this.#histogramView.showHistogramAxis(minimumLabel, maximumLabel);
-    }
-
-    /** Hide the sampled minimum and maximum labels. @return {void} */
-    hideHistogramAxis() {
-        this.#histogramView.hideHistogramAxis();
     }
 
     /**

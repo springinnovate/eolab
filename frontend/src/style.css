@@ -1454,7 +1454,7 @@ h5 {
 .raster-histogram-chart {
   display: block;
   width: 100%;
-  height: 112px;
+  height: 190px;
   border: 1px solid var(--border-2);
   border-radius: 2px;
   background: var(--surface-2);
@@ -1465,7 +1465,6 @@ h5 {
 }
 
 .raster-histogram-chart[hidden],
-.raster-histogram-axis[hidden],
 .raster-percentile-controls[hidden] {
   display: none;
 }
@@ -1499,15 +1498,26 @@ h5 {
 
 .raster-histogram-tooltip text {
   fill: var(--surface-2);
-  font: 9px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font: 11px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
-.raster-histogram-axis {
-  display: flex;
-  justify-content: space-between;
-  margin-top: 3px;
-  color: var(--text-3);
-  font: 0.65rem/1.3 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+.raster-histogram-axes text {
+  fill: var(--text-2);
+  font: 11px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.raster-histogram-axes .raster-histogram-axis-title {
+  font: 12px/1 system-ui, sans-serif;
+}
+
+.raster-histogram-grid {
+  stroke: var(--border-2);
+  stroke-dasharray: 2 3;
+}
+
+.raster-histogram-baseline {
+  fill: none;
+  stroke: var(--text-3);
 }
 
 .raster-percentile-controls {
@@ -3547,7 +3557,6 @@ button.raster-histogram-summary:hover,
 }
 #map-histogram-panel .raster-histogram-heading { margin: 0 0 6px; padding-right: 36px; }
 #map-histogram-panel .raster-histogram-heading > div { min-width: 0; }
-#map-histogram-panel .raster-histogram-chart { min-height: 130px; }
 #map-histogram-panel .raster-bivariate-statistics,
 #map-histogram-panel .raster-histogram { grid-template-columns: minmax(0, 1fr); margin: 0; padding: 0; border: 0; background: transparent; }
 #map-histogram-panel .raster-histogram-body { overflow: visible; padding: 0; }

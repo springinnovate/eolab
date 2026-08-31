@@ -92,6 +92,25 @@ export const FAKE_SVG_DOCUMENT = Object.freeze({
 });
 
 /**
+ * Build isolated resize-observer doubles for chart lifecycle tests.
+ * @return {Object} Observer constructor and created instances.
+ */
+export function createFakeResizeObservers() {
+  const instances = [];
+  class ResizeObserver {
+    /** Retain the browser callback without automatically measuring layout. */
+    constructor(callback) { this.callback = callback; this.disconnected = false; instances.push(this); }
+    /** Track the observed SVG. @param {Object} target Chart element. */
+    observe(target) { this.target = target; }
+    /** Record teardown; tests can still simulate a stale queued callback. */
+    disconnect() { this.disconnected = true; }
+    /** Deliver one synthetic measured content width. @param {number} width CSS pixels. */
+    resize(width) { this.callback([{ target: this.target, contentRect: { width } }]); }
+  }
+  return { ResizeObserver, instances };
+}
+
+/**
  * Build a Leaflet-compatible event map for controller tests.
  *
  * @param {{lng:number,lat:number}} [center] Initial map center.

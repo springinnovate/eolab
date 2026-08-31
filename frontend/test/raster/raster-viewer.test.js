@@ -275,18 +275,13 @@ function createFakeControlsView() {
         setStatisticsStatus(message) {
             this.statisticsStatus = message;
         },
-        renderHistogram(statistics) {
+        renderHistogram(statistics, _style, valueLabel) {
             this.displayedStatistics = statistics;
+            this.histogramValueLabel = valueLabel;
             this.renderedStatistics.push(statistics);
         },
         clearHistogram() {
             this.displayedStatistics = null;
-        },
-        showHistogramAxis(minimum, maximum) {
-            this.histogramAxis = { minimum, maximum };
-        },
-        hideHistogramAxis() {
-            this.histogramAxis = null;
         },
         setPercentileControlsVisible() {},
         setStatisticsRetryVisible(isVisible) {
@@ -510,6 +505,18 @@ function visibleLayerFixture(loadStatistics = async (item) => createLayerStatist
     return { viewer, controlsView, mapLayers, layerStackView, wmsLayers, leaflet, leafletMap,
         destroy() { viewer.destroy(); mapLayers.destroy(); } };
 }
+
+test('histogram axis units follow each analyzed data asset', async () => {
+    const h = visibleLayerFixture();
+    const item = { ...MOUNTED_GEOTIFF_ITEM, assets: { data: {
+        ...MOUNTED_GEOTIFF_ITEM.assets.data, "raster:bands": [{unit:"%"}],
+    } } };
+    await h.viewer.show(item);
+    await flushPromises();
+    assert.equal(h.controlsView.histogramValueLabel, "Raster value (%)");
+    assert.equal(h.controlsView.layerHistograms[0].valueLabel, "Raster value (%)");
+    h.destroy();
+});
 
 test('two uncached 1D histograms share one read slot and both complete', async () => {
     const reads = [];
@@ -1270,8 +1277,7 @@ test("renderer-independent analysis supports exact windows without publication",
         ["wholeRaster"]
     );
     assert.match(controlsView.statisticsStatus, /Whole-raster exact/);
-    assert.doesNotMatch(controlsView.histogramAxis.minimum, /≈/);
-    assert.doesNotMatch(controlsView.histogramAxis.maximum, /≈/);
+    assert.equal(controlsView.displayedStatistics.estimated, false);
 
     leafletMap.emit("mousemove", { latlng: { lng: -122, lat: 48.5 } });
     await flushPromises();
