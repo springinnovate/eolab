@@ -255,6 +255,9 @@ test("Map layers owns compact rows; one floating editor owns all styling", () =>
     assert.match(STYLESHEET, /\.map-inspection-panels\s*\{[^}]*max-height:[^}]*overflow-y:\s*auto/s);
     assert.match(STYLESHEET, /@container map-inspection \(min-width: 680px\)/);
     assert.match(STYLESHEET, /max-height:\s*52dvh/);
+    assert.match(STYLESHEET, /#map-inspection\s*\{[^}]*pointer-events:\s*none/s);
+    assert.match(STYLESHEET, /#map-histogram-panel,\s*#layer-style-editor\s*\{[^}]*pointer-events:\s*auto/s);
+    assert.match(STYLESHEET, /@container map-inspection[^}]*grid-template-columns:\s*repeat\(2,[^}]*pointer-events:\s*none/s);
 });
 
 test("Map layers has one heading and collapse control with no nested list widget", () => {

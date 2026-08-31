@@ -3459,6 +3459,7 @@ button.raster-histogram-summary:hover,
   background: transparent;
   color: var(--text-1);
   container: map-inspection / inline-size;
+  pointer-events: none;
 }
 
 #map-inspection:has(#map-histogram-panel:not([hidden])):has(#layer-style-editor:not([hidden])) {
@@ -3466,6 +3467,7 @@ button.raster-histogram-summary:hover,
 }
 
 .map-inspection-panels {
+  pointer-events: auto;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   align-items: start;
@@ -3477,6 +3479,7 @@ button.raster-histogram-summary:hover,
 
 #map-histogram-panel,
 #layer-style-editor {
+  pointer-events: auto;
   min-width: 0;
   padding: 14px;
   border: 1px solid var(--border-1);
@@ -3493,6 +3496,8 @@ button.raster-histogram-summary:hover,
 @container map-inspection (min-width: 680px) {
   .map-inspection-panels:has(#map-histogram-panel:not([hidden])):has(#layer-style-editor:not([hidden])) {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    /* Unequal panel heights must leave the exposed map clickable. */
+    pointer-events: none;
   }
   #map-histogram-panel,
   #layer-style-editor { max-height: min(72dvh, calc(100dvh - 80px)); overflow-y: auto; overscroll-behavior: contain; }
