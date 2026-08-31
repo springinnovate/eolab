@@ -435,7 +435,7 @@ export function buildUnavailableRenderingDiagnosticsViewModel() {
 }
 
 /**
- * Apply one complete diagnostics view model to its owned DOM elements.
+ * Apply diagnostics and expose non-ready announcements outside collapsed details.
  *
  * @param {Object} elements Diagnostics elements resolved by the page owner.
  * @param {Object} viewModel Safe display state built by this module.
@@ -447,6 +447,10 @@ export function applyRenderingDiagnosticsViewModel(elements, viewModel) {
     elements.disclosure.classList.remove(...STATE_CLASSES);
     elements.disclosure.classList.add(viewModel.stateClass);
     elements.stateText.textContent = viewModel.statusText;
+    elements.stateAnnouncement.classList.toggle(
+        "visually-hidden",
+        viewModel.state === "ready"
+    );
     if (stateChanged) {
         elements.stateAnnouncement.textContent = viewModel.statusText;
     }

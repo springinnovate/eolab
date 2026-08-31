@@ -410,9 +410,12 @@ export class EomapLayoutController {
             "aria-expanded",
             String(this.operationalStatusIsExpanded)
         );
-        this.operationalToggle.textContent = this.operationalStatusIsExpanded
-            ? "Hide status details"
-            : "Show status details";
+        this.operationalToggle.setAttribute(
+            "aria-label",
+            this.operationalStatusIsExpanded
+                ? "Hide status details"
+                : "Show status details"
+        );
         this.operationalBody.hidden = !this.operationalStatusIsExpanded;
         this.operationalBody.setAttribute(
             "aria-hidden",
@@ -527,7 +530,8 @@ export class EomapLayoutController {
             this.operationalStatusIsExpanded &&
             focusedElement !== null &&
             focusedElement !== undefined &&
-            this.operationalRegion.contains(focusedElement)
+            (this.operationalToggle === focusedElement ||
+                this.operationalRegion.contains(focusedElement))
         ) {
             keyboardEvent.preventDefault();
             this.operationalStatusIsExpanded = false;

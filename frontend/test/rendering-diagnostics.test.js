@@ -312,6 +312,19 @@ test("diagnostic formatters always show explicit units", () => {
   assert.equal(formatDiagnosticUptime(93780), "1 d 2 h");
 });
 
+test("rendering warnings stay visible and recovery remains a polite hidden announcement", () => {
+  const elements = createDiagnosticsElements();
+  for (const state of ["busy", "degraded", "unavailable", "ready"]) {
+    const model = state === "unavailable"
+      ? buildUnavailableRenderingDiagnosticsViewModel()
+      : buildRenderingDiagnosticsViewModel({ ...READY_DIAGNOSTICS_DOCUMENT, state });
+    applyRenderingDiagnosticsViewModel(elements, model);
+    assert.equal(elements.stateAnnouncement.classList.contains("visually-hidden"), state === "ready");
+    assert.equal(elements.stateAnnouncement.textContent, model.statusText);
+    assert.equal(elements.disclosure.open, undefined, "Status updates must not force details open");
+  }
+});
+
 test("diagnostics poll immediately, slowly while collapsed, and quickly while open", async () => {
   const clock = createFakeClock();
   const requests = [];
@@ -454,6 +467,7 @@ function createFakeClock() {
 
 function createDiagnosticsElements() {
   const classNames = new Set();
+  const announcementClasses = new Set(["visually-hidden"]);
   const element = (textContent = "") => ({
     textContent,
     hidden: false,
@@ -476,7 +490,18 @@ function createDiagnosticsElements() {
       },
     },
     stateText: element("Rendering: Checking"),
-    stateAnnouncement: element(),
+    stateAnnouncement: {
+      ...element(),
+      classList: {
+        toggle(name, force) {
+          if (force) announcementClasses.add(name);
+          else announcementClasses.delete(name);
+        },
+        contains(name) {
+          return announcementClasses.has(name);
+        },
+      },
+    },
     observed: element(),
     observedVerb: element(),
     observedAt: element(),

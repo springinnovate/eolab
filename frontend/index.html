@@ -54,43 +54,56 @@
         id="control-panel"
         aria-label="CONTROL LABEL TO BE SET BY CONFIGURATION"
       >
-        <header class="panel-header">
-          <div>
-            <p class="eyebrow">Earth observation workspace</p>
+        <header class="panel-header" id="app-header">
+          <div class="panel-identity">
             <h1 id="app-title">TITLE TO BE SET BY CONFIGURATION</h1>
             <p class="subtitle" id="app-subtitle">
               SUBTITLE TO BE SET BY CONFIGURATION
             </p>
           </div>
-          <button
-            class="icon-button"
-            id="collapse-panel"
-            type="button"
-            aria-label="Collapse control panel"
-            aria-controls="control-panel"
-            aria-expanded="true"
-          >
-            <span aria-hidden="true">&#10005;</span>
-          </button>
+          <div class="panel-header-actions">
+            <button
+              class="secondary-button"
+              id="toggle-operational-status"
+              type="button"
+              aria-label="Show status details"
+              aria-controls="eomap-operational-status-body"
+              aria-expanded="false"
+            >
+              Status
+            </button>
+            <button
+              class="icon-button"
+              id="collapse-panel"
+              type="button"
+              aria-label="Collapse control panel"
+              aria-controls="control-panel"
+              aria-expanded="true"
+            >
+              <span aria-hidden="true">&#10005;</span>
+            </button>
+          </div>
         </header>
 
         <section
           class="eomap-workspace-region operational-status-region"
           id="eomap-operational-status-region"
-          aria-labelledby="eomap-operational-status-heading"
+          aria-label="Operational status"
         >
-        <div class="workspace-region-heading operational-status-heading">
-          <h2 id="eomap-operational-status-heading">Operational status</h2>
-          <button
-            class="secondary-button workspace-region-toggle"
-            id="toggle-operational-status"
-            type="button"
-            aria-controls="eomap-operational-status-body"
-            aria-expanded="false"
-          >
-            Show status details
-          </button>
-        </div>
+        <p
+          class="operational-status-notice visually-hidden"
+          id="catalog-state-announcement"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        ></p>
+        <p
+          class="operational-status-notice visually-hidden"
+          id="rendering-state-announcement"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        ></p>
         <div
           class="workspace-region-body operational-status-body"
           id="eomap-operational-status-body"
@@ -138,13 +151,6 @@
             </section>
           </div>
         </details>
-        <p
-          class="visually-hidden"
-          id="catalog-state-announcement"
-          role="status"
-          aria-live="polite"
-          aria-atomic="true"
-        ></p>
         <details class="system-state rendering-diagnostics" id="rendering-diagnostics">
           <summary>
             <span class="status-dot" aria-hidden="true"></span>
@@ -196,13 +202,6 @@
             </p>
           </div>
         </details>
-        <p
-          class="visually-hidden"
-          id="rendering-state-announcement"
-          role="status"
-          aria-live="polite"
-          aria-atomic="true"
-        ></p>
         </div>
         </section>
 

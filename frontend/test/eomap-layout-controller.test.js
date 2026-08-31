@@ -184,11 +184,11 @@ function createLayoutFixture() {
     const operationalToggle = new FakeLayoutElement({
         "aria-expanded": "false",
     });
+    operationalToggle.textContent = "Status";
     const operationalBody = new FakeLayoutElement({
         "aria-hidden": "true",
     });
     operationalBody.hidden = true;
-    operationalRegion.addDescendant(operationalToggle);
     operationalRegion.addDescendant(operationalBody);
 
     const catalogTab = new FakeLayoutElement({ "aria-expanded": "true" });
@@ -218,6 +218,7 @@ function createLayoutFixture() {
 
     for (const child of [
         collapsePanel,
+        operationalToggle,
         operationalRegion,
         catalogTab,
         catalogRegion,
@@ -426,12 +427,14 @@ test("operational status disclosure owns hidden state, Escape, and focus", () =>
     });
 
     assert.equal(fixture.operationalBody.hidden, true);
-    assert.equal(fixture.operationalToggle.textContent, "Show status details");
+    assert.equal(fixture.operationalToggle.textContent, "Status");
+    assert.equal(fixture.operationalToggle.getAttribute("aria-label"), "Show status details");
     fixture.operationalToggle.dispatchEvent(new Event("click"));
     assert.equal(fixture.operationalBody.hidden, false);
     assert.equal(fixture.operationalBody.getAttribute("aria-hidden"), "false");
     assert.equal(fixture.operationalToggle.getAttribute("aria-expanded"), "true");
-    assert.equal(fixture.operationalToggle.textContent, "Hide status details");
+    assert.equal(fixture.operationalToggle.textContent, "Status");
+    assert.equal(fixture.operationalToggle.getAttribute("aria-label"), "Hide status details");
     assert.equal(
         fixture.operationalRegion.classList.contains("is-collapsed"),
         false
@@ -445,6 +448,28 @@ test("operational status disclosure owns hidden state, Escape, and focus", () =>
     assert.equal(fixture.operationalToggle.focused, true);
     assert.equal(fixture.panel.classList.contains("is-collapsed"), false);
     assert.equal(fixture.timers.length, 2);
+    controller.destroy();
+});
+
+test("Escape on the header Status button closes details before the sidebar", () => {
+    const fixture = createLayoutFixture();
+    const controller = new EomapLayoutController({
+        documentContext: fixture.document,
+        invalidateMapSize() {},
+        schedule: fixture.schedule,
+    });
+    assert.equal(fixture.operationalRegion.contains(fixture.operationalToggle), false);
+    fixture.operationalToggle.dispatchEvent(new Event("click"));
+    fixture.operationalToggle.focus();
+    const escapeEvent = new FakeKeyboardEvent("Escape");
+    fixture.document.dispatchEvent(escapeEvent);
+
+    assert.equal(escapeEvent.defaultPrevented, true);
+    assert.equal(fixture.operationalBody.hidden, true);
+    assert.equal(fixture.operationalToggle.getAttribute("aria-expanded"), "false");
+    assert.equal(fixture.operationalToggle.getAttribute("aria-label"), "Show status details");
+    assert.equal(fixture.document.activeElement, fixture.operationalToggle);
+    assert.equal(fixture.panel.classList.contains("is-collapsed"), false);
     controller.destroy();
 });
 
