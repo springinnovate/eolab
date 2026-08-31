@@ -26,6 +26,7 @@ import { requireRasterControl } from "./required-control.js";
  * @property {"idle"|"loading"|"ready"|"error"} state Statistics lifecycle.
  * @property {string} scope Readable geographic sampling scope.
  * @property {number[]|null} counts Histogram bin counts when ready.
+ * @property {string} [errorMessage] Reason the current sample is unavailable.
  */
 
 /** Own direct DOM interaction and presentation for raster histograms. */
@@ -47,6 +48,7 @@ export class RasterHistogramControlsView {
             documentContext,
             "#raster-histogram-scope"
         );
+        this.mapScope = requireRasterControl(documentContext, "#map-histogram-scope");
         this.histogramStatus = requireRasterControl(
             documentContext,
             "#raster-histogram-status"
@@ -157,6 +159,7 @@ export class RasterHistogramControlsView {
      */
     setActiveLayer(label) {
         this.histogramDetailLayer.textContent = label;
+        this.histogramDetailLayer.title = label;
     }
 
     /**
@@ -182,6 +185,8 @@ export class RasterHistogramControlsView {
      */
     setModeCompatible(isCompatible) {
         this.modeIsCompatible = isCompatible;
+        // In 1D each layer labels its own scope; only 2D has one shared scope.
+        this.mapScope.hidden = isCompatible;
         this.histogramList.hidden = !isCompatible;
         const isVisible = isCompatible && this.isAvailable && !this.automatic;
         this.histogram.hidden = !isVisible;
@@ -192,8 +197,8 @@ export class RasterHistogramControlsView {
     /**
      * Reveal the contextual histogram. By default this preserves focus on the
      * action that initiated sampling; callers may instead focus the chart.
-     * The presentation scrolls only its containing workspace enough to keep
-     * the requested result in view.
+     * The composition root reveals the map-side panel; this adapter must not
+     * scroll the page or any sidebar when a map sample completes.
      *
      * @param {boolean} [moveFocus=false] Whether to focus the chart.
      * @return {void}
@@ -205,10 +210,6 @@ export class RasterHistogramControlsView {
         this.histogram.hidden = false;
         this.histogram.setAttribute("aria-hidden", "false");
         this.#synchronizeSummaryExpansion();
-        this.histogram.scrollIntoView?.({
-            block: "nearest",
-            inline: "nearest",
-        });
         if (moveFocus) {
             this.histogramChart.focus?.();
         }
@@ -247,6 +248,7 @@ export class RasterHistogramControlsView {
         }
         this.histogram.setAttribute("data-sampling-area", mode);
         this.histogramScope.textContent = label || labels[mode];
+        this.mapScope.textContent = label || labels[mode];
     }
 
     /** Enable statistics retry for an active raster. @return {void} */
@@ -333,10 +335,10 @@ export class RasterHistogramControlsView {
     }
 
     /**
-     * Construct one retained-raster histogram summary button.
+     * Construct a chart-first raster summary with sampling context underneath.
      *
      * @param {RasterHistogramSummary} summary Validated view model.
-     * @return {HTMLButtonElement} Bound accessible summary button.
+     * @return {HTMLElement} Automatic chart article or bound summary button.
      * @throws {TypeError} If required identity or presentation fields are bad.
      */
     #createSummaryButton(summary) {
@@ -375,19 +377,24 @@ export class RasterHistogramControlsView {
         const name = this.documentContext.createElement("span");
         name.className = "raster-histogram-summary-name";
         name.textContent = summary.label;
+        name.title = summary.label;
         const scope = this.documentContext.createElement("span");
         scope.className = "raster-histogram-summary-scope";
         scope.textContent = summary.scope;
         const status = this.documentContext.createElement("span");
         status.className = "raster-histogram-summary-status";
+        status.setAttribute("role", "status");
         status.textContent = {
             idle: "Waiting for histogram",
             loading: "Updating histogram…",
-            ready: "Histogram ready",
-            error: "Histogram unavailable",
+            ready: "",
+            error: summary.errorMessage
+                ? `Histogram unavailable: ${summary.errorMessage}`
+                : "Histogram unavailable",
         }[summary.state];
-        button.append(name, scope, status);
-        if (summary.automatic && summary.statistics) {
+        status.hidden = summary.state === "ready";
+        button.append(name, status);
+        if (summary.automatic && summary.state === "ready" && summary.statistics) {
             const chart = this.documentContext.createElementNS(
                 "http://www.w3.org/2000/svg", "svg"
             );
@@ -395,13 +402,12 @@ export class RasterHistogramControlsView {
             renderRasterHistogramChart(
                 chart, summary.statistics, summary.style, this.documentContext
             );
-            const axis = this.documentContext.createElement("p");
-            axis.className = "raster-histogram-summary-scope";
-            axis.textContent = `Range: ${summary.minimumLabel} to ${summary.maximumLabel}`;
-            button.append(chart, axis);
-        } else if (summary.counts !== null && summary.counts.length > 0) {
+            scope.textContent += ` · Range: ${summary.minimumLabel} to ${summary.maximumLabel}`;
+            button.append(chart);
+        } else if (summary.state === "ready" && summary.counts !== null && summary.counts.length > 0) {
             button.append(this.#createSummaryPreview(summary));
         }
+        button.append(scope);
         if (summary.automatic) {
             if (summary.canRetry) {
                 const retry = this.documentContext.createElement("button");

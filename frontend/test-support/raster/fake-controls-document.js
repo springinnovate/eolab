@@ -45,6 +45,15 @@ export class FakeRasterControlElement extends EventTarget {
     }
 
     /**
+     * Check ownership for focus-scoped keyboard interactions.
+     * @param {FakeRasterControlElement|null} element Candidate descendant.
+     * @return {boolean} Whether this element owns the candidate.
+     */
+    contains(element) {
+        return element === this || this.children.some(child => child.contains(element));
+    }
+
+    /**
      * Replace all child elements.
      *
      * @param {...FakeRasterControlElement} children Replacement elements.

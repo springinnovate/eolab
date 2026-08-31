@@ -128,7 +128,7 @@ test("compact header owns branding and actions while alerts stay outside hidden 
     assert.match(STYLESHEET, /\.operational-status-notice:not\(\.visually-hidden\)/);
 });
 
-test("Catalog, Map layers, and Histograms are independent sibling disclosures", () => {
+test("Catalog, Map layers, and Sampling are independent sibling disclosures", () => {
     const panel = requireElementRange("control-panel");
     const catalogRegion = requireElementRange("eomap-catalog-region");
     const renderingRegion = requireElementRange("eomap-map-layers-region");
@@ -184,6 +184,7 @@ test("Catalog, Map layers, and Histograms are independent sibling disclosures", 
     assert.match(renderingRegion.source, /hidden/);
     assert.match(analysisRegion.source, /aria-hidden="true"/);
     assert.match(analysisRegion.source, /hidden/);
+    assert.match(requireElementRange("toggle-raster-interpretation").source, />\s*Sampling\s*</);
     assert.match(
         MARKUP,
         /id="collapse-panel"[^>]*aria-controls="control-panel"[^>]*aria-expanded="true"/s
@@ -235,7 +236,10 @@ test("Map layers owns compact rows; one floating editor owns all styling", () =>
     const editor = requireElementRange("layer-style-editor");
     const panel = requireElementRange("control-panel");
     assert.ok(editor.start > panel.end, "Style editor must be outside sidebar overflow");
-    assert.match(editor.source, /popover="manual" role="dialog"/);
+    const inspection = requireElementRange("map-inspection");
+    assert.ok(editor.start > inspection.start && editor.end < inspection.end);
+    assert.match(inspection.source, /popover="manual"/);
+    assert.match(editor.source, /role="dialog"/);
     assert.match(editor.source, /aria-modal="false"/);
     for (const id of [
         "layer-style-opacity", "raster-appearance-controls", "raster-percentile-controls",
@@ -247,8 +251,13 @@ test("Map layers owns compact rows; one floating editor owns all styling", () =>
     assert.match(rendering.source, /id="raster-layer-stack"/);
     assert.match(rendering.source, /id="raster-detail-preview-controls"/);
     assert.doesNotMatch(MARKUP, /id="open-histogram-map-layers"/);
-    assert.match(STYLESHEET, /#layer-style-editor\s*\{[^}]*position:\s*fixed/s);
-    assert.match(STYLESHEET, /max-height:\s*70dvh/);
+    assert.match(STYLESHEET, /#map-inspection\s*\{[^}]*position:\s*fixed/s);
+    assert.match(STYLESHEET, /\.map-inspection-panels\s*\{[^}]*max-height:[^}]*overflow-y:\s*auto/s);
+    assert.match(STYLESHEET, /@container map-inspection \(min-width: 680px\)/);
+    assert.match(STYLESHEET, /max-height:\s*52dvh/);
+    assert.match(STYLESHEET, /#map-inspection\s*\{[^}]*pointer-events:\s*none/s);
+    assert.match(STYLESHEET, /#map-histogram-panel,\s*#layer-style-editor\s*\{[^}]*pointer-events:\s*auto/s);
+    assert.match(STYLESHEET, /@container map-inspection[^}]*grid-template-columns:\s*repeat\(2,[^}]*pointer-events:\s*none/s);
 });
 
 test("Map layers has one heading and collapse control with no nested list widget", () => {
@@ -288,11 +297,13 @@ test("inspector visualization and previews can reveal Map layers through composi
     );
     assert.match(
         COMPOSITION_SOURCE,
-        /\(\) => layoutController\.showWorkspace\("histogram"\)/
+        /onHistogramRequested: \(\) => mapInspection\.showHistogram\(\)/
     );
+    assert.doesNotMatch(COMPOSITION_SOURCE, /layoutController\.showWorkspace\("histogram"\)/);
+    assert.match(COMPOSITION_SOURCE, /onHistogramClose: \(\) => activeRasterViewer\?\.stopSampleWindowSelection\(\)/);
 });
 
-test("Histograms own shared sampling, per-layer histograms, AOI, and pixel guidance", () => {
+test("Sampling keeps area controls and AOI; map exploration owns histogram results", () => {
     const analysisRegion = requireElementRange(
         "eomap-raster-interpretation-region"
     );
@@ -304,10 +315,20 @@ test("Histograms own shared sampling, per-layer histograms, AOI, and pixel guida
         "raster-bivariate-statistics"
     );
     const temporaryAoi = requireElementRange("temporary-aoi");
+    const panel = requireElementRange("control-panel");
+    const exploration = requireElementRange("map-histogram-panel");
+    assert.ok(exploration.start > panel.end);
+    assert.match(exploration.source, /role="dialog" aria-modal="false"/);
+    for (const id of ["raster-comparison-mode", "raster-histogram-list", "raster-histogram", "raster-bivariate-statistics"]) {
+        assert.match(exploration.source, new RegExp(`id="${id}"`));
+        assert.doesNotMatch(analysisRegion.source, new RegExp(`id="${id}"`));
+    }
+    assert.match(analysisRegion.source, /id="temporary-aoi"/);
+    assert.match(analysisRegion.source, /id="raster-sampling-area-controls"/);
 
-    assert.match(analysisRegion.source, /id="raster-comparison-mode"/);
-    assert.match(analysisRegion.source, /1D – visible rasters/);
-    assert.match(analysisRegion.source, /No visible raster layers/);
+    assert.match(exploration.source, /1D – visible rasters/);
+    assert.match(exploration.source, /2D – compare rasters/);
+    assert.match(exploration.source, /No visible raster layers/);
     assert.match(composite.source, /<legend>Sample area<\/legend>/);
     assert.match(composite.source, /id="raster-active-controls"/);
     assert.match(composite.source, /id="raster-sampling-area-controls"/);
@@ -324,9 +345,8 @@ test("Histograms own shared sampling, per-layer histograms, AOI, and pixel guida
         assert.match(sampling.source, new RegExp(`id="${action}"`));
     }
     assert.match(histogramList.source, /aria-label="Raster histograms"/);
-    assert.match(analysisRegion.source, /Map layer histograms/);
     assert.doesNotMatch(analysisRegion.source, /retained/i);
-    assert.match(histogram.source, /<h3 id="raster-histogram-heading">Histogram<\/h3>/);
+    assert.match(histogram.source, /<h3 id="raster-histogram-heading" class="visually-hidden">Histogram<\/h3>/);
     assert.match(histogram.source, /id="raster-histogram-detail-layer"/);
     assert.match(histogram.source, /id="raster-histogram-status"/);
     assert.match(histogram.source, /id="raster-histogram-chart"/);
@@ -339,11 +359,9 @@ test("Histograms own shared sampling, per-layer histograms, AOI, and pixel guida
         pairedHistogram.source,
         /data-eomap-region="raster-interpretation"/
     );
-    assert.match(analysisRegion.source, /id="pixel-probe-guidance-heading"/);
-    assert.match(
-        analysisRegion.source,
-        /Move over the map to inspect the top visible raster's value/
-    );
+    assert.doesNotMatch(MARKUP, /pixel-probe-guidance|Pixel values/);
+    assert.doesNotMatch(STYLESHEET, /pixel-probe-guidance/);
+    assert.match(MARKUP, /id="raster-pixel-probe-reading"/);
     assert.match(temporaryAoi.source, /data-eomap-region="raster-interpretation"/);
     assert.match(temporaryAoi.source, /aria-labelledby="temporary-aoi-heading"/);
     for (const renderingControl of [
@@ -357,6 +375,30 @@ test("Histograms own shared sampling, per-layer histograms, AOI, and pixel guida
             new RegExp(`id="${renderingControl}"`)
         );
     }
+});
+
+test("map histograms put plots before captions and mode without a visible title strip", () => {
+    assert.match(requireElementRange("map-histogram-heading").source,
+        /class="visually-hidden">Histogram/);
+    assert.match(requireElementRange("close-map-histogram").source,
+        /aria-label="Close histogram">×/);
+    const mode = requireElementRange("raster-bivariate-controls");
+    assert.match(mode.source, /class="visually-hidden">Histogram mode/);
+    assert.match(mode.source, /aria-describedby="raster-bivariate-status"/);
+    for (const id of ["raster-histogram-list", "raster-histogram", "raster-bivariate-statistics"]) {
+        assert.ok(requireElementRange(id).end < mode.start, `${id} precedes mode controls`);
+    }
+    assert.ok(requireMarkupPosition("raster-histogram-chart") < requireMarkupPosition("raster-histogram-scope"));
+    assert.ok(requireMarkupPosition("raster-bivariate-histogram") < requireMarkupPosition("map-histogram-scope"));
+    assert.ok(requireMarkupPosition("raster-bivariate-histogram") < requireMarkupPosition("raster-bivariate-statistics-status"));
+    assert.match(STYLESHEET, /--map-inspection-height:\s*calc\(100dvh - var\(--map-inspection-top\) - 16px\)/);
+    assert.match(STYLESHEET, /#map-inspection\s*\{[^}]*overflow:\s*visible/s);
+    assert.match(STYLESHEET, /#map-inspection:has\(#map-histogram-panel:not\(\[hidden\]\)\)\s*\{[^}]*--map-inspection-top:\s*16px/s);
+    assert.match(STYLESHEET, /@container map-inspection[^}]*max-height:\s*none[^}]*overflow:\s*visible/s);
+    assert.match(STYLESHEET, /\.map-histogram-toolbar\s*\{[^}]*height:\s*0/s);
+    assert.match(STYLESHEET, /#map-histogram-panel \.raster-bivariate-statistics,\s*#map-histogram-panel \.raster-histogram\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/s);
+    assert.match(STYLESHEET, /#map-histogram-panel \.raster-histogram-heading\s*\{[^}]*padding-right:\s*36px/s);
+    assert.match(STYLESHEET, /#open-map-histogram\[hidden\],[^{]*\{\s*display:\s*none/s);
 });
 
 test("sidebar panels own deliberate, independent scrolling", () => {
@@ -544,6 +586,12 @@ test("semantic regions preserve one DOM instance of every owned control", () => 
         "toggle-analysis-aoi",
         "temporary-aoi",
         "raster-pixel-probe",
+        "map-inspection",
+        "map-histogram-panel",
+        "map-histogram-scope",
+        "open-map-histogram",
+        "close-map-histogram",
+        "layer-style-editor",
     ];
 
     for (const identifier of uniqueIdentifiers) {
