@@ -70,7 +70,7 @@ function harness({ selectedItem = null, assess = async (item) => item,
     toggle(name, enabled) { if (enabled) classes.add(name); else classes.delete(name); },
     contains(name) { return classes.has(name); },
   } };
-  const onMap = {}, actionContainer = { setAttribute() {} };
+  const onMap = {}, actionContainer = { setAttribute() {} }, styleButton = new EventTarget();
   const actionStatus = { textContent: "" }, status = { textContent: "" };
   const visualization = {
     describe: getCatalogVisualization,
@@ -100,13 +100,15 @@ function harness({ selectedItem = null, assess = async (item) => item,
     renderCatalogItemInspector: (item) => calls.push(["render-inspector", item.id]),
     appGlobalConfiguration: { scanDisplayPathPrefix: "Mounted" },
     catalogLayerToggle: layerButton, catalogMapActionStatus: actionStatus,
+    catalogLayerStyle: styleButton,
+    layerStyleEditor: { open: (key) => calls.push(["style", key]) },
     catalogLayerStatus: status, catalogMapActionsElement: actionContainer, catalogOnMap: onMap,
     rasterDetailPreviewControls: {}, showRasterDetailPreview: {}, removeRasterDetailPreview: {},
     renderRasterDetailPreviewResolution() {},
     onRenderingWorkspaceRequested: () => calls.push(["open-rendering"]),
   };
   const actions = new Function(...Object.keys(dependencies), `${ACTION_SOURCE}
-    return { run: toggleCatalogLayer, refresh: refreshCatalogMapAction };`
+    return { run: toggleCatalogLayer, style: styleCatalogLayer, refresh: refreshCatalogMapAction };`
   )(...Object.values(dependencies));
   const addRow = (item) => {
     const row = { item, update(value) { this.state = value; } };
@@ -118,7 +120,7 @@ function harness({ selectedItem = null, assess = async (item) => item,
   actions.refresh();
   return {
     run: (item = state.selectedItem, options) => actions.run(item, options),
-    refresh: actions.refresh, addRow, row, state, calls, layerButton,
+    refresh: actions.refresh, style: actions.style, addRow, row, state, calls, layerButton, styleButton,
     onMap, actionContainer, actionStatus, status,
     removeExternally(item) { visualization.remove(item); actions.refresh(); },
   };
@@ -133,6 +135,47 @@ test("assessment stays internal; inspector and map feedback retain live regions"
   assert.doesNotMatch(MARKUP + SOURCE, /Assess for visualization|Reassess visualization|Check for full visualization/);
   const tileFailure = sourceBetween("function reportMapTileError(", "function refreshCatalogMapAction()");
   assert.match(tileFailure, /catalogLayerStatus\.textContent = message;\s*mapLayerRenderingAnnouncement\.textContent = message;/);
+});
+
+test("row and details Style reuse the editor with composite identity and no map or selection changes", () => {
+  const first = raster("same-id"), second = vector("same-id");
+  const h = harness({ selectedItem: second, retained: [first, second] });
+  assert.match(SOURCE, /onStyle: styleCatalogLayer/);
+  assert.match(MARKUP, /id="style-catalog-layer"[\s\S]*?aria-controls="layer-style-editor"[\s\S]*?hidden[\s\S]*?>\s*Style\s*</);
+  assert.equal(h.styleButton.hidden, false);
+  assert.equal(h.styleButton.disabled, false);
+  h.style(first);
+  h.styleButton.dispatchEvent(new Event("click"));
+  assert.deepEqual(h.calls, [["style", getCatalogItemKey(first)], ["style", getCatalogItemKey(second)]]);
+  assert.equal(h.state.selectedItem, second);
+  assert.equal(h.row.state.retained, true);
+});
+
+test("Style is absent before adding and after removal, and stale or busy requests do nothing", async () => {
+  const item = raster("style-lifecycle"), completion = deferred();
+  const h = harness({ selectedItem: item, assess: () => completion.promise });
+  assert.equal(h.styleButton.hidden, true);
+  h.style(item);
+  h.style(null);
+  assert.deepEqual(h.calls, []);
+  const attempt = h.run();
+  assert.equal(h.styleButton.disabled, true);
+  h.style(item);
+  assert.deepEqual(h.calls, [["assess", item.id]]);
+  completion.resolve(item);
+  await attempt;
+  assert.equal(h.styleButton.hidden, false);
+  assert.equal(h.styleButton.disabled, false);
+  const pending = h.state.pendingMapActions.begin(item, "Adding...", "Checking");
+  h.calls.length = 0;
+  h.style(item);
+  assert.deepEqual(h.calls, []);
+  h.state.pendingMapActions.finish(pending);
+  h.removeExternally(item);
+  assert.equal(h.styleButton.hidden, true);
+  h.calls.length = 0;
+  h.style(item);
+  assert.deepEqual(h.calls, []);
 });
 
 test("pending row Add needs no selection, disables only its Item, and prevents duplicates", async () => {

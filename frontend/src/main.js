@@ -521,6 +521,7 @@ async function initializeCatalog(
     const catalogLayerToggle = document.querySelector(
         "#toggle-catalog-layer"
     );
+    const catalogLayerStyle = document.querySelector("#style-catalog-layer");
     const catalogOnMap = document.querySelector("#catalog-on-map");
     const catalogMapActionStatus = document.querySelector(
         "#catalog-map-action-status"
@@ -782,6 +783,8 @@ async function initializeCatalog(
         );
         catalogLayerToggle.disabled = pendingAction !== null;
         catalogLayerToggle.hidden = false;
+        catalogLayerStyle.hidden = !isRetained;
+        catalogLayerStyle.disabled = pendingAction !== null;
         const actionStatus = pendingAction?.statusText ??
             getCatalogMapActionFeedback(item)?.message ?? "";
         if (catalogMapActionStatus.textContent !== actionStatus) {
@@ -964,6 +967,7 @@ async function initializeCatalog(
                 id: `catalog-result-${catalogState.searchSequence}-${catalogState.resultViews.size}`,
                 onDetails: selectCatalogItem,
                 onMapAction: (requestedItem) => toggleCatalogLayer(requestedItem),
+                onStyle: styleCatalogLayer,
                 onPreview: (previewItem) => footprintController.preview(previewItem),
                 onClearPreview: () => footprintController.clearPreview(),
             });
@@ -1302,6 +1306,21 @@ async function initializeCatalog(
             finishCatalogMapAction(pendingAction);
         }
     }
+    /**
+     * Open the shared editor for a retained Item without selecting or showing it.
+     *
+     * @param {Object|null} item Item requested by a result or details shortcut.
+     * @return {void}
+     */
+    function styleCatalogLayer(item) {
+        if (item === null || !catalogVisualization.contains(item) ||
+            catalogState.pendingMapActions.get(item) !== null) return;
+        layerStyleEditor.open(getCatalogItemKey(item));
+    }
+
+    catalogLayerStyle.addEventListener("click", () => {
+        styleCatalogLayer(catalogState.selectedItem);
+    });
     catalogLayerToggle.addEventListener("click", () => {
         void toggleCatalogLayer(catalogState.selectedItem, { revealMapLayers: true });
     });

@@ -78,6 +78,44 @@ test('vector editor exposes opacity only, and removed targets close safely', () 
     h.editor.destroy();
 });
 
+test('catalog and details shortcuts preserve hidden layer state and receive focus on close', () => {
+    for (const key of ['a', 'b']) {
+        const h = fixture();
+        const layer = h.layers.find(layer => layer.key === key);
+        layer.visible = false;
+        const before = structuredClone(h.layers);
+        const shortcut = h.doc.createElement();
+        shortcut.isConnected = true;
+        shortcut.focus();
+        h.editor.open(key);
+        assert.equal(h.editor.key, key);
+        assert.equal(h.editor.title.textContent, layer.label);
+        h.editor.close();
+        assert.equal(h.doc.activeElement, shortcut);
+        assert.deepEqual(h.layers, before);
+        assert.deepEqual(h.edits, []);
+        h.editor.destroy();
+    }
+});
+
+test('closing falls back when a shortcut was removed, hidden, disabled, or in a collapsed pane', () => {
+    for (const reason of ['removed', 'hidden', 'disabled', 'collapsed']) {
+        const h = fixture();
+        const shortcut = h.doc.createElement();
+        shortcut.isConnected = true;
+        shortcut.focus();
+        h.editor.open('a');
+        if (reason === 'removed') shortcut.isConnected = false;
+        if (reason === 'hidden') shortcut.hidden = true;
+        if (reason === 'disabled') shortcut.disabled = true;
+        // Native focus is a no-op when a CSS-collapsed ancestor hides a control.
+        if (reason === 'collapsed') shortcut.focus = () => {};
+        h.editor.close();
+        assert.equal(h.doc.activeElement, h.styleButtons[0]);
+        h.editor.destroy();
+    }
+});
+
 test('paired styles lock ordinary opacity and show the coordinated controls', () => {
     const h = fixture();
     h.layers[0].opacityLocked = true;

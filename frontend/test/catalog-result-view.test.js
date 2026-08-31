@@ -37,16 +37,17 @@ function fixture(presentation = {}) {
       ...presentation,
     },
     onMapAction: (requested) => calls.push(["map", requested]),
+    onStyle: (requested) => calls.push(["style", requested]),
     onDetails: (requested, button) => calls.push(["details", requested, button]),
     onPreview: (requested) => calls.push(["preview", requested]),
     onClearPreview: () => calls.push(["clear"]),
   });
   const actions = view.element.children.find((child) => child.className === "catalog-result-actions");
-  const [onMap, mapButton] = actions.children;
+  const [onMap, mapButton, styleButton] = actions.children;
   const status = view.element.children.at(-1);
   const update = (state = {}) => view.update({ supported: true, retained: false, pendingAction: null, feedback: null, ...state });
   update();
-  return { view, item, document, calls, actions, onMap, mapButton, status, update };
+  return { view, item, document, calls, actions, onMap, mapButton, styleButton, status, update };
 }
 
 test("result row has separate native map/details buttons without nested buttons", () => {
@@ -84,6 +85,28 @@ test("state changes preserve controls/focus and keep On map distinct from Remove
   f.update();
   assert.equal(f.onMap.hidden, true);
   assert.equal(f.mapButton.textContent, "Add to map");
+});
+
+test("Style follows Remove only for retained Items and does not invoke map or details actions", () => {
+  const f = fixture();
+  assert.equal(f.styleButton.hidden, true);
+  f.update({ retained: true });
+  assert.equal(f.styleButton.hidden, false);
+  assert.equal(f.styleButton.disabled, false);
+  assert.equal(f.styleButton.type, "button");
+  assert.equal(f.styleButton.textContent, "Style");
+  assert.equal(f.styleButton.getAttribute("aria-label"), "Style: future/wind.tif");
+  assert.equal(f.styleButton.getAttribute("aria-controls"), "layer-style-editor");
+  assert.deepEqual(f.actions.children, [f.onMap, f.mapButton, f.styleButton, f.view.detailsButton]);
+  f.styleButton.focus();
+  f.styleButton.dispatchEvent(new Event("click"));
+  assert.deepEqual(f.calls, [["style", f.item]]);
+  f.update({ retained: true });
+  assert.equal(f.document.activeElement, f.styleButton);
+  f.update({ retained: true, pendingAction: { buttonText: "Adding...", statusText: "Checking" } });
+  assert.equal(f.styleButton.disabled, true);
+  f.update();
+  assert.equal(f.styleButton.hidden, true);
 });
 
 test("errors are visible beside the affected action; retries hide stale errors", () => {
