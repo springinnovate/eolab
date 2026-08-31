@@ -1051,65 +1051,18 @@ h5 {
   line-height: 1.45;
 }
 
-.raster-layer-stack {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  order: 3;
-  width: min(340px, calc(100vw - 32px));
-  max-height: min(52dvh, 480px);
-  gap: 10px;
-  margin: 0;
-  overflow: hidden;
-  pointer-events: auto;
-  border: 1px solid var(--border-1);
-  border-radius: var(--radius);
-  background: rgb(255 255 255 / 97%);
-  padding: 12px;
-  box-shadow: var(--elevation-panel);
-}
-
 .raster-layer-stack[hidden] {
   display: none;
 }
 
-.raster-layer-stack-heading {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.raster-layer-stack-heading .section-label {
+#raster-layer-stack-limit {
   margin: 0;
-}
-
-#raster-layer-widget-count {
-  display: inline-grid;
-  min-width: 1.45rem;
-  min-height: 1.45rem;
-  margin-left: 4px;
-  place-items: center;
-  border-radius: 999px;
-  background: var(--surface-selected);
-  color: var(--brand-press);
-  font-size: 0.68rem;
-}
-
-.map-layer-widget-body {
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
-}
-
-.map-layer-widget-body > p:first-child {
-  margin: 0 0 9px;
   color: var(--text-3);
   font-size: 0.68rem;
   line-height: 1.4;
 }
 
-.map-layer-widget.is-collapsed {
+#raster-layer-stack-limit:empty {
   display: none;
 }
 
@@ -2795,33 +2748,12 @@ h5 {
   display: grid;
   width: 100%;
   max-height: none;
-  order: initial;
-  grid-template-rows: auto minmax(0, 1fr);
   gap: 10px;
-  margin: 0 0 14px;
-  overflow: hidden;
-  border: 0;
-  border-radius: 0;
-  background: var(--surface-2);
-  padding: 0;
+  margin: 0;
   box-shadow: none;
 }
 
-.raster-layer-stack-heading h3,
-.raster-layer-stack-heading .section-label {
-  margin: 0;
-}
-
-.raster-layer-stack-heading h3 { font-size: 0.8rem; }
-#toggle-map-layer-widget { padding: 4px 6px; font-size: 0.68rem; white-space: nowrap; }
 #remove-raster-detail-preview[hidden] + #style-raster-detail-preview { display: none; }
-
-.map-layer-widget-body {
-  max-height: min(42dvh, 420px);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
-}
 
 .rendering-availability,
 .raster-histogram-overview,

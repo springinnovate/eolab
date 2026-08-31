@@ -213,8 +213,6 @@ function createLayoutFixture() {
     rasterAnalysisRegion.addDescendant(analysisAoiDisclosure);
     rasterAnalysisRegion.addDescendant(rasterAnalysisContent);
     rasterAnalysisRegion.hidden = true;
-    const openMapLayerHistograms = new FakeLayoutElement();
-    const openHistogramMapLayers = new FakeLayoutElement();
 
     for (const child of [
         collapsePanel,
@@ -245,8 +243,6 @@ function createLayoutFixture() {
         ["#toggle-raster-interpretation", rasterAnalysisTab],
         ["#eomap-raster-interpretation-region", rasterAnalysisRegion],
         ["#eomap-raster-interpretation-body", rasterAnalysisContent],
-        ["#open-map-layer-histograms", openMapLayerHistograms],
-        ["#open-histogram-map-layers", openHistogramMapLayers],
         ["#analysis-aoi-disclosure", analysisAoiDisclosure],
         ["#toggle-analysis-aoi", analysisAoiToggle],
     ]);
@@ -264,8 +260,6 @@ function createLayoutFixture() {
         operationalBody,
         operationalRegion,
         operationalToggle,
-        openHistogramMapLayers,
-        openMapLayerHistograms,
         panel,
         rasterAnalysisContent,
         rasterAnalysisRegion,
@@ -380,7 +374,7 @@ test("composition can expand a named workspace without closing siblings", () => 
     controller.destroy();
 });
 
-test("Map layers links to Histograms without a redundant styling shortcut", () => {
+test("Map layers collapse and reopen preserve content and independent Histograms", () => {
     const fixture = createLayoutFixture();
     const controller = new EomapLayoutController({
         documentContext: fixture.document,
@@ -388,11 +382,33 @@ test("Map layers links to Histograms without a redundant styling shortcut", () =
         schedule: fixture.schedule,
     });
 
-    fixture.openMapLayerHistograms.dispatchEvent(new Event("click"));
-    assert.equal(fixture.catalogRegion.hidden, false);
+    fixture.renderingTab.dispatchEvent(new Event("click"));
+    fixture.rasterAnalysisTab.dispatchEvent(new Event("click"));
+    const layerAction = new FakeLayoutElement({}, [], "BUTTON");
+    layerAction.ownerDocument = fixture.document;
+    fixture.renderingContent.addDescendant(layerAction);
+    fixture.renderingContent.scrollTop = 120;
+    layerAction.focus();
+    const escape = new FakeKeyboardEvent("Escape");
+    fixture.document.dispatchEvent(escape);
+
+    assert.equal(escape.defaultPrevented, true);
+    assert.equal(fixture.document.activeElement, fixture.renderingTab);
     assert.equal(fixture.renderingRegion.hidden, true);
+    assert.equal(fixture.renderingContent.hidden, false);
+    assert.equal(fixture.renderingContent.contains(layerAction), true);
+    assert.equal(fixture.panel.classList.contains("is-collapsed"), false);
     assert.equal(fixture.rasterAnalysisRegion.hidden, false);
-    assert.equal(fixture.rasterAnalysisTab.focused, true);
+
+    fixture.renderingTab.dispatchEvent(new Event("click"));
+    assert.equal(fixture.renderingRegion.hidden, false);
+    assert.equal(fixture.renderingTab.getAttribute("aria-expanded"), "true");
+    assert.equal(fixture.renderingContent.contains(layerAction), true);
+    assert.equal(fixture.renderingContent.scrollTop, 120);
+    assert.equal(fixture.rasterAnalysisRegion.hidden, false);
+    fixture.rasterAnalysisTab.dispatchEvent(new Event("click"));
+    assert.equal(fixture.rasterAnalysisRegion.hidden, true);
+    assert.equal(fixture.renderingRegion.hidden, false);
 
     controller.destroy();
 });
