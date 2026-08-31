@@ -91,6 +91,15 @@ function canRetryRasterStatistics(error) {
  * @property {() => void} reset Clear the raster and restore default styling.
  * @property {(item: Object) => Promise<Object|null>} show Publish and retain
  * one selected raster Item.
+ * @property {() => void} syncVisibleLayers Opt into histogram selection from
+ * the top visible rasters and synchronize analysis without choosing a style target.
+ * @property {(key:string) => boolean} openStyle Select a retained or sampled
+ * raster for editing; return false when the key has no raster session.
+ * @property {() => void} closeStyle Flush a pending edit and release its target.
+ * @property {() => void} refreshStyle Refresh the editing target's availability
+ * and percentile controls, discarding pending work if the target disappeared.
+ * @property {(key:string) => Object|null} getSampledStyleTarget Return the
+ * matching sampled preview's key, label, and visibility flags, or null.
  * @property {(item:Object) => void} activateAnalysis Start independent raster
  * analysis controls without requiring a renderer.
  * @property {(item:Object|null) => void} deactivateAnalysis Remove a matching
@@ -170,8 +179,17 @@ export function initializeRasterViewer(
         leafletMap,
         leaflet,
         onTileError,
-        onLayersChange = () => {},
-        onHistogramRequested = () => {},
+        onLayersChange = /**
+         * Ignore layer snapshots when no application observer is supplied.
+         * Accepts no parameters; callback arguments are intentionally unused.
+         *
+         * @return {void}
+         */ () => {},
+        onHistogramRequested = /**
+         * Leave workspace visibility unchanged without a presentation callback.
+         *
+         * @return {void}
+         */ () => {},
     },
     {
         controlsView = null,
@@ -436,6 +454,11 @@ export function initializeRasterViewer(
     function syncBivariateCandidate(session) {
         const key = getCatalogItemKey(session.item);
         const candidate = bivariateCandidates.find(
+            /**
+             * Match a paired candidate by catalog or renderer-session identity.
+             * @param {Object} current Candidate with a stable key.
+             * @return {boolean} Whether it belongs to the session being saved.
+             */
             (current) => current.key === key || current.key === session.key
         );
         if (candidate === undefined) {
@@ -461,7 +484,9 @@ export function initializeRasterViewer(
      *
      * The two most recently selected distinct catalog rasters are retained in
      * top-first X/Y order. WMS publication, map visibility, and renderer type
-     * are deliberately absent from this contract.
+     * are deliberately absent from this contract. Once syncVisibleLayers opts
+     * into visible-layer analysis, this function does nothing; stack order and
+     * visibility determine the candidates instead.
      *
      * @param {Object} item Selected Catalog raster Item.
      * @return {void}
@@ -470,6 +495,11 @@ export function initializeRasterViewer(
         if (followsVisibleLayers) return;
         const key = getCatalogItemKey(item);
         const existing = bivariateCandidates.find(
+            /**
+             * Locate prior paired-analysis state for this catalog selection.
+             * @param {Object} candidate Previously remembered candidate.
+             * @return {boolean} Whether its key matches the selected Item.
+             */
             (candidate) => candidate.key === key
         );
         const liveSession = getBivariateCandidateSession(key);
@@ -496,7 +526,14 @@ export function initializeRasterViewer(
         };
         bivariateCandidates = [
             candidate,
-            ...bivariateCandidates.filter((current) => current.key !== key),
+            ...bivariateCandidates.filter(
+                /**
+                 * Keep other candidates after moving this Item to the front.
+                 * @param {Object} current Previously remembered candidate.
+                 * @return {boolean} Whether its key differs from this Item.
+                 */
+                (current) => current.key !== key
+            ),
         ].slice(0, 2);
         renderBivariateAvailability();
     }
@@ -621,6 +658,13 @@ export function initializeRasterViewer(
     );
     const rasterStatisticsController = new RasterStatisticsController(
         loadStatistics,
+        /**
+         * Present the start of the active raster's request in its correct scope.
+         *
+         * @param {Object} _ Requested Catalog Item; active state owns its identity.
+         * @param {Object} samplingArea Normalized whole-raster, bounds, or AOI area.
+         * @return {void}
+         */
         (_, samplingArea) => {
             resetPendingRasterStatisticsState();
             if (samplingArea.kind === "wholeRaster") {
@@ -630,6 +674,14 @@ export function initializeRasterViewer(
             }
             renderLayerHistogramSummaries();
         },
+        /**
+         * Route current active-raster statistics to the whole or selected view.
+         *
+         * @param {Object} statistics Validated statistics response.
+         * @param {Object} _ Requested Catalog Item; active state owns its identity.
+         * @param {Object} samplingArea Normalized area used for this response.
+         * @return {void}
+         */
         (statistics, _, samplingArea) => {
             if (samplingArea.kind === "wholeRaster") {
                 renderWholeRasterStatistics(statistics);
@@ -638,6 +690,14 @@ export function initializeRasterViewer(
             }
             renderLayerHistogramSummaries();
         },
+        /**
+         * Present an active-raster failure in the matching histogram scope.
+         *
+         * @param {Error} error Current non-abort statistics failure.
+         * @param {Object} _ Requested Catalog Item; active state owns its identity.
+         * @param {Object} samplingArea Normalized area of the failed request.
+         * @return {void}
+         */
         (error, _, samplingArea) => {
             if (samplingArea.kind === "wholeRaster") {
                 renderWholeRasterStatisticsError(error);
@@ -648,17 +708,37 @@ export function initializeRasterViewer(
         }
     );
     const pairedStatisticsController = new RasterStatisticsController(
+        /**
+         * Adapt the controller's ordered pair to the paired-statistics API.
+         *
+         * @param {{xItem:Object,yItem:Object}} pair Catalog Items in X/Y order.
+         * @param {Object} samplingArea Normalized whole-overlap or bounds area.
+         * @param {AbortSignal} signal Cancellation signal for superseded work.
+         * @return {Promise<Object>} Validated paired statistics; rejects on failure.
+         */
         (pair, samplingArea, signal) => loadPairedStatistics(
             pair.xItem,
             pair.yItem,
             samplingArea,
             signal
         ),
+        /**
+         * Announce a new paired request; target, area, and context are unused.
+         *
+         * @return {void}
+         */
         () => {
             controlsView.setPairedStatisticsLoading?.(
                 "Calculating the 2D histogram..."
             );
         },
+        /**
+         * Retain paired statistics and resolve still-automatic axis ranges.
+         * Ignores the response if 2D mode or its pair is no longer available.
+         *
+         * @param {Object} statistics Validated paired histogram with X/Y bin edges.
+         * @return {void}
+         */
         (statistics) => {
             if (!bivariateMode.active) return;
             bivariateStatistics = statistics;
@@ -682,6 +762,12 @@ export function initializeRasterViewer(
             applyBivariatePresentation();
             renderLayerStack();
         },
+        /**
+         * Show a current paired request failure and its retry availability.
+         *
+         * @param {Error} error Non-abort paired-statistics failure.
+         * @return {void}
+         */
         (error) => {
             if (!bivariateMode.active) return;
             controlsView.renderPairedStatisticsError?.(
@@ -729,7 +815,10 @@ export function initializeRasterViewer(
      *
      * @param {Object} session Raster-owned retained interaction state.
      * @return {{key:string,label:string,state:string,scope:string,
-     * counts:number[]|null}} Histogram summary view model.
+     * counts:number[]|null,automatic:boolean,minimumLabel:string,
+     * maximumLabel:string,statistics:Object|null,style:Object,
+     * canRetry:boolean}} Histogram view model with cached counts, ready-only
+     * statistics, range labels, coloring, and retry availability.
      */
     function buildLayerHistogramSummary(session) {
         const presentation = getLayerHistogramPresentation(session);
@@ -754,13 +843,22 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Publish raster-owned summary state to the focused histogram view.
+     * Return up to two visible raster records in top-first map order.
      *
-     * @return {void}
+     * A sampled preview precedes retained WMS rasters because it is drawn on
+     * top. Hidden layers and non-raster adapters are excluded.
+     *
+     * @return {Object[]} Retained records or a preview record with entry,
+     * state, and adapter fields; an empty array when no raster is visible.
      */
     function visibleRasterRecords() {
-        const records = mapLayers.retainedRecords.filter(({ adapter, entry }) =>
-            adapter === rasterMapLayerAdapter && entry.visible
+        const records = mapLayers.retainedRecords.filter(
+            /**
+             * Exclude hidden layers and layers owned by another renderer.
+             * @param {{adapter:Object,entry:Object}} record Retained layer record.
+             * @return {boolean} Whether this is a visible WMS raster.
+             */
+            ({ adapter, entry }) => adapter === rasterMapLayerAdapter && entry.visible
         );
         // The explicit low-resolution preview is drawn above retained WMS
         // overlays and still owns its existing styling and analysis controls.
@@ -775,13 +873,24 @@ export function initializeRasterViewer(
     /**
      * Application policy: histograms follow visible map rasters. Catalog-only
      * analysis remains available to other callers of this reusable viewer.
+     * Activates the top raster, starts missing secondary statistics, and ends
+     * 2D mode if pair membership changes. Does nothing during clear().
      * Never call this to choose a style target.
+     *
+     * @return {void}
      */
     function syncVisibleLayers() {
         if (clearing) return;
         followsVisibleLayers = true;
         const records = visibleRasterRecords();
-        const signature = JSON.stringify(records.map(({ entry }) => entry.key));
+        const signature = JSON.stringify(records.map(
+            /**
+             * Extract identity while preserving top-first histogram order.
+             * @param {{entry:Object}} record Visible raster record.
+             * @return {string} Stable retained or sampled-preview key.
+             */
+            ({ entry }) => entry.key
+        ));
         const primaryKey = records[0]?.entry.key ?? null;
         const primaryIsRetained = mapLayers.getRecord(primaryKey) !== null;
         if (signature === visibleHistogramSignature && activeLayerKey === primaryKey &&
@@ -793,15 +902,30 @@ export function initializeRasterViewer(
         visibleHistogramSignature = signature;
         if (bivariateMode.active && (
             records.length !== 2 ||
-            records.some(({ entry }) => !bivariateMode.contains(entry.key))
+            records.some(
+                /**
+                 * Detect a visible raster outside the current 2D pair.
+                 * @param {{entry:Object}} record Visible raster record.
+                 * @return {boolean} Whether pair membership must be reset.
+                 */
+                ({ entry }) => !bivariateMode.contains(entry.key)
+            )
         )) leaveBivariateMode("Visible raster layers changed; 2D mode ended.", false);
-        bivariateCandidates = records.map(({ entry, state }) => ({
-            key: entry.key, item: entry.item, label: entry.label,
-            rasterStyle: { ...state.rasterStyle },
-            rasterRangeResolved: !hasDefaultRasterRange(
-                state.rasterStyle, state.rasterStyleWasEdited
-            ),
-        }));
+        bivariateCandidates = records.map(
+            /**
+             * Snapshot a visible raster's identity and ordinary range for 2D use.
+             * @param {{entry:Object,state:Object}} record Visible raster and state.
+             * @return {Object} Candidate with key, Item, label, copied style, and
+             * a rasterRangeResolved flag indicating a non-placeholder range.
+             */
+            ({ entry, state }) => ({
+                key: entry.key, item: entry.item, label: entry.label,
+                rasterStyle: { ...state.rasterStyle },
+                rasterRangeResolved: !hasDefaultRasterRange(
+                    state.rasterStyle, state.rasterStyleWasEdited
+                ),
+            })
+        );
         if (primaryKey !== activeLayerKey ||
             (primaryIsRetained && mapLayers.activeKey !== primaryKey)) {
             deactivateActiveLayer();
@@ -825,12 +949,37 @@ export function initializeRasterViewer(
         refreshStyle();
     }
 
+    /**
+     * Render histogram summaries for visible rasters in automatic mode, or
+     * all retained rasters otherwise, with the current analysis key marked.
+     *
+     * @return {void}
+     */
     function renderLayerHistogramSummaries() {
         const summaries = (followsVisibleLayers
             ? visibleRasterRecords() : mapLayers.retainedRecords)
-            .filter(({ adapter }) => adapter === rasterMapLayerAdapter)
-            .map(({ state }) => buildLayerHistogramSummary(state));
+            .filter(
+                /**
+                 * Keep only records owned by the raster analysis adapter.
+                 * @param {{adapter:Object}} record Candidate retained layer.
+                 * @return {boolean} Whether this viewer owns the record.
+                 */
+                ({ adapter }) => adapter === rasterMapLayerAdapter
+            )
+            .map(
+                /**
+                 * Convert retained interaction state to histogram presentation.
+                 * @param {{state:Object}} record Raster record with session state.
+                 * @return {Object} Histogram summary from buildLayerHistogramSummary.
+                 */
+                ({ state }) => buildLayerHistogramSummary(state)
+            );
         const activeRetainedKey = summaries.some(
+            /**
+             * Check whether active analysis appears among the displayed summaries.
+             * @param {{key:string}} summary Histogram view model.
+             * @return {boolean} Whether this summary owns active analysis.
+             */
             ({ key }) => key === activeLayerKey
         )
             ? activeLayerKey
@@ -934,6 +1083,13 @@ export function initializeRasterViewer(
     function requireLayerHistogramController(session) {
         session.layerHistogramController ??= new RasterStatisticsController(
             loadStatistics,
+            /**
+             * Mark this inactive session's requested scope busy and inapplicable.
+             *
+             * @param {Object} _ Requested Item; the captured session owns identity.
+             * @param {Object} samplingArea Normalized whole-raster, bounds, or AOI area.
+             * @return {void}
+             */
             (_, samplingArea) => {
                 if (samplingArea.kind === "wholeRaster") {
                     session.wholeRasterStatisticsState = "loading";
@@ -945,9 +1101,25 @@ export function initializeRasterViewer(
                 session.rasterStatisticsIsApplicable = false;
                 renderLayerStack();
             },
+            /**
+             * Store a current response in the captured inactive raster session.
+             *
+             * @param {Object} statistics Validated statistics response.
+             * @param {Object} _ Requested Item; the captured session owns identity.
+             * @param {Object} samplingArea Normalized area used for this response.
+             * @return {void}
+             */
             (statistics, _, samplingArea) => {
                 storeLayerHistogramResult(session, statistics, samplingArea);
             },
+            /**
+             * Store a current failure in the captured inactive raster session.
+             *
+             * @param {Error} error Non-abort statistics request failure.
+             * @param {Object} _ Requested Item; the captured session owns identity.
+             * @param {Object} samplingArea Normalized area of the failed request.
+             * @return {void}
+             */
             (error, _, samplingArea) => {
                 storeLayerHistogramError(session, error, samplingArea);
             }
@@ -956,10 +1128,11 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Refresh every inactive retained raster for one explicit histogram area.
+     * Refresh inactive retained rasters for one explicit histogram area.
      *
      * The active raster continues through the existing shared controller so
      * detailed status, retries, and percentile applicability remain unchanged.
+     * Hidden records are skipped when following visible-layer analysis.
      *
      * @param {Readonly<Object>} samplingArea Validated sampling-area union.
      * @return {void}
@@ -1113,9 +1286,19 @@ export function initializeRasterViewer(
     function getBivariatePairCandidates() {
         if (!bivariateMode.active) return null;
         const xCandidate = bivariateCandidates.find(
+            /**
+             * Locate the current X-axis candidate by stable identity.
+             * @param {Object} candidate Remembered paired-analysis candidate.
+             * @return {boolean} Whether its key owns the X axis.
+             */
             (candidate) => candidate.key === bivariateMode.xKey
         );
         const yCandidate = bivariateCandidates.find(
+            /**
+             * Locate the current Y-axis candidate by stable identity.
+             * @param {Object} candidate Remembered paired-analysis candidate.
+             * @return {boolean} Whether its key owns the Y axis.
+             */
             (candidate) => candidate.key === bivariateMode.yKey
         );
         return xCandidate === undefined || yCandidate === undefined
@@ -1129,6 +1312,7 @@ export function initializeRasterViewer(
      *
      * @return {Object} Current labels, catalog ranges, coordinated styles,
      * palette identity, and Catalog Items.
+     * @throws {Error} If either paired candidate is no longer available.
      */
     function getBivariatePresentation() {
         const candidates = getBivariatePairCandidates();
@@ -1216,6 +1400,11 @@ export function initializeRasterViewer(
         }
         const topRecord = renderedRecords.length === 2
             ? mapLayers.retainedRecords.find(
+                /**
+                 * Find the top attached pair renderer for additive blending.
+                 * @param {Object} record Retained record in top-first stack order.
+                 * @return {boolean} Whether the attached layer belongs to the pair.
+                 */
                 (record) => bivariateMode.contains(record.entry.key) &&
                     mapLayers.isAttached(record.entry.key)
             )
@@ -1304,7 +1493,14 @@ export function initializeRasterViewer(
         bivariateSelectedWindowSizeKm = selectedRasterWindowSizeKm;
         rasterStatisticsController.clear();
         pixelProbeController.clear();
-        bivariateMode.enter(eligible.map((candidate) => candidate.key));
+        bivariateMode.enter(eligible.map(
+            /**
+             * Preserve candidate order as the initial X/Y axis assignment.
+             * @param {Object} candidate Eligible paired-analysis candidate.
+             * @return {string} Stable candidate key.
+             */
+            (candidate) => candidate.key
+        ));
         controlsView.setAppearanceEnabled?.(false);
         controlsView.setUnivariateHistogramVisible?.(false);
         renderRasterSamplingAreaControls();
@@ -1368,6 +1564,15 @@ export function initializeRasterViewer(
         tileErrorMessage: "Map tiles could not be rendered.",
         label: getCatalogRasterBasename,
         publish: publishRaster,
+        /**
+         * Create a published layer's state, preserving matching analysis data.
+         *
+         * @param {Object} context Neutral controller's publication context.
+         * @param {Object} context.entry Stable stack entry and display label.
+         * @param {Object} context.publication GeoServer publication response.
+         * @param {Object} context.item Catalog raster Item being retained.
+         * @return {Object} New raster session with any prior interaction state.
+         */
         createState({ entry, publication, item }) {
             const analysisSession = matchingAnalysisSession(item);
             if (analysisSession !== null) {
@@ -1379,6 +1584,13 @@ export function initializeRasterViewer(
             }
             return session;
         },
+        /**
+         * Construct the retained raster's WMS layer with its current style.
+         *
+         * @param {Object} record Record containing publication and raster state.
+         * @param {() => void} reportTileError Controller-owned failure callback.
+         * @return {Object} Leaflet-compatible WMS layer, not yet attached.
+         */
         createLayer(record, reportTileError) {
             return createRasterLayer(
                 record.publication,
@@ -1386,6 +1598,15 @@ export function initializeRasterViewer(
                 reportTileError
             );
         },
+        /**
+         * Describe effective opacity and legend, including paired-mode styling.
+         * Saves shared analysis state first when this record is active.
+         *
+         * @param {Object} record Retained raster entry and interaction state.
+         * @return {{opacityLocked:boolean,effectiveOpacity:number,
+         * legend:Object}} Opacity in [0, 1] and a gradient legend containing
+         * its kind, CSS gradient, description, and three numeric labels.
+         */
         snapshot(record) {
             if (activeLayerKey === record.entry.key) {
                 saveActiveLayerSession();
@@ -1414,6 +1635,12 @@ export function initializeRasterViewer(
                 },
             };
         },
+        /**
+         * Copy matching detached analysis state before activating a renderer.
+         *
+         * @param {Object} record Retained raster record to prepare in place.
+         * @return {void}
+         */
         prepare(record) {
             const analysisSession = matchingAnalysisSession(record.entry.item);
             if (analysisSession !== null) {
@@ -1421,12 +1648,25 @@ export function initializeRasterViewer(
                 copyRasterInteractionState(record.state, analysisSession);
             }
         },
+        /**
+         * Release shared controls only if this record owns active analysis.
+         *
+         * @param {Object} record Retained raster being deactivated.
+         * @return {void}
+         */
         deactivate(record) {
             if (activeLayerKey === record.entry.key) {
                 deactivateActiveLayer();
                 analysisRasterSession = null;
             }
         },
+        /**
+         * Transfer a retained raster from background to shared analysis.
+         * In automatic mode, only the top visible raster may take ownership.
+         *
+         * @param {Object} record Retained raster entry and interaction state.
+         * @return {void}
+         */
         activate(record) {
             if (followsVisibleLayers && visibleRasterRecords()[0]?.entry.key !== record.entry.key) return;
             record.state.layerHistogramController?.clear();
@@ -1439,6 +1679,15 @@ export function initializeRasterViewer(
             activateRasterSession(record.entry, record.state);
             renderBivariateAvailability();
         },
+        /**
+         * Release this style target and preserve active analysis before removal.
+         *
+         * @param {Object} record Raster record about to leave the stack.
+         * @param {Object} context Neutral controller's removal context.
+         * @param {boolean} context.wasActive Whether the record owned analysis.
+         * @return {{activateFallback:boolean}|undefined} A false fallback flag
+         * preserves detached analysis; undefined keeps normal inactive removal.
+         */
         beforeRemove(record, { wasActive }) {
             if (editingLayerKey === record.entry.key) closeStyle();
             if (!wasActive) {
@@ -1448,6 +1697,14 @@ export function initializeRasterViewer(
             analysisRasterSession = detachAnalysisSession(record.state);
             return { activateFallback: false };
         },
+        /**
+         * Cancel removed-layer requests and restore detached or paired analysis.
+         *
+         * @param {Object} record Removed raster record and retained state.
+         * @param {Object} context Neutral controller's removal context.
+         * @param {boolean} context.wasActive Whether the removed record was active.
+         * @return {void}
+         */
         removed(record, { wasActive }) {
             record.state.layerHistogramController?.clear();
             if (wasActive && analysisRasterSession !== null) {
@@ -1457,6 +1714,14 @@ export function initializeRasterViewer(
             }
             renderBivariateAvailability();
         },
+        /**
+         * Refresh paired rendering and active-raster guidance after a toggle.
+         * Analysis ownership is synchronized separately by syncVisibleLayers.
+         *
+         * @param {Object} record Raster record whose visibility changed.
+         * @param {boolean} visible Whether the map layer is now visible.
+         * @return {void}
+         */
         visibilityChanged(record, visible) {
             if (bivariateMode.contains(record.entry.key)) {
                 applyBivariatePresentation();
@@ -1471,6 +1736,12 @@ export function initializeRasterViewer(
             saveActiveLayerSession();
             renderBivariateAvailability();
         },
+        /**
+         * Report one raster's tile failure through the application callback.
+         *
+         * @param {Object} record Failed record containing error text and its Item.
+         * @return {void}
+         */
         tileError(record) {
             onTileError(record.error, record.entry.item);
         },
@@ -1498,7 +1769,11 @@ export function initializeRasterViewer(
                 applyBivariatePresentation();
             }
         },
-        /** Reapply blending after stack reordering. @return {void} */
+        /**
+         * Reapply coordinated blending after stack reordering in 2D mode.
+         *
+         * @return {void}
+         */
         orderChanged() {
             if (bivariateMode.active) {
                 applyBivariatePresentation();
@@ -1745,6 +2020,8 @@ export function initializeRasterViewer(
      * session when one exists. Otherwise this method presents the same pixel,
      * area-selection, histogram, percentile, and color controls without
      * publishing or constructing a map raster layer.
+     * In visible-layer mode, ignores the catalog selection and synchronizes
+     * analysis from the map stack instead.
      *
      * @param {Object} item Selected Catalog raster Item.
      * @return {void}
@@ -1975,10 +2252,13 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Validate a candidate style and build its GeoServer environment.
+     * Find the session that owns style edits, independently of analysis.
      *
-     * @return {{style: Object, environment: string}|null} Valid candidate or
-     * null after presenting its contract error.
+     * An explicit editing key takes precedence. Without one, legacy callers
+     * use the active detached or retained analysis session.
+     *
+     * @return {Object|null} Mutable raster session, or null when the target
+     * is absent; does not fall back from a missing explicit editing key.
      */
     function editingSession() {
         return editingLayerKey === null
@@ -1988,19 +2268,39 @@ export function initializeRasterViewer(
                 (sampledRasterSession?.key === editingLayerKey ? sampledRasterSession : null);
     }
 
+    /**
+     * Update rendering availability without overwriting another style target.
+     *
+     * @param {boolean} available Whether the active analysis raster has a renderer.
+     * @return {void}
+     */
     function presentActiveRenderingAvailability(available) {
         if (editingLayerKey === null || editingLayerKey === activeLayerKey) {
             controlsView.setRenderingControlsAvailable(available);
         }
     }
 
+    /**
+     * Show the active analysis style only when another raster is not being edited.
+     *
+     * @param {Object} style Active raster's numeric range and color stops.
+     * @param {string} paletteName Registered palette identity or "custom".
+     * @return {void}
+     */
     function presentActiveStyle(style, paletteName) {
         if (editingLayerKey === null || editingLayerKey === activeLayerKey) {
             controlsView.setStyle(style, paletteName);
         }
     }
 
-    /** Open styling without transferring histogram or pixel-probe ownership. */
+    /**
+     * Select a style target without transferring histogram or probe ownership.
+     * Flushes any pending edit on the previous target before looking up the key.
+     *
+     * @param {string} key Retained raster key or sampled-preview session key.
+     * @return {boolean} True after initializing the target's style controls;
+     * false for missing or non-raster targets, leaving no explicit style target.
+     */
     function openStyle(key) {
         closeStyle();
         const record = mapLayers.getRecord(key);
@@ -2015,12 +2315,24 @@ export function initializeRasterViewer(
         return true;
     }
 
-    /** Flush a pending valid edit before closing or changing target. */
+    /**
+     * Flush any pending valid edit and release the explicit editing target.
+     * The floating editor's DOM lifecycle is owned by MapLayerStyleEditor.
+     *
+     * @return {void}
+     */
     function closeStyle() {
         if (rasterStyleCommitTimeout !== null) commitRasterStyle();
         editingLayerKey = null;
     }
 
+    /**
+     * Refresh style availability and percentile feedback for the editing target.
+     * Cancels pending edits and clears the target if its session was removed;
+     * otherwise preserves input values while applying current 2D restrictions.
+     *
+     * @return {void}
+     */
     function refreshStyle() {
         if (editingLayerKey === null) return;
         const session = editingSession();
@@ -2040,7 +2352,17 @@ export function initializeRasterViewer(
         updateRasterPercentileValues();
     }
 
-    /** Commit to the target's renderer and retained state, not its list position. */
+    /**
+     * Apply a style to the target's renderer and session, not its list position.
+     * Also synchronizes shared state if this target owns active analysis.
+     *
+     * @param {Object} session Retained WMS or sampled-preview raster session.
+     * @param {Object} style Numeric range and color stops to validate and apply.
+     * @param {string} paletteName Registered palette identity or "custom".
+     * @param {boolean} wasEdited Whether a user edit should block automatic ranges.
+     * @return {void}
+     * @throws {Error} If style validation or the renderer update fails.
+     */
     function applySessionStyle(session, style, paletteName, wasEdited) {
         const environment = buildRasterStyleEnvironment(style);
         if (session.onStyleChange) session.onStyleChange(style);
@@ -2062,6 +2384,12 @@ export function initializeRasterViewer(
         syncBivariateCandidate(session);
     }
 
+    /**
+     * Validate current style inputs and build their GeoServer environment.
+     *
+     * @return {{style:Object,environment:string}|null} Valid candidate and WMS
+     * environment, or null after displaying the validation error.
+     */
     function validateRasterStyleControls() {
         const candidateStyle = controlsView.readStyle();
         try {
@@ -2075,7 +2403,9 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Commit one valid control state to the current WMS or sampled layer.
+     * Commit valid inputs to the editing session's WMS or sampled renderer.
+     * Cancels the debounce timer; missing targets, paired-mode targets, and
+     * invalid input produce no style update. Failures are shown in the controls.
      *
      * @return {void}
      */
@@ -2128,7 +2458,9 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Restore the initial appearance for the active Item.
+     * Populate controls with the editing target's initial colors and range.
+     * Uses a sampled initial style, whole-raster percentiles, or defaults, in
+     * that order. Does not commit the style to its renderer.
      *
      * @return {void}
      */
@@ -2144,7 +2476,7 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Restore histogram percentile selectors to application defaults.
+     * Restore percentile selectors to defaults unless another layer is being edited.
      *
      * @return {void}
      */
@@ -2155,7 +2487,8 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Update approximate values and ordered-input feedback for percentiles.
+     * Update percentile values and applicability for the editing session, or
+     * the active analysis session when no explicit style target is set.
      *
      * @return {{lower: number, middle: number, upper: number}|null} Ordered
      * percentiles, null for invalid ordering or absent statistics.
@@ -2874,7 +3207,8 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Mark a manual style input and schedule its WMS commit.
+     * Mark the editing session's manual change and schedule its renderer update.
+     * Missing sessions and paired-mode targets are ignored.
      *
      * @param {boolean} isColor Whether a color input changed.
      * @return {void}
@@ -2891,7 +3225,7 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Apply one selected predefined palette to the current style.
+     * Apply the palette selected in the controls to the editing session's style.
      *
      * @return {void}
      */
@@ -2920,7 +3254,8 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Reset the active style to its bounded whole-raster reference range.
+     * Reset and commit the editing session's initial colors and reference range.
+     * Missing sessions and paired-mode targets are ignored.
      *
      * @return {void}
      */
@@ -2987,14 +3322,19 @@ export function initializeRasterViewer(
         requestBivariateStatistics();
     }
 
-    /** Retry the exact current ordered pair and bounded area. @return {void} */
+    /**
+     * Retry the current ordered pair and bounded area while 2D mode is active.
+     *
+     * @return {void}
+     */
     function handleRetryPairedStatistics() {
         if (!bivariateMode.active) return;
         void pairedStatisticsController.retry();
     }
 
     /**
-     * Apply the current ordered histogram-estimated percentile range.
+     * Apply the editing session's ordered histogram-estimated percentile range.
+     * Requires applicable statistics and an ordinary, non-paired style target.
      *
      * @return {void}
      */
@@ -3205,7 +3545,7 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Remove the active raster and restore its default appearance.
+     * Clear all retained raster interactions and restore default style inputs.
      *
      * @return {void}
      */
@@ -3300,6 +3640,11 @@ export function initializeRasterViewer(
         saveActiveLayerSession();
         availableTemporaryAoi = validatedAoi;
         const sessions = mapLayers.retainedRecords.map(
+            /**
+             * Retrieve session state for AOI lifecycle invalidation.
+             * @param {Object} record Retained map-layer record.
+             * @return {Object} Mutable interaction state from the record.
+             */
             (record) => record.state
         );
         if (sampledRasterSession !== null) {
@@ -3378,10 +3723,24 @@ export function initializeRasterViewer(
         onPercentileInput: updateRasterPercentileValues,
         onApplyPercentiles: handleApplyPercentiles,
         onRetryStatistics: handleRetryStatistics,
+        /**
+         * Retry the active histogram or a visible secondary raster's request.
+         * Missing or hidden secondary targets are ignored.
+         *
+         * @param {string} key Stable raster key supplied by the histogram view.
+         * @return {void}
+         */
         onRetryHistogram: (key) => {
             if (key === activeLayerKey) handleRetryStatistics();
             else {
-                const record = visibleRasterRecords().find(({ entry }) => entry.key === key);
+                const record = visibleRasterRecords().find(
+                    /**
+                     * Match the requested histogram to a visible raster.
+                     * @param {{entry:Object}} record Visible raster record.
+                     * @return {boolean} Whether this record owns the retry action.
+                     */
+                    ({ entry }) => entry.key === key
+                );
                 if (record) void requireLayerHistogramController(record.state).retry();
             }
         },
@@ -3389,6 +3748,12 @@ export function initializeRasterViewer(
         onSampleWindowRangeInput: setRasterSampleWindowSize,
         onSampleWindowNumberInput: setRasterSampleWindowSize,
         onSampleWindowNumberChange: handleSampleWindowNumberChange,
+        /**
+         * Sample a window at the map center when an analysis target is available.
+         * Leaves temporary-AOI sampling before committing the map window.
+         *
+         * @return {void}
+         */
         onSampleMapCenter: () => {
             if (canUseRasterMapInteractions()) {
                 if (selectedTemporaryAoi !== null) {
@@ -3422,6 +3787,14 @@ export function initializeRasterViewer(
         openStyle,
         closeStyle,
         refreshStyle,
+        /**
+         * Describe a matching sampled preview for the floating style editor.
+         *
+         * @param {string} key Candidate sampled-preview session key.
+         * @return {{key:string,label:string,visible:boolean,sampled:boolean}|null}
+         * Matching preview identity with visible and sampled set to true, or
+         * null when no preview owns the key. Does not change the editing target.
+         */
         getSampledStyleTarget: (key) => sampledRasterSession?.key === key ? {
             key, label: sampledRasterSession.label, visible: true, sampled: true,
         } : null,
