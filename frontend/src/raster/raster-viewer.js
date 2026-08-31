@@ -2502,7 +2502,9 @@ export function initializeRasterViewer(
                 : deriveRasterStyleFromStatistics(
                     DEFAULT_RASTER_STYLE, session.wholeRasterStatistics
                 ));
-        controlsView.setStyle(style, "blue-yellow-red");
+        controlsView.setStyle({
+            ...style, minimumOpacity: 1, midpointOpacity: 1, maximumOpacity: 1
+        }, "blue-yellow-red");
     }
 
     /**

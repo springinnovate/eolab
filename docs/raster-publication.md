@@ -71,3 +71,28 @@ The rendering API exposes a concise message and one stable category:
 The browser preserves the category on its rendering error and displays the
 server-provided actionable message beside **View on map**. GeoServer remains
 private, and WMS requests continue to accept exactly one app-authorized layer.
+
+## Value-dependent color opacity
+
+The style editor exposes 0–100% opacity beside each minimum, midpoint, and
+maximum color. These values are independent of the browser-side **Layer
+opacity** slider. The raster-owned WMS environment sends `amin`, `amed`, and
+`amax` as finite numbers from zero through one, alongside the existing `min`,
+`med`, `max`, `cmin`, `cmed`, and `cmax` fields. Authorization accepts exactly
+the six legacy fields (fully opaque) or all nine fields, never a partial alpha
+set or arbitrary substitutions, with a 384-character bound.
+
+GeoServer's native `ColorMapEntry` opacity interpolates across the numeric
+stops and clamps beyond the endpoints. The shared SLD defaults each opacity
+to one for legacy requests; initialization updates this style during deploy.
+No new GeoServer extension, REST endpoint, or source-raster processing is
+involved. A transparent valid pixel remains data, not nodata: statistics and
+histograms still include it, and histogram bars retain visible RGB colors.
+
+Sampled map previews interpolate alpha using the same stop values and keep
+nodata fully transparent. The style legend shows a checkerboard underneath
+transparency; its gradient samples RGB and alpha independently to approximate
+GeoServer's ramp without CSS premultiplied-color distortion. Palette and
+histogram-range changes retain color opacities; resetting the style restores
+100%. Coordinated 2D styles temporarily override all three stop opacities to
+100%, as well as layer opacity, and restore the ordinary styles on exit.

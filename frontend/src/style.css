@@ -1218,10 +1218,13 @@ h5 {
 
 .raster-style-stops {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 42px;
+  grid-template-columns: minmax(0, 1fr) 42px 78px;
   gap: 8px;
   align-items: end;
 }
+
+.raster-style-stops label { min-width: 0; }
+.raster-style-stops input[type="number"] { width: 100%; }
 
 .raster-style-stops input[type="color"] {
   width: 42px;

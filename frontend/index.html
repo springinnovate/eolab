@@ -841,7 +841,7 @@
       <p id="layer-style-title"></p>
       <div class="layer-style-body">
         <label class="layer-style-opacity" for="layer-style-opacity">
-          <span>Opacity</span>
+          <span>Layer opacity</span>
           <input id="layer-style-opacity" type="range" min="0" max="100" step="1" aria-describedby="layer-style-note" />
           <output id="layer-style-opacity-value" for="layer-style-opacity"></output>
         </label>
@@ -871,16 +871,28 @@
                               <input id="raster-minimum" type="number" step="any" aria-describedby="raster-style-error" />
                             </label>
                             <input id="raster-minimum-color" type="color" aria-label="Minimum color" aria-describedby="raster-style-error" />
+                            <label for="raster-minimum-opacity">
+                              <span>Opacity %</span>
+                              <input id="raster-minimum-opacity" type="number" min="0" max="100" step="1" value="100" aria-label="Minimum color opacity (%)" aria-describedby="raster-style-error" />
+                            </label>
                             <label for="raster-midpoint">
                               <span>Display midpoint</span>
                               <input id="raster-midpoint" type="number" step="any" aria-describedby="raster-style-error" />
                             </label>
                             <input id="raster-midpoint-color" type="color" aria-label="Midpoint color" aria-describedby="raster-style-error" />
+                            <label for="raster-midpoint-opacity">
+                              <span>Opacity %</span>
+                              <input id="raster-midpoint-opacity" type="number" min="0" max="100" step="1" value="100" aria-label="Midpoint color opacity (%)" aria-describedby="raster-style-error" />
+                            </label>
                             <label for="raster-maximum">
                               <span>Display maximum</span>
                               <input id="raster-maximum" type="number" step="any" aria-describedby="raster-style-error" />
                             </label>
                             <input id="raster-maximum-color" type="color" aria-label="Maximum color" aria-describedby="raster-style-error" />
+                            <label for="raster-maximum-opacity">
+                              <span>Opacity %</span>
+                              <input id="raster-maximum-opacity" type="number" min="0" max="100" step="1" value="100" aria-label="Maximum color opacity (%)" aria-describedby="raster-style-error" />
+                            </label>
                           </div>
                           <div class="raster-legend" id="raster-legend" role="img"></div>
                           <div class="raster-legend-labels" aria-hidden="true">
@@ -897,7 +909,7 @@
                             aria-atomic="true"
                           ></p>
                           <button class="secondary-button" id="reset-raster-style" type="button">
-                            Reset colors and range
+                            Reset colors, opacity and range
                           </button>
                           <details class="style-percentiles"><summary>Use histogram range</summary><div
                             class="raster-percentile-controls"

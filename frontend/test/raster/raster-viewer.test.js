@@ -719,6 +719,37 @@ test('visible policy keeps 2D explicit and restores ordinary opacity when a pair
     h.destroy();
 });
 
+test('color opacity stays per-layer, survives 2D, and resets with the style', async () => {
+    const h = visibleLayerFixture();
+    await h.viewer.show(createRasterItem('bottom'));
+    await h.viewer.show(createRasterItem('top'));
+    await flushPromises();
+    const [top, bottom] = h.mapLayers.snapshots();
+    h.viewer.openStyle(bottom.key);
+    h.controlsView.style = { ...h.controlsView.style,
+        minimumOpacity: 0, midpointOpacity: 0.25, maximumOpacity: 0.8 };
+    h.controlsView.handlers.onStyleInput(false);
+    h.viewer.closeStyle(); // A pending opacity edit must be committed on close.
+    const ordinary = { ...h.mapLayers.getRecord(bottom.key).state.rasterStyle };
+    assert.equal(ordinary.midpointOpacity, 0.25);
+    assert.equal(h.mapLayers.getRecord(top.key).state.rasterStyle.midpointOpacity, 1);
+    h.viewer.openStyle(top.key);
+    assert.equal(h.controlsView.style.minimumOpacity, 1);
+    h.viewer.openStyle(bottom.key);
+    assert.equal(h.controlsView.style.minimumOpacity, 0);
+    h.controlsView.handlers.onBivariateModeChange('bivariate');
+    await flushPromises();
+    assert.match(h.mapLayers.getLeafletLayer(bottom.key).parameters.env, /;amin:1;amed:1;amax:1$/);
+    h.controlsView.handlers.onBivariateModeChange('overlay');
+    assert.deepEqual(h.mapLayers.getRecord(bottom.key).state.rasterStyle, ordinary);
+    assert.match(h.mapLayers.getLeafletLayer(bottom.key).parameters.env, /;amin:0;amed:0.25;amax:0.8$/);
+    h.controlsView.handlers.onResetStyle();
+    assert.equal(h.mapLayers.getRecord(bottom.key).state.rasterStyle.minimumOpacity, 1);
+    assert.equal(h.mapLayers.getRecord(bottom.key).state.rasterStyle.midpointOpacity, 1);
+    assert.equal(h.mapLayers.getRecord(bottom.key).state.rasterStyle.maximumOpacity, 1);
+    h.destroy();
+});
+
 test('a late histogram cannot overwrite another layer editor or an edited range', async () => {
     const pending = createDeferred();
     const h = visibleLayerFixture(item => item.id.endsWith('later')
@@ -1712,11 +1743,13 @@ test("sampled rasters reuse color controls and bounded click histograms", async 
 
     controlsView.handlers.onResetStyle();
     assert.equal(styleChanges.length, 3);
-    assert.deepEqual(styleChanges[2], firstFiniteStyle);
+    assert.deepEqual(styleChanges[2], { ...firstFiniteStyle,
+        minimumOpacity: 1, midpointOpacity: 1, maximumOpacity: 1 });
     assert.match(controlsView.appearanceStatus, /initial colors and range/);
 
     viewer.updateSampledInitialStyle(MOUNTED_GEOTIFF_ITEM, initialStyle);
-    assert.deepEqual(controlsView.style, firstFiniteStyle);
+    assert.deepEqual(controlsView.style, { ...firstFiniteStyle,
+        minimumOpacity: 1, midpointOpacity: 1, maximumOpacity: 1 });
 
     controlsView.handlers.onClearSampleWindow();
     assert.equal(controlsView.samplingAreaMode, "wholeRaster");

@@ -195,11 +195,13 @@ def test_wms_proxy_forwards_supported_read_operation(
     assert response.content == b'<WMS_Capabilities version="1.3.0"/>'
 
 
+@pytest.mark.parametrize("opacity_environment", ["", ";amin:0;amed:0.25;amax:1"])
 def test_wms_proxy_allows_bounded_png_rendering(
     configured_environment: None,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     version_file_path: Path,
+    opacity_environment: str,
 ) -> None:
     """Allow tiles only after this app process approves the current source.
 
@@ -208,6 +210,7 @@ def test_wms_proxy_allows_bounded_png_rendering(
         monkeypatch: Environment mutation fixture for the scan mount.
         tmp_path: Temporary directory containing the controlled raster.
         version_file_path: Baked application-version fixture path.
+        opacity_environment: Legacy or per-color-opacity WMS substitutions.
 
     Returns:
         None.
@@ -244,7 +247,7 @@ def test_wms_proxy_allows_bounded_png_rendering(
         assert request.url.params["height"] == "256"
         assert request.url.params["env"] == (
             "min:0;med:50;max:100;cmin:#2b83ba;"
-            "cmed:#ffffbf;cmax:#d7191c"
+            "cmed:#ffffbf;cmax:#d7191c" + opacity_environment
         )
         if len(wms_requests) == 2:
             return httpx2.Response(
@@ -298,6 +301,7 @@ def test_wms_proxy_allows_bounded_png_rendering(
             "&env=min%3A0%3Bmed%3A50%3Bmax%3A100%3B"
             "cmin%3A%232b83ba%3Bcmed%3A%23ffffbf%3Bcmax%3A%23d7191c"
         )
+        tile_url += opacity_environment.replace(":", "%3A").replace(";", "%3B")
         response = client.get(tile_url)
         diagnostics = client.get("/api/rendering/diagnostics")
         exception_response = client.get(tile_url)

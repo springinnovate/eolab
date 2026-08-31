@@ -3,6 +3,7 @@
 import {
     DEFAULT_RASTER_STYLE,
     getRasterStyleColor,
+    getRasterStyleOpacity,
     validateRasterStyle
 } from "./style.js";
 
@@ -53,7 +54,7 @@ export function buildRasterDetailPreviewRgba(preview, style) {
         rgba[offset] = channels[0];
         rgba[offset + 1] = channels[1];
         rgba[offset + 2] = channels[2];
-        rgba[offset + 3] = 255;
+        rgba[offset + 3] = Math.round(getRasterStyleOpacity(style, value) * 255);
     }
     return rgba;
 }

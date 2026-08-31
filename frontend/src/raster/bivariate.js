@@ -346,12 +346,18 @@ export function getBivariateAxisStyles(paletteName, xStyle, yStyle) {
             minimumColor: color(0, 0),
             midpointColor: color(0.5, 0),
             maximumColor: color(1, 0),
+            minimumOpacity: 1,
+            midpointOpacity: 1,
+            maximumOpacity: 1,
         },
         yStyle: {
             ...yStyle,
             minimumColor: color(0, 0),
             midpointColor: color(0, 0.5),
             maximumColor: color(0, 1),
+            minimumOpacity: 1,
+            midpointOpacity: 1,
+            maximumOpacity: 1,
         },
     };
 }

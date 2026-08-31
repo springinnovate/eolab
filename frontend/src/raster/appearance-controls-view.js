@@ -56,6 +56,9 @@ export class RasterAppearanceControlsView {
                 documentContext,
                 "#raster-maximum-color"
             ),
+            minimumOpacity: requireRasterControl(documentContext, "#raster-minimum-opacity"),
+            midpointOpacity: requireRasterControl(documentContext, "#raster-midpoint-opacity"),
+            maximumOpacity: requireRasterControl(documentContext, "#raster-maximum-opacity"),
         };
         this.legend = requireRasterControl(documentContext, "#raster-legend");
         this.legendLabels = {
@@ -215,6 +218,11 @@ export class RasterAppearanceControlsView {
             minimumColor: this.styleInputs.minimumColor.value,
             midpointColor: this.styleInputs.midpointColor.value,
             maximumColor: this.styleInputs.maximumColor.value,
+            ...Object.fromEntries(["minimum", "midpoint", "maximum"].map((stop) => {
+                const field = `${stop}Opacity`;
+                const value = this.styleInputs[field].value;
+                return [field, value === "" ? Number.NaN : Number(value) / 100];
+            })),
         };
     }
 
@@ -227,7 +235,9 @@ export class RasterAppearanceControlsView {
      */
     setStyle(style, paletteName) {
         for (const fieldName of Object.keys(this.styleInputs)) {
-            this.styleInputs[fieldName].value = style[fieldName];
+            this.styleInputs[fieldName].value = fieldName.endsWith("Opacity")
+                ? Math.round((style[fieldName] ?? 1) * 10000) / 100
+                : style[fieldName];
         }
         this.palette.value = paletteName;
         this.renderLegend(style);
@@ -270,7 +280,9 @@ export class RasterAppearanceControlsView {
         }
         const invalidFields = styleError.fieldGroup === "colors"
             ? ["minimumColor", "midpointColor", "maximumColor"]
-            : ["minimum", "midpoint", "maximum"];
+            : styleError.fieldGroup === "opacities"
+                ? ["minimumOpacity", "midpointOpacity", "maximumOpacity"]
+                : ["minimum", "midpoint", "maximum"];
         for (const fieldName of invalidFields) {
             this.styleInputs[fieldName].setAttribute("aria-invalid", "true");
         }
@@ -284,7 +296,9 @@ export class RasterAppearanceControlsView {
      */
     renderLegend(style) {
         const legend = buildRasterLegend(style);
-        this.legend.style.background = legend.gradient;
+        this.legend.style.backgroundImage = legend.gradient +
+            ", repeating-conic-gradient(#ddd 0% 25%, #fff 0% 50%)";
+        this.legend.style.backgroundSize = "100% 100%, 10px 10px";
         this.legend.setAttribute("aria-label", legend.description);
         for (const thresholdName of ["minimum", "midpoint", "maximum"]) {
             this.legendLabels[thresholdName].textContent = style[thresholdName];

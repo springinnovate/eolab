@@ -15,9 +15,11 @@ _STYLE_ENVIRONMENT_KEYS = frozenset(
     {"min", "med", "max", "cmin", "cmed", "cmax"}
 )
 _STYLE_COLOR_PATTERN = re.compile(r"#[0-9a-fA-F]{6}")
+_STYLE_OPACITY_KEYS = frozenset({"amin", "amed", "amax"})
 _STYLE_ENVIRONMENT_ERROR = (
     "env must define ordered finite min, med, and max values plus cmin, "
-    "cmed, and cmax six-digit hex colors"
+    "cmed, and cmax six-digit hex colors, optionally followed by amin, "
+    "amed, and amax finite opacities from 0 through 1"
 )
 
 
@@ -28,12 +30,12 @@ def validate_raster_style_environment(environment: str) -> None:
         environment: Untrusted WMS ``env`` query value.
 
     Raises:
-        PublishedLayerRequestError: If the value is not exactly the six
-            finite, ordered threshold and color assignments owned by raster
-            rendering.
+        PublishedLayerRequestError: If the value does not contain exactly the
+            six threshold/color assignments, with either all three bounded
+            opacity assignments or none (legacy fully opaque rendering).
     """
     fields = environment.split(";")
-    if len(environment) > 256 or len(fields) != 6:
+    if len(environment) > 384 or len(fields) not in (6, 9):
         raise PublishedLayerRequestError(_STYLE_ENVIRONMENT_ERROR)
     assignments = {}
     for field in fields:
@@ -41,16 +43,23 @@ def validate_raster_style_environment(environment: str) -> None:
         if separator == "" or name in assignments:
             raise PublishedLayerRequestError(_STYLE_ENVIRONMENT_ERROR)
         assignments[name] = value
-    if assignments.keys() != _STYLE_ENVIRONMENT_KEYS:
+    if assignments.keys() not in (
+        _STYLE_ENVIRONMENT_KEYS,
+        _STYLE_ENVIRONMENT_KEYS | _STYLE_OPACITY_KEYS,
+    ):
         raise PublishedLayerRequestError(_STYLE_ENVIRONMENT_ERROR)
     try:
         thresholds = tuple(
             float(assignments[name]) for name in ("min", "med", "max")
         )
+        opacities = tuple(
+            float(assignments.get(name, "1")) for name in _STYLE_OPACITY_KEYS
+        )
     except ValueError as error:
         raise PublishedLayerRequestError(_STYLE_ENVIRONMENT_ERROR) from error
     if not (
         all(math.isfinite(value) for value in thresholds)
+        and all(math.isfinite(value) and 0 <= value <= 1 for value in opacities)
         and thresholds[0] < thresholds[1] < thresholds[2]
         and all(
             _STYLE_COLOR_PATTERN.fullmatch(assignments[name])
