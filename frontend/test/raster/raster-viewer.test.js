@@ -506,9 +506,52 @@ function visibleLayerFixture(loadStatistics = async (item) => createLayerStatist
         viewport: { innerWidth: 1280, innerHeight: 720 },
     });
     viewer.syncVisibleLayers();
-    return { viewer, controlsView, mapLayers, layerStackView, wmsLayers, leaflet,
+    return { viewer, controlsView, mapLayers, layerStackView, wmsLayers, leaflet, leafletMap,
         destroy() { viewer.destroy(); mapLayers.destroy(); } };
 }
+
+test('closing histogram sampling preserves its footprint and results across map and layer changes', async () => {
+    const requests = [];
+    const h = visibleLayerFixture(async (item, area) => {
+        requests.push({ item, area });
+        return createLayerStatistics(item, selectedBoundsFromArea(area));
+    });
+    await h.viewer.show(createRasterItem('first'));
+    await h.viewer.show(createRasterItem('second'));
+    await flushPromises();
+    h.leafletMap.emit('click', { latlng: { lng: 0, lat: 0 } });
+    await flushPromises();
+    const statistics = h.controlsView.displayedStatistics;
+    const footprint = [...h.leafletMap.layers].find(layer => layer.kind === 'selection');
+    assert.ok(footprint);
+    assert.equal(statistics.scope, 'selectedArea');
+    const bounds = [...footprint.boundsHistory];
+    h.viewer.stopSampleWindowSelection();
+    assert.match(h.controlsView.sampleWindowStatus, /Selection paused/);
+    assert.equal(h.controlsView.displayedStatistics, statistics);
+    assert.equal(h.leafletMap.layers.has(footprint), true);
+    assert.equal([...h.leafletMap.layers].some(layer => layer.kind === 'preview'), false);
+    const count = requests.length;
+    h.leafletMap.emit('moveend', {});
+    h.leafletMap.emit('zoomend', {});
+    h.leafletMap.emit('click', { latlng: { lng: 4, lat: 4 } });
+    await flushPromises();
+    assert.equal(requests.length, count);
+    assert.deepEqual(footprint.boundsHistory, bounds);
+    h.mapLayers.setVisible(h.mapLayers.snapshots()[0].key, false);
+    await flushPromises();
+    const afterVisibility = requests.length;
+    h.leafletMap.emit('click', { latlng: { lng: 8, lat: 8 } });
+    await flushPromises();
+    assert.equal(requests.length, afterVisibility, 'layer changes must not re-arm sampling');
+    assert.equal(h.controlsView.displayedStatistics.scope, 'selectedArea');
+    h.controlsView.handlers.onSelectSampleWindow();
+    h.leafletMap.emit('click', { latlng: { lng: 4, lat: 4 } });
+    await flushPromises();
+    assert.ok(requests.length > afterVisibility);
+    assert.notDeepEqual(h.controlsView.displayedStatistics.selectedBounds, statistics.selectedBounds);
+    h.destroy();
+});
 
 test('visible raster histograms follow order, skip vectors and never follow the style editor', async () => {
     const h = visibleLayerFixture();
@@ -716,7 +759,7 @@ test("selecting 2D opens paired analysis without a map interaction", async () =>
     assert.equal(pairedPixelRequests.length, 0);
     assert.match(
         controlsView.bivariateAvailability.guidance,
-        /2D histogram mode is active/
+        /2D comparison styles both rasters.*blending at 100% opacity/
     );
     assert.equal(controlsView.appearanceEnabled, false);
     assert.equal(controlsView.univariateHistogramVisible, false);

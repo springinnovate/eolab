@@ -36,6 +36,7 @@ import {
 } from "./catalog-result-presentation.js";
 import { createCatalogResultView } from "./catalog-result-view.js";
 import { EomapLayoutController } from "./eomap-layout-controller.js";
+import { MapInspectionController } from "./map-inspection-controller.js";
 import {
     applyCatalogSystemState,
     renderScanLocations,
@@ -463,8 +464,7 @@ function renderCatalogItemInspector(
  * asynchronous catalog loading begins.
  * @param {import("./catalog-pane-controller.js").CatalogPaneControls}
  * catalogPaneControls Catalog-owned progressive inspector presentation.
- * @param {() => void} [onHistogramRequested=() => {}] Reveals the semantic
- * Histograms workspace after an explicit histogram action.
+ * @param {MapInspectionController} mapInspection Shared map-side tools.
  * @param {() => void} [onRenderingWorkspaceRequested=() => {}] Reveals Map
  * layers when a visualization attempt or low-resolution presentation starts.
  * @return {Promise<Function>} Function that reloads the active catalog search.
@@ -475,7 +475,7 @@ async function initializeCatalog(
     leafletMap,
     onRasterViewerReady = () => {},
     catalogPaneControls,
-    onHistogramRequested = () => {},
+    mapInspection,
     onRenderingWorkspaceRequested = () => {}
 ) {
     if (typeof onRenderingWorkspaceRequested !== "function") {
@@ -715,10 +715,11 @@ async function initializeCatalog(
         leafletMap,
         leaflet: L,
         onTileError: reportMapTileError,
-        onHistogramRequested,
+        onHistogramRequested: () => mapInspection.showHistogram(),
     }, { mapLayerController });
     layerStyleEditor = new MapLayerStyleEditor({
         mapLayers: mapLayerController, rasterViewer: rasterVisualization,
+        inspection: mapInspection,
     });
     mapLayerController.onStyle = (key) => layerStyleEditor.open(key);
     document.querySelector("#style-raster-detail-preview").addEventListener("click", () => {
@@ -1574,16 +1575,21 @@ async function startApplication() {
         invalidateMapSize: () => leafletMap.invalidateSize(),
     });
     const temporaryAoi = initializeTemporaryAoi(leafletMap, L);
+    let activeRasterViewer = null;
+    const mapInspection = new MapInspectionController({
+        onHistogramClose: () => activeRasterViewer?.stopSampleWindowSelection(),
+    });
     const refreshCatalog = await initializeCatalog(
         appGlobalConfiguration,
         leafletMap,
         (rasterViewer) => {
+            activeRasterViewer = rasterViewer;
             temporaryAoi.subscribeSamplingArea(
                 rasterViewer.setTemporaryAoi
             );
         },
         catalogPaneControls,
-        () => layoutController.showWorkspace("histogram"),
+        mapInspection,
         () => layoutController.showWorkspace("map-layers")
     );
     await initializeScanner(refreshCatalog);

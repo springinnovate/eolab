@@ -450,7 +450,7 @@
             aria-controls="eomap-raster-interpretation-region"
             aria-expanded="false"
           >
-            Histograms
+            Sampling
           </button>
           <section
             class="eomap-workspace-region raster-interpretation-region"
@@ -460,45 +460,12 @@
             aria-hidden="true"
             hidden
           >
-                  <div class="workspace-region-heading">
-                    <div>
-                      <h2 id="eomap-raster-interpretation-heading">Histograms</h2>
-                    </div>
-                  </div>
                   <div
                     class="workspace-region-body raster-interpretation-body"
                     id="eomap-raster-interpretation-body"
                     aria-hidden="false"
                   >
-<section
-                      class="raster-bivariate-controls"
-                      id="raster-bivariate-controls"
-                      data-eomap-region="raster-interpretation"
-                      aria-labelledby="raster-bivariate-heading"
-                    >
-                      <div class="raster-bivariate-heading">
-                        <div>
-                          <h3 id="raster-bivariate-heading">Raster histograms</h3>
-                        </div>
-                      </div>
-                      <label for="raster-comparison-mode">
-                        <span>Histogram mode</span>
-                        <select
-                          id="raster-comparison-mode"
-                          aria-describedby="raster-bivariate-status"
-                        >
-                          <option value="overlay">1D – visible rasters</option>
-                          <option value="bivariate">2D – bivariate rasters</option>
-                        </select>
-                      </label>
-                      <p
-                        class="raster-bivariate-status"
-                        id="raster-bivariate-status"
-                        role="status"
-                        aria-live="polite"
-                        aria-atomic="true"
-                      ></p>
-                      </section>
+
                   <fieldset
                     class="raster-style-controls"
                     id="raster-style-controls"
@@ -600,143 +567,6 @@
                     </p>
                   </section>
                   </fieldset>
-
-                  <section class="raster-histogram-overview" aria-labelledby="raster-histogram-list-heading">
-                    <div class="raster-histogram-overview-heading">
-                      <div>
-                        <h3 id="raster-histogram-list-heading">Map layer histograms</h3>
-                      </div>
-                    </div>
-                    <p class="raster-histogram-empty" id="raster-histogram-empty">
-                      No visible raster layers. Show a raster layer to see its histogram.
-                    </p>
-                    <div
-                      class="raster-histogram-list"
-                      id="raster-histogram-list"
-                      role="group"
-                      aria-label="Raster histograms"
-                    ></div>
-                  </section>
-
-                  <section
-                    class="raster-bivariate-statistics"
-                    id="raster-bivariate-statistics"
-                    data-eomap-region="raster-interpretation"
-                    aria-labelledby="raster-bivariate-statistics-heading"
-                    hidden
-                  >
-                    <div class="raster-histogram-heading">
-                      <div>
-                        <h3 id="raster-bivariate-statistics-heading">Paired raster distribution</h3>
-                      </div>
-                      <button
-                        class="secondary-button"
-                        id="retry-raster-paired-statistics"
-                        type="button"
-                        hidden
-                      >
-                        Retry
-                      </button>
-                    </div>
-                    <p
-                      class="raster-histogram-status"
-                      id="raster-bivariate-statistics-status"
-                      role="status"
-                      aria-live="polite"
-                      aria-atomic="true"
-                    ></p>
-                    <dl
-                      class="raster-bivariate-axis-key"
-                      aria-label="Raster axes"
-                    >
-                      <div>
-                        <dt>Horizontal</dt>
-                        <dd id="raster-bivariate-statistics-x-label"></dd>
-                      </div>
-                      <div>
-                        <dt>Vertical</dt>
-                        <dd id="raster-bivariate-statistics-y-label"></dd>
-                      </div>
-                    </dl>
-                    <p class="raster-bivariate-density-legend">
-                      Larger, brighter squares contain more paired pixels.
-                    </p>
-                    <svg
-                      class="raster-bivariate-histogram"
-                      id="raster-bivariate-histogram"
-                      viewBox="0 0 660 620"
-                      preserveAspectRatio="xMinYMin meet"
-                      role="img"
-                      hidden
-                    ></svg>
-                    <output
-                      class="raster-bivariate-histogram-summary"
-                      id="raster-bivariate-histogram-summary"
-                      aria-live="polite"
-                    ></output>
-                  </section>
-
-                  <section
-                    class="raster-histogram"
-                    id="raster-histogram"
-                    data-eomap-region="raster-interpretation"
-                    data-sampling-area="wholeRaster"
-                    aria-labelledby="raster-histogram-heading"
-                    aria-hidden="true"
-                    aria-busy="false"
-                    hidden
-                  >
-                    <div class="raster-histogram-heading">
-                      <div>
-                        <h3 id="raster-histogram-heading">Histogram</h3>
-                        <p class="raster-histogram-detail-layer" id="raster-histogram-detail-layer"></p>
-                      </div>
-                      <div class="raster-histogram-actions">
-                        <button
-                          class="secondary-button"
-                          id="retry-raster-statistics"
-                          type="button"
-                          hidden
-                        >
-                          Retry
-                        </button>
-                      </div>
-                    </div>
-                    <div class="raster-histogram-body">
-                      <p class="raster-histogram-scope" id="raster-histogram-scope">
-                        Whole raster
-                      </p>
-                      <p
-                        class="raster-histogram-status"
-                        id="raster-histogram-status"
-                        role="status"
-                        aria-live="polite"
-                        aria-atomic="true"
-                      ></p>
-                      <svg
-                        class="raster-histogram-chart"
-                        id="raster-histogram-chart"
-                        viewBox="0 0 640 112"
-                        preserveAspectRatio="none"
-                        role="img"
-                        hidden
-                      ></svg>
-                      <div
-                        class="raster-histogram-axis"
-                        id="raster-histogram-axis"
-                        aria-hidden="true"
-                        hidden
-                      >
-                        <span id="raster-histogram-minimum"></span>
-                        <span id="raster-histogram-maximum"></span>
-                      </div>
-                    </div>
-                  </section>
-
-                  <section class="pixel-probe-guidance" aria-labelledby="pixel-probe-guidance-heading">
-                    <h3 id="pixel-probe-guidance-heading">Pixel values</h3>
-                    <p>Move over the map to inspect the top visible raster's value.</p>
-                  </section>
 
                   <details class="analysis-aoi-disclosure" id="analysis-aoi-disclosure">
                     <summary
@@ -923,10 +753,170 @@
         ></div>
         <div id="raster-pixel-probe-reading"></div>
       </div>
-    </main>
 
-    <script type="module" src="/src/main.js"></script>
-    <section id="layer-style-editor" popover="manual" role="dialog"
+      <button id="open-map-histogram" class="secondary-button map-histogram-opener"
+        type="button" aria-controls="map-histogram-panel" aria-expanded="false"
+        aria-haspopup="dialog">Histogram</button>
+      <aside id="map-inspection" popover="manual" aria-label="Map exploration">
+        <div class="map-inspection-panels">
+          <section id="map-histogram-panel" role="dialog" aria-modal="false"
+            aria-labelledby="map-histogram-heading" hidden>
+            <header class="layer-style-header">
+              <h2 id="map-histogram-heading">Histogram</h2>
+              <button id="close-map-histogram" class="secondary-button" type="button"
+                aria-label="Close histogram">Close</button>
+            </header>
+            <p id="map-histogram-scope" class="raster-histogram-scope" hidden>Whole overlap</p>
+<section
+                      class="raster-bivariate-controls"
+                      id="raster-bivariate-controls"
+                      data-eomap-region="raster-interpretation"
+                      aria-label="Histogram mode"
+                    >
+                      <label for="raster-comparison-mode">
+                        <span>Histogram mode</span>
+                        <select
+                          id="raster-comparison-mode"
+                          aria-describedby="raster-bivariate-status"
+                        >
+                          <option value="overlay">1D – visible rasters</option>
+                          <option value="bivariate">2D – comparison and map styling</option>
+                        </select>
+                      </label>
+                      <p
+                        class="raster-bivariate-status"
+                        id="raster-bivariate-status"
+                        role="status"
+                        aria-live="polite"
+                        aria-atomic="true"
+                      ></p>
+                      </section>
+<section id="map-histogram-overview" class="raster-histogram-overview" aria-label="Visible raster distributions">
+                    <p class="raster-histogram-empty" id="raster-histogram-empty">
+                      No visible raster layers. Show a raster layer to see its histogram.
+                    </p>
+                    <div
+                      class="raster-histogram-list"
+                      id="raster-histogram-list"
+                      role="group"
+                      aria-label="Raster histograms"
+                    ></div>
+                  </section>
+<section
+                    class="raster-bivariate-statistics"
+                    id="raster-bivariate-statistics"
+                    data-eomap-region="raster-interpretation"
+                    aria-labelledby="raster-bivariate-statistics-heading"
+                    hidden
+                  >
+                    <div class="raster-histogram-heading">
+                      <div>
+                        <h3 id="raster-bivariate-statistics-heading">Paired raster distribution</h3>
+                      </div>
+                      <button
+                        class="secondary-button"
+                        id="retry-raster-paired-statistics"
+                        type="button"
+                        hidden
+                      >
+                        Retry
+                      </button>
+                    </div>
+                    <p
+                      class="raster-histogram-status"
+                      id="raster-bivariate-statistics-status"
+                      role="status"
+                      aria-live="polite"
+                      aria-atomic="true"
+                    ></p>
+                    <dl
+                      class="raster-bivariate-axis-key"
+                      aria-label="Raster axes"
+                    >
+                      <div>
+                        <dt>Horizontal</dt>
+                        <dd id="raster-bivariate-statistics-x-label"></dd>
+                      </div>
+                      <div>
+                        <dt>Vertical</dt>
+                        <dd id="raster-bivariate-statistics-y-label"></dd>
+                      </div>
+                    </dl>
+                    <p class="raster-bivariate-density-legend">
+                      Larger, brighter squares contain more paired pixels.
+                    </p>
+                    <svg
+                      class="raster-bivariate-histogram"
+                      id="raster-bivariate-histogram"
+                      viewBox="0 0 660 620"
+                      preserveAspectRatio="xMinYMin meet"
+                      role="img"
+                      hidden
+                    ></svg>
+                    <output
+                      class="raster-bivariate-histogram-summary"
+                      id="raster-bivariate-histogram-summary"
+                      aria-live="polite"
+                    ></output>
+                  </section>
+<section
+                    class="raster-histogram"
+                    id="raster-histogram"
+                    data-eomap-region="raster-interpretation"
+                    data-sampling-area="wholeRaster"
+                    aria-labelledby="raster-histogram-heading"
+                    aria-hidden="true"
+                    aria-busy="false"
+                    hidden
+                  >
+                    <div class="raster-histogram-heading">
+                      <div>
+                        <h3 id="raster-histogram-heading">Histogram</h3>
+                        <p class="raster-histogram-detail-layer" id="raster-histogram-detail-layer"></p>
+                      </div>
+                      <div class="raster-histogram-actions">
+                        <button
+                          class="secondary-button"
+                          id="retry-raster-statistics"
+                          type="button"
+                          hidden
+                        >
+                          Retry
+                        </button>
+                      </div>
+                    </div>
+                    <div class="raster-histogram-body">
+                      <p class="raster-histogram-scope" id="raster-histogram-scope">
+                        Whole raster
+                      </p>
+                      <p
+                        class="raster-histogram-status"
+                        id="raster-histogram-status"
+                        role="status"
+                        aria-live="polite"
+                        aria-atomic="true"
+                      ></p>
+                      <svg
+                        class="raster-histogram-chart"
+                        id="raster-histogram-chart"
+                        viewBox="0 0 640 112"
+                        preserveAspectRatio="none"
+                        role="img"
+                        hidden
+                      ></svg>
+                      <div
+                        class="raster-histogram-axis"
+                        id="raster-histogram-axis"
+                        aria-hidden="true"
+                        hidden
+                      >
+                        <span id="raster-histogram-minimum"></span>
+                        <span id="raster-histogram-maximum"></span>
+                      </div>
+                    </div>
+                  </section>
+          </section>
+<section id="layer-style-editor" hidden role="dialog"
       aria-modal="false" aria-labelledby="layer-style-heading layer-style-title">
       <header class="layer-style-header">
         <h2 id="layer-style-heading">Style layer</h2>
@@ -1088,11 +1078,17 @@
                           probe for exact values.
                         </p>
                         <p class="raster-bivariate-histogram-guidance">
-                          Selecting 2D opens Histograms and calculates the paired
+                          Selecting 2D opens Histogram and calculates the paired
                           distribution automatically.
                         </p>
                       </div></div>
       </div>
     </section>
+        </div>
+      </aside>
+    </main>
+
+    <script type="module" src="/src/main.js"></script>
+
   </body>
 </html>

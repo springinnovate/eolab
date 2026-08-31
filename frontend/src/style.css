@@ -2759,7 +2759,6 @@ h5 {
 .raster-histogram-overview,
 .raster-bivariate-statistics,
 .raster-histogram,
-.pixel-probe-guidance,
 .analysis-aoi-disclosure {
   margin-bottom: 14px;
   border: 1px solid var(--border-2);
@@ -2792,13 +2791,11 @@ h5 {
 
 .raster-histogram-overview-heading h3,
 .raster-histogram-overview-heading .section-label,
-.rendering-availability h3,
-.pixel-probe-guidance h3 {
+.rendering-availability h3 {
   margin-bottom: 0;
 }
 
-.raster-histogram-overview > p,
-.pixel-probe-guidance p {
+.raster-histogram-overview > p {
   margin: 8px 0 0;
   color: var(--text-3);
   font-size: 0.74rem;
@@ -2875,10 +2872,6 @@ h5 {
 .raster-bivariate-statistics,
 .raster-histogram {
   order: 2;
-}
-
-.pixel-probe-guidance {
-  order: 4;
 }
 
 .analysis-aoi-disclosure {
@@ -3446,25 +3439,69 @@ button.raster-histogram-summary:hover,
   font-weight: 650;
 }
 
-/* Styling lives in the top layer, outside every sidebar scrolling container. */
-#layer-style-editor {
+/* Results and styling share one top-layer surface, independent of the sidebar. */
+.map-histogram-opener {
+  position: absolute;
+  top: 16px;
+  right: 20px;
+  z-index: 800;
+  box-shadow: var(--elevation-panel);
+}
+
+#map-inspection {
   box-sizing: border-box;
   position: fixed;
-  inset: 20px 20px auto auto;
+  inset: 60px 20px auto auto;
   margin: 0;
   width: min(420px, calc(100vw - 32px));
-  max-height: calc(100dvh - 40px);
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--text-1);
+  container: map-inspection / inline-size;
+}
+
+#map-inspection:has(#map-histogram-panel:not([hidden])):has(#layer-style-editor:not([hidden])) {
+  width: min(800px, max(380px, calc(100vw - var(--active-workspace-width) - 48px)));
+}
+
+.map-inspection-panels {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  max-height: min(72dvh, calc(100dvh - 80px));
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 18px;
+}
+
+#map-histogram-panel,
+#layer-style-editor {
+  min-width: 0;
+  padding: 14px;
   border: 1px solid var(--border-1);
   border-radius: var(--radius);
   background: var(--surface-1);
-  color: var(--text-1);
   box-shadow: var(--elevation-panel);
 }
-#layer-style-editor:not(:popover-open),
+
+#map-inspection:not(:popover-open),
+#map-histogram-panel[hidden],
+#layer-style-editor[hidden],
 .layer-style-opacity[hidden] { display: none; }
+
+@container map-inspection (min-width: 680px) {
+  .map-inspection-panels:has(#map-histogram-panel:not([hidden])):has(#layer-style-editor:not([hidden])) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  #map-histogram-panel,
+  #layer-style-editor { max-height: min(72dvh, calc(100dvh - 80px)); overflow-y: auto; overscroll-behavior: contain; }
+}
+
+#map-histogram-panel .raster-histogram-overview { padding: 0; border: 0; background: transparent; }
+#map-histogram-panel .raster-histogram-summary-name { white-space: normal; overflow-wrap: anywhere; }
+#map-histogram-panel .raster-histogram-chart { min-height: 130px; }
+#map-histogram-scope { margin: 10px 0; }
 .layer-style-header { position: sticky; top: 0; z-index: 1; background: var(--surface-1); display: flex; gap: 12px; align-items: center; justify-content: space-between; }
 .layer-style-header h2 { margin: 0; font-size: 1rem; }
 #layer-style-title { overflow-wrap: anywhere; font-weight: 600; font-size: 0.85rem; }
@@ -3481,10 +3518,11 @@ button.raster-histogram-summary:hover,
 #layer-style-editor h3 { margin: 0; font-size: 0.85rem; }
 .style-percentiles { margin-top: 16px; }
 .style-percentiles summary { cursor: pointer; font-size: 0.8rem; }
-@media (max-width: 600px) {
-  #layer-style-editor {
+@media (max-width: 699px) {
+  #map-inspection,
+  #map-inspection:has(#map-histogram-panel:not([hidden])):has(#layer-style-editor:not([hidden])) {
     inset: auto 8px 8px 8px;
-    width: auto;
-    max-height: 70dvh;
+    width: calc(100vw - 16px);
   }
+  .map-inspection-panels { max-height: 52dvh; }
 }
