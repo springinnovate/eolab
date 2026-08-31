@@ -10,13 +10,14 @@
  * @param {Function} options.onDetails Open only this Item's inspector.
  * @param {Function} options.onMapAction Add/remove this Item without navigation.
  * @param {Function} options.onStyle Open the existing editor for this Item.
+ * @param {Function} options.onZoom Fit the map to this Item's bounding box.
  * @param {Function} options.onPreview Preview the Item footprint.
  * @param {Function} options.onClearPreview Clear the transient footprint.
  * @param {Document} [options.documentContext=document] Owning document.
  * @return {Object} Row element, details control, Item, and state renderer.
  */
 export function createCatalogResultView({
-    item, presentation, id, onDetails, onMapAction, onStyle, onPreview, onClearPreview,
+    item, presentation, id, onDetails, onMapAction, onStyle, onZoom, onPreview, onClearPreview,
     documentContext = document,
 }) {
     const element = documentContext.createElement("div");
@@ -61,6 +62,15 @@ export function createCatalogResultView({
     mapButton.setAttribute("aria-describedby", `${id}-status`);
     mapButton.addEventListener("click", () => onMapAction(item));
 
+    const zoomButton = documentContext.createElement("button");
+    zoomButton.className = "secondary-button catalog-result-zoom";
+    zoomButton.type = "button";
+    zoomButton.textContent = "Zoom to";
+    zoomButton.hidden = true;
+    zoomButton.setAttribute("aria-label", `Zoom to: ${presentation.fullTitle}`);
+    zoomButton.setAttribute("aria-controls", "map");
+    zoomButton.addEventListener("click", () => onZoom(item));
+
     const styleButton = documentContext.createElement("button");
     styleButton.className = "secondary-button catalog-result-style";
     styleButton.type = "button";
@@ -78,7 +88,7 @@ export function createCatalogResultView({
     detailsButton.setAttribute("aria-controls", "catalog-item-inspector");
     detailsButton.setAttribute("aria-pressed", "false");
     detailsButton.addEventListener("click", () => onDetails(item, detailsButton));
-    actions.append(onMap, mapButton, styleButton, detailsButton);
+    actions.append(onMap, mapButton, zoomButton, styleButton, detailsButton);
 
     const status = documentContext.createElement("p");
     status.id = `${id}-status`;
@@ -100,16 +110,20 @@ export function createCatalogResultView({
         /**
          * Mirror this Item's state without selecting it or moving focus.
          *
-         * @param {Object} state Supported kind, membership, pending action,
+         * @param {Object} state Supported kind, membership, usable bounds, pending action,
          * and optional {message,isError} feedback for this Item only.
          * @return {void}
          */
-        update({ supported, retained, pendingAction, feedback }) {
+        update({ supported, retained, canZoom, pendingAction, feedback }) {
             onMap.hidden = !retained;
             mapButton.hidden = !supported;
             mapButton.disabled = pendingAction !== null;
             styleButton.hidden = !retained;
             styleButton.disabled = pendingAction !== null;
+            zoomButton.hidden = !retained;
+            zoomButton.disabled = pendingAction !== null || !canZoom;
+            zoomButton.title = canZoom ? "Zoom to this item's bounding box."
+                : "Zoom unavailable: this item has no usable bounding box.";
             mapButton.classList.toggle("is-retained", retained);
             mapButton.setAttribute("aria-busy", String(pendingAction !== null));
             mapButton.textContent = pendingAction !== null

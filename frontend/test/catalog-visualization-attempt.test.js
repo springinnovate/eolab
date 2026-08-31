@@ -5,6 +5,7 @@ import {
   catalogItemsMatch, CatalogMapActionRegistry, CatalogVisualizationAssessmentCache,
 } from "../src/catalog-map-actions.js";
 import { getCatalogItemKey } from "../src/catalog-item-identity.js";
+import { getCatalogItemMapBounds } from "../src/map.js";
 import {
   formatCatalogVisualizationReason, formatCatalogRasterStatus,
   getCatalogVisualization, supportsRasterDetailOnlyPreview,
@@ -71,6 +72,7 @@ function harness({ selectedItem = null, assess = async (item) => item,
     contains(name) { return classes.has(name); },
   } };
   const onMap = {}, actionContainer = { setAttribute() {} }, styleButton = new EventTarget();
+  const zoomButton = new EventTarget();
   const actionStatus = { textContent: "" }, status = { textContent: "" };
   const visualization = {
     describe: getCatalogVisualization,
@@ -101,6 +103,8 @@ function harness({ selectedItem = null, assess = async (item) => item,
     appGlobalConfiguration: { scanDisplayPathPrefix: "Mounted" },
     catalogLayerToggle: layerButton, catalogMapActionStatus: actionStatus,
     catalogLayerStyle: styleButton,
+    catalogLayerZoom: zoomButton, getCatalogItemMapBounds,
+    leafletMap: { fitBounds: (bounds, options) => calls.push(["zoom", bounds, options]) },
     layerStyleEditor: { open: (key) => calls.push(["style", key]) },
     catalogLayerStatus: status, catalogMapActionsElement: actionContainer, catalogOnMap: onMap,
     rasterDetailPreviewControls: {}, showRasterDetailPreview: {}, removeRasterDetailPreview: {},
@@ -108,7 +112,7 @@ function harness({ selectedItem = null, assess = async (item) => item,
     onRenderingWorkspaceRequested: () => calls.push(["open-rendering"]),
   };
   const actions = new Function(...Object.keys(dependencies), `${ACTION_SOURCE}
-    return { run: toggleCatalogLayer, style: styleCatalogLayer, refresh: refreshCatalogMapAction };`
+    return { run: toggleCatalogLayer, style: styleCatalogLayer, zoom: zoomCatalogLayer, refresh: refreshCatalogMapAction };`
   )(...Object.values(dependencies));
   const addRow = (item) => {
     const row = { item, update(value) { this.state = value; } };
@@ -120,7 +124,7 @@ function harness({ selectedItem = null, assess = async (item) => item,
   actions.refresh();
   return {
     run: (item = state.selectedItem, options) => actions.run(item, options),
-    refresh: actions.refresh, style: actions.style, addRow, row, state, calls, layerButton, styleButton,
+    refresh: actions.refresh, style: actions.style, zoom: actions.zoom, addRow, row, state, calls, layerButton, styleButton, zoomButton,
     onMap, actionContainer, actionStatus, status,
     removeExternally(item) { visualization.remove(item); actions.refresh(); },
   };
@@ -149,6 +153,49 @@ test("row and details Style reuse the editor with composite identity and no map 
   assert.deepEqual(h.calls, [["style", getCatalogItemKey(first)], ["style", getCatalogItemKey(second)]]);
   assert.equal(h.state.selectedItem, second);
   assert.equal(h.row.state.retained, true);
+});
+
+test("Zoom to targets the requested raster or vector bbox without selection or layer mutations", () => {
+  const first = { ...raster("same-id"), bbox: [-123, 48, -122, 49] };
+  const second = { ...vector("same-id"), bbox: [10, 20, 100, 11, 21, 200] };
+  const h = harness({ selectedItem: second, retained: [first, second] });
+  assert.match(SOURCE, /onZoom: zoomCatalogLayer/);
+  assert.match(MARKUP, /id="toggle-catalog-layer"[\s\S]*?id="zoom-catalog-layer"[\s\S]*?aria-controls="map"[\s\S]*?>\s*Zoom to\s*<[\s\S]*?id="style-catalog-layer"/);
+  assert.equal(h.zoomButton.hidden, false);
+  assert.equal(h.zoomButton.disabled, false);
+  assert.equal(h.row.state.canZoom, true);
+  h.zoom(first);
+  h.zoomButton.dispatchEvent(new Event("click"));
+  assert.deepEqual(h.calls, [
+    ["zoom", [[48, -123], [49, -122]], { padding: [24, 24], maxZoom: 9 }],
+    ["zoom", [[20, 10], [21, 11]], { padding: [24, 24], maxZoom: 9 }],
+  ]);
+  assert.equal(h.state.selectedItem, second);
+  assert.equal(h.row.state.retained, true);
+});
+
+test("Zoom to rejects missing bounds, pending actions, and removed or unretained Items", () => {
+  const item = raster("zoom-lifecycle"), h = harness({ selectedItem: item, retained: [item] });
+  assert.equal(h.zoomButton.disabled, true);
+  assert.match(h.zoomButton.title, /no usable bounding box/);
+  assert.equal(h.row.state.canZoom, false);
+  h.zoom(item);
+  h.zoom(null);
+  item.bbox = [10, 20, 10, 20];
+  h.refresh();
+  assert.equal(h.zoomButton.disabled, false);
+  const pending = h.state.pendingMapActions.begin(item, "Adding...", "Checking");
+  h.refresh();
+  assert.equal(h.zoomButton.disabled, true);
+  h.zoom(item);
+  h.zoom({ ...vector("not-retained"), bbox: item.bbox });
+  assert.deepEqual(h.calls, []);
+  h.state.pendingMapActions.finish(pending);
+  h.removeExternally(item);
+  assert.equal(h.zoomButton.hidden, true);
+  h.calls.length = 0;
+  h.zoom(item);
+  assert.deepEqual(h.calls, []);
 });
 
 test("Style is absent before adding and after removal, and stale or busy requests do nothing", async () => {

@@ -2031,6 +2031,7 @@ h5 {
 }
 
 .catalog-result {
+  min-width: 0;
   content-visibility: auto;
   contain-intrinsic-size: auto 84px;
   display: grid;
@@ -2111,6 +2112,7 @@ h5 {
 }
 
 .catalog-result-map-action,
+.catalog-result-zoom,
 .catalog-result-style {
   padding: 4px 8px;
   font-size: 0.72rem;

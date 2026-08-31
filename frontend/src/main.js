@@ -44,6 +44,7 @@ import {
 } from "./catalog-system-state.js";
 import {
     createSingleWorldMap,
+    getCatalogItemMapBounds,
     formatSingleWorldPosition
 } from "./map.js";
 import { MapLayerStyleEditor } from "./map-layers/style-editor.js";
@@ -522,6 +523,7 @@ async function initializeCatalog(
         "#toggle-catalog-layer"
     );
     const catalogLayerStyle = document.querySelector("#style-catalog-layer");
+    const catalogLayerZoom = document.querySelector("#zoom-catalog-layer");
     const catalogOnMap = document.querySelector("#catalog-on-map");
     const catalogMapActionStatus = document.querySelector(
         "#catalog-map-action-status"
@@ -598,6 +600,7 @@ async function initializeCatalog(
             view.update({
                 supported: getCatalogVisualization(view.item) !== null,
                 retained: catalogVisualization.contains(view.item),
+                canZoom: getCatalogItemMapBounds(view.item) !== null,
                 pendingAction: catalogState.pendingMapActions.get(view.item),
                 feedback: getCatalogMapActionFeedback(view.item),
             });
@@ -785,6 +788,11 @@ async function initializeCatalog(
         catalogLayerToggle.hidden = false;
         catalogLayerStyle.hidden = !isRetained;
         catalogLayerStyle.disabled = pendingAction !== null;
+        const canZoom = getCatalogItemMapBounds(item) !== null;
+        catalogLayerZoom.hidden = !isRetained;
+        catalogLayerZoom.disabled = pendingAction !== null || !canZoom;
+        catalogLayerZoom.title = canZoom ? "Zoom to this item's bounding box."
+            : "Zoom unavailable: this item has no usable bounding box.";
         const actionStatus = pendingAction?.statusText ??
             getCatalogMapActionFeedback(item)?.message ?? "";
         if (catalogMapActionStatus.textContent !== actionStatus) {
@@ -968,6 +976,7 @@ async function initializeCatalog(
                 onDetails: selectCatalogItem,
                 onMapAction: (requestedItem) => toggleCatalogLayer(requestedItem),
                 onStyle: styleCatalogLayer,
+                onZoom: zoomCatalogLayer,
                 onPreview: (previewItem) => footprintController.preview(previewItem),
                 onClearPreview: () => footprintController.clearPreview(),
             });
@@ -1318,6 +1327,22 @@ async function initializeCatalog(
         layerStyleEditor.open(getCatalogItemKey(item));
     }
 
+    /**
+     * Fit a retained Item's bounds without changing selection or layer state.
+     *
+     * @param {Object|null} item Item requested by a result or details shortcut.
+     * @return {void}
+     */
+    function zoomCatalogLayer(item) {
+        const bounds = getCatalogItemMapBounds(item);
+        if (bounds === null || !catalogVisualization.contains(item) ||
+            catalogState.pendingMapActions.get(item) !== null) return;
+        leafletMap.fitBounds(bounds, { padding: [24, 24], maxZoom: 9 });
+    }
+
+    catalogLayerZoom.addEventListener("click", () => {
+        zoomCatalogLayer(catalogState.selectedItem);
+    });
     catalogLayerStyle.addEventListener("click", () => {
         styleCatalogLayer(catalogState.selectedItem);
     });

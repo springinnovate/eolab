@@ -30,6 +30,11 @@ test("controls retain distinct interactive and accessibility states", () => {
   assert.match(STYLESHEET, /\.temporary-aoi-error/);
 });
 
+test("catalog rows can shrink while their action buttons wrap at compact widths", () => {
+  assert.match(STYLESHEET, /\.catalog-result\s*\{[^}]*min-width:\s*0;/s);
+  assert.match(STYLESHEET, /\.catalog-result-actions\s*\{[^}]*flex-wrap:\s*wrap;/s);
+});
+
 test("map overlays and inspection surfaces retain contrast contracts", () => {
   assert.match(
     STYLESHEET,
