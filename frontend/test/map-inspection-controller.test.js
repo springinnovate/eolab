@@ -37,10 +37,12 @@ test('automatic presentation does not move focus; close and reopen retain result
     assert.deepEqual(h.calls, ['show']);
     assert.equal(h.doc.activeElement, map);
     assert.equal(h.histogram.hidden, false);
+    assert.equal(h.opener.hidden, true);
     assert.equal(h.opener.getAttribute('aria-expanded'), 'true');
 
     h.close.dispatchEvent(new Event('click'));
     assert.equal(h.histogram.hidden, true);
+    assert.equal(h.opener.hidden, false);
     assert.equal(h.doc.activeElement, h.opener);
     assert.equal(h.opener.getAttribute('aria-expanded'), 'false');
     h.controller.closeHistogram();
@@ -56,17 +58,20 @@ test('automatic presentation does not move focus; close and reopen retain result
 test('histogram and style have independent visibility on one persistent surface', () => {
     const h = fixture();
     h.controller.showStyle();
+    assert.equal(h.opener.hidden, false);
     h.controller.showHistogram();
     assert.equal(h.style.hidden, false);
     assert.equal(h.histogram.hidden, false);
     h.controller.closeHistogram();
     assert.equal(h.style.hidden, false);
+    assert.equal(h.opener.hidden, false);
     assert.deepEqual(h.calls, ['show', 'pause']);
     h.controller.showHistogram();
     h.controller.hideStyle();
     assert.equal(h.histogram.hidden, false);
     assert.deepEqual(h.calls, ['show', 'pause']);
     h.controller.destroy();
+    assert.equal(h.opener.hidden, false);
     assert.deepEqual(h.calls, ['show', 'pause', 'hide']);
 });
 

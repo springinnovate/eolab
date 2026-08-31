@@ -3449,9 +3449,11 @@ button.raster-histogram-summary:hover,
 }
 
 #map-inspection {
+  --map-inspection-top: 60px;
+  --map-inspection-height: calc(100dvh - var(--map-inspection-top) - 16px);
   box-sizing: border-box;
   position: fixed;
-  inset: 60px 20px auto auto;
+  inset: var(--map-inspection-top) 20px auto auto;
   margin: 0;
   width: min(420px, calc(100vw - 32px));
   border: 0;
@@ -3459,7 +3461,12 @@ button.raster-histogram-summary:hover,
   background: transparent;
   color: var(--text-1);
   container: map-inspection / inline-size;
+  overflow: visible;
   pointer-events: none;
+}
+
+#map-inspection:has(#map-histogram-panel:not([hidden])) {
+  --map-inspection-top: 16px;
 }
 
 #map-inspection:has(#map-histogram-panel:not([hidden])):has(#layer-style-editor:not([hidden])) {
@@ -3472,7 +3479,7 @@ button.raster-histogram-summary:hover,
   grid-template-columns: minmax(0, 1fr);
   align-items: start;
   gap: 12px;
-  max-height: min(72dvh, calc(100dvh - 80px));
+  max-height: var(--map-inspection-height);
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -3489,8 +3496,10 @@ button.raster-histogram-summary:hover,
 }
 
 #map-inspection:not(:popover-open),
+#open-map-histogram[hidden],
 #map-histogram-panel[hidden],
 #layer-style-editor[hidden],
+.raster-histogram-summary-status[hidden],
 .layer-style-opacity[hidden] { display: none; }
 
 @container map-inspection (min-width: 680px) {
@@ -3498,15 +3507,63 @@ button.raster-histogram-summary:hover,
     grid-template-columns: repeat(2, minmax(0, 1fr));
     /* Unequal panel heights must leave the exposed map clickable. */
     pointer-events: none;
+    max-height: none;
+    overflow: visible;
   }
   #map-histogram-panel,
-  #layer-style-editor { max-height: min(72dvh, calc(100dvh - 80px)); overflow-y: auto; overscroll-behavior: contain; }
+  #layer-style-editor { max-height: var(--map-inspection-height); overflow-y: auto; overscroll-behavior: contain; }
 }
 
+.map-histogram-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  justify-content: flex-end;
+  height: 0;
+}
+#close-map-histogram {
+  flex: 0 0 28px;
+  height: 28px;
+  padding: 0;
+  margin-top: -4px;
+  line-height: 1;
+  font-size: 1.1rem;
+}
 #map-histogram-panel .raster-histogram-overview { padding: 0; border: 0; background: transparent; }
-#map-histogram-panel .raster-histogram-summary-name { white-space: normal; overflow-wrap: anywhere; }
+#map-histogram-panel .raster-histogram-summary { padding: 0; border: 0; background: transparent; gap: 6px; }
+#map-histogram-panel .raster-histogram-summary + .raster-histogram-summary { padding-top: 12px; border-top: 1px solid var(--border-1); }
+#map-histogram-panel .raster-histogram-summary-name { padding-right: 36px; }
+#map-histogram-panel .raster-histogram-empty { padding-right: 36px; }
+#map-histogram-panel .raster-histogram-summary-name,
+#map-histogram-panel .raster-histogram-detail-layer,
+#raster-bivariate-statistics-heading {
+  min-width: 0;
+  margin: 0;
+  font-size: 0.75rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#map-histogram-panel .raster-histogram-heading { margin: 0 0 6px; padding-right: 36px; }
+#map-histogram-panel .raster-histogram-heading > div { min-width: 0; }
 #map-histogram-panel .raster-histogram-chart { min-height: 130px; }
-#map-histogram-scope { margin: 10px 0; }
+#map-histogram-panel .raster-bivariate-statistics,
+#map-histogram-panel .raster-histogram { grid-template-columns: minmax(0, 1fr); margin: 0; padding: 0; border: 0; background: transparent; }
+#map-histogram-panel .raster-histogram-body { overflow: visible; padding: 0; }
+#map-histogram-scope { margin: 6px 0; font-weight: normal; }
+#map-histogram-panel .raster-bivariate-axis-key { margin: 6px 0; }
+#map-histogram-panel .raster-bivariate-controls {
+  gap: 4px;
+  margin: 12px 0 0;
+  padding: 10px 0 0;
+  border: 0;
+  border-top: 1px solid var(--border-1);
+  background: transparent;
+}
+#map-histogram-panel .raster-bivariate-controls label { width: fit-content; max-width: 100%; }
+#map-histogram-panel .raster-bivariate-controls select { padding: 4px 24px 4px 6px; font-size: 0.72rem; }
+#map-histogram-panel .raster-bivariate-status { margin: 0; font-size: 0.7rem; }
 .layer-style-header { position: sticky; top: 0; z-index: 1; background: var(--surface-1); display: flex; gap: 12px; align-items: center; justify-content: space-between; }
 .layer-style-header h2 { margin: 0; font-size: 1rem; }
 #layer-style-title { overflow-wrap: anywhere; font-weight: 600; font-size: 0.85rem; }

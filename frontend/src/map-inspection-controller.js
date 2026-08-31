@@ -31,12 +31,13 @@ export class MapInspectionController {
     }
 
     /**
-     * Reveal results without changing the sample, styling, or sidebar layout.
+     * Reveal results and hide their redundant opener without changing analysis.
      * @param {boolean} [moveFocus=false] Focus Close for an explicit opener click.
      * @return {void}
      */
     showHistogram(moveFocus = false) {
         this.histogram.hidden = false;
+        this.opener.hidden = true;
         this.opener.setAttribute("aria-expanded", "true");
         this.#synchronize();
         if (moveFocus) this.closeButton.focus();
@@ -46,6 +47,7 @@ export class MapInspectionController {
     closeHistogram() {
         if (this.histogram.hidden) return;
         this.histogram.hidden = true;
+        this.opener.hidden = false;
         this.opener.setAttribute("aria-expanded", "false");
         this.onHistogramClose();
         this.#synchronize();
@@ -81,6 +83,7 @@ export class MapInspectionController {
         this.histogram.hidden = true;
         this.style.hidden = true;
         this.opener.setAttribute("aria-expanded", "false");
+        this.opener.hidden = false;
         this.#synchronize();
     }
 }

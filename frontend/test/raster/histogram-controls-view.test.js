@@ -114,12 +114,18 @@ test("pending and failed summaries do not present cached charts as the current s
         const row = list.children[0];
         assert.equal(row.children[0].title, "drought.tif");
         assert.equal(row.children.some(child => child.classList.contains("raster-histogram-chart")), state === "ready");
-        assert.equal(row.children[2].textContent, {
-            loading: "Updating histogram…", error: "Histogram unavailable", ready: "Histogram ready",
+        assert.equal(row.children[1].textContent, {
+            loading: "Updating histogram…", error: "Histogram unavailable", ready: "",
         }[state]);
+        assert.equal(row.children[1].hidden, state === "ready");
+        assert.equal(row.children.at(-1).textContent, state === "ready"
+            ? "200 km map sample · Range: -10 to 30" : "200 km map sample");
+        if (state === "ready") {
+            assert.equal(row.children[2].classList.contains("raster-histogram-chart"), true);
+        }
     }
     view.renderLayerHistograms([{ ...summary, state: "error", errorMessage: "No finite pixels in this sample." }], "first");
-    assert.equal(list.children[0].children[2].textContent, "Histogram unavailable: No finite pixels in this sample.");
+    assert.equal(list.children[0].children[1].textContent, "Histogram unavailable: No finite pixels in this sample.");
 });
 
 test("only paired mode shows a shared scope; 1D retains each layer's own scope", () => {
@@ -175,9 +181,10 @@ test("histogram adapter owns labeled per-raster summaries without double binding
         firstButton.getAttribute("aria-controls"),
         "raster-histogram"
     );
-    assert.equal(firstButton.children.at(-1).classNames.includes(
+    assert.equal(firstButton.children.at(-2).classNames.includes(
         "raster-histogram-summary-preview"
     ), true);
+    assert.equal(firstButton.children.at(-1).textContent, "200 km map sample");
     assert.equal(secondButton.getAttribute("aria-expanded"), "true");
     assert.equal(
         documentContext.querySelector("#raster-histogram-empty").hidden,
@@ -188,6 +195,8 @@ test("histogram adapter owns labeled per-raster summaries without double binding
             .textContent,
         "second-raster.tif"
     );
+    assert.equal(documentContext.querySelector("#raster-histogram-detail-layer").title,
+        "second-raster.tif");
 
     secondButton.focus();
     view.renderLayerHistograms(summaries, "first");

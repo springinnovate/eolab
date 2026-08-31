@@ -249,7 +249,7 @@ export class BivariateRasterControlsView {
     }
 
     /**
-     * Render explicit mode state and its coordinated two-dimensional legend.
+     * Render mode state, a compact titled identity, and the coordinated legend.
      *
      * @param {Object} state Viewer-owned mode presentation state.
      * @return {void}
@@ -265,6 +265,7 @@ export class BivariateRasterControlsView {
         this.palette.value = state.paletteName;
         this.statisticsHeading.textContent =
             `${state.xLabel} vs. ${state.yLabel}`;
+        this.statisticsHeading.title = this.statisticsHeading.textContent;
         this.xLabel.textContent = `X axis: ${state.xLabel}`;
         this.yLabel.textContent = `Y axis: ${state.yLabel}`;
         this.statisticsXLabel.textContent = state.xLabel;

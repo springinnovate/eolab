@@ -159,6 +159,7 @@ export class RasterHistogramControlsView {
      */
     setActiveLayer(label) {
         this.histogramDetailLayer.textContent = label;
+        this.histogramDetailLayer.title = label;
     }
 
     /**
@@ -334,10 +335,10 @@ export class RasterHistogramControlsView {
     }
 
     /**
-     * Construct one retained-raster histogram summary button.
+     * Construct a chart-first raster summary with sampling context underneath.
      *
      * @param {RasterHistogramSummary} summary Validated view model.
-     * @return {HTMLButtonElement} Bound accessible summary button.
+     * @return {HTMLElement} Automatic chart article or bound summary button.
      * @throws {TypeError} If required identity or presentation fields are bad.
      */
     #createSummaryButton(summary) {
@@ -386,12 +387,13 @@ export class RasterHistogramControlsView {
         status.textContent = {
             idle: "Waiting for histogram",
             loading: "Updating histogram…",
-            ready: "Histogram ready",
+            ready: "",
             error: summary.errorMessage
                 ? `Histogram unavailable: ${summary.errorMessage}`
                 : "Histogram unavailable",
         }[summary.state];
-        button.append(name, scope, status);
+        status.hidden = summary.state === "ready";
+        button.append(name, status);
         if (summary.automatic && summary.state === "ready" && summary.statistics) {
             const chart = this.documentContext.createElementNS(
                 "http://www.w3.org/2000/svg", "svg"
@@ -400,13 +402,12 @@ export class RasterHistogramControlsView {
             renderRasterHistogramChart(
                 chart, summary.statistics, summary.style, this.documentContext
             );
-            const axis = this.documentContext.createElement("p");
-            axis.className = "raster-histogram-summary-scope";
-            axis.textContent = `Range: ${summary.minimumLabel} to ${summary.maximumLabel}`;
-            button.append(chart, axis);
+            scope.textContent += ` · Range: ${summary.minimumLabel} to ${summary.maximumLabel}`;
+            button.append(chart);
         } else if (summary.state === "ready" && summary.counts !== null && summary.counts.length > 0) {
             button.append(this.#createSummaryPreview(summary));
         }
+        button.append(scope);
         if (summary.automatic) {
             if (summary.canRetry) {
                 const retry = this.documentContext.createElement("button");

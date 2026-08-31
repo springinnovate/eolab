@@ -327,7 +327,7 @@ test("Sampling keeps area controls and AOI; map exploration owns histogram resul
     assert.match(analysisRegion.source, /id="raster-sampling-area-controls"/);
 
     assert.match(exploration.source, /1D – visible rasters/);
-    assert.match(exploration.source, /2D – comparison and map styling/);
+    assert.match(exploration.source, /2D – compare rasters/);
     assert.match(exploration.source, /No visible raster layers/);
     assert.match(composite.source, /<legend>Sample area<\/legend>/);
     assert.match(composite.source, /id="raster-active-controls"/);
@@ -346,7 +346,7 @@ test("Sampling keeps area controls and AOI; map exploration owns histogram resul
     }
     assert.match(histogramList.source, /aria-label="Raster histograms"/);
     assert.doesNotMatch(analysisRegion.source, /retained/i);
-    assert.match(histogram.source, /<h3 id="raster-histogram-heading">Histogram<\/h3>/);
+    assert.match(histogram.source, /<h3 id="raster-histogram-heading" class="visually-hidden">Histogram<\/h3>/);
     assert.match(histogram.source, /id="raster-histogram-detail-layer"/);
     assert.match(histogram.source, /id="raster-histogram-status"/);
     assert.match(histogram.source, /id="raster-histogram-chart"/);
@@ -375,6 +375,30 @@ test("Sampling keeps area controls and AOI; map exploration owns histogram resul
             new RegExp(`id="${renderingControl}"`)
         );
     }
+});
+
+test("map histograms put plots before captions and mode without a visible title strip", () => {
+    assert.match(requireElementRange("map-histogram-heading").source,
+        /class="visually-hidden">Histogram/);
+    assert.match(requireElementRange("close-map-histogram").source,
+        /aria-label="Close histogram">×/);
+    const mode = requireElementRange("raster-bivariate-controls");
+    assert.match(mode.source, /class="visually-hidden">Histogram mode/);
+    assert.match(mode.source, /aria-describedby="raster-bivariate-status"/);
+    for (const id of ["raster-histogram-list", "raster-histogram", "raster-bivariate-statistics"]) {
+        assert.ok(requireElementRange(id).end < mode.start, `${id} precedes mode controls`);
+    }
+    assert.ok(requireMarkupPosition("raster-histogram-chart") < requireMarkupPosition("raster-histogram-scope"));
+    assert.ok(requireMarkupPosition("raster-bivariate-histogram") < requireMarkupPosition("map-histogram-scope"));
+    assert.ok(requireMarkupPosition("raster-bivariate-histogram") < requireMarkupPosition("raster-bivariate-statistics-status"));
+    assert.match(STYLESHEET, /--map-inspection-height:\s*calc\(100dvh - var\(--map-inspection-top\) - 16px\)/);
+    assert.match(STYLESHEET, /#map-inspection\s*\{[^}]*overflow:\s*visible/s);
+    assert.match(STYLESHEET, /#map-inspection:has\(#map-histogram-panel:not\(\[hidden\]\)\)\s*\{[^}]*--map-inspection-top:\s*16px/s);
+    assert.match(STYLESHEET, /@container map-inspection[^}]*max-height:\s*none[^}]*overflow:\s*visible/s);
+    assert.match(STYLESHEET, /\.map-histogram-toolbar\s*\{[^}]*height:\s*0/s);
+    assert.match(STYLESHEET, /#map-histogram-panel \.raster-bivariate-statistics,\s*#map-histogram-panel \.raster-histogram\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/s);
+    assert.match(STYLESHEET, /#map-histogram-panel \.raster-histogram-heading\s*\{[^}]*padding-right:\s*36px/s);
+    assert.match(STYLESHEET, /#open-map-histogram\[hidden\],[^{]*\{\s*display:\s*none/s);
 });
 
 test("sidebar panels own deliberate, independent scrolling", () => {
