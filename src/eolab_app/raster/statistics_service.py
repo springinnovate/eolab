@@ -10,7 +10,7 @@ from typing import cast
 
 import rasterio
 
-from eolab_app.raster.errors import RasterConflictError
+from eolab_app.raster.errors import RasterConflictError, RasterStatisticsCapacityError
 from eolab_app.raster.models import (
     AuthorizedRaster,
     CatalogRasterPairRequest,
@@ -170,7 +170,7 @@ class RasterStatisticsService:
                 work = self._inflight.get(cache_key)
                 if work is None:
                     if len(self._inflight) >= self._maximum_inflight:
-                        raise RasterConflictError(
+                        raise RasterStatisticsCapacityError(
                             "Raster statistics capacity is busy; retry after "
                             "the current bounded read finishes."
                         )
@@ -187,7 +187,7 @@ class RasterStatisticsService:
                     work = _InflightStatistics(task, cancellation_requested)
                     self._inflight[cache_key] = work
                 elif work.cancellation_requested.is_set():
-                    raise RasterConflictError(
+                    raise RasterStatisticsCapacityError(
                         "Raster statistics capacity is finishing canceled work; "
                         "retry shortly."
                     )
@@ -288,7 +288,7 @@ class RasterStatisticsService:
                 work = self._inflight.get(cache_key)
                 if work is None:
                     if len(self._inflight) >= self._maximum_inflight:
-                        raise RasterConflictError(
+                        raise RasterStatisticsCapacityError(
                             "Raster statistics capacity is busy; retry after "
                             "the current bounded read finishes."
                         )
@@ -309,7 +309,7 @@ class RasterStatisticsService:
                     )
                     self._inflight[cache_key] = work
                 elif work.cancellation_requested.is_set():
-                    raise RasterConflictError(
+                    raise RasterStatisticsCapacityError(
                         "Raster statistics capacity is finishing canceled work; "
                         "retry shortly."
                     )

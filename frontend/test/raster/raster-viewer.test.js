@@ -489,7 +489,7 @@ function flushPromises() {
 }
 
 /** Exercise the real application's visible-layer policy and neutral controller. */
-function visibleLayerFixture(loadStatistics = async (item) => createLayerStatistics(item)) {
+function visibleLayerFixture(loadStatistics = async (item) => createLayerStatistics(item), dependencies = {}) {
     const leafletMap = createFakeMap();
     const { leaflet, wmsLayers } = createFakeLeaflet();
     const controlsView = createFakeControlsView();
@@ -504,11 +504,105 @@ function visibleLayerFixture(loadStatistics = async (item) => createLayerStatist
         loadPairedStatistics: async () => pairedStatistics(),
         samplePairPixels: async () => ({}),
         viewport: { innerWidth: 1280, innerHeight: 720 },
+        ...dependencies,
     });
     viewer.syncVisibleLayers();
     return { viewer, controlsView, mapLayers, layerStackView, wmsLayers, leaflet, leafletMap,
         destroy() { viewer.destroy(); mapLayers.destroy(); } };
 }
+
+test('two uncached 1D histograms share one read slot and both complete', async () => {
+    const reads = [];
+    let inflight = 0;
+    const h = visibleLayerFixture((item, area, signal) => {
+        assert.equal(inflight++, 0, 'the actual viewer must not overlap statistics reads');
+        const result = createDeferred();
+        reads.push({ item, area, signal, result });
+        return result.promise.finally(() => { inflight--; });
+    });
+    const first = createRasterItem('capacity-first'), second = createRasterItem('capacity-second');
+    await h.viewer.show(first);
+    reads[0].result.resolve(createLayerStatistics(first));
+    await flushPromises();
+    await h.viewer.show(second);
+    reads[1].result.resolve(createLayerStatistics(second));
+    await flushPromises();
+    h.leafletMap.emit('click', { latlng: { lng: -74, lat: 41 } });
+    assert.equal(reads.length, 3);
+    assert.deepEqual(h.controlsView.layerHistograms.map(s => s.state), ['loading', 'loading']);
+    reads[2].result.resolve(createLayerStatistics(reads[2].item, reads[2].area.selectedBounds));
+    await flushPromises();
+    assert.equal(reads.length, 4);
+    reads[3].result.resolve(createLayerStatistics(reads[3].item, reads[3].area.selectedBounds));
+    await flushPromises();
+    assert.deepEqual(h.controlsView.layerHistograms.map(s => s.state), ['ready', 'ready']);
+    assert.equal(inflight, 0);
+    h.destroy();
+});
+
+test('rapid samples drop obsolete queued work and hidden-layer requests', async () => {
+    const reads = [];
+    const h = visibleLayerFixture((item, area, signal) => {
+        if (area.kind === 'wholeRaster') return Promise.resolve(createLayerStatistics(item));
+        const result = createDeferred();
+        reads.push({ item, area, signal, result });
+        return result.promise;
+    });
+    await h.viewer.show(createRasterItem('first'));
+    await h.viewer.show(createRasterItem('second'));
+    await flushPromises();
+    h.leafletMap.emit('click', { latlng: { lng: -74, lat: 41 } });
+    h.leafletMap.emit('click', { latlng: { lng: -72, lat: 43 } });
+    assert.equal(reads.length, 1);
+    assert.equal(reads[0].signal.aborted, true);
+    const [, bottom] = h.mapLayers.snapshots();
+    h.mapLayers.setVisible(bottom.key, false);
+    reads[0].result.resolve(createLayerStatistics(reads[0].item, reads[0].area.selectedBounds));
+    await flushPromises();
+    assert.equal(reads.length, 2);
+    assert.notEqual(reads[1].item.id, reads[0].item.id);
+    assert.ok(reads[1].area.selectedBounds.west > -74);
+    reads[1].result.resolve(createLayerStatistics(reads[1].item, reads[1].area.selectedBounds));
+    await flushPromises();
+    assert.deepEqual(h.controlsView.layerHistograms.map(s => s.state), ['ready']);
+    h.leafletMap.emit('click', { latlng: { lng: -70, lat: 45 } });
+    h.destroy();
+    assert.equal(reads[2].signal.aborted, true);
+    reads[2].result.resolve(createLayerStatistics(reads[2].item, reads[2].area.selectedBounds));
+    await flushPromises();
+    assert.equal(reads.length, 3);
+});
+
+test('mode changes cancel queued 1D reads and share the slot with 2D', async () => {
+    const reads = [];
+    let pairedCalls = 0;
+    const h = visibleLayerFixture((item, area, signal) => {
+        if (area.kind === 'wholeRaster') return Promise.resolve(createLayerStatistics(item));
+        const result = createDeferred();
+        reads.push({ item, area, signal, result });
+        return result.promise;
+    }, { loadPairedStatistics: async () => { pairedCalls++; return pairedStatistics(); } });
+    await h.viewer.show(createRasterItem('first'));
+    await h.viewer.show(createRasterItem('second'));
+    await flushPromises();
+    h.leafletMap.emit('click', { latlng: { lng: -74, lat: 41 } });
+    h.controlsView.handlers.onBivariateModeChange('bivariate');
+    assert.equal(reads.length, 1);
+    assert.equal(reads[0].signal.aborted, true);
+    assert.equal(pairedCalls, 0);
+    reads[0].result.resolve(createLayerStatistics(reads[0].item, reads[0].area.selectedBounds));
+    await flushPromises();
+    assert.equal(pairedCalls, 1);
+    assert.equal(reads.length, 1, 'the canceled second 1D request must never start');
+    h.controlsView.handlers.onBivariateModeChange('overlay');
+    for (let i = 1; i <= 2; i++) {
+        assert.equal(reads.length, i + 1);
+        reads[i].result.resolve(createLayerStatistics(reads[i].item, reads[i].area.selectedBounds));
+        await flushPromises();
+    }
+    assert.deepEqual(h.controlsView.layerHistograms.map(s => s.state), ['ready', 'ready']);
+    h.destroy();
+});
 
 test('closing histogram sampling preserves its footprint and results across map and layer changes', async () => {
     const requests = [];
@@ -856,7 +950,9 @@ test("catalog selections enable paired analysis without publication", async () =
             publishRaster: async () => {
                 throw new Error("paired analysis must not publish WMS");
             },
-            loadStatistics: () => new Promise(() => {}),
+            loadStatistics: (_item, _area, signal) => new Promise((_, reject) => {
+                signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+            }),
             loadPairedStatistics: async (xItem, yItem, area) => {
                 pairedRequests.push({ xItem, yItem, area });
                 const statistics = pairedStatistics();
@@ -1424,11 +1520,12 @@ test("renderer changes abort and ignore obsolete analysis responses", async () =
     viewer.activateAnalysis(MOUNTED_GEOTIFF_ITEM);
     viewer.activateSampled(MOUNTED_GEOTIFF_ITEM, style, () => {});
 
-    assert.equal(requests.length, 2);
+    assert.equal(requests.length, 1);
     assert.equal(requests[0].signal.aborted, true);
-    requests[1].result.resolve(EXACT_RASTER_STATISTICS);
-    await flushPromises();
     requests[0].result.resolve(RASTER_STATISTICS);
+    await flushPromises();
+    assert.equal(requests.length, 2);
+    requests[1].result.resolve(EXACT_RASTER_STATISTICS);
     await flushPromises();
 
     assert.equal(controlsView.displayedStatistics, EXACT_RASTER_STATISTICS);
@@ -1654,7 +1751,7 @@ test("late sampled histogram responses cannot replace a newer clicked window", a
             layerStackView: createFakeLayerStackView(),
             loadStatistics(_item, samplingArea, signal) {
                 if (samplingArea.kind === "wholeRaster") {
-                    return new Promise(() => {});
+                    return Promise.resolve(RASTER_STATISTICS);
                 }
                 const result = createDeferred();
                 requests.push({
@@ -1668,11 +1765,17 @@ test("late sampled histogram responses cannot replace a newer clicked window", a
         }
     );
     viewer.activateSampled(MOUNTED_GEOTIFF_ITEM, style, () => {});
+    await flushPromises();
 
     leafletMap.emit("click", { latlng: { lng: -122, lat: 48 } });
     leafletMap.emit("click", { latlng: { lng: -121, lat: 49 } });
-    assert.equal(requests.length, 2);
+    assert.equal(requests.length, 1);
     assert.equal(requests[0].signal.aborted, true);
+    requests[0].result.resolve({
+        ...RASTER_STATISTICS, scope: "selectedArea", selectedBounds: requests[0].selectedBounds,
+    });
+    await flushPromises();
+    assert.equal(requests.length, 2);
     const currentStatistics = {
         ...RASTER_STATISTICS,
         scope: "selectedArea",
@@ -1680,11 +1783,6 @@ test("late sampled histogram responses cannot replace a newer clicked window", a
         samplingMethod: "sampleGrid",
     };
     requests[1].result.resolve(currentStatistics);
-    await flushPromises();
-    requests[0].result.resolve({
-        ...currentStatistics,
-        selectedBounds: requests[0].selectedBounds,
-    });
     await flushPromises();
 
     assert.equal(controlsView.displayedStatistics, currentStatistics);
@@ -2180,6 +2278,43 @@ test("a restored whole-raster statistics error retries the active layer", async 
     viewer.destroy();
 });
 
+test("exhausted capacity retries offer manual recovery without stale histograms", async () => {
+    const timers = new Map();
+    const clock = {
+        /** Retain the next retry until explicitly advanced. @return {Function} Timer token. */
+        setTimeout(callback, delay) { timers.set(callback, delay); return callback; },
+        /** Remove an aborted retry timer. @return {void} */
+        clearTimeout(callback) { timers.delete(callback); },
+    };
+    let busy = true;
+    let attempts = 0;
+    const h = visibleLayerFixture(async (item) => {
+        attempts++;
+        if (busy) throw new RasterAnalysisRequestError("Capacity occupied", 409, "statistics_capacity_busy");
+        return createLayerStatistics(item);
+    }, { clock });
+    await h.viewer.show(MOUNTED_GEOTIFF_ITEM);
+    for (const delay of [250, 500, 1000, 2000, 4000]) {
+        await flushPromises();
+        assert.equal(h.controlsView.layerHistograms[0].state, "loading");
+        assert.deepEqual([...timers.values()], [delay]);
+        const callback = timers.keys().next().value;
+        timers.delete(callback);
+        callback();
+    }
+    await flushPromises();
+    assert.equal(attempts, 6);
+    assert.equal(h.controlsView.layerHistograms[0].state, "error");
+    assert.equal(h.controlsView.statisticsRetryVisible, true);
+    busy = false;
+    h.controlsView.handlers.onRetryStatistics();
+    await flushPromises();
+    assert.equal(attempts, 7);
+    assert.equal(h.controlsView.layerHistograms[0].state, "ready");
+    assert.equal(h.controlsView.statisticsRetryVisible, false);
+    h.destroy();
+});
+
 test("a deterministic selected-area conflict does not offer Retry", async () => {
     const leafletMap = createFakeMap();
     const { leaflet } = createFakeLeaflet();
@@ -2372,7 +2507,11 @@ test("hidden WMS renderers do not gate active Catalog analysis", async () => {
             }),
             loadStatistics: (item, samplingArea, signal) => {
                 const selectedBounds = selectedBoundsFromArea(samplingArea);
+                if (item.id !== "geotiff-hidden-work-third") {
+                    return Promise.resolve(createLayerStatistics(item, selectedBounds));
+                }
                 const deferred = createDeferred();
+                signal.addEventListener("abort", () => deferred.reject(signal.reason), { once: true });
                 statisticsRequests.push({
                     deferred,
                     item,
@@ -2904,10 +3043,12 @@ test("AOI hide restores hover windows and show restores AOI sampling", async () 
 
     viewer.setTemporaryAoi(replacementAoi);
 
-    assert.equal(aoiRequests.length, 2);
+    assert.equal(aoiRequests.length, 1);
     assert.equal(aoiRequests[0].signal.aborted, true);
-    assert.equal(aoiRequests[1].temporaryAoiId, replacementId);
     aoiRequests[0].deferred.resolve(TEMPORARY_AOI_RASTER_STATISTICS);
+    await flushPromises();
+    assert.equal(aoiRequests.length, 2);
+    assert.equal(aoiRequests[1].temporaryAoiId, replacementId);
     aoiRequests[1].deferred.resolve({
         ...TEMPORARY_AOI_RASTER_STATISTICS,
         temporaryAoiId: replacementId,
@@ -2921,10 +3062,13 @@ test("AOI hide restores hover windows and show restores AOI sampling", async () 
     controlsView.handlers.onClearSampleWindow();
     assert.equal(controlsView.samplingAreaMode, "wholeRaster");
     controlsView.handlers.onUseTemporaryAoi();
+    await flushPromises();
     assert.equal(aoiRequests.length, 3);
     assert.equal(aoiRequests[2].temporaryAoiId, replacementId);
 
     viewer.setTemporaryAoi(null);
+    aoiRequests[2].deferred.resolve(TEMPORARY_AOI_RASTER_STATISTICS);
+    await flushPromises();
 
     assert.equal(aoiRequests[2].signal.aborted, true);
     assert.equal(controlsView.samplingAreaMode, "wholeRaster");

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from eolab_app.raster.errors import RasterConflictError
+from eolab_app.raster.errors import RasterConflictError, RasterStatisticsCapacityError
 from eolab_app.raster.models import (
     AuthorizedRaster,
     CatalogRasterPairRequest,
@@ -473,8 +473,10 @@ def test_paired_last_waiter_cancellation_retains_shared_capacity(
         with pytest.raises(asyncio.CancelledError):
             await paired_task
         assert await asyncio.to_thread(cancellation_observed.wait, 2)
-        with pytest.raises(RasterConflictError, match="capacity is busy"):
+        with pytest.raises(RasterStatisticsCapacityError, match="capacity is busy"):
             await service.get(ordinary_request)
+        with pytest.raises(RasterStatisticsCapacityError, match="finishing canceled work"):
+            await service.get_paired(pair_request)
         release_read.set()
         assert await asyncio.to_thread(reader_finished.wait, 2)
         async with asyncio.timeout(2):

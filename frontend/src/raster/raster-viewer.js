@@ -12,6 +12,7 @@ import {
     loadCatalogRasterStatistics,
     loadCatalogRasterPairedStatistics,
     RasterAnalysisRequestError,
+    isRasterStatisticsCapacityError,
     sampleCatalogRasterPixel,
     sampleCatalogRasterPairPixels,
 } from "./analysis-api.js";
@@ -46,6 +47,7 @@ import {
     WHOLE_RASTER_SAMPLING_AREA,
 } from "./statistics.js";
 import { RasterStatisticsController } from "./statistics-controller.js";
+import { RasterStatisticsRequestQueue } from "./statistics-request-queue.js";
 import {
     normalizeRasterPairedSamplingArea,
     WHOLE_RASTER_OVERLAP_SAMPLING_AREA,
@@ -66,8 +68,8 @@ const RASTER_STYLE_DEBOUNCE_MILLISECONDS = 200;
 /**
  * Return whether repeating a failed statistics request may change its result.
  *
- * Client and conflict responses describe invalid or currently unsupported
- * intent, so repeating the same request is not presented as recovery. Unknown
+ * Unclassified client/conflict responses describe invalid or unsupported
+ * intent. Classified capacity conflicts may recover after waiting. Unknown
  * transport failures, timeouts, rate limits, and server failures remain
  * retryable without coupling the viewer to backend error-message text.
  *
@@ -79,7 +81,7 @@ function canRetryRasterStatistics(error) {
         return true;
     }
     return (
-        error.status === 408 ||
+        isRasterStatisticsCapacityError(error) || error.status === 408 ||
         error.status === 429 ||
         error.status >= 500
     );
@@ -210,6 +212,17 @@ export function initializeRasterViewer(
         throw new TypeError("Histogram presentation callback must be callable");
     }
     controlsView ??= new RasterControlsView();
+    const statisticsRequests = new RasterStatisticsRequestQueue(clock);
+    /**
+     * Queue ordinary reads alongside paired reads for this viewer.
+     * @param {Object} item Catalog raster to analyze.
+     * @param {Object} area Normalized whole, bounds, or AOI sampling area.
+     * @param {AbortSignal} signal Controller-owned cancellation signal.
+     * @return {Promise<Object>} Statistics or the final read/abort failure.
+     */
+    function loadQueuedStatistics(item, area, signal) {
+        return statisticsRequests.run(() => loadStatistics(item, area, signal), signal);
+    }
     ensureRasterSampleWindowPane(leafletMap);
     const ownsMapLayerController = mapLayerController === null;
     const mapLayers = mapLayerController ?? new MapLayerController({
@@ -660,7 +673,7 @@ export function initializeRasterViewer(
         renderRasterSampleWindowGuidance
     );
     const rasterStatisticsController = new RasterStatisticsController(
-        loadStatistics,
+        loadQueuedStatistics,
         /**
          * Present the start of the active raster's request in its correct scope.
          *
@@ -719,12 +732,12 @@ export function initializeRasterViewer(
          * @param {AbortSignal} signal Cancellation signal for superseded work.
          * @return {Promise<Object>} Validated paired statistics; rejects on failure.
          */
-        (pair, samplingArea, signal) => loadPairedStatistics(
+        (pair, samplingArea, signal) => statisticsRequests.run(() => loadPairedStatistics(
             pair.xItem,
             pair.yItem,
             samplingArea,
             signal
-        ),
+        ), signal),
         /**
          * Announce a new paired request; target, area, and context are unused.
          *
@@ -1085,7 +1098,7 @@ export function initializeRasterViewer(
      */
     function requireLayerHistogramController(session) {
         session.layerHistogramController ??= new RasterStatisticsController(
-            loadStatistics,
+            loadQueuedStatistics,
             /**
              * Mark this inactive session's requested scope busy and inapplicable.
              *
@@ -1131,6 +1144,17 @@ export function initializeRasterViewer(
     }
 
     /**
+     * Cancel a secondary read without leaving an orphaned loading state.
+     * @param {Object} session Retained raster interaction state.
+     * @return {void}
+     */
+    function cancelLayerHistogramRequest(session) {
+        session.layerHistogramController?.clear();
+        if (session.wholeRasterStatisticsState === "loading") session.wholeRasterStatisticsState = "idle";
+        if (session.selectedRasterStatisticsState === "loading") session.selectedRasterStatisticsState = "idle";
+    }
+
+    /**
      * Refresh inactive retained rasters for one explicit histogram area.
      *
      * The active raster continues through the existing shared controller so
@@ -1138,9 +1162,10 @@ export function initializeRasterViewer(
      * Hidden records are skipped when following visible-layer analysis.
      *
      * @param {Readonly<Object>} samplingArea Validated sampling-area union.
+     * @param {boolean} [onlyMissing=false] Resume canceled work without replacing ready results.
      * @return {void}
      */
-    function refreshRetainedLayerHistograms(samplingArea) {
+    function refreshRetainedLayerHistograms(samplingArea, onlyMissing = false) {
         saveActiveLayerSession();
         for (const record of mapLayers.retainedRecords) {
             if (
@@ -1151,6 +1176,7 @@ export function initializeRasterViewer(
                 continue;
             }
             const session = record.state;
+            if (onlyMissing && getLayerHistogramPresentation(session).state !== "idle") continue;
             setSessionSamplingArea(session, samplingArea);
             void requireLayerHistogramController(session).activate(
                 session.item,
@@ -1495,6 +1521,11 @@ export function initializeRasterViewer(
             : { ...selectedRasterBounds };
         bivariateSelectedWindowSizeKm = selectedRasterWindowSizeKm;
         rasterStatisticsController.clear();
+        resetPendingRasterStatisticsState();
+        saveActiveLayerSession();
+        for (const record of mapLayers.retainedRecords) {
+            if (record.adapter === rasterMapLayerAdapter) cancelLayerHistogramRequest(record.state);
+        }
         pixelProbeController.clear();
         bivariateMode.enter(eligible.map(
             /**
@@ -1553,6 +1584,7 @@ export function initializeRasterViewer(
         if (restoreAnalysis && activeRasterItem !== null) {
             pixelProbeController.activate(activeRasterItem);
             restoreActiveLayerStatistics();
+            refreshRetainedLayerHistograms(currentRasterSamplingArea(), true);
         } else if (restoreAnalysis) {
             rasterSampleWindowController.clear();
             controlsView.hidePixelProbe();
@@ -1672,13 +1704,7 @@ export function initializeRasterViewer(
          */
         activate(record) {
             if (followsVisibleLayers && visibleRasterRecords()[0]?.entry.key !== record.entry.key) return;
-            record.state.layerHistogramController?.clear();
-            if (record.state.wholeRasterStatisticsState === "loading") {
-                record.state.wholeRasterStatisticsState = "idle";
-            }
-            if (record.state.selectedRasterStatisticsState === "loading") {
-                record.state.selectedRasterStatisticsState = "idle";
-            }
+            cancelLayerHistogramRequest(record.state);
             activateRasterSession(record.entry, record.state);
             renderBivariateAvailability();
         },
@@ -1726,6 +1752,7 @@ export function initializeRasterViewer(
          * @return {void}
          */
         visibilityChanged(record, visible) {
+            if (!visible && followsVisibleLayers) cancelLayerHistogramRequest(record.state);
             if (bivariateMode.contains(record.entry.key)) {
                 applyBivariatePresentation();
             }

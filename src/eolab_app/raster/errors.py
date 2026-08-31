@@ -52,6 +52,10 @@ class RasterConflictError(RasterFeatureError):
     """Raised when current raster state cannot satisfy an operation."""
 
 
+class RasterStatisticsCapacityError(RasterConflictError):
+    """A temporary statistics admission conflict, safe to retry later."""
+
+
 class RasterUpstreamError(RasterFeatureError):
     """Raised when a required catalog or rendering adapter fails."""
 
