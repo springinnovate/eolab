@@ -749,11 +749,28 @@ async function initializeCatalog(
     vectorFeatureInspector = new VectorFeatureInspectorController({
         leaflet: L,
         leafletMap,
-        mapLayers: mapLayerController,
-        vectorAdapter: vectorMapLayerAdapter,
+        getVisibleTargets: () => mapLayerController.retainedRecords
+            .filter((record) =>
+                record.entry.visible && record.adapter === vectorMapLayerAdapter
+            )
+            .map((record) => ({
+                label: record.entry.label,
+                publication: {
+                    layerName: record.publication.layerName,
+                    styleName: record.publication.styleName,
+                },
+                primaryGeometry:
+                    record.state.item.properties?.["table:primary_geometry"] ?? null,
+            })),
         wmsUrl: appGlobalConfiguration.wmsUrl,
-        inspection: mapInspection,
-        onEnable: () => rasterVisualization.stopSampleWindowSelection(),
+        onActiveChange: (active) => {
+            if (active) {
+                rasterVisualization.stopSampleWindowSelection();
+                mapInspection.showFeatureInspector();
+            } else {
+                mapInspection.hideFeatureInspector();
+            }
+        },
     });
     const rasterDetailPreview = initializeRasterDetailPreview({
         leafletMap,

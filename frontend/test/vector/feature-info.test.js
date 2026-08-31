@@ -14,22 +14,19 @@ const PUBLICATION = Object.freeze({
   styleName: "vector-polygon",
 });
 
-function mapFixture() {
-  return {
-    getSize: () => ({ x: 4096, y: 2048 }),
-    getBounds: () => ({
-      getSouthWest: () => ({ lat: 10, lng: 20 }),
-      getNorthEast: () => ({ lat: 30, lng: 40 }),
-    }),
-  };
-}
+const VIEWPORT = Object.freeze({
+  bbox: Object.freeze([20, 10, 40, 30]),
+  width: 4096,
+  height: 2048,
+  x: 1024,
+  y: 512,
+});
 
 test("feature info scales a large viewport and click under the WMS limit", () => {
   const url = new URL(buildVectorFeatureInfoUrl({
     wmsUrl: "https://viewer.test/geoserver/eolab/wms",
-    leafletMap: mapFixture(),
     publication: PUBLICATION,
-    containerPoint: { x: 1024, y: 512 },
+    viewport: VIEWPORT,
   }));
   assert.equal(url.searchParams.get("request"), "GetFeatureInfo");
   assert.equal(url.searchParams.get("layers"), PUBLICATION.layerName);
@@ -56,9 +53,8 @@ test("feature info accepts only a bounded GeoJSON FeatureCollection", async () =
   const calls = [];
   const features = await fetchVectorFeatureInfo({
     wmsUrl: "/geoserver/eolab/wms",
-    leafletMap: mapFixture(),
     publication: PUBLICATION,
-    containerPoint: { x: 4, y: 8 },
+    viewport: VIEWPORT,
     signal: new AbortController().signal,
   }, async (url, options) => {
     calls.push({ url, options });
@@ -73,9 +69,8 @@ test("feature info accepts only a bounded GeoJSON FeatureCollection", async () =
   await assert.rejects(
     () => fetchVectorFeatureInfo({
       wmsUrl: "/wms",
-      leafletMap: mapFixture(),
       publication: PUBLICATION,
-      containerPoint: { x: 4, y: 8 },
+      viewport: VIEWPORT,
       signal: new AbortController().signal,
     }, async () => ({
       ok: true,
@@ -91,9 +86,8 @@ test("feature info exposes safe proxy failures", async () => {
   await assert.rejects(
     () => fetchVectorFeatureInfo({
       wmsUrl: "/wms",
-      leafletMap: mapFixture(),
       publication: PUBLICATION,
-      containerPoint: { x: 4, y: 8 },
+      viewport: VIEWPORT,
       signal: new AbortController().signal,
     }, async () => ({
       ok: false,

@@ -14,7 +14,20 @@ const HIGHLIGHT_STYLE = Object.freeze({
 });
 const MAX_ATTRIBUTE_VALUE_CHARACTERS = 1000;
 
-/** Format an arbitrary GeoJSON property as bounded display text. */
+/**
+ * @typedef {Object} VectorFeatureInspectionTarget
+ * @property {string} label User-facing retained-layer label.
+ * @property {{layerName:string,styleName:string}} publication Authorized WMS
+ * publication identity.
+ * @property {string|null} primaryGeometry Catalog-declared geometry field.
+ */
+
+/**
+ * Format an arbitrary GeoJSON property as bounded display text.
+ *
+ * @param {*} value GeoJSON property value.
+ * @return {string} Safe text capped at the presentation limit.
+ */
 export function formatVectorFeatureAttribute(value) {
     let text;
     if (value === null || value === undefined) {
@@ -37,9 +50,14 @@ export function formatVectorFeatureAttribute(value) {
         : `${text.slice(0, MAX_ATTRIBUTE_VALUE_CHARACTERS - 1)}…`;
 }
 
-/** Return user-facing properties while excluding the source geometry field. */
-export function vectorFeatureAttributes(feature, item) {
-    const primaryGeometry = item?.properties?.["table:primary_geometry"];
+/**
+ * Return user-facing properties while excluding geometry metadata.
+ *
+ * @param {Object} feature Validated GeoJSON Feature.
+ * @param {string|null} primaryGeometry Catalog-declared geometry field.
+ * @return {{name:string,value:string}[]} Bounded display attributes.
+ */
+export function vectorFeatureAttributes(feature, primaryGeometry = null) {
     const geometryNames = new Set(
         [primaryGeometry, "geometry", "the_geom", "boundedBy", "bbox"]
             .filter((name) => typeof name === "string")
@@ -65,11 +83,11 @@ export class VectorFeatureInspectorController {
      * @param {Object} configuration Collaborators.
      * @param {Object} configuration.leaflet Leaflet namespace.
      * @param {Object} configuration.leafletMap Initialized Leaflet map.
-     * @param {Object} configuration.mapLayers Retained map-layer controller.
-     * @param {Object} configuration.vectorAdapter Vector layer identity.
+     * @param {() => VectorFeatureInspectionTarget[]}
+     * configuration.getVisibleTargets Current visible vectors from composition.
      * @param {string} configuration.wmsUrl Restricted browser WMS URL.
-     * @param {Object} configuration.inspection Shared map-side presentation.
-     * @param {() => void} configuration.onEnable Pauses competing map tools.
+     * @param {(active:boolean) => void} configuration.onActiveChange Notifies
+     * composition so it can coordinate sibling map tools.
      * @param {Document} [configuration.documentContext=document] DOM owner.
      * @param {typeof fetch} [configuration.fetchImplementation=globalThis.fetch]
      * HTTP implementation.
@@ -77,21 +95,23 @@ export class VectorFeatureInspectorController {
     constructor({
         leaflet,
         leafletMap,
-        mapLayers,
-        vectorAdapter,
+        getVisibleTargets,
         wmsUrl,
-        inspection,
-        onEnable,
+        onActiveChange,
         documentContext = document,
         fetchImplementation = globalThis.fetch,
     }) {
+        if (typeof getVisibleTargets !== "function") {
+            throw new TypeError("getVisibleTargets must be a function.");
+        }
+        if (typeof onActiveChange !== "function") {
+            throw new TypeError("onActiveChange must be a function.");
+        }
         this.leaflet = leaflet;
         this.map = leafletMap;
-        this.mapLayers = mapLayers;
-        this.vectorAdapter = vectorAdapter;
+        this.getVisibleTargets = getVisibleTargets;
         this.wmsUrl = wmsUrl;
-        this.inspection = inspection;
-        this.onEnable = onEnable;
+        this.onActiveChange = onActiveChange;
         this.document = documentContext;
         this.fetchImplementation = fetchImplementation;
         this.opener = documentContext.querySelector("#open-vector-inspector");
@@ -138,16 +158,41 @@ export class VectorFeatureInspectorController {
         this.syncVisibleLayers();
     }
 
-    /** Return visible vector records in top-first map order. */
-    visibleVectorRecords() {
-        return this.mapLayers.retainedRecords.filter(
-            (record) => record.entry.visible && record.adapter === this.vectorAdapter
-        );
+    /**
+     * Return validated visible vector targets in top-first map order.
+     *
+     * @return {VectorFeatureInspectionTarget[]} Current inspection targets.
+     * @throws {TypeError} If composition violates the target contract.
+     */
+    visibleTargets() {
+        const targets = this.getVisibleTargets();
+        if (!Array.isArray(targets)) {
+            throw new TypeError("getVisibleTargets must return an array.");
+        }
+        for (const target of targets) {
+            if (
+                typeof target?.label !== "string" ||
+                target.label.length === 0 ||
+                typeof target?.publication?.layerName !== "string" ||
+                typeof target?.publication?.styleName !== "string" ||
+                !(
+                    target?.primaryGeometry === null ||
+                    typeof target?.primaryGeometry === "string"
+                )
+            ) {
+                throw new TypeError("Invalid vector feature inspection target.");
+            }
+        }
+        return targets;
     }
 
-    /** Synchronize opener availability and close an orphaned interaction. */
+    /**
+     * Synchronize opener availability and close an orphaned interaction.
+     *
+     * @return {void}
+     */
     syncVisibleLayers() {
-        const available = this.visibleVectorRecords().length > 0;
+        const available = this.visibleTargets().length > 0;
         this.opener.hidden = !available;
         this.opener.disabled = !available;
         if (!available && this.active) {
@@ -155,23 +200,59 @@ export class VectorFeatureInspectorController {
         }
     }
 
-    /** Enable explicit inspection without moving keyboard focus. */
+    /**
+     * Project the Leaflet map click into the neutral WMS viewport contract.
+     *
+     * @param {{x:number,y:number}} containerPoint Click position in map pixels.
+     * @return {{bbox:number[],width:number,height:number,x:number,y:number}}
+     * Current WGS 84 viewport and click position.
+     */
+    mapViewport(containerPoint) {
+        const size = this.map.getSize();
+        const bounds = this.map.getBounds();
+        const southwest = bounds.getSouthWest();
+        const northeast = bounds.getNorthEast();
+        return {
+            bbox: [
+                southwest.lng,
+                southwest.lat,
+                northeast.lng,
+                northeast.lat,
+            ],
+            width: size.x,
+            height: size.y,
+            x: containerPoint.x,
+            y: containerPoint.y,
+        };
+    }
+
+    /**
+     * Enable explicit inspection without moving keyboard focus.
+     *
+     * @return {void}
+     */
     enable() {
-        if (this.active || this.visibleVectorRecords().length === 0) {
+        if (this.active || this.visibleTargets().length === 0) {
             return;
         }
         this.active = true;
-        this.onEnable();
+        this.onActiveChange(true);
         this.map.on("click", this.onMapClick);
         this.mapContainer.classList.add("is-inspecting-vector-features");
         this.opener.hidden = true;
         this.opener.setAttribute("aria-expanded", "true");
         this.status.textContent = "Click a visible vector feature to inspect it.";
-        this.inspection.showFeatureInspector();
     }
 
-    /** Disable inspection, cancel work, clear results, and optionally restore focus. */
+    /**
+     * Disable inspection, cancel work, clear results, and optionally restore focus.
+     *
+     * @param {Object} [options] Disable options.
+     * @param {boolean} [options.moveFocus=false] Restore focus to the opener.
+     * @return {void}
+     */
     disable({ moveFocus = false } = {}) {
+        const wasActive = this.active;
         if (this.active) {
             this.map.off("click", this.onMapClick);
         }
@@ -181,7 +262,9 @@ export class VectorFeatureInspectorController {
         this.abortController = null;
         this.clearResults();
         this.mapContainer.classList.remove("is-inspecting-vector-features");
-        this.inspection.hideFeatureInspector();
+        if (wasActive) {
+            this.onActiveChange(false);
+        }
         this.opener.setAttribute("aria-expanded", "false");
         this.syncVisibleLayers();
         if (moveFocus && !this.opener.hidden) {
@@ -189,10 +272,15 @@ export class VectorFeatureInspectorController {
         }
     }
 
-    /** Inspect every currently visible vector layer at one map click. */
+    /**
+     * Inspect every currently visible vector target at one map click.
+     *
+     * @param {Object} event Leaflet map-click event.
+     * @return {Promise<void>} Completion after current results are presented.
+     */
     async inspect(event) {
-        const records = this.visibleVectorRecords();
-        if (!this.active || records.length === 0) {
+        const targets = this.visibleTargets();
+        if (!this.active || targets.length === 0) {
             return;
         }
         this.abortController?.abort();
@@ -202,15 +290,14 @@ export class VectorFeatureInspectorController {
         this.status.textContent = "Inspecting visible vector layers…";
         const containerPoint = event.containerPoint ??
             this.map.latLngToContainerPoint(event.latlng);
-        const responses = await Promise.allSettled(records.map(async (record) => {
+        const responses = await Promise.allSettled(targets.map(async (target) => {
             const features = await fetchVectorFeatureInfo({
                 wmsUrl: this.wmsUrl,
-                leafletMap: this.map,
-                publication: record.publication,
-                containerPoint,
+                publication: target.publication,
+                viewport: this.mapViewport(containerPoint),
                 signal: this.abortController.signal,
             }, this.fetchImplementation);
-            return features.map((feature) => ({ feature, record }));
+            return features.map((feature) => ({ feature, target }));
         }));
         if (!this.active || generation !== this.requestGeneration) {
             return;
@@ -239,20 +326,25 @@ export class VectorFeatureInspectorController {
             : "No vector feature was found at that location.";
     }
 
-    /** Present one result and replace its map highlight. */
+    /**
+     * Present one result and replace its map highlight.
+     *
+     * @param {number} index Zero-based result index.
+     * @return {void}
+     */
     showResult(index) {
         if (this.results.length === 0) {
             return;
         }
         this.resultIndex = Math.min(this.results.length - 1, Math.max(0, index));
-        const { feature, record } = this.results[this.resultIndex];
+        const { feature, target } = this.results[this.resultIndex];
         this.result.hidden = false;
-        this.layerName.textContent = record.entry.label;
+        this.layerName.textContent = target.label;
         this.position.textContent = `${this.resultIndex + 1} of ${this.results.length}`;
         this.previous.disabled = this.resultIndex === 0;
         this.next.disabled = this.resultIndex === this.results.length - 1;
         this.attributes.replaceChildren();
-        const entries = vectorFeatureAttributes(feature, record.state.item);
+        const entries = vectorFeatureAttributes(feature, target.primaryGeometry);
         if (entries.length === 0) {
             const term = this.document.createElement("dt");
             term.textContent = "Attributes";
@@ -278,7 +370,11 @@ export class VectorFeatureInspectorController {
         }
     }
 
-    /** Clear result DOM and map highlight. */
+    /**
+     * Clear result DOM and map highlight.
+     *
+     * @return {void}
+     */
     clearResults() {
         this.results = [];
         this.resultIndex = 0;
@@ -287,7 +383,11 @@ export class VectorFeatureInspectorController {
         this.clearHighlight();
     }
 
-    /** Remove the selected feature overlay if one exists. */
+    /**
+     * Remove the selected feature overlay if one exists.
+     *
+     * @return {void}
+     */
     clearHighlight() {
         if (this.highlightLayer !== null) {
             this.map.removeLayer(this.highlightLayer);
@@ -295,7 +395,11 @@ export class VectorFeatureInspectorController {
         }
     }
 
-    /** Permanently release listeners and transient state. */
+    /**
+     * Permanently release listeners and transient state.
+     *
+     * @return {void}
+     */
     destroy() {
         this.disable();
         this.opener.removeEventListener("click", this.onOpen);

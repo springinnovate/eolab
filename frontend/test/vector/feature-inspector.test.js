@@ -15,28 +15,11 @@ function createFixture(fetchImplementation) {
   documentContext.removeEventListener = documentEvents.removeEventListener.bind(documentEvents);
   documentContext.dispatchEvent = documentEvents.dispatchEvent.bind(documentEvents);
   documentContext.querySelector("#vector-feature-result").hidden = true;
-  const vectorAdapter = {};
-  const otherAdapter = {};
-  const records = [
+  const targets = [
     {
-      adapter: vectorAdapter,
-      entry: { visible: true, label: "Parcels" },
+      label: "Parcels",
       publication: { layerName: "eolab:parcels", styleName: "vector-polygon" },
-      state: {
-        item: { properties: { "table:primary_geometry": "geometry" } },
-      },
-    },
-    {
-      adapter: vectorAdapter,
-      entry: { visible: false, label: "Hidden roads" },
-      publication: { layerName: "eolab:roads", styleName: "vector-line" },
-      state: { item: { properties: {} } },
-    },
-    {
-      adapter: otherAdapter,
-      entry: { visible: true, label: "Raster" },
-      publication: { layerName: "eolab:raster", styleName: "dynamic-raster" },
-      state: { item: { properties: {} } },
+      primaryGeometry: "geometry",
     },
   ];
   const handlers = new Map();
@@ -69,31 +52,24 @@ function createFixture(fetchImplementation) {
     },
     circleMarker(latlng, options) { return { latlng, options }; },
   };
-  const inspectionCalls = [];
-  const enableCalls = [];
+  const activeChanges = [];
   const controller = new VectorFeatureInspectorController({
     leaflet,
     leafletMap,
-    mapLayers: { get retainedRecords() { return records; } },
-    vectorAdapter,
+    getVisibleTargets: () => targets,
     wmsUrl: "/geoserver/eolab/wms",
-    inspection: {
-      showFeatureInspector: () => inspectionCalls.push("show"),
-      hideFeatureInspector: () => inspectionCalls.push("hide"),
-    },
-    onEnable: () => enableCalls.push("pause-raster"),
+    onActiveChange: (active) => activeChanges.push(active),
     documentContext,
     fetchImplementation,
   });
   return {
     controller,
     documentContext,
-    records,
+    targets,
     handlers,
     highlights,
     removedLayers,
-    inspectionCalls,
-    enableCalls,
+    activeChanges,
     mapContainer,
   };
 }
@@ -108,14 +84,14 @@ test("attribute formatting is bounded and excludes the geometry field", () => {
     bbox: [0, 0, 1, 1],
     habitat: "wetland",
     rank: 2,
-  } }, { properties: { "table:primary_geometry": "geometry" } }), [
+  } }, "geometry"), [
     { name: "Feature ID", value: "parcels.1" },
     { name: "habitat", value: "wetland" },
     { name: "rank", value: "2" },
   ]);
 });
 
-test("inspector queries only visible vectors and navigates overlapping features", async () => {
+test("inspector queries composed visible targets and navigates overlapping features", async () => {
   const requestedLayers = [];
   const features = [
     {
@@ -139,8 +115,7 @@ test("inspector queries only visible vectors and navigates overlapping features"
   const opener = h.documentContext.querySelector("#open-vector-inspector");
   assert.equal(opener.hidden, false);
   opener.dispatchEvent(new Event("click"));
-  assert.deepEqual(h.enableCalls, ["pause-raster"]);
-  assert.deepEqual(h.inspectionCalls, ["show"]);
+  assert.deepEqual(h.activeChanges, [true]);
   assert.equal(h.handlers.has("click"), true);
   assert.equal(h.mapContainer.classList.contains("is-inspecting-vector-features"), true);
 
@@ -159,6 +134,17 @@ test("inspector queries only visible vectors and navigates overlapping features"
     "2 of 2");
   assert.equal(h.highlights.length, 2);
   assert.equal(h.removedLayers.length, 1);
+});
+
+test("inspector validates the composition target contract at its boundary", () => {
+  const h = createFixture(async () => {
+    throw new Error("No request expected.");
+  });
+  h.targets[0].publication.layerName = null;
+  assert.throws(
+    () => h.controller.syncVisibleLayers(),
+    /Invalid vector feature inspection target/,
+  );
 });
 
 test("a newer click owns presentation and hiding the last vector closes inspection", async () => {
@@ -185,10 +171,10 @@ test("a newer click owns presentation and hiding the last vector closes inspecti
   assert.equal(h.documentContext.querySelector("#vector-feature-status").textContent,
     "1 feature found.");
 
-  h.records[0].entry.visible = false;
+  h.targets.length = 0;
   h.controller.syncVisibleLayers();
   assert.equal(h.controller.active, false);
   assert.equal(h.documentContext.querySelector("#open-vector-inspector").hidden, true);
   assert.equal(h.handlers.has("click"), false);
-  assert.deepEqual(h.inspectionCalls, ["show", "hide"]);
+  assert.deepEqual(h.activeChanges, [true, false]);
 });

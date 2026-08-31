@@ -1,4 +1,4 @@
-/** Shared non-modal map-side presentation for histograms and layer styling. */
+/** Shared non-modal presentation surface for independent map-side tools. */
 export class MapInspectionController {
     /**
      * Bind the persistent histogram opener and its independent close control.
@@ -67,13 +67,21 @@ export class MapInspectionController {
         this.#synchronize();
     }
 
-    /** Reveal vector feature results without changing retained map layers. */
+    /**
+     * Reveal vector feature results without changing retained map layers.
+     *
+     * @return {void}
+     */
     showFeatureInspector() {
         this.feature.hidden = false;
         this.#synchronize();
     }
 
-    /** Hide vector feature results without changing any other map-side tool. */
+    /**
+     * Hide vector feature results without changing any other map-side tool.
+     *
+     * @return {void}
+     */
     hideFeatureInspector() {
         this.feature.hidden = true;
         this.#synchronize();

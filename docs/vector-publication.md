@@ -125,6 +125,14 @@ property values, and writes all names and values with `textContent`. The
 source geometry field is omitted from the attribute table because the selected
 geometry is already represented by the temporary map highlight.
 
+The browser composition root projects visible retained vector records into the
+inspector's narrow target contract and coordinates raster-sampling pause and
+map-side panel visibility. The inspector does not read the retained-layer
+controller, compare concrete map adapters, or call sibling presentation
+controllers. Its WMS publication name remains a current-process lifecycle
+identifier authorized by the existing published-layer registry; no filesystem
+path is accepted or exposed.
+
 ## Production verification
 
 `deployment/require-geoserver-vector-datastores.sh` fails image build and

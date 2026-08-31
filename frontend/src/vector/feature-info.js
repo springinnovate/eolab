@@ -4,6 +4,15 @@ export const VECTOR_FEATURE_INFO_LIMIT = 5;
 export const VECTOR_FEATURE_INFO_BUFFER_PIXELS = 8;
 const MAX_WMS_VIEWPORT_EDGE = 2048;
 
+/**
+ * @typedef {Object} VectorFeatureInfoViewport
+ * @property {number[]} bbox WGS 84 west, south, east, north bounds.
+ * @property {number} width Browser viewport width in pixels.
+ * @property {number} height Browser viewport height in pixels.
+ * @property {number} x Horizontal click coordinate in viewport pixels.
+ * @property {number} y Vertical click coordinate in viewport pixels.
+ */
+
 /** Browser-safe vector inspection failure. */
 export class VectorFeatureInfoError extends Error {
     /** @param {string} message User-facing failure detail. */
@@ -16,30 +25,29 @@ export class VectorFeatureInfoError extends Error {
 /**
  * Build a bounded GetFeatureInfo URL for one map click and vector publication.
  *
- * The request describes the current EPSG:4326 viewport, reducing dimensions
- * and the click coordinate together when a large display exceeds the public
- * WMS edge limit. WMS 1.1.1 keeps longitude/latitude axis order and causes
- * GeoServer's default feature-info reprojection to return Leaflet-ready GeoJSON.
+ * The request describes a neutral EPSG:4326 viewport, reducing dimensions and
+ * the click coordinate together when a large display exceeds the public WMS
+ * edge limit. WMS 1.1.1 keeps longitude/latitude axis order.
  *
  * @param {Object} configuration Request configuration.
  * @param {string} configuration.wmsUrl Restricted browser WMS endpoint.
- * @param {Object} configuration.leafletMap Initialized Leaflet map.
  * @param {Object} configuration.publication Published vector identity.
- * @param {{x:number,y:number}} configuration.containerPoint Click position.
+ * @param {VectorFeatureInfoViewport} configuration.viewport Neutral map view.
  * @return {string} Relative or absolute bounded WMS URL.
  */
 export function buildVectorFeatureInfoUrl({
     wmsUrl,
-    leafletMap,
     publication,
-    containerPoint,
+    viewport,
 }) {
-    const size = leafletMap.getSize();
     if (
-        !Number.isFinite(size?.x) || !Number.isFinite(size?.y) ||
-        size.x <= 0 || size.y <= 0 ||
-        !Number.isFinite(containerPoint?.x) ||
-        !Number.isFinite(containerPoint?.y)
+        !Number.isFinite(viewport?.width) ||
+        !Number.isFinite(viewport?.height) ||
+        viewport.width <= 0 || viewport.height <= 0 ||
+        !Number.isFinite(viewport?.x) ||
+        !Number.isFinite(viewport?.y) ||
+        !Array.isArray(viewport?.bbox) || viewport.bbox.length !== 4 ||
+        !viewport.bbox.every(Number.isFinite)
     ) {
         throw new VectorFeatureInfoError(
             "The map viewport is unavailable for feature inspection."
@@ -47,22 +55,13 @@ export function buildVectorFeatureInfoUrl({
     }
     const scale = Math.min(
         1,
-        MAX_WMS_VIEWPORT_EDGE / size.x,
-        MAX_WMS_VIEWPORT_EDGE / size.y
+        MAX_WMS_VIEWPORT_EDGE / viewport.width,
+        MAX_WMS_VIEWPORT_EDGE / viewport.height
     );
-    const width = Math.max(1, Math.round(size.x * scale));
-    const height = Math.max(1, Math.round(size.y * scale));
-    const i = Math.min(width - 1, Math.max(0, Math.round(containerPoint.x * scale)));
-    const j = Math.min(height - 1, Math.max(0, Math.round(containerPoint.y * scale)));
-    const bounds = leafletMap.getBounds();
-    const southwest = bounds.getSouthWest();
-    const northeast = bounds.getNorthEast();
-    const bbox = [southwest.lng, southwest.lat, northeast.lng, northeast.lat];
-    if (!bbox.every(Number.isFinite)) {
-        throw new VectorFeatureInfoError(
-            "The map bounds are unavailable for feature inspection."
-        );
-    }
+    const width = Math.max(1, Math.round(viewport.width * scale));
+    const height = Math.max(1, Math.round(viewport.height * scale));
+    const i = Math.min(width - 1, Math.max(0, Math.round(viewport.x * scale)));
+    const j = Math.min(height - 1, Math.max(0, Math.round(viewport.y * scale)));
     const parameters = new URLSearchParams({
         service: "WMS",
         version: "1.1.1",
@@ -71,7 +70,7 @@ export function buildVectorFeatureInfoUrl({
         query_layers: publication.layerName,
         styles: publication.styleName,
         srs: "EPSG:4326",
-        bbox: bbox.join(","),
+        bbox: viewport.bbox.join(","),
         width: String(width),
         height: String(height),
         format: "image/png",

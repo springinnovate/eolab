@@ -3468,7 +3468,7 @@ button.raster-histogram-summary:hover,
   max-width: calc(100% - 40px);
 }
 .map-tool-openers .secondary-button { box-shadow: var(--elevation-panel); }
-.map-tool-openers:has(#open-map-histogram[hidden]) #open-vector-inspector {
+.map-tool-openers:has(#open-map-histogram[hidden]) {
   display: none;
 }
 
