@@ -69,9 +69,8 @@ export class MapLayerController {
         this.presentationActiveKey = null;
         this.destroyed = false;
         this.view.bind({
-            onActivate: (key) => this.activate(key),
+            onStyle: (key) => this.onStyle?.(key),
             onVisibility: (key, visible) => this.setVisible(key, visible),
-            onOpacity: (key, opacity) => this.setOpacity(key, opacity),
             onMove: (key, direction) => this.move(key, direction),
             onRemove: (key) => this.removeKey(key),
         });
@@ -340,13 +339,13 @@ export class MapLayerController {
             this.stack.entries[removedIndex - 1]?.key ??
             null;
         if (wasActive && activeKey !== null && removal.activateFallback !== false) {
-            this.#activate(activeKey, { key: activeKey, action: "activate" });
+            this.#activate(activeKey, { key: activeKey, action: "style" });
         } else {
             if (wasActive) {
                 this.presentationActiveKey = null;
             }
             this.render(
-                focusKey === null ? null : { key: focusKey, action: "activate" }
+                focusKey === null ? null : { key: focusKey, action: "style" }
             );
         }
         this.view.setStatus(`${removed.label} was removed from map layers.`);

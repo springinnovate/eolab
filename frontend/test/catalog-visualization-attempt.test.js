@@ -23,7 +23,7 @@ function sourceBetween(startMarker, endMarker) {
 
 const ACTION_SOURCE = [
   sourceBetween("function refreshCatalogMapAction()", "function renderRasterDetailPreviewResolution("),
-  sourceBetween("function beginCatalogMapAction(", "const mapLayerController ="),
+  sourceBetween("function beginCatalogMapAction(", "let rasterVisualization ="),
   sourceBetween("function updateCatalogMapAction(item)", "function clearCatalogSelection()"),
   sourceBetween("async function toggleCatalogLayer(", 'catalogLayerToggle.addEventListener('),
 ].join("\n");

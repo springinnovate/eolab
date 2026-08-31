@@ -201,6 +201,11 @@ export function initializeRasterViewer(
     let analysisRasterSession = null;
     let activeLayerKey = null;
     let rasterStyle = { ...DEFAULT_RASTER_STYLE };
+    let activePaletteName = "blue-yellow-red";
+    let editingLayerKey = null;
+    let followsVisibleLayers = false;
+    let visibleHistogramSignature = null;
+    let clearing = false;
     let rasterPixelProbeLabel = "";
     let pixelProbeClientPosition = null;
     let pixelProbeSize = { width: 0, height: 0 };
@@ -400,7 +405,7 @@ export function initializeRasterViewer(
         for (const session of [sampledRasterSession, analysisRasterSession]) {
             if (
                 session !== null &&
-                getCatalogItemKey(session.item) === key
+                (getCatalogItemKey(session.item) === key || session.key === key)
             ) {
                 return session;
             }
@@ -431,7 +436,7 @@ export function initializeRasterViewer(
     function syncBivariateCandidate(session) {
         const key = getCatalogItemKey(session.item);
         const candidate = bivariateCandidates.find(
-            (current) => current.key === key
+            (current) => current.key === key || current.key === session.key
         );
         if (candidate === undefined) {
             return;
@@ -462,6 +467,7 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function rememberBivariateCandidate(item) {
+        if (followsVisibleLayers) return;
         const key = getCatalogItemKey(item);
         const existing = bivariateCandidates.find(
             (candidate) => candidate.key === key
@@ -523,7 +529,7 @@ export function initializeRasterViewer(
             requireLayerSession(activeLayerKey);
         Object.assign(session, {
             rasterStyle: { ...rasterStyle },
-            paletteName: controlsView.getPaletteName(),
+            paletteName: activePaletteName,
             rasterStyleWasEdited,
             rasterStatistics,
             rasterStatisticsIsApplicable,
@@ -538,6 +544,7 @@ export function initializeRasterViewer(
             selectedRasterStatisticsError,
         });
         syncBivariateCandidate(session);
+        refreshStyle();
     }
 
     /**
@@ -551,6 +558,7 @@ export function initializeRasterViewer(
         activeRasterItem = session.item;
         rasterPixelProbeLabel = session.label;
         rasterStyle = { ...session.rasterStyle };
+        activePaletteName = session.paletteName;
         rasterStyleWasEdited = session.rasterStyleWasEdited;
         rasterStatistics = session.rasterStatistics;
         rasterStatisticsIsApplicable = session.rasterStatisticsIsApplicable;
@@ -731,7 +739,17 @@ export function initializeRasterViewer(
             label: session.label,
             state: presentation.state,
             scope: presentation.scope,
-            counts: Array.isArray(counts) ? [...counts] : null,
+            counts: Array.isArray(counts) && (!followsVisibleLayers || presentation.state === "ready")
+                ? [...counts] : null,
+            automatic: followsVisibleLayers,
+            minimumLabel: presentation.statistics ? formatRasterPixelValue(presentation.statistics.sampleMinimum) : "",
+            maximumLabel: presentation.statistics ? formatRasterPixelValue(presentation.statistics.sampleMaximum) : "",
+            statistics: presentation.state === "ready" ? presentation.statistics : null,
+            style: session.rasterStyle,
+            canRetry: presentation.state === "error" && canRetryRasterStatistics(
+                session.selectedTemporaryAoi !== null || session.selectedRasterBounds !== null
+                    ? session.selectedRasterStatisticsError : session.wholeRasterStatisticsError
+            ),
         };
     }
 
@@ -740,8 +758,76 @@ export function initializeRasterViewer(
      *
      * @return {void}
      */
+    function visibleRasterRecords() {
+        const records = mapLayers.retainedRecords.filter(({ adapter, entry }) =>
+            adapter === rasterMapLayerAdapter && entry.visible
+        );
+        // The explicit low-resolution preview is drawn above retained WMS
+        // overlays and still owns its existing styling and analysis controls.
+        if (sampledRasterSession !== null) records.unshift({
+            entry: { key: sampledRasterSession.key, item: sampledRasterSession.item,
+                label: sampledRasterSession.label, visible: true },
+            state: sampledRasterSession, adapter: rasterMapLayerAdapter,
+        });
+        return records.slice(0, 2);
+    }
+
+    /**
+     * Application policy: histograms follow visible map rasters. Catalog-only
+     * analysis remains available to other callers of this reusable viewer.
+     * Never call this to choose a style target.
+     */
+    function syncVisibleLayers() {
+        if (clearing) return;
+        followsVisibleLayers = true;
+        const records = visibleRasterRecords();
+        const signature = JSON.stringify(records.map(({ entry }) => entry.key));
+        const primaryKey = records[0]?.entry.key ?? null;
+        const primaryIsRetained = mapLayers.getRecord(primaryKey) !== null;
+        if (signature === visibleHistogramSignature && activeLayerKey === primaryKey &&
+            (!primaryIsRetained || mapLayers.activeKey === primaryKey)) {
+            renderLayerHistogramSummaries();
+            refreshStyle();
+            return;
+        }
+        visibleHistogramSignature = signature;
+        if (bivariateMode.active && (
+            records.length !== 2 ||
+            records.some(({ entry }) => !bivariateMode.contains(entry.key))
+        )) leaveBivariateMode("Visible raster layers changed; 2D mode ended.", false);
+        bivariateCandidates = records.map(({ entry, state }) => ({
+            key: entry.key, item: entry.item, label: entry.label,
+            rasterStyle: { ...state.rasterStyle },
+            rasterRangeResolved: !hasDefaultRasterRange(
+                state.rasterStyle, state.rasterStyleWasEdited
+            ),
+        }));
+        if (primaryKey !== activeLayerKey ||
+            (primaryIsRetained && mapLayers.activeKey !== primaryKey)) {
+            deactivateActiveLayer();
+            analysisRasterSession = null;
+            if (primaryIsRetained) mapLayers.activate(primaryKey);
+            else if (sampledRasterSession !== null) activateDetachedSession(sampledRasterSession);
+            else {
+                controlsView.setControlsVisible(false);
+                controlsView.clearStatistics();
+            }
+        }
+        for (const { entry, state } of records.slice(1)) {
+            if (getLayerHistogramPresentation(state).state === "idle") {
+                const area = currentRasterSamplingArea();
+                setSessionSamplingArea(state, area);
+                void requireLayerHistogramController(state).activate(entry.item, area);
+            }
+        }
+        renderLayerHistogramSummaries();
+        renderBivariateAvailability();
+        refreshStyle();
+    }
+
     function renderLayerHistogramSummaries() {
-        const summaries = mapLayers.retainedRecords
+        const summaries = (followsVisibleLayers
+            ? visibleRasterRecords() : mapLayers.retainedRecords)
             .filter(({ adapter }) => adapter === rasterMapLayerAdapter)
             .map(({ state }) => buildLayerHistogramSummary(state));
         const activeRetainedKey = summaries.some(
@@ -805,6 +891,17 @@ export function initializeRasterViewer(
         }
         session.rasterStatistics = statistics;
         session.rasterStatisticsIsApplicable = true;
+        if (samplingArea.kind === "wholeRaster") {
+            const style = deriveInitialRasterStyleFromStatistics(
+                session.rasterStyle, statistics, session.rasterStyleWasEdited
+            );
+            if (style !== null) {
+                applySessionStyle(session, style, session.paletteName, false);
+                if (editingLayerKey === session.key) {
+                    controlsView.setStyle(style, session.paletteName);
+                }
+            }
+        }
         renderLayerStack();
     }
 
@@ -872,6 +969,7 @@ export function initializeRasterViewer(
         for (const record of mapLayers.retainedRecords) {
             if (
                 record.adapter !== rasterMapLayerAdapter ||
+                (followsVisibleLayers && !record.entry.visible) ||
                 record.entry.key === activeLayerKey
             ) {
                 continue;
@@ -1078,10 +1176,10 @@ export function initializeRasterViewer(
         const canEnter = eligible.length === 2;
         const guidance = message ?? (
             bivariateMode.active
-                ? "2D histogram mode is active for the two selected rasters."
+                ? "2D histogram mode is active for the two visible rasters."
                 : canEnter
                     ? "Choose 2D to calculate and open the paired histogram."
-                    : "Select two single-band catalog rasters to enable the " +
+                    : "Show two single-band raster layers to enable the " +
                       "2D histogram."
         );
         controlsView.setBivariateAvailability?.(canEnter, guidance);
@@ -1330,6 +1428,7 @@ export function initializeRasterViewer(
             }
         },
         activate(record) {
+            if (followsVisibleLayers && visibleRasterRecords()[0]?.entry.key !== record.entry.key) return;
             record.state.layerHistogramController?.clear();
             if (record.state.wholeRasterStatisticsState === "loading") {
                 record.state.wholeRasterStatisticsState = "idle";
@@ -1341,6 +1440,7 @@ export function initializeRasterViewer(
             renderBivariateAvailability();
         },
         beforeRemove(record, { wasActive }) {
+            if (editingLayerKey === record.entry.key) closeStyle();
             if (!wasActive) {
                 return undefined;
             }
@@ -1414,6 +1514,7 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function renderLayerStack(requestedFocus = null) {
+        refreshStyle();
         renderLayerHistogramSummaries();
         if (activeDetachedRasterSession() !== null) {
             mapLayers.deactivatePresentation();
@@ -1458,9 +1559,6 @@ export function initializeRasterViewer(
     function deactivateActiveLayer() {
         if (activeLayerKey === null) {
             return;
-        }
-        if (rasterStyleCommitTimeout !== null) {
-            commitRasterStyle();
         }
         rasterStatisticsController.clear();
         pixelProbeController.clear();
@@ -1529,10 +1627,9 @@ export function initializeRasterViewer(
         }
         loadActiveLayerSession(session);
         controlsView.setControlsVisible(true);
-        controlsView.setRenderingControlsAvailable(true);
+        presentActiveRenderingAvailability(true);
         controlsView.setActiveLayer(entry.label, entry.visible);
-        controlsView.setStyle(rasterStyle, session.paletteName);
-        controlsView.renderLegend(rasterStyle);
+        presentActiveStyle(rasterStyle, session.paletteName);
         resetRasterPercentileControls();
 
         if (!bivariateMode.active) {
@@ -1595,12 +1692,11 @@ export function initializeRasterViewer(
     function activateDetachedSession(session) {
         loadActiveLayerSession(session);
         controlsView.setControlsVisible(true);
-        controlsView.setRenderingControlsAvailable(
+        presentActiveRenderingAvailability(
             session === sampledRasterSession
         );
         controlsView.setActiveLayer(session.label, true);
-        controlsView.setStyle(rasterStyle, session.paletteName);
-        controlsView.renderLegend(rasterStyle);
+        presentActiveStyle(rasterStyle, session.paletteName);
         resetRasterPercentileControls();
         if (!bivariateMode.active) {
             rasterSampleWindowController.setWindowSize(
@@ -1654,6 +1750,10 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function activateAnalysis(item) {
+        if (followsVisibleLayers) {
+            syncVisibleLayers();
+            return;
+        }
         const catalogKey = getCatalogItemKey(item);
         if (bivariateMode.active && !bivariateMode.contains(catalogKey)) {
             leaveBivariateMode(
@@ -1825,7 +1925,7 @@ export function initializeRasterViewer(
             return;
         }
         rasterStyle = { ...establishedStyle };
-        controlsView.setStyle(
+        presentActiveStyle(
             rasterStyle,
             sampledRasterSession.paletteName
         );
@@ -1880,6 +1980,88 @@ export function initializeRasterViewer(
      * @return {{style: Object, environment: string}|null} Valid candidate or
      * null after presenting its contract error.
      */
+    function editingSession() {
+        return editingLayerKey === null
+            ? activeDetachedRasterSession() ??
+                mapLayers.getRecord(activeLayerKey)?.state ?? null
+            : mapLayers.getRecord(editingLayerKey)?.state ??
+                (sampledRasterSession?.key === editingLayerKey ? sampledRasterSession : null);
+    }
+
+    function presentActiveRenderingAvailability(available) {
+        if (editingLayerKey === null || editingLayerKey === activeLayerKey) {
+            controlsView.setRenderingControlsAvailable(available);
+        }
+    }
+
+    function presentActiveStyle(style, paletteName) {
+        if (editingLayerKey === null || editingLayerKey === activeLayerKey) {
+            controlsView.setStyle(style, paletteName);
+        }
+    }
+
+    /** Open styling without transferring histogram or pixel-probe ownership. */
+    function openStyle(key) {
+        closeStyle();
+        const record = mapLayers.getRecord(key);
+        const session = record?.adapter === rasterMapLayerAdapter
+            ? record.state : sampledRasterSession?.key === key ? sampledRasterSession : null;
+        if (session === null) return false;
+        saveActiveLayerSession();
+        editingLayerKey = key;
+        controlsView.setStyle(session.rasterStyle, session.paletteName);
+        controlsView.resetPercentiles(DEFAULT_RASTER_PERCENTILES);
+        refreshStyle();
+        return true;
+    }
+
+    /** Flush a pending valid edit before closing or changing target. */
+    function closeStyle() {
+        if (rasterStyleCommitTimeout !== null) commitRasterStyle();
+        editingLayerKey = null;
+    }
+
+    function refreshStyle() {
+        if (editingLayerKey === null) return;
+        const session = editingSession();
+        if (session === null) {
+            if (rasterStyleCommitTimeout !== null) {
+                clock.clearTimeout(rasterStyleCommitTimeout);
+                rasterStyleCommitTimeout = null;
+            }
+            editingLayerKey = null;
+            return;
+        }
+        controlsView.setRenderingControlsAvailable(true);
+        controlsView.setAppearanceEnabled(!bivariateMode.contains(editingLayerKey));
+        controlsView.setPercentileControlsVisible(
+            session.rasterStatistics !== null
+        );
+        updateRasterPercentileValues();
+    }
+
+    /** Commit to the target's renderer and retained state, not its list position. */
+    function applySessionStyle(session, style, paletteName, wasEdited) {
+        const environment = buildRasterStyleEnvironment(style);
+        if (session.onStyleChange) session.onStyleChange(style);
+        else mapLayers.getLeafletLayer(session.key)?.setParams({
+            styles: "dynamic-raster", env: environment,
+        });
+        session.rasterStyle = { ...style };
+        session.paletteName = paletteName;
+        session.rasterStyleWasEdited = wasEdited;
+        if (session.key === activeLayerKey) {
+            rasterStyle = { ...style };
+            activePaletteName = paletteName;
+            rasterStyleWasEdited = wasEdited;
+            if (rasterStatistics !== null) {
+                controlsView.renderHistogram(rasterStatistics, rasterStyle);
+            }
+            saveActiveLayerSession();
+        }
+        syncBivariateCandidate(session);
+    }
+
     function validateRasterStyleControls() {
         const candidateStyle = controlsView.readStyle();
         try {
@@ -1902,51 +2084,20 @@ export function initializeRasterViewer(
             clock.clearTimeout(rasterStyleCommitTimeout);
             rasterStyleCommitTimeout = null;
         }
-        if (bivariateMode.active) {
-            return;
-        }
+        const session = editingSession();
+        if (session === null || bivariateMode.contains(session.key)) return;
         const candidate = validateRasterStyleControls();
-        if (candidate === null) {
+        if (candidate === null) return;
+        try {
+            applySessionStyle(
+                session, candidate.style, controlsView.getPaletteName(),
+                session.rasterStyleWasEdited
+            );
+        } catch (error) {
+            controlsView.renderStyleError(error);
             return;
         }
-        if (isActiveSampledRaster()) {
-            try {
-                sampledRasterSession.onStyleChange(candidate.style);
-            } catch (error) {
-                controlsView.renderStyleError(error);
-                return;
-            }
-            rasterStyle = candidate.style;
-            controlsView.renderLegend(rasterStyle);
-            if (rasterStatistics !== null) {
-                controlsView.renderHistogram(rasterStatistics, rasterStyle);
-            }
-            saveActiveLayerSession();
-            return;
-        }
-        if (isActiveAnalysisRaster()) {
-            rasterStyle = candidate.style;
-            controlsView.renderLegend(rasterStyle);
-            if (rasterStatistics !== null) {
-                controlsView.renderHistogram(rasterStatistics, rasterStyle);
-            }
-            saveActiveLayerSession();
-            return;
-        }
-        const activeLayer = mapLayers.getLeafletLayer(activeLayerKey);
-        if (activeLayer === null) {
-            return;
-        }
-        rasterStyle = candidate.style;
-        controlsView.renderLegend(rasterStyle);
-        if (rasterStatistics !== null) {
-            controlsView.renderHistogram(rasterStatistics, rasterStyle);
-        }
-        activeLayer.setParams({
-            styles: "dynamic-raster",
-            env: candidate.environment,
-        });
-        saveActiveLayerSession();
+        controlsView.renderLegend(candidate.style);
         renderLayerStack();
     }
 
@@ -1982,17 +2133,14 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function resetRasterStyle() {
-        rasterStyle = isActiveSampledRaster()
-            ? { ...sampledRasterSession.initialStyle }
-            : (
-                wholeRasterStatistics === null
-                    ? { ...DEFAULT_RASTER_STYLE }
-                    : deriveRasterStyleFromStatistics(
-                        DEFAULT_RASTER_STYLE,
-                        wholeRasterStatistics
-                    )
-            );
-        controlsView.setStyle(rasterStyle, "blue-yellow-red");
+        const session = editingSession();
+        const style = session?.initialStyle ??
+            (session?.wholeRasterStatistics == null
+                ? { ...DEFAULT_RASTER_STYLE }
+                : deriveRasterStyleFromStatistics(
+                    DEFAULT_RASTER_STYLE, session.wholeRasterStatistics
+                ));
+        controlsView.setStyle(style, "blue-yellow-red");
     }
 
     /**
@@ -2001,7 +2149,9 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function resetRasterPercentileControls() {
-        controlsView.resetPercentiles(DEFAULT_RASTER_PERCENTILES);
+        if (editingLayerKey === null || editingLayerKey === activeLayerKey) {
+            controlsView.resetPercentiles(DEFAULT_RASTER_PERCENTILES);
+        }
     }
 
     /**
@@ -2011,7 +2161,13 @@ export function initializeRasterViewer(
      * percentiles, null for invalid ordering or absent statistics.
      */
     function updateRasterPercentileValues() {
-        if (rasterStatistics === null) {
+        const session = editingSession();
+        const statistics = editingLayerKey === null
+            ? rasterStatistics : session?.rasterStatistics ?? null;
+        const applicable = editingLayerKey === null
+            ? rasterStatisticsIsApplicable
+            : session?.rasterStatisticsIsApplicable === true;
+        if (statistics === null) {
             return null;
         }
         const percentiles = controlsView.readPercentiles();
@@ -2022,7 +2178,7 @@ export function initializeRasterViewer(
         for (const percentileName of ["lower", "middle", "upper"]) {
             approximateValues[percentileName] = formatRasterPixelValue(
                 estimateRasterHistogramPercentile(
-                    rasterStatistics,
+                    statistics,
                     percentiles[percentileName]
                 )
             );
@@ -2031,7 +2187,7 @@ export function initializeRasterViewer(
             percentiles,
             approximateValues,
             isOrdered,
-            rasterStatisticsIsApplicable
+            applicable
         );
         return isOrdered ? percentiles : null;
     }
@@ -2082,8 +2238,12 @@ export function initializeRasterViewer(
             return false;
         }
         rasterStyle = initialStyle;
-        controlsView.setStyle(rasterStyle, controlsView.getPaletteName());
-        commitRasterStyle();
+        const session = activeDetachedRasterSession() ??
+            mapLayers.getRecord(activeLayerKey)?.state;
+        if (session) applySessionStyle(
+            session, rasterStyle, activePaletteName, rasterStyleWasEdited
+        );
+        presentActiveStyle(rasterStyle, activePaletteName);
         return true;
     }
 
@@ -2720,7 +2880,10 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function handleStyleInput(isColor) {
-        rasterStyleWasEdited = true;
+        const session = editingSession();
+        if (session === null || bivariateMode.contains(session.key)) return;
+        session.rasterStyleWasEdited = true;
+        if (session.key === activeLayerKey) rasterStyleWasEdited = true;
         if (isColor) {
             controlsView.setPaletteName("custom");
         }
@@ -2737,7 +2900,10 @@ export function initializeRasterViewer(
         if (paletteName === "custom") {
             return;
         }
-        rasterStyleWasEdited = true;
+        const session = editingSession();
+        if (session === null || bivariateMode.contains(session.key)) return;
+        session.rasterStyleWasEdited = true;
+        if (session.key === activeLayerKey) rasterStyleWasEdited = true;
         const candidate = validateRasterStyleControls();
         if (candidate === null) {
             controlsView.setPaletteName("custom");
@@ -2759,42 +2925,15 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function handleResetStyle() {
-        rasterStyleWasEdited = true;
+        const session = editingSession();
+        if (session === null || bivariateMode.contains(session.key)) return;
+        session.rasterStyleWasEdited = true;
+        if (session.key === activeLayerKey) rasterStyleWasEdited = true;
         resetRasterStyle();
         commitRasterStyle();
-        controlsView.setAppearanceStatus(
-            "Restored the initial colors and range."
-        );
-        if (isActiveSampledRaster()) {
-            const provenance = rasterStatistics === null
-                ? ""
-                : ` The current histogram remains the ${
-                    rasterStatistics.samplingMethod === "sampleGrid"
-                        ? "approximate sampled-grid"
-                        : "exact bounded"
-                } histogram.`;
-            controlsView.setStatisticsStatus(
-                "Reset appearance to the initial minimum, median, and " +
-                `maximum for the low-resolution rendering.${provenance}`
-            );
-        } else if (wholeRasterStatistics !== null) {
-            resetRasterPercentileControls();
-            updateRasterPercentileValues();
-            const scopeNote = !hasSelectedRasterSamplingArea()
-                ? ""
-                : rasterStatisticsIsApplicable
-                    ? " The selected-area histogram remains available."
-                    : " The previous histogram remains reference-only " +
-                      "and cannot be applied to the current selected area.";
-            const provenance = wholeRasterStatistics.estimated
-                ? "sampled-grid"
-                : "exact bounded";
-            controlsView.setStatisticsStatus(
-                "Reset appearance to the histogram-estimated whole-raster " +
-                `5th, 50th, and 95th percentile range from the ${provenance} ` +
-                `histogram.${scopeNote}`
-            );
-        }
+        controlsView.setAppearanceStatus("Restored the initial colors and range.");
+        resetRasterPercentileControls();
+        updateRasterPercentileValues();
     }
 
     /**
@@ -2860,32 +2999,19 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function handleApplyPercentiles() {
+        const session = editingSession();
         const percentiles = updateRasterPercentileValues();
-        if (percentiles === null || rasterStatistics === null) {
-            return;
-        }
-        rasterStyleWasEdited = true;
-        rasterStyle = deriveRasterStyleFromStatistics(
-            rasterStyle,
-            rasterStatistics,
-            percentiles
+        if (session === null || percentiles === null ||
+            !session.rasterStatisticsIsApplicable ||
+            bivariateMode.contains(session.key)) return;
+        session.rasterStyleWasEdited = true;
+        if (session.key === activeLayerKey) rasterStyleWasEdited = true;
+        const style = deriveRasterStyleFromStatistics(
+            session.rasterStyle, session.rasterStatistics, percentiles
         );
-        controlsView.setStyle(
-            rasterStyle,
-            controlsView.getPaletteName()
-        );
+        controlsView.setStyle(style, session.paletteName);
         commitRasterStyle();
-        controlsView.setAppearanceStatus(
-            "Applied histogram range: " +
-            `${formatRasterPixelValue(rasterStyle.minimum)}, ` +
-            `${formatRasterPixelValue(rasterStyle.midpoint)}, and ` +
-            `${formatRasterPixelValue(rasterStyle.maximum)}.`
-        );
-        controlsView.setStatisticsStatus(
-            `Rescaled the colors to the selected ${
-                rasterStatistics.estimated ? "approximate" : "exact"
-            } percentile range.`
-        );
+        controlsView.setAppearanceStatus("Applied the histogram percentile range.");
     }
 
     /**
@@ -3028,6 +3154,8 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function clear() {
+        clearing = true;
+        editingLayerKey = null;
         if (rasterStyleCommitTimeout !== null) {
             clock.clearTimeout(rasterStyleCommitTimeout);
             rasterStyleCommitTimeout = null;
@@ -3072,6 +3200,8 @@ export function initializeRasterViewer(
         controlsView.setUnivariateHistogramVisible?.(true);
         controlsView.setTemporaryAoiCompatible?.(true);
         renderBivariateAvailability();
+        visibleHistogramSignature = null;
+        clearing = false;
     }
 
     /**
@@ -3248,6 +3378,13 @@ export function initializeRasterViewer(
         onPercentileInput: updateRasterPercentileValues,
         onApplyPercentiles: handleApplyPercentiles,
         onRetryStatistics: handleRetryStatistics,
+        onRetryHistogram: (key) => {
+            if (key === activeLayerKey) handleRetryStatistics();
+            else {
+                const record = visibleRasterRecords().find(({ entry }) => entry.key === key);
+                if (record) void requireLayerHistogramController(record.state).retry();
+            }
+        },
         onSelectHistogram: handleSelectLayerHistogram,
         onSampleWindowRangeInput: setRasterSampleWindowSize,
         onSampleWindowNumberInput: setRasterSampleWindowSize,
@@ -3281,6 +3418,13 @@ export function initializeRasterViewer(
         clear,
         reset,
         show,
+        syncVisibleLayers,
+        openStyle,
+        closeStyle,
+        refreshStyle,
+        getSampledStyleTarget: (key) => sampledRasterSession?.key === key ? {
+            key, label: sampledRasterSession.label, visible: true, sampled: true,
+        } : null,
         activateAnalysis,
         deactivateAnalysis,
         activateSampled,

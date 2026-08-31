@@ -206,83 +206,27 @@ test("Catalog owns discovery, inspection, and its explicit layer action only", (
     }
 });
 
-test("Map layers owns layer presentation, appearance, cutoffs, and limitations", () => {
-    const renderingRegion = requireElementRange("eomap-map-layers-region");
-    const layerStack = requireElementRange("raster-layer-stack");
-    const appearance = requireElementRange("raster-appearance-controls");
-    const renderingFeedback = requireElementRange("catalog-layer-status");
-    const bivariateControls = requireElementRange("raster-bivariate-controls");
-    const percentileControls = requireElementRange(
-        "raster-percentile-controls"
-    );
-
-    for (const ownedControl of [
-        "raster-layer-stack",
-        "raster-layer-stack-status",
-        "raster-appearance-controls",
-        "raster-percentile-controls",
-        "raster-bivariate-controls",
-        "raster-comparison-mode",
-        "raster-bivariate-legend",
-        "raster-palette",
-        "raster-detail-preview-controls",
-        "catalog-layer-status",
-        "map-layer-rendering-announcement",
+test("Map layers owns compact rows; one floating editor owns all styling", () => {
+    const rendering = requireElementRange("eomap-map-layers-region");
+    const editor = requireElementRange("layer-style-editor");
+    const panel = requireElementRange("control-panel");
+    assert.ok(editor.start > panel.end, "Style editor must be outside sidebar overflow");
+    assert.match(editor.source, /popover="manual" role="dialog"/);
+    assert.match(editor.source, /aria-modal="false"/);
+    for (const id of [
+        "layer-style-opacity", "raster-appearance-controls", "raster-percentile-controls",
+        "raster-bivariate-panel", "raster-bivariate-palette", "raster-bivariate-legend",
     ]) {
-        assert.match(
-            renderingRegion.source,
-            new RegExp(`id="${ownedControl}"`)
-        );
+        assert.match(editor.source, new RegExp(`id="${id}"`));
+        assert.doesNotMatch(rendering.source, new RegExp(`id="${id}"`));
     }
-    assert.match(layerStack.source, /data-eomap-region="map-layers"/);
-    assert.match(appearance.source, /data-eomap-region="map-layers"/);
-    assert.match(
-        bivariateControls.source,
-        /<h3 id="raster-bivariate-heading">Raster histograms<\/h3>/
-    );
-    assert.match(bivariateControls.source, /<span>Histogram mode<\/span>/);
-    assert.match(bivariateControls.source, />1D – single raster<\/option>/);
-    assert.match(
-        bivariateControls.source,
-        />2D – bivariate rasters<\/option>/
-    );
-    assert.match(
-        bivariateControls.source,
-        /Selecting 2D opens Histograms and calculates the paired\s+distribution automatically\./
-    );
-    assert.ok(
-        renderingFeedback.start < layerStack.start,
-        "Rendering feedback should precede the retained layer list"
-    );
-    assert.match(
-        STYLESHEET,
-        /\.map-layer-action-status:not\(:empty\)\s*\{[^}]*border-left:\s*3px solid var\(--brand\)[^}]*background:\s*var\(--surface-selected\)[^}]*padding:\s*10px 12px/s
-    );
-    assert.match(
-        percentileControls.source,
-        /Set the color range from the histogram/
-    );
-    assert.match(
-        percentileControls.source,
-        />\s*Apply histogram range\s*</
-    );
-    assert.match(
-        renderingRegion.source,
-        /<strong>Low-resolution raster rendering<\/strong>/
-    );
-    for (const analysisControl of [
-        "raster-style-controls",
-        "raster-bivariate-statistics",
-        "raster-histogram-list",
-        "raster-histogram",
-        "temporary-aoi",
-    ]) {
-        assert.doesNotMatch(
-            renderingRegion.source,
-            new RegExp(`id="${analysisControl}"`)
-        );
-    }
+    assert.match(rendering.source, /id="raster-layer-stack"/);
+    assert.match(rendering.source, /id="raster-detail-preview-controls"/);
+    assert.doesNotMatch(MARKUP, /id="open-histogram-map-layers"/);
+    assert.match(STYLESHEET, /#layer-style-editor\s*\{[^}]*position:\s*fixed/s);
+    assert.match(STYLESHEET, /max-height:\s*70dvh/);
 });
+
 
 test("inspector visualization and previews can reveal Map layers through composition", () => {
     assert.match(
@@ -316,6 +260,9 @@ test("Histograms own shared sampling, per-layer histograms, AOI, and pixel guida
     );
     const temporaryAoi = requireElementRange("temporary-aoi");
 
+    assert.match(analysisRegion.source, /id="raster-comparison-mode"/);
+    assert.match(analysisRegion.source, /1D – visible rasters/);
+    assert.match(analysisRegion.source, /No visible raster layers/);
     assert.match(composite.source, /<legend>Sample area<\/legend>/);
     assert.match(composite.source, /id="raster-active-controls"/);
     assert.match(composite.source, /id="raster-sampling-area-controls"/);
@@ -350,7 +297,7 @@ test("Histograms own shared sampling, per-layer histograms, AOI, and pixel guida
     assert.match(analysisRegion.source, /id="pixel-probe-guidance-heading"/);
     assert.match(
         analysisRegion.source,
-        /Move over the map to inspect the selected layer's value/
+        /Move over the map to inspect the top visible raster's value/
     );
     assert.match(temporaryAoi.source, /data-eomap-region="raster-interpretation"/);
     assert.match(temporaryAoi.source, /aria-labelledby="temporary-aoi-heading"/);
@@ -358,7 +305,6 @@ test("Histograms own shared sampling, per-layer histograms, AOI, and pixel guida
         "raster-layer-stack",
         "raster-appearance-controls",
         "raster-percentile-controls",
-        "raster-bivariate-controls",
         "raster-detail-preview-controls",
     ]) {
         assert.doesNotMatch(

@@ -2,7 +2,7 @@
  * Accessible DOM presentation for the retained map-layer stack.
  *
  * This adapter renders top-first keyed rows and forwards activation,
- * visibility, opacity, ordering, and removal intent. It does not publish
+ * visibility, styling, ordering, and removal intent. It does not publish
  * datasets, enforce state invariants, or manipulate Leaflet layers.
  */
 import { MAX_VISIBLE_MAP_LAYERS } from "./layer-stack.js";
@@ -25,11 +25,9 @@ function requireLayerStackElement(documentContext, selector) {
 
 /**
  * @typedef {Object} MapLayerStackViewHandlers
- * @property {(key: string) => void} onActivate Activate one retained layer.
+ * @property {(key: string) => void} onStyle Open one retained layer style editor.
  * @property {(key: string, visible: boolean) => void} onVisibility Change
  * map visibility.
- * @property {(key: string, opacity: number) => void} onOpacity Change
- * ordinary-overlay opacity.
  * @property {(key: string, direction: "up"|"down") => void} onMove Move one
  * layer in top-first order.
  * @property {(key: string) => void} onRemove Remove one retained layer.
@@ -139,21 +137,18 @@ export class MapLayerStackView {
             ? "Two layers are visible. Hide one before showing another."
             : "";
         if (retainedFocus !== null) {
+            const action = retainedFocus.action.startsWith("move-") || retainedFocus.action === "remove"
+                ? "actions" : retainedFocus.action;
             let focusTarget = focusTargets.get(
-                `${retainedFocus.key}\u0000${retainedFocus.action}`
+                `${retainedFocus.key}\u0000${action}`
             );
             if (focusTarget?.disabled) {
-                const fallbackAction = retainedFocus.action === "move-up"
-                    ? "move-down"
-                    : retainedFocus.action === "move-down"
-                        ? "move-up"
-                        : "activate";
                 focusTarget = focusTargets.get(
-                    `${retainedFocus.key}\u0000${fallbackAction}`
+                    `${retainedFocus.key}\u0000style`
                 );
             }
             if (focusTarget === undefined && layers.length === 0) {
-                focusTarget = this.status;
+                focusTarget = this.documentContext.querySelector("#toggle-map-layers") ?? this.status;
             }
             focusTarget?.focus();
         }
@@ -188,216 +183,77 @@ export class MapLayerStackView {
         activeKey,
         focusTargets
     ) {
-        const itemIdentity = `${layer.item.collection} / ${layer.item.id}`;
-        const accessibleName = `${layer.label}; Catalog Item ${itemIdentity}`;
+        const accessibleName = `${layer.label}; Catalog Item ${layer.item.collection} / ${layer.item.id}`;
         const row = this.documentContext.createElement("li");
         row.className = "raster-layer-row";
-        row.classList.toggle("has-fixed-legend", layer.legend.kind === "fixed");
-        row.classList.toggle("is-active", layer.key === activeKey);
         row.classList.toggle("is-hidden", !layer.visible);
         row.setAttribute("aria-label", accessibleName);
-
-        const heading = this.documentContext.createElement("div");
-        heading.className = "raster-layer-heading";
-
-        const activeInput = this.documentContext.createElement("input");
-        activeInput.type = "radio";
-        activeInput.name = "active-map-layer";
-        activeInput.checked = layer.key === activeKey;
-        activeInput.dataset.layerKey = layer.key;
-        activeInput.dataset.layerAction = "activate";
-        activeInput.setAttribute(
-            "aria-label",
-            `${layer.legend.kind === "fixed" ? "Select" : "Edit"} ${accessibleName}`
+        const label = this.documentContext.createElement("label");
+        label.className = "raster-layer-visibility";
+        const visibility = this.documentContext.createElement("input");
+        visibility.type = "checkbox";
+        visibility.checked = layer.visible;
+        visibility.disabled = !layer.visible && visibleCount >= MAX_VISIBLE_MAP_LAYERS;
+        visibility.dataset.layerKey = layer.key;
+        visibility.dataset.layerAction = "visibility";
+        visibility.setAttribute("aria-label", `${accessibleName} visible`);
+        visibility.setAttribute("aria-describedby", "raster-layer-stack-limit");
+        visibility.addEventListener("change", () =>
+            this.handlers?.onVisibility(layer.key, visibility.checked)
         );
-        activeInput.addEventListener("change", () => {
-            if (activeInput.checked) {
-                this.handlers?.onActivate(layer.key);
-            }
-        });
-        this.#rememberFocusTarget(focusTargets, activeInput);
-
-        const nameBlock = this.documentContext.createElement("span");
-        nameBlock.className = "raster-layer-name-block";
+        this.#rememberFocusTarget(focusTargets, visibility);
         const name = this.documentContext.createElement("span");
         name.className = "raster-layer-name";
         name.textContent = layer.label;
-        name.title = layer.label;
-        const identity = this.documentContext.createElement("span");
-        identity.className = "raster-layer-identity";
-        identity.textContent = itemIdentity;
-        identity.title = itemIdentity;
-        nameBlock.append(name, identity);
-
-        const state = this.documentContext.createElement("span");
-        state.className = "raster-layer-state";
-        state.textContent = layer.visible ? "Visible" : "Hidden";
-
-        const removeButton = this.#button(
-            "Remove",
-            `Remove ${accessibleName}`,
-            layer.key,
-            "remove",
-            () => this.handlers?.onRemove(layer.key),
-            focusTargets
+        name.title = accessibleName;
+        label.append(visibility, name);
+        const style = this.#button(
+            "Style…", `Style ${accessibleName}`, layer.key, "style",
+            () => this.handlers?.onStyle(layer.key), focusTargets
         );
-        heading.append(activeInput, nameBlock, state, removeButton);
-
-        const presentation = this.documentContext.createElement("div");
-        presentation.className = "raster-layer-presentation";
-
-        const visibilityLabel = this.documentContext.createElement("label");
-        visibilityLabel.className = "raster-layer-visibility";
-        const visibilityInput = this.documentContext.createElement("input");
-        visibilityInput.type = "checkbox";
-        visibilityInput.checked = layer.visible;
-        visibilityInput.disabled =
-            !layer.visible && visibleCount >= MAX_VISIBLE_MAP_LAYERS;
-        visibilityInput.dataset.layerKey = layer.key;
-        visibilityInput.dataset.layerAction = "visibility";
-        visibilityInput.setAttribute(
-            "aria-label",
-            `${accessibleName} visible`
-        );
-        visibilityInput.setAttribute("aria-describedby", "raster-layer-stack-limit");
-        visibilityInput.addEventListener("change", () => {
-            this.handlers?.onVisibility(layer.key, visibilityInput.checked);
-        });
-        this.#rememberFocusTarget(focusTargets, visibilityInput);
-        visibilityLabel.append(
-            visibilityInput,
-            this.documentContext.createTextNode(" Visible")
-        );
-
-        const opacityLabel = this.documentContext.createElement("label");
-        opacityLabel.className = "raster-layer-opacity";
-        const opacityText = this.documentContext.createElement("span");
-        opacityText.textContent = "Opacity";
-        const opacityInput = this.documentContext.createElement("input");
-        opacityInput.type = "range";
-        opacityInput.id = `raster-layer-opacity-${index}`;
-        opacityInput.min = "0";
-        opacityInput.max = "100";
-        opacityInput.step = "1";
-        const displayedOpacity = layer.effectiveOpacity ?? layer.opacity;
-        opacityInput.value = String(Math.round(displayedOpacity * 100));
-        opacityInput.disabled = layer.opacityLocked === true;
-        opacityInput.dataset.layerKey = layer.key;
-        opacityInput.dataset.layerAction = "opacity";
-        opacityInput.setAttribute(
-            "aria-label",
-            layer.opacityLocked === true
-                ? `${accessibleName} opacity is currently locked`
-                : `${accessibleName} opacity`
-        );
-        opacityInput.setAttribute(
-            "aria-valuetext",
-            `${opacityInput.value} percent`
-        );
-        const opacityOutput = this.documentContext.createElement("output");
-        opacityOutput.setAttribute("for", opacityInput.id);
-        opacityOutput.value = `${opacityInput.value}%`;
-        opacityOutput.textContent = `${opacityInput.value}%`;
-        opacityInput.addEventListener("input", () => {
-            opacityOutput.value = `${opacityInput.value}%`;
-            opacityOutput.textContent = opacityOutput.value;
-            opacityInput.setAttribute(
-                "aria-valuetext",
-                `${opacityInput.value} percent`
+        style.setAttribute("aria-haspopup", "dialog");
+        style.setAttribute("aria-controls", "layer-style-editor");
+        const actions = this.documentContext.createElement("details");
+        actions.className = "raster-layer-actions";
+        const toggle = this.documentContext.createElement("summary");
+        toggle.textContent = "⋯";
+        toggle.setAttribute("aria-label", `Actions for ${accessibleName}`);
+        toggle.dataset.layerKey = layer.key;
+        toggle.dataset.layerAction = "actions";
+        this.#rememberFocusTarget(focusTargets, toggle);
+        const menu = this.documentContext.createElement("div");
+        menu.className = "raster-layer-action-list";
+        for (const [text, action, disabled, callback] of [
+            ["Move up", "move-up", index === 0,
+                () => this.handlers?.onMove(layer.key, "up")],
+            ["Move down", "move-down", index === layerCount - 1,
+                () => this.handlers?.onMove(layer.key, "down")],
+            ["Remove from map", "remove", false,
+                () => this.handlers?.onRemove(layer.key)],
+        ]) {
+            const button = this.#button(
+                text, `${text}: ${accessibleName}`, layer.key, action,
+                () => { actions.open = false; callback(); }, focusTargets
             );
-            this.handlers?.onOpacity(
-                layer.key,
-                Number(opacityInput.value) / 100
-            );
-        });
-        this.#rememberFocusTarget(focusTargets, opacityInput);
-        opacityLabel.append(opacityText, opacityInput, opacityOutput);
-
-        const order = this.documentContext.createElement("div");
-        order.className = "raster-layer-order";
-        const upButton = this.#button(
-            "Up",
-            `Move ${accessibleName} up`,
-            layer.key,
-            "move-up",
-            () => this.handlers?.onMove(layer.key, "up"),
-            focusTargets
-        );
-        upButton.disabled = index === 0;
-        const downButton = this.#button(
-            "Down",
-            `Move ${accessibleName} down`,
-            layer.key,
-            "move-down",
-            () => this.handlers?.onMove(layer.key, "down"),
-            focusTargets
-        );
-        downButton.disabled = index === layerCount - 1;
-        order.append(upButton, downButton);
-        presentation.append(visibilityLabel, opacityLabel, order);
-
-        const { legend, labels } = layer.legend.kind === "fixed"
-            ? this.#buildFixedLegend(layer, accessibleName)
-            : this.#buildGradientLegend(layer, accessibleName);
-
-        const error = this.documentContext.createElement("p");
-        error.className = "raster-layer-error";
-        error.textContent = layer.error ?? "";
-        error.hidden = !layer.error;
-
-        row.append(heading, presentation, legend, labels, error);
-        return row;
-    }
-
-    /**
-     * Build one feature-owned gradient legend and numeric labels.
-     *
-     * @param {Object} layer Map-layer presentation snapshot.
-     * @param {string} accessibleName Complete layer accessible name.
-     * @return {{legend:HTMLDivElement,labels:HTMLDivElement}} Legend elements.
-     */
-    #buildGradientLegend(layer, accessibleName) {
-        const legend = this.documentContext.createElement("div");
-        legend.className = "raster-layer-legend";
-        legend.setAttribute("role", "img");
-        legend.style.background = layer.legend.gradient;
-        legend.setAttribute(
-            "aria-label",
-            `${accessibleName}. ${layer.legend.description}`
-        );
-        const labels = this.documentContext.createElement("div");
-        labels.className = "raster-layer-legend-labels";
-        labels.setAttribute("aria-hidden", "true");
-        for (const value of layer.legend.labels) {
-            const label = this.documentContext.createElement("span");
-            label.textContent = String(value);
-            labels.append(label);
+            button.disabled = disabled;
+            menu.append(button);
         }
-        return { legend, labels };
-    }
-
-    /**
-     * Build one feature-owned fixed swatch without raster style controls.
-     *
-     * @param {Object} layer Fixed-style layer presentation snapshot.
-     * @param {string} accessibleName Complete layer accessible name.
-     * @return {{legend:HTMLDivElement,labels:HTMLDivElement}} Legend elements.
-     */
-    #buildFixedLegend(layer, accessibleName) {
-        const { label, fill, stroke } = layer.legend;
-        const legend = this.documentContext.createElement("div");
-        legend.className = "raster-layer-legend";
-        legend.setAttribute("role", "img");
-        legend.style.background = fill;
-        legend.style.borderColor = stroke;
-        legend.setAttribute(
-            "aria-label",
-            `${accessibleName}. Default ${label.toLowerCase()} symbology.`
-        );
-        const labels = this.documentContext.createElement("div");
-        labels.className = "raster-layer-legend-labels";
-        labels.textContent = `${label} features · fixed default style`;
-        return { legend, labels };
+        actions.append(toggle, menu);
+        actions.addEventListener("keydown", (event) => {
+            if (event.key !== "Escape" || !actions.open) return;
+            event.preventDefault();
+            event.stopPropagation();
+            actions.open = false;
+            toggle.focus();
+        });
+        row.append(label, style, actions);
+        if (layer.error) {
+            const error = this.documentContext.createElement("p");
+            error.className = "raster-layer-error";
+            error.textContent = layer.error;
+            row.append(error);
+        }
+        return row;
     }
 
     /**

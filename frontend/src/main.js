@@ -45,6 +45,7 @@ import {
     createSingleWorldMap,
     formatSingleWorldPosition
 } from "./map.js";
+import { MapLayerStyleEditor } from "./map-layers/style-editor.js";
 import { MapLayerController } from "./map-layers/controller.js";
 import { MapLayerStackView } from "./map-layers/layer-stack-view.js";
 import {
@@ -698,18 +699,34 @@ async function initializeCatalog(
         refreshCatalogMapAction();
     }
 
+    let rasterVisualization = null;
+    let layerStyleEditor = null;
     const mapLayerController = new MapLayerController({
         leafletMap,
         view: new MapLayerStackView(),
-        onLayersChange: refreshCatalogMapAction,
+        onLayersChange: () => {
+            refreshCatalogMapAction();
+            rasterVisualization?.syncVisibleLayers();
+            layerStyleEditor?.refresh();
+        },
     });
-    const rasterVisualization = initializeRasterViewer({
+    rasterVisualization = initializeRasterViewer({
         wmsUrl: appGlobalConfiguration.wmsUrl,
         leafletMap,
         leaflet: L,
         onTileError: reportMapTileError,
         onHistogramRequested,
     }, { mapLayerController });
+    layerStyleEditor = new MapLayerStyleEditor({
+        mapLayers: mapLayerController, rasterViewer: rasterVisualization,
+    });
+    mapLayerController.onStyle = (key) => layerStyleEditor.open(key);
+    document.querySelector("#style-raster-detail-preview").addEventListener("click", () => {
+        if (catalogState.selectedItem !== null) {
+            layerStyleEditor.open(`detail:${getCatalogItemKey(catalogState.selectedItem)}`);
+        }
+    });
+    rasterVisualization.syncVisibleLayers();
     const catalogVisualization = new CatalogVisualizationCoordinator(
         rasterVisualization,
         mapLayerController,

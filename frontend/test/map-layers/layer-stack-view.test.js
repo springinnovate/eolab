@@ -275,207 +275,81 @@ const LAYERS = [
   },
 ];
 
-test("MapLayerStackView renders semantic, accessible independent rows", () => {
-  const documentContext = new FakeLayerStackDocument();
-  const view = new MapLayerStackView(documentContext);
-
+test("rows expose filename, visibility, Style and contained actions only", () => {
+  const doc = new FakeLayerStackDocument();
+  const view = new MapLayerStackView(doc);
   view.render(LAYERS, "vegetation");
-
-  const root = documentContext.querySelector("#raster-layer-stack");
-  const list = documentContext.querySelector("#raster-layer-list");
-  const limit = documentContext.querySelector("#raster-layer-stack-limit");
-  assert.equal(root.hidden, false);
-  assert.equal(
-    documentContext.querySelector("#raster-layer-widget-count").textContent,
-    "3",
-  );
-  assert.equal(
-    documentContext.querySelector("#toggle-map-layer-widget")
-      .getAttribute("aria-label"),
-    "Hide layers",
-  );
-  assert.equal(list.tagName, "OL");
-  assert.deepEqual(list.children.map((row) => row.tagName), ["LI", "LI", "LI"]);
-  assert.equal(
-    limit.textContent,
-    "Two layers are visible. Hide one before showing another.",
-  );
-
-  const [temperatureRow, vegetationRow, moistureRow] = list.children;
-  assert.equal(temperatureRow.classList.contains("is-active"), false);
-  assert.equal(vegetationRow.classList.contains("is-active"), true);
-  assert.equal(moistureRow.classList.contains("is-hidden"), true);
-  assert.equal(actionControl(vegetationRow, "activate").checked, true);
-  assert.equal(actionControl(temperatureRow, "visibility").checked, true);
-  assert.equal(actionControl(moistureRow, "visibility").checked, false);
-  assert.equal(actionControl(moistureRow, "visibility").disabled, true);
-  assert.equal(
-    actionControl(moistureRow, "visibility").getAttribute("aria-describedby"),
-    "raster-layer-stack-limit",
-  );
-
-  const temperatureName = elementsByClass(
-    temperatureRow,
-    "raster-layer-name",
-  )[0];
-  assert.equal(temperatureName.textContent, LAYERS[0].label);
-  assert.equal(temperatureName.title, LAYERS[0].label);
-  assert.equal(
-    elementsByClass(temperatureRow, "raster-layer-identity")[0].textContent,
-    "climate / temperature-annual",
-  );
-  const temperatureAccessibleName =
-    `${LAYERS[0].label}; Catalog Item climate / temperature-annual`;
-  assert.equal(
-    actionControl(temperatureRow, "activate").getAttribute("aria-label"),
-    `Edit ${temperatureAccessibleName}`,
-  );
-  assert.equal(
-    actionControl(temperatureRow, "visibility").getAttribute("aria-label"),
-    `${temperatureAccessibleName} visible`,
-  );
-  assert.equal(
-    actionControl(temperatureRow, "remove").getAttribute("aria-label"),
-    `Remove ${temperatureAccessibleName}`,
-  );
-  assert.equal(
-    actionControl(moistureRow, "visibility").getAttribute("aria-label"),
-    `${LAYERS[2].label}; Catalog Item soil / moisture-anomaly visible`,
-  );
-
-  const legends = list.children.map(
-    (row) => elementsByClass(row, "raster-layer-legend")[0],
-  );
-  assert.ok(legends.every((legend) => legend.getAttribute("role") === "img"));
-  assert.equal(new Set(legends.map((legend) => legend.style.background)).size, 3);
-  assert.match(legends[0].getAttribute("aria-label"), /-10 at #0000ff/);
-  assert.match(legends[1].getAttribute("aria-label"), /50 at #a4fc3c/);
-  assert.match(legends[2].getAttribute("aria-label"), /9 at #9e0142/);
-  assert.deepEqual(
-    list.children.map((row) =>
-      elementsByClass(row, "raster-layer-legend-labels")[0].children.map(
-        (label) => label.textContent,
-      )),
-    [["-10", "0", "15"], ["0", "50", "100"], ["-5", "1", "9"]],
-  );
-  assert.equal(
-    elementsByClass(moistureRow, "raster-layer-error")[0].textContent,
-    "Statistics unavailable.",
-  );
-  assert.equal(elementsByClass(moistureRow, "raster-layer-error")[0].hidden, false);
+  const rows = doc.querySelector("#raster-layer-list").children;
+  assert.equal(rows.length, 3);
+  for (const [index, row] of rows.entries()) {
+    assert.equal(row.tagName, "LI");
+    assert.equal(row.classList.contains("is-active"), false);
+    assert.equal(elementsByClass(row, "raster-layer-name")[0].textContent, LAYERS[index].label);
+    assert.equal(elementsByClass(row, "raster-layer-legend").length, 0);
+    assert.equal(elementsByClass(row, "raster-layer-opacity").length, 0);
+    assert.equal(actionControl(row, "style").getAttribute("aria-haspopup"), "dialog");
+    assert.equal(actionControl(row, "visibility").type, "checkbox");
+    assert.equal(actionControl(row, "visibility").checked, LAYERS[index].visible);
+  }
+  assert.equal(actionControl(rows[2], "visibility").disabled, true);
+  assert.equal(actionControl(rows[0], "move-up").disabled, true);
+  assert.equal(actionControl(rows[2], "move-down").disabled, true);
+  assert.equal(elementsByClass(rows[2], "raster-layer-error")[0].textContent, "Statistics unavailable.");
+  assert.equal(doc.querySelector("#raster-layer-widget-count").textContent, "3");
 });
 
-test("bivariate snapshots lock opacity at 100 percent", () => {
-  const documentContext = new FakeLayerStackDocument();
-  const view = new MapLayerStackView(documentContext);
-  view.render([
-    {
-      ...LAYERS[0],
-      opacityLocked: true,
-      effectiveOpacity: 1,
-    },
-  ], LAYERS[0].key);
-
-  const row = documentContext.querySelector("#raster-layer-list").children[0];
-  const opacity = actionControl(row, "opacity");
-  assert.equal(opacity.value, "100");
-  assert.equal(opacity.disabled, true);
-  assert.match(opacity.getAttribute("aria-label"), /opacity is currently locked/);
+test("raster and vector rows use the same compact action layout", () => {
+  const doc = new FakeLayerStackDocument();
+  const view = new MapLayerStackView(doc);
+  const vector = { ...LAYERS[0], legend: { kind: "fixed", label: "Polygon" } };
+  view.render([vector, { ...LAYERS[1], opacityLocked: true, effectiveOpacity: 1 }], null);
+  for (const row of doc.querySelector("#raster-layer-list").children) {
+    assert.equal(actionControl(row, "style").textContent, "Style…");
+    assert.equal(elementsByClass(row, "raster-layer-legend").length, 0);
+  }
 });
 
-test("MapLayerStackView renders a neutral fixed-swatch legend", () => {
-  const documentContext = new FakeLayerStackDocument();
-  const view = new MapLayerStackView(documentContext);
-  const layer = {
-    ...LAYERS[0],
-    legend: {
-      kind: "fixed",
-      label: "Polygon",
-      fill: "#a855f7",
-      stroke: "#581c87",
-    },
-  };
-
-  view.render([layer], layer.key);
-
-  const row = documentContext.querySelector("#raster-layer-list").children[0];
-  const legend = elementsByClass(row, "raster-layer-legend")[0];
-  const labels = elementsByClass(row, "raster-layer-legend-labels")[0];
-  assert.equal(row.classList.contains("has-fixed-legend"), true);
-  assert.equal(legend.style.background, "#a855f7");
-  assert.equal(legend.style.borderColor, "#581c87");
-  assert.match(legend.getAttribute("aria-label"), /Default polygon symbology/);
-  assert.equal(labels.textContent, "Polygon features · fixed default style");
-});
-
-test("MapLayerStackView forwards controls and updates opacity output", () => {
-  const documentContext = new FakeLayerStackDocument();
-  const view = new MapLayerStackView(documentContext);
+test("row actions forward stable identity; Escape closes actions before the list", () => {
+  const doc = new FakeLayerStackDocument();
+  const view = new MapLayerStackView(doc);
   const received = [];
   view.bind({
-    onActivate: (key) => received.push(["activate", key]),
+    onStyle: key => received.push(["style", key]),
     onVisibility: (key, visible) => received.push(["visibility", key, visible]),
-    onOpacity: (key, opacity) => received.push(["opacity", key, opacity]),
     onMove: (key, direction) => received.push(["move", key, direction]),
-    onRemove: (key) => received.push(["remove", key]),
+    onRemove: key => received.push(["remove", key]),
   });
-  view.render(LAYERS, "vegetation");
-  const widgetBody = documentContext.querySelector("#raster-layer-stack-body");
-  const widgetToggle = documentContext.querySelector("#toggle-map-layer-widget");
-  widgetToggle.dispatchEvent(new Event("click"));
-  assert.equal(widgetBody.hidden, true);
-  assert.equal(widgetToggle.getAttribute("aria-expanded"), "false");
-  assert.equal(widgetToggle.getAttribute("aria-label"), "Show layers");
-  widgetToggle.dispatchEvent(new Event("click"));
-  assert.equal(widgetBody.hidden, false);
-  const [temperatureRow, vegetationRow, moistureRow] = documentContext
-    .querySelector("#raster-layer-list").children;
-
-  const activate = actionControl(temperatureRow, "activate");
-  activate.checked = true;
-  activate.dispatchEvent(new Event("change"));
-  const visibility = actionControl(temperatureRow, "visibility");
+  view.render(LAYERS, null);
+  const [first, second, third] = doc.querySelector("#raster-layer-list").children;
+  actionControl(first, "style").dispatchEvent(new Event("click"));
+  const visibility = actionControl(first, "visibility");
   visibility.checked = false;
   visibility.dispatchEvent(new Event("change"));
-  const opacity = actionControl(vegetationRow, "opacity");
-  const opacityOutput = elementsByClass(
-    vegetationRow,
-    "raster-layer-opacity",
-  )[0].children[2];
-  assert.equal(opacity.value, "100");
-  assert.equal(opacityOutput.textContent, "100%");
-  assert.equal(opacity.getAttribute("aria-valuetext"), "100 percent");
-  assert.equal(opacityOutput.getAttribute("for"), opacity.id);
-  opacity.value = "37";
-  opacity.dispatchEvent(new Event("input"));
-  actionControl(vegetationRow, "move-up").dispatchEvent(new Event("click"));
-  actionControl(moistureRow, "remove").dispatchEvent(new Event("click"));
-
-  assert.equal(opacityOutput.value, "37%");
-  assert.equal(opacityOutput.textContent, "37%");
-  assert.equal(opacity.getAttribute("aria-valuetext"), "37 percent");
+  actionControl(second, "move-up").dispatchEvent(new Event("click"));
+  actionControl(third, "remove").dispatchEvent(new Event("click"));
   assert.deepEqual(received, [
-    ["activate", "temperature"],
-    ["visibility", "temperature", false],
-    ["opacity", "vegetation", 0.37],
-    ["move", "vegetation", "up"],
-    ["remove", "moisture"],
+    ["style", "temperature"], ["visibility", "temperature", false],
+    ["move", "vegetation", "up"], ["remove", "moisture"],
   ]);
-  assert.equal(actionControl(temperatureRow, "move-up").disabled, true);
-  assert.equal(actionControl(moistureRow, "move-down").disabled, true);
-
+  const actions = elementsByClass(first, "raster-layer-actions")[0];
+  actions.open = true;
+  const escape = new Event("keydown", { cancelable: true });
+  Object.defineProperty(escape, "key", { value: "Escape" });
+  actions.dispatchEvent(escape);
+  assert.equal(actions.open, false);
+  assert.equal(doc.activeElement, actionControl(first, "actions"));
+  assert.equal(doc.querySelector("#raster-layer-stack-body").hidden, false);
   view.unbind();
-  actionControl(moistureRow, "remove").dispatchEvent(new Event("click"));
-  assert.equal(received.length, 5);
+  actionControl(third, "remove").dispatchEvent(new Event("click"));
+  assert.equal(received.length, 4);
 });
 
 test("MapLayerStackView Escape collapses only its sidebar section", () => {
   const documentContext = new FakeLayerStackDocument();
   const view = new MapLayerStackView(documentContext);
   view.bind({
-    onActivate() {},
+    onStyle() {},
     onVisibility() {},
-    onOpacity() {},
     onMove() {},
     onRemove() {},
   });
@@ -507,7 +381,7 @@ test("MapLayerStackView announces status and retains stable action focus", () =>
 
   assert.notEqual(documentContext.activeElement, focusedBeforeRender);
   assert.equal(documentContext.activeElement.dataset.layerKey, "moisture");
-  assert.equal(documentContext.activeElement.dataset.layerAction, "remove");
+  assert.equal(documentContext.activeElement.dataset.layerAction, "actions");
 
   view.render(
     [LAYERS[0], LAYERS[1]],
@@ -515,7 +389,7 @@ test("MapLayerStackView announces status and retains stable action focus", () =>
     { key: "vegetation", action: "move-up" },
   );
   assert.equal(documentContext.activeElement.dataset.layerKey, "vegetation");
-  assert.equal(documentContext.activeElement.dataset.layerAction, "move-up");
+  assert.equal(documentContext.activeElement.dataset.layerAction, "actions");
 
   view.render(
     [LAYERS[1], LAYERS[0]],
@@ -523,7 +397,7 @@ test("MapLayerStackView announces status and retains stable action focus", () =>
     { key: "vegetation", action: "move-up" },
   );
   assert.equal(documentContext.activeElement.dataset.layerKey, "vegetation");
-  assert.equal(documentContext.activeElement.dataset.layerAction, "move-down");
+  assert.equal(documentContext.activeElement.dataset.layerAction, "actions");
 
   view.setStatus("Soil moisture anomaly removed.");
   assert.equal(

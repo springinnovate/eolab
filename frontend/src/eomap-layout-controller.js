@@ -137,10 +137,6 @@ export class EomapLayoutController {
             documentContext,
             "#open-map-layer-histograms"
         );
-        this.openHistogramMapLayers = requireLayoutElement(
-            documentContext,
-            "#open-histogram-map-layers"
-        );
         this.operationalStatusIsExpanded =
             this.operationalToggle.getAttribute("aria-expanded") !== "false";
         this.controlPanelIsCollapsed =
@@ -157,8 +153,6 @@ export class EomapLayoutController {
             this.#handleAnalysisAoiKeydown.bind(this);
         this.boundOpenMapLayerHistograms = () =>
             this.showWorkspace("histogram", true);
-        this.boundOpenHistogramMapLayers = () =>
-            this.showWorkspace("map-layers", true);
         this.operationalToggle.addEventListener(
             "click",
             this.boundOperationalToggle
@@ -183,10 +177,6 @@ export class EomapLayoutController {
         this.openMapLayerHistograms.addEventListener(
             "click",
             this.boundOpenMapLayerHistograms
-        );
-        this.openHistogramMapLayers.addEventListener(
-            "click",
-            this.boundOpenHistogramMapLayers
         );
 
         this.workspaceDisclosures = WORKSPACE_DISCLOSURES.map(
@@ -301,10 +291,6 @@ export class EomapLayoutController {
         this.openMapLayerHistograms.removeEventListener(
             "click",
             this.boundOpenMapLayerHistograms
-        );
-        this.openHistogramMapLayers.removeEventListener(
-            "click",
-            this.boundOpenHistogramMapLayers
         );
         for (const workspaceDisclosure of this.workspaceDisclosures) {
             workspaceDisclosure.toggle.removeEventListener(

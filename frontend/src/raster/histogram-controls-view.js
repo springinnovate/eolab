@@ -135,6 +135,8 @@ export class RasterHistogramControlsView {
         )?.key ?? null;
         this.#clearSummaryButtonListeners();
         this.activeHistogramKey = activeKey;
+        this.automatic = summaries.some((summary) => summary.automatic);
+        this.histogram.hidden = !this.isAvailable || !this.modeIsCompatible || this.automatic;
         const buttons = summaries.map((summary) =>
             this.#createSummaryButton(summary)
         );
@@ -166,7 +168,7 @@ export class RasterHistogramControlsView {
      */
     setActiveRasterAvailable(isAvailable) {
         this.isAvailable = isAvailable;
-        const isVisible = isAvailable && this.modeIsCompatible;
+        const isVisible = isAvailable && this.modeIsCompatible && !this.automatic;
         this.histogram.hidden = !isVisible;
         this.histogram.setAttribute("aria-hidden", String(!isVisible));
         this.#synchronizeSummaryExpansion();
@@ -180,7 +182,8 @@ export class RasterHistogramControlsView {
      */
     setModeCompatible(isCompatible) {
         this.modeIsCompatible = isCompatible;
-        const isVisible = isCompatible && this.isAvailable;
+        this.histogramList.hidden = !isCompatible;
+        const isVisible = isCompatible && this.isAvailable && !this.automatic;
         this.histogram.hidden = !isVisible;
         this.histogram.setAttribute("aria-hidden", String(!isVisible));
         this.#synchronizeSummaryExpansion();
@@ -196,7 +199,7 @@ export class RasterHistogramControlsView {
      * @return {void}
      */
     showWidget(moveFocus = false) {
-        if (!this.isAvailable || !this.modeIsCompatible) {
+        if (!this.isAvailable || !this.modeIsCompatible || this.automatic) {
             return;
         }
         this.histogram.hidden = false;
@@ -360,12 +363,14 @@ export class RasterHistogramControlsView {
         ) {
             throw new TypeError("Raster histogram summary is invalid");
         }
-        const button = this.documentContext.createElement("button");
+        const button = this.documentContext.createElement(summary.automatic ? "article" : "button");
         button.type = "button";
         button.className = "raster-histogram-summary";
         button.setAttribute("aria-label", `Histogram — ${summary.label}`);
-        button.setAttribute("aria-controls", "raster-histogram");
-        button.setAttribute("aria-expanded", "false");
+        if (!summary.automatic) {
+            button.setAttribute("aria-controls", "raster-histogram");
+            button.setAttribute("aria-expanded", "false");
+        }
 
         const name = this.documentContext.createElement("span");
         name.className = "raster-histogram-summary-name";
@@ -382,8 +387,34 @@ export class RasterHistogramControlsView {
             error: "Histogram unavailable",
         }[summary.state];
         button.append(name, scope, status);
-        if (summary.counts !== null && summary.counts.length > 0) {
+        if (summary.automatic && summary.statistics) {
+            const chart = this.documentContext.createElementNS(
+                "http://www.w3.org/2000/svg", "svg"
+            );
+            chart.classList.add("raster-histogram-chart");
+            renderRasterHistogramChart(
+                chart, summary.statistics, summary.style, this.documentContext
+            );
+            const axis = this.documentContext.createElement("p");
+            axis.className = "raster-histogram-summary-scope";
+            axis.textContent = `Range: ${summary.minimumLabel} to ${summary.maximumLabel}`;
+            button.append(chart, axis);
+        } else if (summary.counts !== null && summary.counts.length > 0) {
             button.append(this.#createSummaryPreview(summary));
+        }
+        if (summary.automatic) {
+            if (summary.canRetry) {
+                const retry = this.documentContext.createElement("button");
+                retry.type = "button";
+                retry.className = "secondary-button";
+                retry.textContent = "Retry histogram";
+                retry.setAttribute("aria-label", `Retry histogram for ${summary.label}`);
+                retry.addEventListener("click", () =>
+                    this.handlers?.onRetryHistogram(summary.key)
+                );
+                button.append(retry);
+            }
+            return button;
         }
         const handleSelect = () => {
             this.handlers?.onSelectHistogram(summary.key);
