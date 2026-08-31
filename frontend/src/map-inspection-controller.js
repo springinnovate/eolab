@@ -1,4 +1,4 @@
-/** Shared non-modal map-side presentation for histograms and layer styling. */
+/** Shared non-modal presentation surface for independent map-side tools. */
 export class MapInspectionController {
     /**
      * Bind the persistent histogram opener and its independent close control.
@@ -12,6 +12,7 @@ export class MapInspectionController {
         this.root = documentContext.querySelector("#map-inspection");
         this.histogram = documentContext.querySelector("#map-histogram-panel");
         this.style = documentContext.querySelector("#layer-style-editor");
+        this.feature = documentContext.querySelector("#vector-feature-inspector");
         this.opener = documentContext.querySelector("#open-map-histogram");
         this.closeButton = documentContext.querySelector("#close-map-histogram");
         this.isOpen = false;
@@ -66,9 +67,30 @@ export class MapInspectionController {
         this.#synchronize();
     }
 
+    /**
+     * Reveal vector feature results without changing retained map layers.
+     *
+     * @return {void}
+     */
+    showFeatureInspector() {
+        this.feature.hidden = false;
+        this.#synchronize();
+    }
+
+    /**
+     * Hide vector feature results without changing any other map-side tool.
+     *
+     * @return {void}
+     */
+    hideFeatureInspector() {
+        this.feature.hidden = true;
+        this.#synchronize();
+    }
+
     /** Keep one native top-layer surface open while either tool is visible. @return {void} */
     #synchronize() {
-        const shouldOpen = !this.histogram.hidden || !this.style.hidden;
+        const shouldOpen = !this.histogram.hidden || !this.style.hidden ||
+            !this.feature.hidden;
         if (shouldOpen === this.isOpen) return;
         this.isOpen = shouldOpen;
         if (shouldOpen) this.root.showPopover();
@@ -82,6 +104,7 @@ export class MapInspectionController {
         this.document.removeEventListener("keydown", this.onKeydown);
         this.histogram.hidden = true;
         this.style.hidden = true;
+        this.feature.hidden = true;
         this.opener.setAttribute("aria-expanded", "false");
         this.opener.hidden = false;
         this.#synchronize();

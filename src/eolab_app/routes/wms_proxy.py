@@ -14,6 +14,11 @@ from eolab_app.rendering.errors import (
 from eolab_app.rendering.ports import PublishedLayerRegistry
 
 
+MAX_FEATURE_INFO_FEATURES = 10
+MAX_FEATURE_INFO_RESPONSE_BYTES = 512 * 1024
+MAX_FEATURE_INFO_BUFFER_PIXELS = 20
+
+
 PUBLIC_WMS_COMMON_QUERY_PARAMETERS = frozenset(
     {"request", "service", "version"}
 )
@@ -130,16 +135,10 @@ def validated_public_wms_query(
                 status_code=400,
                 detail="WMS map format must be image/png",
             )
-        if normalized_query.get("info_format", "").lower() not in {
-            "application/json",
-            "text/plain",
-        }:
+        if normalized_query.get("info_format", "").lower() != "application/json":
             raise HTTPException(
                 status_code=400,
-                detail=(
-                    "WMS feature information format must be application/json "
-                    "or text/plain"
-                ),
+                detail="WMS feature information format must be application/json",
             )
         try:
             feature_count = int(normalized_query.get("feature_count", "1"))
@@ -148,10 +147,28 @@ def validated_public_wms_query(
                 status_code=400,
                 detail="feature_count must be an integer",
             ) from error
-        if not 1 <= feature_count <= 100:
+        if not 1 <= feature_count <= MAX_FEATURE_INFO_FEATURES:
             raise HTTPException(
                 status_code=400,
-                detail="feature_count must be between 1 and 100",
+                detail=(
+                    "feature_count must be between 1 and "
+                    f"{MAX_FEATURE_INFO_FEATURES}"
+                ),
+            )
+        try:
+            buffer_pixels = int(normalized_query.get("buffer", "0"))
+        except ValueError as error:
+            raise HTTPException(
+                status_code=400,
+                detail="buffer must be an integer",
+            ) from error
+        if not 0 <= buffer_pixels <= MAX_FEATURE_INFO_BUFFER_PIXELS:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "buffer must be between 0 and "
+                    f"{MAX_FEATURE_INFO_BUFFER_PIXELS}"
+                ),
             )
     layer_name = None
     if operation == "getmap":
@@ -299,6 +316,22 @@ def create_wms_proxy_router(
                 status_code=502,
                 detail="The rendering service is unavailable",
             ) from error
+
+        if operation == "getfeatureinfo" and geoserver_response.is_success:
+            response_media_type = geoserver_response.headers.get(
+                "content-type",
+                "",
+            ).partition(";")[0].lower()
+            if response_media_type != "application/json":
+                raise HTTPException(
+                    status_code=502,
+                    detail="The rendering service returned invalid feature information",
+                )
+            if len(geoserver_response.content) > MAX_FEATURE_INFO_RESPONSE_BYTES:
+                raise HTTPException(
+                    status_code=502,
+                    detail="The rendering service returned too much feature information",
+                )
 
         response_headers = {
             header_name: header_value

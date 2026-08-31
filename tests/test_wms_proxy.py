@@ -14,7 +14,10 @@ from eolab_app.rendering.errors import (
     PublishedLayerNotAuthorizedError,
     PublishedLayerRequestError,
 )
-from eolab_app.routes.wms_proxy import create_wms_proxy_router
+from eolab_app.routes.wms_proxy import (
+    MAX_FEATURE_INFO_RESPONSE_BYTES,
+    create_wms_proxy_router,
+)
 from tests.app_support import (
     GeoServerPublicationMock,
     RASTER_STYLE_ENVIRONMENT_ERROR,
@@ -150,8 +153,97 @@ def test_wms_proxy_forwards_one_authorized_fixed_style_vector_layer() -> None:
     }
     assert unbounded_feature_response.status_code == 400
     assert unbounded_feature_response.json() == {
-        "detail": "feature_count must be between 1 and 100"
+        "detail": "feature_count must be between 1 and 10"
     }
+
+
+def test_wms_proxy_forwards_bounded_json_feature_information() -> None:
+    """Authorize one small JSON feature response through the vector registry."""
+    forwarded_requests = []
+    feature_collection = b'{"type":"FeatureCollection","features":[]}'
+
+    def geoserver_response(request: httpx2.Request) -> httpx2.Response:
+        forwarded_requests.append(request)
+        return httpx2.Response(
+            200,
+            content=feature_collection,
+            headers={"Content-Type": "application/json;charset=UTF-8"},
+        )
+
+    application = FastAPI()
+    application.include_router(create_wms_proxy_router(
+        httpx2.AsyncClient(transport=httpx2.MockTransport(geoserver_response)),
+        "http://geoserver:8080/geoserver",
+        (_NoRasterAuthorization(), _FixedVectorAuthorization()),
+        GetMapRequestTracker(2),
+    ))
+    response = TestClient(application).get(
+        "/geoserver/eolab/wms?service=WMS&version=1.3.0"
+        "&request=GetFeatureInfo&layers=eolab%3Aparcels"
+        "&query_layers=eolab%3Aparcels&styles=vector-polygon"
+        "&crs=EPSG%3A3857&bbox=0%2C0%2C1%2C1"
+        "&width=256&height=256&format=image%2Fpng"
+        "&info_format=application%2Fjson&i=1&j=1"
+        "&feature_count=5&buffer=8"
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/json;charset=UTF-8"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.content == feature_collection
+    assert len(forwarded_requests) == 1
+    assert forwarded_requests[0].url.params["feature_count"] == "5"
+    assert forwarded_requests[0].url.params["buffer"] == "8"
+
+
+@pytest.mark.parametrize(
+    ("content", "content_type", "detail"),
+    (
+        (
+            b"x" * (MAX_FEATURE_INFO_RESPONSE_BYTES + 1),
+            "application/json",
+            "The rendering service returned too much feature information",
+        ),
+        (
+            b"<html>not JSON</html>",
+            "text/html",
+            "The rendering service returned invalid feature information",
+        ),
+    ),
+)
+def test_wms_proxy_rejects_unbounded_feature_information_response(
+    content: bytes,
+    content_type: str,
+    detail: str,
+) -> None:
+    """Reject successful upstream feature responses outside the public contract."""
+
+    def geoserver_response(request: httpx2.Request) -> httpx2.Response:
+        del request
+        return httpx2.Response(
+            200,
+            content=content,
+            headers={"Content-Type": content_type},
+        )
+
+    application = FastAPI()
+    application.include_router(create_wms_proxy_router(
+        httpx2.AsyncClient(transport=httpx2.MockTransport(geoserver_response)),
+        "http://geoserver:8080/geoserver",
+        (_NoRasterAuthorization(), _FixedVectorAuthorization()),
+        GetMapRequestTracker(2),
+    ))
+    response = TestClient(application).get(
+        "/geoserver/eolab/wms?service=WMS&version=1.3.0"
+        "&request=GetFeatureInfo&layers=eolab%3Aparcels"
+        "&query_layers=eolab%3Aparcels&styles=vector-polygon"
+        "&crs=EPSG%3A3857&bbox=0%2C0%2C1%2C1"
+        "&width=256&height=256&format=image%2Fpng"
+        "&info_format=application%2Fjson&i=1&j=1&feature_count=5"
+    )
+
+    assert response.status_code == 502
+    assert response.json() == {"detail": detail}
 
 
 def test_wms_proxy_forwards_supported_read_operation(
@@ -426,10 +518,12 @@ def test_wms_proxy_rejects_a_layer_not_approved_by_this_app_process(
         ),
         (
             "service=WMS&request=GetFeatureInfo&info_format=text/html",
-            (
-                "WMS feature information format must be application/json "
-                "or text/plain"
-            ),
+            "WMS feature information format must be application/json",
+        ),
+        (
+            "service=WMS&request=GetFeatureInfo&info_format=application%2Fjson"
+            "&feature_count=1&buffer=21",
+            "buffer must be between 0 and 20",
         ),
     ),
 )

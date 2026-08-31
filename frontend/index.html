@@ -772,11 +772,38 @@
         <div id="raster-pixel-probe-reading"></div>
       </div>
 
-      <button id="open-map-histogram" class="secondary-button map-histogram-opener"
-        type="button" aria-controls="map-histogram-panel" aria-expanded="false"
-        aria-haspopup="dialog">Histogram</button>
+      <div class="map-tool-openers">
+        <button id="open-vector-inspector" class="secondary-button" type="button"
+          aria-controls="vector-feature-inspector" aria-expanded="false"
+          aria-haspopup="dialog" hidden>Inspect features</button>
+        <button id="open-map-histogram" class="secondary-button"
+          type="button" aria-controls="map-histogram-panel" aria-expanded="false"
+          aria-haspopup="dialog">Histogram</button>
+      </div>
       <aside id="map-inspection" popover="manual" aria-label="Map exploration">
         <div class="map-inspection-panels">
+          <section id="vector-feature-inspector" role="dialog" aria-modal="false"
+            aria-labelledby="vector-feature-inspector-heading" hidden>
+            <header class="vector-feature-inspector-header">
+              <h2 id="vector-feature-inspector-heading">Feature inspector</h2>
+              <button id="close-vector-inspector" class="secondary-button"
+                type="button" aria-label="Close feature inspector">×</button>
+            </header>
+            <p id="vector-feature-status" class="vector-feature-status" role="status">
+              Click a visible vector feature to inspect it.
+            </p>
+            <article id="vector-feature-result" hidden>
+              <h3 id="vector-feature-layer"></h3>
+              <nav class="vector-feature-navigation" aria-label="Inspected features">
+                <button id="previous-vector-feature" class="secondary-button"
+                  type="button">Previous</button>
+                <span id="vector-feature-position"></span>
+                <button id="next-vector-feature" class="secondary-button"
+                  type="button">Next</button>
+              </nav>
+              <dl id="vector-feature-attributes" class="vector-feature-attributes"></dl>
+            </article>
+          </section>
           <section id="map-histogram-panel" role="dialog" aria-modal="false"
             aria-labelledby="map-histogram-heading" hidden>
             <header class="map-histogram-toolbar">

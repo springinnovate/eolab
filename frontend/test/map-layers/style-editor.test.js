@@ -17,6 +17,7 @@ function fixture() {
     const histogram = doc.querySelector('#map-histogram-panel');
     histogram.hidden = true;
     histogram.append(doc.querySelector('#close-map-histogram'));
+    doc.querySelector('#vector-feature-inspector').hidden = true;
     const surface = doc.querySelector('#map-inspection');
     surface.showPopover = () => { surface.open = true; };
     surface.hidePopover = () => { surface.open = false; };
