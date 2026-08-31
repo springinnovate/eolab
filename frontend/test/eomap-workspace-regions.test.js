@@ -96,12 +96,36 @@ test("one sidebar owns the workspace disclosures and compact status", () => {
     assert.doesNotMatch(panel.source, /role="tab(?:list|panel)?"/);
     assert.match(
         panel.source,
-        /id="toggle-operational-status"[^>]*aria-controls="eomap-operational-status-body"[^>]*aria-expanded="false"[^>]*>\s*Show status details/s
+        /id="toggle-operational-status"[^>]*aria-label="Show status details"[^>]*aria-controls="eomap-operational-status-body"[^>]*aria-expanded="false"[^>]*>\s*Status/s
     );
     assert.match(
         panel.source,
         /id="eomap-operational-status-body"[^>]*aria-hidden="true"[^>]*hidden/s
     );
+});
+
+test("compact header owns branding and actions while alerts stay outside hidden details", () => {
+    const header = requireElementRange("app-header");
+    const status = requireElementRange("eomap-operational-status-region");
+    const body = requireElementRange("eomap-operational-status-body");
+    for (const id of ["app-title", "app-subtitle", "toggle-operational-status", "collapse-panel"]) {
+        assert.match(header.source, new RegExp(`id="${id}"`));
+    }
+    assert.match(header.source, /class="panel-identity"/);
+    assert.match(header.source, /class="panel-header-actions"/);
+    assert.doesNotMatch(MARKUP, /Earth observation workspace|operational-status-heading/);
+    assert.ok(header.end < status.start);
+    for (const id of ["catalog-state-announcement", "rendering-state-announcement"]) {
+        const announcement = requireElementRange(id);
+        assert.ok(status.start < announcement.start && announcement.end < body.start);
+        assert.match(announcement.source, /role="status"[^>]*aria-live="polite"/s);
+        assert.doesNotMatch(announcement.source, /aria-hidden|\shidden(?:\s|>)/);
+    }
+    assert.match(STYLESHEET, /\.panel-header\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) auto/s);
+    assert.match(STYLESHEET, /\.panel-identity\s*\{[^}]*min-width:\s*0[^}]*flex-wrap:\s*wrap/s);
+    assert.match(STYLESHEET, /\.panel-header-actions\s*\{[^}]*display:\s*flex[^}]*flex-shrink:\s*0/s);
+    assert.doesNotMatch(STYLESHEET, /\.panel-header \.subtitle\s*\{[^}]*display:\s*none/s);
+    assert.match(STYLESHEET, /\.operational-status-notice:not\(\.visually-hidden\)/);
 });
 
 test("Catalog, Map layers, and Histograms are independent sibling disclosures", () => {

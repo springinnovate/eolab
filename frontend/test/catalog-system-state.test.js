@@ -10,6 +10,7 @@ import {
 
 test("Catalog state replaces visual classes and announces only changes", () => {
   const classNames = new Set(["is-warning"]);
+  const announcementClasses = new Set(["visually-hidden"]);
   const elements = {
     disclosure: {
       classList: {
@@ -22,7 +23,15 @@ test("Catalog state replaces visual classes and announces only changes", () => {
       },
     },
     stateText: { textContent: "Catalog: searching" },
-    stateAnnouncement: { textContent: "" },
+    stateAnnouncement: {
+      textContent: "",
+      classList: {
+        toggle(name, force) {
+          if (force) announcementClasses.add(name);
+          else announcementClasses.delete(name);
+        },
+      },
+    },
   };
 
   applyCatalogSystemState(
@@ -33,6 +42,7 @@ test("Catalog state replaces visual classes and announces only changes", () => {
 
   assert.equal(classNames.has("is-warning"), false);
   assert.equal(classNames.has("is-connected"), true);
+  assert.equal(announcementClasses.has("visually-hidden"), true);
   assert.equal(elements.stateText.textContent, "Catalog: connected · 42 Items");
   assert.equal(
     elements.stateAnnouncement.textContent,
@@ -54,6 +64,12 @@ test("Catalog state replaces visual classes and announces only changes", () => {
   );
   assert.equal(classNames.has("is-connected"), false);
   assert.equal(classNames.has("is-warning"), true);
+  assert.equal(announcementClasses.has("visually-hidden"), false);
+  assert.equal(elements.stateAnnouncement.textContent, "Catalog: unavailable");
+
+  applyCatalogSystemState(elements, "Catalog: connecting");
+  assert.equal(announcementClasses.has("visually-hidden"), true);
+  assert.equal(elements.stateAnnouncement.textContent, "Catalog: connecting");
 });
 
 test("Catalog scan controls use a native system-state disclosure", () => {

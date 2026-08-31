@@ -4,6 +4,7 @@
  * The native disclosure owns keyboard and open/close behavior. This module
  * only applies connection state and mirrors changed labels into the dedicated
  * live region so the interactive summary does not also act as a status region.
+ * Warnings remain visible outside the collapsed operational-status details.
  */
 
 const CATALOG_STATE_CLASSES = ["is-connected", "is-warning"];
@@ -14,7 +15,8 @@ const CATALOG_STATE_CLASSES = ["is-connected", "is-warning"];
  * @typedef {Object} CatalogSystemStateElements
  * @property {HTMLElement} disclosure Catalog details element.
  * @property {HTMLElement} stateText Visible Catalog summary label.
- * @property {HTMLElement} stateAnnouncement Polite live-status region.
+ * @property {HTMLElement} stateAnnouncement Polite live-status region outside
+ * the details; visually hidden except when displaying a warning.
  */
 
 /**
@@ -36,6 +38,10 @@ export function applyCatalogSystemState(
         elements.disclosure.classList.add(stateClass);
     }
     elements.stateText.textContent = statusText;
+    elements.stateAnnouncement.classList.toggle(
+        "visually-hidden",
+        stateClass !== "is-warning"
+    );
     if (previousStatusText !== statusText) {
         elements.stateAnnouncement.textContent = statusText;
     }
