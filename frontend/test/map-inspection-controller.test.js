@@ -13,7 +13,8 @@ function fixture() {
     const root = doc.querySelector('#map-inspection');
     const histogram = doc.querySelector('#map-histogram-panel');
     const style = doc.querySelector('#layer-style-editor');
-    histogram.hidden = style.hidden = true;
+    const feature = doc.querySelector('#vector-feature-inspector');
+    histogram.hidden = style.hidden = feature.hidden = true;
     const close = doc.querySelector('#close-map-histogram');
     histogram.append(close);
     const calls = [];
@@ -21,7 +22,7 @@ function fixture() {
     root.hidePopover = () => calls.push('hide');
     const controller = new MapInspectionController({ documentContext: doc,
         onHistogramClose: () => calls.push('pause') });
-    return { doc, histogram, style, close, calls, controller,
+    return { doc, histogram, style, feature, close, calls, controller,
         opener: doc.querySelector('#open-map-histogram') };
 }
 
@@ -73,6 +74,20 @@ test('histogram and style have independent visibility on one persistent surface'
     h.controller.destroy();
     assert.equal(h.opener.hidden, false);
     assert.deepEqual(h.calls, ['show', 'pause', 'hide']);
+});
+
+test('vector feature inspection shares the map-side surface independently', () => {
+    const h = fixture();
+    h.controller.showFeatureInspector();
+    assert.equal(h.feature.hidden, false);
+    assert.deepEqual(h.calls, ['show']);
+    h.controller.showStyle();
+    h.controller.hideFeatureInspector();
+    assert.equal(h.style.hidden, false);
+    assert.deepEqual(h.calls, ['show']);
+    h.controller.hideStyle();
+    assert.deepEqual(h.calls, ['show', 'hide']);
+    h.controller.destroy();
 });
 
 test('Escape is focus-scoped and destroy detaches presentation listeners', () => {

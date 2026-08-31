@@ -3455,13 +3455,21 @@ button.raster-histogram-summary:hover,
   font-weight: 650;
 }
 
-/* Results and styling share one top-layer surface, independent of the sidebar. */
-.map-histogram-opener {
+/* Exploration openers remain compact and independent of the sidebar. */
+.map-tool-openers {
   position: absolute;
   top: 16px;
   right: 20px;
   z-index: 800;
-  box-shadow: var(--elevation-panel);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  max-width: calc(100% - 40px);
+}
+.map-tool-openers .secondary-button { box-shadow: var(--elevation-panel); }
+.map-tool-openers:has(#open-map-histogram[hidden]) #open-vector-inspector {
+  display: none;
 }
 
 #map-inspection {
@@ -3501,7 +3509,8 @@ button.raster-histogram-summary:hover,
 }
 
 #map-histogram-panel,
-#layer-style-editor {
+#layer-style-editor,
+#vector-feature-inspector {
   pointer-events: auto;
   min-width: 0;
   padding: 14px;
@@ -3515,6 +3524,7 @@ button.raster-histogram-summary:hover,
 #open-map-histogram[hidden],
 #map-histogram-panel[hidden],
 #layer-style-editor[hidden],
+#vector-feature-inspector[hidden],
 .raster-histogram-summary-status[hidden],
 .layer-style-opacity[hidden] { display: none; }
 
@@ -3527,8 +3537,38 @@ button.raster-histogram-summary:hover,
     overflow: visible;
   }
   #map-histogram-panel,
-  #layer-style-editor { max-height: var(--map-inspection-height); overflow-y: auto; overscroll-behavior: contain; }
+  #layer-style-editor,
+  #vector-feature-inspector { max-height: var(--map-inspection-height); overflow-y: auto; overscroll-behavior: contain; }
 }
+
+.leaflet-container.is-inspecting-vector-features { cursor: crosshair; }
+.vector-feature-inspector-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: var(--surface-1);
+}
+.vector-feature-inspector-header h2 { margin: 0; font-size: 1rem; }
+#close-vector-inspector { flex: 0 0 28px; height: 28px; padding: 0; line-height: 1; font-size: 1.1rem; }
+.vector-feature-status { margin: 12px 0; color: var(--text-2); font-size: 0.78rem; }
+#vector-feature-result h3 { margin: 0 0 10px; overflow-wrap: anywhere; font-size: 0.86rem; }
+.vector-feature-navigation { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; }
+.vector-feature-navigation span { text-align: center; color: var(--text-2); font-size: 0.75rem; }
+.vector-feature-attributes {
+  display: grid;
+  grid-template-columns: minmax(90px, 0.4fr) minmax(0, 1fr);
+  gap: 0;
+  margin: 14px 0 0;
+  border-top: 1px solid var(--border-1);
+}
+.vector-feature-attributes dt,
+.vector-feature-attributes dd { margin: 0; padding: 8px 6px; border-bottom: 1px solid var(--border-1); overflow-wrap: anywhere; }
+.vector-feature-attributes dt { color: var(--text-2); font-size: 0.72rem; font-weight: 650; }
+.vector-feature-attributes dd { font-size: 0.78rem; }
 
 .map-histogram-toolbar {
   position: sticky;

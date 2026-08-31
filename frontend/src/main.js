@@ -62,6 +62,7 @@ import {
     isRasterDetailPreviewProcessing,
 } from "./raster/detail-preview-status.js";
 import { initializeRasterViewer } from "./raster/raster-viewer.js";
+import { VectorFeatureInspectorController } from "./vector/feature-inspector.js";
 import { createVectorMapLayerAdapter } from "./vector/map-layer-adapter.js";
 import { initializeTemporaryAoi } from "./temporary-aoi/temporary-aoi.js";
 import {
@@ -705,6 +706,7 @@ async function initializeCatalog(
 
     let rasterVisualization = null;
     let layerStyleEditor = null;
+    let vectorFeatureInspector = null;
     const mapLayerController = new MapLayerController({
         leafletMap,
         view: new MapLayerStackView(),
@@ -712,6 +714,7 @@ async function initializeCatalog(
             refreshCatalogMapAction();
             rasterVisualization?.syncVisibleLayers();
             layerStyleEditor?.refresh();
+            vectorFeatureInspector?.syncVisibleLayers();
         },
     });
     rasterVisualization = initializeRasterViewer({
@@ -732,16 +735,26 @@ async function initializeCatalog(
         }
     });
     rasterVisualization.syncVisibleLayers();
+    const vectorMapLayerAdapter = createVectorMapLayerAdapter({
+        leaflet: L,
+        leafletMap,
+        wmsUrl: appGlobalConfiguration.wmsUrl,
+        onTileError: reportMapTileError,
+    });
     const catalogVisualization = new CatalogVisualizationCoordinator(
         rasterVisualization,
         mapLayerController,
-        createVectorMapLayerAdapter({
-            leaflet: L,
-            leafletMap,
-            wmsUrl: appGlobalConfiguration.wmsUrl,
-            onTileError: reportMapTileError,
-        })
+        vectorMapLayerAdapter
     );
+    vectorFeatureInspector = new VectorFeatureInspectorController({
+        leaflet: L,
+        leafletMap,
+        mapLayers: mapLayerController,
+        vectorAdapter: vectorMapLayerAdapter,
+        wmsUrl: appGlobalConfiguration.wmsUrl,
+        inspection: mapInspection,
+        onEnable: () => rasterVisualization.stopSampleWindowSelection(),
+    });
     const rasterDetailPreview = initializeRasterDetailPreview({
         leafletMap,
         leaflet: L,

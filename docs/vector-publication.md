@@ -108,6 +108,23 @@ removal, and tile-error ownership with raster WMS layers. Fit-to-bounds is an
 adapter option and defaults on when a vector is added. Selecting a vector hides
 raster-only palette, histogram, pixel, and sample-window controls.
 
+### Feature inspection
+
+When at least one published vector is visible, the browser offers an explicit
+feature-inspection mode. One map click issues an independent WMS 1.1.1
+`GetFeatureInfo` request for each visible vector layer through the same public
+proxy. The request uses the current EPSG:4326 viewport so the returned GeoJSON
+geometry can be highlighted directly by Leaflet. Hidden vectors and raster
+layers are never queried.
+
+The public contract accepts only `application/json`, at most ten upstream
+features, a search buffer no larger than twenty pixels, and a response no
+larger than 512 KiB. The browser asks for at most five features per visible
+layer, aborts superseded clicks, ignores stale responses, bounds displayed
+property values, and writes all names and values with `textContent`. The
+source geometry field is omitted from the attribute table because the selected
+geometry is already represented by the temporary map highlight.
+
 ## Production verification
 
 `deployment/require-geoserver-vector-datastores.sh` fails image build and
