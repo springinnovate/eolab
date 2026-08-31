@@ -96,3 +96,19 @@ automatically retried: five delays of 250, 500, 1000, 2000, and 4000 ms.
 Cancellation clears the delay timer. If contention persists, the normal error
 state offers Retry; deterministic conflicts are not retried. The queue does
 not change backend concurrency, cache limits, pixel probing, or map rendering.
+
+### Histogram presentation
+
+The 1D chart owns its SVG coordinate mapping and redraws against its measured
+container width, keeping all bins visible and axis text at a readable size.
+Its x-axis uses the returned histogram edges, including the padded domain for
+constant samples; units are shown only when the analyzed data asset explicitly
+supplies its first band's `raster:bands` unit. Tiny/large values use scientific
+notation, and narrowly spaced large values use a labeled offset.
+
+The y-axis starts at zero and shows each bin's percentage of valid sampled
+pixels, excluding nodata. Each chart has its own labeled percentage maximum;
+bar height alone is not a shared scale across different charts. Hover details
+retain exact counts and bin bounds. Resize observers are disconnected whenever
+a chart is replaced, cleared, or its controls are destroyed. These are display
+changes only: sampling, bin counts, and percentile calculations are unchanged.

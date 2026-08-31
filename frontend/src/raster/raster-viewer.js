@@ -48,6 +48,7 @@ import {
 } from "./statistics.js";
 import { RasterStatisticsController } from "./statistics-controller.js";
 import { RasterStatisticsRequestQueue } from "./statistics-request-queue.js";
+import { getHistogramValueLabel } from "./histogram-axes.js";
 import {
     normalizeRasterPairedSamplingArea,
     WHOLE_RASTER_OVERLAP_SAMPLING_AREA,
@@ -831,8 +832,8 @@ export function initializeRasterViewer(
      *
      * @param {Object} session Raster-owned retained interaction state.
      * @return {{key:string,label:string,state:string,scope:string,
-     * counts:number[]|null,automatic:boolean,minimumLabel:string,
-     * maximumLabel:string,statistics:Object|null,style:Object,
+     * counts:number[]|null,automatic:boolean,valueLabel:string,
+     * statistics:Object|null,style:Object,
      * canRetry:boolean,errorMessage:string}} Histogram view model with cached
      * counts, ready-only statistics, coloring, failure reason, and retry state.
      */
@@ -849,8 +850,7 @@ export function initializeRasterViewer(
             counts: Array.isArray(counts) && (!followsVisibleLayers || presentation.state === "ready")
                 ? [...counts] : null,
             automatic: followsVisibleLayers,
-            minimumLabel: presentation.statistics ? formatRasterPixelValue(presentation.statistics.sampleMinimum) : "",
-            maximumLabel: presentation.statistics ? formatRasterPixelValue(presentation.statistics.sampleMaximum) : "",
+            valueLabel: getHistogramValueLabel(session.item),
             statistics: presentation.state === "ready" ? presentation.statistics : null,
             style: session.rasterStyle,
             errorMessage: presentation.state === "error" ? error?.message ?? "" : "",
@@ -2237,7 +2237,7 @@ export function initializeRasterViewer(
             sampledRasterSession.paletteName
         );
         if (rasterStatistics !== null) {
-            controlsView.renderHistogram(rasterStatistics, rasterStyle);
+            controlsView.renderHistogram(rasterStatistics, rasterStyle, getHistogramValueLabel(activeRasterItem));
         }
         saveActiveLayerSession();
         if (bivariateMode.contains(getCatalogItemKey(item))) {
@@ -2407,7 +2407,7 @@ export function initializeRasterViewer(
             activePaletteName = paletteName;
             rasterStyleWasEdited = wasEdited;
             if (rasterStatistics !== null) {
-                controlsView.renderHistogram(rasterStatistics, rasterStyle);
+                controlsView.renderHistogram(rasterStatistics, rasterStyle, getHistogramValueLabel(activeRasterItem));
             }
             saveActiveLayerSession();
         }
@@ -2634,16 +2634,7 @@ export function initializeRasterViewer(
             );
         controlsView.setStatisticsBusy(false);
         controlsView.setStatisticsRetryVisible(false);
-        controlsView.renderHistogram(statistics, rasterStyle);
-        const approximationMarker = statistics.estimated ? "≈ " : "";
-        controlsView.showHistogramAxis(
-            `${approximationMarker}${formatRasterPixelValue(
-                statistics.sampleMinimum
-            )}`,
-            `${approximationMarker}${formatRasterPixelValue(
-                statistics.sampleMaximum
-            )}`
-        );
+        controlsView.renderHistogram(statistics, rasterStyle, getHistogramValueLabel(activeRasterItem));
         controlsView.setPercentileControlsVisible(true);
         resetRasterPercentileControls();
         updateRasterPercentileValues();
@@ -2705,7 +2696,6 @@ export function initializeRasterViewer(
         rasterStatisticsIsApplicable = false;
         controlsView.setStatisticsBusy(false);
         controlsView.clearHistogram();
-        controlsView.hideHistogramAxis();
         controlsView.setPercentileControlsVisible(false);
         controlsView.setStatisticsRetryVisible(
             canRetryRasterStatistics(error)

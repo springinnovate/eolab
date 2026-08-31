@@ -6,6 +6,7 @@ import {
 } from "../../src/raster/histogram-controls-view.js";
 import { DEFAULT_RASTER_STYLE } from "../../src/raster/style.js";
 import { RASTER_STATISTICS } from "../../test-support/raster/fixtures.js";
+import { createFakeResizeObservers } from "../../test-support/raster/fakes.js";
 import {
     FakeRasterControlDocument,
     FakeRasterControlElement,
@@ -24,7 +25,6 @@ test("histogram adapter owns status, chart, retry, and direct presentation", () 
     view.setStatisticsBusy(true);
     view.setStatisticsStatus("Ready.");
     view.renderHistogram(RASTER_STATISTICS, DEFAULT_RASTER_STYLE);
-    view.showHistogramAxis("≈ -10", "≈ 30");
     view.setStatisticsRetryVisible(true);
     view.enableActiveRasterActions();
 
@@ -100,13 +100,33 @@ test("histogram adapter clears an independently populated chart", () => {
     assert.equal(chart.getAttribute("hidden"), "");
 });
 
+test("replacing dynamic charts and unbinding release all resize observers", () => {
+    const doc = new FakeRasterControlDocument();
+    const { ResizeObserver, instances } = createFakeResizeObservers();
+    doc.defaultView = { ResizeObserver };
+    const view = new RasterHistogramControlsView(doc);
+    const summary = { key: "first", label: "drought.tif", scope: "Whole raster",
+        automatic: true, state: "ready", counts: RASTER_STATISTICS.histogram.counts,
+        statistics: RASTER_STATISTICS, style: DEFAULT_RASTER_STYLE };
+    view.renderLayerHistograms([summary], "first");
+    const replaced = instances[0].target;
+    view.renderLayerHistograms([summary], "first");
+    assert.equal(instances[0].disconnected, true);
+    instances[0].resize(391);
+    assert.equal(replaced.children.length, 0);
+    view.renderHistogram(RASTER_STATISTICS, DEFAULT_RASTER_STYLE);
+    view.unbind();
+    assert.equal(instances.length, 3);
+    assert.ok(instances.every(observer => observer.disconnected));
+});
+
 test("pending and failed summaries do not present cached charts as the current sample", () => {
     const doc = new FakeRasterControlDocument();
     const view = new RasterHistogramControlsView(doc);
     const summary = {
         key: "first", label: "drought.tif", scope: "200 km map sample",
         automatic: true, counts: [1, 4, 2], statistics: RASTER_STATISTICS,
-        style: DEFAULT_RASTER_STYLE, minimumLabel: "-10", maximumLabel: "30",
+        style: DEFAULT_RASTER_STYLE, valueLabel: "Raster value (%)",
     };
     const list = doc.querySelector("#raster-histogram-list");
     for (const state of ["loading", "error", "ready"]) {
@@ -118,10 +138,11 @@ test("pending and failed summaries do not present cached charts as the current s
             loading: "Updating histogram…", error: "Histogram unavailable", ready: "",
         }[state]);
         assert.equal(row.children[1].hidden, state === "ready");
-        assert.equal(row.children.at(-1).textContent, state === "ready"
-            ? "200 km map sample · Range: -10 to 30" : "200 km map sample");
+        assert.equal(row.children.at(-1).textContent, "200 km map sample");
         if (state === "ready") {
             assert.equal(row.children[2].classList.contains("raster-histogram-chart"), true);
+            assert.equal(row.children[2].getAttribute("viewBox"), "0 0 640 190");
+            assert.match(row.children[2].getAttribute("aria-label"), /Horizontal axis: Raster value \(%\)/);
         }
     }
     view.renderLayerHistograms([{ ...summary, state: "error", errorMessage: "No finite pixels in this sample." }], "first");

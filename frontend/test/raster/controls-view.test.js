@@ -326,7 +326,6 @@ test("RasterControlsView clears histogram visibility through its DOM contract", 
 
     assert.equal(chart.children.length, 0);
     assert.equal(chart.getAttribute("hidden"), "");
-    assert.equal(documentContext.querySelector("#raster-histogram-axis").hidden, true);
     assert.equal(
         documentContext.querySelector("#raster-percentile-controls").hidden,
         true
@@ -445,7 +444,6 @@ test("RasterControlsView reveals a successful histogram presentation", () => {
     chart.setAttribute("hidden", "");
 
     view.renderHistogram(RASTER_STATISTICS, DEFAULT_RASTER_STYLE);
-    view.showHistogramAxis("≈ -1.000e+1", "≈ 3.000e+1");
     view.setPercentileControlsVisible(true);
     view.renderPercentileValues(
         { lower: 5, middle: 50, upper: 95 },
@@ -467,10 +465,8 @@ test("RasterControlsView reveals a successful histogram presentation", () => {
         ).length,
         1
     );
-    assert.equal(
-        documentContext.querySelector("#raster-histogram-axis").hidden,
-        false
-    );
+    assert.equal(chart.getAttribute("viewBox"), "0 0 640 190");
+    assert.match(chart.getAttribute("aria-label"), /percentage of valid sampled pixels/);
     assert.equal(
         documentContext.querySelector("#raster-percentile-controls").hidden,
         false
@@ -491,19 +487,11 @@ test("RasterControlsView labels exact bounded histogram provenance", () => {
     const view = new RasterControlsView(documentContext);
     const chart = documentContext.querySelector("#raster-histogram-chart");
 
-    view.renderHistogram(EXACT_RASTER_STATISTICS, DEFAULT_RASTER_STYLE);
-    view.showHistogramAxis("-1.000e+1", "3.000e+1");
+    view.renderHistogram(EXACT_RASTER_STATISTICS, DEFAULT_RASTER_STYLE, "Raster value (K)");
 
     assert.match(chart.children[0].textContent, /^Exact bounded band 1/);
     assert.match(chart.getAttribute("aria-label"), /^Exact bounded band 1/);
-    assert.doesNotMatch(
-        documentContext.querySelector("#raster-histogram-minimum").textContent,
-        /≈/
-    );
-    assert.doesNotMatch(
-        documentContext.querySelector("#raster-histogram-maximum").textContent,
-        /≈/
-    );
+    assert.match(chart.getAttribute("aria-label"), /Horizontal axis: Raster value \(K\)/);
 });
 
 test("RasterControlsView rejects an incomplete application document", () => {
@@ -535,8 +523,6 @@ test("RasterControlsView preserves the raster viewer compatibility surface", () 
         "setStatisticsStatus",
         "renderHistogram",
         "clearHistogram",
-        "showHistogramAxis",
-        "hideHistogramAxis",
         "setPercentileControlsVisible",
         "setStatisticsRetryVisible",
         "setApplyPercentilesEnabled",
