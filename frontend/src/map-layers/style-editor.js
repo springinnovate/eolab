@@ -92,8 +92,13 @@ export class MapLayerStyleEditor {
         this.inspection.hideStyle();
         const replacement = [...this.document.querySelectorAll('[data-layer-action="style"]')]
             .find((element) => element.dataset.layerKey === key);
-        const target = replacement ?? (this.opener?.isConnected ? this.opener : null);
-        (target ?? this.document.querySelector("#toggle-map-layers"))?.focus();
+        // Prefer the originating shortcut; removed or hidden controls cannot
+        // receive focus, so try the retained-layer action and disclosure next.
+        for (const target of [this.opener, replacement, this.document.querySelector("#toggle-map-layers")]) {
+            if (!target || target.isConnected === false || target.hidden || target.disabled) continue;
+            target.focus();
+            if (this.document.activeElement === target) break;
+        }
     }
 
     /** Close this editor and detach its input/keyboard listeners. @return {void} */

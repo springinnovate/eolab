@@ -9,13 +9,14 @@
  * @param {string} options.id Unique DOM ID prefix for this result instance.
  * @param {Function} options.onDetails Open only this Item's inspector.
  * @param {Function} options.onMapAction Add/remove this Item without navigation.
+ * @param {Function} options.onStyle Open the existing editor for this Item.
  * @param {Function} options.onPreview Preview the Item footprint.
  * @param {Function} options.onClearPreview Clear the transient footprint.
  * @param {Document} [options.documentContext=document] Owning document.
  * @return {Object} Row element, details control, Item, and state renderer.
  */
 export function createCatalogResultView({
-    item, presentation, id, onDetails, onMapAction, onPreview, onClearPreview,
+    item, presentation, id, onDetails, onMapAction, onStyle, onPreview, onClearPreview,
     documentContext = document,
 }) {
     const element = documentContext.createElement("div");
@@ -60,6 +61,15 @@ export function createCatalogResultView({
     mapButton.setAttribute("aria-describedby", `${id}-status`);
     mapButton.addEventListener("click", () => onMapAction(item));
 
+    const styleButton = documentContext.createElement("button");
+    styleButton.className = "secondary-button catalog-result-style";
+    styleButton.type = "button";
+    styleButton.textContent = "Style";
+    styleButton.hidden = true;
+    styleButton.setAttribute("aria-label", `Style: ${presentation.fullTitle}`);
+    styleButton.setAttribute("aria-controls", "layer-style-editor");
+    styleButton.addEventListener("click", () => onStyle(item));
+
     const detailsButton = documentContext.createElement("button");
     detailsButton.className = "catalog-result-details";
     detailsButton.type = "button";
@@ -68,7 +78,7 @@ export function createCatalogResultView({
     detailsButton.setAttribute("aria-controls", "catalog-item-inspector");
     detailsButton.setAttribute("aria-pressed", "false");
     detailsButton.addEventListener("click", () => onDetails(item, detailsButton));
-    actions.append(onMap, mapButton, detailsButton);
+    actions.append(onMap, mapButton, styleButton, detailsButton);
 
     const status = documentContext.createElement("p");
     status.id = `${id}-status`;
@@ -98,6 +108,8 @@ export function createCatalogResultView({
             onMap.hidden = !retained;
             mapButton.hidden = !supported;
             mapButton.disabled = pendingAction !== null;
+            styleButton.hidden = !retained;
+            styleButton.disabled = pendingAction !== null;
             mapButton.classList.toggle("is-retained", retained);
             mapButton.setAttribute("aria-busy", String(pendingAction !== null));
             mapButton.textContent = pendingAction !== null

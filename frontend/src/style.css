@@ -2110,7 +2110,8 @@ h5 {
   margin-top: 5px;
 }
 
-.catalog-result-map-action {
+.catalog-result-map-action,
+.catalog-result-style {
   padding: 4px 8px;
   font-size: 0.72rem;
   line-height: 1.4;
