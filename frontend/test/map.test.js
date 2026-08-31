@@ -4,8 +4,33 @@ import test from "node:test";
 import {
   createSingleWorldMap,
   formatSingleWorldPosition,
+  getCatalogItemMapBounds,
   SINGLE_WORLD_BOUNDS,
 } from "../src/map.js";
+
+test("catalog bounds convert 2D and 3D axis order without mutating the Item", () => {
+  for (const bbox of [[-123, 48, -122, 49], [-123, 48, -100, -122, 49, 500]]) {
+    const item = { bbox }, before = structuredClone(item);
+    assert.deepEqual(getCatalogItemMapBounds(item), [[48, -123], [49, -122]]);
+    assert.deepEqual(item, before);
+  }
+});
+
+test("catalog bounds retain points and global extents and fit crossing bounds in one world", () => {
+  assert.deepEqual(getCatalogItemMapBounds({ bbox: [10, 20, 10, 20] }), [[20, 10], [20, 10]]);
+  assert.deepEqual(getCatalogItemMapBounds({ bbox: [-180, -90, 180, 90] }), SINGLE_WORLD_BOUNDS);
+  assert.deepEqual(getCatalogItemMapBounds({ bbox: [177, -20, -178, -16] }), [[-20, -180], [-16, 180]]);
+});
+
+test("missing and malformed catalog bounds never reach Leaflet", () => {
+  assert.equal(getCatalogItemMapBounds(null), null);
+  for (const bbox of [undefined, null, "0,0,1,1", [], [0, 0, 1], [0, 0, 1, 1, 2],
+    [0, 0, 1, NaN], [0, 0, Infinity, 1], ["0", 0, 1, 1], [null, 0, 1, 1],
+    [0, 10, 1, 5], [-181, 0, 1, 1], [0, 0, 181, 1], [0, -91, 1, 1],
+    [0, 0, 1, 91], [0, 0, 100, 1, 1, 50]]) {
+    assert.equal(getCatalogItemMapBounds({ bbox }), null, JSON.stringify(bbox));
+  }
+});
 
 function createLeafletDouble() {
   const calls = {

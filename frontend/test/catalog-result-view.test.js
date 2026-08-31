@@ -38,16 +38,17 @@ function fixture(presentation = {}) {
     },
     onMapAction: (requested) => calls.push(["map", requested]),
     onStyle: (requested) => calls.push(["style", requested]),
+    onZoom: (requested) => calls.push(["zoom", requested]),
     onDetails: (requested, button) => calls.push(["details", requested, button]),
     onPreview: (requested) => calls.push(["preview", requested]),
     onClearPreview: () => calls.push(["clear"]),
   });
   const actions = view.element.children.find((child) => child.className === "catalog-result-actions");
-  const [onMap, mapButton, styleButton] = actions.children;
+  const [onMap, mapButton, zoomButton, styleButton] = actions.children;
   const status = view.element.children.at(-1);
-  const update = (state = {}) => view.update({ supported: true, retained: false, pendingAction: null, feedback: null, ...state });
+  const update = (state = {}) => view.update({ supported: true, retained: false, canZoom: true, pendingAction: null, feedback: null, ...state });
   update();
-  return { view, item, document, calls, actions, onMap, mapButton, styleButton, status, update };
+  return { view, item, document, calls, actions, onMap, mapButton, zoomButton, styleButton, status, update };
 }
 
 test("result row has separate native map/details buttons without nested buttons", () => {
@@ -87,7 +88,7 @@ test("state changes preserve controls/focus and keep On map distinct from Remove
   assert.equal(f.mapButton.textContent, "Add to map");
 });
 
-test("Style follows Remove only for retained Items and does not invoke map or details actions", () => {
+test("Style follows Zoom to only for retained Items and does not invoke map or details actions", () => {
   const f = fixture();
   assert.equal(f.styleButton.hidden, true);
   f.update({ retained: true });
@@ -97,7 +98,7 @@ test("Style follows Remove only for retained Items and does not invoke map or de
   assert.equal(f.styleButton.textContent, "Style");
   assert.equal(f.styleButton.getAttribute("aria-label"), "Style: future/wind.tif");
   assert.equal(f.styleButton.getAttribute("aria-controls"), "layer-style-editor");
-  assert.deepEqual(f.actions.children, [f.onMap, f.mapButton, f.styleButton, f.view.detailsButton]);
+  assert.deepEqual(f.actions.children, [f.onMap, f.mapButton, f.zoomButton, f.styleButton, f.view.detailsButton]);
   f.styleButton.focus();
   f.styleButton.dispatchEvent(new Event("click"));
   assert.deepEqual(f.calls, [["style", f.item]]);
@@ -107,6 +108,30 @@ test("Style follows Remove only for retained Items and does not invoke map or de
   assert.equal(f.styleButton.disabled, true);
   f.update();
   assert.equal(f.styleButton.hidden, true);
+});
+
+test("Zoom to uses a separate native action and mirrors membership, bounds, and busy state", () => {
+  const f = fixture();
+  assert.equal(f.zoomButton.hidden, true);
+  f.update({ retained: true });
+  assert.equal(f.zoomButton.hidden, false);
+  assert.equal(f.zoomButton.disabled, false);
+  assert.equal(f.zoomButton.type, "button");
+  assert.equal(f.zoomButton.textContent, "Zoom to");
+  assert.equal(f.zoomButton.getAttribute("aria-label"), "Zoom to: future/wind.tif");
+  assert.equal(f.zoomButton.getAttribute("aria-controls"), "map");
+  f.zoomButton.focus();
+  f.zoomButton.dispatchEvent(new Event("click"));
+  assert.deepEqual(f.calls, [["zoom", f.item]]);
+  assert.equal(f.document.activeElement, f.zoomButton);
+  f.update({ retained: true, canZoom: false });
+  assert.equal(f.zoomButton.disabled, true);
+  assert.match(f.zoomButton.title, /no usable bounding box/);
+  assert.equal(f.styleButton.disabled, false);
+  f.update({ retained: true, pendingAction: { buttonText: "Adding...", statusText: "Checking" } });
+  assert.equal(f.zoomButton.disabled, true);
+  f.update();
+  assert.equal(f.zoomButton.hidden, true);
 });
 
 test("errors are visible beside the affected action; retries hide stale errors", () => {

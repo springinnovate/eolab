@@ -16,6 +16,29 @@ const BASEMAP_ERROR_TILE_URL =
     "width=%221%22 height=%221%22/%3E";
 
 /**
+ * Convert a STAC Item's 2D/3D bbox to Leaflet's latitude/longitude corners.
+ *
+ * RFC 7946 section 5 orders all lower axes before all upper axes. A crossing
+ * bbox (west > east) needs the full longitude span to show both sides within
+ * this application's single, non-wrapping world.
+ *
+ * @param {Object|null} item Catalog Item with a WGS 84 bounding box.
+ * @return {number[][]|null} Map corners, or null for missing/invalid bounds.
+ */
+export function getCatalogItemMapBounds(item) {
+    const bbox = item?.bbox;
+    if (!Array.isArray(bbox) || ![4, 6].includes(bbox.length) ||
+        !bbox.every(Number.isFinite)) return null;
+    const dimensions = bbox.length / 2;
+    const [west, south] = bbox;
+    const [east, north] = bbox.slice(dimensions);
+    if (south < -90 || north > 90 || south > north ||
+        Math.abs(west) > 180 || Math.abs(east) > 180 ||
+        (dimensions === 3 && bbox[2] > bbox[5])) return null;
+    return [[south, west > east ? -180 : west], [north, west > east ? 180 : east]];
+}
+
+/**
  * Format a pointer position only when it belongs to the canonical world.
  *
  * At low zoom, a viewport can be wider than Leaflet's zoom-zero world. The
