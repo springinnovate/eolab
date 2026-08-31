@@ -4,7 +4,7 @@ import test from "node:test";
 import {
     RasterAppearanceControlsView,
 } from "../../src/raster/appearance-controls-view.js";
-import { DEFAULT_RASTER_STYLE } from "../../src/raster/style.js";
+import { DEFAULT_RASTER_STYLE, validateRasterStyle } from "../../src/raster/style.js";
 import {
     FakeRasterControlDocument,
 } from "../../test-support/raster/fake-controls-document.js";
@@ -96,4 +96,36 @@ test("appearance adapter requires its semantic subgroup root", () => {
         () => new RasterAppearanceControlsView({ querySelector: () => null }),
         /Required raster control is missing: #raster-appearance-controls/
     );
+});
+
+test("opacity controls convert percent, validate blanks, and share the edit lifecycle", () => {
+    const doc = new FakeRasterControlDocument();
+    const view = new RasterAppearanceControlsView(doc);
+    const events = [];
+    view.bind({ onStyleInput: value => events.push(value), onStyleChange: () => events.push("commit") });
+    view.setStyle({ ...DEFAULT_RASTER_STYLE, minimumOpacity: 0, midpointOpacity: 0.35 }, "viridis");
+    const input = doc.querySelector("#raster-midpoint-opacity");
+    assert.equal(input.value, 35);
+    assert.equal(view.readStyle().minimumOpacity, 0);
+    assert.equal(view.readStyle().midpointOpacity, 0.35);
+    input.value = "75";
+    input.dispatchEvent(new Event("input"));
+    input.dispatchEvent(new Event("change"));
+    assert.deepEqual(events, [false, "commit"]);
+    assert.equal(view.getPaletteName(), "viridis", "opacity does not change the RGB palette");
+    assert.equal(view.readStyle().midpointOpacity, 0.75);
+    input.value = "";
+    let error;
+    try { validateRasterStyle(view.readStyle()); } catch (caught) { error = caught; }
+    view.renderStyleError(error);
+    assert.equal(input.getAttribute("aria-invalid"), "true");
+    assert.equal(doc.querySelector("#raster-midpoint").getAttribute("aria-invalid"), null);
+    view.setStyle(DEFAULT_RASTER_STYLE, "blue-yellow-red");
+    assert.equal(input.value, 100);
+    assert.equal(input.getAttribute("aria-invalid"), null);
+    view.setEnabled(false);
+    assert.equal(input.disabled, true);
+    view.unbind();
+    input.dispatchEvent(new Event("input"));
+    assert.equal(events.length, 2);
 });

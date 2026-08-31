@@ -11,11 +11,11 @@
       <FeatureTypeStyle>
         <Rule>
           <RasterSymbolizer>
-            <Opacity>${env('opacity',1.0)}</Opacity>
+            <Opacity>1.0</Opacity>
             <ColorMap type="ramp">
-              <ColorMapEntry color="${env('cmin','#2b83ba')}" quantity="${env('min',0)}" opacity="1.0" label="min"/>
-              <ColorMapEntry color="${env('cmed','#ffffbf')}" quantity="${env('med',50)}" opacity="1.0" label="med"/>
-              <ColorMapEntry color="${env('cmax','#d7191c')}" quantity="${env('max',100)}" opacity="1.0" label="max"/>
+              <ColorMapEntry color="${env('cmin','#2b83ba')}" quantity="${env('min',0)}" opacity="${env('amin',1.0)}" label="min"/>
+              <ColorMapEntry color="${env('cmed','#ffffbf')}" quantity="${env('med',50)}" opacity="${env('amed',1.0)}" label="med"/>
+              <ColorMapEntry color="${env('cmax','#d7191c')}" quantity="${env('max',100)}" opacity="${env('amax',1.0)}" label="max"/>
             </ColorMap>
           </RasterSymbolizer>
         </Rule>

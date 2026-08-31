@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { DEFAULT_RASTER_STYLE } from "../../src/raster/style.js";
 
 import {
   buildRasterDetailPreviewRgba,
@@ -13,6 +14,7 @@ import {
 
 test("sampled raster style uses sample-grid range with the normal color ramp", () => {
   assert.deepEqual(buildRasterDetailPreviewStyle(CENTER_SAMPLE_DETAIL_PREVIEW), {
+    ...DEFAULT_RASTER_STYLE,
     minimum: 0,
     midpoint: 50,
     maximum: 100,
@@ -20,6 +22,16 @@ test("sampled raster style uses sample-grid range with the normal color ramp", (
     midpointColor: "#ffffbf",
     maximumColor: "#d7191c",
   });
+});
+
+test("sampled preview alpha follows the ramp while nodata remains transparent", () => {
+  const style = { ...DEFAULT_RASTER_STYLE,
+    minimumOpacity: 0, midpointOpacity: 0.5, maximumOpacity: 1 };
+  const rgba = buildRasterDetailPreviewRgba(CENTER_SAMPLE_DETAIL_PREVIEW, style);
+  assert.deepEqual(Array.from(rgba).slice(0, 24), [
+    43, 131, 186, 0, 255, 255, 191, 128, 215, 25, 28, 255,
+    0, 0, 0, 0, 149, 193, 189, 64, 235, 140, 110, 191,
+  ]);
 });
 
 test("numeric sample grid colors remain row-major and nodata stays transparent", () => {

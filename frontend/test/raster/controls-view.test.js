@@ -172,6 +172,9 @@ test("RasterControlsView owns style values and semantic control events", () => {
     assert.equal(documentContext.querySelector("#raster-palette").children.length, 2);
 
     const style = {
+        minimumOpacity: 1,
+        midpointOpacity: 1,
+        maximumOpacity: 1,
         minimum: -5,
         midpoint: 2,
         maximum: 9,
@@ -188,7 +191,7 @@ test("RasterControlsView owns style values and semantic control events", () => {
         "Applied the Viridis palette."
     );
     assert.match(
-        documentContext.querySelector("#raster-legend").style.background,
+        documentContext.querySelector("#raster-legend").style.backgroundImage,
         /#000000/
     );
 

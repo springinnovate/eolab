@@ -16,11 +16,11 @@ import {
 test("raster style builds the dynamic SLD environment contract", () => {
   assert.equal(
     buildRasterStyleEnvironment(DEFAULT_RASTER_STYLE),
-    "min:0;med:50;max:100;cmin:#2b83ba;cmed:#ffffbf;cmax:#d7191c",
+    "min:0;med:50;max:100;cmin:#2b83ba;cmed:#ffffbf;cmax:#d7191c;amin:1;amed:1;amax:1",
   );
 });
 
-test("raster style environment rejects values outside its six-field contract", () => {
+test("raster style environment rejects invalid thresholds, colors, and alpha", () => {
   assert.throws(
     () => buildRasterStyleEnvironment({
       ...DEFAULT_RASTER_STYLE,
@@ -42,6 +42,16 @@ test("raster style environment rejects values outside its six-field contract", (
     }),
     /six-digit hex/,
   );
+});
+
+test("WMS sends independent stop opacities, defaulting legacy styles to opaque", () => {
+  const style = { ...DEFAULT_RASTER_STYLE, minimumOpacity: 0, midpointOpacity: 0.25 };
+  assert.match(buildRasterStyleEnvironment(style), /;amin:0;amed:0.25;amax:1$/);
+  delete style.minimumOpacity;
+  delete style.midpointOpacity;
+  delete style.maximumOpacity;
+  assert.match(buildRasterStyleEnvironment(style), /;amin:1;amed:1;amax:1$/);
+  assert.throws(() => buildRasterStyleEnvironment({ ...style, maximumOpacity: Infinity }), /opacity/);
 });
 
 test("constant raster suggestions build valid WMS environments", () => {

@@ -20,6 +20,15 @@ const STYLE = Object.freeze({
   maximumColor: "#eeeeee",
 });
 
+test("coordinated ramps override alpha without mutating ordinary styles", () => {
+  const ordinary = { ...STYLE, minimumOpacity: 0, midpointOpacity: 0.25, maximumOpacity: 0.5 };
+  const { xStyle, yStyle } = getBivariateAxisStyles("orangeBlue", ordinary, ordinary);
+  for (const style of [xStyle, yStyle]) {
+    assert.deepEqual([style.minimumOpacity, style.midpointOpacity, style.maximumOpacity], [1, 1, 1]);
+  }
+  assert.deepEqual([ordinary.minimumOpacity, ordinary.midpointOpacity, ordinary.maximumOpacity], [0, 0.25, 0.5]);
+});
+
 test("bivariate palettes preserve the eight ESOS-C definitions", () => {
   assert.deepEqual(BIVARIATE_RASTER_PALETTES, {
     orangeBlue: {

@@ -20,6 +20,9 @@ import {
  * @property {string} minimumColor Six-digit hex color for the minimum.
  * @property {string} midpointColor Six-digit hex color for the midpoint.
  * @property {string} maximumColor Six-digit hex color for the maximum.
+ * @property {number} [minimumOpacity=1] Minimum-stop opacity, zero through one.
+ * @property {number} [midpointOpacity=1] Midpoint-stop opacity, zero through one.
+ * @property {number} [maximumOpacity=1] Maximum-stop opacity, zero through one.
  */
 
 /** Default three-stop raster style shown before statistics are available. */
@@ -29,7 +32,10 @@ export const DEFAULT_RASTER_STYLE = Object.freeze({
     maximum: 100,
     minimumColor: "#2b83ba",
     midpointColor: "#ffffbf",
-    maximumColor: "#d7191c"
+    maximumColor: "#d7191c",
+    minimumOpacity: 1,
+    midpointOpacity: 1,
+    maximumOpacity: 1
 });
 
 /** Named color palettes available from the raster appearance controls. */
@@ -110,6 +116,15 @@ export function validateRasterStyle(style) {
         throw rasterStyleContractError(
             "Raster colors must use six-digit hex values.",
             "colors"
+        );
+    }
+    const opacities = ["minimum", "midpoint", "maximum"].map(
+        (stop) => style[`${stop}Opacity`] === undefined ? 1 : style[`${stop}Opacity`]
+    );
+    if (!opacities.every((value) => Number.isFinite(value) && value >= 0 && value <= 1)) {
+        throw rasterStyleContractError(
+            "Color opacity must be a number from 0 to 100 percent.",
+            "opacities"
         );
     }
     return style;
@@ -293,15 +308,36 @@ export function buildRasterLegend(style) {
     const midpointPosition =
         ((style.midpoint - style.minimum) /
             (style.maximum - style.minimum)) * 100;
+    const transparent = ["minimum", "midpoint", "maximum"].some(
+        (stop) => (style[`${stop}Opacity`] ?? 1) !== 1
+    );
+    // Sample RGB and alpha separately: CSS otherwise premultiplies the ramp,
+    // unlike the independent color/opacity interpolation used by GeoServer.
+    const positions = [...new Set([
+        ...Array.from({ length: 33 }, (_, index) => index / 32),
+        midpointPosition / 100
+    ])].sort((a, b) => a - b);
+    const alphaGradient = transparent ? positions.map((position) => {
+        const value = style.minimum + position * (style.maximum - style.minimum);
+        const color = getRasterStyleColor(style, value);
+        const alpha = Math.round(getRasterStyleOpacity(style, value) * 255)
+            .toString(16).padStart(2, "0");
+        return `${color}${alpha} ${position * 100}%`;
+    }).join(", ") : null;
     return {
         midpointPosition,
-        gradient: `linear-gradient(90deg, ${style.minimumColor} 0%, ` +
-            `${style.midpointColor} ${midpointPosition}%, ` +
-            `${style.maximumColor} 100%)`,
+        gradient: alphaGradient === null
+            ? `linear-gradient(90deg, ${style.minimumColor} 0%, ` +
+                `${style.midpointColor} ${midpointPosition}%, ${style.maximumColor} 100%)`
+            : `linear-gradient(90deg, ${alphaGradient})`,
         description:
             `Color ramp: ${style.minimum} at ${style.minimumColor}, ` +
             `${style.midpoint} at ${style.midpointColor}, and ` +
-            `${style.maximum} at ${style.maximumColor}.`
+            `${style.maximum} at ${style.maximumColor}.` +
+            (transparent ? " Color opacity (minimum, midpoint, maximum): " +
+                ["minimum", "midpoint", "maximum"].map(
+                    (stop) => `${Math.round((style[`${stop}Opacity`] ?? 1) * 100)}%`
+                ).join(", ") + "." : "")
     };
 }
 
@@ -351,4 +387,26 @@ export function getRasterStyleColor(style, value) {
         );
     }
     return style.maximumColor;
+}
+
+/**
+ * Interpolate value-dependent alpha independently of RGB and layer opacity.
+ * Legacy styles without alpha fields are fully opaque. Endpoints clamp to
+ * their stop opacity, matching the GeoServer continuous color-map contract.
+ * @param {RasterStyle} style Validated raster style.
+ * @param {number} value Finite raster value.
+ * @return {number} Pixel opacity from zero through one.
+ */
+export function getRasterStyleOpacity(style, value) {
+    const minimum = style.minimumOpacity ?? 1;
+    const midpoint = style.midpointOpacity ?? 1;
+    const maximum = style.maximumOpacity ?? 1;
+    if (value <= style.minimum) return minimum;
+    if (value >= style.maximum) return maximum;
+    const lower = value <= style.midpoint;
+    const start = lower ? minimum : midpoint;
+    const end = lower ? midpoint : maximum;
+    const startValue = lower ? style.minimum : style.midpoint;
+    const endValue = lower ? style.midpoint : style.maximum;
+    return start + (end - start) * (value - startValue) / (endValue - startValue);
 }
