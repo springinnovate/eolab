@@ -1,6 +1,13 @@
 History
 *******
 
+Unreleased
+----------
+
+* Save styled map layers and the current viewport to a portable JSON file.
+* Open saved views with current Catalog revalidation and per-layer results.
+* Warn about viewer-version, deployment, and source-revision differences.
+
 0.2.0 (2026-09-01)
 ------------------
 
