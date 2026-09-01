@@ -210,6 +210,7 @@ def test_wms_proxy_forwards_bounded_json_feature_information() -> None:
             "The rendering service returned invalid feature information",
         ),
     ),
+    ids=("oversized-json", "invalid-content-type"),
 )
 def test_wms_proxy_rejects_unbounded_feature_information_response(
     content: bytes,
@@ -501,7 +502,7 @@ def test_wms_proxy_rejects_a_layer_not_approved_by_this_app_process(
         ),
         (
             "service=WMS&request=GetFeatureInfo&layers=eolab%3Afirst"
-            "&query_layers=eolab%3Asecond&info_format=text%2Fplain",
+            "&query_layers=eolab%3Asecond&info_format=application%2Fjson",
             "query_layers must match layers",
         ),
         (
