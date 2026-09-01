@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import test from "node:test";
 
 const SAVED_MAP_MODULES = [
@@ -9,8 +9,9 @@ const SAVED_MAP_MODULES = [
   "leaflet-viewport.js",
   "model.js",
 ];
+const SOURCE_ROOT = new URL("../../src/", import.meta.url);
 
-test("saved map modules do not import dataset feature implementations", async () => {
+test("saved map modules do not import sibling implementations", async () => {
   for (const moduleName of SAVED_MAP_MODULES) {
     const source = await readFile(
       new URL(`../../src/saved-map-view/${moduleName}`, import.meta.url),
@@ -19,7 +20,28 @@ test("saved map modules do not import dataset feature implementations", async ()
 
     assert.doesNotMatch(source, /\.\.\/raster\//);
     assert.doesNotMatch(source, /\.\.\/vector\//);
+    assert.doesNotMatch(source, /\.\.\/map-layers\//);
+    assert.doesNotMatch(source, /\.\.\/catalog-visualization\.js/);
   }
+});
+
+test("only the composition root imports the saved map package", async () => {
+  const sourceFiles = await readdir(SOURCE_ROOT, { recursive: true });
+  const violations = [];
+
+  for (const sourceFile of sourceFiles) {
+    const normalizedPath = sourceFile.replaceAll("\\", "/");
+    if (!normalizedPath.endsWith(".js") || normalizedPath === "main.js" ||
+        normalizedPath.startsWith("saved-map-view/")) {
+      continue;
+    }
+    const source = await readFile(new URL(normalizedPath, SOURCE_ROOT), "utf8");
+    if (/from\s+["'][^"']*saved-map-view\//.test(source)) {
+      violations.push(normalizedPath);
+    }
+  }
+
+  assert.deepEqual(violations, []);
 });
 
 test("composition alone assembles the saved map coordinator", async () => {

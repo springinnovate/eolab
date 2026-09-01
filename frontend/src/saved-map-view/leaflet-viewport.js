@@ -8,7 +8,12 @@
  */
 export function createSavedMapLeafletViewport(leafletMap) {
     return Object.freeze({
-        /** Return the current canonical map center and zoom. */
+        /**
+         * Return the current canonical map center and zoom.
+         *
+         * @return {{center:{latitude:number,longitude:number},zoom:number}}
+         * Canonical WGS 84 viewport.
+         */
         snapshot() {
             const center = leafletMap.getCenter();
             return {

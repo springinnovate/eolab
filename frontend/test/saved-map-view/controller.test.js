@@ -7,7 +7,11 @@ import { createSavedMapView, serializeSavedMapView } from "../../src/saved-map-v
 
 const ZERO_REVISION = `sha256:${"0".repeat(64)}`;
 
-/** Create an inspectable view boundary for controller tests. */
+/**
+ * Create an inspectable view boundary for controller tests.
+ *
+ * @return {Object} Mutable saved-map presentation test double.
+ */
 function createView() {
   return {
     busy: [],
@@ -28,7 +32,11 @@ function createView() {
   };
 }
 
-/** Return a digest implementation with a stable non-secret fingerprint. */
+/**
+ * Return a digest implementation with a stable non-secret fingerprint.
+ *
+ * @return {{digest:()=>Promise<ArrayBuffer>}} Test SubtleCrypto subset.
+ */
 function zeroDigest() {
   return { digest: async () => new Uint8Array(32).buffer };
 }

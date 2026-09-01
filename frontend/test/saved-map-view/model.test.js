@@ -9,7 +9,11 @@ import {
   serializeSavedMapView,
 } from "../../src/saved-map-view/model.js";
 
-/** Return one valid portable map candidate with one raster layer. */
+/**
+ * Return one valid portable map candidate with one raster layer.
+ *
+ * @return {Object} Valid saved-map construction fields.
+ */
 function savedMapCandidate() {
   return {
     viewer: { version: "0.2.0", origin: "https://viewer.example" },
