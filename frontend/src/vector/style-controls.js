@@ -11,6 +11,9 @@ const VECTOR_LABEL_DEFAULTS = Object.freeze({
     haloWidth: 1.5,
     minimumZoom: 0,
 });
+const LONG_LABEL_NOTE =
+    "Long values are not truncated and may be omitted when GeoServer " +
+    "cannot place them without a conflict.";
 
 /** Own vector style form state without knowing map or raster implementations. */
 export class VectorStyleControls {
@@ -291,7 +294,8 @@ export class VectorStyleControls {
         } else {
             this.labelNote.textContent =
                 `Labels use ${this.labelField.value} at zoom ` +
-                `${this.labelMinimumZoom.value} and closer.`;
+                `${this.labelMinimumZoom.value} and closer. ` +
+                LONG_LABEL_NOTE;
         }
     }
 }

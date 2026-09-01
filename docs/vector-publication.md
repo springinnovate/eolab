@@ -117,8 +117,11 @@ Table Extension columns, closed font-family and weight choices, bounded font
 and halo values, geometry-aware placement, and a zoom from zero through 22.
 The minimum zoom becomes a label-only `MaxScaleDenominator` rule, so hiding
 labels at small scales never hides the underlying geometry. The SLD requests
-GeoServer's normal conflict resolution, but decluttering quality and
-large-layer label performance require separate dataset-specific verification.
+GeoServer's normal conflict resolution. Attribute values are neither copied
+through the browser nor truncated: GeoServer evaluates the selected field for
+each feature, and may omit a long one-line value when it cannot place the label
+without a conflict. Wrapping, explicit truncation, decluttering quality, and
+large-layer label performance require separate dataset-specific work.
 
 Vectors share the neutral retained-layer visibility limit, opacity, top-first
 ordering, activation, removal, and tile-error ownership with raster WMS
