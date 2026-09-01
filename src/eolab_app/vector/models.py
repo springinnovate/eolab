@@ -29,6 +29,9 @@ VectorFormat = Literal[
     "file-geodatabase",
 ]
 VectorGeometryKind = Literal["point", "line", "polygon"]
+VectorLabelFontFamily = Literal["SansSerif", "Serif", "Monospaced"]
+VectorLabelFontWeight = Literal["normal", "bold"]
+VectorLabelPlacement = Literal["center", "above", "below", "follow-line"]
 VectorSourceKind = Literal["mounted", "remote"]
 VectorSourceSignature = tuple[tuple[str, int, int, int, int, int], ...]
 
@@ -73,6 +76,63 @@ class CatalogVectorRequest(BaseModel):
     )
 
 
+class VectorLabelStyle(BaseModel):
+    """Validated optional label presentation for one vector style."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    field: str = Field(min_length=1, max_length=256, strict=True)
+    font_family: VectorLabelFontFamily = Field(alias="fontFamily")
+    font_size: float = Field(alias="fontSize", ge=6, le=72, strict=True)
+    font_weight: VectorLabelFontWeight = Field(alias="fontWeight")
+    font_color: str = Field(
+        alias="fontColor",
+        pattern=r"^#[0-9A-Fa-f]{6}$",
+        strict=True,
+    )
+    halo_color: str = Field(
+        alias="haloColor",
+        pattern=r"^#[0-9A-Fa-f]{6}$",
+        strict=True,
+    )
+    halo_width: float = Field(
+        alias="haloWidth", ge=0, le=10, strict=True
+    )
+    placement: VectorLabelPlacement
+    minimum_zoom: int = Field(alias="minimumZoom", ge=0, le=22, strict=True)
+
+    @field_validator("field")
+    @classmethod
+    def reject_control_characters(cls, value: str) -> str:
+        """Reject field identities that cannot safely cross text boundaries.
+
+        Args:
+            value: Candidate authoritative attribute field identity.
+
+        Returns:
+            Unmodified field identity, including meaningful whitespace.
+
+        Raises:
+            ValueError: If the name contains a control character.
+        """
+        if any(ord(character) < 32 or ord(character) == 127 for character in value):
+            raise ValueError("Label field cannot contain control characters")
+        return value
+
+    @field_validator("font_color", "halo_color")
+    @classmethod
+    def normalize_label_color(cls, value: str) -> str:
+        """Normalize validated label colors for stable SLD output.
+
+        Args:
+            value: Validated six-digit CSS hex color.
+
+        Returns:
+            Lowercase color.
+        """
+        return value.lower()
+
+
 class VectorSingleSymbolStyle(BaseModel):
     """Validated single-symbol presentation for one vector geometry class."""
 
@@ -110,6 +170,7 @@ class VectorSingleSymbolStyle(BaseModel):
         le=64,
         strict=True,
     )
+    label: VectorLabelStyle | None = None
 
     @field_validator("fill_color", "stroke_color")
     @classmethod
@@ -154,6 +215,12 @@ class VectorSingleSymbolStyle(BaseModel):
             raise ValueError("Point styles require pointSize")
         if self.geometry_kind == "polygon" and self.point_size is not None:
             raise ValueError("Polygon styles cannot include pointSize")
+        if (
+            self.label is not None
+            and self.label.placement == "follow-line"
+            and self.geometry_kind != "line"
+        ):
+            raise ValueError("Only line styles can follow line geometry")
         return self
 
 

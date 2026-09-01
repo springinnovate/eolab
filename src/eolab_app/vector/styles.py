@@ -6,12 +6,14 @@ from xml.etree import ElementTree
 
 from eolab_app.vector.models import (
     VectorGeometryKind,
+    VectorLabelStyle,
     VectorSingleSymbolStyle,
 )
 
 
 SLD_NAMESPACE = "http://www.opengis.net/sld"
 OGC_NAMESPACE = "http://www.opengis.net/ogc"
+WEB_MERCATOR_ZOOM_ZERO_SCALE = 559082264.0287178
 ElementTree.register_namespace("", SLD_NAMESPACE)
 ElementTree.register_namespace("ogc", OGC_NAMESPACE)
 
@@ -141,11 +143,180 @@ def build_vector_sld(
     else:
         _append_fill(symbolizer, style)
         _append_stroke(symbolizer, style)
+    if style.label is not None:
+        _append_label_rule(
+            feature_type_style,
+            style.geometry_kind,
+            style.label,
+        )
     return ElementTree.tostring(
         root,
         encoding="utf-8",
         xml_declaration=True,
     )
+
+
+def _append_label_rule(
+    feature_type_style: ElementTree.Element,
+    geometry_kind: VectorGeometryKind,
+    label: VectorLabelStyle,
+) -> None:
+    """Append one independently scaled text rule to a vector style.
+
+    Args:
+        feature_type_style: SLD feature-type style receiving the label rule.
+        geometry_kind: Point, line, or polygon geometry class.
+        label: Complete validated label presentation.
+    """
+    rule = ElementTree.SubElement(
+        feature_type_style,
+        f"{{{SLD_NAMESPACE}}}Rule",
+    )
+    if label.minimum_zoom > 0:
+        maximum_scale = WEB_MERCATOR_ZOOM_ZERO_SCALE / (
+            2 ** label.minimum_zoom
+        )
+        ElementTree.SubElement(
+            rule,
+            f"{{{SLD_NAMESPACE}}}MaxScaleDenominator",
+        ).text = _number(maximum_scale)
+    text_symbolizer = ElementTree.SubElement(
+        rule,
+        f"{{{SLD_NAMESPACE}}}TextSymbolizer",
+    )
+    label_expression = ElementTree.SubElement(
+        text_symbolizer,
+        f"{{{SLD_NAMESPACE}}}Label",
+    )
+    ElementTree.SubElement(
+        label_expression,
+        f"{{{OGC_NAMESPACE}}}PropertyName",
+    ).text = label.field
+    _append_label_font(text_symbolizer, label)
+    _append_label_placement(text_symbolizer, geometry_kind, label)
+    if label.halo_width > 0:
+        halo = ElementTree.SubElement(
+            text_symbolizer,
+            f"{{{SLD_NAMESPACE}}}Halo",
+        )
+        ElementTree.SubElement(
+            halo,
+            f"{{{SLD_NAMESPACE}}}Radius",
+        ).text = _number(label.halo_width)
+        halo_fill = ElementTree.SubElement(
+            halo,
+            f"{{{SLD_NAMESPACE}}}Fill",
+        )
+        _append_css_parameter(halo_fill, "fill", label.halo_color)
+    text_fill = ElementTree.SubElement(
+        text_symbolizer,
+        f"{{{SLD_NAMESPACE}}}Fill",
+    )
+    _append_css_parameter(text_fill, "fill", label.font_color)
+    if geometry_kind == "line" and label.placement != "center":
+        _append_vendor_option(text_symbolizer, "followLine", "true")
+    _append_vendor_option(text_symbolizer, "conflictResolution", "true")
+
+
+def _append_label_font(
+    text_symbolizer: ElementTree.Element,
+    label: VectorLabelStyle,
+) -> None:
+    """Append bounded font parameters to a text symbolizer.
+
+    Args:
+        text_symbolizer: SLD text symbolizer receiving font parameters.
+        label: Complete validated label presentation.
+    """
+    font = ElementTree.SubElement(
+        text_symbolizer,
+        f"{{{SLD_NAMESPACE}}}Font",
+    )
+    _append_css_parameter(font, "font-family", label.font_family)
+    _append_css_parameter(font, "font-style", "normal")
+    _append_css_parameter(font, "font-weight", label.font_weight)
+    _append_css_parameter(font, "font-size", _number(label.font_size))
+
+
+def _append_label_placement(
+    text_symbolizer: ElementTree.Element,
+    geometry_kind: VectorGeometryKind,
+    label: VectorLabelStyle,
+) -> None:
+    """Append point or line placement selected by validated label state.
+
+    Args:
+        text_symbolizer: SLD text symbolizer receiving placement parameters.
+        geometry_kind: Point, line, or polygon geometry class.
+        label: Complete validated label presentation.
+    """
+    placement = ElementTree.SubElement(
+        text_symbolizer,
+        f"{{{SLD_NAMESPACE}}}LabelPlacement",
+    )
+    if geometry_kind == "line" and label.placement != "center":
+        line_placement = ElementTree.SubElement(
+            placement,
+            f"{{{SLD_NAMESPACE}}}LinePlacement",
+        )
+        if label.placement != "follow-line":
+            offset = 6 if label.placement == "above" else -6
+            ElementTree.SubElement(
+                line_placement,
+                f"{{{SLD_NAMESPACE}}}PerpendicularOffset",
+            ).text = str(offset)
+        return
+    point_placement = ElementTree.SubElement(
+        placement,
+        f"{{{SLD_NAMESPACE}}}PointPlacement",
+    )
+    anchor_point = ElementTree.SubElement(
+        point_placement,
+        f"{{{SLD_NAMESPACE}}}AnchorPoint",
+    )
+    anchor_y = {"center": 0.5, "above": 0, "below": 1}[label.placement]
+    ElementTree.SubElement(
+        anchor_point,
+        f"{{{SLD_NAMESPACE}}}AnchorPointX",
+    ).text = "0.5"
+    ElementTree.SubElement(
+        anchor_point,
+        f"{{{SLD_NAMESPACE}}}AnchorPointY",
+    ).text = _number(anchor_y)
+    displacement = ElementTree.SubElement(
+        point_placement,
+        f"{{{SLD_NAMESPACE}}}Displacement",
+    )
+    ElementTree.SubElement(
+        displacement,
+        f"{{{SLD_NAMESPACE}}}DisplacementX",
+    ).text = "0"
+    displacement_y = {"center": 0, "above": 6, "below": -6}[
+        label.placement
+    ]
+    ElementTree.SubElement(
+        displacement,
+        f"{{{SLD_NAMESPACE}}}DisplacementY",
+    ).text = str(displacement_y)
+
+
+def _append_vendor_option(
+    parent: ElementTree.Element,
+    name: str,
+    value: str,
+) -> None:
+    """Append one bounded GeoServer vendor option.
+
+    Args:
+        parent: Text symbolizer receiving the option.
+        name: Fixed option name selected by the SLD generator.
+        value: Fixed option value selected by the SLD generator.
+    """
+    ElementTree.SubElement(
+        parent,
+        f"{{{SLD_NAMESPACE}}}VendorOption",
+        {"name": name},
+    ).text = value
 
 
 def _append_css_parameter(

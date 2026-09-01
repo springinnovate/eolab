@@ -132,6 +132,17 @@ def test_vector_routes_preserve_identity_and_fixed_style_contract() -> None:
             "strokeColor": "#F97316",
             "strokeOpacity": 0.75,
             "strokeWidth": 4,
+            "label": {
+                "field": "name",
+                "fontFamily": "SansSerif",
+                "fontSize": 12,
+                "fontWeight": "bold",
+                "fontColor": "#112233",
+                "haloColor": "#FFFFFF",
+                "haloWidth": 1.5,
+                "placement": "follow-line",
+                "minimumZoom": 6,
+            },
         },
     })
 
@@ -151,6 +162,7 @@ def test_vector_routes_preserve_identity_and_fixed_style_contract() -> None:
             "strokeOpacity": 1.0,
             "strokeWidth": 2.0,
             "pointSize": None,
+            "label": None,
         },
     }
     assert style.status_code == 200
@@ -166,6 +178,17 @@ def test_vector_routes_preserve_identity_and_fixed_style_contract() -> None:
             "strokeOpacity": 0.75,
             "strokeWidth": 4.0,
             "pointSize": None,
+            "label": {
+                "field": "name",
+                "fontFamily": "SansSerif",
+                "fontSize": 12.0,
+                "fontWeight": "bold",
+                "fontColor": "#112233",
+                "haloColor": "#ffffff",
+                "haloWidth": 1.5,
+                "placement": "follow-line",
+                "minimumZoom": 6,
+            },
         },
     }
 

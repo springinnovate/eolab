@@ -1,6 +1,7 @@
 """Application workflow for authoritative single-symbol vector styling."""
 
 import asyncio
+from typing import Any
 
 from eolab_app.rendering.errors import (
     PublishedLayerChangedError,
@@ -109,6 +110,15 @@ class VectorStyleService:
                     "Style unavailable: the requested symbol geometry does not "
                     "match the assessed vector layer."
                 )
+            if (
+                request.style.label is not None
+                and request.style.label.field
+                not in _catalog_vector_label_fields(item)
+            ):
+                raise VectorConflictError(
+                    "Style unavailable: the selected label field is not a "
+                    "current attribute of the authoritative vector Item."
+                )
             style_name = await self._styler.apply_style(
                 request.item_id,
                 request.style,
@@ -127,3 +137,30 @@ class VectorStyleService:
                 styleName=style_name,
                 style=request.style,
             )
+
+
+def _catalog_vector_label_fields(item: dict[str, Any]) -> frozenset[str]:
+    """Return authoritative non-geometry fields eligible for vector labels.
+
+    Args:
+        item: Authoritative Catalog Item loaded by the style service.
+
+    Returns:
+        Exact bounded attribute field identities declared by the STAC Table
+        Extension, excluding its primary geometry column.
+    """
+    properties = item.get("properties")
+    if not isinstance(properties, dict):
+        return frozenset()
+    columns = properties.get("table:columns")
+    primary_geometry = properties.get("table:primary_geometry")
+    if not isinstance(columns, list):
+        return frozenset()
+    return frozenset(
+        name
+        for column in columns
+        if isinstance(column, dict)
+        and isinstance((name := column.get("name")), str)
+        and 0 < len(name) <= 256
+        and name != primary_geometry
+    )

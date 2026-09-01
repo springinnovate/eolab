@@ -14,6 +14,7 @@ from eolab_app.vector.errors import VectorConflictError
 from eolab_app.vector.geoserver import GeoServerVectorPublisher
 from eolab_app.vector.models import (
     CatalogVectorStyleRequest,
+    VectorLabelStyle,
     VectorSingleSymbolStyle,
 )
 from eolab_app.vector.sources import (
@@ -22,6 +23,7 @@ from eolab_app.vector.sources import (
     vector_source_signature,
 )
 from eolab_app.vector.styles import (
+    OGC_NAMESPACE,
     SLD_NAMESPACE,
     build_vector_sld,
     default_vector_style,
@@ -59,12 +61,14 @@ class RecordingStyler:
 def polygon_request(
     item: dict[str, Any],
     geometry_kind: str = "polygon",
+    label_field: str | None = None,
 ) -> CatalogVectorStyleRequest:
     """Build one style request for an assessed Item.
 
     Args:
         item: Authoritative catalog Item.
         geometry_kind: Requested geometry class.
+        label_field: Optional authoritative field selected for labels.
 
     Returns:
         Validated style request.
@@ -79,6 +83,20 @@ def polygon_request(
         style.update(fillColor="#abcdef", fillOpacity=0.45)
     if geometry_kind == "point":
         style["pointSize"] = 11
+    if label_field is not None:
+        style["label"] = {
+            "field": label_field,
+            "fontFamily": "SansSerif",
+            "fontSize": 12,
+            "fontWeight": "normal",
+            "fontColor": "#112233",
+            "haloColor": "#FFFFFF",
+            "haloWidth": 1.5,
+            "placement": (
+                "follow-line" if geometry_kind == "line" else "center"
+            ),
+            "minimumZoom": 6,
+        }
     return CatalogVectorStyleRequest(
         collectionId=item["collection"],
         itemId=item["id"],
@@ -96,6 +114,7 @@ def test_style_model_requires_geometry_specific_controls() -> None:
     )
 
     assert line.stroke_color == "#f97316"
+    assert line.label is None
     with pytest.raises(ValidationError):
         VectorSingleSymbolStyle(
             geometryKind="line",
@@ -104,6 +123,27 @@ def test_style_model_requires_geometry_specific_controls() -> None:
             strokeColor="#000000",
             strokeOpacity=1,
             strokeWidth=2,
+        )
+    with pytest.raises(ValidationError, match="follow line"):
+        VectorSingleSymbolStyle(
+            geometryKind="point",
+            fillColor="#ffffff",
+            fillOpacity=1,
+            strokeColor="#000000",
+            strokeOpacity=1,
+            strokeWidth=2,
+            pointSize=8,
+            label={
+                "field": "name",
+                "fontFamily": "SansSerif",
+                "fontSize": 12,
+                "fontWeight": "normal",
+                "fontColor": "#000000",
+                "haloColor": "#ffffff",
+                "haloWidth": 1,
+                "placement": "follow-line",
+                "minimumZoom": 4,
+            },
         )
     with pytest.raises(ValidationError):
         VectorSingleSymbolStyle(
@@ -157,6 +197,80 @@ def test_sld_generation_uses_only_the_geometry_symbolizer(
     assert ("fill" in parameter_names) is (geometry_kind != "line")
 
 
+@pytest.mark.parametrize(
+    ("geometry_kind", "placement", "placement_element"),
+    [
+        ("point", "above", "PointPlacement"),
+        ("line", "follow-line", "LinePlacement"),
+        ("polygon", "center", "PointPlacement"),
+    ],
+)
+def test_sld_generation_adds_independently_scaled_vector_labels(
+    geometry_kind: str,
+    placement: str,
+    placement_element: str,
+) -> None:
+    """Serialize authoritative fields, font, halo, placement, and scale.
+
+    Args:
+        geometry_kind: Point, line, or polygon style family.
+        placement: Geometry-appropriate label placement.
+        placement_element: Expected SLD placement element.
+    """
+    base_style = default_vector_style(geometry_kind)
+    label = VectorLabelStyle(
+        field="display name",
+        fontFamily="Serif",
+        fontSize=14,
+        fontWeight="bold",
+        fontColor="#123456",
+        haloColor="#FEDCBA",
+        haloWidth=2,
+        placement=placement,
+        minimumZoom=6,
+    )
+    style = VectorSingleSymbolStyle.model_validate({
+        **base_style.model_dump(by_alias=True),
+        "label": label.model_dump(by_alias=True),
+    })
+    root = ElementTree.fromstring(build_vector_sld("labeled-style", style))
+    namespaces = {"sld": SLD_NAMESPACE, "ogc": OGC_NAMESPACE}
+
+    assert len(root.findall(".//sld:Rule", namespaces)) == 2
+    assert root.find(
+        f".//sld:{placement_element}", namespaces
+    ) is not None
+    assert root.find(".//ogc:PropertyName", namespaces).text == "display name"
+    maximum_scale = float(
+        root.find(".//sld:MaxScaleDenominator", namespaces).text
+    )
+    assert maximum_scale == pytest.approx(559082264.0287178 / 64)
+    text_symbolizer = root.find(".//sld:TextSymbolizer", namespaces)
+    font_parameters = {
+        parameter.attrib["name"]: parameter.text
+        for parameter in text_symbolizer.findall(
+            "./sld:Font/sld:CssParameter", namespaces
+        )
+    }
+    assert font_parameters["font-family"] == "Serif"
+    assert font_parameters["font-weight"] == "bold"
+    assert font_parameters["font-size"] == "14"
+    assert text_symbolizer.find(
+        "./sld:Halo/sld:Fill/sld:CssParameter", namespaces
+    ).text == "#fedcba"
+    assert text_symbolizer.find(
+        "./sld:Fill/sld:CssParameter", namespaces
+    ).text == "#123456"
+    vendor_options = {
+        option.attrib["name"]: option.text
+        for option in text_symbolizer.findall("./sld:VendorOption", namespaces)
+    }
+    assert vendor_options["conflictResolution"] == "true"
+    assert ("followLine" in vendor_options) is (geometry_kind == "line")
+    child_names = [child.tag.rsplit("}", 1)[-1] for child in text_symbolizer]
+    assert child_names.index("Fill") < child_names.index("VendorOption")
+
+
 def test_vector_style_name_changes_only_with_resource_or_rendering() -> None:
     """Give each distinct layer rendering its own stable WMS cache identity."""
     resource_name = "geopackage-0123456789abcdef01234567"
@@ -208,7 +322,7 @@ def test_style_service_uses_catalog_identity_and_current_publication(
         styler,
         registry,
     )
-    request = polygon_request(item)
+    request = polygon_request(item, label_field="name")
 
     result = asyncio.run(service.apply(request))
 
@@ -250,6 +364,38 @@ def test_style_service_rejects_unpublished_or_wrong_geometry(
     )
     with pytest.raises(VectorConflictError, match="does not match"):
         asyncio.run(service.apply(polygon_request(item, "line")))
+
+
+def test_style_service_rejects_label_fields_outside_authoritative_table(
+    tmp_path: Path,
+) -> None:
+    """Reject a browser field that is absent from current Catalog metadata.
+
+    Args:
+        tmp_path: Isolated mounted scan source.
+    """
+    item, _ = assessed_geopackage_item(tmp_path)
+    resolver = MountedVectorResolver(tmp_path)
+    source = resolver.resolve(item)
+    registry = PublishedVectorRegistry()
+    registry.authorize(
+        f"{GEOSERVER_WORKSPACE_NAME}:{item['id']}",
+        source,
+        vector_source_signature(source),
+        "vector-polygon",
+    )
+    service = VectorStyleService(
+        StaticCatalog(item),
+        resolver,
+        RecordingStyler(),
+        registry,
+    )
+
+    with pytest.raises(VectorConflictError, match="authoritative vector Item"):
+        asyncio.run(service.apply(polygon_request(
+            item,
+            label_field="browser-invented-field",
+        )))
 
 
 def test_geoserver_style_adapter_uses_content_addressed_layer_slds() -> None:

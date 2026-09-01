@@ -744,6 +744,7 @@ async function initializeCatalog(
             return {
                 key,
                 style: record.state.style,
+                fields: record.state.labelFields,
                 apply: async (style) => {
                     const applied = await record.adapter.applyStyle(record, style);
                     mapLayerController.render();
