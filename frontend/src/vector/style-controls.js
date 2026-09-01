@@ -97,20 +97,27 @@ export class VectorStyleControls {
         this.target = null;
         this.generation = 0;
         this.busy = false;
+        /** Update range-value text after an opacity control changes. @return {void} */
         this.onRangeInput = () => this.#renderRangeValues();
+        /** Synchronize label controls and guidance after a label input. @return {void} */
         this.onLabelInput = () => {
             this.#synchronizeLabelInputs();
             this.#renderLabelNote();
         };
+        /** Start the asynchronous color-mode transition. @return {void} */
         this.onModeChange = () => void this.#changeCategoryMode();
+        /** Reset and reload categories after the selected field changes. @return {void} */
         this.onCategoryFieldChange = () => {
             this.categorySummary = null;
             this.categoryColors.clear();
             this.paletteGeneration = 0;
             void this.#loadCategories();
         };
+        /** Re-render retained category values after the limit changes. @return {void} */
         this.onCategoryLimitInput = () => this.#renderCategories();
+        /** Replace generated category colors on explicit user request. @return {void} */
         this.onCategoryRegenerate = () => this.#regenerateCategoryColors();
+        /** Start the asynchronous complete-style application. @return {void} */
         this.onApply = () => void this.#apply();
         this.mode.addEventListener("change", this.onModeChange);
         this.categoryField.addEventListener("change", this.onCategoryFieldChange);
@@ -240,7 +247,12 @@ export class VectorStyleControls {
         this.applyButton.removeEventListener("click", this.onApply);
     }
 
-    /** Apply the complete form state through the narrow target callback. */
+    /**
+     * Apply the complete form state through the narrow target callback.
+     *
+     * @return {Promise<void>} Resolves after validation and the current apply
+     * request finish, or immediately when no target can accept a request.
+     */
     async #apply() {
         if (this.target === null || this.busy) return;
         let style;
@@ -300,13 +312,22 @@ export class VectorStyleControls {
         this.#synchronizeCategoryInputs();
     }
 
-    /** Update visible percentage labels for range controls. @return {void} */
+    /**
+     * Update visible percentage labels from the current range controls.
+     *
+     * @return {void}
+     */
     #renderRangeValues() {
         this.fillOpacityValue.textContent = `${this.fillOpacity.value}%`;
         this.strokeOpacityValue.textContent = `${this.strokeOpacity.value}%`;
     }
 
-    /** Switch between single-color and field-category controls. @return {Promise<void>} */
+    /**
+     * Switch between single-color and field-category controls.
+     *
+     * @return {Promise<void>} Resolves after any required bounded category
+     * summary finishes loading.
+     */
     async #changeCategoryMode() {
         this.#renderCategoryMode();
         if (this.mode.value !== "categories") {
@@ -331,7 +352,12 @@ export class VectorStyleControls {
         }
     }
 
-    /** Load one bounded category summary through the composition callback. */
+    /**
+     * Load the selected field's bounded category summary through the target.
+     *
+     * @return {Promise<void>} Resolves after the latest request renders or its
+     * safe error is presented; stale requests leave current state unchanged.
+     */
     async #loadCategories() {
         if (
             this.target === null || this.mode.value !== "categories" ||
@@ -400,7 +426,14 @@ export class VectorStyleControls {
         }
     }
 
-    /** Build the complete categorical style block from the current summary. */
+    /**
+     * Build the complete categorical style block from the current summary.
+     *
+     * @return {Object} Validated-input category field, limit, typed rules, and
+     * applicable Other and No value colors for the complete style request.
+     * @throws {TypeError} If current values are unavailable or the limit is
+     * invalid.
+     */
     #categoricalState() {
         const summary = this.categorySummary;
         if (summary === null || summary.field !== this.categoryField.value) {
@@ -435,7 +468,11 @@ export class VectorStyleControls {
         };
     }
 
-    /** Render single/category mode without changing the retained form state. */
+    /**
+     * Render single/category mode without changing retained form state.
+     *
+     * @return {void}
+     */
     #renderCategoryMode() {
         const categorical = this.mode.value === "categories";
         this.categoryFieldsRoot.hidden = !categorical;
@@ -444,7 +481,11 @@ export class VectorStyleControls {
         this.#synchronizeCategoryInputs();
     }
 
-    /** Apply availability, loading, and request state to category controls. */
+    /**
+     * Apply availability, loading, and request state to category controls.
+     *
+     * @return {void}
+     */
     #synchronizeCategoryInputs() {
         const categorical = this.mode.value === "categories";
         const unavailable = this.categoryFields.length === 0;
@@ -459,7 +500,11 @@ export class VectorStyleControls {
             this.busy || (categorical && (this.categoryLoading || this.categorySummary === null));
     }
 
-    /** Replace the category field selector with eligible Catalog fields. */
+    /**
+     * Replace the category selector with the retained eligible Catalog fields.
+     *
+     * @return {void}
+     */
     #renderCategoryFields() {
         const options = this.categoryFields.map(({ name, type }) => {
             const option = this.document.createElement("option");
@@ -470,7 +515,11 @@ export class VectorStyleControls {
         this.categoryField.replaceChildren(...options);
     }
 
-    /** Replace every generated color while retaining values and ordering. */
+    /**
+     * Replace every generated color while retaining values and ordering.
+     *
+     * @return {void}
+     */
     #regenerateCategoryColors() {
         if (this.categorySummary === null || this.busy || this.categoryLoading) return;
         this.paletteGeneration += 1;
@@ -483,7 +532,11 @@ export class VectorStyleControls {
         this.#renderCategories();
     }
 
-    /** Render current explicit, Other, and No value category rows. */
+    /**
+     * Render current explicit, Other, and No value category rows.
+     *
+     * @return {void}
+     */
     #renderCategories() {
         const summary = this.categorySummary;
         if (summary === null) {
@@ -539,7 +592,15 @@ export class VectorStyleControls {
         this.#synchronizeCategoryInputs();
     }
 
-    /** Create one compact safe category color row. */
+    /**
+     * Create one compact category color row using text-only presentation.
+     *
+     * @param {string} label User-visible bounded category label.
+     * @param {string} count User-visible exact or lower-bound feature count.
+     * @param {string} currentColor Current validated six-digit hex color.
+     * @param {(nextColor:string)=>void} onColor Retained-state color updater.
+     * @return {HTMLLabelElement} Detached row ready for the category list.
+     */
     #categoryRow(label, count, currentColor, onColor) {
         const row = this.document.createElement("label");
         row.className = "vector-category-row";
@@ -560,7 +621,12 @@ export class VectorStyleControls {
         return row;
     }
 
-    /** Explain category coverage and bounded-read completeness. */
+    /**
+     * Explain category coverage and bounded-read completeness.
+     *
+     * @param {number} styledCount Number of explicit value rows being styled.
+     * @return {void}
+     */
     #renderCategoryStatus(styledCount) {
         const summary = this.categorySummary;
         if (summary === null) return;
@@ -580,7 +646,13 @@ export class VectorStyleControls {
             (hasRemaining ? "; remaining values use Other." : ".") + unsupported;
     }
 
-    /** Build complete label state from enabled form fields. @return {Object} */
+    /**
+     * Build complete label state from enabled form fields.
+     *
+     * @return {Object} Validated-input label field, typography, placement, and
+     * minimum zoom for the complete style request.
+     * @throws {TypeError} If the selected field is no longer in Catalog data.
+     */
     #labelState() {
         if (!this.labelFields.some(({ name }) => name === this.labelField.value)) {
             throw new TypeError("Choose a current Catalog attribute field.");
@@ -598,7 +670,11 @@ export class VectorStyleControls {
         };
     }
 
-    /** Replace field selector options with current Catalog metadata. @return {void} */
+    /**
+     * Replace label-field options with current Catalog metadata.
+     *
+     * @return {void}
+     */
     #renderLabelFields() {
         const options = this.labelFields.map(({ name, type }) => {
             const option = this.document.createElement("option");
@@ -609,7 +685,12 @@ export class VectorStyleControls {
         this.labelField.replaceChildren(...options);
     }
 
-    /** Replace placement options for the current geometry class. @param {string} geometryKind Geometry class. @return {void} */
+    /**
+     * Replace placement options for the current geometry class.
+     *
+     * @param {string} geometryKind Point, line, or polygon geometry class.
+     * @return {void}
+     */
     #renderPlacementOptions(geometryKind) {
         const placements = geometryKind === "line"
             ? [
@@ -631,7 +712,11 @@ export class VectorStyleControls {
         }));
     }
 
-    /** Apply busy, availability, and enabled state to label fields. @return {void} */
+    /**
+     * Apply busy, availability, and enabled state to label fields.
+     *
+     * @return {void}
+     */
     #synchronizeLabelInputs() {
         const unavailable = this.labelFields.length === 0;
         this.labelEnabled.disabled = this.busy || unavailable;
@@ -639,7 +724,11 @@ export class VectorStyleControls {
         for (const input of this.labelInputs) input.disabled = fieldsDisabled;
     }
 
-    /** Explain current label availability and scale behavior. @return {void} */
+    /**
+     * Explain current label availability and scale behavior.
+     *
+     * @return {void}
+     */
     #renderLabelNote() {
         if (this.labelFields.length === 0) {
             this.labelNote.textContent = "This Item has no cataloged attribute fields.";
