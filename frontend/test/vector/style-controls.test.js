@@ -42,6 +42,12 @@ test("vector style controls show fields owned by each geometry", () => {
     assert.equal(fixture.controls.heading.textContent, "Line style");
     assert.equal(fixture.controls.labelEnabled.checked, false);
     assert.equal(fixture.controls.labelField.children.length, 2);
+    assert.equal(fixture.controls.labelFontFamily.value, "SansSerif");
+    assert.equal(fixture.controls.labelFontSize.value, "12");
+    assert.equal(fixture.controls.labelFontWeight.value, "normal");
+    assert.equal(fixture.controls.labelFontColor.value, "#111827");
+    assert.equal(fixture.controls.labelHaloColor.value, "#ffffff");
+    assert.equal(fixture.controls.labelHaloWidth.value, "1.5");
     assert.equal(fixture.controls.labelMinimumZoom.value, "0");
 
     fixture.controls.show(fixture.target("point", {

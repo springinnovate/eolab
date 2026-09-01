@@ -2,6 +2,16 @@
 
 import { normalizeVectorStyle } from "./style.js";
 
+const VECTOR_LABEL_DEFAULTS = Object.freeze({
+    fontFamily: "SansSerif",
+    fontSize: 12,
+    fontWeight: "normal",
+    fontColor: "#111827",
+    haloColor: "#ffffff",
+    haloWidth: 1.5,
+    minimumZoom: 0,
+});
+
 /** Own vector style form state without knowing map or raster implementations. */
 export class VectorStyleControls {
     /**
@@ -109,15 +119,25 @@ export class VectorStyleControls {
         this.labelEnabled.checked = labelFieldAvailable;
         this.labelField.value = labelFieldAvailable
             ? label.field : this.labelFields[0]?.name ?? "";
-        this.labelFontFamily.value = label?.fontFamily ?? "SansSerif";
-        this.labelFontSize.value = String(label?.fontSize ?? 12);
-        this.labelFontWeight.value = label?.fontWeight ?? "normal";
-        this.labelFontColor.value = label?.fontColor ?? "#111827";
-        this.labelHaloColor.value = label?.haloColor ?? "#ffffff";
-        this.labelHaloWidth.value = String(label?.haloWidth ?? 1.5);
+        this.labelFontFamily.value =
+            label?.fontFamily ?? VECTOR_LABEL_DEFAULTS.fontFamily;
+        this.labelFontSize.value = String(
+            label?.fontSize ?? VECTOR_LABEL_DEFAULTS.fontSize,
+        );
+        this.labelFontWeight.value =
+            label?.fontWeight ?? VECTOR_LABEL_DEFAULTS.fontWeight;
+        this.labelFontColor.value =
+            label?.fontColor ?? VECTOR_LABEL_DEFAULTS.fontColor;
+        this.labelHaloColor.value =
+            label?.haloColor ?? VECTOR_LABEL_DEFAULTS.haloColor;
+        this.labelHaloWidth.value = String(
+            label?.haloWidth ?? VECTOR_LABEL_DEFAULTS.haloWidth,
+        );
         this.labelPlacement.value = labelFieldAvailable
             ? label.placement : defaultPlacement(style.geometryKind);
-        this.labelMinimumZoom.value = String(label?.minimumZoom ?? 0);
+        this.labelMinimumZoom.value = String(
+            label?.minimumZoom ?? VECTOR_LABEL_DEFAULTS.minimumZoom,
+        );
         this.status.textContent = "";
         this.#renderRangeValues();
         this.#synchronizeLabelInputs();
