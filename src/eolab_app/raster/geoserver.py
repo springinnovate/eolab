@@ -13,7 +13,6 @@ from eolab_app.raster.errors import (
     RasterPublicationFailureCategory,
     RasterUpstreamError,
 )
-from eolab_app.raster.models import RasterReaderAssessment
 from eolab_app.rendering.geoserver import (
     GEOSERVER_ERROR_EXCERPT_LIMIT,
     GEOSERVER_WORKSPACE_NAME,
@@ -29,71 +28,6 @@ _READER_REJECTION_PATTERN = re.compile(
     r"coordinate reference system|coverage.*(?:reader|crs)|"
     r"(?:reader|crs|projection).*coverage)"
 )
-
-
-class GeoServerRasterReaderAssessor:
-    """Probe mounted GeoTIFFs with the deployed GeoTools reader.
-
-    The adapter owns only the authenticated, read-only assessment protocol. It
-    never creates or updates GeoServer catalog resources.
-    """
-
-    def __init__(
-        self,
-        geoserver_client: httpx2.AsyncClient,
-        geoserver_internal_url: str,
-    ) -> None:
-        """Create the read-only reader-assessment adapter.
-
-        Args:
-            geoserver_client: Authenticated internal GeoServer client.
-            geoserver_internal_url: Internal GeoServer base URL.
-
-        Returns:
-            None.
-        """
-        self._geoserver_client = geoserver_client
-        self._assessment_url = (
-            f"{geoserver_internal_url.rstrip('/')}/rest/eolab/"
-            "reader-assessments"
-        )
-
-    async def assess(self, source_path: Path) -> RasterReaderAssessment:
-        """Acquire one source through GeoServer without changing its catalog.
-
-        Args:
-            source_path: Canonical mounted GeoTIFF path shared with GeoServer.
-
-        Returns:
-            Validated deployed-reader compatibility result.
-
-        Raises:
-            RasterUpstreamError: If GeoServer is unavailable, rejects the
-                request, or returns an invalid assessment document.
-        """
-        try:
-            response = await self._geoserver_client.post(
-                self._assessment_url,
-                content=source_path.as_uri(),
-                headers={
-                    "Accept": "application/json",
-                    "Content-Type": "text/plain",
-                },
-            )
-        except httpx2.RequestError as error:
-            raise RasterUpstreamError(
-                "The rendering service is unavailable"
-            ) from error
-        if response.status_code != 200:
-            raise RasterUpstreamError(
-                "GeoServer could not assess the selected GeoTIFF"
-            )
-        try:
-            return RasterReaderAssessment.model_validate(response.json())
-        except ValueError as error:
-            raise RasterUpstreamError(
-                "GeoServer returned an invalid raster assessment"
-            ) from error
 
 
 @dataclass(frozen=True)

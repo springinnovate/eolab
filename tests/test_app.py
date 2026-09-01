@@ -14,10 +14,7 @@ import rasterio
 from fastapi.testclient import TestClient
 from rasterio.transform import from_origin
 
-from eolab_app.catalog.geotiff import build_stac_item as build_geotiff_stac_item
 from eolab_app.main import create_app
-from eolab_app.raster.models import GEOSERVER_READER_CONTRACT
-from eolab_app.raster.sources import source_signature
 from eolab_app.settings import load_settings
 from tests.app_support import (
     GeoServerPublicationMock,
@@ -350,225 +347,6 @@ def test_catalog_geotiff_is_published_idempotently(
     assert len({request.url.path for request in mutation_requests}) == 2
 
 
-def test_one_outdated_raster_is_assessed_and_updated(
-    configured_environment: None,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    version_file_path: Path,
-) -> None:
-    """Upgrade one selected Item without scanning the mounted directory."""
-    source_path = tmp_path / "raster.tif"
-    _write_geotiff(source_path)
-    current_item = build_geotiff_stac_item(tmp_path, source_path)
-    item_id = current_item["id"]
-    current_item["assets"]["data"]["eolab:rendering"] = {
-        "policy": "raster-v1",
-        "eligible": False,
-        "reason": "Visualization unavailable under the former policy.",
-    }
-    monkeypatch.setenv("SCAN_MOUNT_PATH", str(tmp_path))
-    monkeypatch.setenv("SCAN_PATHS_WITHIN_MOUNT", '["."]')
-    catalog_requests = []
-
-    def catalog_response(request: httpx2.Request) -> httpx2.Response:
-        nonlocal current_item
-        catalog_requests.append(request)
-        item_path = (
-            "/collections/eolab-mounted-geotiffs/items/" + item_id
-        )
-        if request.method == "GET" and request.url.path == item_path:
-            return httpx2.Response(200, json=current_item)
-        if request.method == "POST":
-            assert request.url.path == (
-                "/collections/eolab-mounted-geotiffs/bulk_items"
-            )
-            request_document = json.loads(request.content)
-            assert request_document["method"] == "upsert"
-            assert list(request_document["items"]) == [item_id]
-            current_item = request_document["items"][item_id]
-            return httpx2.Response(200, json="Successfully upserted 1 item.")
-        raise AssertionError(f"Unexpected catalog request: {request}")
-
-    def geoserver_response(request: httpx2.Request) -> httpx2.Response:
-        """Return one compatible deployed-reader assessment.
-
-        Args:
-            request: Captured authenticated GeoServer assessment request.
-
-        Returns:
-            Controlled compatible reader response.
-        """
-        assert request.url.path == (
-            "/geoserver/rest/eolab/reader-assessments"
-        )
-        assert request.method == "POST"
-        assert request.content.decode() == source_path.resolve().as_uri()
-        return httpx2.Response(200, json={
-            "contract": GEOSERVER_READER_CONTRACT,
-            "compatible": True,
-            "reasonCode": None,
-        })
-
-    with TestClient(
-        create_app(
-            version_file_path,
-            catalog_transport=httpx2.MockTransport(catalog_response),
-            geoserver_transport=httpx2.MockTransport(geoserver_response),
-        )
-    ) as client:
-        request_body = {
-            "collectionId": "eolab-mounted-geotiffs",
-            "itemId": item_id,
-        }
-        first_response = client.post(
-            "/api/rendering/assessments",
-            json=request_body,
-        )
-        repeated_response = client.post(
-            "/api/rendering/assessments",
-            json=request_body,
-        )
-
-    assert first_response.status_code == 200
-    assert first_response.json()["assets"]["data"]["eolab:rendering"] == {
-        "policy": "raster-v3",
-        "eligible": True,
-        "reader_contract": GEOSERVER_READER_CONTRACT,
-        "reader_compatible": True,
-        "source_signature": source_signature(source_path).to_catalog(),
-        "bounded_blocks": True,
-        "block_shapes": [[1, 1]],
-        "overview_factors": [[]],
-        "overview_storage": "none",
-        "compression": None,
-        "estimated_uncompressed_bytes": 1,
-    }
-    assert repeated_response.json() == first_response.json()
-    assert [request.method for request in catalog_requests] == [
-        "GET",
-        "POST",
-        "GET",
-        "POST",
-    ]
-
-
-@pytest.mark.parametrize(
-    ("rendering_metadata", "expected_detail"),
-    (
-        (
-            None,
-            "Visualization unavailable: assess this raster first.",
-        ),
-        (
-            {
-                "policy": "raster-v3",
-                "eligible": False,
-                "reason_code": "blocks_too_large",
-                "reason": (
-                    "Visualization unavailable: this raster needs smaller "
-                    "internal blocks."
-                ),
-            },
-            (
-                "Visualization unavailable: this raster needs smaller "
-                "internal blocks."
-            ),
-        ),
-    ),
-    ids=("unassessed", "ineligible"),
-)
-def test_raster_publication_requires_scanner_eligibility(
-    configured_environment: None,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    version_file_path: Path,
-    rendering_metadata: dict[str, object] | None,
-    expected_detail: str,
-) -> None:
-    """Refuse legacy and unsuitable Items before contacting GeoServer."""
-    source_path = tmp_path / "raster.tif"
-    _write_geotiff(source_path)
-    monkeypatch.setenv("SCAN_MOUNT_PATH", str(tmp_path))
-    monkeypatch.setenv("SCAN_PATHS_WITHIN_MOUNT", '["."]')
-    item = _mounted_geotiff_item(source_path.as_uri())
-    if rendering_metadata is None:
-        del item["assets"]["data"]["eolab:rendering"]
-    else:
-        item["assets"]["data"]["eolab:rendering"] = rendering_metadata
-    geoserver_requests = []
-
-    def catalog_response(_: httpx2.Request) -> httpx2.Response:
-        return httpx2.Response(200, json=item)
-
-    def geoserver_response(request: httpx2.Request) -> httpx2.Response:
-        geoserver_requests.append(request)
-        return httpx2.Response(500)
-
-    response = TestClient(
-        create_app(
-            version_file_path,
-            catalog_transport=httpx2.MockTransport(catalog_response),
-            geoserver_transport=httpx2.MockTransport(geoserver_response),
-        )
-    ).post(
-        "/api/rendering/layers",
-        json={
-            "collectionId": "eolab-mounted-geotiffs",
-            "itemId": TEST_GEOTIFF_ITEM_ID,
-        },
-    )
-
-    assert response.status_code == 409
-    assert response.json() == {"detail": expected_detail}
-    assert geoserver_requests == []
-
-
-def test_raster_publication_reassesses_a_changed_source(
-    configured_environment: None,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    version_file_path: Path,
-) -> None:
-    """Require reassessment when source identity changed after assessment."""
-    source_path = tmp_path / "raster.tif"
-    _write_geotiff(source_path)
-    monkeypatch.setenv("SCAN_MOUNT_PATH", str(tmp_path))
-    monkeypatch.setenv("SCAN_PATHS_WITHIN_MOUNT", '["."]')
-    item = _mounted_geotiff_item(source_path.as_uri())
-    geoserver_requests = []
-    source_path.write_bytes(b"changed after assessment")
-
-    def catalog_response(_: httpx2.Request) -> httpx2.Response:
-        return httpx2.Response(200, json=item)
-
-    def geoserver_response(request: httpx2.Request) -> httpx2.Response:
-        geoserver_requests.append(request)
-        return httpx2.Response(500)
-
-    response = TestClient(
-        create_app(
-            version_file_path,
-            catalog_transport=httpx2.MockTransport(catalog_response),
-            geoserver_transport=httpx2.MockTransport(geoserver_response),
-        )
-    ).post(
-        "/api/rendering/layers",
-        json={
-            "collectionId": "eolab-mounted-geotiffs",
-            "itemId": TEST_GEOTIFF_ITEM_ID,
-        },
-    )
-
-    assert response.status_code == 409
-    assert response.json() == {
-        "detail": (
-            "Visualization unavailable: the raster changed; reassess it "
-            "before publication."
-        )
-    }
-    assert geoserver_requests == []
-
-
 def test_raster_changed_during_publication_is_not_authorized(
     configured_environment: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -645,10 +423,6 @@ def test_raster_changed_during_publication_is_not_authorized(
 
 
 @pytest.mark.parametrize(
-    "endpoint",
-    ("/api/rendering/assessments", "/api/rendering/layers"),
-)
-@pytest.mark.parametrize(
     "request_body",
     (
         {
@@ -671,7 +445,6 @@ def test_raster_changed_during_publication_is_not_authorized(
 def test_raster_actions_reject_browser_paths_and_unsupported_items(
     configured_environment: None,
     version_file_path: Path,
-    endpoint: str,
     request_body: dict[str, object],
 ) -> None:
     """Reject invalid public input before making any upstream request."""
@@ -684,7 +457,7 @@ def test_raster_actions_reject_browser_paths_and_unsupported_items(
         )
     )
 
-    response = client.post(endpoint, json=request_body)
+    response = client.post("/api/rendering/layers", json=request_body)
 
     assert response.status_code == 422
     upstream_request.assert_not_awaited()
@@ -826,12 +599,6 @@ def test_pixel_probe_samples_catalog_raster_without_geoserver(
     monkeypatch.setenv("SCAN_MOUNT_PATH", str(tmp_path))
     monkeypatch.setenv("SCAN_PATHS_WITHIN_MOUNT", '["."]')
     item = _mounted_geotiff_item(source_path.as_uri())
-    rendering = item["assets"]["data"]["eolab:rendering"]
-    rendering.update({
-        "eligible": False,
-        "reader_compatible": False,
-        "reason_code": "geoserver_crs_metadata_incompatible",
-    })
     geoserver_requests: list[httpx2.Request] = []
 
     def catalog_response(request: httpx2.Request) -> httpx2.Response:
@@ -910,13 +677,13 @@ def test_pixel_probe_samples_catalog_raster_without_geoserver(
     }
 
 
-def test_raster_statistics_sample_a_rendering_ineligible_projected_raster(
+def test_raster_statistics_sample_a_projected_catalog_raster(
     configured_environment: None,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     version_file_path: Path,
 ) -> None:
-    """Analyze a catalog source rejected by rendering without GeoServer.
+    """Analyze a prepared projected source without consulting GeoServer.
 
     Args:
         configured_environment: Applied baseline application environment.
@@ -968,13 +735,6 @@ def test_raster_statistics_sample_a_rendering_ineligible_projected_raster(
     monkeypatch.setenv("SCAN_MOUNT_PATH", str(tmp_path))
     monkeypatch.setenv("SCAN_PATHS_WITHIN_MOUNT", '["."]')
     item = _mounted_geotiff_item(source_path.as_uri())
-    rendering = item["assets"]["data"]["eolab:rendering"]
-    assert isinstance(rendering, dict)
-    rendering.update({
-        "eligible": False,
-        "reader_compatible": False,
-        "reason_code": "geoserver_crs_metadata_incompatible",
-    })
     geoserver_requests: list[httpx2.Request] = []
 
     def upstream_response(request: httpx2.Request) -> httpx2.Response:

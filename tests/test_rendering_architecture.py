@@ -6,6 +6,8 @@ from pathlib import Path
 
 RENDERING_SOURCE = Path("src/eolab_app/rendering")
 WMS_PROXY_SOURCE = Path("src/eolab_app/routes/wms_proxy.py")
+GEOTIFF_CATALOG_SOURCE = Path("src/eolab_app/catalog/geotiff.py")
+APPLICATION_COMPOSITION_SOURCE = Path("src/eolab_app/main.py")
 
 
 def imported_modules(source_path: Path) -> set[str]:
@@ -52,3 +54,32 @@ def test_restricted_wms_route_depends_only_on_neutral_authorization() -> None:
         "eolab_app.rendering.errors",
         "eolab_app.rendering.ports",
     }
+
+
+def test_raster_discovery_has_no_geoserver_or_publication_dependency() -> None:
+    """Keep prepared-raster discovery neutral and side-effect free."""
+    imports = imported_modules(GEOTIFF_CATALOG_SOURCE)
+
+    assert not {
+        module
+        for module in imports
+        if module.startswith("eolab_app.raster.geoserver")
+        or module.startswith("eolab_app.raster.publication")
+        or module.startswith("eolab_app.rendering")
+    }
+
+
+def test_raster_preflight_and_approximate_view_edges_are_removed() -> None:
+    """Prevent composition from restoring deleted raster rendering policy."""
+    removed_sources = (
+        Path("src/eolab_app/raster/assessment.py"),
+        Path("src/eolab_app/raster/eligibility.py"),
+        Path("src/eolab_app/raster/detail_preview.py"),
+        Path("src/eolab_app/raster/detail_preview_service.py"),
+        Path("src/eolab_app/raster/exact_detail.py"),
+    )
+    composition_imports = imported_modules(APPLICATION_COMPOSITION_SOURCE)
+
+    assert not any(source.exists() for source in removed_sources)
+    assert "eolab_app.raster.assessment" not in composition_imports
+    assert "eolab_app.raster.eligibility" not in composition_imports

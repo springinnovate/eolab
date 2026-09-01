@@ -20,7 +20,6 @@ import pytest
 import rasterio
 from affine import Affine
 from rasterio.crs import CRS
-from rasterio.enums import Resampling
 from rasterio.shutil import copy as copy_raster
 from rasterio.transform import from_bounds, from_origin
 
@@ -59,14 +58,10 @@ from eolab_app.catalog.geotiff import (
     SUGGESTED_WARP_BOUNDS_DESCRIPTION,
     build_stac_item as build_geotiff_stac_item,
 )
-from eolab_app.raster.eligibility import (
+from eolab_app.raster.catalog_contract import (
     COG_MEDIA_TYPE,
     GEOTIFF_MEDIA_TYPE,
-    RENDERING_METADATA_KEY,
-    apply_reader_assessment,
-    assess_raster_renderability,
 )
-from eolab_app.raster.models import GEOSERVER_READER_CONTRACT
 from eolab_app.raster.sources import source_signature
 
 
@@ -75,43 +70,6 @@ DATASET_ITEM_BUILDERS = {
     ".tiff": build_geotiff_stac_item,
     ".shp": build_shapefile_stac_item,
 }
-
-
-def test_geoserver_crs_regression_fixture_is_rasterio_readable() -> None:
-    """Keep the GeoTools-incompatible regression source valid for Rasterio."""
-    fixture_path = Path(
-        "tests/fixtures/rasters/geoserver-incompatible-eckert-iv.tif"
-    )
-    source_before_assessment = fixture_path.read_bytes()
-
-    with rasterio.open(fixture_path) as dataset:
-        assessment = assess_raster_renderability(dataset)
-
-    assert assessment["eligible"] is True
-    assert fixture_path.read_bytes() == source_before_assessment
-
-
-def test_reader_crs_incompatibility_has_a_stable_specific_reason() -> None:
-    """Distinguish GeoServer CRS encoding from structural policy failures."""
-    assessment = apply_reader_assessment(
-        {
-            "policy": "raster-v3",
-            "eligible": True,
-            "bounded_blocks": True,
-        },
-        reader_contract=GEOSERVER_READER_CONTRACT,
-        reader_compatible=False,
-        reader_reason_code="geoserver_crs_metadata_incompatible",
-    )
-
-    assert assessment["eligible"] is False
-    assert assessment["reason_code"] == (
-        "geoserver_crs_metadata_incompatible"
-    )
-    assert assessment["reason"] == (
-        "Visualization unavailable: GeoServer cannot interpret this "
-        "raster's coordinate-system metadata."
-    )
 
 
 def build_test_registry_items(
@@ -202,43 +160,6 @@ def write_geotiff(
             )
 
 
-class RasterLayout:
-    """Supply raster structure to the pure rendering-policy assessment."""
-
-    def __init__(
-        self,
-        *,
-        width: int,
-        height: int,
-        data_types: tuple[str, ...] = ("uint8",),
-        block_shapes: tuple[tuple[int, int], ...] = ((1, 1),),
-        overview_factors: tuple[tuple[int, ...], ...] = ((),),
-        compression: str | None = None,
-        external_overview_suffix: str | None = None,
-    ) -> None:
-        self.width = width
-        self.height = height
-        self.dtypes = data_types
-        self.count = len(data_types)
-        self.indexes = tuple(range(1, self.count + 1))
-        self.block_shapes = block_shapes
-        self._overview_factors = overview_factors
-        self.files = (
-            ("raster.tif", f"raster.tif{external_overview_suffix}")
-            if external_overview_suffix is not None
-            else ("raster.tif",)
-        )
-        self.compression = (
-            SimpleNamespace(value=compression)
-            if compression is not None
-            else None
-        )
-
-    def overviews(self, band_index: int) -> tuple[int, ...]:
-        """Return overview factors for a one-based band index."""
-        return self._overview_factors[band_index - 1]
-
-
 def write_shapefile(
     path: Path,
     *,
@@ -297,17 +218,10 @@ def test_geotiff_uses_embedded_acquisition_datetime(tmp_path: Path) -> None:
     assert item["assets"]["data"]["type"] == GEOTIFF_MEDIA_TYPE
     assert FILE_EXTENSION in item["stac_extensions"]
     assert item["assets"]["data"]["file:size"] > 0
-    assert item["assets"]["data"][RENDERING_METADATA_KEY] == {
-        "policy": "raster-v3",
-        "eligible": True,
-        "bounded_blocks": True,
-        "block_shapes": [[2, 3]],
-        "overview_factors": [[]],
-        "overview_storage": "none",
-        "compression": None,
-        "estimated_uncompressed_bytes": 6,
+    assert item["assets"]["data"]["eolab:source"] == {
         "source_signature": source_signature(geotiff_path).to_catalog(),
     }
+    assert "eolab:rendering" not in item["assets"]["data"]
     json.dumps(item)
 
 
@@ -323,12 +237,9 @@ def test_cog_profile_is_recorded_from_gdal_layout_metadata(
     item = build_geotiff_stac_item(tmp_path, cog_path)
 
     assert item["assets"]["data"]["type"] == COG_MEDIA_TYPE
-    rendering_metadata = item["assets"]["data"][RENDERING_METADATA_KEY]
-    assert rendering_metadata["bounded_blocks"] is True
-    assert rendering_metadata["block_shapes"] == [[512, 512]]
-    assert rendering_metadata["overview_factors"] == [[2, 4]]
-    assert rendering_metadata["overview_storage"] == "internal"
-    assert rendering_metadata["compression"] == "DEFLATE"
+    assert item["assets"]["data"]["eolab:source"]["source_signature"] == (
+        source_signature(cog_path).to_catalog()
+    )
 
 
 def test_cog_filename_does_not_define_the_storage_profile(tmp_path: Path) -> None:
@@ -339,252 +250,6 @@ def test_cog_filename_does_not_define_the_storage_profile(tmp_path: Path) -> Non
     item = build_geotiff_stac_item(tmp_path, geotiff_path)
 
     assert item["assets"]["data"]["type"] == GEOTIFF_MEDIA_TYPE
-
-
-def test_external_geotiff_overviews_are_recorded(tmp_path: Path) -> None:
-    """Recognize an overview pyramid stored outside the GeoTIFF."""
-    geotiff_path = tmp_path / "external-overviews.tif"
-    write_geotiff(geotiff_path, width=512, height=512)
-
-    with rasterio.Env(TIFF_USE_OVR="YES"):
-        with rasterio.open(geotiff_path, "r+") as dataset:
-            dataset.build_overviews([2], Resampling.nearest)
-        with rasterio.open(geotiff_path) as dataset:
-            assessment = assess_raster_renderability(dataset)
-
-    assert geotiff_path.with_suffix(".tif.ovr").is_file()
-    assert assessment["overview_factors"] == [[2]]
-    assert assessment["overview_storage"] == "external"
-
-
-@pytest.mark.parametrize(
-    ("layout", "eligible", "reason_code", "reason_fragment"),
-    (
-        (
-            RasterLayout(
-                width=2_000,
-                height=1_000,
-                block_shapes=((1, 2_000),),
-            ),
-            True,
-            None,
-            None,
-        ),
-        (
-            RasterLayout(
-                width=10_000,
-                height=7_000,
-                block_shapes=((1, 10_000),),
-            ),
-            False,
-            "blocks_too_large",
-            "needs smaller internal blocks",
-        ),
-        (
-            RasterLayout(
-                width=50_000,
-                height=50_000,
-                data_types=("float32",),
-                block_shapes=((512, 512),),
-                overview_factors=((2, 4, 8, 16, 32),),
-                compression="DEFLATE",
-            ),
-            True,
-            None,
-            None,
-        ),
-        (
-            RasterLayout(
-                width=50_000,
-                height=50_000,
-                data_types=("float32",),
-                block_shapes=((512, 512),),
-                overview_factors=((2, 4, 8),),
-                compression="DEFLATE",
-            ),
-            False,
-            "coarsest_overview_decoded_size_exceeded",
-            "exceeds 64 MiB of decoded pixel data",
-        ),
-        (
-            RasterLayout(
-                width=50_000,
-                height=50_000,
-                data_types=("float32",),
-                block_shapes=((512, 512),),
-                overview_factors=((2, 4, 16, 32),),
-                compression="DEFLATE",
-            ),
-            False,
-            "incomplete_overview_pyramid",
-            "beginning at 2x without skipped levels",
-        ),
-        (
-            RasterLayout(
-                width=133_584,
-                height=66_792,
-                data_types=("float32",),
-                block_shapes=((512, 512),),
-                overview_factors=((2, 4, 8, 16, 32),),
-                compression="ZSTD",
-            ),
-            True,
-            None,
-            None,
-        ),
-        (
-            RasterLayout(
-                width=1_296_704,
-                height=1_296_704,
-                block_shapes=((512, 512),),
-                overview_factors=(
-                    (
-                        2,
-                        4,
-                        8,
-                        16,
-                        32,
-                        64,
-                        128,
-                        256,
-                        512,
-                        1024,
-                        2049,
-                        4103,
-                    ),
-                ),
-                compression="ZSTD",
-            ),
-            True,
-            None,
-            None,
-        ),
-        (
-            RasterLayout(
-                width=300_000,
-                height=10_000,
-                data_types=("float32",),
-                block_shapes=((512, 512),),
-                overview_factors=((2, 4, 8, 16, 32),),
-            ),
-            False,
-            "coarsest_overview_dimension_exceeded",
-            "wider or taller than 8192 pixels",
-        ),
-        (
-            RasterLayout(
-                width=50_000,
-                height=50_000,
-                data_types=("float32",),
-                block_shapes=((2048, 2048),),
-                overview_factors=((2, 4, 8, 16, 32),),
-            ),
-            False,
-            "blocks_too_large",
-            "needs smaller internal blocks",
-        ),
-        (
-            RasterLayout(
-                width=10,
-                height=10,
-                data_types=("uint8", "uint8", "uint8"),
-                block_shapes=((10, 10),) * 3,
-                overview_factors=((),) * 3,
-            ),
-            False,
-            "unsupported_band_count",
-            "supports one-band rasters",
-        ),
-        (
-            RasterLayout(
-                width=10,
-                height=10,
-                data_types=("uint32",),
-                block_shapes=((10, 10),),
-            ),
-            False,
-            "unsupported_pixel_type",
-            "does not support uint32 pixels",
-        ),
-    ),
-    ids=(
-        "small-full-width-blocks",
-        "large-full-width-blocks",
-        "large-overviewed",
-        "shallow-overviews",
-        "gapped-overviews",
-        "global-cog-overviews",
-        "rounded-deep-overviews",
-        "oversized-coarsest-overview",
-        "oversized-blocks",
-        "multiple-bands",
-        "unsupported-data-type",
-    ),
-)
-def test_raster_renderability_policy(
-    layout: RasterLayout,
-    eligible: bool,
-    reason_code: str | None,
-    reason_fragment: str | None,
-) -> None:
-    """Apply one conservative policy to synthetic raster structures.
-
-    Args:
-        layout: Synthetic raster structure under assessment.
-        eligible: Expected structural eligibility decision.
-        reason_code: Expected stable rejection code, or ``None``.
-        reason_fragment: Expected explanatory text fragment, or ``None``.
-    """
-    assessment = assess_raster_renderability(layout)
-
-    assert assessment["eligible"] is eligible
-    if reason_fragment is None:
-        assert "reason_code" not in assessment
-        assert "reason" not in assessment
-    else:
-        assert assessment["reason_code"] == reason_code
-        assert reason_fragment in assessment["reason"]
-
-
-def test_oversized_block_reason_reports_shape_orientation_and_limit() -> None:
-    """Explain an oversized block using display-oriented dimensions."""
-    assessment = assess_raster_renderability(
-        RasterLayout(
-            width=160_216,
-            height=1_000,
-            block_shapes=((1, 160_216),),
-        )
-    )
-
-    assert assessment["eligible"] is False
-    assert assessment["reason_code"] == "blocks_too_large"
-    assert assessment["reason"] == (
-        "Visualization unavailable: this raster needs smaller internal "
-        "blocks. Current internal blocks are 160216 × 1 pixels "
-        "(width × height); each edge must be 1024 pixels or smaller."
-    )
-
-
-@pytest.mark.parametrize("sidecar_suffix", (".ovr", ".aux", ".rrd"))
-def test_large_raster_requires_internal_overviews(
-    sidecar_suffix: str,
-) -> None:
-    """Reject overview pyramids whose sidecar can disappear independently."""
-    assessment = assess_raster_renderability(
-        RasterLayout(
-            width=50_000,
-            height=50_000,
-            data_types=("float32",),
-            block_shapes=((512, 512),),
-            overview_factors=((2, 4, 8, 16, 32),),
-            external_overview_suffix=sidecar_suffix,
-        )
-    )
-
-    assert assessment["eligible"] is False
-    assert assessment["reason_code"] == "internal_overviews_required"
-    assert assessment["overview_storage"] == "external"
-    assert "needs an internal overview pyramid" in assessment["reason"]
 
 
 @pytest.mark.parametrize(

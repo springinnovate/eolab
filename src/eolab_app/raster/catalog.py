@@ -79,36 +79,3 @@ class StacRasterCatalog:
                 "The STAC catalog returned an invalid Item"
             )
         return item
-
-    async def upsert_item(
-        self,
-        request: CatalogRasterRequest,
-        item: dict[str, Any],
-    ) -> None:
-        """Persist one assessed STAC Item through the bulk upsert API.
-
-        Args:
-            request: Validated Collection and Item identity.
-            item: Complete replacement STAC Item.
-
-        Raises:
-            RasterUpstreamError: If the catalog is unavailable or rejects the
-                update.
-        """
-        try:
-            response = await self._catalog_client.post(
-                f"{self._catalog_internal_url}/collections/"
-                f"{request.collection_id}/bulk_items",
-                json={
-                    "method": "upsert",
-                    "items": {request.item_id: item},
-                },
-            )
-        except httpx2.RequestError as error:
-            raise RasterUpstreamError(
-                "The STAC catalog service is unavailable"
-            ) from error
-        if not response.is_success:
-            raise RasterUpstreamError(
-                "The STAC catalog could not save the raster assessment"
-            )

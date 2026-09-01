@@ -17,16 +17,8 @@ from eolab_app.catalog.search_counts import number_matched_is_estimated
 from eolab_app.catalog.stac_api import StacApiWriter
 from eolab_app.diagnostics.service import RenderingDiagnosticsService
 from eolab_app.diagnostics.tracker import GetMapRequestTracker
-from eolab_app.raster.assessment import (
-    RasterAssessmentFinalizer,
-    RasterAssessmentService,
-)
 from eolab_app.raster.catalog import StacRasterCatalog
-from eolab_app.raster.geoserver import (
-    GeoServerRasterPublisher,
-    GeoServerRasterReaderAssessor,
-)
-from eolab_app.raster.detail_preview_service import RasterDetailPreviewService
+from eolab_app.raster.geoserver import GeoServerRasterPublisher
 from eolab_app.raster.pixel_service import RasterPixelService
 from eolab_app.raster.publication import RasterPublicationService
 from eolab_app.raster.source_authorization import (
@@ -139,14 +131,6 @@ def create_app(
         raster_catalog,
         raster_source_resolver,
     )
-    raster_reader_assessor = GeoServerRasterReaderAssessor(
-        geoserver_rest_client,
-        app_global_configuration.geoserver_internal_url,
-    )
-    raster_assessment_finalizer = RasterAssessmentFinalizer(
-        raster_source_resolver,
-        raster_reader_assessor,
-    )
     published_rasters = PublishedRasterRegistry()
     temporary_aoi_service = TemporaryAoiService(
         ttl=timedelta(
@@ -160,12 +144,6 @@ def create_app(
             app_global_configuration.scan_mount_path,
         )
     )
-    detail_preview_service = RasterDetailPreviewService(
-        raster_catalog,
-        raster_source_resolver,
-        app_global_configuration.raster_pixel_read_concurrency,
-        app_global_configuration.raster_statistics_cache_entries,
-    )
     raster_pixel_service = RasterPixelService(
         raster_source_authorizer,
         app_global_configuration.raster_pixel_read_concurrency,
@@ -177,12 +155,6 @@ def create_app(
         temporary_aoi_reader=temporary_aoi_service,
     )
     raster_feature = create_raster_feature(
-        RasterAssessmentService(
-            app_global_configuration.scan_mount_path,
-            raster_catalog,
-            raster_source_resolver,
-            raster_reader_assessor,
-        ),
         RasterPublicationService(
             raster_catalog,
             raster_source_resolver,
@@ -192,7 +164,6 @@ def create_app(
             ),
             published_rasters,
         ),
-        detail_preview_service,
         published_rasters,
     )
     vector_catalog = StacVectorCatalog(
@@ -307,7 +278,6 @@ def create_app(
         app_global_configuration.scan_writer_count,
         app_global_configuration.scan_batch_size,
         item_finalizer=CompositeDatasetItemFinalizer((
-            raster_assessment_finalizer,
             vector_assessment_finalizer,
         )),
         reconciler=MissingItemReconciler(

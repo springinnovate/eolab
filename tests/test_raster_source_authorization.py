@@ -63,22 +63,19 @@ class _Resolver:
 
 
 def _item(signature: RasterSourceIdentity) -> dict[str, Any]:
-    """Build an Item explicitly rejected by the rendering subsystem.
+    """Build an Item containing only neutral source identity.
 
     Args:
         signature: Scanner-owned primary-source identity.
 
     Returns:
-        Item whose source is analyzable despite rendering rejection.
+        Item whose source is analyzable without rendering metadata.
     """
     return {
         "assets": {
             "data": {
-                "eolab:rendering": {
+                "eolab:source": {
                     "source_signature": signature.to_catalog(),
-                    "eligible": False,
-                    "reader_compatible": False,
-                    "reason_code": "geoserver_crs_metadata_incompatible",
                 }
             }
         }
@@ -123,7 +120,7 @@ def test_source_authorization_accepts_legacy_identity_after_remount(
     source_path.write_bytes(b"source")
     signature = source_signature(source_path)
     item = _item(signature)
-    metadata = item["assets"]["data"]["eolab:rendering"]
+    metadata = item["assets"]["data"]["eolab:source"]
     assert isinstance(metadata, dict)
     metadata["source_signature"] = [92, *signature.to_catalog()]
     authorizer = CatalogRasterSourceAuthorizer(
@@ -166,7 +163,7 @@ def test_source_authorization_rejects_missing_and_stale_scan_identity(
 
     missing_signature_item = _item(scanned_signature)
     metadata = missing_signature_item["assets"]["data"][
-        "eolab:rendering"
+        "eolab:source"
     ]
     assert isinstance(metadata, dict)
     metadata.pop("source_signature")

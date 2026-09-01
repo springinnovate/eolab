@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-from dataclasses import replace
 from pathlib import Path
 
 import httpx2
@@ -12,14 +11,9 @@ from eolab_app.raster.errors import RasterConflictError, RasterPublicationError
 from eolab_app.raster.geoserver import (
     GEOSERVER_ERROR_EXCERPT_LIMIT,
     GeoServerRasterPublisher,
-    GeoServerRasterReaderAssessor,
     sanitize_geoserver_error_excerpt,
 )
-from eolab_app.raster.models import (
-    GEOSERVER_READER_CONTRACT,
-    CatalogRasterRequest,
-    RasterReaderAssessment,
-)
+from eolab_app.raster.models import CatalogRasterRequest
 from eolab_app.raster.publication import RasterPublicationService
 from eolab_app.raster.sources import PublishedRasterRegistry, source_signature
 
@@ -28,7 +22,7 @@ RESOURCE_NAME = "geotiff-0123456789abcdef01234567"
 
 
 class _Catalog:
-    """Return one controlled eligible catalog Item.
+    """Return one controlled prepared catalog Item.
 
     Attributes:
         item: Authoritative controlled STAC Item returned by the test port.
@@ -216,13 +210,13 @@ class _GeoServerScenario:
 
 
 def _catalog_item(source_path: Path) -> dict[str, object]:
-    """Build one eligible authoritative Item for service tests.
+    """Build one prepared authoritative Item for service tests.
 
     Args:
         source_path: Mounted raster path represented by the Item.
 
     Returns:
-        Minimal eligible STAC Item accepted by the publication service.
+        Minimal prepared STAC Item accepted by the publication service.
     """
     return {
         "id": RESOURCE_NAME,
@@ -230,14 +224,10 @@ def _catalog_item(source_path: Path) -> dict[str, object]:
         "assets": {
             "data": {
                 "href": source_path.as_uri(),
-                "eolab:rendering": {
-                    "policy": "raster-v3",
-                    "eligible": True,
-                    "reader_contract": GEOSERVER_READER_CONTRACT,
-                    "reader_compatible": True,
-                    "source_signature": (
-                        source_signature(source_path).to_catalog()
-                    ),
+                "eolab:source": {
+                    "source_signature": source_signature(
+                        source_path
+                    ).to_catalog(),
                 },
             }
         },
@@ -315,63 +305,18 @@ def test_publication_coordinates_upstream_contract_and_authorization(
     assert registry.require_current(result.layer_name).source_path == source_path
 
 
-def test_publication_accepts_unchanged_legacy_source_after_remount(
+def test_publication_rejects_a_source_changed_since_discovery(
     tmp_path: Path,
 ) -> None:
-    """Authorize an unchanged legacy assessment after device-number churn.
-
-    This reproduces the production mismatch: the catalog recorded ``st_dev``
-    92, the replacement container observed 88, and every retained identity
-    field remained exact.
+    """Keep stale Catalog spatial metadata from authorizing a replacement.
 
     Args:
         tmp_path: Temporary directory containing the controlled source.
-
-    Returns:
-        None.
     """
     source_path = tmp_path / "raster.tif"
-    source_path.write_bytes(b"raster")
-    current_identity = source_signature(source_path)
+    source_path.write_bytes(b"discovered source")
     item = _catalog_item(source_path)
-    metadata = item["assets"]["data"]["eolab:rendering"]
-    assert isinstance(metadata, dict)
-    metadata["source_signature"] = [92, *current_identity.to_catalog()]
-    publisher = _Publisher()
-    registry = PublishedRasterRegistry()
-    service = RasterPublicationService(
-        _Catalog(item),
-        _Resolver(source_path),
-        publisher,
-        registry,
-        signature_reader=source_signature,
-    )
-
-    result = asyncio.run(service.publish(_catalog_request()))
-
-    assert publisher.calls == [(RESOURCE_NAME, source_path)]
-    assert registry.require_current(result.layer_name).source_signature == (
-        current_identity
-    )
-
-
-def test_publication_distinguishes_invalid_assessment_identity(
-    tmp_path: Path,
-) -> None:
-    """Reject malformed assessment metadata with a specific remediation.
-
-    Args:
-        tmp_path: Temporary directory containing the controlled source.
-
-    Returns:
-        None.
-    """
-    source_path = tmp_path / "raster.tif"
-    source_path.write_bytes(b"raster")
-    item = _catalog_item(source_path)
-    metadata = item["assets"]["data"]["eolab:rendering"]
-    assert isinstance(metadata, dict)
-    metadata["source_signature"] = [1, 2, 3]
+    source_path.write_bytes(b"replacement source with another size")
     publisher = _Publisher()
     service = RasterPublicationService(
         _Catalog(item),
@@ -381,46 +326,7 @@ def test_publication_distinguishes_invalid_assessment_identity(
         signature_reader=source_signature,
     )
 
-    with pytest.raises(RasterConflictError, match="invalid source identity"):
-        asyncio.run(service.publish(_catalog_request()))
-
-    assert publisher.calls == []
-
-
-@pytest.mark.parametrize(
-    "field_name",
-    ("inode", "size_bytes", "modified_ns", "changed_ns"),
-)
-def test_publication_rejects_every_retained_identity_change(
-    field_name: str,
-    tmp_path: Path,
-) -> None:
-    """Reject replacement, size, modification-time, and ctime changes.
-
-    Args:
-        field_name: Canonical identity field changed after assessment.
-        tmp_path: Temporary directory containing the controlled source.
-
-    Returns:
-        None.
-    """
-    source_path = tmp_path / "raster.tif"
-    source_path.write_bytes(b"raster")
-    assessed_identity = source_signature(source_path)
-    changed_identity = replace(
-        assessed_identity,
-        **{field_name: getattr(assessed_identity, field_name) + 1},
-    )
-    publisher = _Publisher()
-    service = RasterPublicationService(
-        _Catalog(_catalog_item(source_path)),
-        _Resolver(source_path),
-        publisher,
-        PublishedRasterRegistry(),
-        signature_reader=lambda _: changed_identity,
-    )
-
-    with pytest.raises(RasterConflictError, match="raster changed"):
+    with pytest.raises(RasterConflictError, match="scan it again"):
         asyncio.run(service.publish(_catalog_request()))
 
     assert publisher.calls == []
@@ -843,61 +749,3 @@ def test_error_excerpt_is_bounded_single_line_and_redacts_secrets() -> None:
     assert "\n" not in excerpt
     assert len(excerpt) <= GEOSERVER_ERROR_EXCERPT_LIMIT + 1
     assert excerpt.endswith("…")
-
-
-def test_geoserver_reader_assessor_owns_read_only_response_contract(
-    tmp_path: Path,
-) -> None:
-    """Validate the stable reader result without publication operations.
-
-    Args:
-        tmp_path: Temporary mounted source directory.
-
-    Returns:
-        None.
-    """
-    source_path = tmp_path / "raster.tif"
-    source_path.write_bytes(b"raster")
-    requests: list[httpx2.Request] = []
-
-    def response(request: httpx2.Request) -> httpx2.Response:
-        """Return one controlled incompatible reader assessment.
-
-        Args:
-            request: Captured internal GeoServer request.
-
-        Returns:
-            Stable incompatible reader response.
-        """
-        requests.append(request)
-        return httpx2.Response(200, json={
-            "contract": GEOSERVER_READER_CONTRACT,
-            "compatible": False,
-            "reasonCode": "geoserver_crs_metadata_incompatible",
-        })
-
-    async def assess() -> RasterReaderAssessment:
-        """Run the asynchronous GeoServer reader adapter.
-
-        Returns:
-            Validated reader assessment.
-        """
-        async with httpx2.AsyncClient(
-            transport=httpx2.MockTransport(response)
-        ) as client:
-            adapter = GeoServerRasterReaderAssessor(
-                client,
-                "http://geoserver:8080/geoserver",
-            )
-            return await adapter.assess(source_path)
-
-    result = asyncio.run(assess())
-
-    assert result.compatible is False
-    assert result.reason_code == "geoserver_crs_metadata_incompatible"
-    assert len(requests) == 1
-    assert requests[0].method == "POST"
-    assert requests[0].url.path == (
-        "/geoserver/rest/eolab/reader-assessments"
-    )
-    assert requests[0].content.decode() == source_path.as_uri()

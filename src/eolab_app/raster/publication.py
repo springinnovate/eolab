@@ -4,15 +4,11 @@ import asyncio
 from collections.abc import Callable
 from pathlib import Path
 
-from eolab_app.raster.eligibility import (
-    RENDERING_METADATA_KEY,
-    RENDERING_POLICY,
-)
+from eolab_app.raster.catalog_metadata import cataloged_source_signature
 from eolab_app.raster.errors import RasterConflictError
 from eolab_app.raster.geoserver import GEOSERVER_WORKSPACE_NAME
 from eolab_app.raster.models import (
     CatalogRasterRequest,
-    GEOSERVER_READER_CONTRACT,
     PublishedRaster,
 )
 from eolab_app.raster.ports import RasterCatalog, RasterPublisher
@@ -26,7 +22,7 @@ from eolab_app.raster.sources import (
 
 
 class RasterPublicationService:
-    """Publish eligible catalog rasters and authorize their public layers."""
+    """Publish prepared catalog rasters and authorize their public layers."""
 
     def __init__(
         self,
@@ -56,7 +52,7 @@ class RasterPublicationService:
         self,
         request: CatalogRasterRequest,
     ) -> PublishedRaster:
-        """Resolve and idempotently publish one approved catalog GeoTIFF.
+        """Resolve and idempotently publish one prepared catalog GeoTIFF.
 
         Args:
             request: Validated Collection and Item identity.
@@ -66,34 +62,13 @@ class RasterPublicationService:
 
         Raises:
             RasterFeatureError: If the Item, Asset, or rendering adapter fails.
-            RasterConflictError: If the source is ineligible, unreadable, or
-                changes during publication.
+            RasterConflictError: If the source is unreadable or changes during
+                publication.
         """
         async with self._publish_lock:
             item = await self._catalog.get_item(request)
             source_path = self._source_resolver.resolve(item)
-            rendering_metadata = item["assets"]["data"].get(
-                RENDERING_METADATA_KEY
-            )
-            if (
-                rendering_metadata is None
-                or rendering_metadata.get("policy") != RENDERING_POLICY
-            ):
-                raise RasterConflictError(
-                    "Visualization unavailable: assess this raster first."
-                )
-            if not rendering_metadata["eligible"]:
-                raise RasterConflictError(rendering_metadata["reason"])
-            if (
-                rendering_metadata.get("reader_contract")
-                != GEOSERVER_READER_CONTRACT
-                or rendering_metadata.get("reader_compatible") is not True
-            ):
-                raise RasterConflictError(
-                    "Visualization unavailable: reassess this raster for the "
-                    "current GeoServer reader."
-                )
-
+            catalog_signature = cataloged_source_signature(item)
             try:
                 inspected_signature = await asyncio.to_thread(
                     self._signature_reader,
@@ -104,22 +79,11 @@ class RasterPublicationService:
                     "Visualization unavailable: the raster metadata can no "
                     "longer be read."
                 ) from error
-            try:
-                assessed_identity = RasterSourceIdentity.from_catalog(
-                    rendering_metadata.get("source_signature")
-                )
-            except ValueError as error:
+            if inspected_signature != catalog_signature:
                 raise RasterConflictError(
-                    "Visualization unavailable: the raster assessment has "
-                    "invalid source identity metadata; reassess it before "
+                    "The cataloged raster changed; scan it again before "
                     "publication."
-                ) from error
-            if inspected_signature != assessed_identity:
-                raise RasterConflictError(
-                    "Visualization unavailable: the raster changed; reassess "
-                    "it before publication."
                 )
-
             resource_name = request.item_id
             await self._publisher.publish(resource_name, source_path)
             layer_name = f"{GEOSERVER_WORKSPACE_NAME}:{resource_name}"
