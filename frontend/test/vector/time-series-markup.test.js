@@ -35,5 +35,9 @@ test("vector time-series controls and accessible outputs are present", () => {
   assert.match(MARKUP, /<label for="vector-time-series-direction">/);
   assert.match(MARKUP, /id="vector-time-series-chart"[^>]+role="img"/);
   assert.match(STYLESHEET, /#vector-time-series\[hidden\]/);
+  assert.match(
+    STYLESHEET,
+    /\.vector-time-series-chart\[hidden\]\s*\{\s*display:\s*none;/,
+  );
   assert.match(STYLESHEET, /\.vector-time-series-axis/);
 });

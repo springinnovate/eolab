@@ -3526,6 +3526,7 @@ button.raster-histogram-summary:hover,
 .vector-time-series-controls select { min-width: 0; max-width: 100%; }
 .vector-time-series-status { margin: 12px 0 4px; color: var(--text-2); font-size: 0.75rem; }
 .vector-time-series-chart { display: block; width: 100%; height: auto; min-height: 250px; }
+.vector-time-series-chart[hidden] { display: none; }
 .vector-time-series-axis { stroke: var(--text-2); stroke-width: 1.2; }
 .vector-time-series-grid { stroke: var(--border-1); stroke-width: 1; }
 .vector-time-series-line { fill: none; stroke: var(--brand); stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
