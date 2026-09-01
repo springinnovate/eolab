@@ -6,7 +6,6 @@ COPY geoserver/reader-assessment/pom.xml ./pom.xml
 RUN mvn --batch-mode --no-transfer-progress dependency:go-offline
 
 COPY geoserver/reader-assessment/src/ ./src/
-COPY tests/fixtures/rasters/ /tests/fixtures/rasters/
 COPY tests/fixtures/vectors/ /tests/fixtures/vectors/
 RUN mvn --batch-mode --no-transfer-progress package
 

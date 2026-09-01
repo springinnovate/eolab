@@ -12,7 +12,6 @@ const ANALYSIS_MODULES = [
 const RENDERING_IMPORTS = [
     "../map-layers/",
     "./api.js",
-    "./detail-preview",
     "./leaflet.js",
     "./wms.js",
 ];

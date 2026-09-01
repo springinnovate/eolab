@@ -219,7 +219,6 @@ test("Catalog owns discovery, inspection, and its explicit layer action only", (
         "catalog-layer-status",
         "map-layer-rendering-announcement",
         "raster-layer-stack",
-        "raster-detail-preview-controls",
         "raster-style-controls",
         "raster-histogram",
         "temporary-aoi",
@@ -249,7 +248,6 @@ test("Map layers owns compact rows; one floating editor owns all styling", () =>
         assert.doesNotMatch(rendering.source, new RegExp(`id="${id}"`));
     }
     assert.match(rendering.source, /id="raster-layer-stack"/);
-    assert.match(rendering.source, /id="raster-detail-preview-controls"/);
     assert.doesNotMatch(MARKUP, /id="open-histogram-map-layers"/);
     assert.match(STYLESHEET, /#map-inspection\s*\{[^}]*position:\s*fixed/s);
     assert.match(STYLESHEET, /\.map-inspection-panels\s*\{[^}]*max-height:[^}]*overflow-y:\s*auto/s);
@@ -281,14 +279,10 @@ test("Map layers has one heading and collapse control with no nested list widget
 });
 
 
-test("inspector visualization and previews can reveal Map layers through composition", () => {
+test("inspector publication can reveal Map layers through composition", () => {
     assert.match(
         COMPOSITION_SOURCE,
         /setCatalogMapActionFeedback\(item, successStatus\);\s*if \(revealMapLayers && catalogItemsMatch\(catalogState.selectedItem, item\)\) \{\s*onRenderingWorkspaceRequested\(\);/
-    );
-    assert.match(
-        COMPOSITION_SOURCE,
-        /preview === null[\s\S]*onRenderingWorkspaceRequested\(\);[\s\S]*catch \(previewError\)/
     );
     assert.match(
         COMPOSITION_SOURCE,
@@ -366,7 +360,6 @@ test("Sampling keeps area controls and AOI; map exploration owns histogram resul
         "raster-layer-stack",
         "raster-appearance-controls",
         "raster-percentile-controls",
-        "raster-detail-preview-controls",
     ]) {
         assert.doesNotMatch(
             analysisRegion.source,
@@ -571,7 +564,6 @@ test("semantic regions preserve one DOM instance of every owned control", () => 
         "raster-appearance-controls",
         "raster-appearance-layer",
         "raster-percentile-controls",
-        "raster-detail-preview-controls",
         "toggle-raster-interpretation",
         "eomap-raster-interpretation-region",
         "raster-style-controls",

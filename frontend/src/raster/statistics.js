@@ -327,7 +327,7 @@ export function rasterStatisticsMatchesSelection(
  *
  * @param {Object} statistics Validated raster statistics.
  * @param {number} percentile Percentile from 0 through 100.
- * @return {number} Approximate sampled raster value.
+ * @return {number} Approximate value used by histogram analysis.
  * @throws {Error} If percentile is nonfinite or outside 0-100.
  */
 export function estimateRasterHistogramPercentile(statistics, percentile) {

@@ -2,13 +2,12 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
-  catalogItemsMatch, CatalogMapActionRegistry, CatalogVisualizationAssessmentCache,
+  catalogItemsMatch, CatalogMapActionRegistry, CatalogVectorAssessmentCache,
 } from "../src/catalog-map-actions.js";
 import { getCatalogItemKey } from "../src/catalog-item-identity.js";
 import { getCatalogItemMapBounds } from "../src/map.js";
 import {
-  formatCatalogVisualizationReason, formatCatalogRasterStatus,
-  getCatalogVisualization, supportsRasterDetailOnlyPreview,
+  formatCatalogVisualizationReason, getCatalogVisualization,
 } from "../src/catalog.js";
 
 const SOURCE = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
@@ -23,28 +22,29 @@ function sourceBetween(startMarker, endMarker) {
 }
 
 const ACTION_SOURCE = [
-  sourceBetween("function refreshCatalogMapAction()", "function renderRasterDetailPreviewResolution("),
-  sourceBetween("function beginCatalogMapAction(", "let rasterVisualization ="),
+  sourceBetween("function refreshCatalogMapAction()", "let rasterVisualization ="),
   sourceBetween("function updateCatalogMapAction(item)", "function clearCatalogSelection()"),
   sourceBetween("async function toggleCatalogLayer(", 'catalogLayerToggle.addEventListener('),
 ].join("\n");
 
-function raster(id, eligible = true, reason = null) {
+function raster(id) {
   return {
     collection: "eolab-mounted-geotiffs", id,
     properties: { title: `Mounted/Model_outputs/${id}.tif` },
-    assets: { data: { "eolab:rendering": {
-      policy: "raster-v3", eligible, reason, source_signature: [1, 2, 3, 4, 5],
+    assets: { data: { "eolab:source": {
+      source_signature: [1, 2, 3, 4, 5],
     } } },
   };
 }
 
-function vector(id) {
+function vector(id, eligible = true, reason = null) {
   return {
     collection: "eolab-mounted-vectors", id, assets: { data: {} },
     properties: {
       title: `${id}.gpkg`,
-      "eolab:vector_rendering": { policy: "vector-v1", eligible: true },
+      "eolab:vector_rendering": {
+        policy: "vector-v1", eligible, reason,
+      },
     },
   };
 }
@@ -56,12 +56,12 @@ function deferred() {
 }
 
 /** Execute real refresh, pending registry, feedback, and Add flow. */
-function harness({ selectedItem = null, assess = async (item) => item,
+function harness({ selectedItem = null, prepare = async (item) => item,
   show = async () => ({ layerName: "eolab:test" }), retained = [] } = {}) {
   const calls = [];
   const state = {
     selectedItem, pendingMapActions: new CatalogMapActionRegistry(),
-    visualizationAssessments: new CatalogVisualizationAssessmentCache(),
+    vectorAssessments: new CatalogVectorAssessmentCache(),
     collectionsDocument: { collections: [] },
     resultViews: new Map(), mapActionFeedback: new Map(),
   };
@@ -79,7 +79,7 @@ function harness({ selectedItem = null, assess = async (item) => item,
     noun: (item) => getCatalogVisualization(item).kind === "raster" ? "raster" : "vector layer",
     contains: (item) => retainedItems.has(getCatalogItemKey(item)),
     remove(item) { calls.push(["remove", item.id]); retainedItems.delete(getCatalogItemKey(item)); },
-    async assess(item) { calls.push(["assess", item.id]); return assess(item); },
+    async prepare(item) { calls.push(["prepare", item.id]); return prepare(item); },
     async show(item) {
       calls.push(["show", item.id]);
       const publication = await show(item);
@@ -90,15 +90,10 @@ function harness({ selectedItem = null, assess = async (item) => item,
   const dependencies = {
     catalogState: state, catalogVisualization: visualization,
     rasterVisualization: {
-      removeSampled: (item) => calls.push(["remove-sampled", item.id]),
       activateAnalysis: (item) => calls.push(["activate-analysis", item.id]),
     },
-    rasterDetailPreview: {
-      contains: () => false, getState: () => null,
-      remove: (item) => calls.push(["remove-preview", item.id]),
-    },
     getCatalogItemKey, catalogItemsMatch, getCatalogVisualization,
-    formatCatalogVisualizationReason, formatCatalogRasterStatus, supportsRasterDetailOnlyPreview,
+    formatCatalogVisualizationReason,
     renderCatalogItemInspector: (item) => calls.push(["render-inspector", item.id]),
     appGlobalConfiguration: { scanDisplayPathPrefix: "Mounted" },
     catalogLayerToggle: layerButton, catalogMapActionStatus: actionStatus,
@@ -107,8 +102,6 @@ function harness({ selectedItem = null, assess = async (item) => item,
     leafletMap: { fitBounds: (bounds, options) => calls.push(["zoom", bounds, options]) },
     layerStyleEditor: { open: (key) => calls.push(["style", key]) },
     catalogLayerStatus: status, catalogMapActionsElement: actionContainer, catalogOnMap: onMap,
-    rasterDetailPreviewControls: {}, showRasterDetailPreview: {}, removeRasterDetailPreview: {},
-    renderRasterDetailPreviewResolution() {},
     onRenderingWorkspaceRequested: () => calls.push(["open-rendering"]),
   };
   const actions = new Function(...Object.keys(dependencies), `${ACTION_SOURCE}
@@ -130,12 +123,11 @@ function harness({ selectedItem = null, assess = async (item) => item,
   };
 }
 
-test("assessment stays internal; inspector and map feedback retain live regions", () => {
+test("catalog publication and map feedback retain live regions", () => {
   assert.match(MARKUP, /id="toggle-catalog-layer"[\s\S]*?>\s*Add to map\s*</);
   assert.match(MARKUP, /id="catalog-on-map" hidden[\s\S]*?On map/);
   assert.match(MARKUP, /id="catalog-map-action-status"[\s\S]*?role="status"[\s\S]*?aria-live="polite"/);
   assert.match(MARKUP, /id="map-layer-rendering-announcement"[\s\S]*?role="status"/);
-  assert.match(MARKUP, /id="show-raster-detail-preview"[\s\S]*?>\s*Use low-resolution rendering\s*</);
   assert.doesNotMatch(MARKUP + SOURCE, /Assess for visualization|Reassess visualization|Check for full visualization/);
   const tileFailure = sourceBetween("function reportMapTileError(", "function refreshCatalogMapAction()");
   assert.match(tileFailure, /catalogLayerStatus\.textContent = message;\s*mapLayerRenderingAnnouncement\.textContent = message;/);
@@ -200,7 +192,7 @@ test("Zoom to rejects missing bounds, pending actions, and removed or unretained
 
 test("Style is absent before adding and after removal, and stale or busy requests do nothing", async () => {
   const item = raster("style-lifecycle"), completion = deferred();
-  const h = harness({ selectedItem: item, assess: () => completion.promise });
+  const h = harness({ selectedItem: item, prepare: () => completion.promise });
   assert.equal(h.styleButton.hidden, true);
   h.style(item);
   h.style(null);
@@ -208,7 +200,7 @@ test("Style is absent before adding and after removal, and stale or busy request
   const attempt = h.run();
   assert.equal(h.styleButton.disabled, true);
   h.style(item);
-  assert.deepEqual(h.calls, [["assess", item.id]]);
+  assert.deepEqual(h.calls, [["prepare", item.id]]);
   completion.resolve(item);
   await attempt;
   assert.equal(h.styleButton.hidden, false);
@@ -227,13 +219,13 @@ test("Style is absent before adding and after removal, and stale or busy request
 
 test("pending row Add needs no selection, disables only its Item, and prevents duplicates", async () => {
   const item = raster("pending"), completion = deferred();
-  const h = harness({ assess: () => completion.promise });
+  const h = harness({ prepare: () => completion.promise });
   const row = h.addRow(item), other = h.addRow(vector("other"));
   const attempt = h.run(item);
   await h.run(item);
   assert.equal(row.state.pendingAction.buttonText, "Adding to map...");
   assert.equal(other.state.pendingAction, null);
-  assert.deepEqual(h.calls, [["assess", "pending"]]);
+  assert.deepEqual(h.calls, [["prepare", "pending"]]);
   completion.resolve(item);
   await attempt;
   assert.equal(row.state.pendingAction, null);
@@ -245,14 +237,14 @@ test("pending row Add needs no selection, disables only its Item, and prevents d
 
 test("selected Item mirrors pending and success states", async () => {
   const item = raster("eligible"), completion = deferred();
-  const h = harness({ selectedItem: item, assess: () => completion.promise });
+  const h = harness({ selectedItem: item, prepare: () => completion.promise });
   const attempt = h.run();
   assert.equal(h.layerButton.disabled, true);
   assert.equal(h.layerButton.textContent, "Adding to map...");
-  assert.equal(h.actionStatus.textContent, "Checking whether this raster can be rendered.");
+  assert.equal(h.actionStatus.textContent, "Publishing this prepared raster.");
   completion.resolve(item);
   await attempt;
-  assert.ok(h.calls.findIndex(([call]) => call === "assess") < h.calls.findIndex(([call]) => call === "show"));
+  assert.ok(h.calls.findIndex(([call]) => call === "prepare") < h.calls.findIndex(([call]) => call === "show"));
   assert.equal(h.layerButton.textContent, "Remove from map");
   assert.equal(h.layerButton.classList.contains("catalog-add-action"), false);
   assert.equal(h.onMap.hidden, false);
@@ -273,7 +265,7 @@ test("row removal skips assessment and updates row and matching inspector", asyn
   const item = raster("retained");
   const h = harness({ selectedItem: item, retained: [item] });
   await h.run();
-  assert.equal(h.calls.some(([call]) => call === "assess" || call === "show"), false);
+  assert.equal(h.calls.some(([call]) => call === "prepare" || call === "show"), false);
   assert.equal(h.layerButton.textContent, "Add to map");
   assert.equal(h.layerButton.classList.contains("catalog-add-action"), true);
   assert.equal(h.onMap.hidden, true);
@@ -281,21 +273,27 @@ test("row removal skips assessment and updates row and matching inspector", asyn
   assert.equal(h.actionStatus.textContent, "Raster removed from the map.");
 });
 
-test("ineligible assessment keeps its contextual reason at the row and never publishes", async () => {
-  const reason = "Visualization unavailable: this raster needs smaller internal blocks.";
-  const h = harness({ selectedItem: raster("ineligible"), assess: async () => raster("ineligible", false, reason) });
+test("ineligible vector assessment keeps its contextual reason and never publishes", async () => {
+  const reason = "Visualization unavailable: this vector cannot be opened.";
+  const h = harness({
+    selectedItem: vector("ineligible"),
+    prepare: async () => vector("ineligible", false, reason),
+  });
   await h.run();
   assert.equal(h.calls.some(([call]) => call === "show"), false);
   assert.equal(h.row.state.feedback.isError, true);
-  assert.equal(h.row.state.feedback.message, "Visualization for ineligible.tif unavailable: this raster needs smaller internal blocks.");
+  assert.equal(
+    h.row.state.feedback.message,
+    "Visualization for ineligible.gpkg unavailable: this vector cannot be opened.",
+  );
   assert.equal(h.actionStatus.textContent, h.row.state.feedback.message);
   assert.equal(h.layerButton.disabled, false);
   assert.equal(h.layerButton.textContent, "Add to map");
   assert.equal(h.row.state.pendingAction, null);
 });
 
-test("assessment and publication errors are local and retryable", async () => {
-  for (const boundary of ["assess", "show"]) {
+test("preparation and publication errors are local and retryable", async () => {
+  for (const boundary of ["prepare", "show"]) {
     const h = harness({ [boundary]: async () => { throw new Error("Service unavailable"); } });
     const item = raster(boundary), row = h.addRow(item), other = h.addRow(vector("unrelated"));
     await h.run(item);
@@ -310,9 +308,9 @@ test("assessment and publication errors are local and retryable", async () => {
   }
 });
 
-test("selection changes during assessment do not cancel Add or overwrite another inspector", async () => {
+test("selection changes during preparation do not cancel Add or overwrite another inspector", async () => {
   const first = raster("first"), second = raster("second"), completion = deferred();
-  const h = harness({ selectedItem: first, assess: () => completion.promise });
+  const h = harness({ selectedItem: first, prepare: () => completion.promise });
   const attempt = h.run();
   h.state.selectedItem = second;
   h.refresh();
@@ -328,7 +326,7 @@ test("selection changes during assessment do not cancel Add or overwrite another
 test("concurrent raster and vector Adds use collection plus Item ID", async () => {
   const first = raster("same-id"), second = vector("same-id");
   const a = deferred(), b = deferred();
-  const h = harness({ assess: (item) => item.collection === first.collection ? a.promise : b.promise });
+  const h = harness({ prepare: (item) => item.collection === first.collection ? a.promise : b.promise });
   const rowA = h.addRow(first), rowB = h.addRow(second);
   const addA = h.run(first), addB = h.run(second);
   b.resolve(second);
@@ -357,7 +355,7 @@ test("a late inspector publication does not reopen Map layers after browsing els
 
 test("replacement search rows inherit in-flight actions and completion by Item identity", async () => {
   const item = raster("refreshed"), completion = deferred();
-  const h = harness({ assess: () => completion.promise });
+  const h = harness({ prepare: () => completion.promise });
   h.addRow(item);
   const attempt = h.run(item);
   h.state.resultViews.clear();

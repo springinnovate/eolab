@@ -1,9 +1,9 @@
 # Bivariate raster comparison
 
-Bivariate mode compares the two most recently selected distinct, continuous
-one-band catalog rasters. The most recent selection starts as X and the prior
-selection starts as Y. Catalog identities—not WMS publications, layer
-visibility, or renderer state—authorize the paired analysis. The browser
+Bivariate mode compares the top two visible, continuous one-band catalog
+rasters. The top raster starts as X and the next visible raster starts as Y.
+Catalog identities—not WMS publications or renderer state—authorize the paired
+analysis. The browser
 composition root coordinates catalog selection, optional raster rendering,
 styling, paired analysis, and controls. Those sibling components do not import
 or use one another's implementation state.
@@ -17,9 +17,9 @@ neither workspace component imports or controls the other.
 **Swap X/Y** reverses both roles and requests a new result because X owns the
 reference grid. Both role labels and the two-dimensional legend name the
 raster basenames and ranges. Selecting a third catalog raster updates the
-available pair. Hiding a map layer, losing WMS tiles, removing a publication,
-or using detail-only rendering changes only the optional map presentation; the
-catalog pair and its pixel/statistics analysis remain available. Exiting
+available pair. Losing WMS tiles changes only the optional map presentation;
+the catalog pair and its pixel/statistics analysis remain available. Hiding,
+removing, or reordering a pair member selects the current top visible pair. Exiting
 restores every retained WMS layer's ordinary style and opacity without another
 publication request.
 

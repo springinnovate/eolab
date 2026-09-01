@@ -15,7 +15,6 @@ import {
   createDebouncedAction,
   findPaginationLink,
   formatCatalogItemCount,
-  formatCatalogRasterStatus,
   formatCatalogVisualizationReason,
   formatScanReconciliation,
   formatScanProgressCounts,
@@ -39,22 +38,10 @@ const expectedSubstringProperties = [
 const cogMediaType =
   "image/tiff; application=geotiff; profile=cloud-optimized";
 const viewableFilter = {
-  op: "and",
+  op: "=",
   args: [
-    {
-      op: "=",
-      args: [
-        { property: "assets.data.eolab:rendering.policy" },
-        "raster-v3",
-      ],
-    },
-    {
-      op: "=",
-      args: [
-        { property: "assets.data.eolab:rendering.eligible" },
-        true,
-      ],
-    },
+    { property: "collection" },
+    "eolab-mounted-geotiffs",
   ],
 };
 
@@ -202,7 +189,7 @@ test("buildCatalogSearch returns only currently viewable rasters", () => {
               cogMediaType,
             ],
           },
-          ...viewableFilter.args,
+          viewableFilter,
         ],
       },
       datetime: "2020-01-01T00:00:00Z/2020-03-31T23:59:59.999999Z",
@@ -502,7 +489,7 @@ test("CatalogSearchClient sends the parsed COG filter", async () => {
   });
 });
 
-test("CatalogSearchClient sends the current viewable assessment filter", async () => {
+test("CatalogSearchClient limits viewable results to mounted rasters", async () => {
   let capturedRequest;
   const client = new CatalogSearchClient("/stac", async (url, options) => {
     capturedRequest = { url, options };
@@ -1001,16 +988,6 @@ test("CatalogResultStream ignores a page from a superseded search", async () => 
 });
 
 test("buildCatalogItemDetails presents scanned GeoTIFF metadata", () => {
-  const renderingMetadata = {
-    policy: "raster-v3",
-    eligible: true,
-    bounded_blocks: true,
-    block_shapes: [[256, 256]],
-    overview_factors: [[2, 4]],
-    overview_storage: "internal",
-    compression: "DEFLATE",
-    estimated_uncompressed_bytes: 12 * 1024 * 1024,
-  };
   const inspector = buildCatalogItemDetails(
     {
       id: "stable-item-id",
@@ -1033,7 +1010,6 @@ test("buildCatalogItemDetails presents scanned GeoTIFF metadata", () => {
           updated: "2025-02-11T17:31:52Z",
           "file:size": 2048,
           "raster:bands": [{ data_type: "uint8", nodata: 0 }],
-          "eolab:rendering": renderingMetadata,
         },
       },
     },
@@ -1076,14 +1052,6 @@ test("buildCatalogItemDetails presents scanned GeoTIFF metadata", () => {
         { label: "File modified", value: "2025-02-11T17:31:52Z" },
         { label: "File size", value: "2 KiB" },
         { label: "Storage profile", value: "Cloud Optimized GeoTIFF" },
-        { label: "Block shapes", value: "256 × 256 pixels" },
-        { label: "Overview storage", value: "Internal" },
-        { label: "Overview factors", value: "Band 1: 2×, 4×" },
-        { label: "Compression", value: "DEFLATE" },
-        {
-          label: "Estimated full-resolution pixel data",
-          value: "12 MiB",
-        },
       ],
       bands: [
         {
@@ -1099,23 +1067,13 @@ test("buildCatalogItemDetails presents scanned GeoTIFF metadata", () => {
   assert.deepEqual(inspector.fields, []);
 });
 
-test("getRasterVisualization distinguishes unassessed and non-raster Items", () => {
-  const legacyRaster = {
-    collection: "eolab-mounted-geotiffs",
-    assets: { data: {} },
-  };
-
-  assert.equal(getRasterVisualization(legacyRaster), undefined);
-  assert.equal(
+test("getRasterVisualization classifies every mounted GeoTIFF as prepared", () => {
+  assert.deepEqual(
     getRasterVisualization({
       collection: "eolab-mounted-geotiffs",
-      assets: {
-        data: {
-          "eolab:rendering": { policy: "raster-v1", eligible: false },
-        },
-      },
+      assets: { data: {} },
     }),
-    undefined,
+    {},
   );
   assert.equal(
     getRasterVisualization({
@@ -1126,48 +1084,24 @@ test("getRasterVisualization distinguishes unassessed and non-raster Items", () 
   );
 });
 
-test("getRasterVisualization returns the scanner decision", () => {
-  const renderingMetadata = {
-    policy: "raster-v3",
-    eligible: false,
-    reason:
-      "Visualization unavailable: this raster needs smaller internal blocks.",
-  };
-
-  assert.equal(
-    getRasterVisualization({
-      collection: "eolab-mounted-geotiffs",
-      assets: { data: { "eolab:rendering": renderingMetadata } },
-    }),
-    renderingMetadata,
-  );
-});
-
-test("Catalog visualization reasons name the file and oversized blocks", () => {
+test("Catalog visualization reasons name the selected dataset", () => {
   const item = {
-    id: "geotiff-stable-id",
-    properties: { title: "Model Outputs/barley_N_increase.tif" },
+    id: "vector-stable-id",
+    properties: { title: "Vectors/habitat.gpkg" },
     assets: {
       data: {
-        title: "Model Outputs/barley_N_increase.tif",
+        title: "Vectors/habitat.gpkg",
       },
     },
   };
-  const renderingMetadata = {
-    reason_code: "blocks_too_large",
-    reason:
-      "Visualization unavailable: this raster needs smaller internal blocks. " +
-      "Current internal blocks are 160216 × 1 pixels (width × height); each " +
-      "edge must be 1024 pixels or smaller.",
-    block_shapes: [[1, 160216], [1, 160216]],
-  };
 
   assert.equal(
-    formatCatalogVisualizationReason(item, renderingMetadata.reason),
-    "Visualization for barley_N_increase.tif unavailable: this raster " +
-      "needs smaller internal blocks. Current internal blocks are " +
-      "160216 × 1 pixels (width × height); each edge must be 1024 pixels " +
-      "or smaller.",
+    formatCatalogVisualizationReason(
+      item,
+      "Visualization unavailable: the deployed reader rejected this layer.",
+    ),
+    "Visualization for habitat.gpkg unavailable: the deployed reader " +
+      "rejected this layer.",
   );
 });
 
@@ -1176,51 +1110,30 @@ test("Catalog visualization reasons use safe fallbacks without invented detail",
     formatCatalogVisualizationReason(
       {
         id: "safe-item-id",
-        properties: { title: "nested\\grassland_c_2022.tif" },
+        properties: { title: "nested\\roads.geojson" },
         assets: { data: {} },
       },
-      "Visualization unavailable: this raster needs an internal overview pyramid.",
+      "Visualization unavailable: this vector format is not supported.",
     ),
-    "Visualization for grassland_c_2022.tif unavailable: this raster needs " +
-      "an internal overview pyramid.",
+    "Visualization for roads.geojson unavailable: this vector format is " +
+      "not supported.",
   );
   assert.equal(formatCatalogVisualizationReason(null, undefined), "");
   assert.equal(
     formatCatalogVisualizationReason(
-      { properties: { title: "ignored.tif" } },
+      { properties: { title: "ignored.gpkg" } },
       "Rendering request failed (404)",
     ),
     "Rendering request failed (404)",
   );
   const contextualReason =
-    "Visualization for grassland_c_2022.tif unavailable: reader failed.";
+    "Visualization for roads.geojson unavailable: reader failed.";
   assert.equal(
     formatCatalogVisualizationReason(
-      { properties: { title: "grassland_c_2022.tif" } },
+      { properties: { title: "roads.geojson" } },
       contextualReason,
     ),
     contextualReason,
-  );
-});
-
-test("Catalog raster status explains the low-resolution fallback", () => {
-  const rejection =
-    "Visualization unavailable: this raster needs an internal overview " +
-    "pyramid beginning at 2x without skipped levels.";
-
-  assert.equal(
-    formatCatalogRasterStatus(rejection, false, true, false),
-    rejection +
-      " Standard whole-raster rendering is unavailable. Use low-resolution " +
-      "rendering to show a fixed 127-longest-edge center sample for broad " +
-      "views; close views automatically use exact bounded source detail.",
-  );
-  assert.equal(
-    formatCatalogRasterStatus(rejection, false, true, true),
-    rejection +
-      " Low-resolution rendering active — not a whole-raster rendering. " +
-      "The orange dashed outline is the raster extent; zooming requests a " +
-      "bounded current-view layer.",
   );
 });
 

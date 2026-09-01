@@ -66,7 +66,8 @@ class RasterSourceIdentity:
 
         Four-field lists are the canonical representation. Five-field legacy
         lists are accepted by deliberately discarding their leading device
-        number; this preserves valid assessments across remounts without
+        number; this preserves valid source authorizations across remounts
+        without
         rewriting catalog metadata.
 
         Args:

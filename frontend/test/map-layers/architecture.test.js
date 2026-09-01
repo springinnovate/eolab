@@ -31,22 +31,6 @@ test("map-layer modules depend only on peers and Catalog identity", async () => 
     }
 });
 
-test("raster detail preview remains independent from map layers", async () => {
-    const detailPreviewSource = await readFile(
-        new URL(
-            "../../src/raster/detail-preview-controller.js",
-            import.meta.url,
-        ),
-        "utf8",
-    );
-
-    assert.match(
-        detailPreviewSource,
-        /from\s+["']\.\.\/catalog-item-identity\.js["']/,
-    );
-    assert.doesNotMatch(detailPreviewSource, /\.\.\/map-layers\//);
-});
-
 test("composition owns the controller and raster consumes it", async () => {
     const compositionSource = await readFile(
         new URL("../../src/main.js", import.meta.url),
@@ -61,4 +45,29 @@ test("composition owns the controller and raster consumes it", async () => {
     assert.match(compositionSource, /initializeRasterViewer[\s\S]+mapLayerController/);
     assert.doesNotMatch(rasterSource, /new MapLayerStack\(/);
     assert.doesNotMatch(rasterSource, /new LeafletLayerSet\(/);
+});
+
+test("composition has no approximate raster view or preflight edge", async () => {
+    const compositionSource = await readFile(
+        new URL("../../src/main.js", import.meta.url),
+        "utf8",
+    );
+    const removedModules = [
+        "detail-preview-controller.js",
+        "detail-preview-image.js",
+        "detail-preview-leaflet.js",
+        "detail-preview-status.js",
+        "detail-preview-viewport.js",
+    ];
+
+    for (const moduleName of removedModules) {
+        await assert.rejects(
+            readFile(
+                new URL(`../../src/raster/${moduleName}`, import.meta.url),
+                "utf8",
+            ),
+            (error) => error.code === "ENOENT",
+        );
+    }
+    assert.doesNotMatch(compositionSource, /detail-preview|assessCatalogRaster/);
 });

@@ -30,12 +30,6 @@
     </dependency>
     <dependency>
       <groupId>org.geotools</groupId>
-      <artifactId>gt-geotiff</artifactId>
-      <version>35.1</version>
-      <scope>provided</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.geotools</groupId>
       <artifactId>gt-shapefile</artifactId>
       <version>35.1</version>
       <scope>test</scope>

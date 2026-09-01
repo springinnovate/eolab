@@ -14,7 +14,6 @@ from eolab_app.raster.catalog_contract import (
 from eolab_app.raster.source_identity import RasterSourceIdentity
 
 
-GEOSERVER_READER_CONTRACT = "geoserver-3.0.1-geotools-35.1-geotiff-v1"
 CanonicalWgs84Bounds = tuple[float, float, float, float]
 RasterStatisticsCacheKey = tuple[
     str,
@@ -24,38 +23,10 @@ RasterStatisticsCacheKey = tuple[
     tuple[object, ...],
     tuple[int, ...],
 ]
-RasterDetailPreviewScope = Literal[
-    "rasterExtent",
-    "currentView",
-]
-RasterDetailPreviewRendering = Literal[
-    "sampleGrid",
-    "exactSourceWindow",
-]
-# Projection roundoff allowance; far below a displayable map distance.
-RASTER_DETAIL_PREVIEW_BOUNDS_TOLERANCE = 1e-9
-# Fixed representation limits repeated in the public response contract. These
-# names keep model validation readable without importing reader modules into
-# the transport model boundary.
-EXACT_DETAIL_MAX_SOURCE_BLOCK_READS = 1_024
-EXACT_DETAIL_MAX_DECODED_SOURCE_BYTES = 64 * 1024 * 1024
-SAMPLE_GRID_MAX_SOURCE_BLOCK_READS = 127 * 127
-SAMPLE_GRID_MAX_DECODED_SOURCE_BYTES = 9 * 1024 * 1024 * 1024
 RASTER_STATISTICS_BIN_COUNT = 64
 RASTER_STATISTICS_SAMPLE_GRID_MAX_DIMENSION = 127
 RASTER_PAIRED_STATISTICS_BIN_COUNT = 32
 RASTER_PAIRED_STATISTICS_SAMPLE_GRID_MAX_DIMENSION = 127
-RasterDetailPreviewCacheKey = tuple[
-    str,
-    str,
-    RasterSourceIdentity,
-    tuple[float, float, float, float],
-    str,
-    CanonicalWgs84Bounds | None,
-    tuple[int, ...],
-]
-
-
 def _exclude_none_from_response(value: object) -> bool:
     """Return whether an optional response field should be omitted.
 
@@ -111,43 +82,6 @@ class CatalogRasterRequest(BaseModel):
         pattern=MOUNTED_GEOTIFF_ITEM_ID_PATTERN,
         strict=True,
     )
-
-
-class RasterReaderAssessment(BaseModel):
-    """Machine-readable result from the deployed GeoServer reader probe.
-
-    Attributes:
-        contract: Stable deployed-reader contract identifier.
-        compatible: Whether GeoTools acquired the mounted GeoTIFF.
-        reason_code: Stable incompatibility classification, or ``None`` for a
-            compatible reader result.
-    """
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    contract: Literal[GEOSERVER_READER_CONTRACT]
-    compatible: bool
-    reason_code: Literal[
-        "geoserver_crs_metadata_incompatible",
-        "geoserver_reader_incompatible",
-    ] | None = Field(default=None, alias="reasonCode")
-
-    @model_validator(mode="after")
-    def require_reason_for_incompatibility(self) -> "RasterReaderAssessment":
-        """Require exactly one reason for an incompatible reader result.
-
-        Returns:
-            The validated reader assessment.
-
-        Raises:
-            ValueError: If compatibility and reason presence disagree.
-        """
-        if self.compatible == (self.reason_code is not None):
-            raise ValueError(
-                "A reader incompatibility reason is required exactly when "
-                "compatible is false"
-            )
-        return self
 
 
 class Wgs84Bounds(BaseModel):
@@ -272,16 +206,6 @@ class CatalogRasterPairRequest(BaseModel):
         return self
 
 
-class CatalogRasterDetailPreviewRequest(CatalogRasterRequest):
-    """Request the fixed bounded preview for an overview-limited raster.
-
-    Attributes:
-        view_bounds: Optional current map rectangle for a refined sample grid.
-    """
-
-    view_bounds: Wgs84Bounds | None = Field(default=None, alias="viewBounds")
-
-
 class PublishedRaster(BaseModel):
     """Browser-safe identity of one published WMS layer."""
 
@@ -331,246 +255,6 @@ class RasterValueRange(BaseModel):
     minimum: FiniteFloat
     midpoint: FiniteFloat
     maximum: FiniteFloat
-
-
-class RasterDetailPreviewLimits(BaseModel):
-    """Public resource bounds applied to one detail-only preview.
-
-    Attributes:
-        maximum_sample_grid_dimension: Maximum sampled-grid edge.
-        maximum_exact_detail_dimension: Maximum native source/output edge for
-            an automatically admitted exact current-view window.
-        maximum_source_block_reads: Representation-specific maximum unique
-            native blocks read.
-        maximum_decoded_source_bytes: Representation-specific cumulative decoded
-            band-one values plus their validity bytes. Sampled blocks are
-            streamed rather than retained simultaneously.
-        maximum_transformed_positions: Maximum target probes transformed for
-            the fixed center-sampled grid.
-        maximum_points_per_cell: Fixed center probes in each sample-grid cell.
-    """
-
-    maximum_sample_grid_dimension: Literal[127] = Field(alias="maximumSampleGridDimension")
-    maximum_exact_detail_dimension: Literal[512] = Field(
-        alias="maximumExactDetailDimension"
-    )
-    maximum_source_block_reads: Literal[1_024, 16_129] = Field(
-        alias="maximumSourceBlockReads"
-    )
-    maximum_decoded_source_bytes: Literal[67_108_864, 9_663_676_416] = Field(
-        alias="maximumDecodedSourceBytes"
-    )
-    maximum_transformed_positions: Literal[16_129] = Field(
-        alias="maximumTransformedPositions"
-    )
-    maximum_points_per_cell: Literal[1] = Field(alias="maximumPointsPerCell")
-
-
-class RasterDetailPreviewWork(BaseModel):
-    """Actual bounded work and source-grid resolution for one preview.
-
-    Attributes:
-        sample_grid_width: Width of the bounded source numeric grid.
-        sample_grid_height: Height of the bounded source numeric grid.
-        source_block_read_count: Unique native source blocks read once; zero
-            when every transformed probe lies outside a rotated source.
-        decoded_source_bytes: Conservative band-plus-validity decoded bytes,
-            also zero exactly when no block is required.
-        points_per_cell: Center positions inspected for each sample-grid cell, or zero
-            for exact bounded source detail.
-        source_window: Exact integral source window for native detail; absent
-            for spatially dispersed sample-grid probes.
-    """
-
-    sample_grid_width: int = Field(alias="sampleGridWidth", ge=1)
-    sample_grid_height: int = Field(alias="sampleGridHeight", ge=1)
-    source_block_read_count: int = Field(alias="sourceBlockReadCount", ge=0)
-    decoded_source_bytes: int = Field(alias="decodedSourceBytes", ge=0)
-    points_per_cell: int = Field(alias="pointsPerCell", ge=0)
-    source_window: "RasterDetailSourceWindow | None" = Field(
-        default=None,
-        alias="sourceWindow",
-    )
-
-
-class RasterDetailSourceWindow(BaseModel):
-    """Browser-safe integral source-pixel window provenance.
-
-    Attributes:
-        column_offset: Zero-based first source column.
-        row_offset: Zero-based first source row.
-        width: Positive number of complete source columns read.
-        height: Positive number of complete source rows read.
-    """
-
-    column_offset: int = Field(alias="columnOffset", ge=0)
-    row_offset: int = Field(alias="rowOffset", ge=0)
-    width: int = Field(ge=1)
-    height: int = Field(ge=1)
-
-
-class RasterDetailPreview(BaseModel):
-    """Browser-safe, georeferenced bounded raster representation.
-
-    Attributes:
-        scope: Raster extent or current map view.
-        rendering: Fixed center-sample grid or exact bounded source window.
-        policy_version: Algorithm and cache policy identity.
-        approximate: Detail-only marker preventing whole-raster interpretation;
-            an exact result is produced from a complete read of its bounded
-            native source window before same-dimension map reprojection.
-        label: User-facing representation label.
-        raster_extent: Cataloged WGS 84 raster extent, not a data footprint.
-        image_bounds: WGS 84 placement of the sampled image in Leaflet.
-        image_width: Width of the numeric image in pixels.
-        image_height: Height of the numeric image in pixels.
-        pixel_values: Row-major finite band-one values or honest nodata.
-        suggested_range: Approximate shared color-ramp thresholds, or ``None``
-            when every bounded sampled position is nodata/non-finite.
-        limits: Resource bounds used to produce the response.
-        actual: Source-grid resolution and actual bounded source work.
-    """
-
-    scope: RasterDetailPreviewScope
-    rendering: RasterDetailPreviewRendering
-    policy_version: Literal["bounded-adaptive-raster-v8"] = Field(
-        alias="policyVersion"
-    )
-    approximate: Literal[True] = True
-    label: str
-    raster_extent: tuple[FiniteFloat, FiniteFloat, FiniteFloat, FiniteFloat] = (
-        Field(alias="rasterExtent")
-    )
-    image_bounds: tuple[FiniteFloat, FiniteFloat, FiniteFloat, FiniteFloat] = (
-        Field(alias="imageBounds")
-    )
-    image_width: int = Field(alias="imageWidth", ge=1)
-    image_height: int = Field(alias="imageHeight", ge=1)
-    pixel_values: list[FiniteFloat | None] = Field(alias="pixelValues")
-    suggested_range: RasterValueRange | None = Field(alias="suggestedRange")
-    limits: RasterDetailPreviewLimits
-    actual: RasterDetailPreviewWork
-
-    @model_validator(mode="after")
-    def require_numeric_image_payload(self) -> "RasterDetailPreview":
-        """Require one bounded row-major numeric image and ordered bounds.
-
-        Returns:
-            The validated detail preview.
-
-        Raises:
-            ValueError: If dimensions, values, bounds, or range are inconsistent.
-        """
-        if len(self.pixel_values) != self.image_width * self.image_height:
-            raise ValueError("Detail preview values must fill its numeric image")
-        if not self.label.strip():
-            raise ValueError("Detail preview label must not be blank")
-        if self.scope not in {"rasterExtent", "currentView"}:
-            raise ValueError("Sample grid provenance is inconsistent")
-        if self.rendering == "exactSourceWindow":
-            if self.scope != "currentView":
-                raise ValueError("Exact detail requires current-view provenance")
-            if (
-                self.image_width > self.limits.maximum_exact_detail_dimension
-                or self.image_height > self.limits.maximum_exact_detail_dimension
-            ):
-                raise ValueError("Exact detail dimensions exceed fixed limits")
-            expected_decoded_limit = EXACT_DETAIL_MAX_DECODED_SOURCE_BYTES
-            expected_block_limit = EXACT_DETAIL_MAX_SOURCE_BLOCK_READS
-            source_window = self.actual.source_window
-            if (
-                source_window is None
-                or source_window.width != self.image_width
-                or source_window.height != self.image_height
-                or self.actual.points_per_cell != 0
-            ):
-                raise ValueError("Exact detail source-window provenance is invalid")
-        else:
-            if max(self.image_width, self.image_height) != (
-                self.limits.maximum_sample_grid_dimension
-            ):
-                raise ValueError(
-                    "Sampled preview longest edge must match the fixed grid"
-                )
-            expected_decoded_limit = SAMPLE_GRID_MAX_DECODED_SOURCE_BYTES
-            expected_block_limit = SAMPLE_GRID_MAX_SOURCE_BLOCK_READS
-            if self.actual.source_window is not None:
-                raise ValueError("Sample grids cannot claim a source window")
-        if (
-            self.actual.sample_grid_width != self.image_width
-            or self.actual.sample_grid_height != self.image_height
-        ):
-            raise ValueError("Detail preview dimensions exceed fixed limits")
-        if self.limits.maximum_decoded_source_bytes != expected_decoded_limit:
-            raise ValueError("Detail preview decoded-work limit is inconsistent")
-        if self.limits.maximum_source_block_reads != expected_block_limit:
-            raise ValueError("Detail preview block-read limit is inconsistent")
-        if (
-            self.actual.source_block_read_count
-            > self.limits.maximum_source_block_reads
-            or self.actual.decoded_source_bytes
-            > self.limits.maximum_decoded_source_bytes
-            or self.actual.points_per_cell
-            > self.limits.maximum_points_per_cell
-        ):
-            raise ValueError("Detail preview work exceeds fixed limits")
-        if (self.actual.source_block_read_count == 0) != (
-            self.actual.decoded_source_bytes == 0
-        ):
-            raise ValueError("Detail preview block and byte work disagree")
-        expected_points_per_cell = (
-            0
-            if self.rendering == "exactSourceWindow"
-            else self.limits.maximum_points_per_cell
-        )
-        if self.actual.points_per_cell != expected_points_per_cell:
-            raise ValueError("Detail preview cell-probe count is inconsistent")
-        if not (
-            self.raster_extent[0] < self.raster_extent[2]
-            and self.raster_extent[1] < self.raster_extent[3]
-            and self.image_bounds[0] < self.image_bounds[2]
-            and self.image_bounds[1] < self.image_bounds[3]
-        ):
-            raise ValueError("Detail preview bounds must be strictly ordered")
-        # The browser/map protocol is canonical WGS 84 even when the source
-        # raster uses another CRS; readers transform before this boundary.
-        if any(
-            bounds[0] < -180
-            or bounds[2] > 180
-            or bounds[1] < -90
-            or bounds[3] > 90
-            for bounds in (self.raster_extent, self.image_bounds)
-        ):
-            raise ValueError("Detail preview bounds must be canonical WGS 84")
-        if not (
-            self.raster_extent[0] - RASTER_DETAIL_PREVIEW_BOUNDS_TOLERANCE
-            <= self.image_bounds[0]
-            and self.raster_extent[1] - RASTER_DETAIL_PREVIEW_BOUNDS_TOLERANCE
-            <= self.image_bounds[1]
-            and self.raster_extent[2] + RASTER_DETAIL_PREVIEW_BOUNDS_TOLERANCE
-            >= self.image_bounds[2]
-            and self.raster_extent[3] + RASTER_DETAIL_PREVIEW_BOUNDS_TOLERANCE
-            >= self.image_bounds[3]
-        ):
-            raise ValueError("Detail preview image must stay in the raster extent")
-        has_finite_value = any(value is not None for value in self.pixel_values)
-        if self.actual.source_block_read_count == 0 and (
-            has_finite_value or self.suggested_range is not None
-        ):
-            raise ValueError(
-                "A preview without source reads cannot contain finite values "
-                "or a suggested range"
-            )
-        if self.suggested_range is None and has_finite_value:
-            raise ValueError("Finite preview values require a suggested range")
-        if self.suggested_range is not None and not has_finite_value:
-            raise ValueError("An empty preview cannot declare a suggested range")
-        if self.suggested_range is not None and not (
-            self.suggested_range.minimum < self.suggested_range.midpoint
-            < self.suggested_range.maximum
-        ):
-            raise ValueError("Detail preview range must be strictly ordered")
-        return self
 
 
 class RasterPercentiles(BaseModel):

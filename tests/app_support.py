@@ -9,7 +9,6 @@ import httpx2
 import rasterio
 from rasterio.transform import from_origin
 
-from eolab_app.raster.models import GEOSERVER_READER_CONTRACT
 from eolab_app.raster.sources import source_signature
 
 
@@ -126,7 +125,7 @@ def mounted_geotiff_item(
         if source_uri.scheme == "file"
         else None
     )
-    assessed_signature = (
+    source_identity = (
         source_signature(source_path).to_catalog()
         if source_path is not None and source_path.is_file()
         else [0, 0, 0, 0]
@@ -154,18 +153,8 @@ def mounted_geotiff_item(
                 "href": asset_href,
                 "type": asset_media_type,
                 "roles": ["data"],
-                "eolab:rendering": {
-                    "policy": "raster-v3",
-                    "eligible": True,
-                    "reader_contract": GEOSERVER_READER_CONTRACT,
-                    "reader_compatible": True,
-                    "source_signature": assessed_signature,
-                    "bounded_blocks": True,
-                    "block_shapes": [[1, 1]],
-                    "overview_factors": [[]],
-                    "overview_storage": "none",
-                    "compression": None,
-                    "estimated_uncompressed_bytes": 1,
+                "eolab:source": {
+                    "source_signature": source_identity,
                 },
             }
         },
@@ -173,7 +162,7 @@ def mounted_geotiff_item(
 
 
 def write_geotiff(path: Path) -> None:
-    """Create a minimal GeoTIFF whose current structure can be reassessed.
+    """Create a minimal prepared GeoTIFF for integration tests.
 
     Args:
         path: Destination path for the GeoTIFF.

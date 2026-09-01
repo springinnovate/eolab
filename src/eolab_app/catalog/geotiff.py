@@ -11,22 +11,14 @@ import rasterio
 from rasterio.transform import array_bounds
 from rasterio.warp import calculate_default_transform, transform_bounds
 
-from eolab_app.raster.eligibility import (
+from eolab_app.raster.catalog_contract import (
     COG_MEDIA_TYPE,
-    DIRECT_RENDERING_MAX_BYTES,
     GEOTIFF_MEDIA_TYPE,
-    GEOTIFF_MEDIA_TYPES,
     MOUNTED_GEOTIFF_COLLECTION_ID,
-    MOUNTED_GEOTIFF_ITEM_ID_PATTERN,
-    OVERVIEW_RENDERING_MAX_BYTES,
-    OVERVIEW_RENDERING_MAX_DIMENSION,
-    RASTER_DATA_TYPE_BYTES,
-    RENDERING_MAX_BLOCK_EDGE,
-    RENDERING_METADATA_KEY,
-    RENDERING_POLICY,
-    SUPPORTED_RENDERING_DATA_TYPES,
-    assess_raster_renderability,
-    inspect_raster_renderability as inspect_geotiff_renderability,
+)
+from eolab_app.raster.catalog_metadata import (
+    RASTER_ASSET_METADATA_KEY,
+    RASTER_SOURCE_SIGNATURE_FIELD,
 )
 from eolab_app.raster.source_identity import RasterSourceIdentity
 
@@ -142,10 +134,11 @@ def build_stac_item(source_root: Path, geotiff_path: Path) -> dict[str, Any]:
             if nodata_value is not None:
                 band["nodata"] = _serialize_nodata(nodata_value)
             raster_bands.append(band)
-        rendering_metadata = assess_raster_renderability(dataset)
-        rendering_metadata["source_signature"] = (
-            RasterSourceIdentity.from_status(file_status).to_catalog()
-        )
+        source_metadata = {
+            RASTER_SOURCE_SIGNATURE_FIELD: (
+                RasterSourceIdentity.from_status(file_status).to_catalog()
+            )
+        }
         media_type = (
             COG_MEDIA_TYPE
             if dataset.tags(ns="IMAGE_STRUCTURE").get("LAYOUT") == "COG"
@@ -176,7 +169,7 @@ def build_stac_item(source_root: Path, geotiff_path: Path) -> dict[str, Any]:
                 "updated": _format_datetime(filesystem_modified_at),
                 "file:size": file_status.st_size,
                 "raster:bands": raster_bands,
-                RENDERING_METADATA_KEY: rendering_metadata,
+                RASTER_ASSET_METADATA_KEY: source_metadata,
             }
         },
     }

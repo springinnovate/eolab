@@ -147,39 +147,25 @@ control-flow queue time. The exporter endpoint is not published outside the
 Compose network, and the diagnostics panel never exposes metric labels,
 internal URLs, request parameters, or upstream error text.
 
-The scanner assesses mounted GeoTIFFs before offering **Add to map layers**. The policy first accepts supported one-band rasters that are small enough for direct rendering, or larger rasters with bounded base-resolution blocks and a complete internal overview pyramid. A structurally eligible raster is then acquired through a private, read-only endpoint inside the deployed GeoServer 3.0.1 / GeoTools 35.1 image. That endpoint uses the same `GeoTiffReader` and repository hints as publication without creating a coverage store or layer. Other rasters remain fully searchable and inspectable with an explanation of why visualization is unavailable. Every Add attempt refreshes the selected Item's assessment and immediately publishes it when eligible, so assessment is not a separate user action.
+The scanner catalogs mounted GeoTIFFs as prepared raster sources. It records
+standard spatial metadata and a neutral source signature, but does not inspect
+block layout, overview structure, compression, decoded size, or GeoServer reader
+compatibility. Preparing rasters for production rendering is an upstream data
+responsibility.
 
-Large rasters rejected only because internal overviews or the coarsest overview
-scale are inadequate can instead offer **Use low-resolution rendering**
-after the current deployed reader accepts their CRS. EOLab builds a map-aligned
-raster-extent sample grid with exactly 127 cells on the projected rectangle's longest
-edge, derives the other edge from its aspect ratio, and observes the source at
-each map cell's center. Zooming and panning replaces one bounded current-view
-overlay under that same fixed policy until the visible native source window is small
-enough to read completely under strict 512-pixel-edge, 1,024-block, and 64 MiB
-ceilings; that close view then displays exact bounded source detail. A sampled
-grid that exceeds its separate fixed
-source-block limit is rejected before pixel I/O instead of being silently
-coarsened. Native blocks are read once under fixed block-count and decoded-work ceilings;
-the raster is never published and no arbitrary full-extent WMS request is made.
-A prominent map disclosure names the current sampled or exact representation
-and reports its dimensions. Broad sample grids use smooth display
-interpolation, while exact windows use crisp nearest-neighbor presentation.
-The shared color controls recolor these numeric images in the browser. A
-separate catalog-authorized analysis path supplies the whole-raster or selected
-bounded distribution whether the map uses WMS, low-resolution rendering, or no
-raster renderer.
-Broad areas use a fixed 127-longest-edge center sample; safely small areas use
-an exact native source window. Hover probing is an independent sibling path:
-it opens the mounted source directly, requests one band-one source cell, and
-never consults GeoServer or WMS publication state. Nodata stays nodata, and the
-raster extent is not presented as a valid-data footprint. See
-[Low-resolution bounded raster visualization](docs/raster-detail-only-preview.md) for
-applicability, exact resource bounds, cache identity, and approximation
-semantics, and [Rendering-independent raster analysis](docs/raster-analysis.md)
-for statistics authorization, sampling, lifecycle, and cache contracts.
+**Add to map** resolves the current Catalog identity through the confined mount
+resolver and publishes that file to GeoServer as-is. The source signature must
+remain unchanged while publication is running. GeoServer reader or CRS failures
+are returned as publication errors; EOLab does not rewrite, approximate, or
+substitute a browser-rendered raster view. A repaired source can be rescanned
+and retried with the same Add action.
 
-Each **Add to map layers** attempt rebuilds the selected Item from the current read-only source, repeats the deployed-reader acquisition, and replaces the prior assessment before publication. A repaired source can therefore be retried with the same Add action. If full rendering remains unavailable, EOLab presents the current reason and offers low-resolution rendering only when the bounded-preview policy permits it. A GeoServer/GeoTools reader upgrade must update the shared reader-contract identifier and rendering policy so stored results cannot be mistaken for assessments made by the new reader. Publication still requires both the recorded source identity and reader contract to remain current. Publication rollback and runtime recovery remain governed by the separate recovery contract below.
+Catalog-authorized statistics, histograms, selected-area analysis, and pixel
+inspection remain a rendering-independent sibling. These bounded analysis paths
+open the mounted source directly and never consult GeoServer, WMS publication
+state, or raster rendering eligibility. See
+[Rendering-independent raster analysis](docs/raster-analysis.md) for
+authorization, sampling, lifecycle, and cache contracts.
 
 Raster publication is a recoverable state transition rather than a blind
 GeoServer create. EOLab preserves complete existing publications, removes and
@@ -191,13 +177,11 @@ retains only a bounded sanitized GeoServer response excerpt. The exact state,
 rollback, REST response, and error contracts are documented in
 [Raster publication recovery contract](docs/raster-publication.md).
 
-Eligible rasters remain in a session-only layer stack until removed. At most two
-may be visible at once; additional candidates are retained hidden without making
-WMS tile requests. Each layer has independent visibility, opacity, drawing
-order, appearance, statistics, sampling selection, and legend. Selecting the
-active layer chooses which raster the shared appearance, histogram, sampling,
-and pixel-probe controls edit. Visibility and active selection are independent,
-and showing a hidden layer reuses its existing GeoServer publication.
+Published rasters remain in a session-only layer stack until removed. Any number
+of retained layers may be visible. The top two visible rasters are the bounded
+histogram-analysis pair; additional visible rasters continue rendering beneath
+them without joining the paired analysis. Each layer has independent visibility,
+opacity, drawing order, appearance, statistics, sampling selection, and legend.
 
 After two distinct catalog rasters are selected, **Raster histograms** offers
 an explicit **2D - bivariate rasters** histogram mode. Catalog identities make
@@ -212,12 +196,12 @@ alignment, bounded-read, and accessibility contracts are documented in
 [Bivariate raster comparison](docs/bivariate-raster.md).
 
 The retained browser lifecycle and restricted WMS delivery contracts are
-dataset-neutral; raster keeps ownership of its assessment, source validation,
+dataset-neutral; raster keeps ownership of source authorization,
 publication reconciliation, dynamic appearance, and analysis behavior. The
 module ownership and dependency direction are documented in
 [Map rendering boundaries](docs/map-rendering-boundaries.md).
 
-For the active raster, **Raster appearance** shows a bounded band-1
+For an analyzed raster, **Raster appearance** shows a bounded band-1
 distribution. Its provenance says whether the server read an exact bounded
 source window or used the approximate 127-longest-edge center grid. EOLab
 initially applies the distribution's 5th, 50th, and 95th percentiles, and the
@@ -280,7 +264,14 @@ architecture, recovery, and production-verification contracts.
 
 For GeoTIFFs, the scanner uses `ACQUISITIONDATETIME` from GDAL's `IMAGERY` metadata domain when it contains an RFC 3339 timestamp with a UTC offset. Otherwise it uses the source file's filesystem modification time as the required STAC Item `datetime`. A mounted Shapefile Item uses the latest modification time among its component files. ZIP-contained Shapefile Items use the archive's modification time, every layer Item from a GeoPackage uses the container file's modification time, every layer Item from a File Geodatabase uses the latest modification time in its container tree, and a GeoJSON Item uses its source file's modification time. Each fallback is explained in the Item description, and every Asset records its own modification time as `updated`. Filesystem creation time is not used because its meaning differs among operating systems. A malformed GeoTIFF `ACQUISITIONDATETIME` is reported as a dataset failure rather than guessed or silently replaced.
 
-GeoTIFF Items also record standard file size, dimensions, and band metadata plus an EOLab-local `eolab:rendering` Asset member containing the versioned visualization assessment. This member records whether the base-resolution blocks meet the large-raster limit, their exact shapes, overview factors and storage, compression, estimated full-resolution pixel data, the assessed source signature, the deployed reader contract and compatibility, eligibility, and an explanation when unavailable. Raster source identity contains inode, exact byte size, nanosecond modification time, and nanosecond metadata-change time. Filesystem device number is excluded because it identifies a mount instance and is not stable across an unchanged NFS remount or replacement container. Every unavailable result includes a stable `reason_code`, so `geoserver_crs_metadata_incompatible` remains distinct from block organization, decoded size, and overview-policy failures. It is a local STAC foreign member rather than a claim that the file passed full COG validation.
+GeoTIFF Items also record standard file size, dimensions, and band metadata plus
+an EOLab-local `eolab:source` Asset member containing the neutral source
+signature. Raster source identity contains inode, exact byte size, nanosecond
+modification time, and nanosecond metadata-change time. Filesystem device number
+is excluded because it identifies a mount instance and is not stable across an
+unchanged NFS remount or replacement container. This metadata supports source
+freshness checks only; it is not a rendering assessment or a claim that the
+file passed full COG validation.
 
 GeoTIFFs without a coordinate reference system are reported as individual dataset errors because pgSTAC requires every stored Item to have a spatial footprint.
 
@@ -288,7 +279,7 @@ The scanner's typed handler, container-pruning, multi-Item, progress, and shared
 
 ## Search the catalog
 
-The Catalog search finds case-insensitive matches in Item filenames, relative paths, descriptions, and standard STAC datetime values. Enter any part of the text; for example, `2002` matches both `grassland_2002.tif` and a description containing `2002`, while `2025-01` remains a literal datetime-text match. Separate terms are combined automatically, so `ESA 2020` requires both terms but permits them to match different searchable fields. Add `format:cog` to return only Cloud Optimized GeoTIFFs. Add `viewable:true` to return only rasters whose current recorded assessment makes **Add to map layers** available; unassessed and unavailable rasters are excluded without being assessed during the search. Search terms and filters do not require an `&`.
+The Catalog search finds case-insensitive matches in Item filenames, relative paths, descriptions, and standard STAC datetime values. Enter any part of the text; for example, `2002` matches both `grassland_2002.tif` and a description containing `2002`, while `2025-01` remains a literal datetime-text match. Separate terms are combined automatically, so `ESA 2020` requires both terms but permits them to match different searchable fields. Add `format:cog` to return only Cloud Optimized GeoTIFFs. Add `viewable:true` to return only mounted GeoTIFF Items, which are treated as prepared raster candidates; the search does not inspect or preflight their rendering structure. Search terms and filters do not require an `&`.
 
 Use `date:YYYY` for a whole UTC calendar year, `date:YYYY-MM` for a whole month, or `date:YYYY-MM-DD` for one day. Two values separated by `..` form an inclusive range; each endpoint may use any of those precisions. The start expands to the beginning of its calendar period and the end expands to the final day of its period, so `date:2020-01..2020-03` covers January 1 through March 31. The range uses standard STAC Item Search temporal-intersection semantics, so it includes instant Items within the period and interval Items that are contained by, partially overlap, or span the requested range. An Item touching either boundary is included. For example, `ESA format:cog viewable:true date:2020` combines text, COG format, current viewability, and calendar-year constraints. Open-ended ranges and timestamps are not accepted; invalid dates and reversed ranges are reported beside the search field. Clear the field to show the complete catalog.
 
