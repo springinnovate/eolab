@@ -31,14 +31,21 @@ function fixture() {
     });
     doc.querySelectorAll = () => styleButtons.filter(button => layers.some(layer => layer.key === button.dataset.layerKey));
     const edits = [];
+    const vectorStyleEvents = [];
     const editor = new MapLayerStyleEditor({ documentContext: doc, inspection,
         mapLayers: {
             snapshots: () => layers,
             setOpacity(key, value) { layers.find(layer => layer.key === key).opacity = value; edits.push([key, value]); },
         },
         rasterViewer: { openStyle: key => key === 'a', closeStyle() {}, refreshStyle() {} },
+        vectorStyleControls: {
+            show(target) { vectorStyleEvents.push(["show", target.key]); },
+            hide() { vectorStyleEvents.push(["hide"]); },
+        },
+        getVectorStyleTarget: key => key === 'b' ? { key, style: {} } : null,
     });
     return { doc, root, histogram, surface, inspection, layers, styleButtons, edits, editor,
+        vectorStyleEvents,
         setLayers(value) { layers = value; } };
 }
 
@@ -65,12 +72,13 @@ test('one editor keeps its layer identity through reorder and persists opacity o
     h.editor.destroy();
 });
 
-test('vector editor exposes opacity only, and removed targets close safely', () => {
+test('vector editor explains symbol controls, and removed targets close safely', () => {
     const h = fixture();
     h.editor.open('b');
     assert.equal(h.editor.rasterControls.hidden, true);
     assert.equal(h.editor.pairedControls.hidden, true);
-    assert.match(h.editor.note.textContent, /fixed default colors/);
+    assert.match(h.editor.note.textContent, /geometry-specific colors and size/);
+    assert.deepEqual(h.vectorStyleEvents.at(-1), ["show", "b"]);
     h.setLayers([h.layers[0]]);
     h.editor.refresh();
     assert.equal(h.root.hidden, true);

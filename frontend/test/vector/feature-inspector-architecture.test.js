@@ -10,6 +10,10 @@ const FEATURE_INFO_SOURCE = readFileSync(
   new URL("../../src/vector/feature-info.js", import.meta.url),
   "utf8",
 );
+const STYLE_CONTROLS_SOURCE = readFileSync(
+  new URL("../../src/vector/style-controls.js", import.meta.url),
+  "utf8",
+);
 const COMPOSITION_SOURCE = readFileSync(
   new URL("../../src/main.js", import.meta.url),
   "utf8",
@@ -42,4 +46,18 @@ test("vector inspection coordination remains in the browser composition root", (
     STYLESHEET,
     /#open-map-histogram\[hidden\]\)\s+#open-vector-inspector/,
   );
+});
+
+test("vector style controls expose intent without knowing sibling subsystems", () => {
+  for (const forbiddenSibling of [
+    "../map-layers/",
+    "../raster/",
+    "MapLayerController",
+    "rasterViewer",
+    "leafletMap",
+  ]) {
+    assert.equal(STYLE_CONTROLS_SOURCE.includes(forbiddenSibling), false);
+  }
+  assert.match(COMPOSITION_SOURCE, /getVectorStyleTarget:\s*\(key\)\s*=>/);
+  assert.match(COMPOSITION_SOURCE, /record\.adapter\.applyStyle\(record, style\)/);
 });

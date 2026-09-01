@@ -1,0 +1,109 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import { VectorStyleControls } from "../../src/vector/style-controls.js";
+import { FakeRasterControlDocument } from "../../test-support/raster/fake-controls-document.js";
+
+function styleFixture() {
+    const documentContext = new FakeRasterControlDocument();
+    const controls = new VectorStyleControls(documentContext);
+    const applied = [];
+    return {
+        controls,
+        documentContext,
+        applied,
+        target(geometryKind, style) {
+            return {
+                key: geometryKind,
+                style,
+                async apply(nextStyle) {
+                    applied.push(nextStyle);
+                    return nextStyle;
+                },
+            };
+        },
+    };
+}
+
+test("vector style controls show fields owned by each geometry", () => {
+    const fixture = styleFixture();
+    fixture.controls.show(fixture.target("line", {
+        geometryKind: "line",
+        strokeColor: "#f97316",
+        strokeOpacity: 1,
+        strokeWidth: 3,
+    }));
+    assert.equal(fixture.controls.fillGroup.hidden, true);
+    assert.equal(fixture.controls.pointGroup.hidden, true);
+    assert.equal(fixture.controls.heading.textContent, "Line symbol");
+
+    fixture.controls.show(fixture.target("point", {
+        geometryKind: "point",
+        fillColor: "#06b6d4",
+        fillOpacity: 1,
+        strokeColor: "#083344",
+        strokeOpacity: 1,
+        strokeWidth: 1.5,
+        pointSize: 9,
+    }));
+    assert.equal(fixture.controls.fillGroup.hidden, false);
+    assert.equal(fixture.controls.pointGroup.hidden, false);
+    fixture.controls.destroy();
+});
+
+test("vector style controls apply one complete validated state", async () => {
+    const fixture = styleFixture();
+    fixture.controls.show(fixture.target("polygon", {
+        geometryKind: "polygon",
+        fillColor: "#a855f7",
+        fillOpacity: 0.38,
+        strokeColor: "#581c87",
+        strokeOpacity: 1,
+        strokeWidth: 2,
+    }));
+    fixture.controls.fillColor.value = "#00ff00";
+    fixture.controls.fillOpacity.value = "55";
+    fixture.controls.strokeWidth.value = "4";
+    fixture.controls.applyButton.dispatchEvent(new Event("click"));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    assert.deepEqual(fixture.applied, [{
+        geometryKind: "polygon",
+        fillColor: "#00ff00",
+        fillOpacity: 0.55,
+        strokeColor: "#581c87",
+        strokeOpacity: 1,
+        strokeWidth: 4,
+        pointSize: null,
+    }]);
+    assert.equal(fixture.controls.status.textContent, "Symbol applied to the map.");
+    fixture.controls.destroy();
+});
+
+test("closing during an apply cannot disable or overwrite a reopened form", async () => {
+    const fixture = styleFixture();
+    let finishApply;
+    const style = {
+        geometryKind: "line",
+        strokeColor: "#f97316",
+        strokeOpacity: 1,
+        strokeWidth: 3,
+    };
+    fixture.controls.show({
+        key: "line",
+        style,
+        apply: () => new Promise(resolve => { finishApply = resolve; }),
+    });
+    fixture.controls.applyButton.dispatchEvent(new Event("click"));
+    assert.equal(fixture.controls.applyButton.disabled, true);
+    fixture.controls.hide();
+    fixture.controls.show(fixture.target("line", style));
+    assert.equal(fixture.controls.applyButton.disabled, false);
+    fixture.controls.status.textContent = "New target";
+    finishApply(style);
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    assert.equal(fixture.controls.status.textContent, "New target");
+    assert.equal(fixture.controls.applyButton.disabled, false);
+    fixture.controls.destroy();
+});

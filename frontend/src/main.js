@@ -64,6 +64,7 @@ import {
 import { initializeRasterViewer } from "./raster/raster-viewer.js";
 import { VectorFeatureInspectorController } from "./vector/feature-inspector.js";
 import { createVectorMapLayerAdapter } from "./vector/map-layer-adapter.js";
+import { VectorStyleControls } from "./vector/style-controls.js";
 import { initializeTemporaryAoi } from "./temporary-aoi/temporary-aoi.js";
 import {
     applyRenderingDiagnosticsViewModel,
@@ -724,9 +725,32 @@ async function initializeCatalog(
         onTileError: reportMapTileError,
         onHistogramRequested: () => mapInspection.showHistogram(),
     }, { mapLayerController });
+    const vectorMapLayerAdapter = createVectorMapLayerAdapter({
+        leaflet: L,
+        leafletMap,
+        wmsUrl: appGlobalConfiguration.wmsUrl,
+        onTileError: reportMapTileError,
+    });
+    const vectorStyleControls = new VectorStyleControls();
     layerStyleEditor = new MapLayerStyleEditor({
         mapLayers: mapLayerController, rasterViewer: rasterVisualization,
         inspection: mapInspection,
+        vectorStyleControls,
+        getVectorStyleTarget: (key) => {
+            const record = mapLayerController.getRecord(key);
+            if (record === null || record.adapter !== vectorMapLayerAdapter) {
+                return null;
+            }
+            return {
+                key,
+                style: record.state.style,
+                apply: async (style) => {
+                    const applied = await record.adapter.applyStyle(record, style);
+                    mapLayerController.render();
+                    return applied;
+                },
+            };
+        },
     });
     mapLayerController.onStyle = (key) => layerStyleEditor.open(key);
     document.querySelector("#style-raster-detail-preview").addEventListener("click", () => {
@@ -735,12 +759,6 @@ async function initializeCatalog(
         }
     });
     rasterVisualization.syncVisibleLayers();
-    const vectorMapLayerAdapter = createVectorMapLayerAdapter({
-        leaflet: L,
-        leafletMap,
-        wmsUrl: appGlobalConfiguration.wmsUrl,
-        onTileError: reportMapTileError,
-    });
     const catalogVisualization = new CatalogVisualizationCoordinator(
         rasterVisualization,
         mapLayerController,

@@ -61,13 +61,20 @@ async function vectorRenderingError(response, action) {
  * Post one selected vector Item identity to an owned rendering action.
  *
  * @param {Object} item Selected STAC Item.
- * @param {"assessments"|"layers"} action Rendering action path.
+ * @param {"assessments"|"layers"|"styles"} action Rendering action path.
  * @param {string} actionLabel User-facing failure action.
  * @param {typeof fetch} fetchImplementation HTTP implementation.
+ * @param {Object} [additionalBody={}] Additional action-owned request fields.
  * @return {Promise<Object>} Parsed response document.
  * @throws {VectorRenderingRequestError} If HTTP or JSON contracts fail.
  */
-async function postVectorAction(item, action, actionLabel, fetchImplementation) {
+async function postVectorAction(
+    item,
+    action,
+    actionLabel,
+    fetchImplementation,
+    additionalBody = {},
+) {
     let response;
     try {
         response = await fetchImplementation(`/api/vector-rendering/${action}`, {
@@ -79,6 +86,7 @@ async function postVectorAction(item, action, actionLabel, fetchImplementation) 
             body: JSON.stringify({
                 collectionId: item.collection,
                 itemId: item.id,
+                ...additionalBody,
             }),
         });
     } catch (error) {
@@ -141,11 +149,48 @@ export async function publishCatalogVector(
         !publication.bbox.every(Number.isFinite) ||
         typeof publication.layerName !== "string" ||
         !["point", "line", "polygon"].includes(publication.geometryKind) ||
-        publication.styleName !== `vector-${publication.geometryKind}`
+        publication.styleName !== `vector-${publication.geometryKind}` ||
+        publication.style?.geometryKind !== publication.geometryKind
     ) {
         throw new VectorRenderingRequestError(
             "Vector publication returned an invalid layer contract."
         );
     }
     return publication;
+}
+
+/**
+ * Apply one complete single-symbol style to a published catalog vector.
+ *
+ * @param {Object} item Selected vector STAC Item.
+ * @param {Object} style Validated geometry-specific browser style state.
+ * @param {typeof fetch} [fetchImplementation=globalThis.fetch] HTTP
+ * implementation.
+ * @return {Promise<Object>} Normalized applied style state.
+ * @throws {VectorRenderingRequestError} If style application fails.
+ */
+export async function styleCatalogVector(
+    item,
+    style,
+    fetchImplementation = globalThis.fetch,
+) {
+    const result = await postVectorAction(
+        item,
+        "styles",
+        "styling",
+        fetchImplementation,
+        { style },
+    );
+    if (
+        typeof result?.styleName !== "string" ||
+        !/^vector-single-[0-9a-f]{24}-[0-9a-f]{12}$/.test(
+          result.styleName,
+        ) ||
+        result.style?.geometryKind !== style.geometryKind
+    ) {
+        throw new VectorRenderingRequestError(
+            "Vector styling returned an invalid style contract."
+        );
+    }
+    return result;
 }

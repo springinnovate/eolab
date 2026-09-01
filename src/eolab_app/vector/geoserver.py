@@ -20,7 +20,9 @@ from eolab_app.vector.models import (
     VectorFormat,
     VectorGeometryKind,
     VectorReaderAssessment,
+    VectorSingleSymbolStyle,
 )
+from eolab_app.vector.styles import build_vector_sld, vector_style_name
 
 
 GEOSERVER_VECTOR_STYLE_NAMES: dict[VectorGeometryKind, str] = {
@@ -205,6 +207,65 @@ class GeoServerVectorPublisher:
                 state,
             )
         await self._require_native_layer_identity(resource_name, layer_name)
+        await self._assign_vector_style(resource_name, style_name)
+        return style_name
+
+    async def apply_style(
+        self,
+        resource_name: str,
+        style: VectorSingleSymbolStyle,
+    ) -> str:
+        """Create or update and assign one per-layer single-symbol SLD.
+
+        Args:
+            resource_name: Stable server-derived WMS layer resource name.
+            style: Complete validated geometry-specific symbol state.
+
+        Returns:
+            Deterministic unqualified style name assigned to the layer.
+
+        Raises:
+            VectorPublicationError: If the layer is absent or GeoServer rejects
+                style persistence or assignment.
+        """
+        style_name = vector_style_name(resource_name, style)
+        layer_exists = await self._gateway.resource_exists(
+            "inspect vector layer before styling",
+            f"{geoserver_layer_path(resource_name)}.json?quietOnNotFound=true",
+        )
+        if not layer_exists:
+            raise VectorPublicationError(
+                "configuration",
+                "The published vector layer is no longer available. Add it to "
+                "the map again before styling it.",
+            )
+        style_path = (
+            f"/workspaces/{GEOSERVER_WORKSPACE_NAME}/styles/{style_name}"
+        )
+        style_exists = await self._gateway.resource_exists(
+            "inspect per-layer vector style",
+            f"{style_path}.sld?quietOnNotFound=true",
+        )
+        style_document = build_vector_sld(style_name, style)
+        if style_exists:
+            await self._gateway.request(
+                "update per-layer vector style",
+                "PUT",
+                style_path,
+                accepted_statuses=frozenset({200}),
+                content=style_document,
+                headers={"Content-Type": "application/vnd.ogc.sld+xml"},
+            )
+        else:
+            await self._gateway.request(
+                "create per-layer vector style",
+                "POST",
+                f"/workspaces/{GEOSERVER_WORKSPACE_NAME}/styles",
+                accepted_statuses=frozenset({201}),
+                params={"name": style_name},
+                content=style_document,
+                headers={"Content-Type": "application/vnd.ogc.sld+xml"},
+            )
         await self._assign_vector_style(resource_name, style_name)
         return style_name
 

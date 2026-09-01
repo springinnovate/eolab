@@ -7,9 +7,15 @@ from fastapi import APIRouter, HTTPException
 from eolab_app.routes.vector_http import vector_http_exception
 from eolab_app.vector.errors import VectorFeatureError
 from eolab_app.vector.assessment import VectorAssessmentService
-from eolab_app.vector.models import CatalogVectorRequest, PublishedVector
+from eolab_app.vector.models import (
+    AppliedVectorStyle,
+    CatalogVectorRequest,
+    CatalogVectorStyleRequest,
+    PublishedVector,
+)
 from eolab_app.vector.publication import VectorPublicationService
 from eolab_app.vector.sources import PublishedVectorRegistry
+from eolab_app.vector.styling import VectorStyleService
 
 
 @dataclass(frozen=True)
@@ -28,6 +34,7 @@ class VectorFeature:
 def create_vector_feature(
     assessment_service: VectorAssessmentService,
     publication_service: VectorPublicationService,
+    style_service: VectorStyleService,
     registry: PublishedVectorRegistry,
 ) -> VectorFeature:
     """Create vector routes around fully constructed application services.
@@ -35,6 +42,7 @@ def create_vector_feature(
     Args:
         assessment_service: Authoritative selected-Item reassessment workflow.
         publication_service: Serialized exact-layer publication workflow.
+        style_service: Serialized authoritative vector styling workflow.
         registry: Process-local vector WMS authorization registry.
 
     Returns:
@@ -79,6 +87,27 @@ def create_vector_feature(
         """
         try:
             return await publication_service.publish(request)
+        except VectorFeatureError as error:
+            raise vector_http_exception(error) from error
+
+    @router.post("/styles", response_model=AppliedVectorStyle)
+    async def style_vector(
+        request: CatalogVectorStyleRequest,
+    ) -> AppliedVectorStyle:
+        """Apply one validated symbol to a current published vector layer.
+
+        Args:
+            request: Authoritative catalog identity and complete symbol state.
+
+        Returns:
+            Applied per-layer style identity and normalized state.
+
+        Raises:
+            HTTPException: If the Item, publication, or GeoServer style is not
+                current and authorized.
+        """
+        try:
+            return await style_service.apply(request)
         except VectorFeatureError as error:
             raise vector_http_exception(error) from error
 

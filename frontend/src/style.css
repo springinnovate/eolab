@@ -3633,6 +3633,62 @@ button.raster-histogram-summary:hover,
 #layer-style-editor .raster-appearance-body { overflow: visible; padding: 0; }
 #layer-style-editor .raster-appearance-heading { margin: 14px 0 10px; }
 #layer-style-editor h3 { margin: 0; font-size: 0.85rem; }
+
+.vector-style-controls {
+  display: grid;
+  gap: 12px;
+  border-top: 1px solid var(--border-2);
+  padding-top: 14px;
+}
+
+.vector-style-controls[hidden],
+.vector-style-group[hidden] {
+  display: none;
+}
+
+.vector-style-group {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.vector-style-group label {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  color: var(--text-2);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.vector-style-group input[type="color"] {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.vector-style-group input[type="number"] {
+  min-width: 0;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  padding: 7px 8px;
+  color: var(--text-1);
+}
+
+.vector-style-range {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 38px;
+  align-items: center;
+  gap: 7px;
+}
+
+.vector-style-range input { min-width: 0; width: 100%; }
+.vector-style-range output { color: var(--text-3); font-weight: 400; }
+.vector-style-status { min-height: 1.4em; margin: 0; color: var(--text-3); font-size: 0.72rem; }
+.vector-style-controls .secondary-button { justify-self: start; }
 .style-percentiles { margin-top: 16px; }
 .style-percentiles summary { cursor: pointer; font-size: 0.8rem; }
 @media (max-width: 699px) {

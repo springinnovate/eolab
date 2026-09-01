@@ -8,6 +8,7 @@ from eolab_app.vector.models import (
     VectorFormat,
     VectorGeometryKind,
     VectorReaderAssessment,
+    VectorSingleSymbolStyle,
 )
 
 
@@ -99,5 +100,28 @@ class VectorPublisher(Protocol):
 
         Raises:
             VectorPublicationError: If GeoServer cannot converge the layer.
+        """
+        ...
+
+
+class VectorStyler(Protocol):
+    """GeoServer styling adapter required by the vector style workflow."""
+
+    async def apply_style(
+        self,
+        resource_name: str,
+        style: VectorSingleSymbolStyle,
+    ) -> str:
+        """Create or update one per-layer SLD and assign it to the layer.
+
+        Args:
+            resource_name: Server-derived GeoServer feature type identity.
+            style: Complete validated single-symbol state.
+
+        Returns:
+            Unqualified deterministic style name assigned to the layer.
+
+        Raises:
+            VectorPublicationError: If GeoServer cannot apply the style.
         """
         ...
