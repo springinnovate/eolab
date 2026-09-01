@@ -16,8 +16,6 @@ test("sampling-area adapter owns size, area choices, status, and listeners", () 
         onSampleWindowRangeInput: (value) => received.push(["range", value]),
         onSampleWindowNumberInput: (value) => received.push(["number", value]),
         onSampleWindowNumberChange: (value) => received.push(["change", value]),
-        onSampleMapCenter: () => received.push(["center"]),
-        onSelectSampleWindow: () => received.push(["select"]),
         onClearSampleWindow: () => received.push(["whole"]),
         onUseTemporaryAoi: () => received.push(["aoi"]),
     });
@@ -31,14 +29,10 @@ test("sampling-area adapter owns size, area choices, status, and listeners", () 
         selectedDataset: "boundary",
     });
     view.setSamplingAreaMode("temporaryAoi");
-    view.enableActiveRasterActions();
-
     for (const [selector, eventType] of [
         ["#raster-sample-window-range", "input"],
         ["#raster-sample-window-number", "input"],
         ["#raster-sample-window-number", "change"],
-        ["#sample-raster-map-center", "click"],
-        ["#select-raster-sample-window", "click"],
         ["#clear-raster-sample-window", "click"],
         ["#use-temporary-aoi-for-raster", "click"],
     ]) {
@@ -49,8 +43,6 @@ test("sampling-area adapter owns size, area choices, status, and listeners", () 
         ["range", "80"],
         ["number", "80"],
         ["change", "80"],
-        ["center"],
-        ["select"],
         ["whole"],
         ["aoi"],
     ]);
@@ -71,9 +63,9 @@ test("sampling-area adapter owns size, area choices, status, and listeners", () 
     assert.throws(() => view.setClearSampleWindowLabel(""), /must not be blank/);
 
     view.unbind();
-    documentContext.querySelector("#sample-raster-map-center")
+    documentContext.querySelector("#clear-raster-sample-window")
         .dispatchEvent(new Event("click"));
-    assert.equal(received.length, 7);
+    assert.equal(received.length, 5);
 });
 
 test("sampling-area adapter requires its semantic subgroup root", () => {

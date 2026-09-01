@@ -4,6 +4,7 @@ History
 Unreleased
 ----------
 
+* Explore visible raster histograms and vector features with one map click.
 * Save styled map layers and the current viewport to a portable JSON file.
 * Open saved views with current Catalog revalidation and per-layer results.
 * Warn about viewer-version, deployment, and source-revision differences.

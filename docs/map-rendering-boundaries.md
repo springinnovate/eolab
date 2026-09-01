@@ -59,11 +59,21 @@ publication, and hashes opaque source revisions before writing a local file.
 The saved-map package imports neither raster nor vector implementations; see
 `saved-map-views.md` for its trust and compatibility contract.
 
+Map exploration remains composition rather than a new feature coordinator.
+The application root owns one Leaflet click and forwards its position to the
+raster viewer and vector feature inspector through their public boundaries.
+The raster viewer owns sample-window validation and statistics requests; the
+vector inspector owns bounded GetFeatureInfo requests, cancellation, attribute
+presentation, and highlighting. Neither peer imports, activates, pauses, or
+reads the implementation state of the other, and closing a result panel changes
+presentation only.
+
 ## Dependency direction
 
 ```text
 application composition
     -> dataset feature adapter
+    -> map click -> raster exploration / vector inspection
     -> neutral map-layer controller -> stack / view / Leaflet set
     -> Catalog Item identity <- detail preview / Catalog actions
     -> saved-map coordinator -> Catalog visualization / neutral viewport

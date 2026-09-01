@@ -800,15 +800,40 @@ async function initializeCatalog(
                     record.state.item.properties?.["table:primary_geometry"] ?? null,
             })),
         wmsUrl: appGlobalConfiguration.wmsUrl,
-        onActiveChange: (active) => {
-            if (active) {
-                rasterVisualization.stopSampleWindowSelection();
-                mapInspection.showFeatureInspector();
-            } else {
-                mapInspection.hideFeatureInspector();
-            }
+        onInspectionChange: (visible) => {
+            if (visible) mapInspection.showFeatureInspector();
+            else mapInspection.hideFeatureInspector();
         },
     });
+    /**
+     * Fan one map exploration intent out to independent raster and vector peers.
+     * Leaflet emits this event only for a completed click, not a drag-pan.
+     *
+     * @param {{latlng:{lng:number,lat:number},containerPoint?:{x:number,y:number}}}
+     * event Leaflet map-click shape.
+     * @return {void}
+     */
+    function exploreMap(event) {
+        rasterVisualization.exploreAt(event.latlng);
+        void vectorFeatureInspector.inspect(event);
+    }
+    /**
+     * Explore the current map center through the same path as a pointer click.
+     *
+     * @return {void}
+     */
+    function exploreMapCenter() {
+        const latlng = leafletMap.getCenter();
+        exploreMap({
+            latlng,
+            containerPoint: leafletMap.latLngToContainerPoint(latlng),
+        });
+    }
+    leafletMap.on("click", exploreMap);
+    document.querySelector("#explore-map-center").addEventListener(
+        "click",
+        exploreMapCenter
+    );
     const rasterDetailPreview = initializeRasterDetailPreview({
         leafletMap,
         leaflet: L,
@@ -1686,15 +1711,11 @@ async function startApplication() {
         invalidateMapSize: () => leafletMap.invalidateSize(),
     });
     const temporaryAoi = initializeTemporaryAoi(leafletMap, L);
-    let activeRasterViewer = null;
-    const mapInspection = new MapInspectionController({
-        onHistogramClose: () => activeRasterViewer?.stopSampleWindowSelection(),
-    });
+    const mapInspection = new MapInspectionController();
     const refreshCatalog = await initializeCatalog(
         appGlobalConfiguration,
         leafletMap,
         (rasterViewer) => {
-            activeRasterViewer = rasterViewer;
             temporaryAoi.subscribeSamplingArea(
                 rasterViewer.setTemporaryAoi
             );

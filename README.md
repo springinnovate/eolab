@@ -223,18 +223,18 @@ source window or used the approximate 127-longest-edge center grid. EOLab
 initially applies the distribution's 5th, 50th, and 95th percentiles, and the
 user can apply other ordered percentiles or directly edit the color palette
 and minimum, midpoint, and maximum display values. Whenever a raster is selected
-for analysis, a 1–300 km window
-follows the pointer without reading the raster; clicking or tapping fixes that
-window and displays its bounded histogram. The percentile controls immediately
+for analysis, clicking or tapping the map fixes a 1–300 km window at that
+position and displays its bounded histogram. The percentile controls immediately
 show the selected distribution's 5th, 50th, and 95th percentile
 values without changing the rendered colors. **Rescale colors to this range**
 applies those values, or other selected percentiles, when the user chooses.
 Hovering a histogram bar reports its bin midpoint, its percentage of the valid
 sample, its sampled-pixel count, and its value range. Each bar uses the same
 active color ramp as a raster pixel at that bin midpoint.
-**Sample map center** provides the same action for keyboard users, and **Use
-whole raster** restores the retained dataset distribution while leaving the
-hover window active. Masked, nodata, and non-finite samples are excluded. A
+**Explore map center** provides the same action for keyboard and touch users,
+and **Use whole raster** restores the retained dataset distribution. The same
+map action also inspects features from visible vectors independently, so raster
+and vector results may appear together. Masked, nodata, and non-finite samples are excluded. A
 statistics failure leaves the raster, manual appearance controls, and hover
 pixel picker available. These appearance changes are session-only: they do not
 modify either the source raster or its catalog Item. Selected windows that

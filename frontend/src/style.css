@@ -3568,7 +3568,7 @@ button.raster-histogram-summary:hover,
   font-weight: 650;
 }
 
-/* Exploration openers remain compact and independent of the sidebar. */
+/* The map-center exploration alternative remains compact and independent. */
 .map-tool-openers {
   position: absolute;
   top: 16px;
@@ -3581,9 +3581,6 @@ button.raster-histogram-summary:hover,
   max-width: calc(100% - 40px);
 }
 .map-tool-openers .secondary-button { box-shadow: var(--elevation-panel); }
-.map-tool-openers:has(#open-map-histogram[hidden]) {
-  display: none;
-}
 
 #map-inspection {
   --map-inspection-top: 60px;
@@ -3634,7 +3631,7 @@ button.raster-histogram-summary:hover,
 }
 
 #map-inspection:not(:popover-open),
-#open-map-histogram[hidden],
+#explore-map-center[hidden],
 #map-histogram-panel[hidden],
 #layer-style-editor[hidden],
 #vector-feature-inspector[hidden],
@@ -3654,7 +3651,6 @@ button.raster-histogram-summary:hover,
   #vector-feature-inspector { max-height: var(--map-inspection-height); overflow-y: auto; overscroll-behavior: contain; }
 }
 
-.leaflet-container.is-inspecting-vector-features { cursor: crosshair; }
 .vector-feature-inspector-header {
   position: sticky;
   top: 0;

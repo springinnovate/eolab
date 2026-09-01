@@ -1,9 +1,9 @@
 /**
  * Interaction controller for the map's raster sample window.
  *
- * This module owns enablement, pointer preview, click/center selection, and
- * preview/selection layer cleanup. Geometry and Leaflet conversion are
- * delegated, and selecting a window only emits validated bounds to its caller.
+ * This module owns one-shot map-position selection and selection-layer cleanup.
+ * Geometry and Leaflet conversion are delegated, and selecting a window only
+ * emits validated bounds to its caller.
  */
 import {
     buildRasterSampleWindowBounds,
@@ -17,11 +17,11 @@ import {
 import { rasterSampleBoundsToLeaflet } from "./leaflet.js";
 
 /**
- * Create a preview or committed rectangle layer.
+ * Create a committed rectangle layer.
  *
  * @callback RasterSampleLayerFactory
  * @param {Array<Array<number>>} bounds Leaflet southwest/northeast corners.
- * @param {"preview"|"selection"} kind Requested rectangle presentation.
+ * @param {"selection"} kind Requested rectangle presentation.
  * @return {{addTo: (map: Object) => Object, setBounds: (bounds: Array<Array<number>>) => void}}
  * Leaflet-compatible rectangle layer.
  */
@@ -42,7 +42,7 @@ import { rasterSampleBoundsToLeaflet } from "./leaflet.js";
  * @return {void}
  */
 
-/** Own the explicit hover-preview and click-to-sample map interaction. */
+/** Own validated one-shot raster sample-window selection. */
 export class RasterSampleWindowController {
     /**
      * Create a raster sample-window interaction controller.
@@ -58,58 +58,12 @@ export class RasterSampleWindowController {
         this.onSelect = onSelect;
         this.onGuidance = onGuidance;
         this.windowSizeKm = DEFAULT_RASTER_SAMPLE_WINDOW_SIZE_KM;
-        this.enabled = false;
-        this.lastPosition = null;
-        this.previewLayer = null;
         this.selectionLayer = null;
         this.selectionBounds = null;
-        this.onMouseMove = (event) => this.#previewAt(event.latlng);
-        this.onMouseOut = () => this.#removePreview();
-        this.onMouseOver = (event) => {
-            const position = event.latlng ?? this.lastPosition;
-            if (position !== null) {
-                this.#previewAt(position);
-            }
-        };
-        this.onClick = (event) => this.#selectAt(event.latlng);
     }
 
     /**
-     * Start selection handlers without issuing a statistics request.
-     *
-     * @return {void}
-     */
-    enable() {
-        if (this.enabled) {
-            return;
-        }
-        this.enabled = true;
-        this.leafletMap.on("mousemove", this.onMouseMove);
-        this.leafletMap.on("mouseout", this.onMouseOut);
-        this.leafletMap.on("mouseover", this.onMouseOver);
-        this.leafletMap.on("click", this.onClick);
-        this.#previewAt(this.leafletMap.getCenter());
-    }
-
-    /**
-     * Stop selection handlers while retaining the committed rectangle.
-     *
-     * @return {void}
-     */
-    disable() {
-        if (!this.enabled) {
-            return;
-        }
-        this.leafletMap.off("mousemove", this.onMouseMove);
-        this.leafletMap.off("mouseout", this.onMouseOut);
-        this.leafletMap.off("mouseover", this.onMouseOver);
-        this.leafletMap.off("click", this.onClick);
-        this.enabled = false;
-        this.#removePreview();
-    }
-
-    /**
-     * Change the ground-distance side length used by later previews/clicks.
+     * Change the ground-distance side length used by later selections.
      *
      * @param {number} sideLengthKm Integer side length from 1 through 300 km.
      * @return {void}
@@ -117,18 +71,17 @@ export class RasterSampleWindowController {
      */
     setWindowSize(sideLengthKm) {
         this.windowSizeKm = validateRasterSampleWindowSize(sideLengthKm);
-        if (this.enabled && this.lastPosition !== null) {
-            this.#previewAt(this.lastPosition);
-        }
     }
 
     /**
-     * Commit a selection at the current map center for keyboard/touch access.
+     * Commit a selection at one composition-owned map position.
      *
-     * @return {Object|null} Canonical selected bounds, or null near an edge.
+     * @param {{lng: number, lat: number}} position Leaflet map position.
+     * @return {Object|null} Canonical bounds, or null near a pole/date line.
+     * @throws {RangeError} If the position or configured size is invalid.
      */
-    sampleMapCenter() {
-        return this.#selectAt(this.leafletMap.getCenter());
+    selectAt(position) {
+        return this.#selectAt(position);
     }
 
     /**
@@ -165,15 +118,8 @@ export class RasterSampleWindowController {
      * @return {void}
      */
     clear() {
-        this.disable();
         this.clearSelection();
-        this.lastPosition = null;
         this.onGuidance("");
-    }
-
-    /** @return {boolean} Whether hover-and-click selection is active. */
-    get isEnabled() {
-        return this.enabled;
     }
 
     /** @return {Object|null} Last committed canonical WGS 84 bounds. */
@@ -195,7 +141,6 @@ export class RasterSampleWindowController {
             latitude: position.lat
         };
         if (!isCanonicalWgs84Position(center)) {
-            this.#removePreview();
             this.onGuidance(RASTER_SAMPLE_WINDOW_MAP_BOUNDS_GUIDANCE);
             return null;
         }
@@ -213,32 +158,8 @@ export class RasterSampleWindowController {
             if (!(error instanceof RasterSampleWindowBoundaryError)) {
                 throw error;
             }
-            this.#removePreview();
             this.onGuidance(RASTER_SAMPLE_WINDOW_EDGE_GUIDANCE);
             return null;
-        }
-    }
-
-    /**
-     * Move or create the transient preview at one map position.
-     *
-     * @param {{lng: number, lat: number}} position Leaflet map position.
-     * @return {void}
-     * @throws {RangeError} If the position or configured size is invalid.
-     */
-    #previewAt(position) {
-        this.lastPosition = position;
-        const sampleWindow = this.#boundsAt(position);
-        if (sampleWindow === null) {
-            return;
-        }
-        if (this.previewLayer === null) {
-            this.previewLayer = this.layerFactory(
-                sampleWindow.leafletBounds,
-                "preview"
-            ).addTo(this.leafletMap);
-        } else {
-            this.previewLayer.setBounds(sampleWindow.leafletBounds);
         }
     }
 
@@ -250,7 +171,6 @@ export class RasterSampleWindowController {
      * @throws {RangeError} If the position or configured size is invalid.
      */
     #selectAt(position) {
-        this.lastPosition = position;
         const sampleWindow = this.#boundsAt(position);
         if (sampleWindow === null) {
             return null;
@@ -268,15 +188,4 @@ export class RasterSampleWindowController {
         return sampleWindow.bounds;
     }
 
-    /**
-     * Remove the transient preview layer if present.
-     *
-     * @return {void}
-     */
-    #removePreview() {
-        if (this.previewLayer !== null) {
-            this.leafletMap.removeLayer(this.previewLayer);
-            this.previewLayer = null;
-        }
-    }
 }

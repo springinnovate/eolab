@@ -207,8 +207,6 @@ test("RasterControlsView owns style values and semantic control events", () => {
         onSampleWindowRangeInput: (value) => received.push(["range", value]),
         onSampleWindowNumberInput: (value) => received.push(["number", value]),
         onSampleWindowNumberChange: (value) => received.push(["change", value]),
-        onSampleMapCenter: () => received.push(["center"]),
-        onSelectSampleWindow: () => received.push(["select-window"]),
         onClearSampleWindow: () => received.push(["whole"]),
         onUseTemporaryAoi: () => received.push(["aoi"]),
     });
@@ -240,7 +238,7 @@ test("RasterControlsView owns style values and semantic control events", () => {
     assert.deepEqual(received, [["style", true], ["range", "80"]]);
 });
 
-test("RasterControlsView exposes accessible exclusive histogram-area choices", () => {
+test("RasterControlsView exposes accessible explicit histogram-area choices", () => {
     const documentContext = new FakeRasterDocument();
     const view = new RasterControlsView(documentContext);
     const received = [];
@@ -255,8 +253,6 @@ test("RasterControlsView exposes accessible exclusive histogram-area choices", (
         onSampleWindowRangeInput() {},
         onSampleWindowNumberInput() {},
         onSampleWindowNumberChange() {},
-        onSampleMapCenter() {},
-        onSelectSampleWindow: () => received.push("window"),
         onClearSampleWindow: () => received.push("whole"),
         onUseTemporaryAoi: () => received.push("aoi"),
     });
@@ -274,16 +270,13 @@ test("RasterControlsView exposes accessible exclusive histogram-area choices", (
         "temporaryAoi"
     );
     documentContext
-        .querySelector("#select-raster-sample-window")
-        .dispatchEvent(new Event("click"));
-    documentContext
         .querySelector("#clear-raster-sample-window")
         .dispatchEvent(new Event("click"));
     documentContext
         .querySelector("#use-temporary-aoi-for-raster")
         .dispatchEvent(new Event("click"));
 
-    assert.deepEqual(received, ["window", "whole", "aoi"]);
+    assert.deepEqual(received, ["whole", "aoi"]);
     assert.equal(
         documentContext
             .querySelector("#use-temporary-aoi-for-raster")
@@ -305,7 +298,6 @@ test("RasterControlsView exposes accessible exclusive histogram-area choices", (
     );
     for (const selector of [
         "#clear-raster-sample-window",
-        "#select-raster-sample-window",
         "#use-temporary-aoi-for-raster",
     ]) {
         assert.equal(
@@ -347,24 +339,12 @@ test("RasterControlsView reports renderer visibility without gating analysis", (
         /global-temperature\.tif — not visible on the map/
     );
     assert.equal(
-        documentContext.querySelector("#sample-raster-map-center").disabled,
-        false
-    );
-    assert.equal(
-        documentContext.querySelector("#select-raster-sample-window").disabled,
-        false
-    );
-    assert.equal(
         documentContext.querySelector("#retry-raster-statistics").disabled,
         false
     );
 
     view.setActiveLayer("global-temperature.tif", true);
 
-    assert.equal(
-        documentContext.querySelector("#sample-raster-map-center").disabled,
-        false
-    );
     assert.equal(
         documentContext.querySelector("#retry-raster-statistics").disabled,
         false

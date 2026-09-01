@@ -300,7 +300,8 @@ test("inspector visualization and previews can reveal Map layers through composi
         /onHistogramRequested: \(\) => mapInspection\.showHistogram\(\)/
     );
     assert.doesNotMatch(COMPOSITION_SOURCE, /layoutController\.showWorkspace\("histogram"\)/);
-    assert.match(COMPOSITION_SOURCE, /onHistogramClose: \(\) => activeRasterViewer\?\.stopSampleWindowSelection\(\)/);
+    assert.match(COMPOSITION_SOURCE, /new MapInspectionController\(\)/);
+    assert.doesNotMatch(COMPOSITION_SOURCE, /stopSampleWindowSelection|onHistogramClose/);
 });
 
 test("Sampling keeps area controls and AOI; map exploration owns histogram results", () => {
@@ -338,8 +339,6 @@ test("Sampling keeps area controls and AOI; map exploration owns histogram resul
     );
     for (const action of [
         "clear-raster-sample-window",
-        "sample-raster-map-center",
-        "select-raster-sample-window",
         "use-temporary-aoi-for-raster",
     ]) {
         assert.match(sampling.source, new RegExp(`id="${action}"`));
@@ -398,7 +397,9 @@ test("map histograms put plots before captions and mode without a visible title 
     assert.match(STYLESHEET, /\.map-histogram-toolbar\s*\{[^}]*height:\s*0/s);
     assert.match(STYLESHEET, /#map-histogram-panel \.raster-bivariate-statistics,\s*#map-histogram-panel \.raster-histogram\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/s);
     assert.match(STYLESHEET, /#map-histogram-panel \.raster-histogram-heading\s*\{[^}]*padding-right:\s*36px/s);
-    assert.match(STYLESHEET, /#open-map-histogram\[hidden\],[^{]*\{\s*display:\s*none/s);
+    assert.match(STYLESHEET, /#explore-map-center\[hidden\],[^{]*\{\s*display:\s*none/s);
+    assert.match(MARKUP, /id="explore-map-center"[^>]*>Explore map center<\/button>/);
+    assert.doesNotMatch(MARKUP, /Inspect features|Select map window|Sample map center/);
 });
 
 test("sidebar panels own deliberate, independent scrolling", () => {
@@ -589,7 +590,7 @@ test("semantic regions preserve one DOM instance of every owned control", () => 
         "map-inspection",
         "map-histogram-panel",
         "map-histogram-scope",
-        "open-map-histogram",
+        "explore-map-center",
         "close-map-histogram",
         "layer-style-editor",
     ];
