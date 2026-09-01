@@ -186,7 +186,7 @@ export class VectorStyleControls {
         const target = this.target;
         const generation = this.generation;
         this.#setBusy(true);
-        this.status.textContent = "Applying style…";
+        this.status.textContent = "Applying style...";
         try {
             const appliedStyle = normalizeVectorStyle(await target.apply(style));
             if (this.generation !== generation) return;

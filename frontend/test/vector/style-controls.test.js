@@ -151,6 +151,7 @@ test("closing during an apply cannot disable or overwrite a reopened form", asyn
     });
     fixture.controls.applyButton.dispatchEvent(new Event("click"));
     assert.equal(fixture.controls.applyButton.disabled, true);
+    assert.equal(fixture.controls.status.textContent, "Applying style...");
     fixture.controls.hide();
     fixture.controls.show(fixture.target("line", style));
     assert.equal(fixture.controls.applyButton.disabled, false);
