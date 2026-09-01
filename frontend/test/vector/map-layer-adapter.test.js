@@ -15,9 +15,10 @@ const PUBLICATION = Object.freeze({
     strokeColor: "#581c87",
     strokeOpacity: 1,
     strokeWidth: 2,
-    pointSize: null,
-    categorical: null,
-    label: null,
+        pointSize: null,
+        categorical: null,
+        graduated: null,
+        label: null,
   },
 });
 
@@ -32,6 +33,7 @@ function createAdapterFixture(fitToBounds) {
   const fitCalls = [];
   const tileErrors = [];
   const categoryCalls = [];
+  const numericCalls = [];
   const leaflet = {
     tileLayer: {
       wms(url, options) {
@@ -74,11 +76,16 @@ function createAdapterFixture(fitToBounds) {
         categoryCalls.push({ item, field });
         return { field, values: [] };
       },
+      classify: async (item, field, method, classCount) => {
+        numericCalls.push({ item, field, method, classCount });
+        return { field, method, requestedClassCount: classCount };
+      },
     }),
     wmsCalls,
     fitCalls,
     tileErrors,
     categoryCalls,
+    numericCalls,
   };
 }
 
@@ -116,6 +123,16 @@ test("vector map-layer adapter owns publication, WMS, legend, and optional fit",
     { field: "name", values: [] },
   );
   assert.deepEqual(fitted.categoryCalls, [{ item, field: "name" }]);
+  assert.deepEqual(
+    await fitted.adapter.classifyNumbers(record, "area", "quantile", 5),
+    { field: "area", method: "quantile", requestedClassCount: 5 },
+  );
+  assert.deepEqual(fitted.numericCalls, [{
+    item,
+    field: "area",
+    method: "quantile",
+    classCount: 5,
+  }]);
   assert.equal(
     layer.errorHandler.type,
     "tileerror",

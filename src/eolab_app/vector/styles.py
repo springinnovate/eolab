@@ -114,9 +114,7 @@ def build_vector_sld(
         user_style,
         f"{{{SLD_NAMESPACE}}}FeatureTypeStyle",
     )
-    if style.categorical is None:
-        _append_symbol_rule(feature_type_style, style)
-    else:
+    if style.categorical is not None:
         categorical = style.categorical
         for category_rule in categorical.rules:
             rule = ElementTree.SubElement(
@@ -147,9 +145,32 @@ def build_vector_sld(
                 f"{{{SLD_NAMESPACE}}}ElseFilter",
             )
             _append_symbolizer(rule, style, categorical.other_color)
+    elif style.graduated is not None:
+        graduated = style.graduated
+        for graduated_rule in graduated.rules:
+            rule = ElementTree.SubElement(
+                feature_type_style,
+                f"{{{SLD_NAMESPACE}}}Rule",
+            )
+            _append_numeric_range_filter(
+                rule,
+                graduated.field,
+                graduated_rule.minimum,
+                graduated_rule.maximum,
+            )
+            _append_symbolizer(rule, style, graduated_rule.color)
+        if graduated.missing_color is not None:
+            rule = ElementTree.SubElement(
+                feature_type_style,
+                f"{{{SLD_NAMESPACE}}}Rule",
+            )
+            _append_null_filter(rule, graduated.field)
+            _append_symbolizer(rule, style, graduated.missing_color)
+    else:
+        _append_symbol_rule(feature_type_style, style)
     if style.label is not None:
         label_feature_type_style = feature_type_style
-        if style.categorical is not None:
+        if style.categorical is not None or style.graduated is not None:
             label_feature_type_style = ElementTree.SubElement(
                 user_style,
                 f"{{{SLD_NAMESPACE}}}FeatureTypeStyle",
@@ -186,15 +207,16 @@ def _append_symbol_rule(
 def _append_symbolizer(
     rule: ElementTree.Element,
     style: VectorStyle,
-    category_color: str | None = None,
+    classification_color: str | None = None,
 ) -> None:
-    """Append one geometry-correct symbolizer with an optional category color.
+    """Append a geometry symbolizer with an optional classification color.
 
     Args:
         rule: SLD rule receiving the geometry symbolizer.
         style: Complete validated vector style.
-        category_color: Optional validated color replacing point/polygon fill
-            or line stroke while retaining all other symbol controls.
+        classification_color: Optional validated categorical or graduated color
+            replacing point/polygon fill or line stroke while retaining all
+            other symbol controls.
     """
     symbolizer = ElementTree.SubElement(
         rule,
@@ -210,7 +232,7 @@ def _append_symbolizer(
             mark,
             f"{{{SLD_NAMESPACE}}}WellKnownName",
         ).text = "circle"
-        _append_fill(mark, style, category_color)
+        _append_fill(mark, style, classification_color)
         _append_stroke(mark, style)
         ElementTree.SubElement(
             graphic,
@@ -221,10 +243,10 @@ def _append_symbolizer(
             symbolizer,
             style,
             line_cap=True,
-            color=category_color,
+            color=classification_color,
         )
     else:
-        _append_fill(symbolizer, style, category_color)
+        _append_fill(symbolizer, style, classification_color)
         _append_stroke(symbolizer, style)
 
 
@@ -260,6 +282,60 @@ def _append_category_filter(
     ).text = _category_literal(value_kind, value)
 
 
+def _append_numeric_range_filter(
+    rule: ElementTree.Element,
+    field: str,
+    minimum: float | None,
+    maximum: float | None,
+) -> None:
+    """Append one complete open-ended numeric range filter.
+
+    Lower bounds are exclusive and upper bounds are inclusive, matching the
+    server classification contract without overlapping adjacent rules.
+
+    Args:
+        rule: SLD rule receiving the filter.
+        field: Validated authoritative numeric property name.
+        minimum: Optional exclusive lower boundary.
+        maximum: Optional inclusive upper boundary.
+    """
+    filter_element = ElementTree.SubElement(
+        rule,
+        f"{{{OGC_NAMESPACE}}}Filter",
+    )
+    if minimum is None and maximum is None:
+        negation = ElementTree.SubElement(
+            filter_element,
+            f"{{{OGC_NAMESPACE}}}Not",
+        )
+        _append_property_is_null(negation, field)
+        return
+    comparisons: list[tuple[str, float]] = []
+    if minimum is not None:
+        comparisons.append(("PropertyIsGreaterThan", minimum))
+    if maximum is not None:
+        comparisons.append(("PropertyIsLessThanOrEqualTo", maximum))
+    parent = filter_element
+    if len(comparisons) == 2:
+        parent = ElementTree.SubElement(
+            filter_element,
+            f"{{{OGC_NAMESPACE}}}And",
+        )
+    for operator, boundary in comparisons:
+        comparison = ElementTree.SubElement(
+            parent,
+            f"{{{OGC_NAMESPACE}}}{operator}",
+        )
+        ElementTree.SubElement(
+            comparison,
+            f"{{{OGC_NAMESPACE}}}PropertyName",
+        ).text = field
+        ElementTree.SubElement(
+            comparison,
+            f"{{{OGC_NAMESPACE}}}Literal",
+        ).text = _number(boundary)
+
+
 def _append_null_filter(rule: ElementTree.Element, field: str) -> None:
     """Append one property-is-null filter to an SLD rule.
 
@@ -271,8 +347,21 @@ def _append_null_filter(rule: ElementTree.Element, field: str) -> None:
         rule,
         f"{{{OGC_NAMESPACE}}}Filter",
     )
+    _append_property_is_null(filter_element, field)
+
+
+def _append_property_is_null(
+    parent: ElementTree.Element,
+    field: str,
+) -> None:
+    """Append one property-is-null expression below an OGC parent.
+
+    Args:
+        parent: Filter or logical expression receiving the comparison.
+        field: Validated authoritative property name.
+    """
     comparison = ElementTree.SubElement(
-        filter_element,
+        parent,
         f"{{{OGC_NAMESPACE}}}PropertyIsNull",
     )
     ElementTree.SubElement(
@@ -502,7 +591,7 @@ def _append_fill(
     Args:
         parent: Mark or polygon symbolizer receiving the fill.
         style: Validated point or polygon style.
-        color: Optional categorical fill color.
+        color: Optional categorical or graduated fill color.
     """
     fill = ElementTree.SubElement(parent, f"{{{SLD_NAMESPACE}}}Fill")
     _append_css_parameter(
@@ -529,7 +618,7 @@ def _append_stroke(
         parent: Symbolizer or Mark receiving the stroke.
         style: Complete validated style.
         line_cap: Whether to request round line endings.
-        color: Optional categorical stroke color.
+        color: Optional categorical or graduated stroke color.
     """
     stroke = ElementTree.SubElement(parent, f"{{{SLD_NAMESPACE}}}Stroke")
     _append_css_parameter(stroke, "stroke", color or style.stroke_color)

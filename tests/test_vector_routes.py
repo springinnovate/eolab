@@ -9,6 +9,7 @@ from eolab_app.vector.models import (
     AppliedVectorStyle,
     PublishedVector,
     VectorCategorySummary,
+    VectorNumericClassificationSummary,
 )
 from eolab_app.vector.sources import PublishedVectorRegistry
 from eolab_app.vector.styles import default_vector_style
@@ -88,6 +89,41 @@ class _VectorRouteService:
             maximumLimit=50,
         )
 
+    async def classify_numeric(
+        self,
+        request: object,
+    ) -> VectorNumericClassificationSummary:
+        """Return one fixed bounded numeric classification.
+
+        Args:
+            request: Validated Item identity, numeric field, and class options.
+
+        Returns:
+            Complete two-class numeric summary fixture.
+        """
+        return VectorNumericClassificationSummary(
+            field=request.field,
+            fieldType="float",
+            method=request.method,
+            requestedClassCount=request.class_count,
+            actualClassCount=2,
+            classes=(
+                {"minimum": None, "maximum": 5.0, "count": 6},
+                {"minimum": 5.0, "maximum": None, "count": 4},
+            ),
+            observedMinimum=1.0,
+            observedMaximum=9.0,
+            numericValueCount=10,
+            scannedFeatureCount=10,
+            featureCount=10,
+            nullCount=0,
+            unsupportedValueCount=0,
+            complete=True,
+            defaultClassCount=5,
+            minimumClassCount=2,
+            maximumClassCount=9,
+        )
+
 
 class _VectorConflictService:
     """Raise one controlled application conflict."""
@@ -130,6 +166,17 @@ class _VectorConflictService:
 
         Args:
             request: Validated Item identity and exact field.
+
+        Raises:
+            VectorConflictError: Always, with browser-safe detail.
+        """
+        raise VectorConflictError("controlled vector conflict")
+
+    async def classify_numeric(self, request: object) -> None:
+        """Reject numeric classification.
+
+        Args:
+            request: Validated Item identity and classification options.
 
         Raises:
             VectorConflictError: Always, with browser-safe detail.
@@ -205,6 +252,7 @@ def test_vector_routes_preserve_identity_and_fixed_style_contract() -> None:
             "strokeWidth": 2.0,
             "pointSize": None,
             "categorical": None,
+            "graduated": None,
             "label": None,
         },
     }
@@ -222,6 +270,7 @@ def test_vector_routes_preserve_identity_and_fixed_style_contract() -> None:
             "strokeWidth": 4.0,
             "pointSize": None,
             "categorical": None,
+            "graduated": None,
             "label": {
                 "field": "name",
                 "fontFamily": "SansSerif",
@@ -258,6 +307,21 @@ def test_vector_routes_preserve_identity_and_fixed_style_contract() -> None:
         "defaultLimit": 20,
         "maximumLimit": 50,
     }
+    numeric = client.post("/api/vector-rendering/numeric-classifications", json={
+        **identity,
+        "field": "score",
+        "method": "quantile",
+        "classCount": 5,
+    })
+    assert numeric.status_code == 200
+    assert numeric.json()["field"] == "score"
+    assert numeric.json()["method"] == "quantile"
+    assert numeric.json()["requestedClassCount"] == 5
+    assert numeric.json()["actualClassCount"] == 2
+    assert numeric.json()["classes"] == [
+        {"minimum": None, "maximum": 5.0, "count": 6},
+        {"minimum": 5.0, "maximum": None, "count": 4},
+    ]
 
 
 def test_vector_routes_translate_application_conflicts() -> None:

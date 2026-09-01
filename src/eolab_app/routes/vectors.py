@@ -10,10 +10,12 @@ from eolab_app.vector.assessment import VectorAssessmentService
 from eolab_app.vector.models import (
     AppliedVectorStyle,
     CatalogVectorCategoryRequest,
+    CatalogVectorNumericClassificationRequest,
     CatalogVectorRequest,
     CatalogVectorStyleRequest,
     PublishedVector,
     VectorCategorySummary,
+    VectorNumericClassificationSummary,
 )
 from eolab_app.vector.publication import VectorPublicationService
 from eolab_app.vector.sources import PublishedVectorRegistry
@@ -44,7 +46,7 @@ def create_vector_feature(
     Args:
         assessment_service: Authoritative selected-Item reassessment workflow.
         publication_service: Serialized exact-layer publication workflow.
-        style_service: Serialized authoritative vector styling workflow.
+        style_service: Authoritative styling and bounded field-class workflow.
         registry: Process-local vector WMS authorization registry.
 
     Returns:
@@ -96,10 +98,10 @@ def create_vector_feature(
     async def style_vector(
         request: CatalogVectorStyleRequest,
     ) -> AppliedVectorStyle:
-        """Apply one validated symbol to a current published vector layer.
+        """Apply one validated style to a current published vector layer.
 
         Args:
-            request: Authoritative catalog identity and complete symbol state.
+            request: Authoritative catalog identity and complete style state.
 
         Returns:
             Applied per-layer style identity and normalized state.
@@ -134,6 +136,31 @@ def create_vector_feature(
         """
         try:
             return await style_service.summarize_categories(request)
+        except VectorFeatureError as error:
+            raise vector_http_exception(error) from error
+
+    @router.post(
+        "/numeric-classifications",
+        response_model=VectorNumericClassificationSummary,
+    )
+    async def classify_vector_numeric_field(
+        request: CatalogVectorNumericClassificationRequest,
+    ) -> VectorNumericClassificationSummary:
+        """Classify one current numeric field through a bounded source read.
+
+        Args:
+            request: Catalog identity, numeric field, method, and class count.
+
+        Returns:
+            Open-ended numeric classes, counts, extent, completeness, and
+            server-advertised class-count limits.
+
+        Raises:
+            HTTPException: If the Item, source signature, numeric field, or
+                bounded reader cannot safely satisfy the operation.
+        """
+        try:
+            return await style_service.classify_numeric(request)
         except VectorFeatureError as error:
             raise vector_http_exception(error) from error
 

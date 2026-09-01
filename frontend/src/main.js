@@ -747,6 +747,8 @@ async function initializeCatalog(
                 fields: record.state.labelFields,
                 summarize: (field) =>
                     record.adapter.summarizeCategories(record, field),
+                classify: (field, method, classCount) =>
+                    record.adapter.classifyNumbers(record, field, method, classCount),
                 apply: async (style) => {
                     const applied = await record.adapter.applyStyle(record, style);
                     mapLayerController.render();

@@ -10,7 +10,7 @@ import pytest
 
 from eolab_app.catalog.geopackage import build_stac_items
 from eolab_app.vector.assessment import VectorAssessmentFinalizer
-from eolab_app.vector.categories import FionaVectorCategoryReader
+from eolab_app.vector.fields import FionaVectorFieldReader
 from eolab_app.vector.errors import VectorConflictError
 from eolab_app.vector.models import CatalogVectorCategoryRequest
 from eolab_app.vector.sources import MountedVectorResolver, PublishedVectorRegistry
@@ -103,14 +103,14 @@ def category_service(item: dict[str, Any], tmp_path: Path) -> VectorStyleService
         tmp_path: Mounted source root.
 
     Returns:
-        Vector style service using the production Fiona category adapter.
+        Vector style service using the production Fiona field adapter.
     """
     return VectorStyleService(
         StaticCatalog(item),
         MountedVectorResolver(tmp_path),
         UnusedStyler(),
         PublishedVectorRegistry(),
-        FionaVectorCategoryReader(),
+        FionaVectorFieldReader(),
     )
 
 
@@ -157,12 +157,12 @@ def test_fiona_reader_is_feature_bounded_and_cooperatively_cancelled(
     """
     item, _ = assessed_category_item(tmp_path)
     source = MountedVectorResolver(tmp_path).resolve(item)
-    reader = FionaVectorCategoryReader()
+    reader = FionaVectorFieldReader()
 
-    partial = reader.read(source, "category", 4, Event())
+    partial = reader.read_categories(source, "category", 4, Event())
     cancelled = Event()
     cancelled.set()
-    empty = reader.read(source, "category", 4, cancelled)
+    empty = reader.read_categories(source, "category", 4, cancelled)
 
     assert partial.scanned_feature_count == 4
     assert partial.complete is False

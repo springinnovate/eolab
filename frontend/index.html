@@ -899,6 +899,7 @@
             <select id="vector-style-mode">
               <option value="single">Single color</option>
               <option value="categories">Categories</option>
+              <option value="graduated">Numeric ranges</option>
             </select>
           </label>
           <fieldset id="vector-category-fields" class="vector-category-controls" hidden>
@@ -920,6 +921,40 @@
               role="status" aria-live="polite" aria-atomic="true"></p>
             <div id="vector-category-list" class="vector-category-list"
               aria-label="Category colors"></div>
+          </fieldset>
+          <fieldset id="vector-graduated-fields" class="vector-graduated-controls" hidden>
+            <legend>Numeric ranges</legend>
+            <div class="vector-graduated-options">
+              <label for="vector-graduated-field">
+                <span>Numeric field</span>
+                <select id="vector-graduated-field"></select>
+              </label>
+              <label for="vector-graduated-method">
+                <span>Method</span>
+                <select id="vector-graduated-method">
+                  <option value="equal-interval">Equal interval</option>
+                  <option value="quantile">Quantile</option>
+                </select>
+              </label>
+              <label for="vector-graduated-class-count">
+                <span>Classes</span>
+                <input id="vector-graduated-class-count" type="number"
+                  min="2" max="9" step="1" value="5" />
+              </label>
+              <label for="vector-graduated-palette">
+                <span>Palette</span>
+                <select id="vector-graduated-palette">
+                  <option value="blues">Blues</option>
+                  <option value="viridis">Viridis</option>
+                  <option value="yellow-red">Yellow to red</option>
+                  <option value="purples">Purples</option>
+                </select>
+              </label>
+            </div>
+            <p id="vector-graduated-status" class="vector-category-status"
+              role="status" aria-live="polite" aria-atomic="true"></p>
+            <div id="vector-graduated-list" class="vector-category-list"
+              aria-label="Numeric class colors"></div>
           </fieldset>
           <div id="vector-style-fill-group" class="vector-style-group">
             <label id="vector-style-fill-color-control" for="vector-style-fill-color">

@@ -10,6 +10,7 @@ from eolab_app.vector.models import (
     VectorCategoryRead,
     VectorFormat,
     VectorGeometryKind,
+    VectorNumericRead,
     VectorReaderAssessment,
     VectorStyle,
 )
@@ -107,10 +108,10 @@ class VectorPublisher(Protocol):
         ...
 
 
-class VectorCategoryReader(Protocol):
-    """Bounded mounted-source attribute reader for vector styling."""
+class VectorFieldReader(Protocol):
+    """Bounded mounted-source field reader for vector styling."""
 
-    def read(
+    def read_categories(
         self,
         source: ResolvedVectorSource,
         field: str,
@@ -127,6 +128,29 @@ class VectorCategoryReader(Protocol):
 
         Returns:
             Bounded observed category counts and completion metadata.
+
+        Raises:
+            VectorFeatureError: If the exact source or field cannot be read.
+        """
+        ...
+
+    def read_numbers(
+        self,
+        source: ResolvedVectorSource,
+        field: str,
+        feature_limit: int,
+        cancel_event: Event,
+    ) -> VectorNumericRead:
+        """Collect finite numbers from one exact vector source field.
+
+        Args:
+            source: Catalog-derived exact mounted source and native layer.
+            field: Authoritative numeric attribute field identity.
+            feature_limit: Maximum features whose values may be inspected.
+            cancel_event: Cooperative cancellation signal checked while reading.
+
+        Returns:
+            Bounded finite numbers and completion metadata.
 
         Raises:
             VectorFeatureError: If the exact source or field cannot be read.

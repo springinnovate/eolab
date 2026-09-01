@@ -304,6 +304,32 @@ test("raster and vector rows use the same compact action layout", () => {
   }
 });
 
+test("neutral classified legends render as compact layer disclosures", () => {
+  const doc = new FakeLayerStackDocument();
+  const view = new MapLayerStackView(doc);
+  const vector = {
+    ...LAYERS[0],
+    legend: {
+      kind: "graduated",
+      label: "risk score",
+      entries: [
+        { label: "≤ 1", color: "#f7fbff" },
+        { label: "> 1", color: "#08306b" },
+      ],
+    },
+  };
+
+  view.render([vector], null);
+  const row = doc.querySelector("#raster-layer-list").children[0];
+  const legend = elementsByClass(row, "map-layer-legend")[0];
+  const swatches = elementsByClass(legend, "map-layer-legend-swatch");
+
+  assert.equal(legend.tagName, "DETAILS");
+  assert.equal(elementsByClass(legend, "map-layer-legend-field")[0].textContent, "risk score");
+  assert.equal(swatches.length, 2);
+  assert.equal(swatches[0].style.backgroundColor, "#f7fbff");
+});
+
 test("row actions forward stable identity; Escape closes actions before the workspace", () => {
   const doc = new FakeLayerStackDocument();
   const view = new MapLayerStackView(doc);

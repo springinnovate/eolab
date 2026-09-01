@@ -3,10 +3,14 @@
 import {
     categoryValueKey,
     formatCategoryValue,
+    formatNumericRange,
     normalizeVectorCategorySummary,
+    normalizeVectorNumericClassification,
     normalizeVectorStyle,
     qualitativeCategoryColor,
+    sequentialPaletteColors,
     vectorCategoricalFields,
+    vectorNumericFields,
 } from "./style.js";
 
 const VECTOR_LABEL_DEFAULTS = Object.freeze({
@@ -40,6 +44,13 @@ export class VectorStyleControls {
         this.categoryRegenerate = documentContext.querySelector("#vector-category-regenerate");
         this.categoryStatus = documentContext.querySelector("#vector-category-status");
         this.categoryList = documentContext.querySelector("#vector-category-list");
+        this.graduatedFieldsRoot = documentContext.querySelector("#vector-graduated-fields");
+        this.graduatedField = documentContext.querySelector("#vector-graduated-field");
+        this.graduatedMethod = documentContext.querySelector("#vector-graduated-method");
+        this.graduatedClassCount = documentContext.querySelector("#vector-graduated-class-count");
+        this.graduatedPalette = documentContext.querySelector("#vector-graduated-palette");
+        this.graduatedStatus = documentContext.querySelector("#vector-graduated-status");
+        this.graduatedList = documentContext.querySelector("#vector-graduated-list");
         this.fillGroup = documentContext.querySelector("#vector-style-fill-group");
         this.pointGroup = documentContext.querySelector("#vector-style-point-group");
         this.fillColorControl = documentContext.querySelector("#vector-style-fill-color-control");
@@ -86,7 +97,9 @@ export class VectorStyleControls {
         ];
         this.labelFields = [];
         this.categoryFields = [];
+        this.graduatedFields = [];
         this.categorySummary = null;
+        this.graduatedSummary = null;
         this.categoryColors = new Map();
         this.categoryColorInputs = [];
         this.otherColor = "#9ca3af";
@@ -94,6 +107,11 @@ export class VectorStyleControls {
         this.paletteGeneration = 0;
         this.categoryLoading = false;
         this.categoryRequest = 0;
+        this.graduatedLoading = false;
+        this.graduatedRequest = 0;
+        this.graduatedMissingEnabled = false;
+        this.graduatedMissingColor = "#d1d5db";
+        this.graduatedMissingInputs = [];
         this.target = null;
         this.generation = 0;
         this.busy = false;
@@ -105,7 +123,7 @@ export class VectorStyleControls {
             this.#renderLabelNote();
         };
         /** Start the asynchronous color-mode transition. @return {void} */
-        this.onModeChange = () => void this.#changeCategoryMode();
+        this.onModeChange = () => void this.#changeColorMode();
         /** Reset and reload categories after the selected field changes. @return {void} */
         this.onCategoryFieldChange = () => {
             this.categorySummary = null;
@@ -117,12 +135,23 @@ export class VectorStyleControls {
         this.onCategoryLimitInput = () => this.#renderCategories();
         /** Replace generated category colors on explicit user request. @return {void} */
         this.onCategoryRegenerate = () => this.#regenerateCategoryColors();
+        /** Reload numeric classes after a server-controlled option changes. @return {void} */
+        this.onGraduatedClassificationChange = () => {
+            this.graduatedSummary = null;
+            void this.#loadGraduated();
+        };
+        /** Repaint current ranges after the palette changes. @return {void} */
+        this.onGraduatedPaletteChange = () => this.#renderGraduated();
         /** Start the asynchronous complete-style application. @return {void} */
         this.onApply = () => void this.#apply();
         this.mode.addEventListener("change", this.onModeChange);
         this.categoryField.addEventListener("change", this.onCategoryFieldChange);
         this.categoryLimit.addEventListener("input", this.onCategoryLimitInput);
         this.categoryRegenerate.addEventListener("click", this.onCategoryRegenerate);
+        this.graduatedField.addEventListener("change", this.onGraduatedClassificationChange);
+        this.graduatedMethod.addEventListener("change", this.onGraduatedClassificationChange);
+        this.graduatedClassCount.addEventListener("change", this.onGraduatedClassificationChange);
+        this.graduatedPalette.addEventListener("change", this.onGraduatedPaletteChange);
         this.fillOpacity.addEventListener("input", this.onRangeInput);
         this.strokeOpacity.addEventListener("input", this.onRangeInput);
         this.labelEnabled.addEventListener("change", this.onLabelInput);
@@ -136,6 +165,7 @@ export class VectorStyleControls {
      *
      * @param {{key:string,style:Object,fields:ReadonlyArray,
      * summarize:(field:string)=>Promise<Object>,
+     * classify:(field:string,method:string,classCount:number)=>Promise<Object>,
      * apply:(style:Object)=>Promise<Object>}} target
      * Narrow vector target contract.
      * @return {void}
@@ -147,9 +177,12 @@ export class VectorStyleControls {
             this.generation += 1;
             this.categoryRequest += 1;
             this.categoryLoading = false;
+            this.graduatedRequest += 1;
+            this.graduatedLoading = false;
         }
         this.labelFields = Array.isArray(target.fields) ? target.fields : [];
         this.categoryFields = vectorCategoricalFields(this.labelFields);
+        this.graduatedFields = vectorNumericFields(this.labelFields);
         this.target = { ...target, fields: this.labelFields };
         this.root.hidden = false;
         if (!changedTarget) return;
@@ -166,6 +199,7 @@ export class VectorStyleControls {
         if (style.pointSize !== null) this.pointSize.value = String(style.pointSize);
         this.#renderLabelFields();
         this.#renderCategoryFields();
+        this.#renderGraduatedFields();
         this.#renderPlacementOptions(style.geometryKind);
         const label = style.label;
         const labelFieldAvailable = label !== null && this.labelFields.some(
@@ -194,8 +228,11 @@ export class VectorStyleControls {
             label?.minimumZoom ?? VECTOR_LABEL_DEFAULTS.minimumZoom,
         );
         const categorical = style.categorical;
-        this.mode.value = categorical === null ? "single" : "categories";
+        const graduated = style.graduated;
+        this.mode.value = categorical !== null
+            ? "categories" : graduated !== null ? "graduated" : "single";
         this.categorySummary = null;
+        this.graduatedSummary = null;
         this.categoryColors.clear();
         this.paletteGeneration = 0;
         if (categorical !== null) {
@@ -212,22 +249,33 @@ export class VectorStyleControls {
             this.otherColor = "#9ca3af";
             this.missingColor = "#d1d5db";
         }
+        this.graduatedField.value = graduated?.field ?? this.graduatedFields[0]?.name ?? "";
+        this.graduatedMethod.value = graduated?.method ?? "equal-interval";
+        this.graduatedClassCount.value = String(graduated?.classCount ?? 5);
+        this.graduatedPalette.value = graduated?.palette ?? "blues";
+        this.graduatedMissingEnabled = graduated?.missingColor !== null && graduated !== null;
+        this.graduatedMissingColor = graduated?.missingColor ?? "#d1d5db";
         this.status.textContent = "";
         this.categoryStatus.textContent = "";
         this.categoryList.replaceChildren();
+        this.graduatedStatus.textContent = "";
+        this.graduatedList.replaceChildren();
         this.#renderRangeValues();
-        this.#renderCategoryMode();
+        this.#renderColorMode();
         this.#synchronizeLabelInputs();
         this.#renderLabelNote();
         if (this.mode.value === "categories") void this.#loadCategories();
+        if (this.mode.value === "graduated") void this.#loadGraduated();
     }
 
     /** Hide and forget the current target. @return {void} */
     hide() {
         if (this.target !== null) this.generation += 1;
         this.categoryRequest += 1;
+        this.graduatedRequest += 1;
         this.target = null;
         this.categoryLoading = false;
+        this.graduatedLoading = false;
         this.#setBusy(false);
         this.root.hidden = true;
     }
@@ -239,6 +287,10 @@ export class VectorStyleControls {
         this.categoryField.removeEventListener("change", this.onCategoryFieldChange);
         this.categoryLimit.removeEventListener("input", this.onCategoryLimitInput);
         this.categoryRegenerate.removeEventListener("click", this.onCategoryRegenerate);
+        this.graduatedField.removeEventListener("change", this.onGraduatedClassificationChange);
+        this.graduatedMethod.removeEventListener("change", this.onGraduatedClassificationChange);
+        this.graduatedClassCount.removeEventListener("change", this.onGraduatedClassificationChange);
+        this.graduatedPalette.removeEventListener("change", this.onGraduatedPaletteChange);
         this.fillOpacity.removeEventListener("input", this.onRangeInput);
         this.strokeOpacity.removeEventListener("input", this.onRangeInput);
         this.labelEnabled.removeEventListener("change", this.onLabelInput);
@@ -268,6 +320,8 @@ export class VectorStyleControls {
                 pointSize: this.pointGroup.hidden ? null : Number(this.pointSize.value),
                 categorical: this.mode.value === "categories"
                     ? this.#categoricalState() : null,
+                graduated: this.mode.value === "graduated"
+                    ? this.#graduatedState() : null,
                 label: this.labelEnabled.checked ? this.#labelState() : null,
             });
         } catch (error) {
@@ -285,6 +339,9 @@ export class VectorStyleControls {
             this.status.textContent = "Style applied to the map.";
             if (appliedStyle.categorical !== null) {
                 this.categoryLimit.value = String(appliedStyle.categorical.limit);
+            }
+            if (appliedStyle.graduated !== null) {
+                this.graduatedClassCount.value = String(appliedStyle.graduated.classCount);
             }
             this.#renderLabelNote();
         } catch (error) {
@@ -310,6 +367,7 @@ export class VectorStyleControls {
         for (const input of this.symbolInputs) input.disabled = busy;
         this.#synchronizeLabelInputs();
         this.#synchronizeCategoryInputs();
+        this.#synchronizeGraduatedInputs();
     }
 
     /**
@@ -328,21 +386,21 @@ export class VectorStyleControls {
      * @return {Promise<void>} Resolves after any required bounded category
      * summary finishes loading.
      */
-    async #changeCategoryMode() {
-        this.#renderCategoryMode();
+    async #changeColorMode() {
+        this.#renderColorMode();
+        if (this.mode.value !== "graduated") {
+            this.graduatedRequest += 1;
+            this.graduatedLoading = false;
+            this.#synchronizeGraduatedInputs();
+        }
         if (this.mode.value !== "categories") {
             this.categoryRequest += 1;
             this.categoryLoading = false;
             this.#synchronizeCategoryInputs();
-            return;
-        }
-        if (this.categoryFields.length === 0) {
+        } else if (this.categoryFields.length === 0) {
             this.categoryStatus.textContent =
                 "This Item has no text, integer, number, or boolean fields.";
-            this.#synchronizeCategoryInputs();
-            return;
-        }
-        if (
+        } else if (
             this.categorySummary === null ||
             this.categorySummary.field !== this.categoryField.value
         ) {
@@ -350,6 +408,18 @@ export class VectorStyleControls {
         } else {
             this.#renderCategories();
         }
+        if (this.mode.value === "graduated" && this.graduatedFields.length === 0) {
+            this.graduatedStatus.textContent = "This Item has no numeric fields.";
+        } else if (
+            this.mode.value === "graduated" &&
+            !this.#graduatedSummaryMatchesControls()
+        ) {
+            await this.#loadGraduated();
+        } else if (this.mode.value === "graduated") {
+            this.#renderGraduated();
+        }
+        this.#synchronizeCategoryInputs();
+        this.#synchronizeGraduatedInputs();
     }
 
     /**
@@ -427,6 +497,117 @@ export class VectorStyleControls {
     }
 
     /**
+     * Load server-computed ranges for the selected numeric field and method.
+     *
+     * @return {Promise<void>} Resolves after the latest classification renders
+     * or its safe error is presented; stale requests do not mutate the form.
+     */
+    async #loadGraduated() {
+        const requestedClassCount = Number(this.graduatedClassCount.value);
+        if (
+            this.target === null || this.mode.value !== "graduated" ||
+            !this.graduatedFields.some(({ name }) => name === this.graduatedField.value) ||
+            !Number.isInteger(requestedClassCount)
+        ) {
+            this.#synchronizeGraduatedInputs();
+            return;
+        }
+        const target = this.target;
+        const generation = this.generation;
+        const graduatedRequest = ++this.graduatedRequest;
+        const field = this.graduatedField.value;
+        const method = this.graduatedMethod.value;
+        this.graduatedLoading = true;
+        this.graduatedStatus.textContent = "Computing bounded numeric classes...";
+        this.graduatedList.replaceChildren();
+        this.#synchronizeGraduatedInputs();
+        try {
+            const summary = normalizeVectorNumericClassification(
+                await target.classify(field, method, requestedClassCount)
+            );
+            if (
+                this.generation !== generation ||
+                this.graduatedRequest !== graduatedRequest ||
+                this.target !== target ||
+                this.graduatedField.value !== field ||
+                this.graduatedMethod.value !== method ||
+                Number(this.graduatedClassCount.value) !== requestedClassCount
+            ) return;
+            if (
+                summary.field !== field || summary.method !== method ||
+                summary.requestedClassCount !== requestedClassCount
+            ) {
+                throw new TypeError("Numeric classification changed unexpectedly.");
+            }
+            this.graduatedSummary = summary;
+            this.graduatedClassCount.min = String(summary.minimumClassCount);
+            this.graduatedClassCount.max = String(summary.maximumClassCount);
+            this.#renderGraduated();
+        } catch (error) {
+            if (
+                this.generation === generation &&
+                this.graduatedRequest === graduatedRequest
+            ) {
+                this.graduatedSummary = null;
+                this.graduatedStatus.textContent = error.message;
+            }
+        } finally {
+            if (
+                this.generation === generation &&
+                this.graduatedRequest === graduatedRequest
+            ) {
+                this.graduatedLoading = false;
+                this.#synchronizeGraduatedInputs();
+            }
+        }
+    }
+
+    /**
+     * Build the complete graduated style block from current server ranges.
+     *
+     * @return {Object} Validated numeric field, method, palette, range rules,
+     * and optional missing-value presentation.
+     * @throws {TypeError} If the current classification is unavailable.
+     */
+    #graduatedState() {
+        const summary = this.graduatedSummary;
+        if (summary === null || !this.#graduatedSummaryMatchesControls()) {
+            throw new TypeError("Wait for current numeric classes before applying.");
+        }
+        const colors = sequentialPaletteColors(
+            this.graduatedPalette.value,
+            summary.actualClassCount,
+        );
+        return {
+            field: summary.field,
+            method: summary.method,
+            classCount: summary.requestedClassCount,
+            palette: this.graduatedPalette.value,
+            rules: summary.classes.map((classification, index) => ({
+                minimum: classification.minimum,
+                maximum: classification.maximum,
+                color: colors[index],
+            })),
+            missingColor: summary.nullCount > 0 && this.graduatedMissingEnabled
+                ? this.graduatedMissingColor : null,
+        };
+    }
+
+    /**
+     * Check whether current numeric controls identify the retained summary.
+     *
+     * @return {boolean} Whether the summary is safe to render and apply.
+     */
+    #graduatedSummaryMatchesControls() {
+        return this.graduatedSummary !== null &&
+            this.graduatedSummary.field === this.graduatedField.value &&
+            this.graduatedSummary.method === this.graduatedMethod.value &&
+            this.graduatedSummary.requestedClassCount === Number(
+                this.graduatedClassCount.value
+            );
+    }
+
+    /**
      * Build the complete categorical style block from the current summary.
      *
      * @return {Object} Validated-input category field, limit, typed rules, and
@@ -469,16 +650,20 @@ export class VectorStyleControls {
     }
 
     /**
-     * Render single/category mode without changing retained form state.
+     * Render the selected color mode without changing retained form state.
      *
      * @return {void}
      */
-    #renderCategoryMode() {
+    #renderColorMode() {
         const categorical = this.mode.value === "categories";
+        const graduated = this.mode.value === "graduated";
+        const classified = categorical || graduated;
         this.categoryFieldsRoot.hidden = !categorical;
-        this.fillColorControl.hidden = categorical;
-        this.strokeColorControl.hidden = categorical && this.fillGroup.hidden;
+        this.graduatedFieldsRoot.hidden = !graduated;
+        this.fillColorControl.hidden = classified;
+        this.strokeColorControl.hidden = classified && this.fillGroup.hidden;
         this.#synchronizeCategoryInputs();
+        this.#synchronizeGraduatedInputs();
     }
 
     /**
@@ -497,7 +682,37 @@ export class VectorStyleControls {
             disabled || !categorical || this.categorySummary === null;
         for (const input of this.categoryColorInputs) input.disabled = disabled;
         this.applyButton.disabled =
-            this.busy || (categorical && (this.categoryLoading || this.categorySummary === null));
+            this.busy ||
+            (categorical && (this.categoryLoading || this.categorySummary === null)) ||
+            (this.mode.value === "graduated" &&
+                (this.graduatedLoading || !this.#graduatedSummaryMatchesControls()));
+    }
+
+    /**
+     * Apply availability, loading, and request state to numeric controls.
+     *
+     * @return {void}
+     */
+    #synchronizeGraduatedInputs() {
+        const graduated = this.mode.value === "graduated";
+        const unavailable = this.graduatedFields.length === 0;
+        const disabled = this.busy || this.graduatedLoading || unavailable;
+        this.mode.disabled = this.busy;
+        this.graduatedField.disabled = disabled;
+        this.graduatedMethod.disabled = disabled || !graduated;
+        this.graduatedClassCount.disabled = disabled || !graduated;
+        this.graduatedPalette.disabled = this.busy || unavailable || !graduated;
+        if (this.graduatedMissingInputs.length === 2) {
+            const [enabled, missingColor] = this.graduatedMissingInputs;
+            enabled.disabled = this.busy || this.graduatedLoading;
+            missingColor.disabled =
+                this.busy || this.graduatedLoading || !enabled.checked;
+        }
+        this.applyButton.disabled =
+            this.busy ||
+            (this.mode.value === "categories" &&
+                (this.categoryLoading || this.categorySummary === null)) ||
+            (graduated && (this.graduatedLoading || !this.#graduatedSummaryMatchesControls()));
     }
 
     /**
@@ -513,6 +728,21 @@ export class VectorStyleControls {
             return option;
         });
         this.categoryField.replaceChildren(...options);
+    }
+
+    /**
+     * Replace the numeric selector with retained eligible Catalog fields.
+     *
+     * @return {void}
+     */
+    #renderGraduatedFields() {
+        const options = this.graduatedFields.map(({ name, type }) => {
+            const option = this.document.createElement("option");
+            option.value = name;
+            option.textContent = `${name} (${type})`;
+            return option;
+        });
+        this.graduatedField.replaceChildren(...options);
     }
 
     /**
@@ -644,6 +874,111 @@ export class VectorStyleControls {
         this.categoryStatus.textContent =
             `${coverage} Styling ${styledCount}` +
             (hasRemaining ? "; remaining values use Other." : ".") + unsupported;
+    }
+
+    /**
+     * Render current numeric ranges, palette swatches, and missing-value style.
+     *
+     * @return {void}
+     */
+    #renderGraduated() {
+        const summary = this.graduatedSummary;
+        if (summary === null || !this.#graduatedSummaryMatchesControls()) {
+            this.graduatedList.replaceChildren();
+            this.#synchronizeGraduatedInputs();
+            return;
+        }
+        const colors = sequentialPaletteColors(
+            this.graduatedPalette.value,
+            summary.actualClassCount,
+        );
+        const rows = summary.classes.map((classification, index) =>
+            this.#graduatedRow(
+                formatNumericRange(classification),
+                summary.complete ? String(classification.count) : `${classification.count}+`,
+                colors[index],
+            )
+        );
+        this.graduatedMissingInputs = [];
+        if (summary.nullCount > 0) {
+            rows.push(this.#graduatedMissingRow(summary));
+        }
+        this.graduatedList.replaceChildren(...rows);
+        const coverage = summary.complete
+            ? `${summary.numericValueCount} numeric values across ${summary.featureCount} features.`
+            : `Classified ${summary.numericValueCount} numeric values in the first ` +
+                `${summary.scannedFeatureCount} of ${summary.featureCount} features.`;
+        const collapsed = summary.actualClassCount < summary.requestedClassCount
+            ? ` Repeated breaks produced ${summary.actualClassCount} distinct classes.`
+            : "";
+        const unsupported = summary.unsupportedValueCount > 0
+            ? ` ${summary.unsupportedValueCount} non-numeric or non-finite values are not styled.`
+            : "";
+        this.graduatedStatus.textContent = coverage + collapsed + unsupported;
+        this.#synchronizeGraduatedInputs();
+    }
+
+    /**
+     * Create one read-only numeric class row.
+     *
+     * @param {string} label User-visible range label.
+     * @param {string} count Exact or lower-bound feature count.
+     * @param {string} currentColor Sequential palette color.
+     * @return {HTMLDivElement} Detached row ready for the numeric list.
+     */
+    #graduatedRow(label, count, currentColor) {
+        const row = this.document.createElement("div");
+        row.className = "vector-category-row vector-graduated-row";
+        const swatch = this.document.createElement("span");
+        swatch.className = "vector-graduated-swatch";
+        swatch.style.backgroundColor = currentColor;
+        swatch.setAttribute("aria-hidden", "true");
+        const name = this.document.createElement("span");
+        name.className = "vector-category-name";
+        name.textContent = label;
+        name.title = label;
+        const featureCount = this.document.createElement("span");
+        featureCount.className = "vector-category-count";
+        featureCount.textContent = count;
+        row.append(swatch, name, featureCount);
+        return row;
+    }
+
+    /**
+     * Create optional styling controls for null numeric values.
+     *
+     * @param {Object} summary Current numeric classification summary.
+     * @return {HTMLLabelElement} Detached missing-value row.
+     */
+    #graduatedMissingRow(summary) {
+        const row = this.document.createElement("label");
+        row.className = "vector-category-row vector-graduated-row";
+        const enabled = this.document.createElement("input");
+        enabled.type = "checkbox";
+        enabled.checked = this.graduatedMissingEnabled;
+        enabled.setAttribute("aria-label", "Style features with no numeric value");
+        const color = this.document.createElement("input");
+        color.type = "color";
+        color.value = this.graduatedMissingColor;
+        color.disabled = this.busy || this.graduatedLoading || !enabled.checked;
+        color.setAttribute("aria-label", "No value color");
+        enabled.addEventListener("change", () => {
+            this.graduatedMissingEnabled = enabled.checked;
+            color.disabled = this.busy || this.graduatedLoading || !enabled.checked;
+        });
+        color.addEventListener("input", () => {
+            this.graduatedMissingColor = color.value;
+        });
+        const name = this.document.createElement("span");
+        name.className = "vector-category-name";
+        name.textContent = "No value";
+        const featureCount = this.document.createElement("span");
+        featureCount.className = "vector-category-count";
+        featureCount.textContent = summary.complete
+            ? String(summary.nullCount) : `${summary.nullCount}+`;
+        row.append(enabled, color, name, featureCount);
+        this.graduatedMissingInputs.push(enabled, color);
+        return row;
     }
 
     /**

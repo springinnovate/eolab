@@ -1,6 +1,7 @@
 /** Focused vector publication and Leaflet adapter for shared map lifecycle. */
 
 import {
+    classifyCatalogVectorNumbers,
     publishCatalogVector,
     styleCatalogVector,
     summarizeCatalogVectorCategories,
@@ -31,6 +32,9 @@ import {
  * @param {(item:Object,field:string)=>Promise<Object>}
  * [configuration.summarize=summarizeCatalogVectorCategories] Bounded category
  * summary API adapter.
+ * @param {(item:Object,field:string,method:string,classCount:number)=>Promise<Object>}
+ * [configuration.classify=classifyCatalogVectorNumbers] Bounded numeric
+ * classification API adapter.
  * @return {Object} Immutable adapter consumed by the shared layer lifecycle.
  */
 export function createVectorMapLayerAdapter({
@@ -42,6 +46,7 @@ export function createVectorMapLayerAdapter({
     publish = publishCatalogVector,
     style = styleCatalogVector,
     summarize = summarizeCatalogVectorCategories,
+    classify = classifyCatalogVectorNumbers,
 }) {
     if (typeof fitToBounds !== "boolean") {
         throw new TypeError("fitToBounds must be boolean.");
@@ -125,10 +130,22 @@ export function createVectorMapLayerAdapter({
             return summarize(record.state.item, field);
         },
         /**
+         * Read bounded numeric classes for one authoritative Catalog field.
+         *
+         * @param {Object} record Neutral retained-layer record.
+         * @param {string} field Current numeric Catalog attribute field.
+         * @param {string} method Equal-interval or quantile classification.
+         * @param {number} classCount Requested bounded class count.
+         * @return {Promise<Object>} Normalized numeric classification.
+         */
+        classifyNumbers(record, field, method, classCount) {
+            return classify(record.state.item, field, method, classCount);
+        },
+        /**
          * Return fixed presentation metadata for the shared layer view.
          *
          * @param {Object} record Neutral retained-layer record.
-         * @return {{legend:Object}} Neutral fixed or categorical legend snapshot.
+         * @return {{legend:Object}} Neutral fixed, categorical, or graduated legend snapshot.
          */
         snapshot(record) {
             return {
