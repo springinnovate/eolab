@@ -891,6 +891,57 @@
           <output id="layer-style-opacity-value" for="layer-style-opacity"></output>
         </label>
         <p id="layer-style-note"></p>
+        <section id="layer-vector-style" class="vector-style-controls"
+          aria-labelledby="vector-style-heading" hidden>
+          <h3 id="vector-style-heading">Vector symbol</h3>
+          <div id="vector-style-fill-group" class="vector-style-group">
+            <label for="vector-style-fill-color">
+              <span>Fill color</span>
+              <input id="vector-style-fill-color" type="color" />
+            </label>
+            <label for="vector-style-fill-opacity">
+              <span>Fill opacity</span>
+              <span class="vector-style-range">
+                <input id="vector-style-fill-opacity" type="range"
+                  min="0" max="100" step="1" />
+                <output id="vector-style-fill-opacity-value"
+                  for="vector-style-fill-opacity"></output>
+              </span>
+            </label>
+          </div>
+          <div class="vector-style-group">
+            <label for="vector-style-stroke-color">
+              <span>Outline color</span>
+              <input id="vector-style-stroke-color" type="color" />
+            </label>
+            <label for="vector-style-stroke-opacity">
+              <span>Outline opacity</span>
+              <span class="vector-style-range">
+                <input id="vector-style-stroke-opacity" type="range"
+                  min="0" max="100" step="1" />
+                <output id="vector-style-stroke-opacity-value"
+                  for="vector-style-stroke-opacity"></output>
+              </span>
+            </label>
+            <label for="vector-style-stroke-width">
+              <span>Outline width</span>
+              <input id="vector-style-stroke-width" type="number"
+                min="0" max="20" step="0.5" />
+            </label>
+          </div>
+          <div id="vector-style-point-group" class="vector-style-group">
+            <label for="vector-style-point-size">
+              <span>Point size</span>
+              <input id="vector-style-point-size" type="number"
+                min="1" max="64" step="1" />
+            </label>
+          </div>
+          <p id="vector-style-status" class="vector-style-status"
+            role="status" aria-live="polite" aria-atomic="true"></p>
+          <button id="apply-vector-style" class="secondary-button" type="button">
+            Apply symbol
+          </button>
+        </section>
         <div id="layer-raster-style"><section
                         class="raster-appearance-controls"
                         id="raster-appearance-controls"

@@ -1,8 +1,9 @@
 /** Focused vector publication and Leaflet adapter for shared map lifecycle. */
 
-import { publishCatalogVector } from "./api.js";
-import { createVectorWmsLayer, VECTOR_DEFAULT_SYMBOLOGY } from "./leaflet.js";
+import { publishCatalogVector, styleCatalogVector } from "./api.js";
+import { createVectorWmsLayer } from "./leaflet.js";
 import { buildCatalogResultPresentation } from "../catalog-result-presentation.js";
+import { normalizeVectorStyle, vectorStyleLegend } from "./style.js";
 
 /**
  * Create the vector implementation of the neutral external-map-layer contract.
@@ -17,6 +18,8 @@ import { buildCatalogResultPresentation } from "../catalog-result-presentation.j
  * layer should fit the map to its assessed extent.
  * @param {(item:Object)=>Promise<Object>} [configuration.publish=publishCatalogVector]
  * Vector publication API adapter.
+ * @param {(item:Object,style:Object)=>Promise<Object>} [configuration.style=styleCatalogVector]
+ * Vector style API adapter.
  * @return {Object} Immutable adapter consumed by the shared layer lifecycle.
  */
 export function createVectorMapLayerAdapter({
@@ -26,6 +29,7 @@ export function createVectorMapLayerAdapter({
     onTileError,
     fitToBounds = true,
     publish = publishCatalogVector,
+    style = styleCatalogVector,
 }) {
     if (typeof fitToBounds !== "boolean") {
         throw new TypeError("fitToBounds must be boolean.");
@@ -50,10 +54,14 @@ export function createVectorMapLayerAdapter({
          * Create adapter-owned state for one retained vector layer.
          *
          * @param {{item:Object}} context Neutral retained-layer context.
-         * @return {{item:Object}} Vector-owned state.
+         * @return {{item:Object,style:Object,layer:Object|null}} Vector-owned state.
          */
-        createState({ item }) {
-            return { item };
+        createState({ item, publication }) {
+            return {
+                item,
+                style: normalizeVectorStyle(publication.style),
+                layer: null,
+            };
         },
         /**
          * Create one bounded fixed-style WMS layer.
@@ -63,12 +71,34 @@ export function createVectorMapLayerAdapter({
          * @return {Object} Leaflet-compatible WMS layer.
          */
         createLayer(record, reportTileError) {
-            return createVectorWmsLayer(
+            const layer = createVectorWmsLayer(
                 leaflet,
                 wmsUrl,
                 record.publication,
                 reportTileError
             );
+            record.state.layer = layer;
+            return layer;
+        },
+        /**
+         * Apply a validated per-layer style and refresh the existing WMS layer.
+         *
+         * @param {Object} record Neutral retained-layer record.
+         * @param {Object} candidate Complete geometry-specific style state.
+         * @return {Promise<Object>} Normalized applied style state.
+         */
+        async applyStyle(record, candidate) {
+            const normalized = normalizeVectorStyle(candidate);
+            const result = await style(record.state.item, normalized);
+            const applied = normalizeVectorStyle(result.style);
+            record.publication = {
+                ...record.publication,
+                styleName: result.styleName,
+                style: applied,
+            };
+            record.state.style = applied;
+            record.state.layer.setParams({ styles: result.styleName });
+            return applied;
         },
         /**
          * Return fixed presentation metadata for the shared layer view.
@@ -79,12 +109,7 @@ export function createVectorMapLayerAdapter({
          */
         snapshot(record) {
             return {
-                legend: {
-                    kind: "fixed",
-                    ...VECTOR_DEFAULT_SYMBOLOGY[
-                        record.publication.geometryKind
-                    ],
-                },
+                legend: vectorStyleLegend(record.state.style),
             };
         },
         /**

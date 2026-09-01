@@ -21,6 +21,7 @@ from eolab_app.vector.sources import (
     PublishedVectorRegistry,
     vector_source_signature,
 )
+from eolab_app.vector.styles import default_vector_style
 
 
 class VectorPublicationService:
@@ -147,4 +148,5 @@ class VectorPublicationService:
                 bbox=tuple(item["bbox"]),
                 geometryKind=geometry_kind,
                 styleName=style_name,
+                style=default_vector_style(geometry_kind),
             )

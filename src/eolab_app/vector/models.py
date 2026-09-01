@@ -4,7 +4,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 from eolab_app.catalog.vector import (
     MOUNTED_VECTOR_COLLECTION_ID,
@@ -67,6 +73,105 @@ class CatalogVectorRequest(BaseModel):
     )
 
 
+class VectorSingleSymbolStyle(BaseModel):
+    """Validated single-symbol presentation for one vector geometry class."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    geometry_kind: VectorGeometryKind = Field(alias="geometryKind")
+    fill_color: str | None = Field(
+        default=None,
+        alias="fillColor",
+        pattern=r"^#[0-9A-Fa-f]{6}$",
+        strict=True,
+    )
+    fill_opacity: float | None = Field(
+        default=None,
+        alias="fillOpacity",
+        ge=0,
+        le=1,
+        strict=True,
+    )
+    stroke_color: str = Field(
+        alias="strokeColor",
+        pattern=r"^#[0-9A-Fa-f]{6}$",
+        strict=True,
+    )
+    stroke_opacity: float = Field(
+        alias="strokeOpacity", ge=0, le=1, strict=True
+    )
+    stroke_width: float = Field(
+        alias="strokeWidth", ge=0, le=20, strict=True
+    )
+    point_size: float | None = Field(
+        default=None,
+        alias="pointSize",
+        ge=1,
+        le=64,
+        strict=True,
+    )
+
+    @field_validator("fill_color", "stroke_color")
+    @classmethod
+    def normalize_color(cls, value: str | None) -> str | None:
+        """Normalize validated CSS hex colors for stable SLD output.
+
+        Args:
+            value: Optional validated six-digit CSS hex color.
+
+        Returns:
+            Lowercase color or ``None`` when the field is not applicable.
+        """
+        return value.lower() if value is not None else None
+
+    @model_validator(mode="after")
+    def require_geometry_specific_controls(self) -> "VectorSingleSymbolStyle":
+        """Reject controls that do not belong to the selected geometry.
+
+        Returns:
+            Geometry-consistent style state.
+
+        Raises:
+            ValueError: If required values are absent or inapplicable values
+                are supplied.
+        """
+        if self.geometry_kind == "line":
+            if any(
+                value is not None
+                for value in (
+                    self.fill_color,
+                    self.fill_opacity,
+                    self.point_size,
+                )
+            ):
+                raise ValueError(
+                    "Line styles cannot include fill or point controls"
+                )
+            return self
+        if self.fill_color is None or self.fill_opacity is None:
+            raise ValueError("Point and polygon styles require fill controls")
+        if self.geometry_kind == "point" and self.point_size is None:
+            raise ValueError("Point styles require pointSize")
+        if self.geometry_kind == "polygon" and self.point_size is not None:
+            raise ValueError("Polygon styles cannot include pointSize")
+        return self
+
+
+class CatalogVectorStyleRequest(CatalogVectorRequest):
+    """Identify one catalog vector and its complete single-symbol style."""
+
+    style: VectorSingleSymbolStyle
+
+
+class AppliedVectorStyle(BaseModel):
+    """Browser-safe result of applying one validated vector style."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    style_name: str = Field(alias="styleName")
+    style: VectorSingleSymbolStyle
+
+
 class VectorReaderAssessment(BaseModel):
     """Machine-readable result from the deployed vector datastore probe."""
 
@@ -117,3 +222,4 @@ class PublishedVector(BaseModel):
     bbox: tuple[float, float, float, float]
     geometry_kind: VectorGeometryKind = Field(alias="geometryKind")
     style_name: str = Field(alias="styleName")
+    style: VectorSingleSymbolStyle

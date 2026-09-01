@@ -66,6 +66,7 @@ from eolab_app.vector.sources import (
     MountedVectorResolver,
     PublishedVectorRegistry,
 )
+from eolab_app.vector.styling import VectorStyleService
 
 
 def create_app(
@@ -209,6 +210,10 @@ def create_app(
         vector_reader_assessor,
     )
     published_vectors = PublishedVectorRegistry()
+    vector_publisher = GeoServerVectorPublisher(
+        geoserver_rest_client,
+        app_global_configuration.geoserver_internal_url,
+    )
     vector_feature = create_vector_feature(
         VectorAssessmentService(
             app_global_configuration.scan_mount_path,
@@ -219,10 +224,13 @@ def create_app(
         VectorPublicationService(
             vector_catalog,
             vector_source_resolver,
-            GeoServerVectorPublisher(
-                geoserver_rest_client,
-                app_global_configuration.geoserver_internal_url,
-            ),
+            vector_publisher,
+            published_vectors,
+        ),
+        VectorStyleService(
+            vector_catalog,
+            vector_source_resolver,
+            vector_publisher,
             published_vectors,
         ),
         published_vectors,

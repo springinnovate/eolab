@@ -4,6 +4,7 @@ import test from "node:test";
 import {
     assessCatalogVector,
     publishCatalogVector,
+    styleCatalogVector,
     VectorRenderingRequestError,
 } from "../../src/vector/api.js";
 
@@ -48,6 +49,15 @@ test("vector publication validates exact fixed-style WMS metadata", async () => 
         bbox: [-123, 48, -122, 49],
         geometryKind: "polygon",
         styleName: "vector-polygon",
+        style: {
+            geometryKind: "polygon",
+            fillColor: "#a855f7",
+            fillOpacity: 0.38,
+            strokeColor: "#581c87",
+            strokeOpacity: 1,
+            strokeWidth: 2,
+            pointSize: null,
+        },
     };
 
     assert.deepEqual(await publishCatalogVector(
@@ -68,6 +78,41 @@ test("vector publication validates exact fixed-style WMS metadata", async () => 
         ),
         /invalid layer contract/
     );
+});
+
+test("vector styling sends Catalog identity plus complete symbol state", async () => {
+    const requests = [];
+    const style = {
+        geometryKind: "line",
+        fillColor: null,
+        fillOpacity: null,
+        strokeColor: "#f97316",
+        strokeOpacity: 0.75,
+        strokeWidth: 4,
+        pointSize: null,
+    };
+    const result = {
+        styleName: "vector-single-0123456789abcdef01234567",
+        style,
+    };
+
+    assert.deepEqual(await styleCatalogVector(
+        VECTOR_ITEM,
+        style,
+        async (url, options) => {
+            requests.push({ url, options });
+            return new Response(JSON.stringify(result), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+            });
+        },
+    ), result);
+    assert.equal(requests[0].url, "/api/vector-rendering/styles");
+    assert.deepEqual(JSON.parse(requests[0].options.body), {
+        collectionId: VECTOR_ITEM.collection,
+        itemId: VECTOR_ITEM.id,
+        style,
+    });
 });
 
 test("vector publication preserves actionable upstream categories", async () => {

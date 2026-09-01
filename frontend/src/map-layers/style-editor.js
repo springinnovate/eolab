@@ -6,12 +6,24 @@ export class MapLayerStyleEditor {
      * @param {Object} dependencies.mapLayers Retained layer controller.
      * @param {Object} dependencies.rasterViewer Raster styling boundary.
      * @param {Object} dependencies.inspection Shared map-side presentation.
+     * @param {Object} [dependencies.vectorStyleControls] Vector-owned controls.
+     * @param {(key:string)=>Object|null} [dependencies.getVectorStyleTarget]
+     * Composition callback returning one narrow vector style target.
      * @param {Document} [dependencies.documentContext=document] Owning document.
      */
-    constructor({ mapLayers, rasterViewer, inspection, documentContext = document }) {
+    constructor({
+        mapLayers,
+        rasterViewer,
+        inspection,
+        vectorStyleControls = { show() {}, hide() {} },
+        getVectorStyleTarget = () => null,
+        documentContext = document,
+    }) {
         this.mapLayers = mapLayers;
         this.rasterViewer = rasterViewer;
         this.inspection = inspection;
+        this.vectorStyleControls = vectorStyleControls;
+        this.getVectorStyleTarget = getVectorStyleTarget;
         this.document = documentContext;
         this.root = documentContext.querySelector("#layer-style-editor");
         this.title = documentContext.querySelector("#layer-style-title");
@@ -75,8 +87,12 @@ export class MapLayerStyleEditor {
         this.note.textContent = locked
             ? "2D mode styles both visible rasters together. Opacity is fixed at 100%. Switch to 1D in Histogram for individual colors."
             : !this.isRaster
-                ? "This vector layer uses fixed default colors. You can adjust its opacity."
+                ? "Layer opacity scales the complete symbol. Customize its geometry-specific colors and size below."
                 : layer.visible ? "Changes apply immediately." : "This layer is hidden. Styling it will not make it visible.";
+        const vectorTarget = this.isRaster
+            ? null : this.getVectorStyleTarget(this.key);
+        if (vectorTarget === null) this.vectorStyleControls.hide();
+        else this.vectorStyleControls.show(vectorTarget);
         this.rasterControls.hidden = !this.isRaster || locked;
         this.pairedControls.hidden = !locked;
         this.rasterViewer.refreshStyle();
@@ -89,6 +105,7 @@ export class MapLayerStyleEditor {
         // Clear first: flushing a valid style can trigger a retained-layer render.
         this.key = null;
         this.rasterViewer.closeStyle();
+        this.vectorStyleControls.hide();
         this.inspection.hideStyle();
         const replacement = [...this.document.querySelectorAll('[data-layer-action="style"]')]
             .find((element) => element.dataset.layerKey === key);
