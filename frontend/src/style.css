@@ -3403,7 +3403,13 @@ button.raster-histogram-summary:hover,
   --map-inspection-top: 16px;
 }
 
-#map-inspection:has(#map-histogram-panel:not([hidden])):has(#layer-style-editor:not([hidden])) {
+#map-inspection:has(#vector-time-series:not([hidden])) {
+  --map-inspection-top: 16px;
+  width: min(580px, calc(100vw - 32px));
+}
+
+#map-inspection:has(#map-histogram-panel:not([hidden])):has(#layer-style-editor:not([hidden])),
+#map-inspection:has(#vector-time-series:not([hidden])):has(#vector-feature-inspector:not([hidden])) {
   width: min(800px, max(380px, calc(100vw - var(--active-workspace-width) - 48px)));
 }
 
@@ -3420,7 +3426,8 @@ button.raster-histogram-summary:hover,
 
 #map-histogram-panel,
 #layer-style-editor,
-#vector-feature-inspector {
+#vector-feature-inspector,
+#vector-time-series {
   pointer-events: auto;
   min-width: 0;
   padding: 14px;
@@ -3435,6 +3442,7 @@ button.raster-histogram-summary:hover,
 #map-histogram-panel[hidden],
 #layer-style-editor[hidden],
 #vector-feature-inspector[hidden],
+#vector-time-series[hidden],
 .raster-histogram-summary-status[hidden],
 .layer-style-opacity[hidden] { display: none; }
 
@@ -3446,9 +3454,16 @@ button.raster-histogram-summary:hover,
     max-height: none;
     overflow: visible;
   }
+  .map-inspection-panels:has(#vector-time-series:not([hidden])):has(#vector-feature-inspector:not([hidden])) {
+    grid-template-columns: minmax(250px, 0.72fr) minmax(360px, 1.28fr);
+    pointer-events: none;
+    max-height: none;
+    overflow: visible;
+  }
   #map-histogram-panel,
   #layer-style-editor,
-  #vector-feature-inspector { max-height: var(--map-inspection-height); overflow-y: auto; overscroll-behavior: contain; }
+  #vector-feature-inspector,
+  #vector-time-series { max-height: var(--map-inspection-height); overflow-y: auto; overscroll-behavior: contain; }
 }
 
 .vector-feature-inspector-header {
@@ -3462,6 +3477,8 @@ button.raster-histogram-summary:hover,
   background: var(--surface-1);
 }
 .vector-feature-inspector-header h2 { margin: 0; font-size: 1rem; }
+.vector-feature-inspector-actions { display: flex; align-items: center; gap: 8px; }
+#open-vector-time-series { white-space: nowrap; }
 #close-vector-inspector { flex: 0 0 28px; height: 28px; padding: 0; line-height: 1; font-size: 1.1rem; }
 .vector-feature-status { margin: 12px 0; color: var(--text-2); font-size: 0.78rem; }
 #vector-feature-result h3 { margin: 0 0 10px; overflow-wrap: anywhere; font-size: 0.86rem; }
@@ -3478,6 +3495,56 @@ button.raster-histogram-summary:hover,
 .vector-feature-attributes dd { margin: 0; padding: 8px 6px; border-bottom: 1px solid var(--border-1); overflow-wrap: anywhere; }
 .vector-feature-attributes dt { color: var(--text-2); font-size: 0.72rem; font-weight: 650; }
 .vector-feature-attributes dd { font-size: 0.78rem; }
+
+.vector-time-series-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 10px;
+  background: var(--surface-1);
+}
+.vector-time-series-header h2 { margin: 0; font-size: 1rem; }
+#close-vector-time-series { flex: 0 0 28px; height: 28px; padding: 0; line-height: 1; font-size: 1.1rem; }
+.vector-time-series-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+}
+.vector-time-series-controls label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  color: var(--text-2);
+  font-size: 0.72rem;
+  font-weight: 650;
+}
+.vector-time-series-controls select { min-width: 0; max-width: 100%; }
+.vector-time-series-status { margin: 12px 0 4px; color: var(--text-2); font-size: 0.75rem; }
+.vector-time-series-chart { display: block; width: 100%; height: auto; min-height: 250px; }
+.vector-time-series-axis { stroke: var(--text-2); stroke-width: 1.2; }
+.vector-time-series-grid { stroke: var(--border-1); stroke-width: 1; }
+.vector-time-series-line { fill: none; stroke: var(--brand); stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
+.vector-time-series-point { fill: var(--surface-1); stroke: var(--brand); stroke-width: 2.5; }
+.vector-time-series-point:focus { outline: none; stroke: var(--text-1); stroke-width: 4; }
+.vector-time-series-tick,
+.vector-time-series-x-tick { fill: var(--text-2); font-size: 11px; }
+.vector-time-series-axis-title { fill: var(--text-1); font-size: 12px; font-weight: 650; }
+.vector-time-series-table { margin-top: 10px; font-size: 0.74rem; }
+.vector-time-series-table summary { cursor: pointer; font-weight: 650; }
+.vector-time-series-table-scroll { margin-top: 8px; overflow-x: auto; }
+.vector-time-series-table table { width: 100%; border-collapse: collapse; }
+.vector-time-series-table th,
+.vector-time-series-table td { padding: 6px; border-bottom: 1px solid var(--border-1); text-align: left; overflow-wrap: anywhere; }
+.vector-time-series-table th { color: var(--text-2); }
+
+@container map-inspection (max-width: 470px) {
+  .vector-time-series-controls { grid-template-columns: minmax(0, 1fr); }
+}
 
 .map-histogram-toolbar {
   position: sticky;
@@ -3759,7 +3826,9 @@ button.raster-histogram-summary:hover,
 .style-percentiles summary { cursor: pointer; font-size: 0.8rem; }
 @media (max-width: 699px) {
   #map-inspection,
-  #map-inspection:has(#map-histogram-panel:not([hidden])):has(#layer-style-editor:not([hidden])) {
+  #map-inspection:has(#map-histogram-panel:not([hidden])):has(#layer-style-editor:not([hidden])),
+  #map-inspection:has(#vector-time-series:not([hidden])),
+  #map-inspection:has(#vector-time-series:not([hidden])):has(#vector-feature-inspector:not([hidden])) {
     inset: auto 8px 8px 8px;
     width: calc(100vw - 16px);
   }

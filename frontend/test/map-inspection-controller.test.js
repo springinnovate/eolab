@@ -14,7 +14,8 @@ function fixture() {
     const histogram = doc.querySelector("#map-histogram-panel");
     const style = doc.querySelector("#layer-style-editor");
     const feature = doc.querySelector("#vector-feature-inspector");
-    histogram.hidden = style.hidden = feature.hidden = true;
+    const vectorTimeSeries = doc.querySelector("#vector-time-series");
+    histogram.hidden = style.hidden = feature.hidden = vectorTimeSeries.hidden = true;
     const close = doc.querySelector("#close-map-histogram");
     histogram.append(close);
     const calls = [];
@@ -26,6 +27,7 @@ function fixture() {
         histogram,
         style,
         feature,
+        vectorTimeSeries,
         close,
         calls,
         controller,
@@ -92,6 +94,21 @@ test("vector feature inspection shares the map-side surface independently", () =
     h.controller.hideStyle();
     assert.deepEqual(h.calls, ["show", "hide"]);
     h.controller.destroy();
+});
+
+test("vector time series is an independent retained map-side panel", () => {
+    const h = fixture();
+    h.controller.showFeatureInspector();
+    h.controller.showVectorTimeSeries();
+    assert.equal(h.feature.hidden, false);
+    assert.equal(h.vectorTimeSeries.hidden, false);
+    assert.deepEqual(h.calls, ["show"]);
+    h.controller.hideFeatureInspector();
+    assert.equal(h.vectorTimeSeries.hidden, false);
+    assert.deepEqual(h.calls, ["show"]);
+    h.controller.hideVectorTimeSeries(true);
+    assert.equal(h.doc.activeElement, h.map);
+    assert.deepEqual(h.calls, ["show", "hide"]);
 });
 
 test("Escape is focus-scoped and destroy detaches presentation listeners", () => {

@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   formatVectorFeatureAttribute,
   vectorFeatureAttributes,
+  vectorInspectionObservation,
   VectorFeatureInspectorController,
 } from "../../src/vector/feature-inspector.js";
 import { FakeRasterControlDocument } from "../../test-support/raster/fake-controls-document.js";
@@ -16,6 +17,7 @@ function createFixture(fetchImplementation) {
   documentContext.dispatchEvent = documentEvents.dispatchEvent.bind(documentEvents);
   documentContext.querySelector("#vector-feature-inspector").hidden = true;
   documentContext.querySelector("#vector-feature-result").hidden = true;
+  documentContext.querySelector("#open-vector-time-series").disabled = true;
   const targets = [
     {
       label: "Parcels",
@@ -54,6 +56,8 @@ function createFixture(fetchImplementation) {
     circleMarker(latlng, options) { return { latlng, options }; },
   };
   const inspectionChanges = [];
+  const sampleChanges = [];
+  let timeSeriesRequests = 0;
   const controller = new VectorFeatureInspectorController({
     leaflet,
     leafletMap,
@@ -63,6 +67,8 @@ function createFixture(fetchImplementation) {
       inspectionChanges.push(visible);
       documentContext.querySelector("#vector-feature-inspector").hidden = !visible;
     },
+    onSampleChange: (sample) => sampleChanges.push(sample),
+    onTimeSeriesRequested: () => { timeSeriesRequests += 1; },
     documentContext,
     fetchImplementation,
   });
@@ -74,6 +80,8 @@ function createFixture(fetchImplementation) {
     highlights,
     removedLayers,
     inspectionChanges,
+    sampleChanges,
+    get timeSeriesRequests() { return timeSeriesRequests; },
     mapContainer,
   };
 }
@@ -93,6 +101,23 @@ test("attribute formatting is bounded and excludes the geometry field", () => {
     { name: "habitat", value: "wetland" },
     { name: "rank", value: "2" },
   ]);
+});
+
+test("analysis observations are immutable and omit nested properties", () => {
+  const observation = vectorInspectionObservation({
+    feature: {
+      id: "parcels.2",
+      properties: { year: 2024, label: "Current", nested: { rank: 2 } },
+    },
+    target: { label: "Parcels 2024" },
+  });
+  assert.deepEqual(observation, {
+    layerLabel: "Parcels 2024",
+    featureId: "parcels.2",
+    properties: { year: 2024, label: "Current" },
+  });
+  assert.equal(Object.isFrozen(observation), true);
+  assert.equal(Object.isFrozen(observation.properties), true);
 });
 
 test("inspector queries composed visible targets and navigates overlapping features", async () => {
@@ -127,6 +152,19 @@ test("inspector queries composed visible targets and navigates overlapping featu
   assert.equal(h.documentContext.querySelector("#vector-feature-position").textContent,
     "1 of 2");
   assert.equal(h.highlights.length, 1);
+  assert.deepEqual(h.sampleChanges.map((sample) => sample.state), [
+    "loading",
+    "ready",
+  ]);
+  assert.equal(h.sampleChanges[1].observations.length, 2);
+  assert.equal(Object.isFrozen(h.sampleChanges[1]), true);
+  assert.equal(
+    h.documentContext.querySelector("#open-vector-time-series").disabled,
+    false,
+  );
+  h.documentContext.querySelector("#open-vector-time-series")
+    .dispatchEvent(new Event("click"));
+  assert.equal(h.timeSeriesRequests, 1);
   h.documentContext.querySelector("#next-vector-feature")
     .dispatchEvent(new Event("click"));
   assert.equal(h.documentContext.querySelector("#vector-feature-position").textContent,
@@ -191,4 +229,38 @@ test("a newer click owns presentation and closing does not disable later inspect
   h.controller.syncVisibleLayers();
   assert.equal(h.handlers.has("click"), false);
   assert.deepEqual(h.inspectionChanges, [true, true, false, true, false]);
+  assert.equal(h.sampleChanges.at(-1).state, "invalidated");
+});
+
+test("changing the visible vector set invalidates results but retains inspection", async () => {
+  const h = createFixture(async () => ({
+    ok: true,
+    json: async () => ({
+      type: "FeatureCollection",
+      features: [{
+        type: "Feature",
+        geometry: null,
+        properties: { score: 3 },
+      }],
+    }),
+  }));
+  await h.controller.inspect({ containerPoint: { x: 2, y: 3 } });
+  h.targets.push({
+    label: "Habitats",
+    publication: {
+      layerName: "eolab:habitats",
+      styleName: "vector-polygon",
+    },
+    primaryGeometry: "geometry",
+  });
+  h.controller.syncVisibleLayers();
+  assert.equal(
+    h.documentContext.querySelector("#vector-feature-status").textContent,
+    "Visible vector layers changed. Click the map to sample again.",
+  );
+  assert.equal(h.sampleChanges.at(-1).state, "invalidated");
+  assert.equal(
+    h.documentContext.querySelector("#vector-feature-inspector").hidden,
+    false,
+  );
 });

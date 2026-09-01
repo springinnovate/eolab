@@ -61,6 +61,7 @@ import { createSavedMapLeafletViewport } from "./saved-map-view/leaflet-viewport
 import { VectorFeatureInspectorController } from "./vector/feature-inspector.js";
 import { createVectorMapLayerAdapter } from "./vector/map-layer-adapter.js";
 import { VectorStyleControls } from "./vector/style-controls.js";
+import { VectorTimeSeriesController } from "./vector/time-series.js";
 import { initializeTemporaryAoi } from "./temporary-aoi/temporary-aoi.js";
 import {
     applyRenderingDiagnosticsViewModel,
@@ -724,6 +725,12 @@ async function initializeCatalog(
         viewerOrigin: globalThis.location.origin,
         beforeRestore: clearCatalogSelection,
     });
+    const vectorTimeSeries = new VectorTimeSeriesController({
+        onVisibilityChange: (visible, moveFocus) => {
+            if (visible) mapInspection.showVectorTimeSeries();
+            else mapInspection.hideVectorTimeSeries(moveFocus);
+        },
+    });
     vectorFeatureInspector = new VectorFeatureInspectorController({
         leaflet: L,
         leafletMap,
@@ -745,6 +752,8 @@ async function initializeCatalog(
             if (visible) mapInspection.showFeatureInspector();
             else mapInspection.hideFeatureInspector();
         },
+        onSampleChange: (sample) => vectorTimeSeries.setSample(sample),
+        onTimeSeriesRequested: () => vectorTimeSeries.open(),
     });
     /**
      * Fan one map exploration intent out to independent raster and vector peers.

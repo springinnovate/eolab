@@ -721,8 +721,12 @@
             aria-labelledby="vector-feature-inspector-heading" hidden>
             <header class="vector-feature-inspector-header">
               <h2 id="vector-feature-inspector-heading">Feature inspector</h2>
-              <button id="close-vector-inspector" class="secondary-button"
-                type="button" aria-label="Close feature inspector">×</button>
+              <div class="vector-feature-inspector-actions">
+                <button id="open-vector-time-series" class="secondary-button"
+                  type="button" aria-controls="vector-time-series" disabled>Time series</button>
+                <button id="close-vector-inspector" class="secondary-button"
+                  type="button" aria-label="Close feature inspector">×</button>
+              </div>
             </header>
             <p id="vector-feature-status" class="vector-feature-status" role="status">
               Click the map to inspect visible vector features.
@@ -738,6 +742,51 @@
               </nav>
               <dl id="vector-feature-attributes" class="vector-feature-attributes"></dl>
             </article>
+          </section>
+          <section id="vector-time-series" role="dialog" aria-modal="false"
+            aria-labelledby="vector-time-series-heading" hidden>
+            <header class="vector-time-series-header">
+              <h2 id="vector-time-series-heading">Vector time series</h2>
+              <button id="close-vector-time-series" class="secondary-button"
+                type="button" aria-label="Close vector time series">×</button>
+            </header>
+            <div class="vector-time-series-controls">
+              <label for="vector-time-series-x">
+                <span>X axis</span>
+                <select id="vector-time-series-x"></select>
+              </label>
+              <label for="vector-time-series-y">
+                <span>Y axis</span>
+                <select id="vector-time-series-y"></select>
+              </label>
+              <label for="vector-time-series-direction">
+                <span>Order</span>
+                <select id="vector-time-series-direction">
+                  <option value="ascending">Ascending</option>
+                  <option value="descending">Descending</option>
+                </select>
+              </label>
+            </div>
+            <p id="vector-time-series-status" class="vector-time-series-status"
+              role="status" aria-live="polite" aria-atomic="true"></p>
+            <svg id="vector-time-series-chart" class="vector-time-series-chart"
+              role="img" preserveAspectRatio="xMinYMin meet" hidden></svg>
+            <details id="vector-time-series-table" class="vector-time-series-table" hidden>
+              <summary>Chart data</summary>
+              <div class="vector-time-series-table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th scope="col">Layer</th>
+                      <th scope="col">Feature</th>
+                      <th scope="col">X</th>
+                      <th scope="col">Y</th>
+                    </tr>
+                  </thead>
+                  <tbody id="vector-time-series-table-body"></tbody>
+                </table>
+              </div>
+            </details>
           </section>
           <section id="map-histogram-panel" role="dialog" aria-modal="false"
             aria-labelledby="map-histogram-heading" hidden>
