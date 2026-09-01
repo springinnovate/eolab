@@ -53,7 +53,7 @@ class RecordingStyler:
             Deterministic per-layer style name.
         """
         self.requests.append((resource_name, style))
-        return vector_style_name(resource_name)
+        return vector_style_name(resource_name, style)
 
 
 def polygon_request(
@@ -134,7 +134,7 @@ def test_sld_generation_uses_only_the_geometry_symbolizer(
         geometry_kind: Default style geometry.
         symbolizer: Expected SLD symbolizer element.
     """
-    style_name = "vector-single-0123456789abcdef01234567"
+    style_name = "vector-single-0123456789abcdef01234567-89abcdef0123"
     root = ElementTree.fromstring(
         build_vector_sld(style_name, default_vector_style(geometry_kind))
     )
@@ -155,6 +155,31 @@ def test_sld_generation_uses_only_the_geometry_symbolizer(
     }
     assert {"stroke", "stroke-opacity", "stroke-width"} <= parameter_names
     assert ("fill" in parameter_names) is (geometry_kind != "line")
+
+
+def test_vector_style_name_changes_only_with_resource_or_rendering() -> None:
+    """Give each distinct layer rendering its own stable WMS cache identity."""
+    resource_name = "geopackage-0123456789abcdef01234567"
+    default_style = default_vector_style("point")
+    changed_style = VectorSingleSymbolStyle(
+        geometryKind="point",
+        fillColor="#00ff66",
+        fillOpacity=0.65,
+        strokeColor="#083344",
+        strokeOpacity=1,
+        strokeWidth=1.5,
+        pointSize=14,
+    )
+
+    assert vector_style_name(resource_name, default_style) == (
+        vector_style_name(resource_name, default_style)
+    )
+    assert vector_style_name(resource_name, default_style) != (
+        vector_style_name(resource_name, changed_style)
+    )
+    assert vector_style_name(resource_name, default_style) != (
+        vector_style_name("another-resource", default_style)
+    )
 
 
 def test_style_service_uses_catalog_identity_and_current_publication(
@@ -192,7 +217,9 @@ def test_style_service_uses_catalog_identity_and_current_publication(
     authorization = registry.require_current(
         f"{GEOSERVER_WORKSPACE_NAME}:{item['id']}"
     )
-    assert authorization.style_name == vector_style_name(item["id"])
+    assert authorization.style_name == vector_style_name(
+        item["id"], request.style
+    )
 
 
 def test_style_service_rejects_unpublished_or_wrong_geometry(
@@ -225,48 +252,47 @@ def test_style_service_rejects_unpublished_or_wrong_geometry(
         asyncio.run(service.apply(polygon_request(item, "line")))
 
 
-def test_geoserver_style_adapter_creates_then_updates_per_layer_sld() -> None:
-    """Use exact create/update status contracts and assign the current style."""
+def test_geoserver_style_adapter_uses_content_addressed_layer_slds() -> None:
+    """Create distinct renderings, reuse exact matches, and assign each one."""
     resource_name = "geopackage-0123456789abcdef01234567"
-    expected_style_name = vector_style_name(resource_name)
-    style_exists = False
+    style_names: set[str] = set()
     requests: list[httpx2.Request] = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
-        nonlocal style_exists
         requests.append(request)
         path = request.url.path.removeprefix("/geoserver/rest")
         if request.method == "GET" and path.endswith(
             f"/layers/{resource_name}.json"
         ):
             return httpx2.Response(200)
-        if request.method == "GET" and path.endswith(
-            f"/styles/{expected_style_name}.sld"
-        ):
-            return httpx2.Response(200 if style_exists else 404)
+        if request.method == "GET" and "/styles/" in path:
+            inspected_style_name = path.rsplit("/", 1)[-1].removesuffix(
+                ".sld"
+            )
+            return httpx2.Response(
+                200 if inspected_style_name in style_names else 404
+            )
         if request.method == "POST" and path.endswith(
             "/workspaces/eolab/styles"
         ):
-            assert request.url.params["name"] == expected_style_name
+            style_name = request.url.params["name"]
             assert request.headers["content-type"] == (
                 "application/vnd.ogc.sld+xml"
             )
             ElementTree.fromstring(request.content)
-            style_exists = True
+            style_names.add(style_name)
             return httpx2.Response(201)
-        if request.method == "PUT" and path.endswith(
-            f"/styles/{expected_style_name}"
-        ):
+        if request.method == "PUT" and "/styles/" in path:
+            assert path.rsplit("/", 1)[-1] in style_names
             ElementTree.fromstring(request.content)
             return httpx2.Response(200)
         if request.method == "PUT" and path.endswith(
             f"/layers/{resource_name}.json"
         ):
             document = __import__("json").loads(request.content)
-            assert document["layer"]["defaultStyle"] == {
-                "name": expected_style_name,
-                "workspace": "eolab",
-            }
+            assigned_style_name = document["layer"]["defaultStyle"]["name"]
+            assert assigned_style_name in style_names
+            assert document["layer"]["defaultStyle"]["workspace"] == "eolab"
             return httpx2.Response(200)
         raise AssertionError(f"Unexpected request: {request.method} {path}")
 
@@ -276,17 +302,23 @@ def test_geoserver_style_adapter_creates_then_updates_per_layer_sld() -> None:
     first = asyncio.run(
         publisher.apply_style(resource_name, default_vector_style("polygon"))
     )
+    changed_style = polygon_request({
+        "collection": "eolab-mounted-vectors",
+        "id": resource_name,
+    }).style
     second = asyncio.run(
-        publisher.apply_style(resource_name, polygon_request({
-            "collection": "eolab-mounted-vectors",
-            "id": resource_name,
-        }).style)
+        publisher.apply_style(resource_name, changed_style)
+    )
+    third = asyncio.run(
+        publisher.apply_style(resource_name, default_vector_style("polygon"))
     )
     asyncio.run(client.aclose())
 
-    assert first == second == expected_style_name
-    assert sum(request.method == "POST" for request in requests) == 1
+    assert first != second
+    assert first == third
+    assert style_names == {first, second}
+    assert sum(request.method == "POST" for request in requests) == 2
     assert any(
-        request.method == "PUT" and request.url.path.endswith(expected_style_name)
+        request.method == "PUT" and "/styles/" in request.url.path
         for request in requests
     )

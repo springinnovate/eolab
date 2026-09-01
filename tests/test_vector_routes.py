@@ -51,7 +51,9 @@ class _VectorRouteService:
             Fixed applied style fixture.
         """
         return AppliedVectorStyle(
-            styleName="vector-single-0123456789abcdef01234567",
+            styleName=(
+                "vector-single-0123456789abcdef01234567-89abcdef0123"
+            ),
             style=request.style,
         )
 
@@ -153,7 +155,9 @@ def test_vector_routes_preserve_identity_and_fixed_style_contract() -> None:
     }
     assert style.status_code == 200
     assert style.json() == {
-        "styleName": "vector-single-0123456789abcdef01234567",
+        "styleName": (
+            "vector-single-0123456789abcdef01234567-89abcdef0123"
+        ),
         "style": {
             "geometryKind": "line",
             "fillColor": None,

@@ -1,5 +1,6 @@
 """Pure vector single-symbol defaults, identity, and SLD generation."""
 
+import json
 from hashlib import sha256
 from xml.etree import ElementTree
 
@@ -53,17 +54,27 @@ def default_vector_style(
     )
 
 
-def vector_style_name(resource_name: str) -> str:
-    """Build a bounded deterministic GeoServer style name for one layer.
+def vector_style_name(
+    resource_name: str,
+    style: VectorSingleSymbolStyle,
+) -> str:
+    """Build a content-addressed GeoServer style name for one layer.
 
     Args:
         resource_name: Authoritative server-side vector resource identity.
+        style: Complete validated single-symbol state.
 
     Returns:
-        Safe unqualified per-layer style name.
+        Safe unqualified style name whose identity changes with rendering.
     """
-    digest = sha256(resource_name.encode("utf-8")).hexdigest()[:24]
-    return f"vector-single-{digest}"
+    resource_digest = sha256(resource_name.encode("utf-8")).hexdigest()[:24]
+    style_document = json.dumps(
+        style.model_dump(by_alias=True),
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    style_digest = sha256(style_document).hexdigest()[:12]
+    return f"vector-single-{resource_digest}-{style_digest}"
 
 
 def build_vector_sld(

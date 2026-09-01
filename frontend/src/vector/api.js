@@ -183,7 +183,9 @@ export async function styleCatalogVector(
     );
     if (
         typeof result?.styleName !== "string" ||
-        !/^vector-single-[0-9a-f]{24}$/.test(result.styleName) ||
+        !/^vector-single-[0-9a-f]{24}-[0-9a-f]{12}$/.test(
+          result.styleName,
+        ) ||
         result.style?.geometryKind !== style.geometryKind
     ) {
         throw new VectorRenderingRequestError(

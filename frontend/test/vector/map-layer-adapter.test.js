@@ -62,7 +62,9 @@ function createAdapterFixture(fitToBounds) {
       fitToBounds,
       publish: async () => PUBLICATION,
       style: async (_item, style) => ({
-        styleName: "vector-single-0123456789abcdef01234567",
+        styleName: style.fillColor === "#00ff00"
+          ? "vector-single-0123456789abcdef01234567-aaaaaaaaaaaa"
+          : "vector-single-0123456789abcdef01234567-bbbbbbbbbbbb",
         style,
       }),
     }),
@@ -115,9 +117,26 @@ test("vector map-layer adapter owns publication, WMS, legend, and optional fit",
     appliedStyle,
   );
   assert.deepEqual(layer.styleRequests, [{
-    styles: "vector-single-0123456789abcdef01234567",
+    styles: "vector-single-0123456789abcdef01234567-aaaaaaaaaaaa",
   }]);
   assert.equal(fitted.adapter.snapshot(record).legend.fill, "#00ff00");
+  const reappliedStyle = {
+    ...appliedStyle,
+    fillColor: "#ff0000",
+  };
+  assert.deepEqual(
+    await fitted.adapter.applyStyle(record, reappliedStyle),
+    reappliedStyle,
+  );
+  assert.deepEqual(layer.styleRequests, [
+    {
+      styles: "vector-single-0123456789abcdef01234567-aaaaaaaaaaaa",
+    },
+    {
+      styles: "vector-single-0123456789abcdef01234567-bbbbbbbbbbbb",
+    },
+  ]);
+  assert.equal(fitted.adapter.snapshot(record).legend.fill, "#ff0000");
 
   const unfitted = createAdapterFixture(false);
   unfitted.adapter.added(record);

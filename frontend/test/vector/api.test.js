@@ -92,7 +92,8 @@ test("vector styling sends Catalog identity plus complete symbol state", async (
         pointSize: null,
     };
     const result = {
-        styleName: "vector-single-0123456789abcdef01234567",
+        styleName:
+          "vector-single-0123456789abcdef01234567-89abcdef0123",
         style,
     };
 

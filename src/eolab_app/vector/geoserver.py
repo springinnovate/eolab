@@ -228,7 +228,7 @@ class GeoServerVectorPublisher:
             VectorPublicationError: If the layer is absent or GeoServer rejects
                 style persistence or assignment.
         """
-        style_name = vector_style_name(resource_name)
+        style_name = vector_style_name(resource_name, style)
         layer_exists = await self._gateway.resource_exists(
             "inspect vector layer before styling",
             f"{geoserver_layer_path(resource_name)}.json?quietOnNotFound=true",
