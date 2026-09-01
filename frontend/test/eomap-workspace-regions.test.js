@@ -397,8 +397,8 @@ test("map histograms put plots before captions and mode without a visible title 
     assert.match(STYLESHEET, /\.map-histogram-toolbar\s*\{[^}]*height:\s*0/s);
     assert.match(STYLESHEET, /#map-histogram-panel \.raster-bivariate-statistics,\s*#map-histogram-panel \.raster-histogram\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/s);
     assert.match(STYLESHEET, /#map-histogram-panel \.raster-histogram-heading\s*\{[^}]*padding-right:\s*36px/s);
-    assert.match(STYLESHEET, /#explore-map-center\[hidden\],[^{]*\{\s*display:\s*none/s);
-    assert.match(MARKUP, /id="explore-map-center"[^>]*>Explore map center<\/button>/);
+    assert.match(STYLESHEET, /#open-analysis-tools\[hidden\],[^{]*\{\s*display:\s*none/s);
+    assert.match(MARKUP, /id="open-analysis-tools"[^>]*>Analysis tools<\/button>/);
     assert.doesNotMatch(MARKUP, /Inspect features|Select map window|Sample map center/);
 });
 
@@ -590,7 +590,7 @@ test("semantic regions preserve one DOM instance of every owned control", () => 
         "map-inspection",
         "map-histogram-panel",
         "map-histogram-scope",
-        "explore-map-center",
+        "open-analysis-tools",
         "close-map-histogram",
         "layer-style-editor",
     ];

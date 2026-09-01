@@ -12,7 +12,9 @@ export class MapInspectionController {
         this.histogram = documentContext.querySelector("#map-histogram-panel");
         this.style = documentContext.querySelector("#layer-style-editor");
         this.feature = documentContext.querySelector("#vector-feature-inspector");
-        this.exploreButton = documentContext.querySelector("#explore-map-center");
+        this.analysisToolsButton = documentContext.querySelector(
+            "#open-analysis-tools"
+        );
         this.map = documentContext.querySelector("#map");
         this.closeButton = documentContext.querySelector("#close-map-histogram");
         this.isOpen = false;
@@ -78,7 +80,7 @@ export class MapInspectionController {
     #synchronize() {
         const shouldOpen = !this.histogram.hidden || !this.style.hidden ||
             !this.feature.hidden;
-        this.exploreButton.hidden = shouldOpen;
+        this.analysisToolsButton.hidden = shouldOpen;
         if (shouldOpen === this.isOpen) return;
         this.isOpen = shouldOpen;
         if (shouldOpen) this.root.showPopover();

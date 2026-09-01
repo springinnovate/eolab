@@ -818,11 +818,11 @@ async function initializeCatalog(
         void vectorFeatureInspector.inspect(event);
     }
     /**
-     * Explore the current map center through the same path as a pointer click.
+     * Open analysis tools at the map center through the pointer-click path.
      *
      * @return {void}
      */
-    function exploreMapCenter() {
+    function openAnalysisToolsAtMapCenter() {
         const latlng = leafletMap.getCenter();
         exploreMap({
             latlng,
@@ -831,9 +831,9 @@ async function initializeCatalog(
     }
     leafletMap.getContainer().classList.add("leaflet-crosshair");
     leafletMap.on("click", exploreMap);
-    document.querySelector("#explore-map-center").addEventListener(
+    document.querySelector("#open-analysis-tools").addEventListener(
         "click",
-        exploreMapCenter
+        openAnalysisToolsAtMapCenter
     );
     const rasterDetailPreview = initializeRasterDetailPreview({
         leafletMap,

@@ -232,7 +232,7 @@ applies those values, or other selected percentiles, when the user chooses.
 Hovering a histogram bar reports its bin midpoint, its percentage of the valid
 sample, its sampled-pixel count, and its value range. Each bar uses the same
 active color ramp as a raster pixel at that bin midpoint.
-**Explore map center** provides the same action for keyboard and touch users,
+**Analysis tools** provides the same map-center action for keyboard and touch users,
 and **Use whole raster** restores the retained dataset distribution. The same
 map action also inspects features from visible vectors independently, so raster
 and vector results may appear together. Masked, nodata, and non-finite samples are excluded. A

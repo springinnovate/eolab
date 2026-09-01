@@ -2984,7 +2984,7 @@ export function initializeRasterViewer(
                 "visibility does not change this histogram selection.";
         } else {
             nextStatus = "Whole-raster histogram selected. Click the map or " +
-                "use Explore map center to analyze a smaller area.";
+                "use Analysis tools to analyze the map center.";
         }
         controlsView.setSampleWindowStatus(nextStatus);
     }

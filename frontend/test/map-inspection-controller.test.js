@@ -29,7 +29,7 @@ function fixture() {
         close,
         calls,
         controller,
-        exploreButton: doc.querySelector("#explore-map-center"),
+        analysisToolsButton: doc.querySelector("#open-analysis-tools"),
         map: doc.querySelector("#map"),
     };
 }
@@ -45,11 +45,11 @@ test("automatic presentation does not move focus and close retains results", () 
     assert.deepEqual(h.calls, ["show"]);
     assert.equal(h.doc.activeElement, h.map);
     assert.equal(h.histogram.hidden, false);
-    assert.equal(h.exploreButton.hidden, true);
+    assert.equal(h.analysisToolsButton.hidden, true);
 
     h.close.dispatchEvent(new Event("click"));
     assert.equal(h.histogram.hidden, true);
-    assert.equal(h.exploreButton.hidden, false);
+    assert.equal(h.analysisToolsButton.hidden, false);
     assert.equal(h.doc.activeElement, h.map);
     assert.deepEqual(h.calls, ["show", "hide"]);
 
@@ -63,20 +63,20 @@ test("automatic presentation does not move focus and close retains results", () 
 test("histogram and style have independent visibility on one persistent surface", () => {
     const h = fixture();
     h.controller.showStyle();
-    assert.equal(h.exploreButton.hidden, true);
+    assert.equal(h.analysisToolsButton.hidden, true);
     h.controller.showHistogram();
     assert.equal(h.style.hidden, false);
     assert.equal(h.histogram.hidden, false);
     h.controller.closeHistogram();
     assert.equal(h.style.hidden, false);
-    assert.equal(h.exploreButton.hidden, true);
+    assert.equal(h.analysisToolsButton.hidden, true);
     assert.deepEqual(h.calls, ["show"]);
     h.controller.showHistogram();
     h.controller.hideStyle();
     assert.equal(h.histogram.hidden, false);
     assert.deepEqual(h.calls, ["show"]);
     h.controller.destroy();
-    assert.equal(h.exploreButton.hidden, false);
+    assert.equal(h.analysisToolsButton.hidden, false);
     assert.deepEqual(h.calls, ["show", "hide"]);
 });
 
