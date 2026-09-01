@@ -179,6 +179,22 @@ test("vector map-layer adapter owns publication, WMS, legend, and optional fit",
     },
   ]);
   assert.equal(fitted.adapter.snapshot(record).legend.fill, "#ff0000");
+  assert.deepEqual(fitted.adapter.exportSavedState(record), {
+    kind: "vector",
+    definition: reappliedStyle,
+  });
+  await fitted.adapter.applySavedState(record, {
+    kind: "vector",
+    definition: appliedStyle,
+  });
+  assert.equal(record.state.style.fillColor, "#00ff00");
+  await assert.rejects(
+    () => fitted.adapter.applySavedState(record, {
+      kind: "vector",
+      definition: { ...appliedStyle, sld: "<StyledLayerDescriptor/>" },
+    }),
+    /unsupported fields/,
+  );
 
   const unfitted = createAdapterFixture(false);
   unfitted.adapter.added(record);

@@ -51,6 +51,14 @@ and raster modules do not duplicate retained-stack or Leaflet-set ownership.
 Raster detail preview depends on Catalog identity directly and does not import
 the map-layer package.
 
+Portable saved maps add a composition-level coordinator rather than a new
+rendering owner. The coordinator reads neutral retained records and delegates
+appearance export/restoration through optional adapter hooks. It resolves only
+Catalog Collection and Item identities, repeats current assessment and
+publication, and hashes opaque source revisions before writing a local file.
+The saved-map package imports neither raster nor vector implementations; see
+`saved-map-views.md` for its trust and compatibility contract.
+
 ## Dependency direction
 
 ```text
@@ -58,6 +66,8 @@ application composition
     -> dataset feature adapter
     -> neutral map-layer controller -> stack / view / Leaflet set
     -> Catalog Item identity <- detail preview / Catalog actions
+    -> saved-map coordinator -> Catalog visualization / neutral viewport
+                             -> neutral map-layer adapter hooks
 
 FastAPI composition
     -> dataset publication service -> shared GeoServer REST gateway

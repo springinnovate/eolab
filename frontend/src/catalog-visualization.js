@@ -91,6 +91,16 @@ export class CatalogVisualizationCoordinator {
     }
 
     /**
+     * Clear mixed retained layers and raster-owned interaction state.
+     *
+     * @return {void}
+     */
+    clear() {
+        this.rasterViewer.clear();
+        this.mapLayerController.clear();
+    }
+
+    /**
      * Return a user-facing dataset noun for one supported Item.
      *
      * @param {Object} item Supported Catalog STAC Item.
@@ -100,6 +110,19 @@ export class CatalogVisualizationCoordinator {
         return this.#requireDescriptor(item).kind === "raster"
             ? "raster"
             : "vector layer";
+    }
+
+    /**
+     * Return the scanner-owned source revision for compatibility checks.
+     *
+     * The revision is an opaque value. Consumers must not infer paths or
+     * rendering authorization from its structure.
+     *
+     * @param {Object} item Supported, assessed Catalog Item.
+     * @return {unknown|null} Opaque revision or null when not supplied.
+     */
+    sourceRevision(item) {
+        return this.#requireDescriptor(item).metadata?.source_signature ?? null;
     }
 
     /**

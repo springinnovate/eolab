@@ -518,6 +518,43 @@ test('histogram axis units follow each analyzed data asset', async () => {
     h.destroy();
 });
 
+test("raster adapter exports and reapplies only validated portable appearance", async () => {
+    const h = visibleLayerFixture();
+    await h.viewer.show(createRasterItem("portable"));
+    const record = h.mapLayers.retainedRecords[0];
+
+    const exported = record.adapter.exportSavedState(record);
+    assert.equal(exported.kind, "raster");
+    assert.deepEqual(exported.definition, record.state.rasterStyle);
+    assert.equal(exported.paletteName, "blue-yellow-red");
+    const restoredStyle = {
+        ...DEFAULT_RASTER_STYLE,
+        minimum: -5,
+        midpoint: 0,
+        maximum: 20,
+        minimumColor: "#000000",
+    };
+    record.adapter.applySavedState(record, {
+        kind: "raster",
+        definition: restoredStyle,
+        paletteName: "custom",
+    });
+
+    assert.deepEqual(record.state.rasterStyle, restoredStyle);
+    assert.equal(record.state.paletteName, "custom");
+    assert.equal(h.wmsLayers[0].parameters.styles, "dynamic-raster");
+    assert.match(h.wmsLayers[0].parameters.env, /min:-5/);
+    assert.throws(
+        () => record.adapter.applySavedState(record, {
+            kind: "raster",
+            definition: { ...restoredStyle, sourcePath: "file:///data.tif" },
+            paletteName: "custom",
+        }),
+        /unsupported fields/,
+    );
+    h.destroy();
+});
+
 test('two uncached 1D histograms share one read slot and both complete', async () => {
     const reads = [];
     let inflight = 0;

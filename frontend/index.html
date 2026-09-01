@@ -63,6 +63,27 @@
           </div>
           <div class="panel-header-actions">
             <button
+              class="secondary-button saved-map-view-action"
+              id="save-map-view"
+              type="button"
+            >
+              Save view
+            </button>
+            <button
+              class="secondary-button saved-map-view-action"
+              id="open-map-view"
+              type="button"
+              aria-haspopup="dialog"
+            >
+              Open view
+            </button>
+            <input
+              id="open-map-view-file"
+              type="file"
+              accept="application/json,.json,.eolab-map.json"
+              hidden
+            />
+            <button
               class="secondary-button"
               id="toggle-operational-status"
               type="button"
@@ -1229,6 +1250,37 @@
         </div>
       </aside>
     </main>
+
+    <dialog
+      class="saved-map-view-dialog"
+      id="saved-map-view-dialog"
+      aria-labelledby="saved-map-view-dialog-title"
+      aria-describedby="saved-map-view-dialog-summary"
+    >
+      <form method="dialog">
+        <h2 id="saved-map-view-dialog-title">Open saved map view?</h2>
+        <p id="saved-map-view-dialog-summary"></p>
+        <ul id="saved-map-view-dialog-details"></ul>
+        <div class="saved-map-view-dialog-actions">
+          <button
+            class="secondary-button"
+            id="cancel-open-map-view"
+            type="submit"
+            value="cancel"
+          >
+            Cancel
+          </button>
+          <button
+            class="secondary-button saved-map-view-confirm"
+            id="confirm-open-map-view"
+            type="submit"
+            value="open"
+          >
+            Replace current view
+          </button>
+        </div>
+      </form>
+    </dialog>
 
     <script type="module" src="/src/main.js"></script>
 
