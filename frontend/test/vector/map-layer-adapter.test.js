@@ -16,6 +16,7 @@ const PUBLICATION = Object.freeze({
     strokeOpacity: 1,
     strokeWidth: 2,
     pointSize: null,
+    label: null,
   },
 });
 
@@ -79,7 +80,15 @@ test("vector map-layer adapter owns publication, WMS, legend, and optional fit",
   const item = {
     collection: "eolab-mounted-vectors",
     id: "geopackage-0123456789abcdef01234567",
-    properties: { title: "Parcels" },
+    properties: {
+      title: "Parcels",
+      "table:primary_geometry": "geometry",
+      "table:columns": [
+        { name: "geometry", type: "Polygon" },
+        { name: "name", type: "str" },
+        { name: "area", type: "float" },
+      ],
+    },
   };
 
   assert.equal(await fitted.adapter.publish(item), PUBLICATION);
@@ -90,6 +99,10 @@ test("vector map-layer adapter owns publication, WMS, legend, and optional fit",
     error: "Vector map tiles could not be rendered.",
   };
   record.state = fitted.adapter.createState({ item, publication: PUBLICATION });
+  assert.deepEqual(record.state.labelFields, [
+    { name: "name", type: "str" },
+    { name: "area", type: "float" },
+  ]);
   const layer = fitted.adapter.createLayer(record, () => {});
   assert.equal(
     layer.errorHandler.type,

@@ -2,6 +2,9 @@
 
 const GEOMETRY_KINDS = new Set(["point", "line", "polygon"]);
 const HEX_COLOR = /^#[0-9a-f]{6}$/i;
+const LABEL_FONT_FAMILIES = new Set(["SansSerif", "Serif", "Monospaced"]);
+const LABEL_FONT_WEIGHTS = new Set(["normal", "bold"]);
+const LABEL_PLACEMENTS = new Set(["center", "above", "below", "follow-line"]);
 
 /**
  * Validate and normalize a complete geometry-specific vector style.
@@ -31,6 +34,7 @@ export function normalizeVectorStyle(candidate) {
         20,
         "Outline width",
     );
+    const label = normalizeVectorLabel(candidate.label, geometryKind);
     if (geometryKind === "line") {
         requireAbsent(candidate, ["fillColor", "fillOpacity", "pointSize"]);
         return Object.freeze({
@@ -41,6 +45,7 @@ export function normalizeVectorStyle(candidate) {
             strokeOpacity,
             strokeWidth,
             pointSize: null,
+            label,
         });
     }
     const fillColor = color(candidate.fillColor, "Fill color");
@@ -60,6 +65,7 @@ export function normalizeVectorStyle(candidate) {
             strokeOpacity,
             strokeWidth,
             pointSize: null,
+            label,
         });
     }
     return Object.freeze({
@@ -70,7 +76,42 @@ export function normalizeVectorStyle(candidate) {
         strokeOpacity,
         strokeWidth,
         pointSize: boundedNumber(candidate.pointSize, 1, 64, "Point size"),
+        label,
     });
+}
+
+/**
+ * Extract exact non-geometry label fields from one Catalog Item.
+ *
+ * @param {Object} item Authoritative STAC Item already loaded by Catalog.
+ * @return {ReadonlyArray<{name:string,type:string}>} Frozen selector options.
+ */
+export function vectorLabelFields(item) {
+    const properties = item?.properties;
+    const columns = properties?.["table:columns"];
+    const primaryGeometry = properties?.["table:primary_geometry"];
+    if (!Array.isArray(columns)) return Object.freeze([]);
+    const names = new Set();
+    const fields = [];
+    for (const column of columns) {
+        const name = column?.name;
+        if (
+            typeof name !== "string" ||
+            name.length < 1 ||
+            name.length > 256 ||
+            /[\u0000-\u001f\u007f]/.test(name) ||
+            name === primaryGeometry ||
+            names.has(name)
+        ) {
+            continue;
+        }
+        names.add(name);
+        fields.push(Object.freeze({
+            name,
+            type: typeof column.type === "string" ? column.type : "unknown",
+        }));
+    }
+    return Object.freeze(fields);
 }
 
 /**
@@ -102,6 +143,80 @@ function color(value, label) {
         throw new TypeError(`${label} must be a six-digit hex color.`);
     }
     return value.toLowerCase();
+}
+
+/**
+ * Validate and normalize an optional vector label.
+ *
+ * @param {unknown} candidate Candidate nested label state or null.
+ * @param {string} geometryKind Validated parent geometry class.
+ * @return {Object|null} Frozen normalized label or null when labels are off.
+ */
+function normalizeVectorLabel(candidate, geometryKind) {
+    if (candidate === undefined || candidate === null) return null;
+    if (typeof candidate !== "object" || Array.isArray(candidate)) {
+        throw new TypeError("Vector label must be an object or null.");
+    }
+    const field = candidate.field;
+    if (
+        typeof field !== "string" ||
+        field.length < 1 ||
+        field.length > 256 ||
+        /[\u0000-\u001f\u007f]/.test(field)
+    ) {
+        throw new TypeError("Label field is invalid.");
+    }
+    const placement = option(
+        candidate.placement,
+        LABEL_PLACEMENTS,
+        "Label placement",
+    );
+    if (placement === "follow-line" && geometryKind !== "line") {
+        throw new TypeError("Only line labels can follow line geometry.");
+    }
+    const minimumZoom = candidate.minimumZoom;
+    if (!Number.isInteger(minimumZoom) || minimumZoom < 0 || minimumZoom > 22) {
+        throw new RangeError("Label minimum zoom must be from 0 to 22.");
+    }
+    return Object.freeze({
+        field,
+        fontFamily: option(
+            candidate.fontFamily,
+            LABEL_FONT_FAMILIES,
+            "Label font family",
+        ),
+        fontSize: boundedNumber(candidate.fontSize, 6, 72, "Label font size"),
+        fontWeight: option(
+            candidate.fontWeight,
+            LABEL_FONT_WEIGHTS,
+            "Label font weight",
+        ),
+        fontColor: color(candidate.fontColor, "Label color"),
+        haloColor: color(candidate.haloColor, "Label halo color"),
+        haloWidth: boundedNumber(
+            candidate.haloWidth,
+            0,
+            10,
+            "Label halo width",
+        ),
+        placement,
+        minimumZoom,
+    });
+}
+
+/**
+ * Require one value from a closed string option set.
+ *
+ * @param {unknown} value Candidate option.
+ * @param {Set<string>} choices Allowed values.
+ * @param {string} label User-facing field label.
+ * @return {string} Validated option.
+ */
+function option(value, choices, label) {
+    if (typeof value !== "string" || !choices.has(value)) {
+        throw new TypeError(`${label} is invalid.`);
+    }
+    return value;
 }
 
 /**

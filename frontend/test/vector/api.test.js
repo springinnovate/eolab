@@ -57,6 +57,7 @@ test("vector publication validates exact fixed-style WMS metadata", async () => 
             strokeOpacity: 1,
             strokeWidth: 2,
             pointSize: null,
+            label: null,
         },
     };
 
@@ -90,6 +91,17 @@ test("vector styling sends Catalog identity plus complete symbol state", async (
         strokeOpacity: 0.75,
         strokeWidth: 4,
         pointSize: null,
+        label: {
+            field: "name",
+            fontFamily: "SansSerif",
+            fontSize: 12,
+            fontWeight: "bold",
+            fontColor: "#112233",
+            haloColor: "#ffffff",
+            haloWidth: 1.5,
+            placement: "follow-line",
+            minimumZoom: 6,
+        },
     };
     const result = {
         styleName:

@@ -936,10 +936,66 @@
                 min="1" max="64" step="1" />
             </label>
           </div>
+          <fieldset class="vector-label-controls">
+            <legend>Labels</legend>
+            <label class="vector-label-toggle" for="vector-label-enabled">
+              <input id="vector-label-enabled" type="checkbox" />
+              <span>Show labels</span>
+            </label>
+            <div class="vector-style-group vector-label-fields">
+              <label for="vector-label-field">
+                <span>Attribute field</span>
+                <select id="vector-label-field"></select>
+              </label>
+              <label for="vector-label-placement">
+                <span>Placement</span>
+                <select id="vector-label-placement"></select>
+              </label>
+              <label for="vector-label-font-family">
+                <span>Font</span>
+                <select id="vector-label-font-family">
+                  <option value="SansSerif">Sans serif</option>
+                  <option value="Serif">Serif</option>
+                  <option value="Monospaced">Monospaced</option>
+                </select>
+              </label>
+              <label for="vector-label-font-weight">
+                <span>Weight</span>
+                <select id="vector-label-font-weight">
+                  <option value="normal">Normal</option>
+                  <option value="bold">Bold</option>
+                </select>
+              </label>
+              <label for="vector-label-font-size">
+                <span>Font size</span>
+                <input id="vector-label-font-size" type="number"
+                  min="6" max="72" step="1" />
+              </label>
+              <label for="vector-label-minimum-zoom">
+                <span>Minimum zoom</span>
+                <input id="vector-label-minimum-zoom" type="number"
+                  min="0" max="22" step="1" />
+              </label>
+              <label for="vector-label-font-color">
+                <span>Font color</span>
+                <input id="vector-label-font-color" type="color" />
+              </label>
+              <label for="vector-label-halo-color">
+                <span>Halo color</span>
+                <input id="vector-label-halo-color" type="color" />
+              </label>
+              <label for="vector-label-halo-width">
+                <span>Halo width</span>
+                <input id="vector-label-halo-width" type="number"
+                  min="0" max="10" step="0.5" />
+              </label>
+            </div>
+            <p id="vector-label-note" class="vector-label-note"></p>
+          </fieldset>
           <p id="vector-style-status" class="vector-style-status"
             role="status" aria-live="polite" aria-atomic="true"></p>
           <button id="apply-vector-style" class="secondary-button" type="button">
-            Apply symbol
+            Apply style
           </button>
         </section>
         <div id="layer-raster-style"><section

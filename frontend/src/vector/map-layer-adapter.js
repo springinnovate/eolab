@@ -3,7 +3,11 @@
 import { publishCatalogVector, styleCatalogVector } from "./api.js";
 import { createVectorWmsLayer } from "./leaflet.js";
 import { buildCatalogResultPresentation } from "../catalog-result-presentation.js";
-import { normalizeVectorStyle, vectorStyleLegend } from "./style.js";
+import {
+    normalizeVectorStyle,
+    vectorLabelFields,
+    vectorStyleLegend,
+} from "./style.js";
 
 /**
  * Create the vector implementation of the neutral external-map-layer contract.
@@ -54,12 +58,14 @@ export function createVectorMapLayerAdapter({
          * Create adapter-owned state for one retained vector layer.
          *
          * @param {{item:Object}} context Neutral retained-layer context.
-         * @return {{item:Object,style:Object,layer:Object|null}} Vector-owned state.
+         * @return {{item:Object,style:Object,labelFields:ReadonlyArray,
+         * layer:Object|null}} Vector-owned state.
          */
         createState({ item, publication }) {
             return {
                 item,
                 style: normalizeVectorStyle(publication.style),
+                labelFields: vectorLabelFields(item),
                 layer: null,
             };
         },

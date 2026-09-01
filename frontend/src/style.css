@@ -3669,13 +3669,44 @@ button.raster-histogram-summary:hover,
   background: var(--surface-2);
 }
 
-.vector-style-group input[type="number"] {
+.vector-style-group input[type="number"],
+.vector-style-group select {
   min-width: 0;
+  width: 100%;
   border: 1px solid var(--border-1);
   border-radius: var(--radius);
   background: var(--surface-2);
   padding: 7px 8px;
   color: var(--text-1);
+}
+
+.vector-label-controls {
+  display: grid;
+  gap: 10px;
+  margin: 2px 0 0;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius);
+  padding: 10px;
+}
+
+.vector-label-controls legend {
+  padding: 0 5px;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.vector-label-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.vector-label-note {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 0.7rem;
 }
 
 .vector-style-range {

@@ -101,12 +101,30 @@ not GeoServer state; selecting the Item again converges and reauthorizes it.
 
 ## Browser lifecycle and bounds
 
-Vector layers use fixed `vector-point`, `vector-line`, or `vector-polygon`
-styles and never accept raster `env` substitutions. They share the neutral
-retained-layer visibility limit, opacity, top-first ordering, activation,
-removal, and tile-error ownership with raster WMS layers. Fit-to-bounds is an
-adapter option and defaults on when a vector is added. Selecting a vector hides
-raster-only palette, histogram, pixel, and sample-window controls.
+Vector layers start with fixed `vector-point`, `vector-line`, or
+`vector-polygon` styles and never accept raster `env` substitutions. The
+vector-owned style workflow can replace that initializer style with a
+content-addressed single-symbol SLD. The browser submits only Catalog identity
+and a complete validated style; the server re-resolves the current Item,
+source signature, publication authorization, geometry family, and any selected
+label field before deriving the GeoServer resource identity. A changed style
+therefore receives a changed authorized WMS style name and refreshes cached
+Leaflet tiles immediately.
+
+The vector style can optionally add one `TextSymbolizer`. Labels are `null` by
+default. An enabled label contains an exact field from the Item's current STAC
+Table Extension columns, closed font-family and weight choices, bounded font
+and halo values, geometry-aware placement, and a zoom from zero through 22.
+The minimum zoom becomes a label-only `MaxScaleDenominator` rule, so hiding
+labels at small scales never hides the underlying geometry. The SLD requests
+GeoServer's normal conflict resolution, but decluttering quality and
+large-layer label performance require separate dataset-specific verification.
+
+Vectors share the neutral retained-layer visibility limit, opacity, top-first
+ordering, activation, removal, and tile-error ownership with raster WMS
+layers. Fit-to-bounds is an adapter option and defaults on when a vector is
+added. Selecting a vector hides raster-only palette, histogram, pixel, and
+sample-window controls.
 
 ### Feature inspection
 
@@ -144,5 +162,7 @@ exact-reader contract available in CI/local builds.
 Deployment still requires richpsharp to run the draft PR image against the
 production mount: scan a representative Shapefile and a two-layer GeoPackage,
 add each exact layer, reload/re-add it, and confirm WMS tiles plus distinct
-point/line/polygon styles. Keep the PR draft until that environment check is
-complete.
+point/line/polygon styles. For label changes, choose a text and numeric field,
+confirm labels remain off by default, verify geometry-specific placement and
+minimum zoom, and revisit a cached zoom after changing font or halo controls.
+Keep the PR draft until that environment check is complete.
