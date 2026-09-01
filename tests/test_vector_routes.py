@@ -5,7 +5,11 @@ from fastapi.testclient import TestClient
 
 from eolab_app.routes.vectors import create_vector_feature
 from eolab_app.vector.errors import VectorConflictError
-from eolab_app.vector.models import AppliedVectorStyle, PublishedVector
+from eolab_app.vector.models import (
+    AppliedVectorStyle,
+    PublishedVector,
+    VectorCategorySummary,
+)
 from eolab_app.vector.sources import PublishedVectorRegistry
 from eolab_app.vector.styles import default_vector_style
 
@@ -52,9 +56,36 @@ class _VectorRouteService:
         """
         return AppliedVectorStyle(
             styleName=(
-                "vector-single-0123456789abcdef01234567-89abcdef0123"
+                "vector-style-0123456789abcdef01234567-89abcdef0123"
             ),
             style=request.style,
+        )
+
+    async def summarize_categories(self, request: object) -> VectorCategorySummary:
+        """Return one fixed bounded typed category summary.
+
+        Args:
+            request: Validated Item identity and exact field.
+
+        Returns:
+            Complete two-value category summary fixture.
+        """
+        return VectorCategorySummary(
+            field=request.field,
+            fieldType="str:40",
+            values=(
+                {"value": {"kind": "string", "value": "high"}, "count": 7},
+                {"value": {"kind": "string", "value": "low"}, "count": 3},
+            ),
+            observedDistinctCount=2,
+            distinctCount=2,
+            scannedFeatureCount=10,
+            featureCount=10,
+            nullCount=0,
+            unsupportedValueCount=0,
+            complete=True,
+            defaultLimit=20,
+            maximumLimit=50,
         )
 
 
@@ -88,6 +119,17 @@ class _VectorConflictService:
 
         Args:
             request: Validated Item identity and style.
+
+        Raises:
+            VectorConflictError: Always, with browser-safe detail.
+        """
+        raise VectorConflictError("controlled vector conflict")
+
+    async def summarize_categories(self, request: object) -> None:
+        """Reject category discovery.
+
+        Args:
+            request: Validated Item identity and exact field.
 
         Raises:
             VectorConflictError: Always, with browser-safe detail.
@@ -162,13 +204,14 @@ def test_vector_routes_preserve_identity_and_fixed_style_contract() -> None:
             "strokeOpacity": 1.0,
             "strokeWidth": 2.0,
             "pointSize": None,
+            "categorical": None,
             "label": None,
         },
     }
     assert style.status_code == 200
     assert style.json() == {
         "styleName": (
-            "vector-single-0123456789abcdef01234567-89abcdef0123"
+            "vector-style-0123456789abcdef01234567-89abcdef0123"
         ),
         "style": {
             "geometryKind": "line",
@@ -178,6 +221,7 @@ def test_vector_routes_preserve_identity_and_fixed_style_contract() -> None:
             "strokeOpacity": 0.75,
             "strokeWidth": 4.0,
             "pointSize": None,
+            "categorical": None,
             "label": {
                 "field": "name",
                 "fontFamily": "SansSerif",
@@ -190,6 +234,29 @@ def test_vector_routes_preserve_identity_and_fixed_style_contract() -> None:
                 "minimumZoom": 6,
             },
         },
+    }
+
+    categories = client.post("/api/vector-rendering/category-summaries", json={
+        **identity,
+        "field": "risk",
+    })
+    assert categories.status_code == 200
+    assert categories.json() == {
+        "field": "risk",
+        "fieldType": "str:40",
+        "values": [
+            {"value": {"kind": "string", "value": "high"}, "count": 7},
+            {"value": {"kind": "string", "value": "low"}, "count": 3},
+        ],
+        "observedDistinctCount": 2,
+        "distinctCount": 2,
+        "scannedFeatureCount": 10,
+        "featureCount": 10,
+        "nullCount": 0,
+        "unsupportedValueCount": 0,
+        "complete": True,
+        "defaultLimit": 20,
+        "maximumLimit": 50,
     }
 
 

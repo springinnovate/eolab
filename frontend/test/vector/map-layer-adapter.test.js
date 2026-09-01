@@ -16,6 +16,7 @@ const PUBLICATION = Object.freeze({
     strokeOpacity: 1,
     strokeWidth: 2,
     pointSize: null,
+    categorical: null,
     label: null,
   },
 });
@@ -30,6 +31,7 @@ function createAdapterFixture(fitToBounds) {
   const wmsCalls = [];
   const fitCalls = [];
   const tileErrors = [];
+  const categoryCalls = [];
   const leaflet = {
     tileLayer: {
       wms(url, options) {
@@ -64,14 +66,19 @@ function createAdapterFixture(fitToBounds) {
       publish: async () => PUBLICATION,
       style: async (_item, style) => ({
         styleName: style.fillColor === "#00ff00"
-          ? "vector-single-0123456789abcdef01234567-aaaaaaaaaaaa"
-          : "vector-single-0123456789abcdef01234567-bbbbbbbbbbbb",
+          ? "vector-style-0123456789abcdef01234567-aaaaaaaaaaaa"
+          : "vector-style-0123456789abcdef01234567-bbbbbbbbbbbb",
         style,
       }),
+      summarize: async (item, field) => {
+        categoryCalls.push({ item, field });
+        return { field, values: [] };
+      },
     }),
     wmsCalls,
     fitCalls,
     tileErrors,
+    categoryCalls,
   };
 }
 
@@ -104,6 +111,11 @@ test("vector map-layer adapter owns publication, WMS, legend, and optional fit",
     { name: "area", type: "float" },
   ]);
   const layer = fitted.adapter.createLayer(record, () => {});
+  assert.deepEqual(
+    await fitted.adapter.summarizeCategories(record, "name"),
+    { field: "name", values: [] },
+  );
+  assert.deepEqual(fitted.categoryCalls, [{ item, field: "name" }]);
   assert.equal(
     layer.errorHandler.type,
     "tileerror",
@@ -130,7 +142,7 @@ test("vector map-layer adapter owns publication, WMS, legend, and optional fit",
     appliedStyle,
   );
   assert.deepEqual(layer.styleRequests, [{
-    styles: "vector-single-0123456789abcdef01234567-aaaaaaaaaaaa",
+    styles: "vector-style-0123456789abcdef01234567-aaaaaaaaaaaa",
   }]);
   assert.equal(fitted.adapter.snapshot(record).legend.fill, "#00ff00");
   const reappliedStyle = {
@@ -143,10 +155,10 @@ test("vector map-layer adapter owns publication, WMS, legend, and optional fit",
   );
   assert.deepEqual(layer.styleRequests, [
     {
-      styles: "vector-single-0123456789abcdef01234567-aaaaaaaaaaaa",
+      styles: "vector-style-0123456789abcdef01234567-aaaaaaaaaaaa",
     },
     {
-      styles: "vector-single-0123456789abcdef01234567-bbbbbbbbbbbb",
+      styles: "vector-style-0123456789abcdef01234567-bbbbbbbbbbbb",
     },
   ]);
   assert.equal(fitted.adapter.snapshot(record).legend.fill, "#ff0000");

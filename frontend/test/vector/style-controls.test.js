@@ -20,6 +20,27 @@ function styleFixture() {
                     { name: "name", type: "str" },
                     { name: "value", type: "float" },
                 ],
+                async summarize(field) {
+                    return {
+                        field,
+                        fieldType: field === "value" ? "float" : "str",
+                        values: [
+                            { value: { kind: "string", value: "A" }, count: 4 },
+                            { value: { kind: "string", value: "B" }, count: 3 },
+                            { value: { kind: "string", value: "C" }, count: 1 },
+                            { value: { kind: "string", value: "D" }, count: 1 },
+                        ],
+                        observedDistinctCount: 4,
+                        distinctCount: 4,
+                        scannedFeatureCount: 10,
+                        featureCount: 10,
+                        nullCount: 1,
+                        unsupportedValueCount: 0,
+                        complete: true,
+                        defaultLimit: 20,
+                        maximumLimit: 50,
+                    };
+                },
                 async apply(nextStyle) {
                     applied.push(nextStyle);
                     return nextStyle;
@@ -88,6 +109,7 @@ test("vector style controls apply one complete validated state", async () => {
         strokeOpacity: 1,
         strokeWidth: 4,
         pointSize: null,
+        categorical: null,
         label: null,
     }]);
     assert.equal(fixture.controls.status.textContent, "Style applied to the map.");
@@ -133,6 +155,45 @@ test("vector style controls apply a field-backed optional label", async () => {
             "truncated and may be omitted when GeoServer cannot place " +
             "them without a conflict.",
     );
+    fixture.controls.destroy();
+});
+
+test("vector category controls preserve colors as the bounded limit changes", async () => {
+    const fixture = styleFixture();
+    fixture.controls.show(fixture.target("polygon", {
+        geometryKind: "polygon",
+        fillColor: "#a855f7",
+        fillOpacity: 0.38,
+        strokeColor: "#581c87",
+        strokeOpacity: 1,
+        strokeWidth: 2,
+    }));
+    fixture.controls.mode.value = "categories";
+    fixture.controls.mode.dispatchEvent(new Event("change"));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    fixture.controls.categoryLimit.value = "2";
+    fixture.controls.categoryLimit.dispatchEvent(new Event("input"));
+    const firstColor = fixture.controls.categoryList.children[0].children[0];
+    firstColor.value = "#123456";
+    firstColor.dispatchEvent(new Event("input"));
+    fixture.controls.categoryLimit.value = "3";
+    fixture.controls.categoryLimit.dispatchEvent(new Event("input"));
+
+    assert.equal(
+        fixture.controls.categoryList.children[0].children[0].value,
+        "#123456",
+    );
+    assert.equal(fixture.controls.categoryList.children.length, 5);
+    fixture.controls.applyButton.dispatchEvent(new Event("click"));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    assert.equal(fixture.applied[0].categorical.field, "name");
+    assert.equal(fixture.applied[0].categorical.limit, 3);
+    assert.equal(fixture.applied[0].categorical.rules.length, 3);
+    assert.equal(fixture.applied[0].categorical.rules[0].color, "#123456");
+    assert.equal(fixture.applied[0].categorical.otherColor, "#9ca3af");
+    assert.equal(fixture.applied[0].categorical.missingColor, "#d1d5db");
     fixture.controls.destroy();
 });
 

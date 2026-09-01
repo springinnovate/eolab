@@ -5,6 +5,7 @@ import {
     assessCatalogVector,
     publishCatalogVector,
     styleCatalogVector,
+    summarizeCatalogVectorCategories,
     VectorRenderingRequestError,
 } from "../../src/vector/api.js";
 
@@ -105,7 +106,7 @@ test("vector styling sends Catalog identity plus complete symbol state", async (
     };
     const result = {
         styleName:
-          "vector-single-0123456789abcdef01234567-89abcdef0123",
+          "vector-style-0123456789abcdef01234567-89abcdef0123",
         style,
     };
 
@@ -125,6 +126,45 @@ test("vector styling sends Catalog identity plus complete symbol state", async (
         collectionId: VECTOR_ITEM.collection,
         itemId: VECTOR_ITEM.id,
         style,
+    });
+});
+
+test("vector category summary sends identity and field then validates limits", async () => {
+    const requests = [];
+    const summary = {
+        field: "risk",
+        fieldType: "str:40",
+        values: [
+            { value: { kind: "string", value: "high" }, count: 7 },
+            { value: { kind: "string", value: "low" }, count: 3 },
+        ],
+        observedDistinctCount: 2,
+        distinctCount: 2,
+        scannedFeatureCount: 10,
+        featureCount: 10,
+        nullCount: 0,
+        unsupportedValueCount: 0,
+        complete: true,
+        defaultLimit: 20,
+        maximumLimit: 50,
+    };
+
+    assert.deepEqual(await summarizeCatalogVectorCategories(
+        VECTOR_ITEM,
+        "risk",
+        async (url, options) => {
+            requests.push({ url, options });
+            return new Response(JSON.stringify(summary), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+            });
+        },
+    ), summary);
+    assert.equal(requests[0].url, "/api/vector-rendering/category-summaries");
+    assert.deepEqual(JSON.parse(requests[0].options.body), {
+        collectionId: VECTOR_ITEM.collection,
+        itemId: VECTOR_ITEM.id,
+        field: "risk",
     });
 });
 

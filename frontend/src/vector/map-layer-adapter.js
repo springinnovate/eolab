@@ -1,6 +1,10 @@
 /** Focused vector publication and Leaflet adapter for shared map lifecycle. */
 
-import { publishCatalogVector, styleCatalogVector } from "./api.js";
+import {
+    publishCatalogVector,
+    styleCatalogVector,
+    summarizeCatalogVectorCategories,
+} from "./api.js";
 import { createVectorWmsLayer } from "./leaflet.js";
 import { buildCatalogResultPresentation } from "../catalog-result-presentation.js";
 import {
@@ -24,6 +28,9 @@ import {
  * Vector publication API adapter.
  * @param {(item:Object,style:Object)=>Promise<Object>} [configuration.style=styleCatalogVector]
  * Vector style API adapter.
+ * @param {(item:Object,field:string)=>Promise<Object>}
+ * [configuration.summarize=summarizeCatalogVectorCategories] Bounded category
+ * summary API adapter.
  * @return {Object} Immutable adapter consumed by the shared layer lifecycle.
  */
 export function createVectorMapLayerAdapter({
@@ -34,6 +41,7 @@ export function createVectorMapLayerAdapter({
     fitToBounds = true,
     publish = publishCatalogVector,
     style = styleCatalogVector,
+    summarize = summarizeCatalogVectorCategories,
 }) {
     if (typeof fitToBounds !== "boolean") {
         throw new TypeError("fitToBounds must be boolean.");
@@ -107,11 +115,20 @@ export function createVectorMapLayerAdapter({
             return applied;
         },
         /**
+         * Read bounded typed categories for one authoritative Catalog field.
+         *
+         * @param {Object} record Neutral retained-layer record.
+         * @param {string} field Current Catalog attribute field.
+         * @return {Promise<Object>} Normalized category summary.
+         */
+        summarizeCategories(record, field) {
+            return summarize(record.state.item, field);
+        },
+        /**
          * Return fixed presentation metadata for the shared layer view.
          *
          * @param {Object} record Neutral retained-layer record.
-         * @return {{legend:{kind:"fixed",label:string,fill:string,stroke:string}}}
-         * Neutral fixed-swatch snapshot contract.
+         * @return {{legend:Object}} Neutral fixed or categorical legend snapshot.
          */
         snapshot(record) {
             return {

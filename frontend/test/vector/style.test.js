@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+    categoryValueKey,
+    normalizeVectorCategorySummary,
     normalizeVectorStyle,
+    qualitativeCategoryColor,
+    vectorCategoricalFields,
     vectorLabelFields,
     vectorStyleLegend,
 } from "../../src/vector/style.js";
@@ -26,6 +30,7 @@ test("vector styles normalize geometry-specific symbol state", () => {
 
     assert.equal(point.fillColor, "#abcdef");
     assert.equal(point.pointSize, 12);
+    assert.equal(point.categorical, null);
     assert.equal(point.label, null);
     assert.equal(line.fillColor, null);
     assert.equal(line.pointSize, null);
@@ -35,6 +40,76 @@ test("vector styles normalize geometry-specific symbol state", () => {
         fill: "#fedcba",
         stroke: "#fedcba",
     });
+});
+
+test("categorical styles preserve explicit value types and qualitative colors", () => {
+    const style = normalizeVectorStyle({
+        geometryKind: "polygon",
+        fillColor: "#a855f7",
+        fillOpacity: 0.38,
+        strokeColor: "#581c87",
+        strokeOpacity: 1,
+        strokeWidth: 2,
+        categorical: {
+            field: "risk",
+            limit: 20,
+            rules: [
+                { value: { kind: "integer", value: 1 }, color: "#D60000" },
+                { value: { kind: "number", value: 1 }, color: "#018700" },
+            ],
+            otherColor: "#9CA3AF",
+            missingColor: "#D1D5DB",
+        },
+    });
+
+    assert.equal(style.categorical.rules[0].color, "#d60000");
+    assert.notEqual(
+        categoryValueKey(style.categorical.rules[0].value),
+        categoryValueKey(style.categorical.rules[1].value),
+    );
+    assert.notEqual(qualitativeCategoryColor(0), qualitativeCategoryColor(1));
+    assert.notEqual(qualitativeCategoryColor(0), qualitativeCategoryColor(0, 1));
+    assert.deepEqual(vectorStyleLegend(style), {
+        kind: "categories",
+        label: "risk",
+        entries: [
+            { label: "1", color: "#d60000" },
+            { label: "1", color: "#018700" },
+            { label: "Other", color: "#9ca3af" },
+            { label: "No value", color: "#d1d5db" },
+        ],
+    });
+});
+
+test("category summaries advertise bounded complete values and eligible fields", () => {
+    const summary = normalizeVectorCategorySummary({
+        field: "risk",
+        fieldType: "str:40",
+        values: [{ value: { kind: "string", value: "high" }, count: 4 }],
+        observedDistinctCount: 1,
+        distinctCount: 1,
+        scannedFeatureCount: 4,
+        featureCount: 4,
+        nullCount: 0,
+        unsupportedValueCount: 0,
+        complete: true,
+        defaultLimit: 20,
+        maximumLimit: 50,
+    });
+
+    assert.equal(summary.values[0].value.kind, "string");
+    assert.deepEqual(vectorCategoricalFields([
+        { name: "risk", type: "str:40" },
+        { name: "score", type: "float" },
+        { name: "observed", type: "date" },
+    ]), [
+        { name: "risk", type: "str:40" },
+        { name: "score", type: "float" },
+    ]);
+    assert.throws(
+        () => normalizeVectorCategorySummary({ ...summary, complete: false }),
+        /Distinct count must agree/,
+    );
 });
 
 test("vector labels normalize optional presentation and Catalog fields", () => {

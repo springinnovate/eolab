@@ -37,6 +37,9 @@ The feature depends on these lower-level contracts:
 - `DatasetHandlerRegistry` rebuilds a selected Item without suffix dispatch in
   the service;
 - the catalog adapter reloads and replaces authoritative Items;
+- the focused vector category-reader port uses Fiona to read only one
+  Catalog-declared scalar field, without geometry, under fixed row, value,
+  concurrency, and cancellation bounds;
 - `src/eolab_app/rendering/` supplies only the GeoServer REST transport,
   failure categories, and published-layer authorization protocol genuinely
   shared with raster publication; and
@@ -104,12 +107,39 @@ not GeoServer state; selecting the Item again converges and reauthorizes it.
 Vector layers start with fixed `vector-point`, `vector-line`, or
 `vector-polygon` styles and never accept raster `env` substitutions. The
 vector-owned style workflow can replace that initializer style with a
-content-addressed single-symbol SLD. The browser submits only Catalog identity
-and a complete validated style; the server re-resolves the current Item,
+content-addressed single-color or categorical SLD. The browser submits only
+Catalog identity and a complete validated style; the server re-resolves the current Item,
 source signature, publication authorization, geometry family, and any selected
 label field before deriving the GeoServer resource identity. A changed style
 therefore receives a changed authorized WMS style name and refreshes cached
 Leaflet tiles immediately.
+
+Categorical discovery is a vector-owned source analysis, not a GeoServer
+operation. The browser posts Collection ID, Item ID, and one exact STAC Table
+field. `VectorStyleService` reloads the Item, resolves the mounted source,
+requires a current successful reader assessment and source signature, and asks
+the focused Fiona adapter to read only that field with geometry ignored. The
+adapter scans at most 100,000 features, checks cooperative cancellation per
+feature, limits explicit string values to 256 characters, and returns at most
+50 typed values ordered by observed count. The response distinguishes scanned
+from total features, observed from exact distinct counts, null values, excluded
+long or unsupported values, and complete from partial reads. A final signature
+check rejects sources that change during the read. This path does not consult
+the published-layer registry or GeoServer, so Catalog search and bounded field
+exploration remain available when rendering is unavailable.
+
+The style form defaults to 20 explicit categories under the server-advertised
+maximum of 50. It uses a fixed qualitative palette, retains existing
+value-to-color mappings when the user changes that limit, permits individual
+overrides, and regenerates colors only on explicit request. Remaining values
+use an optional **Other** rule and nulls use a separate **No value** rule. JSON
+values carry an explicit boolean, integer, number, or string kind so integral
+floating values cannot be confused with integer fields. When a categorical
+style is applied, the service revalidates its field and every rule kind against
+current Catalog metadata before GeoServer receives SLD equality, null, and
+else rules. Point and polygon categories replace fill color; line categories
+replace stroke color; the geometry-specific size, outline, width, and opacity
+controls remain authoritative.
 
 The vector style can optionally add one `TextSymbolizer`. Labels are `null` by
 default. An enabled label contains an exact field from the Item's current STAC
@@ -121,7 +151,10 @@ GeoServer's normal conflict resolution. Attribute values are neither copied
 through the browser nor truncated: GeoServer evaluates the selected field for
 each feature, and may omit a long one-line value when it cannot place the label
 without a conflict. Wrapping, explicit truncation, decluttering quality, and
-large-layer label performance require separate dataset-specific work.
+large-layer label performance require separate dataset-specific work. For a
+categorical style, labels occupy a second `FeatureTypeStyle`; this keeps their
+unfiltered, independently scaled rule from suppressing the geometry
+`ElseFilter` while leaving label state independent from category selection.
 
 Vectors share the neutral retained-layer visibility limit, opacity, top-first
 ordering, activation, removal, and tile-error ownership with raster WMS

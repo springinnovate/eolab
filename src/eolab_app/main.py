@@ -57,6 +57,7 @@ from eolab_app.vector.assessment import (
     VectorAssessmentService,
 )
 from eolab_app.vector.catalog import StacVectorCatalog
+from eolab_app.vector.categories import FionaVectorCategoryReader
 from eolab_app.vector.geoserver import (
     GeoServerVectorPublisher,
     GeoServerVectorReaderAssessor,
@@ -232,6 +233,7 @@ def create_app(
             vector_source_resolver,
             vector_publisher,
             published_vectors,
+            FionaVectorCategoryReader(),
         ),
         published_vectors,
     )

@@ -3642,8 +3642,105 @@ button.raster-histogram-summary:hover,
 }
 
 .vector-style-controls[hidden],
-.vector-style-group[hidden] {
+.vector-style-group[hidden],
+.vector-category-controls[hidden],
+#vector-style-fill-color-control[hidden],
+#vector-style-stroke-color-control[hidden] {
   display: none;
+}
+
+.vector-style-mode,
+.vector-category-options label {
+  display: grid;
+  gap: 5px;
+  color: var(--text-2);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.vector-style-mode select,
+.vector-category-options select,
+.vector-category-options input {
+  min-width: 0;
+  width: 100%;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  padding: 7px 8px;
+  color: var(--text-1);
+}
+
+.vector-category-controls {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius);
+  padding: 10px;
+}
+
+.vector-category-controls legend {
+  padding: 0 5px;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.vector-category-options {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(86px, 0.45fr);
+  align-items: end;
+  gap: 8px;
+}
+
+.vector-category-options .secondary-button {
+  grid-column: 1 / -1;
+  padding: 6px 9px;
+}
+
+.vector-category-status {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 0.7rem;
+  line-height: 1.4;
+}
+
+.vector-category-list {
+  display: grid;
+  gap: 5px;
+}
+
+.vector-category-row {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  border-top: 1px solid var(--border-3);
+  padding-top: 5px;
+}
+
+.vector-category-row input[type="color"] {
+  width: 36px;
+  height: 28px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  padding: 1px;
+}
+
+.vector-category-name {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vector-category-count {
+  color: var(--text-3);
+  font-size: 0.66rem;
+  font-variant-numeric: tabular-nums;
 }
 
 .vector-style-group {

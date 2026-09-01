@@ -1,5 +1,7 @@
 /** HTTP contracts for catalog vector assessment and publication. */
 
+import { normalizeVectorCategorySummary } from "./style.js";
+
 const PUBLICATION_FAILURE_CATEGORIES = new Set([
     "reader_rejection",
     "connectivity",
@@ -61,7 +63,8 @@ async function vectorRenderingError(response, action) {
  * Post one selected vector Item identity to an owned rendering action.
  *
  * @param {Object} item Selected STAC Item.
- * @param {"assessments"|"layers"|"styles"} action Rendering action path.
+ * @param {"assessments"|"layers"|"styles"|"category-summaries"} action
+ * Rendering action path.
  * @param {string} actionLabel User-facing failure action.
  * @param {typeof fetch} fetchImplementation HTTP implementation.
  * @param {Object} [additionalBody={}] Additional action-owned request fields.
@@ -183,7 +186,7 @@ export async function styleCatalogVector(
     );
     if (
         typeof result?.styleName !== "string" ||
-        !/^vector-single-[0-9a-f]{24}-[0-9a-f]{12}$/.test(
+        !/^vector-style-[0-9a-f]{24}-[0-9a-f]{12}$/.test(
           result.styleName,
         ) ||
         result.style?.geometryKind !== style.geometryKind
@@ -193,4 +196,39 @@ export async function styleCatalogVector(
         );
     }
     return result;
+}
+
+/**
+ * Summarize one authoritative scalar field through a bounded source read.
+ *
+ * @param {Object} item Selected vector STAC Item.
+ * @param {string} field Exact Catalog attribute field.
+ * @param {typeof fetch} [fetchImplementation=globalThis.fetch] HTTP
+ * implementation.
+ * @return {Promise<Object>} Normalized typed category summary.
+ * @throws {VectorRenderingRequestError} If summary or response validation fails.
+ */
+export async function summarizeCatalogVectorCategories(
+    item,
+    field,
+    fetchImplementation = globalThis.fetch,
+) {
+    const result = await postVectorAction(
+        item,
+        "category-summaries",
+        "category summary",
+        fetchImplementation,
+        { field },
+    );
+    try {
+        const summary = normalizeVectorCategorySummary(result);
+        if (summary.field !== field) {
+            throw new TypeError("Category summary field does not match the request.");
+        }
+        return summary;
+    } catch (error) {
+        throw new VectorRenderingRequestError(
+            "Vector category summary returned an invalid response."
+        );
+    }
 }

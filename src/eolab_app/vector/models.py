@@ -1,13 +1,18 @@
 """Public requests, responses, and internal vector value objects."""
 
 from dataclasses import dataclass
+from math import isfinite
 from pathlib import Path
-from typing import Literal
+from typing import Literal, TypeAlias
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    StrictBool,
+    StrictFloat,
+    StrictInt,
+    StrictStr,
     field_validator,
     model_validator,
 )
@@ -21,6 +26,10 @@ from eolab_app.catalog.vector import (
 VECTOR_RENDERING_POLICY = "vector-v1"
 VECTOR_READER_CONTRACT = "geoserver-3.0.1-geotools-35.1-vector-v1"
 VECTOR_RENDERING_METADATA_KEY = "eolab:vector_rendering"
+VECTOR_CATEGORY_DEFAULT_LIMIT = 20
+VECTOR_CATEGORY_MAXIMUM_LIMIT = 50
+VECTOR_CATEGORY_FEATURE_LIMIT = 100_000
+VECTOR_CATEGORY_TEXT_LIMIT = 256
 VectorFormat = Literal[
     "shapefile",
     "geopackage",
@@ -34,6 +43,7 @@ VectorLabelFontWeight = Literal["normal", "bold"]
 VectorLabelPlacement = Literal["center", "above", "below", "follow-line"]
 VectorSourceKind = Literal["mounted", "remote"]
 VectorSourceSignature = tuple[tuple[str, int, int, int, int, int], ...]
+VectorCategoryScalar: TypeAlias = StrictBool | StrictInt | StrictFloat | StrictStr
 
 
 @dataclass(frozen=True)
@@ -59,6 +69,26 @@ class ResolvedVectorSource:
     component_paths: tuple[Path, ...] = ()
 
 
+@dataclass(frozen=True)
+class VectorCategoryRead:
+    """Bounded category counts read from one exact mounted vector layer.
+
+    Attributes:
+        counts: Typed non-null values paired with observed feature counts.
+        scanned_feature_count: Features included in the observed counts.
+        null_count: Scanned features whose selected property is null.
+        unsupported_value_count: Scanned non-null values excluded because they
+            cannot safely become bounded SLD literals.
+        complete: Whether the source iterator was exhausted within the limit.
+    """
+
+    counts: tuple[tuple[VectorCategoryScalar, int], ...]
+    scanned_feature_count: int
+    null_count: int
+    unsupported_value_count: int
+    complete: bool
+
+
 class CatalogVectorRequest(BaseModel):
     """Identify one mounted-vector catalog Item without accepting paths."""
 
@@ -73,6 +103,155 @@ class CatalogVectorRequest(BaseModel):
         max_length=128,
         pattern=r"^[A-Za-z0-9][A-Za-z0-9._~-]*$",
         strict=True,
+    )
+
+
+class CatalogVectorCategoryRequest(CatalogVectorRequest):
+    """Identify one Catalog vector and an authoritative attribute field."""
+
+    field: str = Field(min_length=1, max_length=256, strict=True)
+
+    @field_validator("field")
+    @classmethod
+    def reject_field_control_characters(cls, value: str) -> str:
+        """Reject field identities that cannot safely cross text boundaries.
+
+        Args:
+            value: Candidate authoritative attribute field identity.
+
+        Returns:
+            Unmodified field identity, including meaningful whitespace.
+
+        Raises:
+            ValueError: If the name contains a control character.
+        """
+        if any(ord(character) < 32 or ord(character) == 127 for character in value):
+            raise ValueError("Category field cannot contain control characters")
+        return value
+
+
+class VectorCategoryValue(BaseModel):
+    """One explicitly typed bounded scalar safe for an SLD literal."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    kind: Literal["boolean", "integer", "number", "string"]
+    value: VectorCategoryScalar
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_explicit_number(
+        cls,
+        candidate: object,
+    ) -> object:
+        """Preserve an explicit floating kind when JSON writes ``1``.
+
+        JSON has one number syntax, and browser serialization removes the
+        decimal point from integral floats. The separate ``kind`` remains
+        authoritative, so this validator restores a Python float before the
+        strict scalar union is evaluated.
+
+        Args:
+            candidate: Untrusted category value mapping.
+
+        Returns:
+            A shallow copy with an explicit number converted to ``float``, or
+            the original candidate for normal Pydantic validation.
+
+        Raises:
+            ValueError: If a declared number is not a finite JSON number.
+        """
+        if not isinstance(candidate, dict) or candidate.get("kind") != "number":
+            return candidate
+        value = candidate.get("value")
+        if type(value) not in {int, float} or not isfinite(value):
+            raise ValueError("Numeric category value is invalid")
+        return {**candidate, "value": float(value)}
+
+    @model_validator(mode="after")
+    def require_matching_safe_value(self) -> "VectorCategoryValue":
+        """Keep the declared JSON type aligned with a safe scalar value.
+
+        Returns:
+            Explicitly typed bounded category value.
+
+        Raises:
+            ValueError: If the declared kind and strict value type disagree, a
+                number is non-finite, or text is too long or XML-incompatible.
+        """
+        expected_types = {
+            "boolean": bool,
+            "integer": int,
+            "number": float,
+            "string": str,
+        }
+        if type(self.value) is not expected_types[self.kind]:
+            raise ValueError("Category value kind does not match its value")
+        if isinstance(self.value, float) and not isfinite(self.value):
+            raise ValueError("Category values must be finite")
+        if isinstance(self.value, str):
+            if len(self.value) > VECTOR_CATEGORY_TEXT_LIMIT:
+                raise ValueError("Category text is too long")
+            if any(
+                ord(character) < 32 and character not in "\t\n\r"
+                for character in self.value
+            ):
+                raise ValueError("Category text contains invalid controls")
+        return self
+
+
+class VectorCategoryValueCount(BaseModel):
+    """One typed category value and its bounded observed feature count."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    value: VectorCategoryValue
+    count: int = Field(ge=1, le=VECTOR_CATEGORY_FEATURE_LIMIT, strict=True)
+
+
+class VectorCategorySummary(BaseModel):
+    """Browser-safe bounded summary of one authoritative vector field."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    field: str
+    field_type: str = Field(alias="fieldType")
+    values: tuple[VectorCategoryValueCount, ...] = Field(
+        max_length=VECTOR_CATEGORY_MAXIMUM_LIMIT,
+    )
+    observed_distinct_count: int = Field(
+        alias="observedDistinctCount",
+        ge=0,
+        le=VECTOR_CATEGORY_FEATURE_LIMIT,
+    )
+    distinct_count: int | None = Field(
+        alias="distinctCount",
+        default=None,
+        ge=0,
+        le=VECTOR_CATEGORY_FEATURE_LIMIT,
+    )
+    scanned_feature_count: int = Field(
+        alias="scannedFeatureCount",
+        ge=0,
+        le=VECTOR_CATEGORY_FEATURE_LIMIT,
+    )
+    feature_count: int = Field(alias="featureCount", ge=0)
+    null_count: int = Field(
+        alias="nullCount",
+        ge=0,
+        le=VECTOR_CATEGORY_FEATURE_LIMIT,
+    )
+    unsupported_value_count: int = Field(
+        alias="unsupportedValueCount",
+        ge=0,
+        le=VECTOR_CATEGORY_FEATURE_LIMIT,
+    )
+    complete: bool
+    default_limit: Literal[VECTOR_CATEGORY_DEFAULT_LIMIT] = Field(
+        alias="defaultLimit",
+    )
+    maximum_limit: Literal[VECTOR_CATEGORY_MAXIMUM_LIMIT] = Field(
+        alias="maximumLimit",
     )
 
 
@@ -133,8 +312,110 @@ class VectorLabelStyle(BaseModel):
         return value.lower()
 
 
-class VectorSingleSymbolStyle(BaseModel):
-    """Validated single-symbol presentation for one vector geometry class."""
+class VectorCategoryRule(BaseModel):
+    """Validated typed equality rule for one categorical vector value."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    value: VectorCategoryValue
+    color: str = Field(
+        pattern=r"^#[0-9A-Fa-f]{6}$",
+        strict=True,
+    )
+
+    @field_validator("color")
+    @classmethod
+    def normalize_color(cls, value: str) -> str:
+        """Normalize one validated category color for stable SLD output.
+
+        Args:
+            value: Validated six-digit CSS hex color.
+
+        Returns:
+            Lowercase color.
+        """
+        return value.lower()
+
+
+class VectorCategoricalStyle(BaseModel):
+    """Validated bounded category rules for one authoritative field."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    field: str = Field(min_length=1, max_length=256, strict=True)
+    limit: int = Field(ge=1, le=VECTOR_CATEGORY_MAXIMUM_LIMIT, strict=True)
+    rules: tuple[VectorCategoryRule, ...] = Field(
+        min_length=1,
+        max_length=VECTOR_CATEGORY_MAXIMUM_LIMIT,
+    )
+    other_color: str | None = Field(
+        default=None,
+        alias="otherColor",
+        pattern=r"^#[0-9A-Fa-f]{6}$",
+        strict=True,
+    )
+    missing_color: str | None = Field(
+        default=None,
+        alias="missingColor",
+        pattern=r"^#[0-9A-Fa-f]{6}$",
+        strict=True,
+    )
+
+    @field_validator("field")
+    @classmethod
+    def reject_field_control_characters(cls, value: str) -> str:
+        """Reject field identities that cannot safely cross text boundaries.
+
+        Args:
+            value: Candidate authoritative attribute field identity.
+
+        Returns:
+            Unmodified field identity.
+
+        Raises:
+            ValueError: If the field contains a control character.
+        """
+        if any(ord(character) < 32 or ord(character) == 127 for character in value):
+            raise ValueError("Category field cannot contain control characters")
+        return value
+
+    @field_validator("other_color", "missing_color")
+    @classmethod
+    def normalize_optional_color(cls, value: str | None) -> str | None:
+        """Normalize optional fallback colors for stable SLD output.
+
+        Args:
+            value: Optional validated six-digit CSS hex color.
+
+        Returns:
+            Lowercase color or ``None``.
+        """
+        return value.lower() if value is not None else None
+
+    @model_validator(mode="after")
+    def require_unique_bounded_rules(self) -> "VectorCategoricalStyle":
+        """Require typed value uniqueness and a limit covering every rule.
+
+        Returns:
+            Validated categorical style.
+
+        Raises:
+            ValueError: If values repeat with the same JSON type or the stored
+                UI limit is smaller than the explicit rules.
+        """
+        identities = [
+            (rule.value.kind, rule.value.value)
+            for rule in self.rules
+        ]
+        if len(set(identities)) != len(identities):
+            raise ValueError("Categorical style values must be unique")
+        if len(self.rules) > self.limit:
+            raise ValueError("Categorical style limit cannot be below its rules")
+        return self
+
+
+class VectorStyle(BaseModel):
+    """Validated single-color or categorical vector presentation."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -170,6 +451,7 @@ class VectorSingleSymbolStyle(BaseModel):
         le=64,
         strict=True,
     )
+    categorical: VectorCategoricalStyle | None = None
     label: VectorLabelStyle | None = None
 
     @field_validator("fill_color", "stroke_color")
@@ -186,7 +468,7 @@ class VectorSingleSymbolStyle(BaseModel):
         return value.lower() if value is not None else None
 
     @model_validator(mode="after")
-    def require_geometry_specific_controls(self) -> "VectorSingleSymbolStyle":
+    def require_geometry_specific_controls(self) -> "VectorStyle":
         """Reject controls that do not belong to the selected geometry.
 
         Returns:
@@ -225,9 +507,9 @@ class VectorSingleSymbolStyle(BaseModel):
 
 
 class CatalogVectorStyleRequest(CatalogVectorRequest):
-    """Identify one catalog vector and its complete single-symbol style."""
+    """Identify one Catalog vector and its complete validated style."""
 
-    style: VectorSingleSymbolStyle
+    style: VectorStyle
 
 
 class AppliedVectorStyle(BaseModel):
@@ -236,7 +518,7 @@ class AppliedVectorStyle(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     style_name: str = Field(alias="styleName")
-    style: VectorSingleSymbolStyle
+    style: VectorStyle
 
 
 class VectorReaderAssessment(BaseModel):
@@ -289,4 +571,4 @@ class PublishedVector(BaseModel):
     bbox: tuple[float, float, float, float]
     geometry_kind: VectorGeometryKind = Field(alias="geometryKind")
     style_name: str = Field(alias="styleName")
-    style: VectorSingleSymbolStyle
+    style: VectorStyle

@@ -894,8 +894,35 @@
         <section id="layer-vector-style" class="vector-style-controls"
           aria-labelledby="vector-style-heading" hidden>
           <h3 id="vector-style-heading">Vector symbol</h3>
+          <label class="vector-style-mode" for="vector-style-mode">
+            <span>Color features by</span>
+            <select id="vector-style-mode">
+              <option value="single">Single color</option>
+              <option value="categories">Categories</option>
+            </select>
+          </label>
+          <fieldset id="vector-category-fields" class="vector-category-controls" hidden>
+            <legend>Categories</legend>
+            <div class="vector-category-options">
+              <label for="vector-category-field">
+                <span>Attribute field</span>
+                <select id="vector-category-field"></select>
+              </label>
+              <label for="vector-category-limit">
+                <span>Values to style</span>
+                <input id="vector-category-limit" type="number"
+                  min="1" max="50" step="1" value="20" />
+              </label>
+              <button id="vector-category-regenerate" class="secondary-button"
+                type="button">New colors</button>
+            </div>
+            <p id="vector-category-status" class="vector-category-status"
+              role="status" aria-live="polite" aria-atomic="true"></p>
+            <div id="vector-category-list" class="vector-category-list"
+              aria-label="Category colors"></div>
+          </fieldset>
           <div id="vector-style-fill-group" class="vector-style-group">
-            <label for="vector-style-fill-color">
+            <label id="vector-style-fill-color-control" for="vector-style-fill-color">
               <span>Fill color</span>
               <input id="vector-style-fill-color" type="color" />
             </label>
@@ -910,7 +937,7 @@
             </label>
           </div>
           <div class="vector-style-group">
-            <label for="vector-style-stroke-color">
+            <label id="vector-style-stroke-color-control" for="vector-style-stroke-color">
               <span>Outline color</span>
               <input id="vector-style-stroke-color" type="color" />
             </label>

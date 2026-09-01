@@ -1,4 +1,4 @@
-"""Pure vector single-symbol defaults, identity, and SLD generation."""
+"""Pure vector defaults, content identity, and SLD generation."""
 
 import json
 from hashlib import sha256
@@ -7,7 +7,7 @@ from xml.etree import ElementTree
 from eolab_app.vector.models import (
     VectorGeometryKind,
     VectorLabelStyle,
-    VectorSingleSymbolStyle,
+    VectorStyle,
 )
 
 
@@ -20,17 +20,17 @@ ElementTree.register_namespace("ogc", OGC_NAMESPACE)
 
 def default_vector_style(
     geometry_kind: VectorGeometryKind,
-) -> VectorSingleSymbolStyle:
+) -> VectorStyle:
     """Return the initializer-equivalent style for one geometry class.
 
     Args:
         geometry_kind: Point, line, or polygon geometry class.
 
     Returns:
-        Complete validated single-symbol state.
+        Complete validated single-color state.
     """
     if geometry_kind == "point":
-        return VectorSingleSymbolStyle(
+        return VectorStyle(
             geometryKind="point",
             fillColor="#06b6d4",
             fillOpacity=1,
@@ -40,13 +40,13 @@ def default_vector_style(
             pointSize=9,
         )
     if geometry_kind == "line":
-        return VectorSingleSymbolStyle(
+        return VectorStyle(
             geometryKind="line",
             strokeColor="#f97316",
             strokeOpacity=1,
             strokeWidth=3,
         )
-    return VectorSingleSymbolStyle(
+    return VectorStyle(
         geometryKind="polygon",
         fillColor="#a855f7",
         fillOpacity=0.38,
@@ -58,13 +58,13 @@ def default_vector_style(
 
 def vector_style_name(
     resource_name: str,
-    style: VectorSingleSymbolStyle,
+    style: VectorStyle,
 ) -> str:
     """Build a content-addressed GeoServer style name for one layer.
 
     Args:
         resource_name: Authoritative server-side vector resource identity.
-        style: Complete validated single-symbol state.
+        style: Complete validated vector style state.
 
     Returns:
         Safe unqualified style name whose identity changes with rendering.
@@ -76,12 +76,12 @@ def vector_style_name(
         separators=(",", ":"),
     ).encode("utf-8")
     style_digest = sha256(style_document).hexdigest()[:12]
-    return f"vector-single-{resource_digest}-{style_digest}"
+    return f"vector-style-{resource_digest}-{style_digest}"
 
 
 def build_vector_sld(
     style_name: str,
-    style: VectorSingleSymbolStyle,
+    style: VectorStyle,
 ) -> bytes:
     """Serialize one validated vector style as an SLD 1.0 document.
 
@@ -114,10 +114,88 @@ def build_vector_sld(
         user_style,
         f"{{{SLD_NAMESPACE}}}FeatureTypeStyle",
     )
+    if style.categorical is None:
+        _append_symbol_rule(feature_type_style, style)
+    else:
+        categorical = style.categorical
+        for category_rule in categorical.rules:
+            rule = ElementTree.SubElement(
+                feature_type_style,
+                f"{{{SLD_NAMESPACE}}}Rule",
+            )
+            _append_category_filter(
+                rule,
+                categorical.field,
+                category_rule.value.kind,
+                category_rule.value.value,
+            )
+            _append_symbolizer(rule, style, category_rule.color)
+        if categorical.missing_color is not None:
+            rule = ElementTree.SubElement(
+                feature_type_style,
+                f"{{{SLD_NAMESPACE}}}Rule",
+            )
+            _append_null_filter(rule, categorical.field)
+            _append_symbolizer(rule, style, categorical.missing_color)
+        if categorical.other_color is not None:
+            rule = ElementTree.SubElement(
+                feature_type_style,
+                f"{{{SLD_NAMESPACE}}}Rule",
+            )
+            ElementTree.SubElement(
+                rule,
+                f"{{{SLD_NAMESPACE}}}ElseFilter",
+            )
+            _append_symbolizer(rule, style, categorical.other_color)
+    if style.label is not None:
+        label_feature_type_style = feature_type_style
+        if style.categorical is not None:
+            label_feature_type_style = ElementTree.SubElement(
+                user_style,
+                f"{{{SLD_NAMESPACE}}}FeatureTypeStyle",
+            )
+        _append_label_rule(
+            label_feature_type_style,
+            style.geometry_kind,
+            style.label,
+        )
+    return ElementTree.tostring(
+        root,
+        encoding="utf-8",
+        xml_declaration=True,
+    )
+
+
+def _append_symbol_rule(
+    feature_type_style: ElementTree.Element,
+    style: VectorStyle,
+) -> None:
+    """Append one unfiltered geometry rule for a single-color style.
+
+    Args:
+        feature_type_style: SLD feature-type style receiving the rule.
+        style: Complete validated vector style.
+    """
     rule = ElementTree.SubElement(
         feature_type_style,
         f"{{{SLD_NAMESPACE}}}Rule",
     )
+    _append_symbolizer(rule, style)
+
+
+def _append_symbolizer(
+    rule: ElementTree.Element,
+    style: VectorStyle,
+    category_color: str | None = None,
+) -> None:
+    """Append one geometry-correct symbolizer with an optional category color.
+
+    Args:
+        rule: SLD rule receiving the geometry symbolizer.
+        style: Complete validated vector style.
+        category_color: Optional validated color replacing point/polygon fill
+            or line stroke while retaining all other symbol controls.
+    """
     symbolizer = ElementTree.SubElement(
         rule,
         f"{{{SLD_NAMESPACE}}}{style.geometry_kind.title()}Symbolizer",
@@ -132,28 +210,103 @@ def build_vector_sld(
             mark,
             f"{{{SLD_NAMESPACE}}}WellKnownName",
         ).text = "circle"
-        _append_fill(mark, style)
+        _append_fill(mark, style, category_color)
         _append_stroke(mark, style)
         ElementTree.SubElement(
             graphic,
             f"{{{SLD_NAMESPACE}}}Size",
         ).text = _number(style.point_size)
     elif style.geometry_kind == "line":
-        _append_stroke(symbolizer, style, line_cap=True)
-    else:
-        _append_fill(symbolizer, style)
-        _append_stroke(symbolizer, style)
-    if style.label is not None:
-        _append_label_rule(
-            feature_type_style,
-            style.geometry_kind,
-            style.label,
+        _append_stroke(
+            symbolizer,
+            style,
+            line_cap=True,
+            color=category_color,
         )
-    return ElementTree.tostring(
-        root,
-        encoding="utf-8",
-        xml_declaration=True,
+    else:
+        _append_fill(symbolizer, style, category_color)
+        _append_stroke(symbolizer, style)
+
+
+def _append_category_filter(
+    rule: ElementTree.Element,
+    field: str,
+    value_kind: str,
+    value: object,
+) -> None:
+    """Append one typed property-equality filter to an SLD rule.
+
+    Args:
+        rule: SLD rule receiving the filter.
+        field: Validated authoritative property name.
+        value_kind: Explicit scalar kind validated with the category value.
+        value: Strict bool, int, float, or string category value.
+    """
+    filter_element = ElementTree.SubElement(
+        rule,
+        f"{{{OGC_NAMESPACE}}}Filter",
     )
+    comparison = ElementTree.SubElement(
+        filter_element,
+        f"{{{OGC_NAMESPACE}}}PropertyIsEqualTo",
+    )
+    ElementTree.SubElement(
+        comparison,
+        f"{{{OGC_NAMESPACE}}}PropertyName",
+    ).text = field
+    ElementTree.SubElement(
+        comparison,
+        f"{{{OGC_NAMESPACE}}}Literal",
+    ).text = _category_literal(value_kind, value)
+
+
+def _append_null_filter(rule: ElementTree.Element, field: str) -> None:
+    """Append one property-is-null filter to an SLD rule.
+
+    Args:
+        rule: SLD rule receiving the filter.
+        field: Validated authoritative property name.
+    """
+    filter_element = ElementTree.SubElement(
+        rule,
+        f"{{{OGC_NAMESPACE}}}Filter",
+    )
+    comparison = ElementTree.SubElement(
+        filter_element,
+        f"{{{OGC_NAMESPACE}}}PropertyIsNull",
+    )
+    ElementTree.SubElement(
+        comparison,
+        f"{{{OGC_NAMESPACE}}}PropertyName",
+    ).text = field
+
+
+def _category_literal(value_kind: str, value: object) -> str:
+    """Serialize one validated explicitly typed category value.
+
+    Args:
+        value_kind: Explicit scalar kind.
+        value: Scalar value whose exact Python type matches the kind.
+
+    Returns:
+        Stable OGC literal text interpreted against the property schema.
+
+    Raises:
+        TypeError: If an internal caller violates the validated value contract.
+    """
+    expected_types = {
+        "boolean": bool,
+        "integer": int,
+        "number": float,
+        "string": str,
+    }
+    if value_kind not in expected_types or type(value) is not expected_types[value_kind]:
+        raise TypeError("Category value kind does not match its value")
+    if value_kind == "boolean":
+        return "true" if value else "false"
+    if value_kind == "number":
+        return format(value, ".17g")
+    return str(value)
 
 
 def _append_label_rule(
@@ -341,16 +494,22 @@ def _append_css_parameter(
 
 def _append_fill(
     parent: ElementTree.Element,
-    style: VectorSingleSymbolStyle,
+    style: VectorStyle,
+    color: str | None = None,
 ) -> None:
     """Append validated fill parameters to a symbolizer component.
 
     Args:
         parent: Mark or polygon symbolizer receiving the fill.
         style: Validated point or polygon style.
+        color: Optional categorical fill color.
     """
     fill = ElementTree.SubElement(parent, f"{{{SLD_NAMESPACE}}}Fill")
-    _append_css_parameter(fill, "fill", style.fill_color or "#000000")
+    _append_css_parameter(
+        fill,
+        "fill",
+        color or style.fill_color or "#000000",
+    )
     _append_css_parameter(
         fill,
         "fill-opacity",
@@ -360,8 +519,9 @@ def _append_fill(
 
 def _append_stroke(
     parent: ElementTree.Element,
-    style: VectorSingleSymbolStyle,
+    style: VectorStyle,
     line_cap: bool = False,
+    color: str | None = None,
 ) -> None:
     """Append validated stroke parameters to a symbolizer component.
 
@@ -369,9 +529,10 @@ def _append_stroke(
         parent: Symbolizer or Mark receiving the stroke.
         style: Complete validated style.
         line_cap: Whether to request round line endings.
+        color: Optional categorical stroke color.
     """
     stroke = ElementTree.SubElement(parent, f"{{{SLD_NAMESPACE}}}Stroke")
-    _append_css_parameter(stroke, "stroke", style.stroke_color)
+    _append_css_parameter(stroke, "stroke", color or style.stroke_color)
     _append_css_parameter(
         stroke,
         "stroke-opacity",
