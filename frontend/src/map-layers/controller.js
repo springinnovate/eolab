@@ -17,6 +17,10 @@ import { MapLayerStackView } from "./layer-stack-view.js";
  * Leaflet-compatible layer for one publication.
  * @property {(record:Object)=>Object} snapshot Return presentation-ready legend
  * and optional feature-owned snapshot fields.
+ * @property {(record:Object)=>Object} [exportSavedState] Return validated,
+ * portable owner-specific style state.
+ * @property {(record:Object,savedState:Object)=>Promise<void>|void}
+ * [applySavedState] Validate and apply portable owner-specific style state.
  * @property {(record:Object)=>void} [prepare] Prepare an existing record before
  * activation.
  * @property {(record:Object,next:Object)=>void} [deactivate] Release this

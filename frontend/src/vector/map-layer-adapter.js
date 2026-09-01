@@ -15,6 +15,40 @@ import {
 } from "./style.js";
 
 /**
+ * Validate one untrusted saved vector style without accepting extra fields.
+ *
+ * @param {unknown} candidate Candidate saved style definition.
+ * @return {Object} Canonical normalized vector style.
+ */
+function normalizePortableVectorStyle(candidate) {
+    const normalized = normalizeVectorStyle(candidate);
+    if (canonicalJson(candidate) !== canonicalJson(normalized)) {
+        throw new TypeError(
+            "Saved vector style contains missing or unsupported fields."
+        );
+    }
+    return normalized;
+}
+
+/**
+ * Return deterministic JSON for a validated JSON-shaped value.
+ *
+ * @param {unknown} candidate JSON-shaped scalar, array, or object.
+ * @return {string} Canonical text with object keys in lexical order.
+ */
+function canonicalJson(candidate) {
+    if (Array.isArray(candidate)) {
+        return `[${candidate.map(canonicalJson).join(",")}]`;
+    }
+    if (candidate !== null && typeof candidate === "object") {
+        return `{${Object.keys(candidate).sort().map(
+            (key) => `${JSON.stringify(key)}:${canonicalJson(candidate[key])}`
+        ).join(",")}}`;
+    }
+    return JSON.stringify(candidate);
+}
+
+/**
  * Create the vector implementation of the neutral external-map-layer contract.
  *
  * @param {Object} configuration Adapter configuration.
@@ -118,6 +152,36 @@ export function createVectorMapLayerAdapter({
             record.state.style = applied;
             record.state.layer.setParams({ styles: result.styleName });
             return applied;
+        },
+        /**
+         * Export only the validated vector appearance owned by this adapter.
+         *
+         * @param {Object} record Neutral retained-layer record.
+         * @return {{kind:string,definition:Object}} Portable vector style.
+         */
+        exportSavedState(record) {
+            return {
+                kind: "vector",
+                definition: structuredClone(
+                    normalizeVectorStyle(record.state.style)
+                ),
+            };
+        },
+        /**
+         * Validate and apply one portable vector appearance through GeoServer.
+         *
+         * @param {Object} record Neutral retained-layer record.
+         * @param {Object} savedState Candidate saved style envelope.
+         * @return {Promise<void>} Completion after the current style is applied.
+         */
+        async applySavedState(record, savedState) {
+            if (savedState?.kind !== "vector") {
+                throw new TypeError("Saved style does not belong to a vector.");
+            }
+            await this.applyStyle(
+                record,
+                normalizePortableVectorStyle(savedState.definition)
+            );
         },
         /**
          * Read bounded typed categories for one authoritative Catalog field.

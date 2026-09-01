@@ -60,11 +60,46 @@ import {
     deriveRasterStyleFromStatistics,
     RASTER_COLOR_PALETTES,
     buildRasterLegend,
+    validateRasterStyle,
 } from "./style.js";
 import { buildRasterStyleEnvironment } from "./wms.js";
 import { RasterControlsView } from "./controls-view.js";
 
 const RASTER_STYLE_DEBOUNCE_MILLISECONDS = 200;
+const PORTABLE_RASTER_STYLE_FIELDS = Object.freeze([
+    "minimum",
+    "midpoint",
+    "maximum",
+    "minimumColor",
+    "midpointColor",
+    "maximumColor",
+    "minimumOpacity",
+    "midpointOpacity",
+    "maximumOpacity",
+]);
+
+/**
+ * Copy and strictly validate one untrusted portable raster style.
+ *
+ * @param {unknown} candidate Candidate saved style definition.
+ * @return {Object} Canonical raster style containing only owned fields.
+ */
+function normalizePortableRasterStyle(candidate) {
+    if (candidate === null || typeof candidate !== "object" ||
+        Array.isArray(candidate)) {
+        throw new TypeError("Saved raster style must be an object.");
+    }
+    const keys = Object.keys(candidate).sort();
+    if (JSON.stringify(keys) !==
+        JSON.stringify([...PORTABLE_RASTER_STYLE_FIELDS].sort())) {
+        throw new TypeError(
+            "Saved raster style contains missing or unsupported fields."
+        );
+    }
+    return validateRasterStyle(Object.fromEntries(
+        PORTABLE_RASTER_STYLE_FIELDS.map((field) => [field, candidate[field]])
+    ));
+}
 
 /**
  * Return whether repeating a failed statistics request may change its result.
@@ -1669,6 +1704,44 @@ export function initializeRasterViewer(
                     ],
                 },
             };
+        },
+        /**
+         * Export only this raster's validated appearance and palette identity.
+         *
+         * @param {Object} record Neutral retained-layer record.
+         * @return {{kind:string,definition:Object,paletteName:string}}
+         * Portable raster style state.
+         */
+        exportSavedState(record) {
+            if (activeLayerKey === record.entry.key) {
+                saveActiveLayerSession();
+            }
+            return {
+                kind: "raster",
+                definition: { ...validateRasterStyle(record.state.rasterStyle) },
+                paletteName: record.state.paletteName,
+            };
+        },
+        /**
+         * Validate and apply one portable raster appearance to its WMS layer.
+         *
+         * @param {Object} record Neutral retained-layer record.
+         * @param {Object} savedState Candidate saved style envelope.
+         * @return {void}
+         */
+        applySavedState(record, savedState) {
+            if (savedState?.kind !== "raster") {
+                throw new TypeError("Saved style does not belong to a raster.");
+            }
+            const style = { ...normalizePortableRasterStyle(
+                savedState.definition
+            ) };
+            const paletteName = savedState.paletteName;
+            if (paletteName !== "custom" &&
+                !Object.hasOwn(RASTER_COLOR_PALETTES, paletteName)) {
+                throw new TypeError("Saved raster palette is invalid.");
+            }
+            applySessionStyle(record.state, style, paletteName, true);
         },
         /**
          * Copy matching detached analysis state before activating a renderer.

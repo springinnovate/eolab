@@ -62,6 +62,10 @@ import {
     isRasterDetailPreviewProcessing,
 } from "./raster/detail-preview-status.js";
 import { initializeRasterViewer } from "./raster/raster-viewer.js";
+import { SavedMapViewCatalogClient } from "./saved-map-view/catalog-client.js";
+import { SavedMapViewController } from "./saved-map-view/controller.js";
+import { SavedMapViewDomView } from "./saved-map-view/dom-view.js";
+import { createSavedMapLeafletViewport } from "./saved-map-view/leaflet-viewport.js";
 import { VectorFeatureInspectorController } from "./vector/feature-inspector.js";
 import { createVectorMapLayerAdapter } from "./vector/map-layer-adapter.js";
 import { VectorStyleControls } from "./vector/style-controls.js";
@@ -769,6 +773,16 @@ async function initializeCatalog(
         mapLayerController,
         vectorMapLayerAdapter
     );
+    new SavedMapViewController({
+        view: new SavedMapViewDomView(),
+        viewport: createSavedMapLeafletViewport(leafletMap),
+        mapLayers: mapLayerController,
+        catalogVisualization,
+        catalogItems: new SavedMapViewCatalogClient(catalogUrl),
+        viewerVersion: appGlobalConfiguration.appVersion,
+        viewerOrigin: globalThis.location.origin,
+        beforeRestore: clearCatalogSelection,
+    });
     vectorFeatureInspector = new VectorFeatureInspectorController({
         leaflet: L,
         leafletMap,

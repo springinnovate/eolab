@@ -2560,6 +2560,83 @@ h5 {
   white-space: nowrap;
 }
 
+.saved-map-view-dialog {
+  width: min(520px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  border: 1px solid var(--border-2);
+  border-radius: 12px;
+  box-shadow: var(--elevation-panel);
+  padding: 0;
+  color: var(--text-1);
+}
+
+.saved-map-view-dialog::backdrop {
+  background: rgb(15 23 42 / 42%);
+}
+
+.saved-map-view-dialog form {
+  display: grid;
+  gap: 14px;
+  padding: 22px;
+}
+
+.saved-map-view-dialog h2,
+.saved-map-view-dialog p,
+.saved-map-view-dialog ul {
+  margin: 0;
+}
+
+.saved-map-view-dialog h2 {
+  font-size: 1.1rem;
+}
+
+.saved-map-view-dialog p,
+.saved-map-view-dialog li {
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.saved-map-view-dialog ul {
+  display: grid;
+  gap: 7px;
+  max-height: min(42vh, 320px);
+  overflow-y: auto;
+  padding-left: 20px;
+}
+
+.saved-map-view-dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.saved-map-view-dialog .saved-map-view-confirm {
+  border-color: var(--brand-hover);
+  background: var(--brand-hover);
+  color: #ffffff;
+}
+
+.saved-map-view-dialog .saved-map-view-confirm:hover:not(:disabled) {
+  background: var(--brand-press);
+}
+
+#map.is-saved-map-view-drop-target::after {
+  position: absolute;
+  z-index: 1000;
+  inset: 18px;
+  display: grid;
+  place-items: center;
+  border: 3px dashed var(--brand);
+  border-radius: 12px;
+  background: rgb(255 255 255 / 88%);
+  color: var(--brand-hover);
+  content: "Drop an EOLab saved map view";
+  font-size: 1rem;
+  font-weight: 700;
+  pointer-events: none;
+}
+
 .panel-header-actions .icon-button {
   width: 34px;
   height: 34px;
