@@ -20,7 +20,7 @@ from eolab_app.vector.models import (
     VectorFormat,
     VectorGeometryKind,
     VectorReaderAssessment,
-    VectorSingleSymbolStyle,
+    VectorStyle,
 )
 from eolab_app.vector.styles import build_vector_sld, vector_style_name
 
@@ -213,9 +213,9 @@ class GeoServerVectorPublisher:
     async def apply_style(
         self,
         resource_name: str,
-        style: VectorSingleSymbolStyle,
+        style: VectorStyle,
     ) -> str:
-        """Create or update and assign one per-layer single-symbol SLD.
+        """Create or update and assign one validated per-layer vector SLD.
 
         Args:
             resource_name: Stable server-derived WMS layer resource name.

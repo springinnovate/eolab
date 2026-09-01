@@ -15,7 +15,7 @@ from eolab_app.vector.geoserver import GeoServerVectorPublisher
 from eolab_app.vector.models import (
     CatalogVectorStyleRequest,
     VectorLabelStyle,
-    VectorSingleSymbolStyle,
+    VectorStyle,
 )
 from eolab_app.vector.sources import (
     MountedVectorResolver,
@@ -38,12 +38,12 @@ class RecordingStyler:
 
     def __init__(self) -> None:
         """Create an empty style request log."""
-        self.requests: list[tuple[str, VectorSingleSymbolStyle]] = []
+        self.requests: list[tuple[str, VectorStyle]] = []
 
     async def apply_style(
         self,
         resource_name: str,
-        style: VectorSingleSymbolStyle,
+        style: VectorStyle,
     ) -> str:
         """Record one style request and return its deterministic name.
 
@@ -56,6 +56,22 @@ class RecordingStyler:
         """
         self.requests.append((resource_name, style))
         return vector_style_name(resource_name, style)
+
+
+class UnusedCategoryReader:
+    """Fail if an apply-only test unexpectedly reads source categories."""
+
+    def read(self, *_args: Any, **_kwargs: Any) -> None:
+        """Reject an unexpected category read.
+
+        Args:
+            *_args: Unexpected positional category-reader arguments.
+            **_kwargs: Unexpected keyword category-reader arguments.
+
+        Raises:
+            AssertionError: Always, because apply tests must not read values.
+        """
+        raise AssertionError("Category reader must not run while applying a style")
 
 
 def polygon_request(
@@ -106,7 +122,7 @@ def polygon_request(
 
 def test_style_model_requires_geometry_specific_controls() -> None:
     """Normalize colors and reject controls belonging to another geometry."""
-    line = VectorSingleSymbolStyle(
+    line = VectorStyle(
         geometryKind="line",
         strokeColor="#F97316",
         strokeOpacity=1,
@@ -116,7 +132,7 @@ def test_style_model_requires_geometry_specific_controls() -> None:
     assert line.stroke_color == "#f97316"
     assert line.label is None
     with pytest.raises(ValidationError):
-        VectorSingleSymbolStyle(
+        VectorStyle(
             geometryKind="line",
             fillColor="#ffffff",
             fillOpacity=1,
@@ -125,7 +141,7 @@ def test_style_model_requires_geometry_specific_controls() -> None:
             strokeWidth=2,
         )
     with pytest.raises(ValidationError, match="follow line"):
-        VectorSingleSymbolStyle(
+        VectorStyle(
             geometryKind="point",
             fillColor="#ffffff",
             fillOpacity=1,
@@ -146,7 +162,7 @@ def test_style_model_requires_geometry_specific_controls() -> None:
             },
         )
     with pytest.raises(ValidationError):
-        VectorSingleSymbolStyle(
+        VectorStyle(
             geometryKind="point",
             fillColor="#ffffff",
             fillOpacity=1,
@@ -174,7 +190,7 @@ def test_sld_generation_uses_only_the_geometry_symbolizer(
         geometry_kind: Default style geometry.
         symbolizer: Expected SLD symbolizer element.
     """
-    style_name = "vector-single-0123456789abcdef01234567-89abcdef0123"
+    style_name = "vector-style-0123456789abcdef01234567-89abcdef0123"
     root = ElementTree.fromstring(
         build_vector_sld(style_name, default_vector_style(geometry_kind))
     )
@@ -229,7 +245,7 @@ def test_sld_generation_adds_independently_scaled_vector_labels(
         placement=placement,
         minimumZoom=6,
     )
-    style = VectorSingleSymbolStyle.model_validate({
+    style = VectorStyle.model_validate({
         **base_style.model_dump(by_alias=True),
         "label": label.model_dump(by_alias=True),
     })
@@ -271,11 +287,68 @@ def test_sld_generation_adds_independently_scaled_vector_labels(
     assert child_names.index("Fill") < child_names.index("VendorOption")
 
 
+def test_sld_generation_uses_typed_categories_and_separate_label_style() -> None:
+    """Keep equality, null, and else rules independent from label rendering."""
+    style = VectorStyle.model_validate({
+        **default_vector_style("polygon").model_dump(by_alias=True),
+        "categorical": {
+            "field": "risk class",
+            "limit": 20,
+            "rules": [
+                {
+                    "value": {"kind": "string", "value": "High & rising"},
+                    "color": "#d60000",
+                },
+                {
+                    "value": {"kind": "string", "value": "Low"},
+                    "color": "#018700",
+                },
+            ],
+            "otherColor": "#9ca3af",
+            "missingColor": "#d1d5db",
+        },
+        "label": {
+            "field": "name",
+            "fontFamily": "SansSerif",
+            "fontSize": 12,
+            "fontWeight": "normal",
+            "fontColor": "#111827",
+            "haloColor": "#ffffff",
+            "haloWidth": 1.5,
+            "placement": "center",
+            "minimumZoom": 4,
+        },
+    })
+
+    root = ElementTree.fromstring(build_vector_sld("categories", style))
+    namespaces = {"sld": SLD_NAMESPACE, "ogc": OGC_NAMESPACE}
+    feature_styles = root.findall(".//sld:FeatureTypeStyle", namespaces)
+    geometry_rules = feature_styles[0].findall("./sld:Rule", namespaces)
+
+    assert len(feature_styles) == 2
+    assert len(geometry_rules) == 4
+    assert [
+        literal.text
+        for literal in feature_styles[0].findall(".//ogc:Literal", namespaces)
+    ] == ["High & rising", "Low"]
+    assert feature_styles[0].find(".//ogc:PropertyIsNull", namespaces) is not None
+    assert feature_styles[0].find(".//sld:ElseFilter", namespaces) is not None
+    assert feature_styles[1].find(".//sld:TextSymbolizer", namespaces) is not None
+    fill_colors = [
+        parameter.text
+        for parameter in feature_styles[0].findall(
+            ".//sld:CssParameter[@name='fill']",
+            namespaces,
+        )
+    ]
+    assert fill_colors == ["#d60000", "#018700", "#d1d5db", "#9ca3af"]
+
+
 def test_vector_style_name_changes_only_with_resource_or_rendering() -> None:
     """Give each distinct layer rendering its own stable WMS cache identity."""
     resource_name = "geopackage-0123456789abcdef01234567"
     default_style = default_vector_style("point")
-    changed_style = VectorSingleSymbolStyle(
+    changed_style = VectorStyle(
         geometryKind="point",
         fillColor="#00ff66",
         fillOpacity=0.65,
@@ -321,6 +394,7 @@ def test_style_service_uses_catalog_identity_and_current_publication(
         resolver,
         styler,
         registry,
+        UnusedCategoryReader(),
     )
     request = polygon_request(item, label_field="name")
 
@@ -352,6 +426,7 @@ def test_style_service_rejects_unpublished_or_wrong_geometry(
         resolver,
         RecordingStyler(),
         registry,
+        UnusedCategoryReader(),
     )
     with pytest.raises(VectorConflictError, match="add the current vector"):
         asyncio.run(service.apply(polygon_request(item)))
@@ -389,6 +464,7 @@ def test_style_service_rejects_label_fields_outside_authoritative_table(
         resolver,
         RecordingStyler(),
         registry,
+        UnusedCategoryReader(),
     )
 
     with pytest.raises(VectorConflictError, match="authoritative vector Item"):
@@ -396,6 +472,54 @@ def test_style_service_rejects_label_fields_outside_authoritative_table(
             item,
             label_field="browser-invented-field",
         )))
+
+
+def test_style_service_revalidates_categorical_field_and_value_types(
+    tmp_path: Path,
+) -> None:
+    """Reject a typed rule that disagrees with current Catalog field metadata.
+
+    Args:
+        tmp_path: Isolated mounted scan source.
+    """
+    item, _ = assessed_geopackage_item(tmp_path)
+    resolver = MountedVectorResolver(tmp_path)
+    source = resolver.resolve(item)
+    registry = PublishedVectorRegistry()
+    registry.authorize(
+        f"{GEOSERVER_WORKSPACE_NAME}:{item['id']}",
+        source,
+        vector_source_signature(source),
+        "vector-polygon",
+    )
+    service = VectorStyleService(
+        StaticCatalog(item),
+        resolver,
+        RecordingStyler(),
+        registry,
+        UnusedCategoryReader(),
+    )
+    base_request = polygon_request(item)
+    request = CatalogVectorStyleRequest(
+        collectionId=item["collection"],
+        itemId=item["id"],
+        style={
+            **base_request.style.model_dump(by_alias=True),
+            "categorical": {
+                "field": "name",
+                "limit": 20,
+                "rules": [{
+                    "value": {"kind": "integer", "value": 1},
+                    "color": "#d60000",
+                }],
+                "otherColor": "#9ca3af",
+                "missingColor": None,
+            },
+        },
+    )
+
+    with pytest.raises(VectorConflictError, match="value type"):
+        asyncio.run(service.apply(request))
 
 
 def test_geoserver_style_adapter_uses_content_addressed_layer_slds() -> None:

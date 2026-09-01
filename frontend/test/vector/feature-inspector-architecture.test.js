@@ -60,5 +60,9 @@ test("vector style controls expose intent without knowing sibling subsystems", (
   }
   assert.match(COMPOSITION_SOURCE, /getVectorStyleTarget:\s*\(key\)\s*=>/);
   assert.match(COMPOSITION_SOURCE, /fields:\s*record\.state\.labelFields/);
+  assert.match(
+    COMPOSITION_SOURCE,
+    /record\.adapter\.summarizeCategories\(record, field\)/,
+  );
   assert.match(COMPOSITION_SOURCE, /record\.adapter\.applyStyle\(record, style\)/);
 });

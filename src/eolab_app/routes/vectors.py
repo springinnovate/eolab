@@ -9,9 +9,11 @@ from eolab_app.vector.errors import VectorFeatureError
 from eolab_app.vector.assessment import VectorAssessmentService
 from eolab_app.vector.models import (
     AppliedVectorStyle,
+    CatalogVectorCategoryRequest,
     CatalogVectorRequest,
     CatalogVectorStyleRequest,
     PublishedVector,
+    VectorCategorySummary,
 )
 from eolab_app.vector.publication import VectorPublicationService
 from eolab_app.vector.sources import PublishedVectorRegistry
@@ -108,6 +110,30 @@ def create_vector_feature(
         """
         try:
             return await style_service.apply(request)
+        except VectorFeatureError as error:
+            raise vector_http_exception(error) from error
+
+    @router.post(
+        "/category-summaries",
+        response_model=VectorCategorySummary,
+    )
+    async def summarize_vector_categories(
+        request: CatalogVectorCategoryRequest,
+    ) -> VectorCategorySummary:
+        """Summarize one current scalar field through a bounded source read.
+
+        Args:
+            request: Authoritative Catalog identity and attribute field.
+
+        Returns:
+            Typed top values, observed counts, completeness, and server limits.
+
+        Raises:
+            HTTPException: If the Item, source signature, field, or bounded
+                reader is not current and authorized for this operation.
+        """
+        try:
+            return await style_service.summarize_categories(request)
         except VectorFeatureError as error:
             raise vector_http_exception(error) from error
 

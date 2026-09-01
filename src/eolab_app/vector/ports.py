@@ -1,14 +1,17 @@
 """Focused collaborator contracts used by vector application services."""
 
 from pathlib import Path
+from threading import Event
 from typing import Any, Protocol
 
 from eolab_app.vector.models import (
     CatalogVectorRequest,
+    ResolvedVectorSource,
+    VectorCategoryRead,
     VectorFormat,
     VectorGeometryKind,
     VectorReaderAssessment,
-    VectorSingleSymbolStyle,
+    VectorStyle,
 )
 
 
@@ -104,19 +107,46 @@ class VectorPublisher(Protocol):
         ...
 
 
+class VectorCategoryReader(Protocol):
+    """Bounded mounted-source attribute reader for vector styling."""
+
+    def read(
+        self,
+        source: ResolvedVectorSource,
+        field: str,
+        feature_limit: int,
+        cancel_event: Event,
+    ) -> VectorCategoryRead:
+        """Count typed values from one exact vector source field.
+
+        Args:
+            source: Catalog-derived exact mounted source and native layer.
+            field: Authoritative attribute field identity.
+            feature_limit: Maximum features whose values may be counted.
+            cancel_event: Cooperative cancellation signal checked while reading.
+
+        Returns:
+            Bounded observed category counts and completion metadata.
+
+        Raises:
+            VectorFeatureError: If the exact source or field cannot be read.
+        """
+        ...
+
+
 class VectorStyler(Protocol):
     """GeoServer styling adapter required by the vector style workflow."""
 
     async def apply_style(
         self,
         resource_name: str,
-        style: VectorSingleSymbolStyle,
+        style: VectorStyle,
     ) -> str:
         """Create or update one per-layer SLD and assign it to the layer.
 
         Args:
             resource_name: Server-derived GeoServer feature type identity.
-            style: Complete validated single-symbol state.
+            style: Complete validated vector style state.
 
         Returns:
             Unqualified deterministic style name assigned to the layer.
