@@ -28,8 +28,11 @@ VECTOR_READER_CONTRACT = "geoserver-3.0.1-geotools-35.1-vector-v1"
 VECTOR_RENDERING_METADATA_KEY = "eolab:vector_rendering"
 VECTOR_CATEGORY_DEFAULT_LIMIT = 20
 VECTOR_CATEGORY_MAXIMUM_LIMIT = 50
-VECTOR_CATEGORY_FEATURE_LIMIT = 100_000
+VECTOR_FIELD_FEATURE_LIMIT = 100_000
 VECTOR_CATEGORY_TEXT_LIMIT = 256
+VECTOR_NUMERIC_DEFAULT_CLASS_COUNT = 5
+VECTOR_NUMERIC_MINIMUM_CLASS_COUNT = 2
+VECTOR_NUMERIC_MAXIMUM_CLASS_COUNT = 9
 VectorFormat = Literal[
     "shapefile",
     "geopackage",
@@ -44,6 +47,8 @@ VectorLabelPlacement = Literal["center", "above", "below", "follow-line"]
 VectorSourceKind = Literal["mounted", "remote"]
 VectorSourceSignature = tuple[tuple[str, int, int, int, int, int], ...]
 VectorCategoryScalar: TypeAlias = StrictBool | StrictInt | StrictFloat | StrictStr
+VectorClassificationMethod = Literal["equal-interval", "quantile"]
+VectorSequentialPalette = Literal["blues", "viridis", "yellow-red", "purples"]
 
 
 @dataclass(frozen=True)
@@ -89,6 +94,26 @@ class VectorCategoryRead:
     complete: bool
 
 
+@dataclass(frozen=True)
+class VectorNumericRead:
+    """Bounded finite numeric values from one exact mounted vector layer.
+
+    Attributes:
+        values: Finite numeric property values in source iteration order.
+        scanned_feature_count: Features inspected by the bounded read.
+        null_count: Scanned features whose selected property is null.
+        unsupported_value_count: Scanned non-null values excluded because they
+            are not finite numbers.
+        complete: Whether the source iterator was exhausted within the limit.
+    """
+
+    values: tuple[float, ...]
+    scanned_feature_count: int
+    null_count: int
+    unsupported_value_count: int
+    complete: bool
+
+
 class CatalogVectorRequest(BaseModel):
     """Identify one mounted-vector catalog Item without accepting paths."""
 
@@ -127,6 +152,37 @@ class CatalogVectorCategoryRequest(CatalogVectorRequest):
         """
         if any(ord(character) < 32 or ord(character) == 127 for character in value):
             raise ValueError("Category field cannot contain control characters")
+        return value
+
+
+class CatalogVectorNumericClassificationRequest(CatalogVectorRequest):
+    """Request one bounded classification for a current numeric field."""
+
+    field: str = Field(min_length=1, max_length=256, strict=True)
+    method: VectorClassificationMethod
+    class_count: int = Field(
+        alias="classCount",
+        ge=VECTOR_NUMERIC_MINIMUM_CLASS_COUNT,
+        le=VECTOR_NUMERIC_MAXIMUM_CLASS_COUNT,
+        strict=True,
+    )
+
+    @field_validator("field")
+    @classmethod
+    def reject_field_control_characters(cls, value: str) -> str:
+        """Reject field identities that cannot safely cross text boundaries.
+
+        Args:
+            value: Candidate authoritative attribute field identity.
+
+        Returns:
+            Unmodified field identity, including meaningful whitespace.
+
+        Raises:
+            ValueError: If the name contains a control character.
+        """
+        if any(ord(character) < 32 or ord(character) == 127 for character in value):
+            raise ValueError("Numeric field cannot contain control characters")
         return value
 
 
@@ -206,7 +262,7 @@ class VectorCategoryValueCount(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     value: VectorCategoryValue
-    count: int = Field(ge=1, le=VECTOR_CATEGORY_FEATURE_LIMIT, strict=True)
+    count: int = Field(ge=1, le=VECTOR_FIELD_FEATURE_LIMIT, strict=True)
 
 
 class VectorCategorySummary(BaseModel):
@@ -222,29 +278,29 @@ class VectorCategorySummary(BaseModel):
     observed_distinct_count: int = Field(
         alias="observedDistinctCount",
         ge=0,
-        le=VECTOR_CATEGORY_FEATURE_LIMIT,
+        le=VECTOR_FIELD_FEATURE_LIMIT,
     )
     distinct_count: int | None = Field(
         alias="distinctCount",
         default=None,
         ge=0,
-        le=VECTOR_CATEGORY_FEATURE_LIMIT,
+        le=VECTOR_FIELD_FEATURE_LIMIT,
     )
     scanned_feature_count: int = Field(
         alias="scannedFeatureCount",
         ge=0,
-        le=VECTOR_CATEGORY_FEATURE_LIMIT,
+        le=VECTOR_FIELD_FEATURE_LIMIT,
     )
     feature_count: int = Field(alias="featureCount", ge=0)
     null_count: int = Field(
         alias="nullCount",
         ge=0,
-        le=VECTOR_CATEGORY_FEATURE_LIMIT,
+        le=VECTOR_FIELD_FEATURE_LIMIT,
     )
     unsupported_value_count: int = Field(
         alias="unsupportedValueCount",
         ge=0,
-        le=VECTOR_CATEGORY_FEATURE_LIMIT,
+        le=VECTOR_FIELD_FEATURE_LIMIT,
     )
     complete: bool
     default_limit: Literal[VECTOR_CATEGORY_DEFAULT_LIMIT] = Field(
@@ -253,6 +309,153 @@ class VectorCategorySummary(BaseModel):
     maximum_limit: Literal[VECTOR_CATEGORY_MAXIMUM_LIMIT] = Field(
         alias="maximumLimit",
     )
+
+
+class VectorNumericClass(BaseModel):
+    """One server-computed open-ended numeric class and observed count."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    minimum: float | None = None
+    maximum: float | None = None
+    count: int = Field(ge=0, le=VECTOR_FIELD_FEATURE_LIMIT, strict=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_json_numbers(cls, candidate: object) -> object:
+        """Restore finite floats after JSON removes integral decimal points.
+
+        Args:
+            candidate: Untrusted numeric-class mapping.
+
+        Returns:
+            A shallow mapping with numeric bounds converted to floats.
+
+        Raises:
+            ValueError: If a supplied bound is not a finite JSON number.
+        """
+        if not isinstance(candidate, dict):
+            return candidate
+        normalized = dict(candidate)
+        for field in ("minimum", "maximum"):
+            value = normalized.get(field)
+            if value is None:
+                continue
+            if type(value) not in {int, float} or not isfinite(value):
+                raise ValueError("Numeric class bounds must be finite")
+            normalized[field] = float(value)
+        return normalized
+
+    @model_validator(mode="after")
+    def require_ordered_bounds(self) -> "VectorNumericClass":
+        """Require an increasing range when both open bounds are present.
+
+        Returns:
+            Validated numeric class.
+
+        Raises:
+            ValueError: If the lower bound is not below the upper bound.
+        """
+        if (
+            self.minimum is not None
+            and self.maximum is not None
+            and self.minimum >= self.maximum
+        ):
+            raise ValueError("Numeric class minimum must be below maximum")
+        return self
+
+
+class VectorNumericClassificationSummary(BaseModel):
+    """Browser-safe bounded classification of one authoritative field."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    field: str
+    field_type: str = Field(alias="fieldType")
+    method: VectorClassificationMethod
+    requested_class_count: int = Field(
+        alias="requestedClassCount",
+        ge=VECTOR_NUMERIC_MINIMUM_CLASS_COUNT,
+        le=VECTOR_NUMERIC_MAXIMUM_CLASS_COUNT,
+        strict=True,
+    )
+    actual_class_count: int = Field(
+        alias="actualClassCount",
+        ge=1,
+        le=VECTOR_NUMERIC_MAXIMUM_CLASS_COUNT,
+        strict=True,
+    )
+    classes: tuple[VectorNumericClass, ...] = Field(
+        min_length=1,
+        max_length=VECTOR_NUMERIC_MAXIMUM_CLASS_COUNT,
+    )
+    observed_minimum: float = Field(alias="observedMinimum", strict=True)
+    observed_maximum: float = Field(alias="observedMaximum", strict=True)
+    numeric_value_count: int = Field(
+        alias="numericValueCount",
+        ge=1,
+        le=VECTOR_FIELD_FEATURE_LIMIT,
+        strict=True,
+    )
+    scanned_feature_count: int = Field(
+        alias="scannedFeatureCount",
+        ge=1,
+        le=VECTOR_FIELD_FEATURE_LIMIT,
+        strict=True,
+    )
+    feature_count: int = Field(alias="featureCount", ge=1, strict=True)
+    null_count: int = Field(
+        alias="nullCount",
+        ge=0,
+        le=VECTOR_FIELD_FEATURE_LIMIT,
+        strict=True,
+    )
+    unsupported_value_count: int = Field(
+        alias="unsupportedValueCount",
+        ge=0,
+        le=VECTOR_FIELD_FEATURE_LIMIT,
+        strict=True,
+    )
+    complete: bool
+    default_class_count: Literal[VECTOR_NUMERIC_DEFAULT_CLASS_COUNT] = Field(
+        alias="defaultClassCount",
+    )
+    minimum_class_count: Literal[VECTOR_NUMERIC_MINIMUM_CLASS_COUNT] = Field(
+        alias="minimumClassCount",
+    )
+    maximum_class_count: Literal[VECTOR_NUMERIC_MAXIMUM_CLASS_COUNT] = Field(
+        alias="maximumClassCount",
+    )
+
+    @model_validator(mode="after")
+    def require_consistent_classes(self) -> "VectorNumericClassificationSummary":
+        """Require complete adjacent class coverage and consistent counts.
+
+        Returns:
+            Validated numeric classification summary.
+
+        Raises:
+            ValueError: If class cardinality, adjacency, extent, or counts
+                disagree with the summary contract.
+        """
+        if len(self.classes) != self.actual_class_count:
+            raise ValueError("Actual numeric class count is inconsistent")
+        if self.classes[0].minimum is not None:
+            raise ValueError("First numeric class must be lower-open")
+        if self.classes[-1].maximum is not None:
+            raise ValueError("Last numeric class must be upper-open")
+        if any(
+            current.maximum != following.minimum
+            for current, following in zip(self.classes, self.classes[1:])
+        ):
+            raise ValueError("Numeric classes must be adjacent")
+        if sum(classification.count for classification in self.classes) != (
+            self.numeric_value_count
+        ):
+            raise ValueError("Numeric class counts must cover every numeric value")
+        if self.observed_minimum > self.observed_maximum:
+            raise ValueError("Observed numeric extent is invalid")
+        return self
 
 
 class VectorLabelStyle(BaseModel):
@@ -414,8 +617,159 @@ class VectorCategoricalStyle(BaseModel):
         return self
 
 
+class VectorGraduatedRule(BaseModel):
+    """One validated open-ended numeric range and symbol color."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    minimum: float | None = None
+    maximum: float | None = None
+    color: str = Field(
+        pattern=r"^#[0-9A-Fa-f]{6}$",
+        strict=True,
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_json_numbers(cls, candidate: object) -> object:
+        """Restore finite floats after JSON removes integral decimal points.
+
+        Args:
+            candidate: Untrusted graduated-rule mapping.
+
+        Returns:
+            A shallow mapping with supplied bounds converted to floats.
+
+        Raises:
+            ValueError: If a supplied bound is not a finite JSON number.
+        """
+        if not isinstance(candidate, dict):
+            return candidate
+        normalized = dict(candidate)
+        for field in ("minimum", "maximum"):
+            value = normalized.get(field)
+            if value is None:
+                continue
+            if type(value) not in {int, float} or not isfinite(value):
+                raise ValueError("Graduated rule bounds must be finite")
+            normalized[field] = float(value)
+        return normalized
+
+    @field_validator("color")
+    @classmethod
+    def normalize_color(cls, value: str) -> str:
+        """Normalize one graduated color for deterministic SLD output.
+
+        Args:
+            value: Validated six-digit CSS hex color.
+
+        Returns:
+            Lowercase color.
+        """
+        return value.lower()
+
+    @model_validator(mode="after")
+    def require_ordered_bounds(self) -> "VectorGraduatedRule":
+        """Require an increasing range when both bounds are present.
+
+        Returns:
+            Validated graduated rule.
+
+        Raises:
+            ValueError: If its lower bound is not below its upper bound.
+        """
+        if (
+            self.minimum is not None
+            and self.maximum is not None
+            and self.minimum >= self.maximum
+        ):
+            raise ValueError("Graduated rule minimum must be below maximum")
+        return self
+
+
+class VectorGraduatedStyle(BaseModel):
+    """Validated graduated classification for one numeric Catalog field."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    field: str = Field(min_length=1, max_length=256, strict=True)
+    method: VectorClassificationMethod
+    class_count: int = Field(
+        alias="classCount",
+        ge=VECTOR_NUMERIC_MINIMUM_CLASS_COUNT,
+        le=VECTOR_NUMERIC_MAXIMUM_CLASS_COUNT,
+        strict=True,
+    )
+    palette: VectorSequentialPalette
+    rules: tuple[VectorGraduatedRule, ...] = Field(
+        min_length=1,
+        max_length=VECTOR_NUMERIC_MAXIMUM_CLASS_COUNT,
+    )
+    missing_color: str | None = Field(
+        default=None,
+        alias="missingColor",
+        pattern=r"^#[0-9A-Fa-f]{6}$",
+        strict=True,
+    )
+
+    @field_validator("field")
+    @classmethod
+    def reject_field_control_characters(cls, value: str) -> str:
+        """Reject field identities that cannot safely cross text boundaries.
+
+        Args:
+            value: Candidate authoritative attribute field identity.
+
+        Returns:
+            Unmodified field identity.
+
+        Raises:
+            ValueError: If the field contains a control character.
+        """
+        if any(ord(character) < 32 or ord(character) == 127 for character in value):
+            raise ValueError("Graduated field cannot contain control characters")
+        return value
+
+    @field_validator("missing_color")
+    @classmethod
+    def normalize_missing_color(cls, value: str | None) -> str | None:
+        """Normalize the optional missing-value color.
+
+        Args:
+            value: Optional validated six-digit CSS hex color.
+
+        Returns:
+            Lowercase color or ``None``.
+        """
+        return value.lower() if value is not None else None
+
+    @model_validator(mode="after")
+    def require_complete_adjacent_rules(self) -> "VectorGraduatedStyle":
+        """Require bounded rule count and complete adjacent numeric coverage.
+
+        Returns:
+            Validated graduated style.
+
+        Raises:
+            ValueError: If rules exceed the request, leave an outer gap, or
+                contain non-adjacent internal boundaries.
+        """
+        if len(self.rules) > self.class_count:
+            raise ValueError("Graduated rules cannot exceed requested classes")
+        if self.rules[0].minimum is not None:
+            raise ValueError("First graduated rule must be lower-open")
+        if self.rules[-1].maximum is not None:
+            raise ValueError("Last graduated rule must be upper-open")
+        if any(
+            current.maximum != following.minimum
+            for current, following in zip(self.rules, self.rules[1:])
+        ):
+            raise ValueError("Graduated rules must be adjacent")
+        return self
+
+
 class VectorStyle(BaseModel):
-    """Validated single-color or categorical vector presentation."""
+    """Validated single-color, categorical, or graduated presentation."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -452,6 +806,7 @@ class VectorStyle(BaseModel):
         strict=True,
     )
     categorical: VectorCategoricalStyle | None = None
+    graduated: VectorGraduatedStyle | None = None
     label: VectorLabelStyle | None = None
 
     @field_validator("fill_color", "stroke_color")
@@ -478,6 +833,8 @@ class VectorStyle(BaseModel):
             ValueError: If required values are absent or inapplicable values
                 are supplied.
         """
+        if self.categorical is not None and self.graduated is not None:
+            raise ValueError("Vector styles cannot combine categories and ranges")
         if self.geometry_kind == "line":
             if any(
                 value is not None

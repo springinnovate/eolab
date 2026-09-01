@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
     assessCatalogVector,
+    classifyCatalogVectorNumbers,
     publishCatalogVector,
     styleCatalogVector,
     summarizeCatalogVectorCategories,
@@ -165,6 +166,55 @@ test("vector category summary sends identity and field then validates limits", a
         collectionId: VECTOR_ITEM.collection,
         itemId: VECTOR_ITEM.id,
         field: "risk",
+    });
+});
+
+test("vector numeric classification sends only identity and bounded options", async () => {
+    const requests = [];
+    const summary = {
+        field: "score",
+        fieldType: "float",
+        method: "equal-interval",
+        requestedClassCount: 3,
+        actualClassCount: 3,
+        classes: [
+            { minimum: null, maximum: 1, count: 4 },
+            { minimum: 1, maximum: 2, count: 3 },
+            { minimum: 2, maximum: null, count: 2 },
+        ],
+        observedMinimum: 0,
+        observedMaximum: 3,
+        numericValueCount: 9,
+        scannedFeatureCount: 10,
+        featureCount: 10,
+        nullCount: 1,
+        unsupportedValueCount: 0,
+        complete: true,
+        defaultClassCount: 5,
+        minimumClassCount: 2,
+        maximumClassCount: 9,
+    };
+
+    assert.deepEqual(await classifyCatalogVectorNumbers(
+        VECTOR_ITEM,
+        "score",
+        "equal-interval",
+        3,
+        async (url, options) => {
+            requests.push({ url, options });
+            return new Response(JSON.stringify(summary), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+            });
+        },
+    ), summary);
+    assert.equal(requests[0].url, "/api/vector-rendering/numeric-classifications");
+    assert.deepEqual(JSON.parse(requests[0].options.body), {
+        collectionId: VECTOR_ITEM.collection,
+        itemId: VECTOR_ITEM.id,
+        field: "score",
+        method: "equal-interval",
+        classCount: 3,
     });
 });
 

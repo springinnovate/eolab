@@ -11,9 +11,11 @@ from pydantic import ValidationError
 
 from eolab_app.rendering.geoserver import GEOSERVER_WORKSPACE_NAME
 from eolab_app.vector.errors import VectorConflictError
+from eolab_app.vector.fields import FionaVectorFieldReader
 from eolab_app.vector.geoserver import GeoServerVectorPublisher
 from eolab_app.vector.models import (
     CatalogVectorStyleRequest,
+    CatalogVectorNumericClassificationRequest,
     VectorLabelStyle,
     VectorStyle,
 )
@@ -31,6 +33,7 @@ from eolab_app.vector.styles import (
 )
 from eolab_app.vector.styling import VectorStyleService
 from tests.test_vector_publication import StaticCatalog, assessed_geopackage_item
+from tests.test_vector_categories import assessed_category_item
 
 
 class RecordingStyler:
@@ -58,10 +61,10 @@ class RecordingStyler:
         return vector_style_name(resource_name, style)
 
 
-class UnusedCategoryReader:
-    """Fail if an apply-only test unexpectedly reads source categories."""
+class UnusedFieldReader:
+    """Fail if an apply-only test unexpectedly reads source field values."""
 
-    def read(self, *_args: Any, **_kwargs: Any) -> None:
+    def read_categories(self, *_args: Any, **_kwargs: Any) -> None:
         """Reject an unexpected category read.
 
         Args:
@@ -72,6 +75,19 @@ class UnusedCategoryReader:
             AssertionError: Always, because apply tests must not read values.
         """
         raise AssertionError("Category reader must not run while applying a style")
+
+    def read_numbers(self, *_args: Any, **_kwargs: Any) -> None:
+        """Reject an unexpected numeric read.
+
+        Args:
+            *_args: Unexpected positional field-reader arguments.
+            **_kwargs: Unexpected keyword field-reader arguments.
+
+        Raises:
+            AssertionError: Always, because these apply tests use fixed or
+                categorical styles.
+        """
+        raise AssertionError("Numeric reader must not run while applying a style")
 
 
 def polygon_request(
@@ -344,6 +360,36 @@ def test_sld_generation_uses_typed_categories_and_separate_label_style() -> None
     assert fill_colors == ["#d60000", "#018700", "#d1d5db", "#9ca3af"]
 
 
+def test_sld_generation_uses_open_numeric_ranges_and_missing_rule() -> None:
+    """Serialize graduated bounds without gaps or duplicate null rendering."""
+    style = VectorStyle.model_validate({
+        **default_vector_style("polygon").model_dump(by_alias=True),
+        "graduated": {
+            "field": "score",
+            "method": "equal-interval",
+            "classCount": 3,
+            "palette": "blues",
+            "rules": [
+                {"minimum": None, "maximum": 1.0, "color": "#f7fbff"},
+                {"minimum": 1.0, "maximum": 2.0, "color": "#6baed6"},
+                {"minimum": 2.0, "maximum": None, "color": "#08306b"},
+            ],
+            "missingColor": "#d1d5db",
+        },
+    })
+
+    root = ElementTree.fromstring(build_vector_sld("graduated", style))
+    namespaces = {"sld": SLD_NAMESPACE, "ogc": OGC_NAMESPACE}
+    rules = root.findall(".//sld:FeatureTypeStyle/sld:Rule", namespaces)
+
+    assert len(rules) == 4
+    assert root.find(".//ogc:PropertyIsGreaterThan", namespaces) is not None
+    assert root.find(".//ogc:PropertyIsLessThanOrEqualTo", namespaces) is not None
+    assert root.find(".//ogc:And", namespaces) is not None
+    assert root.find(".//ogc:PropertyIsNull", namespaces) is not None
+    assert root.find(".//sld:ElseFilter", namespaces) is None
+
+
 def test_vector_style_name_changes_only_with_resource_or_rendering() -> None:
     """Give each distinct layer rendering its own stable WMS cache identity."""
     resource_name = "geopackage-0123456789abcdef01234567"
@@ -394,7 +440,7 @@ def test_style_service_uses_catalog_identity_and_current_publication(
         resolver,
         styler,
         registry,
-        UnusedCategoryReader(),
+        UnusedFieldReader(),
     )
     request = polygon_request(item, label_field="name")
 
@@ -426,7 +472,7 @@ def test_style_service_rejects_unpublished_or_wrong_geometry(
         resolver,
         RecordingStyler(),
         registry,
-        UnusedCategoryReader(),
+        UnusedFieldReader(),
     )
     with pytest.raises(VectorConflictError, match="add the current vector"):
         asyncio.run(service.apply(polygon_request(item)))
@@ -464,7 +510,7 @@ def test_style_service_rejects_label_fields_outside_authoritative_table(
         resolver,
         RecordingStyler(),
         registry,
-        UnusedCategoryReader(),
+        UnusedFieldReader(),
     )
 
     with pytest.raises(VectorConflictError, match="authoritative vector Item"):
@@ -497,7 +543,7 @@ def test_style_service_revalidates_categorical_field_and_value_types(
         resolver,
         RecordingStyler(),
         registry,
-        UnusedCategoryReader(),
+        UnusedFieldReader(),
     )
     base_request = polygon_request(item)
     request = CatalogVectorStyleRequest(
@@ -520,6 +566,92 @@ def test_style_service_revalidates_categorical_field_and_value_types(
 
     with pytest.raises(VectorConflictError, match="value type"):
         asyncio.run(service.apply(request))
+
+
+def test_style_service_recomputes_numeric_ranges_before_applying(
+    tmp_path: Path,
+) -> None:
+    """Apply only server-current numeric classes and reject browser drift.
+
+    Args:
+        tmp_path: Isolated mounted scan source.
+    """
+    item, _ = assessed_category_item(tmp_path)
+    resolver = MountedVectorResolver(tmp_path)
+    source = resolver.resolve(item)
+    registry = PublishedVectorRegistry()
+    registry.authorize(
+        f"{GEOSERVER_WORKSPACE_NAME}:{item['id']}",
+        source,
+        vector_source_signature(source),
+        "vector-polygon",
+    )
+    styler = RecordingStyler()
+    service = VectorStyleService(
+        StaticCatalog(item),
+        resolver,
+        styler,
+        registry,
+        FionaVectorFieldReader(),
+    )
+    summary = asyncio.run(service.classify_numeric(
+        CatalogVectorNumericClassificationRequest(
+            collectionId=item["collection"],
+            itemId=item["id"],
+            field="score",
+            method="equal-interval",
+            classCount=3,
+        )
+    ))
+    colors = ("#f7fbff", "#6baed6", "#08306b")
+    rules = [
+        {
+            "minimum": classification.minimum,
+            "maximum": classification.maximum,
+            "color": colors[index],
+        }
+        for index, classification in enumerate(summary.classes)
+    ]
+    valid_request = CatalogVectorStyleRequest(
+        collectionId=item["collection"],
+        itemId=item["id"],
+        style={
+            **default_vector_style("polygon").model_dump(by_alias=True),
+            "graduated": {
+                "field": "score",
+                "method": "equal-interval",
+                "classCount": 3,
+                "palette": "blues",
+                "rules": rules,
+                "missingColor": None,
+            },
+        },
+    )
+
+    applied = asyncio.run(service.apply(valid_request))
+
+    assert applied.style.graduated is not None
+    assert styler.requests == [(item["id"], valid_request.style)]
+    drifted_rules = [dict(rule) for rule in rules]
+    drifted_rules[0]["maximum"] = 0.5
+    drifted_rules[1]["minimum"] = 0.5
+    drifted_request = CatalogVectorStyleRequest(
+        collectionId=item["collection"],
+        itemId=item["id"],
+        style={
+            **default_vector_style("polygon").model_dump(by_alias=True),
+            "graduated": {
+                "field": "score",
+                "method": "equal-interval",
+                "classCount": 3,
+                "palette": "blues",
+                "rules": drifted_rules,
+                "missingColor": None,
+            },
+        },
+    )
+    with pytest.raises(VectorConflictError, match="no longer match"):
+        asyncio.run(service.apply(drifted_request))
 
 
 def test_geoserver_style_adapter_uses_content_addressed_layer_slds() -> None:

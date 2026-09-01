@@ -1127,6 +1127,42 @@ h5 {
 }
 .raster-layer-error { grid-column: 1 / -1; }
 
+.map-layer-legend {
+  grid-column: 1 / -1;
+  min-width: 0;
+  color: var(--text-2);
+  font-size: 0.7rem;
+}
+
+.map-layer-legend summary { cursor: pointer; font-weight: 600; }
+.map-layer-legend-field {
+  display: block;
+  margin: 5px 0;
+  overflow: hidden;
+  color: var(--text-3);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.map-layer-legend-list {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.map-layer-legend-list li {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+}
+.map-layer-legend-swatch {
+  width: 18px;
+  height: 12px;
+  border: 1px solid rgb(0 0 0 / 25%);
+  border-radius: 2px;
+}
+
 .raster-layer-error,
 .raster-layer-stack-status {
   margin: 0;
@@ -3644,13 +3680,15 @@ button.raster-histogram-summary:hover,
 .vector-style-controls[hidden],
 .vector-style-group[hidden],
 .vector-category-controls[hidden],
+.vector-graduated-controls[hidden],
 #vector-style-fill-color-control[hidden],
 #vector-style-stroke-color-control[hidden] {
   display: none;
 }
 
 .vector-style-mode,
-.vector-category-options label {
+.vector-category-options label,
+.vector-graduated-options label {
   display: grid;
   gap: 5px;
   color: var(--text-2);
@@ -3660,7 +3698,9 @@ button.raster-histogram-summary:hover,
 
 .vector-style-mode select,
 .vector-category-options select,
-.vector-category-options input {
+.vector-category-options input,
+.vector-graduated-options select,
+.vector-graduated-options input {
   min-width: 0;
   width: 100%;
   border: 1px solid var(--border-1);
@@ -3670,7 +3710,8 @@ button.raster-histogram-summary:hover,
   color: var(--text-1);
 }
 
-.vector-category-controls {
+.vector-category-controls,
+.vector-graduated-controls {
   display: grid;
   gap: 10px;
   margin: 0;
@@ -3679,7 +3720,8 @@ button.raster-histogram-summary:hover,
   padding: 10px;
 }
 
-.vector-category-controls legend {
+.vector-category-controls legend,
+.vector-graduated-controls legend {
   padding: 0 5px;
   font-size: 0.78rem;
   font-weight: 700;
@@ -3688,6 +3730,13 @@ button.raster-histogram-summary:hover,
 .vector-category-options {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(86px, 0.45fr);
+  align-items: end;
+  gap: 8px;
+}
+
+.vector-graduated-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   align-items: end;
   gap: 8px;
 }
@@ -3717,6 +3766,22 @@ button.raster-histogram-summary:hover,
   min-width: 0;
   border-top: 1px solid var(--border-3);
   padding-top: 5px;
+}
+
+.vector-graduated-row {
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+}
+
+.vector-graduated-row:has(input[type="checkbox"]) {
+  grid-template-columns: auto 36px minmax(0, 1fr) auto;
+}
+
+.vector-graduated-swatch {
+  display: block;
+  width: 36px;
+  height: 24px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius);
 }
 
 .vector-category-row input[type="color"] {

@@ -3,11 +3,15 @@ import test from "node:test";
 
 import {
     categoryValueKey,
+    formatNumericRange,
     normalizeVectorCategorySummary,
+    normalizeVectorNumericClassification,
     normalizeVectorStyle,
     qualitativeCategoryColor,
+    sequentialPaletteColors,
     vectorCategoricalFields,
     vectorLabelFields,
+    vectorNumericFields,
     vectorStyleLegend,
 } from "../../src/vector/style.js";
 
@@ -31,6 +35,7 @@ test("vector styles normalize geometry-specific symbol state", () => {
     assert.equal(point.fillColor, "#abcdef");
     assert.equal(point.pointSize, 12);
     assert.equal(point.categorical, null);
+    assert.equal(point.graduated, null);
     assert.equal(point.label, null);
     assert.equal(line.fillColor, null);
     assert.equal(line.pointSize, null);
@@ -40,6 +45,81 @@ test("vector styles normalize geometry-specific symbol state", () => {
         fill: "#fedcba",
         stroke: "#fedcba",
     });
+});
+
+test("graduated styles normalize server ranges, palettes, and legends", () => {
+    const summary = normalizeVectorNumericClassification({
+        field: "score",
+        fieldType: "float",
+        method: "quantile",
+        requestedClassCount: 5,
+        actualClassCount: 2,
+        classes: [
+            { minimum: null, maximum: 1, count: 6 },
+            { minimum: 1, maximum: null, count: 4 },
+        ],
+        observedMinimum: 0,
+        observedMaximum: 9,
+        numericValueCount: 10,
+        scannedFeatureCount: 11,
+        featureCount: 11,
+        nullCount: 1,
+        unsupportedValueCount: 0,
+        complete: true,
+        defaultClassCount: 5,
+        minimumClassCount: 2,
+        maximumClassCount: 9,
+    });
+    const colors = sequentialPaletteColors("viridis", summary.actualClassCount);
+    const style = normalizeVectorStyle({
+        geometryKind: "polygon",
+        fillColor: "#a855f7",
+        fillOpacity: 0.38,
+        strokeColor: "#581c87",
+        strokeOpacity: 1,
+        strokeWidth: 2,
+        graduated: {
+            field: summary.field,
+            method: summary.method,
+            classCount: summary.requestedClassCount,
+            palette: "viridis",
+            rules: summary.classes.map((classification, index) => ({
+                minimum: classification.minimum,
+                maximum: classification.maximum,
+                color: colors[index],
+            })),
+            missingColor: "#D1D5DB",
+        },
+    });
+
+    assert.equal(summary.actualClassCount, 2);
+    assert.deepEqual(colors, ["#440154", "#fde725"]);
+    assert.equal(formatNumericRange(summary.classes[0]), "≤ 1");
+    assert.deepEqual(vectorNumericFields([
+        { name: "score", type: "float" },
+        { name: "rank", type: "int32" },
+        { name: "risk", type: "str" },
+    ]), [
+        { name: "score", type: "float" },
+        { name: "rank", type: "int32" },
+    ]);
+    assert.deepEqual(vectorStyleLegend(style), {
+        kind: "graduated",
+        label: "score",
+        entries: [
+            { label: "≤ 1", color: "#440154" },
+            { label: "> 1", color: "#fde725" },
+            { label: "No value", color: "#d1d5db" },
+        ],
+    });
+    assert.throws(
+        () => normalizeVectorStyle({ ...style, categorical: {
+            field: "risk",
+            limit: 1,
+            rules: [{ value: { kind: "string", value: "high" }, color: "#d60000" }],
+        } }),
+        /cannot combine/,
+    );
 });
 
 test("categorical styles preserve explicit value types and qualitative colors", () => {

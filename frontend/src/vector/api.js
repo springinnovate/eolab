@@ -1,6 +1,9 @@
 /** HTTP contracts for catalog vector assessment and publication. */
 
-import { normalizeVectorCategorySummary } from "./style.js";
+import {
+    normalizeVectorCategorySummary,
+    normalizeVectorNumericClassification,
+} from "./style.js";
 
 const PUBLICATION_FAILURE_CATEGORIES = new Set([
     "reader_rejection",
@@ -63,7 +66,8 @@ async function vectorRenderingError(response, action) {
  * Post one selected vector Item identity to an owned rendering action.
  *
  * @param {Object} item Selected STAC Item.
- * @param {"assessments"|"layers"|"styles"|"category-summaries"} action
+ * @param {"assessments"|"layers"|"styles"|"category-summaries"|
+ * "numeric-classifications"} action
  * Rendering action path.
  * @param {string} actionLabel User-facing failure action.
  * @param {typeof fetch} fetchImplementation HTTP implementation.
@@ -163,7 +167,7 @@ export async function publishCatalogVector(
 }
 
 /**
- * Apply one complete single-symbol style to a published catalog vector.
+ * Apply one complete vector style to a published catalog vector.
  *
  * @param {Object} item Selected vector STAC Item.
  * @param {Object} style Validated geometry-specific browser style state.
@@ -229,6 +233,50 @@ export async function summarizeCatalogVectorCategories(
     } catch (error) {
         throw new VectorRenderingRequestError(
             "Vector category summary returned an invalid response."
+        );
+    }
+}
+
+/**
+ * Classify one authoritative numeric field through a bounded source read.
+ *
+ * @param {Object} item Selected vector STAC Item.
+ * @param {string} field Exact numeric Catalog attribute field.
+ * @param {"equal-interval"|"quantile"} method Classification method.
+ * @param {number} classCount Requested class count.
+ * @param {typeof fetch} [fetchImplementation=globalThis.fetch] HTTP
+ * implementation.
+ * @return {Promise<Object>} Normalized numeric classification summary.
+ * @throws {VectorRenderingRequestError} If classification or validation fails.
+ */
+export async function classifyCatalogVectorNumbers(
+    item,
+    field,
+    method,
+    classCount,
+    fetchImplementation = globalThis.fetch,
+) {
+    const result = await postVectorAction(
+        item,
+        "numeric-classifications",
+        "numeric classification",
+        fetchImplementation,
+        { field, method, classCount },
+    );
+    try {
+        const summary = normalizeVectorNumericClassification(result);
+        if (
+            summary.field !== field || summary.method !== method ||
+            summary.requestedClassCount !== classCount
+        ) {
+            throw new TypeError(
+                "Numeric classification does not match the request."
+            );
+        }
+        return summary;
+    } catch (error) {
+        throw new VectorRenderingRequestError(
+            "Vector numeric classification returned an invalid response."
         );
     }
 }

@@ -7,6 +7,28 @@ const LABEL_FONT_WEIGHTS = new Set(["normal", "bold"]);
 const LABEL_PLACEMENTS = new Set(["center", "above", "below", "follow-line"]);
 const CATEGORY_KINDS = new Set(["boolean", "integer", "number", "string"]);
 const CATEGORY_MAXIMUM_LIMIT = 50;
+const CLASSIFICATION_METHODS = new Set(["equal-interval", "quantile"]);
+const SEQUENTIAL_PALETTE_NAMES = new Set(["blues", "viridis", "yellow-red", "purples"]);
+const NUMERIC_MINIMUM_CLASS_COUNT = 2;
+const NUMERIC_MAXIMUM_CLASS_COUNT = 9;
+const SEQUENTIAL_PALETTES = Object.freeze({
+    blues: Object.freeze([
+        "#f7fbff", "#deebf7", "#c6dbef", "#9ecae1", "#6baed6",
+        "#4292c6", "#2171b5", "#08519c", "#08306b",
+    ]),
+    viridis: Object.freeze([
+        "#440154", "#472d7b", "#3b528b", "#2c728e", "#21918c",
+        "#27ad81", "#5cc863", "#aadc32", "#fde725",
+    ]),
+    "yellow-red": Object.freeze([
+        "#ffffcc", "#ffeda0", "#fed976", "#feb24c", "#fd8d3c",
+        "#fc4e2a", "#e31a1c", "#bd0026", "#800026",
+    ]),
+    purples: Object.freeze([
+        "#fcfbfd", "#efedf5", "#dadaeb", "#bcbddc", "#9e9ac8",
+        "#807dba", "#6a51a3", "#54278f", "#3f007d",
+    ]),
+});
 const QUALITATIVE_COLORS = Object.freeze([
     "#d60000", "#8c3bff", "#018700", "#00acc6", "#e6a500",
     "#ff7ed1", "#6b004f", "#573b00", "#005659", "#15e18c",
@@ -50,6 +72,10 @@ export function normalizeVectorStyle(candidate) {
     );
     const label = normalizeVectorLabel(candidate.label, geometryKind);
     const categorical = normalizeVectorCategorical(candidate.categorical);
+    const graduated = normalizeVectorGraduated(candidate.graduated);
+    if (categorical !== null && graduated !== null) {
+        throw new TypeError("Vector styles cannot combine categories and ranges.");
+    }
     if (geometryKind === "line") {
         requireAbsent(candidate, ["fillColor", "fillOpacity", "pointSize"]);
         return Object.freeze({
@@ -61,6 +87,7 @@ export function normalizeVectorStyle(candidate) {
             strokeWidth,
             pointSize: null,
             categorical,
+            graduated,
             label,
         });
     }
@@ -82,6 +109,7 @@ export function normalizeVectorStyle(candidate) {
             strokeWidth,
             pointSize: null,
             categorical,
+            graduated,
             label,
         });
     }
@@ -94,6 +122,7 @@ export function normalizeVectorStyle(candidate) {
         strokeWidth,
         pointSize: boundedNumber(candidate.pointSize, 1, 64, "Point size"),
         categorical,
+        graduated,
         label,
     });
 }
@@ -142,6 +171,19 @@ export function vectorCategoricalFields(fields) {
     if (!Array.isArray(fields)) return Object.freeze([]);
     return Object.freeze(fields.filter(({ name, type }) =>
         typeof name === "string" && categoricalFieldKind(type) !== null
+    ));
+}
+
+/**
+ * Keep only Catalog fields supported by graduated numeric styling.
+ *
+ * @param {ReadonlyArray<{name:string,type:string}>} fields Catalog fields.
+ * @return {ReadonlyArray<{name:string,type:string}>} Frozen numeric options.
+ */
+export function vectorNumericFields(fields) {
+    if (!Array.isArray(fields)) return Object.freeze([]);
+    return Object.freeze(fields.filter(({ name, type }) =>
+        typeof name === "string" && numericFieldKind(type) !== null
     ));
 }
 
@@ -224,6 +266,132 @@ export function normalizeVectorCategorySummary(candidate) {
 }
 
 /**
+ * Validate one bounded numeric-classification response from the vector boundary.
+ *
+ * @param {unknown} candidate Untrusted response-shaped value.
+ * @return {Object} Frozen normalized numeric classification.
+ * @throws {TypeError|RangeError} If the response contract is invalid.
+ */
+export function normalizeVectorNumericClassification(candidate) {
+    if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) {
+        throw new TypeError("Vector numeric classification must be an object.");
+    }
+    const field = boundedText(candidate.field, 256, "Numeric field");
+    const fieldType = boundedText(candidate.fieldType, 128, "Numeric field type");
+    if (numericFieldKind(fieldType) === null) {
+        throw new TypeError("Numeric classification field type is invalid.");
+    }
+    const method = option(candidate.method, CLASSIFICATION_METHODS, "Classification method");
+    const requestedClassCount = boundedInteger(
+        candidate.requestedClassCount,
+        NUMERIC_MINIMUM_CLASS_COUNT,
+        NUMERIC_MAXIMUM_CLASS_COUNT,
+        "Requested class count",
+    );
+    const actualClassCount = boundedInteger(
+        candidate.actualClassCount,
+        1,
+        requestedClassCount,
+        "Actual class count",
+    );
+    if (!Array.isArray(candidate.classes) || candidate.classes.length !== actualClassCount) {
+        throw new TypeError("Numeric classes must match the actual class count.");
+    }
+    const classes = candidate.classes.map((classification) =>
+        normalizeNumericRange(classification, true)
+    );
+    requireAdjacentOpenRanges(classes, "Numeric classes");
+    const observedMinimum = finiteNumber(candidate.observedMinimum, "Observed minimum");
+    const observedMaximum = finiteNumber(candidate.observedMaximum, "Observed maximum");
+    if (observedMinimum > observedMaximum) {
+        throw new RangeError("Observed numeric minimum cannot exceed its maximum.");
+    }
+    const numericValueCount = boundedInteger(
+        candidate.numericValueCount, 1, 100000, "Numeric value count"
+    );
+    if (classes.reduce((total, classification) => total + classification.count, 0) !== numericValueCount) {
+        throw new RangeError("Numeric class counts must cover every numeric value.");
+    }
+    const scannedFeatureCount = boundedInteger(
+        candidate.scannedFeatureCount, 1, 100000, "Scanned feature count"
+    );
+    const featureCount = boundedInteger(
+        candidate.featureCount, 1, Number.MAX_SAFE_INTEGER, "Feature count"
+    );
+    const complete = candidate.complete;
+    if (typeof complete !== "boolean") {
+        throw new TypeError("Numeric classification completeness must be boolean.");
+    }
+    if (complete && scannedFeatureCount !== featureCount) {
+        throw new RangeError("Complete classifications must scan every feature.");
+    }
+    const defaultClassCount = boundedInteger(
+        candidate.defaultClassCount, NUMERIC_MINIMUM_CLASS_COUNT,
+        NUMERIC_MAXIMUM_CLASS_COUNT, "Default class count",
+    );
+    const minimumClassCount = boundedInteger(
+        candidate.minimumClassCount, NUMERIC_MINIMUM_CLASS_COUNT,
+        defaultClassCount, "Minimum class count",
+    );
+    const maximumClassCount = boundedInteger(
+        candidate.maximumClassCount, defaultClassCount,
+        NUMERIC_MAXIMUM_CLASS_COUNT, "Maximum class count",
+    );
+    return Object.freeze({
+        field,
+        fieldType,
+        method,
+        requestedClassCount,
+        actualClassCount,
+        classes: Object.freeze(classes),
+        observedMinimum,
+        observedMaximum,
+        numericValueCount,
+        scannedFeatureCount,
+        featureCount,
+        nullCount: boundedInteger(candidate.nullCount, 0, 100000, "Null count"),
+        unsupportedValueCount: boundedInteger(
+            candidate.unsupportedValueCount, 0, 100000, "Unsupported value count"
+        ),
+        complete,
+        defaultClassCount,
+        minimumClassCount,
+        maximumClassCount,
+    });
+}
+
+/**
+ * Select perceptually ordered colors for one supported sequential palette.
+ *
+ * @param {string} palette Supported palette identity.
+ * @param {number} classCount Effective class count from the server.
+ * @return {ReadonlyArray<string>} Frozen light-to-dark color sequence.
+ */
+export function sequentialPaletteColors(palette, classCount) {
+    const name = option(palette, SEQUENTIAL_PALETTE_NAMES, "Sequential palette");
+    const count = boundedInteger(classCount, 1, NUMERIC_MAXIMUM_CLASS_COUNT, "Class count");
+    const colors = SEQUENTIAL_PALETTES[name];
+    if (count === 1) return Object.freeze([colors[4]]);
+    return Object.freeze(Array.from({ length: count }, (_unused, index) =>
+        colors[Math.round(index * (colors.length - 1) / (count - 1))]
+    ));
+}
+
+/**
+ * Format one open-ended numeric class for controls and neutral legends.
+ *
+ * @param {{minimum:number|null,maximum:number|null}} candidate Numeric class.
+ * @return {string} Compact inclusive/exclusive range label.
+ */
+export function formatNumericRange(candidate) {
+    const range = normalizeNumericRange({ ...candidate, count: 0 }, true);
+    if (range.minimum === null && range.maximum === null) return "All values";
+    if (range.minimum === null) return `≤ ${formatNumber(range.maximum)}`;
+    if (range.maximum === null) return `> ${formatNumber(range.minimum)}`;
+    return `> ${formatNumber(range.minimum)} to ≤ ${formatNumber(range.maximum)}`;
+}
+
+/**
  * Return a deterministic qualitative palette color.
  *
  * @param {number} index Stable category rank.
@@ -266,14 +434,28 @@ export function formatCategoryValue(candidate) {
 }
 
 /**
- * Build the neutral fixed-swatch presentation from current vector style.
+ * Build the neutral legend presentation from current vector style.
  *
  * @param {Object} candidate Complete vector style state.
- * @return {{kind:"fixed",label:string,fill:string,stroke:string}}
+ * @return {Object}
  * Map-layer legend contract.
  */
 export function vectorStyleLegend(candidate) {
     const style = normalizeVectorStyle(candidate);
+    if (style.graduated !== null) {
+        const entries = style.graduated.rules.map((rule) => Object.freeze({
+            label: formatNumericRange(rule),
+            color: rule.color,
+        }));
+        if (style.graduated.missingColor !== null) {
+            entries.push(Object.freeze({ label: "No value", color: style.graduated.missingColor }));
+        }
+        return {
+            kind: "graduated",
+            label: style.graduated.field,
+            entries: Object.freeze(entries),
+        };
+    }
     if (style.categorical !== null) {
         const entries = style.categorical.rules.map((rule) => Object.freeze({
             label: formatCategoryValue(rule.value),
@@ -297,6 +479,116 @@ export function vectorStyleLegend(candidate) {
         fill: style.fillColor ?? style.strokeColor,
         stroke: style.strokeColor,
     };
+}
+
+/**
+ * Validate an optional graduated numeric style block.
+ *
+ * @param {unknown} candidate Candidate graduated state or null.
+ * @return {Object|null} Frozen normalized graduated state.
+ */
+function normalizeVectorGraduated(candidate) {
+    if (candidate === undefined || candidate === null) return null;
+    if (typeof candidate !== "object" || Array.isArray(candidate)) {
+        throw new TypeError("Graduated style must be an object or null.");
+    }
+    const field = boundedText(candidate.field, 256, "Graduated field");
+    const method = option(candidate.method, CLASSIFICATION_METHODS, "Classification method");
+    const classCount = boundedInteger(
+        candidate.classCount,
+        NUMERIC_MINIMUM_CLASS_COUNT,
+        NUMERIC_MAXIMUM_CLASS_COUNT,
+        "Class count",
+    );
+    const palette = option(candidate.palette, SEQUENTIAL_PALETTE_NAMES, "Sequential palette");
+    if (!Array.isArray(candidate.rules) || candidate.rules.length < 1 || candidate.rules.length > classCount) {
+        throw new RangeError("Graduated rules must fit the selected class count.");
+    }
+    const rules = candidate.rules.map((rule) => {
+        const range = normalizeNumericRange(rule, false);
+        return Object.freeze({
+            minimum: range.minimum,
+            maximum: range.maximum,
+            color: color(rule.color, "Graduated color"),
+        });
+    });
+    requireAdjacentOpenRanges(rules, "Graduated rules");
+    return Object.freeze({
+        field,
+        method,
+        classCount,
+        palette,
+        rules: Object.freeze(rules),
+        missingColor: candidate.missingColor === undefined || candidate.missingColor === null
+            ? null : color(candidate.missingColor, "No value color"),
+    });
+}
+
+/**
+ * Normalize one open-ended numeric range.
+ *
+ * @param {unknown} candidate Candidate range object.
+ * @param {boolean} includeCount Whether to validate and retain a count.
+ * @return {Object} Frozen normalized range.
+ */
+function normalizeNumericRange(candidate, includeCount) {
+    if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) {
+        throw new TypeError("Numeric range must be an object.");
+    }
+    const minimum = candidate.minimum === null ? null : finiteNumber(candidate.minimum, "Range minimum");
+    const maximum = candidate.maximum === null ? null : finiteNumber(candidate.maximum, "Range maximum");
+    if (minimum !== null && maximum !== null && minimum >= maximum) {
+        throw new RangeError("Numeric range minimum must be below its maximum.");
+    }
+    const normalized = { minimum, maximum };
+    if (includeCount) normalized.count = boundedInteger(candidate.count, 0, 100000, "Class count");
+    return Object.freeze(normalized);
+}
+
+/**
+ * Require first/last open bounds and exact adjacency between numeric ranges.
+ *
+ * @param {ReadonlyArray<{minimum:number|null,maximum:number|null}>} ranges Numeric ranges.
+ * @param {string} label User-facing contract label.
+ * @return {void}
+ */
+function requireAdjacentOpenRanges(ranges, label) {
+    if (ranges[0].minimum !== null || ranges.at(-1).maximum !== null) {
+        throw new RangeError(`${label} must cover all numeric values.`);
+    }
+    for (let index = 0; index < ranges.length - 1; index += 1) {
+        if (ranges[index].maximum !== ranges[index + 1].minimum) {
+            throw new RangeError(`${label} must be adjacent.`);
+        }
+    }
+}
+
+/**
+ * Require one finite number.
+ *
+ * @param {unknown} value Candidate number.
+ * @param {string} label User-facing field label.
+ * @return {number} Validated number.
+ */
+function finiteNumber(value, label) {
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+        throw new TypeError(`${label} must be finite.`);
+    }
+    return value;
+}
+
+/**
+ * Format one finite classification boundary without unreadable precision.
+ *
+ * @param {number} value Numeric boundary.
+ * @return {string} Compact locale-independent representation.
+ */
+function formatNumber(value) {
+    const magnitude = Math.abs(value);
+    if ((magnitude !== 0 && magnitude < 0.001) || magnitude >= 1000000) {
+        return value.toExponential(3);
+    }
+    return Number(value.toPrecision(6)).toString();
 }
 
 /**
@@ -403,6 +695,17 @@ function categoricalFieldKind(fieldType) {
 }
 
 /**
+ * Map one Catalog field type to a supported numeric scalar kind.
+ *
+ * @param {unknown} fieldType Catalog field type.
+ * @return {"integer"|"number"|null} Numeric kind or null when unsupported.
+ */
+function numericFieldKind(fieldType) {
+    const kind = categoricalFieldKind(fieldType);
+    return kind === "integer" || kind === "number" ? kind : null;
+}
+
+/**
  * Validate and normalize an optional vector label.
  *
  * @param {unknown} candidate Candidate nested label state or null.
@@ -492,7 +795,15 @@ function boundedNumber(value, minimum, maximum, label) {
     return value;
 }
 
-/** Require an integer inside an inclusive range. */
+/**
+ * Require an integer inside an inclusive range.
+ *
+ * @param {unknown} value Candidate integer.
+ * @param {number} minimum Inclusive minimum.
+ * @param {number} maximum Inclusive maximum.
+ * @param {string} label User-facing field label.
+ * @return {number} Validated integer.
+ */
 function boundedInteger(value, minimum, maximum, label) {
     if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
         throw new RangeError(`${label} must be from ${minimum} to ${maximum}.`);
@@ -500,7 +811,14 @@ function boundedInteger(value, minimum, maximum, label) {
     return value;
 }
 
-/** Require bounded non-control text. */
+/**
+ * Require bounded non-control text.
+ *
+ * @param {unknown} value Candidate text.
+ * @param {number} maximumLength Maximum accepted characters.
+ * @param {string} label User-facing field label.
+ * @return {string} Validated text.
+ */
 function boundedText(value, maximumLength, label) {
     if (
         typeof value !== "string" || value.length < 1 ||

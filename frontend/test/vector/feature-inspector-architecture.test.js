@@ -64,5 +64,9 @@ test("vector style controls expose intent without knowing sibling subsystems", (
     COMPOSITION_SOURCE,
     /record\.adapter\.summarizeCategories\(record, field\)/,
   );
+  assert.match(
+    COMPOSITION_SOURCE,
+    /record\.adapter\.classifyNumbers\(record, field, method, classCount\)/,
+  );
   assert.match(COMPOSITION_SOURCE, /record\.adapter\.applyStyle\(record, style\)/);
 });

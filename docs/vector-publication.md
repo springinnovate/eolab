@@ -37,9 +37,9 @@ The feature depends on these lower-level contracts:
 - `DatasetHandlerRegistry` rebuilds a selected Item without suffix dispatch in
   the service;
 - the catalog adapter reloads and replaces authoritative Items;
-- the focused vector category-reader port uses Fiona to read only one
-  Catalog-declared scalar field, without geometry, under fixed row, value,
-  concurrency, and cancellation bounds;
+- the focused vector field-reader port uses Fiona to read only one
+  Catalog-declared scalar or numeric field, without geometry, under fixed row,
+  value, concurrency, and cancellation bounds;
 - `src/eolab_app/rendering/` supplies only the GeoServer REST transport,
   failure categories, and published-layer authorization protocol genuinely
   shared with raster publication; and
@@ -107,7 +107,7 @@ not GeoServer state; selecting the Item again converges and reauthorizes it.
 Vector layers start with fixed `vector-point`, `vector-line`, or
 `vector-polygon` styles and never accept raster `env` substitutions. The
 vector-owned style workflow can replace that initializer style with a
-content-addressed single-color or categorical SLD. The browser submits only
+content-addressed single-color, categorical, or graduated SLD. The browser submits only
 Catalog identity and a complete validated style; the server re-resolves the current Item,
 source signature, publication authorization, geometry family, and any selected
 label field before deriving the GeoServer resource identity. A changed style
@@ -141,6 +141,28 @@ else rules. Point and polygon categories replace fill color; line categories
 replace stroke color; the geometry-specific size, outline, width, and opacity
 controls remain authoritative.
 
+Graduated numeric discovery follows that same vector-owned field-analysis
+boundary. The browser posts only Catalog identity, one current integer or
+floating-point field, `equal-interval` or `quantile`, and a requested class
+count from two through nine. The shared Fiona adapter reads at most 100,000
+features with geometry ignored and reports finite values, missing values,
+unsupported values, scan completeness, and source extent. Equal intervals use
+the observed minimum and maximum. Quantiles use deterministic nearest-rank
+breaks; repeated breaks collapse, so the response can honestly contain fewer
+classes than requested.
+
+Every returned class is adjacent and collectively covers all numeric values:
+the first range has no lower bound, internal lower bounds are exclusive and
+upper bounds inclusive, and the last range has no upper bound. This keeps
+features outside an incomplete sample's observed extent visible. The browser
+assigns a deterministic light-to-dark color sequence from Blues, Viridis,
+Yellow-to-red, or Purples, and can separately style nulls when they exist. On
+apply, `VectorStyleService` repeats the current bounded classification and
+requires the submitted ranges to match before generating GeoServer comparison
+filters. A changed source or class result therefore stops styling rather than
+publishing stale breaks. The map-layer view consumes only the vector adapter's
+neutral legend entries and does not know numeric-style internals.
+
 The vector style can optionally add one `TextSymbolizer`. Labels are `null` by
 default. An enabled label contains an exact field from the Item's current STAC
 Table Extension columns, closed font-family and weight choices, bounded font
@@ -152,7 +174,7 @@ through the browser nor truncated: GeoServer evaluates the selected field for
 each feature, and may omit a long one-line value when it cannot place the label
 without a conflict. Wrapping, explicit truncation, decluttering quality, and
 large-layer label performance require separate dataset-specific work. For a
-categorical style, labels occupy a second `FeatureTypeStyle`; this keeps their
+categorical or graduated style, labels occupy a second `FeatureTypeStyle`; this keeps their
 unfiltered, independently scaled rule from suppressing the geometry
 `ElseFilter` while leaving label state independent from category selection.
 
@@ -201,4 +223,8 @@ add each exact layer, reload/re-add it, and confirm WMS tiles plus distinct
 point/line/polygon styles. For label changes, choose a text and numeric field,
 confirm labels remain off by default, verify geometry-specific placement and
 minimum zoom, and revisit a cached zoom after changing font or halo controls.
+For graduated styling, test an integer and floating-point field with both
+methods, change class count and palette, confirm repeated quantiles collapse
+without gaps, inspect the map-layer legend, and revisit cached zooms after
+applying the style.
 Keep the PR draft until that environment check is complete.

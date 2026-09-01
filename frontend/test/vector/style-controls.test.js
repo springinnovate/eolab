@@ -41,6 +41,31 @@ function styleFixture() {
                         maximumLimit: 50,
                     };
                 },
+                async classify(field, method, classCount) {
+                    return {
+                        field,
+                        fieldType: "float",
+                        method,
+                        requestedClassCount: classCount,
+                        actualClassCount: 3,
+                        classes: [
+                            { minimum: null, maximum: 1, count: 4 },
+                            { minimum: 1, maximum: 2, count: 3 },
+                            { minimum: 2, maximum: null, count: 2 },
+                        ],
+                        observedMinimum: 0,
+                        observedMaximum: 3,
+                        numericValueCount: 9,
+                        scannedFeatureCount: 10,
+                        featureCount: 10,
+                        nullCount: 1,
+                        unsupportedValueCount: 0,
+                        complete: true,
+                        defaultClassCount: 5,
+                        minimumClassCount: 2,
+                        maximumClassCount: 9,
+                    };
+                },
                 async apply(nextStyle) {
                     applied.push(nextStyle);
                     return nextStyle;
@@ -110,6 +135,7 @@ test("vector style controls apply one complete validated state", async () => {
         strokeWidth: 4,
         pointSize: null,
         categorical: null,
+        graduated: null,
         label: null,
     }]);
     assert.equal(fixture.controls.status.textContent, "Style applied to the map.");
@@ -194,6 +220,49 @@ test("vector category controls preserve colors as the bounded limit changes", as
     assert.equal(fixture.applied[0].categorical.rules[0].color, "#123456");
     assert.equal(fixture.applied[0].categorical.otherColor, "#9ca3af");
     assert.equal(fixture.applied[0].categorical.missingColor, "#d1d5db");
+    fixture.controls.destroy();
+});
+
+test("graduated controls classify, palette, and optionally style missing values", async () => {
+    const fixture = styleFixture();
+    fixture.controls.show(fixture.target("polygon", {
+        geometryKind: "polygon",
+        fillColor: "#a855f7",
+        fillOpacity: 0.38,
+        strokeColor: "#581c87",
+        strokeOpacity: 1,
+        strokeWidth: 2,
+    }));
+    fixture.controls.mode.value = "graduated";
+    fixture.controls.graduatedClassCount.value = "3";
+    fixture.controls.mode.dispatchEvent(new Event("change"));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    assert.equal(fixture.controls.graduatedField.value, "value");
+    assert.equal(fixture.controls.graduatedList.children.length, 4);
+    fixture.controls.graduatedPalette.value = "viridis";
+    fixture.controls.graduatedPalette.dispatchEvent(new Event("change"));
+    const missing = fixture.controls.graduatedList.children[3];
+    missing.children[0].checked = true;
+    missing.children[0].dispatchEvent(new Event("change"));
+    missing.children[1].value = "#abcdef";
+    missing.children[1].dispatchEvent(new Event("input"));
+    fixture.controls.applyButton.dispatchEvent(new Event("click"));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    assert.deepEqual(fixture.applied[0].graduated, {
+        field: "value",
+        method: "equal-interval",
+        classCount: 3,
+        palette: "viridis",
+        rules: [
+            { minimum: null, maximum: 1, color: "#440154" },
+            { minimum: 1, maximum: 2, color: "#21918c" },
+            { minimum: 2, maximum: null, color: "#fde725" },
+        ],
+        missingColor: "#abcdef",
+    });
+    assert.equal(fixture.applied[0].categorical, null);
     fixture.controls.destroy();
 });
 

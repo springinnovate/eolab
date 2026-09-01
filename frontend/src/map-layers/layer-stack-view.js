@@ -223,6 +223,8 @@ export class MapLayerStackView {
             toggle.focus();
         });
         row.append(label, style, actions);
+        const legend = this.#buildLegend(layer.legend);
+        if (legend !== null) row.append(legend);
         if (layer.error) {
             const error = this.documentContext.createElement("p");
             error.className = "raster-layer-error";
@@ -230,6 +232,44 @@ export class MapLayerStackView {
             row.append(error);
         }
         return row;
+    }
+
+    /**
+     * Build one optional neutral multi-entry legend disclosure.
+     *
+     * @param {unknown} legend Adapter-owned legend snapshot.
+     * @return {HTMLDetailsElement|null} Detached legend or null for fixed styles.
+     */
+    #buildLegend(legend) {
+        if (!Array.isArray(legend?.entries) || legend.entries.length === 0) {
+            return null;
+        }
+        const details = this.documentContext.createElement("details");
+        details.className = "map-layer-legend";
+        const summary = this.documentContext.createElement("summary");
+        summary.textContent = "Legend";
+        const field = this.documentContext.createElement("span");
+        field.className = "map-layer-legend-field";
+        field.textContent = typeof legend.label === "string" ? legend.label : "";
+        const list = this.documentContext.createElement("ul");
+        list.className = "map-layer-legend-list";
+        for (const entry of legend.entries) {
+            if (typeof entry?.label !== "string" || typeof entry?.color !== "string") {
+                continue;
+            }
+            const item = this.documentContext.createElement("li");
+            const swatch = this.documentContext.createElement("span");
+            swatch.className = "map-layer-legend-swatch";
+            swatch.style.backgroundColor = entry.color;
+            swatch.setAttribute("aria-hidden", "true");
+            const text = this.documentContext.createElement("span");
+            text.textContent = entry.label;
+            item.append(swatch, text);
+            list.append(item);
+        }
+        if (list.childElementCount === 0) return null;
+        details.append(summary, field, list);
+        return details;
     }
 
     /**
