@@ -17,38 +17,6 @@
         data-eomap-region="map-layers"
         aria-label="MAP LABEL TO BE SET BY CONFIGURATION"
       ></div>
-      <div
-        class="raster-detail-processing"
-        id="raster-detail-processing"
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
-        aria-busy="false"
-        hidden
-      >
-        <div class="raster-detail-processing-card">
-          <span
-            class="raster-detail-processing-spinner"
-            aria-hidden="true"
-          ></span>
-          <span class="raster-detail-processing-message">
-            <strong>Processing raster detail…</strong>
-            <small>
-              Calculating the current map view. The displayed raster will
-              update when it is ready.
-            </small>
-          </span>
-        </div>
-      </div>
-      <p
-        class="raster-detail-map-notice"
-        id="raster-detail-map-notice"
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
-        hidden
-      ></p>
-
       <section
         class="control-panel"
         id="control-panel"
@@ -421,40 +389,6 @@
                       aria-live="polite"
                       aria-atomic="true"
                     ></p>
-                    <div
-                      class="raster-detail-preview-controls"
-                      id="raster-detail-preview-controls"
-                      hidden
-                    >
-                      <p>
-                        <strong>Low-resolution raster rendering</strong>
-                        <span>When a raster is too large for standard whole-raster rendering, EOLab can show a bounded sample grid. Close views automatically use complete source-window detail when the visible area satisfies server-owned limits.</span>
-                      </p>
-                      <small>Sample grids use smooth display interpolation; exact close-view windows use crisp nearest-neighbor presentation. This overview-limited raster is never published to GeoServer. The status below reports the active map area, source window, native blocks, and decoded work.</small>
-                      <output
-                        class="raster-detail-preview-resolution"
-                        id="raster-detail-preview-resolution"
-                        aria-live="polite"
-                      >Base raster detail: —; active view: —</output>
-                      <div class="raster-detail-preview-actions">
-                        <button
-                          class="secondary-button"
-                          id="show-raster-detail-preview"
-                          type="button"
-                        >
-                              Use low-resolution rendering
-                        </button>
-                        <button
-                          class="secondary-button"
-                          id="remove-raster-detail-preview"
-                          type="button"
-                          hidden
-                        >
-                              Remove low-resolution rendering
-                        </button>
-                        <button class="secondary-button" id="style-raster-detail-preview" type="button">Style…</button>
-                      </div>
-                    </div>
                     </section>
                     <p class="map-layers-empty-state">
                       No map layers yet. Add an item from Catalog.

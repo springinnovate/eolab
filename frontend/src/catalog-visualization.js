@@ -1,7 +1,6 @@
-/** Format-neutral Catalog assessment and mixed map-layer coordination. */
+/** Format-neutral Catalog preparation and mixed map-layer coordination. */
 
 import { getCatalogVisualization } from "./catalog.js";
-import { assessCatalogRaster } from "./raster/api.js";
 import { assessCatalogVector } from "./vector/api.js";
 
 /** Coordinate dataset adapters without placing format checks in composition. */
@@ -12,8 +11,6 @@ export class CatalogVisualizationCoordinator {
      * @param {Object} rasterViewer Raster-owned map and analysis boundary.
      * @param {Object} mapLayerController Neutral retained-layer controller.
      * @param {Object} vectorMapLayerAdapter Focused vector map-layer adapter.
-     * @param {(item:Object)=>Promise<Object>} [assessRaster=assessCatalogRaster]
-     * Raster assessment boundary.
      * @param {(item:Object)=>Promise<Object>} [assessVector=assessCatalogVector]
      * Vector assessment boundary.
      */
@@ -21,20 +18,16 @@ export class CatalogVisualizationCoordinator {
         rasterViewer,
         mapLayerController,
         vectorMapLayerAdapter,
-        assessRaster = assessCatalogRaster,
         assessVector = assessCatalogVector
     ) {
         this.rasterViewer = rasterViewer;
         this.mapLayerController = mapLayerController;
         this.vectorMapLayerAdapter = vectorMapLayerAdapter;
-        this.assessors = Object.freeze({
-            raster: assessRaster,
-            vector: assessVector,
-        });
+        this.assessVector = assessVector;
     }
 
     /**
-     * Return the supported kind and current assessment for one Item.
+     * Return the supported kind and current preparation metadata for one Item.
      *
      * @param {Object|null} item Selected STAC Item.
      * @return {{kind:"raster"|"vector",metadata:Object|undefined}|null}
@@ -45,21 +38,26 @@ export class CatalogVisualizationCoordinator {
     }
 
     /**
-     * Assess one Item through its explicitly owned adapter.
+     * Prepare one Item through its explicitly owned adapter.
+     *
+     * Prepared rasters need no browser preflight. Vectors retain their
+     * authoritative capability assessment before publication.
      *
      * @param {Object} item Selected supported STAC Item.
-     * @return {Promise<Object>} Updated authoritative assessed Item.
+     * @return {Promise<Object>} Prepared Item; vectors carry fresh assessment.
      * @throws {TypeError} If the Item has no visualization adapter.
      */
-    assess(item) {
+    prepare(item) {
         const descriptor = this.#requireDescriptor(item);
-        return this.assessors[descriptor.kind](item);
+        return descriptor.kind === "raster"
+            ? Promise.resolve(item)
+            : this.assessVector(item);
     }
 
     /**
      * Publish and retain one Item in the shared mixed layer lifecycle.
      *
-     * @param {Object} item Selected supported and eligible STAC Item.
+     * @param {Object} item Selected supported and prepared STAC Item.
      * @return {Promise<Object|null>} Publication or null after invalidation.
      * @throws {TypeError} If the Item has no visualization adapter.
      */
@@ -122,7 +120,10 @@ export class CatalogVisualizationCoordinator {
      * @return {unknown|null} Opaque revision or null when not supplied.
      */
     sourceRevision(item) {
-        return this.#requireDescriptor(item).metadata?.source_signature ?? null;
+        const descriptor = this.#requireDescriptor(item);
+        return descriptor.kind === "raster"
+            ? item.assets?.data?.["eolab:source"]?.source_signature ?? null
+            : descriptor.metadata?.source_signature ?? null;
     }
 
     /**

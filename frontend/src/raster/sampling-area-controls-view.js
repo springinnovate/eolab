@@ -240,7 +240,7 @@ export class RasterSamplingAreaControlsView {
      * Mark the active histogram-area choice without changing availability.
      *
      * @param {"none"|"wholeRaster"|"selectedArea"|"temporaryAoi"} mode
-     * Active area, or no selected histogram area for a sampled raster.
+     * Active area, or no selected histogram area for the raster.
      * @return {void}
      */
     setSamplingAreaMode(mode) {

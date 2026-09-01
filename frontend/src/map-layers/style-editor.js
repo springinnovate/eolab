@@ -54,7 +54,7 @@ export class MapLayerStyleEditor {
 
     /**
      * Open one layer's controls without changing the histogram target.
-     * @param {string} key Retained or sampled layer identity.
+     * @param {string} key Retained layer identity.
      * @return {void}
      */
     open(key) {
@@ -71,15 +71,16 @@ export class MapLayerStyleEditor {
     /** Synchronize controls with the independently keyed editing target. @return {void} */
     refresh() {
         if (this.key === null) return;
-        const layer = this.mapLayers.snapshots().find(({ key }) => key === this.key) ??
-            this.rasterViewer.getSampledStyleTarget?.(this.key);
+        const layer = this.mapLayers.snapshots().find(
+            ({ key }) => key === this.key
+        );
         if (!layer) {
             this.close();
             return;
         }
         this.title.textContent = layer.label;
         const locked = layer.opacityLocked === true;
-        this.opacity.closest?.("label").toggleAttribute("hidden", layer.sampled === true);
+        this.opacity.closest?.("label").removeAttribute("hidden");
         this.opacity.value = String(Math.round((layer.effectiveOpacity ?? layer.opacity ?? 1) * 100));
         this.opacity.disabled = locked;
         this.opacityValue.textContent = `${this.opacity.value}%`;

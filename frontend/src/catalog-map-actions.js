@@ -1,5 +1,5 @@
 /**
- * Catalog map-action and completed visualization-assessment state.
+ * Catalog map-action and completed vector-assessment state.
  *
  * Assessment and publication requests belong to a Catalog Item's composite
  * identity. Pending actions retain busy presentation across selection changes,
@@ -8,8 +8,6 @@
 
 import { getCatalogItemKey } from "./catalog-item-identity.js";
 
-/** Scanner-owned rendering metadata on a mounted raster's data Asset. */
-const RASTER_RENDERING_METADATA_KEY = "eolab:rendering";
 /** Scanner-owned rendering metadata on a vector Item's properties. */
 const VECTOR_RENDERING_METADATA_KEY = "eolab:vector_rendering";
 
@@ -25,8 +23,8 @@ export function catalogItemsMatch(first, second) {
         first.collection === second.collection && first.id === second.id;
 }
 
-/** Retain completed assessments until a refreshed equivalent Item consumes one. */
-export class CatalogVisualizationAssessmentCache {
+/** Retain vector assessments until a refreshed equivalent Item consumes one. */
+export class CatalogVectorAssessmentCache {
     /** Create an empty completed-assessment cache. */
     constructor() {
         this.assessments = new Map();
@@ -45,20 +43,15 @@ export class CatalogVisualizationAssessmentCache {
      */
     record(requestedItem, assessedItem) {
         const key = getCatalogItemKey(requestedItem);
-        const rasterMetadata =
-            assessedItem.assets?.data?.[RASTER_RENDERING_METADATA_KEY];
         const vectorMetadata =
             assessedItem.properties?.[VECTOR_RENDERING_METADATA_KEY];
-        const assessment = rasterMetadata === undefined
-            ? { kind: "vector", metadata: vectorMetadata }
-            : { kind: "raster", metadata: rasterMetadata };
-        if (assessment.metadata === undefined) {
+        if (vectorMetadata === undefined) {
             throw new TypeError(
-                "Completed Catalog assessments require rendering metadata."
+                "Completed vector assessments require rendering metadata."
             );
         }
         Object.assign(requestedItem, assessedItem);
-        this.assessments.set(key, assessment);
+        this.assessments.set(key, vectorMetadata);
     }
 
     /**
@@ -77,21 +70,14 @@ export class CatalogVisualizationAssessmentCache {
         if (assessment === undefined) {
             return false;
         }
-        const { kind, metadata } = assessment;
-        const currentMetadata = kind === "raster"
-            ? item.assets?.data?.[RASTER_RENDERING_METADATA_KEY]
-            : item.properties?.[VECTOR_RENDERING_METADATA_KEY];
+        const currentMetadata = item.properties?.[VECTOR_RENDERING_METADATA_KEY];
         if (
-            currentMetadata?.policy === metadata.policy
+            currentMetadata?.policy === assessment.policy
         ) {
             this.assessments.delete(key);
             return false;
         }
-        if (kind === "raster") {
-            item.assets.data[RASTER_RENDERING_METADATA_KEY] = metadata;
-        } else {
-            item.properties[VECTOR_RENDERING_METADATA_KEY] = metadata;
-        }
+        item.properties[VECTOR_RENDERING_METADATA_KEY] = assessment;
         this.assessments.delete(key);
         return true;
     }

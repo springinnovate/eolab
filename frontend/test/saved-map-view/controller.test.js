@@ -95,7 +95,7 @@ test("saved map controller confirms, restores bottom-first, and reports each lay
       mapLayers.retainedRecords = [];
       records.clear();
     },
-    assess: async (item) => ({ ...item, assessed: true }),
+    prepare: async (item) => ({ ...item, prepared: true }),
     sourceRevision: () => ["current"],
     async show(item) {
       calls.push(["show", item.id]);

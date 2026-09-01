@@ -35,12 +35,11 @@ test("catalog visualization routes explicit source kinds to owned adapters", asy
         viewer,
         mapLayerController,
         vectorMapLayerAdapter,
-        async (item) => ({ kind: "raster", item }),
         async (item) => ({ kind: "vector", item })
     );
 
-    assert.equal((await coordinator.assess(RASTER_ITEM)).kind, "raster");
-    assert.equal((await coordinator.assess(VECTOR_ITEM)).kind, "vector");
+    assert.equal(await coordinator.prepare(RASTER_ITEM), RASTER_ITEM);
+    assert.equal((await coordinator.prepare(VECTOR_ITEM)).kind, "vector");
     assert.equal(await coordinator.show(RASTER_ITEM), "raster");
     assert.equal(await coordinator.show(VECTOR_ITEM), "vector");
     assert.equal(coordinator.contains(VECTOR_ITEM), true);
@@ -50,6 +49,17 @@ test("catalog visualization routes explicit source kinds to owned adapters", asy
         ["show-vector", VECTOR_ITEM, vectorMapLayerAdapter],
         ["remove", VECTOR_ITEM],
     ]);
+});
+
+test("raster source revisions come from neutral Catalog source metadata", () => {
+    const coordinator = new CatalogVisualizationCoordinator({}, {}, {});
+    const signature = { size: 42, mtime_ns: 99 };
+    const item = {
+        ...RASTER_ITEM,
+        assets: { data: { "eolab:source": { source_signature: signature } } },
+    };
+
+    assert.equal(coordinator.sourceRevision(item), signature);
 });
 
 test("remote collections are not reinterpreted as mounted vectors", () => {

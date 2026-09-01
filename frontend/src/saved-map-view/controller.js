@@ -19,7 +19,7 @@ export class SavedMapViewController {
      * @param {Object} configuration.viewport Neutral viewport adapter.
      * @param {Object} configuration.mapLayers Neutral retained-layer owner.
      * @param {Object} configuration.catalogVisualization Format-neutral
-     * assessment, publication, and clearing coordinator.
+     * preparation, publication, and clearing coordinator.
      * @param {Object} configuration.catalogItems Exact Catalog Item client.
      * @param {string} configuration.viewerVersion Running application version.
      * @param {string} configuration.viewerOrigin Running application origin.
@@ -184,23 +184,23 @@ export class SavedMapViewController {
                 const catalogItem = await this.catalogItems.get(
                     layer.catalogItem
                 );
-                const assessedItem = await this.catalogVisualization.assess(
+                const preparedItem = await this.catalogVisualization.prepare(
                     catalogItem
                 );
                 const currentRevision = await hashSavedMapSourceRevision(
-                    this.catalogVisualization.sourceRevision(assessedItem),
+                    this.catalogVisualization.sourceRevision(preparedItem),
                     this.subtleCrypto
                 );
                 const changed = layer.sourceRevision !== null &&
                     currentRevision !== null &&
                     layer.sourceRevision !== currentRevision;
                 const publication = await this.catalogVisualization.show(
-                    assessedItem
+                    preparedItem
                 );
                 if (publication === null) {
                     throw new Error("Layer publication was superseded.");
                 }
-                const key = getCatalogItemKey(assessedItem);
+                const key = getCatalogItemKey(preparedItem);
                 const record = this.mapLayers.getRecord(key);
                 if (record === null ||
                     typeof record.adapter.applySavedState !== "function") {

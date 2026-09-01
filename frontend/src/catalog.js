@@ -6,10 +6,7 @@ const CATALOG_SUBSTRING_PROPERTIES = [
     "eolab_end_datetime_text"
 ];
 const CATALOG_DATA_ASSET_MEDIA_TYPE_PROPERTY = "assets.data.type";
-const CATALOG_DATA_ASSET_RENDERING_POLICY_PROPERTY =
-    "assets.data.eolab:rendering.policy";
-const CATALOG_DATA_ASSET_RENDERING_ELIGIBLE_PROPERTY =
-    "assets.data.eolab:rendering.eligible";
+const CATALOG_COLLECTION_PROPERTY = "collection";
 const COG_MEDIA_TYPE =
     "image/tiff; application=geotiff; profile=cloud-optimized";
 const CATALOG_FILTER_FIELD_PATTERN = /^[a-z][a-z0-9_-]*$/i;
@@ -20,36 +17,23 @@ const CATALOG_DATE_SYNTAX_ERROR =
     "between two of these values.";
 export const MOUNTED_GEOTIFF_COLLECTION_ID = "eolab-mounted-geotiffs";
 export const MOUNTED_VECTOR_COLLECTION_ID = "eolab-mounted-vectors";
-const RASTER_RENDERING_POLICY = "raster-v3";
 const VECTOR_RENDERING_POLICY = "vector-v1";
-const GEOSERVER_READER_CONTRACT =
-    "geoserver-3.0.1-geotools-35.1-geotiff-v1";
-const DETAIL_ONLY_PREVIEW_REASON_CODES = new Set([
-    "internal_overviews_required",
-    "incomplete_overview_pyramid",
-    "coarsest_overview_dimension_exceeded",
-    "coarsest_overview_decoded_size_exceeded"
-]);
 export const MOUNTED_DATASET_TYPES = new Map([
     [MOUNTED_GEOTIFF_COLLECTION_ID, "Raster"],
     ["eolab-mounted-vectors", "Vector"]
 ]);
 
 /**
- * Returns the scanner-owned visualization decision for a mounted GeoTIFF.
+ * Return whether one Item is a prepared mounted GeoTIFF.
  *
  * @param {Object|null} item Selected STAC Item.
- * @return {Object|null|undefined} Rendering metadata, null for a non-raster
- * Item, or undefined when the selected raster has not been assessed.
+ * @return {Object|null} An empty raster descriptor or null for a non-raster.
  */
 export function getRasterVisualization(item) {
     if (item?.collection !== MOUNTED_GEOTIFF_COLLECTION_ID) {
         return null;
     }
-    const renderingMetadata = item.assets.data["eolab:rendering"];
-    return renderingMetadata?.policy === RASTER_RENDERING_POLICY
-        ? renderingMetadata
-        : undefined;
+    return {};
 }
 
 /**
@@ -131,65 +115,6 @@ export function formatCatalogVisualizationReason(item, rawReason) {
     }
     return `Visualization for ${getCatalogDisplayBasename(item)} unavailable: ` +
         trimmedReason.slice(reasonPrefix.length).trim();
-}
-
-/**
- * Return whether one assessed raster may use bounded detail-only previews.
- *
- * @param {Object|null} item Selected STAC Item.
- * @return {boolean} Whether only an overview/scale rejection remains and the
- * current deployed reader accepted the raster, CRS, and bounded blocks.
- */
-export function supportsRasterDetailOnlyPreview(item) {
-    const renderingMetadata = getRasterVisualization(item);
-    return renderingMetadata !== null &&
-        renderingMetadata !== undefined &&
-        renderingMetadata.eligible === false &&
-        DETAIL_ONLY_PREVIEW_REASON_CODES.has(
-            renderingMetadata.reason_code
-        ) &&
-        renderingMetadata.bounded_blocks === true &&
-        renderingMetadata.reader_contract === GEOSERVER_READER_CONTRACT &&
-        renderingMetadata.reader_compatible === true;
-}
-
-/**
- * Format the Catalog status for one assessed raster and rendering state.
- *
- * @param {string} fullVisualizationReason Scanner-owned rejection reason.
- * @param {boolean} isRetained Whether normal rendering is retained on the map.
- * @param {boolean} supportsDetailPreview Whether low-resolution rendering is
- * offered.
- * @param {boolean} hasDetailPreview Whether low-resolution rendering is active.
- * @return {string} Catalog status preserving the assessment and map state.
- */
-export function formatCatalogRasterStatus(
-    fullVisualizationReason,
-    isRetained,
-    supportsDetailPreview,
-    hasDetailPreview
-) {
-    let renderingExplanation = "";
-    if (isRetained) {
-        renderingExplanation =
-            "This raster is on the map.";
-    }
-    if (supportsDetailPreview) {
-        renderingExplanation =
-            "Standard whole-raster rendering is unavailable. Use " +
-            "low-resolution rendering to show a fixed 127-longest-edge " +
-            "center sample for broad views; close views automatically use " +
-            "exact bounded source detail.";
-    }
-    if (hasDetailPreview) {
-        renderingExplanation =
-            "Low-resolution rendering active — not a whole-raster " +
-            "rendering. The orange dashed outline is the raster extent; " +
-            "zooming requests a bounded current-view layer.";
-    }
-    return [fullVisualizationReason, renderingExplanation]
-        .filter((message) => message !== "")
-        .join(" ");
 }
 
 /** Format a byte count without implying decimal storage units. */
@@ -624,25 +549,13 @@ export function buildCatalogSearch(searchText) {
         });
     }
     if (hasViewableFilter) {
-        filters.push(
-            {
-                op: "=",
-                args: [
-                    { property: CATALOG_DATA_ASSET_RENDERING_POLICY_PROPERTY },
-                    RASTER_RENDERING_POLICY
-                ]
-            },
-            {
-                op: "=",
-                args: [
-                    {
-                        property:
-                            CATALOG_DATA_ASSET_RENDERING_ELIGIBLE_PROPERTY
-                    },
-                    true
-                ]
-            }
-        );
+        filters.push({
+            op: "=",
+            args: [
+                { property: CATALOG_COLLECTION_PROPERTY },
+                MOUNTED_GEOTIFF_COLLECTION_ID
+            ]
+        });
     }
     const filter = filters.length === 0
         ? null
@@ -832,55 +745,13 @@ export function buildCatalogItemDetails(
                 value: formatByteSize(asset["file:size"])
             });
         }
-        const renderingMetadata = asset["eolab:rendering"];
-        if (renderingMetadata !== undefined) {
-            assetMetadata.push(
-                {
-                    label: "Storage profile",
-                    value: asset.type.includes("profile=cloud-optimized")
-                        ? "Cloud Optimized GeoTIFF"
-                        : "GeoTIFF"
-                },
-                {
-                    label: "Block shapes",
-                    value: renderingMetadata.block_shapes
-                        .map(
-                            ([height, width]) =>
-                                `${width} × ${height} pixels`
-                        )
-                        .join(" · ")
-                },
-                {
-                    label: "Overview storage",
-                    value: {
-                        none: "None",
-                        internal: "Internal",
-                        external: "External sidecar"
-                    }[renderingMetadata.overview_storage]
-                },
-                {
-                    label: "Overview factors",
-                    value: renderingMetadata.overview_factors
-                        .map((factors, bandIndex) =>
-                            factors.length === 0
-                                ? `Band ${bandIndex + 1}: None`
-                                : `Band ${bandIndex + 1}: ${factors
-                                      .map((factor) => `${factor}×`)
-                                      .join(", ")}`
-                        )
-                        .join(" · ")
-                },
-                {
-                    label: "Compression",
-                    value: renderingMetadata.compression ?? "None"
-                },
-                {
-                    label: "Estimated full-resolution pixel data",
-                    value: formatByteSize(
-                        renderingMetadata.estimated_uncompressed_bytes
-                    )
-                }
-            );
+        if (asset.type?.startsWith("image/tiff")) {
+            assetMetadata.push({
+                label: "Storage profile",
+                value: asset.type.includes("profile=cloud-optimized")
+                    ? "Cloud Optimized GeoTIFF"
+                    : "GeoTIFF"
+            });
         }
 
         const bands = (asset["raster:bands"] ?? []).map((band, bandIndex) => {

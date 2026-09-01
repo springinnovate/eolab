@@ -392,7 +392,7 @@ export class RasterControlsView {
      * Mark the active histogram-area choice without changing availability.
      *
      * @param {"none"|"wholeRaster"|"selectedArea"|"temporaryAoi"} mode
-     * Active area, or no selected histogram area for a sampled raster.
+     * Active area, or no selected histogram area for the raster.
      * @param {string} [label=""] Optional semantic histogram scope label.
      * @return {void}
      */

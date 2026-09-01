@@ -133,23 +133,15 @@ function canRetryRasterStatistics(error) {
  * the top visible rasters and synchronize analysis without choosing a style target.
  * @property {(position:{lng:number,lat:number}) => boolean} exploreAt Select
  * one validated map window and request its histogram when analysis is active.
- * @property {(key:string) => boolean} openStyle Select a retained or sampled
- * raster for editing; return false when the key has no raster session.
+ * @property {(key:string) => boolean} openStyle Select a retained raster for
+ * editing; return false when the key has no raster session.
  * @property {() => void} closeStyle Flush a pending edit and release its target.
  * @property {() => void} refreshStyle Refresh the editing target's availability
  * and percentile controls, discarding pending work if the target disappeared.
- * @property {(key:string) => Object|null} getSampledStyleTarget Return the
- * matching sampled preview's key, label, and visibility flags, or null.
  * @property {(item:Object) => void} activateAnalysis Start independent raster
  * analysis controls without requiring a renderer.
  * @property {(item:Object|null) => void} deactivateAnalysis Remove a matching
  * analysis-only session and restore retained map-layer controls.
- * @property {(item:Object,style:Object,onStyleChange:(style:Object)=>void)
- * => void} activateSampled Edit one visible browser-rendered sampled raster.
- * @property {(item:Object,style:Object) => void} updateSampledInitialStyle
- * Adopt the first finite sampled range unless the user already edited it.
- * @property {(item:Object) => void} removeSampled Remove matching sampled
- * raster controls without removing its map presentation.
  * @property {(item: Object) => boolean} contains Return whether an Item is
  * retained in the layer stack.
  * @property {(item: Object) => void} remove Remove one Item from the stack.
@@ -266,7 +258,6 @@ export function initializeRasterViewer(
         view: layerStackView ?? new MapLayerStackView(),
         onLayersChange,
     });
-    let sampledRasterSession = null;
     let analysisRasterSession = null;
     let activeLayerKey = null;
     let rasterStyle = { ...DEFAULT_RASTER_STYLE };
@@ -300,16 +291,6 @@ export function initializeRasterViewer(
     let bivariateSelectedWindowSizeKm = null;
 
     /**
-     * Return whether the shared controls currently own a sampled raster.
-     *
-     * @return {boolean} Whether a non-WMS sampled session is active.
-     */
-    function isActiveSampledRaster() {
-        return sampledRasterSession !== null &&
-            activeLayerKey === sampledRasterSession.key;
-    }
-
-    /**
      * Return whether shared controls own a renderer-independent session.
      *
      * @return {boolean} Whether analysis-only controls are active.
@@ -322,12 +303,9 @@ export function initializeRasterViewer(
     /**
      * Return the active non-WMS session, if one owns the shared controls.
      *
-     * @return {Object|null} Sampled or analysis-only session.
+     * @return {Object|null} Analysis-only session.
      */
     function activeDetachedRasterSession() {
-        if (isActiveSampledRaster()) {
-            return sampledRasterSession;
-        }
         return isActiveAnalysisRaster() ? analysisRasterSession : null;
     }
 
@@ -368,7 +346,7 @@ export function initializeRasterViewer(
      *
      * The session is deliberately not inserted into the map-layer stack. It
      * gives pixel and statistics analysis an owner while the selected raster
-     * has no WMS or adaptive-detail presentation.
+     * has no WMS presentation.
      *
      * @param {Object} item Selected Catalog raster Item.
      * @return {Object} Analysis-only interaction state.
@@ -435,7 +413,7 @@ export function initializeRasterViewer(
     /**
      * Detach renderer-neutral state from a renderer session.
      *
-     * @param {Object} source Active WMS or adaptive-detail session.
+     * @param {Object} source Active WMS session.
      * @return {Object} Analysis-only session with the same area and controls.
      */
     function detachAnalysisSession(source) {
@@ -471,13 +449,12 @@ export function initializeRasterViewer(
         if (retainedSession !== null) {
             return retainedSession;
         }
-        for (const session of [sampledRasterSession, analysisRasterSession]) {
-            if (
-                session !== null &&
-                (getCatalogItemKey(session.item) === key || session.key === key)
-            ) {
-                return session;
-            }
+        const session = analysisRasterSession;
+        if (
+            session !== null &&
+            (getCatalogItemKey(session.item) === key || session.key === key)
+        ) {
+            return session;
         }
         return null;
     }
@@ -895,11 +872,10 @@ export function initializeRasterViewer(
     /**
      * Return all visible raster records in top-first map order.
      *
-     * A sampled preview precedes retained WMS rasters because it is drawn on
-     * top. Hidden layers and non-raster adapters are excluded.
+     * Hidden layers and non-raster adapters are excluded.
      *
-     * @return {Object[]} Retained records and an optional preview record with
-     * entry, state, and adapter fields; empty when no raster is visible.
+     * @return {Object[]} Retained records with entry, state, and adapter
+     * fields; empty when no raster is visible.
      */
     function allVisibleRasterRecords() {
         const records = mapLayers.retainedRecords.filter(
@@ -910,13 +886,6 @@ export function initializeRasterViewer(
              */
             ({ adapter, entry }) => adapter === rasterMapLayerAdapter && entry.visible
         );
-        // The explicit low-resolution preview is drawn above retained WMS
-        // overlays and still owns its existing styling and analysis controls.
-        if (sampledRasterSession !== null) records.unshift({
-            entry: { key: sampledRasterSession.key, item: sampledRasterSession.item,
-                label: sampledRasterSession.label, visible: true },
-            state: sampledRasterSession, adapter: rasterMapLayerAdapter,
-        });
         return records;
     }
 
@@ -991,7 +960,7 @@ export function initializeRasterViewer(
             /**
              * Extract identity while preserving top-first histogram order.
              * @param {{entry:Object}} record Visible raster record.
-             * @return {string} Stable retained or sampled-preview key.
+             * @return {string} Stable retained raster key.
              */
             ({ entry }) => entry.key
         ));
@@ -1046,7 +1015,6 @@ export function initializeRasterViewer(
             deactivateActiveLayer();
             analysisRasterSession = null;
             if (primaryIsRetained) mapLayers.activate(primaryKey);
-            else if (sampledRasterSession !== null) activateDetachedSession(sampledRasterSession);
             else {
                 controlsView.setControlsVisible(false);
                 controlsView.clearStatistics();
@@ -2141,16 +2109,13 @@ export function initializeRasterViewer(
     /**
      * Restore one renderer-detached session into shared viewer controls.
      *
-     * @param {Object} session Sampled-renderer or analysis-only interaction
-     * state.
+     * @param {Object} session Analysis-only interaction state.
      * @return {void}
      */
     function activateDetachedSession(session) {
         loadActiveLayerSession(session);
         controlsView.setControlsVisible(true);
-        presentActiveRenderingAvailability(
-            session === sampledRasterSession
-        );
+        presentActiveRenderingAvailability(false);
         controlsView.setActiveLayer(session.label, true);
         presentActiveStyle(rasterStyle, session.paletteName);
         resetRasterPercentileControls();
@@ -2193,8 +2158,8 @@ export function initializeRasterViewer(
     /**
      * Activate renderer-independent analysis for one selected Catalog raster.
      *
-     * A retained WMS layer or active adaptive-detail layer remains the parent
-     * session when one exists. Otherwise this method presents the same pixel,
+     * A retained WMS layer remains the parent session when one exists.
+     * Otherwise this method presents the same pixel,
      * area-selection, histogram, percentile, and color controls without
      * publishing or constructing a map raster layer.
      * In visible-layer mode, ignores the catalog selection and synchronizes
@@ -2229,15 +2194,6 @@ export function initializeRasterViewer(
                 copyRasterInteractionState(retainedSession, analysisSession);
             }
             activateLayer(retainedKey);
-            return;
-        }
-        const sampledKey = `detail:${retainedKey}`;
-        if (sampledRasterSession?.key === sampledKey) {
-            if (!isActiveSampledRaster()) {
-                deactivateActiveLayer();
-                analysisRasterSession = null;
-                activateDetachedSession(sampledRasterSession);
-            }
             return;
         }
         deactivateActiveLayer();
@@ -2288,146 +2244,6 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Activate shared appearance and click-histogram controls for one sampled
-     * raster that is already visible through the detail-preview controller.
-     *
-     * The session never publishes WMS. Pixel and statistics controllers receive
-     * only the active Catalog Item and their own analysis inputs, exactly as
-     * they do for a WMS-rendered raster.
-     *
-     * @param {Object} item Selected overview-limited Catalog raster.
-     * @param {Object} style Initial min/median/max shared raster color style.
-     * @param {(style:Object) => void} onStyleChange Browser-image recoloring
-     * callback owned by the detail-preview controller.
-     * @return {void}
-     * @throws {TypeError} If the recoloring callback is absent.
-     * @throws {Error} If the initial shared raster style is invalid.
-     */
-    function activateSampled(item, style, onStyleChange) {
-        if (typeof onStyleChange !== "function") {
-            throw new TypeError("Sampled raster recoloring callback is required");
-        }
-        buildRasterStyleEnvironment(style);
-        mapLayers.recordIntent();
-        const analysisSession = matchingAnalysisSession(item);
-        deactivateActiveLayer();
-        const key = `detail:${getCatalogItemKey(item)}`;
-        const initialStyle = Object.freeze({ ...style });
-        sampledRasterSession = {
-            key,
-            item,
-            label: `${getCatalogRasterBasename(item)} (sampled raster)`,
-            rasterStyle: { ...initialStyle },
-            initialStyle,
-            onStyleChange,
-            paletteName: "blue-yellow-red",
-            rasterStyleWasEdited: false,
-            rasterStatistics: null,
-            rasterStatisticsIsApplicable: false,
-            wholeRasterStatistics: null,
-            wholeRasterStatisticsState: "idle",
-            wholeRasterStatisticsError: null,
-            selectedRasterBounds: null,
-            selectedTemporaryAoi: availableTemporaryAoi,
-            selectedRasterWindowSizeKm: null,
-            selectedRasterStatistics: null,
-            selectedRasterStatisticsState: "idle",
-            selectedRasterStatisticsError: null,
-        };
-        if (analysisSession !== null) {
-            copyRasterInteractionState(
-                sampledRasterSession,
-                analysisSession,
-                false
-            );
-        }
-        analysisRasterSession = null;
-        activateDetachedSession(sampledRasterSession);
-    }
-
-    /**
-     * Adopt a newly established first-finite sampled range when still automatic.
-     *
-     * An all-nodata base grid initially uses the application fallback. The
-     * detail-preview controller can later establish a finite current-view
-     * minimum/median/maximum; this method synchronizes the controls without
-     * overriding any user style edit.
-     *
-     * @param {Object} item Catalog Item that may own the sampled session.
-     * @param {Object} style Newly established shared sampled-raster style.
-     * @return {void}
-     * @throws {Error} If a matching session receives an invalid style.
-     */
-    function updateSampledInitialStyle(item, style) {
-        const expectedKey = `detail:${getCatalogItemKey(item)}`;
-        if (
-            sampledRasterSession?.key !== expectedKey ||
-            (
-                isActiveSampledRaster()
-                    ? rasterStyleWasEdited
-                    : sampledRasterSession.rasterStyleWasEdited
-            )
-        ) {
-            return;
-        }
-        buildRasterStyleEnvironment(style);
-        const establishedStyle = Object.freeze({ ...style });
-        sampledRasterSession.initialStyle = establishedStyle;
-        sampledRasterSession.rasterStyle = { ...establishedStyle };
-        if (!isActiveSampledRaster()) {
-            return;
-        }
-        rasterStyle = { ...establishedStyle };
-        presentActiveStyle(
-            rasterStyle,
-            sampledRasterSession.paletteName
-        );
-        if (rasterStatistics !== null) {
-            controlsView.renderHistogram(rasterStatistics, rasterStyle, getHistogramValueLabel(activeRasterItem));
-        }
-        saveActiveLayerSession();
-        if (bivariateMode.contains(getCatalogItemKey(item))) {
-            applyBivariatePresentation();
-            renderLayerStack();
-        }
-    }
-
-    /**
-     * Remove the shared-control session for a matching sampled raster.
-     *
-     * @param {Object} item Catalog Item that may own the sampled session.
-     * @return {void}
-     */
-    function removeSampled(item) {
-        const expectedKey = `detail:${getCatalogItemKey(item)}`;
-        if (sampledRasterSession?.key !== expectedKey) {
-            return;
-        }
-        mapLayers.recordIntent();
-        const wasActive = isActiveSampledRaster();
-        if (wasActive) {
-            deactivateActiveLayer();
-        }
-        const detachedSession = wasActive
-            ? detachAnalysisSession(sampledRasterSession)
-            : null;
-        sampledRasterSession = null;
-        if (detachedSession !== null) {
-            analysisRasterSession = detachedSession;
-            activateDetachedSession(analysisRasterSession);
-            return;
-        }
-        const nextActiveKey = mapLayers.activeKey;
-        if (nextActiveKey === null) {
-            controlsView.setControlsVisible(false);
-            controlsView.hidePixelProbe();
-            renderLayerStack();
-            return;
-        }
-        activateLayer(nextActiveKey);
-    }
-
-    /**
      * Find the session that owns style edits, independently of analysis.
      *
      * An explicit editing key takes precedence. Without one, legacy callers
@@ -2440,8 +2256,7 @@ export function initializeRasterViewer(
         return editingLayerKey === null
             ? activeDetachedRasterSession() ??
                 mapLayers.getRecord(activeLayerKey)?.state ?? null
-            : mapLayers.getRecord(editingLayerKey)?.state ??
-                (sampledRasterSession?.key === editingLayerKey ? sampledRasterSession : null);
+            : mapLayers.getRecord(editingLayerKey)?.state ?? null;
     }
 
     /**
@@ -2473,7 +2288,7 @@ export function initializeRasterViewer(
      * Select a style target without transferring histogram or probe ownership.
      * Flushes any pending edit on the previous target before looking up the key.
      *
-     * @param {string} key Retained raster key or sampled-preview session key.
+     * @param {string} key Retained raster key.
      * @return {boolean} True after initializing the target's style controls;
      * false for missing or non-raster targets, leaving no explicit style target.
      */
@@ -2481,7 +2296,7 @@ export function initializeRasterViewer(
         closeStyle();
         const record = mapLayers.getRecord(key);
         const session = record?.adapter === rasterMapLayerAdapter
-            ? record.state : sampledRasterSession?.key === key ? sampledRasterSession : null;
+            ? record.state : null;
         if (session === null) return false;
         saveActiveLayerSession();
         editingLayerKey = key;
@@ -2532,7 +2347,7 @@ export function initializeRasterViewer(
      * Apply a style to the target's renderer and session, not its list position.
      * Also synchronizes shared state if this target owns active analysis.
      *
-     * @param {Object} session Retained WMS or sampled-preview raster session.
+     * @param {Object} session Retained WMS raster session.
      * @param {Object} style Numeric range and color stops to validate and apply.
      * @param {string} paletteName Registered palette identity or "custom".
      * @param {boolean} wasEdited Whether a user edit should block automatic ranges.
@@ -2541,8 +2356,7 @@ export function initializeRasterViewer(
      */
     function applySessionStyle(session, style, paletteName, wasEdited) {
         const environment = buildRasterStyleEnvironment(style);
-        if (session.onStyleChange) session.onStyleChange(style);
-        else mapLayers.getLeafletLayer(session.key)?.setParams({
+        mapLayers.getLeafletLayer(session.key)?.setParams({
             styles: "dynamic-raster", env: environment,
         });
         session.rasterStyle = { ...style };
@@ -2579,7 +2393,7 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Commit valid inputs to the editing session's WMS or sampled renderer.
+     * Commit valid inputs to the editing session's WMS renderer.
      * Cancels the debounce timer; missing targets, paired-mode targets, and
      * invalid input produce no style update. Failures are shown in the controls.
      *
@@ -2635,19 +2449,18 @@ export function initializeRasterViewer(
 
     /**
      * Populate controls with the editing target's initial colors and range.
-     * Uses a sampled initial style, whole-raster percentiles, or defaults, in
-     * that order. Does not commit the style to its renderer.
+     * Uses whole-raster percentiles or defaults. Does not commit the style to
+     * its renderer.
      *
      * @return {void}
      */
     function resetRasterStyle() {
         const session = editingSession();
-        const style = session?.initialStyle ??
-            (session?.wholeRasterStatistics == null
+        const style = session?.wholeRasterStatistics == null
                 ? { ...DEFAULT_RASTER_STYLE }
                 : deriveRasterStyleFromStatistics(
                     DEFAULT_RASTER_STYLE, session.wholeRasterStatistics
-                ));
+                );
         controlsView.setStyle({
             ...style, minimumOpacity: 1, midpointOpacity: 1, maximumOpacity: 1
         }, "blue-yellow-red");
@@ -3668,7 +3481,6 @@ export function initializeRasterViewer(
         leaveBivariateMode(null, false);
         deactivateActiveLayer();
         mapLayers.deactivatePresentation();
-        sampledRasterSession = null;
         analysisRasterSession = null;
         mapLayers.removeOwned(rasterMapLayerAdapter);
         pixelProbeController.clear();
@@ -3812,9 +3624,6 @@ export function initializeRasterViewer(
              */
             (record) => record.state
         );
-        if (sampledRasterSession !== null) {
-            sessions.push(sampledRasterSession);
-        }
         if (analysisRasterSession !== null) {
             sessions.push(analysisRasterSession);
         }
@@ -3936,22 +3745,8 @@ export function initializeRasterViewer(
         openStyle,
         closeStyle,
         refreshStyle,
-        /**
-         * Describe a matching sampled preview for the floating style editor.
-         *
-         * @param {string} key Candidate sampled-preview session key.
-         * @return {{key:string,label:string,visible:boolean,sampled:boolean}|null}
-         * Matching preview identity with visible and sampled set to true, or
-         * null when no preview owns the key. Does not change the editing target.
-         */
-        getSampledStyleTarget: (key) => sampledRasterSession?.key === key ? {
-            key, label: sampledRasterSession.label, visible: true, sampled: true,
-        } : null,
         activateAnalysis,
         deactivateAnalysis,
-        activateSampled,
-        updateSampledInitialStyle,
-        removeSampled,
         contains,
         remove,
         setTemporaryAoi,
@@ -3962,8 +3757,7 @@ export function initializeRasterViewer(
          * @return {boolean} Whether any raster layer is displayed.
          */
         get isDisplayed() {
-            return mapLayers.visibleCountFor(rasterMapLayerAdapter) > 0 ||
-                sampledRasterSession !== null;
+            return mapLayers.visibleCountFor(rasterMapLayerAdapter) > 0;
         },
     };
 }
