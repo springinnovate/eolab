@@ -5,7 +5,6 @@
  * styling, ordering, and removal intent. It does not publish
  * datasets, enforce state invariants, or manipulate Leaflet layers.
  */
-import { MAX_VISIBLE_MAP_LAYERS } from "./layer-stack.js";
 
 /**
  * Resolve one required stack element.
@@ -55,10 +54,6 @@ export class MapLayerStackView {
             documentContext,
             "#raster-layer-stack-status"
         );
-        this.limit = requireLayerStackElement(
-            documentContext,
-            "#raster-layer-stack-limit"
-        );
         /** @type {MapLayerStackViewHandlers|null} */
         this.handlers = null;
     }
@@ -97,21 +92,16 @@ export class MapLayerStackView {
      */
     render(layers, activeKey, requestedFocus = null) {
         const retainedFocus = requestedFocus ?? this.#readFocusedAction();
-        const visibleCount = layers.filter((layer) => layer.visible).length;
         const focusTargets = new Map();
         const rows = layers.map((layer, index) => this.#buildRow(
             layer,
             index,
             layers.length,
-            visibleCount,
             activeKey,
             focusTargets
         ));
         this.list.replaceChildren(...rows);
         this.root.hidden = layers.length === 0;
-        this.limit.textContent = visibleCount >= MAX_VISIBLE_MAP_LAYERS
-            ? "Two layers are visible. Hide one before showing another."
-            : "";
         if (retainedFocus !== null) {
             const action = retainedFocus.action.startsWith("move-") || retainedFocus.action === "remove"
                 ? "actions" : retainedFocus.action;
@@ -146,7 +136,6 @@ export class MapLayerStackView {
      * @param {Object} layer Layer presentation snapshot.
      * @param {number} index Top-first row index.
      * @param {number} layerCount Total retained layers.
-     * @param {number} visibleCount Current visible count.
      * @param {string|null} activeKey Active layer key.
      * @param {Map<string,Element>} focusTargets Rendered focus targets.
      * @return {HTMLLIElement} Complete accessible row.
@@ -155,7 +144,6 @@ export class MapLayerStackView {
         layer,
         index,
         layerCount,
-        visibleCount,
         activeKey,
         focusTargets
     ) {
@@ -169,11 +157,9 @@ export class MapLayerStackView {
         const visibility = this.documentContext.createElement("input");
         visibility.type = "checkbox";
         visibility.checked = layer.visible;
-        visibility.disabled = !layer.visible && visibleCount >= MAX_VISIBLE_MAP_LAYERS;
         visibility.dataset.layerKey = layer.key;
         visibility.dataset.layerAction = "visibility";
         visibility.setAttribute("aria-label", `${accessibleName} visible`);
-        visibility.setAttribute("aria-describedby", "raster-layer-stack-limit");
         visibility.addEventListener("change", () =>
             this.handlers?.onVisibility(layer.key, visibility.checked)
         );
@@ -183,6 +169,14 @@ export class MapLayerStackView {
         name.textContent = layer.label;
         name.title = accessibleName;
         label.append(visibility, name);
+        if (layer.roleBadge !== null && layer.roleBadge !== undefined) {
+            const roleBadge = this.documentContext.createElement("span");
+            roleBadge.className = "map-layer-role-badge";
+            roleBadge.textContent = layer.roleBadge.label;
+            roleBadge.title = layer.roleBadge.description;
+            roleBadge.setAttribute("aria-label", layer.roleBadge.description);
+            label.append(roleBadge);
+        }
         const style = this.#button(
             "Style…", `Style ${accessibleName}`, layer.key, "style",
             () => this.handlers?.onStyle(layer.key), focusTargets

@@ -1,11 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-  MAX_VISIBLE_MAP_LAYERS,
-  MapLayerStack,
-  MapLayerVisibilityLimitError,
-} from "../../src/map-layers/layer-stack.js";
+import { MapLayerStack } from "../../src/map-layers/layer-stack.js";
 
 function catalogItem(collection, id) {
   return { collection, id };
@@ -48,7 +44,7 @@ test("new layers are inserted in top-first drawing order", () => {
   );
 });
 
-test("at most two retained map layers can be visible", () => {
+test("retained map layers may all be visible", () => {
   const stack = new MapLayerStack();
   const first = stack.add(catalogItem("collection", "first"), "first.tif").entry;
   const second = stack.add(
@@ -57,22 +53,18 @@ test("at most two retained map layers can be visible", () => {
   ).entry;
   const third = stack.add(catalogItem("collection", "third"), "third.tif").entry;
 
-  assert.equal(MAX_VISIBLE_MAP_LAYERS, 2);
   assert.equal(first.visible, true);
   assert.equal(second.visible, true);
-  assert.equal(third.visible, false);
-  assert.equal(stack.visibleCount, 2);
-  assert.throws(
-    () => stack.setVisible(third.key, true),
-    MapLayerVisibilityLimitError,
-  );
+  assert.equal(third.visible, true);
+  assert.equal(stack.visibleCount, 3);
 
   stack.setVisible(first.key, false);
-  stack.setVisible(third.key, true);
 
   assert.equal(stack.visibleCount, 2);
   assert.equal(first.visible, false);
   assert.equal(third.visible, true);
+  stack.setVisible(first.key, true);
+  assert.equal(stack.visibleCount, 3);
   assert.throws(() => stack.setVisible(second.key, "yes"), TypeError);
 });
 
@@ -81,6 +73,7 @@ test("active selection is independent of layer visibility", () => {
   const first = stack.add(catalogItem("collection", "first"), "first.tif").entry;
   stack.add(catalogItem("collection", "second"), "second.tif");
   const hidden = stack.add(catalogItem("collection", "hidden"), "hidden.tif").entry;
+  stack.setVisible(hidden.key, false);
 
   assert.equal(hidden.visible, false);
   assert.equal(stack.activeKey, hidden.key);

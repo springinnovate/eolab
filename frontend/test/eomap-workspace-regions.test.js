@@ -268,7 +268,6 @@ test("Map layers has one heading and collapse control with no nested list widget
     assert.match(rendering.source, /No map layers yet\. Add an item from Catalog\./);
     assert.match(stack.source, /id="raster-layer-list" aria-label="Map layers"/);
     assert.match(stack.source, /id="raster-layer-stack-status"[^>]*role="status"/s);
-    assert.match(stack.source, /id="raster-layer-stack-limit"/);
     assert.doesNotMatch(stack.source, /aria-expanded|aria-controls/);
     for (const obsolete of [
         "eomap-map-layers-heading", "open-map-layer-histograms",

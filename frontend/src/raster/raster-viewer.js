@@ -893,15 +893,15 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Return up to two visible raster records in top-first map order.
+     * Return all visible raster records in top-first map order.
      *
      * A sampled preview precedes retained WMS rasters because it is drawn on
      * top. Hidden layers and non-raster adapters are excluded.
      *
-     * @return {Object[]} Retained records or a preview record with entry,
-     * state, and adapter fields; an empty array when no raster is visible.
+     * @return {Object[]} Retained records and an optional preview record with
+     * entry, state, and adapter fields; empty when no raster is visible.
      */
-    function visibleRasterRecords() {
+    function allVisibleRasterRecords() {
         const records = mapLayers.retainedRecords.filter(
             /**
              * Exclude hidden layers and layers owned by another renderer.
@@ -917,15 +917,62 @@ export function initializeRasterViewer(
                 label: sampledRasterSession.label, visible: true },
             state: sampledRasterSession, adapter: rasterMapLayerAdapter,
         });
-        return records.slice(0, 2);
+        return records;
+    }
+
+    /**
+     * Return the bounded top-two raster-analysis inputs in map order.
+     *
+     * Rendering remains independent: visible rasters below this pair stay on
+     * the map but never enter automatic histogram or bivariate requests.
+     *
+     * @return {Object[]} Zero, one, or two visible raster records.
+     */
+    function visibleRasterRecords() {
+        return allVisibleRasterRecords().slice(0, 2);
+    }
+
+    /**
+     * Move an active 2D analysis to the newly derived top-two raster pair.
+     *
+     * The current axis orientation and bounded sample are preserved. Pending
+     * work for the old pair is canceled before its ordinary presentation is
+     * restored, so stale responses cannot repaint the new pair.
+     *
+     * @param {Object[]} previousCandidates Previous top-two candidates.
+     * @return {void}
+     */
+    function migrateBivariatePair(previousCandidates) {
+        const previousKeys = [bivariateMode.xKey, bivariateMode.yKey];
+        const axesWereSwapped = previousCandidates.length === 2 &&
+            bivariateMode.xKey === previousCandidates[1].key &&
+            bivariateMode.yKey === previousCandidates[0].key;
+        pairedStatisticsController.clear();
+        pairedPixelProbeController.clear();
+        bivariateStatistics = null;
+        controlsView.clearPairedStatistics?.();
+        restoreOrdinaryRasterPresentation(previousKeys);
+        bivariateMode.enter(bivariateCandidates.map(
+            /** @param {Object} candidate Newly derived analysis candidate. */
+            (candidate) => candidate.key
+        ));
+        if (axesWereSwapped) bivariateMode.swap();
+        applyBivariatePresentation();
+        const presentation = getBivariatePresentation();
+        pairedPixelProbeController.activate({
+            xItem: presentation.xItem,
+            yItem: presentation.yItem,
+        });
+        requestBivariateStatistics();
     }
 
     /**
      * Application policy: histograms follow visible map rasters. Catalog-only
      * analysis remains available to other callers of this reusable viewer.
-     * Activates the top raster, starts missing secondary statistics, and ends
-     * 2D mode if pair membership changes. Does nothing during clear().
-     * Never call this to choose a style target.
+     * Activates the top raster and starts missing statistics only for the
+     * bounded top-two analysis pair. While 2D mode is active, pair membership
+     * migrates with visibility and order. Does nothing during clear(). Never
+     * call this to choose a style target.
      *
      * @return {void}
      */
@@ -933,6 +980,13 @@ export function initializeRasterViewer(
         if (clearing) return;
         followsVisibleLayers = true;
         const records = visibleRasterRecords();
+        const analyzedKeys = new Set(records.map(({ entry }) => entry.key));
+        for (const record of mapLayers.retainedRecords) {
+            if (
+                record.adapter === rasterMapLayerAdapter &&
+                !analyzedKeys.has(record.entry.key)
+            ) cancelLayerHistogramRequest(record.state);
+        }
         const signature = JSON.stringify(records.map(
             /**
              * Extract identity while preserving top-first histogram order.
@@ -950,7 +1004,8 @@ export function initializeRasterViewer(
             return;
         }
         visibleHistogramSignature = signature;
-        if (bivariateMode.active && (
+        const previousCandidates = bivariateCandidates;
+        const pairChanged = bivariateMode.active && (
             records.length !== 2 ||
             records.some(
                 /**
@@ -960,7 +1015,7 @@ export function initializeRasterViewer(
                  */
                 ({ entry }) => !bivariateMode.contains(entry.key)
             )
-        )) leaveBivariateMode("Visible raster layers changed; 2D mode ended.", false);
+        );
         bivariateCandidates = records.map(
             /**
              * Snapshot a visible raster's identity and ordinary range for 2D use.
@@ -976,6 +1031,16 @@ export function initializeRasterViewer(
                 ),
             })
         );
+        let migratedPair = false;
+        if (bivariateMode.active && records.length !== 2) {
+            leaveBivariateMode(
+                "Show at least two raster layers to resume 2D analysis.",
+                false
+            );
+        } else if (pairChanged) {
+            migrateBivariatePair(previousCandidates);
+            migratedPair = true;
+        }
         if (primaryKey !== activeLayerKey ||
             (primaryIsRetained && mapLayers.activeKey !== primaryKey)) {
             deactivateActiveLayer();
@@ -987,16 +1052,19 @@ export function initializeRasterViewer(
                 controlsView.clearStatistics();
             }
         }
-        for (const { entry, state } of records.slice(1)) {
-            if (getLayerHistogramPresentation(state).state === "idle") {
-                const area = currentRasterSamplingArea();
-                setSessionSamplingArea(state, area);
-                void requireLayerHistogramController(state).activate(entry.item, area);
+        if (!bivariateMode.active) {
+            for (const { entry, state } of records.slice(1)) {
+                if (getLayerHistogramPresentation(state).state === "idle") {
+                    const area = currentRasterSamplingArea();
+                    setSessionSamplingArea(state, area);
+                    void requireLayerHistogramController(state).activate(entry.item, area);
+                }
             }
         }
         renderLayerHistogramSummaries();
         renderBivariateAvailability();
         refreshStyle();
+        if (migratedPair) renderLayerStack();
     }
 
     /**
@@ -1201,10 +1269,13 @@ export function initializeRasterViewer(
      */
     function refreshRetainedLayerHistograms(samplingArea, onlyMissing = false) {
         saveActiveLayerSession();
+        const analyzedKeys = followsVisibleLayers
+            ? new Set(visibleRasterRecords().map(({ entry }) => entry.key))
+            : null;
         for (const record of mapLayers.retainedRecords) {
             if (
                 record.adapter !== rasterMapLayerAdapter ||
-                (followsVisibleLayers && !record.entry.visible) ||
+                (analyzedKeys !== null && !analyzedKeys.has(record.entry.key)) ||
                 record.entry.key === activeLayerKey
             ) {
                 continue;
@@ -1421,13 +1492,20 @@ export function initializeRasterViewer(
     function renderBivariateAvailability(message = null) {
         const eligible = bivariateCandidates;
         const canEnter = eligible.length === 2;
+        const hasUnanalyzedRasters = allVisibleRasterRecords().length > 2;
+        const extraGuidance = hasUnanalyzedRasters
+            ? " Other visible rasters stay on the map without histogram analysis."
+            : "";
         const guidance = message ?? (
             bivariateMode.active
-                ? "2D comparison styles both rasters with coordinated colors and blending at 100% opacity."
+                ? "2D analyzes the X/Y-badged rasters with coordinated colors " +
+                  "and blending at 100% opacity. Reorder Map layers to change " +
+                  `the pair.${extraGuidance}`
                 : canEnter
-                    ? "2D compares both rasters and also changes map colors and blending at 100% opacity."
-                    : "Show two single-band raster layers to enable the " +
-                      "2D histogram."
+                    ? "2D analyzes the top two visible rasters. Reorder Map " +
+                      `layers to choose the pair.${extraGuidance}`
+                    : "Show at least two single-band raster layers to enable " +
+                      "the 2D histogram."
         );
         controlsView.setBivariateAvailability?.(canEnter, guidance);
     }
@@ -1691,6 +1769,12 @@ export function initializeRasterViewer(
             return {
                 opacityLocked,
                 effectiveOpacity: opacityLocked ? 1 : record.entry.opacity,
+                roleBadge: opacityLocked ? {
+                    label: record.entry.key === bivariateMode.xKey ? "X" : "Y",
+                    description: record.entry.key === bivariateMode.xKey
+                        ? "X axis raster"
+                        : "Y axis raster",
+                } : null,
                 legend: {
                     kind: "gradient",
                     gradient: definition.gradient,

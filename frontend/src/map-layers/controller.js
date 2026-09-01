@@ -2,10 +2,7 @@
 
 import { getCatalogItemKey } from "../catalog-item-identity.js";
 import { LeafletLayerSet } from "./leaflet-layer-set.js";
-import {
-    MapLayerStack,
-    MapLayerVisibilityLimitError,
-} from "./layer-stack.js";
+import { MapLayerStack } from "./layer-stack.js";
 import { MapLayerStackView } from "./layer-stack-view.js";
 
 /**
@@ -15,8 +12,8 @@ import { MapLayerStackView } from "./layer-stack-view.js";
  * @property {(context:Object)=>Object} createState Create adapter-owned state.
  * @property {(record:Object,onTileError:()=>void)=>Object} createLayer Create a
  * Leaflet-compatible layer for one publication.
- * @property {(record:Object)=>Object} snapshot Return presentation-ready legend
- * and optional feature-owned snapshot fields.
+ * @property {(record:Object)=>Object} snapshot Return presentation-ready legend,
+ * optional role badge, and other feature-owned snapshot fields.
  * @property {(record:Object)=>Object} [exportSavedState] Return validated,
  * portable owner-specific style state.
  * @property {(record:Object,savedState:Object)=>Promise<void>|void}
@@ -216,17 +213,7 @@ export class MapLayerController {
      * @return {void}
      */
     setVisible(key, visible) {
-        let entry;
-        try {
-            entry = this.stack.setVisible(key, visible);
-        } catch (error) {
-            if (!(error instanceof MapLayerVisibilityLimitError)) {
-                throw error;
-            }
-            this.view.setStatus(error.message);
-            this.render({ key, action: "visibility" });
-            return;
-        }
+        const entry = this.stack.setVisible(key, visible);
         this.leafletLayers.setVisible(key, visible);
         const record = this.#requireRecord(key);
         record.adapter.visibilityChanged?.(record, visible);

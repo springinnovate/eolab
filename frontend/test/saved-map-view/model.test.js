@@ -46,6 +46,21 @@ test("saved map model round trips the versioned bounded contract", () => {
   assert.equal(Object.isFrozen(parsed.layers), true);
 });
 
+test("saved map model preserves more than two visible layers", () => {
+  const candidate = savedMapCandidate();
+  for (const id of ["temperature", "vegetation"]) {
+    candidate.layers.push({
+      ...structuredClone(candidate.layers[0]),
+      catalogItem: { collection: "rasters", id },
+    });
+  }
+
+  const saved = createSavedMapView(candidate);
+
+  assert.equal(saved.layers.length, 3);
+  assert.ok(saved.layers.every((layer) => layer.visible));
+});
+
 test("saved map model rejects incompatible, duplicate, and unbounded input", () => {
   const incompatible = createSavedMapView(savedMapCandidate());
   assert.throws(
