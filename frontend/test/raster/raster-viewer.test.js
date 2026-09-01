@@ -711,6 +711,11 @@ test('visible raster histograms follow order, skip vectors and never follow the 
         createLayer: () => h.leaflet.tileLayer.wms('/geoserver/eolab/wms', {}),
         snapshot: () => ({ legend: { kind: 'fixed' } }), tileErrorMessage: 'Vector tile error',
     });
+    const vectorRecord = h.mapLayers.retainedRecords.find(
+        (record) => record.entry.item.id === vector.id,
+    );
+    assert.equal(vectorRecord.entry.visible, true);
+    assert.equal(h.mapLayers.isAttached(vectorRecord.entry.key), true);
     assert.deepEqual(h.controlsView.layerHistograms.map(s => s.label), ['second.tif']);
     h.mapLayers.setVisible(secondKey, false);
     assert.deepEqual(h.controlsView.layerHistograms, []);
@@ -719,6 +724,119 @@ test('visible raster histograms follow order, skip vectors and never follow the 
     assert.deepEqual(h.controlsView.layerHistograms, [], 'Catalog details cannot steal histogram input');
     h.mapLayers.removeKey(firstKey);
     h.viewer.closeStyle();
+    h.destroy();
+});
+
+test('three visible rasters render while only the top two are analyzed', async () => {
+    const requests = [];
+    const h = visibleLayerFixture(async (item, area) => {
+        requests.push({
+            id: item.id.replace(/^geotiff-/, ''),
+            area: area.kind,
+        });
+        return createLayerStatistics(item, selectedBoundsFromArea(area));
+    });
+    const bottom = createRasterItem('bottom');
+    const middle = createRasterItem('middle');
+    const top = createRasterItem('top');
+    await h.viewer.show(bottom);
+    await h.viewer.show(middle);
+    await h.viewer.show(top);
+    await flushPromises();
+
+    assert.equal(h.mapLayers.visibleCount, 3);
+    assert.equal(
+        h.wmsLayers.filter((layer) => h.leafletMap.layers.has(layer)).length,
+        3,
+    );
+    assert.deepEqual(
+        h.controlsView.layerHistograms.map((summary) => summary.label),
+        ['top.tif', 'middle.tif'],
+    );
+
+    requests.length = 0;
+    h.viewer.exploreAt({ lng: -74, lat: 41 });
+    await flushPromises();
+    assert.deepEqual(
+        requests.map(({ id }) => id).sort(),
+        ['middle', 'top'],
+    );
+    h.destroy();
+});
+
+test('active 2D analysis follows the top raster pair and exposes X Y badges', async () => {
+    const pairedRequests = [];
+    const h = visibleLayerFixture(undefined, {
+        loadPairedStatistics: async (xItem, yItem) => {
+            pairedRequests.push([
+                xItem.id.replace(/^geotiff-/, ''),
+                yItem.id.replace(/^geotiff-/, ''),
+            ]);
+            return pairedStatistics();
+        },
+    });
+    await h.viewer.show(createRasterItem('bottom'));
+    await h.viewer.show(createRasterItem('middle'));
+    await h.viewer.show(createRasterItem('top'));
+    await flushPromises();
+    const [top, middle, bottom] = h.mapLayers.snapshots();
+    h.mapLayers.setOpacity(middle.key, 0.35);
+    h.mapLayers.setOpacity(bottom.key, 0.4);
+
+    h.controlsView.handlers.onBivariateModeChange('bivariate');
+    await flushPromises();
+    assert.deepEqual(pairedRequests.at(-1), ['top', 'middle']);
+    assert.deepEqual(
+        h.mapLayers.snapshots().map((layer) => layer.roleBadge?.label ?? null),
+        ['X', 'Y', null],
+    );
+    assert.deepEqual(
+        h.mapLayers.snapshots().map((layer) => layer.opacityLocked),
+        [true, true, false],
+    );
+    assert.equal(h.mapLayers.getLeafletLayer(bottom.key).opacity, 0.4);
+
+    h.controlsView.handlers.onBivariateSwapAxes();
+    await flushPromises();
+    assert.deepEqual(
+        h.mapLayers.snapshots().map((layer) => layer.roleBadge?.label ?? null),
+        ['Y', 'X', null],
+    );
+    assert.deepEqual(pairedRequests.at(-1), ['middle', 'top']);
+
+    h.mapLayers.move(bottom.key, 'up');
+    await flushPromises();
+    assert.equal(h.controlsView.bivariateMode.active, true);
+    assert.deepEqual(
+        h.mapLayers.snapshots().map((layer) => [
+            layer.item.id.replace(/^geotiff-/, ''),
+            layer.roleBadge?.label ?? null,
+        ]),
+        [['top', 'Y'], ['bottom', 'X'], ['middle', null]],
+    );
+    assert.deepEqual(pairedRequests.at(-1), ['bottom', 'top']);
+    assert.equal(h.mapLayers.getLeafletLayer(middle.key).opacity, 0.35);
+    assert.equal(
+        h.mapLayers.getLeafletLayer(middle.key).container.style.mixBlendMode,
+        'normal',
+    );
+
+    h.mapLayers.setVisible(top.key, false);
+    await flushPromises();
+    assert.equal(h.controlsView.bivariateMode.active, true);
+    assert.deepEqual(
+        h.mapLayers.snapshots().map((layer) => [
+            layer.item.id.replace(/^geotiff-/, ''),
+            layer.roleBadge?.label ?? null,
+        ]),
+        [['top', null], ['bottom', 'Y'], ['middle', 'X']],
+    );
+    assert.deepEqual(pairedRequests.at(-1), ['middle', 'bottom']);
+
+    h.mapLayers.setVisible(middle.key, false);
+    assert.equal(h.controlsView.bivariateMode.active, false);
+    assert.ok(h.mapLayers.snapshots().every((layer) => layer.roleBadge === null));
+    assert.equal(h.mapLayers.getLeafletLayer(bottom.key).opacity, 0.4);
     h.destroy();
 });
 
@@ -814,7 +932,7 @@ test('explicit low-resolution previews retain styling and histogram access', asy
     h.destroy();
 });
 
-test('hidden candidates do not request automatic histograms until made visible', async () => {
+test('automatic samples exclude rasters below the top-two pair', async () => {
     const requests = [];
     const h = visibleLayerFixture(async item => {
         requests.push(item.id);
@@ -824,13 +942,18 @@ test('hidden candidates do not request automatic histograms until made visible',
     await h.viewer.show(createRasterItem('second'));
     await h.viewer.show(createRasterItem('hidden'));
     await flushPromises();
-    assert.equal(requests.includes('geotiff-hidden'), false);
-    const [hidden, second] = h.mapLayers.snapshots();
-    h.mapLayers.setVisible(second.key, false);
-    h.mapLayers.setVisible(hidden.key, true);
+    requests.length = 0;
+    h.viewer.exploreAt({ lng: -74, lat: 41 });
     await flushPromises();
-    assert.equal(requests.includes('geotiff-hidden'), true);
-    assert.deepEqual(h.controlsView.layerHistograms.map(s => s.label), ['hidden.tif', 'first.tif']);
+    assert.equal(requests.includes('geotiff-first'), false);
+    const [, , first] = h.mapLayers.snapshots();
+    h.mapLayers.move(first.key, 'up');
+    h.mapLayers.move(first.key, 'up');
+    await flushPromises();
+    assert.deepEqual(
+        h.controlsView.layerHistograms.map(s => s.label),
+        ['first.tif', 'hidden.tif'],
+    );
     h.destroy();
 });
 
@@ -915,7 +1038,7 @@ test("selecting 2D opens paired analysis without a map interaction", async () =>
     assert.equal(pairedPixelRequests.length, 0);
     assert.match(
         controlsView.bivariateAvailability.guidance,
-        /2D comparison styles both rasters.*blending at 100% opacity/
+        /2D analyzes the X\/Y-badged rasters.*blending at 100% opacity/
     );
     assert.equal(controlsView.appearanceEnabled, false);
     assert.equal(controlsView.univariateHistogramVisible, false);
@@ -2050,7 +2173,7 @@ test("manual style edits prevent late whole-raster automatic rescaling", async (
     viewer.destroy();
 });
 
-test("raster viewer retains candidates while enforcing two visible layers", async () => {
+test("raster viewer renders every retained layer", async () => {
     const leafletMap = createFakeMap();
     const { leaflet, wmsLayers } = createFakeLeaflet();
     const controlsView = createFakeControlsView();
@@ -2095,31 +2218,31 @@ test("raster viewer retains candidates while enforcing two visible layers", asyn
     assert.deepEqual(
         layerStackView.layers.map((layer) => [layer.item.id, layer.visible]),
         [
-            [third.id, false],
+            [third.id, true],
             [second.id, true],
             [first.id, true],
         ]
     );
     assert.equal(
         wmsLayers.filter((layer) => leafletMap.layers.has(layer)).length,
-        2
+        3
     );
     assert.deepEqual(controlsView.activeLayer, {
         label: "third.tif",
-        visible: false,
+        visible: true,
     });
 
     const thirdKey = layerStackView.layers[0].key;
     const firstKey = layerStackView.layers[2].key;
-    layerStackView.handlers.onVisibility(thirdKey, true);
-    assert.equal(layerStackView.layers[0].visible, false);
-    assert.match(layerStackView.status, /Only 2 map layers/);
-
     layerStackView.handlers.onVisibility(firstKey, false);
-    layerStackView.handlers.onVisibility(thirdKey, true);
     assert.equal(
         wmsLayers.filter((layer) => leafletMap.layers.has(layer)).length,
         2
+    );
+    layerStackView.handlers.onVisibility(firstKey, true);
+    assert.equal(
+        wmsLayers.filter((layer) => leafletMap.layers.has(layer)).length,
+        3
     );
     assert.equal(wmsLayers[2].opacity, 1);
     mapLayerController.setOpacity(thirdKey, 0.4);
@@ -2604,6 +2727,10 @@ test("hidden WMS renderers do not gate active Catalog analysis", async () => {
     await viewer.show(first);
     await viewer.show(second);
     await viewer.show(third);
+    const thirdKey = layerStackView.layers.find(
+        ({ item }) => item === third,
+    ).key;
+    layerStackView.handlers.onVisibility(thirdKey, false);
 
     const wholeThirdRequest = statisticsRequests.find(
         ({ item, selectedBounds }) => item === third && selectedBounds === null
@@ -2632,9 +2759,6 @@ test("hidden WMS renderers do not gate active Catalog analysis", async () => {
 
     const firstKey = layerStackView.layers.find(
         ({ item }) => item === first
-    ).key;
-    const thirdKey = layerStackView.layers.find(
-        ({ item }) => item === third
     ).key;
     layerStackView.handlers.onVisibility(firstKey, false);
     layerStackView.handlers.onVisibility(thirdKey, true);

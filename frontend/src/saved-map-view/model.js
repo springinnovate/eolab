@@ -140,11 +140,6 @@ function validateSavedMapView(candidate) {
         );
     }
     const layers = candidate.layers.map(validateLayer);
-    if (layers.filter((layer) => layer.visible).length > 2) {
-        throw new SavedMapViewValidationError(
-            "Saved maps may have at most two visible layers."
-        );
-    }
     const identities = new Set();
     for (const layer of layers) {
         const key = JSON.stringify([

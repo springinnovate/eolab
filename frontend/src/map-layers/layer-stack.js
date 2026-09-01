@@ -8,21 +8,6 @@
 
 import { getCatalogItemKey } from "../catalog-item-identity.js";
 
-/** Maximum retained layers that may issue map tile requests simultaneously. */
-export const MAX_VISIBLE_MAP_LAYERS = 2;
-
-/** Raised when a visibility transition would exceed the stack contract. */
-export class MapLayerVisibilityLimitError extends Error {
-    /** Create the fixed user-facing visibility-limit error. */
-    constructor() {
-        super(
-            `Only ${MAX_VISIBLE_MAP_LAYERS} map layers can be visible ` +
-            "at once. Hide one before showing another."
-        );
-        this.name = "MapLayerVisibilityLimitError";
-    }
-}
-
 /**
  * @typedef {Object} MapLayerStackEntry
  * @property {string} key Stable composite Catalog Item key.
@@ -47,8 +32,8 @@ export class MapLayerStack {
     /**
      * Add one unique Item at the top and make it active.
      *
-     * A new entry is visible only when the two-layer map capacity permits it.
-     * Adding an existing Item is idempotent and merely activates it.
+     * A new entry is visible by default. Adding an existing Item is
+     * idempotent and merely activates it.
      *
      * @param {Object} item Catalog STAC Item.
      * @param {string} label Readable layer label.
@@ -86,7 +71,7 @@ export class MapLayerStack {
             item,
             label,
             retentionOrder,
-            visible: this.visibleCount < MAX_VISIBLE_MAP_LAYERS,
+            visible: true,
             opacity: 1,
         };
         const insertionIndex = this.entries.findIndex(
@@ -139,25 +124,17 @@ export class MapLayerStack {
     }
 
     /**
-     * Change visibility while preserving the two-visible invariant.
+     * Change one retained layer's visibility.
      *
      * @param {string} key Stable layer key.
      * @param {boolean} visible Requested visibility.
      * @return {MapLayerStackEntry} Updated entry.
-     * @throws {MapLayerVisibilityLimitError} If a third layer is requested.
      */
     setVisible(key, visible) {
         if (typeof visible !== "boolean") {
             throw new TypeError("Map layer visibility must be boolean.");
         }
         const entry = this.#require(key);
-        if (
-            visible &&
-            !entry.visible &&
-            this.visibleCount >= MAX_VISIBLE_MAP_LAYERS
-        ) {
-            throw new MapLayerVisibilityLimitError();
-        }
         entry.visible = visible;
         return entry;
     }

@@ -24,9 +24,9 @@ without exporting that metadata. The current Catalog Item and fresh
 assessment remain authoritative on every open.
 
 The file parser accepts only schema version 1, at most 512 KiB, at most 50
-unique Catalog identities, at most two visible layers, a canonical single-world
-viewport, and bounded scalar fields. A different viewer version or origin is a
-warning rather than rendering authority; an incompatible schema is rejected.
+unique Catalog identities, a canonical single-world viewport, and bounded
+scalar fields. A different viewer version or origin is a warning rather than
+rendering authority; an incompatible schema is rejected.
 
 The first schema deliberately excludes Catalog search state, selected Item,
 feature inspection, pixel probes, histogram and 2D-analysis state, sampling

@@ -1055,17 +1055,6 @@ h5 {
   display: none;
 }
 
-#raster-layer-stack-limit {
-  margin: 0;
-  color: var(--text-3);
-  font-size: 0.68rem;
-  line-height: 1.4;
-}
-
-#raster-layer-stack-limit:empty {
-  display: none;
-}
-
 .raster-layer-list {
   display: grid;
   gap: 9px;
@@ -1102,6 +1091,19 @@ h5 {
   overflow-wrap: anywhere;
   font-size: 0.78rem;
   line-height: 1.45;
+}
+.map-layer-role-badge {
+  flex: none;
+  min-width: 1.6em;
+  border: 1px solid var(--brand);
+  border-radius: 999px;
+  background: var(--surface-selected);
+  padding: 1px 5px;
+  color: var(--brand-strong);
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1.35;
+  text-align: center;
 }
 .raster-layer-row .secondary-button,
 .raster-layer-actions summary {

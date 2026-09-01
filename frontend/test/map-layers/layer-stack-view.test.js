@@ -115,7 +115,6 @@ class FakeLayerStackDocument {
       ["#raster-layer-stack", new FakeLayerStackElement("div", this)],
       ["#raster-layer-list", new FakeLayerStackElement("ol", this)],
       ["#raster-layer-stack-status", new FakeLayerStackElement("p", this)],
-      ["#raster-layer-stack-limit", new FakeLayerStackElement("p", this)],
     ]);
     this.elements.get("#raster-layer-stack").hidden = true;
   }
@@ -286,7 +285,7 @@ test("rows expose filename, visibility, Style and contained actions only", () =>
     assert.equal(actionControl(row, "visibility").type, "checkbox");
     assert.equal(actionControl(row, "visibility").checked, LAYERS[index].visible);
   }
-  assert.equal(actionControl(rows[2], "visibility").disabled, true);
+  assert.equal(actionControl(rows[2], "visibility").disabled, false);
   assert.equal(actionControl(rows[0], "move-up").disabled, true);
   assert.equal(actionControl(rows[2], "move-down").disabled, true);
   assert.equal(elementsByClass(rows[2], "raster-layer-error")[0].textContent, "Statistics unavailable.");
@@ -302,6 +301,29 @@ test("raster and vector rows use the same compact action layout", () => {
     assert.equal(actionControl(row, "style").textContent, "Style…");
     assert.equal(elementsByClass(row, "raster-layer-legend").length, 0);
   }
+});
+
+test("optional analysis role badges are visible and accessible", () => {
+  const doc = new FakeLayerStackDocument();
+  const view = new MapLayerStackView(doc);
+  view.render([
+    {
+      ...LAYERS[0],
+      roleBadge: { label: "X", description: "X axis raster" },
+    },
+    {
+      ...LAYERS[1],
+      roleBadge: { label: "Y", description: "Y axis raster" },
+    },
+  ], null);
+
+  const rows = doc.querySelector("#raster-layer-list").children;
+  const badges = rows.map((row) => elementsByClass(row, "map-layer-role-badge")[0]);
+  assert.deepEqual(badges.map((badge) => badge.textContent), ["X", "Y"]);
+  assert.deepEqual(
+    badges.map((badge) => badge.getAttribute("aria-label")),
+    ["X axis raster", "Y axis raster"],
+  );
 });
 
 test("neutral classified legends render as compact layer disclosures", () => {
@@ -435,9 +457,5 @@ test("MapLayerStackView announces status and retains stable action focus", () =>
   assert.equal(
     documentContext.activeElement,
     documentContext.querySelector("#raster-layer-stack-status"),
-  );
-  assert.equal(
-    documentContext.querySelector("#raster-layer-stack-limit").textContent,
-    "",
   );
 });

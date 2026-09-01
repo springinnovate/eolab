@@ -106,13 +106,13 @@ test("controller owns cross-adapter visibility, ordering, and removal", async ()
             getCatalogItemKey(third),
         ],
     ]);
-    assert.equal(controller.visibleCount, 2);
-    assert.equal(controller.isAttached(getCatalogItemKey(third)), false);
-    view.handlers.onVisibility(getCatalogItemKey(third), true);
-    assert.match(view.status, /Only 2 map layers/);
+    assert.equal(controller.visibleCount, 3);
+    assert.equal(controller.isAttached(getCatalogItemKey(third)), true);
 
     view.handlers.onVisibility(getCatalogItemKey(first), false);
-    view.handlers.onVisibility(getCatalogItemKey(third), true);
+    assert.equal(controller.visibleCount, 2);
+    view.handlers.onVisibility(getCatalogItemKey(first), true);
+    assert.equal(controller.visibleCount, 3);
     controller.setOpacity(getCatalogItemKey(third), 0.35);
     view.handlers.onMove(getCatalogItemKey(first), "up");
 
