@@ -1,9 +1,9 @@
 /**
  * Interaction controller for the map's raster sample window.
  *
- * This module owns one-shot map-position selection and selection-layer cleanup.
- * Geometry and Leaflet conversion are delegated, and selecting a window only
- * emits validated bounds to its caller.
+ * This module owns a passive pointer preview, one-shot map-position selection,
+ * and rectangle cleanup. Geometry and Leaflet conversion are delegated, and
+ * selecting a window only emits validated bounds to its caller.
  */
 import {
     buildRasterSampleWindowBounds,
@@ -17,11 +17,11 @@ import {
 import { rasterSampleBoundsToLeaflet } from "./leaflet.js";
 
 /**
- * Create a committed rectangle layer.
+ * Create a preview or committed rectangle layer.
  *
  * @callback RasterSampleLayerFactory
  * @param {Array<Array<number>>} bounds Leaflet southwest/northeast corners.
- * @param {"selection"} kind Requested rectangle presentation.
+ * @param {"preview"|"selection"} kind Requested rectangle presentation.
  * @return {{addTo: (map: Object) => Object, setBounds: (bounds: Array<Array<number>>) => void}}
  * Leaflet-compatible rectangle layer.
  */
@@ -42,7 +42,7 @@ import { rasterSampleBoundsToLeaflet } from "./leaflet.js";
  * @return {void}
  */
 
-/** Own validated one-shot raster sample-window selection. */
+/** Own passive preview and validated one-shot raster sample-window selection. */
 export class RasterSampleWindowController {
     /**
      * Create a raster sample-window interaction controller.
@@ -58,6 +58,7 @@ export class RasterSampleWindowController {
         this.onSelect = onSelect;
         this.onGuidance = onGuidance;
         this.windowSizeKm = DEFAULT_RASTER_SAMPLE_WINDOW_SIZE_KM;
+        this.previewLayer = null;
         this.selectionLayer = null;
         this.selectionBounds = null;
     }
@@ -82,6 +83,37 @@ export class RasterSampleWindowController {
      */
     selectAt(position) {
         return this.#selectAt(position);
+    }
+
+    /**
+     * Preview the current window at one viewer-owned pointer position.
+     *
+     * @param {{lng: number, lat: number}} position Leaflet map position.
+     * @return {boolean} Whether a valid preview is visible.
+     * @throws {RangeError} If the position or configured size is invalid.
+     */
+    previewAt(position) {
+        const sampleWindow = this.#boundsAt(position);
+        if (sampleWindow === null) {
+            return false;
+        }
+        if (this.previewLayer === null) {
+            this.previewLayer = this.layerFactory(
+                sampleWindow.leafletBounds,
+                "preview"
+            ).addTo(this.leafletMap);
+        } else {
+            this.previewLayer.setBounds(sampleWindow.leafletBounds);
+        }
+        return true;
+    }
+
+    /** Remove the passive pointer preview if present. @return {void} */
+    clearPreview() {
+        if (this.previewLayer !== null) {
+            this.leafletMap.removeLayer(this.previewLayer);
+            this.previewLayer = null;
+        }
     }
 
     /**
@@ -118,6 +150,7 @@ export class RasterSampleWindowController {
      * @return {void}
      */
     clear() {
+        this.clearPreview();
         this.clearSelection();
         this.onGuidance("");
     }
@@ -141,6 +174,7 @@ export class RasterSampleWindowController {
             latitude: position.lat
         };
         if (!isCanonicalWgs84Position(center)) {
+            this.clearPreview();
             this.onGuidance(RASTER_SAMPLE_WINDOW_MAP_BOUNDS_GUIDANCE);
             return null;
         }
@@ -158,6 +192,7 @@ export class RasterSampleWindowController {
             if (!(error instanceof RasterSampleWindowBoundaryError)) {
                 throw error;
             }
+            this.clearPreview();
             this.onGuidance(RASTER_SAMPLE_WINDOW_EDGE_GUIDANCE);
             return null;
         }

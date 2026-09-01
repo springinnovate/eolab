@@ -829,6 +829,7 @@ async function initializeCatalog(
             containerPoint: leafletMap.latLngToContainerPoint(latlng),
         });
     }
+    leafletMap.getContainer().classList.add("leaflet-crosshair");
     leafletMap.on("click", exploreMap);
     document.querySelector("#explore-map-center").addEventListener(
         "click",

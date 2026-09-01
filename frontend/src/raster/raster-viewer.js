@@ -681,10 +681,10 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Create one committed sample-window rectangle.
+     * Create one passive preview or committed sample-window rectangle.
      *
      * @param {Array} bounds Leaflet rectangle bounds.
-     * @param {"selection"} layerKind Rectangle purpose.
+     * @param {"preview"|"selection"} layerKind Rectangle purpose.
      * @return {Object} Leaflet-compatible rectangle layer.
      */
     function createSampleWindowLayer(bounds, layerKind) {
@@ -3505,8 +3505,10 @@ export function initializeRasterViewer(
      */
     function handleMapMouseMove(mapEvent) {
         if (!canUseRasterMapInteractions()) {
+            rasterSampleWindowController.clearPreview();
             return;
         }
+        rasterSampleWindowController.previewAt(mapEvent.latlng);
         const point = {
             longitude: mapEvent.latlng.lng,
             latitude: mapEvent.latlng.lat,
@@ -3551,6 +3553,7 @@ export function initializeRasterViewer(
     function handleMapMouseLeave() {
         pixelProbeController.cancel();
         pairedPixelProbeController.cancel();
+        rasterSampleWindowController.clearPreview();
         pixelProbeClientPosition = null;
         controlsView.hidePixelProbe();
     }

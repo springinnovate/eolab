@@ -1857,7 +1857,7 @@ test("late sampled histogram responses cannot replace a newer clicked window", a
 
 test("raster viewer samples pixels only inside the single map world", async () => {
     const leafletMap = createFakeMap();
-    const { leaflet } = createFakeLeaflet();
+    const { leaflet, rectangleLayers } = createFakeLeaflet();
     const controlsView = createFakeControlsView();
     const pixelRequests = [];
     const viewer = initializeRasterViewer(
@@ -1887,12 +1887,16 @@ test("raster viewer samples pixels only inside the single map world", async () =
     leafletMap.emit("mousemove", { latlng: { lng: 238, lat: 48 } });
     assert.equal(pixelRequests.length, 0);
     assert.equal(controlsView.probeVisible, false);
+    assert.equal(rectangleLayers.length, 0);
 
     leafletMap.emit("mousemove", { latlng: { lng: -122, lat: 48 } });
     assert.deepEqual(pixelRequests, [{
         item: MOUNTED_GEOTIFF_ITEM,
         point: { longitude: -122, latitude: 48 },
     }]);
+    assert.equal(rectangleLayers.length, 1);
+    assert.equal(rectangleLayers[0].kind, "preview");
+    assert.equal(leafletMap.layers.has(rectangleLayers[0]), true);
     await flushPromises();
     assert.equal(controlsView.probeVisible, true);
     viewer.destroy();

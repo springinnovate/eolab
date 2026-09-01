@@ -223,8 +223,9 @@ source window or used the approximate 127-longest-edge center grid. EOLab
 initially applies the distribution's 5th, 50th, and 95th percentiles, and the
 user can apply other ordered percentiles or directly edit the color palette
 and minimum, midpoint, and maximum display values. Whenever a raster is selected
-for analysis, clicking or tapping the map fixes a 1–300 km window at that
-position and displays its bounded histogram. The percentile controls immediately
+for analysis, a crosshair and passive outline preview the current 1–300 km
+sample window under the pointer. Clicking or tapping the map fixes that window
+and displays its bounded histogram. The percentile controls immediately
 show the selected distribution's 5th, 50th, and 95th percentile
 values without changing the rendered colors. **Rescale colors to this range**
 applies those values, or other selected percentiles, when the user chooses.

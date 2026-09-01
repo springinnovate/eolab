@@ -7,7 +7,7 @@ import {
   createFakeSampleLayerFactory,
 } from "../../test-support/raster/fakes.js";
 
-test("sample window validates and commits one composition-owned position", () => {
+test("sample window previews and commits composition-owned positions", () => {
   const map = createFakeLeafletMap();
   const layers = [];
   const selections = [];
@@ -25,17 +25,28 @@ test("sample window validates and commits one composition-owned position", () =>
   assert.equal(map.layers.length, 0);
 
   controller.setWindowSize(50);
+  assert.equal(controller.previewAt({ lng: -122, lat: 48 }), true);
+  assert.equal(selections.length, 0);
+  assert.equal(layers[0].kind, "preview");
+  assert.equal(map.layers.length, 1);
+  assert.equal(controller.previewAt({ lng: -121, lat: 47 }), true);
+  assert.equal(layers[0].boundsHistory.length, 2);
+
   const bounds = controller.selectAt({ lng: -122, lat: 48 });
   assert.equal(selections.length, 1);
   assert.equal(bounds, selections[0]);
   assert.ok(bounds.west < -122);
   assert.ok(bounds.east > -122);
   assert.equal(layers.at(-1).kind, "selection");
+  assert.equal(map.layers.length, 2);
   assert.deepEqual(controller.selectedBounds, bounds);
   assert.equal(guidance.at(-1), "");
   for (const eventName of ["mousemove", "mouseout", "mouseover", "click"]) {
     assert.equal(map.listenerCount(eventName), 0);
   }
+
+  controller.clearPreview();
+  assert.equal(map.layers.length, 1);
 });
 
 test("sample window restores a retained selection in the canonical world", () => {

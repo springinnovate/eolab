@@ -62,8 +62,10 @@ The saved-map package imports neither raster nor vector implementations; see
 Map exploration remains composition rather than a new feature coordinator.
 The application root owns one Leaflet click and forwards its position to the
 raster viewer and vector feature inspector through their public boundaries.
-The raster viewer owns sample-window validation and statistics requests; the
-vector inspector owns bounded GetFeatureInfo requests, cancellation, attribute
+It also applies the map-wide crosshair interaction cue. The raster viewer owns
+sample-window validation, its passive noninteractive pointer preview, and
+statistics requests; the vector inspector owns bounded GetFeatureInfo requests,
+cancellation, attribute
 presentation, and highlighting. Neither peer imports, activates, pauses, or
 reads the implementation state of the other, and closing a result panel changes
 presentation only.

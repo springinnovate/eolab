@@ -36,6 +36,10 @@ test("vector inspection coordination remains in the browser composition root", (
   assert.match(COMPOSITION_SOURCE, /getVisibleTargets:\s*\(\)\s*=>/);
   assert.match(COMPOSITION_SOURCE, /onInspectionChange:\s*\(visible\)\s*=>/);
   assert.match(COMPOSITION_SOURCE, /leafletMap\.on\("click", exploreMap\)/);
+  assert.match(
+    COMPOSITION_SOURCE,
+    /getContainer\(\)\.classList\.add\("leaflet-crosshair"\)/,
+  );
   assert.match(COMPOSITION_SOURCE, /rasterVisualization\.exploreAt\(event\.latlng\)/);
   assert.match(COMPOSITION_SOURCE, /vectorFeatureInspector\.inspect\(event\)/);
   assert.doesNotMatch(INSPECTOR_SOURCE, /\.on\("click"/);
