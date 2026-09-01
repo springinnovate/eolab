@@ -42,6 +42,7 @@ test("vector style controls show fields owned by each geometry", () => {
     assert.equal(fixture.controls.heading.textContent, "Line style");
     assert.equal(fixture.controls.labelEnabled.checked, false);
     assert.equal(fixture.controls.labelField.children.length, 2);
+    assert.equal(fixture.controls.labelMinimumZoom.value, "0");
 
     fixture.controls.show(fixture.target("point", {
         geometryKind: "point",

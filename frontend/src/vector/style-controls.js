@@ -117,7 +117,7 @@ export class VectorStyleControls {
         this.labelHaloWidth.value = String(label?.haloWidth ?? 1.5);
         this.labelPlacement.value = labelFieldAvailable
             ? label.placement : defaultPlacement(style.geometryKind);
-        this.labelMinimumZoom.value = String(label?.minimumZoom ?? 6);
+        this.labelMinimumZoom.value = String(label?.minimumZoom ?? 0);
         this.status.textContent = "";
         this.#renderRangeValues();
         this.#synchronizeLabelInputs();
