@@ -1,8 +1,9 @@
 # Raster publication recovery contract
 
-Raster eligibility assessment is an upstream catalog contract. Publication
-does not define CRS eligibility or rewrite a source raster; it makes every
-remaining GeoServer runtime outcome safe, observable, and retryable.
+Raster publication assumes the Catalog raster was prepared upstream. EOLab
+does not define structural eligibility, preflight the deployed reader, build an
+approximate fallback, or rewrite a source raster. Publication makes GeoServer
+runtime outcomes safe, observable, and retryable.
 
 ## Source identity
 
@@ -10,17 +11,16 @@ The scanner persists one canonical raster identity in this order: inode, byte
 size, nanosecond modification time, and nanosecond metadata-change time. Inode
 detects replacement at the same mounted path, size and modification time detect
 content changes, and metadata-change time strengthens mutation and replacement
-detection. Assessment, publication, catalog-authorized analysis, detail-only
-preview, and process-local WMS authorization all use this same typed identity.
+detection. Catalog discovery, publication, catalog-authorized analysis, and process-local
+WMS authorization all use this same typed identity.
 
 Filesystem device number is not part of raster identity. It names the current
 mount instance rather than the GeoTIFF and can change when an unchanged
 NFS-backed source is remounted into a replacement container. Catalog records
 written with the former five-field representation remain readable through an
 explicit compatibility parser that discards only the leading device number;
-the catalog is not rewritten during publication. Malformed assessment identity
-metadata receives a distinct reassessment error, while a mismatch in any
-retained field continues to report a changed source.
+the catalog is not rewritten during publication. Malformed source identity metadata receives a distinct Catalog-source error,
+while a mismatch in any retained field continues to report a changed source.
 
 ## Publication state
 
@@ -69,7 +69,7 @@ The rendering API exposes a concise message and one stable category:
 | `upstream_failure` | Another exact REST contract failed; retry and use the bounded application log if it persists. |
 
 The browser preserves the category on its rendering error and displays the
-server-provided actionable message beside **View on map**. GeoServer remains
+server-provided actionable message beside **Add to map**. GeoServer remains
 private, and WMS requests continue to accept exactly one app-authorized layer.
 
 ## Value-dependent color opacity
@@ -88,11 +88,3 @@ to one for legacy requests; initialization updates this style during deploy.
 No new GeoServer extension, REST endpoint, or source-raster processing is
 involved. A transparent valid pixel remains data, not nodata: statistics and
 histograms still include it, and histogram bars retain visible RGB colors.
-
-Sampled map previews interpolate alpha using the same stop values and keep
-nodata fully transparent. The style legend shows a checkerboard underneath
-transparency; its gradient samples RGB and alpha independently to approximate
-GeoServer's ramp without CSS premultiplied-color distortion. Palette and
-histogram-range changes retain color opacities; resetting the style restores
-100%. Coordinated 2D styles temporarily override all three stop opacities to
-100%, as well as layer opacity, and restore the ordinary styles on exit.

@@ -4,6 +4,7 @@ History
 Unreleased
 ----------
 
+* Publish prepared raster files directly without raster preflight or approximate map previews.
 * Show any number of map layers while limiting histogram analysis to the top two visible rasters.
 * Explore visible raster histograms and vector features with one crosshair map interaction.
 * Save styled map layers and the current viewport to a portable JSON file.
