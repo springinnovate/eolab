@@ -563,21 +563,6 @@
                     <div class="raster-sample-window-actions">
                       <button
                         class="secondary-button"
-                        id="select-raster-sample-window"
-                        type="button"
-                        aria-pressed="false"
-                      >
-                        Select map window
-                      </button>
-                      <button
-                        class="secondary-button"
-                        id="sample-raster-map-center"
-                        type="button"
-                      >
-                        Sample map center
-                      </button>
-                      <button
-                        class="secondary-button"
                         id="clear-raster-sample-window"
                         type="button"
                         aria-pressed="true"
@@ -602,7 +587,7 @@
                       aria-live="polite"
                       aria-atomic="true"
                     >
-                      Whole-raster histogram selected. Choose Select map window or Sample map center to analyze a smaller area.
+                      Whole-raster histogram selected. Click the map or use Analysis tools to analyze the map center.
                     </p>
                   </section>
                   </fieldset>
@@ -794,12 +779,8 @@
       </div>
 
       <div class="map-tool-openers">
-        <button id="open-vector-inspector" class="secondary-button" type="button"
-          aria-controls="vector-feature-inspector" aria-expanded="false"
-          aria-haspopup="dialog" hidden>Inspect features</button>
-        <button id="open-map-histogram" class="secondary-button"
-          type="button" aria-controls="map-histogram-panel" aria-expanded="false"
-          aria-haspopup="dialog">Histogram</button>
+        <button id="open-analysis-tools" class="secondary-button" type="button"
+          aria-label="Open analysis tools using visible data at the map center">Analysis tools</button>
       </div>
       <aside id="map-inspection" popover="manual" aria-label="Map exploration">
         <div class="map-inspection-panels">
@@ -811,7 +792,7 @@
                 type="button" aria-label="Close feature inspector">×</button>
             </header>
             <p id="vector-feature-status" class="vector-feature-status" role="status">
-              Click a visible vector feature to inspect it.
+              Click the map to inspect visible vector features.
             </p>
             <article id="vector-feature-result" hidden>
               <h3 id="vector-feature-layer"></h3>

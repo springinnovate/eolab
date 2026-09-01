@@ -571,7 +571,7 @@ test('two uncached 1D histograms share one read slot and both complete', async (
     await h.viewer.show(second);
     reads[1].result.resolve(createLayerStatistics(second));
     await flushPromises();
-    h.leafletMap.emit('click', { latlng: { lng: -74, lat: 41 } });
+    h.viewer.exploreAt({ lng: -74, lat: 41 });
     assert.equal(reads.length, 3);
     assert.deepEqual(h.controlsView.layerHistograms.map(s => s.state), ['loading', 'loading']);
     reads[2].result.resolve(createLayerStatistics(reads[2].item, reads[2].area.selectedBounds));
@@ -595,8 +595,8 @@ test('rapid samples drop obsolete queued work and hidden-layer requests', async 
     await h.viewer.show(createRasterItem('first'));
     await h.viewer.show(createRasterItem('second'));
     await flushPromises();
-    h.leafletMap.emit('click', { latlng: { lng: -74, lat: 41 } });
-    h.leafletMap.emit('click', { latlng: { lng: -72, lat: 43 } });
+    h.viewer.exploreAt({ lng: -74, lat: 41 });
+    h.viewer.exploreAt({ lng: -72, lat: 43 });
     assert.equal(reads.length, 1);
     assert.equal(reads[0].signal.aborted, true);
     const [, bottom] = h.mapLayers.snapshots();
@@ -609,7 +609,7 @@ test('rapid samples drop obsolete queued work and hidden-layer requests', async 
     reads[1].result.resolve(createLayerStatistics(reads[1].item, reads[1].area.selectedBounds));
     await flushPromises();
     assert.deepEqual(h.controlsView.layerHistograms.map(s => s.state), ['ready']);
-    h.leafletMap.emit('click', { latlng: { lng: -70, lat: 45 } });
+    h.viewer.exploreAt({ lng: -70, lat: 45 });
     h.destroy();
     assert.equal(reads[2].signal.aborted, true);
     reads[2].result.resolve(createLayerStatistics(reads[2].item, reads[2].area.selectedBounds));
@@ -629,7 +629,7 @@ test('mode changes cancel queued 1D reads and share the slot with 2D', async () 
     await h.viewer.show(createRasterItem('first'));
     await h.viewer.show(createRasterItem('second'));
     await flushPromises();
-    h.leafletMap.emit('click', { latlng: { lng: -74, lat: 41 } });
+    h.viewer.exploreAt({ lng: -74, lat: 41 });
     h.controlsView.handlers.onBivariateModeChange('bivariate');
     assert.equal(reads.length, 1);
     assert.equal(reads[0].signal.aborted, true);
@@ -648,7 +648,7 @@ test('mode changes cancel queued 1D reads and share the slot with 2D', async () 
     h.destroy();
 });
 
-test('closing histogram sampling preserves its footprint and results across map and layer changes', async () => {
+test('one-shot map exploration replaces its footprint without a hidden pause mode', async () => {
     const requests = [];
     const h = visibleLayerFixture(async (item, area) => {
         requests.push({ item, area });
@@ -657,36 +657,23 @@ test('closing histogram sampling preserves its footprint and results across map 
     await h.viewer.show(createRasterItem('first'));
     await h.viewer.show(createRasterItem('second'));
     await flushPromises();
-    h.leafletMap.emit('click', { latlng: { lng: 0, lat: 0 } });
+    h.viewer.exploreAt({ lng: 0, lat: 0 });
     await flushPromises();
     const statistics = h.controlsView.displayedStatistics;
     const footprint = [...h.leafletMap.layers].find(layer => layer.kind === 'selection');
     assert.ok(footprint);
     assert.equal(statistics.scope, 'selectedArea');
     const bounds = [...footprint.boundsHistory];
-    h.viewer.stopSampleWindowSelection();
-    assert.match(h.controlsView.sampleWindowStatus, /Selection paused/);
-    assert.equal(h.controlsView.displayedStatistics, statistics);
-    assert.equal(h.leafletMap.layers.has(footprint), true);
-    assert.equal([...h.leafletMap.layers].some(layer => layer.kind === 'preview'), false);
     const count = requests.length;
     h.leafletMap.emit('moveend', {});
     h.leafletMap.emit('zoomend', {});
-    h.leafletMap.emit('click', { latlng: { lng: 4, lat: 4 } });
-    await flushPromises();
     assert.equal(requests.length, count);
     assert.deepEqual(footprint.boundsHistory, bounds);
-    h.mapLayers.setVisible(h.mapLayers.snapshots()[0].key, false);
+    h.viewer.exploreAt({ lng: 4, lat: 4 });
     await flushPromises();
-    const afterVisibility = requests.length;
-    h.leafletMap.emit('click', { latlng: { lng: 8, lat: 8 } });
-    await flushPromises();
-    assert.equal(requests.length, afterVisibility, 'layer changes must not re-arm sampling');
-    assert.equal(h.controlsView.displayedStatistics.scope, 'selectedArea');
-    h.controlsView.handlers.onSelectSampleWindow();
-    h.leafletMap.emit('click', { latlng: { lng: 4, lat: 4 } });
-    await flushPromises();
-    assert.ok(requests.length > afterVisibility);
+    assert.ok(requests.length > count);
+    assert.equal(h.leafletMap.layers.has(footprint), true);
+    assert.equal(footprint.boundsHistory.length, bounds.length + 1);
     assert.notDeepEqual(h.controlsView.displayedStatistics.selectedBounds, statistics.selectedBounds);
     h.destroy();
 });
@@ -1122,7 +1109,7 @@ test("catalog selections enable paired analysis without publication", async () =
     viewer.removeSampled(secondItem);
     viewer.deactivateAnalysis(secondItem);
     assert.equal(controlsView.controlsVisible, true);
-    leafletMap.emit("click", { latlng: { lng: -100, lat: 40 } });
+    viewer.exploreAt({ lng: -100, lat: 40 });
     await flushPromises();
     assert.equal(pairedRequests.at(-1).area.kind, "selectedArea");
     controlsView.handlers.onBivariateModeChange("overlay");
@@ -1182,7 +1169,7 @@ test("2D sampling remains independent from raster sessions and renderers", async
     await flushPromises();
     viewer.activateAnalysis(secondItem);
     await flushPromises();
-    leafletMap.emit("click", { latlng: { lng: -80, lat: 20 } });
+    viewer.exploreAt({ lng: -80, lat: 20 });
     await flushPromises();
     const ordinaryBounds = ordinaryRequests.at(-1).area.selectedBounds;
     controlsView.handlers.onBivariateModeChange("bivariate");
@@ -1190,7 +1177,7 @@ test("2D sampling remains independent from raster sessions and renderers", async
     assert.equal(controlsView.pairedStatistics.pairedSampleCount, 1);
 
     const clearsBeforeSelection = controlsView.pairedStatisticsClearCount;
-    leafletMap.emit("click", { latlng: { lng: -100, lat: 40 } });
+    viewer.exploreAt({ lng: -100, lat: 40 });
     assert.equal(pairedRequests.length, 2);
     assert.equal(pairedRequests[1].area.kind, "selectedArea");
     assert.equal(controlsView.pairedStatistics, null);
@@ -1353,7 +1340,7 @@ test("renderer-independent analysis supports exact windows without publication",
         item: MOUNTED_GEOTIFF_ITEM,
         point: { longitude: -122, latitude: 48.5 },
     }]);
-    leafletMap.emit("click", { latlng: { lng: -122, lat: 48.5 } });
+    viewer.exploreAt({ lng: -122, lat: 48.5 });
     await flushPromises();
     assert.equal(controlsView.histogramWidgetOpenCount, 1);
     assert.equal(statisticsRequests.at(-1).samplingArea.kind, "selectedArea");
@@ -1609,7 +1596,7 @@ test("renderer changes abort and ignore obsolete analysis responses", async () =
     viewer.destroy();
 });
 
-test("a ready AOI owns detail-only statistics before map-window handlers", async () => {
+test("one-shot map exploration replaces a ready AOI with a selected window", async () => {
     const leafletMap = createFakeMap();
     const { leaflet, rectangleLayers } = createFakeLeaflet();
     const controlsView = createFakeControlsView();
@@ -1658,10 +1645,13 @@ test("a ready AOI owns detail-only statistics before map-window handlers", async
         [{ kind: "temporaryAoi", temporaryAoiId: TEMPORARY_AOI_ID }]
     );
     assert.equal(controlsView.samplingAreaMode, "temporaryAoi");
-    const requestCount = statisticsRequests.length;
-    leafletMap.emit("click", { latlng: { lng: -122, lat: 48.5 } });
-    assert.equal(statisticsRequests.length, requestCount);
-    assert.equal(rectangleLayers.length, 0);
+    viewer.exploreAt({ lng: -122, lat: 48.5 });
+    await flushPromises();
+    assert.ok(statisticsRequests.some(
+        ({ samplingArea }) => samplingArea.kind === "selectedArea"
+    ));
+    assert.equal(controlsView.samplingAreaMode, "selectedArea");
+    assert.equal(rectangleLayers.length, 1);
 
     viewer.destroy();
 });
@@ -1762,7 +1752,7 @@ test("sampled rasters reuse color controls and bounded click histograms", async 
     });
     assert.equal(controlsView.probeVisible, true);
     assert.match(controlsView.pixelProbeContent.detail, /Pixel: 1\.000e\+0/);
-    leafletMap.emit("click", { latlng: { lng: -122, lat: 48.5 } });
+    viewer.exploreAt({ lng: -122, lat: 48.5 });
     await flushPromises();
     assert.equal(histogramRequests.length, 1);
     assert.equal(histogramRequests[0].item, MOUNTED_GEOTIFF_ITEM);
@@ -1843,8 +1833,8 @@ test("late sampled histogram responses cannot replace a newer clicked window", a
     viewer.activateSampled(MOUNTED_GEOTIFF_ITEM, style, () => {});
     await flushPromises();
 
-    leafletMap.emit("click", { latlng: { lng: -122, lat: 48 } });
-    leafletMap.emit("click", { latlng: { lng: -121, lat: 49 } });
+    viewer.exploreAt({ lng: -122, lat: 48 });
+    viewer.exploreAt({ lng: -121, lat: 49 });
     assert.equal(requests.length, 1);
     assert.equal(requests[0].signal.aborted, true);
     requests[0].result.resolve({
@@ -1867,7 +1857,7 @@ test("late sampled histogram responses cannot replace a newer clicked window", a
 
 test("raster viewer samples pixels only inside the single map world", async () => {
     const leafletMap = createFakeMap();
-    const { leaflet } = createFakeLeaflet();
+    const { leaflet, rectangleLayers } = createFakeLeaflet();
     const controlsView = createFakeControlsView();
     const pixelRequests = [];
     const viewer = initializeRasterViewer(
@@ -1897,12 +1887,16 @@ test("raster viewer samples pixels only inside the single map world", async () =
     leafletMap.emit("mousemove", { latlng: { lng: 238, lat: 48 } });
     assert.equal(pixelRequests.length, 0);
     assert.equal(controlsView.probeVisible, false);
+    assert.equal(rectangleLayers.length, 0);
 
     leafletMap.emit("mousemove", { latlng: { lng: -122, lat: 48 } });
     assert.deepEqual(pixelRequests, [{
         item: MOUNTED_GEOTIFF_ITEM,
         point: { longitude: -122, latitude: 48 },
     }]);
+    assert.equal(rectangleLayers.length, 1);
+    assert.equal(rectangleLayers[0].kind, "preview");
+    assert.equal(leafletMap.layers.has(rectangleLayers[0]), true);
     await flushPromises();
     assert.equal(controlsView.probeVisible, true);
     viewer.destroy();
@@ -1983,7 +1977,7 @@ test("selected statistics remain draft-only until the user applies them", async 
     assert.equal(controlsView.displayedStatistics, RASTER_STATISTICS);
     assert.equal(wmsLayers[0].parameterUpdates.length, 1);
 
-    leafletMap.emit("click", { latlng: { lng: -74, lat: 41 } });
+    viewer.exploreAt({ lng: -74, lat: 41 });
     assert.equal(selectedRequests.length, 1);
     assert.equal(controlsView.applyPercentilesEnabled, false);
     const selectedStatistics = {
@@ -2000,7 +1994,7 @@ test("selected statistics remain draft-only until the user applies them", async 
     controlsView.handlers.onApplyPercentiles();
     assert.equal(wmsLayers[0].parameterUpdates.length, 2);
 
-    leafletMap.emit("click", { latlng: { lng: -73, lat: 42 } });
+    viewer.exploreAt({ lng: -73, lat: 42 });
     assert.equal(selectedRequests.length, 2);
     selectedRequests[1].request.reject(new Error("selected sample failed"));
     await flushPromises();
@@ -2425,7 +2419,7 @@ test("a deterministic selected-area conflict does not offer Retry", async () => 
 
     await viewer.show(MOUNTED_GEOTIFF_ITEM);
     await flushPromises();
-    leafletMap.emit("click", { latlng: { lng: -122, lat: 48.5 } });
+    viewer.exploreAt({ lng: -122, lat: 48.5 });
     await flushPromises();
 
     assert.match(
@@ -2621,7 +2615,7 @@ test("hidden WMS renderers do not gate active Catalog analysis", async () => {
         visible: false,
     });
 
-    leafletMap.emit("click", { latlng: { lng: -74, lat: 41 } });
+    viewer.exploreAt({ lng: -74, lat: 41 });
     leafletMap.emit("mousemove", {
         latlng: { lng: -74, lat: 41 },
     });
@@ -2702,7 +2696,7 @@ test("explicit sampling refreshes every raster layer to one shared area", async 
     await flushPromises();
     const firstKey = layerStackView.activeKey;
     controlsView.handlers.onSampleWindowNumberInput("42");
-    leafletMap.emit("click", { latlng: { lng: -74, lat: 41 } });
+    viewer.exploreAt({ lng: -74, lat: 41 });
     await flushPromises();
     const firstSelectedRequest = statisticsRequests.find(
         ({ item, selectedBounds }) =>
@@ -2725,7 +2719,7 @@ test("explicit sampling refreshes every raster layer to one shared area", async 
     await viewer.show(second);
     await flushPromises();
     controlsView.handlers.onSampleWindowNumberInput("80");
-    leafletMap.emit("click", { latlng: { lng: 12, lat: 34 } });
+    viewer.exploreAt({ lng: 12, lat: 34 });
     await flushPromises();
     assert.equal(controlsView.displayedStatistics.itemId, second.id);
     assert.equal(controlsView.sampleWindowSizeKm, 80);
@@ -2826,7 +2820,7 @@ test("removing an active WMS renderer preserves analysis before adjacent restore
         layerStackView.layers.map(({ item, key }) => [item, key])
     );
 
-    leafletMap.emit("click", { latlng: { lng: -73, lat: 42 } });
+    viewer.exploreAt({ lng: -73, lat: 42 });
     await flushPromises();
     assert.equal(controlsView.displayedStatistics.scope, "selectedArea");
     controlsView.setPaletteName("viridis");
@@ -3052,7 +3046,7 @@ test("a failed publication preserves existing layers and can be retried", async 
     viewer.destroy();
 });
 
-test("AOI hide restores hover windows and show restores AOI sampling", async () => {
+test("AOI lifecycle restores whole-raster scope and replaces selected windows", async () => {
     const leafletMap = createFakeMap();
     const { leaflet, rectangleLayers } = createFakeLeaflet();
     const controlsView = createFakeControlsView();
@@ -3113,10 +3107,6 @@ test("AOI hide restores hover windows and show restores AOI sampling", async () 
     assert.equal(aoiRequests[0].temporaryAoiId, TEMPORARY_AOI_ID);
     assert.equal(controlsView.samplingAreaMode, "temporaryAoi");
     assert.equal(controlsView.availableTemporaryAoi.id, TEMPORARY_AOI_ID);
-    const requestCountBeforeMapClick = aoiRequests.length;
-    leafletMap.emit("click", { latlng: { lng: 0, lat: 0 } });
-    assert.equal(aoiRequests.length, requestCountBeforeMapClick);
-
     viewer.setTemporaryAoi(replacementAoi);
 
     assert.equal(aoiRequests.length, 1);
@@ -3151,10 +3141,11 @@ test("AOI hide restores hover windows and show restores AOI sampling", async () 
     assert.equal(controlsView.availableTemporaryAoi, null);
     assert.equal(controlsView.displayedStatistics.scope, "wholeRaster");
 
-    leafletMap.emit("mousemove", { latlng: { lng: 2, lat: 2 } });
-    const hoverWindow = rectangleLayers.at(-1);
-    assert.equal(hoverWindow.kind, "preview");
-    assert.equal(leafletMap.layers.has(hoverWindow), true);
+    viewer.exploreAt({ lng: 2, lat: 2 });
+    await flushPromises();
+    const selectedWindow = rectangleLayers.at(-1);
+    assert.equal(selectedWindow.kind, "selection");
+    assert.equal(leafletMap.layers.has(selectedWindow), true);
 
     viewer.setTemporaryAoi(replacementAoi);
 
@@ -3162,5 +3153,5 @@ test("AOI hide restores hover windows and show restores AOI sampling", async () 
     assert.equal(aoiRequests[3].temporaryAoiId, replacementId);
     assert.equal(controlsView.samplingAreaMode, "temporaryAoi");
     assert.equal(controlsView.availableTemporaryAoi.id, replacementId);
-    assert.equal(leafletMap.layers.has(hoverWindow), false);
+    assert.equal(leafletMap.layers.has(selectedWindow), false);
 });

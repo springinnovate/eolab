@@ -186,12 +186,13 @@ sample-window controls.
 
 ### Feature inspection
 
-When at least one published vector is visible, the browser offers an explicit
-feature-inspection mode. One map click issues an independent WMS 1.1.1
+When at least one published vector is visible, one map click issues an independent WMS 1.1.1
 `GetFeatureInfo` request for each visible vector layer through the same public
 proxy. The request uses the current EPSG:4326 viewport so the returned GeoJSON
 geometry can be highlighted directly by Leaflet. Hidden vectors and raster
-layers are never queried.
+layers are never queried for features. The same click may independently select
+a raster histogram window when raster analysis is available; neither result
+depends on the other succeeding.
 
 The public contract accepts only `application/json`, at most ten upstream
 features, a search buffer no larger than twenty pixels, and a response no
@@ -202,8 +203,10 @@ source geometry field is omitted from the attribute table because the selected
 geometry is already represented by the temporary map highlight.
 
 The browser composition root projects visible retained vector records into the
-inspector's narrow target contract and coordinates raster-sampling pause and
-map-side panel visibility. The inspector does not read the retained-layer
+inspector's narrow target contract, owns the single Leaflet click, and fans that
+intent out to the independent raster and vector boundaries. Closing either
+result only hides its map-side panel and does not disable later map clicks. The
+inspector does not read the retained-layer
 controller, compare concrete map adapters, or call sibling presentation
 controllers. Its WMS publication name remains a current-process lifecycle
 identifier authorized by the existing published-layer registry; no filesystem

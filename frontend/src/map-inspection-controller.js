@@ -1,58 +1,47 @@
 /** Shared non-modal presentation surface for independent map-side tools. */
 export class MapInspectionController {
     /**
-     * Bind the persistent histogram opener and its independent close control.
+     * Bind independent close controls for the shared exploration surface.
+     *
      * @param {Object} dependencies Presentation dependencies.
      * @param {Document} [dependencies.documentContext=document] Owning document.
-     * @param {() => void} dependencies.onHistogramClose Pauses map selection.
      */
-    constructor({ documentContext = document, onHistogramClose }) {
+    constructor({ documentContext = document } = {}) {
         this.document = documentContext;
-        this.onHistogramClose = onHistogramClose;
         this.root = documentContext.querySelector("#map-inspection");
         this.histogram = documentContext.querySelector("#map-histogram-panel");
         this.style = documentContext.querySelector("#layer-style-editor");
         this.feature = documentContext.querySelector("#vector-feature-inspector");
-        this.opener = documentContext.querySelector("#open-map-histogram");
+        this.analysisToolsButton = documentContext.querySelector(
+            "#open-analysis-tools"
+        );
+        this.map = documentContext.querySelector("#map");
         this.closeButton = documentContext.querySelector("#close-map-histogram");
         this.isOpen = false;
-        this.onOpen = () => this.showHistogram(true);
         this.onClose = () => this.closeHistogram();
         this.onKeydown = (event) => {
             if (event.key !== "Escape" || this.histogram.hidden ||
-                !(this.histogram.contains(this.document.activeElement) ||
-                    this.document.activeElement === this.opener)) return;
+                !this.histogram.contains(this.document.activeElement)) return;
             event.preventDefault();
             event.stopPropagation();
             this.closeHistogram();
         };
-        this.opener.addEventListener("click", this.onOpen);
         this.closeButton.addEventListener("click", this.onClose);
         this.document.addEventListener("keydown", this.onKeydown);
     }
 
-    /**
-     * Reveal results and hide their redundant opener without changing analysis.
-     * @param {boolean} [moveFocus=false] Focus Close for an explicit opener click.
-     * @return {void}
-     */
-    showHistogram(moveFocus = false) {
+    /** Reveal histogram results without changing analysis. @return {void} */
+    showHistogram() {
         this.histogram.hidden = false;
-        this.opener.hidden = true;
-        this.opener.setAttribute("aria-expanded", "true");
         this.#synchronize();
-        if (moveFocus) this.closeButton.focus();
     }
 
-    /** Pause selection, retain results, and return focus to the map opener. @return {void} */
+    /** Hide histogram results and return focus to the map. @return {void} */
     closeHistogram() {
         if (this.histogram.hidden) return;
         this.histogram.hidden = true;
-        this.opener.hidden = false;
-        this.opener.setAttribute("aria-expanded", "false");
-        this.onHistogramClose();
         this.#synchronize();
-        this.opener.focus();
+        this.map.focus();
     }
 
     /** Reveal styling alongside any open histogram without stealing its state. @return {void} */
@@ -91,6 +80,7 @@ export class MapInspectionController {
     #synchronize() {
         const shouldOpen = !this.histogram.hidden || !this.style.hidden ||
             !this.feature.hidden;
+        this.analysisToolsButton.hidden = shouldOpen;
         if (shouldOpen === this.isOpen) return;
         this.isOpen = shouldOpen;
         if (shouldOpen) this.root.showPopover();
@@ -99,14 +89,11 @@ export class MapInspectionController {
 
     /** Release presentation listeners without changing retained analysis state. @return {void} */
     destroy() {
-        this.opener.removeEventListener("click", this.onOpen);
         this.closeButton.removeEventListener("click", this.onClose);
         this.document.removeEventListener("keydown", this.onKeydown);
         this.histogram.hidden = true;
         this.style.hidden = true;
         this.feature.hidden = true;
-        this.opener.setAttribute("aria-expanded", "false");
-        this.opener.hidden = false;
         this.#synchronize();
     }
 }

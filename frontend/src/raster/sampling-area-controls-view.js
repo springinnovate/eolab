@@ -1,9 +1,10 @@
 /**
  * DOM presentation adapter for raster histogram sampling-area controls.
  *
- * This adapter owns sample-window sizing and whole/map-window/temporary-AOI
- * controls. It presents state supplied by the raster coordinator and makes no
- * map, AOI lifecycle, statistics, or request decisions.
+ * This adapter owns sample-window sizing and whole-window/temporary-AOI
+ * controls. Map exploration is coordinated separately by the composition root.
+ * It presents state supplied by the raster coordinator and makes no map, AOI
+ * lifecycle, statistics, or request decisions.
  */
 import { requireRasterControl } from "./required-control.js";
 
@@ -15,8 +16,6 @@ import { requireRasterControl } from "./required-control.js";
  * sample-window size from the numeric control.
  * @property {(value: string) => void} onSampleWindowNumberChange Commits the
  * numeric sample-window size.
- * @property {() => void} onSampleMapCenter Selects the map-center window.
- * @property {() => void} onSelectSampleWindow Enables pointer window selection.
  * @property {() => void} onClearSampleWindow Restores whole-raster statistics.
  * @property {() => void} onUseTemporaryAoi Selects the retained uploaded AOI.
  */
@@ -45,14 +44,6 @@ export class RasterSamplingAreaControlsView {
             documentContext,
             "#raster-sample-window-number"
         );
-        this.sampleMapCenterButton = requireRasterControl(
-            documentContext,
-            "#sample-raster-map-center"
-        );
-        this.selectSampleWindowButton = requireRasterControl(
-            documentContext,
-            "#select-raster-sample-window"
-        );
         this.clearSampleWindowButton = requireRasterControl(
             documentContext,
             "#clear-raster-sample-window"
@@ -74,8 +65,6 @@ export class RasterSamplingAreaControlsView {
             this.#handleSampleWindowNumberInput.bind(this);
         this.boundSampleWindowNumberChange =
             this.#handleSampleWindowNumberChange.bind(this);
-        this.boundSampleMapCenter = this.#handleSampleMapCenter.bind(this);
-        this.boundSelectSampleWindow = this.#handleSelectSampleWindow.bind(this);
         this.boundClearSampleWindow = this.#handleClearSampleWindow.bind(this);
         this.boundUseTemporaryAoi = this.#handleUseTemporaryAoi.bind(this);
     }
@@ -99,14 +88,6 @@ export class RasterSamplingAreaControlsView {
         this.sampleWindowNumber.addEventListener(
             "change",
             this.boundSampleWindowNumberChange
-        );
-        this.sampleMapCenterButton.addEventListener(
-            "click",
-            this.boundSampleMapCenter
-        );
-        this.selectSampleWindowButton.addEventListener(
-            "click",
-            this.boundSelectSampleWindow
         );
         this.clearSampleWindowButton.addEventListener(
             "click",
@@ -132,14 +113,6 @@ export class RasterSamplingAreaControlsView {
             "change",
             this.boundSampleWindowNumberChange
         );
-        this.sampleMapCenterButton.removeEventListener(
-            "click",
-            this.boundSampleMapCenter
-        );
-        this.selectSampleWindowButton.removeEventListener(
-            "click",
-            this.boundSelectSampleWindow
-        );
         this.clearSampleWindowButton.removeEventListener(
             "click",
             this.boundClearSampleWindow
@@ -149,16 +122,6 @@ export class RasterSamplingAreaControlsView {
             this.boundUseTemporaryAoi
         );
         this.handlers = null;
-    }
-
-    /**
-     * Enable map-dependent sampling actions for an active raster.
-     *
-     * @return {void}
-     */
-    enableActiveRasterActions() {
-        this.sampleMapCenterButton.disabled = false;
-        this.selectSampleWindowButton.disabled = false;
     }
 
     /**
@@ -285,10 +248,6 @@ export class RasterSamplingAreaControlsView {
             "aria-pressed",
             String(mode === "wholeRaster")
         );
-        this.selectSampleWindowButton.setAttribute(
-            "aria-pressed",
-            String(mode === "selectedArea")
-        );
         this.useTemporaryAoiButton.setAttribute(
             "aria-pressed",
             String(mode === "temporaryAoi")
@@ -308,16 +267,6 @@ export class RasterSamplingAreaControlsView {
     /** Forward a committed numeric size edit. @return {void} */
     #handleSampleWindowNumberChange() {
         this.handlers.onSampleWindowNumberChange(this.sampleWindowNumber.value);
-    }
-
-    /** Forward the map-center sampling action. @return {void} */
-    #handleSampleMapCenter() {
-        this.handlers.onSampleMapCenter();
-    }
-
-    /** Forward pointer-window selection. @return {void} */
-    #handleSelectSampleWindow() {
-        this.handlers.onSelectSampleWindow();
     }
 
     /** Forward whole-raster restoration. @return {void} */

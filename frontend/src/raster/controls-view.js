@@ -37,8 +37,6 @@ import {
  * sample-window size from the numeric control.
  * @property {(value: string) => void} onSampleWindowNumberChange Commits the
  * numeric sample-window size.
- * @property {() => void} onSampleMapCenter Selects the map-center window.
- * @property {() => void} onSelectSampleWindow Enables pointer window selection.
  * @property {() => void} onClearSampleWindow Restores whole-raster statistics.
  * @property {() => void} onUseTemporaryAoi Selects the retained uploaded AOI.
  * @property {(mode: string) => void} onBivariateModeChange Changes explicit
@@ -113,7 +111,6 @@ export class RasterControlsView {
         this.#activeLayerLabel.textContent = visible
             ? label
             : `${label} — not visible on the map`;
-        this.#samplingAreaView.enableActiveRasterActions();
         this.#histogramView.setActiveLayer(label);
         this.#histogramView.enableActiveRasterActions();
     }

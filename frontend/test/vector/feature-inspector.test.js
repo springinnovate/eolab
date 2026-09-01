@@ -14,6 +14,7 @@ function createFixture(fetchImplementation) {
   documentContext.addEventListener = documentEvents.addEventListener.bind(documentEvents);
   documentContext.removeEventListener = documentEvents.removeEventListener.bind(documentEvents);
   documentContext.dispatchEvent = documentEvents.dispatchEvent.bind(documentEvents);
+  documentContext.querySelector("#vector-feature-inspector").hidden = true;
   documentContext.querySelector("#vector-feature-result").hidden = true;
   const targets = [
     {
@@ -52,13 +53,16 @@ function createFixture(fetchImplementation) {
     },
     circleMarker(latlng, options) { return { latlng, options }; },
   };
-  const activeChanges = [];
+  const inspectionChanges = [];
   const controller = new VectorFeatureInspectorController({
     leaflet,
     leafletMap,
     getVisibleTargets: () => targets,
     wmsUrl: "/geoserver/eolab/wms",
-    onActiveChange: (active) => activeChanges.push(active),
+    onInspectionChange: (visible) => {
+      inspectionChanges.push(visible);
+      documentContext.querySelector("#vector-feature-inspector").hidden = !visible;
+    },
     documentContext,
     fetchImplementation,
   });
@@ -69,7 +73,7 @@ function createFixture(fetchImplementation) {
     handlers,
     highlights,
     removedLayers,
-    activeChanges,
+    inspectionChanges,
     mapContainer,
   };
 }
@@ -112,14 +116,9 @@ test("inspector queries composed visible targets and navigates overlapping featu
       json: async () => ({ type: "FeatureCollection", features }),
     };
   });
-  const opener = h.documentContext.querySelector("#open-vector-inspector");
-  assert.equal(opener.hidden, false);
-  opener.dispatchEvent(new Event("click"));
-  assert.deepEqual(h.activeChanges, [true]);
-  assert.equal(h.handlers.has("click"), true);
-  assert.equal(h.mapContainer.classList.contains("is-inspecting-vector-features"), true);
-
   await h.controller.inspect({ containerPoint: { x: 12, y: 24 } });
+  assert.deepEqual(h.inspectionChanges, [true]);
+  assert.equal(h.handlers.has("click"), false);
   assert.deepEqual(requestedLayers, ["eolab:parcels"]);
   assert.equal(h.documentContext.querySelector("#vector-feature-status").textContent,
     "2 features found.");
@@ -147,7 +146,7 @@ test("inspector validates the composition target contract at its boundary", () =
   );
 });
 
-test("a newer click owns presentation and hiding the last vector closes inspection", async () => {
+test("a newer click owns presentation and closing does not disable later inspection", async () => {
   const resolvers = [];
   const h = createFixture((url, options) => new Promise((resolve, reject) => {
     options.signal.addEventListener("abort", () => {
@@ -157,8 +156,6 @@ test("a newer click owns presentation and hiding the last vector closes inspecti
     });
     resolvers.push(resolve);
   }));
-  h.documentContext.querySelector("#open-vector-inspector")
-    .dispatchEvent(new Event("click"));
   const first = h.controller.inspect({ containerPoint: { x: 1, y: 1 } });
   const second = h.controller.inspect({ containerPoint: { x: 2, y: 2 } });
   resolvers[1]({
@@ -171,10 +168,27 @@ test("a newer click owns presentation and hiding the last vector closes inspecti
   assert.equal(h.documentContext.querySelector("#vector-feature-status").textContent,
     "1 feature found.");
 
+  h.documentContext.querySelector("#close-vector-inspector")
+    .dispatchEvent(new Event("click"));
+  assert.equal(
+    h.documentContext.querySelector("#vector-feature-inspector").hidden,
+    true,
+  );
+  assert.equal(h.documentContext.activeElement, h.mapContainer);
+
+  const reopened = h.controller.inspect({ containerPoint: { x: 3, y: 3 } });
+  resolvers[2]({
+    ok: true,
+    json: async () => ({ type: "FeatureCollection", features: [] }),
+  });
+  await reopened;
+  assert.equal(
+    h.documentContext.querySelector("#vector-feature-inspector").hidden,
+    false,
+  );
+
   h.targets.length = 0;
   h.controller.syncVisibleLayers();
-  assert.equal(h.controller.active, false);
-  assert.equal(h.documentContext.querySelector("#open-vector-inspector").hidden, true);
   assert.equal(h.handlers.has("click"), false);
-  assert.deepEqual(h.activeChanges, [true, false]);
+  assert.deepEqual(h.inspectionChanges, [true, true, false, true, false]);
 });

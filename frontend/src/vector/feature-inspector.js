@@ -1,4 +1,4 @@
-/** Explicit click-to-inspect interaction for visible published vector layers. */
+/** One-shot feature inspection for visible published vector layers. */
 
 import {
     fetchVectorFeatureInfo,
@@ -77,7 +77,7 @@ export function vectorFeatureAttributes(feature, primaryGeometry = null) {
     return attributes;
 }
 
-/** Own vector-inspection enablement, requests, results, and map highlight. */
+/** Own vector-inspection requests, results, and map highlight. */
 export class VectorFeatureInspectorController {
     /**
      * @param {Object} configuration Collaborators.
@@ -86,8 +86,8 @@ export class VectorFeatureInspectorController {
      * @param {() => VectorFeatureInspectionTarget[]}
      * configuration.getVisibleTargets Current visible vectors from composition.
      * @param {string} configuration.wmsUrl Restricted browser WMS URL.
-     * @param {(active:boolean) => void} configuration.onActiveChange Notifies
-     * composition so it can coordinate sibling map tools.
+     * @param {(visible:boolean) => void} configuration.onInspectionChange
+     * Requests presentation changes without knowing the presentation owner.
      * @param {Document} [configuration.documentContext=document] DOM owner.
      * @param {typeof fetch} [configuration.fetchImplementation=globalThis.fetch]
      * HTTP implementation.
@@ -97,24 +97,23 @@ export class VectorFeatureInspectorController {
         leafletMap,
         getVisibleTargets,
         wmsUrl,
-        onActiveChange,
+        onInspectionChange,
         documentContext = document,
         fetchImplementation = globalThis.fetch,
     }) {
         if (typeof getVisibleTargets !== "function") {
             throw new TypeError("getVisibleTargets must be a function.");
         }
-        if (typeof onActiveChange !== "function") {
-            throw new TypeError("onActiveChange must be a function.");
+        if (typeof onInspectionChange !== "function") {
+            throw new TypeError("onInspectionChange must be a function.");
         }
         this.leaflet = leaflet;
         this.map = leafletMap;
         this.getVisibleTargets = getVisibleTargets;
         this.wmsUrl = wmsUrl;
-        this.onActiveChange = onActiveChange;
+        this.onInspectionChange = onInspectionChange;
         this.document = documentContext;
         this.fetchImplementation = fetchImplementation;
-        this.opener = documentContext.querySelector("#open-vector-inspector");
         this.panel = documentContext.querySelector("#vector-feature-inspector");
         this.closeButton = documentContext.querySelector("#close-vector-inspector");
         this.status = documentContext.querySelector("#vector-feature-status");
@@ -124,33 +123,26 @@ export class VectorFeatureInspectorController {
         this.attributes = documentContext.querySelector("#vector-feature-attributes");
         this.previous = documentContext.querySelector("#previous-vector-feature");
         this.next = documentContext.querySelector("#next-vector-feature");
-        this.active = false;
         this.results = [];
         this.resultIndex = 0;
         this.highlightLayer = null;
         this.abortController = null;
         this.requestGeneration = 0;
         this.mapContainer = this.map.getContainer();
-        this.onOpen = () => this.enable();
-        this.onClose = () => this.disable({ moveFocus: true });
+        this.onClose = () => this.close({ moveFocus: true });
         this.onPrevious = () => this.showResult(this.resultIndex - 1);
         this.onNext = () => this.showResult(this.resultIndex + 1);
-        this.onMapClick = (event) => this.inspect(event);
         this.onKeydown = (event) => {
-            if (
-                event.key !== "Escape" || !this.active ||
-                !(
-                    this.panel.contains(this.document.activeElement) ||
-                    this.document.activeElement === this.mapContainer
-                )
-            ) {
+            if (event.key !== "Escape" || this.panel.hidden || !(
+                this.panel.contains(this.document.activeElement) ||
+                this.document.activeElement === this.mapContainer
+            )) {
                 return;
             }
             event.preventDefault();
             event.stopPropagation();
-            this.disable({ moveFocus: true });
+            this.close({ moveFocus: true });
         };
-        this.opener.addEventListener("click", this.onOpen);
         this.closeButton.addEventListener("click", this.onClose);
         this.previous.addEventListener("click", this.onPrevious);
         this.next.addEventListener("click", this.onNext);
@@ -187,16 +179,17 @@ export class VectorFeatureInspectorController {
     }
 
     /**
-     * Synchronize opener availability and close an orphaned interaction.
+     * Close orphaned results after the last visible vector leaves the map.
      *
      * @return {void}
      */
     syncVisibleLayers() {
         const available = this.visibleTargets().length > 0;
-        this.opener.hidden = !available;
-        this.opener.disabled = !available;
-        if (!available && this.active) {
-            this.disable();
+        if (!available && (
+            !this.panel.hidden || this.abortController !== null ||
+            this.results.length > 0
+        )) {
+            this.close();
         }
     }
 
@@ -227,62 +220,34 @@ export class VectorFeatureInspectorController {
     }
 
     /**
-     * Enable explicit inspection without moving keyboard focus.
+     * Hide inspection, cancel work, clear results, and optionally focus the map.
      *
+     * @param {Object} [options] Close options.
+     * @param {boolean} [options.moveFocus=false] Restore focus to the map.
      * @return {void}
      */
-    enable() {
-        if (this.active || this.visibleTargets().length === 0) {
-            return;
-        }
-        this.active = true;
-        this.onActiveChange(true);
-        this.map.on("click", this.onMapClick);
-        this.mapContainer.classList.add("is-inspecting-vector-features");
-        this.opener.hidden = true;
-        this.opener.setAttribute("aria-expanded", "true");
-        this.status.textContent = "Click a visible vector feature to inspect it.";
-    }
-
-    /**
-     * Disable inspection, cancel work, clear results, and optionally restore focus.
-     *
-     * @param {Object} [options] Disable options.
-     * @param {boolean} [options.moveFocus=false] Restore focus to the opener.
-     * @return {void}
-     */
-    disable({ moveFocus = false } = {}) {
-        const wasActive = this.active;
-        if (this.active) {
-            this.map.off("click", this.onMapClick);
-        }
-        this.active = false;
+    close({ moveFocus = false } = {}) {
         this.requestGeneration += 1;
         this.abortController?.abort();
         this.abortController = null;
         this.clearResults();
-        this.mapContainer.classList.remove("is-inspecting-vector-features");
-        if (wasActive) {
-            this.onActiveChange(false);
-        }
-        this.opener.setAttribute("aria-expanded", "false");
-        this.syncVisibleLayers();
-        if (moveFocus && !this.opener.hidden) {
-            this.opener.focus();
-        }
+        this.status.textContent = "Click the map to inspect visible vector features.";
+        this.onInspectionChange(false);
+        if (moveFocus) this.mapContainer.focus();
     }
 
     /**
      * Inspect every currently visible vector target at one map click.
      *
      * @param {Object} event Leaflet map-click event.
-     * @return {Promise<void>} Completion after current results are presented.
+     * @return {Promise<boolean>} Whether visible vector targets were inspected.
      */
     async inspect(event) {
         const targets = this.visibleTargets();
-        if (!this.active || targets.length === 0) {
-            return;
+        if (targets.length === 0) {
+            return false;
         }
+        this.onInspectionChange(true);
         this.abortController?.abort();
         this.abortController = new AbortController();
         const generation = ++this.requestGeneration;
@@ -299,8 +264,8 @@ export class VectorFeatureInspectorController {
             }, this.fetchImplementation);
             return features.map((feature) => ({ feature, target }));
         }));
-        if (!this.active || generation !== this.requestGeneration) {
-            return;
+        if (generation !== this.requestGeneration) {
+            return false;
         }
         this.abortController = null;
         this.results = responses.flatMap((response) =>
@@ -315,7 +280,7 @@ export class VectorFeatureInspectorController {
             this.status.textContent = failures === 0
                 ? `${this.results.length} feature${this.results.length === 1 ? "" : "s"} found.`
                 : `${this.results.length} feature${this.results.length === 1 ? "" : "s"} found; one visible layer could not be inspected.`;
-            return;
+            return true;
         }
         const failure = responses.find(
             (response) => response.status === "rejected" &&
@@ -324,6 +289,7 @@ export class VectorFeatureInspectorController {
         this.status.textContent = failure?.reason instanceof VectorFeatureInfoError
             ? failure.reason.message
             : "No vector feature was found at that location.";
+        return true;
     }
 
     /**
@@ -401,8 +367,7 @@ export class VectorFeatureInspectorController {
      * @return {void}
      */
     destroy() {
-        this.disable();
-        this.opener.removeEventListener("click", this.onOpen);
+        this.close();
         this.closeButton.removeEventListener("click", this.onClose);
         this.previous.removeEventListener("click", this.onPrevious);
         this.next.removeEventListener("click", this.onNext);

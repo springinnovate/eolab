@@ -34,7 +34,15 @@ test("vector inspection coordination remains in the browser composition root", (
     assert.doesNotMatch(INSPECTOR_SOURCE, new RegExp(forbiddenPeerKnowledge));
   }
   assert.match(COMPOSITION_SOURCE, /getVisibleTargets:\s*\(\)\s*=>/);
-  assert.match(COMPOSITION_SOURCE, /onActiveChange:\s*\(active\)\s*=>/);
+  assert.match(COMPOSITION_SOURCE, /onInspectionChange:\s*\(visible\)\s*=>/);
+  assert.match(COMPOSITION_SOURCE, /leafletMap\.on\("click", exploreMap\)/);
+  assert.match(
+    COMPOSITION_SOURCE,
+    /getContainer\(\)\.classList\.add\("leaflet-crosshair"\)/,
+  );
+  assert.match(COMPOSITION_SOURCE, /rasterVisualization\.exploreAt\(event\.latlng\)/);
+  assert.match(COMPOSITION_SOURCE, /vectorFeatureInspector\.inspect\(event\)/);
+  assert.doesNotMatch(INSPECTOR_SOURCE, /\.on\("click"/);
   for (const forbiddenMapImplementation of [
     "leafletMap",
     ".getBounds(",
@@ -42,10 +50,7 @@ test("vector inspection coordination remains in the browser composition root", (
   ]) {
     assert.equal(FEATURE_INFO_SOURCE.includes(forbiddenMapImplementation), false);
   }
-  assert.doesNotMatch(
-    STYLESHEET,
-    /#open-map-histogram\[hidden\]\)\s+#open-vector-inspector/,
-  );
+  assert.doesNotMatch(STYLESHEET, /is-inspecting-vector-features/);
 });
 
 test("vector style controls expose intent without knowing sibling subsystems", () => {

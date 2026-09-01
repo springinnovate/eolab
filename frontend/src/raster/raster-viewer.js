@@ -131,8 +131,8 @@ function canRetryRasterStatistics(error) {
  * one selected raster Item.
  * @property {() => void} syncVisibleLayers Opt into histogram selection from
  * the top visible rasters and synchronize analysis without choosing a style target.
- * @property {() => void} stopSampleWindowSelection Pause map-click sampling
- * while retaining the selected footprint and histogram results.
+ * @property {(position:{lng:number,lat:number}) => boolean} exploreAt Select
+ * one validated map window and request its histogram when analysis is active.
  * @property {(key:string) => boolean} openStyle Select a retained or sampled
  * raster for editing; return false when the key has no raster session.
  * @property {() => void} closeStyle Flush a pending edit and release its target.
@@ -286,7 +286,6 @@ export function initializeRasterViewer(
     let wholeRasterStatisticsState = "idle";
     let wholeRasterStatisticsError = null;
     let selectedRasterBounds = null;
-    let sampleWindowSelectionPaused = false;
     let selectedTemporaryAoi = null;
     let availableTemporaryAoi = null;
     let selectedRasterWindowSizeKm = null;
@@ -682,7 +681,7 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Create one transient or committed sample-window rectangle.
+     * Create one passive preview or committed sample-window rectangle.
      *
      * @param {Array} bounds Leaflet rectangle bounds.
      * @param {"preview"|"selection"} layerKind Rectangle purpose.
@@ -1573,7 +1572,6 @@ export function initializeRasterViewer(
         controlsView.setAppearanceEnabled?.(false);
         controlsView.setUnivariateHistogramVisible?.(false);
         renderRasterSamplingAreaControls();
-        resumeSampleWindowSelection();
         showHistogramWorkspace();
         requestBivariateStatistics();
         applyBivariatePresentation();
@@ -2029,13 +2027,9 @@ export function initializeRasterViewer(
                 presentedBounds
             );
         }
-        if (selectedTemporaryAoi === null) {
-            resumeSampleWindowSelection();
-        }
         if (bivariateMode.active) {
             controlsView.setAppearanceEnabled?.(false);
             controlsView.setUnivariateHistogramVisible?.(false);
-            resumeSampleWindowSelection();
             saveActiveLayerSession();
             applyBivariatePresentation();
             renderRasterSampleWindowGuidance("");
@@ -2094,15 +2088,11 @@ export function initializeRasterViewer(
                 presentedBounds
             );
         }
-        if (selectedTemporaryAoi === null) {
-            resumeSampleWindowSelection();
-        }
         renderRasterSamplingAreaControls();
         if (bivariateMode.active) {
             pixelProbeController.clear();
             controlsView.setAppearanceEnabled?.(false);
             controlsView.setUnivariateHistogramVisible?.(false);
-            resumeSampleWindowSelection();
             saveActiveLayerSession();
             applyBivariatePresentation();
             renderRasterSampleWindowGuidance("");
@@ -2198,7 +2188,6 @@ export function initializeRasterViewer(
             activateLayer(mapLayers.activeKey);
         } else if (bivariateMode.active) {
             controlsView.setControlsVisible(true);
-            resumeSampleWindowSelection();
             const [presentedBounds] = getPresentedSampleWindow();
             if (presentedBounds !== null) {
                 rasterSampleWindowController.restoreSelection(presentedBounds);
@@ -2926,9 +2915,6 @@ export function initializeRasterViewer(
             bivariateSelectedBounds = null;
             bivariateSelectedWindowSizeKm = null;
             rasterSampleWindowController.clearSelection();
-            if (canUseRasterMapInteractions()) {
-                resumeSampleWindowSelection();
-            }
             renderRasterSamplingAreaControls();
             renderRasterSampleWindowGuidance("");
             requestBivariateStatistics();
@@ -2943,9 +2929,6 @@ export function initializeRasterViewer(
         selectedRasterStatisticsState = "idle";
         selectedRasterStatisticsError = null;
         rasterSampleWindowController.clearSelection();
-        if (canUseRasterMapInteractions()) {
-            resumeSampleWindowSelection();
-        }
         renderRasterSamplingAreaControls();
         renderRasterSampleWindowGuidance("");
         if (wholeRasterStatisticsState === "ready") {
@@ -2986,26 +2969,22 @@ export function initializeRasterViewer(
                 `${presentedWindowSizeKm} km window selected: ` +
                 `W ${west.toFixed(3)}, S ${south.toFixed(3)}, ` +
                 `E ${east.toFixed(3)}, N ${north.toFixed(3)}. ` +
-                `${sampleWindowSelectionPaused
-                    ? "Selection paused; choose Select map window to sample again."
-                    : "Move and click again to replace it."}${
+                `Click the map again to replace it.${
                     bivariateMode.active
                         ? " The paired distribution uses this shared area."
                         : ""
                 }`;
         } else if (bivariateMode.active) {
             nextStatus = "Whole-overlap paired distribution selected. " +
-                (sampleWindowSelectionPaused
-                    ? "Selection paused; choose Select map window to sample again."
-                    : "Move over the map and click to use one shared WGS 84 window.");
+                "Click the map to use one shared WGS 84 window.";
         } else if (selectedTemporaryAoi !== null) {
             nextStatus =
                 `Uploaded AOI selected: ${selectedTemporaryAoi.filename}, ` +
                 `layer ${selectedTemporaryAoi.selectedDataset}. Map overlay ` +
                 "visibility does not change this histogram selection.";
         } else {
-            nextStatus = "Whole-raster histogram selected. Choose Select " +
-                "map window or Sample map center to analyze a smaller area.";
+            nextStatus = "Whole-raster histogram selected. Click the map or " +
+                "use Analysis tools to analyze the map center.";
         }
         controlsView.setSampleWindowStatus(nextStatus);
     }
@@ -3042,6 +3021,26 @@ export function initializeRasterViewer(
             currentRasterSamplingArea()
         );
         saveActiveLayerSession();
+    }
+
+    /**
+     * Explore one composition-owned map position with the current window size.
+     *
+     * Uploaded-AOI analysis returns to the ordinary raster scope before the
+     * selected window is committed. Bounds validation and selection rendering
+     * remain owned by the sample-window controller.
+     *
+     * @param {{lng:number,lat:number}} position Leaflet map position.
+     * @return {boolean} Whether an active raster accepted the position.
+     */
+    function exploreAt(position) {
+        if (!canUseRasterMapInteractions()) {
+            return false;
+        }
+        if (selectedTemporaryAoi !== null) {
+            restoreWholeRasterStatistics();
+        }
+        return rasterSampleWindowController.selectAt(position) !== null;
     }
 
     /**
@@ -3140,43 +3139,6 @@ export function initializeRasterViewer(
             );
         }
         saveActiveLayerSession();
-    }
-
-    /**
-     * Leave AOI sampling and enable mouse, touch, and keyboard window choice.
-     *
-     * The whole-raster distribution is the stable interim scope until the user
-     * commits a new map window.
-     *
-     * @return {void}
-     */
-    function enableRasterSampleWindowSelection() {
-        sampleWindowSelectionPaused = false;
-        restoreWholeRasterStatistics();
-        if (!canUseRasterMapInteractions()) {
-            return;
-        }
-        resumeSampleWindowSelection();
-        controlsView.setSampleWindowStatus(
-            "Map-window selection enabled. Move over the map and click, tap " +
-            "Sample map center, or use the keyboard action to choose a window."
-        );
-    }
-
-    /** Honor an explicit pause when ordinary layer state restores map interaction. @return {void} */
-    function resumeSampleWindowSelection() {
-        if (!sampleWindowSelectionPaused) rasterSampleWindowController.enable();
-    }
-
-    /**
-     * Stop pointer sampling without clearing its rectangle, results, or styles.
-     * Layer changes and reopening results must not silently re-arm selection.
-     * @return {void}
-     */
-    function stopSampleWindowSelection() {
-        sampleWindowSelectionPaused = true;
-        rasterSampleWindowController.disable();
-        renderRasterSampleWindowGuidance("");
     }
 
     /**
@@ -3543,8 +3505,10 @@ export function initializeRasterViewer(
      */
     function handleMapMouseMove(mapEvent) {
         if (!canUseRasterMapInteractions()) {
+            rasterSampleWindowController.clearPreview();
             return;
         }
+        rasterSampleWindowController.previewAt(mapEvent.latlng);
         const point = {
             longitude: mapEvent.latlng.lng,
             latitude: mapEvent.latlng.lat,
@@ -3589,6 +3553,7 @@ export function initializeRasterViewer(
     function handleMapMouseLeave() {
         pixelProbeController.cancel();
         pairedPixelProbeController.cancel();
+        rasterSampleWindowController.clearPreview();
         pixelProbeClientPosition = null;
         controlsView.hidePixelProbe();
     }
@@ -3794,8 +3759,6 @@ export function initializeRasterViewer(
         resetPendingRasterStatisticsState();
         if (selectedTemporaryAoi !== null) {
             rasterSampleWindowController.clear();
-        } else if (canUseRasterMapInteractions()) {
-            resumeSampleWindowSelection();
         }
         renderRasterSamplingAreaControls();
         renderRasterSampleWindowGuidance("");
@@ -3864,21 +3827,6 @@ export function initializeRasterViewer(
         onSampleWindowRangeInput: setRasterSampleWindowSize,
         onSampleWindowNumberInput: setRasterSampleWindowSize,
         onSampleWindowNumberChange: handleSampleWindowNumberChange,
-        /**
-         * Sample a window at the map center when an analysis target is available.
-         * Leaves temporary-AOI sampling before committing the map window.
-         *
-         * @return {void}
-         */
-        onSampleMapCenter: () => {
-            if (canUseRasterMapInteractions()) {
-                if (selectedTemporaryAoi !== null) {
-                    restoreWholeRasterStatistics();
-                }
-                rasterSampleWindowController.sampleMapCenter();
-            }
-        },
-        onSelectSampleWindow: enableRasterSampleWindowSelection,
         onClearSampleWindow: handleClearSampleWindow,
         onUseTemporaryAoi: useTemporaryAoiForRasterStatistics,
         onBivariateModeChange: handleBivariateModeChange,
@@ -3900,6 +3848,7 @@ export function initializeRasterViewer(
         reset,
         show,
         syncVisibleLayers,
+        exploreAt,
         openStyle,
         closeStyle,
         refreshStyle,
@@ -3921,7 +3870,6 @@ export function initializeRasterViewer(
         removeSampled,
         contains,
         remove,
-        stopSampleWindowSelection,
         setTemporaryAoi,
         destroy,
         /**

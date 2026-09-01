@@ -21,7 +21,7 @@ function fixture() {
     const surface = doc.querySelector('#map-inspection');
     surface.showPopover = () => { surface.open = true; };
     surface.hidePopover = () => { surface.open = false; };
-    const inspection = new MapInspectionController({ documentContext: doc, onHistogramClose() {} });
+    const inspection = new MapInspectionController({ documentContext: doc });
     let layers = [{ key: 'a', label: 'a.tif', visible: true, opacity: 0.4 },
         { key: 'b', label: 'b.gpkg', visible: true, opacity: 1 }];
     const styleButtons = ['a', 'b'].map(key => {
@@ -142,7 +142,8 @@ test('paired styles lock ordinary opacity and show the coordinated controls', ()
 test('Escape closes only the focused map tool while its neighbour stays usable', () => {
     const h = fixture();
     h.editor.open('a');
-    h.inspection.showHistogram(true);
+    h.inspection.showHistogram();
+    h.doc.querySelector('#close-map-histogram').focus();
     /** Dispatch Escape at the owning document with its current focus. */
     const escape = () => {
         const event = new Event('keydown', { cancelable: true });
