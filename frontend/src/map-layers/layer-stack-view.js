@@ -25,6 +25,8 @@ function requireLayerStackElement(documentContext, selector) {
 /**
  * @typedef {Object} MapLayerStackViewHandlers
  * @property {(key: string) => void} onStyle Open one retained layer style editor.
+ * @property {(key: string) => void} onCopyStyle Copy one retained layer style.
+ * @property {(key: string) => void} onPasteStyle Paste onto one retained layer.
  * @property {(key: string, visible: boolean) => void} onVisibility Change
  * map visibility.
  * @property {(key: string, targetIndex: number) => void} onReorder Move one
@@ -210,6 +212,39 @@ export class MapLayerStackView {
         );
         style.setAttribute("aria-haspopup", "dialog");
         style.setAttribute("aria-controls", "layer-style-editor");
+        const clipboard = layer.styleClipboard ?? {
+            canCopy: false,
+            canPaste: false,
+            sourceLabel: null,
+            pasteReason: "Style copy and paste is unavailable.",
+        };
+        const copyStyle = this.#styleIconButton(
+            "copy",
+            `Copy style from ${accessibleName}`,
+            clipboard.canCopy
+                ? `Copy style and opacity from ${layer.label}`
+                : "Copying styles is unavailable for this layer.",
+            layer.key,
+            "copy-style",
+            () => this.handlers?.onCopyStyle(layer.key),
+            focusTargets,
+            !clipboard.canCopy
+        );
+        const pasteStyle = this.#styleIconButton(
+            "paste",
+            `Paste copied style onto ${accessibleName}`,
+            clipboard.canPaste
+                ? `Paste style and opacity from ${clipboard.sourceLabel}`
+                : clipboard.pasteReason,
+            layer.key,
+            "paste-style",
+            () => this.handlers?.onPasteStyle(layer.key),
+            focusTargets,
+            !clipboard.canPaste
+        );
+        const styleActions = this.documentContext.createElement("div");
+        styleActions.className = "map-layer-style-actions";
+        styleActions.append(style, copyStyle, pasteStyle);
         const actions = this.documentContext.createElement("details");
         actions.className = "raster-layer-actions";
         const toggle = this.documentContext.createElement("summary");
@@ -240,7 +275,7 @@ export class MapLayerStackView {
             actions.open = false;
             toggle.focus();
         });
-        row.append(reorder, label, style, actions);
+        row.append(reorder, label, styleActions, actions);
         const legend = this.#buildLegend(layer.legend);
         if (legend !== null) row.append(legend);
         if (layer.error) {
@@ -571,6 +606,45 @@ export class MapLayerStackView {
         button.dataset.layerAction = action;
         button.addEventListener("click", callback);
         this.#rememberFocusTarget(focusTargets, button);
+        return button;
+    }
+
+    /**
+     * Create one compact icon button beside the primary Style action.
+     *
+     * The icon is presentation-only CSS so the accessible name and tooltip
+     * remain authoritative across pointer, keyboard, and assistive use.
+     *
+     * @param {"copy"|"paste"} icon Clipboard action icon.
+     * @param {string} accessibleName Full accessible action name.
+     * @param {string} title Pointer tooltip or disabled-state explanation.
+     * @param {string} key Stable layer key.
+     * @param {string} action Stable focus action.
+     * @param {() => void} callback Intent callback.
+     * @param {Map<string,Element>} focusTargets Rendered focus targets.
+     * @param {boolean} disabled Whether the action is unavailable.
+     * @return {HTMLButtonElement} Configured icon button.
+     */
+    #styleIconButton(
+        icon,
+        accessibleName,
+        title,
+        key,
+        action,
+        callback,
+        focusTargets,
+        disabled
+    ) {
+        const button = this.#button(
+            "", accessibleName, key, action, callback, focusTargets
+        );
+        button.classList.add("map-layer-style-icon-button");
+        button.title = title;
+        button.disabled = disabled;
+        const image = this.documentContext.createElement("span");
+        image.className = `map-layer-style-${icon}-icon`;
+        image.setAttribute("aria-hidden", "true");
+        button.append(image);
         return button;
     }
 

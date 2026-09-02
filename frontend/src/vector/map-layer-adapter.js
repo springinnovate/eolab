@@ -9,8 +9,13 @@ import {
 import { createVectorWmsLayer } from "./leaflet.js";
 import { buildCatalogResultPresentation } from "../catalog-result-presentation.js";
 import {
+    normalizeVectorNumericClassification,
     normalizeVectorStyle,
+    sequentialPaletteColors,
+    vectorCategoricalFieldKind,
+    vectorCategoricalFields,
     vectorLabelFields,
+    vectorNumericFields,
     vectorStyleLegend,
 } from "./style.js";
 
@@ -46,6 +51,131 @@ function canonicalJson(candidate) {
         ).join(",")}}`;
     }
     return JSON.stringify(candidate);
+}
+
+/**
+ * Check one copied vector style against a target vector record.
+ *
+ * Geometry and Catalog field compatibility are feature-owned concerns. The
+ * backend remains authoritative when the style is applied, but this bounded
+ * check prevents known-incompatible paste actions from being offered.
+ *
+ * @param {Object} record Target retained vector record.
+ * @param {Object} savedState Candidate portable style envelope.
+ * @return {string|null} Null when compatible or a user-facing reason.
+ */
+function checkPortableVectorStyleCompatibility(record, savedState) {
+    if (savedState?.kind !== "vector") {
+        return "Only copied vector styles can be pasted onto vector layers.";
+    }
+    let style;
+    try {
+        style = normalizePortableVectorStyle(savedState.definition);
+    } catch (error) {
+        return error instanceof Error
+            ? `Copied vector style is invalid: ${error.message}`
+            : "Copied vector style is invalid.";
+    }
+    const targetGeometry = normalizeVectorStyle(
+        record.state.style
+    ).geometryKind;
+    if (style.geometryKind !== targetGeometry) {
+        return `A ${style.geometryKind} style cannot be pasted onto a ` +
+            `${targetGeometry} layer.`;
+    }
+    const fields = record.state.labelFields;
+    const fieldNames = new Set(fields.map(({ name }) => name));
+    if (style.label !== null && !fieldNames.has(style.label.field)) {
+        return `The target layer does not contain label field ` +
+            `“${style.label.field}”.`;
+    }
+    if (
+        style.categorical !== null
+    ) {
+        const targetField = vectorCategoricalFields(fields).find(
+            ({ name }) => name === style.categorical.field
+        );
+        const targetKind = vectorCategoricalFieldKind(targetField?.type);
+        const valuesAreCompatible = style.categorical.rules.every(
+            ({ value }) => value.kind === targetKind
+        );
+        if (targetField === undefined || !valuesAreCompatible) {
+            return `The target layer does not contain compatible category ` +
+                `field “${style.categorical.field}”.`;
+        }
+    }
+    if (
+        style.graduated !== null &&
+        !vectorNumericFields(fields).some(
+            ({ name }) => name === style.graduated.field
+        )
+    ) {
+        return `The target layer does not contain compatible numeric field ` +
+            `“${style.graduated.field}”.`;
+    }
+    return null;
+}
+
+/**
+ * Reclassify a copied graduated style against its target vector Item.
+ *
+ * Numeric rule boundaries describe source data rather than portable visual
+ * intent. Field, method, requested class count, palette, and symbol settings
+ * transfer, while the existing bounded-classification boundary supplies the
+ * target's authoritative ranges. The style service repeats that classification
+ * during apply so a source change between the two bounded reads still fails
+ * safely.
+ *
+ * @param {Object} record Target retained vector record.
+ * @param {Object} copiedStyle Validated copied vector style.
+ * @param {(item:Object,field:string,method:string,classCount:number)=>Promise<Object>}
+ * classify Bounded numeric-classification API adapter.
+ * @return {Promise<Object>} Validated style using target-specific ranges.
+ * @throws {TypeError} If the classification response does not match the
+ * copied field, method, and requested class count.
+ */
+async function adaptPortableVectorStyleToTarget(
+    record,
+    copiedStyle,
+    classify
+) {
+    const graduated = copiedStyle.graduated;
+    if (graduated === null) {
+        return copiedStyle;
+    }
+    const summary = normalizeVectorNumericClassification(
+        await classify(
+            record.state.item,
+            graduated.field,
+            graduated.method,
+            graduated.classCount
+        )
+    );
+    if (
+        summary.field !== graduated.field ||
+        summary.method !== graduated.method ||
+        summary.requestedClassCount !== graduated.classCount
+    ) {
+        throw new TypeError("Numeric classification changed unexpectedly.");
+    }
+    const colors = sequentialPaletteColors(
+        graduated.palette,
+        summary.actualClassCount
+    );
+    return normalizeVectorStyle({
+        ...copiedStyle,
+        graduated: {
+            ...graduated,
+            rules: summary.classes.map((numericClass, index) => ({
+                minimum: numericClass.minimum,
+                maximum: numericClass.maximum,
+                color: colors[index]
+            })),
+            missingColor: summary.nullCount > 0
+                ? graduated.missingColor
+                : null
+        }
+    });
 }
 
 /**
@@ -168,6 +298,16 @@ export function createVectorMapLayerAdapter({
             };
         },
         /**
+         * Check geometry and Catalog fields before offering a paste action.
+         *
+         * @param {Object} record Target retained vector record.
+         * @param {Object} savedState Candidate portable style envelope.
+         * @return {string|null} Null when compatible or a user-facing reason.
+         */
+        checkSavedStateCompatibility(record, savedState) {
+            return checkPortableVectorStyleCompatibility(record, savedState);
+        },
+        /**
          * Validate and apply one portable vector appearance through GeoServer.
          *
          * @param {Object} record Neutral retained-layer record.
@@ -178,9 +318,16 @@ export function createVectorMapLayerAdapter({
             if (savedState?.kind !== "vector") {
                 throw new TypeError("Saved style does not belong to a vector.");
             }
+            const copiedStyle = normalizePortableVectorStyle(
+                savedState.definition
+            );
             await this.applyStyle(
                 record,
-                normalizePortableVectorStyle(savedState.definition)
+                await adaptPortableVectorStyleToTarget(
+                    record,
+                    copiedStyle,
+                    classify
+                )
             );
         },
         /**

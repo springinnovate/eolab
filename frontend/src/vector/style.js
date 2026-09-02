@@ -170,7 +170,7 @@ export function vectorLabelFields(item) {
 export function vectorCategoricalFields(fields) {
     if (!Array.isArray(fields)) return Object.freeze([]);
     return Object.freeze(fields.filter(({ name, type }) =>
-        typeof name === "string" && categoricalFieldKind(type) !== null
+        typeof name === "string" && vectorCategoricalFieldKind(type) !== null
     ));
 }
 
@@ -683,8 +683,14 @@ function normalizeCategoryValue(candidate) {
     return Object.freeze({ kind: candidate.kind, value });
 }
 
-/** Map one Catalog field type to the explicit category value kind. */
-function categoricalFieldKind(fieldType) {
+/**
+ * Map one Catalog field type to the explicit category value kind.
+ *
+ * @param {unknown} fieldType Catalog field type.
+ * @return {"boolean"|"integer"|"number"|"string"|null} Supported category
+ * kind or null when the field cannot be styled categorically.
+ */
+export function vectorCategoricalFieldKind(fieldType) {
     if (typeof fieldType !== "string") return null;
     const baseType = fieldType.split(":", 1)[0].toLowerCase();
     if (["str", "string"].includes(baseType)) return "string";
@@ -701,7 +707,7 @@ function categoricalFieldKind(fieldType) {
  * @return {"integer"|"number"|null} Numeric kind or null when unsupported.
  */
 function numericFieldKind(fieldType) {
-    const kind = categoricalFieldKind(fieldType);
+    const kind = vectorCategoricalFieldKind(fieldType);
     return kind === "integer" || kind === "number" ? kind : null;
 }
 

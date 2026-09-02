@@ -527,6 +527,24 @@ test("raster adapter exports and reapplies only validated portable appearance", 
     assert.equal(exported.kind, "raster");
     assert.deepEqual(exported.definition, record.state.rasterStyle);
     assert.equal(exported.paletteName, "blue-yellow-red");
+    assert.equal(
+        record.adapter.checkSavedStateCompatibility(record, exported),
+        null,
+    );
+    assert.match(
+        record.adapter.checkSavedStateCompatibility(record, {
+            kind: "vector",
+            definition: {},
+        }),
+        /Only copied raster styles/,
+    );
+    assert.match(
+        record.adapter.checkSavedStateCompatibility(record, {
+            ...exported,
+            paletteName: "not-a-palette",
+        }),
+        /palette is invalid/,
+    );
     const restoredStyle = {
         ...DEFAULT_RASTER_STYLE,
         minimum: -5,
