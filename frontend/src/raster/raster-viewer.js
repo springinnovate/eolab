@@ -363,6 +363,7 @@ export function initializeRasterViewer(
             selectedRasterStatisticsState: "idle",
             selectedRasterStatisticsError: null,
             layerHistogramController: null,
+            layer: null,
             error: null,
         };
     }
@@ -1732,11 +1733,13 @@ export function initializeRasterViewer(
          * @return {Object} Leaflet-compatible WMS layer, not yet attached.
          */
         createLayer(record, reportTileError) {
-            return createRasterLayer(
+            const layer = createRasterLayer(
                 record.publication,
                 record.state.rasterStyle,
                 reportTileError
             );
+            record.state.layer = layer;
+            return layer;
         },
         /**
          * Describe effective opacity and legend, including paired-mode styling.
@@ -2392,7 +2395,7 @@ export function initializeRasterViewer(
      */
     function applySessionStyle(session, style, paletteName, wasEdited) {
         const environment = buildRasterStyleEnvironment(style);
-        mapLayers.getLeafletLayer(session.key)?.setParams({
+        session.layer?.setParams({
             styles: "dynamic-raster", env: environment,
         });
         session.rasterStyle = { ...style };

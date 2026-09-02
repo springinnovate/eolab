@@ -579,6 +579,40 @@ test("raster adapter exports and reapplies only validated portable appearance", 
     h.destroy();
 });
 
+test("saved style updates a staged raster before it is attached", async () => {
+    const h = visibleLayerFixture();
+    const staged = await h.viewer.stage(
+        createRasterItem("staged-portable"),
+        { visible: true, opacity: 0.6 },
+    );
+    const restoredStyle = {
+        ...DEFAULT_RASTER_STYLE,
+        minimum: 0.25,
+        midpoint: 0.5,
+        maximum: 0.75,
+    };
+
+    assert.equal(h.mapLayers.retainedRecords.length, 0);
+    assert.equal(h.leafletMap.layers.size, 0);
+    staged.record.adapter.applySavedState(staged.record, {
+        kind: "raster",
+        definition: restoredStyle,
+        paletteName: "blue-yellow-red",
+    });
+
+    assert.deepEqual(staged.record.state.rasterStyle, restoredStyle);
+    assert.equal(staged.layer.parameters.styles, "dynamic-raster");
+    assert.match(staged.layer.parameters.env, /min:0.25/);
+    assert.match(staged.layer.parameters.env, /med:0.5/);
+    assert.match(staged.layer.parameters.env, /max:0.75/);
+    assert.equal(h.leafletMap.layers.size, 0);
+
+    h.mapLayers.commitStaged([staged], { fitToBounds: false });
+    assert.equal(h.leafletMap.layers.has(staged.layer), true);
+    assert.equal(staged.layer.opacity, 0.6);
+    h.destroy();
+});
+
 test('two uncached 1D histograms share one read slot and both complete', async () => {
     const reads = [];
     let inflight = 0;
