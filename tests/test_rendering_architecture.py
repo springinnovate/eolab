@@ -6,6 +6,7 @@ from pathlib import Path
 
 RENDERING_SOURCE = Path("src/eolab_app/rendering")
 WMS_PROXY_SOURCE = Path("src/eolab_app/routes/wms_proxy.py")
+HTTP_DISCONNECT_SOURCE = Path("src/eolab_app/routes/http_disconnect.py")
 GEOTIFF_CATALOG_SOURCE = Path("src/eolab_app/catalog/geotiff.py")
 APPLICATION_COMPOSITION_SOURCE = Path("src/eolab_app/main.py")
 
@@ -53,7 +54,19 @@ def test_restricted_wms_route_depends_only_on_neutral_authorization() -> None:
         "eolab_app.diagnostics.tracker",
         "eolab_app.rendering.errors",
         "eolab_app.rendering.ports",
+        "eolab_app.routes.http_disconnect",
     }
+
+
+def test_disconnect_coordination_is_dataset_neutral() -> None:
+    """Keep shared request cancellation independent from feature packages."""
+    application_imports = {
+        module
+        for module in imported_modules(HTTP_DISCONNECT_SOURCE)
+        if module.startswith("eolab_app.")
+    }
+
+    assert application_imports == set()
 
 
 def test_raster_discovery_has_no_geoserver_or_publication_dependency() -> None:

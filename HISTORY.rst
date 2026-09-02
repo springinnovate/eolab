@@ -4,6 +4,7 @@ History
 Unreleased
 ----------
 
+* Cancel abandoned map requests and bound GeoServer queue waits.
 * Suggest valid Catalog search filters contextually while users type.
 * Copy complete raster or vector styles and layer opacity onto compatible map layers.
 * Reorder map layers with an accessible pointer, touch, or keyboard drag handle.

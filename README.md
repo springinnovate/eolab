@@ -9,9 +9,10 @@ EOLab is an open source platform for Earth observation analysis and visualizatio
 3. In Coolify's **Production** environment variables, set `EOLAB_DATABASE_PASSWORD` to a long random value before the first deployment. Keep this value: PostgreSQL uses it when initializing the persistent database volume, and changing the environment variable later does not change the database password.
 4. Set `EOLAB_GEOSERVER_ADMIN_PASSWORD` and `EOLAB_GEOSERVER_MASTER_PASSWORD` to different long random values. Use at least 16 letters, numbers, hyphens, underscores, or periods for the administrator password. The master password must contain at least eight characters with no surrounding whitespace. GeoServer uses the first value for its internal administrator account; EOLab's initializer applies the second to the GeoServer keystore without exposing either value to the browser.
    Add `EOLAB_GEOSERVER_CPU_LIMIT=4`,
-   `EOLAB_GEOSERVER_MAX_HEAP_SIZE=4g`, and
-   `EOLAB_GEOSERVER_WMS_RENDER_COUNT=2` if Coolify does not list those
-   defaulted variables automatically.
+   `EOLAB_GEOSERVER_MAX_HEAP_SIZE=4g`,
+   `EOLAB_GEOSERVER_WMS_RENDER_COUNT=2`, and
+   `EOLAB_GEOSERVER_WMS_QUEUE_TIMEOUT_SECONDS=10` if Coolify does not list
+   those defaulted variables automatically.
 5. Configure the read-only scan mount and the directories EOLab should search. In the EOLab resource's **Production** environment variables, select **Add** and create these variables:
 
     ```text
@@ -58,6 +59,7 @@ EOLab no longer loads a sample Collection during deployment. Upgrading does not 
 | `EOLAB_GEOSERVER_CPU_LIMIT`        | `4`                                               | GeoServer container CPU limit                        |
 | `EOLAB_GEOSERVER_MAX_HEAP_SIZE`    | `4g`                                              | Maximum GeoServer Java heap (`m` or `g`)             |
 | `EOLAB_GEOSERVER_WMS_RENDER_COUNT` | `2`                                               | Concurrent GeoServer WMS map renders                 |
+| `EOLAB_GEOSERVER_WMS_QUEUE_TIMEOUT_SECONDS` | `10`                                     | Maximum seconds a WMS request may wait in GeoServer's queue |
 | `EOLAB_RASTER_PIXEL_READ_CONCURRENCY` | `2`                                            | Concurrent Rasterio pixel reads                      |
 | `EOLAB_RASTER_STATISTICS_READ_CONCURRENCY` | `1`                                       | Concurrent Rasterio statistics reads                 |
 | `EOLAB_RASTER_STATISTICS_CACHE_ENTRIES` | `32`                                          | Completed statistics documents cached per app process |
@@ -119,11 +121,18 @@ GeoServer is configured automatically. Keep `EOLAB_GEOSERVER_ADMIN_PASSWORD` and
 GeoServer may use up to `EOLAB_GEOSERVER_CPU_LIMIT` CPUs and
 `EOLAB_GEOSERVER_MAX_HEAP_SIZE` of Java heap. Its control-flow extension runs
 at most `EOLAB_GEOSERVER_WMS_RENDER_COUNT` WMS map renders concurrently and
-queues the remaining tile requests. Change these Coolify variables and
-redeploy to tune the service; Java detects the Docker CPU limit without an
-`ActiveProcessorCount` override. The CPU limit must be positive, the render
-count must be a positive integer, and the heap must be at least `256m` with an
-`m` or `g` suffix.
+queues the remaining tile requests for at most
+`EOLAB_GEOSERVER_WMS_QUEUE_TIMEOUT_SECONDS` seconds. The queue timeout bounds
+only the wait for GeoServer rendering capacity; the app retains a separate
+30-second upstream HTTP safety timeout. EOLab also cancels its upstream
+`GetMap` operation when the requesting browser
+disconnects. Closing that connection releases EOLab resources and abandons
+queued work, but it is a best-effort signal rather than a guarantee that every
+already-running GeoServer renderer stops immediately. Change these Coolify
+variables and redeploy to tune the service; Java detects the Docker CPU limit
+without an `ActiveProcessorCount` override. The CPU limit must be positive,
+the render count and queue timeout must be positive integers, and the heap must
+be at least `256m` with an `m` or `g` suffix.
 
 The application also bounds its own Rasterio work. Keep
 `EOLAB_RASTER_STATISTICS_READ_CONCURRENCY` at `1` unless storage benchmarks
@@ -143,7 +152,9 @@ stop while the browser tab is hidden. The raw JMX Exporter and GeoServer
 administrative endpoints remain internal; the browser receives only a fixed
 numeric summary. Heap maximum is the configured Java `-Xmx`, not host RAM, and
 GetMap duration is measured end to end at EOLab's WMS proxy, including any
-control-flow queue time. The exporter endpoint is not published outside the
+control-flow queue time. Requests abandoned by disconnected clients release
+their active slot without being reported as completed renders or failures. The
+exporter endpoint is not published outside the
 Compose network, and the diagnostics panel never exposes metric labels,
 internal URLs, request parameters, or upstream error text.
 

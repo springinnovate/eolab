@@ -205,6 +205,10 @@ def test_geoserver_has_bounded_tunable_rendering_resources() -> None:
         '"GEOSERVER_WMS_RENDER_COUNT=${EOLAB_GEOSERVER_WMS_RENDER_COUNT:-2}"'
         in compose
     )
+    assert (
+        '"GEOSERVER_WMS_QUEUE_TIMEOUT_SECONDS='
+        '${EOLAB_GEOSERVER_WMS_QUEUE_TIMEOUT_SECONDS:-10}"' in compose
+    )
     assert "geoserver-3.0.1-control-flow-plugin.zip" in geoserver_dockerfile
     assert (
         "sha256:08e1c95e0f753fa6b63f815d3314764d891d9cf1bee418dcae6"
@@ -218,7 +222,7 @@ def test_geoserver_has_bounded_tunable_rendering_resources() -> None:
     assert "'^[1-9][0-9]*$'" in startup
     assert "'^[1-9][0-9]*[mMgG]$'" in startup
     assert 'if [ "$heap_megabytes" -lt 256 ]' in startup
-    assert "printf 'ows.wms.getmap=%s\\n'" in startup
+    assert "printf 'ows.wms.getmap=%s\\ntimeout=%s\\n'" in startup
     assert "ActiveProcessorCount" not in compose
     assert "ActiveProcessorCount" not in geoserver_dockerfile
 
@@ -281,12 +285,17 @@ def test_geoserver_rejects_invalid_runtime_limits() -> None:
     repository_root = COMPOSE_PATH.parent
     base_environment = os.environ | {
         "GEOSERVER_WMS_RENDER_COUNT": "2",
+        "GEOSERVER_WMS_QUEUE_TIMEOUT_SECONDS": "10",
         "GEOSERVER_MAX_HEAP_SIZE": "4g",
     }
     invalid_limits = (
         (
             {"GEOSERVER_WMS_RENDER_COUNT": "0"},
             "GEOSERVER_WMS_RENDER_COUNT must be a positive integer",
+        ),
+        (
+            {"GEOSERVER_WMS_QUEUE_TIMEOUT_SECONDS": "0"},
+            "GEOSERVER_WMS_QUEUE_TIMEOUT_SECONDS must be a positive integer",
         ),
         (
             {"GEOSERVER_MAX_HEAP_SIZE": "4g -XX:ActiveProcessorCount=32"},

@@ -1,7 +1,8 @@
 """Test the restricted public WMS proxy contract."""
 
-from pathlib import Path
+import asyncio
 from collections.abc import Mapping
+from pathlib import Path
 
 import httpx2
 import pytest
@@ -83,6 +84,128 @@ class _FixedVectorAuthorization:
             raise PublishedLayerRequestError(
                 "env is not supported for vector layers"
             )
+
+
+def test_wms_proxy_cancels_get_map_after_client_disconnect() -> None:
+    """Abandon the upstream render without recording a rendering failure."""
+
+    async def exercise_disconnect() -> tuple[
+        list[dict[str, object]],
+        bool,
+        GetMapRequestTracker,
+    ]:
+        """Run one controlled GetMap request through an ASGI disconnect.
+
+        Returns:
+            Response messages, upstream cancellation state, and diagnostics
+            tracker after cancellation.
+        """
+        upstream_started = asyncio.Event()
+        upstream_canceled = asyncio.Event()
+
+        async def geoserver_response(
+            request: httpx2.Request,
+        ) -> httpx2.Response:
+            """Block the render until cancellation closes its operation.
+
+            Args:
+                request: Controlled internal GeoServer request.
+
+            Raises:
+                asyncio.CancelledError: When the public client disconnects.
+                AssertionError: If the controlled operation resumes normally.
+            """
+            del request
+            upstream_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                upstream_canceled.set()
+                raise
+            raise AssertionError("The controlled render must be canceled")
+
+        tracker = GetMapRequestTracker(2)
+        geoserver_client = httpx2.AsyncClient(
+            transport=httpx2.MockTransport(geoserver_response)
+        )
+        application = FastAPI()
+        application.include_router(
+            create_wms_proxy_router(
+                geoserver_client,
+                "http://geoserver:8080/geoserver",
+                (_NoRasterAuthorization(), _FixedVectorAuthorization()),
+                tracker,
+            )
+        )
+        query_string = (
+            "service=WMS&version=1.3.0&request=GetMap"
+            "&layers=eolab%3Aparcels&styles=vector-polygon"
+            "&crs=EPSG%3A3857&bbox=0%2C0%2C1%2C1"
+            "&width=256&height=256&format=image%2Fpng&transparent=true"
+        ).encode()
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0", "spec_version": "2.3"},
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "http",
+            "path": "/geoserver/eolab/wms",
+            "raw_path": b"/geoserver/eolab/wms",
+            "query_string": query_string,
+            "headers": [(b"host", b"testserver")],
+            "client": ("127.0.0.1", 12345),
+            "server": ("testserver", 80),
+            "root_path": "",
+            "state": {},
+        }
+        request_messages: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+        await request_messages.put(
+            {"type": "http.request", "body": b"", "more_body": False}
+        )
+        response_messages: list[dict[str, object]] = []
+
+        async def receive() -> dict[str, object]:
+            """Return the next controlled request message.
+
+            Returns:
+                Initial empty request body or client-disconnect message.
+            """
+            return await request_messages.get()
+
+        async def send(message: dict[str, object]) -> None:
+            """Record one response message emitted by FastAPI.
+
+            Args:
+                message: ASGI response message emitted by the application.
+
+            Returns:
+                None.
+            """
+            response_messages.append(message)
+
+        request_task = asyncio.create_task(application(scope, receive, send))
+        await asyncio.wait_for(upstream_started.wait(), 1)
+        await request_messages.put({"type": "http.disconnect"})
+        await asyncio.wait_for(request_task, 1)
+        await geoserver_client.aclose()
+        return response_messages, upstream_canceled.is_set(), tracker
+
+    response_messages, upstream_canceled, tracker = asyncio.run(
+        exercise_disconnect()
+    )
+
+    assert upstream_canceled is True
+    assert next(
+        message["status"]
+        for message in response_messages
+        if message["type"] == "http.response.start"
+    ) == 499
+    snapshot = tracker.snapshot()
+    assert snapshot.active == 0
+    assert snapshot.completed == 0
+    assert snapshot.latest_seconds is None
+    assert snapshot.recent_failures == 0
+    assert snapshot.recent_window_size == 0
 
 
 def test_wms_proxy_forwards_one_authorized_fixed_style_vector_layer() -> None:
