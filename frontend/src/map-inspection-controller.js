@@ -12,6 +12,9 @@ export class MapInspectionController {
         this.histogram = documentContext.querySelector("#map-histogram-panel");
         this.style = documentContext.querySelector("#layer-style-editor");
         this.feature = documentContext.querySelector("#vector-feature-inspector");
+        this.vectorTimeSeries = documentContext.querySelector(
+            "#vector-time-series"
+        );
         this.analysisToolsButton = documentContext.querySelector(
             "#open-analysis-tools"
         );
@@ -76,10 +79,28 @@ export class MapInspectionController {
         this.#synchronize();
     }
 
+    /** Reveal vector time-series analysis independently. @return {void} */
+    showVectorTimeSeries() {
+        this.vectorTimeSeries.hidden = false;
+        this.#synchronize();
+    }
+
+    /**
+     * Hide vector time-series analysis without clearing its retained settings.
+     *
+     * @param {boolean} [moveFocus=false] Restore focus to the map.
+     * @return {void}
+     */
+    hideVectorTimeSeries(moveFocus = false) {
+        this.vectorTimeSeries.hidden = true;
+        this.#synchronize();
+        if (moveFocus) this.map.focus();
+    }
+
     /** Keep one native top-layer surface open while either tool is visible. @return {void} */
     #synchronize() {
         const shouldOpen = !this.histogram.hidden || !this.style.hidden ||
-            !this.feature.hidden;
+            !this.feature.hidden || !this.vectorTimeSeries.hidden;
         this.analysisToolsButton.hidden = shouldOpen;
         if (shouldOpen === this.isOpen) return;
         this.isOpen = shouldOpen;
@@ -94,6 +115,7 @@ export class MapInspectionController {
         this.histogram.hidden = true;
         this.style.hidden = true;
         this.feature.hidden = true;
+        this.vectorTimeSeries.hidden = true;
         this.#synchronize();
     }
 }

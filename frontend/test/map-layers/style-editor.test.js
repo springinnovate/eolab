@@ -18,6 +18,7 @@ function fixture() {
     histogram.hidden = true;
     histogram.append(doc.querySelector('#close-map-histogram'));
     doc.querySelector('#vector-feature-inspector').hidden = true;
+    doc.querySelector('#vector-time-series').hidden = true;
     const surface = doc.querySelector('#map-inspection');
     surface.showPopover = () => { surface.open = true; };
     surface.hidePopover = () => { surface.open = false; };

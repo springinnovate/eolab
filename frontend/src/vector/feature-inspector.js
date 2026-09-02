@@ -23,6 +23,36 @@ const MAX_ATTRIBUTE_VALUE_CHARACTERS = 1000;
  */
 
 /**
+ * Return an immutable scalar-only observation for sibling analysis tools.
+ *
+ * Geometry and nested values stay owned by the feature inspector. The analysis
+ * boundary contains only the fields needed to order and chart inspected rows.
+ *
+ * @param {{feature:Object,target:VectorFeatureInspectionTarget}} result Result.
+ * @return {Readonly<Object>} Closed inspection-observation contract.
+ */
+export function vectorInspectionObservation({ feature, target }) {
+    const properties = {};
+    for (const [name, value] of Object.entries(feature.properties)) {
+        if (
+            value === null ||
+            typeof value === "string" ||
+            typeof value === "boolean" ||
+            typeof value === "number"
+        ) {
+            properties[name] = value;
+        }
+    }
+    return Object.freeze({
+        layerLabel: target.label,
+        featureId: typeof feature.id === "string" || typeof feature.id === "number"
+            ? feature.id
+            : null,
+        properties: Object.freeze(properties),
+    });
+}
+
+/**
  * Format an arbitrary GeoJSON property as bounded display text.
  *
  * @param {*} value GeoJSON property value.
@@ -88,6 +118,10 @@ export class VectorFeatureInspectorController {
      * @param {string} configuration.wmsUrl Restricted browser WMS URL.
      * @param {(visible:boolean) => void} configuration.onInspectionChange
      * Requests presentation changes without knowing the presentation owner.
+     * @param {(sample:Readonly<Object>)=>void} configuration.onSampleChange
+     * Publishes immutable bounded observations through application composition.
+     * @param {()=>void} configuration.onTimeSeriesRequested Publishes analysis
+     * intent without knowing the sibling time-series implementation.
      * @param {Document} [configuration.documentContext=document] DOM owner.
      * @param {typeof fetch} [configuration.fetchImplementation=globalThis.fetch]
      * HTTP implementation.
@@ -98,6 +132,8 @@ export class VectorFeatureInspectorController {
         getVisibleTargets,
         wmsUrl,
         onInspectionChange,
+        onSampleChange,
+        onTimeSeriesRequested,
         documentContext = document,
         fetchImplementation = globalThis.fetch,
     }) {
@@ -107,15 +143,26 @@ export class VectorFeatureInspectorController {
         if (typeof onInspectionChange !== "function") {
             throw new TypeError("onInspectionChange must be a function.");
         }
+        if (typeof onSampleChange !== "function") {
+            throw new TypeError("onSampleChange must be a function.");
+        }
+        if (typeof onTimeSeriesRequested !== "function") {
+            throw new TypeError("onTimeSeriesRequested must be a function.");
+        }
         this.leaflet = leaflet;
         this.map = leafletMap;
         this.getVisibleTargets = getVisibleTargets;
         this.wmsUrl = wmsUrl;
         this.onInspectionChange = onInspectionChange;
+        this.onSampleChange = onSampleChange;
+        this.onTimeSeriesRequested = onTimeSeriesRequested;
         this.document = documentContext;
         this.fetchImplementation = fetchImplementation;
         this.panel = documentContext.querySelector("#vector-feature-inspector");
         this.closeButton = documentContext.querySelector("#close-vector-inspector");
+        this.timeSeriesButton = documentContext.querySelector(
+            "#open-vector-time-series"
+        );
         this.status = documentContext.querySelector("#vector-feature-status");
         this.result = documentContext.querySelector("#vector-feature-result");
         this.layerName = documentContext.querySelector("#vector-feature-layer");
@@ -128,8 +175,10 @@ export class VectorFeatureInspectorController {
         this.highlightLayer = null;
         this.abortController = null;
         this.requestGeneration = 0;
+        this.sampleTargetSignature = null;
         this.mapContainer = this.map.getContainer();
         this.onClose = () => this.close({ moveFocus: true });
+        this.onOpenTimeSeries = () => this.onTimeSeriesRequested();
         this.onPrevious = () => this.showResult(this.resultIndex - 1);
         this.onNext = () => this.showResult(this.resultIndex + 1);
         this.onKeydown = (event) => {
@@ -144,6 +193,7 @@ export class VectorFeatureInspectorController {
             this.close({ moveFocus: true });
         };
         this.closeButton.addEventListener("click", this.onClose);
+        this.timeSeriesButton.addEventListener("click", this.onOpenTimeSeries);
         this.previous.addEventListener("click", this.onPrevious);
         this.next.addEventListener("click", this.onNext);
         this.document.addEventListener("keydown", this.onKeydown);
@@ -184,7 +234,27 @@ export class VectorFeatureInspectorController {
      * @return {void}
      */
     syncVisibleLayers() {
-        const available = this.visibleTargets().length > 0;
+        const targets = this.visibleTargets();
+        const available = targets.length > 0;
+        const signature = this.#targetSignature(targets);
+        if (
+            this.sampleTargetSignature !== null &&
+            signature !== this.sampleTargetSignature
+        ) {
+            this.requestGeneration += 1;
+            this.abortController?.abort();
+            this.abortController = null;
+            this.clearResults();
+            this.sampleTargetSignature = null;
+            this.status.textContent = available
+                ? "Visible vector layers changed. Click the map to sample again."
+                : "Show a vector layer, then click the map to inspect features.";
+            this.#publishSample(
+                "invalidated",
+                [],
+                "Visible vector layers changed. Click the map to sample again."
+            );
+        }
         if (!available && (
             !this.panel.hidden || this.abortController !== null ||
             this.results.length > 0
@@ -251,8 +321,14 @@ export class VectorFeatureInspectorController {
         this.abortController?.abort();
         this.abortController = new AbortController();
         const generation = ++this.requestGeneration;
+        this.sampleTargetSignature = this.#targetSignature(targets);
         this.clearResults();
         this.status.textContent = "Inspecting visible vector layers…";
+        this.#publishSample(
+            "loading",
+            [],
+            "Inspecting visible vector layers…"
+        );
         const containerPoint = event.containerPoint ??
             this.map.latLngToContainerPoint(event.latlng);
         const responses = await Promise.allSettled(targets.map(async (target) => {
@@ -273,6 +349,7 @@ export class VectorFeatureInspectorController {
         );
         if (this.results.length > 0) {
             this.showResult(0);
+            this.timeSeriesButton.disabled = this.results.length < 2;
             const failures = responses.filter(
                 (response) => response.status === "rejected" &&
                     response.reason?.name !== "AbortError"
@@ -280,6 +357,11 @@ export class VectorFeatureInspectorController {
             this.status.textContent = failures === 0
                 ? `${this.results.length} feature${this.results.length === 1 ? "" : "s"} found.`
                 : `${this.results.length} feature${this.results.length === 1 ? "" : "s"} found; one visible layer could not be inspected.`;
+            this.#publishSample(
+                "ready",
+                this.results,
+                this.status.textContent
+            );
             return true;
         }
         const failure = responses.find(
@@ -289,7 +371,35 @@ export class VectorFeatureInspectorController {
         this.status.textContent = failure?.reason instanceof VectorFeatureInfoError
             ? failure.reason.message
             : "No vector feature was found at that location.";
+        this.#publishSample("empty", [], this.status.textContent);
         return true;
+    }
+
+    /**
+     * Return a stable set identity independent of drawing order and styling.
+     *
+     * @param {VectorFeatureInspectionTarget[]} targets Visible vector targets.
+     * @return {string} Stable visible-publication signature.
+     */
+    #targetSignature(targets) {
+        return targets.map((target) => target.publication.layerName)
+            .sort()
+            .join("\u0000");
+    }
+
+    /**
+     * Publish one frozen inspection sample through application composition.
+     *
+     * @param {"loading"|"ready"|"empty"|"invalidated"} state Sample state.
+     * @param {Object[]} results Inspector-owned feature results.
+     * @param {string} message Browser-safe sample status.
+     * @return {void}
+     */
+    #publishSample(state, results, message) {
+        const observations = Object.freeze(
+            results.map(vectorInspectionObservation)
+        );
+        this.onSampleChange(Object.freeze({ state, observations, message }));
     }
 
     /**
@@ -345,6 +455,7 @@ export class VectorFeatureInspectorController {
         this.results = [];
         this.resultIndex = 0;
         this.result.hidden = true;
+        this.timeSeriesButton.disabled = true;
         this.attributes.replaceChildren();
         this.clearHighlight();
     }
@@ -369,6 +480,7 @@ export class VectorFeatureInspectorController {
     destroy() {
         this.close();
         this.closeButton.removeEventListener("click", this.onClose);
+        this.timeSeriesButton.removeEventListener("click", this.onOpenTimeSeries);
         this.previous.removeEventListener("click", this.onPrevious);
         this.next.removeEventListener("click", this.onNext);
         this.document.removeEventListener("keydown", this.onKeydown);
