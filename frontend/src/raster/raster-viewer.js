@@ -102,6 +102,32 @@ function normalizePortableRasterStyle(candidate) {
 }
 
 /**
+ * Check one copied style against the portable raster appearance contract.
+ *
+ * @param {Object} savedState Candidate portable style envelope.
+ * @return {string|null} Null when compatible or a user-facing reason.
+ */
+function checkPortableRasterStyleCompatibility(savedState) {
+    if (savedState?.kind !== "raster") {
+        return "Only copied raster styles can be pasted onto raster layers.";
+    }
+    try {
+        normalizePortableRasterStyle(savedState.definition);
+        if (
+            savedState.paletteName !== "custom" &&
+            !Object.hasOwn(RASTER_COLOR_PALETTES, savedState.paletteName)
+        ) {
+            throw new TypeError("Copied raster palette is invalid.");
+        }
+        return null;
+    } catch (error) {
+        return error instanceof Error
+            ? `Copied raster style is invalid: ${error.message}`
+            : "Copied raster style is invalid.";
+    }
+}
+
+/**
  * Return whether repeating a failed statistics request may change its result.
  *
  * Unclassified client/conflict responses describe invalid or unsupported
@@ -1771,6 +1797,16 @@ export function initializeRasterViewer(
                 definition: { ...validateRasterStyle(record.state.rasterStyle) },
                 paletteName: record.state.paletteName,
             };
+        },
+        /**
+         * Check one copied appearance before offering a raster paste action.
+         *
+         * @param {Object} record Target retained raster record.
+         * @param {Object} savedState Candidate portable style envelope.
+         * @return {string|null} Null when compatible or a user-facing reason.
+         */
+        checkSavedStateCompatibility(record, savedState) {
+            return checkPortableRasterStyleCompatibility(savedState);
         },
         /**
          * Validate and apply one portable raster appearance to its WMS layer.

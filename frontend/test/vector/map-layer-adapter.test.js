@@ -183,6 +183,70 @@ test("vector map-layer adapter owns publication, WMS, legend, and optional fit",
     kind: "vector",
     definition: reappliedStyle,
   });
+  assert.equal(
+    fitted.adapter.checkSavedStateCompatibility(record, {
+      kind: "vector",
+      definition: reappliedStyle,
+    }),
+    null,
+  );
+  assert.match(
+    fitted.adapter.checkSavedStateCompatibility(record, {
+      kind: "raster",
+      definition: {},
+    }),
+    /Only copied vector styles/,
+  );
+  assert.match(
+    fitted.adapter.checkSavedStateCompatibility(record, {
+      kind: "vector",
+      definition: {
+        ...reappliedStyle,
+        geometryKind: "point",
+        pointSize: 8,
+      },
+    }),
+    /point style cannot be pasted onto a polygon layer/,
+  );
+  assert.match(
+    fitted.adapter.checkSavedStateCompatibility(record, {
+      kind: "vector",
+      definition: {
+        ...reappliedStyle,
+        label: {
+          field: "missing-name",
+          fontFamily: "SansSerif",
+          fontSize: 12,
+          fontWeight: "normal",
+          fontColor: "#111111",
+          haloColor: "#ffffff",
+          haloWidth: 1,
+          placement: "center",
+          minimumZoom: 0,
+        },
+      },
+    }),
+    /does not contain label field/,
+  );
+  assert.match(
+    fitted.adapter.checkSavedStateCompatibility(record, {
+      kind: "vector",
+      definition: {
+        ...reappliedStyle,
+        categorical: {
+          field: "area",
+          limit: 20,
+          rules: [{
+            value: { kind: "string", value: "large" },
+            color: "#ff0000",
+          }],
+          otherColor: null,
+          missingColor: null,
+        },
+      },
+    }),
+    /does not contain compatible category field/,
+  );
   await fitted.adapter.applySavedState(record, {
     kind: "vector",
     definition: appliedStyle,

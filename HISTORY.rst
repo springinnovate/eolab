@@ -4,6 +4,7 @@ History
 Unreleased
 ----------
 
+* Copy complete raster or vector styles and layer opacity onto compatible map layers.
 * Reorder map layers with an accessible pointer, touch, or keyboard drag handle.
 * Chart numeric attributes from bounded vector feature-inspection results with persistent axis and sort controls.
 * Publish prepared raster files directly without raster preflight or approximate map previews.

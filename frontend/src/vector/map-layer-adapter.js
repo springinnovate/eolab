@@ -10,7 +10,10 @@ import { createVectorWmsLayer } from "./leaflet.js";
 import { buildCatalogResultPresentation } from "../catalog-result-presentation.js";
 import {
     normalizeVectorStyle,
+    vectorCategoricalFieldKind,
+    vectorCategoricalFields,
     vectorLabelFields,
+    vectorNumericFields,
     vectorStyleLegend,
 } from "./style.js";
 
@@ -46,6 +49,69 @@ function canonicalJson(candidate) {
         ).join(",")}}`;
     }
     return JSON.stringify(candidate);
+}
+
+/**
+ * Check one copied vector style against a target vector record.
+ *
+ * Geometry and Catalog field compatibility are feature-owned concerns. The
+ * backend remains authoritative when the style is applied, but this bounded
+ * check prevents known-incompatible paste actions from being offered.
+ *
+ * @param {Object} record Target retained vector record.
+ * @param {Object} savedState Candidate portable style envelope.
+ * @return {string|null} Null when compatible or a user-facing reason.
+ */
+function checkPortableVectorStyleCompatibility(record, savedState) {
+    if (savedState?.kind !== "vector") {
+        return "Only copied vector styles can be pasted onto vector layers.";
+    }
+    let style;
+    try {
+        style = normalizePortableVectorStyle(savedState.definition);
+    } catch (error) {
+        return error instanceof Error
+            ? `Copied vector style is invalid: ${error.message}`
+            : "Copied vector style is invalid.";
+    }
+    const targetGeometry = normalizeVectorStyle(
+        record.state.style
+    ).geometryKind;
+    if (style.geometryKind !== targetGeometry) {
+        return `A ${style.geometryKind} style cannot be pasted onto a ` +
+            `${targetGeometry} layer.`;
+    }
+    const fields = record.state.labelFields;
+    const fieldNames = new Set(fields.map(({ name }) => name));
+    if (style.label !== null && !fieldNames.has(style.label.field)) {
+        return `The target layer does not contain label field ` +
+            `“${style.label.field}”.`;
+    }
+    if (
+        style.categorical !== null
+    ) {
+        const targetField = vectorCategoricalFields(fields).find(
+            ({ name }) => name === style.categorical.field
+        );
+        const targetKind = vectorCategoricalFieldKind(targetField?.type);
+        const valuesAreCompatible = style.categorical.rules.every(
+            ({ value }) => value.kind === targetKind
+        );
+        if (targetField === undefined || !valuesAreCompatible) {
+            return `The target layer does not contain compatible category ` +
+                `field “${style.categorical.field}”.`;
+        }
+    }
+    if (
+        style.graduated !== null &&
+        !vectorNumericFields(fields).some(
+            ({ name }) => name === style.graduated.field
+        )
+    ) {
+        return `The target layer does not contain compatible numeric field ` +
+            `“${style.graduated.field}”.`;
+    }
+    return null;
 }
 
 /**
@@ -166,6 +232,16 @@ export function createVectorMapLayerAdapter({
                     normalizeVectorStyle(record.state.style)
                 ),
             };
+        },
+        /**
+         * Check geometry and Catalog fields before offering a paste action.
+         *
+         * @param {Object} record Target retained vector record.
+         * @param {Object} savedState Candidate portable style envelope.
+         * @return {string|null} Null when compatible or a user-facing reason.
+         */
+        checkSavedStateCompatibility(record, savedState) {
+            return checkPortableVectorStyleCompatibility(record, savedState);
         },
         /**
          * Validate and apply one portable vector appearance through GeoServer.
