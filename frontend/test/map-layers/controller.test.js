@@ -183,3 +183,103 @@ test("controller coalesces publication and invalidates removed pending work", as
     assert.equal(controller.contains(item), false);
     assert.equal(map.attached.size, 0);
 });
+
+test("controller copies portable style and layer opacity onto a compatible target", async () => {
+    const map = createMap();
+    const view = createView();
+    const adapter = createAdapter("raster");
+    adapter.createState = ({ item }) => ({
+        owner: "raster",
+        item,
+        style: { color: item.id === "source" ? "red" : "blue" },
+    });
+    adapter.exportSavedState = (record) => ({
+        kind: "raster",
+        definition: record.state.style,
+    });
+    adapter.checkSavedStateCompatibility = (_record, savedState) =>
+        savedState.kind === "raster" ? null : "Raster style required.";
+    adapter.applySavedState = async (record, savedState) => {
+        record.state.style = structuredClone(savedState.definition);
+    };
+    const controller = new MapLayerController({ leafletMap: map, view });
+    const source = catalogItem("source");
+    const target = catalogItem("target");
+    await controller.show(source, adapter);
+    await controller.show(target, adapter);
+    const sourceKey = getCatalogItemKey(source);
+    const targetKey = getCatalogItemKey(target);
+    controller.setOpacity(sourceKey, 0.37);
+    controller.setOpacity(targetKey, 0.82);
+
+    assert.equal(
+        controller.snapshots().find(({ key }) => key === targetKey)
+            .styleClipboard.canPaste,
+        false,
+    );
+    assert.equal(controller.copyStyle(sourceKey), true);
+    controller.getRecord(sourceKey).state.style.color = "green";
+    const targetClipboard = controller.snapshots().find(
+        ({ key }) => key === targetKey,
+    ).styleClipboard;
+    assert.equal(targetClipboard.canPaste, true);
+    assert.equal(targetClipboard.sourceLabel, "raster source");
+
+    assert.equal(await controller.pasteStyle(targetKey), true);
+    assert.deepEqual(controller.getRecord(targetKey).state.style, { color: "red" });
+    assert.equal(controller.getRecord(targetKey).entry.opacity, 0.37);
+    assert.equal(controller.getLeafletLayer(targetKey).opacity, 0.37);
+    assert.equal(
+        view.status,
+        "Style and opacity from raster source pasted onto raster target.",
+    );
+});
+
+test("controller rejects incompatible and failed pastes without changing opacity", async () => {
+    const map = createMap();
+    const view = createView();
+    const raster = createAdapter("raster");
+    raster.createState = ({ item }) => ({ owner: "raster", item, style: "source" });
+    raster.exportSavedState = (record) => ({
+        kind: "raster",
+        definition: record.state.style,
+    });
+    raster.checkSavedStateCompatibility = () => null;
+    raster.applySavedState = async () => {};
+    const vector = createAdapter("vector");
+    vector.createState = ({ item }) => ({ owner: "vector", item, style: "target" });
+    vector.exportSavedState = (record) => ({
+        kind: "vector",
+        definition: record.state.style,
+    });
+    vector.checkSavedStateCompatibility = (_record, savedState) =>
+        savedState.kind === "vector" ? null : "Only vector styles are compatible.";
+    vector.applySavedState = async () => {
+        throw new Error("The target fields changed.");
+    };
+    const controller = new MapLayerController({ leafletMap: map, view });
+    const source = catalogItem("source");
+    const target = catalogItem("target");
+    await controller.show(source, raster);
+    await controller.show(target, vector);
+    const sourceKey = getCatalogItemKey(source);
+    const targetKey = getCatalogItemKey(target);
+    controller.setOpacity(sourceKey, 0.25);
+    controller.setOpacity(targetKey, 0.75);
+    controller.copyStyle(sourceKey);
+
+    const incompatible = controller.snapshots().find(
+        ({ key }) => key === targetKey,
+    ).styleClipboard;
+    assert.equal(incompatible.canPaste, false);
+    assert.equal(incompatible.pasteReason, "Only vector styles are compatible.");
+    assert.equal(await controller.pasteStyle(targetKey), false);
+    assert.equal(controller.getRecord(targetKey).state.style, "target");
+    assert.equal(controller.getRecord(targetKey).entry.opacity, 0.75);
+
+    vector.checkSavedStateCompatibility = () => null;
+    assert.equal(await controller.pasteStyle(targetKey), false);
+    assert.equal(controller.getRecord(targetKey).state.style, "target");
+    assert.equal(controller.getRecord(targetKey).entry.opacity, 0.75);
+    assert.match(view.status, /The target fields changed/);
+});

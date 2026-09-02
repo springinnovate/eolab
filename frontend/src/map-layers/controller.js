@@ -18,6 +18,9 @@ import { MapLayerStackView } from "./layer-stack-view.js";
  * portable owner-specific style state.
  * @property {(record:Object,savedState:Object)=>Promise<void>|void}
  * [applySavedState] Validate and apply portable owner-specific style state.
+ * @property {(record:Object,savedState:Object)=>string|null}
+ * [checkSavedStateCompatibility] Return null when a copied portable style can
+ * be applied to the record, otherwise a user-facing incompatibility reason.
  * @property {(record:Object)=>void} [prepare] Prepare an existing record before
  * activation.
  * @property {(record:Object,next:Object)=>void} [deactivate] Release this
@@ -66,11 +69,15 @@ export class MapLayerController {
         this.publicationGenerations = new Map();
         this.pendingPublications = new Map();
         this.pendingAdapters = new Map();
+        this.styleClipboard = null;
+        this.pendingStylePastes = new Set();
         this.activationIntentSequence = 0;
         this.presentationActiveKey = null;
         this.destroyed = false;
         this.view.bind({
             onStyle: (key) => this.onStyle?.(key),
+            onCopyStyle: (key) => this.copyStyle(key),
+            onPasteStyle: (key) => void this.pasteStyle(key),
             onVisibility: (key, visible) => this.setVisible(key, visible),
             onReorder: (key, targetIndex) => this.reorder(key, targetIndex),
             onRemove: (key) => this.removeKey(key),
@@ -242,6 +249,103 @@ export class MapLayerController {
     }
 
     /**
+     * Copy one adapter-owned portable style and neutral layer opacity.
+     *
+     * The clipboard is intentionally local to this controller instance. It
+     * preserves a detached style value after its source layer is removed and
+     * does not include visibility, order, or feature-owned interaction state.
+     *
+     * @param {string} key Stable retained-layer key.
+     * @return {boolean} Whether a style was copied.
+     */
+    copyStyle(key) {
+        const record = this.#requireRecord(key);
+        if (typeof record.adapter.exportSavedState !== "function") {
+            this.view.setStatus(
+                `${record.entry.label} does not support copying styles.`
+            );
+            return false;
+        }
+        try {
+            const savedState = structuredClone(
+                record.adapter.exportSavedState(record)
+            );
+            if (
+                savedState === null || typeof savedState !== "object" ||
+                typeof savedState.kind !== "string" ||
+                savedState.kind.length === 0
+            ) {
+                throw new TypeError("The layer returned an invalid style.");
+            }
+            this.styleClipboard = Object.freeze({
+                sourceKey: key,
+                sourceLabel: record.entry.label,
+                opacity: record.entry.opacity,
+                savedState,
+            });
+            this.view.setStatus(
+                `Style and opacity copied from ${record.entry.label}.`
+            );
+            this.render({ key, action: "copy-style" });
+            return true;
+        } catch (error) {
+            this.view.setStatus(
+                `Could not copy the style from ${record.entry.label}: ` +
+                `${asErrorMessage(error)}`
+            );
+            return false;
+        }
+    }
+
+    /**
+     * Apply the copied adapter-owned style and neutral opacity to one layer.
+     *
+     * Adapter validation occurs before neutral opacity changes, so rejected
+     * portable styles leave the target opacity untouched. Rendering and
+     * observer notification remain within the retained-layer lifecycle.
+     *
+     * @param {string} key Stable retained-layer key.
+     * @return {Promise<boolean>} Whether the complete appearance was applied.
+     */
+    async pasteStyle(key) {
+        const record = this.#requireRecord(key);
+        const availability = this.#styleClipboardSnapshot(record);
+        if (!availability.canPaste) {
+            this.view.setStatus(availability.pasteReason);
+            return false;
+        }
+        const clipboard = this.styleClipboard;
+        this.pendingStylePastes.add(key);
+        this.render({ key, action: "paste-style" });
+        try {
+            await record.adapter.applySavedState(
+                record,
+                structuredClone(clipboard.savedState)
+            );
+            if (this.records.get(key) !== record) {
+                return false;
+            }
+            this.setOpacity(key, clipboard.opacity);
+            this.view.setStatus(
+                `Style and opacity from ${clipboard.sourceLabel} pasted onto ` +
+                `${record.entry.label}.`
+            );
+            return true;
+        } catch (error) {
+            this.view.setStatus(
+                `Could not paste the style from ${clipboard.sourceLabel} ` +
+                `onto ${record.entry.label}: ${asErrorMessage(error)}`
+            );
+            return false;
+        } finally {
+            this.pendingStylePastes.delete(key);
+            if (this.records.get(key) === record) {
+                this.render({ key, action: "paste-style" });
+            }
+        }
+    }
+
+    /**
      * Move one retained layer atomically to a top-first drawing-order index.
      *
      * @param {string} key Stable retained-layer key.
@@ -370,6 +474,7 @@ export class MapLayerController {
             return {
                 ...entry,
                 ...record.adapter.snapshot(record),
+                styleClipboard: this.#styleClipboardSnapshot(record),
                 error: record.error,
             };
         });
@@ -398,6 +503,8 @@ export class MapLayerController {
         }
         this.destroyed = true;
         this.clear();
+        this.styleClipboard = null;
+        this.pendingStylePastes.clear();
         this.view.unbind();
     }
 
@@ -568,6 +675,74 @@ export class MapLayerController {
     }
 
     /**
+     * Build neutral copy/paste presentation state for one retained record.
+     *
+     * Dataset-specific compatibility remains delegated to the target adapter.
+     * The controller handles only clipboard presence, pending lifecycle, and
+     * the shared portable-style protocol.
+     *
+     * @param {Object} record Retained map-layer record.
+     * @return {{canCopy:boolean,canPaste:boolean,sourceLabel:string|null,
+     * pasteReason:string}} Presentation-ready clipboard availability.
+     */
+    #styleClipboardSnapshot(record) {
+        const canCopy = typeof record.adapter.exportSavedState === "function";
+        const sourceLabel = this.styleClipboard?.sourceLabel ?? null;
+        if (this.styleClipboard === null) {
+            return Object.freeze({
+                canCopy,
+                canPaste: false,
+                sourceLabel,
+                pasteReason: "Copy a layer style before pasting.",
+            });
+        }
+        if (this.pendingStylePastes.has(record.entry.key)) {
+            return Object.freeze({
+                canCopy,
+                canPaste: false,
+                sourceLabel,
+                pasteReason: `Pasting the style from ${sourceLabel}.`,
+            });
+        }
+        if (
+            typeof record.adapter.applySavedState !== "function" ||
+            typeof record.adapter.checkSavedStateCompatibility !== "function"
+        ) {
+            return Object.freeze({
+                canCopy,
+                canPaste: false,
+                sourceLabel,
+                pasteReason: "Pasting styles is unavailable for this layer.",
+            });
+        }
+        try {
+            const reason = record.adapter.checkSavedStateCompatibility(
+                record,
+                this.styleClipboard.savedState
+            );
+            if (reason !== null && typeof reason !== "string") {
+                throw new TypeError(
+                    "Style compatibility must be null or a reason."
+                );
+            }
+            return Object.freeze({
+                canCopy,
+                canPaste: reason === null,
+                sourceLabel,
+                pasteReason: reason ??
+                    `Paste the style copied from ${sourceLabel}.`,
+            });
+        } catch (error) {
+            return Object.freeze({
+                canCopy,
+                canPaste: false,
+                sourceLabel,
+                pasteReason: `Copied style is invalid: ${asErrorMessage(error)}`,
+            });
+        }
+    }
+
+    /**
      * Require the complete adapter contract.
      *
      * @param {MapLayerAdapter} adapter Candidate adapter.
@@ -595,4 +770,16 @@ export class MapLayerController {
             );
         }
     }
+}
+
+/**
+ * Return a user-facing message for one thrown value.
+ *
+ * @param {unknown} candidate Thrown value.
+ * @return {string} Ordinary error message or a safe fallback.
+ */
+function asErrorMessage(candidate) {
+    return candidate instanceof Error && candidate.message.length > 0
+        ? candidate.message
+        : "Style operation failed.";
 }

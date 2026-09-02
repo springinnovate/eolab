@@ -28,7 +28,7 @@ const PUBLICATION = Object.freeze({
  * @param {boolean} fitToBounds Whether new layers should fit the map.
  * @return {{adapter:Object,wmsCalls:Object[],fitCalls:Object[]}} Fixture state.
  */
-function createAdapterFixture(fitToBounds) {
+function createAdapterFixture(fitToBounds, classifyResult = null) {
   const wmsCalls = [];
   const fitCalls = [];
   const tileErrors = [];
@@ -78,6 +78,9 @@ function createAdapterFixture(fitToBounds) {
       },
       classify: async (item, field, method, classCount) => {
         numericCalls.push({ item, field, method, classCount });
+        if (classifyResult !== null) {
+          return structuredClone(classifyResult);
+        }
         return { field, method, requestedClassCount: classCount };
       },
     }),
@@ -183,6 +186,70 @@ test("vector map-layer adapter owns publication, WMS, legend, and optional fit",
     kind: "vector",
     definition: reappliedStyle,
   });
+  assert.equal(
+    fitted.adapter.checkSavedStateCompatibility(record, {
+      kind: "vector",
+      definition: reappliedStyle,
+    }),
+    null,
+  );
+  assert.match(
+    fitted.adapter.checkSavedStateCompatibility(record, {
+      kind: "raster",
+      definition: {},
+    }),
+    /Only copied vector styles/,
+  );
+  assert.match(
+    fitted.adapter.checkSavedStateCompatibility(record, {
+      kind: "vector",
+      definition: {
+        ...reappliedStyle,
+        geometryKind: "point",
+        pointSize: 8,
+      },
+    }),
+    /point style cannot be pasted onto a polygon layer/,
+  );
+  assert.match(
+    fitted.adapter.checkSavedStateCompatibility(record, {
+      kind: "vector",
+      definition: {
+        ...reappliedStyle,
+        label: {
+          field: "missing-name",
+          fontFamily: "SansSerif",
+          fontSize: 12,
+          fontWeight: "normal",
+          fontColor: "#111111",
+          haloColor: "#ffffff",
+          haloWidth: 1,
+          placement: "center",
+          minimumZoom: 0,
+        },
+      },
+    }),
+    /does not contain label field/,
+  );
+  assert.match(
+    fitted.adapter.checkSavedStateCompatibility(record, {
+      kind: "vector",
+      definition: {
+        ...reappliedStyle,
+        categorical: {
+          field: "area",
+          limit: 20,
+          rules: [{
+            value: { kind: "string", value: "large" },
+            color: "#ff0000",
+          }],
+          otherColor: null,
+          missingColor: null,
+        },
+      },
+    }),
+    /does not contain compatible category field/,
+  );
   await fitted.adapter.applySavedState(record, {
     kind: "vector",
     definition: appliedStyle,
@@ -209,4 +276,102 @@ test("vector map-layer adapter owns publication, WMS, legend, and optional fit",
     }),
     TypeError,
   );
+});
+
+test("copied graduated styles use the target vector classification", async () => {
+  const targetClassification = {
+    field: "score",
+    fieldType: "float",
+    method: "quantile",
+    requestedClassCount: 5,
+    actualClassCount: 2,
+    classes: [
+      { minimum: null, maximum: 12, count: 6 },
+      { minimum: 12, maximum: null, count: 4 },
+    ],
+    observedMinimum: 2,
+    observedMaximum: 20,
+    numericValueCount: 10,
+    scannedFeatureCount: 10,
+    featureCount: 10,
+    nullCount: 0,
+    unsupportedValueCount: 0,
+    complete: true,
+    defaultClassCount: 5,
+    minimumClassCount: 2,
+    maximumClassCount: 9,
+  };
+  const fixture = createAdapterFixture(false, targetClassification);
+  const item = {
+    collection: "eolab-mounted-vectors",
+    id: "shapefile-target",
+    properties: {
+      title: "Target points",
+      "table:primary_geometry": "geometry",
+      "table:columns": [
+        { name: "geometry", type: "Point" },
+        { name: "score", type: "float" },
+      ],
+    },
+  };
+  const targetStyle = {
+    geometryKind: "point",
+    fillColor: "#2563eb",
+    fillOpacity: 0.7,
+    strokeColor: "#1e3a8a",
+    strokeOpacity: 1,
+    strokeWidth: 1,
+    pointSize: 8,
+    categorical: null,
+    graduated: null,
+    label: null,
+  };
+  const copiedStyle = {
+    ...targetStyle,
+    fillColor: "#a855f7",
+    graduated: {
+      field: "score",
+      method: "quantile",
+      classCount: 5,
+      palette: "viridis",
+      rules: [
+        { minimum: null, maximum: 3, color: "#440154" },
+        { minimum: 3, maximum: 7, color: "#21918c" },
+        { minimum: 7, maximum: null, color: "#fde725" },
+      ],
+      missingColor: "#d1d5db",
+    },
+  };
+  const publication = {
+    ...PUBLICATION,
+    geometryKind: "point",
+    style: targetStyle,
+  };
+  const record = { publication, entry: { item } };
+  record.state = fixture.adapter.createState({ item, publication });
+  fixture.adapter.createLayer(record, () => {});
+
+  await fixture.adapter.applySavedState(record, {
+    kind: "vector",
+    definition: copiedStyle,
+  });
+
+  assert.deepEqual(fixture.numericCalls, [{
+    item,
+    field: "score",
+    method: "quantile",
+    classCount: 5,
+  }]);
+  assert.deepEqual(record.state.style.graduated, {
+    field: "score",
+    method: "quantile",
+    classCount: 5,
+    palette: "viridis",
+    rules: [
+      { minimum: null, maximum: 12, color: "#440154" },
+      { minimum: 12, maximum: null, color: "#fde725" },
+    ],
+    missingColor: null,
+  });
+  assert.equal(record.state.style.fillColor, "#a855f7");
 });

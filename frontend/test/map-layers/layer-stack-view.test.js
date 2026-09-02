@@ -269,6 +269,12 @@ const LAYERS = [
     label: "Global surface temperature anomaly (1981–2010 baseline)",
     visible: true,
     opacity: 0.42,
+    styleClipboard: {
+      canCopy: true,
+      canPaste: false,
+      sourceLabel: null,
+      pasteReason: "Copy a layer style before pasting.",
+    },
     error: null,
     legend: gradientLegend({
       minimum: -10,
@@ -285,6 +291,12 @@ const LAYERS = [
     label: "Vegetation health index",
     visible: true,
     opacity: 1,
+    styleClipboard: {
+      canCopy: true,
+      canPaste: false,
+      sourceLabel: null,
+      pasteReason: "Copy a layer style before pasting.",
+    },
     error: null,
     legend: gradientLegend({
       minimum: 0,
@@ -301,6 +313,12 @@ const LAYERS = [
     label: "Soil moisture anomaly",
     visible: false,
     opacity: 0.75,
+    styleClipboard: {
+      canCopy: true,
+      canPaste: false,
+      sourceLabel: null,
+      pasteReason: "Copy a layer style before pasting.",
+    },
     error: "Statistics unavailable.",
     legend: gradientLegend({
       minimum: -5,
@@ -313,7 +331,7 @@ const LAYERS = [
   },
 ];
 
-test("rows expose a reorder grip, filename, visibility, Style and removal", () => {
+test("rows expose reorder, visibility, style clipboard, and removal actions", () => {
   const doc = new FakeLayerStackDocument();
   const view = new MapLayerStackView(doc);
   view.render(LAYERS, "vegetation");
@@ -326,6 +344,13 @@ test("rows expose a reorder grip, filename, visibility, Style and removal", () =
     assert.equal(elementsByClass(row, "raster-layer-legend").length, 0);
     assert.equal(elementsByClass(row, "raster-layer-opacity").length, 0);
     assert.equal(actionControl(row, "style").getAttribute("aria-haspopup"), "dialog");
+    assert.equal(actionControl(row, "copy-style").disabled, false);
+    assert.match(actionControl(row, "copy-style").title, /Copy style and opacity/);
+    assert.equal(actionControl(row, "paste-style").disabled, true);
+    assert.equal(
+      actionControl(row, "paste-style").title,
+      "Copy a layer style before pasting.",
+    );
     assert.match(actionControl(row, "reorder").getAttribute("aria-label"), /position \d of 3/);
     assert.equal(actionControl(row, "reorder").getAttribute("aria-pressed"), "false");
     assert.equal(actionControl(row, "visibility").type, "checkbox");
@@ -405,19 +430,37 @@ test("row actions forward stable identity; Escape closes actions before the work
   const received = [];
   view.bind({
     onStyle: key => received.push(["style", key]),
+    onCopyStyle: key => received.push(["copy-style", key]),
+    onPasteStyle: key => received.push(["paste-style", key]),
     onVisibility: (key, visible) => received.push(["visibility", key, visible]),
     onReorder: (key, targetIndex) => received.push(["reorder", key, targetIndex]),
     onRemove: key => received.push(["remove", key]),
   });
-  view.render(LAYERS, null);
+  view.render([
+    {
+      ...LAYERS[0],
+      styleClipboard: {
+        canCopy: true,
+        canPaste: true,
+        sourceLabel: "Vegetation health index",
+        pasteReason: "Paste the copied style.",
+      },
+    },
+    ...LAYERS.slice(1),
+  ], null);
   const [first, second, third] = doc.querySelector("#raster-layer-list").children;
   actionControl(first, "style").dispatchEvent(new Event("click"));
+  actionControl(first, "copy-style").dispatchEvent(new Event("click"));
+  actionControl(first, "paste-style").dispatchEvent(new Event("click"));
   const visibility = actionControl(first, "visibility");
   visibility.checked = false;
   visibility.dispatchEvent(new Event("change"));
   actionControl(third, "remove").dispatchEvent(new Event("click"));
   assert.deepEqual(received, [
-    ["style", "temperature"], ["visibility", "temperature", false],
+    ["style", "temperature"],
+    ["copy-style", "temperature"],
+    ["paste-style", "temperature"],
+    ["visibility", "temperature", false],
     ["remove", "moisture"],
   ]);
   const actions = elementsByClass(first, "raster-layer-actions")[0];
@@ -432,7 +475,7 @@ test("row actions forward stable identity; Escape closes actions before the work
   assert.equal(doc.querySelector("#raster-layer-stack").hidden, false);
   view.unbind();
   actionControl(third, "remove").dispatchEvent(new Event("click"));
-  assert.equal(received.length, 3);
+  assert.equal(received.length, 5);
 });
 
 test("pointer dragging emits one atomic reorder with insertion feedback", () => {

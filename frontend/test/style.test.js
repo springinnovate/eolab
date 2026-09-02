@@ -52,6 +52,21 @@ test("map-layer reorder handles expose grab and insertion feedback", () => {
   assert.match(STYLESHEET, /\.raster-layer-row\.is-drop-after::after/);
 });
 
+test("map-layer style clipboard actions stay compact and visually distinct", () => {
+  assert.match(
+    STYLESHEET,
+    /\.map-layer-style-actions\s*\{[^}]*display:\s*flex;[^}]*gap:\s*4px;/s,
+  );
+  assert.match(
+    STYLESHEET,
+    /\.raster-layer-row \.map-layer-style-icon-button\s*\{[^}]*width:\s*27px;[^}]*height:\s*27px;/s,
+  );
+  assert.match(STYLESHEET, /\.map-layer-style-copy-icon::before/);
+  assert.match(STYLESHEET, /\.map-layer-style-copy-icon::after/);
+  assert.match(STYLESHEET, /\.map-layer-style-paste-icon::before/);
+  assert.match(STYLESHEET, /\.map-layer-style-paste-icon::after/);
+});
+
 test("map overlays and inspection surfaces retain contrast contracts", () => {
   assert.match(
     STYLESHEET,
