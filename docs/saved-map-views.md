@@ -3,17 +3,18 @@
 EOLab saved map views are bounded JSON documents that reproduce a map's
 retained Catalog layers, top-first order, visibility, opacity, validated
 per-layer appearance, and WGS 84 viewport. They also record the creating
-viewer version and origin so another deployment can warn before it attempts a
-potentially stale or cross-deployment restoration.
+viewer version and origin as provenance for potentially stale or
+cross-deployment restoration.
 
 The browser gzip-compresses the canonical document, encodes it as unpadded
 Base64URL, and places it in a `#view=` URL fragment. The fragment is retained by
-the browser rather than sent in an HTTP request. Opening a shared link first
-presents a replacement summary. Approval clears the existing composition,
-resolves every layer by its standard STAC Collection and Item identity, repeats
-the current preparation and publication flow, and delegates style validation
-to the layer's raster or vector adapter. The result dialog reports every loaded,
-missing, changed, or style-incompatible layer separately.
+the browser rather than sent in an HTTP request. Opening a valid shared link
+immediately clears the existing composition, resolves every layer by its
+standard STAC Collection and Item identity, repeats the current preparation and
+publication flow, and delegates style validation to the layer's raster or
+vector adapter. Successful restoration dismisses its loading state
+automatically; warnings and partial restoration keep an actionable exception
+report open.
 
 ## Trust boundary
 
@@ -27,8 +28,8 @@ flow remain authoritative on every open.
 The fragment transport accepts at most 128 KiB of encoded content and stops
 decompression after 512 KiB. The document parser accepts only schema version 1,
 at most 512 KiB, at most 50 unique Catalog identities, a canonical single-world
-viewport, and bounded scalar fields. A different viewer version or origin is a
-warning rather than rendering authority; an incompatible schema is rejected.
+viewport, and bounded scalar fields. A different viewer version or origin is
+provenance rather than rendering authority; an incompatible schema is rejected.
 
 The first schema deliberately excludes Catalog search state, selected Item,
 feature inspection, pixel probes, histogram and 2D-analysis state, sampling

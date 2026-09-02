@@ -2696,16 +2696,6 @@ h5 {
   gap: 8px;
 }
 
-.saved-map-view-dialog .saved-map-view-confirm {
-  border-color: var(--brand-hover);
-  background: var(--brand-hover);
-  color: #ffffff;
-}
-
-.saved-map-view-dialog .saved-map-view-confirm:hover:not(:disabled) {
-  background: var(--brand-press);
-}
-
 .panel-header-actions .icon-button {
   width: 34px;
   height: 34px;
