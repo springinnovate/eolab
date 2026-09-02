@@ -34,7 +34,7 @@ depending on each other's implementation state.
 
 `frontend/src/map-layers/` owns the retained presentation contract:
 
-- `MapLayerStack` owns two-visible-layer capacity, opacity, active selection,
+- `MapLayerStack` owns retained-layer visibility, opacity, active selection,
   and top-first order without DOM or Leaflet dependencies.
 - `LeafletLayerSet` owns keyed attachment, detachment, opacity, z-order, and
   cleanup without publication behavior.
@@ -43,6 +43,12 @@ depending on each other's implementation state.
   lifecycle through dataset-owned adapters. When active ownership changes, it
   asks the outgoing adapter to release its controls before activating the next
   adapter; neither owner imports or calls its sibling.
+
+The retained presentation contract imposes no layer-count limit: any number of
+retained raster and vector layers may be visible and rendered. The raster
+viewer independently bounds automatic histogram and bivariate analysis to the
+top two visible rasters. That analysis policy does not constrain
+`MapLayerStack` or map rendering.
 
 The application composition root constructs the controller. The raster viewer
 supplies an adapter and continues to own its appearance, analysis, sampling,
