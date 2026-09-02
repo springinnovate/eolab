@@ -677,6 +677,8 @@ async function initializeCatalog(
             layerStyleEditor?.refresh();
             vectorFeatureInspector?.syncVisibleLayers();
         },
+        onItemZoom: zoomRetainedMapLayer,
+        onItemInfo: inspectRetainedMapLayer,
     });
     rasterVisualization = initializeRasterViewer({
         wmsUrl: appGlobalConfiguration.wmsUrl,
@@ -724,8 +726,6 @@ async function initializeCatalog(
         mapLayerController,
         vectorMapLayerAdapter
     );
-    mapLayerController.onZoom = zoomRetainedMapLayer;
-    mapLayerController.onInfo = inspectRetainedMapLayer;
     new SavedMapViewController({
         view: new SavedMapViewDomView(),
         viewport: createSavedMapLeafletViewport(leafletMap),
@@ -1326,22 +1326,21 @@ async function initializeCatalog(
     /**
      * Fit the map to one retained layer through its authoritative Catalog Item.
      *
-     * @param {string} key Stable retained-layer key emitted by the layer view.
+     * @param {Object|null} item Authoritative retained Catalog Item.
      * @return {void}
      */
-    function zoomRetainedMapLayer(key) {
-        zoomCatalogLayer(mapLayerController.getRecord(key)?.state.item ?? null);
+    function zoomRetainedMapLayer(item) {
+        zoomCatalogLayer(item);
     }
 
     /**
      * Open Catalog details for one retained layer without coupling its view to
      * Catalog presentation or navigation.
      *
-     * @param {string} key Stable retained-layer key emitted by the layer view.
+     * @param {Object|null} item Authoritative retained Catalog Item.
      * @return {void}
      */
-    function inspectRetainedMapLayer(key) {
-        const item = mapLayerController.getRecord(key)?.state.item ?? null;
+    function inspectRetainedMapLayer(item) {
         if (item === null) return;
         onCatalogWorkspaceRequested();
         selectCatalogItem(item);

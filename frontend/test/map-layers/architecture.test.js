@@ -45,8 +45,12 @@ test("composition owns the controller and raster consumes it", async () => {
     assert.match(compositionSource, /initializeRasterViewer[\s\S]+mapLayerController/);
     assert.doesNotMatch(rasterSource, /new MapLayerStack\(/);
     assert.doesNotMatch(rasterSource, /new LeafletLayerSet\(/);
-    assert.match(compositionSource, /onZoom = zoomRetainedMapLayer/);
-    assert.match(compositionSource, /onInfo = inspectRetainedMapLayer/);
+    assert.match(compositionSource, /onItemZoom: zoomRetainedMapLayer/);
+    assert.match(compositionSource, /onItemInfo: inspectRetainedMapLayer/);
+    assert.doesNotMatch(
+        compositionSource,
+        /zoomRetainedMapLayer[\s\S]{0,300}\.state\.item/
+    );
 });
 
 test("map-layer presentation does not name its parent workspace layout", async () => {
