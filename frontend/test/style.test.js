@@ -35,6 +35,23 @@ test("catalog rows can shrink while their action buttons wrap at compact widths"
   assert.match(STYLESHEET, /\.catalog-result-actions\s*\{[^}]*flex-wrap:\s*wrap;/s);
 });
 
+test("map-layer reorder handles expose grab and insertion feedback", () => {
+  assert.match(
+    STYLESHEET,
+    /\.raster-layer-list\s*\{[^}]*padding:\s*6px 0;/s,
+  );
+  assert.match(
+    STYLESHEET,
+    /\.map-layer-drag-handle\s*\{[^}]*touch-action:\s*none;[^}]*cursor:\s*grab;/s,
+  );
+  assert.match(
+    STYLESHEET,
+    /\.raster-layer-row\.is-dragging\s*\{[^}]*box-shadow:[^}]*opacity:/s,
+  );
+  assert.match(STYLESHEET, /\.raster-layer-row\.is-drop-before::before/);
+  assert.match(STYLESHEET, /\.raster-layer-row\.is-drop-after::after/);
+});
+
 test("map overlays and inspection surfaces retain contrast contracts", () => {
   assert.match(
     STYLESHEET,

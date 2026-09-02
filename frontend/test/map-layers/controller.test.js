@@ -114,7 +114,7 @@ test("controller owns cross-adapter visibility, ordering, and removal", async ()
     view.handlers.onVisibility(getCatalogItemKey(first), true);
     assert.equal(controller.visibleCount, 3);
     controller.setOpacity(getCatalogItemKey(third), 0.35);
-    view.handlers.onMove(getCatalogItemKey(first), "up");
+    view.handlers.onReorder(getCatalogItemKey(first), 1);
 
     assert.equal(controller.getLeafletLayer(getCatalogItemKey(third)).opacity, 0.35);
     assert.deepEqual(firstOwner.events.at(-1), [
@@ -124,6 +124,10 @@ test("controller owns cross-adapter visibility, ordering, and removal", async ()
     assert.deepEqual(
         controller.snapshots().map(({ item }) => item.id),
         ["three", "one", "two"],
+    );
+    assert.equal(
+        view.status,
+        "first one moved to position 2 of 3 in the map drawing order.",
     );
 
     controller.removeOwned(firstOwner);

@@ -695,7 +695,7 @@ test('visible raster histograms follow order, skip vectors and never follow the 
     assert.equal(h.mapLayers.activeKey, secondKey);
     assert.equal(h.mapLayers.getRecord(firstKey).state.rasterStyle.minimum, -2);
     assert.notEqual(h.mapLayers.getRecord(secondKey).state.rasterStyle.minimum, -2);
-    h.mapLayers.move(firstKey, 'up');
+    h.mapLayers.reorder(firstKey, 0);
     assert.equal(h.controlsView.style.minimum, -2);
     assert.deepEqual(h.controlsView.layerHistograms.map(s => s.label), ['first.tif', 'second.tif']);
     h.mapLayers.setVisible(firstKey, false);
@@ -804,7 +804,7 @@ test('active 2D analysis follows the top raster pair and exposes X Y badges', as
     );
     assert.deepEqual(pairedRequests.at(-1), ['middle', 'top']);
 
-    h.mapLayers.move(bottom.key, 'up');
+    h.mapLayers.reorder(bottom.key, 1);
     await flushPromises();
     assert.equal(h.controlsView.bivariateMode.active, true);
     assert.deepEqual(
@@ -928,8 +928,7 @@ test('automatic samples exclude rasters below the top-two pair', async () => {
     await flushPromises();
     assert.equal(requests.includes('geotiff-first'), false);
     const [, , first] = h.mapLayers.snapshots();
-    h.mapLayers.move(first.key, 'up');
-    h.mapLayers.move(first.key, 'up');
+    h.mapLayers.reorder(first.key, 0);
     await flushPromises();
     assert.deepEqual(
         h.controlsView.layerHistograms.map(s => s.label),
