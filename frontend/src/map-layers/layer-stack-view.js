@@ -364,7 +364,7 @@ export class MapLayerStackView {
         let targetIndex = rows.length - 1;
         for (let index = 0; index < rows.length; index += 1) {
             const bounds = rows[index].getBoundingClientRect();
-            if (event.clientY < bounds.top + bounds.height / 2) {
+            if (event.clientY <= bounds.bottom) {
                 targetIndex = index;
                 break;
             }

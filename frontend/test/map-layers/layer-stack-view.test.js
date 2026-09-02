@@ -469,6 +469,36 @@ test("pointer dragging emits one atomic reorder with insertion feedback", () => 
   assert.equal(list.children[2].classList.contains("is-drop-after"), false);
 });
 
+test("pointer dragging onto the top row moves a lower layer to the top", () => {
+  const documentContext = new FakeLayerStackDocument();
+  const view = new MapLayerStackView(documentContext);
+  const received = [];
+  view.bind({
+    onStyle() {},
+    onVisibility() {},
+    onReorder: (key, targetIndex) => received.push([key, targetIndex]),
+    onRemove() {},
+  });
+  view.render(LAYERS, null);
+  const list = documentContext.querySelector("#raster-layer-list");
+  const handle = actionControl(list.children[2], "reorder");
+  handle.dispatchEvent(interactionEvent("pointerdown", {
+    button: 0,
+    isPrimary: true,
+    pointerId: 8,
+  }));
+
+  // The lower half of the first row is still an unambiguous top-row drop.
+  handle.dispatchEvent(interactionEvent("pointermove", {
+    pointerId: 8,
+    clientY: 40,
+  }));
+  assert.equal(list.children[0].classList.contains("is-drop-before"), true);
+
+  handle.dispatchEvent(interactionEvent("pointerup", { pointerId: 8 }));
+  assert.deepEqual(received, [["moisture", 0]]);
+});
+
 test("keyboard reorder moves through the owner and Escape restores the origin", () => {
   const documentContext = new FakeLayerStackDocument();
   const view = new MapLayerStackView(documentContext);
