@@ -362,7 +362,7 @@ export class VectorTimeSeriesController {
         this.direction.value = this.settings.direction;
         this.chart.replaceChildren();
         this.tableBody.replaceChildren();
-        this.chart.hidden = true;
+        this.chart.setAttribute("hidden", "");
         this.table.hidden = true;
         if (this.sampleState !== "ready") {
             this.status.textContent = this.sampleMessage;
@@ -596,7 +596,7 @@ export class VectorTimeSeriesController {
                 "text-anchor": "middle",
             }, this.settings.yField)
         );
-        this.chart.hidden = false;
+        this.chart.removeAttribute("hidden");
     }
 
     /**

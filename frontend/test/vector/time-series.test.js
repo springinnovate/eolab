@@ -41,7 +41,10 @@ function fixture() {
   documentContext.removeEventListener = events.removeEventListener.bind(events);
   documentContext.dispatchEvent = events.dispatchEvent.bind(events);
   documentContext.querySelector("#vector-time-series").hidden = true;
-  documentContext.querySelector("#vector-time-series-chart").hidden = true;
+  documentContext.querySelector("#vector-time-series-chart").setAttribute(
+    "hidden",
+    "",
+  );
   documentContext.querySelector("#vector-time-series-table").hidden = true;
   const visibility = [];
   const controller = new VectorTimeSeriesController({
@@ -103,7 +106,7 @@ test("controller renders axes and table while retaining controls across samples"
   h.controller.open();
   const chart = h.documentContext.querySelector("#vector-time-series-chart");
   const table = h.documentContext.querySelector("#vector-time-series-table");
-  assert.equal(chart.hidden, false);
+  assert.equal(chart.getAttribute("hidden"), null);
   assert.equal(chart.getAttribute("viewBox"), "0 0 680 360");
   assert.match(chart.getAttribute("aria-label"), /score by filename or layer/);
   assert.equal(table.hidden, false);
@@ -157,8 +160,10 @@ test("loading and invalidation retain settings without a stale chart", () => {
     message: "Visible vector layers changed. Click the map to sample again.",
   });
   assert.equal(
-    h.documentContext.querySelector("#vector-time-series-chart").hidden,
-    true,
+    h.documentContext.querySelector("#vector-time-series-chart").getAttribute(
+      "hidden",
+    ),
+    "",
   );
   assert.equal(
     h.documentContext.querySelector("#vector-time-series-status").textContent,
