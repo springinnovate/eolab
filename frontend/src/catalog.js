@@ -15,6 +15,57 @@ const CATALOG_DATE_PERIOD_PATTERN =
 const CATALOG_DATE_SYNTAX_ERROR =
     "Use date:YYYY, date:YYYY-MM, date:YYYY-MM-DD, or a range " +
     "between two of these values.";
+
+/**
+ * User-facing Catalog field filters accepted by `buildCatalogSearch`.
+ *
+ * Keeping insertion text and presentation metadata beside the parser's field
+ * and value contract prevents the search assistant from documenting syntax
+ * that the Catalog cannot execute.
+ *
+ * @type {ReadonlyArray<Readonly<{
+ *   field:string,
+ *   token:string,
+ *   value:string|null,
+ *   label:string,
+ *   description:string,
+ *   keywords:ReadonlyArray<string>,
+ *   searchImmediately:boolean
+ * }>>}
+ */
+export const CATALOG_SEARCH_FILTERS = Object.freeze([
+    Object.freeze({
+        field: "format",
+        token: "format:cog",
+        value: "cog",
+        label: "Cloud-optimized rasters",
+        description: "Only cloud-optimized GeoTIFF Items.",
+        keywords: Object.freeze(["format", "cog", "datatype", "raster"]),
+        searchImmediately: true
+    }),
+    Object.freeze({
+        field: "viewable",
+        token: "viewable:true",
+        value: "true",
+        label: "Ready to add to the map",
+        description: "Only mounted rasters that EOLab can render.",
+        keywords: Object.freeze(["viewable", "map", "datatype", "raster"]),
+        searchImmediately: true
+    }),
+    Object.freeze({
+        field: "date",
+        token: "date:",
+        value: null,
+        label: "Observation date or range",
+        description: "Use YYYY, YYYY-MM, YYYY-MM-DD, or FROM..TO.",
+        keywords: Object.freeze(["date", "time", "year", "range"]),
+        searchImmediately: false
+    })
+]);
+
+const CATALOG_SEARCH_FILTERS_BY_FIELD = new Map(
+    CATALOG_SEARCH_FILTERS.map((filter) => [filter.field, filter])
+);
 export const MOUNTED_GEOTIFF_COLLECTION_ID = "eolab-mounted-geotiffs";
 export const MOUNTED_VECTOR_COLLECTION_ID = "eolab-mounted-vectors";
 const VECTOR_RENDERING_POLICY = "vector-v1";
@@ -480,7 +531,10 @@ export function buildCatalogSearch(searchText) {
 
         const normalizedFieldName = fieldName.toLowerCase();
         const normalizedFieldValue = fieldValue.toLowerCase();
-        if (normalizedFieldName === "date") {
+        const supportedFilter = CATALOG_SEARCH_FILTERS_BY_FIELD.get(
+            normalizedFieldName
+        );
+        if (supportedFilter?.field === "date") {
             if (datetime !== null) {
                 throw new CatalogSearchSyntaxError(
                     "The date filter may appear only once."
@@ -505,8 +559,8 @@ export function buildCatalogSearch(searchText) {
                 `${endDate}T23:59:59.999999Z`;
             continue;
         }
-        if (normalizedFieldName === "format") {
-            if (normalizedFieldValue !== "cog") {
+        if (supportedFilter?.field === "format") {
+            if (normalizedFieldValue !== supportedFilter.value) {
                 throw new CatalogSearchSyntaxError(
                     "The supported format filter is format:cog."
                 );
@@ -519,8 +573,8 @@ export function buildCatalogSearch(searchText) {
             hasCogFormatFilter = true;
             continue;
         }
-        if (normalizedFieldName === "viewable") {
-            if (normalizedFieldValue !== "true") {
+        if (supportedFilter?.field === "viewable") {
+            if (normalizedFieldValue !== supportedFilter.value) {
                 throw new CatalogSearchSyntaxError(
                     "The supported viewable filter is viewable:true."
                 );
