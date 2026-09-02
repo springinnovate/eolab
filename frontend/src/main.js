@@ -726,7 +726,7 @@ async function initializeCatalog(
         mapLayerController,
         vectorMapLayerAdapter
     );
-    new SavedMapViewController({
+    const savedMapViewController = new SavedMapViewController({
         view: new SavedMapViewDomView(),
         viewport: createSavedMapLeafletViewport(leafletMap),
         mapLayers: mapLayerController,
@@ -736,6 +736,7 @@ async function initializeCatalog(
         viewerOrigin: globalThis.location.origin,
         beforeRestore: clearCatalogSelection,
     });
+    void savedMapViewController.openSharedFragment(globalThis.location.hash);
     const vectorTimeSeries = new VectorTimeSeriesController({
         onVisibilityChange: (visible, moveFocus) => {
             if (visible) mapInspection.showVectorTimeSeries();

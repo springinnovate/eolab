@@ -1,26 +1,47 @@
-/** DOM presentation and local-file interaction for portable saved maps. */
+/** DOM presentation and browser-link interaction for portable saved maps. */
 
-/** Present saved-map actions without owning restoration or validation. */
+/** Present shared-map actions without owning restoration or validation. */
 export class SavedMapViewDomView {
     /**
-     * Bind the fixed saved-map controls and map drop target.
+     * Bind the fixed saved-map controls and browser capabilities.
      *
      * @param {Document} documentContext Application document.
-     * @param {URL} urlApi Browser object-URL implementation.
+     * @param {Object} [browserContext] Injected browser interfaces.
+     * @param {{href:string}} [browserContext.locationContext] Current location.
+     * @param {{writeText:(value:string)=>Promise<void>}} [browserContext.clipboard]
+     * Clipboard writer, when browser permissions permit it.
+     * @param {(handler:()=>void,delay:number)=>unknown} [browserContext.setTimer]
+     * Timer used to restore the copy-button label.
+     * @param {(timer:unknown)=>void} [browserContext.clearTimer] Timer clearer.
      */
-    constructor(documentContext = globalThis.document, urlApi = globalThis.URL) {
+    constructor(
+        documentContext = globalThis.document,
+        {
+            locationContext = globalThis.location,
+            clipboard = globalThis.navigator?.clipboard,
+            setTimer = (handler, delay) =>
+                globalThis.setTimeout(handler, delay),
+            clearTimer = (timer) => globalThis.clearTimeout(timer),
+        } = {}
+    ) {
         this.document = documentContext;
-        this.urlApi = urlApi;
-        this.saveButton = documentContext.querySelector("#save-map-view");
-        this.openButton = documentContext.querySelector("#open-map-view");
-        this.fileInput = documentContext.querySelector("#open-map-view-file");
-        this.mapContainer = documentContext.querySelector("#map");
+        this.location = locationContext;
+        this.clipboard = clipboard;
+        this.setTimer = setTimer;
+        this.clearTimer = clearTimer;
+        this.copyButton = documentContext.querySelector("#copy-map-link");
+        this.copyButtonLabel = documentContext.querySelector(
+            "#copy-map-link-label"
+        );
         this.dialog = documentContext.querySelector("#saved-map-view-dialog");
         this.dialogTitle = documentContext.querySelector(
             "#saved-map-view-dialog-title"
         );
         this.dialogSummary = documentContext.querySelector(
             "#saved-map-view-dialog-summary"
+        );
+        this.dialogUrl = documentContext.querySelector(
+            "#saved-map-view-dialog-url"
         );
         this.dialogDetails = documentContext.querySelector(
             "#saved-map-view-dialog-details"
@@ -31,70 +52,78 @@ export class SavedMapViewDomView {
         this.confirmButton = documentContext.querySelector(
             "#confirm-open-map-view"
         );
-        this.dragDepth = 0;
         this.handlers = null;
+        this.copiedTimer = null;
         this.blockCancel = (event) => event.preventDefault();
     }
 
     /**
-     * Connect user events to controller-owned actions.
+     * Connect the copy action to controller-owned orchestration.
      *
      * @param {Object} handlers Saved-map action callbacks.
-     * @param {()=>void} handlers.onSave Download current map state.
-     * @param {(file:File)=>void} handlers.onOpen Open a selected local file.
+     * @param {()=>void} handlers.onCopy Copy the current shared map link.
      * @return {void}
      */
-    bind({ onSave, onOpen }) {
+    bind({ onCopy }) {
         this.unbind();
-        this.handlers = {
-            save: () => onSave(),
-            choose: () => this.fileInput.click(),
-            change: () => {
-                const file = this.fileInput.files?.[0];
-                this.fileInput.value = "";
-                if (file !== undefined) onOpen(file);
-            },
-            dragenter: (event) => {
-                if (!hasFiles(event)) return;
-                event.preventDefault();
-                this.dragDepth += 1;
-                this.mapContainer.classList.add(
-                    "is-saved-map-view-drop-target"
-                );
-            },
-            dragover: (event) => {
-                if (!hasFiles(event)) return;
-                event.preventDefault();
-                event.dataTransfer.dropEffect = "copy";
-            },
-            dragleave: (event) => {
-                if (!hasFiles(event)) return;
-                event.preventDefault();
-                this.dragDepth = Math.max(0, this.dragDepth - 1);
-                if (this.dragDepth === 0) {
-                    this.mapContainer.classList.remove(
-                        "is-saved-map-view-drop-target"
-                    );
-                }
-            },
-            drop: (event) => {
-                if (!hasFiles(event)) return;
-                event.preventDefault();
-                this.dragDepth = 0;
-                this.mapContainer.classList.remove(
-                    "is-saved-map-view-drop-target"
-                );
-                const file = event.dataTransfer.files?.[0];
-                if (file !== undefined) onOpen(file);
-            },
-        };
-        this.saveButton.addEventListener("click", this.handlers.save);
-        this.openButton.addEventListener("click", this.handlers.choose);
-        this.fileInput.addEventListener("change", this.handlers.change);
-        this.mapContainer.addEventListener("dragenter", this.handlers.dragenter);
-        this.mapContainer.addEventListener("dragover", this.handlers.dragover);
-        this.mapContainer.addEventListener("dragleave", this.handlers.dragleave);
-        this.mapContainer.addEventListener("drop", this.handlers.drop);
+        this.handlers = { copy: () => onCopy() };
+        this.copyButton.addEventListener("click", this.handlers.copy);
+    }
+
+    /**
+     * Copy a fragment on the current viewer URL when Clipboard API access works.
+     *
+     * @param {string} fragment Validated complete `#view=` fragment.
+     * @return {Promise<{copied:boolean,url:string}>} Copy result and share URL.
+     */
+    async copyLink(fragment) {
+        const url = createSavedMapViewUrl(this.location.href, fragment);
+        if (typeof this.clipboard?.writeText !== "function") {
+            return { copied: false, url };
+        }
+        try {
+            await this.clipboard.writeText(url);
+            return { copied: true, url };
+        } catch {
+            return { copied: false, url };
+        }
+    }
+
+    /**
+     * Temporarily acknowledge a successful clipboard write on the action itself.
+     *
+     * @return {void}
+     */
+    showCopied() {
+        if (this.copiedTimer !== null) this.clearTimer(this.copiedTimer);
+        this.copyButtonLabel.textContent = "Map link copied";
+        this.copiedTimer = this.setTimer(() => {
+            this.copyButtonLabel.textContent = "Copy map link";
+            this.copiedTimer = null;
+        }, 2200);
+    }
+
+    /**
+     * Present a selectable link when automatic clipboard access is unavailable.
+     *
+     * @param {string} url Complete share URL.
+     * @return {void}
+     */
+    showCopyFallback(url) {
+        this.#setCancelBlocked(false);
+        this.#prepareDialog(
+            "Copy map link",
+            "Your browser could not copy automatically. Copy this link:",
+            []
+        );
+        this.dialogUrl.hidden = false;
+        this.dialogUrl.value = url;
+        this.cancelButton.textContent = "Close";
+        this.cancelButton.value = "close";
+        this.confirmButton.hidden = true;
+        this.dialog.showModal();
+        this.dialogUrl.focus();
+        this.dialogUrl.select();
     }
 
     /**
@@ -113,17 +142,17 @@ export class SavedMapViewDomView {
         currentOrigin
     ) {
         this.#prepareDialog(
-            "Open saved map view?",
+            "Open shared map view?",
             `Replace ${formatCount(currentLayerCount, "current layer")} with ` +
-                `${formatCount(savedMapView.layers.length, "saved layer")} ` +
-                "and move the map to its saved position.",
+                `${formatCount(savedMapView.layers.length, "shared layer")} ` +
+                "and move the map to its shared position.",
             compatibilityDetails(savedMapView, currentVersion, currentOrigin)
         );
         this.cancelButton.textContent = "Cancel";
         this.cancelButton.value = "cancel";
         this.confirmButton.hidden = false;
         this.confirmButton.disabled = false;
-        this.confirmButton.textContent = "Replace current view";
+        this.confirmButton.textContent = "Open shared view";
         return new Promise((resolve) => {
             this.dialog.addEventListener(
                 "close",
@@ -144,10 +173,10 @@ export class SavedMapViewDomView {
         this.#setCancelBlocked(false);
         this.#prepareDialog(
             report.loaded === report.total
-                ? "Saved map view opened"
-                : "Saved map view partially opened",
+                ? "Shared map view opened"
+                : "Shared map view partially opened",
             `${formatCount(report.loaded, "layer")} loaded from ` +
-                `${formatCount(report.total, "saved layer")}.`,
+                `${formatCount(report.total, "shared layer")}.`,
             report.details
         );
         this.cancelButton.textContent = "Close";
@@ -159,13 +188,13 @@ export class SavedMapViewDomView {
     /**
      * Keep the application stable while current Items are revalidated.
      *
-     * @param {number} layerCount Number of saved layers to restore.
+     * @param {number} layerCount Number of shared layers to restore.
      * @return {void}
      */
     showLoading(layerCount) {
         this.#prepareDialog(
-            "Opening saved map view…",
-            `Resolving and validating ${formatCount(layerCount, "saved layer")}.`,
+            "Opening shared map view…",
+            `Resolving and validating ${formatCount(layerCount, "shared layer")}.`,
             ["The current Catalog and rendering policies remain authoritative."]
         );
         this.cancelButton.hidden = true;
@@ -176,15 +205,18 @@ export class SavedMapViewDomView {
     }
 
     /**
-     * Present a local-file or validation error without changing map state.
+     * Present a link creation or validation error without changing map state.
      *
      * @param {Error} error User-facing failure.
+     * @param {"copy"|"open"} operation Failed operation.
      * @return {void}
      */
-    showError(error) {
+    showError(error, operation) {
         this.#setCancelBlocked(false);
         this.#prepareDialog(
-            "Saved map view could not be opened",
+            operation === "copy"
+                ? "Map link could not be created"
+                : "Shared map view could not be opened",
             error.message,
             []
         );
@@ -196,51 +228,32 @@ export class SavedMapViewDomView {
     }
 
     /**
-     * Enable or disable both entry actions during bounded async work.
+     * Enable or disable the entry action during bounded async work.
      *
-     * @param {boolean} busy Whether an open or save action is running.
+     * @param {boolean} busy Whether a copy or open action is running.
      * @return {void}
      */
     setBusy(busy) {
-        this.saveButton.disabled = busy;
-        this.openButton.disabled = busy;
-        this.openButton.setAttribute("aria-busy", String(busy));
+        this.copyButton.disabled = busy;
+        this.copyButton.setAttribute("aria-busy", String(busy));
     }
 
     /**
-     * Download one generated JSON document without sending it to a server.
-     *
-     * @param {string} content UTF-8 JSON content.
-     * @param {string} filename Safe proposed filename.
-     * @return {void}
-     */
-    download(content, filename) {
-        const objectUrl = this.urlApi.createObjectURL(
-            new Blob([content], { type: "application/json;charset=utf-8" })
-        );
-        const link = this.document.createElement("a");
-        link.href = objectUrl;
-        link.download = filename;
-        link.click();
-        this.urlApi.revokeObjectURL(objectUrl);
-    }
-
-    /**
-     * Detach every registered user event.
+     * Detach every registered user event and pending presentation timer.
      *
      * @return {void}
      */
     unbind() {
         this.#setCancelBlocked(false);
-        if (this.handlers === null) return;
-        this.saveButton.removeEventListener("click", this.handlers.save);
-        this.openButton.removeEventListener("click", this.handlers.choose);
-        this.fileInput.removeEventListener("change", this.handlers.change);
-        this.mapContainer.removeEventListener("dragenter", this.handlers.dragenter);
-        this.mapContainer.removeEventListener("dragover", this.handlers.dragover);
-        this.mapContainer.removeEventListener("dragleave", this.handlers.dragleave);
-        this.mapContainer.removeEventListener("drop", this.handlers.drop);
-        this.handlers = null;
+        if (this.handlers !== null) {
+            this.copyButton.removeEventListener("click", this.handlers.copy);
+            this.handlers = null;
+        }
+        if (this.copiedTimer !== null) {
+            this.clearTimer(this.copiedTimer);
+            this.copiedTimer = null;
+            this.copyButtonLabel.textContent = "Copy map link";
+        }
     }
 
     /**
@@ -255,6 +268,8 @@ export class SavedMapViewDomView {
         if (this.dialog.open) this.dialog.close("replaced");
         this.dialogTitle.textContent = title;
         this.dialogSummary.textContent = summary;
+        this.dialogUrl.hidden = true;
+        this.dialogUrl.value = "";
         this.dialogDetails.replaceChildren();
         this.dialog.removeAttribute("aria-busy");
         this.cancelButton.hidden = false;
@@ -274,20 +289,24 @@ export class SavedMapViewDomView {
      */
     #setCancelBlocked(blocked) {
         this.dialog.removeEventListener("cancel", this.blockCancel);
-        if (blocked) {
-            this.dialog.addEventListener("cancel", this.blockCancel);
-        }
+        if (blocked) this.dialog.addEventListener("cancel", this.blockCancel);
     }
 }
 
 /**
- * Return whether a drag event contains local files.
+ * Place a validated saved-map fragment on the current viewer URL.
  *
- * @param {DragEvent} event Candidate drag event.
- * @return {boolean} Whether files are present.
+ * @param {string} currentHref Current complete viewer URL.
+ * @param {string} fragment Complete validated fragment including `#`.
+ * @return {string} Complete share URL.
  */
-function hasFiles(event) {
-    return [...(event.dataTransfer?.types ?? [])].includes("Files");
+export function createSavedMapViewUrl(currentHref, fragment) {
+    if (typeof fragment !== "string" || !fragment.startsWith("#view=")) {
+        throw new TypeError("A complete saved-map fragment is required.");
+    }
+    const url = new URL(currentHref);
+    url.hash = fragment.slice(1);
+    return url.href;
 }
 
 /**
@@ -322,7 +341,7 @@ function compatibilityDetails(savedMapView, currentVersion, currentOrigin) {
     }
     if (savedMapView.viewer.origin !== currentOrigin) {
         details.push(
-            `Saved by ${savedMapView.viewer.origin}; Catalog identities will ` +
+            `Shared by ${savedMapView.viewer.origin}; Catalog identities will ` +
             "be resolved against this deployment."
         );
     }

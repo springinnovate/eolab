@@ -32,25 +32,24 @@
           <div class="panel-header-actions">
             <button
               class="secondary-button saved-map-view-action"
-              id="save-map-view"
+              id="copy-map-link"
               type="button"
+              title="Copy a link to this map view"
             >
-              Save view
+              <svg
+                aria-hidden="true"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+              </svg>
+              <span id="copy-map-link-label">Copy map link</span>
             </button>
-            <button
-              class="secondary-button saved-map-view-action"
-              id="open-map-view"
-              type="button"
-              aria-haspopup="dialog"
-            >
-              Open view
-            </button>
-            <input
-              id="open-map-view-file"
-              type="file"
-              accept="application/json,.json,.eolab-map.json"
-              hidden
-            />
             <button
               class="secondary-button"
               id="toggle-operational-status"
@@ -1261,8 +1260,15 @@
       aria-describedby="saved-map-view-dialog-summary"
     >
       <form method="dialog">
-        <h2 id="saved-map-view-dialog-title">Open saved map view?</h2>
+        <h2 id="saved-map-view-dialog-title">Open shared map view?</h2>
         <p id="saved-map-view-dialog-summary"></p>
+        <textarea
+          id="saved-map-view-dialog-url"
+          aria-label="Map link"
+          rows="4"
+          readonly
+          hidden
+        ></textarea>
         <ul id="saved-map-view-dialog-details"></ul>
         <div class="saved-map-view-dialog-actions">
           <button

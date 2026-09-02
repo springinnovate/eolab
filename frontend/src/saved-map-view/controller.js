@@ -2,6 +2,11 @@
 
 import { getCatalogItemKey } from "../catalog-item-identity.js";
 import {
+    decodeSavedMapViewFragment,
+    encodeSavedMapViewFragment,
+    isSavedMapViewFragment,
+} from "./fragment-codec.js";
+import {
     createSavedMapView,
     hashSavedMapSourceRevision,
     MAX_SAVED_MAP_VIEW_BYTES,
@@ -9,7 +14,7 @@ import {
     serializeSavedMapView,
 } from "./model.js";
 
-/** Coordinate local saved-map files without becoming a rendering owner. */
+/** Coordinate shareable map views without becoming a rendering owner. */
 export class SavedMapViewController {
     /**
      * Create and bind the portable saved-map coordinator.
@@ -52,17 +57,16 @@ export class SavedMapViewController {
         this.subtleCrypto = subtleCrypto;
         this.busy = false;
         this.view.bind({
-            onSave: () => void this.save(),
-            onOpen: (file) => void this.open(file),
+            onCopy: () => void this.copyMapLink(),
         });
     }
 
     /**
-     * Build and download the current portable map document.
+     * Build and copy a compressed link for the current portable map document.
      *
-     * @return {Promise<void>} Completion after the local download starts.
+     * @return {Promise<void>} Completion after copy or fallback presentation.
      */
-    async save() {
+    async copyMapLink() {
         if (this.busy) return;
         this.#setBusy(true);
         try {
@@ -80,35 +84,38 @@ export class SavedMapViewController {
                 viewport: this.viewport.snapshot(),
                 layers,
             });
-            const timestamp = savedMapView.createdAt
-                .replaceAll(":", "-")
-                .replace(/\.\d{3}Z$/, "Z");
-            this.view.download(
+            const fragment = await encodeSavedMapViewFragment(
                 serializeSavedMapView(savedMapView),
-                `eolab-map-view-${timestamp}.eolab-map.json`
+                { maximumInputBytes: MAX_SAVED_MAP_VIEW_BYTES }
             );
+            const result = await this.view.copyLink(fragment);
+            if (result.copied) this.view.showCopied();
+            else this.view.showCopyFallback(result.url);
         } catch (error) {
-            this.view.showError(asError(error));
+            this.view.showError(asError(error), "copy");
         } finally {
             this.#setBusy(false);
         }
     }
 
     /**
-     * Validate, preview, and optionally restore one local saved-map file.
+     * Validate, preview, and optionally restore one shared map fragment.
      *
-     * @param {File|{size:number,text:()=>Promise<string>}} file Local file.
+     * Unrelated fragments are ignored so this component does not own other
+     * application anchors.
+     *
+     * @param {string} fragment Current browser URL fragment.
      * @return {Promise<void>} Completion after cancellation or restoration.
      */
-    async open(file) {
+    async openSharedFragment(fragment) {
+        if (!isSavedMapViewFragment(fragment)) return;
         if (this.busy) return;
         this.#setBusy(true);
         try {
-            if (!Number.isFinite(file?.size) ||
-                file.size > MAX_SAVED_MAP_VIEW_BYTES) {
-                throw new Error("Saved map files must be 512 KiB or smaller.");
-            }
-            const savedMapView = parseSavedMapView(await file.text());
+            const serialized = await decodeSavedMapViewFragment(fragment, {
+                maximumOutputBytes: MAX_SAVED_MAP_VIEW_BYTES,
+            });
+            const savedMapView = parseSavedMapView(serialized);
             const approved = await this.view.confirmOpen(
                 savedMapView,
                 this.mapLayers.retainedRecords.length,
@@ -120,7 +127,7 @@ export class SavedMapViewController {
             const report = await this.#restore(savedMapView);
             this.view.showResults(report);
         } catch (error) {
-            this.view.showError(asError(error));
+            this.view.showError(asError(error), "open");
         } finally {
             this.#setBusy(false);
         }

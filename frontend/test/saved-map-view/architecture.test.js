@@ -6,6 +6,7 @@ const SAVED_MAP_MODULES = [
   "catalog-client.js",
   "controller.js",
   "dom-view.js",
+  "fragment-codec.js",
   "leaflet-viewport.js",
   "model.js",
 ];
@@ -53,9 +54,15 @@ test("composition alone assembles the saved map coordinator", async () => {
     new URL("../../src/saved-map-view/controller.js", import.meta.url),
     "utf8",
   );
+  const codec = await readFile(
+    new URL("../../src/saved-map-view/fragment-codec.js", import.meta.url),
+    "utf8",
+  );
 
   assert.match(composition, /new SavedMapViewController\(/);
   assert.match(composition, /new SavedMapViewCatalogClient\(catalogUrl\)/);
   assert.doesNotMatch(controller, /fetch\(/);
   assert.doesNotMatch(controller, /layerName|styleName|sourceUri|href/);
+  assert.doesNotMatch(codec, /^import\s/m);
+  assert.doesNotMatch(codec, /fetch\(|localStorage|sessionStorage/);
 });
