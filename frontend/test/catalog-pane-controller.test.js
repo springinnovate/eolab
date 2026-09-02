@@ -58,7 +58,7 @@ function createCatalogPaneFixture() {
   inspectorPane.hidden = true;
   const inspectorBody = new FakeElement({}, document);
   const inspectorHeading = new FakeElement({}, document);
-  const backToResults = new FakeElement({}, document);
+  const closeItemDetails = new FakeElement({}, document);
   const elements = new Map([
     ["#catalog-layout", layout],
     ["#catalog-results-pane", resultsPane],
@@ -67,11 +67,11 @@ function createCatalogPaneFixture() {
     ["#catalog-item-inspector", inspectorPane],
     ["#catalog-inspector-body", inspectorBody],
     ["#catalog-inspector-heading", inspectorHeading],
-    ["#back-to-catalog-results", backToResults],
+    ["#close-catalog-item-details", closeItemDetails],
   ]);
   document.querySelector = (selector) => elements.get(selector) ?? null;
   return {
-    backToResults,
+    closeItemDetails,
     document,
     inspectorBody,
     inspectorHeading,
@@ -126,12 +126,12 @@ test("Catalog validates its feature-neutral layout-change boundary", () => {
   );
 });
 
-test("Back returns focus to Catalog results when no originating row exists", () => {
+test("Closing details focuses Catalog results when no originating row exists", () => {
   const fixture = createCatalogPaneFixture();
   const controls = initializeCatalogPaneControls(fixture.document);
   controls.showInspector();
 
-  fixture.backToResults.dispatchEvent(new Event("click"));
+  fixture.closeItemDetails.dispatchEvent(new Event("click"));
 
   assert.equal(fixture.inspectorPane.hidden, true);
   assert.equal(fixture.inspectorPane.getAttribute("aria-hidden"), "true");
@@ -155,18 +155,18 @@ test("More details reveals metadata immediately with scroll reset", () => {
   assert.equal(fixture.document.activeElement, fixture.inspectorHeading);
 });
 
-test("Back restores the originating More details button, with a stale-row fallback", () => {
+test("Closing details restores its origin, with a stale-row fallback", () => {
   const fixture = createCatalogPaneFixture();
   const controls = initializeCatalogPaneControls(fixture.document);
   const detailsButton = new FakeElement({}, fixture.document);
   detailsButton.isConnected = true;
   controls.showInspector({ moveFocus: true, returnFocusTarget: detailsButton });
-  fixture.backToResults.dispatchEvent(new Event("click"));
+  fixture.closeItemDetails.dispatchEvent(new Event("click"));
   assert.equal(fixture.document.activeElement, detailsButton);
 
   controls.showInspector({ returnFocusTarget: detailsButton });
   detailsButton.isConnected = false;
-  fixture.backToResults.dispatchEvent(new Event("click"));
+  fixture.closeItemDetails.dispatchEvent(new Event("click"));
   assert.equal(fixture.document.activeElement, fixture.resultsHeading);
 });
 
@@ -199,16 +199,16 @@ test("Catalog inspector shows requested metadata without a second disclosure", (
   assert.ok(markup.indexOf('id="catalog-map-actions"') < markup.indexOf('id="catalog-inspector-content"'));
   assert.match(
     markup,
-    /<button\s+class="secondary-button catalog-inspector-back"\s+id="back-to-catalog-results"/,
+    /<button\s+class="secondary-button catalog-inspector-close"\s+id="close-catalog-item-details"[\s\S]*aria-label="Close item details"[\s\S]*title="Close item details"/,
   );
-  assert.match(markup, /Back to results/);
+  assert.doesNotMatch(markup, /Back to results/);
   assert.match(markup, /id="catalog-item-inspector"[\s\S]*aria-hidden="true"[\s\S]*hidden/);
   assert.match(
     markup,
     /class="visually-hidden" id="catalog-results-heading" tabindex="-1"/,
   );
   assert.match(markup, /id="catalog-inspector-heading" tabindex="-1"/);
-  assert.match(markup, /placeholder="Search filenames, hazards, or formats\.\.\."/);
+  assert.match(markup, /placeholder="Search filenames, hazards, or data types\.\.\."/);
   assert.match(markup, /<details class="catalog-actions">/);
   assert.ok(
     markup.indexOf('id="catalog-search"') <
@@ -254,7 +254,7 @@ test("Catalog layout reserves its height for compact searchable results", () => 
   assert.doesNotMatch(stylesheet, /is-catalog-browser-collapsed/);
   assert.match(stylesheet, /is-catalog-inspector-visible/);
   assert.match(stylesheet, /\.catalog-item-heading h3\s*\{[^}]*font-size:\s*0\.82rem[^}]*text-overflow:\s*ellipsis/s);
-  assert.match(stylesheet, /\.catalog-inspector-back\s*\{[^}]*display:\s*inline-flex/s);
+  assert.match(stylesheet, /\.catalog-inspector-close\s*\{[^}]*display:\s*inline-grid/s);
   assert.match(stylesheet, /\.catalog-map-actions \.catalog-add-action\s*\{[^}]*background:\s*var\(--brand\)/s);
   assert.match(stylesheet, /\.catalog-on-map\[hidden\]\s*\{[^}]*display:\s*none/s);
   assert.match(stylesheet, /\.catalog-search-toolbar\s*\{/);

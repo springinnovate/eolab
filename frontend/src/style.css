@@ -749,6 +749,7 @@ h5 {
 
 .catalog-item-heading {
   display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   min-width: 0;
   flex: 0 0 auto;
   gap: 7px;
@@ -756,6 +757,8 @@ h5 {
 }
 
 .catalog-item-heading h3 {
+  grid-column: 1;
+  grid-row: 1;
   min-width: 0;
   margin: 0;
   overflow: hidden;
@@ -766,12 +769,19 @@ h5 {
   white-space: nowrap;
 }
 
-.catalog-inspector-back {
-  display: inline-flex;
-  justify-self: start;
+.catalog-inspector-close {
+  display: inline-grid;
+  grid-column: 2;
+  grid-row: 1;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  place-items: center;
+  line-height: 1;
 }
 
 .catalog-item-context {
+  grid-column: 1 / -1;
   min-width: 0;
   margin: 0;
   color: var(--text-3);

@@ -15,6 +15,8 @@ const CATALOG_DATE_PERIOD_PATTERN =
 const CATALOG_DATE_SYNTAX_ERROR =
     "Use date:YYYY, date:YYYY-MM, date:YYYY-MM-DD, or a range " +
     "between two of these values.";
+export const MOUNTED_GEOTIFF_COLLECTION_ID = "eolab-mounted-geotiffs";
+export const MOUNTED_VECTOR_COLLECTION_ID = "eolab-mounted-vectors";
 
 /**
  * User-facing Catalog field filters accepted by `buildCatalogSearch`.
@@ -30,7 +32,8 @@ const CATALOG_DATE_SYNTAX_ERROR =
  *   label:string,
  *   description:string,
  *   keywords:ReadonlyArray<string>,
- *   searchImmediately:boolean
+ *   searchImmediately:boolean,
+ *   collectionId?:string
  * }>>}
  */
 export const CATALOG_SEARCH_FILTERS = Object.freeze([
@@ -44,13 +47,24 @@ export const CATALOG_SEARCH_FILTERS = Object.freeze([
         searchImmediately: true
     }),
     Object.freeze({
-        field: "viewable",
-        token: "viewable:true",
-        value: "true",
-        label: "Ready to add to the map",
-        description: "Only mounted rasters that EOLab can render.",
-        keywords: Object.freeze(["viewable", "map", "datatype", "raster"]),
-        searchImmediately: true
+        field: "type",
+        token: "type:raster",
+        value: "raster",
+        label: "Raster items",
+        description: "Only mounted raster Items.",
+        keywords: Object.freeze(["type", "datatype", "raster", "image"]),
+        searchImmediately: true,
+        collectionId: MOUNTED_GEOTIFF_COLLECTION_ID
+    }),
+    Object.freeze({
+        field: "type",
+        token: "type:vector",
+        value: "vector",
+        label: "Vector items",
+        description: "Only mounted vector Items.",
+        keywords: Object.freeze(["type", "datatype", "vector", "feature"]),
+        searchImmediately: true,
+        collectionId: MOUNTED_VECTOR_COLLECTION_ID
     }),
     Object.freeze({
         field: "date",
@@ -64,14 +78,16 @@ export const CATALOG_SEARCH_FILTERS = Object.freeze([
 ]);
 
 const CATALOG_SEARCH_FILTERS_BY_FIELD = new Map(
-    CATALOG_SEARCH_FILTERS.map((filter) => [filter.field, filter])
+    [...new Set(CATALOG_SEARCH_FILTERS.map((filter) => filter.field))]
+        .map((field) => [
+            field,
+            CATALOG_SEARCH_FILTERS.filter((filter) => filter.field === field)
+        ])
 );
-export const MOUNTED_GEOTIFF_COLLECTION_ID = "eolab-mounted-geotiffs";
-export const MOUNTED_VECTOR_COLLECTION_ID = "eolab-mounted-vectors";
 const VECTOR_RENDERING_POLICY = "vector-v1";
 export const MOUNTED_DATASET_TYPES = new Map([
     [MOUNTED_GEOTIFF_COLLECTION_ID, "Raster"],
-    ["eolab-mounted-vectors", "Vector"]
+    [MOUNTED_VECTOR_COLLECTION_ID, "Vector"]
 ]);
 
 /**
@@ -508,7 +524,7 @@ export function buildCatalogSearch(searchText) {
 
     const literalTokens = [];
     let hasCogFormatFilter = false;
-    let hasViewableFilter = false;
+    let datasetCollectionId = null;
     let datetime = null;
     for (const token of normalizedSearchText.split(/\s+/)) {
         if (token === "&") {
@@ -531,10 +547,13 @@ export function buildCatalogSearch(searchText) {
 
         const normalizedFieldName = fieldName.toLowerCase();
         const normalizedFieldValue = fieldValue.toLowerCase();
-        const supportedFilter = CATALOG_SEARCH_FILTERS_BY_FIELD.get(
+        const supportedFilters = CATALOG_SEARCH_FILTERS_BY_FIELD.get(
             normalizedFieldName
         );
-        if (supportedFilter?.field === "date") {
+        if (
+            normalizedFieldName === "date" &&
+            supportedFilters !== undefined
+        ) {
             if (datetime !== null) {
                 throw new CatalogSearchSyntaxError(
                     "The date filter may appear only once."
@@ -559,8 +578,13 @@ export function buildCatalogSearch(searchText) {
                 `${endDate}T23:59:59.999999Z`;
             continue;
         }
-        if (supportedFilter?.field === "format") {
-            if (normalizedFieldValue !== supportedFilter.value) {
+        if (
+            normalizedFieldName === "format" &&
+            supportedFilters !== undefined
+        ) {
+            if (!supportedFilters.some(
+                (filter) => normalizedFieldValue === filter.value
+            )) {
                 throw new CatalogSearchSyntaxError(
                     "The supported format filter is format:cog."
                 );
@@ -573,18 +597,24 @@ export function buildCatalogSearch(searchText) {
             hasCogFormatFilter = true;
             continue;
         }
-        if (supportedFilter?.field === "viewable") {
-            if (normalizedFieldValue !== supportedFilter.value) {
+        if (
+            normalizedFieldName === "type" &&
+            supportedFilters !== undefined
+        ) {
+            const typeFilter = supportedFilters.find(
+                (filter) => normalizedFieldValue === filter.value
+            );
+            if (typeFilter === undefined) {
                 throw new CatalogSearchSyntaxError(
-                    "The supported viewable filter is viewable:true."
+                    "Use type:raster or type:vector."
                 );
             }
-            if (hasViewableFilter) {
+            if (datasetCollectionId !== null) {
                 throw new CatalogSearchSyntaxError(
-                    "The viewable filter may appear only once."
+                    "The type filter may appear only once."
                 );
             }
-            hasViewableFilter = true;
+            datasetCollectionId = typeFilter.collectionId;
             continue;
         }
         throw new CatalogSearchSyntaxError(
@@ -602,12 +632,12 @@ export function buildCatalogSearch(searchText) {
             ]
         });
     }
-    if (hasViewableFilter) {
+    if (datasetCollectionId !== null) {
         filters.push({
             op: "=",
             args: [
                 { property: CATALOG_COLLECTION_PROPERTY },
-                MOUNTED_GEOTIFF_COLLECTION_ID
+                datasetCollectionId
             ]
         });
     }

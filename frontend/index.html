@@ -234,7 +234,7 @@
                           type="search"
                           role="combobox"
                           autocomplete="off"
-                          placeholder="Search filenames, hazards, or formats..."
+                          placeholder="Search filenames, hazards, or data types..."
                           aria-autocomplete="list"
                           aria-controls="catalog-search-suggestion-list"
                           aria-haspopup="listbox"
@@ -257,8 +257,8 @@
                         </div>
                       </div>
                       <small class="visually-hidden" id="catalog-search-help">
-                        Search text or use format:cog, viewable:true, or date:YYYY-MM-DD.
-                        Example: ESA format:cog viewable:true date:2020-01-01..2020-12-31,
+                        Search text or use type:raster, type:vector, format:cog, or date:YYYY-MM-DD.
+                        Example: ESA type:raster format:cog date:2020-01-01..2020-12-31,
                         date:2020-01..2020-03.
                       </small>
                       <span
@@ -310,11 +310,13 @@
               >
                 <div class="catalog-item-heading">
                   <button
-                    class="secondary-button catalog-inspector-back"
-                    id="back-to-catalog-results"
+                    class="secondary-button catalog-inspector-close"
+                    id="close-catalog-item-details"
                     type="button"
+                    aria-label="Close item details"
+                    title="Close item details"
                   >
-                    Back to results
+                    <span aria-hidden="true">&#10005;</span>
                   </button>
                   <h3 id="catalog-inspector-heading" tabindex="-1">Selected item</h3>
                   <p class="catalog-item-context" id="catalog-item-context"></p>

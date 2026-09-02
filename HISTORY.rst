@@ -4,6 +4,7 @@ History
 Unreleased
 ----------
 
+* Filter Catalog Items explicitly as rasters or vectors.
 * Put direct style, zoom, details, clipboard, and removal actions on every map-layer row.
 * Cancel abandoned map requests and bound GeoServer queue waits.
 * Suggest valid Catalog search filters contextually while users type.

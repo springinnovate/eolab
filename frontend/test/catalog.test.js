@@ -12,6 +12,8 @@ import {
   CatalogSearchClient,
   CatalogSearchSyntaxError,
   CatalogSurpriseClient,
+  MOUNTED_GEOTIFF_COLLECTION_ID,
+  MOUNTED_VECTOR_COLLECTION_ID,
   createDebouncedAction,
   findPaginationLink,
   formatCatalogItemCount,
@@ -37,11 +39,18 @@ const expectedSubstringProperties = [
 ];
 const cogMediaType =
   "image/tiff; application=geotiff; profile=cloud-optimized";
-const viewableFilter = {
+const rasterTypeFilter = {
   op: "=",
   args: [
     { property: "collection" },
-    "eolab-mounted-geotiffs",
+    MOUNTED_GEOTIFF_COLLECTION_ID,
+  ],
+};
+const vectorTypeFilter = {
+  op: "=",
+  args: [
+    { property: "collection" },
+    MOUNTED_VECTOR_COLLECTION_ID,
   ],
 };
 
@@ -170,11 +179,12 @@ test("buildCatalogSearch combines each literal search term with AND", () => {
   });
 });
 
-test("buildCatalogSearch returns only currently viewable rasters", () => {
-  assert.deepEqual(catalogFilter(" VIEWABLE:TRUE "), viewableFilter);
+test("buildCatalogSearch filters mounted raster and vector Items", () => {
+  assert.deepEqual(catalogFilter(" TYPE:RASTER "), rasterTypeFilter);
+  assert.deepEqual(catalogFilter("type:vector"), vectorTypeFilter);
   assert.deepEqual(
     buildCatalogSearch(
-      "barley viewable:true format:cog " +
+      "barley type:raster format:cog " +
         "date:2020-01-01..2020-03-31",
     ),
     {
@@ -189,7 +199,7 @@ test("buildCatalogSearch returns only currently viewable rasters", () => {
               cogMediaType,
             ],
           },
-          viewableFilter,
+          rasterTypeFilter,
         ],
       },
       datetime: "2020-01-01T00:00:00Z/2020-03-31T23:59:59.999999Z",
@@ -299,9 +309,13 @@ test("buildCatalogSearch rejects syntax outside the field contract", () => {
     "format:",
     "format:geotiff",
     "format:cog format:cog",
+    "type:",
+    "type:points",
+    "type:raster type:raster",
+    "type:raster type:vector",
     "viewable:",
     "viewable:false",
-    "viewable:true viewable:true",
+    "viewable:true",
     "datatype:cog",
     "collection:rasters",
     "barley & format:cog",
@@ -314,7 +328,7 @@ test("buildCatalogSearch rejects syntax outside the field contract", () => {
   }
 });
 
-test("Catalog search help presents the viewable filter", () => {
+test("Catalog search help presents raster and vector type filters", () => {
   const catalogMarkup = readFileSync(
     new URL("../index.html", import.meta.url),
     "utf8",
@@ -322,11 +336,11 @@ test("Catalog search help presents the viewable filter", () => {
 
   assert.match(
     catalogMarkup,
-    /format:cog, viewable:true, or date:YYYY-MM-DD/,
+    /type:raster, type:vector, format:cog, or date:YYYY-MM-DD/,
   );
   assert.match(
     catalogMarkup,
-    /ESA format:cog viewable:true date:2020-01-01\.\.2020-12-31/,
+    /ESA type:raster format:cog date:2020-01-01\.\.2020-12-31/,
   );
 });
 
@@ -378,7 +392,7 @@ test("CatalogSurpriseClient sends active filters and prior Item identity", async
 
   assert.deepEqual(
     await client.surprise(
-      "barley format:cog viewable:true date:2020-01..2020-03",
+      "barley type:raster format:cog date:2020-01..2020-03",
       { collection: "collection-a", id: "item-previous" },
     ),
     selectedItem,
@@ -388,7 +402,7 @@ test("CatalogSurpriseClient sends active filters and prior Item identity", async
   assert.equal(capturedRequest.options.method, "POST");
   assert.deepEqual(JSON.parse(capturedRequest.options.body), {
     search: buildCatalogSearchRequest(
-      "barley format:cog viewable:true date:2020-01..2020-03",
+      "barley type:raster format:cog date:2020-01..2020-03",
     ),
     exclude: { collection: "collection-a", id: "item-previous" },
   });
@@ -489,19 +503,19 @@ test("CatalogSearchClient sends the parsed COG filter", async () => {
   });
 });
 
-test("CatalogSearchClient limits viewable results to mounted rasters", async () => {
+test("CatalogSearchClient limits results to the selected dataset type", async () => {
   let capturedRequest;
   const client = new CatalogSearchClient("/stac", async (url, options) => {
     capturedRequest = { url, options };
     return itemCollectionResponse();
   });
 
-  await client.search("viewable:true");
+  await client.search("type:vector");
 
   assert.equal(capturedRequest.url, "/stac/search");
   assert.deepEqual(
     JSON.parse(capturedRequest.options.body).filter,
-    viewableFilter,
+    vectorTypeFilter,
   );
 });
 

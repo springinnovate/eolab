@@ -107,6 +107,20 @@ export function applyCatalogSearchSuggestion(value, caretPosition, filter) {
 }
 
 /**
+ * Build a stable, unique DOM identifier from an executable filter token.
+ *
+ * @param {{token:string}} filter Parser-owned filter description.
+ * @return {string} Identifier suitable for an ARIA active descendant.
+ */
+function getCatalogSearchSuggestionOptionId(filter) {
+    const tokenIdentifier = filter.token
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, "");
+    return `catalog-search-suggestion-${tokenIdentifier}`;
+}
+
+/**
  * Accessible combobox/listbox presentation for Catalog search filters.
  */
 export class CatalogSearchSuggestions {
@@ -189,7 +203,7 @@ export class CatalogSearchSuggestions {
             const label = this.document.createElement("strong");
             const description = this.document.createElement("span");
             option.type = "button";
-            option.id = `catalog-search-suggestion-${filter.field}`;
+            option.id = getCatalogSearchSuggestionOptionId(filter);
             option.className = "catalog-search-suggestion";
             option.setAttribute("role", "option");
             option.setAttribute(

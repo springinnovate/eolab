@@ -50,7 +50,7 @@ export function initializeCatalogPaneControls(
         inspectorPane: "#catalog-item-inspector",
         inspectorBody: "#catalog-inspector-body",
         inspectorHeading: "#catalog-inspector-heading",
-        backToResults: "#back-to-catalog-results"
+        closeItemDetails: "#close-catalog-item-details"
     };
     const elements = Object.fromEntries(
         Object.entries(requiredElements).map(([key, selector]) => [
@@ -123,7 +123,7 @@ export function initializeCatalogPaneControls(
 
     setInspectorVisible(!elements.inspectorPane.hidden);
 
-    elements.backToResults.addEventListener("click", () => {
+    elements.closeItemDetails.addEventListener("click", () => {
         setInspectorVisible(false, { moveFocus: true });
     });
     elements.inspectorPane.addEventListener(
