@@ -9,7 +9,9 @@ import {
 import { createVectorWmsLayer } from "./leaflet.js";
 import { buildCatalogResultPresentation } from "../catalog-result-presentation.js";
 import {
+    normalizeVectorNumericClassification,
     normalizeVectorStyle,
+    sequentialPaletteColors,
     vectorCategoricalFieldKind,
     vectorCategoricalFields,
     vectorLabelFields,
@@ -112,6 +114,68 @@ function checkPortableVectorStyleCompatibility(record, savedState) {
             `“${style.graduated.field}”.`;
     }
     return null;
+}
+
+/**
+ * Reclassify a copied graduated style against its target vector Item.
+ *
+ * Numeric rule boundaries describe source data rather than portable visual
+ * intent. Field, method, requested class count, palette, and symbol settings
+ * transfer, while the existing bounded-classification boundary supplies the
+ * target's authoritative ranges. The style service repeats that classification
+ * during apply so a source change between the two bounded reads still fails
+ * safely.
+ *
+ * @param {Object} record Target retained vector record.
+ * @param {Object} copiedStyle Validated copied vector style.
+ * @param {(item:Object,field:string,method:string,classCount:number)=>Promise<Object>}
+ * classify Bounded numeric-classification API adapter.
+ * @return {Promise<Object>} Validated style using target-specific ranges.
+ * @throws {TypeError} If the classification response does not match the
+ * copied field, method, and requested class count.
+ */
+async function adaptPortableVectorStyleToTarget(
+    record,
+    copiedStyle,
+    classify
+) {
+    const graduated = copiedStyle.graduated;
+    if (graduated === null) {
+        return copiedStyle;
+    }
+    const summary = normalizeVectorNumericClassification(
+        await classify(
+            record.state.item,
+            graduated.field,
+            graduated.method,
+            graduated.classCount
+        )
+    );
+    if (
+        summary.field !== graduated.field ||
+        summary.method !== graduated.method ||
+        summary.requestedClassCount !== graduated.classCount
+    ) {
+        throw new TypeError("Numeric classification changed unexpectedly.");
+    }
+    const colors = sequentialPaletteColors(
+        graduated.palette,
+        summary.actualClassCount
+    );
+    return normalizeVectorStyle({
+        ...copiedStyle,
+        graduated: {
+            ...graduated,
+            rules: summary.classes.map((numericClass, index) => ({
+                minimum: numericClass.minimum,
+                maximum: numericClass.maximum,
+                color: colors[index]
+            })),
+            missingColor: summary.nullCount > 0
+                ? graduated.missingColor
+                : null
+        }
+    });
 }
 
 /**
@@ -254,9 +318,16 @@ export function createVectorMapLayerAdapter({
             if (savedState?.kind !== "vector") {
                 throw new TypeError("Saved style does not belong to a vector.");
             }
+            const copiedStyle = normalizePortableVectorStyle(
+                savedState.definition
+            );
             await this.applyStyle(
                 record,
-                normalizePortableVectorStyle(savedState.definition)
+                await adaptPortableVectorStyleToTarget(
+                    record,
+                    copiedStyle,
+                    classify
+                )
             );
         },
         /**
