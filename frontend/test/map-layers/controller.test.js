@@ -149,6 +149,29 @@ test("controller owns cross-adapter visibility, ordering, and removal", async ()
     assert.equal(controller.contains(first), false);
 });
 
+test("removal preserves a replacement presentation activated by its adapter", async () => {
+    const view = createView();
+    const controller = new MapLayerController({
+        leafletMap: createMap(),
+        view,
+    });
+    const fallback = catalogItem("fallback");
+    const removed = catalogItem("removed");
+    const fallbackKey = getCatalogItemKey(fallback);
+    const fallbackAdapter = createAdapter("fallback");
+    const removedAdapter = createAdapter("removed");
+    removedAdapter.beforeRemove = () => ({ activateFallback: false });
+    removedAdapter.removed = () => controller.activate(fallbackKey);
+
+    await controller.show(fallback, fallbackAdapter);
+    await controller.show(removed, removedAdapter);
+    controller.remove(removed);
+
+    assert.equal(controller.activeKey, fallbackKey);
+    assert.equal(view.activeKey, fallbackKey);
+    assert.deepEqual(fallbackAdapter.events.at(-1), ["activate", fallbackKey]);
+});
+
 test("controller forwards authoritative Items to composition callbacks", async () => {
     const view = createView();
     const received = [];
