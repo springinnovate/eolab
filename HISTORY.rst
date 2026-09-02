@@ -4,7 +4,7 @@ History
 Unreleased
 ----------
 
-* Keep the Feature inspector closed when a map click finds no vector feature.
+* Keep the Feature inspector closed and skip off-extent vector requests when a map click finds no feature.
 * Explore inspected vector observations as line or scatter series with source-layer navigation.
 * Filter Catalog Items explicitly as rasters or vectors.
 * Put direct style, zoom, details, clipboard, and removal actions on every map-layer row.

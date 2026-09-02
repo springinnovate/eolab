@@ -759,6 +759,7 @@ async function initializeCatalog(
             .map((record) => ({
                 sourceId: record.entry.key,
                 label: record.entry.label,
+                bbox: [...record.entry.item.bbox],
                 publication: {
                     layerName: record.publication.layerName,
                     styleName: record.publication.styleName,
