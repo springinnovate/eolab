@@ -47,6 +47,15 @@ test("composition owns the controller and raster consumes it", async () => {
     assert.doesNotMatch(rasterSource, /new LeafletLayerSet\(/);
 });
 
+test("map-layer presentation does not name its parent workspace layout", async () => {
+    const viewSource = await readFile(
+        new URL("../../src/map-layers/layer-stack-view.js", import.meta.url),
+        "utf8",
+    );
+
+    assert.doesNotMatch(viewSource, /eomap-map-layers-body/);
+});
+
 test("composition has no approximate raster view or preflight edge", async () => {
     const compositionSource = await readFile(
         new URL("../../src/main.js", import.meta.url),

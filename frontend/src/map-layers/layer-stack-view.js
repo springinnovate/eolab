@@ -54,9 +54,7 @@ export class MapLayerStackView {
             documentContext,
             "#raster-layer-stack-status"
         );
-        this.scrollContainer = documentContext.querySelector(
-            "#eomap-map-layers-body"
-        ) ?? this.list;
+        this.scrollContainer = this.root.parentElement ?? this.list;
         /** @type {MapLayerStackViewHandlers|null} */
         this.handlers = null;
         /** @type {{key:string,sourceIndex:number,targetIndex:number,pointerId:number}|null} */

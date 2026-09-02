@@ -165,7 +165,7 @@ export class MapLayerStack {
      * @param {number} targetIndex Zero-based top-first destination.
      * @return {boolean} Whether the entry moved.
      * @throws {TypeError} If targetIndex is not an integer.
-     * @throws {RangeError} If the key or destination is outside the stack.
+     * @throws {RangeError} If the key is not retained.
      */
     moveTo(key, targetIndex) {
         if (!Number.isInteger(targetIndex)) {

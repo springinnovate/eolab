@@ -137,11 +137,14 @@ class FakeLayerStackDocument {
   /** Create the required semantic layer-stack markup. */
   constructor() {
     this.activeElement = null;
+    this.layerScrollContainer = new FakeLayerStackElement("div", this);
     this.elements = new Map([
       ["#raster-layer-stack", new FakeLayerStackElement("div", this)],
       ["#raster-layer-list", new FakeLayerStackElement("ol", this)],
       ["#raster-layer-stack-status", new FakeLayerStackElement("p", this)],
     ]);
+    this.elements.get("#raster-layer-stack").parentElement =
+      this.layerScrollContainer;
     this.elements.get("#raster-layer-stack").hidden = true;
   }
 
@@ -460,7 +463,8 @@ test("pointer dragging emits one atomic reorder with insertion feedback", () => 
     clientY: 150,
   }));
   assert.equal(list.children[2].classList.contains("is-drop-after"), true);
-  assert.ok(list.scrollTop > 0);
+  assert.ok(documentContext.layerScrollContainer.scrollTop > 0);
+  assert.equal(list.scrollTop, 0);
   assert.deepEqual(received, []);
 
   handle.dispatchEvent(interactionEvent("pointerup", { pointerId: 7 }));
