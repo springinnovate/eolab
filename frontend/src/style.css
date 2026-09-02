@@ -912,7 +912,7 @@ h5 {
   display: grid;
   gap: 9px;
   margin: 0;
-  padding: 0;
+  padding: 6px 0;
   list-style: none;
 }
 

@@ -38,6 +38,10 @@ test("catalog rows can shrink while their action buttons wrap at compact widths"
 test("map-layer reorder handles expose grab and insertion feedback", () => {
   assert.match(
     STYLESHEET,
+    /\.raster-layer-list\s*\{[^}]*padding:\s*6px 0;/s,
+  );
+  assert.match(
+    STYLESHEET,
     /\.map-layer-drag-handle\s*\{[^}]*touch-action:\s*none;[^}]*cursor:\s*grab;/s,
   );
   assert.match(
