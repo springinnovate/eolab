@@ -751,6 +751,32 @@ test('visible raster histograms follow order, skip vectors and never follow the 
     h.destroy();
 });
 
+test('sequential raster removals release analysis before a vector is added', async () => {
+    const h = visibleLayerFixture();
+    await h.viewer.show(createRasterItem('bottom'));
+    await h.viewer.show(createRasterItem('top'));
+    await flushPromises();
+    const [top, bottom] = h.mapLayers.snapshots();
+
+    h.mapLayers.removeKey(top.key);
+    assert.equal(h.mapLayers.activeKey, bottom.key);
+    assert.equal(h.layerStackView.activeKey, bottom.key);
+    assert.doesNotThrow(() => h.mapLayers.removeKey(bottom.key));
+
+    const vector = { collection: 'vectors', id: 'reported-vector' };
+    await assert.doesNotReject(() => h.mapLayers.show(vector, {
+        label: () => 'SOKNOT_2024_node_score_comparison.shp',
+        publish: async () => ({}),
+        createState: () => ({}),
+        createLayer: () => h.leaflet.tileLayer.wms('/geoserver/eolab/wms', {}),
+        snapshot: () => ({ legend: { kind: 'fixed' } }),
+        tileErrorMessage: 'Vector tile error',
+    }));
+    assert.equal(h.mapLayers.contains(vector), true);
+    assert.deepEqual(h.controlsView.layerHistograms, []);
+    h.destroy();
+});
+
 test('three visible rasters render while only the top two are analyzed', async () => {
     const requests = [];
     const h = visibleLayerFixture(async (item, area) => {

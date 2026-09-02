@@ -455,7 +455,9 @@ export class MapLayerController {
         if (wasActive && activeKey !== null && removal.activateFallback !== false) {
             this.#activate(activeKey, { key: activeKey, action: "style" });
         } else {
-            if (wasActive) {
+            // Adapter cleanup may reentrantly establish another presentation.
+            // Clear only the removed key, never that newer valid transition.
+            if (wasActive && this.presentationActiveKey === key) {
                 this.presentationActiveKey = null;
             }
             this.render(
