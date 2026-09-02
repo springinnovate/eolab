@@ -29,7 +29,9 @@ from eolab_app.raster.sources import (
     PublishedRasterRegistry,
 )
 from eolab_app.raster.statistics_service import RasterStatisticsService
+from eolab_app.rendering.composite import CompositeMapRenderingService
 from eolab_app.routes.catalog import create_catalog_router
+from eolab_app.routes.composite_map import create_composite_map_router
 from eolab_app.routes.diagnostics import create_diagnostics_router
 from eolab_app.routes.raster_analysis import create_raster_analysis_router
 from eolab_app.routes.rasters import create_raster_feature
@@ -320,6 +322,16 @@ def create_app(
             geoserver_wms_client,
             app_global_configuration.geoserver_internal_url,
             (raster_feature.registry, vector_feature.registry),
+            get_map_request_tracker,
+        )
+    )
+    application.include_router(
+        create_composite_map_router(
+            CompositeMapRenderingService(
+                (raster_feature.registry, vector_feature.registry)
+            ),
+            geoserver_wms_client,
+            app_global_configuration.geoserver_internal_url,
             get_map_request_tracker,
         )
     )

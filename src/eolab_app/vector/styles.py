@@ -14,7 +14,7 @@ from eolab_app.vector.models import (
 SLD_NAMESPACE = "http://www.opengis.net/sld"
 OGC_NAMESPACE = "http://www.opengis.net/ogc"
 WEB_MERCATOR_ZOOM_ZERO_SCALE = 559082264.0287178
-ElementTree.register_namespace("", SLD_NAMESPACE)
+ElementTree.register_namespace("sld", SLD_NAMESPACE)
 ElementTree.register_namespace("ogc", OGC_NAMESPACE)
 
 
@@ -82,12 +82,17 @@ def vector_style_name(
 def build_vector_sld(
     style_name: str,
     style: VectorStyle,
+    *,
+    layer_name: str | None = None,
+    opacity_multiplier: float = 1,
 ) -> bytes:
     """Serialize one validated vector style as an SLD 1.0 document.
 
     Args:
         style_name: Safe deterministic GeoServer style name.
         style: Complete geometry-specific style state.
+        layer_name: Optional published layer identity for an external SLD.
+        opacity_multiplier: Neutral whole-layer opacity from zero through one.
 
     Returns:
         UTF-8 XML accepted by the GeoServer style REST boundary.
@@ -101,7 +106,7 @@ def build_vector_sld(
         f"{{{SLD_NAMESPACE}}}NamedLayer",
     )
     ElementTree.SubElement(named_layer, f"{{{SLD_NAMESPACE}}}Name").text = (
-        style_name
+        layer_name or style_name
     )
     user_style = ElementTree.SubElement(
         named_layer,
@@ -127,14 +132,24 @@ def build_vector_sld(
                 category_rule.value.kind,
                 category_rule.value.value,
             )
-            _append_symbolizer(rule, style, category_rule.color)
+            _append_symbolizer(
+                rule,
+                style,
+                category_rule.color,
+                opacity_multiplier,
+            )
         if categorical.missing_color is not None:
             rule = ElementTree.SubElement(
                 feature_type_style,
                 f"{{{SLD_NAMESPACE}}}Rule",
             )
             _append_null_filter(rule, categorical.field)
-            _append_symbolizer(rule, style, categorical.missing_color)
+            _append_symbolizer(
+                rule,
+                style,
+                categorical.missing_color,
+                opacity_multiplier,
+            )
         if categorical.other_color is not None:
             rule = ElementTree.SubElement(
                 feature_type_style,
@@ -144,7 +159,12 @@ def build_vector_sld(
                 rule,
                 f"{{{SLD_NAMESPACE}}}ElseFilter",
             )
-            _append_symbolizer(rule, style, categorical.other_color)
+            _append_symbolizer(
+                rule,
+                style,
+                categorical.other_color,
+                opacity_multiplier,
+            )
     elif style.graduated is not None:
         graduated = style.graduated
         for graduated_rule in graduated.rules:
@@ -158,16 +178,26 @@ def build_vector_sld(
                 graduated_rule.minimum,
                 graduated_rule.maximum,
             )
-            _append_symbolizer(rule, style, graduated_rule.color)
+            _append_symbolizer(
+                rule,
+                style,
+                graduated_rule.color,
+                opacity_multiplier,
+            )
         if graduated.missing_color is not None:
             rule = ElementTree.SubElement(
                 feature_type_style,
                 f"{{{SLD_NAMESPACE}}}Rule",
             )
             _append_null_filter(rule, graduated.field)
-            _append_symbolizer(rule, style, graduated.missing_color)
+            _append_symbolizer(
+                rule,
+                style,
+                graduated.missing_color,
+                opacity_multiplier,
+            )
     else:
-        _append_symbol_rule(feature_type_style, style)
+        _append_symbol_rule(feature_type_style, style, opacity_multiplier)
     if style.label is not None:
         label_feature_type_style = feature_type_style
         if style.categorical is not None or style.graduated is not None:
@@ -179,6 +209,7 @@ def build_vector_sld(
             label_feature_type_style,
             style.geometry_kind,
             style.label,
+            opacity_multiplier,
         )
     return ElementTree.tostring(
         root,
@@ -190,24 +221,27 @@ def build_vector_sld(
 def _append_symbol_rule(
     feature_type_style: ElementTree.Element,
     style: VectorStyle,
+    opacity_multiplier: float,
 ) -> None:
     """Append one unfiltered geometry rule for a single-color style.
 
     Args:
         feature_type_style: SLD feature-type style receiving the rule.
         style: Complete validated vector style.
+        opacity_multiplier: Neutral whole-layer opacity from zero through one.
     """
     rule = ElementTree.SubElement(
         feature_type_style,
         f"{{{SLD_NAMESPACE}}}Rule",
     )
-    _append_symbolizer(rule, style)
+    _append_symbolizer(rule, style, opacity_multiplier=opacity_multiplier)
 
 
 def _append_symbolizer(
     rule: ElementTree.Element,
     style: VectorStyle,
     classification_color: str | None = None,
+    opacity_multiplier: float = 1,
 ) -> None:
     """Append a geometry symbolizer with an optional classification color.
 
@@ -217,6 +251,7 @@ def _append_symbolizer(
         classification_color: Optional validated categorical or graduated color
             replacing point/polygon fill or line stroke while retaining all
             other symbol controls.
+        opacity_multiplier: Neutral whole-layer opacity from zero through one.
     """
     symbolizer = ElementTree.SubElement(
         rule,
@@ -232,8 +267,8 @@ def _append_symbolizer(
             mark,
             f"{{{SLD_NAMESPACE}}}WellKnownName",
         ).text = "circle"
-        _append_fill(mark, style, classification_color)
-        _append_stroke(mark, style)
+        _append_fill(mark, style, classification_color, opacity_multiplier)
+        _append_stroke(mark, style, opacity_multiplier=opacity_multiplier)
         ElementTree.SubElement(
             graphic,
             f"{{{SLD_NAMESPACE}}}Size",
@@ -244,10 +279,20 @@ def _append_symbolizer(
             style,
             line_cap=True,
             color=classification_color,
+            opacity_multiplier=opacity_multiplier,
         )
     else:
-        _append_fill(symbolizer, style, classification_color)
-        _append_stroke(symbolizer, style)
+        _append_fill(
+            symbolizer,
+            style,
+            classification_color,
+            opacity_multiplier,
+        )
+        _append_stroke(
+            symbolizer,
+            style,
+            opacity_multiplier=opacity_multiplier,
+        )
 
 
 def _append_category_filter(
@@ -402,6 +447,7 @@ def _append_label_rule(
     feature_type_style: ElementTree.Element,
     geometry_kind: VectorGeometryKind,
     label: VectorLabelStyle,
+    opacity_multiplier: float,
 ) -> None:
     """Append one independently scaled text rule to a vector style.
 
@@ -409,6 +455,7 @@ def _append_label_rule(
         feature_type_style: SLD feature-type style receiving the label rule.
         geometry_kind: Point, line, or polygon geometry class.
         label: Complete validated label presentation.
+        opacity_multiplier: Neutral whole-layer opacity from zero through one.
     """
     rule = ElementTree.SubElement(
         feature_type_style,
@@ -450,11 +497,21 @@ def _append_label_rule(
             f"{{{SLD_NAMESPACE}}}Fill",
         )
         _append_css_parameter(halo_fill, "fill", label.halo_color)
+        _append_css_parameter(
+            halo_fill,
+            "fill-opacity",
+            _number(opacity_multiplier),
+        )
     text_fill = ElementTree.SubElement(
         text_symbolizer,
         f"{{{SLD_NAMESPACE}}}Fill",
     )
     _append_css_parameter(text_fill, "fill", label.font_color)
+    _append_css_parameter(
+        text_fill,
+        "fill-opacity",
+        _number(opacity_multiplier),
+    )
     if geometry_kind == "line" and label.placement != "center":
         _append_vendor_option(text_symbolizer, "followLine", "true")
     _append_vendor_option(text_symbolizer, "conflictResolution", "true")
@@ -585,6 +642,7 @@ def _append_fill(
     parent: ElementTree.Element,
     style: VectorStyle,
     color: str | None = None,
+    opacity_multiplier: float = 1,
 ) -> None:
     """Append validated fill parameters to a symbolizer component.
 
@@ -592,6 +650,7 @@ def _append_fill(
         parent: Mark or polygon symbolizer receiving the fill.
         style: Validated point or polygon style.
         color: Optional categorical or graduated fill color.
+        opacity_multiplier: Neutral whole-layer opacity from zero through one.
     """
     fill = ElementTree.SubElement(parent, f"{{{SLD_NAMESPACE}}}Fill")
     _append_css_parameter(
@@ -602,7 +661,7 @@ def _append_fill(
     _append_css_parameter(
         fill,
         "fill-opacity",
-        _number(style.fill_opacity),
+        _number(style.fill_opacity * opacity_multiplier),
     )
 
 
@@ -611,6 +670,7 @@ def _append_stroke(
     style: VectorStyle,
     line_cap: bool = False,
     color: str | None = None,
+    opacity_multiplier: float = 1,
 ) -> None:
     """Append validated stroke parameters to a symbolizer component.
 
@@ -619,13 +679,14 @@ def _append_stroke(
         style: Complete validated style.
         line_cap: Whether to request round line endings.
         color: Optional categorical or graduated stroke color.
+        opacity_multiplier: Neutral whole-layer opacity from zero through one.
     """
     stroke = ElementTree.SubElement(parent, f"{{{SLD_NAMESPACE}}}Stroke")
     _append_css_parameter(stroke, "stroke", color or style.stroke_color)
     _append_css_parameter(
         stroke,
         "stroke-opacity",
-        _number(style.stroke_opacity),
+        _number(style.stroke_opacity * opacity_multiplier),
     )
     _append_css_parameter(
         stroke,

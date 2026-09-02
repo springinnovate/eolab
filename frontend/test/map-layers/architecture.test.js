@@ -3,6 +3,8 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const MAP_LAYER_MODULES = [
+    "composite-api.js",
+    "composite-leaflet-renderer.js",
     "controller.js",
     "layer-stack.js",
     "layer-stack-view.js",
@@ -42,9 +44,12 @@ test("composition owns the controller and raster consumes it", async () => {
     );
 
     assert.match(compositionSource, /new MapLayerController\(/);
+    assert.match(compositionSource, /new CompositeLeafletRenderer\(/);
+    assert.match(compositionSource, /new LeafletLayerSet\(/);
     assert.match(compositionSource, /initializeRasterViewer[\s\S]+mapLayerController/);
     assert.doesNotMatch(rasterSource, /new MapLayerStack\(/);
     assert.doesNotMatch(rasterSource, /new LeafletLayerSet\(/);
+    assert.doesNotMatch(rasterSource, /CompositeLeafletRenderer/);
     assert.match(compositionSource, /onItemZoom: zoomRetainedMapLayer/);
     assert.match(compositionSource, /onItemInfo: inspectRetainedMapLayer/);
     assert.doesNotMatch(

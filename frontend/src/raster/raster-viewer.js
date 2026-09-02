@@ -189,6 +189,8 @@ function canRetryRasterStatistics(error) {
  * layer snapshots after state changes.
  * @property {() => void} [onHistogramRequested] Notifies the composition root
  * that an explicit analysis action should reveal its presentation workspace.
+ * @property {(active:boolean)=>void} [onBivariateRenderingChange] Requests the
+ * composition-owned independent rendering strategy for additive 2D display.
  */
 
 /**
@@ -248,6 +250,11 @@ export function initializeRasterViewer(
          *
          * @return {void}
          */ () => {},
+        onBivariateRenderingChange = /**
+         * Keep ordinary composite rendering without a composition callback.
+         *
+         * @return {void}
+         */ () => {},
     },
     {
         controlsView = null,
@@ -264,6 +271,9 @@ export function initializeRasterViewer(
 ) {
     if (typeof onHistogramRequested !== "function") {
         throw new TypeError("Histogram presentation callback must be callable");
+    }
+    if (typeof onBivariateRenderingChange !== "function") {
+        throw new TypeError("Bivariate rendering callback must be callable");
     }
     controlsView ??= new RasterControlsView();
     const statisticsRequests = new RasterStatisticsRequestQueue(clock);
@@ -1641,6 +1651,7 @@ export function initializeRasterViewer(
              */
             (candidate) => candidate.key
         ));
+        onBivariateRenderingChange(true);
         controlsView.setAppearanceEnabled?.(false);
         controlsView.setUnivariateHistogramVisible?.(false);
         renderRasterSamplingAreaControls();
@@ -1673,6 +1684,7 @@ export function initializeRasterViewer(
         bivariateStatistics = null;
         restoreOrdinaryRasterPresentation(keys);
         bivariateMode.leave();
+        onBivariateRenderingChange(false);
         bivariateSelectedBounds = null;
         bivariateSelectedWindowSizeKm = null;
         controlsView.renderBivariateMode?.({ active: false });
@@ -1737,6 +1749,22 @@ export function initializeRasterViewer(
                 record.state.rasterStyle,
                 reportTileError
             );
+        },
+        /**
+         * Describe the current authorized raster appearance for composition.
+         *
+         * @param {Object} record Retained raster publication and style state.
+         * @return {{layerName:string,styleName:string,styleEnvironment:string}}
+         * Complete feature-owned composite descriptor.
+         */
+        renderDescriptor(record) {
+            return {
+                layerName: record.publication.layerName,
+                styleName: "dynamic-raster",
+                styleEnvironment: buildRasterStyleEnvironment(
+                    record.state.rasterStyle
+                ),
+            };
         },
         /**
          * Describe effective opacity and legend, including paired-mode styling.

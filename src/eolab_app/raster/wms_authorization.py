@@ -23,16 +23,17 @@ _STYLE_ENVIRONMENT_ERROR = (
 )
 
 
-def validate_raster_style_environment(environment: str) -> None:
-    """Validate the substitutions consumed by the dynamic raster SLD.
+def parse_raster_style_environment(environment: str) -> dict[str, str]:
+    """Parse validated substitutions consumed by the dynamic raster SLD.
 
     Args:
         environment: Untrusted WMS ``env`` query value.
 
+    Returns:
+        Exact validated assignment names and serialized values.
+
     Raises:
-        PublishedLayerRequestError: If the value does not contain exactly the
-            six threshold/color assignments, with either all three bounded
-            opacity assignments or none (legacy fully opaque rendering).
+        PublishedLayerRequestError: If the dynamic raster style is malformed.
     """
     fields = environment.split(";")
     if len(environment) > 384 or len(fields) not in (6, 9):
@@ -67,6 +68,21 @@ def validate_raster_style_environment(environment: str) -> None:
         )
     ):
         raise PublishedLayerRequestError(_STYLE_ENVIRONMENT_ERROR)
+    return assignments
+
+
+def validate_raster_style_environment(environment: str) -> None:
+    """Validate the substitutions consumed by the dynamic raster SLD.
+
+    Args:
+        environment: Untrusted WMS ``env`` query value.
+
+    Raises:
+        PublishedLayerRequestError: If the value does not contain exactly the
+            six threshold/color assignments, with either all three bounded
+            opacity assignments or none (legacy fully opaque rendering).
+    """
+    parse_raster_style_environment(environment)
 
 
 @dataclass(frozen=True)
@@ -101,3 +117,40 @@ class PublishedRasterAuthorization:
         del operation
         if "env" in query:
             validate_raster_style_environment(query["env"])
+
+    def build_composite_sld(
+        self,
+        layer_name: str,
+        style_name: str,
+        style_environment: str | None,
+        style_definition: Mapping[str, object] | None,
+        opacity: float,
+    ) -> bytes:
+        """Build one authorized inline raster layer for composite rendering.
+
+        Args:
+            layer_name: Current workspace-qualified raster layer identity.
+            style_name: Requested dynamic raster style identity.
+            style_environment: Required validated raster ramp environment.
+            style_definition: Unsupported vector-style representation.
+            opacity: Neutral retained-layer opacity from zero through one.
+
+        Returns:
+            Complete single-layer SLD document.
+
+        Raises:
+            PublishedLayerRequestError: If the appearance is not a complete
+                authorized dynamic raster style.
+        """
+        if (
+            style_name != self.style_name
+            or style_environment is None
+            or style_definition is not None
+        ):
+            raise PublishedLayerRequestError(
+                "Composite raster rendering requires its dynamic raster style"
+            )
+        assignments = parse_raster_style_environment(style_environment)
+        from eolab_app.raster.composite_sld import build_raster_composite_sld
+
+        return build_raster_composite_sld(layer_name, assignments, opacity)
