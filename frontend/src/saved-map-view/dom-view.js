@@ -49,9 +49,6 @@ export class SavedMapViewDomView {
         this.cancelButton = documentContext.querySelector(
             "#cancel-open-map-view"
         );
-        this.confirmButton = documentContext.querySelector(
-            "#confirm-open-map-view"
-        );
         this.handlers = null;
         this.copiedTimer = null;
         this.blockCancel = (event) => event.preventDefault();
@@ -120,60 +117,28 @@ export class SavedMapViewDomView {
         this.dialogUrl.value = url;
         this.cancelButton.textContent = "Close";
         this.cancelButton.value = "close";
-        this.confirmButton.hidden = true;
         this.dialog.showModal();
         this.dialogUrl.focus();
         this.dialogUrl.select();
     }
 
     /**
-     * Ask permission before current layers and viewport are replaced.
-     *
-     * @param {Object} savedMapView Validated saved-map document.
-     * @param {number} currentLayerCount Current retained-layer count.
-     * @param {string} currentVersion Running application version.
-     * @param {string} currentOrigin Running application origin.
-     * @return {Promise<boolean>} Whether the user approved replacement.
-     */
-    confirmOpen(
-        savedMapView,
-        currentLayerCount,
-        currentVersion,
-        currentOrigin
-    ) {
-        this.#prepareDialog(
-            "Open shared map view?",
-            `Replace ${formatCount(currentLayerCount, "current layer")} with ` +
-                `${formatCount(savedMapView.layers.length, "shared layer")} ` +
-                "and move the map to its shared position.",
-            compatibilityDetails(savedMapView, currentVersion, currentOrigin)
-        );
-        this.cancelButton.textContent = "Cancel";
-        this.cancelButton.value = "cancel";
-        this.confirmButton.hidden = false;
-        this.confirmButton.disabled = false;
-        this.confirmButton.textContent = "Open shared view";
-        return new Promise((resolve) => {
-            this.dialog.addEventListener(
-                "close",
-                () => resolve(this.dialog.returnValue === "open"),
-                { once: true }
-            );
-            this.dialog.showModal();
-        });
-    }
-
-    /**
-     * Show one persistent per-layer restoration report.
+     * Finish loading silently on success or show an actionable partial report.
      *
      * @param {{loaded:number,total:number,details:string[]}} report Outcome.
      * @return {void}
      */
     showResults(report) {
         this.#setCancelBlocked(false);
+        if (report.loaded === report.total && report.details.length === 0) {
+            this.dialog.removeAttribute("aria-busy");
+            if (this.dialog.open) this.dialog.close("loaded");
+            return;
+        }
+        const completedWithWarnings = report.loaded === report.total;
         this.#prepareDialog(
-            report.loaded === report.total
-                ? "Shared map view opened"
+            completedWithWarnings
+                ? "Shared map opened with warnings"
                 : "Shared map view partially opened",
             `${formatCount(report.loaded, "layer")} loaded from ` +
                 `${formatCount(report.total, "shared layer")}.`,
@@ -181,7 +146,6 @@ export class SavedMapViewDomView {
         );
         this.cancelButton.textContent = "Close";
         this.cancelButton.value = "close";
-        this.confirmButton.hidden = true;
         this.dialog.showModal();
     }
 
@@ -193,12 +157,11 @@ export class SavedMapViewDomView {
      */
     showLoading(layerCount) {
         this.#prepareDialog(
-            "Opening shared map view…",
-            `Resolving and validating ${formatCount(layerCount, "shared layer")}.`,
-            ["The current Catalog and rendering policies remain authoritative."]
+            "Opening shared map…",
+            `Loading ${formatCount(layerCount, "shared layer")}…`,
+            []
         );
         this.cancelButton.hidden = true;
-        this.confirmButton.hidden = true;
         this.dialog.setAttribute("aria-busy", "true");
         this.#setCancelBlocked(true);
         this.dialog.showModal();
@@ -223,7 +186,6 @@ export class SavedMapViewDomView {
         this.cancelButton.textContent = "Close";
         this.cancelButton.hidden = false;
         this.cancelButton.value = "close";
-        this.confirmButton.hidden = true;
         this.dialog.showModal();
     }
 
@@ -318,32 +280,4 @@ export function createSavedMapViewUrl(currentHref, fragment) {
  */
 function formatCount(count, singular) {
     return `${count} ${singular}${count === 1 ? "" : "s"}`;
-}
-
-/**
- * Build compatibility notices shown before replacement.
- *
- * @param {Object} savedMapView Validated saved-map document.
- * @param {string} currentVersion Running viewer version.
- * @param {string} currentOrigin Running viewer origin.
- * @return {string[]} Creation provenance and mismatch notices.
- */
-function compatibilityDetails(savedMapView, currentVersion, currentOrigin) {
-    const details = [
-        `Created ${new Date(savedMapView.createdAt).toLocaleString()} with ` +
-            `EOLab ${savedMapView.viewer.version}.`,
-    ];
-    if (savedMapView.viewer.version !== currentVersion) {
-        details.push(
-            `Viewer version differs from this deployment (${currentVersion}); ` +
-            "each layer will be revalidated."
-        );
-    }
-    if (savedMapView.viewer.origin !== currentOrigin) {
-        details.push(
-            `Shared by ${savedMapView.viewer.origin}; Catalog identities will ` +
-            "be resolved against this deployment."
-        );
-    }
-    return details;
 }

@@ -99,13 +99,13 @@ export class SavedMapViewController {
     }
 
     /**
-     * Validate, preview, and optionally restore one shared map fragment.
+     * Validate and restore one shared map fragment.
      *
      * Unrelated fragments are ignored so this component does not own other
      * application anchors.
      *
      * @param {string} fragment Current browser URL fragment.
-     * @return {Promise<void>} Completion after cancellation or restoration.
+     * @return {Promise<void>} Completion after restoration.
      */
     async openSharedFragment(fragment) {
         if (!isSavedMapViewFragment(fragment)) return;
@@ -116,13 +116,6 @@ export class SavedMapViewController {
                 maximumOutputBytes: MAX_SAVED_MAP_VIEW_BYTES,
             });
             const savedMapView = parseSavedMapView(serialized);
-            const approved = await this.view.confirmOpen(
-                savedMapView,
-                this.mapLayers.retainedRecords.length,
-                this.viewerVersion,
-                this.viewerOrigin
-            );
-            if (!approved) return;
             this.view.showLoading(savedMapView.layers.length);
             const report = await this.#restore(savedMapView);
             this.view.showResults(report);
@@ -233,9 +226,10 @@ export class SavedMapViewController {
                 if (styleWarning !== null) {
                     notices.push(`saved style was not applied: ${styleWarning}`);
                 }
-                outcomes[index] = notices.length === 0
-                    ? `${record.entry.label}: loaded.`
-                    : `${record.entry.label}: loaded (${notices.join("; ")}).`;
+                if (notices.length > 0) {
+                    outcomes[index] =
+                        `${record.entry.label}: ${notices.join("; ")}.`;
+                }
             } catch (error) {
                 outcomes[index] = `${identityLabel}: ${asError(error).message}`;
             }
