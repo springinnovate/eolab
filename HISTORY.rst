@@ -4,6 +4,7 @@ History
 Unreleased
 ----------
 
+* Explore inspected vector observations as line or scatter series with source-layer navigation.
 * Filter Catalog Items explicitly as rasters or vectors.
 * Put direct style, zoom, details, clipboard, and removal actions on every map-layer row.
 * Cancel abandoned map requests and bound GeoServer queue waits.

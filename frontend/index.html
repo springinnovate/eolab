@@ -746,7 +746,7 @@
               <h2 id="vector-feature-inspector-heading">Feature inspector</h2>
               <div class="vector-feature-inspector-actions">
                 <button id="open-vector-time-series" class="secondary-button"
-                  type="button" aria-controls="vector-time-series" disabled>Time series</button>
+                  type="button" aria-controls="vector-time-series" disabled>Series</button>
                 <button id="close-vector-inspector" class="secondary-button"
                   type="button" aria-label="Close feature inspector">×</button>
               </div>
@@ -769,9 +769,9 @@
           <section id="vector-time-series" role="dialog" aria-modal="false"
             aria-labelledby="vector-time-series-heading" hidden>
             <header class="vector-time-series-header">
-              <h2 id="vector-time-series-heading">Vector time series</h2>
+              <h2 id="vector-time-series-heading">Vector series</h2>
               <button id="close-vector-time-series" class="secondary-button"
-                type="button" aria-label="Close vector time series">×</button>
+                type="button" aria-label="Close vector series">×</button>
             </header>
             <div class="vector-time-series-controls">
               <label for="vector-time-series-x">
@@ -789,11 +789,28 @@
                   <option value="descending">Descending</option>
                 </select>
               </label>
+              <label for="vector-time-series-chart-type">
+                <span>Chart</span>
+                <select id="vector-time-series-chart-type">
+                  <option value="line">Line</option>
+                  <option value="scatter">Scatter</option>
+                </select>
+              </label>
             </div>
             <p id="vector-time-series-status" class="vector-time-series-status"
               role="status" aria-live="polite" aria-atomic="true"></p>
             <svg id="vector-time-series-chart" class="vector-time-series-chart"
               role="img" preserveAspectRatio="xMinYMin meet" hidden></svg>
+            <div id="vector-time-series-selection" class="vector-time-series-selection"
+              hidden>
+              <p>
+                <strong>Selected point</strong>
+                <span id="vector-time-series-selection-text" role="status"
+                  aria-live="polite" aria-atomic="true"></span>
+              </p>
+              <button id="zoom-vector-time-series-source" class="secondary-button"
+                type="button" disabled>Zoom to source layer</button>
+            </div>
             <details id="vector-time-series-table" class="vector-time-series-table" hidden>
               <summary>Chart data</summary>
               <div class="vector-time-series-table-scroll">

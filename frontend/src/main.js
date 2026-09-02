@@ -741,6 +741,13 @@ async function initializeCatalog(
             if (visible) mapInspection.showVectorTimeSeries();
             else mapInspection.hideVectorTimeSeries(moveFocus);
         },
+        onSourceLayerZoom: (sourceId) => {
+            const record = mapLayerController.getRecord(sourceId);
+            if (record === null || record.adapter !== vectorMapLayerAdapter) {
+                return false;
+            }
+            return zoomRetainedMapLayer(record.entry.item);
+        },
     });
     vectorFeatureInspector = new VectorFeatureInspectorController({
         leaflet: L,
@@ -750,6 +757,7 @@ async function initializeCatalog(
                 record.entry.visible && record.adapter === vectorMapLayerAdapter
             )
             .map((record) => ({
+                sourceId: record.entry.key,
                 label: record.entry.label,
                 publication: {
                     layerName: record.publication.layerName,
@@ -1314,23 +1322,24 @@ async function initializeCatalog(
      * Fit a retained Item's bounds without changing selection or layer state.
      *
      * @param {Object|null} item Item requested by a result or details shortcut.
-     * @return {void}
+     * @return {boolean} Whether the retained Item could be fitted.
      */
     function zoomCatalogLayer(item) {
         const bounds = getCatalogItemMapBounds(item);
         if (bounds === null || !catalogVisualization.contains(item) ||
-            catalogState.pendingMapActions.get(item) !== null) return;
+            catalogState.pendingMapActions.get(item) !== null) return false;
         leafletMap.fitBounds(bounds, { padding: [24, 24], maxZoom: 9 });
+        return true;
     }
 
     /**
      * Fit the map to one retained layer through its authoritative Catalog Item.
      *
      * @param {Object|null} item Authoritative retained Catalog Item.
-     * @return {void}
+     * @return {boolean} Whether the retained Item could be fitted.
      */
     function zoomRetainedMapLayer(item) {
-        zoomCatalogLayer(item);
+        return zoomCatalogLayer(item);
     }
 
     /**

@@ -20,6 +20,7 @@ function createFixture(fetchImplementation) {
   documentContext.querySelector("#open-vector-time-series").disabled = true;
   const targets = [
     {
+      sourceId: "catalog|parcels",
       label: "Parcels",
       publication: { layerName: "eolab:parcels", styleName: "vector-polygon" },
       primaryGeometry: "geometry",
@@ -109,9 +110,10 @@ test("analysis observations are immutable and omit nested properties", () => {
       id: "parcels.2",
       properties: { year: 2024, label: "Current", nested: { rank: 2 } },
     },
-    target: { label: "Parcels 2024" },
+    target: { sourceId: "catalog|parcels-2024", label: "Parcels 2024" },
   });
   assert.deepEqual(observation, {
+    sourceId: "catalog|parcels-2024",
     layerLabel: "Parcels 2024",
     featureId: "parcels.2",
     properties: { year: 2024, label: "Current" },
@@ -246,6 +248,7 @@ test("changing the visible vector set invalidates results but retains inspection
   }));
   await h.controller.inspect({ containerPoint: { x: 2, y: 3 } });
   h.targets.push({
+    sourceId: "catalog|habitats",
     label: "Habitats",
     publication: {
       layerName: "eolab:habitats",

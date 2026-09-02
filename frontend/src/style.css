@@ -3725,7 +3725,7 @@ button.raster-histogram-summary:hover,
 #close-vector-time-series { flex: 0 0 28px; height: 28px; padding: 0; line-height: 1; font-size: 1.1rem; }
 .vector-time-series-controls {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto auto;
   align-items: end;
   gap: 10px;
 }
@@ -3744,11 +3744,28 @@ button.raster-histogram-summary:hover,
 .vector-time-series-axis { stroke: var(--text-2); stroke-width: 1.2; }
 .vector-time-series-grid { stroke: var(--border-1); stroke-width: 1; }
 .vector-time-series-line { fill: none; stroke: var(--brand); stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
-.vector-time-series-point { fill: var(--surface-1); stroke: var(--brand); stroke-width: 2.5; }
+.vector-time-series-point { cursor: pointer; fill: var(--surface-1); stroke: var(--brand); stroke-width: 2.5; }
+.vector-time-series-point:hover,
+.vector-time-series-point.is-selected { fill: var(--brand); stroke: var(--text-1); }
 .vector-time-series-point:focus { outline: none; stroke: var(--text-1); stroke-width: 4; }
 .vector-time-series-tick,
 .vector-time-series-x-tick { fill: var(--text-2); font-size: 11px; }
 .vector-time-series-axis-title { fill: var(--text-1); font-size: 12px; font-weight: 650; }
+.vector-time-series-selection {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-small);
+  background: var(--surface-2);
+}
+.vector-time-series-selection[hidden] { display: none; }
+.vector-time-series-selection p { display: grid; gap: 3px; min-width: 0; margin: 0; font-size: 0.74rem; }
+.vector-time-series-selection span { color: var(--text-2); overflow-wrap: anywhere; }
+.vector-time-series-selection button { flex: 0 0 auto; }
 .vector-time-series-table { margin-top: 10px; font-size: 0.74rem; }
 .vector-time-series-table summary { cursor: pointer; font-weight: 650; }
 .vector-time-series-table-scroll { margin-top: 8px; overflow-x: auto; }
