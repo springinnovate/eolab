@@ -61,7 +61,9 @@ Portable saved maps add a composition-level coordinator rather than a new
 rendering owner. The coordinator reads neutral retained records and delegates
 appearance export/restoration through optional adapter hooks. It resolves only
 Catalog Collection and Item identities, repeats current assessment and
-publication, and hashes opaque source revisions before writing a local file.
+publication, and hashes opaque source revisions before encoding a browser-only
+URL fragment. The fragment codec stays inside the saved-map package and does
+not create another rendering or persistence owner.
 The saved-map package imports neither raster nor vector implementations; see
 `saved-map-views.md` for its trust and compatibility contract.
 

@@ -3,6 +3,10 @@ import test from "node:test";
 
 import { getCatalogItemKey } from "../../src/catalog-item-identity.js";
 import { SavedMapViewController } from "../../src/saved-map-view/controller.js";
+import {
+  decodeSavedMapViewFragment,
+  encodeSavedMapViewFragment,
+} from "../../src/saved-map-view/fragment-codec.js";
 import { createSavedMapView, serializeSavedMapView } from "../../src/saved-map-view/model.js";
 
 const ZERO_REVISION = `sha256:${"0".repeat(64)}`;
@@ -21,7 +25,12 @@ function createView() {
     bind(handlers) { this.handlers = handlers; },
     unbind() { this.handlers = null; },
     setBusy(value) { this.busy.push(value); },
-    download(content, filename) { this.downloaded = { content, filename }; },
+    async copyLink(fragment) {
+      this.fragment = fragment;
+      return { copied: true, url: `https://viewer.example/${fragment}` };
+    },
+    showCopied() { this.copied = true; },
+    showCopyFallback(url) { this.copyFallback = url; },
     async confirmOpen(...arguments_) {
       this.confirmation = arguments_;
       return true;
@@ -41,7 +50,7 @@ function zeroDigest() {
   return { digest: async () => new Uint8Array(32).buffer };
 }
 
-test("saved map controller exports ordered Catalog layers and current viewport", async () => {
+test("saved map controller copies ordered Catalog layers and current viewport", async () => {
   const view = createView();
   const item = { collection: "vectors", id: "roads" };
   const record = {
@@ -64,13 +73,14 @@ test("saved map controller exports ordered Catalog layers and current viewport",
     subtleCrypto: zeroDigest(),
   });
 
-  await controller.save();
+  await controller.copyMapLink();
 
-  const downloaded = JSON.parse(view.downloaded.content);
-  assert.equal(view.downloaded.filename,
-    "eolab-map-view-2026-09-01T12-00-00Z.eolab-map.json");
-  assert.deepEqual(downloaded.layers[0].catalogItem, item);
-  assert.equal(downloaded.layers[0].sourceRevision, ZERO_REVISION);
+  const copied = JSON.parse(await decodeSavedMapViewFragment(view.fragment, {
+    maximumOutputBytes: 512 * 1024,
+  }));
+  assert.deepEqual(copied.layers[0].catalogItem, item);
+  assert.equal(copied.layers[0].sourceRevision, ZERO_REVISION);
+  assert.equal(view.copied, true);
   assert.deepEqual(view.busy, [true, false]);
 });
 
@@ -151,10 +161,10 @@ test("saved map controller confirms, restores bottom-first, and reports each lay
     subtleCrypto: zeroDigest(),
   });
 
-  await controller.open({
-    size: 100,
-    text: async () => serializeSavedMapView(saved),
-  });
+  await controller.openSharedFragment(await encodeSavedMapViewFragment(
+    serializeSavedMapView(saved),
+    { maximumInputBytes: 512 * 1024 },
+  ));
 
   assert.deepEqual(calls.filter(([kind]) => kind === "show"), [
     ["show", "bottom"],
@@ -189,8 +199,76 @@ test("saved map controller leaves the current map unchanged after cancellation",
     subtleCrypto: zeroDigest(),
   });
 
-  await controller.open({ size: 10, text: async () => serializeSavedMapView(saved) });
+  await controller.openSharedFragment(await encodeSavedMapViewFragment(
+    serializeSavedMapView(saved),
+    { maximumInputBytes: 512 * 1024 },
+  ));
 
   assert.equal(cleared, false);
   assert.equal(view.result, null);
+});
+
+test("saved map controller ignores fragments owned by other components", async () => {
+  const view = createView();
+  const controller = new SavedMapViewController({
+    view,
+    viewport: {},
+    mapLayers: { retainedRecords: [] },
+    catalogVisualization: {},
+    catalogItems: {},
+    viewerVersion: "0.2.0",
+    viewerOrigin: "https://viewer.example",
+    subtleCrypto: zeroDigest(),
+  });
+
+  await controller.openSharedFragment("#catalog=roads");
+
+  assert.deepEqual(view.busy, []);
+  assert.equal(view.confirmation, null);
+});
+
+test("saved map controller exposes the URL when clipboard access is denied", async () => {
+  const view = createView();
+  view.copyLink = async (fragment) => ({
+    copied: false,
+    url: `https://viewer.example/${fragment}`,
+  });
+  const controller = new SavedMapViewController({
+    view,
+    viewport: { snapshot: () => ({
+      center: { latitude: 0, longitude: 0 }, zoom: 2,
+    }) },
+    mapLayers: { retainedRecords: [] },
+    catalogVisualization: {},
+    catalogItems: {},
+    viewerVersion: "0.2.0",
+    viewerOrigin: "https://viewer.example",
+    subtleCrypto: zeroDigest(),
+  });
+
+  await controller.copyMapLink();
+
+  assert.match(view.copyFallback, /^https:\/\/viewer\.example\/#view=/);
+  assert.equal(view.copied, undefined);
+});
+
+test("saved map controller reports malformed owned fragments without clearing", async () => {
+  const view = createView();
+  let cleared = false;
+  const controller = new SavedMapViewController({
+    view,
+    viewport: {},
+    mapLayers: { retainedRecords: [] },
+    catalogVisualization: { clear: () => { cleared = true; } },
+    catalogItems: {},
+    viewerVersion: "0.2.0",
+    viewerOrigin: "https://viewer.example",
+    subtleCrypto: zeroDigest(),
+  });
+
+  await controller.openSharedFragment("#view=not+base64");
+
+  assert.equal(cleared, false);
+  assert.match(view.error.message, /invalid encoded view/);
+  assert.deepEqual(view.busy, [true, false]);
 });

@@ -37,7 +37,7 @@ export function createSavedMapView(candidate) {
 }
 
 /**
- * Parse one bounded JSON document from an untrusted local file.
+ * Parse one bounded JSON document from an untrusted transport.
  *
  * @param {string} serialized Candidate JSON text.
  * @return {Readonly<Object>} Frozen canonical saved-map document.
@@ -49,7 +49,7 @@ export function parseSavedMapView(serialized) {
     }
     if (new TextEncoder().encode(serialized).byteLength > MAX_SAVED_MAP_VIEW_BYTES) {
         throw new SavedMapViewValidationError(
-            "Saved map files must be 512 KiB or smaller."
+            "Saved map content must be 512 KiB or smaller."
         );
     }
     let candidate;
@@ -57,7 +57,7 @@ export function parseSavedMapView(serialized) {
         candidate = JSON.parse(serialized);
     } catch {
         throw new SavedMapViewValidationError(
-            "The selected file is not valid JSON."
+            "The saved map content is not valid JSON."
         );
     }
     return validateSavedMapView(candidate);
@@ -113,7 +113,7 @@ function validateSavedMapView(candidate) {
     );
     if (candidate.format !== SAVED_MAP_VIEW_FORMAT) {
         throw new SavedMapViewValidationError(
-            "This file is not an EOLab saved map."
+            "This content is not an EOLab saved map."
         );
     }
     if (candidate.schemaVersion !== SAVED_MAP_VIEW_SCHEMA_VERSION) {
