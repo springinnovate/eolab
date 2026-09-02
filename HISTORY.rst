@@ -4,6 +4,7 @@ History
 Unreleased
 ----------
 
+* Suggest valid Catalog search filters contextually while users type.
 * Reorder map layers with an accessible pointer, touch, or keyboard drag handle.
 * Chart numeric attributes from bounded vector feature-inspection results with persistent axis and sort controls.
 * Publish prepared raster files directly without raster preflight or approximate map previews.

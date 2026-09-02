@@ -228,13 +228,34 @@
                   <div class="catalog-search-toolbar">
                     <label class="catalog-search" for="catalog-search">
                       <span class="visually-hidden">Search catalog</span>
-                      <input
-                        id="catalog-search"
-                        type="search"
-                        autocomplete="off"
-                        placeholder="Search filenames, hazards, or formats..."
-                        aria-describedby="catalog-search-help catalog-search-error"
-                      />
+                      <div class="catalog-search-combobox" id="catalog-search-combobox">
+                        <input
+                          id="catalog-search"
+                          type="search"
+                          role="combobox"
+                          autocomplete="off"
+                          placeholder="Search filenames, hazards, or formats..."
+                          aria-autocomplete="list"
+                          aria-controls="catalog-search-suggestion-list"
+                          aria-haspopup="listbox"
+                          aria-expanded="false"
+                          aria-describedby="catalog-search-help catalog-search-error"
+                        />
+                        <div
+                          class="catalog-search-suggestions"
+                          id="catalog-search-suggestions"
+                          hidden
+                        >
+                          <p>Words match filenames, descriptions, and indexed dates.</p>
+                          <div
+                            class="catalog-search-suggestion-list"
+                            id="catalog-search-suggestion-list"
+                            role="listbox"
+                            aria-label="Catalog search filters"
+                          ></div>
+                          <small>Arrow keys choose · Enter adds · Escape closes</small>
+                        </div>
+                      </div>
                       <small class="visually-hidden" id="catalog-search-help">
                         Search text or use format:cog, viewable:true, or date:YYYY-MM-DD.
                         Example: ESA format:cog viewable:true date:2020-01-01..2020-12-31,
