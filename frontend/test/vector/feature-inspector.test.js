@@ -175,6 +175,75 @@ test("inspector queries composed visible targets and navigates overlapping featu
   assert.equal(h.removedLayers.length, 1);
 });
 
+test("an empty click never opens the feature inspector", async () => {
+  const h = createFixture(async () => ({
+    ok: true,
+    json: async () => ({ type: "FeatureCollection", features: [] }),
+  }));
+  await h.controller.inspect({ containerPoint: { x: 2, y: 3 } });
+  assert.deepEqual(h.inspectionChanges, []);
+  assert.equal(
+    h.documentContext.querySelector("#vector-feature-inspector").hidden,
+    true,
+  );
+  assert.equal(
+    h.documentContext.querySelector("#vector-feature-status").textContent,
+    "Click the map to inspect visible vector features.",
+  );
+  assert.deepEqual(
+    h.sampleChanges.map((sample) => [sample.state, sample.message]),
+    [
+      ["loading", "Inspecting visible vector layers…"],
+      ["empty", "No vector feature was found at that location."],
+    ],
+  );
+});
+
+test("an empty click clears and closes a previous feature result", async () => {
+  let features = [{
+    type: "Feature",
+    geometry: { type: "Point", coordinates: [1, 2] },
+    properties: { name: "Previous" },
+  }];
+  const h = createFixture(async () => ({
+    ok: true,
+    json: async () => ({ type: "FeatureCollection", features }),
+  }));
+  await h.controller.inspect({ containerPoint: { x: 2, y: 3 } });
+  features = [];
+  await h.controller.inspect({ containerPoint: { x: 4, y: 5 } });
+  assert.deepEqual(h.inspectionChanges, [true, false]);
+  assert.equal(
+    h.documentContext.querySelector("#vector-feature-inspector").hidden,
+    true,
+  );
+  assert.equal(
+    h.documentContext.querySelector("#vector-feature-result").hidden,
+    true,
+  );
+  assert.equal(h.removedLayers.length, 1);
+  assert.equal(h.sampleChanges.at(-1).state, "empty");
+});
+
+test("an actionable inspection failure still opens the inspector", async () => {
+  const h = createFixture(async () => ({
+    ok: false,
+    status: 503,
+    json: async () => ({ detail: "GeoServer is warming up." }),
+  }));
+  await h.controller.inspect({ containerPoint: { x: 2, y: 3 } });
+  assert.deepEqual(h.inspectionChanges, [true]);
+  assert.equal(
+    h.documentContext.querySelector("#vector-feature-inspector").hidden,
+    false,
+  );
+  assert.equal(
+    h.documentContext.querySelector("#vector-feature-status").textContent,
+    "GeoServer is warming up.",
+  );
+  assert.equal(h.sampleChanges.at(-1).state, "empty");
+});
+
 test("inspector validates the composition target contract at its boundary", () => {
   const h = createFixture(async () => {
     throw new Error("No request expected.");
@@ -224,13 +293,13 @@ test("a newer click owns presentation and closing does not disable later inspect
   await reopened;
   assert.equal(
     h.documentContext.querySelector("#vector-feature-inspector").hidden,
-    false,
+    true,
   );
 
   h.targets.length = 0;
   h.controller.syncVisibleLayers();
   assert.equal(h.handlers.has("click"), false);
-  assert.deepEqual(h.inspectionChanges, [true, true, false, true, false]);
+  assert.deepEqual(h.inspectionChanges, [true, false]);
   assert.equal(h.sampleChanges.at(-1).state, "invalidated");
 });
 

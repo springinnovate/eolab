@@ -321,7 +321,6 @@ export class VectorFeatureInspectorController {
         if (targets.length === 0) {
             return false;
         }
-        this.onInspectionChange(true);
         this.abortController?.abort();
         this.abortController = new AbortController();
         const generation = ++this.requestGeneration;
@@ -352,6 +351,7 @@ export class VectorFeatureInspectorController {
             response.status === "fulfilled" ? response.value : []
         );
         if (this.results.length > 0) {
+            this.onInspectionChange(true);
             this.showResult(0);
             this.timeSeriesButton.disabled = this.results.length < 2;
             const failures = responses.filter(
@@ -372,10 +372,18 @@ export class VectorFeatureInspectorController {
             (response) => response.status === "rejected" &&
                 response.reason?.name !== "AbortError"
         );
-        this.status.textContent = failure?.reason instanceof VectorFeatureInfoError
+        const message = failure?.reason instanceof VectorFeatureInfoError
             ? failure.reason.message
             : "No vector feature was found at that location.";
-        this.#publishSample("empty", [], this.status.textContent);
+        if (failure?.reason instanceof VectorFeatureInfoError) {
+            this.status.textContent = message;
+            this.onInspectionChange(true);
+        } else {
+            this.status.textContent =
+                "Click the map to inspect visible vector features.";
+            if (!this.panel.hidden) this.onInspectionChange(false);
+        }
+        this.#publishSample("empty", [], message);
         return true;
     }
 
