@@ -149,6 +149,28 @@ test("controller owns cross-adapter visibility, ordering, and removal", async ()
     assert.equal(controller.contains(first), false);
 });
 
+test("controller forwards navigation intents to composition callbacks", () => {
+    const view = createView();
+    const controller = new MapLayerController({
+        leafletMap: createMap(),
+        view,
+    });
+    const received = [];
+    controller.onStyle = (key) => received.push(["style", key]);
+    controller.onZoom = (key) => received.push(["zoom", key]);
+    controller.onInfo = (key) => received.push(["info", key]);
+
+    view.handlers.onStyle("layer-key");
+    view.handlers.onZoom("layer-key");
+    view.handlers.onInfo("layer-key");
+
+    assert.deepEqual(received, [
+        ["style", "layer-key"],
+        ["zoom", "layer-key"],
+        ["info", "layer-key"],
+    ]);
+});
+
 test("on-map membership survives hiding a layer until it is removed", async () => {
     const map = createMap();
     const controller = new MapLayerController({ leafletMap: map, view: createView() });

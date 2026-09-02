@@ -297,6 +297,17 @@ test("inspector publication can reveal Map layers through composition", () => {
     assert.doesNotMatch(COMPOSITION_SOURCE, /stopSampleWindowSelection|onHistogramClose/);
 });
 
+test("map-layer Info can reveal Catalog through composition", () => {
+    assert.match(
+        COMPOSITION_SOURCE,
+        /onCatalogWorkspaceRequested\(\);\s*selectCatalogItem\(item\);/
+    );
+    assert.match(
+        COMPOSITION_SOURCE,
+        /\(\) => layoutController\.showWorkspace\("catalog"\)/
+    );
+});
+
 test("Sampling keeps area controls and AOI; map exploration owns histogram results", () => {
     const analysisRegion = requireElementRange(
         "eomap-raster-interpretation-region"

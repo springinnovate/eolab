@@ -4,6 +4,7 @@ History
 Unreleased
 ----------
 
+* Put direct style, zoom, details, clipboard, and removal actions on every map-layer row.
 * Cancel abandoned map requests and bound GeoServer queue waits.
 * Suggest valid Catalog search filters contextually while users type.
 * Copy complete raster or vector styles and layer opacity onto compatible map layers.

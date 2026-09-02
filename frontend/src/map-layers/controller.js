@@ -76,6 +76,8 @@ export class MapLayerController {
         this.destroyed = false;
         this.view.bind({
             onStyle: (key) => this.onStyle?.(key),
+            onZoom: (key) => this.onZoom?.(key),
+            onInfo: (key) => this.onInfo?.(key),
             onCopyStyle: (key) => this.copyStyle(key),
             onPasteStyle: (key) => void this.pasteStyle(key),
             onVisibility: (key, visible) => this.setVisible(key, visible),

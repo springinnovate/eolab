@@ -331,7 +331,7 @@ const LAYERS = [
   },
 ];
 
-test("rows expose reorder, visibility, style clipboard, and removal actions", () => {
+test("rows expose two-row identity, map, style, clipboard, and removal actions", () => {
   const doc = new FakeLayerStackDocument();
   const view = new MapLayerStackView(doc);
   view.render(LAYERS, "vegetation");
@@ -344,6 +344,9 @@ test("rows expose reorder, visibility, style clipboard, and removal actions", ()
     assert.equal(elementsByClass(row, "raster-layer-legend").length, 0);
     assert.equal(elementsByClass(row, "raster-layer-opacity").length, 0);
     assert.equal(actionControl(row, "style").getAttribute("aria-haspopup"), "dialog");
+    assert.equal(actionControl(row, "style").textContent, "Style");
+    assert.equal(actionControl(row, "zoom").textContent, "Zoom to");
+    assert.equal(actionControl(row, "info").textContent, "Info");
     assert.equal(actionControl(row, "copy-style").disabled, false);
     assert.match(actionControl(row, "copy-style").title, /Copy style and opacity/);
     assert.equal(actionControl(row, "paste-style").disabled, true);
@@ -359,7 +362,11 @@ test("rows expose reorder, visibility, style clipboard, and removal actions", ()
   assert.equal(actionControl(rows[2], "visibility").disabled, false);
   assert.throws(() => actionControl(rows[0], "move-up"));
   assert.throws(() => actionControl(rows[2], "move-down"));
-  assert.equal(actionControl(rows[0], "remove").textContent, "Remove from map");
+  assert.equal(actionControl(rows[0], "remove").textContent, "×");
+  assert.match(actionControl(rows[0], "remove").title, /Remove from map/);
+  assert.equal(elementsByClass(rows[0], "map-layer-primary-row").length, 1);
+  assert.equal(elementsByClass(rows[0], "map-layer-row-actions").length, 1);
+  assert.equal(elementsByClass(rows[0], "raster-layer-actions").length, 0);
   assert.equal(elementsByClass(rows[2], "raster-layer-error")[0].textContent, "Statistics unavailable.");
   assert.equal(doc.querySelector("#raster-layer-stack").hidden, false);
 });
@@ -370,7 +377,8 @@ test("raster and vector rows use the same compact action layout", () => {
   const vector = { ...LAYERS[0], legend: { kind: "fixed", label: "Polygon" } };
   view.render([vector, { ...LAYERS[1], opacityLocked: true, effectiveOpacity: 1 }], null);
   for (const row of doc.querySelector("#raster-layer-list").children) {
-    assert.equal(actionControl(row, "style").textContent, "Style…");
+    assert.equal(actionControl(row, "style").textContent, "Style");
+    assert.equal(elementsByClass(row, "map-layer-row-actions").length, 1);
     assert.equal(elementsByClass(row, "raster-layer-legend").length, 0);
   }
 });
@@ -424,12 +432,14 @@ test("neutral classified legends render as compact layer disclosures", () => {
   assert.equal(swatches[0].style.backgroundColor, "#f7fbff");
 });
 
-test("row actions forward stable identity; Escape closes actions before the workspace", () => {
+test("direct row actions forward stable identity", () => {
   const doc = new FakeLayerStackDocument();
   const view = new MapLayerStackView(doc);
   const received = [];
   view.bind({
     onStyle: key => received.push(["style", key]),
+    onZoom: key => received.push(["zoom", key]),
+    onInfo: key => received.push(["info", key]),
     onCopyStyle: key => received.push(["copy-style", key]),
     onPasteStyle: key => received.push(["paste-style", key]),
     onVisibility: (key, visible) => received.push(["visibility", key, visible]),
@@ -450,6 +460,8 @@ test("row actions forward stable identity; Escape closes actions before the work
   ], null);
   const [first, second, third] = doc.querySelector("#raster-layer-list").children;
   actionControl(first, "style").dispatchEvent(new Event("click"));
+  actionControl(first, "zoom").dispatchEvent(new Event("click"));
+  actionControl(first, "info").dispatchEvent(new Event("click"));
   actionControl(first, "copy-style").dispatchEvent(new Event("click"));
   actionControl(first, "paste-style").dispatchEvent(new Event("click"));
   const visibility = actionControl(first, "visibility");
@@ -458,24 +470,17 @@ test("row actions forward stable identity; Escape closes actions before the work
   actionControl(third, "remove").dispatchEvent(new Event("click"));
   assert.deepEqual(received, [
     ["style", "temperature"],
+    ["zoom", "temperature"],
+    ["info", "temperature"],
     ["copy-style", "temperature"],
     ["paste-style", "temperature"],
     ["visibility", "temperature", false],
     ["remove", "moisture"],
   ]);
-  const actions = elementsByClass(first, "raster-layer-actions")[0];
-  actions.open = true;
-  const escape = new Event("keydown", { cancelable: true });
-  Object.defineProperty(escape, "key", { value: "Escape" });
-  actions.dispatchEvent(escape);
-  assert.equal(actions.open, false);
-  assert.equal(doc.activeElement, actionControl(first, "actions"));
-  assert.equal(escape.defaultPrevented, true);
-  assert.equal(escape.cancelBubble, true);
   assert.equal(doc.querySelector("#raster-layer-stack").hidden, false);
   view.unbind();
   actionControl(third, "remove").dispatchEvent(new Event("click"));
-  assert.equal(received.length, 5);
+  assert.equal(received.length, 7);
 });
 
 test("pointer dragging emits one atomic reorder with insertion feedback", () => {
@@ -629,7 +634,7 @@ test("MapLayerStackView announces status and retains stable action focus", () =>
 
   assert.notEqual(documentContext.activeElement, focusedBeforeRender);
   assert.equal(documentContext.activeElement.dataset.layerKey, "moisture");
-  assert.equal(documentContext.activeElement.dataset.layerAction, "actions");
+  assert.equal(documentContext.activeElement.dataset.layerAction, "remove");
 
   view.render(
     [LAYERS[0], LAYERS[1]],
