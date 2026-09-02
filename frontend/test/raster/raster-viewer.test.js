@@ -396,6 +396,7 @@ function createFakeLayerStackView() {
         layers: [],
         activeKey: null,
         status: "",
+        announcement: "",
         bind(handlers) {
             this.handlers = handlers;
         },
@@ -408,6 +409,11 @@ function createFakeLayerStackView() {
         },
         setStatus(message) {
             this.status = message;
+            this.announcement = message;
+        },
+        announceStatus(message) {
+            this.status = "";
+            this.announcement = message;
         },
     };
 }

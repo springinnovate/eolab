@@ -603,12 +603,7 @@ export class MapLayerController {
             }
             throw error;
         }
-        this.view.setStatus(
-            entry.visible
-                ? `${label} was added and is visible.`
-                : `${label} was added hidden because two map layers are ` +
-                  "already visible. Hide one to show it."
-        );
+        this.view.announceStatus(`${label} was added and is visible.`);
         this.render();
         return publication;
     }

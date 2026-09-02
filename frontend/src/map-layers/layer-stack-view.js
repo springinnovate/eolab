@@ -142,6 +142,18 @@ export class MapLayerStackView {
      * @return {void}
      */
     setStatus(message) {
+        this.status.classList.remove("visually-hidden");
+        this.status.textContent = message;
+    }
+
+    /**
+     * Announce a successful state change without retaining visible text.
+     *
+     * @param {string} message Polite assistive-technology announcement.
+     * @return {void}
+     */
+    announceStatus(message) {
+        this.status.classList.add("visually-hidden");
         this.status.textContent = message;
     }
 

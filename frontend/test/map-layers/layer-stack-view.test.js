@@ -652,6 +652,22 @@ test("MapLayerStackView announces status and retains stable action focus", () =>
     documentContext.querySelector("#raster-layer-stack-status").textContent,
     "Soil moisture anomaly removed.",
   );
+  assert.equal(
+    documentContext.querySelector("#raster-layer-stack-status")
+      .classList.contains("visually-hidden"),
+    false,
+  );
+
+  view.announceStatus("Vegetation index was added and is visible.");
+  assert.equal(
+    documentContext.querySelector("#raster-layer-stack-status").textContent,
+    "Vegetation index was added and is visible.",
+  );
+  assert.equal(
+    documentContext.querySelector("#raster-layer-stack-status")
+      .classList.contains("visually-hidden"),
+    true,
+  );
 
   view.render([], null);
   assert.equal(documentContext.querySelector("#raster-layer-stack").hidden, true);
