@@ -98,6 +98,7 @@ services:
       - "JAVA_TOOL_OPTIONS=-XX:+ExitOnOutOfMemoryError"
       - "GEOSERVER_MAX_HEAP_SIZE=${EOLAB_GEOSERVER_MAX_HEAP_SIZE:-4g}"
       - "GEOSERVER_WMS_RENDER_COUNT=${EOLAB_GEOSERVER_WMS_RENDER_COUNT:-2}"
+      - "GEOSERVER_WMS_QUEUE_TIMEOUT_SECONDS=${EOLAB_GEOSERVER_WMS_QUEUE_TIMEOUT_SECONDS:-10}"
       - "PROXY_BASE_URL=$${X-Forwarded-Proto}://$${X-Forwarded-Host}/geoserver http://geoserver:8080/geoserver"
       - "PROXY_BASE_URL_HEADERS=true"
       - "GEOSERVER_ADMIN_USER=eolab"

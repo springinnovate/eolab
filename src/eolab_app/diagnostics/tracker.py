@@ -28,6 +28,7 @@ class _TrackedGetMap:
     """Mutable outcome owned by one tracker context."""
 
     succeeded: bool = False
+    canceled: bool = False
 
 
 class GetMapRequestTracker:
@@ -53,10 +54,11 @@ class GetMapRequestTracker:
 
     @contextmanager
     def track(self) -> Iterator[_TrackedGetMap]:
-        """Record one valid GetMap request through completion or cancellation.
+        """Record one valid GetMap request through its response or cancellation.
 
         Yields:
-            Mutable request outcome for the WMS proxy to mark successful.
+            Mutable request outcome for the WMS proxy to mark successful or
+            canceled.
         """
         started_at = time.perf_counter()
         outcome = _TrackedGetMap()
@@ -65,9 +67,10 @@ class GetMapRequestTracker:
             yield outcome
         finally:
             self._active -= 1
-            self._completed += 1
-            self._latest_seconds = time.perf_counter() - started_at
-            self._recent_successes.append(outcome.succeeded)
+            if not outcome.canceled:
+                self._completed += 1
+                self._latest_seconds = time.perf_counter() - started_at
+                self._recent_successes.append(outcome.succeeded)
 
     def snapshot(self) -> GetMapSnapshot:
         """Return the current request state without exposing request details.

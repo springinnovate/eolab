@@ -12,6 +12,10 @@ from eolab_app.rendering.errors import (
     PublishedLayerRequestError,
 )
 from eolab_app.rendering.ports import PublishedLayerRegistry
+from eolab_app.routes.http_disconnect import (
+    HttpClientDisconnectedError,
+    run_until_http_disconnect,
+)
 
 
 MAX_FEATURE_INFO_FEATURES = 10
@@ -292,11 +296,21 @@ def create_wms_proxy_router(
         try:
             if operation == "getmap":
                 with get_map_request_tracker.track() as tracked_request:
-                    geoserver_response = await geoserver_client.get(
-                        f"{internal_geoserver_url}/eolab/wms",
-                        params=query_entries,
-                        headers=forwarded_headers,
-                    )
+                    try:
+                        geoserver_response = await run_until_http_disconnect(
+                            request,
+                            geoserver_client.get(
+                                f"{internal_geoserver_url}/eolab/wms",
+                                params=query_entries,
+                                headers=forwarded_headers,
+                            ),
+                        )
+                    except HttpClientDisconnectedError as error:
+                        tracked_request.canceled = True
+                        raise HTTPException(
+                            status_code=499,
+                            detail="The map request was canceled",
+                        ) from error
                     response_media_type = geoserver_response.headers.get(
                         "content-type",
                         "",

@@ -40,6 +40,23 @@ def test_get_map_tracker_retains_only_the_latest_hundred_outcomes() -> None:
     assert snapshot.recent_failures == 0
 
 
+def test_get_map_tracker_excludes_abandoned_requests_from_outcomes() -> None:
+    """Release active capacity without reporting a disconnect as a failure."""
+    tracker = GetMapRequestTracker(2)
+
+    with tracker.track() as canceled_request:
+        assert tracker.snapshot().active == 1
+        canceled_request.canceled = True
+
+    snapshot = tracker.snapshot()
+    assert snapshot.active == 0
+    assert snapshot.completed == 0
+    assert snapshot.latest_seconds is None
+    assert snapshot.recent_failures == 0
+    assert snapshot.recent_window_size == 0
+    assert snapshot.latest_failed is False
+
+
 def test_get_map_tracker_requires_the_configured_capacity_contract() -> None:
     """Reject a tracker that could never accept a render."""
     with pytest.raises(ValueError, match="greater than zero"):

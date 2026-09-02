@@ -1,7 +1,5 @@
 """FastAPI delivery boundary for rendering-independent raster analysis."""
 
-import asyncio
-
 from fastapi import APIRouter, HTTPException, Request
 
 from eolab_app.raster.errors import RasterFeatureError
@@ -15,10 +13,11 @@ from eolab_app.raster.models import (
 )
 from eolab_app.raster.pixel_service import RasterPixelService
 from eolab_app.raster.statistics_service import RasterStatisticsService
-from eolab_app.routes.raster_http import (
-    raster_http_exception,
-    wait_for_http_disconnect,
+from eolab_app.routes.http_disconnect import (
+    HttpClientDisconnectedError,
+    run_until_http_disconnect,
 )
+from eolab_app.routes.raster_http import raster_http_exception
 
 
 def create_raster_analysis_router(
@@ -82,32 +81,18 @@ def create_raster_analysis_router(
         Raises:
             HTTPException: If analysis fails or the browser disconnects.
         """
-        statistics_task = asyncio.create_task(statistics_service.get(request))
-        disconnect_task = asyncio.create_task(
-            wait_for_http_disconnect(http_request)
-        )
         try:
-            completed_tasks, _ = await asyncio.wait(
-                (statistics_task, disconnect_task),
-                return_when=asyncio.FIRST_COMPLETED,
+            return await run_until_http_disconnect(
+                http_request,
+                statistics_service.get(request),
             )
-            if statistics_task in completed_tasks:
-                try:
-                    return statistics_task.result()
-                except RasterFeatureError as error:
-                    raise raster_http_exception(error) from error
+        except RasterFeatureError as error:
+            raise raster_http_exception(error) from error
+        except HttpClientDisconnectedError as error:
             raise HTTPException(
                 status_code=499,
                 detail="The raster statistics request was canceled",
-            )
-        finally:
-            disconnect_task.cancel()
-            statistics_task.cancel()
-            await asyncio.gather(
-                statistics_task,
-                disconnect_task,
-                return_exceptions=True,
-            )
+            ) from error
 
     @router.post(
         "/paired-statistics",
@@ -129,33 +114,17 @@ def create_raster_analysis_router(
         Raises:
             HTTPException: If analysis fails or the browser disconnects.
         """
-        statistics_task = asyncio.create_task(
-            statistics_service.get_paired(request)
-        )
-        disconnect_task = asyncio.create_task(
-            wait_for_http_disconnect(http_request)
-        )
         try:
-            completed_tasks, _ = await asyncio.wait(
-                (statistics_task, disconnect_task),
-                return_when=asyncio.FIRST_COMPLETED,
+            return await run_until_http_disconnect(
+                http_request,
+                statistics_service.get_paired(request),
             )
-            if statistics_task in completed_tasks:
-                try:
-                    return statistics_task.result()
-                except RasterFeatureError as error:
-                    raise raster_http_exception(error) from error
+        except RasterFeatureError as error:
+            raise raster_http_exception(error) from error
+        except HttpClientDisconnectedError as error:
             raise HTTPException(
                 status_code=499,
                 detail="The paired raster statistics request was canceled",
-            )
-        finally:
-            disconnect_task.cancel()
-            statistics_task.cancel()
-            await asyncio.gather(
-                statistics_task,
-                disconnect_task,
-                return_exceptions=True,
-            )
+            ) from error
 
     return router
