@@ -72,7 +72,7 @@ export class MapLayerController {
         this.view.bind({
             onStyle: (key) => this.onStyle?.(key),
             onVisibility: (key, visible) => this.setVisible(key, visible),
-            onMove: (key, direction) => this.move(key, direction),
+            onReorder: (key, targetIndex) => this.reorder(key, targetIndex),
             onRemove: (key) => this.removeKey(key),
         });
         this.render();
@@ -242,23 +242,22 @@ export class MapLayerController {
     }
 
     /**
-     * Move one retained layer in top-first drawing order.
+     * Move one retained layer atomically to a top-first drawing-order index.
      *
-     * @param {string} key Stable map-layer key.
-     * @param {"up"|"down"} direction Requested movement.
+     * @param {string} key Stable retained-layer key.
+     * @param {number} targetIndex Zero-based top-first destination.
      * @return {void}
      */
-    move(key, direction) {
-        if (!this.stack.move(key, direction)) {
-            return;
-        }
+    reorder(key, targetIndex) {
+        if (!this.stack.moveTo(key, targetIndex)) return;
         this.#applyLeafletOrder();
         const record = this.#requireRecord(key);
         record.adapter.orderChanged?.(record);
         this.view.setStatus(
-            `${record.entry.label} moved ${direction} in the map drawing order.`
+            `${record.entry.label} moved to position ${targetIndex + 1} of ` +
+            `${this.stack.entries.length} in the map drawing order.`
         );
-        this.render({ key, action: `move-${direction}` });
+        this.render({ key, action: "reorder" });
     }
 
     /**

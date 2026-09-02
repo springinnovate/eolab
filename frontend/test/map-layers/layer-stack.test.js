@@ -105,26 +105,26 @@ test("opacity accepts only finite values in the closed unit interval", () => {
   assert.equal(entry.opacity, 1);
 });
 
-test("moving layers respects top and bottom boundaries", () => {
+test("moving directly to an index is atomic and validates its contract", () => {
   const stack = new MapLayerStack();
-  const bottom = stack.add(catalogItem("collection", "bottom"), "bottom.tif").entry;
-  const middle = stack.add(catalogItem("collection", "middle"), "middle.tif").entry;
-  const top = stack.add(catalogItem("collection", "top"), "top.tif").entry;
+  const bottom = stack.add(
+    catalogItem("collection", "bottom"),
+    "bottom.tif",
+  ).entry;
+  stack.add(catalogItem("collection", "middle"), "middle.tif");
+  stack.add(catalogItem("collection", "upper"), "upper.tif");
+  stack.add(catalogItem("collection", "top"), "top.tif");
 
-  assert.equal(stack.move(top.key, "up"), false);
-  assert.equal(stack.move(bottom.key, "down"), false);
-  assert.equal(stack.move(middle.key, "up"), true);
+  assert.equal(stack.moveTo(bottom.key, 0), true);
   assert.deepEqual(
     stack.entries.map((entry) => entry.item.id),
-    ["middle", "top", "bottom"],
+    ["bottom", "top", "upper", "middle"],
   );
-  assert.equal(stack.move(middle.key, "down"), true);
-  assert.deepEqual(
-    stack.entries.map((entry) => entry.item.id),
-    ["top", "middle", "bottom"],
-  );
-  assert.throws(() => stack.move(middle.key, "sideways"), TypeError);
-  assert.throws(() => stack.move("missing", "up"), RangeError);
+  assert.equal(stack.moveTo(bottom.key, 0), false);
+  assert.equal(stack.moveTo(bottom.key, -1), false);
+  assert.equal(stack.moveTo(bottom.key, 4), false);
+  assert.throws(() => stack.moveTo(bottom.key, 1.5), TypeError);
+  assert.throws(() => stack.moveTo("missing", 0), RangeError);
 });
 
 test("removing the active layer chooses a deterministic adjacent fallback", () => {

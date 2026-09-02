@@ -159,29 +159,28 @@ export class MapLayerStack {
     }
 
     /**
-     * Move an entry one position in top-first drawing order.
+     * Move an entry atomically to one top-first drawing-order index.
      *
      * @param {string} key Stable layer key.
-     * @param {"up"|"down"} direction Requested movement.
+     * @param {number} targetIndex Zero-based top-first destination.
      * @return {boolean} Whether the entry moved.
-     * @throws {TypeError} If direction is not part of the contract.
+     * @throws {TypeError} If targetIndex is not an integer.
+     * @throws {RangeError} If the key or destination is outside the stack.
      */
-    move(key, direction) {
-        if (direction !== "up" && direction !== "down") {
-            throw new TypeError("Map layers can move only up or down.");
+    moveTo(key, targetIndex) {
+        if (!Number.isInteger(targetIndex)) {
+            throw new TypeError("Map layer positions must be integers.");
         }
         const index = this.entries.findIndex((entry) => entry.key === key);
         if (index < 0) {
             throw new RangeError(`Unknown map layer key: ${key}`);
         }
-        const nextIndex = direction === "up" ? index - 1 : index + 1;
-        if (nextIndex < 0 || nextIndex >= this.entries.length) {
+        if (targetIndex < 0 || targetIndex >= this.entries.length) {
             return false;
         }
-        [this.entries[index], this.entries[nextIndex]] = [
-            this.entries[nextIndex],
-            this.entries[index],
-        ];
+        if (targetIndex === index) return false;
+        const [entry] = this.entries.splice(index, 1);
+        this.entries.splice(targetIndex, 0, entry);
         return true;
     }
 

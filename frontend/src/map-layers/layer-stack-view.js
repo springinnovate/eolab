@@ -27,8 +27,8 @@ function requireLayerStackElement(documentContext, selector) {
  * @property {(key: string) => void} onStyle Open one retained layer style editor.
  * @property {(key: string, visible: boolean) => void} onVisibility Change
  * map visibility.
- * @property {(key: string, direction: "up"|"down") => void} onMove Move one
- * layer in top-first order.
+ * @property {(key: string, targetIndex: number) => void} onReorder Move one
+ * layer to a zero-based top-first position.
  * @property {(key: string) => void} onRemove Remove one retained layer.
  */
 
@@ -54,8 +54,15 @@ export class MapLayerStackView {
             documentContext,
             "#raster-layer-stack-status"
         );
+        this.scrollContainer = documentContext.querySelector(
+            "#eomap-map-layers-body"
+        ) ?? this.list;
         /** @type {MapLayerStackViewHandlers|null} */
         this.handlers = null;
+        /** @type {{key:string,sourceIndex:number,targetIndex:number,pointerId:number}|null} */
+        this.pointerDrag = null;
+        /** @type {{key:string,originIndex:number}|null} */
+        this.keyboardDrag = null;
     }
 
     /**
@@ -78,6 +85,8 @@ export class MapLayerStackView {
      * @return {void}
      */
     unbind() {
+        this.pointerDrag = null;
+        this.keyboardDrag = null;
         this.handlers = null;
     }
 
@@ -91,6 +100,12 @@ export class MapLayerStackView {
      * @return {void}
      */
     render(layers, activeKey, requestedFocus = null) {
+        if (
+            this.keyboardDrag !== null &&
+            !layers.some((layer) => layer.key === this.keyboardDrag.key)
+        ) {
+            this.keyboardDrag = null;
+        }
         const retainedFocus = requestedFocus ?? this.#readFocusedAction();
         const focusTargets = new Map();
         const rows = layers.map((layer, index) => this.#buildRow(
@@ -103,7 +118,7 @@ export class MapLayerStackView {
         this.list.replaceChildren(...rows);
         this.root.hidden = layers.length === 0;
         if (retainedFocus !== null) {
-            const action = retainedFocus.action.startsWith("move-") || retainedFocus.action === "remove"
+            const action = retainedFocus.action === "remove"
                 ? "actions" : retainedFocus.action;
             let focusTarget = focusTargets.get(
                 `${retainedFocus.key}\u0000${action}`
@@ -150,8 +165,22 @@ export class MapLayerStackView {
         const accessibleName = `${layer.label}; Catalog Item ${layer.item.collection} / ${layer.item.id}`;
         const row = this.documentContext.createElement("li");
         row.className = "raster-layer-row";
+        row.dataset.layerKey = layer.key;
+        row.dataset.layerIndex = String(index);
         row.classList.toggle("is-hidden", !layer.visible);
+        row.classList.toggle(
+            "is-dragging",
+            this.keyboardDrag?.key === layer.key
+        );
         row.setAttribute("aria-label", accessibleName);
+        const reorder = this.#buildReorderHandle(
+            layer,
+            index,
+            layerCount,
+            accessibleName,
+            row,
+            focusTargets
+        );
         const label = this.documentContext.createElement("label");
         label.className = "raster-layer-visibility";
         const visibility = this.documentContext.createElement("input");
@@ -193,21 +222,18 @@ export class MapLayerStackView {
         this.#rememberFocusTarget(focusTargets, toggle);
         const menu = this.documentContext.createElement("div");
         menu.className = "raster-layer-action-list";
-        for (const [text, action, disabled, callback] of [
-            ["Move up", "move-up", index === 0,
-                () => this.handlers?.onMove(layer.key, "up")],
-            ["Move down", "move-down", index === layerCount - 1,
-                () => this.handlers?.onMove(layer.key, "down")],
-            ["Remove from map", "remove", false,
-                () => this.handlers?.onRemove(layer.key)],
-        ]) {
-            const button = this.#button(
-                text, `${text}: ${accessibleName}`, layer.key, action,
-                () => { actions.open = false; callback(); }, focusTargets
-            );
-            button.disabled = disabled;
-            menu.append(button);
-        }
+        const remove = this.#button(
+            "Remove from map",
+            `Remove from map: ${accessibleName}`,
+            layer.key,
+            "remove",
+            () => {
+                actions.open = false;
+                this.handlers?.onRemove(layer.key);
+            },
+            focusTargets
+        );
+        menu.append(remove);
         actions.append(toggle, menu);
         actions.addEventListener("keydown", (event) => {
             if (event.key !== "Escape" || !actions.open) return;
@@ -216,7 +242,7 @@ export class MapLayerStackView {
             actions.open = false;
             toggle.focus();
         });
-        row.append(label, style, actions);
+        row.append(reorder, label, style, actions);
         const legend = this.#buildLegend(layer.legend);
         if (legend !== null) row.append(legend);
         if (layer.error) {
@@ -226,6 +252,266 @@ export class MapLayerStackView {
             row.append(error);
         }
         return row;
+    }
+
+    /**
+     * Build one pointer- and keyboard-operable layer-order grip.
+     *
+     * @param {Object} layer Layer presentation snapshot.
+     * @param {number} index Current zero-based top-first position.
+     * @param {number} layerCount Total retained layer count.
+     * @param {string} accessibleName Layer and Catalog identity label.
+     * @param {HTMLLIElement} row Owning rendered row.
+     * @param {Map<string,Element>} focusTargets Rendered focus targets.
+     * @return {HTMLButtonElement} Reorder handle.
+     */
+    #buildReorderHandle(
+        layer,
+        index,
+        layerCount,
+        accessibleName,
+        row,
+        focusTargets
+    ) {
+        const handle = this.documentContext.createElement("button");
+        handle.type = "button";
+        handle.className = "map-layer-drag-handle";
+        handle.textContent = "⠿";
+        handle.title = "Drag to reorder. Keyboard: Space, arrow keys, Space.";
+        handle.dataset.layerKey = layer.key;
+        handle.dataset.layerAction = "reorder";
+        const keyboardPickedUp = this.keyboardDrag?.key === layer.key;
+        handle.setAttribute(
+            "aria-label",
+            `Reorder ${accessibleName}, position ${index + 1} of ` +
+            `${layerCount}. ${keyboardPickedUp
+                ? "Use arrow keys to move, Space to drop, or Escape to cancel."
+                : "Press Space to pick up."}`
+        );
+        handle.setAttribute(
+            "aria-pressed",
+            String(keyboardPickedUp)
+        );
+        handle.setAttribute(
+            "aria-keyshortcuts",
+            "Space Enter ArrowUp ArrowDown Escape"
+        );
+        handle.addEventListener("pointerdown", (event) =>
+            this.#startPointerDrag(event, layer.key, index, row, handle)
+        );
+        handle.addEventListener("pointermove", (event) =>
+            this.#updatePointerDrag(event)
+        );
+        handle.addEventListener("pointerup", (event) =>
+            this.#finishPointerDrag(event, false, handle)
+        );
+        handle.addEventListener("pointercancel", (event) =>
+            this.#finishPointerDrag(event, true, handle)
+        );
+        handle.addEventListener("lostpointercapture", (event) =>
+            this.#finishPointerDrag(event, true, handle)
+        );
+        handle.addEventListener("keydown", (event) =>
+            this.#handleReorderKey(event, layer, index, layerCount, row, handle)
+        );
+        this.#rememberFocusTarget(focusTargets, handle);
+        return handle;
+    }
+
+    /**
+     * Begin one captured pointer reorder without changing domain order.
+     *
+     * @param {PointerEvent} event Pointer-down event.
+     * @param {string} key Stable layer key.
+     * @param {number} sourceIndex Initial top-first index.
+     * @param {HTMLLIElement} row Owning rendered row.
+     * @param {HTMLButtonElement} handle Capturing reorder handle.
+     * @return {void}
+     */
+    #startPointerDrag(event, key, sourceIndex, row, handle) {
+        if (event.button !== 0 || event.isPrimary === false) return;
+        event.preventDefault();
+        this.keyboardDrag = null;
+        this.pointerDrag = {
+            key,
+            sourceIndex,
+            targetIndex: sourceIndex,
+            pointerId: event.pointerId,
+        };
+        row.classList.add("is-dragging");
+        this.list.classList.add("is-reordering");
+        handle.setAttribute("aria-pressed", "true");
+        handle.setPointerCapture?.(event.pointerId);
+        handle.focus();
+    }
+
+    /**
+     * Update the pending destination and insertion marker for a pointer drag.
+     *
+     * @param {PointerEvent} event Captured pointer-move event.
+     * @return {void}
+     */
+    #updatePointerDrag(event) {
+        if (
+            this.pointerDrag === null ||
+            event.pointerId !== this.pointerDrag.pointerId
+        ) {
+            return;
+        }
+        event.preventDefault();
+        this.#autoScroll(event.clientY);
+        const rows = [...this.list.children];
+        let targetIndex = rows.length - 1;
+        for (let index = 0; index < rows.length; index += 1) {
+            const bounds = rows[index].getBoundingClientRect();
+            if (event.clientY < bounds.top + bounds.height / 2) {
+                targetIndex = index;
+                break;
+            }
+        }
+        this.pointerDrag.targetIndex = targetIndex;
+        this.#showDropTarget(
+            rows,
+            this.pointerDrag.sourceIndex,
+            targetIndex
+        );
+    }
+
+    /**
+     * Complete or cancel one pointer reorder and release its capture.
+     *
+     * @param {PointerEvent} event Pointer completion event.
+     * @param {boolean} cancelled Whether no reorder should be emitted.
+     * @param {HTMLButtonElement} handle Capturing reorder handle.
+     * @return {void}
+     */
+    #finishPointerDrag(event, cancelled, handle) {
+        const drag = this.pointerDrag;
+        if (drag === null || event.pointerId !== drag.pointerId) return;
+        this.pointerDrag = null;
+        handle.releasePointerCapture?.(event.pointerId);
+        handle.setAttribute("aria-pressed", "false");
+        this.#clearDragClasses();
+        if (!cancelled && drag.targetIndex !== drag.sourceIndex) {
+            this.handlers?.onReorder(drag.key, drag.targetIndex);
+        }
+    }
+
+    /**
+     * Apply accessible pickup, move, drop, and cancel keyboard semantics.
+     *
+     * @param {KeyboardEvent} event Reorder-handle key event.
+     * @param {Object} layer Layer presentation snapshot.
+     * @param {number} index Current zero-based top-first position.
+     * @param {number} layerCount Total retained layer count.
+     * @param {HTMLLIElement} row Owning rendered row.
+     * @param {HTMLButtonElement} handle Keyboard reorder handle.
+     * @return {void}
+     */
+    #handleReorderKey(event, layer, index, layerCount, row, handle) {
+        const isToggle = event.key === " " || event.key === "Enter";
+        const isActive = this.keyboardDrag?.key === layer.key;
+        if (isToggle) {
+            event.preventDefault();
+            if (isActive) {
+                this.keyboardDrag = null;
+                row.classList.remove("is-dragging");
+                handle.setAttribute("aria-pressed", "false");
+                this.setStatus(
+                    `${layer.label} dropped at position ${index + 1} of ` +
+                    `${layerCount}.`
+                );
+            } else {
+                this.keyboardDrag = { key: layer.key, originIndex: index };
+                row.classList.add("is-dragging");
+                handle.setAttribute("aria-pressed", "true");
+                this.setStatus(
+                    `${layer.label} picked up at position ${index + 1} of ` +
+                    `${layerCount}. Use Up and Down arrows, then Space to drop.`
+                );
+            }
+            return;
+        }
+        if (!isActive) return;
+        if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+            event.preventDefault();
+            const targetIndex = Math.max(
+                0,
+                Math.min(
+                    layerCount - 1,
+                    index + (event.key === "ArrowUp" ? -1 : 1)
+                )
+            );
+            if (targetIndex !== index) {
+                this.handlers?.onReorder(layer.key, targetIndex);
+            }
+            return;
+        }
+        if (event.key === "Escape") {
+            event.preventDefault();
+            event.stopPropagation();
+            const originIndex = this.keyboardDrag.originIndex;
+            this.keyboardDrag = null;
+            row.classList.remove("is-dragging");
+            handle.setAttribute("aria-pressed", "false");
+            if (originIndex !== index) {
+                this.handlers?.onReorder(layer.key, originIndex);
+            }
+            this.setStatus(`${layer.label} reordering cancelled.`);
+        }
+    }
+
+    /**
+     * Mark one prospective insertion edge without changing source order.
+     *
+     * @param {Element[]} rows Current top-first rendered rows.
+     * @param {number} sourceIndex Original row index.
+     * @param {number} targetIndex Prospective destination index.
+     * @return {void}
+     */
+    #showDropTarget(rows, sourceIndex, targetIndex) {
+        for (const row of rows) {
+            row.classList.remove("is-drop-before", "is-drop-after");
+        }
+        if (sourceIndex === targetIndex) return;
+        rows[targetIndex]?.classList.add(
+            targetIndex < sourceIndex ? "is-drop-before" : "is-drop-after"
+        );
+    }
+
+    /** Remove all transient pointer-drag presentation classes. @return {void} */
+    #clearDragClasses() {
+        this.list.classList.remove("is-reordering");
+        for (const row of this.list.children) {
+            row.classList.remove(
+                "is-dragging",
+                "is-drop-before",
+                "is-drop-after"
+            );
+        }
+    }
+
+    /**
+     * Scroll the bounded map-layer panel when a drag approaches either edge.
+     *
+     * @param {number} clientY Pointer viewport Y coordinate.
+     * @return {void}
+     */
+    #autoScroll(clientY) {
+        if (
+            typeof this.scrollContainer.getBoundingClientRect !== "function"
+        ) {
+            return;
+        }
+        const bounds = this.scrollContainer.getBoundingClientRect();
+        const edgeSize = Math.min(44, bounds.height / 4);
+        let delta = 0;
+        if (clientY < bounds.top + edgeSize) {
+            delta = -Math.ceil((bounds.top + edgeSize - clientY) / 4);
+        } else if (clientY > bounds.bottom - edgeSize) {
+            delta = Math.ceil((clientY - (bounds.bottom - edgeSize)) / 4);
+        }
+        if (delta !== 0) this.scrollContainer.scrollTop += delta;
     }
 
     /**

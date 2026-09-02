@@ -917,14 +917,84 @@ h5 {
 }
 
 .raster-layer-row {
+  position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: 26px minmax(0, 1fr) auto auto;
   gap: 8px;
   align-items: start;
   min-width: 0;
-  border-bottom: 1px solid var(--border-3);
-  padding: 10px 0;
+  border: 1px solid transparent;
+  border-bottom-color: var(--border-3);
+  border-radius: var(--radius-sm);
+  padding: 9px 6px;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease,
+    box-shadow 120ms ease,
+    opacity 120ms ease;
 }
+
+.raster-layer-row:hover,
+.raster-layer-row:focus-within {
+  border-color: var(--border-2);
+  background: var(--surface-1);
+}
+
+.map-layer-drag-handle {
+  display: grid;
+  width: 26px;
+  height: 32px;
+  place-items: center;
+  touch-action: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  padding: 0;
+  color: var(--text-3);
+  font-size: 1.15rem;
+  line-height: 1;
+  cursor: grab;
+}
+
+.map-layer-drag-handle:hover,
+.map-layer-drag-handle:focus-visible,
+.map-layer-drag-handle[aria-pressed="true"] {
+  border-color: var(--brand);
+  background: var(--surface-selected);
+  color: var(--brand-strong);
+}
+
+.map-layer-drag-handle:active,
+.raster-layer-row.is-dragging .map-layer-drag-handle {
+  cursor: grabbing;
+}
+
+.raster-layer-list.is-reordering {
+  user-select: none;
+}
+
+.raster-layer-row.is-dragging {
+  z-index: 1;
+  border-color: var(--brand);
+  background: var(--surface-selected);
+  box-shadow: var(--elevation-panel);
+  opacity: 0.72;
+}
+
+.raster-layer-row.is-drop-before::before,
+.raster-layer-row.is-drop-after::after {
+  position: absolute;
+  right: 2px;
+  left: 2px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--brand);
+  content: "";
+  pointer-events: none;
+}
+
+.raster-layer-row.is-drop-before::before { top: -6px; }
+.raster-layer-row.is-drop-after::after { bottom: -6px; }
 
 .raster-layer-row.is-hidden .raster-layer-name { color: var(--text-3); }
 .raster-layer-visibility {

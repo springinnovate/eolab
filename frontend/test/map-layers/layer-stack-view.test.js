@@ -27,9 +27,17 @@ class FakeLayerStackElement extends EventTarget {
     this.title = "";
     this.type = "";
     this.name = "";
+    this.scrollTop = 0;
+    this.capturedPointerId = null;
     this._classNames = new Set();
     this.classList = {
+      add: (...classNames) => {
+        for (const className of classNames) this._classNames.add(className);
+      },
       contains: (className) => this._classNames.has(className),
+      remove: (...classNames) => {
+        for (const className of classNames) this._classNames.delete(className);
+      },
       toggle: (className, force) => {
         const shouldAdd = force ?? !this._classNames.has(className);
         if (shouldAdd) {
@@ -95,6 +103,24 @@ class FakeLayerStackElement extends EventTarget {
   /** Give this control fake document focus. */
   focus() {
     this.ownerDocument.activeElement = this;
+  }
+
+  /** Capture subsequent synthetic pointer events. */
+  setPointerCapture(pointerId) {
+    this.capturedPointerId = pointerId;
+  }
+
+  /** Release one synthetic pointer capture. */
+  releasePointerCapture(pointerId) {
+    if (this.capturedPointerId === pointerId) this.capturedPointerId = null;
+  }
+
+  /** Return deterministic vertical geometry for pointer sorting tests. */
+  getBoundingClientRect() {
+    const isRow = this.tagName === "LI";
+    const top = isRow ? Number(this.dataset.layerIndex) * 52 : 0;
+    const height = isRow ? 48 : 156;
+    return { top, bottom: top + height, height };
   }
 }
 
@@ -195,6 +221,21 @@ function actionControl(row, action) {
 }
 
 /**
+ * Create a cancelable synthetic event with read-only interaction fields.
+ *
+ * @param {string} type Event type.
+ * @param {Object} fields Pointer or keyboard fields.
+ * @return {Event} Synthetic interaction event.
+ */
+function interactionEvent(type, fields) {
+  const event = new Event(type, { cancelable: true });
+  for (const [name, value] of Object.entries(fields)) {
+    Object.defineProperty(event, name, { value });
+  }
+  return event;
+}
+
+/**
  * Build the neutral gradient-legend contract emitted by a layer owner.
  *
  * @param {Object} style Test ramp with numeric stops and CSS colors.
@@ -269,7 +310,7 @@ const LAYERS = [
   },
 ];
 
-test("rows expose filename, visibility, Style and contained actions only", () => {
+test("rows expose a reorder grip, filename, visibility, Style and removal", () => {
   const doc = new FakeLayerStackDocument();
   const view = new MapLayerStackView(doc);
   view.render(LAYERS, "vegetation");
@@ -282,12 +323,15 @@ test("rows expose filename, visibility, Style and contained actions only", () =>
     assert.equal(elementsByClass(row, "raster-layer-legend").length, 0);
     assert.equal(elementsByClass(row, "raster-layer-opacity").length, 0);
     assert.equal(actionControl(row, "style").getAttribute("aria-haspopup"), "dialog");
+    assert.match(actionControl(row, "reorder").getAttribute("aria-label"), /position \d of 3/);
+    assert.equal(actionControl(row, "reorder").getAttribute("aria-pressed"), "false");
     assert.equal(actionControl(row, "visibility").type, "checkbox");
     assert.equal(actionControl(row, "visibility").checked, LAYERS[index].visible);
   }
   assert.equal(actionControl(rows[2], "visibility").disabled, false);
-  assert.equal(actionControl(rows[0], "move-up").disabled, true);
-  assert.equal(actionControl(rows[2], "move-down").disabled, true);
+  assert.throws(() => actionControl(rows[0], "move-up"));
+  assert.throws(() => actionControl(rows[2], "move-down"));
+  assert.equal(actionControl(rows[0], "remove").textContent, "Remove from map");
   assert.equal(elementsByClass(rows[2], "raster-layer-error")[0].textContent, "Statistics unavailable.");
   assert.equal(doc.querySelector("#raster-layer-stack").hidden, false);
 });
@@ -359,7 +403,7 @@ test("row actions forward stable identity; Escape closes actions before the work
   view.bind({
     onStyle: key => received.push(["style", key]),
     onVisibility: (key, visible) => received.push(["visibility", key, visible]),
-    onMove: (key, direction) => received.push(["move", key, direction]),
+    onReorder: (key, targetIndex) => received.push(["reorder", key, targetIndex]),
     onRemove: key => received.push(["remove", key]),
   });
   view.render(LAYERS, null);
@@ -368,11 +412,10 @@ test("row actions forward stable identity; Escape closes actions before the work
   const visibility = actionControl(first, "visibility");
   visibility.checked = false;
   visibility.dispatchEvent(new Event("change"));
-  actionControl(second, "move-up").dispatchEvent(new Event("click"));
   actionControl(third, "remove").dispatchEvent(new Event("click"));
   assert.deepEqual(received, [
     ["style", "temperature"], ["visibility", "temperature", false],
-    ["move", "vegetation", "up"], ["remove", "moisture"],
+    ["remove", "moisture"],
   ]);
   const actions = elementsByClass(first, "raster-layer-actions")[0];
   actions.open = true;
@@ -386,7 +429,89 @@ test("row actions forward stable identity; Escape closes actions before the work
   assert.equal(doc.querySelector("#raster-layer-stack").hidden, false);
   view.unbind();
   actionControl(third, "remove").dispatchEvent(new Event("click"));
-  assert.equal(received.length, 4);
+  assert.equal(received.length, 3);
+});
+
+test("pointer dragging emits one atomic reorder with insertion feedback", () => {
+  const documentContext = new FakeLayerStackDocument();
+  const view = new MapLayerStackView(documentContext);
+  const received = [];
+  view.bind({
+    onStyle() {},
+    onVisibility() {},
+    onReorder: (key, targetIndex) => received.push([key, targetIndex]),
+    onRemove() {},
+  });
+  view.render(LAYERS, null);
+  const list = documentContext.querySelector("#raster-layer-list");
+  const handle = actionControl(list.children[0], "reorder");
+  const down = interactionEvent("pointerdown", {
+    button: 0,
+    isPrimary: true,
+    pointerId: 7,
+  });
+  handle.dispatchEvent(down);
+  assert.equal(down.defaultPrevented, true);
+  assert.equal(handle.capturedPointerId, 7);
+  assert.equal(list.children[0].classList.contains("is-dragging"), true);
+
+  handle.dispatchEvent(interactionEvent("pointermove", {
+    pointerId: 7,
+    clientY: 150,
+  }));
+  assert.equal(list.children[2].classList.contains("is-drop-after"), true);
+  assert.ok(list.scrollTop > 0);
+  assert.deepEqual(received, []);
+
+  handle.dispatchEvent(interactionEvent("pointerup", { pointerId: 7 }));
+  assert.deepEqual(received, [["temperature", 2]]);
+  assert.equal(list.classList.contains("is-reordering"), false);
+  assert.equal(list.children[2].classList.contains("is-drop-after"), false);
+});
+
+test("keyboard reorder moves through the owner and Escape restores the origin", () => {
+  const documentContext = new FakeLayerStackDocument();
+  const view = new MapLayerStackView(documentContext);
+  let layers = [...LAYERS];
+  const received = [];
+  view.bind({
+    onStyle() {},
+    onVisibility() {},
+    onReorder: (key, targetIndex) => {
+      received.push([key, targetIndex]);
+      const sourceIndex = layers.findIndex((layer) => layer.key === key);
+      const [layer] = layers.splice(sourceIndex, 1);
+      layers.splice(targetIndex, 0, layer);
+      view.render(layers, null, { key, action: "reorder" });
+    },
+    onRemove() {},
+  });
+  view.render(layers, null);
+  let handle = actionControl(
+    documentContext.querySelector("#raster-layer-list").children[1],
+    "reorder",
+  );
+  handle.focus();
+  handle.dispatchEvent(interactionEvent("keydown", { key: " " }));
+  assert.equal(handle.getAttribute("aria-pressed"), "true");
+  handle.dispatchEvent(interactionEvent("keydown", { key: "ArrowUp" }));
+  assert.deepEqual(layers.map((layer) => layer.key), [
+    "vegetation", "temperature", "moisture",
+  ]);
+  handle = documentContext.activeElement;
+  assert.equal(handle.dataset.layerAction, "reorder");
+  assert.equal(handle.getAttribute("aria-pressed"), "true");
+
+  handle.dispatchEvent(interactionEvent("keydown", { key: "Escape" }));
+  assert.deepEqual(layers.map((layer) => layer.key), [
+    "temperature", "vegetation", "moisture",
+  ]);
+  assert.deepEqual(received, [["vegetation", 0], ["vegetation", 1]]);
+  assert.equal(handle.getAttribute("aria-pressed"), "false");
+  assert.equal(
+    documentContext.querySelector("#raster-layer-stack-status").textContent,
+    "Vegetation health index reordering cancelled.",
+  );
 });
 
 test("the layer list leaves Escape to its owning workspace", () => {
@@ -395,7 +520,7 @@ test("the layer list leaves Escape to its owning workspace", () => {
   view.bind({
     onStyle() {},
     onVisibility() {},
-    onMove() {},
+    onReorder() {},
     onRemove() {},
   });
   view.render([LAYERS[0]], LAYERS[0].key);
@@ -432,18 +557,18 @@ test("MapLayerStackView announces status and retains stable action focus", () =>
   view.render(
     [LAYERS[0], LAYERS[1]],
     "vegetation",
-    { key: "vegetation", action: "move-up" },
+    { key: "vegetation", action: "reorder" },
   );
   assert.equal(documentContext.activeElement.dataset.layerKey, "vegetation");
-  assert.equal(documentContext.activeElement.dataset.layerAction, "actions");
+  assert.equal(documentContext.activeElement.dataset.layerAction, "reorder");
 
   view.render(
     [LAYERS[1], LAYERS[0]],
     "vegetation",
-    { key: "vegetation", action: "move-up" },
+    { key: "vegetation", action: "reorder" },
   );
   assert.equal(documentContext.activeElement.dataset.layerKey, "vegetation");
-  assert.equal(documentContext.activeElement.dataset.layerAction, "actions");
+  assert.equal(documentContext.activeElement.dataset.layerAction, "reorder");
 
   view.setStatus("Soil moisture anomaly removed.");
   assert.equal(
