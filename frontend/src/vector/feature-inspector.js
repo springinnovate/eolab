@@ -18,6 +18,8 @@ const MAX_ATTRIBUTE_VALUE_CHARACTERS = 1000;
  * @typedef {Object} VectorFeatureInspectionTarget
  * @property {string} sourceId Opaque retained-source identity from composition.
  * @property {string} label User-facing retained-layer label.
+ * @property {number[]} bbox Authoritative Catalog Item west, south, east, north
+ * bounds.
  * @property {{layerName:string,styleName:string}} publication Authorized WMS
  * publication identity.
  * @property {string|null} primaryGeometry Catalog-declared geometry field.
@@ -52,6 +54,22 @@ export function vectorInspectionObservation({ feature, target }) {
             : null,
         properties: Object.freeze(properties),
     });
+}
+
+/**
+ * Return whether one WGS 84 position is inside an authoritative Item extent.
+ *
+ * Inclusive edges preserve inspection of features whose coordinates coincide
+ * with a Catalog bounding-box boundary.
+ *
+ * @param {number[]} bbox West, south, east, north Catalog Item bounds.
+ * @param {{lng:number,lat:number}} position Leaflet WGS 84 click position.
+ * @return {boolean} Whether the target can contain the clicked feature.
+ */
+function vectorBoundsContainPosition(bbox, position) {
+    const [west, south, east, north] = bbox;
+    return position.lng >= west && position.lng <= east &&
+        position.lat >= south && position.lat <= north;
 }
 
 /**
@@ -219,6 +237,11 @@ export class VectorFeatureInspectorController {
                 target.sourceId.length === 0 ||
                 typeof target?.label !== "string" ||
                 target.label.length === 0 ||
+                !Array.isArray(target?.bbox) ||
+                target.bbox.length !== 4 ||
+                !target.bbox.every(Number.isFinite) ||
+                target.bbox[0] > target.bbox[2] ||
+                target.bbox[1] > target.bbox[3] ||
                 typeof target?.publication?.layerName !== "string" ||
                 typeof target?.publication?.styleName !== "string" ||
                 !(
@@ -317,16 +340,27 @@ export class VectorFeatureInspectorController {
      * @return {Promise<boolean>} Whether visible vector targets were inspected.
      */
     async inspect(event) {
-        const targets = this.visibleTargets();
-        if (targets.length === 0) {
+        const visibleTargets = this.visibleTargets();
+        if (visibleTargets.length === 0) {
             return false;
         }
-        this.onInspectionChange(true);
         this.abortController?.abort();
-        this.abortController = new AbortController();
+        this.abortController = null;
         const generation = ++this.requestGeneration;
-        this.sampleTargetSignature = this.#targetSignature(targets);
+        this.sampleTargetSignature = this.#targetSignature(visibleTargets);
         this.clearResults();
+        const targets = visibleTargets.filter((target) =>
+            vectorBoundsContainPosition(target.bbox, event.latlng)
+        );
+        if (targets.length === 0) {
+            const message = "No vector feature was found at that location.";
+            this.status.textContent =
+                "Click the map to inspect visible vector features.";
+            if (!this.panel.hidden) this.onInspectionChange(false);
+            this.#publishSample("empty", [], message);
+            return true;
+        }
+        this.abortController = new AbortController();
         this.status.textContent = "Inspecting visible vector layers…";
         this.#publishSample(
             "loading",
@@ -352,6 +386,7 @@ export class VectorFeatureInspectorController {
             response.status === "fulfilled" ? response.value : []
         );
         if (this.results.length > 0) {
+            this.onInspectionChange(true);
             this.showResult(0);
             this.timeSeriesButton.disabled = this.results.length < 2;
             const failures = responses.filter(
@@ -372,10 +407,18 @@ export class VectorFeatureInspectorController {
             (response) => response.status === "rejected" &&
                 response.reason?.name !== "AbortError"
         );
-        this.status.textContent = failure?.reason instanceof VectorFeatureInfoError
+        const message = failure?.reason instanceof VectorFeatureInfoError
             ? failure.reason.message
             : "No vector feature was found at that location.";
-        this.#publishSample("empty", [], this.status.textContent);
+        if (failure?.reason instanceof VectorFeatureInfoError) {
+            this.status.textContent = message;
+            this.onInspectionChange(true);
+        } else {
+            this.status.textContent =
+                "Click the map to inspect visible vector features.";
+            if (!this.panel.hidden) this.onInspectionChange(false);
+        }
+        this.#publishSample("empty", [], message);
         return true;
     }
 

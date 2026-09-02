@@ -22,6 +22,7 @@ function createFixture(fetchImplementation) {
     {
       sourceId: "catalog|parcels",
       label: "Parcels",
+      bbox: [0, 0, 10, 10],
       publication: { layerName: "eolab:parcels", styleName: "vector-polygon" },
       primaryGeometry: "geometry",
     },
@@ -87,6 +88,13 @@ function createFixture(fetchImplementation) {
   };
 }
 
+function inspectionEvent(x, y, longitude = 5, latitude = 5) {
+  return {
+    latlng: { lng: longitude, lat: latitude },
+    containerPoint: { x, y },
+  };
+}
+
 test("attribute formatting is bounded and excludes the geometry field", () => {
   assert.equal(formatVectorFeatureAttribute(null), "No value");
   assert.equal(formatVectorFeatureAttribute(true), "True");
@@ -143,7 +151,7 @@ test("inspector queries composed visible targets and navigates overlapping featu
       json: async () => ({ type: "FeatureCollection", features }),
     };
   });
-  await h.controller.inspect({ containerPoint: { x: 12, y: 24 } });
+  await h.controller.inspect(inspectionEvent(12, 24));
   assert.deepEqual(h.inspectionChanges, [true]);
   assert.equal(h.handlers.has("click"), false);
   assert.deepEqual(requestedLayers, ["eolab:parcels"]);
@@ -175,6 +183,119 @@ test("inspector queries composed visible targets and navigates overlapping featu
   assert.equal(h.removedLayers.length, 1);
 });
 
+test("an empty click never opens the feature inspector", async () => {
+  const h = createFixture(async () => ({
+    ok: true,
+    json: async () => ({ type: "FeatureCollection", features: [] }),
+  }));
+  await h.controller.inspect(inspectionEvent(2, 3));
+  assert.deepEqual(h.inspectionChanges, []);
+  assert.equal(
+    h.documentContext.querySelector("#vector-feature-inspector").hidden,
+    true,
+  );
+  assert.equal(
+    h.documentContext.querySelector("#vector-feature-status").textContent,
+    "Click the map to inspect visible vector features.",
+  );
+  assert.deepEqual(
+    h.sampleChanges.map((sample) => [sample.state, sample.message]),
+    [
+      ["loading", "Inspecting visible vector layers…"],
+      ["empty", "No vector feature was found at that location."],
+    ],
+  );
+});
+
+test("an empty click clears and closes a previous feature result", async () => {
+  let features = [{
+    type: "Feature",
+    geometry: { type: "Point", coordinates: [1, 2] },
+    properties: { name: "Previous" },
+  }];
+  const h = createFixture(async () => ({
+    ok: true,
+    json: async () => ({ type: "FeatureCollection", features }),
+  }));
+  await h.controller.inspect(inspectionEvent(2, 3));
+  features = [];
+  await h.controller.inspect(inspectionEvent(4, 5));
+  assert.deepEqual(h.inspectionChanges, [true, false]);
+  assert.equal(
+    h.documentContext.querySelector("#vector-feature-inspector").hidden,
+    true,
+  );
+  assert.equal(
+    h.documentContext.querySelector("#vector-feature-result").hidden,
+    true,
+  );
+  assert.equal(h.removedLayers.length, 1);
+  assert.equal(h.sampleChanges.at(-1).state, "empty");
+});
+
+test("an actionable inspection failure still opens the inspector", async () => {
+  const h = createFixture(async () => ({
+    ok: false,
+    status: 503,
+    json: async () => ({ detail: "GeoServer is warming up." }),
+  }));
+  await h.controller.inspect(inspectionEvent(2, 3));
+  assert.deepEqual(h.inspectionChanges, [true]);
+  assert.equal(
+    h.documentContext.querySelector("#vector-feature-inspector").hidden,
+    false,
+  );
+  assert.equal(
+    h.documentContext.querySelector("#vector-feature-status").textContent,
+    "GeoServer is warming up.",
+  );
+  assert.equal(h.sampleChanges.at(-1).state, "empty");
+});
+
+test("inspector skips targets outside their authoritative Catalog bounds", async () => {
+  const requestedLayers = [];
+  const h = createFixture(async (url) => {
+    requestedLayers.push(
+      new URL(url, "https://viewer.test").searchParams.get("layers"),
+    );
+    return {
+      ok: true,
+      json: async () => ({
+        type: "FeatureCollection",
+        features: [{
+          type: "Feature",
+          geometry: { type: "Point", coordinates: [5, 5] },
+          properties: { name: "Inside" },
+        }],
+      }),
+    };
+  });
+  h.targets.push({
+    sourceId: "catalog|distant",
+    label: "Distant points",
+    bbox: [20, 20, 30, 30],
+    publication: {
+      layerName: "eolab:distant",
+      styleName: "vector-point",
+    },
+    primaryGeometry: "geometry",
+  });
+
+  await h.controller.inspect(inspectionEvent(2, 3));
+  assert.deepEqual(requestedLayers, ["eolab:parcels"]);
+  assert.deepEqual(h.inspectionChanges, [true]);
+
+  await h.controller.inspect(inspectionEvent(4, 5, 50, 50));
+  assert.deepEqual(requestedLayers, ["eolab:parcels"]);
+  assert.deepEqual(h.inspectionChanges, [true, false]);
+  assert.equal(
+    h.documentContext.querySelector("#vector-feature-result").hidden,
+    true,
+  );
+  assert.equal(h.removedLayers.length, 1);
+  assert.equal(h.sampleChanges.at(-1).state, "empty");
+});
+
 test("inspector validates the composition target contract at its boundary", () => {
   const h = createFixture(async () => {
     throw new Error("No request expected.");
@@ -196,8 +317,8 @@ test("a newer click owns presentation and closing does not disable later inspect
     });
     resolvers.push(resolve);
   }));
-  const first = h.controller.inspect({ containerPoint: { x: 1, y: 1 } });
-  const second = h.controller.inspect({ containerPoint: { x: 2, y: 2 } });
+  const first = h.controller.inspect(inspectionEvent(1, 1));
+  const second = h.controller.inspect(inspectionEvent(2, 2));
   resolvers[1]({
     ok: true,
     json: async () => ({ type: "FeatureCollection", features: [{
@@ -216,7 +337,7 @@ test("a newer click owns presentation and closing does not disable later inspect
   );
   assert.equal(h.documentContext.activeElement, h.mapContainer);
 
-  const reopened = h.controller.inspect({ containerPoint: { x: 3, y: 3 } });
+  const reopened = h.controller.inspect(inspectionEvent(3, 3));
   resolvers[2]({
     ok: true,
     json: async () => ({ type: "FeatureCollection", features: [] }),
@@ -224,13 +345,13 @@ test("a newer click owns presentation and closing does not disable later inspect
   await reopened;
   assert.equal(
     h.documentContext.querySelector("#vector-feature-inspector").hidden,
-    false,
+    true,
   );
 
   h.targets.length = 0;
   h.controller.syncVisibleLayers();
   assert.equal(h.handlers.has("click"), false);
-  assert.deepEqual(h.inspectionChanges, [true, true, false, true, false]);
+  assert.deepEqual(h.inspectionChanges, [true, false]);
   assert.equal(h.sampleChanges.at(-1).state, "invalidated");
 });
 
@@ -246,10 +367,11 @@ test("changing the visible vector set invalidates results but retains inspection
       }],
     }),
   }));
-  await h.controller.inspect({ containerPoint: { x: 2, y: 3 } });
+  await h.controller.inspect(inspectionEvent(2, 3));
   h.targets.push({
     sourceId: "catalog|habitats",
     label: "Habitats",
+    bbox: [0, 0, 10, 10],
     publication: {
       layerName: "eolab:habitats",
       styleName: "vector-polygon",
