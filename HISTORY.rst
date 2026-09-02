@@ -4,6 +4,7 @@ History
 Unreleased
 ----------
 
+* Restore shared maps with bounded-concurrent layer preparation and one ordered map attachment.
 * Keep the Feature inspector closed and skip off-extent vector requests when a map click finds no feature.
 * Explore inspected vector observations as line or scatter series with source-layer navigation.
 * Filter Catalog Items explicitly as rasters or vectors.

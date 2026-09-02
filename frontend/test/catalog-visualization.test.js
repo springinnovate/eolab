@@ -21,11 +21,19 @@ test("catalog visualization routes explicit source kinds to owned adapters", asy
             calls.push(["show-raster", item]);
             return Promise.resolve("raster");
         },
+        stage(item, presentation) {
+            calls.push(["stage-raster", item, presentation]);
+            return Promise.resolve("staged raster");
+        },
     };
     const mapLayerController = {
         show(item, adapter) {
             calls.push(["show-vector", item, adapter]);
             return Promise.resolve("vector");
+        },
+        stage(item, adapter, presentation) {
+            calls.push(["stage-vector", item, adapter, presentation]);
+            return Promise.resolve("staged vector");
         },
         contains() { return true; },
         remove(item) { calls.push(["remove", item]); },
@@ -42,11 +50,22 @@ test("catalog visualization routes explicit source kinds to owned adapters", asy
     assert.equal((await coordinator.prepare(VECTOR_ITEM)).kind, "vector");
     assert.equal(await coordinator.show(RASTER_ITEM), "raster");
     assert.equal(await coordinator.show(VECTOR_ITEM), "vector");
+    const presentation = { visible: false, opacity: 0.4 };
+    assert.equal(
+        await coordinator.stage(RASTER_ITEM, presentation),
+        "staged raster"
+    );
+    assert.equal(
+        await coordinator.stage(VECTOR_ITEM, presentation),
+        "staged vector"
+    );
     assert.equal(coordinator.contains(VECTOR_ITEM), true);
     coordinator.remove(VECTOR_ITEM);
     assert.deepEqual(calls, [
         ["show-raster", RASTER_ITEM],
         ["show-vector", VECTOR_ITEM, vectorMapLayerAdapter],
+        ["stage-raster", RASTER_ITEM, presentation],
+        ["stage-vector", VECTOR_ITEM, vectorMapLayerAdapter, presentation],
         ["remove", VECTOR_ITEM],
     ]);
 });

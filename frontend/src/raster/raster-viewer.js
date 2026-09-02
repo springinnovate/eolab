@@ -3581,6 +3581,19 @@ export function initializeRasterViewer(
     }
 
     /**
+     * Publish and construct one raster layer without retaining or attaching it.
+     *
+     * @param {Object} item Selected mounted GeoTIFF STAC Item.
+     * @param {{visible:boolean,opacity:number}} presentation Initial neutral
+     * layer visibility and opacity.
+     * @return {Promise<{key:string,record:Object,layer:Object}>} Detached raster
+     * layer prepared by the neutral retained-layer owner.
+     */
+    function stage(item, presentation) {
+        return mapLayers.stage(item, rasterMapLayerAdapter, presentation);
+    }
+
+    /**
      * Validate one lifecycle snapshot received from the temporary-AOI boundary.
      *
      * @param {Readonly<Object>|null} temporaryAoi Candidate public snapshot.
@@ -3776,6 +3789,7 @@ export function initializeRasterViewer(
         clear,
         reset,
         show,
+        stage,
         syncVisibleLayers,
         exploreAt,
         openStyle,
