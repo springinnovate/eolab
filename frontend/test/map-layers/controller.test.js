@@ -16,6 +16,7 @@ function createView() {
         layers: [],
         activeKey: null,
         status: "",
+        announcement: "",
         bind(handlers) {
             this.handlers = handlers;
         },
@@ -28,6 +29,11 @@ function createView() {
         },
         setStatus(status) {
             this.status = status;
+            this.announcement = status;
+        },
+        announceStatus(status) {
+            this.status = "";
+            this.announcement = status;
         },
     };
 }
@@ -96,6 +102,9 @@ test("controller owns cross-adapter visibility, ordering, and removal", async ()
     await controller.show(first, firstOwner);
     await controller.show(second, secondOwner);
     await controller.show(third, firstOwner);
+
+    assert.equal(view.status, "");
+    assert.equal(view.announcement, "first three was added and is visible.");
 
     assert.equal(controller.retainedRecords.length, 3);
     assert.deepEqual(secondOwner.events, [
