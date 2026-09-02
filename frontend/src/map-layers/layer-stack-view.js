@@ -25,6 +25,9 @@ function requireLayerStackElement(documentContext, selector) {
 /**
  * @typedef {Object} MapLayerStackViewHandlers
  * @property {(key: string) => void} onStyle Open one retained layer style editor.
+ * @property {(key: string) => void} onZoom Fit the map to one retained layer.
+ * @property {(key: string) => void} onInfo Open one retained layer's Catalog
+ * Item details.
  * @property {(key: string) => void} onCopyStyle Copy one retained layer style.
  * @property {(key: string) => void} onPasteStyle Paste onto one retained layer.
  * @property {(key: string, visible: boolean) => void} onVisibility Change
@@ -118,10 +121,8 @@ export class MapLayerStackView {
         this.list.replaceChildren(...rows);
         this.root.hidden = layers.length === 0;
         if (retainedFocus !== null) {
-            const action = retainedFocus.action === "remove"
-                ? "actions" : retainedFocus.action;
             let focusTarget = focusTargets.get(
-                `${retainedFocus.key}\u0000${action}`
+                `${retainedFocus.key}\u0000${retainedFocus.action}`
             );
             if (focusTarget?.disabled) {
                 focusTarget = focusTargets.get(
@@ -218,12 +219,25 @@ export class MapLayerStackView {
             roleBadge.setAttribute("aria-label", layer.roleBadge.description);
             label.append(roleBadge);
         }
+        const primary = this.documentContext.createElement("div");
+        primary.className = "map-layer-primary-row";
+        primary.append(label);
         const style = this.#button(
-            "Style…", `Style ${accessibleName}`, layer.key, "style",
+            "Style", `Style ${accessibleName}`, layer.key, "style",
             () => this.handlers?.onStyle(layer.key), focusTargets
         );
         style.setAttribute("aria-haspopup", "dialog");
         style.setAttribute("aria-controls", "layer-style-editor");
+        const zoom = this.#button(
+            "Zoom to", `Zoom to ${accessibleName}`, layer.key, "zoom",
+            () => this.handlers?.onZoom(layer.key), focusTargets
+        );
+        zoom.title = `Zoom to ${layer.label}`;
+        const info = this.#button(
+            "Info", `View details for ${accessibleName}`, layer.key, "info",
+            () => this.handlers?.onInfo(layer.key), focusTargets
+        );
+        info.title = `View details for ${layer.label}`;
         const clipboard = layer.styleClipboard ?? {
             canCopy: false,
             canPaste: false,
@@ -254,40 +268,27 @@ export class MapLayerStackView {
             focusTargets,
             !clipboard.canPaste
         );
-        const styleActions = this.documentContext.createElement("div");
-        styleActions.className = "map-layer-style-actions";
-        styleActions.append(style, copyStyle, pasteStyle);
-        const actions = this.documentContext.createElement("details");
-        actions.className = "raster-layer-actions";
-        const toggle = this.documentContext.createElement("summary");
-        toggle.textContent = "⋯";
-        toggle.setAttribute("aria-label", `Actions for ${accessibleName}`);
-        toggle.dataset.layerKey = layer.key;
-        toggle.dataset.layerAction = "actions";
-        this.#rememberFocusTarget(focusTargets, toggle);
-        const menu = this.documentContext.createElement("div");
-        menu.className = "raster-layer-action-list";
         const remove = this.#button(
-            "Remove from map",
+            "×",
             `Remove from map: ${accessibleName}`,
             layer.key,
             "remove",
-            () => {
-                actions.open = false;
-                this.handlers?.onRemove(layer.key);
-            },
+            () => this.handlers?.onRemove(layer.key),
             focusTargets
         );
-        menu.append(remove);
-        actions.append(toggle, menu);
-        actions.addEventListener("keydown", (event) => {
-            if (event.key !== "Escape" || !actions.open) return;
-            event.preventDefault();
-            event.stopPropagation();
-            actions.open = false;
-            toggle.focus();
-        });
-        row.append(reorder, label, styleActions, actions);
+        remove.classList.add("map-layer-remove-button");
+        remove.title = `Remove from map: ${layer.label}`;
+        const rowActions = this.documentContext.createElement("div");
+        rowActions.className = "map-layer-row-actions";
+        rowActions.append(
+            style,
+            zoom,
+            info,
+            copyStyle,
+            pasteStyle,
+            remove
+        );
+        row.append(reorder, primary, rowActions);
         const legend = this.#buildLegend(layer.legend);
         if (legend !== null) row.append(legend);
         if (layer.error) {

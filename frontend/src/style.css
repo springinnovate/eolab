@@ -919,8 +919,8 @@ h5 {
 .raster-layer-row {
   position: relative;
   display: grid;
-  grid-template-columns: 26px minmax(0, 1fr) auto auto;
-  gap: 8px;
+  grid-template-columns: 26px minmax(0, 1fr);
+  gap: 6px 8px;
   align-items: start;
   min-width: 0;
   border: 1px solid transparent;
@@ -941,6 +941,7 @@ h5 {
 }
 
 .map-layer-drag-handle {
+  grid-row: 1 / span 2;
   display: grid;
   width: 26px;
   height: 32px;
@@ -997,6 +998,9 @@ h5 {
 .raster-layer-row.is-drop-after::after { bottom: -6px; }
 
 .raster-layer-row.is-hidden .raster-layer-name { color: var(--text-3); }
+.map-layer-primary-row {
+  min-width: 0;
+}
 .raster-layer-visibility {
   display: flex;
   gap: 8px;
@@ -1028,22 +1032,32 @@ h5 {
   line-height: 1.35;
   text-align: center;
 }
-.raster-layer-row .secondary-button,
-.raster-layer-actions summary {
-  padding: 5px 7px;
-  font-size: 0.72rem;
+.raster-layer-row .secondary-button {
+  padding: 4px 6px;
+  font-size: 0.68rem;
   margin: 0;
 }
-.map-layer-style-actions {
+.map-layer-row-actions {
   display: flex;
-  align-items: flex-start;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 4px;
+  min-width: 0;
+}
+.map-layer-row-actions > .secondary-button {
+  border-color: transparent;
+  background: transparent;
+}
+.map-layer-row-actions > .secondary-button:hover,
+.map-layer-row-actions > .secondary-button:focus-visible {
+  border-color: var(--brand);
+  background: var(--surface-selected);
 }
 .raster-layer-row .map-layer-style-icon-button {
   display: grid;
-  width: 27px;
-  height: 27px;
-  flex: 0 0 27px;
+  width: 25px;
+  height: 25px;
+  flex: 0 0 25px;
   place-items: center;
   padding: 0;
 }
@@ -1086,21 +1100,11 @@ h5 {
   line-height: 12px;
   text-align: center;
 }
-.raster-layer-actions summary {
-  cursor: pointer;
-  list-style: none;
-  border: 1px solid var(--border-2);
-  border-radius: var(--radius);
-}
-.raster-layer-actions summary::-webkit-details-marker { display: none; }
-.raster-layer-actions[open] { grid-column: 1 / -1; }
-.raster-layer-actions[open] > summary { width: fit-content; margin-left: auto; }
-.raster-layer-action-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding-top: 6px;
-  justify-content: flex-end;
+.raster-layer-row .map-layer-remove-button {
+  margin-inline-start: auto;
+  color: var(--status-danger);
+  font-size: 1rem;
+  line-height: 1;
 }
 .raster-layer-error { grid-column: 1 / -1; }
 

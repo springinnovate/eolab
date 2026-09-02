@@ -51,6 +51,10 @@ export class MapLayerController {
      * @param {MapLayerStackView} [configuration.view] Layer-list DOM adapter.
      * @param {(layers:Object[])=>void} [configuration.onLayersChange]
      * Presentation change observer.
+     * @param {(item:Object)=>void} [configuration.onItemZoom] Requests that a
+     * higher-level consumer fit the map to one authoritative Catalog Item.
+     * @param {(item:Object)=>void} [configuration.onItemInfo] Requests that a
+     * higher-level consumer present one authoritative Catalog Item's details.
      * @param {MapLayerStack} [configuration.stack] Pure retained-layer state.
      * @param {LeafletLayerSet} [configuration.leafletLayers] Keyed Leaflet set.
      */
@@ -58,11 +62,23 @@ export class MapLayerController {
         leafletMap,
         view = new MapLayerStackView(),
         onLayersChange = () => {},
+        onItemZoom = () => {},
+        onItemInfo = () => {},
         stack = new MapLayerStack(),
         leafletLayers = new LeafletLayerSet(leafletMap),
     }) {
+        if (
+            typeof onItemZoom !== "function" ||
+            typeof onItemInfo !== "function"
+        ) {
+            throw new TypeError(
+                "Map-layer Item navigation callbacks must be callable"
+            );
+        }
         this.view = view;
         this.onLayersChange = onLayersChange;
+        this.onItemZoom = onItemZoom;
+        this.onItemInfo = onItemInfo;
         this.stack = stack;
         this.leafletLayers = leafletLayers;
         this.records = new Map();
@@ -76,6 +92,10 @@ export class MapLayerController {
         this.destroyed = false;
         this.view.bind({
             onStyle: (key) => this.onStyle?.(key),
+            onZoom: (key) =>
+                this.onItemZoom(this.#requireRecord(key).entry.item),
+            onInfo: (key) =>
+                this.onItemInfo(this.#requireRecord(key).entry.item),
             onCopyStyle: (key) => this.copyStyle(key),
             onPasteStyle: (key) => void this.pasteStyle(key),
             onVisibility: (key, visible) => this.setVisible(key, visible),

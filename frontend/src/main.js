@@ -469,6 +469,8 @@ function renderCatalogItemInspector(
  * @param {MapInspectionController} mapInspection Shared map-side tools.
  * @param {() => void} [onRenderingWorkspaceRequested=() => {}] Reveals Map
  * layers when a visualization attempt starts.
+ * @param {() => void} [onCatalogWorkspaceRequested=() => {}] Reveals Catalog
+ * when retained-layer details are requested.
  * @return {Promise<Function>} Function that reloads the active catalog search.
  * @throws {TypeError} If the rendering-workspace callback is not callable.
  */
@@ -478,11 +480,15 @@ async function initializeCatalog(
     onRasterViewerReady = () => {},
     catalogPaneControls,
     mapInspection,
-    onRenderingWorkspaceRequested = () => {}
+    onRenderingWorkspaceRequested = () => {},
+    onCatalogWorkspaceRequested = () => {}
 ) {
-    if (typeof onRenderingWorkspaceRequested !== "function") {
+    if (
+        typeof onRenderingWorkspaceRequested !== "function" ||
+        typeof onCatalogWorkspaceRequested !== "function"
+    ) {
         throw new TypeError(
-            "Rendering-workspace presentation callback must be callable"
+            "Workspace presentation callbacks must be callable"
         );
     }
     const catalogSystemStateElements = {
@@ -671,6 +677,8 @@ async function initializeCatalog(
             layerStyleEditor?.refresh();
             vectorFeatureInspector?.syncVisibleLayers();
         },
+        onItemZoom: zoomRetainedMapLayer,
+        onItemInfo: inspectRetainedMapLayer,
     });
     rasterVisualization = initializeRasterViewer({
         wmsUrl: appGlobalConfiguration.wmsUrl,
@@ -1315,6 +1323,29 @@ async function initializeCatalog(
         leafletMap.fitBounds(bounds, { padding: [24, 24], maxZoom: 9 });
     }
 
+    /**
+     * Fit the map to one retained layer through its authoritative Catalog Item.
+     *
+     * @param {Object|null} item Authoritative retained Catalog Item.
+     * @return {void}
+     */
+    function zoomRetainedMapLayer(item) {
+        zoomCatalogLayer(item);
+    }
+
+    /**
+     * Open Catalog details for one retained layer without coupling its view to
+     * Catalog presentation or navigation.
+     *
+     * @param {Object|null} item Authoritative retained Catalog Item.
+     * @return {void}
+     */
+    function inspectRetainedMapLayer(item) {
+        if (item === null) return;
+        onCatalogWorkspaceRequested();
+        selectCatalogItem(item);
+    }
+
     catalogLayerZoom.addEventListener("click", () => {
         zoomCatalogLayer(catalogState.selectedItem);
     });
@@ -1548,7 +1579,8 @@ async function startApplication() {
         },
         catalogPaneControls,
         mapInspection,
-        () => layoutController.showWorkspace("map-layers")
+        () => layoutController.showWorkspace("map-layers"),
+        () => layoutController.showWorkspace("catalog")
     );
     await initializeScanner(refreshCatalog);
 }

@@ -149,6 +149,47 @@ test("controller owns cross-adapter visibility, ordering, and removal", async ()
     assert.equal(controller.contains(first), false);
 });
 
+test("controller forwards authoritative Items to composition callbacks", async () => {
+    const view = createView();
+    const received = [];
+    const controller = new MapLayerController({
+        leafletMap: createMap(),
+        view,
+        onItemZoom: (item) => received.push(["zoom", item]),
+        onItemInfo: (item) => received.push(["info", item]),
+    });
+    const item = catalogItem("navigation");
+    const key = getCatalogItemKey(item);
+    await controller.show(item, createAdapter("test"));
+
+    view.handlers.onZoom(key);
+    view.handlers.onInfo(key);
+
+    assert.deepEqual(received, [
+        ["zoom", item],
+        ["info", item],
+    ]);
+});
+
+test("controller rejects invalid Item navigation boundaries", () => {
+    assert.throws(
+        () => new MapLayerController({
+            leafletMap: createMap(),
+            view: createView(),
+            onItemZoom: null,
+        }),
+        /navigation callbacks must be callable/,
+    );
+    assert.throws(
+        () => new MapLayerController({
+            leafletMap: createMap(),
+            view: createView(),
+            onItemInfo: "details",
+        }),
+        /navigation callbacks must be callable/,
+    );
+});
+
 test("on-map membership survives hiding a layer until it is removed", async () => {
     const map = createMap();
     const controller = new MapLayerController({ leafletMap: map, view: createView() });
