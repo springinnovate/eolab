@@ -109,7 +109,7 @@ function createSuggestionFixture() {
 test("Catalog filter descriptions are executable parser-owned syntax", () => {
   assert.deepEqual(
     CATALOG_SEARCH_FILTERS.map((filter) => filter.field),
-    ["format", "viewable", "date"],
+    ["format", "type", "type", "date"],
   );
   for (const filter of CATALOG_SEARCH_FILTERS.filter(
     (candidate) => candidate.searchImmediately,
@@ -129,8 +129,8 @@ test("Catalog suggestions follow the current token and omit used fields", () => 
     ["format"],
   );
   assert.deepEqual(
-    getCatalogSearchSuggestions("datatype", 8).map((filter) => filter.field),
-    ["format", "viewable"],
+    getCatalogSearchSuggestions("datatype", 8).map((filter) => filter.token),
+    ["format:cog", "type:raster", "type:vector"],
   );
   assert.deepEqual(
     getCatalogSearchSuggestions("forest date:202", 15).map(
@@ -139,7 +139,7 @@ test("Catalog suggestions follow the current token and omit used fields", () => 
     ["date"],
   );
   assert.deepEqual(
-    getCatalogSearchSuggestions("viewable:true ", 14).map(
+    getCatalogSearchSuggestions("type:raster ", 12).map(
       (filter) => filter.field,
     ),
     ["format", "date"],
@@ -175,7 +175,7 @@ test("Catalog search suggestions open, navigate, and apply from the keyboard", (
   fixture.input.dispatchEvent(keyboardEvent("ArrowDown"));
   assert.equal(
     fixture.input.getAttribute("aria-activedescendant"),
-    "catalog-search-suggestion-format",
+    "catalog-search-suggestion-format-cog",
   );
   fixture.input.dispatchEvent(keyboardEvent("Enter"));
 
@@ -186,13 +186,35 @@ test("Catalog search suggestions open, navigate, and apply from the keyboard", (
   assert.equal(inputEvents, 1);
 });
 
+test("Raster and vector type suggestions have unique accessible options", () => {
+  const fixture = createSuggestionFixture();
+  let inputEvents = 0;
+  fixture.input.addEventListener("input", () => inputEvents += 1);
+  fixture.input.value = "datatype";
+  fixture.input.setSelectionRange(8, 8);
+
+  fixture.input.dispatchEvent(new Event("focus"));
+
+  assert.deepEqual(
+    fixture.list.children.map((option) => option.id),
+    [
+      "catalog-search-suggestion-format-cog",
+      "catalog-search-suggestion-type-raster",
+      "catalog-search-suggestion-type-vector",
+    ],
+  );
+  fixture.list.children[2].dispatchEvent(new Event("click"));
+  assert.equal(fixture.input.value, "type:vector");
+  assert.equal(inputEvents, 1);
+});
+
 test("Incomplete date help leaves the caret ready without running a search", () => {
   const fixture = createSuggestionFixture();
   let inputEvents = 0;
   fixture.input.addEventListener("input", () => inputEvents += 1);
   fixture.input.dispatchEvent(new Event("focus"));
 
-  fixture.list.children[2].dispatchEvent(new Event("click"));
+  fixture.list.children[3].dispatchEvent(new Event("click"));
 
   assert.equal(fixture.input.value, "date:");
   assert.equal(fixture.input.selectionStart, 5);
