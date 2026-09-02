@@ -13,6 +13,7 @@ const NATURAL_TEXT = new Intl.Collator("en", {
 
 /**
  * @typedef {Object} VectorInspectionObservation
+ * @property {string} sourceId Opaque retained-source identity from composition.
  * @property {string} layerLabel User-facing source layer or filename.
  * @property {string|number|null} featureId Bounded feature identity.
  * @property {Readonly<Record<string,string|number|boolean|null>>} properties
@@ -53,6 +54,8 @@ export function validateVectorInspectionObservations(observations) {
     }
     for (const observation of observations) {
         if (
+            typeof observation?.sourceId !== "string" ||
+            observation.sourceId.length === 0 ||
             typeof observation?.layerLabel !== "string" ||
             observation.layerLabel.length === 0 ||
             !(
@@ -173,6 +176,7 @@ export function buildVectorTimeSeriesSeries(observations, settings) {
         }
         points.push({
             sourceIndex,
+            sourceId: observation.sourceId,
             layerLabel: observation.layerLabel,
             featureId: observation.featureId,
             xValue,
@@ -236,24 +240,31 @@ function ordinalTickIndexes(count, maximum = 7) {
     ))];
 }
 
-/** Own persistent vector time-series configuration and presentation. */
+/** Own persistent vector-series configuration and presentation. */
 export class VectorTimeSeriesController {
     /**
-     * Configure the vector time-series analysis component.
+     * Configure the vector-series analysis component.
      *
      * @param {Object} configuration Collaborators.
      * @param {(visible:boolean,moveFocus:boolean)=>void}
      * configuration.onVisibilityChange Requests presentation through composition.
+     * @param {(sourceId:string)=>boolean} configuration.onSourceLayerZoom
+     * Requests source-layer navigation through application composition.
      * @param {Document} [configuration.documentContext=document] DOM owner.
      */
     constructor({
         onVisibilityChange,
+        onSourceLayerZoom,
         documentContext = document,
     }) {
         if (typeof onVisibilityChange !== "function") {
             throw new TypeError("onVisibilityChange must be a function.");
         }
+        if (typeof onSourceLayerZoom !== "function") {
+            throw new TypeError("onSourceLayerZoom must be a function.");
+        }
         this.onVisibilityChange = onVisibilityChange;
+        this.onSourceLayerZoom = onSourceLayerZoom;
         this.document = documentContext;
         this.panel = documentContext.querySelector("#vector-time-series");
         this.closeButton = documentContext.querySelector(
@@ -264,6 +275,9 @@ export class VectorTimeSeriesController {
         this.direction = documentContext.querySelector(
             "#vector-time-series-direction"
         );
+        this.chartType = documentContext.querySelector(
+            "#vector-time-series-chart-type"
+        );
         this.status = documentContext.querySelector(
             "#vector-time-series-status"
         );
@@ -272,20 +286,41 @@ export class VectorTimeSeriesController {
         this.tableBody = documentContext.querySelector(
             "#vector-time-series-table-body"
         );
+        this.selection = documentContext.querySelector(
+            "#vector-time-series-selection"
+        );
+        this.selectionText = documentContext.querySelector(
+            "#vector-time-series-selection-text"
+        );
+        this.zoomSourceButton = documentContext.querySelector(
+            "#zoom-vector-time-series-source"
+        );
         this.observations = Object.freeze([]);
+        this.pointElements = [];
+        this.selectedPoint = null;
         this.sampleState = "empty";
         this.sampleMessage = "Click the map to inspect vector features first.";
         this.settings = {
             xField: VECTOR_TIME_SERIES_LAYER_LABEL,
             yField: null,
             direction: "ascending",
+            chartType: "line",
         };
         this.onClose = () => this.close({ moveFocus: true });
         this.onControlChange = () => {
             this.settings.xField = this.xField.value;
             this.settings.yField = this.yField.value || null;
             this.settings.direction = this.direction.value;
+            this.settings.chartType = this.chartType.value;
             this.render();
+        };
+        this.onZoomSource = () => {
+            if (this.selectedPoint === null) return;
+            if (this.onSourceLayerZoom(this.selectedPoint.sourceId)) return;
+            this.zoomSourceButton.disabled = true;
+            this.selectionText.textContent =
+                `${this.#pointIdentity(this.selectedPoint)} · ` +
+                "Source layer is no longer available.";
         };
         this.onKeydown = (event) => {
             if (
@@ -303,11 +338,13 @@ export class VectorTimeSeriesController {
         this.xField.addEventListener("change", this.onControlChange);
         this.yField.addEventListener("change", this.onControlChange);
         this.direction.addEventListener("change", this.onControlChange);
+        this.chartType.addEventListener("change", this.onControlChange);
+        this.zoomSourceButton.addEventListener("click", this.onZoomSource);
         this.document.addEventListener("keydown", this.onKeydown);
         this.render();
     }
 
-    /** Reveal the time-series panel without changing its sample. @return {void} */
+    /** Reveal the series panel without changing its sample. @return {void} */
     open() {
         this.onVisibilityChange(true, false);
         this.render();
@@ -325,7 +362,7 @@ export class VectorTimeSeriesController {
     }
 
     /**
-     * Replace the bounded sample while retaining X, Y, and direction settings.
+     * Replace the bounded sample while retaining chart settings.
      *
      * @param {Object} sample Immutable inspector-owned sample envelope.
      * @param {"loading"|"ready"|"empty"|"invalidated"} sample.state State.
@@ -346,6 +383,7 @@ export class VectorTimeSeriesController {
         this.sampleState = sample.state;
         this.sampleMessage = sample.message;
         this.observations = Object.freeze([...sample.observations]);
+        this.#clearPointSelection();
         const { numericFields } = summarizeVectorTimeSeriesFields(
             this.observations
         );
@@ -360,15 +398,19 @@ export class VectorTimeSeriesController {
         const fields = summarizeVectorTimeSeriesFields(this.observations);
         this.#renderFieldOptions(fields);
         this.direction.value = this.settings.direction;
+        this.chartType.value = this.settings.chartType;
         this.chart.replaceChildren();
+        this.pointElements = [];
         this.tableBody.replaceChildren();
         this.chart.setAttribute("hidden", "");
         this.table.hidden = true;
         if (this.sampleState !== "ready") {
+            this.#clearPointSelection();
             this.status.textContent = this.sampleMessage;
             return;
         }
         if (this.settings.yField === null) {
+            this.#clearPointSelection();
             this.status.textContent =
                 "No finite numeric attribute is available for the Y axis.";
             return;
@@ -378,10 +420,19 @@ export class VectorTimeSeriesController {
             this.settings
         );
         if (series.points.length === 0) {
+            this.#clearPointSelection();
             this.status.textContent =
                 `No inspection result has both ${this.#xAxisLabel()} and ` +
                 `a finite ${this.settings.yField} value.`;
             return;
+        }
+        if (
+            this.selectedPoint !== null &&
+            !series.points.some((point) =>
+                point.sourceIndex === this.selectedPoint.sourceIndex
+            )
+        ) {
+            this.#clearPointSelection();
         }
         this.#renderChart(series.points);
         this.#renderTable(series.points);
@@ -478,7 +529,7 @@ export class VectorTimeSeriesController {
     }
 
     /**
-     * Draw an ordinal line-and-point chart with numeric Y axes.
+     * Draw an ordinal line or scatter chart with numeric Y axes.
      *
      * @param {Object[]} points Ordered plot points.
      * @return {void}
@@ -502,7 +553,8 @@ export class VectorTimeSeriesController {
         this.chart.setAttribute("viewBox", `0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`);
         this.chart.setAttribute(
             "aria-label",
-            `Vector time series showing ${this.settings.yField} by ` +
+            `Vector series ${this.settings.chartType} chart showing ` +
+            `${this.settings.yField} by ` +
             `${this.#xAxisLabel()} for ${points.length} observations.`
         );
         const xAxisY = CHART_MARGIN.top + plotHeight;
@@ -560,13 +612,15 @@ export class VectorTimeSeriesController {
                 }, formatTickLabel(points[index].xLabel))
             );
         }
-        const path = points.map((point, index) =>
-            `${index === 0 ? "M" : "L"}${x(index)},${y(point.yValue)}`
-        ).join(" ");
-        this.chart.append(this.#svg("path", {
-            class: "vector-time-series-line",
-            d: path,
-        }));
+        if (this.settings.chartType === "line") {
+            const path = points.map((point, index) =>
+                `${index === 0 ? "M" : "L"}${x(index)},${y(point.yValue)}`
+            ).join(" ");
+            this.chart.append(this.#svg("path", {
+                class: "vector-time-series-line",
+                d: path,
+            }));
+        }
         points.forEach((point, index) => {
             const circle = this.#svg("circle", {
                 class: "vector-time-series-point",
@@ -574,13 +628,29 @@ export class VectorTimeSeriesController {
                 cy: y(point.yValue),
                 r: 4.5,
                 tabindex: 0,
+                role: "button",
+                "aria-pressed": "false",
+                "aria-label": this.#pointIdentity(point),
+            });
+            circle.addEventListener("click", () => this.#selectPoint(point));
+            circle.addEventListener("keydown", (event) => {
+                if (!["Enter", " "].includes(event.key)) return;
+                event.preventDefault();
+                this.#selectPoint(point);
             });
             circle.append(this.#svg("title", {},
                 `${point.layerLabel} · ${point.featureId ?? "No feature ID"} · ` +
                 `${point.xLabel} · ${formatNumber(point.yValue)}`
             ));
+            this.pointElements.push({ circle, point });
             this.chart.append(circle);
         });
+        if (this.selectedPoint !== null) {
+            const selected = points.find((point) =>
+                point.sourceIndex === this.selectedPoint.sourceIndex
+            );
+            if (selected !== undefined) this.#selectPoint(selected);
+        }
         this.chart.append(
             this.#svg("text", {
                 class: "vector-time-series-axis-title",
@@ -597,6 +667,46 @@ export class VectorTimeSeriesController {
             }, this.settings.yField)
         );
         this.chart.removeAttribute("hidden");
+    }
+
+    /**
+     * Return a concise accessible identity for one plotted observation.
+     *
+     * @param {Object} point Plotted observation.
+     * @return {string} Source layer, feature, and plotted values.
+     */
+    #pointIdentity(point) {
+        return `Source layer: ${point.layerLabel} · Feature: ` +
+            `${point.featureId ?? "No feature ID"} · X: ${point.xLabel} · ` +
+            `Y: ${formatNumber(point.yValue)}`;
+    }
+
+    /**
+     * Select one plotted observation without redrawing or moving keyboard focus.
+     *
+     * @param {Object} point Plotted observation.
+     * @return {void}
+     */
+    #selectPoint(point) {
+        this.selectedPoint = point;
+        for (const entry of this.pointElements) {
+            const selected = entry.point.sourceIndex === point.sourceIndex;
+            if (selected) entry.circle.classList.add("is-selected");
+            else entry.circle.classList.remove("is-selected");
+            entry.circle.setAttribute("aria-pressed", String(selected));
+        }
+        this.selectionText.textContent = this.#pointIdentity(point);
+        this.selection.hidden = false;
+        this.zoomSourceButton.disabled = false;
+    }
+
+    /** Clear selected-point presentation and retained navigation identity. @return {void} */
+    #clearPointSelection() {
+        this.selectedPoint = null;
+        this.pointElements = [];
+        this.selection.hidden = true;
+        this.selectionText.textContent = "";
+        this.zoomSourceButton.disabled = true;
     }
 
     /**
@@ -629,6 +739,8 @@ export class VectorTimeSeriesController {
         this.xField.removeEventListener("change", this.onControlChange);
         this.yField.removeEventListener("change", this.onControlChange);
         this.direction.removeEventListener("change", this.onControlChange);
+        this.chartType.removeEventListener("change", this.onControlChange);
+        this.zoomSourceButton.removeEventListener("click", this.onZoomSource);
         this.document.removeEventListener("keydown", this.onKeydown);
         this.onVisibilityChange(false, false);
     }

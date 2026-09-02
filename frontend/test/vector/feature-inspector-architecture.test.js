@@ -81,6 +81,18 @@ test("time-series analysis consumes neutral samples without sibling knowledge", 
     COMPOSITION_SOURCE,
     /onSampleChange:\s*\(sample\)\s*=>\s*vectorTimeSeries\.setSample\(sample\)/,
   );
+  assert.match(COMPOSITION_SOURCE, /sourceId:\s*record\.entry\.key/);
+  assert.match(COMPOSITION_SOURCE, /onSourceLayerZoom:\s*\(sourceId\)\s*=>/);
+  assert.match(
+    COMPOSITION_SOURCE,
+    /return zoomRetainedMapLayer\(record\.entry\.item\)/,
+  );
+  for (const forbiddenNavigationKnowledge of [
+    "getCatalogItemMapBounds",
+    "fitBounds",
+  ]) {
+    assert.equal(TIME_SERIES_SOURCE.includes(forbiddenNavigationKnowledge), false);
+  }
   assert.doesNotMatch(INSPECTOR_SOURCE, /VectorTimeSeriesController/);
   assert.doesNotMatch(TIME_SERIES_SOURCE, /VectorFeatureInspectorController/);
 });

@@ -19,8 +19,12 @@ test("vector time-series controls and accessible outputs are present", () => {
     "vector-time-series-x",
     "vector-time-series-y",
     "vector-time-series-direction",
+    "vector-time-series-chart-type",
     "vector-time-series-status",
     "vector-time-series-chart",
+    "vector-time-series-selection",
+    "vector-time-series-selection-text",
+    "zoom-vector-time-series-source",
     "vector-time-series-table",
     "vector-time-series-table-body",
   ]) {
@@ -33,6 +37,10 @@ test("vector time-series controls and accessible outputs are present", () => {
   assert.match(MARKUP, /<label for="vector-time-series-x">/);
   assert.match(MARKUP, /<label for="vector-time-series-y">/);
   assert.match(MARKUP, /<label for="vector-time-series-direction">/);
+  assert.match(MARKUP, /<label for="vector-time-series-chart-type">/);
+  assert.match(MARKUP, />Series<\/button>/);
+  assert.match(MARKUP, />Vector series<\/h2>/);
+  assert.doesNotMatch(MARKUP, />Time series<\/button>/);
   assert.match(MARKUP, /id="vector-time-series-chart"[^>]+role="img"/);
   assert.match(STYLESHEET, /#vector-time-series\[hidden\]/);
   assert.match(
@@ -40,4 +48,6 @@ test("vector time-series controls and accessible outputs are present", () => {
     /\.vector-time-series-chart\[hidden\]\s*\{\s*display:\s*none;/,
   );
   assert.match(STYLESHEET, /\.vector-time-series-axis/);
+  assert.match(STYLESHEET, /\.vector-time-series-point\.is-selected/);
+  assert.match(STYLESHEET, /\.vector-time-series-selection\[hidden\]/);
 });

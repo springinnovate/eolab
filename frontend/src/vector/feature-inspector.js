@@ -16,6 +16,7 @@ const MAX_ATTRIBUTE_VALUE_CHARACTERS = 1000;
 
 /**
  * @typedef {Object} VectorFeatureInspectionTarget
+ * @property {string} sourceId Opaque retained-source identity from composition.
  * @property {string} label User-facing retained-layer label.
  * @property {{layerName:string,styleName:string}} publication Authorized WMS
  * publication identity.
@@ -44,6 +45,7 @@ export function vectorInspectionObservation({ feature, target }) {
         }
     }
     return Object.freeze({
+        sourceId: target.sourceId,
         layerLabel: target.label,
         featureId: typeof feature.id === "string" || typeof feature.id === "number"
             ? feature.id
@@ -213,6 +215,8 @@ export class VectorFeatureInspectorController {
         }
         for (const target of targets) {
             if (
+                typeof target?.sourceId !== "string" ||
+                target.sourceId.length === 0 ||
                 typeof target?.label !== "string" ||
                 target.label.length === 0 ||
                 typeof target?.publication?.layerName !== "string" ||
