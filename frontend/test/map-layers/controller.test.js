@@ -257,6 +257,72 @@ test("controller coalesces publication and invalidates removed pending work", as
     assert.equal(map.attached.size, 0);
 });
 
+test("controller stages layers detached and commits one ordered snapshot", async () => {
+    const map = createMap();
+    const view = createView();
+    let renderCount = 0;
+    const render = view.render.bind(view);
+    view.render = (...arguments_) => {
+        renderCount += 1;
+        render(...arguments_);
+    };
+    const layerChanges = [];
+    const controller = new MapLayerController({
+        leafletMap: map,
+        view,
+        onLayersChange: (layers) => layerChanges.push(
+            layers.map(({ item }) => item.id)
+        ),
+    });
+    const adapter = createAdapter("batch");
+    adapter.added = (record, context) =>
+        adapter.events.push(["added", record.entry.key, context.fitToBounds]);
+    const top = await controller.stage(
+        catalogItem("top"),
+        adapter,
+        { visible: true, opacity: 0.4 }
+    );
+    const bottom = await controller.stage(
+        catalogItem("bottom"),
+        adapter,
+        { visible: false, opacity: 0.7 }
+    );
+
+    assert.equal(map.attached.size, 0);
+    assert.deepEqual(controller.retainedRecords, []);
+    assert.equal(renderCount, 1);
+    assert.deepEqual(layerChanges, [[]]);
+
+    const committed = controller.commitStaged(
+        [top, bottom],
+        { fitToBounds: false }
+    );
+
+    assert.deepEqual(committed.map(({ entry }) => entry.item.id), [
+        "top",
+        "bottom",
+    ]);
+    assert.deepEqual(view.layers.map(({ item }) => item.id), ["top", "bottom"]);
+    assert.equal(map.attached.size, 1);
+    assert.equal(controller.isAttached(top.key), true);
+    assert.equal(controller.isAttached(bottom.key), false);
+    assert.equal(controller.getLeafletLayer(top.key).opacity, 0.4);
+    assert.equal(controller.getLeafletLayer(bottom.key).opacity, 0.7);
+    assert.ok(
+        controller.getLeafletLayer(top.key).zIndex >
+        controller.getLeafletLayer(bottom.key).zIndex
+    );
+    assert.equal(renderCount, 2);
+    assert.deepEqual(layerChanges, [[], ["top", "bottom"]]);
+    assert.deepEqual(
+        adapter.events.filter(([event]) => event === "added"),
+        [
+            ["added", top.key, false],
+            ["added", bottom.key, false],
+        ]
+    );
+});
+
 test("controller copies portable style and layer opacity onto a compatible target", async () => {
     const map = createMap();
     const view = createView();

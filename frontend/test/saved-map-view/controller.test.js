@@ -84,42 +84,39 @@ test("saved map controller copies ordered Catalog layers and current viewport", 
   assert.deepEqual(view.busy, [true, false]);
 });
 
-test("saved map controller confirms, restores bottom-first, and reports each layer", async () => {
+test("saved map controller stages concurrently and commits final saved order", async () => {
   const view = createView();
   const viewportCalls = [];
-  const records = new Map();
   const calls = [];
   const mapLayers = {
     retainedRecords: [{ entry: { item: { collection: "old", id: "layer" } } }],
-    getRecord: (key) => records.get(key) ?? null,
-    setOpacity(key, opacity) { calls.push(["opacity", key, opacity]); },
-    setVisible(key, visible) {
-      records.get(key).entry.visible = visible;
-      calls.push(["visible", key, visible]);
+    commitStaged(staged, options) {
+      calls.push([
+        "commit",
+        staged.map(({ record }) => record.entry.item.id),
+        options,
+      ]);
+      this.retainedRecords = staged.map(({ record }) => record);
     },
-    render() { calls.push(["render"]); },
   };
   const catalogVisualization = {
     clear() {
       calls.push(["clear"]);
       mapLayers.retainedRecords = [];
-      records.clear();
     },
     prepare: async (item) => ({ ...item, prepared: true }),
     sourceRevision: () => ["current"],
-    async show(item) {
-      calls.push(["show", item.id]);
+    async stage(item, presentation) {
+      calls.push(["stage", item.id, presentation]);
       const record = {
-        entry: { item, visible: true, opacity: 1, label: item.id.toUpperCase() },
+        entry: { item, ...presentation, label: item.id.toUpperCase() },
         adapter: {
           async applySavedState(_record, style) {
             calls.push(["style", item.id, style.kind]);
           },
         },
       };
-      records.set(getCatalogItemKey(item), record);
-      mapLayers.retainedRecords.unshift(record);
-      return { layerName: item.id };
+      return { key: getCatalogItemKey(item), record, layer: {} };
     },
   };
   const saved = createSavedMapView({
@@ -151,7 +148,10 @@ test("saved map controller confirms, restores bottom-first, and reports each lay
     view,
     viewport: {
       snapshot: () => saved.viewport,
-      restore: (value) => viewportCalls.push(value),
+      restore: (value) => {
+        viewportCalls.push(value);
+        calls.push(["viewport"]);
+      },
     },
     mapLayers,
     catalogVisualization,
@@ -166,16 +166,171 @@ test("saved map controller confirms, restores bottom-first, and reports each lay
     { maximumInputBytes: 512 * 1024 },
   ));
 
-  assert.deepEqual(calls.filter(([kind]) => kind === "show"), [
-    ["show", "bottom"],
-    ["show", "top"],
+  assert.deepEqual(calls.filter(([kind]) => kind === "stage"), [
+    ["stage", "top", { visible: true, opacity: 0.5 }],
+    ["stage", "bottom", { visible: false, opacity: 0.8 }],
   ]);
+  assert.deepEqual(calls.filter(([kind]) => kind === "commit"), [
+    ["commit", ["top", "bottom"], { fitToBounds: false }],
+  ]);
+  assert.ok(
+    calls.findIndex(([kind]) => kind === "viewport") <
+    calls.findIndex(([kind]) => kind === "commit")
+  );
   assert.equal(view.confirmation[1], 1);
   assert.equal(view.result.loaded, 2);
   assert.equal(view.loading, 2);
   assert.match(view.result.details[0], /TOP: loaded \(source changed/);
   assert.match(view.result.details[1], /BOTTOM: loaded\./);
   assert.deepEqual(viewportCalls, [saved.viewport]);
+});
+
+test("saved map restoration bounds work and isolates layer failures", async () => {
+  const view = createView();
+  const activeCounts = [];
+  let active = 0;
+  let commitWhileActive = null;
+  let committed = null;
+  const layers = Array.from({ length: 9 }, (_, index) => ({
+    catalogItem: { collection: "vectors", id: `layer-${index}` },
+    sourceRevision: null,
+    visible: index % 2 === 0,
+    opacity: 0.5,
+    style: { kind: "vector", definition: {} },
+  }));
+  const saved = createSavedMapView({
+    viewer: { version: "0.2.0", origin: "https://viewer.example" },
+    createdAt: "2026-09-01T12:00:00Z",
+    viewport: { center: { latitude: 0, longitude: 0 }, zoom: 3 },
+    layers,
+  });
+  const mapLayers = {
+    retainedRecords: [],
+    commitStaged(staged) {
+      commitWhileActive = active;
+      committed = staged;
+    },
+  };
+  const catalogVisualization = {
+    clear() {},
+    prepare: async (item) => item,
+    sourceRevision: () => null,
+    async stage(item, presentation) {
+      active += 1;
+      activeCounts.push(active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active -= 1;
+      if (item.id === "layer-4") {
+        throw new Error("publication failed");
+      }
+      const record = {
+        entry: { item, ...presentation, label: item.id.toUpperCase() },
+        adapter: {
+          async applySavedState() {
+            if (item.id === "layer-6") {
+              throw new Error("style changed");
+            }
+          },
+        },
+      };
+      return { key: getCatalogItemKey(item), record, layer: {} };
+    },
+  };
+  const controller = new SavedMapViewController({
+    view,
+    viewport: { restore() {} },
+    mapLayers,
+    catalogVisualization,
+    catalogItems: { get: async (identity) => ({ ...identity }) },
+    viewerVersion: "0.2.0",
+    viewerOrigin: "https://viewer.example",
+    subtleCrypto: zeroDigest(),
+  });
+
+  await controller.openSharedFragment(await encodeSavedMapViewFragment(
+    serializeSavedMapView(saved),
+    { maximumInputBytes: 512 * 1024 },
+  ));
+
+  assert.equal(Math.max(...activeCounts), 4);
+  assert.equal(commitWhileActive, 0);
+  assert.deepEqual(
+    committed.map(({ record }) => record.entry.item.id),
+    layers.map(({ catalogItem }) => catalogItem.id)
+      .filter((id) => id !== "layer-4"),
+  );
+  assert.equal(view.result.loaded, 8);
+  assert.equal(view.result.total, 9);
+  assert.match(view.result.details[4], /publication failed/);
+  assert.match(view.result.details[6], /saved style was not applied: style changed/);
+});
+
+test("destroyed saved map restoration never commits its detached batch", async () => {
+  const view = createView();
+  let releaseStage;
+  let reportStageStarted;
+  const stageStarted = new Promise((resolve) => {
+    reportStageStarted = resolve;
+  });
+  const stageReleased = new Promise((resolve) => {
+    releaseStage = resolve;
+  });
+  let committed = false;
+  const layer = {
+    catalogItem: { collection: "vectors", id: "roads" },
+    sourceRevision: null,
+    visible: true,
+    opacity: 1,
+    style: { kind: "vector", definition: {} },
+  };
+  const saved = createSavedMapView({
+    viewer: { version: "0.2.0", origin: "https://viewer.example" },
+    createdAt: "2026-09-01T12:00:00Z",
+    viewport: { center: { latitude: 0, longitude: 0 }, zoom: 3 },
+    layers: [layer],
+  });
+  const controller = new SavedMapViewController({
+    view,
+    viewport: { restore: () => assert.fail("stale viewport restored") },
+    mapLayers: {
+      retainedRecords: [],
+      commitStaged() { committed = true; },
+    },
+    catalogVisualization: {
+      clear() {},
+      prepare: async (item) => item,
+      sourceRevision: () => null,
+      async stage(item, presentation) {
+        reportStageStarted();
+        await stageReleased;
+        return {
+          key: getCatalogItemKey(item),
+          record: {
+            entry: { item, ...presentation, label: "Roads" },
+            adapter: { applySavedState() {} },
+          },
+          layer: {},
+        };
+      },
+    },
+    catalogItems: { get: async (identity) => ({ ...identity }) },
+    viewerVersion: "0.2.0",
+    viewerOrigin: "https://viewer.example",
+    subtleCrypto: zeroDigest(),
+  });
+  const opening = controller.openSharedFragment(
+    await encodeSavedMapViewFragment(serializeSavedMapView(saved), {
+      maximumInputBytes: 512 * 1024,
+    })
+  );
+
+  await stageStarted;
+  controller.destroy();
+  releaseStage();
+  await opening;
+
+  assert.equal(committed, false);
+  assert.equal(view.result, null);
 });
 
 test("saved map controller leaves the current map unchanged after cancellation", async () => {
