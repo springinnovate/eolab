@@ -6,6 +6,7 @@ Unreleased
 
 * Open shared map links directly and dismiss successful loading automatically.
 * Compose ordinary visible map layers into one authorized GeoServer WMS tile grid while preserving order, styles, and opacity.
+* Restore shared maps with bounded-concurrent layer preparation and one ordered map attachment.
 * Keep the Feature inspector closed and skip off-extent vector requests when a map click finds no feature.
 * Explore inspected vector observations as line or scatter series with source-layer navigation.
 * Filter Catalog Items explicitly as rasters or vectors.

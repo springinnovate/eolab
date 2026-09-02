@@ -69,6 +69,27 @@ export class CatalogVisualizationCoordinator {
     }
 
     /**
+     * Publish and construct one supported layer without attaching it to a map.
+     *
+     * @param {Object} item Supported and prepared Catalog Item.
+     * @param {{visible:boolean,opacity:number}} presentation Initial neutral
+     * layer visibility and opacity.
+     * @return {Promise<{key:string,record:Object,layer:Object}>} Detached layer
+     * prepared by the owning raster or vector adapter.
+     * @throws {TypeError} If the Item has no visualization adapter.
+     */
+    stage(item, presentation) {
+        const descriptor = this.#requireDescriptor(item);
+        return descriptor.kind === "raster"
+            ? this.rasterViewer.stage(item, presentation)
+            : this.mapLayerController.stage(
+                item,
+                this.vectorMapLayerAdapter,
+                presentation
+            );
+    }
+
+    /**
      * Return whether one Item is retained in the mixed layer stack.
      *
      * @param {Object} item Catalog STAC Item.

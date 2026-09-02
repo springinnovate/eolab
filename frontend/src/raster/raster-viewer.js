@@ -373,6 +373,7 @@ export function initializeRasterViewer(
             selectedRasterStatisticsState: "idle",
             selectedRasterStatisticsError: null,
             layerHistogramController: null,
+            layer: null,
             error: null,
         };
     }
@@ -1744,11 +1745,13 @@ export function initializeRasterViewer(
          * @return {Object} Leaflet-compatible WMS layer, not yet attached.
          */
         createLayer(record, reportTileError) {
-            return createRasterLayer(
+            const layer = createRasterLayer(
                 record.publication,
                 record.state.rasterStyle,
                 reportTileError
             );
+            record.state.layer = layer;
+            return layer;
         },
         /**
          * Describe the current authorized raster appearance for composition.
@@ -2420,7 +2423,7 @@ export function initializeRasterViewer(
      */
     function applySessionStyle(session, style, paletteName, wasEdited) {
         const environment = buildRasterStyleEnvironment(style);
-        mapLayers.getLeafletLayer(session.key)?.setParams({
+        session.layer?.setParams({
             styles: "dynamic-raster", env: environment,
         });
         session.rasterStyle = { ...style };
@@ -3609,6 +3612,19 @@ export function initializeRasterViewer(
     }
 
     /**
+     * Publish and construct one raster layer without retaining or attaching it.
+     *
+     * @param {Object} item Selected mounted GeoTIFF STAC Item.
+     * @param {{visible:boolean,opacity:number}} presentation Initial neutral
+     * layer visibility and opacity.
+     * @return {Promise<{key:string,record:Object,layer:Object}>} Detached raster
+     * layer prepared by the neutral retained-layer owner.
+     */
+    function stage(item, presentation) {
+        return mapLayers.stage(item, rasterMapLayerAdapter, presentation);
+    }
+
+    /**
      * Validate one lifecycle snapshot received from the temporary-AOI boundary.
      *
      * @param {Readonly<Object>|null} temporaryAoi Candidate public snapshot.
@@ -3804,6 +3820,7 @@ export function initializeRasterViewer(
         clear,
         reset,
         show,
+        stage,
         syncVisibleLayers,
         exploreAt,
         openStyle,

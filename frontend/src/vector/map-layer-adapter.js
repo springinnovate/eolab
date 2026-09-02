@@ -381,10 +381,13 @@ export function createVectorMapLayerAdapter({
          * Fit the map to one WGS 84 publication extent.
          *
          * @param {Object} record Neutral retained-layer record.
+         * @param {Object} [context] Neutral addition context.
+         * @param {boolean} [context.fitToBounds=true] Whether this addition may
+         * move the viewport.
          * @return {void}
          */
-        added(record) {
-            if (!fitToBounds) {
+        added(record, { fitToBounds: mayFitToBounds = true } = {}) {
+            if (!fitToBounds || !mayFitToBounds) {
                 return;
             }
             const [west, south, east, north] = record.publication.bbox;

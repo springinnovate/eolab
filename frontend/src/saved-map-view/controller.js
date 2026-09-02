@@ -1,6 +1,5 @@
 /** Portable saved-map orchestration over existing Catalog and map owners. */
 
-import { getCatalogItemKey } from "../catalog-item-identity.js";
 import {
     decodeSavedMapViewFragment,
     encodeSavedMapViewFragment,
@@ -13,6 +12,8 @@ import {
     parseSavedMapView,
     serializeSavedMapView,
 } from "./model.js";
+
+const RESTORE_CONCURRENCY = 4;
 
 /** Coordinate shareable map views without becoming a rendering owner. */
 export class SavedMapViewController {
@@ -56,6 +57,8 @@ export class SavedMapViewController {
         this.clock = clock;
         this.subtleCrypto = subtleCrypto;
         this.busy = false;
+        this.restoreGeneration = 0;
+        this.destroyed = false;
         this.view.bind({
             onCopy: () => void this.copyMapLink(),
         });
@@ -67,7 +70,7 @@ export class SavedMapViewController {
      * @return {Promise<void>} Completion after copy or fallback presentation.
      */
     async copyMapLink() {
-        if (this.busy) return;
+        if (this.busy || this.destroyed) return;
         this.#setBusy(true);
         try {
             const layers = await Promise.all(
@@ -109,7 +112,9 @@ export class SavedMapViewController {
      */
     async openSharedFragment(fragment) {
         if (!isSavedMapViewFragment(fragment)) return;
-        if (this.busy) return;
+        if (this.busy || this.destroyed) return;
+        const restoreGeneration = this.restoreGeneration + 1;
+        this.restoreGeneration = restoreGeneration;
         this.#setBusy(true);
         try {
             const serialized = await decodeSavedMapViewFragment(fragment, {
@@ -117,8 +122,13 @@ export class SavedMapViewController {
             });
             const savedMapView = parseSavedMapView(serialized);
             this.view.showLoading(savedMapView.layers.length);
-            const report = await this.#restore(savedMapView);
-            this.view.showResults(report);
+            const report = await this.#restore(
+                savedMapView,
+                restoreGeneration
+            );
+            if (report !== null) {
+                this.view.showResults(report);
+            }
         } catch (error) {
             this.view.showError(asError(error), "open");
         } finally {
@@ -132,6 +142,9 @@ export class SavedMapViewController {
      * @return {void}
      */
     destroy() {
+        if (this.destroyed) return;
+        this.destroyed = true;
+        this.restoreGeneration += 1;
         this.view.unbind();
     }
 
@@ -163,83 +176,95 @@ export class SavedMapViewController {
     }
 
     /**
-     * Restore every saved layer bottom-first, then restore the viewport.
+     * Prepare saved layers concurrently, restore the viewport, then commit
+     * them top-first.
      *
      * @param {Object} savedMapView Validated saved-map document.
-     * @return {Promise<{loaded:number,total:number,details:string[]}>}
-     * Per-layer restoration report.
+     * @param {number} restoreGeneration Current restoration generation.
+     * @return {Promise<{loaded:number,total:number,details:string[]}|null>}
+     * Per-layer restoration report, or null after supersession.
      */
-    async #restore(savedMapView) {
+    async #restore(savedMapView, restoreGeneration) {
         this.beforeRestore();
         this.catalogVisualization.clear();
-        const outcomes = new Array(savedMapView.layers.length);
-        let loaded = 0;
-        const reversedLayers = [...savedMapView.layers]
-            .map((layer, index) => ({ layer, index }))
-            .reverse();
-        for (const { layer, index } of reversedLayers) {
-            const identityLabel =
-                `${layer.catalogItem.collection}/${layer.catalogItem.id}`;
-            try {
-                const catalogItem = await this.catalogItems.get(
-                    layer.catalogItem
-                );
-                const preparedItem = await this.catalogVisualization.prepare(
-                    catalogItem
-                );
-                const currentRevision = await hashSavedMapSourceRevision(
-                    this.catalogVisualization.sourceRevision(preparedItem),
-                    this.subtleCrypto
-                );
-                const changed = layer.sourceRevision !== null &&
-                    currentRevision !== null &&
-                    layer.sourceRevision !== currentRevision;
-                const publication = await this.catalogVisualization.show(
-                    preparedItem
-                );
-                if (publication === null) {
-                    throw new Error("Layer publication was superseded.");
-                }
-                const key = getCatalogItemKey(preparedItem);
-                const record = this.mapLayers.getRecord(key);
-                if (record === null ||
-                    typeof record.adapter.applySavedState !== "function") {
-                    throw new Error("Layer style restoration is unavailable.");
-                }
-                let styleWarning = null;
-                try {
-                    await record.adapter.applySavedState(record, layer.style);
-                } catch (error) {
-                    styleWarning = asError(error).message;
-                }
-                this.mapLayers.setOpacity(key, layer.opacity);
-                if (record.entry.visible !== layer.visible) {
-                    this.mapLayers.setVisible(key, layer.visible);
-                }
-                this.mapLayers.render();
-                loaded += 1;
-                const notices = [];
-                if (changed) notices.push("source changed; current data was used");
-                if (layer.sourceRevision !== null && currentRevision === null) {
-                    notices.push("current source revision was unavailable");
-                }
-                if (styleWarning !== null) {
-                    notices.push(`saved style was not applied: ${styleWarning}`);
-                }
-                if (notices.length > 0) {
-                    outcomes[index] =
-                        `${record.entry.label}: ${notices.join("; ")}.`;
-                }
-            } catch (error) {
-                outcomes[index] = `${identityLabel}: ${asError(error).message}`;
-            }
+        const preparations = await mapBounded(
+            savedMapView.layers,
+            RESTORE_CONCURRENCY,
+            async (layer) => this.#prepareLayer(layer)
+        );
+        const stagedLayers = preparations
+            .filter(({ staged }) => staged !== null)
+            .map(({ staged }) => staged);
+        if (restoreGeneration !== this.restoreGeneration) {
+            return null;
         }
         this.viewport.restore(savedMapView.viewport);
+        this.mapLayers.commitStaged(stagedLayers, { fitToBounds: false });
         return {
-            loaded,
+            loaded: stagedLayers.length,
             total: savedMapView.layers.length,
-            details: outcomes.filter((detail) => detail !== undefined),
+            details: preparations
+                .map(({ detail }) => detail)
+                .filter((detail) => detail !== null),
         };
+    }
+
+    /**
+     * Resolve, validate, publish, and style one detached saved layer.
+     *
+     * @param {Object} layer Validated saved-layer document.
+     * @return {Promise<{staged:Object|null,detail:string|null}>} Detached layer and
+     * ordered user-facing outcome, or a failure detail without a layer.
+     */
+    async #prepareLayer(layer) {
+        const identityLabel =
+            `${layer.catalogItem.collection}/${layer.catalogItem.id}`;
+        try {
+            const catalogItem = await this.catalogItems.get(
+                layer.catalogItem
+            );
+            const preparedItem = await this.catalogVisualization.prepare(
+                catalogItem
+            );
+            const currentRevision = await hashSavedMapSourceRevision(
+                this.catalogVisualization.sourceRevision(preparedItem),
+                this.subtleCrypto
+            );
+            const changed = layer.sourceRevision !== null &&
+                currentRevision !== null &&
+                layer.sourceRevision !== currentRevision;
+            const staged = await this.catalogVisualization.stage(
+                preparedItem,
+                { visible: layer.visible, opacity: layer.opacity }
+            );
+            const record = staged.record;
+            if (typeof record.adapter.applySavedState !== "function") {
+                throw new Error("Layer style restoration is unavailable.");
+            }
+            let styleWarning = null;
+            try {
+                await record.adapter.applySavedState(record, layer.style);
+            } catch (error) {
+                styleWarning = asError(error).message;
+            }
+            const notices = [];
+            if (changed) notices.push("source changed; current data was used");
+            if (layer.sourceRevision !== null && currentRevision === null) {
+                notices.push("current source revision was unavailable");
+            }
+            if (styleWarning !== null) {
+                notices.push(`saved style was not applied: ${styleWarning}`);
+            }
+            const detail = notices.length === 0
+                ? null
+                : `${record.entry.label}: ${notices.join("; ")}.`;
+            return { staged, detail };
+        } catch (error) {
+            return {
+                staged: null,
+                detail: `${identityLabel}: ${asError(error).message}`,
+            };
+        }
     }
 
     /**
@@ -252,6 +277,33 @@ export class SavedMapViewController {
         this.busy = busy;
         this.view.setBusy(busy);
     }
+}
+
+/**
+ * Map inputs through a fixed-size worker pool while preserving input order.
+ *
+ * @template Input, Output
+ * @param {Input[]} inputs Ordered input values.
+ * @param {number} concurrency Positive maximum number of active workers.
+ * @param {(input:Input,index:number)=>Promise<Output>} transform Async mapper.
+ * @return {Promise<Output[]>} Results in the same order as inputs.
+ */
+async function mapBounded(inputs, concurrency, transform) {
+    if (!Number.isSafeInteger(concurrency) || concurrency < 1) {
+        throw new TypeError("Restore concurrency must be a positive integer.");
+    }
+    const results = new Array(inputs.length);
+    let nextIndex = 0;
+    async function runWorker() {
+        while (nextIndex < inputs.length) {
+            const index = nextIndex;
+            nextIndex += 1;
+            results[index] = await transform(inputs[index], index);
+        }
+    }
+    const workerCount = Math.min(concurrency, inputs.length);
+    await Promise.all(Array.from({ length: workerCount }, runWorker));
+    return results;
 }
 
 /**

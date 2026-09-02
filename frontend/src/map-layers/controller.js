@@ -38,7 +38,9 @@ import { MapLayerStackView } from "./layer-stack-view.js";
  * @property {(record:Object,number)=>void} [opacityChanged] Observe opacity.
  * @property {(record:Object)=>void} [orderChanged] Observe completed stack
  * movement when feature-owned presentation depends on drawing order.
- * @property {(record:Object)=>void} [added] Observe successful layer creation.
+ * @property {(record:Object,context?:{fitToBounds:boolean})=>void} [added]
+ * Observe successful layer creation. Batch callers may suppress automatic
+ * viewport fitting while restoring an authoritative saved viewport.
  * @property {(record:Object)=>void} [tileError] Observe an owned tile failure.
  * @property {string} tileErrorMessage Browser-safe tile failure message.
  */
@@ -157,6 +159,149 @@ export class MapLayerController {
                 this.pendingAdapters.delete(key);
             }
         }
+    }
+
+    /**
+     * Publish and construct one map layer without retaining or attaching it.
+     *
+     * The returned record supports the existing adapter-owned saved-style
+     * contract while its Leaflet layer remains detached. Callers may therefore
+     * finish asynchronous style restoration without issuing disposable WMS
+     * tile requests.
+     *
+     * @param {Object} item Supported Catalog Item.
+     * @param {MapLayerAdapter} adapter Feature-owned map-layer adapter.
+     * @param {Object} [presentation] Initial neutral presentation.
+     * @param {boolean} [presentation.visible=true] Initial visibility.
+     * @param {number} [presentation.opacity=1] Initial opacity in [0, 1].
+     * @return {Promise<{key:string,record:Object,layer:Object}>} Detached
+     * publication, owner state, and Leaflet layer.
+     * @throws {Error} If publication or detached construction fails.
+     */
+    async stage(item, adapter, { visible = true, opacity = 1 } = {}) {
+        this.#requireAdapter(adapter);
+        if (this.destroyed) {
+            throw new Error("Map-layer controller is destroyed.");
+        }
+        if (typeof visible !== "boolean") {
+            throw new TypeError("Map layer visibility must be boolean.");
+        }
+        if (!Number.isFinite(opacity) || opacity < 0 || opacity > 1) {
+            throw new RangeError(
+                "Map layer opacity must be from zero through one."
+            );
+        }
+        const key = getCatalogItemKey(item);
+        if (this.records.has(key) || this.pendingPublications.has(key)) {
+            throw new Error(`Map layer is already retained or pending: ${key}`);
+        }
+        const publication = await adapter.publish(item);
+        if (this.destroyed) {
+            throw new Error("Map-layer controller is destroyed.");
+        }
+        return this.#createStaged(
+            item,
+            adapter,
+            publication,
+            { visible, opacity }
+        );
+    }
+
+    /**
+     * Retain and attach a complete top-first set of detached layers at once.
+     *
+     * All stack records and Leaflet layers are installed while detached. Their
+     * drawing order is applied before visible layers are attached synchronously,
+     * and the public layer snapshot is rendered only after the batch completes.
+     *
+     * @param {Array<{key:string,record:Object,layer:Object}>} stagedLayers
+     * Detached layers in final top-first drawing order.
+     * @param {Object} [options] Batch lifecycle options.
+     * @param {boolean} [options.fitToBounds=true] Whether adapter addition hooks
+     * may fit the map to an added layer.
+     * @return {Object[]} Committed retained records in top-first order.
+     * @throws {Error} If the controller is non-empty or the batch is invalid.
+     */
+    commitStaged(stagedLayers, { fitToBounds = true } = {}) {
+        if (!Array.isArray(stagedLayers)) {
+            throw new TypeError("Staged map layers must be an array.");
+        }
+        if (typeof fitToBounds !== "boolean") {
+            throw new TypeError("fitToBounds must be boolean.");
+        }
+        if (
+            this.stack.entries.length !== 0 ||
+            this.records.size !== 0 ||
+            this.pendingPublications.size !== 0
+        ) {
+            throw new Error("A staged layer batch requires an empty controller.");
+        }
+        const keys = new Set();
+        for (const staged of stagedLayers) {
+            const key = staged?.key;
+            const record = staged?.record;
+            if (
+                typeof key !== "string" ||
+                record?.entry?.key !== key ||
+                record.adapter === undefined ||
+                staged.layer === undefined ||
+                getCatalogItemKey(record.entry.item) !== key
+            ) {
+                throw new TypeError("Staged map layer is invalid.");
+            }
+            if (keys.has(key)) {
+                throw new Error(`Staged map layer is duplicated: ${key}`);
+            }
+            keys.add(key);
+        }
+
+        try {
+            for (const staged of [...stagedLayers].reverse()) {
+                const { record, layer, key } = staged;
+                const presentation = record.entry;
+                const retentionOrder = this.recordIntent();
+                const { entry } = this.stack.add(
+                    presentation.item,
+                    presentation.label,
+                    retentionOrder
+                );
+                this.stack.setOpacity(key, presentation.opacity);
+                this.stack.setVisible(key, presentation.visible);
+                record.entry = entry;
+                this.records.set(key, record);
+                this.leafletLayers.add(key, layer, {
+                    visible: false,
+                    opacity: entry.opacity,
+                });
+            }
+            this.#applyLeafletOrder();
+            for (const record of this.retainedRecords) {
+                record.adapter.added?.(record, { fitToBounds });
+                record.adapter.opacityChanged?.(record, record.entry.opacity);
+                if (!record.entry.visible) {
+                    record.adapter.visibilityChanged?.(record, false);
+                }
+            }
+            this.presentationActiveKey = this.stack.activeKey;
+            const activeRecord = this.presentationActiveKey === null
+                ? null
+                : this.records.get(this.presentationActiveKey);
+            activeRecord?.adapter.activate?.(activeRecord);
+            for (const entry of [...this.stack.entries].reverse()) {
+                if (entry.visible) {
+                    this.leafletLayers.setVisible(entry.key, true);
+                }
+            }
+        } catch (error) {
+            this.leafletLayers.clear();
+            this.stack.clear();
+            this.records.clear();
+            this.presentationActiveKey = null;
+            this.render();
+            throw error;
+        }
+        this.render();
+        return this.retainedRecords;
     }
 
     /**
@@ -604,7 +749,13 @@ export class MapLayerController {
         ) {
             return null;
         }
-        const label = adapter.label(item);
+        const staged = this.#createStaged(
+            item,
+            adapter,
+            publication,
+            { visible: true, opacity: 1 }
+        );
+        const label = staged.record.entry.label;
         const previousActiveKey = this.stack.activeKey;
         const { entry } = this.stack.add(item, label, showRequestSequence);
         const shouldActivate =
@@ -612,24 +763,10 @@ export class MapLayerController {
         if (!shouldActivate && previousActiveKey !== null) {
             this.stack.activate(previousActiveKey);
         }
-        const record = {
-            entry,
-            adapter,
-            publication,
-            state: null,
-            error: null,
-        };
-        record.state = adapter.createState({ entry, publication, item });
+        const { record, layer } = staged;
+        record.entry = entry;
         this.records.set(key, record);
         try {
-            const layer = adapter.createLayer(record, () => {
-                if (this.leafletLayers.get(key) !== layer) {
-                    return;
-                }
-                record.error = adapter.tileErrorMessage;
-                this.render();
-                adapter.tileError?.(record);
-            });
             this.leafletLayers.add(key, layer, entry);
             this.#applyLeafletOrder();
             adapter.added?.(record);
@@ -655,6 +792,45 @@ export class MapLayerController {
         this.view.announceStatus(`${label} was added and is visible.`);
         this.render();
         return publication;
+    }
+
+    /**
+     * Construct one neutral record and detached Leaflet layer.
+     *
+     * @param {Object} item Supported Catalog Item.
+     * @param {MapLayerAdapter} adapter Feature-owned adapter.
+     * @param {Object} publication Completed owner publication response.
+     * @param {{visible:boolean,opacity:number}} presentation Initial state.
+     * @return {{key:string,record:Object,layer:Object}} Detached layer.
+     */
+    #createStaged(item, adapter, publication, presentation) {
+        const key = getCatalogItemKey(item);
+        const entry = {
+            key,
+            item,
+            label: adapter.label(item),
+            retentionOrder: 1,
+            visible: presentation.visible,
+            opacity: presentation.opacity,
+        };
+        const record = {
+            entry,
+            adapter,
+            publication,
+            state: null,
+            error: null,
+        };
+        record.state = adapter.createState({ entry, publication, item });
+        let layer;
+        layer = adapter.createLayer(record, () => {
+            if (this.leafletLayers.get(key) !== layer) {
+                return;
+            }
+            record.error = adapter.tileErrorMessage;
+            this.render();
+            adapter.tileError?.(record);
+        });
+        return { key, record, layer };
     }
 
     /**
