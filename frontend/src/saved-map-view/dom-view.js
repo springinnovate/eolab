@@ -19,8 +19,9 @@ export class SavedMapViewDomView {
         {
             locationContext = globalThis.location,
             clipboard = globalThis.navigator?.clipboard,
-            setTimer = globalThis.setTimeout,
-            clearTimer = globalThis.clearTimeout,
+            setTimer = (handler, delay) =>
+                globalThis.setTimeout(handler, delay),
+            clearTimer = (timer) => globalThis.clearTimeout(timer),
         } = {}
     ) {
         this.document = documentContext;
