@@ -80,7 +80,7 @@ test("feature-field plotting has searchable, accessible series controls", () => 
   );
   assert.match(
     MARKUP,
-    />One numeric field across all features found at this location\.<\/span>/,
+    />Plot one numeric field across all features found at this location\.<\/span>/,
   );
   assert.match(
     MARKUP,
