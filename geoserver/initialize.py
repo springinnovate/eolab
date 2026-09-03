@@ -433,9 +433,6 @@ def initialize_geowebcache(
         ValueError: If a listed EOLab layer has an invalid qualified name.
     """
     gridset_path = f"/gwc/rest/gridsets/{GEOWEBCACHE_GRIDSET_NAME}.xml"
-    status, _ = client.request_application("GET", gridset_path)
-    if status not in {200, 404}:
-        _require_status(status, 200, "GET", gridset_path)
     status, _ = client.request_application(
         "PUT",
         gridset_path,

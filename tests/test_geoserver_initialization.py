@@ -244,7 +244,6 @@ def test_geowebcache_initialization_uses_only_epsg3857_and_bounded_storage() -> 
     client = RecordingGeoServerClient(
         [(200, b""), (200, b"")],
         [
-            (404, b""),
             (200, b""),
             (200, layer_list),
             (200, b""),
@@ -258,7 +257,6 @@ def test_geowebcache_initialization_uses_only_epsg3857_and_bounded_storage() -> 
     initialize_geowebcache(client, configuration, 25)
 
     assert [request[:2] for request in client.application_requests] == [
-        ("GET", "/gwc/rest/gridsets/EPSG:3857.xml"),
         ("PUT", "/gwc/rest/gridsets/EPSG:3857.xml"),
         ("GET", "/gwc/rest/layers.xml"),
         ("PUT", "/gwc/rest/layers/eolab%3Araster.xml"),
