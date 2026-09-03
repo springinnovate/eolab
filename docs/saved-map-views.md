@@ -6,6 +6,21 @@ per-layer appearance, and WGS 84 viewport. They also record the creating
 viewer version and origin as provenance for potentially stale or
 cross-deployment restoration.
 
+The viewer also keeps the latest valid document in origin-local browser
+storage. A normal reload silently restores that private working map through
+the same current Catalog lookup, publication, style validation, and ordered
+attachment transaction used by a shared link. An explicit `#view=` fragment
+always takes precedence; a malformed owned fragment is reported rather than
+falling back to unrelated private state. Corrupt or incompatible local content
+is discarded without blocking startup.
+
+**Reset view** applies a validated empty document at the deployment's
+configured initial viewport. **Undo reset** immediately restores the validated
+pre-reset snapshot and is kept only in memory. Changes to layers or viewport
+are coalesced before local persistence. Catalog search text and transient
+histogram, pixel, feature-inspection, and series results remain outside both
+shared and locally remembered documents.
+
 The browser gzip-compresses the canonical document, encodes it as unpadded
 Base64URL, and places it in a `#view=` URL fragment. The fragment is retained by
 the browser rather than sent in an HTTP request. Opening a valid shared link
@@ -40,11 +55,15 @@ transport for this same canonical document, not a second map-state format.
 
 `saved-map-view/model.js` owns the portable schema and untrusted-content bounds.
 `saved-map-view/fragment-codec.js` owns bounded gzip and Base64URL transport.
-`SavedMapViewController` owns the copy/open workflow but no dataset behavior.
+`SavedMapViewController` owns share, startup restoration, reset, undo, and
+coalesced persistence policy but no dataset behavior.
 It consumes the neutral viewport and retained-layer boundaries plus
 `CatalogVisualizationCoordinator`; raster and vector adapters alone export and
 apply their validated appearance. `SavedMapViewCatalogClient` performs exact
 standard STAC Item retrieval independently of interactive search cancellation.
+`SavedMapViewLocalStorage` alone owns failure-tolerant browser storage access
+and treats the serialized document as opaque text; schema interpretation stays
+with the saved-map owner.
 
 The composition root is the only place these collaborators are assembled.
 The saved-map package does not import raster or vector implementations, and the

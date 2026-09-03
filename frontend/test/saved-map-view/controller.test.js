@@ -22,6 +22,7 @@ function createView() {
     result: null,
     loading: null,
     error: null,
+    undoVisible: false,
     bind(handlers) { this.handlers = handlers; },
     unbind() { this.handlers = null; },
     setBusy(value) { this.busy.push(value); },
@@ -33,8 +34,90 @@ function createView() {
     showCopyFallback(url) { this.copyFallback = url; },
     showResults(result) { this.result = result; },
     showLoading(layerCount) { this.loading = layerCount; },
-    showError(error) { this.error = error; },
+    showError(error, operation) {
+      this.error = error;
+      this.errorOperation = operation;
+    },
+    showUndoReset() { this.undoVisible = true; },
+    hideUndoReset() { this.undoVisible = false; },
   };
+}
+
+/**
+ * Create an inspectable opaque storage adapter for controller tests.
+ *
+ * @param {string|null} [serialized] Initially remembered content.
+ * @return {Object} Mutable storage boundary test double.
+ */
+function createStorage(serialized = null) {
+  return {
+    serialized,
+    reads: 0,
+    writes: [],
+    clears: 0,
+    read() {
+      this.reads += 1;
+      return this.serialized;
+    },
+    write(value) {
+      this.serialized = value;
+      this.writes.push(value);
+      return true;
+    },
+    clear() {
+      this.serialized = null;
+      this.clears += 1;
+      return true;
+    },
+  };
+}
+
+/**
+ * Create deterministic debounce timer boundaries.
+ *
+ * @return {Object} Timer functions and inspectable scheduled handlers.
+ */
+function createTimers() {
+  let nextIdentifier = 1;
+  const scheduled = new Map();
+  return {
+    scheduled,
+    setTimer(handler, delay) {
+      const identifier = nextIdentifier;
+      nextIdentifier += 1;
+      scheduled.set(identifier, { handler, delay });
+      return identifier;
+    },
+    clearTimer(identifier) { scheduled.delete(identifier); },
+    runOnly() {
+      assert.equal(scheduled.size, 1);
+      const [[identifier, { handler }]] = scheduled;
+      scheduled.delete(identifier);
+      handler();
+    },
+  };
+}
+
+/**
+ * Build one empty validated saved-map document with a chosen viewport.
+ *
+ * @param {number} latitude Canonical center latitude.
+ * @param {number} longitude Canonical center longitude.
+ * @param {number} zoom Leaflet zoom level.
+ * @return {Readonly<Object>} Validated saved-map document.
+ */
+function emptySavedMap(latitude, longitude, zoom) {
+  return createSavedMapView({
+    viewer: { version: "0.2.0", origin: "https://viewer.example" },
+    createdAt: "2026-09-01T12:00:00Z",
+    viewport: { center: { latitude, longitude }, zoom },
+    layers: [],
+  });
+}
+
+/** Allow detached async persistence to finish after a timer handler. */
+async function flushAsyncWork() {
+  await new Promise((resolve) => setImmediate(resolve));
 }
 
 /**
@@ -392,4 +475,291 @@ test("saved map controller reports malformed owned fragments without clearing", 
   assert.equal(cleared, false);
   assert.match(view.error.message, /invalid encoded view/);
   assert.deepEqual(view.busy, [true, false]);
+});
+
+test("startup shared fragments take precedence over remembered local views", async () => {
+  const localView = emptySavedMap(1, 2, 3);
+  const sharedView = emptySavedMap(40, -120, 7);
+  const storage = createStorage(serializeSavedMapView(localView));
+  const timers = createTimers();
+  const restored = [];
+  const controller = new SavedMapViewController({
+    view: createView(),
+    viewport: { restore: (viewport) => restored.push(viewport) },
+    mapLayers: { retainedRecords: [], commitStaged() {} },
+    catalogVisualization: { clear() {} },
+    catalogItems: {},
+    viewerVersion: "0.2.0",
+    viewerOrigin: "https://viewer.example",
+    storage,
+    subtleCrypto: zeroDigest(),
+    setTimer: timers.setTimer.bind(timers),
+    clearTimer: timers.clearTimer.bind(timers),
+  });
+
+  await controller.restoreStartupView(await encodeSavedMapViewFragment(
+    serializeSavedMapView(sharedView),
+    { maximumInputBytes: 512 * 1024 },
+  ));
+
+  assert.equal(storage.reads, 0);
+  assert.deepEqual(restored, [sharedView.viewport]);
+});
+
+test("malformed owned startup fragments never fall back to private state", async () => {
+  const storage = createStorage(serializeSavedMapView(emptySavedMap(1, 2, 3)));
+  const view = createView();
+  let restored = false;
+  const controller = new SavedMapViewController({
+    view,
+    viewport: { restore: () => { restored = true; } },
+    mapLayers: { retainedRecords: [] },
+    catalogVisualization: { clear() {} },
+    catalogItems: {},
+    viewerVersion: "0.2.0",
+    viewerOrigin: "https://viewer.example",
+    storage,
+    subtleCrypto: zeroDigest(),
+  });
+
+  await controller.restoreStartupView("#view=not+base64");
+
+  assert.equal(storage.reads, 0);
+  assert.equal(restored, false);
+  assert.match(view.error.message, /invalid encoded view/);
+});
+
+test("startup silently restores a valid remembered map through the transaction", async () => {
+  const remembered = emptySavedMap(-15, 35, 6);
+  const storage = createStorage(serializeSavedMapView(remembered));
+  const timers = createTimers();
+  const calls = [];
+  const view = createView();
+  const controller = new SavedMapViewController({
+    view,
+    viewport: { restore: (viewport) => calls.push(["viewport", viewport]) },
+    mapLayers: {
+      retainedRecords: [],
+      commitStaged: (layers, options) => calls.push(["commit", layers, options]),
+    },
+    catalogVisualization: { clear: () => calls.push(["clear"]) },
+    catalogItems: {},
+    viewerVersion: "0.2.0",
+    viewerOrigin: "https://viewer.example",
+    storage,
+    subtleCrypto: zeroDigest(),
+    setTimer: timers.setTimer.bind(timers),
+    clearTimer: timers.clearTimer.bind(timers),
+  });
+
+  await controller.restoreStartupView("#catalog=roads");
+
+  assert.equal(storage.reads, 1);
+  assert.deepEqual(calls, [
+    ["clear"],
+    ["viewport", remembered.viewport],
+    ["commit", [], { fitToBounds: false }],
+  ]);
+  assert.equal(view.loading, null);
+  assert.equal(view.result, null);
+  assert.equal(view.error, null);
+});
+
+test("startup discards corrupt remembered content without blocking the map", async () => {
+  const storage = createStorage("not valid saved-map JSON");
+  let clearedMap = false;
+  const view = createView();
+  const controller = new SavedMapViewController({
+    view,
+    viewport: {},
+    mapLayers: { retainedRecords: [] },
+    catalogVisualization: { clear: () => { clearedMap = true; } },
+    catalogItems: {},
+    viewerVersion: "0.2.0",
+    viewerOrigin: "https://viewer.example",
+    storage,
+    subtleCrypto: zeroDigest(),
+  });
+
+  await controller.restoreStartupView("");
+
+  assert.equal(storage.clears, 1);
+  assert.equal(clearedMap, false);
+  assert.equal(view.error, null);
+  assert.deepEqual(view.busy, []);
+});
+
+test("remembered map persistence coalesces complete validated snapshots", async () => {
+  const item = { collection: "vectors", id: "roads" };
+  const record = {
+    entry: { item, visible: false, opacity: 0.35, label: "Roads" },
+    adapter: {
+      exportSavedState: () => ({ kind: "vector", definition: { width: 4 } }),
+    },
+  };
+  const storage = createStorage();
+  const timers = createTimers();
+  const controller = new SavedMapViewController({
+    view: createView(),
+    viewport: { snapshot: () => ({
+      center: { latitude: 8, longitude: 9 }, zoom: 5,
+    }) },
+    mapLayers: { retainedRecords: [record] },
+    catalogVisualization: { sourceRevision: () => null },
+    catalogItems: {},
+    viewerVersion: "0.2.0",
+    viewerOrigin: "https://viewer.example",
+    storage,
+    clock: () => new Date("2026-09-01T12:00:00Z"),
+    subtleCrypto: zeroDigest(),
+    setTimer: timers.setTimer.bind(timers),
+    clearTimer: timers.clearTimer.bind(timers),
+  });
+
+  controller.scheduleRemember();
+  controller.scheduleRemember();
+
+  assert.equal(timers.scheduled.size, 1);
+  assert.equal([...timers.scheduled.values()][0].delay, 350);
+  timers.runOnly();
+  await flushAsyncWork();
+
+  assert.equal(storage.writes.length, 1);
+  const remembered = JSON.parse(storage.writes[0]);
+  assert.deepEqual(remembered.viewport, {
+    center: { latitude: 8, longitude: 9 }, zoom: 5,
+  });
+  assert.deepEqual(remembered.layers, [{
+    catalogItem: item,
+    sourceRevision: null,
+    visible: false,
+    opacity: 0.35,
+    style: { kind: "vector", definition: { width: 4 } },
+  }]);
+  assert.deepEqual(Object.keys(remembered).sort(), [
+    "createdAt", "format", "layers", "schemaVersion", "viewer", "viewport",
+  ]);
+});
+
+test("reset and one-step undo reuse complete validated restore documents", async () => {
+  const initialViewport = {
+    center: { latitude: 0, longitude: 0 }, zoom: 2,
+  };
+  const workingViewport = {
+    center: { latitude: 12, longitude: 13 }, zoom: 7,
+  };
+  const item = { collection: "vectors", id: "roads" };
+  const style = { kind: "vector", definition: { width: 3 } };
+  const originalRecord = {
+    entry: { item, visible: true, opacity: 0.6, label: "Roads" },
+    adapter: { exportSavedState: () => style },
+  };
+  let currentViewport = workingViewport;
+  const calls = [];
+  const mapLayers = {
+    retainedRecords: [originalRecord],
+    commitStaged(staged) {
+      this.retainedRecords = staged.map(({ record }) => record);
+      calls.push(["commit", this.retainedRecords.map(({ entry }) => entry.item.id)]);
+    },
+  };
+  const catalogVisualization = {
+    clear() { mapLayers.retainedRecords = []; },
+    sourceRevision: () => null,
+    prepare: async (catalogItem) => catalogItem,
+    async stage(catalogItem, presentation) {
+      const restoredRecord = {
+        entry: {
+          item: catalogItem,
+          label: "Roads",
+          ...presentation,
+        },
+        adapter: {
+          exportSavedState: () => style,
+          applySavedState(_record, restoredStyle) {
+            calls.push(["style", restoredStyle]);
+          },
+        },
+      };
+      return {
+        key: getCatalogItemKey(catalogItem),
+        record: restoredRecord,
+        layer: {},
+      };
+    },
+  };
+  const view = createView();
+  const storage = createStorage();
+  const timers = createTimers();
+  const controller = new SavedMapViewController({
+    view,
+    viewport: {
+      snapshot: () => currentViewport,
+      restore(viewport) {
+        currentViewport = viewport;
+        calls.push(["viewport", viewport]);
+      },
+    },
+    mapLayers,
+    catalogVisualization,
+    catalogItems: { get: async (identity) => ({ ...identity }) },
+    viewerVersion: "0.2.0",
+    viewerOrigin: "https://viewer.example",
+    storage,
+    initialViewport,
+    clock: () => new Date("2026-09-01T12:00:00Z"),
+    subtleCrypto: zeroDigest(),
+    setTimer: timers.setTimer.bind(timers),
+    clearTimer: timers.clearTimer.bind(timers),
+  });
+
+  await controller.resetView();
+
+  assert.deepEqual(currentViewport, initialViewport);
+  assert.deepEqual(mapLayers.retainedRecords, []);
+  assert.equal(view.undoVisible, true);
+  assert.deepEqual(JSON.parse(storage.serialized).layers, []);
+
+  controller.scheduleRemember();
+  timers.runOnly();
+  await flushAsyncWork();
+
+  assert.equal(
+    view.undoVisible,
+    true,
+    "programmatic restore events must not consume reset undo",
+  );
+
+  await controller.undoReset();
+
+  assert.deepEqual(currentViewport, workingViewport);
+  assert.deepEqual(
+    mapLayers.retainedRecords.map(({ entry }) => entry.item),
+    [item],
+  );
+  assert.deepEqual(calls.filter(([kind]) => kind === "style"), [
+    ["style", style],
+  ]);
+  assert.equal(view.undoVisible, false);
+  assert.deepEqual(JSON.parse(storage.serialized).layers[0], {
+    catalogItem: item,
+    sourceRevision: null,
+    visible: true,
+    opacity: 0.6,
+    style,
+  });
+
+  await controller.resetView();
+  currentViewport = {
+    center: { latitude: 1, longitude: 1 }, zoom: 3,
+  };
+  controller.scheduleRemember();
+  timers.runOnly();
+  await flushAsyncWork();
+
+  assert.equal(
+    view.undoVisible,
+    true,
+    "reset undo remains available until it is used or replaced",
+  );
 });

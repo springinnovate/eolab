@@ -4,6 +4,7 @@ History
 Unreleased
 ----------
 
+* Remember the last valid map locally and reset it with one-step undo.
 * Show exact raster values from the same retained map click as histograms and vector inspection.
 * Show progressive, timed vector inspection results while slower layers continue loading.
 * Open shared map links directly and dismiss successful loading automatically.

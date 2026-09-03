@@ -28,6 +28,10 @@ test("controls retain distinct interactive and accessibility states", () => {
   assert.match(STYLESHEET, /\[aria-disabled="true"\]/);
   assert.match(STYLESHEET, /\.catalog-result:has\(\.catalog-result-details\.is-selected\)/);
   assert.match(STYLESHEET, /\.temporary-aoi-error/);
+  assert.match(
+    STYLESHEET,
+    /\.saved-map-view-action\[hidden\]\s*\{[^}]*display:\s*none;/s,
+  );
 });
 
 test("catalog rows can shrink while their action buttons wrap at compact widths", () => {
