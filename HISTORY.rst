@@ -4,6 +4,8 @@ History
 Unreleased
 ----------
 
+* Refresh automatically derived raster styles in composite maps without requiring a manual style edit.
+
 0.3.0 (2026-09-02)
 ------------------
 

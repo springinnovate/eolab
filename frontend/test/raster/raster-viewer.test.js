@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { MapLayerController } from "../../src/map-layers/controller.js";
+import { LeafletLayerSet } from "../../src/map-layers/leaflet-layer-set.js";
 import { initializeRasterViewer } from "../../src/raster/raster-viewer.js";
 import { RasterAnalysisRequestError } from "../../src/raster/analysis-api.js";
 import { DEFAULT_RASTER_STYLE } from "../../src/raster/style.js";
@@ -600,6 +601,83 @@ test("saved style updates a staged raster before it is attached", async () => {
     assert.equal(h.leafletMap.layers.has(staged.layer), true);
     assert.equal(staged.layer.opacity, 0.6);
     h.destroy();
+});
+
+test("automatic raster range refreshes the composite rendering plan", async () => {
+    const leafletMap = createFakeMap();
+    const { leaflet } = createFakeLeaflet();
+    const controlsView = createFakeControlsView();
+    const layerStackView = createFakeLayerStackView();
+    const statistics = createDeferred();
+    const compositeUpdates = [];
+    const leafletLayers = new LeafletLayerSet(leafletMap, {
+        update(rendering) {
+            compositeUpdates.push(structuredClone(rendering));
+        },
+        clear() {},
+    });
+    let viewer;
+    const mapLayers = new MapLayerController({
+        leafletMap,
+        view: layerStackView,
+        leafletLayers,
+        onLayersChange: () => viewer?.syncVisibleLayers(),
+    });
+    const item = createRasterItem("automatic-composite-style");
+    viewer = initializeRasterViewer(
+        {
+            leafletMap,
+            leaflet,
+            wmsUrl: "/geoserver/eolab/wms",
+            onTileError() {},
+        },
+        {
+            controlsView,
+            mapLayerController: mapLayers,
+            loadStatistics: () => statistics.promise,
+            publishRaster: async () => ({
+                layerName: `eolab:${item.id}`,
+                bbox: [-180, -90, 180, 90],
+            }),
+            samplePixel: async () => ({ inBounds: true, value: 1 }),
+            loadPairedStatistics: async () => pairedStatistics(),
+        },
+    );
+    viewer.syncVisibleLayers();
+
+    await viewer.show(item);
+    const updatesBeforeStatistics = compositeUpdates.length;
+    assert.match(
+        compositeUpdates.at(-1)[0].styleEnvironment,
+        /min:0;med:50;max:100/,
+    );
+
+    statistics.resolve(createLayerStatistics(item));
+    await flushPromises();
+
+    assert.equal(compositeUpdates.length, updatesBeforeStatistics + 1);
+    assert.match(
+        compositeUpdates.at(-1)[0].styleEnvironment,
+        /min:-4;med:3;max:20/,
+    );
+    assert.deepEqual(
+        mapLayers.snapshots()[0].legend.labels,
+        [-4, 3, 20],
+    );
+
+    viewer.remove(item);
+    const firstUpdateAfterRemoval = compositeUpdates.length;
+    await viewer.show(item);
+    await flushPromises();
+
+    const readditionUpdates = compositeUpdates.slice(firstUpdateAfterRemoval);
+    assert.ok(readditionUpdates.length > 0);
+    assert.match(
+        readditionUpdates.at(-1)[0].styleEnvironment,
+        /min:-4;med:3;max:20/,
+    );
+    viewer.destroy();
+    mapLayers.destroy();
 });
 
 test('two uncached 1D histograms share one read slot and both complete', async () => {
