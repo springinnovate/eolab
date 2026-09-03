@@ -213,7 +213,6 @@ function createFakeLeaflet() {
 function createFakeControlsView() {
     return {
         controlsVisible: false,
-        probeVisible: false,
         paletteName: "blue-yellow-red",
         style: null,
         handlers: null,
@@ -368,19 +367,11 @@ function createFakeControlsView() {
         setActiveLayer(label, visible) {
             this.activeLayer = { label, visible };
         },
-        isPixelProbeVisible() {
-            return this.probeVisible;
+        renderPointSamples(snapshot) {
+            this.pointSamples = snapshot;
         },
-        setPixelProbeContent(label, detail) {
-            this.pixelProbeContent = { label, detail };
-        },
-        showPixelProbe() {
-            this.probeVisible = true;
-            return { width: 100, height: 40 };
-        },
-        positionPixelProbe() {},
-        hidePixelProbe() {
-            this.probeVisible = false;
+        clearPointSamples() {
+            this.pointSamples = null;
         },
     };
 }
@@ -503,8 +494,6 @@ function visibleLayerFixture(loadStatistics = async (item) => createLayerStatist
         publishRaster: async item => ({ layerName: `eolab:${item.id}`, bbox: [-180, -90, 180, 90] }),
         samplePixel: async () => ({ inBounds: true, value: 1 }),
         loadPairedStatistics: async () => pairedStatistics(),
-        samplePairPixels: async () => ({}),
-        viewport: { innerWidth: 1280, innerHeight: 720 },
         ...dependencies,
     });
     viewer.syncVisibleLayers();
@@ -823,12 +812,18 @@ test('sequential raster removals release analysis before a vector is added', asy
 
 test('three visible rasters render while only the top two are analyzed', async () => {
     const requests = [];
+    const pointRequests = [];
     const h = visibleLayerFixture(async (item, area) => {
         requests.push({
             id: item.id.replace(/^geotiff-/, ''),
             area: area.kind,
         });
         return createLayerStatistics(item, selectedBoundsFromArea(area));
+    }, {
+        samplePixel: async (item) => {
+            pointRequests.push(item.id.replace(/^geotiff-/, ''));
+            return { inBounds: true, value: 1 };
+        },
     });
     const bottom = createRasterItem('bottom');
     const middle = createRasterItem('middle');
@@ -855,11 +850,17 @@ test('three visible rasters render while only the top two are analyzed', async (
         requests.map(({ id }) => id).sort(),
         ['middle', 'top'],
     );
+    assert.deepEqual(pointRequests, ['top', 'middle']);
+    assert.deepEqual(
+        h.controlsView.pointSamples.samples.map(({ label }) => label),
+        ['top.tif', 'middle.tif'],
+    );
     h.destroy();
 });
 
 test('active 2D analysis follows the top raster pair and exposes X Y badges', async () => {
     const pairedRequests = [];
+    const pointRequests = [];
     const h = visibleLayerFixture(undefined, {
         loadPairedStatistics: async (xItem, yItem) => {
             pairedRequests.push([
@@ -867,6 +868,10 @@ test('active 2D analysis follows the top raster pair and exposes X Y badges', as
                 yItem.id.replace(/^geotiff-/, ''),
             ]);
             return pairedStatistics();
+        },
+        samplePixel: async (item) => {
+            pointRequests.push(item.id);
+            return { inBounds: true, value: item.id.endsWith('top') ? 9 : 4 };
         },
     });
     await h.viewer.show(createRasterItem('bottom'));
@@ -889,6 +894,15 @@ test('active 2D analysis follows the top raster pair and exposes X Y badges', as
         [true, true, false],
     );
     assert.equal(h.mapLayers.getLeafletLayer(bottom.key).opacity, 0.4);
+    h.viewer.exploreAt({ lng: -74, lat: 41 });
+    await flushPromises();
+    assert.deepEqual(
+        h.controlsView.pointSamples.samples.map(({ label, axis }) => ({ label, axis })),
+        [
+            { label: 'top.tif', axis: 'X' },
+            { label: 'middle.tif', axis: 'Y' },
+        ],
+    );
 
     h.controlsView.handlers.onBivariateSwapAxes();
     await flushPromises();
@@ -897,6 +911,16 @@ test('active 2D analysis follows the top raster pair and exposes X Y badges', as
         ['Y', 'X', null],
     );
     assert.deepEqual(pairedRequests.at(-1), ['middle', 'top']);
+    assert.equal(pointRequests.length, 2);
+    assert.deepEqual(
+        h.controlsView.pointSamples.samples.map(({ label, axis, value }) => ({
+            label, axis, value,
+        })),
+        [
+            { label: 'middle.tif', axis: 'X', value: 4 },
+            { label: 'top.tif', axis: 'Y', value: 9 },
+        ],
+    );
 
     h.mapLayers.reorder(bottom.key, 1);
     await flushPromises();
@@ -1037,7 +1061,7 @@ test("selecting 2D opens paired analysis without a map interaction", async () =>
     const controlsView = createFakeControlsView();
     const layerStackView = createFakeLayerStackView();
     const pairedRequests = [];
-    const pairedPixelRequests = [];
+    const pixelRequests = [];
     let histogramPresentationRequests = 0;
     const firstItem = createRasterItem("first");
     const secondItem = createRasterItem("second");
@@ -1065,20 +1089,11 @@ test("selecting 2D opens paired analysis without a map interaction", async () =>
                 pairedRequests.push({ xItem, yItem, area });
                 return pairedStatistics();
             },
-            samplePixel: async () => ({ inBounds: true, value: 1 }),
-            samplePairPixels: async (pair, point) => {
-                pairedPixelRequests.push({ pair, point });
+            samplePixel: async (item, point) => {
+                pixelRequests.push({ item, point });
                 return {
-                    x: {
-                        available: true,
-                        pixel: { inBounds: true, value: 9 },
-                        error: null,
-                    },
-                    y: {
-                        available: true,
-                        pixel: { inBounds: true, value: 4 },
-                        error: null,
-                    },
+                    inBounds: true,
+                    value: item === secondItem ? 9 : 4,
                 };
             },
             viewport: { innerWidth: 1280, innerHeight: 720 },
@@ -1109,7 +1124,7 @@ test("selecting 2D opens paired analysis without a map interaction", async () =>
     );
     assert.equal(controlsView.bivariateMode.active, true);
     assert.equal(histogramPresentationRequests, 1);
-    assert.equal(pairedPixelRequests.length, 0);
+    assert.equal(pixelRequests.length, 0);
     assert.match(
         controlsView.bivariateAvailability.guidance,
         /2D analyzes the X\/Y-badged rasters.*blending at 100% opacity/
@@ -1147,12 +1162,25 @@ test("selecting 2D opens paired analysis without a map interaction", async () =>
     assert.match(wmsLayers[0].parameters.env, /cmin:#111827/);
     assert.match(wmsLayers[1].parameters.env, /cmin:#111827/);
 
-    leafletMap.emit("mousemove", { latlng: { lng: -122, lat: 49 } });
+    viewer.exploreAt({ lng: -122, lat: 49 });
     await flushPromises();
-    assert.equal(pairedPixelRequests.length, 1);
+    assert.deepEqual(
+        pixelRequests.map(({ item, point }) => ({ id: item.id, point })),
+        [
+            { id: secondItem.id, point: { longitude: -122, latitude: 49 } },
+            { id: firstItem.id, point: { longitude: -122, latitude: 49 } },
+        ]
+    );
     assert.deepEqual(controlsView.pairedHighlight, { xValue: 9, yValue: 4 });
-    assert.match(controlsView.pixelProbeContent.detail, /second\.tif: 9/);
-    assert.match(controlsView.pixelProbeContent.detail, /first\.tif: 4/);
+    assert.deepEqual(
+        controlsView.pointSamples.samples.map(({ label, axis, state, value }) => ({
+            label, axis, state, value,
+        })),
+        [
+            { label: "second.tif", axis: "X", state: "value", value: 9 },
+            { label: "first.tif", axis: "Y", state: "value", value: 4 },
+        ]
+    );
 
     wmsLayers[0].eventHandlers.get("tileerror")();
     assert.equal(controlsView.bivariateMode.active, true);
@@ -1210,11 +1238,10 @@ test("raster viewer owns the displayed layer lifecycle and detaches cleanly", as
             }),
             loadStatistics: () => new Promise(() => {}),
             samplePixel: async () => ({ inBounds: true, value: 1 }),
-            viewport: { innerWidth: 1280, innerHeight: 720 },
         }
     );
 
-    assert.equal(leafletMap.container.listenerCount("pointermove"), 1);
+    assert.equal(leafletMap.container.listenerCount("pointermove"), 0);
     assert.equal(leafletMap.handlers.get("mousemove").size, 1);
     const published = await viewer.show(MOUNTED_GEOTIFF_ITEM);
     assert.equal(published.layerName, "eolab:test-raster");
@@ -1293,13 +1320,15 @@ test("renderer-independent analysis supports exact windows without publication",
     assert.equal(controlsView.displayedStatistics.estimated, false);
 
     leafletMap.emit("mousemove", { latlng: { lng: -122, lat: 48.5 } });
+    assert.deepEqual(pixelRequests, []);
+    viewer.exploreAt({ lng: -122, lat: 48.5 });
     await flushPromises();
     assert.deepEqual(pixelRequests, [{
         item: MOUNTED_GEOTIFF_ITEM,
         point: { longitude: -122, latitude: 48.5 },
     }]);
-    viewer.exploreAt({ lng: -122, lat: 48.5 });
-    await flushPromises();
+    assert.equal(controlsView.pointSamples.samples[0].state, "value");
+    assert.equal(controlsView.pointSamples.samples[0].value, 17);
     assert.equal(controlsView.histogramWidgetOpenCount, 1);
     assert.equal(statisticsRequests.at(-1).samplingArea.kind, "selectedArea");
     assert.match(controlsView.statisticsStatus, /Selected-area exact/);
@@ -1503,7 +1532,7 @@ test("clearing analysis invalidates a pending renderer activation", async () => 
     viewer.destroy();
 });
 
-test("raster viewer samples pixels only inside the single map world", async () => {
+test("raster viewer samples click values only inside the single map world", async () => {
     const leafletMap = createFakeMap();
     const { leaflet, rectangleLayers } = createFakeLeaflet();
     const controlsView = createFakeControlsView();
@@ -1534,19 +1563,19 @@ test("raster viewer samples pixels only inside the single map world", async () =
     await viewer.show(MOUNTED_GEOTIFF_ITEM);
     leafletMap.emit("mousemove", { latlng: { lng: 238, lat: 48 } });
     assert.equal(pixelRequests.length, 0);
-    assert.equal(controlsView.probeVisible, false);
     assert.equal(rectangleLayers.length, 0);
 
     leafletMap.emit("mousemove", { latlng: { lng: -122, lat: 48 } });
+    assert.deepEqual(pixelRequests, []);
+    assert.equal(rectangleLayers.length, 1);
+    viewer.exploreAt({ lng: -122, lat: 48 });
+    await flushPromises();
     assert.deepEqual(pixelRequests, [{
         item: MOUNTED_GEOTIFF_ITEM,
         point: { longitude: -122, latitude: 48 },
     }]);
-    assert.equal(rectangleLayers.length, 1);
-    assert.equal(rectangleLayers[0].kind, "preview");
-    assert.equal(leafletMap.layers.has(rectangleLayers[0]), true);
-    await flushPromises();
-    assert.equal(controlsView.probeVisible, true);
+    assert.ok(rectangleLayers.some((layer) => layer.kind === "selection"));
+    assert.equal(controlsView.pointSamples.samples[0].value, 1);
     viewer.destroy();
 });
 
@@ -2268,9 +2297,6 @@ test("hidden WMS renderers do not gate active Catalog analysis", async () => {
     });
 
     viewer.exploreAt({ lng: -74, lat: 41 });
-    leafletMap.emit("mousemove", {
-        latlng: { lng: -74, lat: 41 },
-    });
     await flushPromises();
     const selectedThirdRequest = statisticsRequests.find(
         ({ item, selectedBounds }) =>

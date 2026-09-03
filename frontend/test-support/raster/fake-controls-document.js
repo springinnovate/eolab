@@ -95,7 +95,7 @@ export class FakeRasterControlElement extends EventTarget {
     }
 
     /**
-     * Return deterministic pointer-probe dimensions.
+     * Return deterministic control dimensions.
      *
      * @return {{width: number, height: number}} Element dimensions.
      */

@@ -32,7 +32,7 @@ viewport, and bounded scalar fields. A different viewer version or origin is
 provenance rather than rendering authority; an incompatible schema is rejected.
 
 The first schema deliberately excludes Catalog search state, selected Item,
-feature inspection, pixel probes, histogram and 2D-analysis state, sampling
+feature inspection, retained point values, histogram and 2D-analysis state, sampling
 windows, temporary AOIs, server status, and pending work. Fragment sharing is a
 transport for this same canonical document, not a second map-state format.
 

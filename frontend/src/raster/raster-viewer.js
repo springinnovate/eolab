@@ -2,7 +2,7 @@
  * Application coordinator for one interactive Catalog raster viewer.
  *
  * This module connects publication, Leaflet layers, raster controls,
- * statistics, selected-area sampling, styling, and the pixel probe. It owns
+ * statistics, selected-area sampling, styling, and exact point values. It owns
  * their shared lifecycle and stale-work rules while delegating domain logic,
  * HTTP access, DOM presentation, and Leaflet construction to focused modules.
  */
@@ -14,7 +14,6 @@ import {
     RasterAnalysisRequestError,
     isRasterStatisticsCapacityError,
     sampleCatalogRasterPixel,
-    sampleCatalogRasterPairPixels,
 } from "./analysis-api.js";
 import {
     BivariateRasterMode,
@@ -32,12 +31,11 @@ import {
 } from "./leaflet.js";
 import { MapLayerController } from "../map-layers/controller.js";
 import { MapLayerStackView } from "../map-layers/layer-stack-view.js";
+import { RasterPointSamplesController } from "./point-samples.js";
 import {
-    getCatalogRasterBasename,
-    getRasterPixelProbePosition,
     formatRasterPixelValue,
-    RasterPixelProbeController,
-} from "./pixel-probe.js";
+    getCatalogRasterBasename,
+} from "./value-format.js";
 import { RasterSampleWindowController } from "./sample-window-controller.js";
 import {
     DEFAULT_RASTER_PERCENTILES,
@@ -212,12 +210,9 @@ function canRetryRasterStatistics(error) {
  * @property {(xItem:Object,yItem:Object,area:Object,signal:AbortSignal)
  * =>Promise<Object>} [loadPairedStatistics=loadCatalogRasterPairedStatistics]
  * Loads paired X-reference statistics.
- * @property {(pair:Object,point:Object,signal:AbortSignal)=>Promise<Object>}
- * [samplePairPixels=sampleCatalogRasterPairPixels] Samples both axis rasters.
  * @property {{setTimeout: (callback: () => void, delay: number) => *,
  * clearTimeout: (identifier: *) => void}} [clock=globalThis] Timer
  * implementation.
- * @property {Object} [viewport=globalThis] Browser viewport dimensions.
  */
 
 /**
@@ -264,9 +259,7 @@ export function initializeRasterViewer(
         loadStatistics = loadCatalogRasterStatistics,
         samplePixel = sampleCatalogRasterPixel,
         loadPairedStatistics = loadCatalogRasterPairedStatistics,
-        samplePairPixels = sampleCatalogRasterPairPixels,
         clock = globalThis,
-        viewport = globalThis,
     } = {}
 ) {
     if (typeof onHistogramRequested !== "function") {
@@ -302,9 +295,6 @@ export function initializeRasterViewer(
     let followsVisibleLayers = false;
     let visibleHistogramSignature = null;
     let clearing = false;
-    let rasterPixelProbeLabel = "";
-    let pixelProbeClientPosition = null;
-    let pixelProbeSize = { width: 0, height: 0 };
     let rasterStyleCommitTimeout = null;
     let rasterStyleWasEdited = false;
     let rasterStatistics = null;
@@ -382,7 +372,7 @@ export function initializeRasterViewer(
      * Create renderer-independent interaction state for one Catalog raster.
      *
      * The session is deliberately not inserted into the map-layer stack. It
-     * gives pixel and statistics analysis an owner while the selected raster
+     * gives point-value and statistics analysis an owner while the selected raster
      * has no WMS presentation.
      *
      * @param {Object} item Selected Catalog raster Item.
@@ -658,7 +648,6 @@ export function initializeRasterViewer(
     function loadActiveLayerSession(session) {
         activeLayerKey = session.key;
         activeRasterItem = session.item;
-        rasterPixelProbeLabel = session.label;
         rasterStyle = { ...session.rasterStyle };
         activePaletteName = session.paletteName;
         rasterStyleWasEdited = session.rasterStyleWasEdited;
@@ -705,15 +694,9 @@ export function initializeRasterViewer(
         return createRasterSampleWindowLayer(leaflet, bounds, layerKind);
     }
 
-    const pixelProbeController = new RasterPixelProbeController(
+    const pointSamplesController = new RasterPointSamplesController(
         samplePixel,
-        renderRasterPixel,
-        renderRasterPixelError
-    );
-    const pairedPixelProbeController = new RasterPixelProbeController(
-        samplePairPixels,
-        renderBivariatePixels,
-        renderBivariatePixelError
+        renderRasterPointSamples
     );
     const rasterSampleWindowController = new RasterSampleWindowController(
         leafletMap,
@@ -939,6 +922,46 @@ export function initializeRasterViewer(
     }
 
     /**
+     * Build the bounded Catalog participants for exact click-value analysis.
+     *
+     * Visible-layer mode reuses the top-two histogram order. Detached Catalog
+     * analysis uses its active raster without consulting rendering state. In
+     * 2D mode the current axis assignment, including a swap, defines order and
+     * badges without changing the Catalog identities passed to analysis.
+     *
+     * @return {Object[]} Zero, one, or two point-sample participants.
+     */
+    function rasterPointSampleParticipants() {
+        if (bivariateMode.active) {
+            const candidates = getBivariatePairCandidates();
+            if (candidates === null) {
+                return [];
+            }
+            return [
+                { ...candidates.xCandidate, axis: "X" },
+                { ...candidates.yCandidate, axis: "Y" },
+            ];
+        }
+        if (followsVisibleLayers) {
+            return visibleRasterRecords().map(({ entry }) => ({
+                key: entry.key,
+                label: entry.label,
+                item: entry.item,
+                axis: null,
+            }));
+        }
+        if (activeRasterItem === null || activeLayerKey === null) {
+            return [];
+        }
+        return [{
+            key: activeLayerKey,
+            label: getCatalogRasterBasename(activeRasterItem),
+            item: activeRasterItem,
+            axis: null,
+        }];
+    }
+
+    /**
      * Move an active 2D analysis to the newly derived top-two raster pair.
      *
      * The current axis orientation and bounded sample are preserved. Pending
@@ -954,7 +977,7 @@ export function initializeRasterViewer(
             bivariateMode.xKey === previousCandidates[1].key &&
             bivariateMode.yKey === previousCandidates[0].key;
         pairedStatisticsController.clear();
-        pairedPixelProbeController.clear();
+        pointSamplesController.clear();
         bivariateStatistics = null;
         controlsView.clearPairedStatistics?.();
         restoreOrdinaryRasterPresentation(previousKeys);
@@ -964,11 +987,6 @@ export function initializeRasterViewer(
         ));
         if (axesWereSwapped) bivariateMode.swap();
         applyBivariatePresentation();
-        const presentation = getBivariatePresentation();
-        pairedPixelProbeController.activate({
-            xItem: presentation.xItem,
-            yItem: presentation.yItem,
-        });
         requestBivariateStatistics();
     }
 
@@ -1067,6 +1085,7 @@ export function initializeRasterViewer(
             }
         }
         renderLayerHistogramSummaries();
+        pointSamplesController.synchronize(rasterPointSampleParticipants());
         renderBivariateAvailability();
         refreshStyle();
         if (migratedPair) renderLayerStack();
@@ -1447,7 +1466,7 @@ export function initializeRasterViewer(
 
     /**
      * Build the single presentation contract shared by map, legend, histogram,
-     * and probe.
+     * and exact click values.
      *
      * @return {Object} Current labels, catalog ranges, coordinated styles,
      * palette identity, and Catalog Items.
@@ -1643,7 +1662,6 @@ export function initializeRasterViewer(
         for (const record of mapLayers.retainedRecords) {
             if (record.adapter === rasterMapLayerAdapter) cancelLayerHistogramRequest(record.state);
         }
-        pixelProbeController.clear();
         bivariateMode.enter(eligible.map(
             /**
              * Preserve candidate order as the initial X/Y axis assignment.
@@ -1659,10 +1677,7 @@ export function initializeRasterViewer(
         showHistogramWorkspace();
         requestBivariateStatistics();
         applyBivariatePresentation();
-        pairedPixelProbeController.activate({
-            xItem: eligible[0].item,
-            yItem: eligible[1].item,
-        });
+        pointSamplesController.synchronize(rasterPointSampleParticipants());
         renderLayerStack();
         renderBivariateAvailability();
     }
@@ -1681,7 +1696,7 @@ export function initializeRasterViewer(
         }
         const keys = [bivariateMode.xKey, bivariateMode.yKey];
         pairedStatisticsController.clear();
-        pairedPixelProbeController.clear();
+        pointSamplesController.synchronize([]);
         bivariateStatistics = null;
         restoreOrdinaryRasterPresentation(keys);
         bivariateMode.leave();
@@ -1700,12 +1715,11 @@ export function initializeRasterViewer(
             );
         }
         if (restoreAnalysis && activeRasterItem !== null) {
-            pixelProbeController.activate(activeRasterItem);
             restoreActiveLayerStatistics();
             refreshRetainedLayerHistograms(currentRasterSamplingArea(), true);
         } else if (restoreAnalysis) {
             rasterSampleWindowController.clear();
-            controlsView.hidePixelProbe();
+            controlsView.clearPointSamples();
             controlsView.setControlsVisible(false);
         }
         renderLayerStack();
@@ -2056,9 +2070,8 @@ export function initializeRasterViewer(
             return;
         }
         rasterStatisticsController.clear();
-        pixelProbeController.clear();
         rasterSampleWindowController.clear();
-        controlsView.hidePixelProbe();
+        pointSamplesController.clear();
         if (wholeRasterStatisticsState === "loading") {
             wholeRasterStatisticsState = "idle";
         }
@@ -2068,7 +2081,6 @@ export function initializeRasterViewer(
         saveActiveLayerSession();
         activeLayerKey = null;
         activeRasterItem = null;
-        rasterPixelProbeLabel = "";
     }
 
     /**
@@ -2154,7 +2166,6 @@ export function initializeRasterViewer(
             renderRasterSampleWindowGuidance("");
             return;
         }
-        pixelProbeController.activate(activeRasterItem);
         renderRasterSampleWindowGuidance("");
 
         restoreActiveLayerStatistics();
@@ -2206,7 +2217,6 @@ export function initializeRasterViewer(
         }
         renderRasterSamplingAreaControls();
         if (bivariateMode.active) {
-            pixelProbeController.clear();
             controlsView.setAppearanceEnabled?.(false);
             controlsView.setUnivariateHistogramVisible?.(false);
             saveActiveLayerSession();
@@ -2215,7 +2225,6 @@ export function initializeRasterViewer(
             renderLayerStack();
             return;
         }
-        pixelProbeController.activate(session.item);
         renderRasterSampleWindowGuidance("");
         restoreActiveLayerStatistics();
         saveActiveLayerSession();
@@ -2226,8 +2235,8 @@ export function initializeRasterViewer(
      * Activate renderer-independent analysis for one selected Catalog raster.
      *
      * A retained WMS layer remains the parent session when one exists.
-     * Otherwise this method presents the same pixel,
-     * area-selection, histogram, percentile, and color controls without
+     * Otherwise this method presents the same click-value, area-selection,
+     * histogram, percentile, and color controls without
      * publishing or constructing a map raster layer.
      * In visible-layer mode, ignores the catalog selection and synchronizes
      * analysis from the map stack instead.
@@ -2305,7 +2314,7 @@ export function initializeRasterViewer(
             renderLayerStack();
         } else {
             controlsView.setControlsVisible(false);
-            controlsView.hidePixelProbe();
+            controlsView.clearPointSamples();
             renderLayerStack();
         }
     }
@@ -2352,7 +2361,7 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Select a style target without transferring histogram or probe ownership.
+     * Select a style target without transferring histogram or click ownership.
      * Flushes any pending edit on the previous target before looking up the key.
      *
      * @param {string} key Retained raster key.
@@ -3004,7 +3013,14 @@ export function initializeRasterViewer(
         if (selectedTemporaryAoi !== null) {
             restoreWholeRasterStatistics();
         }
-        return rasterSampleWindowController.selectAt(position) !== null;
+        if (rasterSampleWindowController.selectAt(position) === null) {
+            return false;
+        }
+        pointSamplesController.sample(
+            rasterPointSampleParticipants(),
+            { longitude: position.lng, latitude: position.lat }
+        );
+        return true;
     }
 
     /**
@@ -3106,146 +3122,30 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Move the pointer probe using cached layout dimensions.
+     * Present one immutable exact-value snapshot in Analysis tools.
      *
+     * When both bivariate axes have finite values, the same snapshot also
+     * identifies their cell in the existing paired histogram. Presentation
+     * visibility remains owned by the map-inspection controller.
+     *
+     * @param {{position:Readonly<Object>,samples:ReadonlyArray<Object>}|null}
+     * snapshot Current point values or null after lifecycle clearing.
      * @return {void}
      */
-    function positionRasterPixelProbe() {
-        if (
-            pixelProbeClientPosition === null ||
-            !controlsView.isPixelProbeVisible()
-        ) {
+    function renderRasterPointSamples(snapshot) {
+        if (snapshot === null) {
+            controlsView.clearPointSamples();
             return;
         }
-        controlsView.positionPixelProbe(
-            getRasterPixelProbePosition(
-                pixelProbeClientPosition,
-                pixelProbeSize,
-                { width: viewport.innerWidth, height: viewport.innerHeight }
-            )
-        );
-    }
-
-    /**
-     * Show and remeasure the pointer probe after its text changes.
-     *
-     * @return {void}
-     */
-    function showRasterPixelProbe() {
-        pixelProbeSize = controlsView.showPixelProbe();
-        positionRasterPixelProbe();
-    }
-
-    /**
-     * Replace the raster name and sampled detail in the pointer probe.
-     *
-     * @param {string} detail Formatted coordinate and sample detail.
-     * @return {void}
-     */
-    function setRasterPixelProbeContent(detail) {
-        controlsView.setPixelProbeContent(rasterPixelProbeLabel, detail);
-    }
-
-    /**
-     * Display one current pixel response beside the pointer.
-     *
-     * @param {{inBounds: boolean, value: number|null}} pixel Pixel response.
-     * @param {{longitude: number, latitude: number}} point Sampled position.
-     * @return {void}
-     */
-    function renderRasterPixel(pixel, point) {
-        let pixelValue = "Outside raster";
-        if (pixel.inBounds) {
-            pixelValue = pixel.value === null
-                ? "No data"
-                : formatRasterPixelValue(pixel.value);
+        controlsView.renderPointSamples(snapshot);
+        if (!bivariateMode.active) {
+            return;
         }
-        setRasterPixelProbeContent(
-            `Lon ${point.longitude.toFixed(5)} · ` +
-            `Lat ${point.latitude.toFixed(5)}\nPixel: ${pixelValue}`
-        );
-        showRasterPixelProbe();
-    }
-
-    /**
-     * Report a current pixel request failure without affecting the layer.
-     *
-     * @param {Error} error Pixel sampling failure.
-     * @param {{longitude: number, latitude: number}} point Sampled position.
-     * @return {void}
-     */
-    function renderRasterPixelError(error, point) {
-        setRasterPixelProbeContent(
-            `Lon ${point.longitude.toFixed(5)} · ` +
-            `Lat ${point.latitude.toFixed(5)}\nPixel unavailable: ` +
-            error.message
-        );
-        showRasterPixelProbe();
-    }
-
-    /**
-     * Format one axis-scoped paired pixel outcome without hiding its peer.
-     *
-     * @param {string} label Raster label assigned to the axis.
-     * @param {Object} outcome Axis-scoped available pixel or failure.
-     * @return {string} Readable axis sample outcome.
-     */
-    function formatBivariatePixelOutcome(label, outcome) {
-        if (!outcome.available) {
-            return `${label}: unavailable (${outcome.error})`;
+        const x = snapshot.samples.find((sample) => sample.axis === "X");
+        const y = snapshot.samples.find((sample) => sample.axis === "Y");
+        if (x?.state === "value" && y?.state === "value") {
+            controlsView.highlightPairedStatistics?.(x.value, y.value);
         }
-        const pixel = outcome.pixel;
-        if (!pixel.inBounds) return `${label}: outside raster`;
-        return `${label}: ${pixel.value === null
-            ? "no data"
-            : formatRasterPixelValue(pixel.value)}`;
-    }
-
-    /**
-     * Display two independent current pixel outcomes and mark their paired bin.
-     *
-     * @param {{x:Object,y:Object}} outcomes Axis-scoped sampling outcomes.
-     * @param {{longitude:number,latitude:number}} point Sampled WGS 84 point.
-     * @return {void}
-     */
-    function renderBivariatePixels(outcomes, point) {
-        if (!bivariateMode.active) return;
-        const presentation = getBivariatePresentation();
-        controlsView.setPixelProbeContent(
-            "Bivariate pair",
-            `Lon ${point.longitude.toFixed(5)} · ` +
-            `Lat ${point.latitude.toFixed(5)}\n` +
-            `${formatBivariatePixelOutcome(presentation.xLabel, outcomes.x)}\n` +
-            formatBivariatePixelOutcome(presentation.yLabel, outcomes.y)
-        );
-        const xValue = outcomes.x.available && outcomes.x.pixel.inBounds
-            ? outcomes.x.pixel.value
-            : null;
-        const yValue = outcomes.y.available && outcomes.y.pixel.inBounds
-            ? outcomes.y.pixel.value
-            : null;
-        if (Number.isFinite(xValue) && Number.isFinite(yValue)) {
-            controlsView.highlightPairedStatistics?.(xValue, yValue);
-        }
-        showRasterPixelProbe();
-    }
-
-    /**
-     * Present an unexpected total dual-probe failure without ending the mode.
-     *
-     * @param {Error} error Unexpected paired request failure.
-     * @param {{longitude:number,latitude:number}} point Sampled WGS 84 point.
-     * @return {void}
-     */
-    function renderBivariatePixelError(error, point) {
-        if (!bivariateMode.active) return;
-        controlsView.setPixelProbeContent(
-            "Bivariate pair",
-            `Lon ${point.longitude.toFixed(5)} · ` +
-            `Lat ${point.latitude.toFixed(5)}\n` +
-            `Paired pixels unavailable: ${error.message}`
-        );
-        showRasterPixelProbe();
     }
 
     /**
@@ -3345,21 +3245,16 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Swap X/Y roles, including reference-grid statistics and dual probing.
+     * Swap X/Y roles, including reference-grid statistics and retained values.
      *
      * @return {void}
      */
     function handleBivariateSwapAxes() {
         if (!bivariateMode.active) return;
-        pairedPixelProbeController.clear();
         bivariateStatistics = null;
         bivariateMode.swap();
         applyBivariatePresentation();
-        const presentation = getBivariatePresentation();
-        pairedPixelProbeController.activate({
-            xItem: presentation.xItem,
-            yItem: presentation.yItem,
-        });
+        pointSamplesController.synchronize(rasterPointSampleParticipants());
         renderLayerStack();
         requestBivariateStatistics();
     }
@@ -3446,23 +3341,7 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Track the pointer synchronously for smooth probe movement.
-     *
-     * @param {PointerEvent} pointerEvent Browser pointer movement event.
-     * @return {void}
-     */
-    function handleMapPointerMove(pointerEvent) {
-        if (canUseRasterMapInteractions()) {
-            pixelProbeClientPosition = {
-                x: pointerEvent.clientX,
-                y: pointerEvent.clientY,
-            };
-            positionRasterPixelProbe();
-        }
-    }
-
-    /**
-     * Queue a throttled pixel sample for one Leaflet map position.
+     * Preview the histogram sample window for one Leaflet map position.
      *
      * @param {Object} mapEvent Leaflet mousemove event in the single map world.
      * @return {void}
@@ -3478,48 +3357,18 @@ export function initializeRasterViewer(
             latitude: mapEvent.latlng.lat,
         };
         if (!isCanonicalWgs84Position(point)) {
-            if (bivariateMode.active) {
-                pairedPixelProbeController.cancel();
-            } else {
-                pixelProbeController.cancel();
-            }
-            pixelProbeClientPosition = null;
-            controlsView.hidePixelProbe();
+            rasterSampleWindowController.clearPreview();
             return;
-        }
-        if (!controlsView.isPixelProbeVisible()) {
-            if (bivariateMode.active) {
-                controlsView.setPixelProbeContent(
-                    "Bivariate pair",
-                    `Lon ${point.longitude.toFixed(5)} · ` +
-                    `Lat ${point.latitude.toFixed(5)}\nPixels: Reading…`
-                );
-            } else {
-                setRasterPixelProbeContent(
-                    `Lon ${point.longitude.toFixed(5)} · ` +
-                    `Lat ${point.latitude.toFixed(5)}\nPixel: Reading…`
-                );
-            }
-            showRasterPixelProbe();
-        }
-        if (bivariateMode.active) {
-            pairedPixelProbeController.move(point);
-        } else {
-            pixelProbeController.move(point);
         }
     }
 
     /**
-     * Cancel pixel sampling and hide the pointer probe outside the map.
+     * Remove the sample-window preview after the pointer leaves the map.
      *
      * @return {void}
      */
     function handleMapMouseLeave() {
-        pixelProbeController.cancel();
-        pairedPixelProbeController.cancel();
         rasterSampleWindowController.clearPreview();
-        pixelProbeClientPosition = null;
-        controlsView.hidePixelProbe();
     }
 
     /**
@@ -3550,8 +3399,7 @@ export function initializeRasterViewer(
         mapLayers.deactivatePresentation();
         analysisRasterSession = null;
         mapLayers.removeOwned(rasterMapLayerAdapter);
-        pixelProbeController.clear();
-        pairedPixelProbeController.clear();
+        pointSamplesController.clear();
         rasterStatisticsController.clear();
         pairedStatisticsController.clear();
         rasterSampleWindowController.clear();
@@ -3574,11 +3422,9 @@ export function initializeRasterViewer(
         bivariateCandidates = [];
         bivariateSelectedBounds = null;
         bivariateSelectedWindowSizeKm = null;
-        pixelProbeClientPosition = null;
-        rasterPixelProbeLabel = "";
         controlsView.setControlsVisible(false);
         controlsView.renderLayerHistograms([], null);
-        controlsView.hidePixelProbe();
+        controlsView.clearPointSamples();
         controlsView.renderBivariateMode?.({ active: false });
         controlsView.setAppearanceEnabled?.(true);
         controlsView.setUnivariateHistogramVisible?.(true);
@@ -3679,7 +3525,7 @@ export function initializeRasterViewer(
      *
      * First readiness automatically selects the AOI for retained rasters.
      * Replacement migrates only sessions actively using the previous AOI;
-     * removal and expiration restore those sessions to mouse-hover map-window
+     * removal and expiration restore those sessions to click-selected map-window
      * sampling. Overlay visibility remains presentation-only.
      * Overlay geometry never crosses this boundary.
      *
@@ -3761,7 +3607,6 @@ export function initializeRasterViewer(
         if (ownsMapLayerController) {
             mapLayers.destroy();
         }
-        mapContainer.removeEventListener("pointermove", handleMapPointerMove);
         mapContainer.removeEventListener("mouseleave", handleMapMouseLeave);
         leafletMap.off("mousemove", handleMapMouseMove);
     }
@@ -3808,7 +3653,6 @@ export function initializeRasterViewer(
         onRetryPairedStatistics: handleRetryPairedStatistics,
     });
     const mapContainer = leafletMap.getContainer();
-    mapContainer.addEventListener("pointermove", handleMapPointerMove);
     leafletMap.on("mousemove", handleMapMouseMove);
     mapContainer.addEventListener("mouseleave", handleMapMouseLeave);
 

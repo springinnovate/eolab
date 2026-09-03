@@ -719,20 +719,6 @@
         OPEN LABEL TO BE SET BY CONFIGURATION
       </button>
       <div class="map-position" id="map-position">0.000, 0.000</div>
-      <div
-        class="raster-pixel-probe"
-        id="raster-pixel-probe"
-        data-eomap-region="raster-interpretation"
-        aria-hidden="true"
-        hidden
-      >
-        <div
-          class="raster-pixel-probe-name"
-          id="raster-pixel-probe-name"
-        ></div>
-        <div id="raster-pixel-probe-reading"></div>
-      </div>
-
       <div class="map-tool-openers">
         <button id="open-analysis-tools" class="secondary-button" type="button"
           aria-label="Open analysis tools using visible data at the map center">Analysis tools</button>
@@ -907,10 +893,16 @@
           <section id="map-histogram-panel" role="dialog" aria-modal="false"
             aria-labelledby="map-histogram-heading" hidden>
             <header class="map-histogram-toolbar">
-              <h2 id="map-histogram-heading" class="visually-hidden">Histogram</h2>
+              <h2 id="map-histogram-heading" class="visually-hidden">Raster analysis</h2>
               <button id="close-map-histogram" class="secondary-button" type="button"
-                aria-label="Close histogram">×</button>
+                aria-label="Close raster analysis">×</button>
             </header>
+            <section class="raster-point-samples" id="raster-point-samples"
+              aria-labelledby="raster-point-samples-heading" aria-live="polite"
+              aria-atomic="true" aria-busy="false" hidden>
+              <h3 id="raster-point-samples-heading">Raster values at click</h3>
+              <dl id="raster-point-sample-list"></dl>
+            </section>
             <section id="map-histogram-overview" class="raster-histogram-overview"
               aria-label="Visible raster distributions">
               <p class="raster-histogram-empty" id="raster-histogram-empty">
@@ -1316,8 +1308,8 @@
                           </figcaption>
                         </figure>
                         <p class="raster-bivariate-explanation">
-                          Map colors combine both raster palettes. Use the map
-                          probe for exact values.
+                          Map colors combine both raster palettes. Click the map
+                          to see exact values.
                         </p>
                         <p class="raster-bivariate-histogram-guidance">
                           Selecting 2D opens Histogram and calculates the paired

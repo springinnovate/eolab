@@ -11,6 +11,7 @@ import {
     renderRasterHistogramChart,
 } from "./histogram-view.js";
 import { requireRasterControl } from "./required-control.js";
+import { formatRasterPixelValue } from "./value-format.js";
 
 /**
  * @typedef {Object} RasterHistogramHandlers
@@ -73,6 +74,14 @@ export class RasterHistogramControlsView {
         this.histogramDetailLayer = requireRasterControl(
             documentContext,
             "#raster-histogram-detail-layer"
+        );
+        this.pointSamples = requireRasterControl(
+            documentContext,
+            "#raster-point-samples"
+        );
+        this.pointSampleList = requireRasterControl(
+            documentContext,
+            "#raster-point-sample-list"
         );
         this.summaryButtons = [];
         this.summaryCharts = [];
@@ -142,6 +151,87 @@ export class RasterHistogramControlsView {
             this.summaryButtons.find(({ key }) => key === focusedKey)
                 ?.button.focus();
         }
+    }
+
+    /**
+     * Render exact raster values retained from one map click.
+     *
+     * @param {{position:Readonly<Object>,samples:ReadonlyArray<Object>}}
+     * snapshot Immutable point-result snapshot from the raster owner.
+     * @return {void}
+     * @throws {TypeError} If result identity, axis, state, or value fields are
+     * outside the closed presentation contract.
+     */
+    renderPointSamples(snapshot) {
+        const allowedStates = new Set([
+            "loading", "value", "nodata", "outside", "error",
+        ]);
+        if (
+            snapshot === null ||
+            typeof snapshot !== "object" ||
+            !Array.isArray(snapshot.samples) ||
+            snapshot.samples.length === 0 ||
+            snapshot.samples.some((sample) => (
+                sample === null ||
+                typeof sample !== "object" ||
+                typeof sample.key !== "string" ||
+                sample.key === "" ||
+                typeof sample.label !== "string" ||
+                sample.label === "" ||
+                ![null, "X", "Y"].includes(sample.axis) ||
+                !allowedStates.has(sample.state) ||
+                (sample.state === "value" && !Number.isFinite(sample.value)) ||
+                (sample.state !== "value" && sample.value !== null) ||
+                typeof sample.errorMessage !== "string"
+            ))
+        ) {
+            throw new TypeError("Raster point-sample snapshot is invalid");
+        }
+        const rows = snapshot.samples.map((sample) => {
+            const row = this.documentContext.createElement("div");
+            row.className = "raster-point-sample-row";
+            row.setAttribute("data-state", sample.state);
+            const name = this.documentContext.createElement("dt");
+            name.className = "raster-point-sample-name";
+            if (sample.axis !== null) {
+                const badge = this.documentContext.createElement("span");
+                badge.className = "raster-point-sample-axis";
+                badge.textContent = sample.axis;
+                name.append(badge);
+            }
+            const label = this.documentContext.createElement("span");
+            label.textContent = sample.label;
+            label.title = sample.label;
+            name.append(label);
+            const value = this.documentContext.createElement("dd");
+            value.className = "raster-point-sample-value";
+            value.textContent = {
+                loading: "Reading…",
+                value: sample.state === "value"
+                    ? formatRasterPixelValue(sample.value)
+                    : "",
+                nodata: "No data",
+                outside: "Outside raster",
+                error: sample.errorMessage === ""
+                    ? "Unavailable"
+                    : `Unavailable: ${sample.errorMessage}`,
+            }[sample.state];
+            row.append(name, value);
+            return row;
+        });
+        this.pointSampleList.replaceChildren(...rows);
+        this.pointSamples.hidden = false;
+        this.pointSamples.setAttribute(
+            "aria-busy",
+            String(snapshot.samples.some((sample) => sample.state === "loading"))
+        );
+    }
+
+    /** Hide and remove exact values from the previous map click. @return {void} */
+    clearPointSamples() {
+        this.pointSampleList.replaceChildren();
+        this.pointSamples.hidden = true;
+        this.pointSamples.setAttribute("aria-busy", "false");
     }
 
     /**

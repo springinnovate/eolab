@@ -3,8 +3,8 @@
  *
  * RasterControlsView preserves the viewer-facing contract while delegating
  * subgroup element lookup, direct event listeners, control reads, and
- * presentation to focused appearance, sampling-area, histogram, percentile,
- * and pixel-probe adapters. The façade owns only its composite root visibility
+ * presentation to focused appearance, sampling-area, histogram, and percentile
+ * adapters. The façade owns only its composite root visibility
  * and active-raster identity presentation. It contains no fetch, Leaflet,
  * rendering, statistics, or lifecycle decisions.
  */
@@ -14,7 +14,6 @@ import { RasterHistogramControlsView } from "./histogram-controls-view.js";
 import {
     RasterPercentileControlsView,
 } from "./percentile-controls-view.js";
-import { RasterPixelProbeView } from "./pixel-probe-view.js";
 import { requireRasterControl } from "./required-control.js";
 import {
     RasterSamplingAreaControlsView,
@@ -57,7 +56,6 @@ export class RasterControlsView {
     #bivariateView;
     #histogramView;
     #percentileView;
-    #pixelProbeView;
     #root;
     #samplingAreaView;
 
@@ -86,7 +84,6 @@ export class RasterControlsView {
         this.#samplingAreaView = new RasterSamplingAreaControlsView(
             documentContext
         );
-        this.#pixelProbeView = new RasterPixelProbeView(documentContext);
     }
 
     /**
@@ -523,7 +520,7 @@ export class RasterControlsView {
     }
 
     /**
-     * Mark the paired histogram bin containing a dual probe result.
+     * Mark the paired histogram bin containing a dual click result.
      *
      * @param {number} xValue Finite X sample.
      * @param {number} yValue Finite Y sample.
@@ -533,39 +530,18 @@ export class RasterControlsView {
         this.#bivariateView.highlightPair(xValue, yValue);
     }
 
-    /** Return whether the pointer probe is visible. @return {boolean} Visibility. */
-    isPixelProbeVisible() {
-        return this.#pixelProbeView.isVisible();
-    }
-
     /**
-     * Replace the raster name and sampled detail in the pointer probe.
+     * Render exact values retained from the current map click.
      *
-     * @param {string} label Raster display basename.
-     * @param {string} detail Formatted coordinate and sample detail.
+     * @param {Object} snapshot Immutable point-sampling snapshot.
      * @return {void}
      */
-    setPixelProbeContent(label, detail) {
-        this.#pixelProbeView.setContent(label, detail);
+    renderPointSamples(snapshot) {
+        this.#histogramView.renderPointSamples(snapshot);
     }
 
-    /** Show and measure the pointer probe. @return {{width: number, height: number}} Dimensions. */
-    showPixelProbe() {
-        return this.#pixelProbeView.show();
-    }
-
-    /**
-     * Move the pointer probe to one browser-viewport position.
-     *
-     * @param {{x: number, y: number}} position Probe top-left position.
-     * @return {void}
-     */
-    positionPixelProbe(position) {
-        this.#pixelProbeView.position(position);
-    }
-
-    /** Hide the pointer probe without changing retained content. @return {void} */
-    hidePixelProbe() {
-        this.#pixelProbeView.hide();
+    /** Clear retained point values from Analysis tools. @return {void} */
+    clearPointSamples() {
+        this.#histogramView.clearPointSamples();
     }
 }

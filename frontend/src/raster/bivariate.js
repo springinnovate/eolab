@@ -1,7 +1,7 @@
 /**
  * Pure bivariate palette definitions, color math, and mode invariants.
  *
- * Every map axis ramp, legend cell, histogram cell, and probe marker derives
+ * Every map axis ramp, legend cell, histogram cell, and sampled-cell marker derives
  * from the same palette object and fixed additive RGB operation.
  */
 import { getRasterStyleColor } from "./style.js";

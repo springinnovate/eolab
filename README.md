@@ -103,7 +103,8 @@ OpenTopoMap supplies native tiles through zoom 17. Leaflet overzooms those
 tiles when EOLab's existing map workflow reaches zoom 18 through 22. Failed
 tile requests render as transparent neutral-background tiles; EOLab does not
 silently send requests to a second provider, and raster, vector, AOI,
-sample-window, footprint, and pixel-probe overlays remain available. A
+sample-window and footprint overlays plus retained click-value analysis remain
+available. A
 deployment that needs guaranteed availability or expects high traffic should
 set `EOLAB_BASEMAP_URL` and `EOLAB_BASEMAP_ATTRIBUTION` to a self-hosted or
 contracted provider before deployment.
@@ -200,7 +201,8 @@ paired statistics and pixel analysis available without GeoServer, WMS
 publication, or visible map layers. When both WMS layers exist, rendering also
 locks their displayed opacities to 100% and applies the coordinated palette and
 additive browser compositing carried forward from ESOS-C. The two-dimensional
-legend, paired histogram, and dual pixel probe use the same palette contract.
+legend, paired histogram, and retained X/Y click values use the same palette
+contract.
 Ordinary overlay remains the default, and leaving bivariate mode restores any
 retained layers' styles and opacities without republishing. The color,
 alignment, bounded-read, and accessibility contracts are documented in
@@ -231,8 +233,9 @@ active color ramp as a raster pixel at that bin midpoint.
 and **Use whole raster** restores the retained dataset distribution. The same
 map action also inspects features from visible vectors independently, so raster
 and vector results may appear together. Masked, nodata, and non-finite samples are excluded. A
-statistics failure leaves the raster, manual appearance controls, and hover
-pixel picker available. These appearance changes are session-only: they do not
+statistics failure leaves the raster, manual appearance controls, and exact
+click-value sampling available. These appearance changes are session-only: they
+do not
 modify either the source raster or its catalog Item. Selected windows that
 cross a pole or the antimeridian are rejected rather than being interpreted as
 a different area.

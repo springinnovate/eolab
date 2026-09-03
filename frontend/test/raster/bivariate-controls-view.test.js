@@ -212,7 +212,7 @@ test("bivariate controls render labeled legend and inspectable ESOS-C histogram"
   assert.match(view.histogramSummary.textContent, /100\.0%/);
 
   view.highlightPair(6.5, 4.5);
-  assert.equal(cell.classList.contains("is-probed"), true);
+  assert.equal(cell.classList.contains("is-sampled"), true);
   assert.match(view.histogramSummary.textContent, /Probe/);
 });
 
