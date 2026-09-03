@@ -1,24 +1,17 @@
 /** Ordered numeric analysis for bounded vector feature-inspection results. */
 
+import {
+    formatSeriesNumber,
+    renderOrdinalSeriesChart,
+} from "./series-chart.js";
+import { validateVectorInspectionObservations } from "./inspection-observation.js";
+
 export const VECTOR_TIME_SERIES_LAYER_LABEL = "__eolab_layer_label__";
 
-const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
-const CHART_WIDTH = 680;
-const CHART_HEIGHT = 360;
-const CHART_MARGIN = Object.freeze({ top: 20, right: 24, bottom: 92, left: 72 });
 const NATURAL_TEXT = new Intl.Collator("en", {
     numeric: true,
     sensitivity: "base",
 });
-
-/**
- * @typedef {Object} VectorInspectionObservation
- * @property {string} sourceId Opaque retained-source identity from composition.
- * @property {string} layerLabel User-facing source layer or filename.
- * @property {string|number|null} featureId Bounded feature identity.
- * @property {Readonly<Record<string,string|number|boolean|null>>} properties
- * Scalar attributes returned by the existing feature inspection.
- */
 
 /**
  * @typedef {Object} VectorTimeSeriesSettings
@@ -39,50 +32,6 @@ function isOrderableValue(value) {
         typeof value === "boolean" ||
         (typeof value === "number" && Number.isFinite(value))
     );
-}
-
-/**
- * Validate the closed inspection-observation boundary.
- *
- * @param {unknown} observations Candidate observations from composition.
- * @return {VectorInspectionObservation[]} Validated observations.
- * @throws {TypeError} If composition violates the observation contract.
- */
-export function validateVectorInspectionObservations(observations) {
-    if (!Array.isArray(observations)) {
-        throw new TypeError("Vector inspection observations must be an array.");
-    }
-    for (const observation of observations) {
-        if (
-            typeof observation?.sourceId !== "string" ||
-            observation.sourceId.length === 0 ||
-            typeof observation?.layerLabel !== "string" ||
-            observation.layerLabel.length === 0 ||
-            !(
-                observation.featureId === null ||
-                typeof observation.featureId === "string" ||
-                typeof observation.featureId === "number"
-            ) ||
-            observation.properties === null ||
-            typeof observation.properties !== "object" ||
-            Array.isArray(observation.properties)
-        ) {
-            throw new TypeError("Invalid vector inspection observation.");
-        }
-        for (const value of Object.values(observation.properties)) {
-            if (!(
-                value === null ||
-                typeof value === "string" ||
-                typeof value === "boolean" ||
-                typeof value === "number"
-            )) {
-                throw new TypeError(
-                    "Vector inspection properties must contain JSON scalars."
-                );
-            }
-        }
-    }
-    return observations;
 }
 
 /**
@@ -196,48 +145,6 @@ export function buildVectorTimeSeriesSeries(observations, settings) {
         omitted: observations.length - points.length,
         total: observations.length,
     };
-}
-
-/**
- * Return compact finite-number text for axes and the accessible table.
- *
- * @param {number} value Finite number.
- * @return {string} Compact localized value.
- */
-function formatNumber(value) {
-    return new Intl.NumberFormat("en", {
-        maximumSignificantDigits: 6,
-    }).format(value);
-}
-
-/**
- * Keep dense ordinal tick labels readable while full values remain in details.
- *
- * @param {string} label Full X label.
- * @param {number} [maximum=28] Maximum visible characters.
- * @return {string} Bounded tick label.
- */
-function formatTickLabel(label, maximum = 28) {
-    return label.length <= maximum
-        ? label
-        : `${label.slice(0, maximum - 1)}…`;
-}
-
-/**
- * Choose bounded ordinal tick indexes including both endpoints.
- *
- * @param {number} count Point count.
- * @param {number} [maximum=7] Maximum labels.
- * @return {number[]} Unique point indexes.
- */
-function ordinalTickIndexes(count, maximum = 7) {
-    if (count <= maximum) {
-        return Array.from({ length: count }, (_, index) => index);
-    }
-    return [...new Set(Array.from(
-        { length: maximum },
-        (_, index) => Math.round(index * (count - 1) / (maximum - 1))
-    ))];
 }
 
 /** Own persistent vector-series configuration and presentation. */
@@ -434,7 +341,28 @@ export class VectorTimeSeriesController {
         ) {
             this.#clearPointSelection();
         }
-        this.#renderChart(series.points);
+        this.pointElements = renderOrdinalSeriesChart({
+            documentContext: this.document,
+            chart: this.chart,
+            points: series.points,
+            chartType: this.settings.chartType,
+            xAxisLabel: this.#xAxisLabel(),
+            yAxisLabel: this.settings.yField,
+            ariaLabel: `Vector series ${this.settings.chartType} chart showing ` +
+                `${this.settings.yField} by ${this.#xAxisLabel()} for ` +
+                `${series.points.length} observations.`,
+            pointAccessibleLabel: (point) => this.#pointIdentity(point),
+            pointTooltip: (point) =>
+                `${point.layerLabel} · ${point.featureId ?? "No feature ID"} · ` +
+                `${point.xLabel} · ${formatSeriesNumber(point.yValue)}`,
+            onPointSelect: (point) => this.#selectPoint(point),
+        }).pointElements;
+        if (this.selectedPoint !== null) {
+            const selected = series.points.find((point) =>
+                point.sourceIndex === this.selectedPoint.sourceIndex
+            );
+            if (selected !== undefined) this.#selectPoint(selected);
+        }
         this.#renderTable(series.points);
         const plotted = `${series.points.length.toLocaleString()} of ` +
             `${series.total.toLocaleString()} inspection results plotted.`;
@@ -512,164 +440,6 @@ export class VectorTimeSeriesController {
     }
 
     /**
-     * Append one namespaced SVG element with string attributes.
-     *
-     * @param {string} name SVG element name.
-     * @param {Record<string,string|number>} attributes SVG attributes.
-     * @param {string|null} [text=null] Optional text content.
-     * @return {SVGElement} New SVG element.
-     */
-    #svg(name, attributes, text = null) {
-        const element = this.document.createElementNS(SVG_NAMESPACE, name);
-        for (const [attribute, value] of Object.entries(attributes)) {
-            element.setAttribute(attribute, String(value));
-        }
-        if (text !== null) element.textContent = text;
-        return element;
-    }
-
-    /**
-     * Draw an ordinal line or scatter chart with numeric Y axes.
-     *
-     * @param {Object[]} points Ordered plot points.
-     * @return {void}
-     */
-    #renderChart(points) {
-        const plotWidth = CHART_WIDTH - CHART_MARGIN.left - CHART_MARGIN.right;
-        const plotHeight = CHART_HEIGHT - CHART_MARGIN.top - CHART_MARGIN.bottom;
-        const values = points.map((point) => point.yValue);
-        let minimum = Math.min(...values);
-        let maximum = Math.max(...values);
-        if (minimum === maximum) {
-            const padding = Math.abs(minimum) * 0.1 || 1;
-            minimum -= padding;
-            maximum += padding;
-        }
-        const x = (index) => points.length === 1
-            ? CHART_MARGIN.left + plotWidth / 2
-            : CHART_MARGIN.left + index * plotWidth / (points.length - 1);
-        const y = (value) => CHART_MARGIN.top +
-            (maximum - value) * plotHeight / (maximum - minimum);
-        this.chart.setAttribute("viewBox", `0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`);
-        this.chart.setAttribute(
-            "aria-label",
-            `Vector series ${this.settings.chartType} chart showing ` +
-            `${this.settings.yField} by ` +
-            `${this.#xAxisLabel()} for ${points.length} observations.`
-        );
-        const xAxisY = CHART_MARGIN.top + plotHeight;
-        this.chart.append(
-            this.#svg("line", {
-                class: "vector-time-series-axis",
-                x1: CHART_MARGIN.left,
-                y1: xAxisY,
-                x2: CHART_MARGIN.left + plotWidth,
-                y2: xAxisY,
-            }),
-            this.#svg("line", {
-                class: "vector-time-series-axis",
-                x1: CHART_MARGIN.left,
-                y1: CHART_MARGIN.top,
-                x2: CHART_MARGIN.left,
-                y2: xAxisY,
-            })
-        );
-        for (let index = 0; index < 5; index += 1) {
-            const value = minimum + (maximum - minimum) * index / 4;
-            const tickY = y(value);
-            this.chart.append(
-                this.#svg("line", {
-                    class: "vector-time-series-grid",
-                    x1: CHART_MARGIN.left,
-                    y1: tickY,
-                    x2: CHART_MARGIN.left + plotWidth,
-                    y2: tickY,
-                }),
-                this.#svg("text", {
-                    class: "vector-time-series-tick",
-                    x: CHART_MARGIN.left - 10,
-                    y: tickY + 4,
-                    "text-anchor": "end",
-                }, formatNumber(value))
-            );
-        }
-        for (const index of ordinalTickIndexes(points.length)) {
-            const tickX = x(index);
-            this.chart.append(
-                this.#svg("line", {
-                    class: "vector-time-series-axis",
-                    x1: tickX,
-                    y1: xAxisY,
-                    x2: tickX,
-                    y2: xAxisY + 5,
-                }),
-                this.#svg("text", {
-                    class: "vector-time-series-x-tick",
-                    x: tickX,
-                    y: xAxisY + 16,
-                    transform: `rotate(-35 ${tickX} ${xAxisY + 16})`,
-                    "text-anchor": "end",
-                }, formatTickLabel(points[index].xLabel))
-            );
-        }
-        if (this.settings.chartType === "line") {
-            const path = points.map((point, index) =>
-                `${index === 0 ? "M" : "L"}${x(index)},${y(point.yValue)}`
-            ).join(" ");
-            this.chart.append(this.#svg("path", {
-                class: "vector-time-series-line",
-                d: path,
-            }));
-        }
-        points.forEach((point, index) => {
-            const circle = this.#svg("circle", {
-                class: "vector-time-series-point",
-                cx: x(index),
-                cy: y(point.yValue),
-                r: 4.5,
-                tabindex: 0,
-                role: "button",
-                "aria-pressed": "false",
-                "aria-label": this.#pointIdentity(point),
-            });
-            circle.addEventListener("click", () => this.#selectPoint(point));
-            circle.addEventListener("keydown", (event) => {
-                if (!["Enter", " "].includes(event.key)) return;
-                event.preventDefault();
-                this.#selectPoint(point);
-            });
-            circle.append(this.#svg("title", {},
-                `${point.layerLabel} · ${point.featureId ?? "No feature ID"} · ` +
-                `${point.xLabel} · ${formatNumber(point.yValue)}`
-            ));
-            this.pointElements.push({ circle, point });
-            this.chart.append(circle);
-        });
-        if (this.selectedPoint !== null) {
-            const selected = points.find((point) =>
-                point.sourceIndex === this.selectedPoint.sourceIndex
-            );
-            if (selected !== undefined) this.#selectPoint(selected);
-        }
-        this.chart.append(
-            this.#svg("text", {
-                class: "vector-time-series-axis-title",
-                x: CHART_MARGIN.left + plotWidth / 2,
-                y: CHART_HEIGHT - 8,
-                "text-anchor": "middle",
-            }, this.#xAxisLabel()),
-            this.#svg("text", {
-                class: "vector-time-series-axis-title",
-                x: 16,
-                y: CHART_MARGIN.top + plotHeight / 2,
-                transform: `rotate(-90 16 ${CHART_MARGIN.top + plotHeight / 2})`,
-                "text-anchor": "middle",
-            }, this.settings.yField)
-        );
-        this.chart.removeAttribute("hidden");
-    }
-
-    /**
      * Return a concise accessible identity for one plotted observation.
      *
      * @param {Object} point Plotted observation.
@@ -678,7 +448,7 @@ export class VectorTimeSeriesController {
     #pointIdentity(point) {
         return `Source layer: ${point.layerLabel} · Feature: ` +
             `${point.featureId ?? "No feature ID"} · X: ${point.xLabel} · ` +
-            `Y: ${formatNumber(point.yValue)}`;
+            `Y: ${formatSeriesNumber(point.yValue)}`;
     }
 
     /**
@@ -722,7 +492,7 @@ export class VectorTimeSeriesController {
                 point.layerLabel,
                 point.featureId ?? "No feature ID",
                 point.xLabel,
-                formatNumber(point.yValue),
+                formatSeriesNumber(point.yValue),
             ]) {
                 const cell = this.document.createElement("td");
                 cell.textContent = String(value);
