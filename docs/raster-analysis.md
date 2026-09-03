@@ -23,9 +23,20 @@ One map click supplies the same retained position to raster point sampling,
 histogram-area selection, and vector inspection. The raster owner samples at
 most the same top-two participants used by automatic histograms, displays each
 layer's numeric, no-data, outside-extent, loading, or unavailable state, and
-cancels superseded reads. Pointer movement previews the sample window without
-requesting point values. In bivariate mode the current X/Y order labels the two
+cancels superseded reads. In bivariate mode the current X/Y order labels the two
 values and updates immediately after an axis swap.
+
+Pointer movement remains separate from retained click analysis. After a 200 ms
+dwell, one transient controller samples all visible rasters whose authoritative
+Catalog bounds contain the pointer, in top-first map order. Its Pixel picker
+follows the pointer, reports the WGS 84 latitude and longitude, supports copying
+the current tab-separated values, and can be hidden with Escape and restored
+with P or its on-map prompt. The controller caps the stack at 50 participants,
+runs two existing Catalog pixel requests at a time, publishes progressive
+immutable results, and aborts queued and in-flight work when the pointer moves,
+leaves the map, or starts a drag. This keeps the readout responsive without
+restoring the former unbounded per-movement probe; the backend pixel-read
+semaphore remains the global concurrency boundary.
 
 ## Bounded read policy
 

@@ -61,6 +61,7 @@ import {
     CatalogVectorAssessmentCache,
 } from "./catalog-map-actions.js";
 import { initializeRasterViewer } from "./raster/raster-viewer.js";
+import { RasterCursorValuesView } from "./raster/cursor-values-view.js";
 import { SavedMapViewCatalogClient } from "./saved-map-view/catalog-client.js";
 import { SavedMapViewController } from "./saved-map-view/controller.js";
 import { SavedMapViewDomView } from "./saved-map-view/dom-view.js";
@@ -708,7 +709,10 @@ async function initializeCatalog(
         onHistogramRequested: () => mapInspection.showHistogram(),
         onBivariateRenderingChange: (active) =>
             mapLayerController.setIndividualRendering(active),
-    }, { mapLayerController });
+    }, {
+        mapLayerController,
+        cursorValuesView: new RasterCursorValuesView(),
+    });
     const vectorMapLayerAdapter = createVectorMapLayerAdapter({
         leaflet: L,
         leafletMap,

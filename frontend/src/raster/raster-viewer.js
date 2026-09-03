@@ -31,10 +31,12 @@ import {
 } from "./leaflet.js";
 import { MapLayerController } from "../map-layers/controller.js";
 import { MapLayerStackView } from "../map-layers/layer-stack-view.js";
+import { RasterCursorSamplesController } from "./cursor-samples.js";
 import { RasterPointSamplesController } from "./point-samples.js";
 import {
     formatRasterPixelValue,
     getCatalogRasterBasename,
+    getCatalogRasterStem,
 } from "./value-format.js";
 import { RasterSampleWindowController } from "./sample-window-controller.js";
 import {
@@ -207,6 +209,12 @@ function canRetryRasterStatistics(error) {
  * @property {(item: Object, point: Object, signal: AbortSignal)
  * => Promise<Object>} [samplePixel=sampleCatalogRasterPixel] Samples one raster
  * pixel.
+ * @property {(item: Object, point: Object, signal: AbortSignal)
+ * => Promise<Object>} [sampleCursorPixel=samplePixel] Samples one transient
+ * cursor participant independently from retained click analysis.
+ * @property {{render:(snapshot:Object)=>void,clear:()=>void,move?:Function,
+ * setEnabled?:Function,bind?:Function,unbind?:Function}|null}
+ * [cursorValuesView=null] Transient pixel-picker presentation adapter.
  * @property {(xItem:Object,yItem:Object,area:Object,signal:AbortSignal)
  * =>Promise<Object>} [loadPairedStatistics=loadCatalogRasterPairedStatistics]
  * Loads paired X-reference statistics.
@@ -258,7 +266,9 @@ export function initializeRasterViewer(
         publishRaster = publishCatalogRaster,
         loadStatistics = loadCatalogRasterStatistics,
         samplePixel = sampleCatalogRasterPixel,
+        sampleCursorPixel = samplePixel,
         loadPairedStatistics = loadCatalogRasterPairedStatistics,
+        cursorValuesView = null,
         clock = globalThis,
     } = {}
 ) {
@@ -269,6 +279,13 @@ export function initializeRasterViewer(
         throw new TypeError("Bivariate rendering callback must be callable");
     }
     controlsView ??= new RasterControlsView();
+    cursorValuesView ??= { render() {}, clear() {} };
+    if (
+        typeof cursorValuesView.render !== "function" ||
+        typeof cursorValuesView.clear !== "function"
+    ) {
+        throw new TypeError("Raster cursor-value view is incomplete");
+    }
     const statisticsRequests = new RasterStatisticsRequestQueue(clock);
     /**
      * Queue ordinary reads alongside paired reads for this viewer.
@@ -295,6 +312,9 @@ export function initializeRasterViewer(
     let followsVisibleLayers = false;
     let visibleHistogramSignature = null;
     let clearing = false;
+    let mapDragging = false;
+    let pixelPickerEnabled = true;
+    let rasterCursorPosition = null;
     let rasterStyleCommitTimeout = null;
     let rasterStyleWasEdited = false;
     let rasterStatistics = null;
@@ -698,6 +718,11 @@ export function initializeRasterViewer(
         samplePixel,
         renderRasterPointSamples
     );
+    const cursorSamplesController = new RasterCursorSamplesController(
+        sampleCursorPixel,
+        renderRasterCursorSamples,
+        clock
+    );
     const rasterSampleWindowController = new RasterSampleWindowController(
         leafletMap,
         createSampleWindowLayer,
@@ -910,6 +935,45 @@ export function initializeRasterViewer(
     }
 
     /**
+     * Return whether authoritative published bounds contain one map position.
+     *
+     * @param {number[]} bbox Published WGS 84 west/south/east/north bounds.
+     * @param {{longitude:number,latitude:number}} position Canonical point.
+     * @return {boolean} Whether the point lies inside or on the bounds.
+     */
+    function publishedBoundsContainPosition(bbox, position) {
+        if (
+            !Array.isArray(bbox) ||
+            bbox.length !== 4 ||
+            !bbox.every(Number.isFinite)
+        ) {
+            return false;
+        }
+        const [west, south, east, north] = bbox;
+        return west <= position.longitude && position.longitude <= east &&
+            south <= position.latitude && position.latitude <= north;
+    }
+
+    /**
+     * Build all visible in-bounds cursor participants in top-first map order.
+     *
+     * @param {{longitude:number,latitude:number}} position Canonical point.
+     * @return {Object[]} Catalog identities and concise filename stems.
+     */
+    function rasterCursorSampleParticipants(position) {
+        return allVisibleRasterRecords()
+            .filter(({ state }) => publishedBoundsContainPosition(
+                state.publishedRaster.bbox,
+                position
+            ))
+            .map(({ entry }) => ({
+                key: entry.key,
+                label: getCatalogRasterStem(entry.item),
+                item: entry.item,
+            }));
+    }
+
+    /**
      * Return the bounded top-two raster-analysis inputs in map order.
      *
      * Rendering remains independent: visible rasters below this pair stay on
@@ -1004,6 +1068,11 @@ export function initializeRasterViewer(
         if (clearing) return;
         followsVisibleLayers = true;
         const records = visibleRasterRecords();
+        if (rasterCursorPosition !== null) {
+            cursorSamplesController.synchronize(
+                rasterCursorSampleParticipants(rasterCursorPosition)
+            );
+        }
         const analyzedKeys = new Set(records.map(({ entry }) => entry.key));
         for (const record of mapLayers.retainedRecords) {
             if (
@@ -3154,6 +3223,36 @@ export function initializeRasterViewer(
     }
 
     /**
+     * Present or clear one transient cursor-stack snapshot on the map.
+     *
+     * @param {{samples:ReadonlyArray<Object>,omittedCount:number}|null}
+     * snapshot Current progressive cursor values or null after clearing.
+     * @return {void}
+     */
+    function renderRasterCursorSamples(snapshot) {
+        if (snapshot === null) {
+            cursorValuesView.clear();
+            return;
+        }
+        if (!pixelPickerEnabled) return;
+        cursorValuesView.render(snapshot);
+    }
+
+    /** Hide the pixel picker and cancel its transient sampling operation. */
+    function hidePixelPicker() {
+        pixelPickerEnabled = false;
+        rasterCursorPosition = null;
+        cursorSamplesController.clear();
+        cursorValuesView.setEnabled?.(false);
+    }
+
+    /** Restore pixel sampling for the next settled map-pointer position. */
+    function showPixelPicker() {
+        pixelPickerEnabled = true;
+        cursorValuesView.setEnabled?.(true);
+    }
+
+    /**
      * Mark the editing session's manual change and schedule its renderer update.
      * Missing sessions and paired-mode targets are ignored.
      *
@@ -3352,19 +3451,36 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function handleMapMouseMove(mapEvent) {
-        if (!canUseRasterMapInteractions()) {
-            rasterSampleWindowController.clearPreview();
-            return;
-        }
-        rasterSampleWindowController.previewAt(mapEvent.latlng);
         const point = {
             longitude: mapEvent.latlng.lng,
             latitude: mapEvent.latlng.lat,
         };
         if (!isCanonicalWgs84Position(point)) {
             rasterSampleWindowController.clearPreview();
+            rasterCursorPosition = null;
+            cursorSamplesController.clear();
             return;
         }
+        if (canUseRasterMapInteractions()) {
+            rasterSampleWindowController.previewAt(mapEvent.latlng);
+        } else {
+            rasterSampleWindowController.clearPreview();
+        }
+        if (mapDragging) {
+            return;
+        }
+        if (!pixelPickerEnabled) {
+            return;
+        }
+        cursorValuesView.move?.({
+            clientX: mapEvent.originalEvent?.clientX,
+            clientY: mapEvent.originalEvent?.clientY,
+        });
+        rasterCursorPosition = Object.freeze(point);
+        cursorSamplesController.move(
+            rasterCursorSampleParticipants(point),
+            point
+        );
     }
 
     /**
@@ -3374,6 +3490,20 @@ export function initializeRasterViewer(
      */
     function handleMapMouseLeave() {
         rasterSampleWindowController.clearPreview();
+        rasterCursorPosition = null;
+        cursorSamplesController.clear();
+    }
+
+    /** Suspend transient reads while Leaflet interprets pointer motion as drag. */
+    function handleMapDragStart() {
+        mapDragging = true;
+        rasterCursorPosition = null;
+        cursorSamplesController.clear();
+    }
+
+    /** Resume dwell-based cursor sampling after a completed map drag. */
+    function handleMapDragEnd() {
+        mapDragging = false;
     }
 
     /**
@@ -3405,6 +3535,7 @@ export function initializeRasterViewer(
         analysisRasterSession = null;
         mapLayers.removeOwned(rasterMapLayerAdapter);
         pointSamplesController.clear();
+        cursorSamplesController.clear();
         rasterStatisticsController.clear();
         pairedStatisticsController.clear();
         rasterSampleWindowController.clear();
@@ -3430,12 +3561,15 @@ export function initializeRasterViewer(
         controlsView.setControlsVisible(false);
         controlsView.renderLayerHistograms([], null);
         controlsView.clearPointSamples();
+        cursorValuesView.clear();
         controlsView.renderBivariateMode?.({ active: false });
         controlsView.setAppearanceEnabled?.(true);
         controlsView.setUnivariateHistogramVisible?.(true);
         controlsView.setTemporaryAoiCompatible?.(true);
         renderBivariateAvailability();
         visibleHistogramSignature = null;
+        rasterCursorPosition = null;
+        mapDragging = false;
         clearing = false;
     }
 
@@ -3612,8 +3746,11 @@ export function initializeRasterViewer(
         if (ownsMapLayerController) {
             mapLayers.destroy();
         }
+        cursorValuesView.unbind?.();
         mapContainer.removeEventListener("mouseleave", handleMapMouseLeave);
         leafletMap.off("mousemove", handleMapMouseMove);
+        leafletMap.off("dragstart", handleMapDragStart);
+        leafletMap.off("dragend", handleMapDragEnd);
     }
 
     controlsView.populatePalettes(RASTER_COLOR_PALETTES);
@@ -3658,7 +3795,14 @@ export function initializeRasterViewer(
         onRetryPairedStatistics: handleRetryPairedStatistics,
     });
     const mapContainer = leafletMap.getContainer();
+    cursorValuesView.bind?.({
+        onHide: hidePixelPicker,
+        onShow: showPixelPicker,
+    });
+    cursorValuesView.setEnabled?.(true);
     leafletMap.on("mousemove", handleMapMouseMove);
+    leafletMap.on("dragstart", handleMapDragStart);
+    leafletMap.on("dragend", handleMapDragEnd);
     mapContainer.addEventListener("mouseleave", handleMapMouseLeave);
 
     resetRasterSampleWindow();

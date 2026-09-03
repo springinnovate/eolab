@@ -2166,6 +2166,140 @@ h5 {
   font: 0.72rem/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
+.raster-cursor-values {
+  position: fixed;
+  z-index: 700;
+  display: grid;
+  width: min(320px, calc(100vw - 40px));
+  max-height: min(46dvh, 380px);
+  gap: 7px;
+  overflow: hidden;
+  pointer-events: none;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius);
+  background: rgb(255 255 255 / 94%);
+  padding: 10px 11px;
+  box-shadow: var(--elevation-panel);
+}
+
+.raster-cursor-values[hidden] {
+  display: none;
+}
+
+.raster-cursor-values-header {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.raster-cursor-values h2 {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+#raster-cursor-position {
+  color: var(--text-3);
+  font: 0.66rem/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: nowrap;
+}
+
+#raster-cursor-value-list {
+  display: grid;
+  min-height: 0;
+  margin: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.raster-cursor-value-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: baseline;
+  min-width: 0;
+  padding: 4px 0;
+  border-top: 1px solid var(--border-3);
+  font-size: 0.72rem;
+}
+
+.raster-cursor-value-help {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 0.66rem;
+}
+
+#raster-cursor-copy-feedback {
+  margin-left: 4px;
+  color: var(--status-success);
+  font-weight: 700;
+}
+
+.raster-cursor-values.is-copy-confirmed {
+  animation: raster-cursor-copy-confirmation 600ms ease-out;
+}
+
+@keyframes raster-cursor-copy-confirmation {
+  35% {
+    border-color: var(--status-success);
+    background: color-mix(in srgb, var(--status-success) 10%, var(--surface-2));
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--status-success) 24%, transparent),
+      var(--elevation-panel);
+  }
+}
+
+.raster-cursor-values-restore {
+  position: absolute;
+  z-index: 700;
+  right: 20px;
+  bottom: 58px;
+  border: 1px solid var(--border-1);
+  border-radius: 999px;
+  background: rgb(255 255 255 / 94%);
+  padding: 7px 11px;
+  color: var(--text-2);
+  box-shadow: var(--elevation-control);
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+.raster-cursor-values-restore:hover,
+.raster-cursor-values-restore:focus-visible {
+  border-color: var(--brand);
+  color: var(--brand-hover);
+}
+
+.raster-cursor-value-row dt {
+  overflow: hidden;
+  color: var(--text-1);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.raster-cursor-value-row dd {
+  margin: 0;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.raster-cursor-value-row[data-state="error"] dd {
+  max-width: 15ch;
+  overflow: hidden;
+  color: var(--status-danger);
+  text-overflow: ellipsis;
+}
+
+#raster-cursor-value-limit {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 0.68rem;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -3004,6 +3138,15 @@ button.raster-histogram-summary:hover,
   .map-position {
     top: 8px;
     bottom: auto;
+  }
+
+  .raster-cursor-values {
+    max-height: 34dvh;
+  }
+
+  .raster-cursor-values-restore {
+    right: 8px;
+    bottom: 8px;
   }
 
   .temporary-aoi-upload,

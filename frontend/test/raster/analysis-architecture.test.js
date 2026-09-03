@@ -4,6 +4,7 @@ import test from "node:test";
 
 const ANALYSIS_MODULES = [
     "analysis-api.js",
+    "cursor-samples.js",
     "paired-statistics.js",
     "point-samples.js",
     "statistics-controller.js",

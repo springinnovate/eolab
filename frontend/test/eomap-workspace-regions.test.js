@@ -370,6 +370,18 @@ test("Sampling keeps area controls and AOI; map exploration owns histogram resul
         MARKUP,
         /id="raster-point-samples"[^>]*aria-live="polite"/s
     );
+    const cursorValues = requireElementRange("raster-cursor-values");
+    assert.match(cursorValues.source, />Pixel picker</);
+    assert.match(cursorValues.source, /id="raster-cursor-position"/);
+    assert.match(cursorValues.source, /id="raster-cursor-value-list"/);
+    assert.match(cursorValues.source, /id="raster-cursor-value-limit"/);
+    assert.match(cursorValues.source, /id="raster-cursor-copy-feedback"[^>]*hidden/);
+    assert.match(MARKUP, /id="restore-raster-cursor-values"[^>]*>Pixel picker hidden · Press P to show</s);
+    assert.doesNotMatch(cursorValues.source, /aria-live|role="status"/);
+    assert.match(
+        STYLESHEET,
+        /\.raster-cursor-values\s*\{[^}]*pointer-events:\s*none/s
+    );
     assert.match(temporaryAoi.source, /data-eomap-region="raster-interpretation"/);
     assert.match(temporaryAoi.source, /aria-labelledby="temporary-aoi-heading"/);
     for (const renderingControl of [
@@ -591,6 +603,12 @@ test("semantic regions preserve one DOM instance of every owned control", () => 
         "temporary-aoi",
         "raster-point-samples",
         "raster-point-sample-list",
+        "raster-cursor-values",
+        "raster-cursor-position",
+        "raster-cursor-value-list",
+        "raster-cursor-value-limit",
+        "raster-cursor-copy-feedback",
+        "restore-raster-cursor-values",
         "map-inspection",
         "map-histogram-panel",
         "map-histogram-scope",

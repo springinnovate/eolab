@@ -736,6 +736,30 @@
         OPEN LABEL TO BE SET BY CONFIGURATION
       </button>
       <div class="map-position" id="map-position">0.000, 0.000</div>
+      <aside
+        class="raster-cursor-values"
+        id="raster-cursor-values"
+        aria-labelledby="raster-cursor-values-heading"
+        aria-busy="false"
+        hidden
+      >
+        <header class="raster-cursor-values-header">
+          <h2 id="raster-cursor-values-heading">Pixel picker</h2>
+          <span id="raster-cursor-position"></span>
+        </header>
+        <dl id="raster-cursor-value-list"></dl>
+        <p id="raster-cursor-value-limit" hidden></p>
+        <p class="raster-cursor-value-help">
+          Ctrl/Cmd+C copy values · Esc hide
+          <span id="raster-cursor-copy-feedback" hidden>[Copied]</span>
+        </p>
+      </aside>
+      <button
+        class="raster-cursor-values-restore"
+        id="restore-raster-cursor-values"
+        type="button"
+        hidden
+      >Pixel picker hidden · Press P to show</button>
       <div class="map-tool-openers">
         <button id="open-analysis-tools" class="secondary-button" type="button"
           aria-label="Open analysis tools using visible data at the map center">Analysis tools</button>
