@@ -473,7 +473,8 @@ def initialize_geowebcache(
         global_configuration,
         "application/xml",
     )
-    _require_status(status, 200, "PUT", configuration_path)
+    if status not in {200, 201}:
+        _require_status(status, 200, "PUT", configuration_path)
     reload_path = "/reload"
     status, _ = client.request("POST", reload_path)
     _require_status(status, 200, "POST", reload_path)

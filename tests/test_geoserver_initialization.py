@@ -242,7 +242,7 @@ def test_geowebcache_initialization_uses_only_epsg3857_and_bounded_storage() -> 
         b"<layer><name>external:ignored</name></layer></layers>"
     )
     client = RecordingGeoServerClient(
-        [(200, b""), (200, b"")],
+        [(201, b""), (200, b"")],
         [
             (201, b""),
             (200, layer_list),
