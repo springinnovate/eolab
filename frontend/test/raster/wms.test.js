@@ -16,7 +16,8 @@ import {
 test("raster style builds the dynamic SLD environment contract", () => {
   assert.equal(
     buildRasterStyleEnvironment(DEFAULT_RASTER_STYLE),
-    "min:0;med:50;max:100;cmin:#2b83ba;cmed:#ffffbf;cmax:#d7191c;amin:1;amed:1;amax:1",
+    "min:0;med:50;max:100;cmin:#ffffcc;cmed:#fd8d3c;" +
+      "cmax:#800026;amin:1;amed:1;amax:1",
   );
 });
 

@@ -55,6 +55,7 @@ import {
 } from "./paired-statistics.js";
 import {
     applyRasterColorPalette,
+    DEFAULT_RASTER_PALETTE_NAME,
     DEFAULT_RASTER_STYLE,
     deriveInitialRasterStyleFromStatistics,
     deriveRasterStyleFromStatistics,
@@ -307,7 +308,7 @@ export function initializeRasterViewer(
     let analysisRasterSession = null;
     let activeLayerKey = null;
     let rasterStyle = { ...DEFAULT_RASTER_STYLE };
-    let activePaletteName = "blue-yellow-red";
+    let activePaletteName = DEFAULT_RASTER_PALETTE_NAME;
     let editingLayerKey = null;
     let followsVisibleLayers = false;
     let visibleHistogramSignature = null;
@@ -369,7 +370,7 @@ export function initializeRasterViewer(
             label: entry.label,
             publishedRaster,
             rasterStyle: { ...DEFAULT_RASTER_STYLE },
-            paletteName: "blue-yellow-red",
+            paletteName: DEFAULT_RASTER_PALETTE_NAME,
             rasterStyleWasEdited: false,
             rasterStatistics: null,
             rasterStatisticsIsApplicable: false,
@@ -404,7 +405,7 @@ export function initializeRasterViewer(
             item,
             label: getCatalogRasterBasename(item),
             rasterStyle: { ...DEFAULT_RASTER_STYLE },
-            paletteName: "blue-yellow-red",
+            paletteName: DEFAULT_RASTER_PALETTE_NAME,
             rasterStyleWasEdited: false,
             rasterStatistics: null,
             rasterStatisticsIsApplicable: false,
@@ -2608,7 +2609,7 @@ export function initializeRasterViewer(
                 );
         controlsView.setStyle({
             ...style, minimumOpacity: 1, midpointOpacity: 1, maximumOpacity: 1
-        }, "blue-yellow-red");
+        }, DEFAULT_RASTER_PALETTE_NAME);
     }
 
     /**
