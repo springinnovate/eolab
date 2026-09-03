@@ -2595,6 +2595,10 @@ h5 {
   gap: 6px;
 }
 
+.saved-map-view-action[hidden] {
+  display: none;
+}
+
 .saved-map-view-action svg {
   width: 15px;
   height: 15px;
