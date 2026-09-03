@@ -115,6 +115,10 @@ class PublishedRasterAuthorization:
                 malformed.
         """
         del operation
+        if "featureid" in query:
+            raise PublishedLayerRequestError(
+                "featureid is supported only for vector layers"
+            )
         if "env" in query:
             validate_raster_style_environment(query["env"])
 

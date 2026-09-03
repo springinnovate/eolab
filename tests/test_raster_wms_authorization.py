@@ -5,7 +5,9 @@ from xml.etree import ElementTree
 
 import pytest
 
+from eolab_app.raster.source_identity import RasterSourceIdentity
 from eolab_app.raster.wms_authorization import (
+    PublishedRasterAuthorization,
     validate_raster_style_environment,
 )
 from eolab_app.rendering.errors import PublishedLayerRequestError
@@ -45,6 +47,23 @@ def test_raster_style_environment_accepts_bounded_thresholds_and_colors() -> Non
     validate_raster_style_environment(
         "min:0;med:50;max:100;cmin:#2b83ba;cmed:#ffffbf;cmax:#d7191c"
     )
+
+
+def test_raster_authorization_rejects_vector_feature_filter() -> None:
+    """Keep selected-feature rendering confined to authorized vector layers."""
+    authorization = PublishedRasterAuthorization(
+        Path("raster.tif"),
+        RasterSourceIdentity(1, 2, 3, 4),
+    )
+
+    with pytest.raises(
+        PublishedLayerRequestError,
+        match="featureid is supported only for vector layers",
+    ):
+        authorization.validate_parameters(
+            "getmap",
+            {"featureid": "parcels.42"},
+        )
 
 
 @pytest.mark.parametrize("alpha", ["0", "0.25", "1", "1e-3"])

@@ -244,6 +244,9 @@ def test_wms_proxy_forwards_one_authorized_fixed_style_vector_layer() -> None:
     )
 
     response = client.get(f"/geoserver/eolab/wms{query}")
+    highlight_response = client.get(
+        f"/geoserver/eolab/wms{query}&featureid=parcels.42"
+    )
     raster_style_response = client.get(
         f"/geoserver/eolab/wms{query.replace('vector-polygon', 'dynamic-raster')}"
     )
@@ -262,10 +265,12 @@ def test_wms_proxy_forwards_one_authorized_fixed_style_vector_layer() -> None:
 
     assert response.status_code == 200
     assert response.content == b"vector png"
-    assert len(forwarded_requests) == 1
+    assert highlight_response.status_code == 200
+    assert len(forwarded_requests) == 2
     assert forwarded_requests[0].url.params.get_list("layers") == [
         "eolab:parcels"
     ]
+    assert forwarded_requests[1].url.params["featureid"] == "parcels.42"
     assert raster_style_response.status_code == 400
     assert raster_style_response.json() == {
         "detail": "WMS style must be vector-polygon"
@@ -639,6 +644,11 @@ def test_wms_proxy_rejects_a_layer_not_approved_by_this_app_process(
         (
             "service=WMS&request=GetMap&format=application/openlayers",
             "WMS map and legend format must be image/png",
+        ),
+        (
+            "service=WMS&request=GetMap&format=image%2Fpng"
+            "&featureid=first.1%2Csecond.2",
+            "featureid must identify exactly one safe feature",
         ),
         (
             "service=WMS&request=GetFeatureInfo&info_format=text/html",

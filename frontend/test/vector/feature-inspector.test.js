@@ -48,7 +48,24 @@ function createFixture(fetchImplementation, { now = () => 0 } = {}) {
     latLngToContainerPoint: () => ({ x: 10, y: 20 }),
   };
   const highlights = [];
+  const wmsHighlights = [];
   const leaflet = {
+    tileLayer: {
+      wms(url, options) {
+        const handlers = new Map();
+        return {
+          url,
+          options,
+          on(type, handler) { handlers.set(type, handler); return this; },
+          addTo(map) {
+            this.map = map;
+            this.handlers = handlers;
+            wmsHighlights.push(this);
+            return this;
+          },
+        };
+      },
+    },
     geoJSON(feature, options) {
       const layer = {
         feature,
@@ -88,6 +105,7 @@ function createFixture(fetchImplementation, { now = () => 0 } = {}) {
     targets,
     handlers,
     highlights,
+    wmsHighlights,
     removedLayers,
     inspectionChanges,
     sampleChanges,
@@ -120,6 +138,40 @@ test("attribute formatting is bounded and excludes the geometry field", () => {
     { name: "habitat", value: "wetland" },
     { name: "rank", value: "2" },
   ]);
+});
+
+test("identified features use a filtered WMS highlight without geometry", async () => {
+  const h = createFixture(async () => ({
+    ok: true,
+    json: async () => ({ type: "FeatureCollection", features: [{
+      type: "Feature",
+      id: "parcels.42",
+      geometry: null,
+      properties: { name: "Selected parcel" },
+    }] }),
+  }));
+
+  await h.controller.inspect(inspectionEvent(12, 24));
+
+  assert.equal(h.highlights.length, 0);
+  assert.equal(h.wmsHighlights.length, 1);
+  assert.equal(h.wmsHighlights[0].url, "/geoserver/eolab/wms");
+  assert.deepEqual(h.wmsHighlights[0].options, {
+    layers: "eolab:parcels",
+    styles: "vector-polygon",
+    format: "image/png",
+    transparent: true,
+    version: "1.1.1",
+    featureid: "parcels.42",
+  });
+  const addedClasses = [];
+  h.wmsHighlights[0].handlers.get("tileload")({
+    tile: { classList: { add: (name) => addedClasses.push(name) } },
+  });
+  assert.deepEqual(addedClasses, ["vector-feature-highlight-tile"]);
+
+  h.controller.clearResults();
+  assert.deepEqual(h.removedLayers, [h.wmsHighlights[0]]);
 });
 
 test("analysis observations are immutable and omit nested properties", () => {

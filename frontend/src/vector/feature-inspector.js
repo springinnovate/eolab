@@ -12,6 +12,7 @@ const HIGHLIGHT_STYLE = Object.freeze({
     fillColor: "#facc15",
     fillOpacity: 0.35,
 });
+const WMS_HIGHLIGHT_TILE_CLASS = "vector-feature-highlight-tile";
 
 const TIME_SERIES_AVAILABLE_HELP =
     "Plot one numeric field across all features found at this location.";
@@ -625,7 +626,20 @@ export class VectorFeatureInspectorController {
             }
         }
         this.clearHighlight();
-        if (feature.geometry !== null) {
+        if (typeof feature.id === "string" && feature.id.length > 0) {
+            const highlightLayer = this.leaflet.tileLayer.wms(this.wmsUrl, {
+                layers: target.publication.layerName,
+                styles: target.publication.styleName,
+                format: "image/png",
+                transparent: true,
+                version: "1.1.1",
+                featureid: feature.id,
+            });
+            highlightLayer.on("tileload", ({ tile }) =>
+                tile.classList.add(WMS_HIGHLIGHT_TILE_CLASS)
+            );
+            this.highlightLayer = highlightLayer.addTo(this.map);
+        } else if (feature.geometry !== null) {
             this.highlightLayer = this.leaflet.geoJSON(feature, {
                 style: HIGHLIGHT_STYLE,
                 pointToLayer: (_pointFeature, latlng) =>
