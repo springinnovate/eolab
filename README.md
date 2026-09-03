@@ -11,7 +11,7 @@ material in real time without installing a desktop GIS or creating an account.
 
 ![EOLab showing Catalog results beside a map of a vector dataset](docs/images/eolab-catalog-map.png)
 
-## What can I do with EOLab?
+## What can you do with EOLab
 
 - Search a shared Catalog by filename, path, date, or dataset type.
 - Add several rasters and vectors to one map, reorder them, and control which
