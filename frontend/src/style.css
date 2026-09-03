@@ -91,14 +91,14 @@ select:hover:not(:disabled) {
 
 #map {
   position: absolute;
-  top: var(--workspace-edge);
-  right: var(--workspace-edge);
-  bottom: var(--workspace-edge);
-  left: var(--workspace-edge);
+  inset: var(--workspace-edge) var(--workspace-edge) var(--workspace-edge)
+    calc(
+      var(--active-workspace-width) + var(--workspace-edge) +
+        var(--workspace-gap)
+    );
+  min-width: 0;
   background: var(--surface-1);
-  transition:
-    right 220ms ease,
-    left 220ms ease;
+  transition: left 220ms ease;
 }
 
 .leaflet-container {
@@ -148,7 +148,6 @@ select:hover:not(:disabled) {
   color: var(--brand-hover) !important;
 }
 
-.eyebrow,
 .section-label {
   margin: 0 0 7px;
   color: var(--brand-hover);
@@ -206,8 +205,7 @@ h5 {
   font-weight: 600;
 }
 
-.subtitle,
-.section-copy {
+.subtitle {
   color: var(--text-2);
   line-height: 1.55;
 }
@@ -242,24 +240,6 @@ h5 {
   color: var(--brand-press);
 }
 
-.workspace-region-heading {
-  display: flex;
-  min-width: 0;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-
-.workspace-region-heading h2 {
-  margin: 0;
-  font-size: 0.98rem;
-}
-
-.workspace-region-toggle {
-  flex: 0 0 auto;
-}
-
 .workspace-region-body {
   min-width: 0;
   min-height: 0;
@@ -269,24 +249,6 @@ h5 {
   display: none;
 }
 
-.eomap-workspace-region.is-collapsed .workspace-region-heading {
-  margin-bottom: 0;
-}
-
-.operational-status-region {
-  grid-column: 1;
-  grid-row: 2;
-  min-height: 0;
-  pointer-events: auto;
-  border: 1px solid var(--border-1);
-  border-radius: var(--radius);
-  background: rgb(255 255 255 / 98%);
-  box-shadow: var(--elevation-panel);
-}
-
-.catalog-panel[hidden],
-.map-layers-region[hidden],
-.raster-interpretation-region[hidden],
 .temporary-aoi-card[hidden] {
   display: none;
 }
@@ -423,49 +385,6 @@ h5 {
   display: none;
 }
 
-.panel-content {
-  display: contents;
-}
-
-.catalog-panel {
-  display: flex;
-  grid-column: 1;
-  grid-row: 3;
-  min-height: 0;
-  flex-direction: column;
-  overflow: hidden;
-  pointer-events: auto;
-  border: 1px solid var(--border-1);
-  border-radius: var(--radius);
-  background: rgb(255 255 255 / 98%);
-  padding: 14px;
-  box-shadow: var(--elevation-panel);
-}
-
-.map-layers-region {
-  grid-column: 3;
-  grid-row: 2 / 5;
-}
-
-.raster-interpretation-region {
-  grid-column: 3;
-  grid-row: 2 / 5;
-}
-
-.map-layers-region,
-.raster-interpretation-region {
-  display: flex;
-  min-height: 0;
-  flex-direction: column;
-  overflow: hidden;
-  pointer-events: auto;
-  border: 1px solid var(--border-1);
-  border-radius: var(--radius);
-  background: rgb(255 255 255 / 98%);
-  padding: 14px;
-  box-shadow: var(--elevation-panel);
-}
-
 .map-layers-body,
 .raster-interpretation-body {
   max-height: none;
@@ -483,18 +402,10 @@ h5 {
 }
 
 .temporary-aoi-card {
-  grid-column: 3;
-  grid-row: 2 / 5;
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
   pointer-events: auto;
-  border: 1px solid var(--border-2);
-  border-left: 4px solid #6d1b7b;
-  border-radius: var(--radius);
-  background: var(--surface-3);
-  padding: 13px 14px;
-  box-shadow: var(--elevation-panel);
 }
 
 .temporary-aoi-heading {
@@ -504,13 +415,8 @@ h5 {
   gap: 12px;
 }
 
-.temporary-aoi-heading h2,
 .temporary-aoi-heading .section-label {
   margin-bottom: 0;
-}
-
-.temporary-aoi-heading h2 {
-  font-size: 1.05rem;
 }
 
 .temporary-aoi-heading > p {
@@ -710,39 +616,10 @@ h5 {
   vector-effect: non-scaling-stroke;
 }
 
-.section-copy {
-  margin-bottom: 18px;
-  font-size: 0.9rem;
-}
-
-.catalog-heading {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.catalog-heading h2 {
-  margin-bottom: 12px;
-}
-
-.catalog-heading .secondary-button {
-  flex: 0 0 auto;
-}
-
-.catalog-layout,
 .catalog-browser {
   min-width: 0;
   min-height: 0;
   flex: 1;
-}
-
-.catalog-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-}
-
-.catalog-browser {
   display: flex;
   flex-direction: column;
 }
@@ -811,13 +688,6 @@ h5 {
 
 .catalog-pane-body[hidden] {
   display: none;
-}
-
-#panel-catalog.is-active {
-  display: flex;
-  min-height: 0;
-  flex-direction: column;
-  overflow: hidden;
 }
 
 .catalog-inspector {
@@ -1211,13 +1081,6 @@ h5 {
   color: var(--text-2);
   font-size: 0.72rem;
   font-weight: 600;
-}
-
-.raster-appearance-description {
-  margin: 0;
-  color: var(--text-3);
-  font-size: 0.68rem;
-  line-height: 1.4;
 }
 
 .raster-palette,
@@ -1777,13 +1640,6 @@ h5 {
   border-top: 1px solid var(--border-2);
 }
 
-.catalog-results-scroll {
-  min-height: 0;
-  flex: 1;
-  overflow-y: auto;
-  padding-right: 4px;
-}
-
 .catalog-search-toolbar {
   position: relative;
   display: grid;
@@ -2270,29 +2126,16 @@ h5 {
   font-size: 0.8rem;
 }
 
-.panel-footer {
-  display: flex;
-  grid-column: 1;
-  grid-row: 4;
-  justify-content: space-between;
-  pointer-events: auto;
-  border: 1px solid var(--border-1);
-  border-radius: var(--radius);
-  background: rgb(255 255 255 / 98%);
-  padding: 7px 10px;
-  color: var(--text-3);
-  box-shadow: var(--elevation-control);
-  font-size: 0.72rem;
-}
-
 .panel-opener {
   position: absolute;
   z-index: 1100;
-  top: 20px;
-  right: 20px;
+  top: auto;
+  right: auto;
+  bottom: var(--workspace-edge);
+  left: var(--workspace-edge);
   cursor: pointer;
   border: 1px solid var(--brand);
-  border-radius: var(--radius);
+  border-radius: 6px;
   background: var(--brand);
   padding: 11px 15px;
   color: #ffffff;
@@ -2312,7 +2155,7 @@ h5 {
 .map-position {
   position: absolute;
   z-index: 450;
-  right: 438px;
+  right: 20px;
   bottom: 20px;
   border: 1px solid var(--border-1);
   border-radius: 999px;
@@ -2321,105 +2164,6 @@ h5 {
   color: var(--text-2);
   box-shadow: var(--elevation-control);
   font: 0.72rem/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  transition: right 220ms ease;
-}
-
-.control-panel.is-collapsed ~ .map-position {
-  right: 20px;
-}
-
-@media (max-width: 820px) {
-  .control-panel {
-    inset: auto 8px 50px;
-    height: min(72dvh, 680px);
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto auto auto minmax(0, 1fr);
-    gap: 0;
-    pointer-events: auto;
-    overflow: hidden;
-    border: 1px solid var(--border-1);
-    border-radius: 8px;
-    background: rgb(255 255 255 / 98%);
-    box-shadow: var(--elevation-panel);
-  }
-
-  .control-panel.is-collapsed {
-    transform: translateY(calc(100% + 58px));
-  }
-
-  .operational-status-region {
-    grid-column: 1;
-    grid-row: 2;
-    border: 0;
-    border-bottom: 1px solid var(--border-3);
-    border-radius: 0;
-    box-shadow: none;
-  }
-
-  .system-state > summary,
-  .system-state-details-body {
-    padding-right: 12px;
-    padding-left: 12px;
-  }
-
-  .catalog-panel,
-  .map-layers-region,
-  .raster-interpretation-region,
-  .temporary-aoi-card {
-    grid-column: 1;
-    border: 0;
-    border-radius: 0;
-    box-shadow: none;
-  }
-
-  .catalog-panel {
-    grid-row: 3 / 5;
-    padding: 12px;
-  }
-
-  .map-layers-region,
-  .raster-interpretation-region,
-  .temporary-aoi-card {
-    grid-row: 4;
-    overflow-y: auto;
-    padding: 12px;
-  }
-
-  .panel-footer {
-    display: none;
-  }
-
-  .panel-opener {
-    top: auto;
-    right: 8px;
-    bottom: 8px;
-  }
-
-  .map-position {
-    top: 8px;
-    right: 8px;
-    bottom: auto;
-  }
-
-  .temporary-aoi-upload,
-  .temporary-aoi-details {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .temporary-aoi-upload .secondary-button {
-    justify-self: start;
-  }
-}
-
-@media (max-width: 420px) {
-  .control-panel {
-    height: min(76dvh, 680px);
-  }
-
-  .workspace-region-heading {
-    align-items: stretch;
-  }
-
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2433,7 +2177,11 @@ h5 {
   }
 }
 
-/* Unified EOMap workspace sidebar --------------------------------------- */
+/* Unified EOMap workspace sidebar ---------------------------------------
+ * Component rules above own intrinsic appearance and interaction states.
+ * These shell rules own placement and responsive allocation, so repeated
+ * component selectors here are intentional final-context overrides.
+ */
 
 #app {
   --workspace-sidebar-width: clamp(340px, 27vw, 420px);
@@ -2485,16 +2233,6 @@ h5 {
   --workspace-catalog-track: 2.1fr;
 }
 
-#map {
-  inset: var(--workspace-edge) var(--workspace-edge) var(--workspace-edge)
-    calc(
-      var(--active-workspace-width) + var(--workspace-edge) +
-        var(--workspace-gap)
-    );
-  min-width: 0;
-  transition: left 220ms ease;
-}
-
 #app.is-control-panel-collapsed #map {
   left: var(--workspace-edge);
 }
@@ -2529,8 +2267,7 @@ h5 {
 }
 
 .panel-header,
-.operational-status-region,
-.panel-footer {
+.operational-status-region {
   grid-column: 1;
   pointer-events: auto;
   border: 0;
@@ -2678,6 +2415,7 @@ h5 {
 
 .operational-status-region {
   grid-row: 2;
+  min-height: 0;
 }
 
 .operational-status-notice:not(.visually-hidden) {
@@ -2817,7 +2555,6 @@ h5 {
   min-width: 0;
   min-height: 0;
   flex-direction: column;
-  overflow: hidden;
   pointer-events: auto;
   border: 0;
   border-right: 1px solid var(--border-2);
@@ -2835,6 +2572,7 @@ h5 {
 
 .map-layers-region,
 .raster-interpretation-region {
+  overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
@@ -2852,6 +2590,7 @@ h5 {
 .catalog-panel {
   container-name: catalog-workspace;
   container-type: inline-size;
+  overflow: hidden;
 }
 
 @container catalog-workspace (min-width: 640px) {
@@ -2897,8 +2636,10 @@ h5 {
 .catalog-results-scroll {
   min-height: 0;
   flex: 1;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   overscroll-behavior: contain;
+  padding-right: 4px;
   scrollbar-gutter: stable;
 }
 
@@ -2939,15 +2680,6 @@ h5 {
   display: none;
 }
 
-.raster-histogram-overview-heading {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.raster-histogram-overview-heading h3,
-.raster-histogram-overview-heading .section-label,
 .rendering-availability h3 {
   margin-bottom: 0;
 }
@@ -3122,10 +2854,6 @@ button.raster-histogram-summary:hover,
   box-shadow: none;
 }
 
-.raster-histogram[hidden] {
-  display: none;
-}
-
 .raster-bivariate-statistics[hidden] {
   display: none;
 }
@@ -3162,22 +2890,19 @@ button.raster-histogram-summary:hover,
 }
 
 .panel-footer {
+  display: flex;
+  grid-column: 1;
   grid-row: 4;
+  justify-content: space-between;
+  pointer-events: auto;
+  border: 0;
   border-top: 1px solid var(--border-3);
+  border-radius: 0;
+  background: transparent;
   padding: 7px 10px;
-}
-
-.panel-opener {
-  top: auto;
-  right: auto;
-  bottom: var(--workspace-edge);
-  left: var(--workspace-edge);
-  border-radius: 6px;
-}
-
-.map-position,
-.control-panel.is-collapsed ~ .map-position {
-  right: 20px;
+  color: var(--text-3);
+  box-shadow: none;
+  font-size: 0.72rem;
 }
 
 @media (max-width: 1199px) {
@@ -3261,6 +2986,36 @@ button.raster-histogram-summary:hover,
   }
 }
 
+@media (max-width: 820px) {
+  .control-panel {
+    height: min(72dvh, 680px);
+  }
+
+  .system-state > summary,
+  .system-state-details-body {
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  .panel-footer {
+    display: none;
+  }
+
+  .map-position {
+    top: 8px;
+    bottom: auto;
+  }
+
+  .temporary-aoi-upload,
+  .temporary-aoi-details {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .temporary-aoi-upload .secondary-button {
+    justify-self: start;
+  }
+}
+
 @media (max-width: 699px) {
   .control-panel {
     inset: auto 8px 8px;
@@ -3285,10 +3040,6 @@ button.raster-histogram-summary:hover,
   .map-layers-region,
   .raster-interpretation-region {
     padding: 11px;
-  }
-
-  .panel-footer {
-    display: none;
   }
 
   .panel-opener {
@@ -3351,16 +3102,11 @@ button.raster-histogram-summary:hover,
 
 /* Bivariate raster comparison ------------------------------------------ */
 
-.raster-bivariate-heading,
 .raster-bivariate-roles {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
-}
-
-.raster-bivariate-heading h3 {
-  margin: 0;
 }
 
 .raster-bivariate-controls label {
@@ -4130,6 +3876,8 @@ button.raster-histogram-summary:hover,
 .vector-style-controls .secondary-button { justify-self: start; }
 .style-percentiles { margin-top: 16px; }
 .style-percentiles summary { cursor: pointer; font-size: 0.8rem; }
+
+/* Kept with the late-defined map-inspection component so it wins by source order. */
 @media (max-width: 699px) {
   #map-inspection,
   #map-inspection:has(#map-histogram-panel:not([hidden])):has(#layer-style-editor:not([hidden])),
@@ -4140,5 +3888,8 @@ button.raster-histogram-summary:hover,
     inset: auto 8px 8px 8px;
     width: calc(100vw - 16px);
   }
-  .map-inspection-panels { max-height: 52dvh; }
+
+  .map-inspection-panels {
+    max-height: 52dvh;
+  }
 }

@@ -147,7 +147,7 @@ test("temporary AOI is bounded inside analysis without taking Catalog scroll", (
   );
   assert.match(
     STYLESHEET,
-    /\.catalog-results-scroll\s*\{[^}]*overflow:\s*auto[^}]*overscroll-behavior:\s*contain/s,
+    /\.catalog-results-scroll\s*\{[^}]*overflow-y:\s*auto[^}]*overscroll-behavior:\s*contain/s,
   );
   assert.match(
     STYLESHEET,

@@ -429,7 +429,7 @@ test("sidebar panels own deliberate, independent scrolling", () => {
     );
     assert.match(
         STYLESHEET,
-        /\.catalog-panel,\s*\.map-layers-region,\s*\.raster-interpretation-region\s*\{[^}]*overflow:\s*hidden/s
+        /\.catalog-panel\s*\{[^}]*overflow:\s*hidden/s
     );
     assert.match(
         STYLESHEET,
@@ -437,7 +437,7 @@ test("sidebar panels own deliberate, independent scrolling", () => {
     );
     assert.match(
         STYLESHEET,
-        /\.catalog-results-scroll\s*\{[^}]*overflow:\s*auto[^}]*overscroll-behavior:\s*contain/s
+        /\.catalog-results-scroll\s*\{[^}]*overflow-y:\s*auto[^}]*overscroll-behavior:\s*contain/s
     );
     assert.match(
         STYLESHEET,
