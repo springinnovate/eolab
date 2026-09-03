@@ -222,7 +222,7 @@ export class SavedMapViewController {
             this.rememberPending = true;
             return;
         }
-        this.#queueRemember(true);
+        this.#queueRemember();
     }
 
     /**
@@ -445,17 +445,16 @@ export class SavedMapViewController {
         this.view.setBusy(busy);
         if (!busy && this.rememberPending) {
             this.rememberPending = false;
-            this.#queueRemember(false);
+            this.#queueRemember();
         }
     }
 
     /**
-     * Debounce one validated local snapshot and optionally consume reset undo.
+     * Debounce one validated local snapshot.
      *
-     * @param {boolean} supersedesUndo Whether a user change invalidates undo.
      * @return {void}
      */
-    #queueRemember(supersedesUndo) {
+    #queueRemember() {
         if (this.storage === null || this.destroyed) return;
         this.rememberGeneration += 1;
         const generation = this.rememberGeneration;
@@ -464,7 +463,7 @@ export class SavedMapViewController {
         }
         this.rememberTimer = this.setTimer(() => {
             this.rememberTimer = null;
-            void this.#remember(generation, supersedesUndo);
+            void this.#remember(generation);
         }, REMEMBER_DEBOUNCE_MILLISECONDS);
     }
 
@@ -474,10 +473,9 @@ export class SavedMapViewController {
      * Storage failures are deliberately private and non-blocking.
      *
      * @param {number} generation Scheduled persistence generation.
-     * @param {boolean} supersedesUndo Whether a changed map consumes reset undo.
      * @return {Promise<void>} Completion after a write or stale rejection.
      */
-    async #remember(generation, supersedesUndo) {
+    async #remember(generation) {
         try {
             const savedMapView = await this.#snapshotCurrentView();
             if (
@@ -486,14 +484,6 @@ export class SavedMapViewController {
                 generation !== this.rememberGeneration
             ) {
                 return;
-            }
-            if (
-                supersedesUndo &&
-                this.undoView !== null &&
-                !hasSameMapState(savedMapView, this.initialView)
-            ) {
-                this.undoView = null;
-                this.view.hideUndoReset();
             }
             this.storage.write(serializeSavedMapView(savedMapView));
         } catch {
@@ -510,19 +500,6 @@ export class SavedMapViewController {
             this.rememberTimer = null;
         }
     }
-}
-
-/**
- * Compare only the remembered map state, excluding document provenance.
- *
- * @param {Readonly<Object>} left First validated saved-map document.
- * @param {Readonly<Object>|null} right Second validated saved-map document.
- * @return {boolean} Whether viewport and ordered layers are identical.
- */
-function hasSameMapState(left, right) {
-    if (right === null) return false;
-    return JSON.stringify([left.viewport, left.layers]) ===
-        JSON.stringify([right.viewport, right.layers]);
 }
 
 /**

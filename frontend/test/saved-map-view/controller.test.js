@@ -757,5 +757,9 @@ test("reset and one-step undo reuse complete validated restore documents", async
   timers.runOnly();
   await flushAsyncWork();
 
-  assert.equal(view.undoVisible, false, "a new map state consumes reset undo");
+  assert.equal(
+    view.undoVisible,
+    true,
+    "reset undo remains available until it is used or replaced",
+  );
 });
