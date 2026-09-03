@@ -180,6 +180,10 @@ test("inspector queries composed visible targets and navigates overlapping featu
     h.documentContext.querySelector("#open-vector-time-series").disabled,
     false,
   );
+  assert.equal(
+    h.documentContext.querySelector("#vector-time-series-action-help").textContent,
+    "Plot one numeric field across all features found at this location.",
+  );
   h.documentContext.querySelector("#open-vector-time-series")
     .dispatchEvent(new Event("click"));
   assert.equal(h.timeSeriesRequests, 1);
@@ -222,6 +226,26 @@ test("current numeric feature actions publish separate plotting intents", async 
   h.controller.clearResults();
   assert.equal(h.currentObservationChanges.at(-1), null);
   assert.equal(profileButton.disabled, true);
+});
+
+test("one feature explains why plotting across features is unavailable", async () => {
+  const h = createFixture(async () => ({
+    ok: true,
+    json: async () => ({ type: "FeatureCollection", features: [{
+      type: "Feature",
+      geometry: null,
+      properties: { node_nm: "North", R2000: 2, R2001: 4 },
+    }] }),
+  }));
+  await h.controller.inspect(inspectionEvent(12, 24));
+  assert.equal(
+    h.documentContext.querySelector("#open-vector-time-series").disabled,
+    true,
+  );
+  assert.equal(
+    h.documentContext.querySelector("#vector-time-series-action-help").textContent,
+    "Select at least two features at this location to plot one field across them.",
+  );
 });
 
 test("an empty click never opens the feature inspector", async () => {

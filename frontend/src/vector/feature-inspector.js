@@ -12,6 +12,11 @@ const HIGHLIGHT_STYLE = Object.freeze({
     fillColor: "#facc15",
     fillOpacity: 0.35,
 });
+
+const TIME_SERIES_AVAILABLE_HELP =
+    "Plot one numeric field across all features found at this location.";
+const TIME_SERIES_UNAVAILABLE_HELP =
+    "Select at least two features at this location to plot one field across them.";
 const MAX_ATTRIBUTE_VALUE_CHARACTERS = 1000;
 
 /**
@@ -197,6 +202,9 @@ export class VectorFeatureInspectorController {
         this.timeSeriesButton = documentContext.querySelector(
             "#open-vector-time-series"
         );
+        this.timeSeriesHelp = documentContext.querySelector(
+            "#vector-time-series-action-help"
+        );
         this.featureProfileButton = documentContext.querySelector(
             "#open-vector-feature-profile"
         );
@@ -245,6 +253,7 @@ export class VectorFeatureInspectorController {
         this.previous.addEventListener("click", this.onPrevious);
         this.next.addEventListener("click", this.onNext);
         this.document.addEventListener("keydown", this.onKeydown);
+        this.#updateTimeSeriesAction(0);
         this.syncVisibleLayers();
     }
 
@@ -416,7 +425,7 @@ export class VectorFeatureInspectorController {
         if (this.results.length > 0) {
             this.onInspectionChange(true);
             this.showResult(0);
-            this.timeSeriesButton.disabled = this.results.length < 2;
+            this.#updateTimeSeriesAction(this.results.length);
             const failures = responses.filter(
                 (response) => response.status === "rejected" &&
                     response.reason?.name !== "AbortError"
@@ -475,6 +484,20 @@ export class VectorFeatureInspectorController {
             results.map(vectorInspectionObservation)
         );
         this.onSampleChange(Object.freeze({ state, observations, message }));
+    }
+
+    /**
+     * Keep selected-feature action eligibility and its explanation together.
+     *
+     * @param {number} featureCount Number of results at the inspected location.
+     * @return {void}
+     */
+    #updateTimeSeriesAction(featureCount) {
+        const available = featureCount >= 2;
+        this.timeSeriesButton.disabled = !available;
+        this.timeSeriesHelp.textContent = available
+            ? TIME_SERIES_AVAILABLE_HELP
+            : TIME_SERIES_UNAVAILABLE_HELP;
     }
 
     /**
@@ -537,7 +560,7 @@ export class VectorFeatureInspectorController {
         this.results = [];
         this.resultIndex = 0;
         this.result.hidden = true;
-        this.timeSeriesButton.disabled = true;
+        this.#updateTimeSeriesAction(0);
         this.featureProfileButton.disabled = true;
         this.onCurrentObservationChange(null);
         this.attributes.replaceChildren();
