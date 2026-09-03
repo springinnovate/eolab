@@ -12,6 +12,12 @@ export class MapInspectionController {
         this.histogram = documentContext.querySelector("#map-histogram-panel");
         this.style = documentContext.querySelector("#layer-style-editor");
         this.feature = documentContext.querySelector("#vector-feature-inspector");
+        this.featureDetails = documentContext.querySelector(
+            "#vector-feature-inspector-details"
+        );
+        this.featureDetailsToggle = documentContext.querySelector(
+            "#toggle-vector-inspector-details"
+        );
         this.vectorTimeSeries = documentContext.querySelector(
             "#vector-time-series"
         );
@@ -25,6 +31,8 @@ export class MapInspectionController {
         this.closeButton = documentContext.querySelector("#close-map-histogram");
         this.isOpen = false;
         this.onClose = () => this.closeHistogram();
+        this.onToggleFeatureDetails = () =>
+            this.setFeatureInspectorExpanded(this.featureDetails.hidden);
         this.onKeydown = (event) => {
             if (event.key !== "Escape" || this.histogram.hidden ||
                 !this.histogram.contains(this.document.activeElement)) return;
@@ -33,6 +41,9 @@ export class MapInspectionController {
             this.closeHistogram();
         };
         this.closeButton.addEventListener("click", this.onClose);
+        this.featureDetailsToggle.addEventListener(
+            "click", this.onToggleFeatureDetails
+        );
         this.document.addEventListener("keydown", this.onKeydown);
     }
 
@@ -80,6 +91,20 @@ export class MapInspectionController {
     hideFeatureInspector() {
         this.feature.hidden = true;
         this.#synchronize();
+    }
+
+    /**
+     * Collapse or expand Feature Inspector details without changing its data.
+     *
+     * @param {boolean} expanded Whether detailed inspector content is visible.
+     * @return {void}
+     */
+    setFeatureInspectorExpanded(expanded) {
+        this.featureDetails.hidden = !expanded;
+        this.featureDetailsToggle.setAttribute(
+            "aria-expanded", String(expanded)
+        );
+        this.featureDetailsToggle.textContent = expanded ? "Collapse" : "Expand";
     }
 
     /** Reveal selected-feature analysis as the active series presentation. @return {void} */
@@ -135,12 +160,16 @@ export class MapInspectionController {
     /** Release presentation listeners without changing retained analysis state. @return {void} */
     destroy() {
         this.closeButton.removeEventListener("click", this.onClose);
+        this.featureDetailsToggle.removeEventListener(
+            "click", this.onToggleFeatureDetails
+        );
         this.document.removeEventListener("keydown", this.onKeydown);
         this.histogram.hidden = true;
         this.style.hidden = true;
         this.feature.hidden = true;
         this.vectorTimeSeries.hidden = true;
         this.vectorFeatureProfile.hidden = true;
+        this.setFeatureInspectorExpanded(true);
         this.#synchronize();
     }
 }

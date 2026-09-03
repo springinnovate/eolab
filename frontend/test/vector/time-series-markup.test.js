@@ -14,6 +14,8 @@ const STYLESHEET = readFileSync(
 test("vector time-series controls and accessible outputs are present", () => {
   for (const identifier of [
     "open-vector-time-series",
+    "toggle-vector-inspector-details",
+    "vector-feature-inspector-details",
     "vector-time-series",
     "close-vector-time-series",
     "vector-time-series-x",
@@ -34,6 +36,10 @@ test("vector time-series controls and accessible outputs are present", () => {
     MARKUP,
     /id="open-vector-time-series"[^>]+aria-controls="vector-time-series"/,
   );
+  assert.match(
+    MARKUP,
+    /id="toggle-vector-inspector-details"[^>]+aria-controls="vector-feature-inspector-details"[^>]+aria-expanded="true"/,
+  );
   assert.match(MARKUP, /<label for="vector-time-series-x">/);
   assert.match(MARKUP, /<label for="vector-time-series-y">/);
   assert.match(MARKUP, /<label for="vector-time-series-direction">/);
@@ -43,6 +49,10 @@ test("vector time-series controls and accessible outputs are present", () => {
   assert.doesNotMatch(MARKUP, />Time series<\/button>/);
   assert.match(MARKUP, /id="vector-time-series-chart"[^>]+role="img"/);
   assert.match(STYLESHEET, /#vector-time-series\[hidden\]/);
+  assert.match(
+    STYLESHEET,
+    /#vector-feature-inspector:has\(#vector-feature-inspector-details\[hidden\]\)/,
+  );
   assert.match(
     STYLESHEET,
     /\.vector-time-series-chart\[hidden\]\s*\{\s*display:\s*none;/,

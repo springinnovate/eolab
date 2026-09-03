@@ -3337,6 +3337,11 @@ button.raster-histogram-summary:hover,
   width: min(580px, calc(100vw - 32px));
 }
 
+#map-inspection:has(#vector-feature-inspector:not([hidden])):has(#vector-feature-inspector-details[hidden]):has(#vector-time-series:not([hidden])),
+#map-inspection:has(#vector-feature-inspector:not([hidden])):has(#vector-feature-inspector-details[hidden]):has(#vector-feature-profile:not([hidden])) {
+  width: min(580px, calc(100vw - 32px));
+}
+
 #map-inspection:has(#map-histogram-panel:not([hidden])):has(#layer-style-editor:not([hidden])),
 #map-inspection:has(#vector-time-series:not([hidden])):has(#vector-feature-inspector:not([hidden])),
 #map-inspection:has(#vector-feature-profile:not([hidden])):has(#vector-feature-inspector:not([hidden])) {
@@ -3414,6 +3419,17 @@ button.raster-histogram-summary:hover,
 .vector-feature-inspector-header h2 { margin: 0; font-size: 1rem; }
 .vector-feature-inspector-actions { display: flex; flex: 1 1 100%; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; }
 .vector-feature-inspector-actions button { white-space: nowrap; }
+#vector-feature-inspector:has(#vector-feature-inspector-details[hidden]) {
+  justify-self: end;
+  width: max-content;
+  max-width: 100%;
+}
+#vector-feature-inspector:has(#vector-feature-inspector-details[hidden]) .vector-feature-inspector-actions {
+  flex: 0 0 auto;
+}
+#vector-feature-inspector:has(#vector-feature-inspector-details[hidden]) .vector-feature-inspector-actions > :not(.vector-feature-inspector-toggle) {
+  display: none;
+}
 .immediate-action-help { position: relative; display: inline-flex; }
 .immediate-action-tooltip {
   position: absolute;
