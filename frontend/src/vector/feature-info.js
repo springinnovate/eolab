@@ -32,12 +32,15 @@ export class VectorFeatureInfoError extends Error {
  * @param {Object} configuration Request configuration.
  * @param {string} configuration.wmsUrl Restricted browser WMS endpoint.
  * @param {Object} configuration.publication Published vector identity.
+ * @param {string[]} configuration.propertyNames Catalog-declared non-geometry
+ * properties to return without materializing full feature geometry.
  * @param {VectorFeatureInfoViewport} configuration.viewport Neutral map view.
  * @return {string} Relative or absolute bounded WMS URL.
  */
 export function buildVectorFeatureInfoUrl({
     wmsUrl,
     publication,
+    propertyNames,
     viewport,
 }) {
     if (
@@ -51,6 +54,16 @@ export function buildVectorFeatureInfoUrl({
     ) {
         throw new VectorFeatureInfoError(
             "The map viewport is unavailable for feature inspection."
+        );
+    }
+    if (
+        !Array.isArray(propertyNames) ||
+        !propertyNames.every((name) =>
+            typeof name === "string" && name.length > 0
+        )
+    ) {
+        throw new VectorFeatureInfoError(
+            "The layer attributes are unavailable for feature inspection."
         );
     }
     const scale = Math.min(
@@ -80,6 +93,9 @@ export function buildVectorFeatureInfoUrl({
         feature_count: String(VECTOR_FEATURE_INFO_LIMIT),
         buffer: String(VECTOR_FEATURE_INFO_BUFFER_PIXELS),
     });
+    if (propertyNames.length > 0) {
+        parameters.set("propertyName", propertyNames.join(","));
+    }
     return `${wmsUrl}${wmsUrl.includes("?") ? "&" : "?"}${parameters}`;
 }
 

@@ -71,6 +71,7 @@ import { VectorFeatureInspectorController } from "./vector/feature-inspector.js"
 import { VectorFeatureProfileController } from "./vector/feature-profile.js";
 import { createVectorMapLayerAdapter } from "./vector/map-layer-adapter.js";
 import { VectorStyleControls } from "./vector/style-controls.js";
+import { vectorLabelFields } from "./vector/style.js";
 import { VectorTimeSeriesController } from "./vector/time-series.js";
 import { initializeTemporaryAoi } from "./temporary-aoi/temporary-aoi.js";
 import {
@@ -808,6 +809,9 @@ async function initializeCatalog(
                     layerName: record.publication.layerName,
                     styleName: record.publication.styleName,
                 },
+                propertyNames: vectorLabelFields(record.state.item).map(
+                    ({ name }) => name
+                ),
                 primaryGeometry:
                     record.state.item.properties?.["table:primary_geometry"] ?? null,
             })),

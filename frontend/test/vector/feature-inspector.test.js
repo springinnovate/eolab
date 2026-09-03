@@ -25,6 +25,7 @@ function createFixture(fetchImplementation, { now = () => 0 } = {}) {
       label: "Parcels",
       bbox: [0, 0, 10, 10],
       publication: { layerName: "eolab:parcels", styleName: "vector-polygon" },
+      propertyNames: ["name", "rank"],
       primaryGeometry: "geometry",
     },
   ];
@@ -141,6 +142,7 @@ test("analysis observations are immutable and omit nested properties", () => {
 
 test("inspector queries composed visible targets and navigates overlapping features", async () => {
   const requestedLayers = [];
+  const requestedProperties = [];
   const features = [
     {
       type: "Feature",
@@ -154,7 +156,9 @@ test("inspector queries composed visible targets and navigates overlapping featu
     },
   ];
   const h = createFixture(async (url) => {
-    requestedLayers.push(new URL(url, "https://viewer.test").searchParams.get("layers"));
+    const parameters = new URL(url, "https://viewer.test").searchParams;
+    requestedLayers.push(parameters.get("layers"));
+    requestedProperties.push(parameters.get("propertyName"));
     return {
       ok: true,
       json: async () => ({ type: "FeatureCollection", features }),
@@ -164,6 +168,7 @@ test("inspector queries composed visible targets and navigates overlapping featu
   assert.deepEqual(h.inspectionChanges, [true]);
   assert.equal(h.handlers.has("click"), false);
   assert.deepEqual(requestedLayers, ["eolab:parcels"]);
+  assert.deepEqual(requestedProperties, ["name,rank"]);
   assert.equal(h.documentContext.querySelector("#vector-feature-status").textContent,
     "2 features found in under 0.1 s.");
   assert.equal(h.documentContext.querySelector("#vector-feature-layer").textContent,
@@ -213,6 +218,7 @@ test("inspector presents out-of-order layer results progressively in map order",
       layerName: "eolab:habitats",
       styleName: "vector-polygon",
     },
+    propertyNames: ["name"],
     primaryGeometry: "geometry",
   });
 
@@ -435,6 +441,7 @@ test("inspector skips targets outside their authoritative Catalog bounds", async
       layerName: "eolab:distant",
       styleName: "vector-point",
     },
+    propertyNames: ["name"],
     primaryGeometry: "geometry",
   });
 
@@ -533,6 +540,7 @@ test("changing the visible vector set invalidates results but retains inspection
       layerName: "eolab:habitats",
       styleName: "vector-polygon",
     },
+    propertyNames: ["score"],
     primaryGeometry: "geometry",
   });
   h.controller.syncVisibleLayers();

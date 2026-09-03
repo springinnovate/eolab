@@ -39,6 +39,7 @@ function formatInspectionDuration(elapsedMilliseconds) {
  * bounds.
  * @property {{layerName:string,styleName:string}} publication Authorized WMS
  * publication identity.
+ * @property {string[]} propertyNames Catalog-declared non-geometry fields.
  * @property {string|null} primaryGeometry Catalog-declared geometry field.
  */
 
@@ -300,6 +301,10 @@ export class VectorFeatureInspectorController {
                 target.bbox[1] > target.bbox[3] ||
                 typeof target?.publication?.layerName !== "string" ||
                 typeof target?.publication?.styleName !== "string" ||
+                !Array.isArray(target?.propertyNames) ||
+                !target.propertyNames.every((name) =>
+                    typeof name === "string" && name.length > 0
+                ) ||
                 !(
                     target?.primaryGeometry === null ||
                     typeof target?.primaryGeometry === "string"
@@ -443,6 +448,7 @@ export class VectorFeatureInspectorController {
                 const features = await fetchVectorFeatureInfo({
                     wmsUrl: this.wmsUrl,
                     publication: target.publication,
+                    propertyNames: target.propertyNames,
                     viewport,
                     signal: abortController.signal,
                 }, this.fetchImplementation);
