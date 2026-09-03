@@ -5,15 +5,17 @@ import test from "node:test";
 const ANALYSIS_MODULES = [
     "analysis-api.js",
     "paired-statistics.js",
-    "pixel-probe.js",
+    "point-samples.js",
     "statistics-controller.js",
     "statistics.js",
+    "value-format.js",
 ];
 const RENDERING_IMPORTS = [
     "../map-layers/",
     "./api.js",
     "./leaflet.js",
     "./wms.js",
+    "../map.js",
 ];
 
 test("raster analysis remains independent from rendering implementations", async () => {

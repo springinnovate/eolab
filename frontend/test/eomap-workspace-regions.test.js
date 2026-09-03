@@ -362,9 +362,14 @@ test("Sampling keeps area controls and AOI; map exploration owns histogram resul
         pairedHistogram.source,
         /data-eomap-region="raster-interpretation"/
     );
-    assert.doesNotMatch(MARKUP, /pixel-probe-guidance|Pixel values/);
+    assert.doesNotMatch(MARKUP, /pixel-probe-guidance|raster-pixel-probe/);
     assert.doesNotMatch(STYLESHEET, /pixel-probe-guidance/);
-    assert.match(MARKUP, /id="raster-pixel-probe-reading"/);
+    assert.match(MARKUP, /id="raster-point-samples"/);
+    assert.match(MARKUP, /id="raster-point-sample-list"/);
+    assert.match(
+        MARKUP,
+        /id="raster-point-samples"[^>]*aria-live="polite"/s
+    );
     assert.match(temporaryAoi.source, /data-eomap-region="raster-interpretation"/);
     assert.match(temporaryAoi.source, /aria-labelledby="temporary-aoi-heading"/);
     for (const renderingControl of [
@@ -379,11 +384,11 @@ test("Sampling keeps area controls and AOI; map exploration owns histogram resul
     }
 });
 
-test("map histograms put plots before captions and mode without a visible title strip", () => {
+test("map raster analysis puts results before mode without a visible title strip", () => {
     assert.match(requireElementRange("map-histogram-heading").source,
-        /class="visually-hidden">Histogram/);
+        /class="visually-hidden">Raster analysis/);
     assert.match(requireElementRange("close-map-histogram").source,
-        /aria-label="Close histogram">×/);
+        /aria-label="Close raster analysis">×/);
     const mode = requireElementRange("raster-bivariate-controls");
     assert.match(mode.source, /class="visually-hidden">Histogram mode/);
     assert.match(mode.source, /aria-describedby="raster-bivariate-status"/);
@@ -550,10 +555,6 @@ test("map overlays retain explicit non-reparenting region ownership", () => {
         MARKUP,
         /id="temporary-aoi"[^>]*data-eomap-region="raster-interpretation"/s
     );
-    assert.match(
-        MARKUP,
-        /id="raster-pixel-probe"[^>]*data-eomap-region="raster-interpretation"/s
-    );
 });
 
 test("semantic regions preserve one DOM instance of every owned control", () => {
@@ -588,7 +589,8 @@ test("semantic regions preserve one DOM instance of every owned control", () => 
         "analysis-aoi-disclosure",
         "toggle-analysis-aoi",
         "temporary-aoi",
-        "raster-pixel-probe",
+        "raster-point-samples",
+        "raster-point-sample-list",
         "map-inspection",
         "map-histogram-panel",
         "map-histogram-scope",

@@ -95,7 +95,7 @@ class FakeControlElement extends EventTarget {
     }
 
     /**
-     * Return deterministic pointer-probe dimensions.
+     * Return deterministic control dimensions.
      *
      * @return {{width: number, height: number}} Element dimensions.
      */
@@ -520,11 +520,8 @@ test("RasterControlsView preserves the raster viewer compatibility surface", () 
         "showAppearanceWidget",
         "setRenderingControlsAvailable",
         "setControlsVisible",
-        "isPixelProbeVisible",
-        "setPixelProbeContent",
-        "showPixelProbe",
-        "positionPixelProbe",
-        "hidePixelProbe",
+        "renderPointSamples",
+        "clearPointSamples",
     ];
 
     for (const methodName of expectedMethods) {

@@ -31,24 +31,24 @@ eolab keeps them in focused domain and presentation modules instead of copying
 the ESOS-C application structure. Both projects distribute this work under the
 [Apache License 2.0](https://github.com/springinnovate/esos-c-dataviewer/blob/main/LICENSE).
 One shared palette definition produces the
-X ramp, Y ramp, map tiles, two-dimensional legend, histogram colors, and probe
-lookup. The available palettes are Orange / Blue, Gray / White, Teal /
+X ramp, Y ramp, map tiles, two-dimensional legend, histogram colors, and
+sampled-cell lookup. The available palettes are Orange / Blue, Gray / White, Teal /
 Magenta, Green / Purple, Red / Cyan, Indigo / Gold, Brown / Sky, and Steel /
 Rose.
 
 When both catalog rasters have WMS presentations, each remains a separate
 one-layer request. Both render at 100% opacity, and the top raster's browser
 tile container uses CSS `mix-blend-mode: plus-lighter`, matching ESOS-C. If one
-or both WMS presentations are unavailable, the paired histogram and probe keep
-working without a substitute publication. Legend and probe calculations use
-the equivalent deterministic operation: add the two RGB channel values and
+or both WMS presentations are unavailable, the paired histogram and exact
+click values keep working without a substitute publication. Legend calculations
+use the equivalent deterministic operation: add the two RGB channel values and
 clamp each result to 255. Addition is commutative before clipping, but drawing
 order stays deterministic. The UI does not expose other blend equations.
 
 Additive eight-bit RGB is not injective. Channel clipping and finite color
 precision can make different value pairs display the same color, so the UI
 describes a bivariate encoding rather than a globally unique identifier. The
-dual pixel probe reports the actual independent samples.
+retained X/Y values report the actual independent samples for a map click.
 
 The paired histogram also retains the ESOS-C visual encoding. Populated-bin
 density uses `log1p`, smoothstep, and a 1.2 gamma. Density changes cell inset,

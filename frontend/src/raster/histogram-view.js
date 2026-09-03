@@ -7,7 +7,7 @@
  */
 import {
     formatRasterPixelValue
-} from "./pixel-probe.js";
+} from "./value-format.js";
 import { getRasterStyleColor } from "./style.js";
 import { drawHistogramAxes, formatHistogramTick, histogramScales } from "./histogram-axes.js";
 

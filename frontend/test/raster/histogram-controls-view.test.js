@@ -100,6 +100,65 @@ test("histogram adapter clears an independently populated chart", () => {
     assert.equal(chart.getAttribute("hidden"), "");
 });
 
+test("histogram adapter presents retained point values with layer identity", () => {
+    const documentContext = new FakeRasterControlDocument();
+    const view = new RasterHistogramControlsView(documentContext);
+    const region = documentContext.querySelector("#raster-point-samples");
+    const list = documentContext.querySelector("#raster-point-sample-list");
+
+    view.renderPointSamples({
+        position: Object.freeze({ longitude: 1, latitude: 2 }),
+        samples: Object.freeze([
+            Object.freeze({
+                key: "first", label: "first.tif", axis: "X",
+                state: "value", value: 12.5, errorMessage: "",
+            }),
+            Object.freeze({
+                key: "second", label: "second.tif", axis: "Y",
+                state: "loading", value: null, errorMessage: "",
+            }),
+        ]),
+    });
+
+    assert.equal(region.hidden, false);
+    assert.equal(region.getAttribute("aria-busy"), "true");
+    assert.equal(list.children.length, 2);
+    assert.equal(list.children[0].children[0].children[0].textContent, "X");
+    assert.equal(list.children[0].children[0].children[1].textContent, "first.tif");
+    assert.equal(list.children[0].children[1].textContent, "1.250e+1");
+    assert.equal(list.children[1].children[1].textContent, "Reading…");
+
+    view.renderPointSamples({
+        position: { longitude: 1, latitude: 2 },
+        samples: [{
+            key: "second", label: "second.tif", axis: null,
+            state: "error", value: null, errorMessage: "Read failed",
+        }],
+    });
+    assert.equal(region.getAttribute("aria-busy"), "false");
+    assert.equal(list.children[0].children[1].textContent, "Unavailable: Read failed");
+
+    view.renderPointSamples({
+        position: { longitude: 1, latitude: 2 },
+        samples: [
+            {
+                key: "first", label: "first.tif", axis: null,
+                state: "nodata", value: null, errorMessage: "",
+            },
+            {
+                key: "second", label: "second.tif", axis: null,
+                state: "outside", value: null, errorMessage: "",
+            },
+        ],
+    });
+    assert.equal(list.children[0].children[1].textContent, "No data");
+    assert.equal(list.children[1].children[1].textContent, "Outside raster");
+
+    view.clearPointSamples();
+    assert.equal(region.hidden, true);
+    assert.equal(list.children.length, 0);
+});
+
 test("replacing dynamic charts and unbinding release all resize observers", () => {
     const doc = new FakeRasterControlDocument();
     const { ResizeObserver, instances } = createFakeResizeObservers();

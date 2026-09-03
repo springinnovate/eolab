@@ -1,11 +1,11 @@
 # Rendering-independent raster analysis
 
-Raster statistics and pixel probes are catalog analysis operations. They do
-not depend on whether the selected raster is published to GeoServer, rendered
+Raster statistics and exact point samples are catalog analysis operations. They
+do not depend on whether the selected raster is published to GeoServer, rendered
 through WMS, displayed through adaptive bounded visualization, or not rendered
 at all. The browser supplies only the scanner-owned Collection and Item
-identity plus an owned sampling-area choice; it never supplies a filesystem
-path, source window, CRS, histogram size, or work limit.
+identity plus an owned sampling-area choice or canonical WGS 84 point; it never
+supplies a filesystem path, source window, CRS, histogram size, or work limit.
 
 `POST /api/raster-analysis/statistics` accepts exactly one of these areas:
 
@@ -16,8 +16,16 @@ path, source window, CRS, histogram size, or work limit.
 The application resolves the current catalog Asset inside the configured
 read-only mount and checks its scanner source signature before and after the
 read. Statistics do not consult the published-layer registry, visualization
-eligibility, preview state, or GeoServer. Pixel probing is a sibling operation
-under `/api/raster-analysis/pixels` and is likewise independent.
+eligibility, preview state, or GeoServer. Exact point sampling is a sibling
+operation under `/api/raster-analysis/pixels` and is likewise independent.
+
+One map click supplies the same retained position to raster point sampling,
+histogram-area selection, and vector inspection. The raster owner samples at
+most the same top-two participants used by automatic histograms, displays each
+layer's numeric, no-data, outside-extent, loading, or unavailable state, and
+cancels superseded reads. Pointer movement previews the sample window without
+requesting point values. In bivariate mode the current X/Y order labels the two
+values and updates immediately after an axis swap.
 
 ## Bounded read policy
 
@@ -95,7 +103,7 @@ occupy server capacity, so only explicitly classified capacity conflicts are
 automatically retried: five delays of 250, 500, 1000, 2000, and 4000 ms.
 Cancellation clears the delay timer. If contention persists, the normal error
 state offers Retry; deterministic conflicts are not retried. The queue does
-not change backend concurrency, cache limits, pixel probing, or map rendering.
+not change backend concurrency, cache limits, point sampling, or map rendering.
 
 ### Histogram presentation
 

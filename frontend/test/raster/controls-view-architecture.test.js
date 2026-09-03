@@ -8,14 +8,14 @@ const FOCUSED_VIEW_IMPORTS = {
     "histogram-controls-view.js": [
         "./histogram-view.js",
         "./required-control.js",
+        "./value-format.js",
     ],
     "percentile-controls-view.js": ["./required-control.js"],
-    "pixel-probe-view.js": ["./required-control.js"],
     "bivariate-controls-view.js": [
         "./bivariate.js",
         "./paired-statistics.js",
-        "./pixel-probe.js",
         "./required-control.js",
+        "./value-format.js",
     ],
 };
 

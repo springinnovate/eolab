@@ -4,6 +4,7 @@ History
 Unreleased
 ----------
 
+* Show exact raster values from the same retained map click as histograms and vector inspection.
 * Show progressive, timed vector inspection results while slower layers continue loading.
 * Open shared map links directly and dismiss successful loading automatically.
 * Compose ordinary visible map layers into one authorized GeoServer WMS tile grid while preserving order, styles, and opacity.

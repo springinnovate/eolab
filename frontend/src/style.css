@@ -2324,39 +2324,6 @@ h5 {
   transition: right 220ms ease;
 }
 
-.raster-pixel-probe {
-  position: fixed;
-  top: 0;
-  left: 0;
-  z-index: 1050;
-  max-width: min(310px, calc(100vw - 16px));
-  pointer-events: none;
-  border: 1px solid var(--border-1);
-  border-radius: var(--radius);
-  background: rgb(255 255 255 / 96%);
-  padding: 8px 10px;
-  color: var(--text-1);
-  box-shadow: var(--elevation-control);
-  font: 0.72rem/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  overflow-wrap: anywhere;
-  will-change: transform;
-}
-
-.raster-pixel-probe-name {
-  overflow: hidden;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-#raster-pixel-probe-reading {
-  white-space: pre-line;
-}
-
-.raster-pixel-probe[hidden] {
-  display: none;
-}
-
 .control-panel.is-collapsed ~ .map-position {
   right: 20px;
 }
@@ -3549,7 +3516,7 @@ button.raster-histogram-summary:hover,
   vector-effect: non-scaling-stroke;
 }
 
-.raster-bivariate-cell:is(:hover, :focus, .is-selected, .is-probed) {
+.raster-bivariate-cell:is(:hover, :focus, .is-selected, .is-sampled) {
   outline: none;
   stroke: var(--text-1);
   stroke-opacity: 1 !important;
@@ -3868,6 +3835,36 @@ button.raster-histogram-summary:hover,
   font-size: 1.1rem;
 }
 #map-histogram-panel .raster-histogram-overview { padding: 0; border: 0; background: transparent; }
+.raster-point-samples {
+  margin: 0 0 12px;
+  padding: 0 36px 12px 0;
+  border-bottom: 1px solid var(--border-1);
+}
+.raster-point-samples[hidden] { display: none; }
+.raster-point-samples h3 { margin: 0 0 6px; font-size: 0.75rem; }
+#raster-point-sample-list { display: grid; gap: 4px; margin: 0; }
+.raster-point-sample-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 0.72rem;
+}
+.raster-point-sample-name { display: flex; min-width: 0; gap: 6px; }
+.raster-point-sample-name > :last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.raster-point-sample-axis {
+  flex: 0 0 auto;
+  color: var(--brand);
+  font-weight: 700;
+}
+.raster-point-sample-value { margin: 0; font-variant-numeric: tabular-nums; }
+.raster-point-sample-row[data-state="error"] .raster-point-sample-value {
+  color: var(--status-danger);
+}
 #map-histogram-panel .raster-histogram-summary { padding: 0; border: 0; background: transparent; gap: 6px; }
 #map-histogram-panel .raster-histogram-summary + .raster-histogram-summary { padding-top: 12px; border-top: 1px solid var(--border-1); }
 #map-histogram-panel .raster-histogram-summary-name { padding-right: 36px; }

@@ -12,7 +12,7 @@ import {
     findRasterPairedHistogramCell,
     getHighestDensityPairedCell,
 } from "./paired-statistics.js";
-import { formatRasterPixelValue } from "./pixel-probe.js";
+import { formatRasterPixelValue } from "./value-format.js";
 
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 const LEGEND_GRID_SIZE = 12;
@@ -606,7 +606,7 @@ export class BivariateRasterControlsView {
     }
 
     /**
-     * Mark the histogram cell containing a dual pixel probe result.
+     * Mark the histogram cell containing a dual point-sample result.
      *
      * @param {number} xValue Current X pixel value.
      * @param {number} yValue Current Y pixel value.
@@ -632,7 +632,7 @@ export class BivariateRasterControlsView {
             )}`,
             cell
         );
-        cell.classList.add("is-probed");
+        cell.classList.add("is-sampled");
     }
 
     /** Clear paired result content while preserving explicit mode controls. @return {void} */
@@ -752,7 +752,7 @@ export class BivariateRasterControlsView {
      * @return {void}
      */
     #selectCell(xBin, yBin, summary, cell) {
-        this.activeCell?.classList.remove("is-selected", "is-probed");
+        this.activeCell?.classList.remove("is-selected", "is-sampled");
         this.activeCell = cell;
         cell.classList.add("is-selected");
         cell.dataset.xBin = String(xBin);

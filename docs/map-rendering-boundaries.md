@@ -67,8 +67,9 @@ contract; leaving 2D mode restores the single composite grid.
 
 The application composition root constructs the controller. The raster viewer
 supplies an adapter and continues to own its appearance, analysis, sampling,
-and pixel-probe sessions. Shared map-layer modules do not import raster modules,
-and raster modules do not duplicate retained-stack or Leaflet-set ownership.
+and retained point-sample sessions. Shared map-layer modules do not import
+raster modules, and raster modules do not duplicate retained-stack or
+Leaflet-set ownership.
 Raster detail preview depends on Catalog identity directly and does not import
 the map-layer package.
 
