@@ -14,6 +14,10 @@ function fixture() {
     const histogram = doc.querySelector("#map-histogram-panel");
     const style = doc.querySelector("#layer-style-editor");
     const feature = doc.querySelector("#vector-feature-inspector");
+    const featureDetails = doc.querySelector("#vector-feature-inspector-details");
+    const featureDetailsToggle = doc.querySelector(
+        "#toggle-vector-inspector-details"
+    );
     const vectorTimeSeries = doc.querySelector("#vector-time-series");
     const vectorFeatureProfile = doc.querySelector("#vector-feature-profile");
     histogram.hidden = style.hidden = feature.hidden =
@@ -29,6 +33,8 @@ function fixture() {
         histogram,
         style,
         feature,
+        featureDetails,
+        featureDetailsToggle,
         vectorTimeSeries,
         vectorFeatureProfile,
         close,
@@ -113,6 +119,29 @@ test("vector time series is an independent retained map-side panel", () => {
     h.controller.hideVectorTimeSeries(true);
     assert.equal(h.doc.activeElement, h.map);
     assert.deepEqual(h.calls, ["show", "hide"]);
+});
+
+test("feature details collapse without closing retained series state", () => {
+    const h = fixture();
+    h.controller.showFeatureInspector();
+    h.controller.showVectorTimeSeries();
+    h.featureDetailsToggle.dispatchEvent(new Event("click"));
+    assert.equal(h.feature.hidden, false);
+    assert.equal(h.featureDetails.hidden, true);
+    assert.equal(h.featureDetailsToggle.getAttribute("aria-expanded"), "false");
+    assert.equal(h.featureDetailsToggle.textContent, "Expand");
+    assert.equal(h.vectorTimeSeries.hidden, false);
+    assert.deepEqual(h.calls, ["show"]);
+
+    h.controller.showFeatureInspector();
+    assert.equal(h.featureDetails.hidden, true);
+    assert.equal(h.vectorTimeSeries.hidden, false);
+
+    h.featureDetailsToggle.dispatchEvent(new Event("click"));
+    assert.equal(h.featureDetails.hidden, false);
+    assert.equal(h.featureDetailsToggle.getAttribute("aria-expanded"), "true");
+    assert.equal(h.featureDetailsToggle.textContent, "Collapse");
+    h.controller.destroy();
 });
 
 test("the two series modes share one exclusive presentation position", () => {

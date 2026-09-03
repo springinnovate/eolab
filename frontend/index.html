@@ -747,6 +747,10 @@
             <header class="vector-feature-inspector-header">
               <h2 id="vector-feature-inspector-heading">Feature inspector</h2>
               <div class="vector-feature-inspector-actions">
+                <button id="toggle-vector-inspector-details"
+                  class="secondary-button vector-feature-inspector-toggle"
+                  type="button" aria-controls="vector-feature-inspector-details"
+                  aria-expanded="true">Collapse</button>
                 <span class="immediate-action-help">
                   <button id="open-vector-feature-profile" class="secondary-button"
                     type="button" aria-controls="vector-feature-profile"
@@ -765,20 +769,22 @@
                   type="button" aria-label="Close feature inspector">×</button>
               </div>
             </header>
-            <p id="vector-feature-status" class="vector-feature-status" role="status">
-              Click the map to inspect visible vector features.
-            </p>
-            <article id="vector-feature-result" hidden>
-              <h3 id="vector-feature-layer"></h3>
-              <nav class="vector-feature-navigation" aria-label="Inspected features">
-                <button id="previous-vector-feature" class="secondary-button"
-                  type="button">Previous</button>
-                <span id="vector-feature-position"></span>
-                <button id="next-vector-feature" class="secondary-button"
-                  type="button">Next</button>
-              </nav>
-              <dl id="vector-feature-attributes" class="vector-feature-attributes"></dl>
-            </article>
+            <div id="vector-feature-inspector-details">
+              <p id="vector-feature-status" class="vector-feature-status" role="status">
+                Click the map to inspect visible vector features.
+              </p>
+              <article id="vector-feature-result" hidden>
+                <h3 id="vector-feature-layer"></h3>
+                <nav class="vector-feature-navigation" aria-label="Inspected features">
+                  <button id="previous-vector-feature" class="secondary-button"
+                    type="button">Previous</button>
+                  <span id="vector-feature-position"></span>
+                  <button id="next-vector-feature" class="secondary-button"
+                    type="button">Next</button>
+                </nav>
+                <dl id="vector-feature-attributes" class="vector-feature-attributes"></dl>
+              </article>
+            </div>
           </section>
           <section id="vector-time-series" role="dialog" aria-modal="false"
             aria-labelledby="vector-time-series-heading" hidden>
