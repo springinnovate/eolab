@@ -242,5 +242,5 @@ def test_vector_composite_sld_multiplies_symbol_opacity() -> None:
         for parameter in root.findall(f".//{{{SLD_NAMESPACE}}}CssParameter")
     }
 
-    assert css_parameters["fill-opacity"] == "0.19"
-    assert css_parameters["stroke-opacity"] == "0.5"
+    assert css_parameters["fill-opacity"] == "0.5"
+    assert css_parameters["stroke-opacity"] == "0"

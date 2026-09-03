@@ -4,9 +4,17 @@ History
 Unreleased
 ----------
 
+0.4.0 (2026-09-03)
+------------------
+
+* Isolate two-dimensional histogram rendering to the selected X/Y raster pair, reveal the pair atomically, and avoid refreshing map tiles when only the sample changes.
+* Serve EPSG:3857 raster tiles through GeoWebCache with deterministic startup configuration.
+* Keep oversized feature geometries out of GeoServer inspection responses while preserving the selected-feature outline.
+* Let the Feature inspector collapse while a Series plot remains visible.
 * Use opaque yellow-to-red defaults for raster fills and vector symbols, with transparent point and polygon outlines.
 * Pick bounded, progressive raster-stack values from a pointer-following map panel.
 * Refresh automatically derived raster styles in composite maps without requiring a manual style edit.
+* Refresh the README quick tour with live tool screenshots and clearer task-focused guidance.
 
 0.3.0 (2026-09-02)
 ------------------

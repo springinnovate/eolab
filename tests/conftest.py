@@ -68,5 +68,5 @@ def version_file_path(tmp_path: Path) -> Path:
         Path to a nonempty version file.
     """
     version_path = tmp_path / "version"
-    version_path.write_text("0.3.0-2-gabcdef0\n", encoding="utf-8")
+    version_path.write_text("0.4.0-2-gabcdef0\n", encoding="utf-8")
     return version_path
