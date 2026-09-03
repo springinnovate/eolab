@@ -720,6 +720,16 @@ test("reset and one-step undo reuse complete validated restore documents", async
   assert.equal(view.undoVisible, true);
   assert.deepEqual(JSON.parse(storage.serialized).layers, []);
 
+  controller.scheduleRemember();
+  timers.runOnly();
+  await flushAsyncWork();
+
+  assert.equal(
+    view.undoVisible,
+    true,
+    "programmatic restore events must not consume reset undo",
+  );
+
   await controller.undoReset();
 
   assert.deepEqual(currentViewport, workingViewport);
@@ -738,4 +748,14 @@ test("reset and one-step undo reuse complete validated restore documents", async
     opacity: 0.6,
     style,
   });
+
+  await controller.resetView();
+  currentViewport = {
+    center: { latitude: 1, longitude: 1 }, zoom: 3,
+  };
+  controller.scheduleRemember();
+  timers.runOnly();
+  await flushAsyncWork();
+
+  assert.equal(view.undoVisible, false, "a new map state consumes reset undo");
 });
