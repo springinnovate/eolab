@@ -254,7 +254,7 @@ test("Map layers owns compact rows; one floating editor owns all styling", () =>
     assert.match(STYLESHEET, /@container map-inspection \(min-width: 680px\)/);
     assert.match(STYLESHEET, /max-height:\s*52dvh/);
     assert.match(STYLESHEET, /#map-inspection\s*\{[^}]*pointer-events:\s*none/s);
-    assert.match(STYLESHEET, /#map-histogram-panel,\s*#layer-style-editor,\s*#vector-feature-inspector,\s*#vector-time-series\s*\{[^}]*pointer-events:\s*auto/s);
+    assert.match(STYLESHEET, /#map-histogram-panel,\s*#layer-style-editor,\s*#vector-feature-inspector,\s*#vector-time-series,\s*#vector-feature-profile\s*\{[^}]*pointer-events:\s*auto/s);
     assert.match(STYLESHEET, /@container map-inspection[^}]*grid-template-columns:\s*repeat\(2,[^}]*pointer-events:\s*none/s);
 });
 

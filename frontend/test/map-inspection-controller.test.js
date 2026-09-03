@@ -15,7 +15,9 @@ function fixture() {
     const style = doc.querySelector("#layer-style-editor");
     const feature = doc.querySelector("#vector-feature-inspector");
     const vectorTimeSeries = doc.querySelector("#vector-time-series");
-    histogram.hidden = style.hidden = feature.hidden = vectorTimeSeries.hidden = true;
+    const vectorFeatureProfile = doc.querySelector("#vector-feature-profile");
+    histogram.hidden = style.hidden = feature.hidden =
+        vectorTimeSeries.hidden = vectorFeatureProfile.hidden = true;
     const close = doc.querySelector("#close-map-histogram");
     histogram.append(close);
     const calls = [];
@@ -28,6 +30,7 @@ function fixture() {
         style,
         feature,
         vectorTimeSeries,
+        vectorFeatureProfile,
         close,
         calls,
         controller,
@@ -102,12 +105,30 @@ test("vector time series is an independent retained map-side panel", () => {
     h.controller.showVectorTimeSeries();
     assert.equal(h.feature.hidden, false);
     assert.equal(h.vectorTimeSeries.hidden, false);
+    assert.equal(h.vectorFeatureProfile.hidden, true);
     assert.deepEqual(h.calls, ["show"]);
     h.controller.hideFeatureInspector();
     assert.equal(h.vectorTimeSeries.hidden, false);
     assert.deepEqual(h.calls, ["show"]);
     h.controller.hideVectorTimeSeries(true);
     assert.equal(h.doc.activeElement, h.map);
+    assert.deepEqual(h.calls, ["show", "hide"]);
+});
+
+test("the two series modes share one exclusive presentation position", () => {
+    const h = fixture();
+    h.controller.showFeatureInspector();
+    h.controller.showVectorTimeSeries();
+    h.controller.showVectorFeatureProfile();
+    assert.equal(h.feature.hidden, false);
+    assert.equal(h.vectorTimeSeries.hidden, true);
+    assert.equal(h.vectorFeatureProfile.hidden, false);
+    h.controller.showVectorTimeSeries();
+    assert.equal(h.vectorTimeSeries.hidden, false);
+    assert.equal(h.vectorFeatureProfile.hidden, true);
+    assert.deepEqual(h.calls, ["show"]);
+    h.controller.hideVectorTimeSeries();
+    h.controller.hideFeatureInspector();
     assert.deepEqual(h.calls, ["show", "hide"]);
 });
 

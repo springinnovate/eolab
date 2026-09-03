@@ -12,6 +12,11 @@ const HIGHLIGHT_STYLE = Object.freeze({
     fillColor: "#facc15",
     fillOpacity: 0.35,
 });
+
+const TIME_SERIES_AVAILABLE_HELP =
+    "Plot one numeric field across all features found at this location.";
+const TIME_SERIES_UNAVAILABLE_HELP =
+    "Select at least two features at this location to plot one field across them.";
 const MAX_ATTRIBUTE_VALUE_CHARACTERS = 1000;
 
 /**
@@ -140,8 +145,12 @@ export class VectorFeatureInspectorController {
      * Requests presentation changes without knowing the presentation owner.
      * @param {(sample:Readonly<Object>)=>void} configuration.onSampleChange
      * Publishes immutable bounded observations through application composition.
+     * @param {(observation:Readonly<Object>|null)=>void}
+     * configuration.onCurrentObservationChange Publishes the current paged result.
+     * @param {()=>void} configuration.onFeatureProfileRequested Publishes
+     * single-feature plotting intent without knowing its implementation.
      * @param {()=>void} configuration.onTimeSeriesRequested Publishes analysis
-     * intent without knowing the sibling time-series implementation.
+     * intent for all selected features without knowing its implementation.
      * @param {Document} [configuration.documentContext=document] DOM owner.
      * @param {typeof fetch} [configuration.fetchImplementation=globalThis.fetch]
      * HTTP implementation.
@@ -153,6 +162,8 @@ export class VectorFeatureInspectorController {
         wmsUrl,
         onInspectionChange,
         onSampleChange,
+        onCurrentObservationChange,
+        onFeatureProfileRequested,
         onTimeSeriesRequested,
         documentContext = document,
         fetchImplementation = globalThis.fetch,
@@ -166,6 +177,12 @@ export class VectorFeatureInspectorController {
         if (typeof onSampleChange !== "function") {
             throw new TypeError("onSampleChange must be a function.");
         }
+        if (typeof onCurrentObservationChange !== "function") {
+            throw new TypeError("onCurrentObservationChange must be a function.");
+        }
+        if (typeof onFeatureProfileRequested !== "function") {
+            throw new TypeError("onFeatureProfileRequested must be a function.");
+        }
         if (typeof onTimeSeriesRequested !== "function") {
             throw new TypeError("onTimeSeriesRequested must be a function.");
         }
@@ -175,6 +192,8 @@ export class VectorFeatureInspectorController {
         this.wmsUrl = wmsUrl;
         this.onInspectionChange = onInspectionChange;
         this.onSampleChange = onSampleChange;
+        this.onCurrentObservationChange = onCurrentObservationChange;
+        this.onFeatureProfileRequested = onFeatureProfileRequested;
         this.onTimeSeriesRequested = onTimeSeriesRequested;
         this.document = documentContext;
         this.fetchImplementation = fetchImplementation;
@@ -182,6 +201,12 @@ export class VectorFeatureInspectorController {
         this.closeButton = documentContext.querySelector("#close-vector-inspector");
         this.timeSeriesButton = documentContext.querySelector(
             "#open-vector-time-series"
+        );
+        this.timeSeriesHelp = documentContext.querySelector(
+            "#vector-time-series-action-help"
+        );
+        this.featureProfileButton = documentContext.querySelector(
+            "#open-vector-feature-profile"
         );
         this.status = documentContext.querySelector("#vector-feature-status");
         this.result = documentContext.querySelector("#vector-feature-result");
@@ -198,7 +223,14 @@ export class VectorFeatureInspectorController {
         this.sampleTargetSignature = null;
         this.mapContainer = this.map.getContainer();
         this.onClose = () => this.close({ moveFocus: true });
-        this.onOpenTimeSeries = () => this.onTimeSeriesRequested();
+        this.onOpenFeatureProfile = () => {
+            if (!this.featureProfileButton.disabled) {
+                this.onFeatureProfileRequested();
+            }
+        };
+        this.onOpenTimeSeries = () => {
+            if (!this.timeSeriesButton.disabled) this.onTimeSeriesRequested();
+        };
         this.onPrevious = () => this.showResult(this.resultIndex - 1);
         this.onNext = () => this.showResult(this.resultIndex + 1);
         this.onKeydown = (event) => {
@@ -213,10 +245,15 @@ export class VectorFeatureInspectorController {
             this.close({ moveFocus: true });
         };
         this.closeButton.addEventListener("click", this.onClose);
+        this.featureProfileButton.addEventListener(
+            "click",
+            this.onOpenFeatureProfile
+        );
         this.timeSeriesButton.addEventListener("click", this.onOpenTimeSeries);
         this.previous.addEventListener("click", this.onPrevious);
         this.next.addEventListener("click", this.onNext);
         this.document.addEventListener("keydown", this.onKeydown);
+        this.#updateTimeSeriesAction(0);
         this.syncVisibleLayers();
     }
 
@@ -388,7 +425,7 @@ export class VectorFeatureInspectorController {
         if (this.results.length > 0) {
             this.onInspectionChange(true);
             this.showResult(0);
-            this.timeSeriesButton.disabled = this.results.length < 2;
+            this.#updateTimeSeriesAction(this.results.length);
             const failures = responses.filter(
                 (response) => response.status === "rejected" &&
                     response.reason?.name !== "AbortError"
@@ -450,6 +487,20 @@ export class VectorFeatureInspectorController {
     }
 
     /**
+     * Keep selected-feature action eligibility and its explanation together.
+     *
+     * @param {number} featureCount Number of results at the inspected location.
+     * @return {void}
+     */
+    #updateTimeSeriesAction(featureCount) {
+        const available = featureCount >= 2;
+        this.timeSeriesButton.disabled = !available;
+        this.timeSeriesHelp.textContent = available
+            ? TIME_SERIES_AVAILABLE_HELP
+            : TIME_SERIES_UNAVAILABLE_HELP;
+    }
+
+    /**
      * Present one result and replace its map highlight.
      *
      * @param {number} index Zero-based result index.
@@ -461,11 +512,18 @@ export class VectorFeatureInspectorController {
         }
         this.resultIndex = Math.min(this.results.length - 1, Math.max(0, index));
         const { feature, target } = this.results[this.resultIndex];
+        const observation = vectorInspectionObservation({ feature, target });
         this.result.hidden = false;
         this.layerName.textContent = target.label;
         this.position.textContent = `${this.resultIndex + 1} of ${this.results.length}`;
         this.previous.disabled = this.resultIndex === 0;
         this.next.disabled = this.resultIndex === this.results.length - 1;
+        this.featureProfileButton.disabled = Object.values(
+            observation.properties
+        ).filter((value) =>
+            typeof value === "number" && Number.isFinite(value)
+        ).length < 2;
+        this.onCurrentObservationChange(observation);
         this.attributes.replaceChildren();
         const entries = vectorFeatureAttributes(feature, target.primaryGeometry);
         if (entries.length === 0) {
@@ -502,7 +560,9 @@ export class VectorFeatureInspectorController {
         this.results = [];
         this.resultIndex = 0;
         this.result.hidden = true;
-        this.timeSeriesButton.disabled = true;
+        this.#updateTimeSeriesAction(0);
+        this.featureProfileButton.disabled = true;
+        this.onCurrentObservationChange(null);
         this.attributes.replaceChildren();
         this.clearHighlight();
     }
@@ -527,6 +587,10 @@ export class VectorFeatureInspectorController {
     destroy() {
         this.close();
         this.closeButton.removeEventListener("click", this.onClose);
+        this.featureProfileButton.removeEventListener(
+            "click",
+            this.onOpenFeatureProfile
+        );
         this.timeSeriesButton.removeEventListener("click", this.onOpenTimeSeries);
         this.previous.removeEventListener("click", this.onPrevious);
         this.next.removeEventListener("click", this.onNext);
