@@ -134,8 +134,7 @@ reset** restores the immediately previous map.
 
 ## Add your own data
 
-EOLab deployments read from a configured, read-only data directory. A workshop
-facilitator or deployment operator normally follows this flow:
+EOLab deployments read from a configured, read-only data directory.
 
 1. Prepare georeferenced GeoTIFFs and vector datasets before the session.
 2. Copy them into the deployment's mounted data directory.
