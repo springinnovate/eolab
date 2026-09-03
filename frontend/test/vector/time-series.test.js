@@ -196,7 +196,7 @@ test("scatter mode preserves points and omits the connecting line", () => {
   const chart = h.documentContext.querySelector("#vector-time-series-chart");
   assert.equal(
     chart.children.filter((element) =>
-      element.getAttribute("class") === "vector-time-series-line"
+      element.getAttribute("class") === "series-chart-line"
     ).length,
     1,
   );
@@ -215,7 +215,7 @@ test("scatter mode preserves points and omits the connecting line", () => {
   assert.equal(chartType.value, "scatter");
   assert.equal(
     chart.children.filter((element) =>
-      element.getAttribute("class") === "vector-time-series-line"
+      element.getAttribute("class") === "series-chart-line"
     ).length,
     0,
   );
@@ -231,7 +231,7 @@ test("chart points identify observations and request source-layer zoom", () => {
   });
   const chart = h.documentContext.querySelector("#vector-time-series-chart");
   const points = chart.children.filter((element) =>
-    element.getAttribute("class") === "vector-time-series-point"
+    element.getAttribute("class") === "series-chart-point"
   );
   points[0].dispatchEvent(new Event("click"));
   assert.equal(points[0].getAttribute("aria-pressed"), "true");
@@ -268,7 +268,7 @@ test("a new inspection sample clears the selected series point", () => {
   });
   const point = h.documentContext.querySelector("#vector-time-series-chart")
     .children.find((element) =>
-      element.getAttribute("class") === "vector-time-series-point"
+      element.getAttribute("class") === "series-chart-point"
     );
   point.dispatchEvent(new Event("click"));
   h.controller.setSample({

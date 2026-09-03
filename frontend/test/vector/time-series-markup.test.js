@@ -38,8 +38,8 @@ test("vector time-series controls and accessible outputs are present", () => {
   assert.match(MARKUP, /<label for="vector-time-series-y">/);
   assert.match(MARKUP, /<label for="vector-time-series-direction">/);
   assert.match(MARKUP, /<label for="vector-time-series-chart-type">/);
-  assert.match(MARKUP, />Series<\/button>/);
-  assert.match(MARKUP, />Vector series<\/h2>/);
+  assert.match(MARKUP, />Plot selected features<\/button>/);
+  assert.match(MARKUP, />Series plot<\/h2>/);
   assert.doesNotMatch(MARKUP, />Time series<\/button>/);
   assert.match(MARKUP, /id="vector-time-series-chart"[^>]+role="img"/);
   assert.match(STYLESHEET, /#vector-time-series\[hidden\]/);
@@ -47,7 +47,43 @@ test("vector time-series controls and accessible outputs are present", () => {
     STYLESHEET,
     /\.vector-time-series-chart\[hidden\]\s*\{\s*display:\s*none;/,
   );
-  assert.match(STYLESHEET, /\.vector-time-series-axis/);
-  assert.match(STYLESHEET, /\.vector-time-series-point\.is-selected/);
+  assert.match(STYLESHEET, /\.series-chart-axis/);
+  assert.match(STYLESHEET, /\.series-chart-point\.is-selected/);
   assert.match(STYLESHEET, /\.vector-time-series-selection\[hidden\]/);
+});
+
+test("feature-field plotting has searchable, accessible series controls", () => {
+  for (const identifier of [
+    "open-vector-feature-profile",
+    "vector-feature-profile-action-help",
+    "vector-feature-profile",
+    "close-vector-feature-profile",
+    "vector-feature-profile-title-field",
+    "vector-feature-profile-field-search",
+    "vector-feature-profile-select-matching",
+    "vector-feature-profile-clear-fields",
+    "vector-feature-profile-field-list",
+    "vector-feature-profile-direction",
+    "vector-feature-profile-chart-type",
+    "vector-feature-profile-chart-title",
+    "vector-feature-profile-status",
+    "vector-feature-profile-chart",
+    "vector-feature-profile-table",
+    "vector-feature-profile-table-body",
+  ]) {
+    assert.match(MARKUP, new RegExp(`id="${identifier}"`));
+  }
+  assert.match(MARKUP, />Plot feature fields<\/button>/);
+  assert.match(MARKUP, />One feature across several numeric fields\.<\/span>/);
+  assert.match(
+    MARKUP,
+    />One numeric field across all features found at this location\.<\/span>/,
+  );
+  assert.match(
+    MARKUP,
+    /id="open-vector-feature-profile"[^>]+aria-controls="vector-feature-profile"[^>]+aria-describedby="vector-feature-profile-action-help"/,
+  );
+  assert.match(STYLESHEET, /#vector-feature-profile\[hidden\]/);
+  assert.match(STYLESHEET, /\.immediate-action-help:hover/);
+  assert.match(STYLESHEET, /\.immediate-action-help:focus-within/);
 });

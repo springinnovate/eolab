@@ -18,6 +18,7 @@ function createFixture(fetchImplementation) {
   documentContext.querySelector("#vector-feature-inspector").hidden = true;
   documentContext.querySelector("#vector-feature-result").hidden = true;
   documentContext.querySelector("#open-vector-time-series").disabled = true;
+  documentContext.querySelector("#open-vector-feature-profile").disabled = true;
   const targets = [
     {
       sourceId: "catalog|parcels",
@@ -59,6 +60,8 @@ function createFixture(fetchImplementation) {
   };
   const inspectionChanges = [];
   const sampleChanges = [];
+  const currentObservationChanges = [];
+  let featureProfileRequests = 0;
   let timeSeriesRequests = 0;
   const controller = new VectorFeatureInspectorController({
     leaflet,
@@ -70,6 +73,9 @@ function createFixture(fetchImplementation) {
       documentContext.querySelector("#vector-feature-inspector").hidden = !visible;
     },
     onSampleChange: (sample) => sampleChanges.push(sample),
+    onCurrentObservationChange: (observation) =>
+      currentObservationChanges.push(observation),
+    onFeatureProfileRequested: () => { featureProfileRequests += 1; },
     onTimeSeriesRequested: () => { timeSeriesRequests += 1; },
     documentContext,
     fetchImplementation,
@@ -83,6 +89,8 @@ function createFixture(fetchImplementation) {
     removedLayers,
     inspectionChanges,
     sampleChanges,
+    currentObservationChanges,
+    get featureProfileRequests() { return featureProfileRequests; },
     get timeSeriesRequests() { return timeSeriesRequests; },
     mapContainer,
   };
@@ -181,6 +189,39 @@ test("inspector queries composed visible targets and navigates overlapping featu
     "2 of 2");
   assert.equal(h.highlights.length, 2);
   assert.equal(h.removedLayers.length, 1);
+  assert.equal(h.currentObservationChanges.at(-1).properties.name, "Second");
+});
+
+test("current numeric feature actions publish separate plotting intents", async () => {
+  const h = createFixture(async () => ({
+    ok: true,
+    json: async () => ({ type: "FeatureCollection", features: [{
+      type: "Feature",
+      geometry: null,
+      properties: { node_nm: "North", R2000: 2, R2001: 4 },
+    }, {
+      type: "Feature",
+      geometry: null,
+      properties: { node_nm: "South", R2000: 3, R2001: 5 },
+    }] }),
+  }));
+  await h.controller.inspect(inspectionEvent(12, 24));
+  const profileButton = h.documentContext.querySelector(
+    "#open-vector-feature-profile",
+  );
+  const selectedButton = h.documentContext.querySelector(
+    "#open-vector-time-series",
+  );
+  assert.equal(profileButton.disabled, false);
+  assert.equal(selectedButton.disabled, false);
+  profileButton.dispatchEvent(new Event("click"));
+  selectedButton.dispatchEvent(new Event("click"));
+  assert.equal(h.featureProfileRequests, 1);
+  assert.equal(h.timeSeriesRequests, 1);
+  assert.equal(h.currentObservationChanges.at(-1).properties.node_nm, "North");
+  h.controller.clearResults();
+  assert.equal(h.currentObservationChanges.at(-1), null);
+  assert.equal(profileButton.disabled, true);
 });
 
 test("an empty click never opens the feature inspector", async () => {

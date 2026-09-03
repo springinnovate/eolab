@@ -744,8 +744,20 @@
             <header class="vector-feature-inspector-header">
               <h2 id="vector-feature-inspector-heading">Feature inspector</h2>
               <div class="vector-feature-inspector-actions">
-                <button id="open-vector-time-series" class="secondary-button"
-                  type="button" aria-controls="vector-time-series" disabled>Series</button>
+                <span class="immediate-action-help">
+                  <button id="open-vector-feature-profile" class="secondary-button"
+                    type="button" aria-controls="vector-feature-profile"
+                    aria-describedby="vector-feature-profile-action-help" disabled>Plot feature fields</button>
+                  <span id="vector-feature-profile-action-help" class="immediate-action-tooltip"
+                    role="tooltip">One feature across several numeric fields.</span>
+                </span>
+                <span class="immediate-action-help">
+                  <button id="open-vector-time-series" class="secondary-button"
+                    type="button" aria-controls="vector-time-series"
+                    aria-describedby="vector-time-series-action-help" disabled>Plot selected features</button>
+                  <span id="vector-time-series-action-help" class="immediate-action-tooltip"
+                    role="tooltip">One numeric field across all features found at this location.</span>
+                </span>
                 <button id="close-vector-inspector" class="secondary-button"
                   type="button" aria-label="Close feature inspector">×</button>
               </div>
@@ -768,7 +780,7 @@
           <section id="vector-time-series" role="dialog" aria-modal="false"
             aria-labelledby="vector-time-series-heading" hidden>
             <header class="vector-time-series-header">
-              <h2 id="vector-time-series-heading">Vector series</h2>
+              <h2 id="vector-time-series-heading">Series plot</h2>
               <button id="close-vector-time-series" class="secondary-button"
                 type="button" aria-label="Close vector series">×</button>
             </header>
@@ -823,6 +835,71 @@
                     </tr>
                   </thead>
                   <tbody id="vector-time-series-table-body"></tbody>
+                </table>
+              </div>
+            </details>
+          </section>
+          <section id="vector-feature-profile" role="dialog" aria-modal="false"
+            aria-labelledby="vector-feature-profile-heading" hidden>
+            <header class="vector-time-series-header">
+              <h2 id="vector-feature-profile-heading">Series plot</h2>
+              <button id="close-vector-feature-profile" class="secondary-button"
+                type="button" aria-label="Close feature-field plot">×</button>
+            </header>
+            <div class="vector-feature-profile-controls">
+              <label for="vector-feature-profile-title-field">
+                <span>Title field</span>
+                <select id="vector-feature-profile-title-field"></select>
+              </label>
+              <label for="vector-feature-profile-direction">
+                <span>Order</span>
+                <select id="vector-feature-profile-direction">
+                  <option value="ascending">Ascending</option>
+                  <option value="descending">Descending</option>
+                </select>
+              </label>
+              <label for="vector-feature-profile-chart-type">
+                <span>Chart</span>
+                <select id="vector-feature-profile-chart-type">
+                  <option value="line">Line</option>
+                  <option value="scatter">Scatter</option>
+                </select>
+              </label>
+            </div>
+            <div class="vector-feature-profile-fields">
+              <label for="vector-feature-profile-field-search">
+                <span>Find fields</span>
+                <input id="vector-feature-profile-field-search" type="search"
+                  autocomplete="off" placeholder="For example, R">
+              </label>
+              <div class="vector-feature-profile-field-actions">
+                <button id="vector-feature-profile-select-matching"
+                  class="secondary-button" type="button">Select matching</button>
+                <button id="vector-feature-profile-clear-fields"
+                  class="secondary-button" type="button">Clear</button>
+              </div>
+              <div id="vector-feature-profile-field-list"
+                class="vector-feature-profile-field-list" role="group"
+                aria-label="Numeric fields to plot"></div>
+            </div>
+            <h3 id="vector-feature-profile-chart-title"
+              class="vector-feature-profile-chart-title" hidden></h3>
+            <p id="vector-feature-profile-status" class="vector-time-series-status"
+              role="status" aria-live="polite" aria-atomic="true"></p>
+            <svg id="vector-feature-profile-chart" class="vector-time-series-chart"
+              role="img" preserveAspectRatio="xMinYMin meet" hidden></svg>
+            <details id="vector-feature-profile-table" class="vector-time-series-table" hidden>
+              <summary>Chart data</summary>
+              <div class="vector-time-series-table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th scope="col">Field</th>
+                      <th scope="col">X</th>
+                      <th scope="col">Value</th>
+                    </tr>
+                  </thead>
+                  <tbody id="vector-feature-profile-table-body"></tbody>
                 </table>
               </div>
             </details>

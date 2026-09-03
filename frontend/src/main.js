@@ -61,6 +61,7 @@ import { SavedMapViewController } from "./saved-map-view/controller.js";
 import { SavedMapViewDomView } from "./saved-map-view/dom-view.js";
 import { createSavedMapLeafletViewport } from "./saved-map-view/leaflet-viewport.js";
 import { VectorFeatureInspectorController } from "./vector/feature-inspector.js";
+import { VectorFeatureProfileController } from "./vector/feature-profile.js";
 import { createVectorMapLayerAdapter } from "./vector/map-layer-adapter.js";
 import { VectorStyleControls } from "./vector/style-controls.js";
 import { VectorTimeSeriesController } from "./vector/time-series.js";
@@ -750,6 +751,12 @@ async function initializeCatalog(
             return zoomRetainedMapLayer(record.entry.item);
         },
     });
+    const vectorFeatureProfile = new VectorFeatureProfileController({
+        onVisibilityChange: (visible, moveFocus) => {
+            if (visible) mapInspection.showVectorFeatureProfile();
+            else mapInspection.hideVectorFeatureProfile(moveFocus);
+        },
+    });
     vectorFeatureInspector = new VectorFeatureInspectorController({
         leaflet: L,
         leafletMap,
@@ -774,6 +781,9 @@ async function initializeCatalog(
             else mapInspection.hideFeatureInspector();
         },
         onSampleChange: (sample) => vectorTimeSeries.setSample(sample),
+        onCurrentObservationChange: (observation) =>
+            vectorFeatureProfile.setCurrentObservation(observation),
+        onFeatureProfileRequested: () => vectorFeatureProfile.open(),
         onTimeSeriesRequested: () => vectorTimeSeries.open(),
     });
     /**

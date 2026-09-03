@@ -15,6 +15,9 @@ export class MapInspectionController {
         this.vectorTimeSeries = documentContext.querySelector(
             "#vector-time-series"
         );
+        this.vectorFeatureProfile = documentContext.querySelector(
+            "#vector-feature-profile"
+        );
         this.analysisToolsButton = documentContext.querySelector(
             "#open-analysis-tools"
         );
@@ -79,8 +82,9 @@ export class MapInspectionController {
         this.#synchronize();
     }
 
-    /** Reveal vector time-series analysis independently. @return {void} */
+    /** Reveal selected-feature analysis as the active series presentation. @return {void} */
     showVectorTimeSeries() {
+        this.vectorFeatureProfile.hidden = true;
         this.vectorTimeSeries.hidden = false;
         this.#synchronize();
     }
@@ -97,10 +101,30 @@ export class MapInspectionController {
         if (moveFocus) this.map.focus();
     }
 
+    /** Reveal feature-field analysis as the active series presentation. @return {void} */
+    showVectorFeatureProfile() {
+        this.vectorTimeSeries.hidden = true;
+        this.vectorFeatureProfile.hidden = false;
+        this.#synchronize();
+    }
+
+    /**
+     * Hide feature-field analysis without clearing its per-source settings.
+     *
+     * @param {boolean} [moveFocus=false] Restore focus to the map.
+     * @return {void}
+     */
+    hideVectorFeatureProfile(moveFocus = false) {
+        this.vectorFeatureProfile.hidden = true;
+        this.#synchronize();
+        if (moveFocus) this.map.focus();
+    }
+
     /** Keep one native top-layer surface open while either tool is visible. @return {void} */
     #synchronize() {
         const shouldOpen = !this.histogram.hidden || !this.style.hidden ||
-            !this.feature.hidden || !this.vectorTimeSeries.hidden;
+            !this.feature.hidden || !this.vectorTimeSeries.hidden ||
+            !this.vectorFeatureProfile.hidden;
         this.analysisToolsButton.hidden = shouldOpen;
         if (shouldOpen === this.isOpen) return;
         this.isOpen = shouldOpen;
@@ -116,6 +140,7 @@ export class MapInspectionController {
         this.style.hidden = true;
         this.feature.hidden = true;
         this.vectorTimeSeries.hidden = true;
+        this.vectorFeatureProfile.hidden = true;
         this.#synchronize();
     }
 }

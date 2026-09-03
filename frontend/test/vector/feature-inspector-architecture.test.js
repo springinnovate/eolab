@@ -18,6 +18,14 @@ const TIME_SERIES_SOURCE = readFileSync(
   new URL("../../src/vector/time-series.js", import.meta.url),
   "utf8",
 );
+const FEATURE_PROFILE_SOURCE = readFileSync(
+  new URL("../../src/vector/feature-profile.js", import.meta.url),
+  "utf8",
+);
+const SERIES_CHART_SOURCE = readFileSync(
+  new URL("../../src/vector/series-chart.js", import.meta.url),
+  "utf8",
+);
 const COMPOSITION_SOURCE = readFileSync(
   new URL("../../src/main.js", import.meta.url),
   "utf8",
@@ -44,6 +52,8 @@ test("vector inspection coordination remains in the browser composition root", (
   );
   assert.match(COMPOSITION_SOURCE, /onInspectionChange:\s*\(visible\)\s*=>/);
   assert.match(COMPOSITION_SOURCE, /onSampleChange:\s*\(sample\)\s*=>/);
+  assert.match(COMPOSITION_SOURCE, /onCurrentObservationChange:\s*\(observation\)\s*=>/);
+  assert.match(COMPOSITION_SOURCE, /onFeatureProfileRequested:\s*\(\)\s*=>/);
   assert.match(COMPOSITION_SOURCE, /onTimeSeriesRequested:\s*\(\)\s*=>/);
   assert.match(COMPOSITION_SOURCE, /leafletMap\.on\("click", exploreMap\)/);
   assert.match(
@@ -61,6 +71,48 @@ test("vector inspection coordination remains in the browser composition root", (
     assert.equal(FEATURE_INFO_SOURCE.includes(forbiddenMapImplementation), false);
   }
   assert.doesNotMatch(STYLESHEET, /is-inspecting-vector-features/);
+});
+
+test("feature-field analysis is a sibling behind neutral observation and chart contracts", () => {
+  for (const forbiddenSibling of [
+    "feature-inspector",
+    "time-series",
+    "MapLayerController",
+    "MapInspectionController",
+    "retainedRecords",
+    "leafletMap",
+    "GeoServer",
+    "GetFeatureInfo",
+    "../raster/",
+    "../map-layers/",
+  ]) {
+    assert.equal(FEATURE_PROFILE_SOURCE.includes(forbiddenSibling), false);
+  }
+  assert.match(
+    COMPOSITION_SOURCE,
+    /new VectorFeatureProfileController\(\{/,
+  );
+  assert.match(
+    COMPOSITION_SOURCE,
+    /vectorFeatureProfile\.setCurrentObservation\(observation\)/,
+  );
+  assert.match(
+    FEATURE_PROFILE_SOURCE,
+    /from "\.\/inspection-observation\.js"/,
+  );
+  assert.match(TIME_SERIES_SOURCE, /from "\.\/inspection-observation\.js"/);
+  assert.match(FEATURE_PROFILE_SOURCE, /from "\.\/series-chart\.js"/);
+  assert.match(TIME_SERIES_SOURCE, /from "\.\/series-chart\.js"/);
+  for (const forbiddenOwner of [
+    "feature-inspector",
+    "time-series",
+    "MapLayerController",
+    "MapInspectionController",
+  ]) {
+    assert.equal(SERIES_CHART_SOURCE.includes(forbiddenOwner), false);
+  }
+  assert.doesNotMatch(INSPECTOR_SOURCE, /VectorFeatureProfileController/);
+  assert.doesNotMatch(FEATURE_PROFILE_SOURCE, /VectorFeatureInspectorController/);
 });
 
 test("time-series analysis consumes neutral samples without sibling knowledge", () => {

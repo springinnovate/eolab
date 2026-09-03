@@ -4,6 +4,7 @@ History
 Unreleased
 ----------
 
+* Plot a single vector feature across searchable numeric field families with reusable titles, ordering, and line or scatter presentation.
 * Restore shared maps with bounded-concurrent layer preparation and one ordered map attachment.
 * Keep the Feature inspector closed and skip off-extent vector requests when a map click finds no feature.
 * Explore inspected vector observations as line or scatter series with source-layer navigation.
