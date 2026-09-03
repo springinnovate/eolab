@@ -120,7 +120,7 @@ Selecting a chart point identifies its source layer and offers **Zoom to source
 layer**. EOLab remembers the plot rules while you inspect other features from
 the same layer, so the chart updates instead of making you configure it again.
 
-### Share or resume the map
+### Share your map
 
 Use **Copy map link** to copy the current map as a URL. The link contains a
 compressed map-view document in its URL fragment, so opening it recreates the
