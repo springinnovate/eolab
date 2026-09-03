@@ -20,6 +20,18 @@ const TIME_SERIES_UNAVAILABLE_HELP =
 const MAX_ATTRIBUTE_VALUE_CHARACTERS = 1000;
 
 /**
+ * Format elapsed inspection time without implying unavailable precision.
+ *
+ * @param {number} elapsedMilliseconds Monotonic elapsed milliseconds.
+ * @return {string} Concise duration for progressive and final status text.
+ */
+function formatInspectionDuration(elapsedMilliseconds) {
+    const boundedMilliseconds = Math.max(0, elapsedMilliseconds);
+    if (boundedMilliseconds < 100) return "under 0.1 s";
+    return `${(boundedMilliseconds / 1000).toFixed(1)} s`;
+}
+
+/**
  * @typedef {Object} VectorFeatureInspectionTarget
  * @property {string} sourceId Opaque retained-source identity from composition.
  * @property {string} label User-facing retained-layer label.
@@ -154,6 +166,8 @@ export class VectorFeatureInspectorController {
      * @param {Document} [configuration.documentContext=document] DOM owner.
      * @param {typeof fetch} [configuration.fetchImplementation=globalThis.fetch]
      * HTTP implementation.
+     * @param {()=>number} [configuration.now] Monotonic clock used only for
+     * user-facing request progress.
      */
     constructor({
         leaflet,
@@ -167,6 +181,7 @@ export class VectorFeatureInspectorController {
         onTimeSeriesRequested,
         documentContext = document,
         fetchImplementation = globalThis.fetch,
+        now = () => globalThis.performance.now(),
     }) {
         if (typeof getVisibleTargets !== "function") {
             throw new TypeError("getVisibleTargets must be a function.");
@@ -186,6 +201,9 @@ export class VectorFeatureInspectorController {
         if (typeof onTimeSeriesRequested !== "function") {
             throw new TypeError("onTimeSeriesRequested must be a function.");
         }
+        if (typeof now !== "function") {
+            throw new TypeError("now must be a function.");
+        }
         this.leaflet = leaflet;
         this.map = leafletMap;
         this.getVisibleTargets = getVisibleTargets;
@@ -197,6 +215,7 @@ export class VectorFeatureInspectorController {
         this.onTimeSeriesRequested = onTimeSeriesRequested;
         this.document = documentContext;
         this.fetchImplementation = fetchImplementation;
+        this.now = now;
         this.panel = documentContext.querySelector("#vector-feature-inspector");
         this.closeButton = documentContext.querySelector("#close-vector-inspector");
         this.timeSeriesButton = documentContext.querySelector(
@@ -397,66 +416,124 @@ export class VectorFeatureInspectorController {
             this.#publishSample("empty", [], message);
             return true;
         }
-        this.abortController = new AbortController();
-        this.status.textContent = "Inspecting visible vector layers…";
+        const abortController = new AbortController();
+        this.abortController = abortController;
+        const startedAt = this.now();
+        const targetResults = targets.map(() => ({
+            complete: false,
+            results: [],
+            failure: null,
+        }));
+        const initialMessage = `Inspecting ${targets.length} visible vector ` +
+            `layer${targets.length === 1 ? "" : "s"}…`;
+        this.status.textContent = initialMessage;
+        if (this.panel.hidden) this.onInspectionChange(true);
         this.#publishSample(
             "loading",
             [],
-            "Inspecting visible vector layers…"
+            initialMessage
         );
         const containerPoint = event.containerPoint ??
             this.map.latLngToContainerPoint(event.latlng);
-        const responses = await Promise.allSettled(targets.map(async (target) => {
-            const features = await fetchVectorFeatureInfo({
-                wmsUrl: this.wmsUrl,
-                publication: target.publication,
-                viewport: this.mapViewport(containerPoint),
-                signal: this.abortController.signal,
-            }, this.fetchImplementation);
-            return features.map((feature) => ({ feature, target }));
+        const viewport = this.mapViewport(containerPoint);
+        await Promise.all(targets.map(async (target, targetIndex) => {
+            let results = [];
+            let failure = null;
+            try {
+                const features = await fetchVectorFeatureInfo({
+                    wmsUrl: this.wmsUrl,
+                    publication: target.publication,
+                    viewport,
+                    signal: abortController.signal,
+                }, this.fetchImplementation);
+                results = features.map((feature) => ({ feature, target }));
+            } catch (error) {
+                failure = error;
+            }
+            if (generation !== this.requestGeneration) return;
+            targetResults[targetIndex] = {
+                complete: true,
+                results,
+                failure,
+            };
+            this.#presentProgress({ targetResults, startedAt });
         }));
         if (generation !== this.requestGeneration) {
             return false;
         }
         this.abortController = null;
-        this.results = responses.flatMap((response) =>
-            response.status === "fulfilled" ? response.value : []
+        return true;
+    }
+
+    /**
+     * Merge one or more completed target slots and update progressive UI state.
+     *
+     * Slots retain visible-layer order even when network responses complete out
+     * of order. If a late result belongs before the selected feature, selection
+     * follows the same result object instead of unexpectedly changing feature.
+     *
+     * @param {Object} progress Current inspection progress.
+     * @param {Object[]} progress.targetResults Ordered per-target result slots.
+     * @param {number} progress.startedAt Monotonic inspection start time.
+     * @return {void}
+     */
+    #presentProgress({ targetResults, startedAt }) {
+        const previouslySelected = this.results[this.resultIndex] ?? null;
+        this.results = targetResults.flatMap((targetResult) =>
+            targetResult.results
         );
         if (this.results.length > 0) {
-            this.onInspectionChange(true);
-            this.showResult(0);
-            this.#updateTimeSeriesAction(this.results.length);
-            const failures = responses.filter(
-                (response) => response.status === "rejected" &&
-                    response.reason?.name !== "AbortError"
-            ).length;
-            this.status.textContent = failures === 0
-                ? `${this.results.length} feature${this.results.length === 1 ? "" : "s"} found.`
-                : `${this.results.length} feature${this.results.length === 1 ? "" : "s"} found; one visible layer could not be inspected.`;
-            this.#publishSample(
-                "ready",
-                this.results,
-                this.status.textContent
-            );
-            return true;
+            const retainedIndex = previouslySelected === null
+                ? 0
+                : this.results.indexOf(previouslySelected);
+            this.showResult(retainedIndex < 0 ? 0 : retainedIndex);
         }
-        const failure = responses.find(
-            (response) => response.status === "rejected" &&
-                response.reason?.name !== "AbortError"
+        this.#updateTimeSeriesAction(this.results.length);
+
+        const completedCount = targetResults.filter(
+            (targetResult) => targetResult.complete
+        ).length;
+        const pendingCount = targetResults.length - completedCount;
+        const failureResults = targetResults.filter((targetResult) =>
+            targetResult.complete &&
+            targetResult.failure !== null &&
+            targetResult.failure?.name !== "AbortError"
         );
-        const message = failure?.reason instanceof VectorFeatureInfoError
-            ? failure.reason.message
+        const duration = formatInspectionDuration(this.now() - startedAt);
+        if (pendingCount > 0) {
+            const featureSummary = this.results.length === 0
+                ? ""
+                : `${this.results.length} feature` +
+                  `${this.results.length === 1 ? "" : "s"} found; `;
+            this.status.textContent = featureSummary +
+                `${completedCount} of ${targetResults.length} vector layers ` +
+                `inspected in ${duration}; waiting for ${pendingCount} more…`;
+            this.#publishSample("loading", this.results, this.status.textContent);
+            return;
+        }
+        if (this.results.length > 0) {
+            const failureSummary = failureResults.length === 0
+                ? ""
+                : `; ${failureResults.length} of ${targetResults.length} vector ` +
+                  `layers could not be inspected`;
+            this.status.textContent = `${this.results.length} feature` +
+                `${this.results.length === 1 ? "" : "s"} found in ${duration}` +
+                `${failureSummary}.`;
+            this.#publishSample("ready", this.results, this.status.textContent);
+            return;
+        }
+        const failure = failureResults[0]?.failure;
+        const message = failure instanceof VectorFeatureInfoError
+            ? failure.message
             : "No vector feature was found at that location.";
-        if (failure?.reason instanceof VectorFeatureInfoError) {
-            this.status.textContent = message;
-            this.onInspectionChange(true);
+        if (failure instanceof VectorFeatureInfoError) {
+            this.status.textContent = `${message} Inspection finished in ${duration}.`;
         } else {
             this.status.textContent =
                 "Click the map to inspect visible vector features.";
             if (!this.panel.hidden) this.onInspectionChange(false);
         }
         this.#publishSample("empty", [], message);
-        return true;
     }
 
     /**

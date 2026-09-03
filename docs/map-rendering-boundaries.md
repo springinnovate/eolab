@@ -88,10 +88,11 @@ raster viewer and vector feature inspector through their public boundaries.
 It also applies the map-wide crosshair interaction cue. The raster viewer owns
 sample-window validation, its passive noninteractive pointer preview, and
 statistics requests; the vector inspector owns bounded GetFeatureInfo requests,
-cancellation, attribute
-presentation, and highlighting. Neither peer imports, activates, pauses, or
-reads the implementation state of the other, and closing a result panel changes
-presentation only.
+cancellation, progressive target-ordered result presentation, attributes, and
+highlighting. It exposes loading and completed observations only through its
+existing immutable callback boundary. Neither peer imports, activates, pauses,
+or reads the implementation state of the other, and closing a result panel
+changes presentation only.
 
 ## Dependency direction
 

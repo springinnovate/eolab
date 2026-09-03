@@ -9,7 +9,7 @@ import {
 } from "../../src/vector/feature-inspector.js";
 import { FakeRasterControlDocument } from "../../test-support/raster/fake-controls-document.js";
 
-function createFixture(fetchImplementation) {
+function createFixture(fetchImplementation, { now = () => 0 } = {}) {
   const documentContext = new FakeRasterControlDocument();
   const documentEvents = new EventTarget();
   documentContext.addEventListener = documentEvents.addEventListener.bind(documentEvents);
@@ -79,6 +79,7 @@ function createFixture(fetchImplementation) {
     onTimeSeriesRequested: () => { timeSeriesRequests += 1; },
     documentContext,
     fetchImplementation,
+    now,
   });
   return {
     controller,
@@ -164,7 +165,7 @@ test("inspector queries composed visible targets and navigates overlapping featu
   assert.equal(h.handlers.has("click"), false);
   assert.deepEqual(requestedLayers, ["eolab:parcels"]);
   assert.equal(h.documentContext.querySelector("#vector-feature-status").textContent,
-    "2 features found.");
+    "2 features found in under 0.1 s.");
   assert.equal(h.documentContext.querySelector("#vector-feature-layer").textContent,
     "Parcels");
   assert.equal(h.documentContext.querySelector("#vector-feature-position").textContent,
@@ -194,6 +195,97 @@ test("inspector queries composed visible targets and navigates overlapping featu
   assert.equal(h.highlights.length, 2);
   assert.equal(h.removedLayers.length, 1);
   assert.equal(h.currentObservationChanges.at(-1).properties.name, "Second");
+});
+
+test("inspector presents out-of-order layer results progressively in map order", async () => {
+  const resolvers = new Map();
+  let elapsedMilliseconds = 0;
+  const h = createFixture((url) => new Promise((resolve) => {
+    const layerName = new URL(url, "https://viewer.test")
+      .searchParams.get("layers");
+    resolvers.set(layerName, resolve);
+  }), { now: () => elapsedMilliseconds });
+  h.targets.push({
+    sourceId: "catalog|habitats",
+    label: "Habitats",
+    bbox: [0, 0, 10, 10],
+    publication: {
+      layerName: "eolab:habitats",
+      styleName: "vector-polygon",
+    },
+    primaryGeometry: "geometry",
+  });
+
+  const inspection = h.controller.inspect(inspectionEvent(12, 24));
+  assert.deepEqual(h.inspectionChanges, [true]);
+  assert.equal(
+    h.documentContext.querySelector("#vector-feature-status").textContent,
+    "Inspecting 2 visible vector layers…",
+  );
+
+  elapsedMilliseconds = 400;
+  resolvers.get("eolab:habitats")({
+    ok: true,
+    json: async () => ({ type: "FeatureCollection", features: [{
+      type: "Feature",
+      geometry: null,
+      properties: { name: "Habitat result" },
+    }] }),
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(
+    h.documentContext.querySelector("#vector-feature-layer").textContent,
+    "Habitats",
+  );
+  assert.equal(
+    h.documentContext.querySelector("#vector-feature-position").textContent,
+    "1 of 1",
+  );
+  assert.equal(
+    h.documentContext.querySelector("#vector-feature-status").textContent,
+    "1 feature found; 1 of 2 vector layers inspected in 0.4 s; " +
+      "waiting for 1 more…",
+  );
+  assert.deepEqual(
+    h.sampleChanges.map((sample) => sample.state),
+    ["loading", "loading"],
+  );
+  assert.equal(h.sampleChanges.at(-1).observations.length, 1);
+
+  elapsedMilliseconds = 1200;
+  resolvers.get("eolab:parcels")({
+    ok: true,
+    json: async () => ({ type: "FeatureCollection", features: [{
+      type: "Feature",
+      geometry: null,
+      properties: { name: "Parcel result" },
+    }] }),
+  });
+  await inspection;
+  assert.equal(
+    h.documentContext.querySelector("#vector-feature-layer").textContent,
+    "Habitats",
+  );
+  assert.equal(
+    h.documentContext.querySelector("#vector-feature-position").textContent,
+    "2 of 2",
+  );
+  assert.equal(
+    h.documentContext.querySelector("#vector-feature-status").textContent,
+    "2 features found in 1.2 s.",
+  );
+  assert.deepEqual(
+    h.sampleChanges.at(-1).observations.map((observation) =>
+      observation.layerLabel
+    ),
+    ["Parcels", "Habitats"],
+  );
+  h.documentContext.querySelector("#previous-vector-feature")
+    .dispatchEvent(new Event("click"));
+  assert.equal(
+    h.documentContext.querySelector("#vector-feature-layer").textContent,
+    "Parcels",
+  );
 });
 
 test("current numeric feature actions publish separate plotting intents", async () => {
@@ -248,13 +340,13 @@ test("one feature explains why plotting across features is unavailable", async (
   );
 });
 
-test("an empty click never opens the feature inspector", async () => {
+test("an empty click closes the transient inspection progress", async () => {
   const h = createFixture(async () => ({
     ok: true,
     json: async () => ({ type: "FeatureCollection", features: [] }),
   }));
   await h.controller.inspect(inspectionEvent(2, 3));
-  assert.deepEqual(h.inspectionChanges, []);
+  assert.deepEqual(h.inspectionChanges, [true, false]);
   assert.equal(
     h.documentContext.querySelector("#vector-feature-inspector").hidden,
     true,
@@ -266,7 +358,7 @@ test("an empty click never opens the feature inspector", async () => {
   assert.deepEqual(
     h.sampleChanges.map((sample) => [sample.state, sample.message]),
     [
-      ["loading", "Inspecting visible vector layers…"],
+      ["loading", "Inspecting 1 visible vector layer…"],
       ["empty", "No vector feature was found at that location."],
     ],
   );
@@ -312,7 +404,7 @@ test("an actionable inspection failure still opens the inspector", async () => {
   );
   assert.equal(
     h.documentContext.querySelector("#vector-feature-status").textContent,
-    "GeoServer is warming up.",
+    "GeoServer is warming up. Inspection finished in under 0.1 s.",
   );
   assert.equal(h.sampleChanges.at(-1).state, "empty");
 });
@@ -392,7 +484,7 @@ test("a newer click owns presentation and closing does not disable later inspect
   });
   await Promise.all([first, second]);
   assert.equal(h.documentContext.querySelector("#vector-feature-status").textContent,
-    "1 feature found.");
+    "1 feature found in under 0.1 s.");
 
   h.documentContext.querySelector("#close-vector-inspector")
     .dispatchEvent(new Event("click"));
@@ -416,7 +508,7 @@ test("a newer click owns presentation and closing does not disable later inspect
   h.targets.length = 0;
   h.controller.syncVisibleLayers();
   assert.equal(h.handlers.has("click"), false);
-  assert.deepEqual(h.inspectionChanges, [true, false]);
+  assert.deepEqual(h.inspectionChanges, [true, false, true, false]);
   assert.equal(h.sampleChanges.at(-1).state, "invalidated");
 });
 
