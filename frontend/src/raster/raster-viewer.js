@@ -2643,6 +2643,11 @@ export function initializeRasterViewer(
         if (session) applySessionStyle(
             session, rasterStyle, activePaletteName, rasterStyleWasEdited
         );
+        // A retained raster changes the composite descriptor, while detached
+        // Catalog analysis has no map presentation to invalidate.
+        if (session && !isActiveAnalysisRaster()) {
+            renderLayerStack();
+        }
         presentActiveStyle(rasterStyle, activePaletteName);
         return true;
     }
