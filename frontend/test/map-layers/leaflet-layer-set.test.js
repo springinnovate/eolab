@@ -8,6 +8,7 @@ function createLayer() {
     const handlers = new Map();
     const container = { style: {} };
     return {
+        redrawCount: 0,
         addTo(map) {
             map.attached.add(this);
             return this;
@@ -31,6 +32,10 @@ function createLayer() {
         },
         emit(event) {
             for (const handler of handlers.get(event) ?? []) handler();
+        },
+        redraw() {
+            this.redrawCount += 1;
+            return this;
         },
         container,
     };
@@ -145,7 +150,7 @@ test("Leaflet layer set atomically isolates selected individual grids", () => {
     assert.equal(updates.length, 2);
 });
 
-test("Leaflet layer set ignores stale isolated-grid loads and keeps composite on failure", () => {
+test("Leaflet layer set ignores stale loads and retries only a failed grid", () => {
     const map = {
         attached: new Set(),
         removeLayer(layer) {
@@ -179,6 +184,52 @@ test("Leaflet layer set ignores stale isolated-grid loads and keeps composite on
     assert.equal(replacement.container.style.visibility, "hidden");
 
     replacement.emit("tileerror");
+    replacement.emit("load");
+    assert.equal(clears, 0);
+    assert.equal(replacement.redrawCount, 1);
+    assert.deepEqual(map.attached, new Set([second, replacement]));
+    assert.equal(second.container.style.visibility, "hidden");
+    assert.equal(replacement.container.style.visibility, "hidden");
+
+    replacement.emit("load");
+    assert.equal(clears, 1);
+    assert.deepEqual(map.attached, new Set([second, replacement]));
+    assert.equal(second.container.style.visibility, "");
+    assert.equal(replacement.container.style.visibility, "");
+});
+
+test("Leaflet layer set keeps the composite after the bounded retry fails", () => {
+    const map = {
+        attached: new Set(),
+        removeLayer(layer) {
+            this.attached.delete(layer);
+        },
+    };
+    let clears = 0;
+    const layers = new LeafletLayerSet(map, {
+        update() {},
+        clear() {
+            clears += 1;
+        },
+    });
+    const first = createLayer();
+    const second = createLayer();
+    layers.add("first", first, { visible: true, opacity: 1 });
+    layers.add("second", second, { visible: true, opacity: 1 });
+    layers.render([
+        { key: "first", visible: true, opacity: 1, descriptor: {} },
+        { key: "second", visible: true, opacity: 1, descriptor: {} },
+    ]);
+
+    layers.setIndividualRendering(["first", "second"]);
+    first.emit("tileerror");
+    first.emit("load");
+    second.emit("load");
+    assert.equal(first.redrawCount, 1);
+    assert.equal(clears, 0);
+
+    first.emit("tileerror");
+    first.emit("load");
     assert.equal(clears, 0);
     assert.equal(map.attached.size, 0);
 });

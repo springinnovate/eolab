@@ -1,5 +1,7 @@
 /** Keyed Leaflet attachment, opacity, and drawing-order adapter. */
 
+const INDIVIDUAL_RENDERING_TILE_RETRY_LIMIT = 1;
+
 /** Manage keyed source layers and optional server-composed presentation. */
 export class LeafletLayerSet {
     /**
@@ -348,9 +350,11 @@ export class LeafletLayerSet {
         }
         const generation = this.individualRenderingGeneration;
         const pending = {
+            failed: new Set(),
             generation,
             keys: selected,
             remaining: new Set(keys),
+            retryCount: 0,
             signature,
             listeners: [],
         };
@@ -366,7 +370,10 @@ export class LeafletLayerSet {
                 generation,
                 key
             );
-            const onError = () => this.#failIndividualRendering(generation);
+            const onError = () => this.#recordIndividualLayerError(
+                generation,
+                key
+            );
             if (
                 typeof record.layer.on === "function" &&
                 typeof record.layer.off === "function"
@@ -392,6 +399,11 @@ export class LeafletLayerSet {
         if (pending === null || pending.generation !== generation) return;
         pending.remaining.delete(key);
         if (pending.remaining.size > 0) return;
+        if (pending.failed.size > 0) {
+            if (this.#retryFailedIndividualLayers(pending)) return;
+            this.#failIndividualRendering(generation);
+            return;
+        }
         this.#removePendingIndividualListeners(pending);
         this.pendingIndividualRendering = null;
         this.compositeRenderer.clear();
@@ -402,6 +414,50 @@ export class LeafletLayerSet {
             }
         }
         this.activeIndividualRenderingSignature = pending.signature;
+    }
+
+    /**
+     * Remember that one staged grid had at least one failed tile.
+     *
+     * The layer-level load event still marks the end of its current tile
+     * cycle. Deferring recovery until then prevents one error from removing
+     * the pair and canceling every other in-flight tile request.
+     *
+     * @param {number} generation Rendering transition generation.
+     * @param {string} key Retained key whose tile failed.
+     * @return {void}
+     */
+    #recordIndividualLayerError(generation, key) {
+        const pending = this.pendingIndividualRendering;
+        if (pending === null || pending.generation !== generation) return;
+        pending.failed.add(key);
+    }
+
+    /**
+     * Redraw only failed staged grids within one bounded retry budget.
+     *
+     * @param {Object} pending Current individual-rendering transition.
+     * @return {boolean} Whether a retry was started.
+     */
+    #retryFailedIndividualLayers(pending) {
+        if (
+            pending.retryCount >= INDIVIDUAL_RENDERING_TILE_RETRY_LIMIT ||
+            [...pending.failed].some((key) => {
+                const record = this.layers.get(key);
+                return !record?.attached ||
+                    typeof record.layer.redraw !== "function";
+            })
+        ) {
+            return false;
+        }
+        const retryKeys = [...pending.failed];
+        pending.failed.clear();
+        pending.remaining = new Set(retryKeys);
+        pending.retryCount += 1;
+        for (const key of retryKeys) {
+            this.#require(key).layer.redraw();
+        }
+        return true;
     }
 
     /**
