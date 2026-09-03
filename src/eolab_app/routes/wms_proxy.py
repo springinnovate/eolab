@@ -1,6 +1,7 @@
 """Restricted public WMS validation, authorization, and forwarding."""
 
 import asyncio
+import re
 
 import httpx2
 from fastapi import APIRouter, HTTPException, Request, Response
@@ -22,6 +23,15 @@ from eolab_app.routes.geoserver_map import (
 MAX_FEATURE_INFO_FEATURES = 10
 MAX_FEATURE_INFO_RESPONSE_BYTES = 512 * 1024
 MAX_FEATURE_INFO_BUFFER_PIXELS = 20
+MAX_FEATURE_ID_CHARACTERS = 512
+SAFE_FEATURE_ID_PATTERN = re.compile(r"[A-Za-z0-9_.:-]+")
+VECTOR_HIGHLIGHT_STYLE_NAMES = frozenset(
+    {
+        "vector-highlight-point",
+        "vector-highlight-line",
+        "vector-highlight-polygon",
+    }
+)
 
 
 PUBLIC_WMS_COMMON_QUERY_PARAMETERS = frozenset(
@@ -46,7 +56,8 @@ PUBLIC_WMS_MAP_QUERY_PARAMETERS = PUBLIC_WMS_COMMON_QUERY_PARAMETERS | {
 PUBLIC_WMS_QUERY_PARAMETERS = {
     "getcapabilities": PUBLIC_WMS_COMMON_QUERY_PARAMETERS
     | {"acceptformats", "acceptversions", "sections", "updatesequence"},
-    "getmap": PUBLIC_WMS_MAP_QUERY_PARAMETERS | {"tiled", "tilesorigin"},
+    "getmap": PUBLIC_WMS_MAP_QUERY_PARAMETERS
+    | {"featureid", "tiled", "tilesorigin"},
     "getfeatureinfo": PUBLIC_WMS_MAP_QUERY_PARAMETERS
     | {
         "buffer",
@@ -133,6 +144,15 @@ def validated_public_wms_query(
             raise HTTPException(
                 status_code=400,
                 detail="WMS map and legend format must be image/png",
+            )
+        feature_id = normalized_query.get("featureid")
+        if feature_id is not None and (
+            len(feature_id) > MAX_FEATURE_ID_CHARACTERS
+            or SAFE_FEATURE_ID_PATTERN.fullmatch(feature_id) is None
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="featureid must identify exactly one safe feature",
             )
     elif operation == "getfeatureinfo":
         if normalized_query.get("format", "image/png").lower() != "image/png":
@@ -271,7 +291,15 @@ def create_wms_proxy_router(
                 style_parameter,
                 "",
             ).removeprefix("eolab:")
-            if requested_style not in {"", authorization.style_name}:
+            is_vector_highlight = (
+                operation == "getmap"
+                and "featureid" in normalized_query
+                and requested_style in VECTOR_HIGHLIGHT_STYLE_NAMES
+            )
+            if (
+                requested_style not in {"", authorization.style_name}
+                and not is_vector_highlight
+            ):
                 raise HTTPException(
                     status_code=400,
                     detail=f"WMS style must be {authorization.style_name}",

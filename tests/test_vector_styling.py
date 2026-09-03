@@ -242,6 +242,22 @@ def test_initialized_vector_slds_match_generated_defaults(
     assert parameters(initialized) == parameters(generated)
 
 
+@pytest.mark.parametrize("geometry_kind", ["point", "line", "polygon"])
+def test_selected_vector_slds_render_only_a_dark_outline(
+    geometry_kind: str,
+) -> None:
+    """Keep feature selection above the map without repainting its fill."""
+    initialized = ElementTree.parse(
+        Path("geoserver") / f"vector-highlight-{geometry_kind}.sld"
+    )
+
+    assert initialized.findall(f".//{{{SLD_NAMESPACE}}}Fill") == []
+    stroke_colors = initialized.findall(
+        f".//{{{SLD_NAMESPACE}}}CssParameter[@name='stroke']"
+    )
+    assert [parameter.text for parameter in stroke_colors] == ["#111827"]
+
+
 @pytest.mark.parametrize(
     ("geometry_kind", "symbolizer"),
     [

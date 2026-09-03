@@ -116,7 +116,7 @@ def test_initialization_updates_existing_style_without_destructive_changes() -> 
 
 
 def test_initialization_converges_every_fixed_vector_style() -> None:
-    """Create or update all point, line, and polygon style resources."""
+    """Create or update default and selection-outline vector styles."""
     client = RecordingGeoServerClient(
         [
             (200, b'{"oldMasterPassword":"new-master-password"}'),
@@ -131,12 +131,21 @@ def test_initialization_converges_every_fixed_vector_style() -> None:
             (200, b""),
             (404, b""),
             (201, b""),
+            (404, b""),
+            (201, b""),
+            (404, b""),
+            (201, b""),
+            (404, b""),
+            (201, b""),
         ]
     )
     vector_styles = {
         "vector-point": b"<point/>",
         "vector-line": b"<line/>",
         "vector-polygon": b"<polygon/>",
+        "vector-highlight-point": b"<highlight-point/>",
+        "vector-highlight-line": b"<highlight-line/>",
+        "vector-highlight-polygon": b"<highlight-polygon/>",
     }
 
     initialize_geoserver(
@@ -156,6 +165,18 @@ def test_initialization_converges_every_fixed_vector_style() -> None:
         ("/workspaces/eolab/styles?name=vector-point", b"<point/>"),
         ("/workspaces/eolab/styles/vector-line", b"<line/>"),
         ("/workspaces/eolab/styles?name=vector-polygon", b"<polygon/>"),
+        (
+            "/workspaces/eolab/styles?name=vector-highlight-point",
+            b"<highlight-point/>",
+        ),
+        (
+            "/workspaces/eolab/styles?name=vector-highlight-line",
+            b"<highlight-line/>",
+        ),
+        (
+            "/workspaces/eolab/styles?name=vector-highlight-polygon",
+            b"<highlight-polygon/>",
+        ),
     ]
 
 

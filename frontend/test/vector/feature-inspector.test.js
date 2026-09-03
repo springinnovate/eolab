@@ -25,6 +25,8 @@ function createFixture(fetchImplementation, { now = () => 0 } = {}) {
       label: "Parcels",
       bbox: [0, 0, 10, 10],
       publication: { layerName: "eolab:parcels", styleName: "vector-polygon" },
+      geometryKind: "polygon",
+      propertyNames: ["name", "rank"],
       primaryGeometry: "geometry",
     },
   ];
@@ -47,7 +49,24 @@ function createFixture(fetchImplementation, { now = () => 0 } = {}) {
     latLngToContainerPoint: () => ({ x: 10, y: 20 }),
   };
   const highlights = [];
+  const wmsHighlights = [];
   const leaflet = {
+    tileLayer: {
+      wms(url, options) {
+        const handlers = new Map();
+        return {
+          url,
+          options,
+          on(type, handler) { handlers.set(type, handler); return this; },
+          addTo(map) {
+            this.map = map;
+            this.handlers = handlers;
+            wmsHighlights.push(this);
+            return this;
+          },
+        };
+      },
+    },
     geoJSON(feature, options) {
       const layer = {
         feature,
@@ -87,6 +106,7 @@ function createFixture(fetchImplementation, { now = () => 0 } = {}) {
     targets,
     handlers,
     highlights,
+    wmsHighlights,
     removedLayers,
     inspectionChanges,
     sampleChanges,
@@ -121,6 +141,34 @@ test("attribute formatting is bounded and excludes the geometry field", () => {
   ]);
 });
 
+test("identified features use a filtered WMS highlight without geometry", async () => {
+  const h = createFixture(async () => ({
+    ok: true,
+    json: async () => ({ type: "FeatureCollection", features: [{
+      type: "Feature",
+      id: "parcels.42",
+      geometry: null,
+      properties: { name: "Selected parcel" },
+    }] }),
+  }));
+
+  await h.controller.inspect(inspectionEvent(12, 24));
+
+  assert.equal(h.highlights.length, 0);
+  assert.equal(h.wmsHighlights.length, 1);
+  assert.equal(h.wmsHighlights[0].url, "/geoserver/eolab/wms");
+  assert.deepEqual(h.wmsHighlights[0].options, {
+    layers: "eolab:parcels",
+    styles: "vector-highlight-polygon",
+    format: "image/png",
+    transparent: true,
+    version: "1.1.1",
+    featureid: "parcels.42",
+  });
+  h.controller.clearResults();
+  assert.deepEqual(h.removedLayers, [h.wmsHighlights[0]]);
+});
+
 test("analysis observations are immutable and omit nested properties", () => {
   const observation = vectorInspectionObservation({
     feature: {
@@ -141,6 +189,7 @@ test("analysis observations are immutable and omit nested properties", () => {
 
 test("inspector queries composed visible targets and navigates overlapping features", async () => {
   const requestedLayers = [];
+  const requestedProperties = [];
   const features = [
     {
       type: "Feature",
@@ -154,7 +203,9 @@ test("inspector queries composed visible targets and navigates overlapping featu
     },
   ];
   const h = createFixture(async (url) => {
-    requestedLayers.push(new URL(url, "https://viewer.test").searchParams.get("layers"));
+    const parameters = new URL(url, "https://viewer.test").searchParams;
+    requestedLayers.push(parameters.get("layers"));
+    requestedProperties.push(parameters.get("propertyName"));
     return {
       ok: true,
       json: async () => ({ type: "FeatureCollection", features }),
@@ -164,6 +215,7 @@ test("inspector queries composed visible targets and navigates overlapping featu
   assert.deepEqual(h.inspectionChanges, [true]);
   assert.equal(h.handlers.has("click"), false);
   assert.deepEqual(requestedLayers, ["eolab:parcels"]);
+  assert.deepEqual(requestedProperties, ["name,rank"]);
   assert.equal(h.documentContext.querySelector("#vector-feature-status").textContent,
     "2 features found in under 0.1 s.");
   assert.equal(h.documentContext.querySelector("#vector-feature-layer").textContent,
@@ -213,6 +265,8 @@ test("inspector presents out-of-order layer results progressively in map order",
       layerName: "eolab:habitats",
       styleName: "vector-polygon",
     },
+    geometryKind: "polygon",
+    propertyNames: ["name"],
     primaryGeometry: "geometry",
   });
 
@@ -435,6 +489,8 @@ test("inspector skips targets outside their authoritative Catalog bounds", async
       layerName: "eolab:distant",
       styleName: "vector-point",
     },
+    geometryKind: "point",
+    propertyNames: ["name"],
     primaryGeometry: "geometry",
   });
 
@@ -533,6 +589,8 @@ test("changing the visible vector set invalidates results but retains inspection
       layerName: "eolab:habitats",
       styleName: "vector-polygon",
     },
+    geometryKind: "polygon",
+    propertyNames: ["score"],
     primaryGeometry: "geometry",
   });
   h.controller.syncVisibleLayers();

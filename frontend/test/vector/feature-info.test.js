@@ -13,6 +13,7 @@ const PUBLICATION = Object.freeze({
   layerName: "eolab:parcels",
   styleName: "vector-polygon",
 });
+const PROPERTY_NAMES = Object.freeze(["name", "R2000", "R2024"]);
 
 const VIEWPORT = Object.freeze({
   bbox: Object.freeze([20, 10, 40, 30]),
@@ -26,6 +27,7 @@ test("feature info scales a large viewport and click under the WMS limit", () =>
   const url = new URL(buildVectorFeatureInfoUrl({
     wmsUrl: "https://viewer.test/geoserver/eolab/wms",
     publication: PUBLICATION,
+    propertyNames: PROPERTY_NAMES,
     viewport: VIEWPORT,
   }));
   assert.equal(url.searchParams.get("request"), "GetFeatureInfo");
@@ -42,6 +44,7 @@ test("feature info scales a large viewport and click under the WMS limit", () =>
   assert.equal(url.searchParams.get("feature_count"), String(VECTOR_FEATURE_INFO_LIMIT));
   assert.equal(url.searchParams.get("buffer"), String(VECTOR_FEATURE_INFO_BUFFER_PIXELS));
   assert.equal(url.searchParams.get("info_format"), "application/json");
+  assert.equal(url.searchParams.get("propertyName"), "name,R2000,R2024");
 });
 
 test("feature info accepts only a bounded GeoJSON FeatureCollection", async () => {
@@ -54,6 +57,7 @@ test("feature info accepts only a bounded GeoJSON FeatureCollection", async () =
   const features = await fetchVectorFeatureInfo({
     wmsUrl: "/geoserver/eolab/wms",
     publication: PUBLICATION,
+    propertyNames: PROPERTY_NAMES,
     viewport: VIEWPORT,
     signal: new AbortController().signal,
   }, async (url, options) => {
@@ -70,6 +74,7 @@ test("feature info accepts only a bounded GeoJSON FeatureCollection", async () =
     () => fetchVectorFeatureInfo({
       wmsUrl: "/wms",
       publication: PUBLICATION,
+      propertyNames: PROPERTY_NAMES,
       viewport: VIEWPORT,
       signal: new AbortController().signal,
     }, async () => ({
@@ -87,6 +92,7 @@ test("feature info exposes safe proxy failures", async () => {
     () => fetchVectorFeatureInfo({
       wmsUrl: "/wms",
       publication: PUBLICATION,
+      propertyNames: PROPERTY_NAMES,
       viewport: VIEWPORT,
       signal: new AbortController().signal,
     }, async () => ({

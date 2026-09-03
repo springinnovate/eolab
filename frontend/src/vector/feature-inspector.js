@@ -12,7 +12,6 @@ const HIGHLIGHT_STYLE = Object.freeze({
     fillColor: "#facc15",
     fillOpacity: 0.35,
 });
-
 const TIME_SERIES_AVAILABLE_HELP =
     "Plot one numeric field across all features found at this location.";
 const TIME_SERIES_UNAVAILABLE_HELP =
@@ -39,6 +38,8 @@ function formatInspectionDuration(elapsedMilliseconds) {
  * bounds.
  * @property {{layerName:string,styleName:string}} publication Authorized WMS
  * publication identity.
+ * @property {"point"|"line"|"polygon"} geometryKind Geometry style family.
+ * @property {string[]} propertyNames Catalog-declared non-geometry fields.
  * @property {string|null} primaryGeometry Catalog-declared geometry field.
  */
 
@@ -300,6 +301,11 @@ export class VectorFeatureInspectorController {
                 target.bbox[1] > target.bbox[3] ||
                 typeof target?.publication?.layerName !== "string" ||
                 typeof target?.publication?.styleName !== "string" ||
+                !["point", "line", "polygon"].includes(target?.geometryKind) ||
+                !Array.isArray(target?.propertyNames) ||
+                !target.propertyNames.every((name) =>
+                    typeof name === "string" && name.length > 0
+                ) ||
                 !(
                     target?.primaryGeometry === null ||
                     typeof target?.primaryGeometry === "string"
@@ -443,6 +449,7 @@ export class VectorFeatureInspectorController {
                 const features = await fetchVectorFeatureInfo({
                     wmsUrl: this.wmsUrl,
                     publication: target.publication,
+                    propertyNames: target.propertyNames,
                     viewport,
                     signal: abortController.signal,
                 }, this.fetchImplementation);
@@ -619,7 +626,17 @@ export class VectorFeatureInspectorController {
             }
         }
         this.clearHighlight();
-        if (feature.geometry !== null) {
+        if (typeof feature.id === "string" && feature.id.length > 0) {
+            const highlightLayer = this.leaflet.tileLayer.wms(this.wmsUrl, {
+                layers: target.publication.layerName,
+                styles: `vector-highlight-${target.geometryKind}`,
+                format: "image/png",
+                transparent: true,
+                version: "1.1.1",
+                featureid: feature.id,
+            });
+            this.highlightLayer = highlightLayer.addTo(this.map);
+        } else if (feature.geometry !== null) {
             this.highlightLayer = this.leaflet.geoJSON(feature, {
                 style: HIGHLIGHT_STYLE,
                 pointToLayer: (_pointFeature, latlng) =>
