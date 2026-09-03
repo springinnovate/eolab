@@ -12,6 +12,8 @@ import { MapLayerStackView } from "./layer-stack-view.js";
  * @property {(context:Object)=>Object} createState Create adapter-owned state.
  * @property {(record:Object,onTileError:()=>void)=>Object} createLayer Create a
  * Leaflet-compatible layer for one publication.
+ * @property {(record:Object)=>Object} renderDescriptor Return an authorized
+ * feature-owned composite-rendering descriptor.
  * @property {(record:Object)=>Object} snapshot Return presentation-ready legend,
  * optional role badge, and other feature-owned snapshot fields.
  * @property {(record:Object)=>Object} [exportSavedState] Return validated,
@@ -407,10 +409,10 @@ export class MapLayerController {
         this.leafletLayers.setOpacity(key, opacity);
         const record = this.#requireRecord(key);
         record.adapter.opacityChanged?.(record, opacity);
-        this.onLayersChange(this.snapshots());
         this.view.setStatus(
             `${entry.label} opacity is ${Math.round(opacity * 100)} percent.`
         );
+        this.render();
     }
 
     /**
@@ -655,8 +657,33 @@ export class MapLayerController {
      */
     render(requestedFocus = null) {
         const layers = this.snapshots();
+        this.leafletLayers.render(
+            this.stack.entries.map((entry) => {
+                const record = this.#requireRecord(entry.key);
+                return {
+                    key: entry.key,
+                    visible: entry.visible,
+                    opacity: entry.opacity,
+                    descriptor: record.adapter.renderDescriptor(record),
+                };
+            })
+        );
         this.view.render(layers, this.presentationActiveKey, requestedFocus);
         this.onLayersChange(layers);
+    }
+
+    /**
+     * Switch between ordinary composite rendering and independent source grids.
+     *
+     * The independent strategy exists only for presentation modes such as the
+     * browser's additive bivariate blend that cannot be represented by the
+     * ordinary GeoServer composite contract.
+     *
+     * @param {boolean} enabled Whether independent source grids are required.
+     * @return {void}
+     */
+    setIndividualRendering(enabled) {
+        this.leafletLayers.setIndividualRendering(enabled);
     }
 
     /**
@@ -948,6 +975,7 @@ export class MapLayerController {
             "publish",
             "createState",
             "createLayer",
+            "renderDescriptor",
             "snapshot",
         ]) {
             if (typeof adapter?.[method] !== "function") {

@@ -19,8 +19,8 @@ const ZERO_REVISION = `sha256:${"0".repeat(64)}`;
 function createView() {
   return {
     busy: [],
-    confirmation: null,
     result: null,
+    loading: null,
     error: null,
     bind(handlers) { this.handlers = handlers; },
     unbind() { this.handlers = null; },
@@ -31,10 +31,6 @@ function createView() {
     },
     showCopied() { this.copied = true; },
     showCopyFallback(url) { this.copyFallback = url; },
-    async confirmOpen(...arguments_) {
-      this.confirmation = arguments_;
-      return true;
-    },
     showResults(result) { this.result = result; },
     showLoading(layerCount) { this.loading = layerCount; },
     showError(error) { this.error = error; },
@@ -177,11 +173,10 @@ test("saved map controller stages concurrently and commits final saved order", a
     calls.findIndex(([kind]) => kind === "viewport") <
     calls.findIndex(([kind]) => kind === "commit")
   );
-  assert.equal(view.confirmation[1], 1);
   assert.equal(view.result.loaded, 2);
   assert.equal(view.loading, 2);
-  assert.match(view.result.details[0], /TOP: loaded \(source changed/);
-  assert.match(view.result.details[1], /BOTTOM: loaded\./);
+  assert.equal(view.result.details.length, 1);
+  assert.match(view.result.details[0], /TOP: source changed/);
   assert.deepEqual(viewportCalls, [saved.viewport]);
 });
 
@@ -261,8 +256,9 @@ test("saved map restoration bounds work and isolates layer failures", async () =
   );
   assert.equal(view.result.loaded, 8);
   assert.equal(view.result.total, 9);
-  assert.match(view.result.details[4], /publication failed/);
-  assert.match(view.result.details[6], /saved style was not applied: style changed/);
+  assert.equal(view.result.details.length, 2);
+  assert.match(view.result.details[0], /publication failed/);
+  assert.match(view.result.details[1], /saved style was not applied: style changed/);
 });
 
 test("destroyed saved map restoration never commits its detached batch", async () => {
@@ -333,36 +329,6 @@ test("destroyed saved map restoration never commits its detached batch", async (
   assert.equal(view.result, null);
 });
 
-test("saved map controller leaves the current map unchanged after cancellation", async () => {
-  const view = createView();
-  view.confirmOpen = async () => false;
-  let cleared = false;
-  const saved = createSavedMapView({
-    viewer: { version: "0.2.0", origin: "https://viewer.example" },
-    createdAt: "2026-09-01T12:00:00Z",
-    viewport: { center: { latitude: 0, longitude: 0 }, zoom: 2 },
-    layers: [],
-  });
-  const controller = new SavedMapViewController({
-    view,
-    viewport: {},
-    mapLayers: { retainedRecords: [] },
-    catalogVisualization: { clear: () => { cleared = true; } },
-    catalogItems: {},
-    viewerVersion: "0.2.0",
-    viewerOrigin: "https://viewer.example",
-    subtleCrypto: zeroDigest(),
-  });
-
-  await controller.openSharedFragment(await encodeSavedMapViewFragment(
-    serializeSavedMapView(saved),
-    { maximumInputBytes: 512 * 1024 },
-  ));
-
-  assert.equal(cleared, false);
-  assert.equal(view.result, null);
-});
-
 test("saved map controller ignores fragments owned by other components", async () => {
   const view = createView();
   const controller = new SavedMapViewController({
@@ -379,7 +345,7 @@ test("saved map controller ignores fragments owned by other components", async (
   await controller.openSharedFragment("#catalog=roads");
 
   assert.deepEqual(view.busy, []);
-  assert.equal(view.confirmation, null);
+  assert.equal(view.loading, null);
 });
 
 test("saved map controller exposes the URL when clipboard access is denied", async () => {

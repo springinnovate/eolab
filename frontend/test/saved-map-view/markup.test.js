@@ -13,5 +13,5 @@ test("saved map controls expose one accessible link action and open dialog", asy
   assert.doesNotMatch(markup, /id="open-map-view-file"/);
   assert.match(markup, /<dialog[^>]*id="saved-map-view-dialog"/s);
   assert.match(markup, /id="saved-map-view-dialog-url"[^>]*readonly[^>]*hidden/s);
-  assert.match(markup, /id="confirm-open-map-view"[^>]*value="open"/s);
+  assert.doesNotMatch(markup, /id="confirm-open-map-view"/);
 });

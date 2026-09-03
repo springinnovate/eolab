@@ -264,6 +264,20 @@ export function createVectorMapLayerAdapter({
             return layer;
         },
         /**
+         * Describe the current authorized vector appearance for composition.
+         *
+         * @param {Object} record Retained vector publication and style state.
+         * @return {{layerName:string,styleName:string,styleDefinition:Object}}
+         * Complete feature-owned composite descriptor.
+         */
+        renderDescriptor(record) {
+            return {
+                layerName: record.publication.layerName,
+                styleName: record.publication.styleName,
+                styleDefinition: structuredClone(record.state.style),
+            };
+        },
+        /**
          * Apply a validated per-layer style and refresh the existing WMS layer.
          *
          * @param {Object} record Neutral retained-layer record.

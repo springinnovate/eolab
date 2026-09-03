@@ -1,15 +1,21 @@
 /** Keyed Leaflet attachment, opacity, and drawing-order adapter. */
 
-/** Manage independent keyed Leaflet layers without publication logic. */
+/** Manage keyed source layers and optional server-composed presentation. */
 export class LeafletLayerSet {
     /**
      * Create an empty keyed layer set.
      *
      * @param {{removeLayer:(layer:Object)=>void}} leafletMap Leaflet map.
+     * @param {{update:(layers:Object[])=>void,clear:()=>void}|null}
+     * [compositeRenderer=null] Optional ordinary-map composite renderer.
      */
-    constructor(leafletMap) {
+    constructor(leafletMap, compositeRenderer = null) {
         this.leafletMap = leafletMap;
+        this.compositeRenderer = compositeRenderer;
         this.layers = new Map();
+        this.order = [];
+        this.rendering = [];
+        this.individualRendering = false;
     }
 
     /**
@@ -26,9 +32,10 @@ export class LeafletLayerSet {
             throw new Error(`Leaflet layer already exists: ${key}`);
         }
         layer.setOpacity(opacity);
-        const record = { layer, attached: false };
+        const record = { layer, attached: false, visible, opacity };
         this.layers.set(key, record);
-        if (visible) {
+        this.order.push(key);
+        if (visible && this.compositeRenderer === null) {
             layer.addTo(this.leafletMap);
             record.attached = true;
         }
@@ -44,6 +51,10 @@ export class LeafletLayerSet {
      */
     setVisible(key, visible) {
         const record = this.#require(key);
+        record.visible = visible;
+        if (this.compositeRenderer !== null && !this.individualRendering) {
+            return;
+        }
         if (record.attached === visible) {
             return;
         }
@@ -63,7 +74,9 @@ export class LeafletLayerSet {
      * @return {void}
      */
     setOpacity(key, opacity) {
-        this.#require(key).layer.setOpacity(opacity);
+        const record = this.#require(key);
+        record.opacity = opacity;
+        record.layer.setOpacity(opacity);
     }
 
     /**
@@ -85,6 +98,7 @@ export class LeafletLayerSet {
         if (new Set(orderedKeys).size !== orderedKeys.length) {
             throw new Error("Leaflet order cannot contain duplicate keys.");
         }
+        this.order = [...orderedKeys];
         const baseZIndex = 200;
         orderedKeys.forEach((key, index) => {
             this.#require(key).layer.setZIndex(
@@ -114,6 +128,52 @@ export class LeafletLayerSet {
     }
 
     /**
+     * Synchronize complete top-first descriptors with the current strategy.
+     *
+     * @param {Array<{key:string,visible:boolean,opacity:number,descriptor:Object}>}
+     * rendering Complete retained-layer rendering state.
+     * @return {void}
+     * @throws {Error} If keys do not match the retained layer set.
+     */
+    render(rendering) {
+        const keys = rendering.map(({ key }) => key);
+        if (
+            keys.length !== this.layers.size ||
+            keys.some((key) => !this.layers.has(key)) ||
+            new Set(keys).size !== keys.length
+        ) {
+            throw new Error(
+                "Leaflet rendering must contain every retained layer once."
+            );
+        }
+        this.rendering = rendering.map((candidate) => ({
+            ...candidate,
+            descriptor: structuredClone(candidate.descriptor),
+        }));
+        for (const candidate of this.rendering) {
+            const record = this.#require(candidate.key);
+            record.visible = candidate.visible;
+            record.opacity = candidate.opacity;
+        }
+        this.setOrder(keys);
+        this.#applyRenderingStrategy();
+    }
+
+    /**
+     * Use independent source grids only for presentation modes that require it.
+     *
+     * @param {boolean} enabled Whether to suspend ordinary composite rendering.
+     * @return {void}
+     */
+    setIndividualRendering(enabled) {
+        if (this.compositeRenderer === null || enabled === this.individualRendering) {
+            return;
+        }
+        this.individualRendering = enabled;
+        this.#applyRenderingStrategy();
+    }
+
+    /**
      * Remove one retained layer from the map and keyed set.
      *
      * @param {string} key Stable map-layer key.
@@ -128,6 +188,10 @@ export class LeafletLayerSet {
             this.leafletMap.removeLayer(record.layer);
         }
         this.layers.delete(key);
+        this.order = this.order.filter((candidate) => candidate !== key);
+        this.rendering = this.rendering.filter(
+            (candidate) => candidate.key !== key
+        );
         return record.layer;
     }
 
@@ -137,9 +201,45 @@ export class LeafletLayerSet {
      * @return {void}
      */
     clear() {
+        this.compositeRenderer?.clear();
         for (const key of [...this.layers.keys()]) {
             this.remove(key);
         }
+        this.order = [];
+        this.rendering = [];
+    }
+
+    /** Apply either one composite grid or the retained independent grids. */
+    #applyRenderingStrategy() {
+        if (this.compositeRenderer === null) return;
+        if (this.individualRendering) {
+            this.compositeRenderer.clear();
+            for (const key of [...this.order].reverse()) {
+                const record = this.#require(key);
+                if (record.visible && !record.attached) {
+                    record.layer.addTo(this.leafletMap);
+                    record.attached = true;
+                } else if (!record.visible && record.attached) {
+                    this.leafletMap.removeLayer(record.layer);
+                    record.attached = false;
+                }
+            }
+            return;
+        }
+        for (const record of this.layers.values()) {
+            if (record.attached) {
+                this.leafletMap.removeLayer(record.layer);
+                record.attached = false;
+            }
+        }
+        this.compositeRenderer.update(
+            this.rendering
+                .filter(({ visible, opacity }) => visible && opacity > 0)
+                .map(({ opacity, descriptor }) => ({
+                    ...structuredClone(descriptor),
+                    opacity,
+                }))
+        );
     }
 
     /**

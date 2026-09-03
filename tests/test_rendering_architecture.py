@@ -6,6 +6,7 @@ from pathlib import Path
 
 RENDERING_SOURCE = Path("src/eolab_app/rendering")
 WMS_PROXY_SOURCE = Path("src/eolab_app/routes/wms_proxy.py")
+COMPOSITE_MAP_SOURCE = Path("src/eolab_app/routes/composite_map.py")
 HTTP_DISCONNECT_SOURCE = Path("src/eolab_app/routes/http_disconnect.py")
 GEOTIFF_CATALOG_SOURCE = Path("src/eolab_app/catalog/geotiff.py")
 APPLICATION_COMPOSITION_SOURCE = Path("src/eolab_app/main.py")
@@ -39,7 +40,27 @@ def test_shared_rendering_has_no_dataset_feature_dependency() -> None:
         if module.startswith("eolab_app.")
     }
 
-    assert application_imports <= {"eolab_app.rendering.errors"}
+    assert all(
+        module.startswith("eolab_app.rendering.")
+        for module in application_imports
+    )
+
+
+def test_composite_map_route_depends_only_on_neutral_rendering() -> None:
+    """Keep composite delivery independent from dataset implementations."""
+    application_imports = {
+        module
+        for module in imported_modules(COMPOSITE_MAP_SOURCE)
+        if module.startswith("eolab_app.")
+    }
+
+    assert not {
+        module
+        for module in application_imports
+        if module.startswith("eolab_app.raster")
+        or module.startswith("eolab_app.vector")
+        or module.startswith("eolab_app.catalog")
+    }
 
 
 def test_restricted_wms_route_depends_only_on_neutral_authorization() -> None:
@@ -54,7 +75,7 @@ def test_restricted_wms_route_depends_only_on_neutral_authorization() -> None:
         "eolab_app.diagnostics.tracker",
         "eolab_app.rendering.errors",
         "eolab_app.rendering.ports",
-        "eolab_app.routes.http_disconnect",
+        "eolab_app.routes.geoserver_map",
     }
 
 

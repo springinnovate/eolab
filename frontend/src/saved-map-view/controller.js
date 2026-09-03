@@ -102,13 +102,13 @@ export class SavedMapViewController {
     }
 
     /**
-     * Validate, preview, and optionally restore one shared map fragment.
+     * Validate and restore one shared map fragment.
      *
      * Unrelated fragments are ignored so this component does not own other
      * application anchors.
      *
      * @param {string} fragment Current browser URL fragment.
-     * @return {Promise<void>} Completion after cancellation or restoration.
+     * @return {Promise<void>} Completion after restoration.
      */
     async openSharedFragment(fragment) {
         if (!isSavedMapViewFragment(fragment)) return;
@@ -121,15 +121,6 @@ export class SavedMapViewController {
                 maximumOutputBytes: MAX_SAVED_MAP_VIEW_BYTES,
             });
             const savedMapView = parseSavedMapView(serialized);
-            const approved = await this.view.confirmOpen(
-                savedMapView,
-                this.mapLayers.retainedRecords.length,
-                this.viewerVersion,
-                this.viewerOrigin
-            );
-            if (!approved || restoreGeneration !== this.restoreGeneration) {
-                return;
-            }
             this.view.showLoading(savedMapView.layers.length);
             const report = await this.#restore(
                 savedMapView,
@@ -212,7 +203,9 @@ export class SavedMapViewController {
         return {
             loaded: stagedLayers.length,
             total: savedMapView.layers.length,
-            details: preparations.map(({ detail }) => detail),
+            details: preparations
+                .map(({ detail }) => detail)
+                .filter((detail) => detail !== null),
         };
     }
 
@@ -220,7 +213,7 @@ export class SavedMapViewController {
      * Resolve, validate, publish, and style one detached saved layer.
      *
      * @param {Object} layer Validated saved-layer document.
-     * @return {Promise<{staged:Object|null,detail:string}>} Detached layer and
+     * @return {Promise<{staged:Object|null,detail:string|null}>} Detached layer and
      * ordered user-facing outcome, or a failure detail without a layer.
      */
     async #prepareLayer(layer) {
@@ -263,8 +256,8 @@ export class SavedMapViewController {
                 notices.push(`saved style was not applied: ${styleWarning}`);
             }
             const detail = notices.length === 0
-                ? `${record.entry.label}: loaded.`
-                : `${record.entry.label}: loaded (${notices.join("; ")}).`;
+                ? null
+                : `${record.entry.label}: ${notices.join("; ")}.`;
             return { staged, detail };
         } catch (error) {
             return {

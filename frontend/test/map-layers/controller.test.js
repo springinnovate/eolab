@@ -56,6 +56,11 @@ function createAdapter(owner, publish = async (item) => ({ id: item.id })) {
         label: (item) => `${owner} ${item.id}`,
         publish,
         createState: ({ item }) => ({ owner, item }),
+        renderDescriptor: (record) => ({
+            layerName: `eolab:${record.entry.item.id}`,
+            styleName: `${owner}-style`,
+            styleDefinition: { owner },
+        }),
         createLayer: (record, onTileError) => ({
             record,
             onTileError,

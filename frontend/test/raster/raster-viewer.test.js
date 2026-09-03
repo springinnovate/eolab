@@ -767,6 +767,11 @@ test('visible raster histograms follow order, skip vectors and never follow the 
     await h.mapLayers.show(vector, {
         label: () => 'volcanoes.gpkg', publish: async () => ({}), createState: () => ({}),
         createLayer: () => h.leaflet.tileLayer.wms('/geoserver/eolab/wms', {}),
+        renderDescriptor: () => ({
+            layerName: 'eolab:volcanoes',
+            styleName: 'vector-point',
+            styleDefinition: { geometryKind: 'point' },
+        }),
         snapshot: () => ({ legend: { kind: 'fixed' } }), tileErrorMessage: 'Vector tile error',
     });
     const vectorRecord = h.mapLayers.retainedRecords.find(
@@ -803,6 +808,11 @@ test('sequential raster removals release analysis before a vector is added', asy
         publish: async () => ({}),
         createState: () => ({}),
         createLayer: () => h.leaflet.tileLayer.wms('/geoserver/eolab/wms', {}),
+        renderDescriptor: () => ({
+            layerName: 'eolab:reported-vector',
+            styleName: 'vector-point',
+            styleDefinition: { geometryKind: 'point' },
+        }),
         snapshot: () => ({ legend: { kind: 'fixed' } }),
         tileErrorMessage: 'Vector tile error',
     }));

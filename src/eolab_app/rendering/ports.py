@@ -26,6 +26,32 @@ class PublishedLayerAuthorization(Protocol):
         """
         ...
 
+    def build_composite_sld(
+        self,
+        layer_name: str,
+        style_name: str,
+        style_environment: str | None,
+        style_definition: Mapping[str, object] | None,
+        opacity: float,
+    ) -> bytes:
+        """Build one authorized layer entry for a composite SLD document.
+
+        Args:
+            layer_name: Current workspace-qualified GeoServer layer identity.
+            style_name: Feature-owned style identity requested by the browser.
+            style_environment: Optional raster dynamic-style environment.
+            style_definition: Optional complete vector style definition.
+            opacity: Neutral retained-layer opacity from zero through one.
+
+        Returns:
+            One complete SLD document containing exactly one named layer.
+
+        Raises:
+            PublishedLayerRequestError: If the requested appearance does not
+                match this feature's current authorized contract.
+        """
+        ...
+
 
 class PublishedLayerRegistry(Protocol):
     """Require current authorization for one feature-owned WMS layer."""

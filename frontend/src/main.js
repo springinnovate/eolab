@@ -50,6 +50,11 @@ import {
 import { MapLayerStyleEditor } from "./map-layers/style-editor.js";
 import { MapLayerController } from "./map-layers/controller.js";
 import { MapLayerStackView } from "./map-layers/layer-stack-view.js";
+import { LeafletLayerSet } from "./map-layers/leaflet-layer-set.js";
+import { CompositeMapPlanClient } from "./map-layers/composite-api.js";
+import {
+    CompositeLeafletRenderer,
+} from "./map-layers/composite-leaflet-renderer.js";
 import {
     catalogItemsMatch,
     CatalogMapActionRegistry,
@@ -669,9 +674,20 @@ async function initializeCatalog(
     let rasterVisualization = null;
     let layerStyleEditor = null;
     let vectorFeatureInspector = null;
+    const mapLayerStackView = new MapLayerStackView();
+    const compositeLeafletRenderer = new CompositeLeafletRenderer({
+        leaflet: L,
+        leafletMap,
+        client: new CompositeMapPlanClient(),
+        onError: (message) => mapLayerStackView.setStatus(message),
+    });
     const mapLayerController = new MapLayerController({
         leafletMap,
-        view: new MapLayerStackView(),
+        view: mapLayerStackView,
+        leafletLayers: new LeafletLayerSet(
+            leafletMap,
+            compositeLeafletRenderer,
+        ),
         onLayersChange: () => {
             refreshCatalogMapAction();
             rasterVisualization?.syncVisibleLayers();
@@ -687,6 +703,8 @@ async function initializeCatalog(
         leaflet: L,
         onTileError: reportMapTileError,
         onHistogramRequested: () => mapInspection.showHistogram(),
+        onBivariateRenderingChange: (active) =>
+            mapLayerController.setIndividualRendering(active),
     }, { mapLayerController });
     const vectorMapLayerAdapter = createVectorMapLayerAdapter({
         leaflet: L,
