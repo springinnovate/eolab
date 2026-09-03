@@ -65,6 +65,7 @@ import { SavedMapViewCatalogClient } from "./saved-map-view/catalog-client.js";
 import { SavedMapViewController } from "./saved-map-view/controller.js";
 import { SavedMapViewDomView } from "./saved-map-view/dom-view.js";
 import { createSavedMapLeafletViewport } from "./saved-map-view/leaflet-viewport.js";
+import { SavedMapViewLocalStorage } from "./saved-map-view/local-storage.js";
 import { VectorFeatureInspectorController } from "./vector/feature-inspector.js";
 import { VectorFeatureProfileController } from "./vector/feature-profile.js";
 import { createVectorMapLayerAdapter } from "./vector/map-layer-adapter.js";
@@ -673,6 +674,7 @@ async function initializeCatalog(
 
     let rasterVisualization = null;
     let layerStyleEditor = null;
+    let savedMapViewController = null;
     let vectorFeatureInspector = null;
     const mapLayerStackView = new MapLayerStackView();
     const compositeLeafletRenderer = new CompositeLeafletRenderer({
@@ -693,6 +695,7 @@ async function initializeCatalog(
             rasterVisualization?.syncVisibleLayers();
             layerStyleEditor?.refresh();
             vectorFeatureInspector?.syncVisibleLayers();
+            savedMapViewController?.scheduleRemember();
         },
         onItemZoom: zoomRetainedMapLayer,
         onItemInfo: inspectRetainedMapLayer,
@@ -745,7 +748,7 @@ async function initializeCatalog(
         mapLayerController,
         vectorMapLayerAdapter
     );
-    const savedMapViewController = new SavedMapViewController({
+    savedMapViewController = new SavedMapViewController({
         view: new SavedMapViewDomView(),
         viewport: createSavedMapLeafletViewport(leafletMap),
         mapLayers: mapLayerController,
@@ -753,9 +756,20 @@ async function initializeCatalog(
         catalogItems: new SavedMapViewCatalogClient(catalogUrl),
         viewerVersion: appGlobalConfiguration.appVersion,
         viewerOrigin: globalThis.location.origin,
+        storage: new SavedMapViewLocalStorage(),
+        initialViewport: {
+            center: {
+                latitude: appGlobalConfiguration.initialView.latitude,
+                longitude: appGlobalConfiguration.initialView.longitude,
+            },
+            zoom: appGlobalConfiguration.initialView.zoom,
+        },
         beforeRestore: clearCatalogSelection,
     });
-    void savedMapViewController.openSharedFragment(globalThis.location.hash);
+    leafletMap.on("moveend", () =>
+        savedMapViewController?.scheduleRemember()
+    );
+    void savedMapViewController.restoreStartupView(globalThis.location.hash);
     const vectorTimeSeries = new VectorTimeSeriesController({
         onVisibilityChange: (visible, moveFocus) => {
             if (visible) mapInspection.showVectorTimeSeries();

@@ -42,12 +42,17 @@ function viewFixture() {
         for (const listener of [...(listeners.get("close") ?? [])]) listener();
         listeners.set("close", []);
       },
+      click() {
+        for (const listener of [...(listeners.get("click") ?? [])]) listener();
+      },
     };
   }
 
   const selectors = new Map([
     ["#copy-map-link", element()],
     ["#copy-map-link-label", element()],
+    ["#reset-map-view", element()],
+    ["#undo-reset-map-view", element()],
     ["#saved-map-view-dialog", element()],
     ["#saved-map-view-dialog-title", element()],
     ["#saved-map-view-dialog-summary", element()],
@@ -59,6 +64,7 @@ function viewFixture() {
     querySelector: (selector) => selectors.get(selector),
     createElement: () => element(),
   };
+  selectors.get("#undo-reset-map-view").hidden = true;
   return {
     elements: selectors,
     view: new SavedMapViewDomView(documentContext, {
@@ -136,4 +142,33 @@ test("shared maps retain actionable restoration warnings", () => {
   assert.equal(elements.get("#saved-map-view-dialog").open, true);
   assert.equal(elements.get("#saved-map-view-dialog-title").textContent,
     "Shared map opened with warnings");
+});
+
+test("saved map controls bind reset and one-step undo accessibly", () => {
+  const { elements, view } = viewFixture();
+  const actions = [];
+  view.bind({
+    onCopy: () => actions.push("copy"),
+    onReset: () => actions.push("reset"),
+    onUndo: () => actions.push("undo"),
+  });
+
+  elements.get("#copy-map-link").click();
+  elements.get("#reset-map-view").click();
+  view.showUndoReset();
+  elements.get("#undo-reset-map-view").click();
+
+  assert.deepEqual(actions, ["copy", "reset", "undo"]);
+  assert.equal(elements.get("#reset-map-view").hidden, true);
+  assert.equal(elements.get("#undo-reset-map-view").hidden, false);
+  view.hideUndoReset();
+  assert.equal(elements.get("#reset-map-view").hidden, false);
+  assert.equal(elements.get("#undo-reset-map-view").hidden, true);
+
+  view.setBusy(true);
+  for (const selector of [
+    "#copy-map-link", "#reset-map-view", "#undo-reset-map-view",
+  ]) {
+    assert.equal(elements.get(selector).disabled, true);
+  }
 });

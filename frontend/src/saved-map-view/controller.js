@@ -14,6 +14,7 @@ import {
 } from "./model.js";
 
 const RESTORE_CONCURRENCY = 4;
+const REMEMBER_DEBOUNCE_MILLISECONDS = 350;
 
 /** Coordinate shareable map views without becoming a rendering owner. */
 export class SavedMapViewController {
@@ -29,10 +30,17 @@ export class SavedMapViewController {
      * @param {Object} configuration.catalogItems Exact Catalog Item client.
      * @param {string} configuration.viewerVersion Running application version.
      * @param {string} configuration.viewerOrigin Running application origin.
+     * @param {Object|null} [configuration.storage] Opaque serialized-view
+     * persistence adapter exposing read, write, and clear operations.
+     * @param {Object|null} [configuration.initialViewport] Configured canonical
+     * viewport used by Reset view.
      * @param {()=>void} [configuration.beforeRestore] Composition-owned cleanup
      * for transient map presentations excluded from the portable contract.
      * @param {()=>Date} [configuration.clock] Creation-time provider.
      * @param {SubtleCrypto} [configuration.subtleCrypto] Revision hasher.
+     * @param {(handler:()=>void,delay:number)=>unknown} [configuration.setTimer]
+     * Debounce timer provider.
+     * @param {(timer:unknown)=>void} [configuration.clearTimer] Timer clearer.
      */
     constructor({
         view,
@@ -42,10 +50,26 @@ export class SavedMapViewController {
         catalogItems,
         viewerVersion,
         viewerOrigin,
+        storage = null,
+        initialViewport = null,
         beforeRestore = () => {},
         clock = () => new Date(),
         subtleCrypto = globalThis.crypto?.subtle,
+        setTimer = (handler, delay) => globalThis.setTimeout(handler, delay),
+        clearTimer = (timer) => globalThis.clearTimeout(timer),
     }) {
+        if (
+            storage !== null &&
+            (
+                typeof storage.read !== "function" ||
+                typeof storage.write !== "function" ||
+                typeof storage.clear !== "function"
+            )
+        ) {
+            throw new TypeError(
+                "Saved-map storage must expose read, write, and clear operations"
+            );
+        }
         this.view = view;
         this.viewport = viewport;
         this.mapLayers = mapLayers;
@@ -53,14 +77,34 @@ export class SavedMapViewController {
         this.catalogItems = catalogItems;
         this.viewerVersion = viewerVersion;
         this.viewerOrigin = viewerOrigin;
+        this.storage = storage;
         this.beforeRestore = beforeRestore;
         this.clock = clock;
         this.subtleCrypto = subtleCrypto;
+        this.setTimer = setTimer;
+        this.clearTimer = clearTimer;
         this.busy = false;
         this.restoreGeneration = 0;
+        this.rememberGeneration = 0;
+        this.rememberTimer = null;
+        this.rememberPending = false;
+        this.undoView = null;
         this.destroyed = false;
+        this.initialView = initialViewport === null
+            ? null
+            : createSavedMapView({
+                viewer: {
+                    version: this.viewerVersion,
+                    origin: this.viewerOrigin,
+                },
+                createdAt: this.clock().toISOString(),
+                viewport: initialViewport,
+                layers: [],
+            });
         this.view.bind({
             onCopy: () => void this.copyMapLink(),
+            onReset: () => void this.resetView(),
+            onUndo: () => void this.undoReset(),
         });
     }
 
@@ -73,20 +117,7 @@ export class SavedMapViewController {
         if (this.busy || this.destroyed) return;
         this.#setBusy(true);
         try {
-            const layers = await Promise.all(
-                this.mapLayers.retainedRecords.map(
-                    async (record) => this.#exportLayer(record)
-                )
-            );
-            const savedMapView = createSavedMapView({
-                viewer: {
-                    version: this.viewerVersion,
-                    origin: this.viewerOrigin,
-                },
-                createdAt: this.clock().toISOString(),
-                viewport: this.viewport.snapshot(),
-                layers,
-            });
+            const savedMapView = await this.#snapshotCurrentView();
             const fragment = await encodeSavedMapViewFragment(
                 serializeSavedMapView(savedMapView),
                 { maximumInputBytes: MAX_SAVED_MAP_VIEW_BYTES }
@@ -113,6 +144,7 @@ export class SavedMapViewController {
     async openSharedFragment(fragment) {
         if (!isSavedMapViewFragment(fragment)) return;
         if (this.busy || this.destroyed) return;
+        this.#cancelScheduledRemember();
         const restoreGeneration = this.restoreGeneration + 1;
         this.restoreGeneration = restoreGeneration;
         this.#setBusy(true);
@@ -128,9 +160,121 @@ export class SavedMapViewController {
             );
             if (report !== null) {
                 this.view.showResults(report);
+                this.rememberPending = true;
             }
         } catch (error) {
             this.view.showError(asError(error), "open");
+        } finally {
+            this.#setBusy(false);
+        }
+    }
+
+    /**
+     * Restore the authoritative startup source with shared-link precedence.
+     *
+     * An owned `#view=` fragment is always attempted and never falls back to
+     * private storage when malformed. Other or absent fragments allow the last
+     * validated origin-local document to restore silently.
+     *
+     * @param {string} fragment Current browser URL fragment.
+     * @return {Promise<void>} Completion after shared or local restoration.
+     */
+    async restoreStartupView(fragment) {
+        if (isSavedMapViewFragment(fragment)) {
+            await this.openSharedFragment(fragment);
+            return;
+        }
+        if (this.busy || this.destroyed || this.storage === null) return;
+        const serialized = this.storage.read();
+        if (serialized === null) return;
+        let savedMapView;
+        try {
+            savedMapView = parseSavedMapView(serialized);
+        } catch {
+            this.storage.clear();
+            return;
+        }
+        this.#cancelScheduledRemember();
+        const restoreGeneration = this.restoreGeneration + 1;
+        this.restoreGeneration = restoreGeneration;
+        this.#setBusy(true);
+        try {
+            const report = await this.#restore(savedMapView, restoreGeneration);
+            if (report !== null) this.rememberPending = true;
+        } catch {
+            this.storage.clear();
+        } finally {
+            this.#setBusy(false);
+        }
+    }
+
+    /**
+     * Coalesce persistence after a composition-owned layer or viewport change.
+     *
+     * The current complete view is validated immediately before storage. A
+     * newer change or restore invalidates any older asynchronous snapshot.
+     *
+     * @return {void}
+     */
+    scheduleRemember() {
+        if (this.destroyed || this.storage === null) return;
+        if (this.busy) {
+            this.rememberPending = true;
+            return;
+        }
+        this.#queueRemember(true);
+    }
+
+    /**
+     * Restore the configured empty initial view and expose one-step undo.
+     *
+     * @return {Promise<void>} Completion after the atomic restore transaction.
+     */
+    async resetView() {
+        if (this.busy || this.destroyed || this.initialView === null) return;
+        this.#cancelScheduledRemember();
+        const restoreGeneration = this.restoreGeneration + 1;
+        this.restoreGeneration = restoreGeneration;
+        this.#setBusy(true);
+        try {
+            const previousView = await this.#snapshotCurrentView();
+            const report = await this.#restore(
+                this.initialView,
+                restoreGeneration
+            );
+            if (report === null) return;
+            this.undoView = previousView;
+            this.storage?.write(serializeSavedMapView(this.initialView));
+            this.view.showUndoReset();
+            this.rememberPending = true;
+        } catch (error) {
+            this.view.showError(asError(error), "reset");
+        } finally {
+            this.#setBusy(false);
+        }
+    }
+
+    /**
+     * Restore and consume the validated view captured immediately before reset.
+     *
+     * @return {Promise<void>} Completion after the atomic restore transaction.
+     */
+    async undoReset() {
+        if (this.busy || this.destroyed || this.undoView === null) return;
+        this.#cancelScheduledRemember();
+        const savedMapView = this.undoView;
+        const restoreGeneration = this.restoreGeneration + 1;
+        this.restoreGeneration = restoreGeneration;
+        this.#setBusy(true);
+        try {
+            const report = await this.#restore(savedMapView, restoreGeneration);
+            if (report === null) return;
+            this.undoView = null;
+            this.storage?.write(serializeSavedMapView(savedMapView));
+            this.view.hideUndoReset();
+            this.rememberPending = true;
+        } catch (error) {
+            this.view.showError(asError(error), "undo");
         } finally {
             this.#setBusy(false);
         }
@@ -145,7 +289,30 @@ export class SavedMapViewController {
         if (this.destroyed) return;
         this.destroyed = true;
         this.restoreGeneration += 1;
+        this.#cancelScheduledRemember();
         this.view.unbind();
+    }
+
+    /**
+     * Build one validated document from current neutral owners.
+     *
+     * @return {Promise<Readonly<Object>>} Canonical complete map document.
+     */
+    async #snapshotCurrentView() {
+        const records = [...this.mapLayers.retainedRecords];
+        const viewport = this.viewport.snapshot();
+        const layers = await Promise.all(
+            records.map(async (record) => this.#exportLayer(record))
+        );
+        return createSavedMapView({
+            viewer: {
+                version: this.viewerVersion,
+                origin: this.viewerOrigin,
+            },
+            createdAt: this.clock().toISOString(),
+            viewport,
+            layers,
+        });
     }
 
     /**
@@ -276,6 +443,67 @@ export class SavedMapViewController {
     #setBusy(busy) {
         this.busy = busy;
         this.view.setBusy(busy);
+        if (!busy && this.rememberPending) {
+            this.rememberPending = false;
+            this.#queueRemember(false);
+        }
+    }
+
+    /**
+     * Debounce one validated local snapshot and optionally consume reset undo.
+     *
+     * @param {boolean} supersedesUndo Whether a user change invalidates undo.
+     * @return {void}
+     */
+    #queueRemember(supersedesUndo) {
+        if (this.storage === null || this.destroyed) return;
+        if (supersedesUndo && this.undoView !== null) {
+            this.undoView = null;
+            this.view.hideUndoReset();
+        }
+        this.rememberGeneration += 1;
+        const generation = this.rememberGeneration;
+        if (this.rememberTimer !== null) {
+            this.clearTimer(this.rememberTimer);
+        }
+        this.rememberTimer = this.setTimer(() => {
+            this.rememberTimer = null;
+            void this.#remember(generation);
+        }, REMEMBER_DEBOUNCE_MILLISECONDS);
+    }
+
+    /**
+     * Persist only a still-current validated complete-view snapshot.
+     *
+     * Storage failures are deliberately private and non-blocking.
+     *
+     * @param {number} generation Scheduled persistence generation.
+     * @return {Promise<void>} Completion after a write or stale rejection.
+     */
+    async #remember(generation) {
+        try {
+            const savedMapView = await this.#snapshotCurrentView();
+            if (
+                this.destroyed ||
+                this.busy ||
+                generation !== this.rememberGeneration
+            ) {
+                return;
+            }
+            this.storage.write(serializeSavedMapView(savedMapView));
+        } catch {
+            // Local persistence must never interrupt the active map.
+        }
+    }
+
+    /** Invalidate scheduled or in-flight local snapshots. @return {void} */
+    #cancelScheduledRemember() {
+        this.rememberGeneration += 1;
+        this.rememberPending = false;
+        if (this.rememberTimer !== null) {
+            this.clearTimer(this.rememberTimer);
+            this.rememberTimer = null;
+        }
     }
 }
 

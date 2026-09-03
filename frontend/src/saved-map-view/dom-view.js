@@ -33,6 +33,10 @@ export class SavedMapViewDomView {
         this.copyButtonLabel = documentContext.querySelector(
             "#copy-map-link-label"
         );
+        this.resetButton = documentContext.querySelector("#reset-map-view");
+        this.undoButton = documentContext.querySelector(
+            "#undo-reset-map-view"
+        );
         this.dialog = documentContext.querySelector("#saved-map-view-dialog");
         this.dialogTitle = documentContext.querySelector(
             "#saved-map-view-dialog-title"
@@ -55,16 +59,36 @@ export class SavedMapViewDomView {
     }
 
     /**
-     * Connect the copy action to controller-owned orchestration.
+     * Connect complete-view actions to controller-owned orchestration.
      *
      * @param {Object} handlers Saved-map action callbacks.
      * @param {()=>void} handlers.onCopy Copy the current shared map link.
+     * @param {()=>void} handlers.onReset Restore the configured initial view.
+     * @param {()=>void} handlers.onUndo Restore the pre-reset view.
      * @return {void}
      */
-    bind({ onCopy }) {
+    bind({ onCopy, onReset, onUndo }) {
         this.unbind();
-        this.handlers = { copy: () => onCopy() };
+        this.handlers = {
+            copy: () => onCopy(),
+            reset: () => onReset(),
+            undo: () => onUndo(),
+        };
         this.copyButton.addEventListener("click", this.handlers.copy);
+        this.resetButton.addEventListener("click", this.handlers.reset);
+        this.undoButton.addEventListener("click", this.handlers.undo);
+    }
+
+    /** Expose the one-step undo action after a completed reset. @return {void} */
+    showUndoReset() {
+        this.resetButton.hidden = true;
+        this.undoButton.hidden = false;
+    }
+
+    /** Remove the undo action once it is used or superseded. @return {void} */
+    hideUndoReset() {
+        this.resetButton.hidden = false;
+        this.undoButton.hidden = true;
     }
 
     /**
@@ -171,15 +195,19 @@ export class SavedMapViewDomView {
      * Present a link creation or validation error without changing map state.
      *
      * @param {Error} error User-facing failure.
-     * @param {"copy"|"open"} operation Failed operation.
+     * @param {"copy"|"open"|"reset"|"undo"} operation Failed operation.
      * @return {void}
      */
     showError(error, operation) {
         this.#setCancelBlocked(false);
+        const titles = {
+            copy: "Map link could not be created",
+            open: "Shared map view could not be opened",
+            reset: "Map view could not be reset",
+            undo: "Reset could not be undone",
+        };
         this.#prepareDialog(
-            operation === "copy"
-                ? "Map link could not be created"
-                : "Shared map view could not be opened",
+            titles[operation] ?? "Saved map operation failed",
             error.message,
             []
         );
@@ -197,7 +225,11 @@ export class SavedMapViewDomView {
      */
     setBusy(busy) {
         this.copyButton.disabled = busy;
+        this.resetButton.disabled = busy;
+        this.undoButton.disabled = busy;
         this.copyButton.setAttribute("aria-busy", String(busy));
+        this.resetButton.setAttribute("aria-busy", String(busy));
+        this.undoButton.setAttribute("aria-busy", String(busy));
     }
 
     /**
@@ -209,6 +241,8 @@ export class SavedMapViewDomView {
         this.#setCancelBlocked(false);
         if (this.handlers !== null) {
             this.copyButton.removeEventListener("click", this.handlers.copy);
+            this.resetButton.removeEventListener("click", this.handlers.reset);
+            this.undoButton.removeEventListener("click", this.handlers.undo);
             this.handlers = null;
         }
         if (this.copiedTimer !== null) {
