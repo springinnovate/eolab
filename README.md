@@ -100,7 +100,7 @@ bounded sample window can be moved or resized to explore a local distribution:
   in the analysis panel. Other layers stay in Map layers but are temporarily
   hidden from the map while 2D mode is active.
 
-![A map pointer and sample window linked to raster values and a two-dimensional distribution](docs/images/eolab-raster-analysis.png)
+![A map pointer and sample window linked to raster values and a two-dimensional distribution](docs/images/eolab-raster-analysis.jpg)
 
 ### Make a series plot
 
