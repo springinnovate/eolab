@@ -103,6 +103,10 @@ class GeoServerPublicationMock:
             f"/layers/{self.resource_name}.xml"
         ):
             return httpx2.Response(200)
+        if request.method == "PUT" and path.endswith(
+            f"/gwc/rest/layers/eolab:{self.resource_name}.xml"
+        ):
+            return httpx2.Response(200)
         raise AssertionError(f"Unexpected GeoServer request: {request}")
 
 

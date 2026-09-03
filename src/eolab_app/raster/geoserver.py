@@ -19,6 +19,7 @@ from eolab_app.rendering.geoserver import (
     GeoServerPublicationGateway,
     sanitize_geoserver_error_excerpt,
 )
+from eolab_app.rendering.geowebcache import GeoWebCacheLayerConfigurator
 
 
 GEOSERVER_RASTER_STYLE_NAME = "dynamic-raster"
@@ -73,6 +74,7 @@ class GeoServerRasterPublisher:
             RasterPublicationError,
             self._classify_response_failure,
         )
+        self._tile_cache = GeoWebCacheLayerConfigurator(self._gateway)
 
     async def publish(self, resource_name: str, source_path: Path) -> None:
         """Converge and style one mounted GeoTIFF publication.
@@ -122,6 +124,10 @@ class GeoServerRasterPublisher:
             )
 
         await self._assign_style(resource_name)
+        await self._tile_cache.configure(
+            resource_name,
+            allow_style_environment=True,
+        )
 
     async def _inspect_publication_state(
         self,

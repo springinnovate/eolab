@@ -8,9 +8,9 @@ from typing import Any
 import httpx2
 
 from eolab_app.rendering.errors import PublicationFailureCategory
+from eolab_infrastructure.geowebcache_documents import GEOSERVER_WORKSPACE_NAME
 
 
-GEOSERVER_WORKSPACE_NAME = "eolab"
 GEOSERVER_ERROR_EXCERPT_LIMIT = 512
 PublicationErrorFactory = Callable[[PublicationFailureCategory, str], Exception]
 
@@ -92,6 +92,7 @@ class GeoServerPublicationGateway:
             failure_classifier: Maps rejected responses to public failures.
         """
         self._client = geoserver_client
+        self._application_url = geoserver_internal_url.rstrip("/")
         self._rest_url = f"{geoserver_internal_url.rstrip('/')}/rest"
         self._publication_kind = publication_kind
         self._error_factory = error_factory
@@ -136,9 +137,75 @@ class GeoServerPublicationGateway:
         Raises:
             Exception: The owning domain's categorized publication error.
         """
+        return await self._request_url(
+            operation,
+            method,
+            f"{self._rest_url}{path}",
+            accepted_statuses,
+            **request_arguments,
+        )
+
+    async def application_request(
+        self,
+        operation: str,
+        method: str,
+        path: str,
+        accepted_statuses: frozenset[int],
+        **request_arguments: Any,
+    ) -> httpx2.Response:
+        """Issue one request below the GeoServer application root.
+
+        GeoWebCache exposes its REST API beside GeoServer's ``/rest`` API at
+        ``/gwc/rest``. This method keeps both transports behind the same
+        timeout, status, sanitization, and failure-category boundary.
+
+        Args:
+            operation: Stable diagnostic operation name.
+            method: HTTP request method.
+            path: Absolute application-relative path.
+            accepted_statuses: Complete accepted response-status set.
+            **request_arguments: HTTPX request arguments owned by the adapter.
+
+        Returns:
+            Accepted GeoServer application response.
+
+        Raises:
+            Exception: The owning domain's categorized publication error.
+        """
+        return await self._request_url(
+            operation,
+            method,
+            f"{self._application_url}{path}",
+            accepted_statuses,
+            **request_arguments,
+        )
+
+    async def _request_url(
+        self,
+        operation: str,
+        method: str,
+        url: str,
+        accepted_statuses: frozenset[int],
+        **request_arguments: Any,
+    ) -> httpx2.Response:
+        """Apply the shared transport contract to one complete internal URL.
+
+        Args:
+            operation: Stable diagnostic operation name.
+            method: HTTP request method.
+            url: Complete internal GeoServer URL.
+            accepted_statuses: Complete accepted response-status set.
+            **request_arguments: HTTPX request arguments owned by the adapter.
+
+        Returns:
+            Accepted GeoServer response.
+
+        Raises:
+            Exception: The owning domain's categorized publication error.
+        """
         try:
             response = await self._client.request(
-                method, f"{self._rest_url}{path}", **request_arguments
+                method, url, **request_arguments
             )
         except httpx2.TimeoutException as error:
             self._logger.warning(

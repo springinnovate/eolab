@@ -15,6 +15,7 @@ from eolab_app.rendering.geoserver import (
     GeoServerPublicationGateway,
     geoserver_layer_path,
 )
+from eolab_app.rendering.geowebcache import GeoWebCacheLayerConfigurator
 from eolab_app.vector.errors import VectorPublicationError, VectorUpstreamError
 from eolab_app.vector.models import (
     VectorFormat,
@@ -150,6 +151,7 @@ class GeoServerVectorPublisher:
             VectorPublicationError,
             self._classify_response_failure,
         )
+        self._tile_cache = GeoWebCacheLayerConfigurator(self._gateway)
 
     async def publish(
         self,
@@ -208,6 +210,10 @@ class GeoServerVectorPublisher:
             )
         await self._require_native_layer_identity(resource_name, layer_name)
         await self._assign_vector_style(resource_name, style_name)
+        await self._tile_cache.configure(
+            resource_name,
+            allow_style_environment=False,
+        )
         return style_name
 
     async def apply_style(

@@ -83,6 +83,8 @@ test("Leaflet adapters own WMS and sample-window presentation options", () => {
       env: "min:0;med:50;max:100;cmin:#000000;cmed:#888888;cmax:#ffffff",
       format: "image/png",
       transparent: true,
+      tiled: true,
+      tilesorigin: "-20037508.342789244,-20037508.342789244",
       version: "1.3.0",
       noWrap: true,
       bounds: [[-5, -10], [15, 20]],

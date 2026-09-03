@@ -109,9 +109,12 @@ After the application reports that its services are ready:
 2. Confirm that the configured user-facing paths appear and the scan completes.
 3. Search for and add one representative raster and vector.
 4. Verify **Zoom to**, styling, map clicking, and a raster histogram.
-5. Open **Rendering diagnostics** while changing zoom levels and check for
+5. In the browser network inspector, reload one map tile twice and verify its
+   `geowebcache-cache-result` response changes from `MISS` to `HIT`, with both
+   `geowebcache-gridset` and `geowebcache-crs` reporting `EPSG:3857`.
+6. Open **Rendering diagnostics** while changing zoom levels and check for
    repeated `GetMap` failures, queue saturation, or sustained heap pressure.
-6. Copy a map link and open it in another browser tab to verify shared-view
+7. Copy a map link and open it in another browser tab to verify shared-view
    restoration.
 
 Scanning is repeatable. It creates or updates stable Catalog Items for mounted
@@ -141,7 +144,9 @@ the deployed workload. The main controls are:
 | `EOLAB_GEOSERVER_CPU_LIMIT` | `4` | CPUs available to GeoServer |
 | `EOLAB_GEOSERVER_MAX_HEAP_SIZE` | `4g` | GeoServer Java heap |
 | `EOLAB_GEOSERVER_WMS_RENDER_COUNT` | `2` | Concurrent WMS renders |
+| `EOLAB_GEOSERVER_GWC_REQUEST_COUNT` | `8` | Concurrent cached-tile requests, including misses |
 | `EOLAB_GEOSERVER_WMS_QUEUE_TIMEOUT_SECONDS` | `10` | Seconds a render may wait for capacity |
+| `EOLAB_GEOWEBCACHE_DISK_QUOTA_GIB` | `25` | Persistent tile-cache size before LRU cleanup |
 | `EOLAB_RASTER_PIXEL_READ_CONCURRENCY` | `2` | Concurrent interactive pixel reads |
 | `EOLAB_RASTER_STATISTICS_READ_CONCURRENCY` | `1` | Concurrent bounded statistics reads |
 | `EOLAB_SCAN_WORKER_COUNT` | `8` | Concurrent metadata workers |
@@ -152,6 +157,15 @@ EOLab abandons queued upstream `GetMap` work when the requesting browser
 disconnects, but an already-running GeoServer render may not stop immediately.
 Increasing concurrency beyond the storage and CPU available can make latency
 worse rather than better.
+
+Normal Leaflet raster and vector tiles use GeoWebCache's explicit EPSG:3857
+grid. Source rasters already stored in EPSG:3857 avoid reprojection on cache
+misses; GeoServer can still reproject other supported source CRSs into the
+same viewer grid. Feature inspection, selected-feature outlines, and composite
+renders remain ordinary uncached WMS work because their requests are not
+marked as tiled. The cache directory is inside the persistent GeoServer volume,
+and the disk quota removes least-recently-used tiles when the configured limit
+is reached.
 
 ## Operations notes
 
