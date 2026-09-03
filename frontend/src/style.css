@@ -2232,6 +2232,25 @@ h5 {
   font-size: 0.66rem;
 }
 
+#raster-cursor-copy-feedback {
+  margin-left: 4px;
+  color: var(--status-success);
+  font-weight: 700;
+}
+
+.raster-cursor-values.is-copy-confirmed {
+  animation: raster-cursor-copy-confirmation 600ms ease-out;
+}
+
+@keyframes raster-cursor-copy-confirmation {
+  35% {
+    border-color: var(--status-success);
+    background: color-mix(in srgb, var(--status-success) 10%, var(--surface-2));
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--status-success) 24%, transparent),
+      var(--elevation-panel);
+  }
+}
+
 .raster-cursor-values-restore {
   position: absolute;
   z-index: 700;

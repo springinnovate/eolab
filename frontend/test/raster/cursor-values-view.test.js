@@ -91,11 +91,18 @@ test("pixel picker follows the pointer while staying inside the viewport", () =>
 test("pixel picker shortcuts copy, hide, and restore without owning policy", async () => {
   const documentContext = new FakeRasterControlDocument();
   const copied = [];
+  const timers = new Map();
+  let nextTimer = 1;
+  const clock = {
+    setTimeout(callback) { const id = nextTimer++; timers.set(id, callback); return id; },
+    clearTimeout(id) { timers.delete(id); },
+  };
   const view = new RasterCursorValuesView(documentContext, {
     async writeText(text) { copied.push(text); },
-  });
+  }, clock);
   const root = documentContext.querySelector("#raster-cursor-values");
   const restore = documentContext.querySelector("#restore-raster-cursor-values");
+  const feedback = documentContext.querySelector("#raster-cursor-copy-feedback");
   const state = { hidden: 0, shown: 0 };
   view.bind({
     onHide() { state.hidden += 1; view.setEnabled(false); },
@@ -118,6 +125,12 @@ test("pixel picker shortcuts copy, hide, and restore without owning policy", asy
   await Promise.resolve();
   assert.deepEqual(copied, [formatRasterCursorValuesForClipboard(snapshot)]);
   assert.doesNotMatch(copied[0], /outside/);
+  assert.equal(feedback.hidden, false);
+  assert.equal(root.classList.contains("is-copy-confirmed"), true);
+  assert.equal(timers.size, 1);
+  timers.values().next().value();
+  assert.equal(feedback.hidden, true);
+  assert.equal(root.classList.contains("is-copy-confirmed"), false);
 
   const hideEvent = new Event("keydown", { cancelable: true });
   Object.assign(hideEvent, { key: "Escape", ctrlKey: false, metaKey: false, altKey: false });

@@ -4,6 +4,7 @@ import { requireRasterControl } from "./required-control.js";
 
 const POINTER_OFFSET_PIXELS = 14;
 const VIEWPORT_EDGE_PIXELS = 8;
+const COPY_FEEDBACK_MILLISECONDS = 1200;
 
 /**
  * Return whether a keyboard event belongs to an editable control.
@@ -64,11 +65,18 @@ export class RasterCursorValuesView {
      * @param {Document} [documentContext=globalThis.document] Owning document.
      * @param {{writeText:(text:string)=>Promise<void>}|null} [clipboard=null]
      * Clipboard boundary; null resolves it from the owning window when possible.
+     * @param {{setTimeout:Function,clearTimeout:Function}} [clock=globalThis]
+     * Injectable timer boundary for copy confirmation.
      */
-    constructor(documentContext = globalThis.document, clipboard = null) {
+    constructor(
+        documentContext = globalThis.document,
+        clipboard = null,
+        clock = globalThis
+    ) {
         this.documentContext = documentContext;
         this.clipboard = clipboard ??
             documentContext.defaultView?.navigator?.clipboard ?? null;
+        this.clock = clock;
         this.root = requireRasterControl(
             documentContext,
             "#raster-cursor-values"
@@ -85,12 +93,17 @@ export class RasterCursorValuesView {
             documentContext,
             "#raster-cursor-value-limit"
         );
+        this.copyFeedback = requireRasterControl(
+            documentContext,
+            "#raster-cursor-copy-feedback"
+        );
         this.restore = requireRasterControl(
             documentContext,
             "#restore-raster-cursor-values"
         );
         this.pointerPosition = null;
         this.snapshot = null;
+        this.copyFeedbackTimeout = null;
         this.handlers = null;
         this.handleKeyDown = this.#handleKeyDown.bind(this);
         this.handleRestoreClick = this.#handleRestoreClick.bind(this);
@@ -119,6 +132,7 @@ export class RasterCursorValuesView {
     unbind() {
         this.restore.removeEventListener("click", this.handleRestoreClick);
         this.documentContext.removeEventListener("keydown", this.handleKeyDown);
+        this.#clearCopyFeedback();
         this.handlers = null;
     }
 
@@ -214,6 +228,7 @@ export class RasterCursorValuesView {
 
     /** Hide and empty the transient pixel-picker readout. @return {void} */
     clear() {
+        this.#clearCopyFeedback();
         this.snapshot = null;
         this.position.textContent = "";
         this.list.replaceChildren();
@@ -221,6 +236,43 @@ export class RasterCursorValuesView {
         this.limit.hidden = true;
         this.root.setAttribute("aria-busy", "false");
         this.root.hidden = true;
+    }
+
+    /** Remove any pending clipboard confirmation and its visual emphasis. */
+    #clearCopyFeedback() {
+        if (this.copyFeedbackTimeout !== null) {
+            this.clock.clearTimeout(this.copyFeedbackTimeout);
+            this.copyFeedbackTimeout = null;
+        }
+        this.copyFeedback.hidden = true;
+        this.root.classList.remove("is-copy-confirmed");
+    }
+
+    /** Briefly confirm a successful clipboard write without a live announcement. */
+    #showCopyFeedback() {
+        this.#clearCopyFeedback();
+        this.copyFeedback.hidden = false;
+        this.root.classList.add("is-copy-confirmed");
+        this.copyFeedbackTimeout = this.clock.setTimeout(() => {
+            this.copyFeedbackTimeout = null;
+            this.copyFeedback.hidden = true;
+            this.root.classList.remove("is-copy-confirmed");
+        }, COPY_FEEDBACK_MILLISECONDS);
+    }
+
+    /** Copy the current resolved presentation and confirm only after success. */
+    async #copyCurrentValues() {
+        if (this.snapshot === null || typeof this.clipboard?.writeText !== "function") {
+            return;
+        }
+        try {
+            await this.clipboard.writeText(
+                formatRasterCursorValuesForClipboard(this.snapshot)
+            );
+        } catch {
+            return;
+        }
+        this.#showCopyFeedback();
     }
 
     /** Place the panel beside the pointer while keeping it on screen. */
@@ -269,9 +321,7 @@ export class RasterCursorValuesView {
         if (key === "c" && (event.ctrlKey || event.metaKey) &&
             !event.altKey && !this.root.hidden && this.snapshot !== null) {
             event.preventDefault();
-            void this.clipboard?.writeText(
-                formatRasterCursorValuesForClipboard(this.snapshot)
-            );
+            void this.#copyCurrentValues();
         }
     }
 }
