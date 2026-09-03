@@ -148,10 +148,6 @@ select:hover:not(:disabled) {
   color: var(--brand-hover) !important;
 }
 
-.vector-feature-highlight-tile {
-  filter: drop-shadow(0 0 2px #111827) drop-shadow(0 0 1px #facc15);
-}
-
 .section-label {
   margin: 0 0 7px;
   color: var(--brand-hover);

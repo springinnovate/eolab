@@ -25,6 +25,7 @@ function createFixture(fetchImplementation, { now = () => 0 } = {}) {
       label: "Parcels",
       bbox: [0, 0, 10, 10],
       publication: { layerName: "eolab:parcels", styleName: "vector-polygon" },
+      geometryKind: "polygon",
       propertyNames: ["name", "rank"],
       primaryGeometry: "geometry",
     },
@@ -158,18 +159,12 @@ test("identified features use a filtered WMS highlight without geometry", async 
   assert.equal(h.wmsHighlights[0].url, "/geoserver/eolab/wms");
   assert.deepEqual(h.wmsHighlights[0].options, {
     layers: "eolab:parcels",
-    styles: "vector-polygon",
+    styles: "vector-highlight-polygon",
     format: "image/png",
     transparent: true,
     version: "1.1.1",
     featureid: "parcels.42",
   });
-  const addedClasses = [];
-  h.wmsHighlights[0].handlers.get("tileload")({
-    tile: { classList: { add: (name) => addedClasses.push(name) } },
-  });
-  assert.deepEqual(addedClasses, ["vector-feature-highlight-tile"]);
-
   h.controller.clearResults();
   assert.deepEqual(h.removedLayers, [h.wmsHighlights[0]]);
 });
@@ -270,6 +265,7 @@ test("inspector presents out-of-order layer results progressively in map order",
       layerName: "eolab:habitats",
       styleName: "vector-polygon",
     },
+    geometryKind: "polygon",
     propertyNames: ["name"],
     primaryGeometry: "geometry",
   });
@@ -493,6 +489,7 @@ test("inspector skips targets outside their authoritative Catalog bounds", async
       layerName: "eolab:distant",
       styleName: "vector-point",
     },
+    geometryKind: "point",
     propertyNames: ["name"],
     primaryGeometry: "geometry",
   });
@@ -592,6 +589,7 @@ test("changing the visible vector set invalidates results but retains inspection
       layerName: "eolab:habitats",
       styleName: "vector-polygon",
     },
+    geometryKind: "polygon",
     propertyNames: ["score"],
     primaryGeometry: "geometry",
   });

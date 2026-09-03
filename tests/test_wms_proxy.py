@@ -245,7 +245,8 @@ def test_wms_proxy_forwards_one_authorized_fixed_style_vector_layer() -> None:
 
     response = client.get(f"/geoserver/eolab/wms{query}")
     highlight_response = client.get(
-        f"/geoserver/eolab/wms{query}&featureid=parcels.42"
+        f"/geoserver/eolab/wms{query.replace('vector-polygon', 'vector-highlight-polygon')}"
+        "&featureid=parcels.42"
     )
     raster_style_response = client.get(
         f"/geoserver/eolab/wms{query.replace('vector-polygon', 'dynamic-raster')}"
@@ -271,6 +272,9 @@ def test_wms_proxy_forwards_one_authorized_fixed_style_vector_layer() -> None:
         "eolab:parcels"
     ]
     assert forwarded_requests[1].url.params["featureid"] == "parcels.42"
+    assert forwarded_requests[1].url.params["styles"] == (
+        "vector-highlight-polygon"
+    )
     assert raster_style_response.status_code == 400
     assert raster_style_response.json() == {
         "detail": "WMS style must be vector-polygon"

@@ -12,7 +12,14 @@ from urllib.request import Request, urlopen
 WORKSPACE_NAME = "eolab"
 RASTER_STYLE_NAME = "dynamic-raster"
 RASTER_STYLE_PATH = Path(__file__).with_name(f"{RASTER_STYLE_NAME}.sld")
-VECTOR_STYLE_NAMES = ("vector-point", "vector-line", "vector-polygon")
+VECTOR_STYLE_NAMES = (
+    "vector-point",
+    "vector-line",
+    "vector-polygon",
+    "vector-highlight-point",
+    "vector-highlight-line",
+    "vector-highlight-polygon",
+)
 VECTOR_STYLE_PATHS = {
     style_name: Path(__file__).with_name(f"{style_name}.sld")
     for style_name in VECTOR_STYLE_NAMES

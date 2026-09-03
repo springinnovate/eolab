@@ -25,6 +25,13 @@ MAX_FEATURE_INFO_RESPONSE_BYTES = 512 * 1024
 MAX_FEATURE_INFO_BUFFER_PIXELS = 20
 MAX_FEATURE_ID_CHARACTERS = 512
 SAFE_FEATURE_ID_PATTERN = re.compile(r"[A-Za-z0-9_.:-]+")
+VECTOR_HIGHLIGHT_STYLE_NAMES = frozenset(
+    {
+        "vector-highlight-point",
+        "vector-highlight-line",
+        "vector-highlight-polygon",
+    }
+)
 
 
 PUBLIC_WMS_COMMON_QUERY_PARAMETERS = frozenset(
@@ -284,7 +291,15 @@ def create_wms_proxy_router(
                 style_parameter,
                 "",
             ).removeprefix("eolab:")
-            if requested_style not in {"", authorization.style_name}:
+            is_vector_highlight = (
+                operation == "getmap"
+                and "featureid" in normalized_query
+                and requested_style in VECTOR_HIGHLIGHT_STYLE_NAMES
+            )
+            if (
+                requested_style not in {"", authorization.style_name}
+                and not is_vector_highlight
+            ):
                 raise HTTPException(
                     status_code=400,
                     detail=f"WMS style must be {authorization.style_name}",

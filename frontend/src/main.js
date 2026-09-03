@@ -809,6 +809,7 @@ async function initializeCatalog(
                     layerName: record.publication.layerName,
                     styleName: record.publication.styleName,
                 },
+                geometryKind: record.state.style.geometryKind,
                 propertyNames: vectorLabelFields(record.state.item).map(
                     ({ name }) => name
                 ),
