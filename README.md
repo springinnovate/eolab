@@ -34,7 +34,7 @@ metric changes across years, and send a colleague a link to the resulting map.
 
 ## A quick tour
 
-### 1. Find a dataset
+### Find a dataset
 
 Use **Catalog search** to enter any part of a filename, path, description, or
 date. Ordinary words can be combined with these filters:
@@ -59,7 +59,7 @@ need:
 After an item is on the map, the same row also offers **Remove**, **Zoom to**,
 and **Style** without making you leave the search results.
 
-### 2. Build the map
+### Build the map
 
 Open **Map layers** to see the current stack. The first layer in the list draws
 on top. Drag a row by its handle to reorder it, or use the keyboard controls on
@@ -81,7 +81,7 @@ styles adapt to point, line, or polygon geometry. They support a single symbol,
 categorical values, graduated numeric classes, and optional labels. Appearance
 changes affect only the current map; they never edit the source data.
 
-### 3. Explore what is under the pointer
+### Explore what is under the pointer
 
 A normal click explores the visible data at that location. Dragging still pans
 the map. **Analysis tools** performs the same action at the center of the map,
@@ -97,11 +97,12 @@ bounded sample window can be moved or resized to explore a local distribution:
 - **1D** mode shows distributions for the active visible rasters.
 - **2D** mode compares the top two visible rasters and marks them **X** and
   **Y** in Map layers. Reorder those layers to change the pair, or swap the axes
-  in the analysis panel. Other visible layers remain on the map underneath.
+  in the analysis panel. Other layers stay in Map layers but are temporarily
+  hidden from the map while 2D mode is active.
 
-![A two-dimensional raster comparison and sample window in EOLab](docs/images/eolab-raster-analysis.png)
+![A map pointer and sample window linked to raster values and a two-dimensional distribution](docs/images/eolab-raster-analysis.png)
 
-### 4. Make a series plot
+### Make a series plot
 
 After selecting vector features, the inspector offers two complementary plots:
 
@@ -113,11 +114,15 @@ After selecting vector features, the inspector offers two complementary plots:
   or filename order, ascending or descending order, and a line or scatter
   chart.
 
+![One selected map feature feeding several fields into a time series](docs/images/eolab-series-one-feature.png)
+
+![Several selected map features feeding one field into an ordered series](docs/images/eolab-series-across-features.png)
+
 Selecting a chart point identifies its source layer and offers **Zoom to source
 layer**. EOLab remembers the plot rules while you inspect other features from
 the same layer, so the chart updates instead of making you configure it again.
 
-### 5. Share or resume the map
+### Share or resume the map
 
 Use **Copy map link** to copy the current map as a URL. The link contains a
 compressed map-view document in its URL fragment, so opening it recreates the
@@ -133,7 +138,7 @@ Catalog search text and temporary exploration results—such as the last click,
 feature attributes, histogram, sample window, and plot selection—are not saved
 or shared.
 
-## Adding workshop or project data
+## Add your own data
 
 EOLab deployments read from a configured, read-only data directory. A workshop
 facilitator or deployment operator normally follows this flow:
@@ -159,19 +164,6 @@ are not yet renderable.
 For a one-off overlay that should not enter the shared Catalog, use **Upload
 AOI** with a GeoPackage or zipped Shapefile. Temporary AOIs expire and are not
 included in copied map links.
-
-## Current boundaries
-
-- Multiband raster selection is not yet available; prepare the band you want to
-  display as a single-band raster.
-- A copied map link refers to data in the same EOLab deployment. It is not a
-  portable copy of the datasets and does not grant access to another server.
-- Map styling, plots, and sampling are exploratory. They do not modify or
-  export derived source datasets.
-- Temporary AOIs and transient analysis results are intentionally session-only.
-- Large or poorly prepared rasters can still be slow to render. Prepare tiled,
-  overviewed Cloud Optimized GeoTIFFs in the map's normal display projection
-  when interactive performance matters.
 
 ## Running your own EOLab workspace
 
