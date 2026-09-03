@@ -1393,8 +1393,16 @@ test("selecting 2D opens paired analysis without a map interaction", async () =>
     assert.match(wmsLayers[0].parameters.env, /cmin:#111827/);
     assert.match(wmsLayers[1].parameters.env, /cmin:#111827/);
 
+    const renderingUpdatesBeforeMapSample = wmsLayers.map(
+        (layer) => layer.parameterUpdates.length
+    );
     viewer.exploreAt({ lng: -122, lat: 49 });
     await flushPromises();
+    assert.deepEqual(
+        wmsLayers.map((layer) => layer.parameterUpdates.length),
+        renderingUpdatesBeforeMapSample,
+        "a new 2D histogram sample must not refresh unchanged WMS layers"
+    );
     assert.deepEqual(
         pixelRequests.map(({ item, point }) => ({ id: item.id, point })),
         [

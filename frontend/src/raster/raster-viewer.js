@@ -819,6 +819,7 @@ export function initializeRasterViewer(
             bivariateStatistics = statistics;
             const candidates = getBivariatePairCandidates();
             if (candidates === null) return;
+            let rasterRangesChanged = false;
             for (const [candidate, edges] of [
                 [candidates.xCandidate, statistics.histogram.xEdges],
                 [candidates.yCandidate, statistics.histogram.yEdges],
@@ -832,9 +833,17 @@ export function initializeRasterViewer(
                         maximum: edges.at(-1),
                     };
                     candidate.rasterRangeResolved = true;
+                    rasterRangesChanged = true;
                 }
             }
-            applyBivariatePresentation();
+            if (rasterRangesChanged) {
+                applyBivariatePresentation();
+            } else {
+                controlsView.renderPairedStatistics?.(
+                    statistics,
+                    getBivariatePresentation()
+                );
+            }
             renderLayerStack();
         },
         /**
