@@ -439,7 +439,8 @@ def initialize_geowebcache(
         web_mercator_gridset_document(),
         "application/xml",
     )
-    _require_status(status, 200, "PUT", gridset_path)
+    if status not in {200, 201}:
+        _require_status(status, 200, "PUT", gridset_path)
 
     layer_list_path = "/gwc/rest/layers.xml"
     status, layer_list = client.request_application("GET", layer_list_path)
