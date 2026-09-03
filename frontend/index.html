@@ -736,6 +736,17 @@
         OPEN LABEL TO BE SET BY CONFIGURATION
       </button>
       <div class="map-position" id="map-position">0.000, 0.000</div>
+      <aside
+        class="raster-cursor-values"
+        id="raster-cursor-values"
+        aria-labelledby="raster-cursor-values-heading"
+        aria-busy="false"
+        hidden
+      >
+        <h2 id="raster-cursor-values-heading">Cursor values</h2>
+        <dl id="raster-cursor-value-list"></dl>
+        <p id="raster-cursor-value-limit" hidden></p>
+      </aside>
       <div class="map-tool-openers">
         <button id="open-analysis-tools" class="secondary-button" type="button"
           aria-label="Open analysis tools using visible data at the map center">Analysis tools</button>

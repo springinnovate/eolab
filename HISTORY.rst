@@ -4,6 +4,7 @@ History
 Unreleased
 ----------
 
+* Show bounded, progressive raster-stack values after the map cursor pauses.
 * Refresh automatically derived raster styles in composite maps without requiring a manual style edit.
 
 0.3.0 (2026-09-02)

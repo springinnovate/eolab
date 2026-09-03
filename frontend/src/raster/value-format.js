@@ -13,6 +13,16 @@ export function getCatalogRasterBasename(item) {
 }
 
 /**
+ * Return a concise filename stem for transient map-cursor presentation.
+ *
+ * @param {Object} item Mounted GeoTIFF Catalog Item.
+ * @return {string} Decoded basename without its final extension.
+ */
+export function getCatalogRasterStem(item) {
+    return getCatalogRasterBasename(item).replace(/\.[^.]+$/, "");
+}
+
+/**
  * Format one finite raster value in scientific notation.
  *
  * @param {number} value Sampled raster value.

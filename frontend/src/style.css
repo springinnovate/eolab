@@ -2166,6 +2166,83 @@ h5 {
   font: 0.72rem/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
+.raster-cursor-values {
+  position: absolute;
+  z-index: 700;
+  right: 20px;
+  bottom: 58px;
+  display: grid;
+  width: min(320px, calc(100vw - 40px));
+  max-height: min(46dvh, 380px);
+  gap: 7px;
+  overflow: hidden;
+  pointer-events: none;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius);
+  background: rgb(255 255 255 / 94%);
+  padding: 10px 11px;
+  box-shadow: var(--elevation-panel);
+}
+
+.raster-cursor-values[hidden] {
+  display: none;
+}
+
+.raster-cursor-values h2 {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+#raster-cursor-value-list {
+  display: grid;
+  min-height: 0;
+  margin: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.raster-cursor-value-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: baseline;
+  min-width: 0;
+  padding: 4px 0;
+  border-top: 1px solid var(--border-3);
+  font-size: 0.72rem;
+}
+
+.raster-cursor-value-row dt {
+  overflow: hidden;
+  color: var(--text-1);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.raster-cursor-value-row dd {
+  margin: 0;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.raster-cursor-value-row[data-state="error"] dd {
+  max-width: 15ch;
+  overflow: hidden;
+  color: var(--status-danger);
+  text-overflow: ellipsis;
+}
+
+#raster-cursor-value-limit {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 0.68rem;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -3004,6 +3081,12 @@ button.raster-histogram-summary:hover,
   .map-position {
     top: 8px;
     bottom: auto;
+  }
+
+  .raster-cursor-values {
+    right: 8px;
+    bottom: 8px;
+    max-height: 34dvh;
   }
 
   .temporary-aoi-upload,

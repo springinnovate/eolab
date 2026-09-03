@@ -936,6 +936,94 @@ test('three visible rasters render while only the top two are analyzed', async (
     h.destroy();
 });
 
+test('cursor sampling follows every visible in-bounds raster and pauses for map dragging', async () => {
+    const timers = new Map();
+    let nextTimerId = 1;
+    const clock = {
+        setTimeout(callback) {
+            const id = nextTimerId;
+            nextTimerId += 1;
+            timers.set(id, callback);
+            return id;
+        },
+        clearTimeout(id) {
+            timers.delete(id);
+        },
+        runNext() {
+            const entry = timers.entries().next().value;
+            assert.ok(entry, 'expected a pending cursor dwell timer');
+            const [id, callback] = entry;
+            timers.delete(id);
+            callback();
+        },
+    };
+    const cursorValuesView = {
+        snapshots: [],
+        clearCount: 0,
+        render(snapshot) {
+            this.snapshots.push(snapshot);
+        },
+        clear() {
+            this.clearCount += 1;
+        },
+    };
+    const cursorRequests = [];
+    const h = visibleLayerFixture(undefined, {
+        clock,
+        cursorValuesView,
+        publishRaster: async item => ({
+            layerName: `eolab:${item.id}`,
+            bbox: item.id.endsWith('outside')
+                ? [20, 20, 30, 30]
+                : [-10, -10, 10, 10],
+        }),
+        sampleCursorPixel: async (item, point) => {
+            cursorRequests.push({ item, point });
+            return { inBounds: true, value: cursorRequests.length };
+        },
+    });
+    const bottom = createRasterItem('cursor-bottom');
+    const outside = createRasterItem('cursor-outside');
+    const top = createRasterItem('cursor-top');
+    await h.viewer.show(bottom);
+    await h.viewer.show(outside);
+    await h.viewer.show(top);
+    await flushPromises();
+
+    h.leafletMap.emit('mousemove', { latlng: { lng: 0, lat: 0 } });
+    assert.equal(cursorRequests.length, 0);
+    clock.runNext();
+    await flushPromises();
+    assert.deepEqual(
+        cursorRequests.map(({ item }) => item.id),
+        [top.id, bottom.id],
+    );
+    assert.deepEqual(
+        cursorValuesView.snapshots.at(-1).samples.map(({ label, state }) => ({
+            label,
+            state,
+        })),
+        [
+            { label: 'cursor-top', state: 'value' },
+            { label: 'cursor-bottom', state: 'value' },
+        ],
+    );
+
+    h.leafletMap.emit('dragstart', {});
+    h.leafletMap.emit('mousemove', { latlng: { lng: 1, lat: 1 } });
+    assert.equal(timers.size, 0);
+    h.leafletMap.emit('dragend', {});
+    h.leafletMap.emit('mousemove', { latlng: { lng: 1, lat: 1 } });
+    assert.equal(timers.size, 1);
+
+    for (const listener of h.leafletMap.container.listeners.get('mouseleave')) {
+        listener(new Event('mouseleave'));
+    }
+    assert.equal(timers.size, 0);
+    assert.ok(cursorValuesView.clearCount > 0);
+    h.destroy();
+});
+
 test('active 2D analysis follows the top raster pair and exposes X Y badges', async () => {
     const pairedRequests = [];
     const pointRequests = [];
