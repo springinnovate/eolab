@@ -463,7 +463,10 @@ def test_wms_proxy_allows_bounded_png_rendering(
         """
         if request.url.host == "stac-api":
             return httpx2.Response(200, json=item)
-        if request.url.path.startswith("/geoserver/rest/"):
+        if request.url.path.startswith((
+            "/geoserver/rest/",
+            "/geoserver/gwc/rest/",
+        )):
             return publication_mock(request)
         wms_requests.append(request)
         assert request.url.params["request"] == "GetMap"
@@ -483,7 +486,13 @@ def test_wms_proxy_allows_bounded_png_rendering(
         return httpx2.Response(
             200,
             content=b"png bytes",
-            headers={"Content-Type": "image/png"},
+            headers={
+                "Content-Type": "image/png",
+                "GeoWebCache-Cache-Result": "MISS",
+                "GeoWebCache-CRS": "EPSG:3857",
+                "GeoWebCache-GridSet": "EPSG:3857",
+                "X-Unsafe-Upstream": "private",
+            },
         )
 
     def diagnostics_response(request: httpx2.Request) -> httpx2.Response:
@@ -523,6 +532,7 @@ def test_wms_proxy_allows_bounded_png_rendering(
             "&styles=dynamic-raster&crs=EPSG%3A3857"
             "&bbox=0%2C0%2C1%2C1&width=256&height=256"
             "&format=image%2Fpng&transparent=true"
+            "&tiled=true&tilesorigin=-20037508.342789244%2C-20037508.342789244"
             "&env=min%3A0%3Bmed%3A50%3Bmax%3A100%3B"
             "cmin%3A%232b83ba%3Bcmed%3A%23ffffbf%3Bcmax%3A%23d7191c"
         )
@@ -544,7 +554,15 @@ def test_wms_proxy_allows_bounded_png_rendering(
     assert response.status_code == 200
     assert response.headers["content-type"] == "image/png"
     assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["geowebcache-cache-result"] == "MISS"
+    assert response.headers["geowebcache-crs"] == "EPSG:3857"
+    assert response.headers["geowebcache-gridset"] == "EPSG:3857"
+    assert "x-unsafe-upstream" not in response.headers
     assert response.content == b"png bytes"
+    assert wms_requests[0].url.params["tiled"] == "true"
+    assert wms_requests[0].url.params["tilesorigin"] == (
+        "-20037508.342789244,-20037508.342789244"
+    )
     assert len(wms_requests) == 2
     request_diagnostics = diagnostics.json()["metrics"]["requests"]
     assert request_diagnostics["latestGetMapSeconds"] >= 0

@@ -1,18 +1,44 @@
 """Test the idempotent EOLab GeoServer bootstrap contract."""
 
 import json
+from pathlib import Path
+from xml.etree import ElementTree
 
 import pytest
 
-from geoserver.initialize import initialize_geoserver, main
+from geoserver.initialize import (
+    geowebcache_disk_quota_document,
+    geowebcache_layer_document,
+    initialize_geoserver,
+    initialize_geowebcache,
+    main,
+    web_mercator_gridset_document,
+)
 
 
 class RecordingGeoServerClient:
     """Return planned HTTP (status, body) pairs while recording requests."""
 
-    def __init__(self, responses: list[tuple[int, bytes]]) -> None:
+    def __init__(
+        self,
+        responses: list[tuple[int, bytes]],
+        application_responses: list[tuple[int, bytes]] | None = None,
+    ) -> None:
+        """Create response plans and empty request recordings.
+
+        Args:
+            responses: Planned GeoServer REST responses.
+            application_responses: Planned application-root REST responses.
+
+        Returns:
+            None.
+        """
         self.responses = iter(responses)
+        self.application_responses = iter(application_responses or [])
         self.requests: list[tuple[str, str, bytes | None, str | None]] = []
+        self.application_requests: list[
+            tuple[str, str, bytes | None, str | None]
+        ] = []
 
     def request(
         self,
@@ -24,6 +50,27 @@ class RecordingGeoServerClient:
         """Record one request and return the next planned response."""
         self.requests.append((method, path, body, content_type))
         return next(self.responses)
+
+    def request_application(
+        self,
+        method: str,
+        path: str,
+        body: bytes | None = None,
+        content_type: str | None = None,
+    ) -> tuple[int, bytes]:
+        """Record one application-root request and return its response.
+
+        Args:
+            method: HTTP request method.
+            path: Application-relative request path.
+            body: Optional request body.
+            content_type: Optional request media type.
+
+        Returns:
+            Next planned HTTP status and response body.
+        """
+        self.application_requests.append((method, path, body, content_type))
+        return next(self.application_responses)
 
 
 def test_initialization_creates_only_missing_eolab_resources() -> None:
@@ -188,6 +235,68 @@ def test_initialization_rejects_unexpected_geoserver_response() -> None:
         initialize_geoserver(client, "new-master-password", b"<sld/>")
 
 
+def test_geowebcache_initialization_uses_only_epsg3857_and_bounded_storage() -> None:
+    """Converge existing EOLab layers, quota, and direct WMS integration."""
+    layer_list = (
+        b"<layers><layer><name>eolab:raster</name></layer>"
+        b"<layer><name>external:ignored</name></layer></layers>"
+    )
+    client = RecordingGeoServerClient(
+        [(201, b""), (200, b"")],
+        [
+            (201, b""),
+            (200, layer_list),
+            (200, b""),
+            (200, b""),
+        ],
+    )
+    configuration = (
+        Path(__file__).parents[1] / "geoserver" / "gwc-gs.xml"
+    ).read_bytes()
+
+    initialize_geowebcache(client, configuration, 25)
+
+    assert [request[:2] for request in client.application_requests] == [
+        ("PUT", "/gwc/rest/gridsets/EPSG:3857.xml"),
+        ("GET", "/gwc/rest/layers.xml"),
+        ("PUT", "/gwc/rest/layers/eolab%3Araster.xml"),
+        ("PUT", "/gwc/rest/diskquota.xml"),
+    ]
+    assert [request[:2] for request in client.requests] == [
+        ("PUT", "/resource/gwc-gs.xml"),
+        ("POST", "/reload"),
+    ]
+    assert b"EPSG:3857" in configuration
+    assert b"900913" not in configuration
+    assert b"<directWMSIntegrationEnabled>true" in configuration
+    quota = ElementTree.fromstring(client.application_requests[-1][2])
+    assert quota.findtext("globalExpirationPolicyName") == "LRU"
+    assert quota.findtext("globalQuota/value") == "25"
+    assert quota.findtext("globalQuota/units") == "GiB"
+
+
+def test_epsg3857_grid_and_layer_documents_match_leaflet_tiles() -> None:
+    """Pin one global 256-pixel Web Mercator pyramid and bounded ENV key."""
+    grid = ElementTree.fromstring(web_mercator_gridset_document())
+    layer = ElementTree.fromstring(geowebcache_layer_document("eolab:raster"))
+    quota = ElementTree.fromstring(geowebcache_disk_quota_document(7))
+
+    assert grid.findtext("name") == "EPSG:3857"
+    assert grid.findtext("srs/number") == "3857"
+    assert grid.findtext("tileWidth") == grid.findtext("tileHeight") == "256"
+    assert len(grid.findall("resolutions/double")) == 25
+    assert len(grid.findall("scaleNames/string")) == 25
+    assert grid.findtext("resolutions/double") == "156543.03392804097"
+    assert layer.findtext("gridSubsets/gridSubset/gridSetName") == "EPSG:3857"
+    assert layer.find("gridSubsets/gridSubset/extent") is None
+    assert layer.findtext("parameterFilters/regexParameterFilter/key") == "ENV"
+    assert layer.findtext("parameterFilters/regexParameterFilter/regex") == (
+        r"[^\r\n]{1,384}"
+    )
+    assert quota.findtext("globalQuota/value") == "7"
+    assert b"900913" not in web_mercator_gridset_document()
+
+
 @pytest.mark.parametrize(
     ("admin_password", "master_password", "expected_error"),
     (
@@ -211,4 +320,25 @@ def test_main_rejects_invalid_passwords(
     monkeypatch.setenv("GEOSERVER_MASTER_PASSWORD", master_password)
 
     with pytest.raises(ValueError, match=expected_error):
+        main()
+
+
+def test_main_rejects_invalid_geowebcache_quota(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reject an unbounded or malformed persistent tile cache.
+
+    Args:
+        monkeypatch: Pytest environment mutation fixture.
+
+    Returns:
+        None.
+    """
+    monkeypatch.setenv("GEOSERVER_INTERNAL_URL", "http://geoserver/geoserver")
+    monkeypatch.setenv("GEOSERVER_ADMIN_USER", "eolab")
+    monkeypatch.setenv("GEOSERVER_ADMIN_PASSWORD", "valid-admin-password")
+    monkeypatch.setenv("GEOSERVER_MASTER_PASSWORD", "valid-master-password")
+    monkeypatch.setenv("GEOWEBCACHE_DISK_QUOTA_GIB", "0")
+
+    with pytest.raises(ValueError, match="must be a positive integer"):
         main()

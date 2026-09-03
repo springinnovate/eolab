@@ -72,6 +72,8 @@ export function createRasterWmsLayer(
         env: styleEnvironment,
         format: "image/png",
         transparent: true,
+        tiled: true,
+        tilesorigin: "-20037508.342789244,-20037508.342789244",
         version: "1.3.0",
         noWrap: true,
         bounds: [

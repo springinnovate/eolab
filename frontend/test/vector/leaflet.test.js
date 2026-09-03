@@ -43,6 +43,8 @@ test("vector WMS uses one bounded layer and no raster environment", () => {
             styles: "vector-line",
             format: "image/png",
             transparent: true,
+            tiled: true,
+            tilesorigin: "-20037508.342789244,-20037508.342789244",
             version: "1.3.0",
             noWrap: true,
             bounds: [[48, -123], [49, -122]],

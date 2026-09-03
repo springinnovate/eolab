@@ -126,6 +126,10 @@ class VectorGeoServerScenario:
             AssertionError: If the adapter uses an unexpected operation.
         """
         self.requests.append(request)
+        if request.method == "PUT" and request.url.path.endswith(
+            f"/gwc/rest/layers/eolab:{self.resource_name}.xml"
+        ):
+            return httpx2.Response(200)
         path = request.url.path.removeprefix("/geoserver/rest")
         if request.method == "GET":
             if path == "/workspaces/eolab.json":

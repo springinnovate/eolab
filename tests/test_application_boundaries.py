@@ -6,6 +6,9 @@ from pathlib import Path
 
 APPLICATION_SOURCE = Path("src/eolab_app")
 GEOSERVER_INITIALIZER = Path("geoserver/initialize.py")
+SHARED_GEOWEBCACHE_DOCUMENTS = Path(
+    "src/eolab_infrastructure/geowebcache_documents.py"
+)
 ROOT_GENERIC_MODULE_NAMES = {
     "constants.py",
     "helpers.py",
@@ -115,6 +118,21 @@ def test_deployment_and_asset_tools_do_not_enter_the_runtime_package() -> None:
     )
     assert not (APPLICATION_SOURCE / "icon.py").exists()
     assert not (APPLICATION_SOURCE / "icon").exists()
+
+
+def test_geowebcache_documents_are_neutral_shared_infrastructure() -> None:
+    """Keep the shared cache contract free of either caller's dependencies."""
+    assert imported_modules(SHARED_GEOWEBCACHE_DOCUMENTS) == {"xml.etree"}
+    assert "eolab_infrastructure.geowebcache_documents" in imported_modules(
+        GEOSERVER_INITIALIZER
+    )
+    for publisher_path in (
+        APPLICATION_SOURCE / "rendering" / "geoserver.py",
+        APPLICATION_SOURCE / "rendering" / "geowebcache.py",
+    ):
+        assert "eolab_infrastructure.geowebcache_documents" in imported_modules(
+            publisher_path
+        )
 
 
 def test_application_root_has_no_generic_shared_module() -> None:

@@ -206,6 +206,10 @@ class _GeoServerScenario:
                 status, body = self.style_responses.pop(0)
                 return httpx2.Response(status, content=body)
             return httpx2.Response(200)
+        if request.method == "PUT" and path.endswith(
+            f"/gwc/rest/layers/eolab:{RESOURCE_NAME}.xml"
+        ):
+            return httpx2.Response(200)
         raise AssertionError(f"Unexpected GeoServer request: {request}")
 
 
@@ -424,7 +428,7 @@ def test_coverage_store_only_state_is_deleted_before_clean_creation(
         for request in scenario.requests
         if request.method != "GET"
     ]
-    assert mutation_methods == ["DELETE", "PUT", "PUT"]
+    assert mutation_methods == ["DELETE", "PUT", "PUT", "PUT"]
     delete_request = next(
         request for request in scenario.requests if request.method == "DELETE"
     )

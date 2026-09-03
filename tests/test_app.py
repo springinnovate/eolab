@@ -343,8 +343,8 @@ def test_catalog_geotiff_is_published_idempotently(
         for request in publication_mock.requests
         if request.method != "GET"
     ]
-    assert [request.method for request in mutation_requests] == ["PUT"] * 3
-    assert len({request.url.path for request in mutation_requests}) == 2
+    assert [request.method for request in mutation_requests] == ["PUT"] * 5
+    assert len({request.url.path for request in mutation_requests}) == 3
 
 
 def test_raster_changed_during_publication_is_not_authorized(
@@ -419,7 +419,7 @@ def test_raster_changed_during_publication_is_not_authorized(
     assert tile_response.status_code == 400
     assert sum(
         request.method == "PUT" for request in publication_mock.requests
-    ) == 2
+    ) == 3
 
 
 @pytest.mark.parametrize(

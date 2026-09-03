@@ -107,6 +107,12 @@ def safe_geoserver_response(geoserver_response: httpx2.Response) -> Response:
             "content-disposition",
             "content-type",
             "etag",
+            "geowebcache-cache-result",
+            "geowebcache-crs",
+            "geowebcache-gridset",
+            "geowebcache-miss-reason",
+            "geowebcache-tile-bounds",
+            "geowebcache-tile-index",
             "last-modified",
         )
         if (header_value := geoserver_response.headers.get(header_name))

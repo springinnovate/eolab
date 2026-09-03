@@ -206,6 +206,10 @@ def test_geoserver_has_bounded_tunable_rendering_resources() -> None:
         in compose
     )
     assert (
+        '"GEOSERVER_GWC_REQUEST_COUNT=${EOLAB_GEOSERVER_GWC_REQUEST_COUNT:-8}"'
+        in compose
+    )
+    assert (
         '"GEOSERVER_WMS_QUEUE_TIMEOUT_SECONDS='
         '${EOLAB_GEOSERVER_WMS_QUEUE_TIMEOUT_SECONDS:-10}"' in compose
     )
@@ -222,7 +226,7 @@ def test_geoserver_has_bounded_tunable_rendering_resources() -> None:
     assert "'^[1-9][0-9]*$'" in startup
     assert "'^[1-9][0-9]*[mMgG]$'" in startup
     assert 'if [ "$heap_megabytes" -lt 256 ]' in startup
-    assert "printf 'ows.wms.getmap=%s\\ntimeout=%s\\n'" in startup
+    assert "printf 'ows.gwc=%s\\nows.wms.getmap=%s\\ntimeout=%s\\n'" in startup
     assert "ActiveProcessorCount" not in compose
     assert "ActiveProcessorCount" not in geoserver_dockerfile
 
@@ -285,6 +289,7 @@ def test_geoserver_rejects_invalid_runtime_limits() -> None:
     repository_root = COMPOSE_PATH.parent
     base_environment = os.environ | {
         "GEOSERVER_WMS_RENDER_COUNT": "2",
+        "GEOSERVER_GWC_REQUEST_COUNT": "8",
         "GEOSERVER_WMS_QUEUE_TIMEOUT_SECONDS": "10",
         "GEOSERVER_MAX_HEAP_SIZE": "4g",
     }
@@ -292,6 +297,10 @@ def test_geoserver_rejects_invalid_runtime_limits() -> None:
         (
             {"GEOSERVER_WMS_RENDER_COUNT": "0"},
             "GEOSERVER_WMS_RENDER_COUNT must be a positive integer",
+        ),
+        (
+            {"GEOSERVER_GWC_REQUEST_COUNT": "0"},
+            "GEOSERVER_GWC_REQUEST_COUNT must be a positive integer",
         ),
         (
             {"GEOSERVER_WMS_QUEUE_TIMEOUT_SECONDS": "0"},
@@ -362,6 +371,9 @@ def test_geoserver_is_internal_persistent_and_reads_the_scan_mount() -> None:
     assert "target: /scan-source" in geoserver_service
     assert "read_only: true" in geoserver_service
     assert "geoserver-data:/opt/geoserver_data" in geoserver_service
+    assert '"GEOWEBCACHE_CACHE_DIR=/opt/geoserver_data/gwc-cache"' in (
+        geoserver_service
+    )
     assert '"RUN_UNPRIVILEGED=true"' in geoserver_service
     assert '"SKIP_DEMO_DATA=true"' in geoserver_service
     assert '"CORS_ENABLED=false"' in geoserver_service
@@ -397,9 +409,31 @@ def test_geoserver_initializer_is_idempotent_image_owned_configuration() -> None
     assert "condition: service_healthy" in compose
     assert '"GEOSERVER_MASTER_PASSWORD=${EOLAB_GEOSERVER_MASTER_PASSWORD:' in compose
     assert "COPY geoserver/ ./" in initializer_dockerfile
+    assert (
+        "COPY src/eolab_infrastructure/ ./eolab_infrastructure/"
+        in initializer_dockerfile
+    )
     assert 'client.request("DELETE"' not in initializer
-    assert 'WORKSPACE_NAME = "eolab"' in initializer
+    assert "WORKSPACE_NAME = GEOSERVER_WORKSPACE_NAME" in initializer
     assert 'RASTER_STYLE_NAME = "dynamic-raster"' in initializer
+    shared_documents = (
+        repository_root
+        / "src"
+        / "eolab_infrastructure"
+        / "geowebcache_documents.py"
+    ).read_text(encoding="utf-8")
+    assert 'GEOWEBCACHE_GRIDSET_NAME = "EPSG:3857"' in shared_documents
+    assert (
+        '"GEOWEBCACHE_DISK_QUOTA_GIB='
+        '${EOLAB_GEOWEBCACHE_DISK_QUOTA_GIB:-25}"' in compose
+    )
+    gwc_configuration = (
+        repository_root / "geoserver" / "gwc-gs.xml"
+    ).read_text(encoding="utf-8")
+    assert "<directWMSIntegrationEnabled>true" in gwc_configuration
+    assert "<requireTiledParameter>true" in gwc_configuration
+    assert "EPSG:3857" in gwc_configuration
+    assert "900913" not in gwc_configuration
 
 
 def test_app_keeps_geoserver_registration_credentials_internal() -> None:
