@@ -1,302 +1,184 @@
 # EOLab
 
-EOLab is an open source platform for Earth observation analysis and visualization. It provides a Leaflet map and a persistent STAC catalog backed by pgSTAC.
+EOLab is a shared browser workspace for exploring prepared raster and vector
+data. It turns a folder of geospatial files into a searchable Catalog where a
+group can build maps, inspect features and pixels, compare rasters, make plots,
+and share the exact view with a link.
 
-## Deploy with Coolify
+It is especially useful for workshops and collaborative analysis. A facilitator
+can publish the participants' datasets once, and everyone can explore the same
+material in real time without installing a desktop GIS or creating an account.
 
-1. Create a new Coolify resource from this GitHub repository.
-2. Select the **Docker Compose** build pack and use `/docker-compose.yml`.
-3. In Coolify's **Production** environment variables, set `EOLAB_DATABASE_PASSWORD` to a long random value before the first deployment. Keep this value: PostgreSQL uses it when initializing the persistent database volume, and changing the environment variable later does not change the database password.
-4. Set `EOLAB_GEOSERVER_ADMIN_PASSWORD` and `EOLAB_GEOSERVER_MASTER_PASSWORD` to different long random values. Use at least 16 letters, numbers, hyphens, underscores, or periods for the administrator password. The master password must contain at least eight characters with no surrounding whitespace. GeoServer uses the first value for its internal administrator account; EOLab's initializer applies the second to the GeoServer keystore without exposing either value to the browser.
-   Add `EOLAB_GEOSERVER_CPU_LIMIT=4`,
-   `EOLAB_GEOSERVER_MAX_HEAP_SIZE=4g`,
-   `EOLAB_GEOSERVER_WMS_RENDER_COUNT=2`, and
-   `EOLAB_GEOSERVER_WMS_QUEUE_TIMEOUT_SECONDS=10` if Coolify does not list
-   those defaulted variables automatically.
-5. Configure the read-only scan mount and the directories EOLab should search. In the EOLab resource's **Production** environment variables, select **Add** and create these variables:
+![EOLab showing Catalog results beside a map of a vector dataset](docs/images/eolab-catalog-map.png)
 
-    ```text
-    EOLAB_SCAN_MOUNT_PATH=/mnt/storage/bigbucket
-    EOLAB_SCAN_PATHS_WITHIN_MOUNT=["eolab_catalog_data/observations","eolab_catalog_data/model_outputs"]
-    EOLAB_SCAN_DISPLAY_PATH_PREFIX=bigboi -- Z:\bigbucket
-    EOLAB_SCAN_WORKER_COUNT=8
-    EOLAB_SCAN_WRITER_COUNT=4
-    EOLAB_SCAN_BATCH_SIZE=100
-    ```
+## What can I do with EOLab?
 
-    `EOLAB_SCAN_MOUNT_PATH` is an absolute path on the deployment server. Coolify does not list it automatically because Compose uses it as a bind-mount source, so add it manually. Each entry in `EOLAB_SCAN_PATHS_WITHIN_MOUNT` is relative to that mount; use `["."]` to scan the entire mount. `EOLAB_SCAN_DISPLAY_PATH_PREFIX` is the path description shown to users in the Item inspector. `EOLAB_SCAN_WORKER_COUNT` is the number of concurrent metadata processes. `EOLAB_SCAN_WRITER_COUNT` is the maximum number of catalog bulk upserts in progress at once. `EOLAB_SCAN_BATCH_SIZE` is the maximum number of Items in each bulk upsert. Keep the defaults initially; the additional scanner limits in the runtime configuration table are intended for measured tuning. The mounted directories and dataset files must be readable by the application container.
+- Search a shared Catalog by filename, path, date, or dataset type.
+- Add several rasters and vectors to one map, reorder them, and control which
+  are visible.
+- Style rasters with color ramps and opacity.
+- Style points, lines, and polygons with one symbol, categories, or graduated
+  numeric classes; add labels when useful.
+- Click the map to inspect vector attributes and sample raster pixels.
+- Draw a sampling window and compare raster distributions with 1D or 2D
+  histograms.
+- Plot several fields from one feature, or one numeric field across all
+  features found at a location.
+- Copy a link that recreates the layers, styles, order, visibility, opacity,
+  viewport, and viewer version.
 
-    To audit a running container, use `docker exec <container> grep ' /scan-source ' /proc/self/mountinfo`. The mount options immediately after `/scan-source` must begin with `ro`; for NFS, the filesystem options after the `- nfs4 ...` separator should also contain `ro`. Treat this kernel-reported state as authoritative. A `docker inspect` mount entry may still show `Mode: rw` because it describes Docker's bind request rather than a read-only property inherited from the host filesystem.
+For example, a landscape-connectivity workshop can combine annual resistance
+rasters with corridor or node vectors. Participants can compare raster values
+at a location, inspect the attributes of overlapping features, plot how a
+metric changes across years, and send a colleague a link to the resulting map.
 
-6. In the project **Configuration**, select **Domains** for the `app` service and enter the public domain with internal port `8000` as `https://eolab.example.com:8000`. Do not attach a domain to the `geoserver` service; EOLab exposes only its restricted WMS route.
-7. In **Advanced**, enable **Include Source Commit in Build**. On Coolify versions that label this setting **Source Commit Availability**, select **Available during build**. EOLab uses `SOURCE_COMMIT` to derive the displayed version from Git tags and the deployed commit.
-8. Set any other desired deployment-specific `EOLAB_*` values listed in `.env.example`.
-9. Open the **Actions** menu in the upper-right corner and select **Deploy**.
+## A quick tour
 
-## Run with Docker Compose
+### 1. Find a dataset
 
-Copy `.env.example` to `.env`, set the database and two GeoServer passwords, and configure the scan variables described below. To display a Git-derived version locally, replace the `SOURCE_COMMIT` fallback with the full 40-character SHA reported by `git rev-parse HEAD`.
+Use **Catalog search** to enter any part of a filename, path, description, or
+date. Ordinary words can be combined with these filters:
 
-Start the stack with the local port override:
+- `type:raster` — only raster datasets
+- `type:vector` — only vector datasets
+- `format:cog` — only Cloud Optimized GeoTIFFs
+- `date:2020`, `date:2020-06`, or `date:2020-06-15` — a year, month, or day
+- `date:2020-01..2020-03` — an inclusive date range
 
-```console
-docker compose -f docker-compose.yml -f docker-compose.local.yml up --build --detach
-```
+For example, `resistance type:raster date:2020` finds raster records containing
+“resistance” from 2020. Suggestions appear while you type. Clear the search to
+show the complete Catalog, or use **Surprise me** to open a random matching
+item.
 
-Open `http://localhost:8000`. The local override also makes the GeoServer administration interface available only from the same machine at `http://localhost:8081/geoserver/web/`; sign in as `eolab` with `EOLAB_GEOSERVER_ADMIN_PASSWORD`. Set `EOLAB_HOST_PORT` or `EOLAB_GEOSERVER_HOST_PORT` to use different loopback ports.
+Each result shows the source filename and the actions you are most likely to
+need:
 
-EOLab no longer loads a sample Collection during deployment. Upgrading does not remove sample records that an earlier release already stored in the persistent database; deleting those records remains a separate, deliberate database operation.
+- **Add to map** publishes and displays the dataset.
+- **More details** opens its Catalog metadata.
 
-## Runtime configuration
+After an item is on the map, the same row also offers **Remove**, **Zoom to**,
+and **Style** without making you leave the search results.
 
-| Variable                           | Default                                           | Purpose                                             |
-| ---------------------------------- | ------------------------------------------------- | --------------------------------------------------- |
-| `EOLAB_DATABASE_PASSWORD`          | none                                              | Required internal PostgreSQL password               |
-| `EOLAB_DATABASE_VOLUME_NAME`       | `eolab-pgstac-data`                               | Database volume name, unique per deployment         |
-| `EOLAB_GEOSERVER_ADMIN_PASSWORD`   | none                                              | Required internal GeoServer administrator password  |
-| `EOLAB_GEOSERVER_MASTER_PASSWORD`  | none                                              | Required GeoServer keystore password                |
-| `EOLAB_GEOSERVER_DATA_VOLUME_NAME` | `eolab-geoserver-data`                            | Persistent GeoServer configuration volume name      |
-| `EOLAB_GEOSERVER_CPU_LIMIT`        | `4`                                               | GeoServer container CPU limit                        |
-| `EOLAB_GEOSERVER_MAX_HEAP_SIZE`    | `4g`                                              | Maximum GeoServer Java heap (`m` or `g`)             |
-| `EOLAB_GEOSERVER_WMS_RENDER_COUNT` | `2`                                               | Concurrent GeoServer WMS map renders                 |
-| `EOLAB_GEOSERVER_WMS_QUEUE_TIMEOUT_SECONDS` | `10`                                     | Maximum seconds a WMS request may wait in GeoServer's queue |
-| `EOLAB_RASTER_PIXEL_READ_CONCURRENCY` | `2`                                            | Concurrent Rasterio pixel reads                      |
-| `EOLAB_RASTER_STATISTICS_READ_CONCURRENCY` | `1`                                       | Concurrent Rasterio statistics reads                 |
-| `EOLAB_RASTER_STATISTICS_CACHE_ENTRIES` | `32`                                          | Completed statistics documents cached per app process |
-| `EOLAB_SCAN_MOUNT_PATH`            | none                                              | Required absolute host directory mounted read-only  |
-| `EOLAB_SCAN_PATHS_WITHIN_MOUNT`    | none                                              | Required JSON array of relative directories to scan |
-| `EOLAB_SCAN_DISPLAY_PATH_PREFIX`   | none                                              | Required user-facing root shown for mounted files   |
-| `EOLAB_SCAN_WORKER_COUNT`          | `8`                                               | Concurrent dataset metadata processes               |
-| `EOLAB_SCAN_WRITER_COUNT`          | `4`                                               | Concurrent catalog bulk upserts                     |
-| `EOLAB_SCAN_BATCH_SIZE`            | `100`                                             | Maximum Items per catalog bulk upsert               |
-| `EOLAB_SCAN_ERROR_DETAIL_LIMIT`    | `100`                                             | Failure details retained in scan status             |
-| `EOLAB_SCAN_RECONCILIATION_PAGE_SIZE` | `500`                                          | Catalog Items loaded per cleanup page               |
-| `EOLAB_SCAN_RECONCILIATION_CONCURRENCY` | `8`                                          | Concurrent mounted-file cleanup checks              |
-| `EOLAB_SCAN_RECONCILIATION_SPOOL_MEMORY_BYTES` | `1048576`                              | Missing-key bytes kept in memory before disk spill  |
-| `EOLAB_SCAN_CATALOG_WRITE_TIMEOUT_SECONDS` | `120`                                      | Per-operation STAC API write timeout                |
-| `EOLAB_SCAN_CATALOG_ERROR_DETAIL_LIMIT` | `500`                                        | Upstream error characters retained in scan status   |
-| `EOLAB_TEMPORARY_AOI_TTL_SECONDS` | `1800`                                             | Temporary AOI lifetime after upload                  |
-| `EOLAB_TEMPORARY_AOI_MAX_UPLOAD_BYTES` | `26214400`                                  | Maximum temporary AOI file bytes                     |
-| `EOLAB_APP_TITLE`                  | `EOLab`                                           | Browser and panel title                             |
-| `EOLAB_APP_SUBTITLE`               | `Explore, visualize, and analyze Earth observation data` | Short panel description                     |
-| `EOLAB_CATALOG_URL`                | `/stac`                                           | Browser-facing STAC API path                        |
-| `EOLAB_BASEMAP_URL`                | OpenTopoMap raster tiles                          | Leaflet tile URL template                           |
-| `EOLAB_BASEMAP_ATTRIBUTION`        | OpenTopoMap, OpenStreetMap, and SRTM attribution  | Basemap attribution HTML                            |
-| `EOLAB_INITIAL_LATITUDE`           | `20`                                              | Initial map latitude                                |
-| `EOLAB_INITIAL_LONGITUDE`          | `0`                                               | Initial map longitude                               |
-| `EOLAB_INITIAL_ZOOM`               | `2`                                               | Initial Leaflet zoom, from 0 to 22                  |
+### 2. Build the map
 
-### Basemap provider
+Open **Map layers** to see the current stack. The first layer in the list draws
+on top. Drag a row by its handle to reorder it, or use the keyboard controls on
+the same handle.
 
-The default basemap is the public OpenTopoMap raster service at
-`https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png`. Its map style is licensed
-under CC-BY-SA 3.0, its OpenStreetMap data is licensed under ODbL, and the
-required OpenTopoMap, OpenStreetMap, SRTM, and license links remain visible in
-Leaflet attribution. OpenTopoMap permits use in web applications, including
-commercial use, without an API credential or license fee. Its operators ask
-applications to avoid mass downloads, request contact before large-scale use,
-and provide no availability guarantee. See the provider's
-[usage and attribution guidance](https://opentopomap.org/about#verwendung) and
-[service FAQ](https://opentopomap.org/about#faq).
+Each layer row provides small, direct actions:
 
-OpenTopoMap supplies native tiles through zoom 17. Leaflet overzooms those
-tiles when EOLab's existing map workflow reaches zoom 18 through 22. Failed
-tile requests render as transparent neutral-background tiles; EOLab does not
-silently send requests to a second provider, and raster, vector, AOI,
-sample-window and footprint overlays plus retained click-value analysis remain
-available. A
-deployment that needs guaranteed availability or expects high traffic should
-set `EOLAB_BASEMAP_URL` and `EOLAB_BASEMAP_ATTRIBUTION` to a self-hosted or
-contracted provider before deployment.
+- the checkbox shows or hides the layer;
+- **Style** changes its appearance;
+- **Zoom to** fits the source layer's bounds;
+- **Info** opens the Catalog details;
+- **Copy** and **Paste** reuse a compatible style, including layer opacity;
+- **×** removes the layer from the map.
 
-Esri World Topographic Map was evaluated first. Esri's current Basemap Styles
-service requires an access token with the `premium:user:basemaps` privilege and
-meters basemap tile or session usage. EOLab does not expose a basemap secret or
-add an authentication lifecycle for this presentation-only change. See Esri's
-[Basemap Styles authentication and usage documentation](https://developers.arcgis.com/documentation/mapping-and-location-services/mapping/basemaps/introduction-basemap-styles-service/).
+![Map Layers and a raster style editor in EOLab](docs/images/eolab-layer-styling.png)
 
-## Rendering service
+Raster styles offer minimum, midpoint, and maximum colors and opacities. Vector
+styles adapt to point, line, or polygon geometry. They support a single symbol,
+categorical values, graduated numeric classes, and optional labels. Appearance
+changes affect only the current map; they never edit the source data.
 
-GeoServer is configured automatically. Keep `EOLAB_GEOSERVER_ADMIN_PASSWORD` and `EOLAB_GEOSERVER_MASTER_PASSWORD` stable in Coolify. The administrator password must contain at least 16 letters, numbers, hyphens, underscores, or periods. The master password must contain at least eight characters with no surrounding whitespace and must differ from the administrator password.
+### 3. Explore what is under the pointer
 
-GeoServer may use up to `EOLAB_GEOSERVER_CPU_LIMIT` CPUs and
-`EOLAB_GEOSERVER_MAX_HEAP_SIZE` of Java heap. Its control-flow extension runs
-at most `EOLAB_GEOSERVER_WMS_RENDER_COUNT` WMS map renders concurrently and
-queues the remaining tile requests for at most
-`EOLAB_GEOSERVER_WMS_QUEUE_TIMEOUT_SECONDS` seconds. The queue timeout bounds
-only the wait for GeoServer rendering capacity; the app retains a separate
-30-second upstream HTTP safety timeout. EOLab also cancels its upstream
-`GetMap` operation when the requesting browser
-disconnects. Closing that connection releases EOLab resources and abandons
-queued work, but it is a best-effort signal rather than a guarantee that every
-already-running GeoServer renderer stops immediately. Change these Coolify
-variables and redeploy to tune the service; Java detects the Docker CPU limit
-without an `ActiveProcessorCount` override. The CPU limit must be positive,
-the render count and queue timeout must be positive integers, and the heap must
-be at least `256m` with an `m` or `g` suffix.
+A normal click explores the visible data at that location. Dragging still pans
+the map. **Analysis tools** performs the same action at the center of the map,
+which is useful for keyboard and touch interaction.
 
-The application also bounds its own Rasterio work. Keep
-`EOLAB_RASTER_STATISTICS_READ_CONCURRENCY` at `1` unless storage benchmarks
-show that overlapping bounded statistics reads improves throughput without
-hurting map rendering. `EOLAB_RASTER_PIXEL_READ_CONCURRENCY` controls small
-interactive band-one reads; canceled requests retain their slot until the
-underlying GDAL thread finishes. `EOLAB_RASTER_STATISTICS_CACHE_ENTRIES`
-controls how many completed statistics documents each app process retains;
-the cache does not retain raster pixels. All three values must be positive
-integers, and changing them requires a redeploy.
+For visible vectors, EOLab highlights the features under the click and opens
+their attributes in **Feature inspector**. Use **Previous** and **Next** when
+several features overlap. Clicking empty space does not open an empty result.
 
-Open **Rendering diagnostics** in the application header to inspect the JVM
-heap used and maximum, GeoServer process CPU, garbage collection, live threads,
-uptime, active and completed WMS GetMap requests, latest GetMap duration, and
-recent failures. Values refresh quickly only while the disclosure is open and
-stop while the browser tab is hidden. The raw JMX Exporter and GeoServer
-administrative endpoints remain internal; the browser receives only a fixed
-numeric summary. Heap maximum is the configured Java `-Xmx`, not host RAM, and
-GetMap duration is measured end to end at EOLab's WMS proxy, including any
-control-flow queue time. Requests abandoned by disconnected clients release
-their active slot without being reported as completed renders or failures. The
-exporter endpoint is not published outside the
-Compose network, and the diagnostics panel never exposes metric labels,
-internal URLs, request parameters, or upstream error text.
+For visible rasters, EOLab samples the pixel values and prepares histograms. A
+bounded sample window can be moved or resized to explore a local distribution:
 
-The scanner catalogs mounted GeoTIFFs as prepared raster sources. It records
-standard spatial metadata and a neutral source signature, but does not inspect
-block layout, overview structure, compression, decoded size, or GeoServer reader
-compatibility. Preparing rasters for production rendering is an upstream data
-responsibility.
+- **1D** mode shows distributions for the active visible rasters.
+- **2D** mode compares the top two visible rasters and marks them **X** and
+  **Y** in Map layers. Reorder those layers to change the pair, or swap the axes
+  in the analysis panel. Other visible layers remain on the map underneath.
 
-**Add to map** resolves the current Catalog identity through the confined mount
-resolver and publishes that file to GeoServer as-is. The source signature must
-remain unchanged while publication is running. GeoServer reader or CRS failures
-are returned as publication errors; EOLab does not rewrite, approximate, or
-substitute a browser-rendered raster view. A repaired source can be rescanned
-and retried with the same Add action.
+![A two-dimensional raster comparison and sample window in EOLab](docs/images/eolab-raster-analysis.png)
 
-Catalog-authorized statistics, histograms, selected-area analysis, and pixel
-inspection remain a rendering-independent sibling. These bounded analysis paths
-open the mounted source directly and never consult GeoServer, WMS publication
-state, or raster rendering eligibility. See
-[Rendering-independent raster analysis](docs/raster-analysis.md) for
-authorization, sampling, lifecycle, and cache contracts.
+### 4. Make a series plot
 
-Raster publication is a recoverable state transition rather than a blind
-GeoServer create. EOLab preserves complete existing publications, removes and
-retries only coverage-store-only orphans, and retains healthy resources when a
-later style operation fails. A restarted app reauthorizes existing layers
-without recreating them. Runtime failures appear beside **Add to map layers**
-with a stable category and actionable message, while the application log
-retains only a bounded sanitized GeoServer response excerpt. The exact state,
-rollback, REST response, and error contracts are documented in
-[Raster publication recovery contract](docs/raster-publication.md).
+After selecting vector features, the inspector offers two complementary plots:
 
-Published rasters remain in a session-only layer stack until removed. Any number
-of retained layers may be visible. The top two visible rasters are the bounded
-histogram-analysis pair; additional visible rasters continue rendering beneath
-them without joining the paired analysis. Each layer has independent visibility,
-opacity, drawing order, appearance, statistics, sampling selection, and legend.
+- **Plot fields from this feature** graphs several numeric attributes from the
+  current feature. This fits data where fields such as `R2000` through `R2024`
+  contain a series within each feature.
+- **Plot one field across features** graphs one numeric attribute for every
+  feature available through **Previous** and **Next**. Choose the X-axis field
+  or filename order, ascending or descending order, and a line or scatter
+  chart.
 
-After two distinct catalog rasters are selected, **Raster histograms** offers
-an explicit **2D - bivariate rasters** histogram mode. Catalog identities make
-paired statistics and pixel analysis available without GeoServer, WMS
-publication, or visible map layers. When both WMS layers exist, rendering also
-locks their displayed opacities to 100% and applies the coordinated palette and
-additive browser compositing carried forward from ESOS-C. The two-dimensional
-legend, paired histogram, and retained X/Y click values use the same palette
-contract.
-Ordinary overlay remains the default, and leaving bivariate mode restores any
-retained layers' styles and opacities without republishing. The color,
-alignment, bounded-read, and accessibility contracts are documented in
-[Bivariate raster comparison](docs/bivariate-raster.md).
+Selecting a chart point identifies its source layer and offers **Zoom to source
+layer**. EOLab remembers the plot rules while you inspect other features from
+the same layer, so the chart updates instead of making you configure it again.
 
-The retained browser lifecycle and restricted WMS delivery contracts are
-dataset-neutral; raster keeps ownership of source authorization,
-publication reconciliation, dynamic appearance, and analysis behavior. The
-module ownership and dependency direction are documented in
-[Map rendering boundaries](docs/map-rendering-boundaries.md).
+### 5. Share or resume the map
 
-For an analyzed raster, **Raster appearance** shows a bounded band-1
-distribution. Its provenance says whether the server read an exact bounded
-source window or used the approximate 127-longest-edge center grid. EOLab
-initially applies the distribution's 5th, 50th, and 95th percentiles, and the
-user can apply other ordered percentiles or directly edit the color palette
-and minimum, midpoint, and maximum display values. Whenever a raster is selected
-for analysis, a crosshair and passive outline preview the current 1–300 km
-sample window under the pointer. Clicking or tapping the map fixes that window
-and displays its bounded histogram. The percentile controls immediately
-show the selected distribution's 5th, 50th, and 95th percentile
-values without changing the rendered colors. **Rescale colors to this range**
-applies those values, or other selected percentiles, when the user chooses.
-Hovering a histogram bar reports its bin midpoint, its percentage of the valid
-sample, its sampled-pixel count, and its value range. Each bar uses the same
-active color ramp as a raster pixel at that bin midpoint.
-**Analysis tools** provides the same map-center action for keyboard and touch users,
-and **Use whole raster** restores the retained dataset distribution. The same
-map action also inspects features from visible vectors independently, so raster
-and vector results may appear together. Masked, nodata, and non-finite samples are excluded. A
-statistics failure leaves the raster, manual appearance controls, and exact
-click-value sampling available. These appearance changes are session-only: they
-do not
-modify either the source raster or its catalog Item. Selected windows that
-cross a pole or the antimeridian are rejected rather than being interpreted as
-a different area.
+Use **Copy map link** to copy the current map as a URL. The link contains a
+compressed map-view document in its URL fragment, so opening it recreates the
+shared viewport and layers without uploading a separate file. Every referenced
+Catalog item is revalidated before use; the source data itself is not embedded
+in the link.
 
-## Scan mounted datasets
+The browser also remembers the last valid map on that deployment. **Reset
+view** returns to an empty map and the configured starting position. **Undo
+reset** restores the immediately previous map.
 
-Open the **Catalog: connected** System state menu and select **Scan directories**. The menu lists each configured scan location using its user-facing path and reports either live scan progress or the most recent completion time since EOLab started. EOLab searches each configured path recursively for GeoTIFF (`.tif` and `.tiff`), GeoPackage (`.gpkg`), mounted ESRI Shapefile (`.shp`), ZIP-contained Shapefile (`.zip`), GeoJSON FeatureCollection (`.geojson`), and Esri File Geodatabase (`.gdb` directory) datasets, matching extensions case-insensitively. Generic `.json` files are not scanned. Live status reports source datasets discovered and processed separately from catalog Items produced and written, then classifies written Items as new or already present. Error details are collapsed by default and remain independently scrollable when opened, so the Catalog results remain usable during a scan. EOLab reads metadata using `EOLAB_SCAN_WORKER_COUNT` concurrent processes and uses `EOLAB_SCAN_WRITER_COUNT` concurrent STAC Bulk Transactions, each containing at most `EOLAB_SCAN_BATCH_SIZE` Items from one Collection. Catalog-write timing is cumulative across writers and can exceed wall time. A failure in one dataset does not stop the remaining scan; a catalog inventory or write failure stops the scan. Configured paths cannot be duplicated, nested inside one another, or escape the mount.
+Catalog search text and temporary exploration results—such as the last click,
+feature attributes, histogram, sample window, and plot selection—are not saved
+or shared.
 
-EOMap also provides an independent **Upload AOI** workflow for a temporary
-GeoPackage or zipped Shapefile overlay. Temporary uploads use isolated operating
-system storage, never enter `/scan-source`, STAC, or GeoServer, and expire after
-30 minutes. Multi-dataset containers require an explicit user selection. See
-[Temporary AOI uploads](docs/temporary-aoi.md) for accepted inputs, security and
-geometry limits, cleanup behavior, and page-session semantics.
+## Adding workshop or project data
 
-The remaining scanner limits are deployment tuning controls. `EOLAB_SCAN_ERROR_DETAIL_LIMIT` bounds the individual failures retained for the UI without changing the total failed count. Cleanup reads `EOLAB_SCAN_RECONCILIATION_PAGE_SIZE` catalog records at a time and performs at most `EOLAB_SCAN_RECONCILIATION_CONCURRENCY` mounted-file checks concurrently; raise concurrency only when the storage server can sustain the additional metadata traffic. Missing Item keys remain in memory up to `EOLAB_SCAN_RECONCILIATION_SPOOL_MEMORY_BYTES`, then spill to a temporary file, so raising it trades application memory for less temporary-file I/O. `EOLAB_SCAN_CATALOG_WRITE_TIMEOUT_SECONDS` is an upstream HTTP operation timeout, not a total scan deadline; increase it only when measured large-batch writes need longer. `EOLAB_SCAN_CATALOG_ERROR_DETAIL_LIMIT` bounds the STAC API response excerpt stored in a terminal scan error. All limits must be greater than zero, and all except the timeout are integers.
+EOLab deployments read from a configured, read-only data directory. A workshop
+facilitator or deployment operator normally follows this flow:
 
-The live performance timing separates elapsed wall time, catalog inventory, filesystem discovery, time awaiting metadata results, catalog writes, catalog cleanup, and search-count refresh. Metadata worker time is cumulative across all workers, so it can exceed elapsed wall time. Worker CPU time estimates metadata processing; the remainder of worker wall time is reported as estimated I/O wait and also includes time the operating system leaves a worker unscheduled. These measurements are diagnostic rather than additive percentages.
+1. Prepare georeferenced GeoTIFFs and vector datasets before the session.
+2. Copy them into the deployment's mounted data directory.
+3. Open **Status**, find the Catalog section, and select **Scan directories**.
+4. Review any dataset-specific errors without interrupting successful files.
+5. Search for a representative raster and vector, add both to the map, and
+   verify their bounds and appearance.
 
-Scans create or update the `eolab-mounted-geotiffs` and `eolab-mounted-vectors` STAC Collections. Item identifiers are derived from each primary file's path relative to the mounted root, so scanning the same path again updates its Item instead of adding a duplicate. In parallel, EOLab removes catalog Items whose required mounted source files no longer exist. Cleanup checks the whole mounted source, not only configured scan subdirectories, and stops without deleting anything if the source cannot be verified. Its progress and any failure are reported separately from dataset scanning. STAC Assets retain their container `file:` URIs; the inspector combines their mount-relative titles with `EOLAB_SCAN_DISPLAY_PATH_PREFIX` so users see each location as it is known on their own system.
+Scanning again updates files that are still present and removes Catalog items
+whose mounted source files have disappeared. The source mount remains
+read-only; EOLab stores Catalog metadata and generated GeoServer configuration
+elsewhere.
 
-One Shapefile Item groups files with the same exact base name. The `.shp`, `.shx`, `.dbf`, and `.prj` components are required; recognized `.cpg`, `.qix`, `.sbn`, `.sbx`, and `.shp.xml` companions are included when present. Missing or unreadable required components produce one dataset error. The Item records the native CRS and bounds, feature count, declared layer geometry type, and field names and types using published STAC Projection and Table extensions. Empty Shapefiles are reported as dataset errors because pgSTAC requires every stored Item to have a spatial footprint.
+Raster rendering currently expects prepared, georeferenced, single-band
+GeoTIFFs. EOLab does not rewrite or optimize them during scanning. Mounted
+Shapefiles and spatial GeoPackage layers can be added to the map. Other
+recognized vector containers may be searchable in the Catalog even when they
+are not yet renderable.
 
-One ZIP source container can produce multiple vector Items, including Shapefiles in nested internal directories. Each complete internal component group uses the same required-component, projection, table, geometry, and empty-dataset rules as a mounted Shapefile. Item IDs are stable hashes of both the mount-relative archive path and the exact validated internal `.shp` path, while the Item title identifies both locations and its source Asset retains the original mounted archive URI. ZIP Items use the archive filesystem modification time as their fallback datetime. Internal paths that are absolute, traversing, backslash-ambiguous, drive-qualified, duplicated case-insensitively, encrypted, or symbolic links are rejected. Before direct GDAL `/vsizip/` access, EOLab bounds compressed archive size to 2 GiB, the central directory to 16 MiB, entries to 4,096, each uncompressed member to 2 GiB, total declared uncompressed size to 4 GiB, and each compression ratio to 1,000:1. ZIP64, multi-disk, and unsupported compression methods are rejected. Direct access creates no temporary extraction directory; an invalid internal Shapefile is logged and skipped without discarding valid siblings, and an archive with no valid Shapefiles produces a scan error.
+For a one-off overlay that should not enter the shared Catalog, use **Upload
+AOI** with a GeoPackage or zipped Shapefile. Temporary AOIs expire and are not
+included in copied map links.
 
-One GeoPackage source may produce several Items: each catalogable spatial vector layer receives its own stable Item identity derived from the mount-relative container path and exact layer name. Raster tile tables and nonspatial attribute tables are not cataloged. EOLab reads each layer's schema, feature count, bounds, and CRS through GDAL metadata without loading its full feature collection. Every Item uses the GeoPackage as its source Asset, records the applicable layer name, and exposes the shared vector metadata in the Catalog inspector. An unreadable or empty layer is logged and skipped when valid sibling layers remain; when no spatial layer can be cataloged, the GeoPackage produces one dataset error.
+## Current boundaries
 
-One File Geodatabase directory may produce several Items: each readable spatial feature class receives a stable identity derived from the mount-relative `.gdb` path and exact layer name. The container directory is discovered once and pruned from ordinary traversal, so internal geodatabase files are never counted as separate datasets. Every Item records the layer name and optional alias, CRS, native and WGS 84 bounds, feature count, declared geometry type, field schema, and original `.gdb` location. Nonspatial tables are skipped. An unreadable or empty layer is logged and skipped when valid sibling layers remain; when no spatial feature class can be cataloged, the geodatabase produces one dataset error. Scanning opens the container read-only and restricts GDAL driver selection to `OpenFileGDB`.
+- Multiband raster selection is not yet available; prepare the band you want to
+  display as a single-band raster.
+- A copied map link refers to data in the same EOLab deployment. It is not a
+  portable copy of the datasets and does not grant access to another server.
+- Map styling, plots, and sampling are exploratory. They do not modify or
+  export derived source datasets.
+- Temporary AOIs and transient analysis results are intentionally session-only.
+- Large or poorly prepared rasters can still be slow to render. Prepare tiled,
+  overviewed Cloud Optimized GeoTIFFs in the map's normal display projection
+  when interactive performance matters.
 
-One GeoJSON FeatureCollection file produces one vector Item. Features are streamed so memory does not grow with the source feature count; retained field metadata is explicitly capped, and malformed or over-limit files produce isolated dataset errors. Bounds, feature count, geometry types, and property types are derived from the streamed features. Mixed JSON property types and nulls remain visible as union types rather than being narrowed. RFC 7946 WGS 84 coordinates are required. Legacy named CRS declarations are accepted only when they unambiguously identify EPSG:4326 or OGC CRS84; other legacy CRS declarations are rejected rather than guessed or reprojected. The Item datetime and Asset update time use the source file's modification time.
+## Running your own EOLab workspace
 
-Mounted Shapefile and exact GeoPackage layers can be assessed and added to the
-map through bounded server-side GeoServer WMS rendering. Other recognized
-vector formats remain cataloged with an actionable unsupported reason; EOLab
-never sends an unbounded vector collection to the browser. Publication keeps
-container/layer identity, stable names, source signatures, fixed geometry-family
-styles, and the existing retained-layer visibility/order/removal lifecycle. See
-[Catalog vector visualization](docs/vector-publication.md) for the capability,
-architecture, recovery, and production-verification contracts.
+Deployment owners can run EOLab with Docker Compose or Coolify. The concise
+[deployment and operations guide](docs/deployment-and-operations.md) covers the
+required passwords, read-only data mount, startup, scanning, verification, and
+resource controls. More detailed behavioral and architecture contracts live in
+the [`docs`](docs) directory.
 
-For GeoTIFFs, the scanner uses `ACQUISITIONDATETIME` from GDAL's `IMAGERY` metadata domain when it contains an RFC 3339 timestamp with a UTC offset. Otherwise it uses the source file's filesystem modification time as the required STAC Item `datetime`. A mounted Shapefile Item uses the latest modification time among its component files. ZIP-contained Shapefile Items use the archive's modification time, every layer Item from a GeoPackage uses the container file's modification time, every layer Item from a File Geodatabase uses the latest modification time in its container tree, and a GeoJSON Item uses its source file's modification time. Each fallback is explained in the Item description, and every Asset records its own modification time as `updated`. Filesystem creation time is not used because its meaning differs among operating systems. A malformed GeoTIFF `ACQUISITIONDATETIME` is reported as a dataset failure rather than guessed or silently replaced.
-
-GeoTIFF Items also record standard file size, dimensions, and band metadata plus
-an EOLab-local `eolab:source` Asset member containing the neutral source
-signature. Raster source identity contains inode, exact byte size, nanosecond
-modification time, and nanosecond metadata-change time. Filesystem device number
-is excluded because it identifies a mount instance and is not stable across an
-unchanged NFS remount or replacement container. This metadata supports source
-freshness checks only; it is not a rendering assessment or a claim that the
-file passed full COG validation.
-
-GeoTIFFs without a coordinate reference system are reported as individual dataset errors because pgSTAC requires every stored Item to have a spatial footprint.
-
-The scanner's typed handler, container-pruning, multi-Item, progress, and shared vector conventions are documented in [Catalog dataset-handler extension contract](docs/catalog-dataset-handlers.md). That contract is the starting point for adding a mounted GIS format without redesigning discovery or scan coordination.
-
-## Search the catalog
-
-The Catalog search finds case-insensitive matches in Item filenames, relative paths, descriptions, and standard STAC datetime values. Enter any part of the text; for example, `2002` matches both `grassland_2002.tif` and a description containing `2002`, while `2025-01` remains a literal datetime-text match. Separate terms are combined automatically, so `ESA 2020` requires both terms but permits them to match different searchable fields. Add `format:cog` to return only Cloud Optimized GeoTIFFs. Add `viewable:true` to return only mounted GeoTIFF Items, which are treated as prepared raster candidates; the search does not inspect or preflight their rendering structure. Search terms and filters do not require an `&`.
-
-Use `date:YYYY` for a whole UTC calendar year, `date:YYYY-MM` for a whole month, or `date:YYYY-MM-DD` for one day. Two values separated by `..` form an inclusive range; each endpoint may use any of those precisions. The start expands to the beginning of its calendar period and the end expands to the final day of its period, so `date:2020-01..2020-03` covers January 1 through March 31. The range uses standard STAC Item Search temporal-intersection semantics, so it includes instant Items within the period and interval Items that are contained by, partially overlap, or span the requested range. An Item touching either boundary is included. For example, `ESA format:cog viewable:true date:2020` combines text, COG format, current viewability, and calendar-year constraints. Open-ended ranges and timestamps are not accepted; invalid dates and reversed ranges are reported beside the search field. Clear the field to show the complete catalog.
-
-## How to reset the database
-
-Deleting the database volume permanently deletes the catalog. To intentionally discard the catalog and start over, stop the deployment, delete the volume named by `EOLAB_DATABASE_VOLUME_NAME`, and deploy again. PostgreSQL creates a new empty database during startup.
+EOLab is open-source software under the [Apache License 2.0](LICENSE).
