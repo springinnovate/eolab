@@ -708,8 +708,8 @@ async function initializeCatalog(
         leaflet: L,
         onTileError: reportMapTileError,
         onHistogramRequested: () => mapInspection.showHistogram(),
-        onBivariateRenderingChange: (active) =>
-            mapLayerController.setIndividualRendering(active),
+        onBivariateRenderingChange: (selectedKeys) =>
+            mapLayerController.setIndividualRendering(selectedKeys),
     }, {
         mapLayerController,
         cursorValuesView: new RasterCursorValuesView(),

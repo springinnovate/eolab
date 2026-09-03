@@ -679,11 +679,12 @@ export class MapLayerController {
      * browser's additive bivariate blend that cannot be represented by the
      * ordinary GeoServer composite contract.
      *
-     * @param {boolean} enabled Whether independent source grids are required.
+     * @param {string[]|null} selectedKeys Retained keys requiring independent
+     * rendering, or null to restore ordinary composite rendering.
      * @return {void}
      */
-    setIndividualRendering(enabled) {
-        this.leafletLayers.setIndividualRendering(enabled);
+    setIndividualRendering(selectedKeys) {
+        this.leafletLayers.setIndividualRendering(selectedKeys);
     }
 
     /**
