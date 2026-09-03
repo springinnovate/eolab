@@ -4,6 +4,9 @@ History
 Unreleased
 ----------
 
+0.3.0 (2026-09-02)
+------------------
+
 * Remember the last valid map locally and reset it with one-step undo.
 * Show exact raster values from the same retained map click as histograms and vector inspection.
 * Show progressive, timed vector inspection results while slower layers continue loading.
