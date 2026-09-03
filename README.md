@@ -116,8 +116,6 @@ After selecting vector features, the inspector offers two complementary plots:
 
 ![One selected map feature feeding several fields into a time series](docs/images/eolab-series-one-feature.jpg)
 
-![Several selected map features feeding one field into an ordered series](docs/images/eolab-series-across-features.jpg)
-
 Selecting a chart point identifies its source layer and offers **Zoom to source
 layer**. EOLab remembers the plot rules while you inspect other features from
 the same layer, so the chart updates instead of making you configure it again.
