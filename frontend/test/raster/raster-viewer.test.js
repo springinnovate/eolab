@@ -481,8 +481,19 @@ function flushPromises() {
     return new Promise((resolve) => setImmediate(resolve));
 }
 
-/** Exercise the real application's visible-layer policy and neutral controller. */
-function visibleLayerFixture(loadStatistics = async (item) => createLayerStatistics(item), dependencies = {}) {
+/**
+ * Exercise the application's visible-layer policy and neutral controller.
+ *
+ * @param {Function} [loadStatistics] Raster statistics loader.
+ * @param {Object} [dependencies={}] Raster-viewer dependency overrides.
+ * @param {Object} [configuration={}] Raster-viewer configuration overrides.
+ * @return {Object} Viewer, map, views, layers, and cleanup helper.
+ */
+function visibleLayerFixture(
+    loadStatistics = async (item) => createLayerStatistics(item),
+    dependencies = {},
+    configuration = {},
+) {
     const leafletMap = createFakeMap();
     const { leaflet, wmsLayers } = createFakeLeaflet();
     const controlsView = createFakeControlsView();
@@ -490,7 +501,13 @@ function visibleLayerFixture(loadStatistics = async (item) => createLayerStatist
     let viewer;
     const mapLayers = new MapLayerController({ leafletMap, view: layerStackView,
         onLayersChange: () => viewer?.syncVisibleLayers() });
-    viewer = initializeRasterViewer({ leafletMap, leaflet, wmsUrl: '/geoserver/eolab/wms', onTileError() {} }, {
+    viewer = initializeRasterViewer({
+        leafletMap,
+        leaflet,
+        wmsUrl: '/geoserver/eolab/wms',
+        onTileError() {},
+        ...configuration,
+    }, {
         controlsView, mapLayerController: mapLayers, loadStatistics,
         publishRaster: async item => ({ layerName: `eolab:${item.id}`, bbox: [-180, -90, 180, 90] }),
         samplePixel: async () => ({ inBounds: true, value: 1 }),
@@ -1058,6 +1075,7 @@ test('cursor sampling follows every visible in-bounds raster and pauses for map 
 test('active 2D analysis follows the top raster pair and exposes X Y badges', async () => {
     const pairedRequests = [];
     const pointRequests = [];
+    const renderingSelections = [];
     const h = visibleLayerFixture(undefined, {
         loadPairedStatistics: async (xItem, yItem) => {
             pairedRequests.push([
@@ -1070,6 +1088,9 @@ test('active 2D analysis follows the top raster pair and exposes X Y badges', as
             pointRequests.push(item.id);
             return { inBounds: true, value: item.id.endsWith('top') ? 9 : 4 };
         },
+    }, {
+        onBivariateRenderingChange: (keys) =>
+            renderingSelections.push(keys === null ? null : [...keys]),
     });
     await h.viewer.show(createRasterItem('bottom'));
     await h.viewer.show(createRasterItem('middle'));
@@ -1082,6 +1103,10 @@ test('active 2D analysis follows the top raster pair and exposes X Y badges', as
     h.controlsView.handlers.onBivariateModeChange('bivariate');
     await flushPromises();
     assert.deepEqual(pairedRequests.at(-1), ['top', 'middle']);
+    assert.deepEqual(
+        new Set(renderingSelections.at(-1)),
+        new Set([top.key, middle.key]),
+    );
     assert.deepEqual(
         h.mapLayers.snapshots().map((layer) => layer.roleBadge?.label ?? null),
         ['X', 'Y', null],
@@ -1130,6 +1155,10 @@ test('active 2D analysis follows the top raster pair and exposes X Y badges', as
         [['top', 'Y'], ['bottom', 'X'], ['middle', null]],
     );
     assert.deepEqual(pairedRequests.at(-1), ['bottom', 'top']);
+    assert.deepEqual(
+        new Set(renderingSelections.at(-1)),
+        new Set([top.key, bottom.key]),
+    );
     assert.equal(h.mapLayers.getLeafletLayer(middle.key).opacity, 0.35);
     assert.equal(
         h.mapLayers.getLeafletLayer(middle.key).container.style.mixBlendMode,
@@ -1147,9 +1176,14 @@ test('active 2D analysis follows the top raster pair and exposes X Y badges', as
         [['top', null], ['bottom', 'Y'], ['middle', 'X']],
     );
     assert.deepEqual(pairedRequests.at(-1), ['middle', 'bottom']);
+    assert.deepEqual(
+        new Set(renderingSelections.at(-1)),
+        new Set([middle.key, bottom.key]),
+    );
 
     h.mapLayers.setVisible(middle.key, false);
     assert.equal(h.controlsView.bivariateMode.active, false);
+    assert.equal(renderingSelections.at(-1), null);
     assert.ok(h.mapLayers.snapshots().every((layer) => layer.roleBadge === null));
     assert.equal(h.mapLayers.getLeafletLayer(bottom.key).opacity, 0.4);
     h.destroy();
@@ -1359,8 +1393,16 @@ test("selecting 2D opens paired analysis without a map interaction", async () =>
     assert.match(wmsLayers[0].parameters.env, /cmin:#111827/);
     assert.match(wmsLayers[1].parameters.env, /cmin:#111827/);
 
+    const renderingUpdatesBeforeMapSample = wmsLayers.map(
+        (layer) => layer.parameterUpdates.length
+    );
     viewer.exploreAt({ lng: -122, lat: 49 });
     await flushPromises();
+    assert.deepEqual(
+        wmsLayers.map((layer) => layer.parameterUpdates.length),
+        renderingUpdatesBeforeMapSample,
+        "a new 2D histogram sample must not refresh unchanged WMS layers"
+    );
     assert.deepEqual(
         pixelRequests.map(({ item, point }) => ({ id: item.id, point })),
         [

@@ -190,8 +190,9 @@ function canRetryRasterStatistics(error) {
  * layer snapshots after state changes.
  * @property {() => void} [onHistogramRequested] Notifies the composition root
  * that an explicit analysis action should reveal its presentation workspace.
- * @property {(active:boolean)=>void} [onBivariateRenderingChange] Requests the
- * composition-owned independent rendering strategy for additive 2D display.
+ * @property {(selectedKeys:string[]|null)=>void}
+ * [onBivariateRenderingChange] Requests isolated source rendering for selected
+ * catalog keys, or ordinary composite rendering for null.
  */
 
 /**
@@ -818,6 +819,7 @@ export function initializeRasterViewer(
             bivariateStatistics = statistics;
             const candidates = getBivariatePairCandidates();
             if (candidates === null) return;
+            let rasterRangesChanged = false;
             for (const [candidate, edges] of [
                 [candidates.xCandidate, statistics.histogram.xEdges],
                 [candidates.yCandidate, statistics.histogram.yEdges],
@@ -831,9 +833,17 @@ export function initializeRasterViewer(
                         maximum: edges.at(-1),
                     };
                     candidate.rasterRangeResolved = true;
+                    rasterRangesChanged = true;
                 }
             }
-            applyBivariatePresentation();
+            if (rasterRangesChanged) {
+                applyBivariatePresentation();
+            } else {
+                controlsView.renderPairedStatistics?.(
+                    statistics,
+                    getBivariatePresentation()
+                );
+            }
             renderLayerStack();
         },
         /**
@@ -1050,6 +1060,10 @@ export function initializeRasterViewer(
             /** @param {Object} candidate Newly derived analysis candidate. */
             (candidate) => candidate.key
         ));
+        onBivariateRenderingChange([
+            bivariateMode.xKey,
+            bivariateMode.yKey,
+        ]);
         if (axesWereSwapped) bivariateMode.swap();
         applyBivariatePresentation();
         requestBivariateStatistics();
@@ -1586,9 +1600,9 @@ export function initializeRasterViewer(
     function renderBivariateAvailability(message = null) {
         const eligible = bivariateCandidates;
         const canEnter = eligible.length === 2;
-        const hasUnanalyzedRasters = allVisibleRasterRecords().length > 2;
-        const extraGuidance = hasUnanalyzedRasters
-            ? " Other visible rasters stay on the map without histogram analysis."
+        const hasSuppressedLayers = mapLayers.visibleCount > 2;
+        const extraGuidance = hasSuppressedLayers
+            ? " Other visible layers are temporarily hidden in 2D mode."
             : "";
         const guidance = message ?? (
             bivariateMode.active
@@ -1740,7 +1754,10 @@ export function initializeRasterViewer(
              */
             (candidate) => candidate.key
         ));
-        onBivariateRenderingChange(true);
+        onBivariateRenderingChange([
+            bivariateMode.xKey,
+            bivariateMode.yKey,
+        ]);
         controlsView.setAppearanceEnabled?.(false);
         controlsView.setUnivariateHistogramVisible?.(false);
         renderRasterSamplingAreaControls();
@@ -1770,7 +1787,7 @@ export function initializeRasterViewer(
         bivariateStatistics = null;
         restoreOrdinaryRasterPresentation(keys);
         bivariateMode.leave();
-        onBivariateRenderingChange(false);
+        onBivariateRenderingChange(null);
         bivariateSelectedBounds = null;
         bivariateSelectedWindowSizeKm = null;
         controlsView.renderBivariateMode?.({ active: false });

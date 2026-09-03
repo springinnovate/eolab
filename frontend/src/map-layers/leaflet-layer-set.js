@@ -1,5 +1,7 @@
 /** Keyed Leaflet attachment, opacity, and drawing-order adapter. */
 
+const INDIVIDUAL_RENDERING_TILE_RETRY_LIMIT = 1;
+
 /** Manage keyed source layers and optional server-composed presentation. */
 export class LeafletLayerSet {
     /**
@@ -15,7 +17,10 @@ export class LeafletLayerSet {
         this.layers = new Map();
         this.order = [];
         this.rendering = [];
-        this.individualRendering = false;
+        this.individualRenderingKeys = null;
+        this.individualRenderingGeneration = 0;
+        this.pendingIndividualRendering = null;
+        this.activeIndividualRenderingSignature = null;
     }
 
     /**
@@ -52,7 +57,21 @@ export class LeafletLayerSet {
     setVisible(key, visible) {
         const record = this.#require(key);
         record.visible = visible;
-        if (this.compositeRenderer !== null && !this.individualRendering) {
+        if (
+            this.compositeRenderer !== null &&
+            this.individualRenderingKeys === null
+        ) {
+            return;
+        }
+        if (
+            this.compositeRenderer !== null &&
+            !this.individualRenderingKeys.has(key)
+        ) {
+            if (record.attached) {
+                this.#setLayerHidden(record.layer, false);
+                this.leafletMap.removeLayer(record.layer);
+                record.attached = false;
+            }
             return;
         }
         if (record.attached === visible) {
@@ -160,16 +179,29 @@ export class LeafletLayerSet {
     }
 
     /**
-     * Use independent source grids only for presentation modes that require it.
+     * Use only selected independent source grids for a special presentation.
      *
-     * @param {boolean} enabled Whether to suspend ordinary composite rendering.
+     * A null selection restores ordinary composite rendering. Selected source
+     * grids load while hidden and replace the current composite together.
+     *
+     * @param {string[]|null} selectedKeys Retained keys to render independently,
+     * or null to restore ordinary composite rendering.
      * @return {void}
      */
-    setIndividualRendering(enabled) {
-        if (this.compositeRenderer === null || enabled === this.individualRendering) {
+    setIndividualRendering(selectedKeys) {
+        if (this.compositeRenderer === null) {
             return;
         }
-        this.individualRendering = enabled;
+        const nextKeys = selectedKeys === null
+            ? null
+            : this.#validateIndividualRenderingKeys(selectedKeys);
+        if (this.#hasSameIndividualRenderingKeys(nextKeys)) {
+            return;
+        }
+        this.individualRenderingKeys = nextKeys;
+        this.individualRenderingGeneration += 1;
+        this.#cancelPendingIndividualRendering();
+        this.activeIndividualRenderingSignature = null;
         this.#applyRenderingStrategy();
     }
 
@@ -184,7 +216,11 @@ export class LeafletLayerSet {
         if (record === undefined) {
             return null;
         }
+        if (this.pendingIndividualRendering?.keys.has(key)) {
+            this.#cancelPendingIndividualRendering();
+        }
         if (record.attached) {
+            this.#setLayerHidden(record.layer, false);
             this.leafletMap.removeLayer(record.layer);
         }
         this.layers.delete(key);
@@ -201,33 +237,29 @@ export class LeafletLayerSet {
      * @return {void}
      */
     clear() {
+        this.individualRenderingGeneration += 1;
+        this.#cancelPendingIndividualRendering();
         this.compositeRenderer?.clear();
         for (const key of [...this.layers.keys()]) {
             this.remove(key);
         }
         this.order = [];
         this.rendering = [];
+        this.individualRenderingKeys = null;
+        this.activeIndividualRenderingSignature = null;
     }
 
     /** Apply either one composite grid or the retained independent grids. */
     #applyRenderingStrategy() {
         if (this.compositeRenderer === null) return;
-        if (this.individualRendering) {
-            this.compositeRenderer.clear();
-            for (const key of [...this.order].reverse()) {
-                const record = this.#require(key);
-                if (record.visible && !record.attached) {
-                    record.layer.addTo(this.leafletMap);
-                    record.attached = true;
-                } else if (!record.visible && record.attached) {
-                    this.leafletMap.removeLayer(record.layer);
-                    record.attached = false;
-                }
-            }
+        if (this.individualRenderingKeys !== null) {
+            this.#prepareIndividualRendering();
             return;
         }
+        this.#cancelPendingIndividualRendering();
         for (const record of this.layers.values()) {
             if (record.attached) {
+                this.#setLayerHidden(record.layer, false);
                 this.leafletMap.removeLayer(record.layer);
                 record.attached = false;
             }
@@ -240,6 +272,260 @@ export class LeafletLayerSet {
                     opacity,
                 }))
         );
+    }
+
+    /**
+     * Validate one requested independent-rendering key selection.
+     *
+     * @param {string[]} selectedKeys Candidate retained keys.
+     * @return {Set<string>} Validated unique key selection.
+     * @throws {TypeError|RangeError} If the selection is malformed or unknown.
+     */
+    #validateIndividualRenderingKeys(selectedKeys) {
+        if (
+            !Array.isArray(selectedKeys) ||
+            selectedKeys.length === 0 ||
+            selectedKeys.some((key) => typeof key !== "string") ||
+            new Set(selectedKeys).size !== selectedKeys.length
+        ) {
+            throw new TypeError(
+                "Individual rendering requires distinct retained layer keys."
+            );
+        }
+        for (const key of selectedKeys) {
+            if (!this.layers.has(key)) {
+                throw new RangeError(`Unknown retained map layer: ${key}`);
+            }
+        }
+        return new Set(selectedKeys);
+    }
+
+    /**
+     * Compare a candidate key selection with the current rendering strategy.
+     *
+     * @param {Set<string>|null} candidate Candidate individual key selection.
+     * @return {boolean} Whether the selected keys are unchanged.
+     */
+    #hasSameIndividualRenderingKeys(candidate) {
+        if (candidate === null || this.individualRenderingKeys === null) {
+            return candidate === this.individualRenderingKeys;
+        }
+        return candidate.size === this.individualRenderingKeys.size &&
+            [...candidate].every(
+                (key) => this.individualRenderingKeys.has(key)
+            );
+    }
+
+    /**
+     * Stage selected source grids and reveal them after every grid loads.
+     *
+     * @return {void}
+     */
+    #prepareIndividualRendering() {
+        const keys = this.order.filter((key) => {
+            const record = this.#require(key);
+            return this.individualRenderingKeys.has(key) && record.visible;
+        });
+        const signature = JSON.stringify(keys);
+        if (
+            this.pendingIndividualRendering?.signature === signature ||
+            this.activeIndividualRenderingSignature === signature
+        ) {
+            return;
+        }
+        this.individualRenderingGeneration += 1;
+        this.#cancelPendingIndividualRendering();
+        const selected = new Set(keys);
+        for (const [key, record] of this.layers) {
+            if (!selected.has(key) && record.attached) {
+                this.#setLayerHidden(record.layer, false);
+                this.leafletMap.removeLayer(record.layer);
+                record.attached = false;
+            }
+        }
+        if (keys.length === 0) {
+            this.compositeRenderer.clear();
+            this.activeIndividualRenderingSignature = signature;
+            return;
+        }
+        const generation = this.individualRenderingGeneration;
+        const pending = {
+            failed: new Set(),
+            generation,
+            keys: selected,
+            remaining: new Set(keys),
+            retryCount: 0,
+            signature,
+            listeners: [],
+        };
+        this.pendingIndividualRendering = pending;
+        for (const key of keys) {
+            const record = this.#require(key);
+            if (!record.attached) {
+                record.layer.addTo(this.leafletMap);
+                record.attached = true;
+            }
+            this.#setLayerHidden(record.layer, true);
+            const onLoad = () => this.#recordIndividualLayerLoad(
+                generation,
+                key
+            );
+            const onError = () => this.#recordIndividualLayerError(
+                generation,
+                key
+            );
+            if (
+                typeof record.layer.on === "function" &&
+                typeof record.layer.off === "function"
+            ) {
+                record.layer.on("load", onLoad);
+                record.layer.on("tileerror", onError);
+                pending.listeners.push({ layer: record.layer, onLoad, onError });
+            } else {
+                record.layer.once?.("load", onLoad);
+            }
+        }
+    }
+
+    /**
+     * Record one selected grid load and reveal the complete current selection.
+     *
+     * @param {number} generation Rendering transition generation.
+     * @param {string} key Loaded retained key.
+     * @return {void}
+     */
+    #recordIndividualLayerLoad(generation, key) {
+        const pending = this.pendingIndividualRendering;
+        if (pending === null || pending.generation !== generation) return;
+        pending.remaining.delete(key);
+        if (pending.remaining.size > 0) return;
+        if (pending.failed.size > 0) {
+            if (this.#retryFailedIndividualLayers(pending)) return;
+            this.#failIndividualRendering(generation);
+            return;
+        }
+        this.#removePendingIndividualListeners(pending);
+        this.pendingIndividualRendering = null;
+        this.compositeRenderer.clear();
+        for (const selectedKey of pending.keys) {
+            const record = this.layers.get(selectedKey);
+            if (record?.attached) {
+                this.#setLayerHidden(record.layer, false);
+            }
+        }
+        this.activeIndividualRenderingSignature = pending.signature;
+    }
+
+    /**
+     * Remember that one staged grid had at least one failed tile.
+     *
+     * The layer-level load event still marks the end of its current tile
+     * cycle. Deferring recovery until then prevents one error from removing
+     * the pair and canceling every other in-flight tile request.
+     *
+     * @param {number} generation Rendering transition generation.
+     * @param {string} key Retained key whose tile failed.
+     * @return {void}
+     */
+    #recordIndividualLayerError(generation, key) {
+        const pending = this.pendingIndividualRendering;
+        if (pending === null || pending.generation !== generation) return;
+        pending.failed.add(key);
+    }
+
+    /**
+     * Redraw only failed staged grids within one bounded retry budget.
+     *
+     * @param {Object} pending Current individual-rendering transition.
+     * @return {boolean} Whether a retry was started.
+     */
+    #retryFailedIndividualLayers(pending) {
+        if (
+            pending.retryCount >= INDIVIDUAL_RENDERING_TILE_RETRY_LIMIT ||
+            [...pending.failed].some((key) => {
+                const record = this.layers.get(key);
+                return !record?.attached ||
+                    typeof record.layer.redraw !== "function";
+            })
+        ) {
+            return false;
+        }
+        const retryKeys = [...pending.failed];
+        pending.failed.clear();
+        pending.remaining = new Set(retryKeys);
+        pending.retryCount += 1;
+        for (const key of retryKeys) {
+            this.#require(key).layer.redraw();
+        }
+        return true;
+    }
+
+    /**
+     * Keep the existing complete presentation after a selected grid fails.
+     *
+     * @param {number} generation Rendering transition generation.
+     * @return {void}
+     */
+    #failIndividualRendering(generation) {
+        const pending = this.pendingIndividualRendering;
+        if (pending === null || pending.generation !== generation) return;
+        this.#removePendingIndividualListeners(pending);
+        this.pendingIndividualRendering = null;
+        for (const key of pending.keys) {
+            const record = this.layers.get(key);
+            if (record?.attached) {
+                this.#setLayerHidden(record.layer, false);
+                this.leafletMap.removeLayer(record.layer);
+                record.attached = false;
+            }
+        }
+        this.activeIndividualRenderingSignature = null;
+    }
+
+    /**
+     * Cancel an obsolete staged individual rendering without revealing it.
+     *
+     * @return {void}
+     */
+    #cancelPendingIndividualRendering() {
+        const pending = this.pendingIndividualRendering;
+        if (pending === null) return;
+        this.#removePendingIndividualListeners(pending);
+        for (const key of pending.keys) {
+            const record = this.layers.get(key);
+            if (record !== undefined) {
+                this.#setLayerHidden(record.layer, false);
+            }
+        }
+        this.pendingIndividualRendering = null;
+    }
+
+    /**
+     * Remove event listeners registered for a staged selected grid set.
+     *
+     * @param {Object} pending Pending individual-rendering transition.
+     * @return {void}
+     */
+    #removePendingIndividualListeners(pending) {
+        for (const { layer, onLoad, onError } of pending.listeners) {
+            layer.off("load", onLoad);
+            layer.off("tileerror", onError);
+        }
+        pending.listeners = [];
+    }
+
+    /**
+     * Hide or reveal one attached Leaflet layer container.
+     *
+     * @param {Object} layer Leaflet-compatible layer.
+     * @param {boolean} hidden Whether the layer must remain visually hidden.
+     * @return {void}
+     */
+    #setLayerHidden(layer, hidden) {
+        const container = layer.getContainer?.();
+        if (container?.style !== undefined) {
+            container.style.visibility = hidden ? "hidden" : "";
+        }
     }
 
     /**
