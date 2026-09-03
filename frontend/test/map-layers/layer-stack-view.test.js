@@ -349,10 +349,18 @@ test("rows expose two-row identity, map, style, clipboard, and removal actions",
     assert.equal(actionControl(row, "info").textContent, "Info");
     assert.equal(actionControl(row, "copy-style").disabled, false);
     assert.match(actionControl(row, "copy-style").title, /Copy style and opacity/);
+    assert.equal(
+      elementsByClass(actionControl(row, "copy-style"), "map-layer-style-copy-icon").length,
+      1,
+    );
     assert.equal(actionControl(row, "paste-style").disabled, true);
     assert.equal(
       actionControl(row, "paste-style").title,
       "Copy a layer style before pasting.",
+    );
+    assert.equal(
+      elementsByClass(actionControl(row, "paste-style"), "map-layer-style-paste-icon").length,
+      1,
     );
     assert.match(actionControl(row, "reorder").getAttribute("aria-label"), /position \d of 3/);
     assert.equal(actionControl(row, "reorder").getAttribute("aria-pressed"), "false");
