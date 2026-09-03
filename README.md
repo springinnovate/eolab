@@ -132,10 +132,6 @@ The browser also remembers the last valid map on that deployment. **Reset
 view** returns to an empty map and the configured starting position. **Undo
 reset** restores the immediately previous map.
 
-Catalog search text and temporary exploration results—such as the last click,
-feature attributes, histogram, sample window, and plot selection—are not saved
-or shared.
-
 ## Add your own data
 
 EOLab deployments read from a configured, read-only data directory. A workshop
