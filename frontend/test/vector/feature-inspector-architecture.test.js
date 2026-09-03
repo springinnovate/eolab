@@ -55,6 +55,8 @@ test("vector inspection coordination remains in the browser composition root", (
   assert.match(COMPOSITION_SOURCE, /onCurrentObservationChange:\s*\(observation\)\s*=>/);
   assert.match(COMPOSITION_SOURCE, /onFeatureProfileRequested:\s*\(\)\s*=>/);
   assert.match(COMPOSITION_SOURCE, /onTimeSeriesRequested:\s*\(\)\s*=>/);
+  assert.match(COMPOSITION_SOURCE, /vectorTimeSeries\.close\(\);/);
+  assert.match(COMPOSITION_SOURCE, /vectorFeatureProfile\.close\(\);/);
   assert.match(COMPOSITION_SOURCE, /leafletMap\.on\("click", exploreMap\)/);
   assert.match(
     COMPOSITION_SOURCE,

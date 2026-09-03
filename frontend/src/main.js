@@ -783,8 +783,14 @@ async function initializeCatalog(
         onSampleChange: (sample) => vectorTimeSeries.setSample(sample),
         onCurrentObservationChange: (observation) =>
             vectorFeatureProfile.setCurrentObservation(observation),
-        onFeatureProfileRequested: () => vectorFeatureProfile.open(),
-        onTimeSeriesRequested: () => vectorTimeSeries.open(),
+        onFeatureProfileRequested: () => {
+            vectorTimeSeries.close();
+            vectorFeatureProfile.open();
+        },
+        onTimeSeriesRequested: () => {
+            vectorFeatureProfile.close();
+            vectorTimeSeries.open();
+        },
     });
     /**
      * Fan one map exploration intent out to independent raster and vector peers.

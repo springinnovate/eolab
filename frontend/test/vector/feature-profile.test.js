@@ -179,17 +179,55 @@ test("per-source rules survive feature navigation and missing values break lines
   assert.doesNotMatch(path.getAttribute("d"), /L/);
 });
 
-test("clearing the inspector observation closes presentation but retains rules", () => {
+test("active mode survives empty clicks, reopens, and ends on explicit close", () => {
   const h = fixture();
   h.controller.setCurrentObservation(observation());
   h.controller.open();
+  const search = h.documentContext.querySelector(
+    "#vector-feature-profile-field-search",
+  );
+  search.value = "R20";
+  search.dispatchEvent(new Event("input"));
+  h.documentContext.querySelector("#vector-feature-profile-select-matching")
+    .dispatchEvent(new Event("click"));
+
   h.controller.setCurrentObservation(null);
+  h.controller.setCurrentObservation(observation({
+    featureId: "corridors.2",
+    properties: {
+      node_nm: "Southern corridor",
+      R2000: 7,
+      R2001: 8,
+      other_7: 2,
+    },
+  }));
   assert.deepEqual(h.visibility, [
     { visible: true, moveFocus: false },
     { visible: false, moveFocus: false },
+    { visible: true, moveFocus: false },
   ]);
   assert.equal(
-    h.documentContext.querySelector("#vector-feature-profile-status").textContent,
-    "Inspect a vector feature first.",
+    h.documentContext.querySelector("#vector-feature-profile-chart-title")
+      .textContent,
+    "Southern corridor",
+  );
+  assert.equal(
+    h.documentContext.querySelector("#vector-feature-profile-table-body")
+      .children.length,
+    2,
+  );
+
+  h.controller.close({ moveFocus: true });
+  h.controller.setCurrentObservation(null);
+  h.controller.setCurrentObservation(observation({ featureId: "corridors.3" }));
+  assert.deepEqual(h.visibility.at(-1), { visible: false, moveFocus: true });
+  assert.equal(
+    h.documentContext.querySelector("#vector-feature-profile").hidden,
+    true,
+  );
+  assert.equal(
+    h.documentContext.querySelector("#vector-feature-profile-table-body")
+      .children.length,
+    2,
   );
 });

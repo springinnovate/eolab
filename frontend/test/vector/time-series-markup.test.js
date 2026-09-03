@@ -38,7 +38,7 @@ test("vector time-series controls and accessible outputs are present", () => {
   assert.match(MARKUP, /<label for="vector-time-series-y">/);
   assert.match(MARKUP, /<label for="vector-time-series-direction">/);
   assert.match(MARKUP, /<label for="vector-time-series-chart-type">/);
-  assert.match(MARKUP, />Plot selected features<\/button>/);
+  assert.match(MARKUP, />Plot one field across features<\/button>/);
   assert.match(MARKUP, />Series plot<\/h2>/);
   assert.doesNotMatch(MARKUP, />Time series<\/button>/);
   assert.match(MARKUP, /id="vector-time-series-chart"[^>]+role="img"/);
@@ -73,8 +73,11 @@ test("feature-field plotting has searchable, accessible series controls", () => 
   ]) {
     assert.match(MARKUP, new RegExp(`id="${identifier}"`));
   }
-  assert.match(MARKUP, />Plot feature fields<\/button>/);
-  assert.match(MARKUP, />One feature across several numeric fields\.<\/span>/);
+  assert.match(MARKUP, />Plot fields from this feature<\/button>/);
+  assert.match(
+    MARKUP,
+    />Plot several numeric fields from this feature, such as R2000–R2024\.<\/span>/,
+  );
   assert.match(
     MARKUP,
     />One numeric field across all features found at this location\.<\/span>/,

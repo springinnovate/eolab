@@ -202,6 +202,7 @@ export class VectorFeatureProfileController {
         this.currentObservation = null;
         this.settingsBySource = new Map();
         this.filter = "";
+        this.modeActive = false;
         this.onClose = () => this.close({ moveFocus: true });
         this.onSettingsChange = () => {
             const settings = this.#currentSettings();
@@ -249,21 +250,29 @@ export class VectorFeatureProfileController {
         this.render();
     }
 
-    /** Reveal the feature-field plot without changing its observation. @return {void} */
+    /**
+     * Activate feature-field plotting and reveal the current observation.
+     *
+     * Later observations reopen the presentation until the user closes it.
+     *
+     * @return {void}
+     */
     open() {
         if (this.currentObservation === null) return;
+        this.modeActive = true;
         this.onVisibilityChange(true, false);
         this.render();
     }
 
     /**
-     * Hide the panel while retaining per-source plotting rules.
+     * Deactivate and hide the panel while retaining per-source plotting rules.
      *
      * @param {Object} [options] Close options.
      * @param {boolean} [options.moveFocus=false] Restore map focus.
      * @return {void}
      */
     close({ moveFocus = false } = {}) {
+        this.modeActive = false;
         this.onVisibilityChange(false, moveFocus);
     }
 
@@ -271,7 +280,8 @@ export class VectorFeatureProfileController {
      * Replace the current immutable feature observation.
      *
      * Settings are initialized once per source and reused for later features
-     * from the same vector layer.
+     * from the same vector layer. An active mode temporarily hides for a null
+     * observation and reopens when a later feature becomes current.
      *
      * @param {Object|null} observation Current inspector result or null.
      * @return {void}
@@ -292,6 +302,9 @@ export class VectorFeatureProfileController {
                 direction: "ascending",
                 chartType: "line",
             });
+        }
+        if (observation !== null && this.modeActive && this.panel.hidden) {
+            this.onVisibilityChange(true, false);
         }
         this.filter = "";
         this.fieldSearch.value = "";
