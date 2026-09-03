@@ -189,6 +189,60 @@ def test_style_model_requires_geometry_specific_controls() -> None:
 
 
 @pytest.mark.parametrize(
+    (
+        "geometry_kind",
+        "fill_color",
+        "fill_opacity",
+        "stroke_color",
+        "stroke_opacity",
+    ),
+    [
+        ("point", "#fd8d3c", 1, "#800026", 0),
+        ("line", None, None, "#e31a1c", 1),
+        ("polygon", "#fd8d3c", 1, "#800026", 0),
+    ],
+)
+def test_default_vector_styles_use_warm_fills_and_visible_lines(
+    geometry_kind: str,
+    fill_color: str | None,
+    fill_opacity: float | None,
+    stroke_color: str,
+    stroke_opacity: float,
+) -> None:
+    """Keep default vector colors and geometry-safe opacity explicit."""
+    style = default_vector_style(geometry_kind)
+
+    assert style.fill_color == fill_color
+    assert style.fill_opacity == fill_opacity
+    assert style.stroke_color == stroke_color
+    assert style.stroke_opacity == stroke_opacity
+
+
+@pytest.mark.parametrize("geometry_kind", ["point", "line", "polygon"])
+def test_initialized_vector_slds_match_generated_defaults(
+    geometry_kind: str,
+) -> None:
+    """Keep bootstrap GeoServer styles aligned with canonical defaults."""
+    initialized = ElementTree.fromstring(
+        (Path("geoserver") / f"vector-{geometry_kind}.sld").read_bytes()
+    )
+    generated = ElementTree.fromstring(
+        build_vector_sld(
+            f"vector-{geometry_kind}",
+            default_vector_style(geometry_kind),
+        )
+    )
+
+    def parameters(root: ElementTree.Element) -> list[tuple[str, str]]:
+        return [
+            (parameter.attrib["name"], parameter.text or "")
+            for parameter in root.findall(f".//{{{SLD_NAMESPACE}}}CssParameter")
+        ]
+
+    assert parameters(initialized) == parameters(generated)
+
+
+@pytest.mark.parametrize(
     ("geometry_kind", "symbolizer"),
     [
         ("point", "PointSymbolizer"),

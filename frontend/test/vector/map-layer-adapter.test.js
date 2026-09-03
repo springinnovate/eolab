@@ -10,10 +10,10 @@ const PUBLICATION = Object.freeze({
   styleName: "vector-polygon",
   style: {
     geometryKind: "polygon",
-    fillColor: "#a855f7",
-    fillOpacity: 0.38,
-    strokeColor: "#581c87",
-    strokeOpacity: 1,
+    fillColor: "#fd8d3c",
+    fillOpacity: 1,
+    strokeColor: "#800026",
+    strokeOpacity: 0,
     strokeWidth: 2,
         pointSize: null,
         categorical: null,
@@ -144,8 +144,8 @@ test("vector map-layer adapter owns publication, WMS, legend, and optional fit",
     legend: {
       kind: "fixed",
       label: "Polygon",
-      fill: "#a855f7",
-      stroke: "#581c87",
+      fill: "#fd8d3c",
+      stroke: "#800026",
     },
   });
   fitted.adapter.added(record);

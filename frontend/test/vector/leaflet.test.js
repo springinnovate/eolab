@@ -53,13 +53,10 @@ test("vector WMS uses one bounded layer and no raster environment", () => {
     assert.equal(failures, 1);
 });
 
-test("default vector geometry families remain visually distinct", () => {
-    assert.deepEqual(Object.keys(VECTOR_DEFAULT_SYMBOLOGY), [
-        "point",
-        "line",
-        "polygon",
-    ]);
-    assert.equal(new Set(Object.values(VECTOR_DEFAULT_SYMBOLOGY).map(
-        ({ stroke }) => stroke
-    )).size, 3);
+test("default vector geometry families use the yellow-red colors", () => {
+    assert.deepEqual(VECTOR_DEFAULT_SYMBOLOGY, {
+        point: { label: "Point", fill: "#fd8d3c", stroke: "#800026" },
+        line: { label: "Line", fill: "transparent", stroke: "#e31a1c" },
+        polygon: { label: "Polygon", fill: "#fd8d3c", stroke: "#800026" },
+    });
 });

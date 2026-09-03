@@ -4,6 +4,7 @@ History
 Unreleased
 ----------
 
+* Use opaque yellow-to-red defaults for raster fills and vector symbols, with transparent point and polygon outlines.
 * Pick bounded, progressive raster-stack values from a pointer-following map panel.
 * Refresh automatically derived raster styles in composite maps without requiring a manual style edit.
 

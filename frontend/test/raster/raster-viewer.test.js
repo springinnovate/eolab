@@ -214,7 +214,7 @@ function createFakeLeaflet() {
 function createFakeControlsView() {
     return {
         controlsVisible: false,
-        paletteName: "blue-yellow-red",
+        paletteName: "yellow-red",
         style: null,
         handlers: null,
         displayedStatistics: null,
@@ -522,7 +522,7 @@ test("raster adapter exports and reapplies only validated portable appearance", 
     const exported = record.adapter.exportSavedState(record);
     assert.equal(exported.kind, "raster");
     assert.deepEqual(exported.definition, record.state.rasterStyle);
-    assert.equal(exported.paletteName, "blue-yellow-red");
+    assert.equal(exported.paletteName, "yellow-red");
     assert.equal(
         record.adapter.checkSavedStateCompatibility(record, exported),
         null,
@@ -829,7 +829,7 @@ test('visible raster histograms follow order, skip vectors and never follow the 
     h.controlsView.handlers.onPaletteChange();
     assert.equal(h.mapLayers.getRecord(firstKey).entry.visible, false);
     assert.equal(h.mapLayers.getRecord(firstKey).state.paletteName, 'viridis');
-    assert.equal(h.mapLayers.getRecord(secondKey).state.paletteName, 'blue-yellow-red');
+    assert.equal(h.mapLayers.getRecord(secondKey).state.paletteName, 'yellow-red');
     const vector = { collection: 'vectors', id: 'volcanoes' };
     await h.mapLayers.show(vector, {
         label: () => 'volcanoes.gpkg', publish: async () => ({}), createState: () => ({}),

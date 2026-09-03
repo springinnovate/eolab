@@ -4,18 +4,18 @@
 export const VECTOR_DEFAULT_SYMBOLOGY = Object.freeze({
     point: Object.freeze({
         label: "Point",
-        fill: "#06b6d4",
-        stroke: "#083344",
+        fill: "#fd8d3c",
+        stroke: "#800026",
     }),
     line: Object.freeze({
         label: "Line",
         fill: "transparent",
-        stroke: "#f97316",
+        stroke: "#e31a1c",
     }),
     polygon: Object.freeze({
         label: "Polygon",
-        fill: "#a855f7",
-        stroke: "#581c87",
+        fill: "#fd8d3c",
+        stroke: "#800026",
     }),
 });
 
