@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { RasterCursorValuesView } from "../../src/raster/cursor-values-view.js";
+import { formatRasterCursorValuesForClipboard } from "../../src/raster/cursor-values-view.js";
 import {
   FakeRasterControlDocument,
 } from "../../test-support/raster/fake-controls-document.js";
@@ -14,6 +15,7 @@ test("cursor-value view presents progressive values and omits outside rasters", 
   const limit = documentContext.querySelector("#raster-cursor-value-limit");
 
   view.render({
+    position: { latitude: -2.75, longitude: 36.8 },
     omittedCount: 2,
     samples: [
       { label: "temperature", state: "value", value: 12.5, errorMessage: "" },
@@ -26,6 +28,10 @@ test("cursor-value view presents progressive values and omits outside rasters", 
 
   assert.equal(root.hidden, false);
   assert.equal(root.getAttribute("aria-busy"), "true");
+  assert.equal(
+    documentContext.querySelector("#raster-cursor-position").textContent,
+    "Lat -2.75000 · Lng 36.80000",
+  );
   assert.equal(list.children.length, 4);
   assert.deepEqual(
     list.children.map(row => [
@@ -53,6 +59,7 @@ test("cursor-value view hides when every server result is outside", () => {
   const view = new RasterCursorValuesView(documentContext);
 
   view.render({
+    position: { latitude: 0, longitude: 0 },
     omittedCount: 0,
     samples: [
       { label: "outside", state: "outside", value: null, errorMessage: "" },
@@ -60,4 +67,73 @@ test("cursor-value view hides when every server result is outside", () => {
   });
 
   assert.equal(documentContext.querySelector("#raster-cursor-values").hidden, true);
+});
+
+test("pixel picker follows the pointer while staying inside the viewport", () => {
+  const documentContext = new FakeRasterControlDocument();
+  documentContext.defaultView = { innerWidth: 300, innerHeight: 220 };
+  const view = new RasterCursorValuesView(documentContext);
+  const root = documentContext.querySelector("#raster-cursor-values");
+
+  view.move({ clientX: 290, clientY: 210 });
+  view.render({
+    position: { latitude: 1, longitude: 2 },
+    omittedCount: 0,
+    samples: [
+      { label: "elevation", state: "value", value: 50, errorMessage: "" },
+    ],
+  });
+
+  assert.equal(root.style.left, "156px");
+  assert.equal(root.style.top, "148px");
+});
+
+test("pixel picker shortcuts copy, hide, and restore without owning policy", async () => {
+  const documentContext = new FakeRasterControlDocument();
+  const copied = [];
+  const view = new RasterCursorValuesView(documentContext, {
+    async writeText(text) { copied.push(text); },
+  });
+  const root = documentContext.querySelector("#raster-cursor-values");
+  const restore = documentContext.querySelector("#restore-raster-cursor-values");
+  const state = { hidden: 0, shown: 0 };
+  view.bind({
+    onHide() { state.hidden += 1; view.setEnabled(false); },
+    onShow() { state.shown += 1; view.setEnabled(true); },
+  });
+  const snapshot = {
+    position: { latitude: 4.5, longitude: -7.25 },
+    omittedCount: 0,
+    samples: [
+      { label: "rainfall", state: "value", value: 12.5, errorMessage: "" },
+      { label: "mask", state: "nodata", value: null, errorMessage: "" },
+      { label: "outside", state: "outside", value: null, errorMessage: "" },
+    ],
+  };
+  view.render(snapshot);
+
+  const copyEvent = new Event("keydown", { cancelable: true });
+  Object.assign(copyEvent, { key: "c", ctrlKey: true, metaKey: false, altKey: false });
+  documentContext.dispatchEvent(copyEvent);
+  await Promise.resolve();
+  assert.deepEqual(copied, [formatRasterCursorValuesForClipboard(snapshot)]);
+  assert.doesNotMatch(copied[0], /outside/);
+
+  const hideEvent = new Event("keydown", { cancelable: true });
+  Object.assign(hideEvent, { key: "Escape", ctrlKey: false, metaKey: false, altKey: false });
+  documentContext.dispatchEvent(hideEvent);
+  assert.equal(state.hidden, 1);
+  assert.equal(root.hidden, true);
+  assert.equal(restore.hidden, false);
+
+  const showEvent = new Event("keydown", { cancelable: true });
+  Object.assign(showEvent, { key: "p", ctrlKey: false, metaKey: false, altKey: false });
+  documentContext.dispatchEvent(showEvent);
+  assert.equal(state.shown, 1);
+  assert.equal(restore.hidden, true);
+
+  view.setEnabled(false);
+  restore.dispatchEvent(new Event("click"));
+  assert.equal(state.shown, 2);
+  view.unbind();
 });

@@ -960,11 +960,26 @@ test('cursor sampling follows every visible in-bounds raster and pauses for map 
     const cursorValuesView = {
         snapshots: [],
         clearCount: 0,
+        moves: [],
+        enabled: null,
+        handlers: null,
         render(snapshot) {
             this.snapshots.push(snapshot);
         },
         clear() {
             this.clearCount += 1;
+        },
+        move(position) {
+            this.moves.push(position);
+        },
+        setEnabled(enabled) {
+            this.enabled = enabled;
+        },
+        bind(handlers) {
+            this.handlers = handlers;
+        },
+        unbind() {
+            this.handlers = null;
         },
     };
     const cursorRequests = [];
@@ -990,7 +1005,11 @@ test('cursor sampling follows every visible in-bounds raster and pauses for map 
     await h.viewer.show(top);
     await flushPromises();
 
-    h.leafletMap.emit('mousemove', { latlng: { lng: 0, lat: 0 } });
+    h.leafletMap.emit('mousemove', {
+        latlng: { lng: 0, lat: 0 },
+        originalEvent: { clientX: 600, clientY: 300 },
+    });
+    assert.deepEqual(cursorValuesView.moves, [{ clientX: 600, clientY: 300 }]);
     assert.equal(cursorRequests.length, 0);
     clock.runNext();
     await flushPromises();
@@ -1009,6 +1028,17 @@ test('cursor sampling follows every visible in-bounds raster and pauses for map 
         ],
     );
 
+    cursorValuesView.handlers.onHide();
+    assert.equal(cursorValuesView.enabled, false);
+    h.leafletMap.emit('mousemove', { latlng: { lng: 1, lat: 1 } });
+    assert.equal(timers.size, 0);
+    cursorValuesView.handlers.onShow();
+    assert.equal(cursorValuesView.enabled, true);
+    h.leafletMap.emit('mousemove', { latlng: { lng: 1, lat: 1 } });
+    assert.equal(timers.size, 1);
+    clock.runNext();
+    await flushPromises();
+
     h.leafletMap.emit('dragstart', {});
     h.leafletMap.emit('mousemove', { latlng: { lng: 1, lat: 1 } });
     assert.equal(timers.size, 0);
@@ -1022,6 +1052,7 @@ test('cursor sampling follows every visible in-bounds raster and pauses for map 
     assert.equal(timers.size, 0);
     assert.ok(cursorValuesView.clearCount > 0);
     h.destroy();
+    assert.equal(cursorValuesView.handlers, null);
 });
 
 test('active 2D analysis follows the top raster pair and exposes X Y badges', async () => {

@@ -743,10 +743,20 @@
         aria-busy="false"
         hidden
       >
-        <h2 id="raster-cursor-values-heading">Cursor values</h2>
+        <header class="raster-cursor-values-header">
+          <h2 id="raster-cursor-values-heading">Pixel picker</h2>
+          <span id="raster-cursor-position"></span>
+        </header>
         <dl id="raster-cursor-value-list"></dl>
         <p id="raster-cursor-value-limit" hidden></p>
+        <p class="raster-cursor-value-help">Ctrl/Cmd+C copy values · Esc hide</p>
       </aside>
+      <button
+        class="raster-cursor-values-restore"
+        id="restore-raster-cursor-values"
+        type="button"
+        hidden
+      >Pixel picker hidden · Press P to show</button>
       <div class="map-tool-openers">
         <button id="open-analysis-tools" class="secondary-button" type="button"
           aria-label="Open analysis tools using visible data at the map center">Analysis tools</button>

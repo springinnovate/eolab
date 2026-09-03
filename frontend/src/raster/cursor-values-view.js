@@ -1,19 +1,81 @@
-/** DOM presentation for transient raster values beneath the map cursor. */
+/** DOM presentation for transient raster values beneath the map pointer. */
 import { formatRasterPixelValue } from "./value-format.js";
 import { requireRasterControl } from "./required-control.js";
 
-/** Present immutable cursor snapshots without owning interaction or policy. */
+const POINTER_OFFSET_PIXELS = 14;
+const VIEWPORT_EDGE_PIXELS = 8;
+
+/**
+ * Return whether a keyboard event belongs to an editable control.
+ *
+ * @param {EventTarget|null} target Event target.
+ * @return {boolean} Whether application shortcuts must leave it alone.
+ */
+function isEditableTarget(target) {
+    const tagName = String(target?.tagName ?? "").toLowerCase();
+    return target?.isContentEditable === true ||
+        ["input", "select", "textarea"].includes(tagName);
+}
+
+/**
+ * Format the current geographic position for compact on-map presentation.
+ *
+ * @param {{latitude:number,longitude:number}} position Canonical WGS 84 point.
+ * @return {string} Readable latitude and longitude.
+ */
+function formatPosition(position) {
+    return `Lat ${position.latitude.toFixed(5)} · Lng ${position.longitude.toFixed(5)}`;
+}
+
+/**
+ * Produce a tab-separated clipboard representation of one picker snapshot.
+ *
+ * @param {{position:Object,samples:Object[],omittedCount:number}} snapshot
+ * Current immutable pixel-picker snapshot.
+ * @return {string} Geographic position followed by visible raster values.
+ */
+export function formatRasterCursorValuesForClipboard(snapshot) {
+    const lines = [
+        `Latitude\t${snapshot.position.latitude}`,
+        `Longitude\t${snapshot.position.longitude}`,
+    ];
+    for (const sample of snapshot.samples) {
+        if (sample.state === "outside") continue;
+        const value = sample.state === "value"
+            ? formatRasterPixelValue(sample.value)
+            : sample.state === "nodata"
+                ? "No data"
+                : sample.state === "loading"
+                    ? "Reading"
+                    : `Unavailable: ${sample.errorMessage}`;
+        lines.push(`${sample.label}\t${value}`);
+    }
+    if (snapshot.omittedCount > 0) {
+        lines.push(`Additional in-bounds rasters omitted\t${snapshot.omittedCount}`);
+    }
+    return lines.join("\n");
+}
+
+/** Present immutable pixel-picker snapshots without owning sampling policy. */
 export class RasterCursorValuesView {
     /**
-     * Resolve the cursor-value DOM contract.
+     * Resolve the pixel-picker DOM contract.
      *
      * @param {Document} [documentContext=globalThis.document] Owning document.
+     * @param {{writeText:(text:string)=>Promise<void>}|null} [clipboard=null]
+     * Clipboard boundary; null resolves it from the owning window when possible.
      */
-    constructor(documentContext = globalThis.document) {
+    constructor(documentContext = globalThis.document, clipboard = null) {
         this.documentContext = documentContext;
+        this.clipboard = clipboard ??
+            documentContext.defaultView?.navigator?.clipboard ?? null;
         this.root = requireRasterControl(
             documentContext,
             "#raster-cursor-values"
+        );
+        this.position = requireRasterControl(
+            documentContext,
+            "#raster-cursor-position"
         );
         this.list = requireRasterControl(
             documentContext,
@@ -23,17 +85,87 @@ export class RasterCursorValuesView {
             documentContext,
             "#raster-cursor-value-limit"
         );
+        this.restore = requireRasterControl(
+            documentContext,
+            "#restore-raster-cursor-values"
+        );
+        this.pointerPosition = null;
+        this.snapshot = null;
+        this.handlers = null;
+        this.handleKeyDown = this.#handleKeyDown.bind(this);
+        this.handleRestoreClick = this.#handleRestoreClick.bind(this);
+    }
+
+    /**
+     * Connect the DOM controls to picker policy owned by the raster viewer.
+     *
+     * @param {{onHide:()=>void,onShow:()=>void}} handlers Interaction callbacks.
+     * @return {void}
+     */
+    bind(handlers) {
+        if (
+            typeof handlers?.onHide !== "function" ||
+            typeof handlers?.onShow !== "function"
+        ) {
+            throw new TypeError("Pixel-picker handlers are incomplete");
+        }
+        this.unbind();
+        this.handlers = handlers;
+        this.restore.addEventListener("click", this.handleRestoreClick);
+        this.documentContext.addEventListener("keydown", this.handleKeyDown);
+    }
+
+    /** Detach picker controls from their event sources. @return {void} */
+    unbind() {
+        this.restore.removeEventListener("click", this.handleRestoreClick);
+        this.documentContext.removeEventListener("keydown", this.handleKeyDown);
+        this.handlers = null;
+    }
+
+    /**
+     * Move the transient panel near the pointer without affecting samples.
+     *
+     * @param {{clientX:number,clientY:number}} position Viewport coordinates.
+     * @return {void}
+     */
+    move(position) {
+        if (
+            !Number.isFinite(position?.clientX) ||
+            !Number.isFinite(position?.clientY)
+        ) {
+            return;
+        }
+        this.pointerPosition = { ...position };
+        this.#applyPointerPosition();
+    }
+
+    /**
+     * Expose whether the picker is available or intentionally hidden.
+     *
+     * @param {boolean} enabled Whether pointer sampling is enabled.
+     * @return {void}
+     */
+    setEnabled(enabled) {
+        if (typeof enabled !== "boolean") {
+            throw new TypeError("Pixel-picker enabled state must be boolean");
+        }
+        this.restore.hidden = enabled;
+        if (!enabled) this.clear();
     }
 
     /**
      * Render visible results; actual outside responses disappear from the list.
      *
-     * @param {{samples:Object[],omittedCount:number}} snapshot Cursor snapshot.
+     * @param {{position:Object,samples:Object[],omittedCount:number}} snapshot
+     * Pixel-picker snapshot.
+     * @return {void}
      */
     render(snapshot) {
         if (
             snapshot === null ||
             typeof snapshot !== "object" ||
+            !Number.isFinite(snapshot.position?.latitude) ||
+            !Number.isFinite(snapshot.position?.longitude) ||
             !Array.isArray(snapshot.samples) ||
             !Number.isInteger(snapshot.omittedCount) ||
             snapshot.omittedCount < 0
@@ -65,6 +197,8 @@ export class RasterCursorValuesView {
             row.append(name, value);
             return row;
         });
+        this.snapshot = snapshot;
+        this.position.textContent = formatPosition(snapshot.position);
         this.list.replaceChildren(...rows);
         this.limit.textContent = snapshot.omittedCount > 0
             ? `${snapshot.omittedCount} additional in-bounds rasters omitted.`
@@ -75,14 +209,69 @@ export class RasterCursorValuesView {
             String(samples.some((sample) => sample.state === "loading"))
         );
         this.root.hidden = false;
+        this.#applyPointerPosition();
     }
 
-    /** Hide and empty the transient cursor readout. */
+    /** Hide and empty the transient pixel-picker readout. @return {void} */
     clear() {
+        this.snapshot = null;
+        this.position.textContent = "";
         this.list.replaceChildren();
         this.limit.textContent = "";
         this.limit.hidden = true;
         this.root.setAttribute("aria-busy", "false");
         this.root.hidden = true;
+    }
+
+    /** Place the panel beside the pointer while keeping it on screen. */
+    #applyPointerPosition() {
+        if (this.pointerPosition === null || this.root.hidden) return;
+        const { width, height } = this.root.getBoundingClientRect();
+        const viewportWidth = this.documentContext.defaultView?.innerWidth ?? 1024;
+        const viewportHeight = this.documentContext.defaultView?.innerHeight ?? 768;
+        let left = this.pointerPosition.clientX + POINTER_OFFSET_PIXELS;
+        let top = this.pointerPosition.clientY + POINTER_OFFSET_PIXELS;
+        if (left + width > viewportWidth - VIEWPORT_EDGE_PIXELS) {
+            left = this.pointerPosition.clientX - width - POINTER_OFFSET_PIXELS;
+        }
+        if (top + height > viewportHeight - VIEWPORT_EDGE_PIXELS) {
+            top = this.pointerPosition.clientY - height - POINTER_OFFSET_PIXELS;
+        }
+        this.root.style.left = `${Math.max(VIEWPORT_EDGE_PIXELS, left)}px`;
+        this.root.style.top = `${Math.max(VIEWPORT_EDGE_PIXELS, top)}px`;
+    }
+
+    /** Restore pointer sampling from its persistent on-map prompt. */
+    #handleRestoreClick() {
+        this.handlers?.onShow();
+    }
+
+    /**
+     * Handle only picker-specific shortcuts outside editable controls.
+     *
+     * @param {KeyboardEvent} event Keyboard input.
+     * @return {void}
+     */
+    #handleKeyDown(event) {
+        if (isEditableTarget(event.target)) return;
+        const key = String(event.key ?? "").toLowerCase();
+        if (key === "escape" && !this.root.hidden) {
+            event.preventDefault();
+            this.handlers?.onHide();
+            return;
+        }
+        if (key === "p" && this.restore.hidden === false &&
+            !event.ctrlKey && !event.metaKey && !event.altKey) {
+            event.preventDefault();
+            this.handlers?.onShow();
+            return;
+        }
+        if (key === "c" && (event.ctrlKey || event.metaKey) &&
+            !event.altKey && !this.root.hidden && this.snapshot !== null) {
+            event.preventDefault();
+            void this.clipboard?.writeText(
+                formatRasterCursorValuesForClipboard(this.snapshot)
+            );
+        }
     }
 }

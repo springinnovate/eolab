@@ -2167,10 +2167,8 @@ h5 {
 }
 
 .raster-cursor-values {
-  position: absolute;
+  position: fixed;
   z-index: 700;
-  right: 20px;
-  bottom: 58px;
   display: grid;
   width: min(320px, calc(100vw - 40px));
   max-height: min(46dvh, 380px);
@@ -2188,12 +2186,25 @@ h5 {
   display: none;
 }
 
+.raster-cursor-values-header {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
 .raster-cursor-values h2 {
   margin: 0;
   color: var(--text-2);
   font-size: 0.72rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+#raster-cursor-position {
+  color: var(--text-3);
+  font: 0.66rem/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: nowrap;
 }
 
 #raster-cursor-value-list {
@@ -2213,6 +2224,33 @@ h5 {
   padding: 4px 0;
   border-top: 1px solid var(--border-3);
   font-size: 0.72rem;
+}
+
+.raster-cursor-value-help {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 0.66rem;
+}
+
+.raster-cursor-values-restore {
+  position: absolute;
+  z-index: 700;
+  right: 20px;
+  bottom: 58px;
+  border: 1px solid var(--border-1);
+  border-radius: 999px;
+  background: rgb(255 255 255 / 94%);
+  padding: 7px 11px;
+  color: var(--text-2);
+  box-shadow: var(--elevation-control);
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+.raster-cursor-values-restore:hover,
+.raster-cursor-values-restore:focus-visible {
+  border-color: var(--brand);
+  color: var(--brand-hover);
 }
 
 .raster-cursor-value-row dt {
@@ -3084,9 +3122,12 @@ button.raster-histogram-summary:hover,
   }
 
   .raster-cursor-values {
+    max-height: 34dvh;
+  }
+
+  .raster-cursor-values-restore {
     right: 8px;
     bottom: 8px;
-    max-height: 34dvh;
   }
 
   .temporary-aoi-upload,

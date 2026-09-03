@@ -371,8 +371,11 @@ test("Sampling keeps area controls and AOI; map exploration owns histogram resul
         /id="raster-point-samples"[^>]*aria-live="polite"/s
     );
     const cursorValues = requireElementRange("raster-cursor-values");
+    assert.match(cursorValues.source, />Pixel picker</);
+    assert.match(cursorValues.source, /id="raster-cursor-position"/);
     assert.match(cursorValues.source, /id="raster-cursor-value-list"/);
     assert.match(cursorValues.source, /id="raster-cursor-value-limit"/);
+    assert.match(MARKUP, /id="restore-raster-cursor-values"[^>]*>Pixel picker hidden · Press P to show</s);
     assert.doesNotMatch(cursorValues.source, /aria-live|role="status"/);
     assert.match(
         STYLESHEET,
@@ -600,8 +603,10 @@ test("semantic regions preserve one DOM instance of every owned control", () => 
         "raster-point-samples",
         "raster-point-sample-list",
         "raster-cursor-values",
+        "raster-cursor-position",
         "raster-cursor-value-list",
         "raster-cursor-value-limit",
+        "restore-raster-cursor-values",
         "map-inspection",
         "map-histogram-panel",
         "map-histogram-scope",

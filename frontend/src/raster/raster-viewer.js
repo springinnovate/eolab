@@ -212,8 +212,9 @@ function canRetryRasterStatistics(error) {
  * @property {(item: Object, point: Object, signal: AbortSignal)
  * => Promise<Object>} [sampleCursorPixel=samplePixel] Samples one transient
  * cursor participant independently from retained click analysis.
- * @property {{render:(snapshot:Object)=>void,clear:()=>void}|null}
- * [cursorValuesView=null] Transient cursor-value presentation adapter.
+ * @property {{render:(snapshot:Object)=>void,clear:()=>void,move?:Function,
+ * setEnabled?:Function,bind?:Function,unbind?:Function}|null}
+ * [cursorValuesView=null] Transient pixel-picker presentation adapter.
  * @property {(xItem:Object,yItem:Object,area:Object,signal:AbortSignal)
  * =>Promise<Object>} [loadPairedStatistics=loadCatalogRasterPairedStatistics]
  * Loads paired X-reference statistics.
@@ -312,6 +313,7 @@ export function initializeRasterViewer(
     let visibleHistogramSignature = null;
     let clearing = false;
     let mapDragging = false;
+    let pixelPickerEnabled = true;
     let rasterCursorPosition = null;
     let rasterStyleCommitTimeout = null;
     let rasterStyleWasEdited = false;
@@ -3232,7 +3234,22 @@ export function initializeRasterViewer(
             cursorValuesView.clear();
             return;
         }
+        if (!pixelPickerEnabled) return;
         cursorValuesView.render(snapshot);
+    }
+
+    /** Hide the pixel picker and cancel its transient sampling operation. */
+    function hidePixelPicker() {
+        pixelPickerEnabled = false;
+        rasterCursorPosition = null;
+        cursorSamplesController.clear();
+        cursorValuesView.setEnabled?.(false);
+    }
+
+    /** Restore pixel sampling for the next settled map-pointer position. */
+    function showPixelPicker() {
+        pixelPickerEnabled = true;
+        cursorValuesView.setEnabled?.(true);
     }
 
     /**
@@ -3452,6 +3469,13 @@ export function initializeRasterViewer(
         if (mapDragging) {
             return;
         }
+        if (!pixelPickerEnabled) {
+            return;
+        }
+        cursorValuesView.move?.({
+            clientX: mapEvent.originalEvent?.clientX,
+            clientY: mapEvent.originalEvent?.clientY,
+        });
         rasterCursorPosition = Object.freeze(point);
         cursorSamplesController.move(
             rasterCursorSampleParticipants(point),
@@ -3722,6 +3746,7 @@ export function initializeRasterViewer(
         if (ownsMapLayerController) {
             mapLayers.destroy();
         }
+        cursorValuesView.unbind?.();
         mapContainer.removeEventListener("mouseleave", handleMapMouseLeave);
         leafletMap.off("mousemove", handleMapMouseMove);
         leafletMap.off("dragstart", handleMapDragStart);
@@ -3770,6 +3795,11 @@ export function initializeRasterViewer(
         onRetryPairedStatistics: handleRetryPairedStatistics,
     });
     const mapContainer = leafletMap.getContainer();
+    cursorValuesView.bind?.({
+        onHide: hidePixelPicker,
+        onShow: showPixelPicker,
+    });
+    cursorValuesView.setEnabled?.(true);
     leafletMap.on("mousemove", handleMapMouseMove);
     leafletMap.on("dragstart", handleMapDragStart);
     leafletMap.on("dragend", handleMapDragEnd);

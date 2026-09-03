@@ -122,11 +122,13 @@ export class FakeRasterControlElement extends EventTarget {
 }
 
 /** Minimal selector and element factory used by focused adapter tests. */
-export class FakeRasterControlDocument {
+export class FakeRasterControlDocument extends EventTarget {
     /** Create an empty document-backed selector registry. */
     constructor() {
+        super();
         this.activeElement = null;
         this.elements = new Map();
+        this.defaultView = { innerWidth: 1024, innerHeight: 768 };
     }
 
     /**
