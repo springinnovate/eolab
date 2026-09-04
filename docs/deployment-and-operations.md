@@ -147,6 +147,7 @@ the deployed workload. The main controls are:
 | `EOLAB_GEOSERVER_GWC_REQUEST_COUNT` | `8` | Concurrent cached-tile requests, including misses |
 | `EOLAB_GEOSERVER_WMS_QUEUE_TIMEOUT_SECONDS` | `10` | Seconds a render may wait for capacity |
 | `EOLAB_GEOWEBCACHE_DISK_QUOTA_GIB` | `25` | Persistent tile-cache size before LRU cleanup |
+| `EOLAB_COMPOSITE_TILE_CACHE_BYTES` | `134217728` | Process-local successful composite PNG response bytes |
 | `EOLAB_RASTER_PIXEL_READ_CONCURRENCY` | `2` | Concurrent interactive pixel reads |
 | `EOLAB_RASTER_STATISTICS_READ_CONCURRENCY` | `1` | Concurrent bounded statistics reads |
 | `EOLAB_SCAN_WORKER_COUNT` | `8` | Concurrent metadata workers |
@@ -162,10 +163,12 @@ Normal Leaflet raster and vector tiles use GeoWebCache's explicit EPSG:3857
 grid. Source rasters already stored in EPSG:3857 avoid reprojection on cache
 misses; GeoServer can still reproject other supported source CRSs into the
 same viewer grid. Feature inspection, selected-feature outlines, and composite
-renders remain ordinary uncached WMS work because their requests are not
-marked as tiled. The cache directory is inside the persistent GeoServer volume,
-and the disk quota removes least-recently-used tiles when the configured limit
-is reached.
+renders are not marked as GeoWebCache tiles. The app retains successful final
+composite PNGs in a byte-bounded, process-local least-recently-used cache keyed
+by the content-addressed plan and normalized tile coordinates. Source and style
+currentness is checked before every cache lookup. The GeoWebCache directory is
+inside the persistent GeoServer volume, and the disk quota removes
+least-recently-used tiles when the configured limit is reached.
 
 ## Operations notes
 

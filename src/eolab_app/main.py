@@ -333,6 +333,7 @@ def create_app(
             geoserver_wms_client,
             app_global_configuration.geoserver_internal_url,
             get_map_request_tracker,
+            app_global_configuration.composite_tile_cache_bytes,
         )
     )
 
