@@ -4,6 +4,8 @@ History
 Unreleased
 ----------
 
+* Keep map-side tools reachable in a bounded, tabbed dock with retained state and independently scrollable content.
+
 0.4.0 (2026-09-03)
 ------------------
 

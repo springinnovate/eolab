@@ -3454,11 +3454,14 @@ button.raster-histogram-summary:hover,
 .map-tool-openers .secondary-button { box-shadow: var(--elevation-panel); }
 
 #map-inspection {
-  --map-inspection-top: 60px;
-  --map-inspection-height: calc(100dvh - var(--map-inspection-top) - 16px);
   box-sizing: border-box;
   position: fixed;
-  inset: var(--map-inspection-top) 20px auto auto;
+  inset: 16px 20px 16px auto;
+  display: flex;
+  height: calc(100dvh - 32px);
+  max-height: calc(100dvh - 32px);
+  flex-direction: column;
+  gap: 8px;
   margin: 0;
   width: min(420px, calc(100vw - 32px));
   border: 0;
@@ -3470,36 +3473,86 @@ button.raster-histogram-summary:hover,
   pointer-events: none;
 }
 
-#map-inspection:has(#map-histogram-panel:not([hidden])) {
-  --map-inspection-top: 16px;
-}
-
-#map-inspection:has(#vector-time-series:not([hidden])),
-#map-inspection:has(#vector-feature-profile:not([hidden])) {
-  --map-inspection-top: 16px;
+#map-inspection[data-active-tool="time-series"],
+#map-inspection[data-active-tool="feature-profile"] {
   width: min(580px, calc(100vw - 32px));
 }
 
-#map-inspection:has(#vector-feature-inspector:not([hidden])):has(#vector-feature-inspector-details[hidden]):has(#vector-time-series:not([hidden])),
-#map-inspection:has(#vector-feature-inspector:not([hidden])):has(#vector-feature-inspector-details[hidden]):has(#vector-feature-profile:not([hidden])) {
-  width: min(580px, calc(100vw - 32px));
+#map-inspection[data-minimized="true"] {
+  inset-block-end: auto;
+  height: auto;
+  max-height: none;
 }
 
-#map-inspection:has(#map-histogram-panel:not([hidden])):has(#layer-style-editor:not([hidden])),
-#map-inspection:has(#vector-time-series:not([hidden])):has(#vector-feature-inspector:not([hidden])),
-#map-inspection:has(#vector-feature-profile:not([hidden])):has(#vector-feature-inspector:not([hidden])) {
-  width: min(800px, max(380px, calc(100vw - var(--active-workspace-width) - 48px)));
+.map-inspection-dock-header {
+  pointer-events: auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius);
+  background: var(--surface-1);
+  padding: 6px;
+  box-shadow: var(--elevation-panel);
+}
+
+.map-inspection-tabs {
+  display: flex;
+  min-width: 0;
+  gap: 3px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+}
+
+.map-inspection-tab {
+  flex: 0 0 auto;
+  cursor: pointer;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  padding: 6px 9px;
+  color: var(--text-2);
+  font-size: 0.74rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.map-inspection-tab:hover,
+.map-inspection-tab:focus-visible {
+  border-color: var(--border-1);
+  background: var(--surface-hover);
+  color: var(--brand-hover);
+}
+
+.map-inspection-tab[aria-selected="true"] {
+  border-color: var(--brand);
+  background: var(--surface-selected);
+  color: var(--brand-press);
+}
+
+.map-inspection-tab[hidden] {
+  display: none;
+}
+
+#toggle-map-inspection-dock {
+  flex: 0 0 auto;
+  padding: 6px 9px;
+  font-size: 0.72rem;
 }
 
 .map-inspection-panels {
   pointer-events: auto;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  align-items: start;
-  gap: 12px;
-  max-height: var(--map-inspection-height);
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+.map-inspection-panels[hidden] {
+  display: none;
 }
 
 #map-histogram-panel,
@@ -3508,7 +3561,12 @@ button.raster-histogram-summary:hover,
 #vector-time-series,
 #vector-feature-profile {
   pointer-events: auto;
+  height: 100%;
   min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 14px;
   border: 1px solid var(--border-1);
   border-radius: var(--radius);
@@ -3526,26 +3584,12 @@ button.raster-histogram-summary:hover,
 .raster-histogram-summary-status[hidden],
 .layer-style-opacity[hidden] { display: none; }
 
-@container map-inspection (min-width: 680px) {
-  .map-inspection-panels:has(#map-histogram-panel:not([hidden])):has(#layer-style-editor:not([hidden])) {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    /* Unequal panel heights must leave the exposed map clickable. */
-    pointer-events: none;
-    max-height: none;
-    overflow: visible;
-  }
-  .map-inspection-panels:has(#vector-time-series:not([hidden])):has(#vector-feature-inspector:not([hidden])),
-  .map-inspection-panels:has(#vector-feature-profile:not([hidden])):has(#vector-feature-inspector:not([hidden])) {
-    grid-template-columns: minmax(250px, 0.72fr) minmax(360px, 1.28fr);
-    pointer-events: none;
-    max-height: none;
-    overflow: visible;
-  }
-  #map-histogram-panel,
-  #layer-style-editor,
-  #vector-feature-inspector,
-  #vector-time-series,
-  #vector-feature-profile { max-height: var(--map-inspection-height); overflow-y: auto; overscroll-behavior: contain; }
+#map-histogram-panel:not([data-map-inspection-active="true"]),
+#layer-style-editor:not([data-map-inspection-active="true"]),
+#vector-feature-inspector:not([data-map-inspection-active="true"]),
+#vector-time-series:not([data-map-inspection-active="true"]),
+#vector-feature-profile:not([data-map-inspection-active="true"]) {
+  display: none;
 }
 
 .vector-feature-inspector-header {
@@ -4038,17 +4082,16 @@ button.raster-histogram-summary:hover,
 
 /* Kept with the late-defined map-inspection component so it wins by source order. */
 @media (max-width: 699px) {
-  #map-inspection,
-  #map-inspection:has(#map-histogram-panel:not([hidden])):has(#layer-style-editor:not([hidden])),
-  #map-inspection:has(#vector-time-series:not([hidden])),
-  #map-inspection:has(#vector-feature-profile:not([hidden])),
-  #map-inspection:has(#vector-time-series:not([hidden])):has(#vector-feature-inspector:not([hidden])),
-  #map-inspection:has(#vector-feature-profile:not([hidden])):has(#vector-feature-inspector:not([hidden])) {
-    inset: auto 8px 8px 8px;
-    width: calc(100vw - 16px);
+  #map-inspection {
+    inset: 8px;
+    width: auto;
+    height: calc(100dvh - 16px);
+    max-height: calc(100dvh - 16px);
   }
 
-  .map-inspection-panels {
-    max-height: 52dvh;
+  #map-inspection[data-minimized="true"] {
+    inset-block-end: auto;
+    height: auto;
+    max-height: none;
   }
 }

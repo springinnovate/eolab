@@ -34,6 +34,28 @@ const STYLESHEET = readFileSync(
   new URL("../../src/style.css", import.meta.url),
   "utf8",
 );
+const MAP_INSPECTION_SOURCE = readFileSync(
+  new URL("../../src/map-inspection-controller.js", import.meta.url),
+  "utf8",
+);
+
+test("map-tool docking remains a presentation-only peer coordinator", () => {
+  assert.doesNotMatch(MAP_INSPECTION_SOURCE, /^import\s/m);
+  for (const forbiddenSubsystemKnowledge of [
+    "Catalog",
+    "GeoServer",
+    "GetFeatureInfo",
+    "MapLayerController",
+    "RasterViewer",
+    "VectorFeatureInspectorController",
+    "VectorTimeSeriesController",
+  ]) {
+    assert.equal(
+      MAP_INSPECTION_SOURCE.includes(forbiddenSubsystemKnowledge),
+      false,
+    );
+  }
+});
 
 test("vector inspection coordination remains in the browser composition root", () => {
   for (const forbiddenPeerKnowledge of [

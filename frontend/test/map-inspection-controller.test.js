@@ -37,6 +37,13 @@ function fixture() {
         featureDetailsToggle,
         vectorTimeSeries,
         vectorFeatureProfile,
+        panels: doc.querySelector("#map-inspection-panels"),
+        minimizeButton: doc.querySelector("#toggle-map-inspection-dock"),
+        featureTab: doc.querySelector("#map-inspection-tab-feature"),
+        timeSeriesTab: doc.querySelector("#map-inspection-tab-time-series"),
+        featureProfileTab: doc.querySelector("#map-inspection-tab-feature-profile"),
+        histogramTab: doc.querySelector("#map-inspection-tab-histogram"),
+        styleTab: doc.querySelector("#map-inspection-tab-style"),
         close,
         calls,
         controller,
@@ -75,11 +82,18 @@ test("histogram and style have independent visibility on one persistent surface"
     const h = fixture();
     h.controller.showStyle();
     assert.equal(h.analysisToolsButton.hidden, true);
+    assert.equal(h.style.getAttribute("data-map-inspection-active"), "true");
+    assert.equal(h.styleTab.getAttribute("aria-selected"), "true");
     h.controller.showHistogram();
     assert.equal(h.style.hidden, false);
     assert.equal(h.histogram.hidden, false);
+    assert.equal(h.style.getAttribute("data-map-inspection-active"), "false");
+    assert.equal(h.histogram.getAttribute("data-map-inspection-active"), "true");
+    assert.equal(h.styleTab.hidden, false);
+    assert.equal(h.histogramTab.hidden, false);
     h.controller.closeHistogram();
     assert.equal(h.style.hidden, false);
+    assert.equal(h.style.getAttribute("data-map-inspection-active"), "true");
     assert.equal(h.analysisToolsButton.hidden, true);
     assert.deepEqual(h.calls, ["show"]);
     h.controller.showHistogram();
@@ -93,15 +107,71 @@ test("histogram and style have independent visibility on one persistent surface"
 
 test("vector feature inspection shares the map-side surface independently", () => {
     const h = fixture();
+    const retainedResult = h.doc.createElement();
+    retainedResult.textContent = "R2024: -13.09";
+    h.feature.append(retainedResult);
     h.controller.showFeatureInspector();
     assert.equal(h.feature.hidden, false);
+    assert.equal(h.feature.getAttribute("data-map-inspection-active"), "true");
     assert.deepEqual(h.calls, ["show"]);
     h.controller.showStyle();
+    assert.equal(h.feature.hidden, false);
+    assert.equal(h.feature.getAttribute("data-map-inspection-active"), "false");
+    assert.equal(h.style.getAttribute("data-map-inspection-active"), "true");
+    h.featureTab.dispatchEvent(new Event("click"));
+    assert.equal(h.feature.getAttribute("data-map-inspection-active"), "true");
+    assert.equal(h.style.getAttribute("data-map-inspection-active"), "false");
+    assert.equal(retainedResult.textContent, "R2024: -13.09");
     h.controller.hideFeatureInspector();
     assert.equal(h.style.hidden, false);
+    assert.equal(h.style.getAttribute("data-map-inspection-active"), "true");
     assert.deepEqual(h.calls, ["show"]);
     h.controller.hideStyle();
     assert.deepEqual(h.calls, ["show", "hide"]);
+    h.controller.destroy();
+});
+
+test("dock minimization retains open tools and selecting a tab expands it", () => {
+    const h = fixture();
+    h.controller.showFeatureInspector();
+    h.controller.showStyle();
+
+    h.minimizeButton.dispatchEvent(new Event("click"));
+    assert.equal(h.panels.hidden, true);
+    assert.equal(h.minimizeButton.textContent, "Expand");
+    assert.equal(h.minimizeButton.getAttribute("aria-expanded"), "false");
+    assert.equal(h.feature.hidden, false);
+    assert.equal(h.style.hidden, false);
+    assert.equal(h.styleTab.getAttribute("aria-selected"), "true");
+
+    h.featureTab.dispatchEvent(new Event("click"));
+    assert.equal(h.panels.hidden, false);
+    assert.equal(h.minimizeButton.textContent, "Minimize");
+    assert.equal(h.minimizeButton.getAttribute("aria-expanded"), "true");
+    assert.equal(h.feature.getAttribute("data-map-inspection-active"), "true");
+    assert.equal(h.style.getAttribute("data-map-inspection-active"), "false");
+    h.controller.destroy();
+});
+
+test("open dock tabs support wrapping horizontal keyboard navigation", () => {
+    const h = fixture();
+    h.controller.showFeatureInspector();
+    h.controller.showStyle();
+    h.styleTab.focus();
+
+    const left = new Event("keydown", { cancelable: true });
+    Object.defineProperty(left, "key", { value: "ArrowLeft" });
+    h.styleTab.dispatchEvent(left);
+    assert.equal(left.defaultPrevented, true);
+    assert.equal(h.doc.activeElement, h.featureTab);
+    assert.equal(h.featureTab.getAttribute("aria-selected"), "true");
+
+    const right = new Event("keydown", { cancelable: true });
+    Object.defineProperty(right, "key", { value: "ArrowRight" });
+    h.featureTab.dispatchEvent(right);
+    assert.equal(right.defaultPrevented, true);
+    assert.equal(h.doc.activeElement, h.styleTab);
+    assert.equal(h.styleTab.getAttribute("aria-selected"), "true");
     h.controller.destroy();
 });
 

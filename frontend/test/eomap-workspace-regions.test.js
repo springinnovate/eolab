@@ -230,7 +230,7 @@ test("Catalog owns discovery, inspection, and its explicit layer action only", (
     }
 });
 
-test("Map layers owns compact rows; one floating editor owns all styling", () => {
+test("Map layers owns compact rows; the bounded map-tool dock owns styling", () => {
     const rendering = requireElementRange("eomap-map-layers-region");
     const editor = requireElementRange("layer-style-editor");
     const panel = requireElementRange("control-panel");
@@ -238,8 +238,20 @@ test("Map layers owns compact rows; one floating editor owns all styling", () =>
     const inspection = requireElementRange("map-inspection");
     assert.ok(editor.start > inspection.start && editor.end < inspection.end);
     assert.match(inspection.source, /popover="manual"/);
-    assert.match(editor.source, /role="dialog"/);
-    assert.match(editor.source, /aria-modal="false"/);
+    assert.match(editor.source, /role="tabpanel"/);
+    assert.match(inspection.source, /id="map-inspection-tabs"[^>]+role="tablist"/);
+    for (const [tab, panelId] of [
+        ["feature", "vector-feature-inspector"],
+        ["time-series", "vector-time-series"],
+        ["feature-profile", "vector-feature-profile"],
+        ["histogram", "map-histogram-panel"],
+        ["style", "layer-style-editor"],
+    ]) {
+        assert.match(
+            inspection.source,
+            new RegExp(`id="map-inspection-tab-${tab}"[\\s\\S]*?role="tab"[\\s\\S]*?aria-controls="${panelId}"`)
+        );
+    }
     for (const id of [
         "layer-style-opacity", "raster-appearance-controls", "raster-percentile-controls",
         "raster-bivariate-panel", "raster-bivariate-palette", "raster-bivariate-legend",
@@ -250,12 +262,11 @@ test("Map layers owns compact rows; one floating editor owns all styling", () =>
     assert.match(rendering.source, /id="raster-layer-stack"/);
     assert.doesNotMatch(MARKUP, /id="open-histogram-map-layers"/);
     assert.match(STYLESHEET, /#map-inspection\s*\{[^}]*position:\s*fixed/s);
-    assert.match(STYLESHEET, /\.map-inspection-panels\s*\{[^}]*max-height:[^}]*overflow-y:\s*auto/s);
-    assert.match(STYLESHEET, /@container map-inspection \(min-width: 680px\)/);
-    assert.match(STYLESHEET, /max-height:\s*52dvh/);
+    assert.match(STYLESHEET, /#map-inspection\s*\{[^}]*height:\s*calc\(100dvh - 32px\)/s);
+    assert.match(STYLESHEET, /\.map-inspection-panels\s*\{[^}]*min-height:\s*0[^}]*overflow:\s*hidden/s);
     assert.match(STYLESHEET, /#map-inspection\s*\{[^}]*pointer-events:\s*none/s);
-    assert.match(STYLESHEET, /#map-histogram-panel,\s*#layer-style-editor,\s*#vector-feature-inspector,\s*#vector-time-series,\s*#vector-feature-profile\s*\{[^}]*pointer-events:\s*auto/s);
-    assert.match(STYLESHEET, /@container map-inspection[^}]*grid-template-columns:\s*repeat\(2,[^}]*pointer-events:\s*none/s);
+    assert.match(STYLESHEET, /#map-histogram-panel,\s*#layer-style-editor,\s*#vector-feature-inspector,\s*#vector-time-series,\s*#vector-feature-profile\s*\{[^}]*height:\s*100%[^}]*overflow-y:\s*auto/s);
+    assert.doesNotMatch(STYLESHEET, /\.map-inspection-panels:has\(/);
 });
 
 test("Map layers has one heading and collapse control with no nested list widget", () => {
@@ -323,7 +334,8 @@ test("Sampling keeps area controls and AOI; map exploration owns histogram resul
     const panel = requireElementRange("control-panel");
     const exploration = requireElementRange("map-histogram-panel");
     assert.ok(exploration.start > panel.end);
-    assert.match(exploration.source, /role="dialog" aria-modal="false"/);
+    assert.match(exploration.source, /role="tabpanel"/);
+    assert.match(exploration.source, /aria-labelledby="map-inspection-tab-histogram"/);
     for (const id of ["raster-comparison-mode", "raster-histogram-list", "raster-histogram", "raster-bivariate-statistics"]) {
         assert.match(exploration.source, new RegExp(`id="${id}"`));
         assert.doesNotMatch(analysisRegion.source, new RegExp(`id="${id}"`));
@@ -410,10 +422,10 @@ test("map raster analysis puts results before mode without a visible title strip
     assert.ok(requireMarkupPosition("raster-histogram-chart") < requireMarkupPosition("raster-histogram-scope"));
     assert.ok(requireMarkupPosition("raster-bivariate-histogram") < requireMarkupPosition("map-histogram-scope"));
     assert.ok(requireMarkupPosition("raster-bivariate-histogram") < requireMarkupPosition("raster-bivariate-statistics-status"));
-    assert.match(STYLESHEET, /--map-inspection-height:\s*calc\(100dvh - var\(--map-inspection-top\) - 16px\)/);
+    assert.match(STYLESHEET, /#map-inspection\s*\{[^}]*inset:\s*16px 20px 16px auto[^}]*height:\s*calc\(100dvh - 32px\)/s);
     assert.match(STYLESHEET, /#map-inspection\s*\{[^}]*overflow:\s*visible/s);
-    assert.match(STYLESHEET, /#map-inspection:has\(#map-histogram-panel:not\(\[hidden\]\)\)\s*\{[^}]*--map-inspection-top:\s*16px/s);
-    assert.match(STYLESHEET, /@container map-inspection[^}]*max-height:\s*none[^}]*overflow:\s*visible/s);
+    assert.match(STYLESHEET, /\.map-inspection-panels\s*\{[^}]*min-height:\s*0[^}]*overflow:\s*hidden/s);
+    assert.match(STYLESHEET, /#map-histogram-panel,[^{]*\{[^}]*height:\s*100%[^}]*overflow-y:\s*auto/s);
     assert.match(STYLESHEET, /\.map-histogram-toolbar\s*\{[^}]*height:\s*0/s);
     assert.match(STYLESHEET, /#map-histogram-panel \.raster-bivariate-statistics,\s*#map-histogram-panel \.raster-histogram\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/s);
     assert.match(STYLESHEET, /#map-histogram-panel \.raster-histogram-heading\s*\{[^}]*padding-right:\s*36px/s);
@@ -610,6 +622,14 @@ test("semantic regions preserve one DOM instance of every owned control", () => 
         "raster-cursor-copy-feedback",
         "restore-raster-cursor-values",
         "map-inspection",
+        "map-inspection-panels",
+        "map-inspection-tabs",
+        "map-inspection-tab-feature",
+        "map-inspection-tab-time-series",
+        "map-inspection-tab-feature-profile",
+        "map-inspection-tab-histogram",
+        "map-inspection-tab-style",
+        "toggle-map-inspection-dock",
         "map-histogram-panel",
         "map-histogram-scope",
         "open-analysis-tools",

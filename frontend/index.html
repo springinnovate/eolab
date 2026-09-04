@@ -765,9 +765,32 @@
           aria-label="Open analysis tools using visible data at the map center">Analysis tools</button>
       </div>
       <aside id="map-inspection" popover="manual" aria-label="Map exploration">
-        <div class="map-inspection-panels">
-          <section id="vector-feature-inspector" role="dialog" aria-modal="false"
-            aria-labelledby="vector-feature-inspector-heading" hidden>
+        <header class="map-inspection-dock-header">
+          <div id="map-inspection-tabs" class="map-inspection-tabs" role="tablist"
+            aria-label="Open map tools">
+            <button id="map-inspection-tab-feature" class="map-inspection-tab"
+              type="button" role="tab" aria-controls="vector-feature-inspector"
+              aria-selected="false" tabindex="-1" hidden>Feature</button>
+            <button id="map-inspection-tab-time-series" class="map-inspection-tab"
+              type="button" role="tab" aria-controls="vector-time-series"
+              aria-selected="false" tabindex="-1" hidden>Series</button>
+            <button id="map-inspection-tab-feature-profile" class="map-inspection-tab"
+              type="button" role="tab" aria-controls="vector-feature-profile"
+              aria-selected="false" tabindex="-1" hidden>Series</button>
+            <button id="map-inspection-tab-histogram" class="map-inspection-tab"
+              type="button" role="tab" aria-controls="map-histogram-panel"
+              aria-selected="false" tabindex="-1" hidden>Raster</button>
+            <button id="map-inspection-tab-style" class="map-inspection-tab"
+              type="button" role="tab" aria-controls="layer-style-editor"
+              aria-selected="false" tabindex="-1" hidden>Style</button>
+          </div>
+          <button id="toggle-map-inspection-dock" class="secondary-button"
+            type="button" aria-controls="map-inspection-panels"
+            aria-expanded="true">Minimize</button>
+        </header>
+        <div id="map-inspection-panels" class="map-inspection-panels">
+          <section id="vector-feature-inspector" role="tabpanel"
+            aria-labelledby="map-inspection-tab-feature" hidden>
             <header class="vector-feature-inspector-header">
               <h2 id="vector-feature-inspector-heading">Feature inspector</h2>
               <div class="vector-feature-inspector-actions">
@@ -810,8 +833,8 @@
               </article>
             </div>
           </section>
-          <section id="vector-time-series" role="dialog" aria-modal="false"
-            aria-labelledby="vector-time-series-heading" hidden>
+          <section id="vector-time-series" role="tabpanel"
+            aria-labelledby="map-inspection-tab-time-series" hidden>
             <header class="vector-time-series-header">
               <h2 id="vector-time-series-heading">Series plot</h2>
               <button id="close-vector-time-series" class="secondary-button"
@@ -872,8 +895,8 @@
               </div>
             </details>
           </section>
-          <section id="vector-feature-profile" role="dialog" aria-modal="false"
-            aria-labelledby="vector-feature-profile-heading" hidden>
+          <section id="vector-feature-profile" role="tabpanel"
+            aria-labelledby="map-inspection-tab-feature-profile" hidden>
             <header class="vector-time-series-header">
               <h2 id="vector-feature-profile-heading">Series plot</h2>
               <button id="close-vector-feature-profile" class="secondary-button"
@@ -937,8 +960,8 @@
               </div>
             </details>
           </section>
-          <section id="map-histogram-panel" role="dialog" aria-modal="false"
-            aria-labelledby="map-histogram-heading" hidden>
+          <section id="map-histogram-panel" role="tabpanel"
+            aria-labelledby="map-inspection-tab-histogram" hidden>
             <header class="map-histogram-toolbar">
               <h2 id="map-histogram-heading" class="visually-hidden">Raster analysis</h2>
               <button id="close-map-histogram" class="secondary-button" type="button"
@@ -1016,8 +1039,8 @@
                 role="status" aria-live="polite" aria-atomic="true"></p>
             </section>
           </section>
-<section id="layer-style-editor" hidden role="dialog"
-      aria-modal="false" aria-labelledby="layer-style-heading layer-style-title">
+<section id="layer-style-editor" hidden role="tabpanel"
+      aria-labelledby="map-inspection-tab-style layer-style-title">
       <header class="layer-style-header">
         <h2 id="layer-style-heading">Style layer</h2>
         <button id="close-layer-style" class="secondary-button" type="button" aria-label="Close style editor">Close</button>
