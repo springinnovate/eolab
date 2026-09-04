@@ -112,6 +112,11 @@ def test_raster_capacity_is_deployer_configurable() -> None:
         '${EOLAB_RASTER_STATISTICS_CACHE_ENTRIES:-32}"'
         in compose
     )
+    assert (
+        '"COMPOSITE_TILE_CACHE_BYTES='
+        '${EOLAB_COMPOSITE_TILE_CACHE_BYTES:-134217728}"'
+        in compose
+    )
 
 
 def test_app_and_geoserver_refuse_a_writable_scan_mount() -> None:

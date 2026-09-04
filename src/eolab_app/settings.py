@@ -24,6 +24,7 @@ class Settings:
         geoserver_internal_url: Application-facing GeoServer URL.
         geoserver_metrics_internal_url: Internal GeoServer metrics URL.
         geoserver_wms_render_count: Maximum concurrent WMS renders.
+        composite_tile_cache_bytes: Composite PNG response cache capacity.
         raster_pixel_read_concurrency: Maximum concurrent raster pixel reads.
         raster_statistics_read_concurrency: Maximum concurrent statistics reads.
         raster_statistics_cache_entries: Completed statistics cache capacity.
@@ -59,6 +60,7 @@ class Settings:
     geoserver_internal_url: str
     geoserver_metrics_internal_url: str
     geoserver_wms_render_count: int
+    composite_tile_cache_bytes: int
     raster_pixel_read_concurrency: int
     raster_statistics_read_concurrency: int
     raster_statistics_cache_entries: int
@@ -120,6 +122,10 @@ class Settings:
             raise ValueError("SCAN_WORKER_COUNT must be greater than zero")
         if self.geoserver_wms_render_count < 1:
             raise ValueError("GEOSERVER_WMS_RENDER_COUNT must be greater than zero")
+        if self.composite_tile_cache_bytes < 1:
+            raise ValueError(
+                "COMPOSITE_TILE_CACHE_BYTES must be greater than zero"
+            )
         if self.raster_pixel_read_concurrency < 1:
             raise ValueError(
                 "RASTER_PIXEL_READ_CONCURRENCY must be greater than zero"
@@ -296,6 +302,9 @@ def load_settings(
             "GEOSERVER_METRICS_INTERNAL_URL"
         ].strip(),
         geoserver_wms_render_count=int(os.environ["GEOSERVER_WMS_RENDER_COUNT"]),
+        composite_tile_cache_bytes=int(
+            os.environ["COMPOSITE_TILE_CACHE_BYTES"]
+        ),
         raster_pixel_read_concurrency=int(
             os.environ["RASTER_PIXEL_READ_CONCURRENCY"]
         ),

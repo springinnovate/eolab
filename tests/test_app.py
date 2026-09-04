@@ -74,7 +74,8 @@ def test_configuration_endpoint_reads_environment(
         settings.raster_pixel_read_concurrency,
         settings.raster_statistics_read_concurrency,
         settings.raster_statistics_cache_entries,
-    ) == (2, 1, 32)
+        settings.composite_tile_cache_bytes,
+    ) == (2, 1, 32, 134217728)
     assert "valid-admin-password" not in repr(settings)
     assert "http://geoserver:8080" not in response.text
     assert "http://geoserver:9404" not in response.text
@@ -1262,6 +1263,7 @@ def test_load_settings_rejects_blank_version(
         ("SCAN_RECONCILIATION_SPOOL_MEMORY_BYTES", "1.5"),
         ("SCAN_CATALOG_ERROR_DETAIL_LIMIT", "1.5"),
         ("GEOSERVER_WMS_RENDER_COUNT", "1.5"),
+        ("COMPOSITE_TILE_CACHE_BYTES", "1.5"),
         ("RASTER_PIXEL_READ_CONCURRENCY", "1.5"),
         ("RASTER_STATISTICS_READ_CONCURRENCY", "1.5"),
         ("RASTER_STATISTICS_CACHE_ENTRIES", "1.5"),
@@ -1347,6 +1349,7 @@ def test_load_settings_rejects_invalid_scan_path_lists(
         ("SCAN_CATALOG_WRITE_TIMEOUT_SECONDS", "nan"),
         ("SCAN_CATALOG_ERROR_DETAIL_LIMIT", "0"),
         ("GEOSERVER_WMS_RENDER_COUNT", "0"),
+        ("COMPOSITE_TILE_CACHE_BYTES", "0"),
         ("RASTER_PIXEL_READ_CONCURRENCY", "0"),
         ("RASTER_STATISTICS_READ_CONCURRENCY", "0"),
         ("RASTER_STATISTICS_CACHE_ENTRIES", "0"),
