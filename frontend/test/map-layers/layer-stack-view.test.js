@@ -142,6 +142,7 @@ class FakeLayerStackDocument {
       ["#raster-layer-stack", new FakeLayerStackElement("div", this)],
       ["#raster-layer-list", new FakeLayerStackElement("ol", this)],
       ["#raster-layer-stack-status", new FakeLayerStackElement("p", this)],
+      ["#map-layer-counts", new FakeLayerStackElement("span", this)],
     ]);
     this.elements.get("#raster-layer-stack").parentElement =
       this.layerScrollContainer;
@@ -265,6 +266,7 @@ function gradientLegend(style) {
 const LAYERS = [
   {
     key: "temperature",
+    datasetKind: "raster",
     item: { collection: "climate", id: "temperature-annual" },
     label: "Global surface temperature anomaly (1981–2010 baseline)",
     visible: true,
@@ -287,6 +289,7 @@ const LAYERS = [
   },
   {
     key: "vegetation",
+    datasetKind: "raster",
     item: { collection: "vegetation", id: "health-index" },
     label: "Vegetation health index",
     visible: true,
@@ -309,6 +312,7 @@ const LAYERS = [
   },
   {
     key: "moisture",
+    datasetKind: "raster",
     item: { collection: "soil", id: "moisture-anomaly" },
     label: "Soil moisture anomaly",
     visible: false,
@@ -330,6 +334,29 @@ const LAYERS = [
     }),
   },
 ];
+
+test("heading counts retained types through mixed, hidden, single-type, and empty maps", () => {
+  const doc = new FakeLayerStackDocument();
+  const view = new MapLayerStackView(doc);
+  const counts = doc.querySelector("#map-layer-counts");
+  const vector = { ...LAYERS[0], datasetKind: "vector", key: "boundaries" };
+  const otherVector = { ...vector, key: "points", visible: false };
+
+  view.render([], null);
+  assert.equal(counts.textContent, "· Empty");
+  view.render([...LAYERS, vector, otherVector], null);
+  assert.equal(counts.textContent, "· 3 rasters · 2 vectors");
+  view.render([otherVector, vector, ...LAYERS].map(layer => ({ ...layer, visible: false })), null);
+  assert.equal(counts.textContent, "· 3 rasters · 2 vectors");
+  view.render([LAYERS[0], vector], null);
+  assert.equal(counts.textContent, "· 1 raster · 1 vector");
+  view.render([vector, otherVector], null);
+  assert.equal(counts.textContent, "· 2 vectors");
+  view.render([LAYERS[0]], null);
+  assert.equal(counts.textContent, "· 1 raster");
+  view.render([], null);
+  assert.equal(counts.textContent, "· Empty");
+});
 
 test("rows expose two-row identity, map, style, clipboard, and removal actions", () => {
   const doc = new FakeLayerStackDocument();

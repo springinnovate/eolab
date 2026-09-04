@@ -370,10 +370,12 @@ export function createVectorMapLayerAdapter({
          * Return fixed presentation metadata for the shared layer view.
          *
          * @param {Object} record Neutral retained-layer record.
-         * @return {{legend:Object}} Neutral fixed, categorical, or graduated legend snapshot.
+         * @return {{datasetKind:"vector",legend:Object}} Dataset type and
+         * neutral fixed, categorical, or graduated legend snapshot.
          */
         snapshot(record) {
             return {
+                datasetKind: "vector",
                 legend: vectorStyleLegend(record.state.style),
             };
         },
