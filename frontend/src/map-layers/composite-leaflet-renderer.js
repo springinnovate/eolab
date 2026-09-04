@@ -1,5 +1,7 @@
 /** Atomic Leaflet presentation of one server-composed visible layer stack. */
 
+const COMPOSITE_TILE_RETRY_DELAYS_MILLISECONDS = Object.freeze([250, 1000]);
+
 /** Own the single WMS grid used for ordinary multi-layer map rendering. */
 export class CompositeLeafletRenderer {
     /**
@@ -22,6 +24,7 @@ export class CompositeLeafletRenderer {
         this.abortController = null;
         this.activeLayer = null;
         this.pendingLayer = null;
+        this.layerRetryStates = new Map();
         this.destroyed = false;
     }
 
@@ -99,11 +102,7 @@ export class CompositeLeafletRenderer {
         const replacesActiveLayer = this.activeLayer !== null;
         layer.setOpacity(replacesActiveLayer ? 0 : 1);
         this.pendingLayer = layer;
-        layer.once("tileerror", () => {
-            if (generation === this.generation && !this.destroyed) {
-                this.onError("The composite map could not be rendered.");
-            }
-        });
+        this.#registerTileRetries(layer);
         layer.once("load", () => {
             if (
                 generation !== this.generation ||
@@ -117,15 +116,162 @@ export class CompositeLeafletRenderer {
             this.activeLayer = layer;
             this.pendingLayer = null;
             if (previous !== null && previous !== layer) {
+                this.#removeTileRetries(previous);
                 this.leafletMap.removeLayer(previous);
             }
         });
         layer.addTo(this.leafletMap);
     }
 
+    /**
+     * Register bounded retry handling for every failed tile in one grid.
+     *
+     * @param {Object} layer Leaflet-compatible WMS layer.
+     * @return {void}
+     */
+    #registerTileRetries(layer) {
+        const state = {
+            errorReported: false,
+            retryTimeouts: new Set(),
+            tiles: new WeakMap(),
+            onTileError: null,
+            onTileLoad: null,
+            onTileUnload: null,
+        };
+        state.onTileError = (event) => this.#recordTileError(
+            layer,
+            state,
+            event,
+        );
+        state.onTileLoad = (event) => this.#forgetTileRetry(
+            state,
+            event?.tile,
+        );
+        state.onTileUnload = state.onTileLoad;
+        this.layerRetryStates.set(layer, state);
+        layer.on("tileerror", state.onTileError);
+        layer.on("tileload", state.onTileLoad);
+        layer.on("tileunload", state.onTileUnload);
+    }
+
+    /**
+     * Schedule the next retry for one failed tile or report exhausted recovery.
+     *
+     * @param {Object} layer Leaflet-compatible WMS layer.
+     * @param {Object} layerState Retry state owned by the layer.
+     * @param {{tile?:Object}|undefined} event Leaflet tile error event.
+     * @return {void}
+     */
+    #recordTileError(layer, layerState, event) {
+        if (!this.#isPresentedLayer(layer, layerState)) return;
+        const tile = event?.tile;
+        const source = tile?.currentSrc || tile?.src;
+        if (typeof source !== "string" || source.length === 0) {
+            this.#reportExhaustedRetry(layerState);
+            return;
+        }
+        let tileState = layerState.tiles.get(tile);
+        if (tileState === undefined) {
+            tileState = {
+                attempts: 0,
+                source,
+                timeoutId: null,
+            };
+            layerState.tiles.set(tile, tileState);
+        }
+        if (tileState.timeoutId !== null) return;
+        if (
+            tileState.attempts >=
+            COMPOSITE_TILE_RETRY_DELAYS_MILLISECONDS.length
+        ) {
+            this.#reportExhaustedRetry(layerState);
+            return;
+        }
+        const delay = COMPOSITE_TILE_RETRY_DELAYS_MILLISECONDS[
+            tileState.attempts
+        ];
+        tileState.attempts += 1;
+        const timeoutId = setTimeout(() => {
+            layerState.retryTimeouts.delete(timeoutId);
+            if (tileState.timeoutId !== timeoutId) return;
+            tileState.timeoutId = null;
+            if (!this.#isPresentedLayer(layer, layerState)) return;
+            // Leaflet retains the failed image, so reloading its authorized URL
+            // retries only this tile without redrawing successful neighbours.
+            tile.src = tileState.source;
+        }, delay);
+        tileState.timeoutId = timeoutId;
+        layerState.retryTimeouts.add(timeoutId);
+    }
+
+    /**
+     * Forget retry state after one tile loads or leaves the visible grid.
+     *
+     * @param {Object} layerState Retry state owned by the layer.
+     * @param {Object|undefined} tile Leaflet tile element.
+     * @return {void}
+     */
+    #forgetTileRetry(layerState, tile) {
+        if (tile === undefined) return;
+        const tileState = layerState.tiles.get(tile);
+        if (
+            tileState?.timeoutId !== null &&
+            tileState?.timeoutId !== undefined
+        ) {
+            clearTimeout(tileState.timeoutId);
+            layerState.retryTimeouts.delete(tileState.timeoutId);
+        }
+        layerState.tiles.delete(tile);
+    }
+
+    /**
+     * Report one rendering error after any tile exhausts its retry budget.
+     *
+     * @param {Object} layerState Retry state owned by the layer.
+     * @return {void}
+     */
+    #reportExhaustedRetry(layerState) {
+        if (layerState.errorReported) return;
+        layerState.errorReported = true;
+        this.onError("The composite map could not be rendered.");
+    }
+
+    /**
+     * Return whether one retry state still belongs to a presented grid.
+     *
+     * @param {Object} layer Leaflet-compatible WMS layer.
+     * @param {Object} layerState Retry state owned by the layer.
+     * @return {boolean} Whether the grid is still pending or visible.
+     */
+    #isPresentedLayer(layer, layerState) {
+        return !this.destroyed &&
+            this.layerRetryStates.get(layer) === layerState &&
+            (this.pendingLayer === layer || this.activeLayer === layer);
+    }
+
+    /**
+     * Cancel retries and detach listeners for one removed grid.
+     *
+     * @param {Object} layer Leaflet-compatible WMS layer.
+     * @return {void}
+     */
+    #removeTileRetries(layer) {
+        const state = this.layerRetryStates.get(layer);
+        if (state === undefined) return;
+        for (const timeoutId of state.retryTimeouts) {
+            clearTimeout(timeoutId);
+        }
+        state.retryTimeouts.clear();
+        layer.off("tileerror", state.onTileError);
+        layer.off("tileload", state.onTileLoad);
+        layer.off("tileunload", state.onTileUnload);
+        this.layerRetryStates.delete(layer);
+    }
+
     /** Remove the grid still loading for a superseded plan. */
     #removePendingLayer() {
         if (this.pendingLayer === null) return;
+        this.#removeTileRetries(this.pendingLayer);
         this.leafletMap.removeLayer(this.pendingLayer);
         this.pendingLayer = null;
     }
@@ -133,6 +279,7 @@ export class CompositeLeafletRenderer {
     /** Remove the fully loaded current composite grid. */
     #removeActiveLayer() {
         if (this.activeLayer === null) return;
+        this.#removeTileRetries(this.activeLayer);
         this.leafletMap.removeLayer(this.activeLayer);
         this.activeLayer = null;
     }
