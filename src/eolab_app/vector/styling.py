@@ -444,19 +444,6 @@ class VectorStyleService:
                     graduated.method,
                     graduated.class_count,
                 )
-                expected_ranges = [
-                    (numeric_class.minimum, numeric_class.maximum)
-                    for numeric_class in classification.classes
-                ]
-                requested_ranges = [
-                    (rule.minimum, rule.maximum)
-                    for rule in graduated.rules
-                ]
-                if requested_ranges != expected_ranges:
-                    raise VectorConflictError(
-                        "Style unavailable: numeric class ranges no longer "
-                        "match the authoritative bounded classification."
-                    )
                 if (
                     graduated.missing_color is not None
                     and classification.null_count == 0

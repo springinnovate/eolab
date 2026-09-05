@@ -718,15 +718,15 @@ def test_style_service_revalidates_categorical_field_and_value_types(
 
 
 @pytest.mark.parametrize("method", ["equal-interval", "percentile-interval"])
-def test_style_service_recomputes_numeric_ranges_before_applying(
+def test_style_service_revalidates_numeric_field_and_accepts_exact_ranges(
     tmp_path: Path,
     method: str,
 ) -> None:
-    """Apply only server-current numeric classes and reject browser drift.
+    """Keep current-source checks while publishing valid user-entered breaks.
 
     Args:
         tmp_path: Isolated mounted scan source.
-        method: Classification method revalidated during style application.
+        method: Classification method used to validate the current field read.
     """
     item, _ = assessed_category_item(tmp_path)
     resolver = MountedVectorResolver(tmp_path)
@@ -802,8 +802,15 @@ def test_style_service_recomputes_numeric_ranges_before_applying(
             },
         },
     )
-    with pytest.raises(VectorConflictError, match="no longer match"):
-        asyncio.run(service.apply(drifted_request))
+    exact = asyncio.run(service.apply(drifted_request))
+
+    assert exact.style.graduated is not None
+    assert exact.style.graduated.rules[0].maximum == 0.5
+    assert exact.style.graduated.rules[1].minimum == 0.5
+    assert styler.requests == [
+        (item["id"], valid_request.style),
+        (item["id"], drifted_request.style),
+    ]
 
 
 @pytest.mark.parametrize("attributes", [[], [{"name": "name", "binding": "java.lang.String"}], [

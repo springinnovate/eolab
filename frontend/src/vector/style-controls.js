@@ -3,7 +3,6 @@
 import {
     categoryValueKey,
     formatCategoryValue,
-    formatNumericRange,
     normalizeVectorCategorySummary,
     normalizeVectorNumericClassification,
     normalizeVectorStyle,
@@ -106,6 +105,11 @@ export class VectorStyleControls {
         this.categoryRequest = 0;
         this.graduatedLoading = false;
         this.graduatedRequest = 0;
+        this.graduatedBreakValues = [];
+        this.graduatedBoundaryInputs = [];
+        this.graduatedRangePrefixes = [];
+        this.graduatedCountOutputs = [];
+        this.graduatedRuleSeed = null;
         this.graduatedMissingEnabled = false;
         this.graduatedMissingColor = "#d1d5db";
         this.graduatedMissingInputs = [];
@@ -135,6 +139,8 @@ export class VectorStyleControls {
         /** Reload numeric classes after a server-controlled option changes. @return {void} */
         this.onGraduatedClassificationChange = () => {
             this.graduatedSummary = null;
+            this.graduatedBreakValues = [];
+            this.graduatedRuleSeed = null;
             void this.#loadGraduated();
         };
         /** Repaint current ranges after the palette changes. @return {void} */
@@ -250,6 +256,15 @@ export class VectorStyleControls {
         this.graduatedMethod.value = graduated?.method ?? VECTOR_NUMERIC_DEFAULTS.method;
         this.graduatedClassCount.value = String(graduated?.classCount ?? 5);
         this.graduatedPalette.value = graduated?.palette ?? VECTOR_NUMERIC_DEFAULTS.palette;
+        this.graduatedBreakValues = graduated === null
+            ? []
+            : graduated.rules.slice(0, -1).map((rule) => String(rule.maximum));
+        this.graduatedRuleSeed = graduated === null ? null : {
+            field: graduated.field,
+            method: graduated.method,
+            classCount: graduated.classCount,
+            breakValues: [...this.graduatedBreakValues],
+        };
         this.graduatedMissingEnabled = graduated?.missingColor !== null && graduated !== null;
         this.graduatedMissingColor = graduated?.missingColor ?? "#d1d5db";
         this.status.textContent = target.notice ?? "";
@@ -273,6 +288,11 @@ export class VectorStyleControls {
         this.target = null;
         this.categoryLoading = false;
         this.graduatedLoading = false;
+        this.graduatedBreakValues = [];
+        this.graduatedBoundaryInputs = [];
+        this.graduatedRangePrefixes = [];
+        this.graduatedCountOutputs = [];
+        this.graduatedRuleSeed = null;
         this.#setBusy(false);
         this.root.hidden = true;
     }
@@ -516,6 +536,9 @@ export class VectorStyleControls {
         const method = this.graduatedMethod.value;
         this.graduatedLoading = true;
         this.graduatedStatus.textContent = "Computing bounded numeric classes...";
+        this.graduatedBoundaryInputs = [];
+        this.graduatedRangePrefixes = [];
+        this.graduatedCountOutputs = [];
         this.graduatedList.replaceChildren();
         this.#synchronizeGraduatedInputs();
         try {
@@ -537,6 +560,14 @@ export class VectorStyleControls {
                 throw new TypeError("Numeric classification changed unexpectedly.");
             }
             this.graduatedSummary = summary;
+            const seeded = this.graduatedRuleSeed;
+            const preserveSeed = seeded !== null &&
+                seeded.field === field && seeded.method === method &&
+                seeded.classCount === requestedClassCount;
+            this.graduatedBreakValues = preserveSeed
+                ? [...seeded.breakValues]
+                : summary.classes.slice(0, -1).map(({ maximum }) => String(maximum));
+            this.graduatedRuleSeed = null;
             this.graduatedClassCount.min = String(summary.minimumClassCount);
             this.graduatedClassCount.max = String(summary.maximumClassCount);
             this.#renderGraduated();
@@ -560,7 +591,7 @@ export class VectorStyleControls {
     }
 
     /**
-     * Build the complete graduated style block from current server ranges.
+     * Build the complete graduated style block from current editable ranges.
      *
      * @return {Object} Validated numeric field, method, palette, range rules,
      * and optional missing-value presentation.
@@ -571,18 +602,16 @@ export class VectorStyleControls {
         if (summary === null || !this.#graduatedSummaryMatchesControls()) {
             throw new TypeError("Wait for current numeric classes before applying.");
         }
-        const colors = sequentialPaletteColors(
-            this.graduatedPalette.value,
-            summary.actualClassCount,
-        );
+        const rules = this.#graduatedRules();
+        const colors = sequentialPaletteColors(this.graduatedPalette.value, rules.length);
         return {
             field: summary.field,
             method: summary.method,
             classCount: summary.requestedClassCount,
             palette: this.graduatedPalette.value,
-            rules: summary.classes.map((classification, index) => ({
-                minimum: classification.minimum,
-                maximum: classification.maximum,
+            rules: rules.map((range, index) => ({
+                minimum: range.minimum,
+                maximum: range.maximum,
                 color: colors[index],
             })),
             missingColor: summary.nullCount > 0 && this.graduatedMissingEnabled
@@ -602,6 +631,83 @@ export class VectorStyleControls {
             this.graduatedSummary.requestedClassCount === Number(
                 this.graduatedClassCount.value
             );
+    }
+
+    /**
+     * Parse the shared internal class boundaries in display order.
+     *
+     * @return {number[]} Finite, strictly increasing numeric boundaries.
+     * @throws {TypeError|RangeError} If a value is absent, non-finite, or not
+     * strictly greater than the preceding boundary.
+     */
+    #graduatedBreaks() {
+        const breaks = this.graduatedBreakValues.map((value) => {
+            if (String(value).trim() === "") {
+                throw new TypeError("Enter a finite number for every class break.");
+            }
+            const numeric = Number(value);
+            if (!Number.isFinite(numeric)) {
+                throw new TypeError("Enter a finite number for every class break.");
+            }
+            return numeric;
+        });
+        if (breaks.some((value, index) => index > 0 && value <= breaks[index - 1])) {
+            throw new RangeError("Class breaks must increase from top to bottom.");
+        }
+        return breaks;
+    }
+
+    /**
+     * Build adjacent open-ended rules from the shared boundary controls.
+     *
+     * @return {Array<{minimum:number|null,maximum:number|null}>} Complete ranges.
+     */
+    #graduatedRules() {
+        const breaks = this.#graduatedBreaks();
+        return breaks.length === 0
+            ? [{ minimum: null, maximum: null }]
+            : [
+                { minimum: null, maximum: breaks[0] },
+                ...breaks.slice(1).map((maximum, index) => ({
+                    minimum: breaks[index],
+                    maximum,
+                })),
+                { minimum: breaks.at(-1), maximum: null },
+            ];
+    }
+
+    /**
+     * Report whether editable boundaries currently reproduce the suggestion.
+     *
+     * @return {boolean} Whether generated class counts still describe each row.
+     */
+    #graduatedUsesSuggestedRanges() {
+        if (!this.#graduatedSummaryMatchesControls()) return false;
+        let rules;
+        try {
+            rules = this.#graduatedRules();
+        } catch {
+            return false;
+        }
+        return rules.length === this.graduatedSummary.classes.length && rules.every(
+            (rule, index) =>
+                rule.minimum === this.graduatedSummary.classes[index].minimum &&
+                rule.maximum === this.graduatedSummary.classes[index].maximum
+        );
+    }
+
+    /**
+     * Return the current boundary error without throwing through DOM events.
+     *
+     * @return {string|null} User-facing validation error or null.
+     */
+    #graduatedBreakError() {
+        try {
+            this.#graduatedBreaks();
+            return null;
+        } catch (error) {
+            return error.message;
+        }
     }
 
     /**
@@ -682,7 +788,8 @@ export class VectorStyleControls {
             this.busy ||
             (categorical && (this.categoryLoading || this.categorySummary === null)) ||
             (this.mode.value === "graduated" &&
-                (this.graduatedLoading || !this.#graduatedSummaryMatchesControls()));
+                (this.graduatedLoading || !this.#graduatedSummaryMatchesControls() ||
+                    this.#graduatedBreakError() !== null));
     }
 
     /**
@@ -699,6 +806,9 @@ export class VectorStyleControls {
         this.graduatedMethod.disabled = disabled || !graduated;
         this.graduatedClassCount.disabled = disabled || !graduated;
         this.graduatedPalette.disabled = this.busy || unavailable || !graduated;
+        for (const input of this.graduatedBoundaryInputs) {
+            input.disabled = disabled || !graduated;
+        }
         if (this.graduatedMissingInputs.length === 2) {
             const [enabled, missingColor] = this.graduatedMissingInputs;
             enabled.disabled = this.busy || this.graduatedLoading;
@@ -709,7 +819,8 @@ export class VectorStyleControls {
             this.busy ||
             (this.mode.value === "categories" &&
                 (this.categoryLoading || this.categorySummary === null)) ||
-            (graduated && (this.graduatedLoading || !this.#graduatedSummaryMatchesControls()));
+            (graduated && (this.graduatedLoading || !this.#graduatedSummaryMatchesControls() ||
+                this.#graduatedBreakError() !== null));
     }
 
     /**
@@ -881,21 +992,41 @@ export class VectorStyleControls {
     #renderGraduated() {
         const summary = this.graduatedSummary;
         if (summary === null || !this.#graduatedSummaryMatchesControls()) {
+            this.graduatedBoundaryInputs = [];
+            this.graduatedRangePrefixes = [];
+            this.graduatedCountOutputs = [];
             this.graduatedList.replaceChildren();
             this.#synchronizeGraduatedInputs();
             return;
         }
-        const colors = sequentialPaletteColors(
-            this.graduatedPalette.value,
-            summary.actualClassCount,
-        );
-        const rows = summary.classes.map((classification, index) =>
-            this.#graduatedRow(
-                formatNumericRange(classification),
-                summary.complete ? String(classification.count) : `${classification.count}+`,
-                colors[index],
-            )
-        );
+        let rules;
+        try {
+            rules = this.#graduatedRules();
+        } catch {
+            rules = this.graduatedBreakValues.map((value, index) => ({
+                minimum: index === 0 ? null : this.graduatedBreakValues[index - 1],
+                maximum: value,
+            }));
+            rules.push({
+                minimum: this.graduatedBreakValues.at(-1) ?? null,
+                maximum: null,
+            });
+        }
+        const colors = sequentialPaletteColors(this.graduatedPalette.value, rules.length);
+        const suggested = this.#graduatedUsesSuggestedRanges();
+        this.graduatedBoundaryInputs = [];
+        this.graduatedRangePrefixes = [];
+        this.graduatedCountOutputs = [];
+        const rows = rules.map((range, index) => this.#graduatedRow(
+            range,
+            index,
+            suggested
+                ? (summary.complete
+                    ? String(summary.classes[index].count)
+                    : `${summary.classes[index].count}+`)
+                : "—",
+            colors[index],
+        ));
         this.graduatedMissingInputs = [];
         if (summary.nullCount > 0) {
             rows.push(this.#graduatedMissingRow(summary));
@@ -911,34 +1042,129 @@ export class VectorStyleControls {
         const unsupported = summary.unsupportedValueCount > 0
             ? ` ${summary.unsupportedValueCount} non-numeric or non-finite values are not styled.`
             : "";
-        this.graduatedStatus.textContent = coverage + collapsed + unsupported;
+        const custom = suggested
+            ? " Edit an upper bound to use exact custom ranges."
+            : " Exact custom ranges will be applied; counts are hidden until ranges are regenerated.";
+        const error = this.#graduatedBreakError();
+        if (error !== null) {
+            for (const input of this.graduatedBoundaryInputs) {
+                input.setAttribute("aria-invalid", "true");
+            }
+        }
+        this.graduatedStatus.textContent = error ?? coverage + collapsed + unsupported + custom;
         this.#synchronizeGraduatedInputs();
     }
 
     /**
-     * Create one read-only numeric class row.
+     * Create one numeric class row with a shared editable upper boundary.
      *
-     * @param {string} label User-visible range label.
+     * @param {{minimum:number|string|null,maximum:number|string|null}} range Range values.
+     * @param {number} index Zero-based class index.
      * @param {string} count Exact or lower-bound feature count.
      * @param {string} currentColor Sequential palette color.
      * @return {HTMLDivElement} Detached row ready for the numeric list.
      */
-    #graduatedRow(label, count, currentColor) {
+    #graduatedRow(range, index, count, currentColor) {
         const row = this.document.createElement("div");
         row.className = "vector-category-row vector-graduated-row";
         const swatch = this.document.createElement("span");
         swatch.className = "vector-graduated-swatch";
         swatch.style.backgroundColor = currentColor;
         swatch.setAttribute("aria-hidden", "true");
-        const name = this.document.createElement("span");
-        name.className = "vector-category-name";
-        name.textContent = label;
-        name.title = label;
+        const name = this.document.createElement(
+            range.maximum === null ? "span" : "label"
+        );
+        name.className = "vector-category-name vector-graduated-range";
+        const prefix = this.document.createElement("span");
+        prefix.textContent = range.maximum === null
+            ? (range.minimum === null ? "All values" : `Values > ${range.minimum}`)
+            : (range.minimum === null ? "Values ≤" : `Values > ${range.minimum} and ≤`);
+        name.append(prefix);
+        this.graduatedRangePrefixes.push(prefix);
+        if (range.maximum !== null) {
+            const boundary = this.document.createElement("input");
+            boundary.type = "number";
+            boundary.step = "any";
+            boundary.value = String(this.graduatedBreakValues[index]);
+            boundary.setAttribute(
+                "aria-label",
+                `Upper bound for numeric class ${index + 1}`,
+            );
+            boundary.setAttribute("aria-describedby", "vector-graduated-status");
+            boundary.addEventListener("input", () => {
+                this.graduatedBreakValues[index] = boundary.value;
+                const error = this.#graduatedBreakError();
+                for (const input of this.graduatedBoundaryInputs) {
+                    if (error === null) input.removeAttribute("aria-invalid");
+                    else input.setAttribute("aria-invalid", "true");
+                }
+                this.#refreshGraduatedRows();
+                this.#renderGraduatedStatus();
+                this.#synchronizeGraduatedInputs();
+            });
+            name.append(boundary);
+            this.graduatedBoundaryInputs.push(boundary);
+        } else {
+            name.title = range.minimum === null
+                ? "All values" : `Values > ${range.minimum}`;
+        }
         const featureCount = this.document.createElement("span");
         featureCount.className = "vector-category-count";
         featureCount.textContent = count;
+        this.graduatedCountOutputs.push(featureCount);
         row.append(swatch, name, featureCount);
         return row;
+    }
+
+    /**
+     * Keep adjacent labels and generated-count visibility current while typing.
+     *
+     * @return {void}
+     */
+    #refreshGraduatedRows() {
+        for (const [index, prefix] of this.graduatedRangePrefixes.entries()) {
+            if (this.graduatedBreakValues.length === 0) {
+                prefix.textContent = "All values";
+            } else if (index === 0) {
+                prefix.textContent = "Values ≤";
+            } else if (index < this.graduatedRangePrefixes.length - 1) {
+                prefix.textContent =
+                    `Values > ${this.graduatedBreakValues[index - 1]} and ≤`;
+            } else {
+                prefix.textContent = `Values > ${this.graduatedBreakValues.at(-1)}`;
+            }
+        }
+        const suggested = this.#graduatedUsesSuggestedRanges();
+        for (const [index, output] of this.graduatedCountOutputs.entries()) {
+            const numericClass = this.graduatedSummary?.classes[index];
+            output.textContent = suggested && numericClass !== undefined
+                ? (this.graduatedSummary.complete
+                    ? String(numericClass.count) : `${numericClass.count}+`)
+                : "—";
+        }
+    }
+
+    /**
+     * Refresh numeric coverage guidance after an in-place boundary edit.
+     *
+     * @return {void}
+     */
+    #renderGraduatedStatus() {
+        const summary = this.graduatedSummary;
+        if (summary === null) return;
+        const error = this.#graduatedBreakError();
+        if (error !== null) {
+            this.graduatedStatus.textContent = error;
+            return;
+        }
+        const coverage = summary.complete
+            ? `${summary.numericValueCount} numeric values across ${summary.featureCount} features.`
+            : `Classified ${summary.numericValueCount} numeric values in the first ` +
+                `${summary.scannedFeatureCount} of ${summary.featureCount} features.`;
+        const custom = this.#graduatedUsesSuggestedRanges()
+            ? " Edit an upper bound to use exact custom ranges."
+            : " Exact custom ranges will be applied; counts are hidden until ranges are regenerated.";
+        this.graduatedStatus.textContent = coverage + custom;
     }
 
     /**

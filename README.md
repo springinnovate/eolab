@@ -78,7 +78,8 @@ Each layer row provides small, direct actions:
 
 Raster styles offer minimum, midpoint, and maximum colors and opacities. Vector
 styles adapt to point, line, or polygon geometry. They support a single symbol,
-categorical values, graduated numeric classes, and optional labels. Appearance
+categorical values, graduated numeric classes with editable exact break values,
+and optional labels. Appearance
 changes affect only the current map; they never edit the source data.
 
 ### Explore what is under the pointer
