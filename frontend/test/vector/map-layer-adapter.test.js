@@ -141,6 +141,7 @@ test("vector map-layer adapter owns publication, WMS, legend, and optional fit",
     "tileerror",
   );
   assert.deepEqual(fitted.adapter.snapshot(record), {
+    datasetKind: "vector",
     legend: {
       kind: "fixed",
       label: "Polygon",

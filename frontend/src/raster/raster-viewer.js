@@ -1875,7 +1875,7 @@ export function initializeRasterViewer(
          * Saves shared analysis state first when this record is active.
          *
          * @param {Object} record Retained raster entry and interaction state.
-         * @return {{opacityLocked:boolean,effectiveOpacity:number,
+         * @return {{datasetKind:"raster",opacityLocked:boolean,effectiveOpacity:number,
          * legend:Object}} Opacity in [0, 1] and a gradient legend containing
          * its kind, CSS gradient, description, and three numeric labels.
          */
@@ -1893,6 +1893,7 @@ export function initializeRasterViewer(
             }
             const definition = buildRasterLegend(presentationStyle);
             return {
+                datasetKind: "raster",
                 opacityLocked,
                 effectiveOpacity: opacityLocked ? 1 : record.entry.opacity,
                 roleBadge: opacityLocked ? {

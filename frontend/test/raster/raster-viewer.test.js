@@ -681,6 +681,7 @@ test("automatic raster range refreshes the composite rendering plan", async () =
         mapLayers.snapshots()[0].legend.labels,
         [-4, 3, 20],
     );
+    assert.equal(mapLayers.snapshots()[0].datasetKind, "raster");
 
     viewer.remove(item);
     const firstUpdateAfterRemoval = compositeUpdates.length;

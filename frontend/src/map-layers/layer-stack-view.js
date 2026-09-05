@@ -59,6 +59,10 @@ export class MapLayerStackView {
             documentContext,
             "#raster-layer-stack-status"
         );
+        this.counts = requireLayerStackElement(
+            documentContext,
+            "#map-layer-counts"
+        );
         this.scrollContainer = this.root.parentElement ?? this.list;
         /** @type {MapLayerStackViewHandlers|null} */
         this.handlers = null;
@@ -103,6 +107,7 @@ export class MapLayerStackView {
      * @return {void}
      */
     render(layers, activeKey, requestedFocus = null) {
+        this.#renderCounts(layers);
         if (
             this.keyboardDrag !== null &&
             !layers.some((layer) => layer.key === this.keyboardDrag.key)
@@ -145,6 +150,21 @@ export class MapLayerStackView {
     setStatus(message) {
         this.status.classList.remove("visually-hidden");
         this.status.textContent = message;
+    }
+
+    /**
+     * Describe every retained layer, including hidden layers, in the heading.
+     *
+     * @param {Array<{datasetKind:"raster"|"vector"}>} layers Current layer
+     * presentation snapshots supplied by their owning adapters.
+     * @return {void}
+     */
+    #renderCounts(layers) {
+        const parts = ["raster", "vector"].flatMap((kind) => {
+            const count = layers.filter((layer) => layer.datasetKind === kind).length;
+            return count === 0 ? [] : [`${count} ${kind}${count === 1 ? "" : "s"}`];
+        });
+        this.counts.textContent = `· ${parts.length === 0 ? "Empty" : parts.join(" · ")}`;
     }
 
     /**
