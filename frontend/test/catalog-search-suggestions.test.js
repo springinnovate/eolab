@@ -248,6 +248,10 @@ test("Arrow Up starts at the final Catalog suggestion", () => {
 
 test("Catalog suggestion markup and CSS form an overlaid accessible listbox", () => {
   const markup = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+  const mainSource = readFileSync(
+    new URL("../src/main.js", import.meta.url),
+    "utf8",
+  );
   const stylesheet = readFileSync(
     new URL("../src/style.css", import.meta.url),
     "utf8",
@@ -256,6 +260,7 @@ test("Catalog suggestion markup and CSS form an overlaid accessible listbox", ()
   assert.match(markup, /id="catalog-search"[\s\S]*role="combobox"/);
   assert.match(markup, /id="catalog-search-suggestion-list"[\s\S]*role="listbox"/);
   assert.match(markup, /Words match filenames, descriptions, and indexed dates/);
+  assert.match(mainSource, /new CatalogSearchSuggestions\(document\)/);
   assert.match(
     stylesheet,
     /\.catalog-search-suggestions\s*\{[^}]*position:\s*absolute[^}]*z-index:/s,
