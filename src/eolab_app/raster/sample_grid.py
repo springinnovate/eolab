@@ -1,4 +1,4 @@
-"""Provably bounded native-block sampling for raster sample grids."""
+"""Bounded overview and native-block sampling for raster sample grids."""
 
 import math
 from dataclasses import dataclass
@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import numpy
 import rasterio
 from affine import TransformNotInvertibleError
+from rasterio.enums import Resampling
 from rasterio.warp import transform as warp_transform
 from rasterio.windows import Window
 
@@ -34,6 +35,7 @@ SAMPLE_GRID_MAX_SOURCE_BLOCK_READS = (
 # blocks while retaining an explicit byte bound for larger native blocks and
 # unusually large source blocks.
 SAMPLE_GRID_MAX_DECODED_SOURCE_BYTES = 9 * 1024 * 1024 * 1024
+SAMPLE_GRID_MAX_OVERVIEW_DIMENSION = 512
 SAMPLE_GRID_CENTER_OFFSETS = ((0.5, 0.5),)
 SAMPLE_GRID_MAX_POINTS_PER_CELL = len(SAMPLE_GRID_CENTER_OFFSETS)
 # The one fixed center-sampled grid transforms one position in each cell.
@@ -62,6 +64,19 @@ def sample_grid_policy_parameters() -> tuple[int, ...]:
             for offset in SAMPLE_GRID_CENTER_OFFSETS
             for value in offset
         ),
+    )
+
+
+def overview_sample_grid_policy_parameters() -> tuple[int, ...]:
+    """Return fixed inputs used by overview-backed sample-grid reads.
+
+    Returns:
+        Maximum overview edge and Rasterio resampling algorithm encoded for
+        stable cache identities.
+    """
+    return (
+        SAMPLE_GRID_MAX_OVERVIEW_DIMENSION,
+        int(Resampling.nearest),
     )
 
 
@@ -225,6 +240,142 @@ def _source_window_cell_positions(
         )
         for cell in local_positions
     )
+
+
+def _overview_read_shape(
+    dataset: rasterio.io.DatasetReader,
+    source_window: Window,
+    sample_grid_width: int,
+    sample_grid_height: int,
+) -> tuple[int, int] | None:
+    """Choose the coarsest overview that retains the final grid resolution.
+
+    The returned shape matches one advertised overview factor closely enough
+    that GDAL selects that overview for a nearest-neighbor decimated read. A
+    shallow overview pyramid is ignored when reading it would require a broad
+    intermediate allocation.
+
+    Args:
+        dataset: Open source whose overview factors may be inspected.
+        source_window: Positive integral window inside the source.
+        sample_grid_width: Final sample-grid width.
+        sample_grid_height: Final sample-grid height.
+
+    Returns:
+        Intermediate overview height and width, or ``None`` when no advertised
+        overview preserves the final grid within the fixed edge limit.
+    """
+    read_overviews = getattr(dataset, "overviews", None)
+    if not callable(read_overviews):
+        return None
+    source_width = int(source_window.width)
+    source_height = int(source_window.height)
+    overview_factors = sorted(
+        {
+            int(factor)
+            for factor in read_overviews(1)
+            if int(factor) > 1
+        },
+        reverse=True,
+    )
+    for factor in overview_factors:
+        if source_width < factor or source_height < factor:
+            continue
+        read_width = math.ceil(source_width / factor)
+        read_height = math.ceil(source_height / factor)
+        if (
+            sample_grid_width <= read_width <= SAMPLE_GRID_MAX_OVERVIEW_DIMENSION
+            and sample_grid_height
+            <= read_height
+            <= SAMPLE_GRID_MAX_OVERVIEW_DIMENSION
+        ):
+            return read_height, read_width
+    return None
+
+
+def _mask_overview_nodata(
+    dataset: rasterio.io.DatasetReader,
+    values: numpy.ndarray,
+) -> numpy.ma.MaskedArray:
+    """Apply only the signed band nodata value to one overview read.
+
+    Args:
+        dataset: Open source whose band-one nodata value is authoritative.
+        values: Two-dimensional decimated band values.
+
+    Returns:
+        Values masked only where they equal the declared nodata value.
+    """
+    nodata = dataset.nodatavals[0]
+    if nodata is None:
+        mask = numpy.zeros(values.shape, dtype=bool)
+    elif math.isnan(float(nodata)):
+        mask = numpy.isnan(values)
+    else:
+        mask = values == nodata
+    return numpy.ma.array(values, mask=mask)
+
+
+def _read_overview_sample_grid(
+    dataset: rasterio.io.DatasetReader,
+    source_window: Window,
+    plan: "SampleGridPlan",
+    cancellation_requested: RasterReadCancellationCheck | None,
+) -> numpy.ma.MaskedArray | None:
+    """Read and center-sample one suitable embedded overview.
+
+    Args:
+        dataset: Open source used to build ``plan``.
+        source_window: Positive integral source window represented by the grid.
+        plan: Admitted final sample-grid plan.
+        cancellation_requested: Optional thread-safe obsolescence predicate.
+
+    Returns:
+        Final masked sample grid, or ``None`` when the overview pyramid has no
+        suitable level.
+
+    Raises:
+        RasterReadCancelled: If every request waiter disconnects.
+        rasterio.errors.RasterioError: If the overview read fails.
+        ValueError: If Rasterio returns a shape other than the bounded request.
+    """
+    read_shape = _overview_read_shape(
+        dataset,
+        source_window,
+        plan.width,
+        plan.height,
+    )
+    if read_shape is None:
+        return None
+    require_active_raster_read(cancellation_requested)
+    values = dataset.read(
+        1,
+        window=source_window,
+        out_shape=read_shape,
+        masked=False,
+        resampling=Resampling.nearest,
+    )
+    require_active_raster_read(cancellation_requested)
+    if values.shape != read_shape:
+        raise ValueError("Raster overview read returned an unexpected shape")
+    overview = _mask_overview_nodata(dataset, values)
+    positions = _cell_positions(
+        read_shape[1],
+        read_shape[0],
+        plan.width,
+        plan.height,
+    )
+    rows = numpy.fromiter(
+        (cell[0][0] for cell in positions),
+        dtype=numpy.int64,
+        count=len(positions),
+    )
+    columns = numpy.fromiter(
+        (cell[0][1] for cell in positions),
+        dtype=numpy.int64,
+        count=len(positions),
+    )
+    return overview[rows, columns].reshape((plan.height, plan.width))
 
 
 def _projected_sample_grid_dimensions(
@@ -731,6 +882,10 @@ def read_source_window_sample_grid(
 ) -> tuple[numpy.ma.MaskedArray, SampleGridPlan]:
     """Read a fixed center grid from one bounded source-pixel window.
 
+    A suitable advertised overview is read at its own resolution and sampled
+    down in memory. Sources without a suitable overview retain the proven
+    native-block center sampler.
+
     Args:
         dataset: Open structurally authorized one-band raster.
         source_window: Positive integral source window wholly inside the raster.
@@ -745,6 +900,14 @@ def read_source_window_sample_grid(
         rasterio.errors.RasterioError: If a bounded native-block read fails.
     """
     plan = plan_source_window_sample_grid(dataset, source_window)
+    overview_sample = _read_overview_sample_grid(
+        dataset,
+        source_window,
+        plan,
+        cancellation_requested,
+    )
+    if overview_sample is not None:
+        return overview_sample, plan
     return (
         read_planned_sample_grid(dataset, plan, cancellation_requested),
         plan,

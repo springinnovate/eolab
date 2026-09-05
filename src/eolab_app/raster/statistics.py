@@ -37,6 +37,7 @@ from eolab_app.raster.read_cancellation import (
     require_active_raster_read,
 )
 from eolab_app.raster.sample_grid import (
+    overview_sample_grid_policy_parameters,
     read_source_window_sample_grid,
     sample_grid_policy_parameters,
 )
@@ -53,7 +54,7 @@ from eolab_app.sampling_area import (
 )
 
 
-RASTER_STATISTICS_ALGORITHM = "rendering-independent-bounded-area-v6"
+RASTER_STATISTICS_ALGORITHM = "rendering-independent-bounded-area-v7"
 RASTER_STATISTICS_BIN_COUNT = 64
 RASTER_STATISTICS_MAX_TRANSFORMED_COORDINATES = 500_000
 # Match the ESOS-C AOI contract: a resampled cell contributes when the
@@ -76,6 +77,7 @@ def raster_statistics_policy_parameters() -> tuple[int, ...]:
         int(RASTER_STATISTICS_SELECTION_ALL_TOUCHED),
         BOUNDED_RASTER_MAX_NATIVE_BLOCK_DECODED_BYTES,
         *sample_grid_policy_parameters(),
+        *overview_sample_grid_policy_parameters(),
         EXACT_SOURCE_MAX_DIMENSION,
         EXACT_SOURCE_MAX_BLOCK_READS,
         EXACT_SOURCE_MAX_DECODED_BYTES,
@@ -448,8 +450,9 @@ def read_raster_statistics(
     satisfying the exact dimension, block, and decoded-byte ceilings are read
     completely one native block at a time. Broader envelopes use the fixed
     127-longest-edge center grid, whose unique blocks and cumulative decoded
-    work are proven before I/O. No path uses a broad ``out_shape`` read or
-    relies on raster overviews, WMS publication, or rendering state.
+    work are proven before I/O. Broad grids prefer a suitable signed embedded
+    overview and otherwise retain exact native-block center sampling. Neither
+    path relies on WMS publication or rendering state.
 
     Args:
         source_path: Authorized mounted GeoTIFF.
