@@ -43,26 +43,28 @@ function requireElementSource(identifier) {
   throw new Error(`Required markup element is not closed: ${identifier}`);
 }
 
-test("temporary AOI is a labeled Raster analysis sampling section", () => {
-  const analysisRegion = requireElementSource("eomap-raster-interpretation-region");
+test("temporary AOI is a labeled section within Raster histogram sampling", () => {
+  const histogramPanel = requireElementSource("map-histogram-panel");
+  const samplingDisclosure = requireElementSource("raster-sampling-disclosure");
   const temporaryAoi = requireElementSource("temporary-aoi");
 
   assert.match(
-    analysisRegion,
-    /<details class="analysis-aoi-disclosure" id="analysis-aoi-disclosure">/,
+    histogramPanel,
+    /<details[^>]*id="raster-sampling-disclosure"[^>]*open>/,
   );
   assert.match(
-    analysisRegion,
-    /<summary\s+id="toggle-analysis-aoi"\s+aria-controls="temporary-aoi"\s+aria-expanded="false"/,
+    samplingDisclosure,
+    /id="raster-sampling-area-summary"/,
   );
-  assert.match(analysisRegion, /Upload or manage a sampling AOI/);
-  assert.match(analysisRegion, /id="temporary-aoi"/);
+  assert.match(samplingDisclosure, /Upload one GeoPackage or zipped Shapefile/);
+  assert.match(samplingDisclosure, /id="temporary-aoi"/);
   assert.match(
     temporaryAoi,
     /data-eomap-region="raster-interpretation"[^>]*aria-labelledby="temporary-aoi-heading"[^>]*aria-busy="false"/s,
   );
   assert.doesNotMatch(temporaryAoi, /role="tabpanel"/);
   assert.doesNotMatch(MARKUP, /id="show-temporary-aoi-workspace"/);
+  assert.doesNotMatch(MARKUP, /analysis-aoi-disclosure|toggle-analysis-aoi/);
   assert.match(temporaryAoi, /<h3 id="temporary-aoi-heading">Temporary AOI<\/h3>/);
   assert.match(temporaryAoi, /<label for="temporary-aoi-file">/);
   assert.match(
@@ -136,14 +138,14 @@ test("temporary AOI upload progress is native, labeled, and described", () => {
   );
 });
 
-test("temporary AOI is bounded inside analysis without taking Catalog scroll", () => {
+test("temporary AOI is bounded inside Raster histogram without taking Catalog scroll", () => {
   assert.match(
     STYLESHEET,
-    /\.analysis-aoi-disclosure\s*\{[^}]*margin-bottom:\s*14px[^}]*border:/s,
+    /\.raster-sampling-disclosure\s*\{[^}]*margin:\s*0 0 14px[^}]*border:/s,
   );
   assert.match(
     STYLESHEET,
-    /\.analysis-aoi-disclosure \.temporary-aoi-card\s*\{[^}]*display:\s*block[^}]*margin:\s*0[^}]*border:\s*0[^}]*padding:\s*12px[^}]*box-shadow:\s*none/s,
+    /\.raster-sampling-aoi \.temporary-aoi-card\s*\{[^}]*margin:\s*0[^}]*border:\s*0[^}]*padding:\s*0[^}]*box-shadow:\s*none/s,
   );
   assert.match(
     STYLESHEET,

@@ -68,6 +68,7 @@ import { buildRasterStyleEnvironment } from "./wms.js";
 import { RasterControlsView } from "./controls-view.js";
 
 const RASTER_STYLE_DEBOUNCE_MILLISECONDS = 200;
+export const RASTER_SAMPLE_WINDOW_RESIZE_DEBOUNCE_MILLISECONDS = 350;
 const PORTABLE_RASTER_STYLE_FIELDS = Object.freeze([
     "minimum",
     "midpoint",
@@ -330,6 +331,7 @@ export function initializeRasterViewer(
     let pixelPickerEnabled = true;
     let rasterCursorPosition = null;
     let rasterStyleCommitTimeout = null;
+    let rasterSampleWindowResizeTimeout = null;
     let rasterStyleWasEdited = false;
     let rasterStatistics = null;
     let rasterStatisticsIsApplicable = false;
@@ -1500,24 +1502,23 @@ export function initializeRasterViewer(
         );
         controlsView.setTemporaryAoiCompatible?.(!bivariateMode.active);
         controlsView.setClearSampleWindowLabel(
-            bivariateMode.active ? "Use whole overlap" : "Use whole raster"
+            bivariateMode.active ? "Whole overlap" : "Whole raster"
         );
-        controlsView.setClearSampleWindowEnabled(
-            bivariateMode.active
-                ? bivariateSelectedBounds !== null
-                : hasSelectedRasterSamplingArea()
-        );
-        const presentedMode = bivariateMode.active
-            ? (presentedBounds === null ? "wholeRaster" : "selectedArea")
-            : samplingMode;
+        const presentedMode = !canUseRasterMapInteractions()
+            ? "none"
+            : bivariateMode.active
+                ? (presentedBounds === null ? "wholeRaster" : "selectedArea")
+                : samplingMode;
         const samplingLabel = presentedMode === "selectedArea"
             ? presentedWindowSizeKm === null
-                ? "Map sample"
-                : `Map sample · ${presentedWindowSizeKm} km × ` +
-                  `${presentedWindowSizeKm} km`
+                ? "Map box"
+                : `${presentedWindowSizeKm} km × ` +
+                  `${presentedWindowSizeKm} km map box`
             : presentedMode === "temporaryAoi"
-                ? `Uploaded AOI · ${selectedTemporaryAoi.filename} · ` +
+                ? `AOI · ${selectedTemporaryAoi.filename} · ` +
                   selectedTemporaryAoi.selectedDataset
+                : presentedMode === "none"
+                    ? "No raster selected"
                 : bivariateMode.active
                     ? "Whole overlap"
                     : "Whole raster";
@@ -3195,6 +3196,7 @@ export function initializeRasterViewer(
         if (!canUseRasterMapInteractions()) {
             return;
         }
+        cancelRasterSampleWindowResize();
         if (bivariateMode.active) {
             bivariateSelectedBounds = bounds;
             bivariateSelectedWindowSizeKm =
@@ -3246,6 +3248,54 @@ export function initializeRasterViewer(
         return true;
     }
 
+    /** Cancel a pending box-size refresh without changing its current area. */
+    function cancelRasterSampleWindowResize() {
+        if (rasterSampleWindowResizeTimeout === null) {
+            return;
+        }
+        clock.clearTimeout(rasterSampleWindowResizeTimeout);
+        rasterSampleWindowResizeTimeout = null;
+    }
+
+    /**
+     * Rebuild the selected map box around its retained center after size edits.
+     *
+     * The mode and bounds identity guard prevents delayed work from replacing a
+     * newer map click, AOI selection, active raster, or comparison mode.
+     *
+     * @param {Object} bounds Current canonical WGS 84 selected bounds.
+     * @return {void}
+     */
+    function scheduleRasterSampleWindowResize(bounds) {
+        cancelRasterSampleWindowResize();
+        const scheduledBivariateMode = bivariateMode.active;
+        const center = {
+            lng: (bounds.west + bounds.east) / 2,
+            lat: (bounds.south + bounds.north) / 2,
+        };
+        rasterSampleWindowResizeTimeout = clock.setTimeout(() => {
+            rasterSampleWindowResizeTimeout = null;
+            const [currentBounds] = getPresentedSampleWindow();
+            if (
+                bivariateMode.active !== scheduledBivariateMode ||
+                currentBounds !== bounds ||
+                !canUseRasterMapInteractions()
+            ) {
+                return;
+            }
+            rasterSampleWindowController.selectAt(center);
+        }, RASTER_SAMPLE_WINDOW_RESIZE_DEBOUNCE_MILLISECONDS);
+    }
+
+    /** Select a box at the current map center from the sampling-area control. */
+    function useMapCenterForRasterStatistics() {
+        if (!canUseRasterMapInteractions()) {
+            renderRasterSamplingAreaControls();
+            return;
+        }
+        exploreAt(leafletMap.getCenter());
+    }
+
     /**
      * Apply one valid size from either synchronized sample-window control.
      *
@@ -3257,6 +3307,7 @@ export function initializeRasterViewer(
         try {
             rasterSampleWindowController.setWindowSize(sideLengthKm);
         } catch {
+            cancelRasterSampleWindowResize();
             controlsView.setSampleWindowInvalid(true);
             controlsView.setSampleWindowStatus(
                 "Choose a window size from 1 through 300 km."
@@ -3272,11 +3323,12 @@ export function initializeRasterViewer(
             presentedWindowSizeKm !== sideLengthKm
         ) {
             controlsView.setSampleWindowStatus(
-                `Window size set to ${sideLengthKm} km. The current ` +
-                `histogram still uses the ${presentedWindowSizeKm} km ` +
-                "window; sample the map again to update it."
+                `Updating the selected map box to ${sideLengthKm} km × ` +
+                `${sideLengthKm} km…`
             );
+            scheduleRasterSampleWindowResize(presentedBounds);
         } else {
+            cancelRasterSampleWindowResize();
             renderRasterSampleWindowGuidance("");
         }
         saveActiveLayerSession();
@@ -3289,6 +3341,7 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function resetRasterSampleWindow() {
+        cancelRasterSampleWindowResize();
         rasterSampleWindowController.clear();
         rasterStatisticsController.clear();
         resetPendingRasterStatisticsState();
@@ -3320,8 +3373,10 @@ export function initializeRasterViewer(
             availableTemporaryAoi === null ||
             activeRasterItem === null
         ) {
+            renderRasterSamplingAreaControls();
             return;
         }
+        cancelRasterSampleWindowResize();
         rasterStatisticsController.clear();
         resetPendingRasterStatisticsState();
         selectedRasterBounds = null;
@@ -3639,6 +3694,7 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function handleClearSampleWindow() {
+        cancelRasterSampleWindowResize();
         restoreWholeRasterStatistics();
         if (!bivariateMode.active) {
             refreshRetainedLayerHistograms(WHOLE_RASTER_SAMPLING_AREA);
@@ -3727,6 +3783,7 @@ export function initializeRasterViewer(
     function clear() {
         clearing = true;
         editingLayerKey = null;
+        cancelRasterSampleWindowResize();
         if (rasterStyleCommitTimeout !== null) {
             clock.clearTimeout(rasterStyleCommitTimeout);
             rasterStyleCommitTimeout = null;
@@ -3768,6 +3825,7 @@ export function initializeRasterViewer(
         controlsView.setAppearanceEnabled?.(true);
         controlsView.setUnivariateHistogramVisible?.(true);
         controlsView.setTemporaryAoiCompatible?.(true);
+        controlsView.setSamplingAreaMode("none", "No raster selected");
         renderBivariateAvailability();
         visibleHistogramSignature = null;
         rasterCursorPosition = null;
@@ -3992,6 +4050,7 @@ export function initializeRasterViewer(
         onSampleWindowNumberInput: setRasterSampleWindowSize,
         onSampleWindowNumberChange: handleSampleWindowNumberChange,
         onClearSampleWindow: handleClearSampleWindow,
+        onUseMapWindow: useMapCenterForRasterStatistics,
         onUseTemporaryAoi: useTemporaryAoiForRasterStatistics,
         onBivariateModeChange: handleBivariateModeChange,
         onBivariatePaletteChange: handleBivariatePaletteChange,
