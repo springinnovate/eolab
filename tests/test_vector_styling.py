@@ -10,7 +10,7 @@ import pytest
 from pydantic import ValidationError
 
 from eolab_app.rendering.geoserver import GEOSERVER_WORKSPACE_NAME
-from eolab_app.vector.errors import VectorConflictError
+from eolab_app.vector.errors import VectorConflictError, VectorPublicationError
 from eolab_app.vector.fields import FionaVectorFieldReader
 from eolab_app.vector.geoserver import GeoServerVectorPublisher
 from eolab_app.vector.models import (
@@ -18,6 +18,7 @@ from eolab_app.vector.models import (
     CatalogVectorNumericClassificationRequest,
     VectorLabelStyle,
     VectorStyle,
+    VectorStylePublication,
 )
 from eolab_app.vector.sources import (
     MountedVectorResolver,
@@ -48,7 +49,7 @@ class RecordingStyler:
         self,
         resource_name: str,
         style: VectorStyle,
-    ) -> str:
+    ) -> VectorStylePublication:
         """Record one style request and return its deterministic name.
 
         Args:
@@ -56,10 +57,12 @@ class RecordingStyler:
             style: Validated vector style.
 
         Returns:
-            Deterministic per-layer style name.
+            Style identity and published geometry attribute.
         """
         self.requests.append((resource_name, style))
-        return vector_style_name(resource_name, style)
+        return VectorStylePublication(
+            vector_style_name(resource_name, style, geometry_name="shape"), "shape",
+        )
 
 
 class UnusedFieldReader:
@@ -355,7 +358,7 @@ def test_sld_generation_adds_independently_scaled_vector_labels(
         **base_style.model_dump(by_alias=True),
         "label": label.model_dump(by_alias=True),
     })
-    root = ElementTree.fromstring(build_vector_sld("labeled-style", style))
+    root = ElementTree.fromstring(build_vector_sld("labeled-style", style, geometry_name="shape"))
     namespaces = {"sld": SLD_NAMESPACE, "ogc": OGC_NAMESPACE}
 
     assert len(root.findall(".//sld:Rule", namespaces)) == 2
@@ -399,11 +402,7 @@ def test_sld_generation_adds_independently_scaled_vector_labels(
     anchor = text_symbolizer.find("./sld:Geometry/ogc:Function", namespaces)
     if geometry_kind == "polygon" or (geometry_kind == "line" and fixed_placement):
         assert anchor.attrib["name"] == ("interiorPoint" if geometry_kind == "polygon" else "centroid")
-        # Empty Literal survives GeoServer normalization; empty PropertyName does not.
-        geometry_property = anchor.find("ogc:Function", namespaces)
-        assert geometry_property.attrib["name"] == "property"
-        assert geometry_property.find("ogc:Literal", namespaces).text is None
-        assert anchor.find("ogc:PropertyName", namespaces) is None
+        assert anchor.find("ogc:PropertyName", namespaces).text == "shape"
         assert list(text_symbolizer)[0].tag == f"{{{SLD_NAMESPACE}}}Geometry"
     else:
         assert anchor is None
@@ -444,7 +443,7 @@ def test_sld_generation_uses_typed_categories_and_separate_label_style() -> None
         },
     })
 
-    root = ElementTree.fromstring(build_vector_sld("categories", style))
+    root = ElementTree.fromstring(build_vector_sld("categories", style, geometry_name="shape"))
     namespaces = {"sld": SLD_NAMESPACE, "ogc": OGC_NAMESPACE}
     feature_styles = root.findall(".//sld:FeatureTypeStyle", namespaces)
     geometry_rules = feature_styles[0].findall("./sld:Rule", namespaces)
@@ -486,7 +485,7 @@ def test_sld_generation_uses_open_numeric_ranges_and_missing_rule() -> None:
         },
     })
 
-    root = ElementTree.fromstring(build_vector_sld("graduated", style))
+    root = ElementTree.fromstring(build_vector_sld("graduated", style, geometry_name="shape"))
     namespaces = {"sld": SLD_NAMESPACE, "ogc": OGC_NAMESPACE}
     rules = root.findall(".//sld:FeatureTypeStyle/sld:Rule", namespaces)
 
@@ -537,17 +536,20 @@ def test_vector_style_identity_includes_generated_rendering_policy(
     style = default_vector_style("polygon")
     before = vector_style_name("polygon-resource", style)
 
-    def changed_renderer(style_name: str, style: VectorStyle) -> bytes:
+    def changed_renderer(
+        style_name: str, style: VectorStyle, *, geometry_name: str | None = None,
+    ) -> bytes:
         """Simulate a deployment changing its generated SLD policy.
 
         Args:
             style_name: Stable style name passed to the generator.
             style: Complete validated appearance to render.
+            geometry_name: Authorized geometry carried through the SLD contract.
 
         Returns:
             Valid XML with distinct generated content.
         """
-        return build_vector_sld(style_name, style) + b"<!-- updated policy -->"
+        return build_vector_sld(style_name, style, geometry_name=geometry_name) + b"<!-- updated policy -->"
 
     monkeypatch.setattr("eolab_app.vector.styles.build_vector_sld", changed_renderer)
     assert vector_style_name("polygon-resource", style) != before
@@ -590,8 +592,17 @@ def test_style_service_uses_catalog_identity_and_current_publication(
         f"{GEOSERVER_WORKSPACE_NAME}:{item['id']}"
     )
     assert authorization.style_name == vector_style_name(
-        item["id"], request.style
+        item["id"], request.style, geometry_name="shape",
     )
+    assert authorization.geometry_name == "shape"
+    composite = authorization.build_composite_sld(
+        f"eolab:{item['id']}", result.style_name, None,
+        result.style.model_dump(by_alias=True), 0.5,
+    )
+    anchor = ElementTree.fromstring(composite).find(
+        f".//{{{SLD_NAMESPACE}}}Geometry/{{{OGC_NAMESPACE}}}Function/{{{OGC_NAMESPACE}}}PropertyName"
+    )
+    assert anchor.text == "shape"
 
 
 def test_style_service_rejects_unpublished_or_wrong_geometry(
@@ -795,6 +806,55 @@ def test_style_service_recomputes_numeric_ranges_before_applying(
         asyncio.run(service.apply(drifted_request))
 
 
+@pytest.mark.parametrize("attributes", [[], [{"name": "name", "binding": "java.lang.String"}], [
+    {"name": "a", "binding": "org.locationtech.jts.geom.Polygon"},
+    {"name": "b", "binding": "org.locationtech.jts.geom.Point"},
+]])
+def test_label_publication_rejects_missing_or_ambiguous_geometry(attributes: list[dict]) -> None:
+    """Stop before style mutation when published geometry cannot be identified.
+
+    Args:
+        attributes: Missing, non-geometric, or ambiguous GeoServer schema.
+
+    Returns:
+        None. Verifies rejection at the real REST adapter boundary.
+    """
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        """Supply schema metadata while rejecting unexpected writes.
+
+        Args:
+            request: GeoServer REST request under test.
+
+        Returns:
+            Existing layer or supplied feature type metadata.
+        """
+        assert request.method == "GET"
+        if "/featuretypes/" in request.url.path:
+            return httpx2.Response(200, json={"featureType": {"attributes": {"attribute": attributes}}})
+        return httpx2.Response(200)
+
+    client = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
+    publisher = GeoServerVectorPublisher(client, "http://geoserver/geoserver")
+    request = polygon_request({"collection": "eolab-mounted-vectors", "id": "test-layer"}, label_field="name")
+    with pytest.raises(VectorPublicationError, match="unique vector label geometry"):
+        asyncio.run(publisher.apply_style("test-layer", request.style))
+    asyncio.run(client.aclose())
+
+
+def test_fixed_label_identity_requires_and_includes_geometry_attribute() -> None:
+    """Reject guessed geometry and distinguish otherwise identical anchors.
+
+    Returns:
+        None. Checks generated-style identities and required geometry metadata.
+    """
+    style = polygon_request({"collection": "eolab-mounted-vectors", "id": "test-layer"}, label_field="name").style
+    with pytest.raises(ValueError, match="authorized geometry"):
+        build_vector_sld("test-style", style)
+    assert vector_style_name("test-layer", style, geometry_name="shape") != vector_style_name(
+        "test-layer", style, geometry_name="different_shape",
+    )
+
+
 @pytest.mark.parametrize("label_font_size", [None, 12, 72])
 def test_geoserver_style_adapter_uses_content_addressed_layer_slds(
     label_font_size: int | None,
@@ -826,6 +886,11 @@ def test_geoserver_style_adapter_uses_content_addressed_layer_slds(
             return httpx2.Response(
                 200 if inspected_style_name in style_names else 404
             )
+        if request.method == "GET" and "/featuretypes/" in path:
+            return httpx2.Response(200, json={"featureType": {"attributes": {"attribute": [
+                {"name": "custom_shape", "binding": "org.locationtech.jts.geom.MultiPolygon"},
+                {"name": "name", "binding": "java.lang.String"},
+            ]}}})
         if request.method == "POST" and path.endswith(
             "/workspaces/eolab/styles"
         ):
@@ -833,7 +898,10 @@ def test_geoserver_style_adapter_uses_content_addressed_layer_slds(
             assert request.headers["content-type"] == (
                 "application/vnd.ogc.sld+xml"
             )
-            ElementTree.fromstring(request.content)
+            document = ElementTree.fromstring(request.content)
+            anchor = document.find(f".//{{{SLD_NAMESPACE}}}Geometry/{{{OGC_NAMESPACE}}}Function/{{{OGC_NAMESPACE}}}PropertyName")
+            if anchor is not None:
+                assert anchor.text == "custom_shape"
             style_names.add(style_name)
             return httpx2.Response(201)
         if request.method == "PUT" and "/styles/" in path:
@@ -882,7 +950,8 @@ def test_geoserver_style_adapter_uses_content_addressed_layer_slds(
 
     assert first != second
     assert first == third
-    assert style_names == {first, second}
+    assert style_names == {first.style_name, second.style_name}
+    assert second.geometry_name == ("custom_shape" if label_font_size is not None else None)
     expected_buffer = 0 if label_font_size is None else max(256, label_font_size * 12 + 20)
     assert assigned_buffers == [0, expected_buffer, 0]
     assert vector_label_rendering_buffer(changed_style) == expected_buffer

@@ -60,15 +60,21 @@ def default_vector_style(
 def vector_style_name(
     resource_name: str,
     style: VectorStyle,
+    *,
+    geometry_name: str | None = None,
 ) -> str:
     """Address one layer's validated settings and generated rendering content.
 
     Args:
         resource_name: Authoritative server-side vector resource identity.
         style: Complete validated vector style state.
+        geometry_name: Authorized GeoServer geometry attribute for fixed labels.
 
     Returns:
         Safe unqualified style name whose identity changes with rendering.
+
+    Raises:
+        ValueError: If fixed labels have no authorized geometry attribute.
     """
     resource_digest = sha256(resource_name.encode("utf-8")).hexdigest()[:24]
     style_document = json.dumps(
@@ -78,7 +84,7 @@ def vector_style_name(
     ).encode("utf-8")
     # Include generated policy so a deployment cannot reuse tiles rendered with
     # older label-placement rules even when the saved settings are unchanged.
-    rendered_style = build_vector_sld("vector-style", style)
+    rendered_style = build_vector_sld("vector-style", style, geometry_name=geometry_name)
     style_digest = sha256(style_document + b"\0" + rendered_style).hexdigest()[:12]
     return f"vector-style-{resource_digest}-{style_digest}"
 
@@ -104,6 +110,7 @@ def build_vector_sld(
     *,
     layer_name: str | None = None,
     opacity_multiplier: float = 1,
+    geometry_name: str | None = None,
 ) -> bytes:
     """Serialize one validated vector style as an SLD 1.0 document.
 
@@ -112,9 +119,13 @@ def build_vector_sld(
         style: Complete geometry-specific style state.
         layer_name: Optional published layer identity for an external SLD.
         opacity_multiplier: Neutral whole-layer opacity from zero through one.
+        geometry_name: Authorized GeoServer geometry attribute for fixed labels.
 
     Returns:
         UTF-8 XML accepted by the GeoServer style REST boundary.
+
+    Raises:
+        ValueError: If fixed labels have no authorized geometry attribute.
     """
     root = ElementTree.Element(
         f"{{{SLD_NAMESPACE}}}StyledLayerDescriptor",
@@ -229,6 +240,7 @@ def build_vector_sld(
             style.geometry_kind,
             style.label,
             opacity_multiplier,
+            geometry_name,
         )
     return ElementTree.tostring(
         root,
@@ -467,6 +479,7 @@ def _append_label_rule(
     geometry_kind: VectorGeometryKind,
     label: VectorLabelStyle,
     opacity_multiplier: float,
+    geometry_name: str | None,
 ) -> None:
     """Append one independently scaled text rule to a vector style.
 
@@ -475,9 +488,13 @@ def _append_label_rule(
         geometry_kind: Point, line, or polygon geometry class.
         label: Complete validated label presentation.
         opacity_multiplier: Neutral whole-layer opacity from zero through one.
+        geometry_name: Authorized GeoServer geometry attribute for fixed labels.
 
     Returns:
         None. Appends the independently scaled label rule in place.
+
+    Raises:
+        ValueError: If fixed labels have no authorized geometry attribute.
     """
     rule = ElementTree.SubElement(
         feature_type_style,
@@ -497,18 +514,15 @@ def _append_label_rule(
     )
     fixed_placement = geometry_kind != "line" or label.placement == "center"
     if geometry_kind == "polygon" or (geometry_kind == "line" and fixed_placement):
+        if not geometry_name:
+            raise ValueError("Fixed vector labels require an authorized geometry attribute")
         geometry = ElementTree.SubElement(text_symbolizer, f"{{{SLD_NAMESPACE}}}Geometry")
         anchor = ElementTree.SubElement(
             geometry,
             f"{{{OGC_NAMESPACE}}}Function",
             {"name": "interiorPoint" if geometry_kind == "polygon" else "centroid"},
         )
-        # property("") selects the default geometry without a source-column guess.
-        # Unlike an empty PropertyName, this survives GeoServer's SLD round-trip.
-        default_geometry = ElementTree.SubElement(
-            anchor, f"{{{OGC_NAMESPACE}}}Function", {"name": "property"},
-        )
-        ElementTree.SubElement(default_geometry, f"{{{OGC_NAMESPACE}}}Literal")
+        ElementTree.SubElement(anchor, f"{{{OGC_NAMESPACE}}}PropertyName").text = geometry_name
     label_expression = ElementTree.SubElement(
         text_symbolizer,
         f"{{{SLD_NAMESPACE}}}Label",

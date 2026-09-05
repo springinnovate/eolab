@@ -465,7 +465,7 @@ class VectorStyleService:
                         "Style unavailable: this numeric field has no missing "
                         "values to style."
                     )
-            style_name = await self._styler.apply_style(
+            publication = await self._styler.apply_style(
                 request.item_id,
                 request.style,
             )
@@ -475,12 +475,13 @@ class VectorStyleService:
                     layer_name,
                     source,
                     authorization.source_signature,
-                    style_name,
+                    publication.style_name,
+                    publication.geometry_name,
                 )
             except PublishedLayerChangedError as error:
                 raise VectorConflictError(str(error)) from error
             return AppliedVectorStyle(
-                styleName=style_name,
+                styleName=publication.style_name,
                 style=request.style,
             )
 

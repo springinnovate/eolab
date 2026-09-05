@@ -205,9 +205,15 @@ and halo values, geometry-aware placement, and a zoom from zero through 22.
 Positive minimum zooms become a label-only `MaxScaleDenominator` rule; zero
 omits the scale cutoff. Hiding labels at small scales never hides the underlying
 geometry. Polygon labels use a full-feature `interiorPoint` expression instead
-of GeoServer's tile-clipped polygon placement. The empty geometry property
-selects the published feature's default geometry without guessing its column
-name. Centered line labels similarly use a full-feature `centroid` expression.
+of GeoServer's tile-clipped polygon placement. The vector publisher resolves
+the exact geometry attribute from the already authorized GeoServer feature type;
+missing or ambiguous geometry metadata rejects the style. Its internal style
+result carries that name through the vector style service, source registry, and
+WMS authorization, so composite opacity rendering uses the same anchor. No
+geometry name is accepted from or added to the browser API. Centered line labels
+similarly use a full-feature `centroid` expression. Naming the actual attribute
+lets GeoServer determine its CRS during rendering; generic default-geometry
+expressions do not reliably render labels in the deployed GeoTools version.
 Labels permit overlap (`conflictResolution=false`); fixed placements allow
 partials across tile edges and wrap at the larger of 120 px or 12 font sizes.
 The vector GeoServer publisher sets a bounded 256–884 px layer rendering margin

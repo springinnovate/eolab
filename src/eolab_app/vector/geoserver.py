@@ -22,6 +22,7 @@ from eolab_app.vector.models import (
     VectorGeometryKind,
     VectorReaderAssessment,
     VectorStyle,
+    VectorStylePublication,
 )
 from eolab_app.vector.styles import (
     build_vector_sld,
@@ -224,7 +225,7 @@ class GeoServerVectorPublisher:
         self,
         resource_name: str,
         style: VectorStyle,
-    ) -> str:
+    ) -> VectorStylePublication:
         """Create or update and assign one validated per-layer vector SLD.
 
         Args:
@@ -232,13 +233,12 @@ class GeoServerVectorPublisher:
             style: Complete validated geometry-specific symbol state.
 
         Returns:
-            Deterministic unqualified style name assigned to the layer.
+            Deterministic style identity and geometry attribute used for labels.
 
         Raises:
             VectorPublicationError: If the layer is absent or GeoServer rejects
                 style persistence or assignment.
         """
-        style_name = vector_style_name(resource_name, style)
         layer_exists = await self._gateway.resource_exists(
             "inspect vector layer before styling",
             f"{geoserver_layer_path(resource_name)}.json?quietOnNotFound=true",
@@ -249,6 +249,13 @@ class GeoServerVectorPublisher:
                 "The published vector layer is no longer available. Add it to "
                 "the map again before styling it.",
             )
+        geometry_name = None
+        if style.label is not None and (
+            style.geometry_kind == "polygon"
+            or (style.geometry_kind == "line" and style.label.placement == "center")
+        ):
+            geometry_name = await self._label_geometry_name(resource_name)
+        style_name = vector_style_name(resource_name, style, geometry_name=geometry_name)
         style_path = (
             f"/workspaces/{GEOSERVER_WORKSPACE_NAME}/styles/{style_name}"
         )
@@ -256,7 +263,7 @@ class GeoServerVectorPublisher:
             "inspect per-layer vector style",
             f"{style_path}.sld?quietOnNotFound=true",
         )
-        style_document = build_vector_sld(style_name, style)
+        style_document = build_vector_sld(style_name, style, geometry_name=geometry_name)
         if style_exists:
             await self._gateway.request(
                 "update per-layer vector style",
@@ -279,7 +286,43 @@ class GeoServerVectorPublisher:
         await self._assign_vector_style(
             resource_name, style_name, rendering_buffer=vector_label_rendering_buffer(style)
         )
-        return style_name
+        return VectorStylePublication(style_name, geometry_name)
+
+    async def _label_geometry_name(self, resource_name: str) -> str:
+        """Resolve the geometry attribute of an already authorized vector layer.
+
+        Args:
+            resource_name: Server-derived feature type and datastore identity.
+
+        Returns:
+            Exact GeoServer geometry attribute, without assuming a source name.
+
+        Raises:
+            VectorPublicationError: If metadata has no unique bounded geometry.
+        """
+        response = await self._gateway.request(
+            "inspect vector label geometry", "GET",
+            f"/workspaces/{GEOSERVER_WORKSPACE_NAME}/datastores/{resource_name}"
+            f"/featuretypes/{resource_name}.json",
+            accepted_statuses=frozenset({200}),
+        )
+        try:
+            attributes = response.json()["featureType"]["attributes"]["attribute"]
+            names = [
+                attribute["name"] for attribute in attributes
+                if isinstance(attribute, dict)
+                and isinstance(attribute.get("binding"), str)
+                and attribute["binding"].startswith("org.locationtech.jts.geom.")
+                and isinstance(attribute.get("name"), str)
+                and 0 < len(attribute["name"]) <= 256
+            ]
+            if len(names) == 1:
+                return names[0]
+        except (KeyError, TypeError, ValueError):
+            pass
+        raise VectorPublicationError(
+            "configuration", "The rendering service did not identify a unique vector label geometry."
+        )
 
     async def _inspect_vector_state(
         self,

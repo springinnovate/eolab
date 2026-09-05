@@ -13,6 +13,7 @@ from eolab_app.vector.models import (
     VectorNumericRead,
     VectorReaderAssessment,
     VectorStyle,
+    VectorStylePublication,
 )
 
 
@@ -165,7 +166,7 @@ class VectorStyler(Protocol):
         self,
         resource_name: str,
         style: VectorStyle,
-    ) -> str:
+    ) -> VectorStylePublication:
         """Create or update one per-layer SLD and assign it to the layer.
 
         Args:
@@ -173,7 +174,7 @@ class VectorStyler(Protocol):
             style: Complete validated vector style state.
 
         Returns:
-            Unqualified deterministic style name assigned to the layer.
+            Style identity and authoritative geometry attribute used for labels.
 
         Raises:
             VectorPublicationError: If GeoServer cannot apply the style.
