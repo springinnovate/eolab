@@ -20,8 +20,8 @@ import {
     VECTOR_NUMERIC_DEFAULTS,
 } from "./defaults.js";
 const LONG_LABEL_NOTE =
-    "Long values are not truncated and may be omitted when GeoServer " +
-    "cannot place them without a conflict.";
+    "Labels may overlap to keep names visible. Centered and point labels wrap " +
+    "across lines and stay anchored as you zoom.";
 
 /** Own vector style form state without knowing map or raster implementations. */
 export class VectorStyleControls {

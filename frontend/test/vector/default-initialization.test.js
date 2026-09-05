@@ -91,15 +91,32 @@ test("new vectors get authorized named numeric styles before WMS and preserve la
     assert.equal(record.state.style.label, null);
 });
 
-test("ambiguous numeric fields skip classification while keeping name labels", async () => {
+test("multiple numeric fields still initialize classified colors and name labels", async () => {
     const f = fixture();
     const item = { ...ITEM, properties: { "table:columns": [
         ...ITEM.properties["table:columns"], { name: "area", type: "float" },
     ] } };
     const result = await f.adapter.publish(item);
-    assert.equal(f.calls.some(call => call[0] === "classify"), false);
-    assert.equal(result.style.graduated, null);
+    assert.equal(f.calls.some(call => call[0] === "classify"), true);
+    assert.equal(result.style.graduated.field, "score");
     assert.equal(result.style.label.field, "name");
+});
+
+test("workshop annual fields automatically classify R2024 before attaching WMS", async () => {
+    const f = fixture({ async classify(item, field, method, classCount) {
+        f.calls.push(["classify", item, field, method, classCount]);
+        return { ...SUMMARY, field };
+    } });
+    const item = { ...ITEM, properties: { "table:columns": [
+        { name: "FID", type: "int" }, { name: "node_nm", type: "str:80" },
+        ...Array.from({ length: 25 }, (_, index) => ({ name: `R${2000 + index}`, type: "float:24.15" })),
+    ] } };
+    const result = await f.controller.show(item, f.adapter);
+    assert.deepEqual(f.calls.map(call => call[0]), ["publish", "classify", "style", "wms"]);
+    assert.equal(f.calls[1][2], "R2024");
+    assert.equal(result.style.graduated.field, "R2024");
+    assert.equal(result.style.label.field, "node_nm");
+    assert.equal(result.style.label.minimumZoom, 0);
 });
 
 test("solid defaults also receive a new style identity instead of reusing old fixed-style tiles", async () => {

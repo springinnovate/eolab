@@ -37,18 +37,32 @@ test("default labels recognize exact Catalog text names without guessing arbitra
     ]), null);
 });
 
-test("default numeric selection excludes identifiers and leaves ambiguous measurements to the user", () => {
+test("default numeric selection excludes identifiers and uses a measurement immediately", () => {
     assert.equal(defaultVectorNumericField(fields), "score");
     for (const name of ["id", "FID", "OBJECTID_1", "site_id", "siteId", "code", "site_code", "index", "OID1"]) {
         assert.equal(defaultVectorNumericField([{ name, type: "int" }]), null, name);
     }
-    assert.equal(defaultVectorNumericField([...fields, { name: "area", type: "float" }]), null);
+    assert.equal(defaultVectorNumericField([...fields, { name: "area", type: "float" }]), "score");
     assert.equal(defaultVectorNumericField([{ name: "score", type: "str" }]), null);
     assert.equal(defaultVectorNumericField([]), null);
 });
 
+test("annual numeric defaults prefer the latest year regardless of Catalog field ordering", () => {
+    const annual = [
+        { name: "FID", type: "int" },
+        { name: "node_nm", type: "str:80" },
+        { name: "area", type: "float" },
+        { name: "R2000", type: "float:24.15" },
+        { name: "R2024", type: "float:24.15" },
+        { name: "R2023", type: "float:24.15" },
+        { name: "id_2025", type: "int" },
+    ];
+    assert.equal(defaultVectorNumericField(annual), "R2024");
+    assert.equal(defaultVectorNumericField([...annual].reverse()), "R2024");
+});
+
 test("default labels preserve symbol parameters and use geometry-aware placement", () => {
-    for (const [geometryKind, placement] of [["polygon", "center"], ["point", "above"], ["line", "follow-line"]]) {
+    for (const [geometryKind, placement] of [["polygon", "center"], ["point", "above"], ["line", "center"]]) {
         const symbol = geometryKind === "line"
             ? { geometryKind, strokeColor: "#2b83ba", strokeOpacity: 1, strokeWidth: 2 }
             : { ...initial, geometryKind, ...(geometryKind === "point" ? { pointSize: 9 } : {}) };

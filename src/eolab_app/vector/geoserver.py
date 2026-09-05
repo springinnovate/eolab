@@ -23,7 +23,11 @@ from eolab_app.vector.models import (
     VectorReaderAssessment,
     VectorStyle,
 )
-from eolab_app.vector.styles import build_vector_sld, vector_style_name
+from eolab_app.vector.styles import (
+    build_vector_sld,
+    vector_label_rendering_buffer,
+    vector_style_name,
+)
 
 
 GEOSERVER_VECTOR_STYLE_NAMES: dict[VectorGeometryKind, str] = {
@@ -272,7 +276,9 @@ class GeoServerVectorPublisher:
                 content=style_document,
                 headers={"Content-Type": "application/vnd.ogc.sld+xml"},
             )
-        await self._assign_vector_style(resource_name, style_name)
+        await self._assign_vector_style(
+            resource_name, style_name, rendering_buffer=vector_label_rendering_buffer(style)
+        )
         return style_name
 
     async def _inspect_vector_state(
@@ -486,12 +492,18 @@ class GeoServerVectorPublisher:
         self,
         resource_name: str,
         style_name: str,
+        *,
+        rendering_buffer: int = 0,
     ) -> None:
         """Idempotently assign one initialized geometry-specific style.
 
         Args:
             resource_name: Stable WMS layer name.
             style_name: Initialized point, line, or polygon style.
+            rendering_buffer: Feature-owned bounded query margin for tile edges.
+
+        Returns:
+            None after GeoServer accepts the style and rendering margin.
 
         Raises:
             VectorPublicationError: If style assignment is rejected.
@@ -506,7 +518,8 @@ class GeoServerVectorPublisher:
                     "defaultStyle": {
                         "name": style_name,
                         "workspace": GEOSERVER_WORKSPACE_NAME,
-                    }
+                    },
+                    "metadata": {"entry": {"@key": "buffer", "$": str(rendering_buffer)}},
                 }
             },
             headers={"Accept": "application/json"},

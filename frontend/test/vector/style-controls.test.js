@@ -201,9 +201,8 @@ test("vector style controls apply a field-backed optional label", async () => {
     });
     assert.equal(
         fixture.controls.labelNote.textContent,
-        "Labels use value at zoom 7 and closer. Long values are not " +
-            "truncated and may be omitted when GeoServer cannot place " +
-            "them without a conflict.",
+        "Labels use value at zoom 7 and closer. Labels may overlap to keep names visible. " +
+            "Centered and point labels wrap across lines and stay anchored as you zoom.",
     );
     fixture.controls.destroy();
 });

@@ -29,6 +29,7 @@ from eolab_app.vector.styles import (
     SLD_NAMESPACE,
     build_vector_sld,
     default_vector_style,
+    vector_label_rendering_buffer,
     vector_style_name,
 )
 from eolab_app.vector.styling import VectorStyleService
@@ -316,6 +317,7 @@ def test_sld_generation_uses_only_the_geometry_symbolizer(
     [
         ("point", "above", "PointPlacement"),
         ("line", "follow-line", "LinePlacement"),
+        ("line", "center", "PointPlacement"),
         ("polygon", "center", "PointPlacement"),
     ],
 )
@@ -360,7 +362,7 @@ def test_sld_generation_adds_independently_scaled_vector_labels(
     assert root.find(
         f".//sld:{placement_element}", namespaces
     ) is not None
-    assert root.find(".//ogc:PropertyName", namespaces).text == "display name"
+    assert root.find(".//sld:Label/ogc:PropertyName", namespaces).text == "display name"
     maximum_scale = root.find(".//sld:MaxScaleDenominator", namespaces)
     if minimum_zoom == 0:
         assert maximum_scale is None
@@ -386,11 +388,21 @@ def test_sld_generation_adds_independently_scaled_vector_labels(
         option.attrib["name"]: option.text
         for option in text_symbolizer.findall("./sld:VendorOption", namespaces)
     }
-    assert vendor_options["conflictResolution"] == "true"
+    assert vendor_options["conflictResolution"] == "false"
     assert vendor_options.get("goodnessOfFit") == (
         "0" if geometry_kind == "polygon" else None
     )
-    assert ("followLine" in vendor_options) is (geometry_kind == "line")
+    fixed_placement = geometry_kind != "line" or placement == "center"
+    assert ("followLine" in vendor_options) is not fixed_placement
+    assert vendor_options.get("partials") == ("true" if fixed_placement else None)
+    assert vendor_options.get("autoWrap") == ("168" if fixed_placement else None)
+    anchor = text_symbolizer.find("./sld:Geometry/ogc:Function", namespaces)
+    if geometry_kind == "polygon" or (geometry_kind == "line" and fixed_placement):
+        assert anchor.attrib["name"] == ("interiorPoint" if geometry_kind == "polygon" else "centroid")
+        assert anchor.find("ogc:PropertyName", namespaces).text is None
+        assert list(text_symbolizer)[0].tag == f"{{{SLD_NAMESPACE}}}Geometry"
+    else:
+        assert anchor is None
     child_names = [child.tag.rsplit("}", 1)[-1] for child in text_symbolizer]
     assert child_names.index("Fill") < child_names.index("VendorOption")
 
@@ -779,11 +791,22 @@ def test_style_service_recomputes_numeric_ranges_before_applying(
         asyncio.run(service.apply(drifted_request))
 
 
-def test_geoserver_style_adapter_uses_content_addressed_layer_slds() -> None:
-    """Create distinct renderings, reuse exact matches, and assign each one."""
+@pytest.mark.parametrize("label_font_size", [None, 12, 72])
+def test_geoserver_style_adapter_uses_content_addressed_layer_slds(
+    label_font_size: int | None,
+) -> None:
+    """Assign content-addressed styles with their bounded tile-edge margins.
+
+    Args:
+        label_font_size: No labels, the ordinary font, or its validated maximum.
+
+    Returns:
+        None. Verifies the GeoServer REST request sequence and margin reset.
+    """
     resource_name = "geopackage-0123456789abcdef01234567"
     style_names: set[str] = set()
     requests: list[httpx2.Request] = []
+    assigned_buffers: list[int] = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         requests.append(request)
@@ -820,6 +843,9 @@ def test_geoserver_style_adapter_uses_content_addressed_layer_slds() -> None:
             assigned_style_name = document["layer"]["defaultStyle"]["name"]
             assert assigned_style_name in style_names
             assert document["layer"]["defaultStyle"]["workspace"] == "eolab"
+            metadata_entry = document["layer"]["metadata"]["entry"]
+            assert metadata_entry["@key"] == "buffer"
+            assigned_buffers.append(int(metadata_entry["$"]))
             return httpx2.Response(200)
         raise AssertionError(f"Unexpected request: {request.method} {path}")
 
@@ -833,6 +859,15 @@ def test_geoserver_style_adapter_uses_content_addressed_layer_slds() -> None:
         "collection": "eolab-mounted-vectors",
         "id": resource_name,
     }).style
+    if label_font_size is not None:
+        changed_style = VectorStyle.model_validate({
+            **changed_style.model_dump(by_alias=True),
+            "label": {
+                "field": "name", "fontFamily": "SansSerif", "fontSize": label_font_size,
+                "fontWeight": "normal", "fontColor": "#111827", "haloColor": "#ffffff",
+                "haloWidth": 10, "placement": "center", "minimumZoom": 0,
+            },
+        })
     second = asyncio.run(
         publisher.apply_style(resource_name, changed_style)
     )
@@ -844,6 +879,9 @@ def test_geoserver_style_adapter_uses_content_addressed_layer_slds() -> None:
     assert first != second
     assert first == third
     assert style_names == {first, second}
+    expected_buffer = 0 if label_font_size is None else max(256, label_font_size * 12 + 20)
+    assert assigned_buffers == [0, expected_buffer, 0]
+    assert vector_label_rendering_buffer(changed_style) == expected_buffer
     assert sum(request.method == "POST" for request in requests) == 2
     assert any(
         request.method == "PUT" and "/styles/" in request.url.path

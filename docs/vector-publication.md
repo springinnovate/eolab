@@ -119,12 +119,15 @@ recognizable text name (case-insensitive `name`, then `display_name`,
 `common_name`, `label`, `title`, `nm`, or a sole `name_*`/`*_name`/`nm_*`/`*_nm`
 field, including the workshop's `node_nm`). Labels use
 12 px dark text, a 1.5 px white halo, and minimum zoom 0. Point labels sit above
-the symbol; line labels follow the line; polygon labels are centered.
+the symbol; line labels use a fixed centroid; polygon labels use a fixed
+interior point. Follow-line placement remains available explicitly.
 
-When exactly one numeric field remains after excluding obvious ID, code, and
-index fields, the browser requests five classes over the 5th–95th percentile
-range and applies blue–yellow–red colors. Ambiguous measurements remain single
-color until the user chooses **Color features by → Numeric ranges → Color by**.
+After excluding obvious ID, code, and index fields, the browser chooses the
+latest annual numeric field (for example, `R2024` before `R2023`); otherwise it
+uses the first numeric measurement in Catalog field order. It requests five
+classes over the 5th–95th percentile range and applies blue–yellow–red colors
+before first display. Layers without an eligible field remain single color.
+The user can change the choice under **Color features by → Numeric ranges → Color by**.
 The label field remains selectable under **Label by**, and **Show labels** can
 turn labels off. Automatic classification/style failures retain an authorized
 base appearance and expose a notice in Style. Defaults run only on new
@@ -201,16 +204,24 @@ from the Item's current STAC Table Extension columns, closed font-family and wei
 and halo values, geometry-aware placement, and a zoom from zero through 22.
 Positive minimum zooms become a label-only `MaxScaleDenominator` rule; zero
 omits the scale cutoff. Hiding labels at small scales never hides the underlying
-geometry. Polygon labels use `goodnessOfFit=0` so names can extend beyond small
-polygons at an overview scale instead of being silently rejected by GeoServer's
-default polygon-fit threshold. The SLD retains normal conflict resolution.
+geometry. Polygon labels use a full-feature `interiorPoint` expression instead
+of GeoServer's tile-clipped polygon placement. The empty geometry property
+selects the published feature's default geometry without guessing its column
+name. Centered line labels similarly use a full-feature `centroid` expression.
+Labels permit overlap (`conflictResolution=false`); fixed placements allow
+partials across tile edges and wrap at the larger of 120 px or 12 font sizes.
+The vector GeoServer publisher sets a bounded 256–884 px layer rendering margin
+from the validated font and halo, so adjacent tiles query features whose labels
+extend into their image. Unlabeled styles reset this margin to zero. This changes
+neither the public tile size limit nor the explicit feature-inspection buffer.
+Polygon labels also retain `goodnessOfFit=0`.
 The content style identity includes the generated SLD as well as validated
 settings, so changed placement policy invalidates older cached rendering.
-Attribute values are neither copied
-through the browser nor truncated: GeoServer evaluates the selected field for
-each feature, and may omit a long one-line value when it cannot place the label
-without a conflict. Wrapping, explicit truncation, decluttering quality, and
-large-layer label performance require separate dataset-specific work. For a
+Attribute values are neither copied through the browser nor truncated: GeoServer
+evaluates the selected field for each feature. Crowded names may overlap; fixed
+anchors outside the viewport do not move inward to label a visible polygon
+fragment. Explicit follow-line placement remains geometry-dependent. Very long
+values and large-layer label performance still need dataset-specific review. For a
 categorical or graduated style, labels occupy a second `FeatureTypeStyle`; this keeps their
 unfiltered, independently scaled rule from suppressing the geometry
 `ElseFilter` while leaving label state independent from category selection.

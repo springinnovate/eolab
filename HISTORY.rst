@@ -5,7 +5,7 @@ Unreleased
 ----------
 
 * Restore blue–yellow–red raster defaults and add named vector labels, thin black outlines, and automatic numeric coloring.
-* Show vector labels from zoom 0 and allow names to extend beyond small polygons while retaining collision avoidance.
+* Show vector labels from zoom 0 with fixed anchors, wrapped text, overlap, and tile-edge margins; automatically color the latest annual or first non-ID numeric measurement.
 * Adjust each 2D raster color range using percentiles from the paired histogram.
 * Show raster and vector counts in the expanded and collapsed Map layers heading.
 * Keep map-side tools reachable in a bounded, tabbed dock with retained state and independently scrollable content.

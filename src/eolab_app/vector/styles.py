@@ -1,6 +1,7 @@
 """Pure vector defaults, content identity, and SLD generation."""
 
 import json
+import math
 from hashlib import sha256
 from xml.etree import ElementTree
 
@@ -80,6 +81,21 @@ def vector_style_name(
     rendered_style = build_vector_sld("vector-style", style)
     style_digest = sha256(style_document + b"\0" + rendered_style).hexdigest()[:12]
     return f"vector-style-{resource_digest}-{style_digest}"
+
+
+def vector_label_rendering_buffer(style: VectorStyle) -> int:
+    """Bound the vector layer query margin for labels crossing tile edges.
+
+    Args:
+        style: Validated vector appearance with an optional bounded label font.
+
+    Returns:
+        Zero without labels; otherwise a 256–884 pixel margin covering the
+        wrapped label width and halo without increasing the output tile size.
+    """
+    if style.label is None:
+        return 0
+    return math.ceil(max(256, style.label.font_size * 12 + style.label.halo_width * 2))
 
 
 def build_vector_sld(
@@ -479,6 +495,17 @@ def _append_label_rule(
         rule,
         f"{{{SLD_NAMESPACE}}}TextSymbolizer",
     )
+    fixed_placement = geometry_kind != "line" or label.placement == "center"
+    if geometry_kind == "polygon" or (geometry_kind == "line" and fixed_placement):
+        geometry = ElementTree.SubElement(text_symbolizer, f"{{{SLD_NAMESPACE}}}Geometry")
+        anchor = ElementTree.SubElement(
+            geometry,
+            f"{{{OGC_NAMESPACE}}}Function",
+            {"name": "interiorPoint" if geometry_kind == "polygon" else "centroid"},
+        )
+        # GeoTools' empty property name selects the feature's default geometry,
+        # without guessing a source-specific geometry-column identity.
+        ElementTree.SubElement(anchor, f"{{{OGC_NAMESPACE}}}PropertyName")
     label_expression = ElementTree.SubElement(
         text_symbolizer,
         f"{{{SLD_NAMESPACE}}}Label",
@@ -521,10 +548,12 @@ def _append_label_rule(
     if geometry_kind == "line" and label.placement != "center":
         _append_vendor_option(text_symbolizer, "followLine", "true")
     if geometry_kind == "polygon":
-        # Small polygons must not silently introduce another scale threshold:
-        # text may extend beyond the shape while still avoiding other labels.
+        # Keep polygon-fit rejection disabled alongside fixed label anchors.
         _append_vendor_option(text_symbolizer, "goodnessOfFit", "0")
-    _append_vendor_option(text_symbolizer, "conflictResolution", "true")
+    _append_vendor_option(text_symbolizer, "conflictResolution", "false")
+    if fixed_placement:
+        _append_vendor_option(text_symbolizer, "partials", "true")
+        _append_vendor_option(text_symbolizer, "autoWrap", _number(max(120, label.font_size * 12)))
 
 
 def _append_label_font(

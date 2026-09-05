@@ -46,10 +46,11 @@ export function defaultVectorLabelField(fields) {
 }
 
 /**
- * Select a sole plausible numeric measurement, excluding obvious identifiers.
+ * Select a numeric measurement, preferring the latest year over schema order.
  *
  * @param {ReadonlyArray<{name:string,type:string}>} fields Catalog fields.
- * @return {string|null} Exact measurement field, or null when choice is ambiguous.
+ * @return {string|null} Latest annual measurement, otherwise the first non-ID
+ * numeric Catalog field, or null when none exists. Source field order breaks ties.
  */
 export function defaultVectorNumericField(fields) {
     const measurements = vectorNumericFields(fields).filter(({ name }) => {
@@ -57,7 +58,17 @@ export function defaultVectorNumericField(fields) {
         return !/(?:^|[_\s-])(?:id|fid|oid|objectid|ogc_fid|gid|uuid|guid|code|index)(?:$|[_\s-])/.test(words)
             && !/^(?:objectid|fid|oid|gid)\d*$/.test(words);
     });
-    return measurements.length === 1 ? measurements[0].name : null;
+    let selected = measurements[0] ?? null;
+    let selectedYear = -1;
+    for (const field of measurements) {
+        const years = [...field.name.matchAll(/(?:^|\D)((?:19|20)\d{2})(?=\D|$)/g)];
+        const latestYear = Math.max(-1, ...years.map(match => Number(match[1])));
+        if (latestYear > selectedYear) {
+            selected = field;
+            selectedYear = latestYear;
+        }
+    }
+    return selected?.name ?? null;
 }
 
 /**
@@ -67,8 +78,7 @@ export function defaultVectorNumericField(fields) {
  * @return {string} Supported geometry-appropriate label placement.
  */
 export function defaultVectorLabelPlacement(geometryKind) {
-    return geometryKind === "line" ? "follow-line"
-        : geometryKind === "point" ? "above" : "center";
+    return geometryKind === "point" ? "above" : "center";
 }
 
 /**
