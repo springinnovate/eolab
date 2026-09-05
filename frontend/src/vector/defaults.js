@@ -36,12 +36,12 @@ export function defaultVectorLabelField(fields) {
     const textFields = fields.filter(({ type }) =>
         vectorCategoricalFieldKind(type) === "string"
     );
-    for (const preferred of ["name", "display_name", "common_name", "label", "title"]) {
+    for (const preferred of ["name", "display_name", "common_name", "label", "title", "nm"]) {
         const matches = textFields.filter(({ name }) => name.toLowerCase() === preferred);
         if (matches.length === 1) return matches[0].name;
         if (matches.length > 1) return null;
     }
-    const named = textFields.filter(({ name }) => /(?:^name[_ ]|[_ ]name$)/i.test(name));
+    const named = textFields.filter(({ name }) => /(?:^(?:name|nm)[_ ]|[_ ](?:name|nm)$)/i.test(name));
     return named.length === 1 ? named[0].name : null;
 }
 

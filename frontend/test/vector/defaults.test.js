@@ -26,6 +26,7 @@ test("default-selection policy depends only on vector style values", async () =>
 test("default labels recognize exact Catalog text names without guessing arbitrary fields", () => {
     assert.equal(defaultVectorLabelField(fields), "NAME");
     assert.equal(defaultVectorLabelField([{ name: "site_name", type: "string" }]), "site_name");
+    assert.equal(defaultVectorLabelField([{ name: "node_nm", type: "str:80" }]), "node_nm");
     assert.equal(defaultVectorLabelField([{ name: "name", type: "int" }]), null);
     assert.equal(defaultVectorLabelField([{ name: "code", type: "str" }]), null);
     assert.equal(defaultVectorLabelField([

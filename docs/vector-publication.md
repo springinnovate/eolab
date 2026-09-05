@@ -116,7 +116,8 @@ Vector layers start with fixed `vector-point`, `vector-line`, or
 polygons have blue fills at 70% opacity and 0.75 px black outlines; lines use a
 2 px blue stroke. Before displaying a newly added layer, the browser selects a
 recognizable text name (case-insensitive `name`, then `display_name`,
-`common_name`, `label`, `title`, or a sole `name_*`/`*_name` field). Labels use
+`common_name`, `label`, `title`, `nm`, or a sole `name_*`/`*_name`/`nm_*`/`*_nm`
+field, including the workshop's `node_nm`). Labels use
 12 px dark text, a 1.5 px white halo, and minimum zoom 6. Point labels sit above
 the symbol; line labels follow the line; polygon labels are centered.
 
