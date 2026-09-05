@@ -147,6 +147,67 @@ export function buildVectorTimeSeriesSeries(observations, settings) {
     };
 }
 
+/**
+ * Build concise plot and source context for a field-across-features series.
+ *
+ * Source identity is deduplicated by opaque source ID while the user-facing
+ * layer labels remain presentation text. The visible context lists at most two
+ * layer names; the full dock title retains every contributing layer.
+ *
+ * @param {Object[]} points Valid plotted points.
+ * @param {string} yField Selected numeric field.
+ * @param {Object} [options] Presentation options.
+ * @param {boolean} [options.loading=false] Whether inspection is still loading.
+ * @return {{label:string,title:string,heading:string,context:string}|null}
+ * Presentation identity, or null before a useful series exists.
+ */
+export function vectorTimeSeriesPresentation(
+    points,
+    yField,
+    { loading = false } = {}
+) {
+    if (!Array.isArray(points)) {
+        throw new TypeError("Vector series points must be an array.");
+    }
+    if (typeof yField !== "string" || yField.trim().length === 0) {
+        throw new TypeError("Vector series field must be a non-empty string.");
+    }
+    if (typeof loading !== "boolean") {
+        throw new TypeError("Vector series loading state must be boolean.");
+    }
+    if (points.length === 0) return null;
+    const sources = new Map();
+    for (const point of points) {
+        if (
+            typeof point?.sourceId !== "string" ||
+            typeof point?.layerLabel !== "string"
+        ) {
+            throw new TypeError("Vector series points require source identity.");
+        }
+        if (!sources.has(point.sourceId)) {
+            sources.set(point.sourceId, point.layerLabel);
+        }
+    }
+    const layerLabels = [...sources.values()];
+    const countLabel = `${points.length} feature${points.length === 1 ? "" : "s"}`;
+    const progress = loading ? "…" : "";
+    const visibleLayers = layerLabels.slice(0, 2).join(", ");
+    const remainder = layerLabels.length - Math.min(layerLabels.length, 2);
+    const context = layerLabels.length === 1
+        ? `Layer: ${layerLabels[0]}`
+        : `Layers (${layerLabels.length}): ${visibleLayers}` +
+            (remainder > 0 ? `, +${remainder} more` : "");
+    const fullContext = layerLabels.length === 1
+        ? `Layer: ${layerLabels[0]}`
+        : `Layers (${layerLabels.length}): ${layerLabels.join(", ")}`;
+    return Object.freeze({
+        label: `${yField} · ${countLabel}${progress}`,
+        title: `${yField} across ${countLabel} · ${fullContext}`,
+        heading: `${yField} across ${countLabel}`,
+        context,
+    });
+}
+
 /** Own persistent vector-series configuration and presentation. */
 export class VectorTimeSeriesController {
     /**
@@ -155,25 +216,39 @@ export class VectorTimeSeriesController {
      * @param {Object} configuration Collaborators.
      * @param {(visible:boolean,moveFocus:boolean)=>void}
      * configuration.onVisibilityChange Requests presentation through composition.
+     * @param {(identity:{label:string,title:string}|null)=>void}
+     * configuration.onPresentationChange Publishes a bounded dock identity
+     * through application composition.
      * @param {(sourceId:string)=>boolean} configuration.onSourceLayerZoom
      * Requests source-layer navigation through application composition.
      * @param {Document} [configuration.documentContext=document] DOM owner.
      */
     constructor({
         onVisibilityChange,
+        onPresentationChange,
         onSourceLayerZoom,
         documentContext = document,
     }) {
         if (typeof onVisibilityChange !== "function") {
             throw new TypeError("onVisibilityChange must be a function.");
         }
+        if (typeof onPresentationChange !== "function") {
+            throw new TypeError("onPresentationChange must be a function.");
+        }
         if (typeof onSourceLayerZoom !== "function") {
             throw new TypeError("onSourceLayerZoom must be a function.");
         }
         this.onVisibilityChange = onVisibilityChange;
+        this.onPresentationChange = onPresentationChange;
         this.onSourceLayerZoom = onSourceLayerZoom;
         this.document = documentContext;
         this.panel = documentContext.querySelector("#vector-time-series");
+        this.heading = documentContext.querySelector(
+            "#vector-time-series-heading"
+        );
+        this.context = documentContext.querySelector(
+            "#vector-time-series-context"
+        );
         this.closeButton = documentContext.querySelector(
             "#close-vector-time-series"
         );
@@ -311,6 +386,16 @@ export class VectorTimeSeriesController {
         this.tableBody.replaceChildren();
         this.chart.setAttribute("hidden", "");
         this.table.hidden = true;
+        const series = this.settings.yField === null
+            ? null
+            : buildVectorTimeSeriesSeries(this.observations, this.settings);
+        this.#renderPresentation(this.settings.yField === null
+            ? null
+            : vectorTimeSeriesPresentation(
+                series.points,
+                this.settings.yField,
+                { loading: this.sampleState === "loading" }
+            ));
         if (this.sampleState !== "ready") {
             this.#clearPointSelection();
             this.status.textContent = this.sampleMessage;
@@ -322,10 +407,6 @@ export class VectorTimeSeriesController {
                 "No finite numeric attribute is available for the Y axis.";
             return;
         }
-        const series = buildVectorTimeSeriesSeries(
-            this.observations,
-            this.settings
-        );
         if (series.points.length === 0) {
             this.#clearPointSelection();
             this.status.textContent =
@@ -452,6 +533,30 @@ export class VectorTimeSeriesController {
     }
 
     /**
+     * Render analysis-owned series context and publish only its dock identity.
+     *
+     * @param {{label:string,title:string,heading:string,context:string}|null}
+     * presentation Current presentation identity, or null without plotted data.
+     * @return {void}
+     */
+    #renderPresentation(presentation) {
+        if (presentation === null) {
+            this.heading.textContent = "Across features";
+            this.context.textContent = "";
+            this.context.hidden = true;
+            this.onPresentationChange(null);
+            return;
+        }
+        this.heading.textContent = presentation.heading;
+        this.context.textContent = presentation.context;
+        this.context.hidden = false;
+        this.onPresentationChange({
+            label: presentation.label,
+            title: presentation.title,
+        });
+    }
+
+    /**
      * Select one plotted observation without redrawing or moving keyboard focus.
      *
      * @param {Object} point Plotted observation.
@@ -512,6 +617,7 @@ export class VectorTimeSeriesController {
         this.chartType.removeEventListener("change", this.onControlChange);
         this.zoomSourceButton.removeEventListener("click", this.onZoomSource);
         this.document.removeEventListener("keydown", this.onKeydown);
+        this.onPresentationChange(null);
         this.onVisibilityChange(false, false);
     }
 }
