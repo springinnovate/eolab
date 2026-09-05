@@ -13,15 +13,12 @@ import {
     vectorNumericFields,
 } from "./style.js";
 
-const VECTOR_LABEL_DEFAULTS = Object.freeze({
-    fontFamily: "SansSerif",
-    fontSize: 12,
-    fontWeight: "normal",
-    fontColor: "#111827",
-    haloColor: "#ffffff",
-    haloWidth: 1.5,
-    minimumZoom: 0,
-});
+import {
+    defaultVectorLabelField,
+    defaultVectorLabelPlacement,
+    VECTOR_LABEL_DEFAULTS,
+    VECTOR_NUMERIC_DEFAULTS,
+} from "./defaults.js";
 const LONG_LABEL_NOTE =
     "Long values are not truncated and may be omitted when GeoServer " +
     "cannot place them without a conflict.";
@@ -163,7 +160,7 @@ export class VectorStyleControls {
     /**
      * Show controls for one composition-provided vector style target.
      *
-     * @param {{key:string,style:Object,fields:ReadonlyArray,
+     * @param {{key:string,style:Object,fields:ReadonlyArray,notice?:string,
      * summarize:(field:string)=>Promise<Object>,
      * classify:(field:string,method:string,classCount:number)=>Promise<Object>,
      * apply:(style:Object)=>Promise<Object>}} target
@@ -207,7 +204,7 @@ export class VectorStyleControls {
         );
         this.labelEnabled.checked = labelFieldAvailable;
         this.labelField.value = labelFieldAvailable
-            ? label.field : this.labelFields[0]?.name ?? "";
+            ? label.field : defaultVectorLabelField(this.labelFields) ?? this.labelFields[0]?.name ?? "";
         this.labelFontFamily.value =
             label?.fontFamily ?? VECTOR_LABEL_DEFAULTS.fontFamily;
         this.labelFontSize.value = String(
@@ -223,7 +220,7 @@ export class VectorStyleControls {
             label?.haloWidth ?? VECTOR_LABEL_DEFAULTS.haloWidth,
         );
         this.labelPlacement.value = labelFieldAvailable
-            ? label.placement : defaultPlacement(style.geometryKind);
+            ? label.placement : defaultVectorLabelPlacement(style.geometryKind);
         this.labelMinimumZoom.value = String(
             label?.minimumZoom ?? VECTOR_LABEL_DEFAULTS.minimumZoom,
         );
@@ -250,12 +247,12 @@ export class VectorStyleControls {
             this.missingColor = "#d1d5db";
         }
         this.graduatedField.value = graduated?.field ?? this.graduatedFields[0]?.name ?? "";
-        this.graduatedMethod.value = graduated?.method ?? "equal-interval";
+        this.graduatedMethod.value = graduated?.method ?? VECTOR_NUMERIC_DEFAULTS.method;
         this.graduatedClassCount.value = String(graduated?.classCount ?? 5);
-        this.graduatedPalette.value = graduated?.palette ?? "blues";
+        this.graduatedPalette.value = graduated?.palette ?? VECTOR_NUMERIC_DEFAULTS.palette;
         this.graduatedMissingEnabled = graduated?.missingColor !== null && graduated !== null;
         this.graduatedMissingColor = graduated?.missingColor ?? "#d1d5db";
-        this.status.textContent = "";
+        this.status.textContent = target.notice ?? "";
         this.categoryStatus.textContent = "";
         this.categoryList.replaceChildren();
         this.graduatedStatus.textContent = "";
@@ -1068,7 +1065,7 @@ export class VectorStyleControls {
         if (this.labelFields.length === 0) {
             this.labelNote.textContent = "This Item has no cataloged attribute fields.";
         } else if (!this.labelEnabled.checked) {
-            this.labelNote.textContent = "Labels are off by default.";
+            this.labelNote.textContent = "Labels are off. Enable Show labels and choose Label by.";
         } else {
             this.labelNote.textContent =
                 `Labels use ${this.labelField.value} at zoom ` +
@@ -1076,14 +1073,4 @@ export class VectorStyleControls {
                 LONG_LABEL_NOTE;
         }
     }
-}
-
-/**
- * Return the initial label placement for one geometry class.
- *
- * @param {string} geometryKind Point, line, or polygon.
- * @return {string} Geometry-appropriate placement value.
- */
-function defaultPlacement(geometryKind) {
-    return geometryKind === "line" ? "follow-line" : "center";
 }

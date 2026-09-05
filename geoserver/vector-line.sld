@@ -13,9 +13,9 @@
         <Rule>
           <LineSymbolizer>
             <Stroke>
-              <CssParameter name="stroke">#e31a1c</CssParameter>
+              <CssParameter name="stroke">#2b83ba</CssParameter>
               <CssParameter name="stroke-opacity">1</CssParameter>
-              <CssParameter name="stroke-width">3</CssParameter>
+              <CssParameter name="stroke-width">2</CssParameter>
               <CssParameter name="stroke-linecap">round</CssParameter>
             </Stroke>
           </LineSymbolizer>

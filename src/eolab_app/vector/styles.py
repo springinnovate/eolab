@@ -32,27 +32,27 @@ def default_vector_style(
     if geometry_kind == "point":
         return VectorStyle(
             geometryKind="point",
-            fillColor="#fd8d3c",
-            fillOpacity=1,
-            strokeColor="#800026",
-            strokeOpacity=0,
-            strokeWidth=1.5,
+            fillColor="#2b83ba",
+            fillOpacity=0.7,
+            strokeColor="#000000",
+            strokeOpacity=1,
+            strokeWidth=0.75,
             pointSize=9,
         )
     if geometry_kind == "line":
         return VectorStyle(
             geometryKind="line",
-            strokeColor="#e31a1c",
+            strokeColor="#2b83ba",
             strokeOpacity=1,
-            strokeWidth=3,
+            strokeWidth=2,
         )
     return VectorStyle(
         geometryKind="polygon",
-        fillColor="#fd8d3c",
-        fillOpacity=1,
-        strokeColor="#800026",
-        strokeOpacity=0,
-        strokeWidth=2,
+        fillColor="#2b83ba",
+        fillOpacity=0.7,
+        strokeColor="#000000",
+        strokeOpacity=1,
+        strokeWidth=0.75,
     )
 
 

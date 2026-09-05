@@ -61,6 +61,13 @@ removal, and presentation-ready legends. It imports neither raster nor vector.
 The raster viewer continues to own raster analysis/control sessions while
 accepting sibling layers only through that neutral adapter contract.
 
+`vector/defaults.js` owns browser default-selection policy using only Catalog
+field metadata and explicit numeric results. The existing vector map adapter
+coordinates publication, optional classification, and style application before
+the layer is attached. The controls consume the same defaults. No vector
+component imports raster analysis or rendering, and numeric reads remain
+available independently of GeoServer and map state.
+
 ## Persisted identity and assessment
 
 Every vector handler emits `eolab:vector_source` with exactly:
@@ -105,8 +112,25 @@ not GeoServer state; selecting the Item again converges and reauthorizes it.
 ## Browser lifecycle and bounds
 
 Vector layers start with fixed `vector-point`, `vector-line`, or
-`vector-polygon` styles and never accept raster `env` substitutions. The
-vector-owned style workflow can replace that initializer style with a
+`vector-polygon` styles and never accept raster `env` substitutions. Points and
+polygons have blue fills at 70% opacity and 0.75 px black outlines; lines use a
+2 px blue stroke. Before displaying a newly added layer, the browser selects a
+recognizable text name (case-insensitive `name`, then `display_name`,
+`common_name`, `label`, `title`, or a sole `name_*`/`*_name` field). Labels use
+12 px dark text, a 1.5 px white halo, and minimum zoom 6. Point labels sit above
+the symbol; line labels follow the line; polygon labels are centered.
+
+When exactly one numeric field remains after excluding obvious ID, code, and
+index fields, the browser requests five classes over the 5th–95th percentile
+range and applies blue–yellow–red colors. Ambiguous measurements remain single
+color until the user chooses **Color features by → Numeric ranges → Color by**.
+The label field remains selectable under **Label by**, and **Show labels** can
+turn labels off. Automatic classification/style failures retain an authorized
+base appearance and expose a notice in Style. Defaults run only on new
+publication preparation: selecting retained layers preserves edits, and saved
+style restoration takes precedence while the layer is still detached.
+
+The vector-owned style workflow can replace that initializer style with a
 content-addressed single-color, categorical, or graduated SLD. The browser submits only
 Catalog identity and a complete validated style; the server re-resolves the current Item,
 source signature, publication authorization, geometry family, and any selected
@@ -143,20 +167,26 @@ controls remain authoritative.
 
 Graduated numeric discovery follows that same vector-owned field-analysis
 boundary. The browser posts only Catalog identity, one current integer or
-floating-point field, `equal-interval` or `quantile`, and a requested class
-count from two through nine. The shared Fiona adapter reads at most 100,000
+floating-point field, `equal-interval`, `quantile`, or `percentile-interval`,
+and a requested class count from two through nine. The shared Fiona adapter reads at most 100,000
 features with geometry ignored and reports finite values, missing values,
 unsupported values, scan completeness, and source extent. Equal intervals use
 the observed minimum and maximum. Quantiles use deterministic nearest-rank
 breaks; repeated breaks collapse, so the response can honestly contain fewer
 classes than requested.
 
+Percentile intervals use nearest-rank 5th and 95th percentiles from the same
+bounded read, then divide that numeric span into equal intervals. Tails remain
+in the open-ended first and last classes. Repeated or numerically collapsed
+breaks are removed; a collapsed percentile range yields one class. Original
+equal-interval and quantile behavior is unchanged.
+
 Every returned class is adjacent and collectively covers all numeric values:
 the first range has no lower bound, internal lower bounds are exclusive and
 upper bounds inclusive, and the last range has no upper bound. This keeps
 features outside an incomplete sample's observed extent visible. The browser
-assigns a deterministic light-to-dark color sequence from Blues, Viridis,
-Yellow-to-red, or Purples, and can separately style nulls when they exist. On
+assigns a deterministic low-to-high color sequence from Blue–yellow–red, Blues,
+Viridis, Yellow-to-red, or Purples, and can separately style nulls when they exist. On
 apply, `VectorStyleService` repeats the current bounded classification and
 requires the submitted ranges to match before generating GeoServer comparison
 filters. A changed source or class result therefore stops styling rather than
@@ -164,8 +194,9 @@ publishing stale breaks. The map-layer view consumes only the vector adapter's
 neutral legend entries and does not know numeric-style internals.
 
 The vector style can optionally add one `TextSymbolizer`. Labels are `null` by
-default. An enabled label contains an exact field from the Item's current STAC
-Table Extension columns, closed font-family and weight choices, bounded font
+default in the fixed publication response; browser initialization enables a
+recognized name as described above. An enabled label contains an exact field
+from the Item's current STAC Table Extension columns, closed font-family and weight choices, bounded font
 and halo values, geometry-aware placement, and a zoom from zero through 22.
 The minimum zoom becomes a label-only `MaxScaleDenominator` rule, so hiding
 labels at small scales never hides the underlying geometry. The SLD requests
@@ -224,7 +255,7 @@ Deployment still requires richpsharp to run the draft PR image against the
 production mount: scan a representative Shapefile and a two-layer GeoPackage,
 add each exact layer, reload/re-add it, and confirm WMS tiles plus distinct
 point/line/polygon styles. For label changes, choose a text and numeric field,
-confirm labels remain off by default, verify geometry-specific placement and
+confirm recognizable names are enabled automatically, verify geometry-specific placement and
 minimum zoom, and revisit a cached zoom after changing font or halo controls.
 For graduated styling, test an integer and floating-point field with both
 methods, change class count and palette, confirm repeated quantiles collapse

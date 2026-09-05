@@ -1088,12 +1088,13 @@
             <legend>Numeric ranges</legend>
             <div class="vector-graduated-options">
               <label for="vector-graduated-field">
-                <span>Numeric field</span>
+                <span>Color by</span>
                 <select id="vector-graduated-field"></select>
               </label>
               <label for="vector-graduated-method">
                 <span>Method</span>
                 <select id="vector-graduated-method">
+                  <option value="percentile-interval">5th–95th percentile range</option>
                   <option value="equal-interval">Equal interval</option>
                   <option value="quantile">Quantile</option>
                 </select>
@@ -1106,9 +1107,10 @@
               <label for="vector-graduated-palette">
                 <span>Palette</span>
                 <select id="vector-graduated-palette">
+                  <option value="blue-yellow-red" selected>Blue–yellow–red</option>
                   <option value="blues">Blues</option>
                   <option value="viridis">Viridis</option>
-                  <option value="yellow-red" selected>Yellow to red</option>
+                  <option value="yellow-red">Yellow to red</option>
                   <option value="purples">Purples</option>
                 </select>
               </label>
@@ -1168,7 +1170,7 @@
             </label>
             <div class="vector-style-group vector-label-fields">
               <label for="vector-label-field">
-                <span>Attribute field</span>
+                <span>Label by</span>
                 <select id="vector-label-field"></select>
               </label>
               <label for="vector-label-placement">

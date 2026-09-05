@@ -30,16 +30,16 @@ export const DEFAULT_RASTER_STYLE = Object.freeze({
     minimum: 0,
     midpoint: 50,
     maximum: 100,
-    minimumColor: "#ffffcc",
-    midpointColor: "#fd8d3c",
-    maximumColor: "#800026",
+    minimumColor: "#2b83ba",
+    midpointColor: "#ffffbf",
+    maximumColor: "#d7191c",
     minimumOpacity: 1,
     midpointOpacity: 1,
     maximumOpacity: 1
 });
 
 /** Named palette applied to newly created and explicitly reset raster styles. */
-export const DEFAULT_RASTER_PALETTE_NAME = "yellow-red";
+export const DEFAULT_RASTER_PALETTE_NAME = "blue-yellow-red";
 
 /** Named color palettes available from the raster appearance controls. */
 export const RASTER_COLOR_PALETTES = Object.freeze({

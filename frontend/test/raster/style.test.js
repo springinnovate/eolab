@@ -19,15 +19,15 @@ import {
   TINY_RASTER_STATISTICS,
 } from "../../test-support/raster/fixtures.js";
 
-test("new rasters default to a fully opaque yellow-to-red ramp", () => {
-  assert.equal(DEFAULT_RASTER_PALETTE_NAME, "yellow-red");
+test("new rasters default to a fully opaque blue-yellow-red ramp", () => {
+  assert.equal(DEFAULT_RASTER_PALETTE_NAME, "blue-yellow-red");
   assert.deepEqual(DEFAULT_RASTER_STYLE, {
     minimum: 0,
     midpoint: 50,
     maximum: 100,
-    minimumColor: "#ffffcc",
-    midpointColor: "#fd8d3c",
-    maximumColor: "#800026",
+    minimumColor: "#2b83ba",
+    midpointColor: "#ffffbf",
+    maximumColor: "#d7191c",
     minimumOpacity: 1,
     midpointOpacity: 1,
     maximumOpacity: 1,
@@ -83,9 +83,9 @@ test("palette and histogram-range edits preserve alpha and legends expose it", (
     assert.deepEqual([result.minimumOpacity, result.midpointOpacity, result.maximumOpacity], [0, 0.5, 1]);
   }
   const legend = buildRasterLegend(style);
-  assert.match(legend.gradient, /#ffffcc00 0%/);
-  assert.match(legend.gradient, /#fd8d3c80 50%/);
-  assert.match(legend.gradient, /#800026ff 100%/);
+  assert.match(legend.gradient, /#2b83ba00 0%/);
+  assert.match(legend.gradient, /#ffffbf80 50%/);
+  assert.match(legend.gradient, /#d7191cff 100%/);
   assert.match(legend.description, /0%, 50%, 100%/);
   // Histogram colors remain readable even for transparent map values.
   assert.equal(getRasterStyleColor(style, 0), DEFAULT_RASTER_STYLE.minimumColor);
@@ -163,12 +163,12 @@ test("late statistics never replace a manually edited style", () => {
 });
 
 test("histogram colors follow the committed three-stop raster ramp", () => {
-  assert.equal(getRasterStyleColor(DEFAULT_RASTER_STYLE, -1), "#ffffcc");
-  assert.equal(getRasterStyleColor(DEFAULT_RASTER_STYLE, 0), "#ffffcc");
-  assert.equal(getRasterStyleColor(DEFAULT_RASTER_STYLE, 50), "#fd8d3c");
-  assert.equal(getRasterStyleColor(DEFAULT_RASTER_STYLE, 100), "#800026");
-  assert.equal(getRasterStyleColor(DEFAULT_RASTER_STYLE, 101), "#800026");
-  assert.equal(getRasterStyleColor(DEFAULT_RASTER_STYLE, 25), "#fec684");
+  assert.equal(getRasterStyleColor(DEFAULT_RASTER_STYLE, -1), "#2b83ba");
+  assert.equal(getRasterStyleColor(DEFAULT_RASTER_STYLE, 0), "#2b83ba");
+  assert.equal(getRasterStyleColor(DEFAULT_RASTER_STYLE, 50), "#ffffbf");
+  assert.equal(getRasterStyleColor(DEFAULT_RASTER_STYLE, 100), "#d7191c");
+  assert.equal(getRasterStyleColor(DEFAULT_RASTER_STYLE, 101), "#d7191c");
+  assert.equal(getRasterStyleColor(DEFAULT_RASTER_STYLE, 25), "#95c1bd");
 });
 
 test("selected histogram percentiles provide a rescaling range", () => {

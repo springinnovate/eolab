@@ -108,7 +108,12 @@ test("vector map-layer adapter owns publication, WMS, legend, and optional fit",
     },
   };
 
-  assert.equal(await fitted.adapter.publish(item), PUBLICATION);
+  const initialized = await fitted.adapter.publish(item);
+  assert.equal(initialized.style.label.field, "name");
+  assert.match(initialized.defaultStyleNotice, /numeric coloring was unavailable/);
+  assert.deepEqual(fitted.numericCalls.splice(0), [{
+    item, field: "area", method: "percentile-interval", classCount: 5,
+  }]);
   assert.equal(fitted.adapter.label(item), "Parcels");
   const record = {
     publication: PUBLICATION,

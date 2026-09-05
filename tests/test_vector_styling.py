@@ -197,25 +197,37 @@ def test_style_model_requires_geometry_specific_controls() -> None:
         "stroke_opacity",
     ),
     [
-        ("point", "#fd8d3c", 1, "#800026", 0),
-        ("line", None, None, "#e31a1c", 1),
-        ("polygon", "#fd8d3c", 1, "#800026", 0),
+        ("point", "#2b83ba", 0.7, "#000000", 1),
+        ("line", None, None, "#2b83ba", 1),
+        ("polygon", "#2b83ba", 0.7, "#000000", 1),
     ],
 )
-def test_default_vector_styles_use_warm_fills_and_visible_lines(
+def test_default_vector_styles_use_translucent_fills_and_black_outlines(
     geometry_kind: str,
     fill_color: str | None,
     fill_opacity: float | None,
     stroke_color: str,
     stroke_opacity: float,
 ) -> None:
-    """Keep default vector colors and geometry-safe opacity explicit."""
+    """Keep default vector colors and geometry-safe opacity explicit.
+
+    Args:
+        geometry_kind: Geometry family whose default is under test.
+        fill_color: Expected fill, absent for lines.
+        fill_opacity: Expected fill opacity, absent for lines.
+        stroke_color: Expected outline or line color.
+        stroke_opacity: Expected visible outline or line opacity.
+
+    Returns:
+        None.
+    """
     style = default_vector_style(geometry_kind)
 
     assert style.fill_color == fill_color
     assert style.fill_opacity == fill_opacity
     assert style.stroke_color == stroke_color
     assert style.stroke_opacity == stroke_opacity
+    assert style.stroke_width == (2 if geometry_kind == "line" else 0.75)
 
 
 @pytest.mark.parametrize("geometry_kind", ["point", "line", "polygon"])
@@ -638,13 +650,16 @@ def test_style_service_revalidates_categorical_field_and_value_types(
         asyncio.run(service.apply(request))
 
 
+@pytest.mark.parametrize("method", ["equal-interval", "percentile-interval"])
 def test_style_service_recomputes_numeric_ranges_before_applying(
     tmp_path: Path,
+    method: str,
 ) -> None:
     """Apply only server-current numeric classes and reject browser drift.
 
     Args:
         tmp_path: Isolated mounted scan source.
+        method: Classification method revalidated during style application.
     """
     item, _ = assessed_category_item(tmp_path)
     resolver = MountedVectorResolver(tmp_path)
@@ -669,7 +684,7 @@ def test_style_service_recomputes_numeric_ranges_before_applying(
             collectionId=item["collection"],
             itemId=item["id"],
             field="score",
-            method="equal-interval",
+            method=method,
             classCount=3,
         )
     ))
@@ -689,9 +704,9 @@ def test_style_service_recomputes_numeric_ranges_before_applying(
             **default_vector_style("polygon").model_dump(by_alias=True),
             "graduated": {
                 "field": "score",
-                "method": "equal-interval",
+                "method": method,
                 "classCount": 3,
-                "palette": "blues",
+                "palette": "blue-yellow-red",
                 "rules": rules,
                 "missingColor": None,
             },
@@ -712,9 +727,9 @@ def test_style_service_recomputes_numeric_ranges_before_applying(
             **default_vector_style("polygon").model_dump(by_alias=True),
             "graduated": {
                 "field": "score",
-                "method": "equal-interval",
+                "method": method,
                 "classCount": 3,
-                "palette": "blues",
+                "palette": "blue-yellow-red",
                 "rules": drifted_rules,
                 "missingColor": None,
             },
