@@ -217,6 +217,10 @@ test("Map layers owns compact rows; the bounded map-tool dock owns styling", () 
     assert.match(inspection.source, /popover="manual"/);
     assert.match(editor.source, /role="tabpanel"/);
     assert.match(inspection.source, /id="map-inspection-tabs"[^>]+role="tablist"/);
+    assert.match(
+        inspection.source,
+        /id="style-inspected-vector-layer"[\s\S]*?aria-controls="layer-style-editor"/
+    );
     for (const [tab, panelId] of [
         ["feature", "vector-feature-inspector"],
         ["time-series", "vector-time-series"],
@@ -242,6 +246,10 @@ test("Map layers owns compact rows; the bounded map-tool dock owns styling", () 
     assert.match(STYLESHEET, /#map-inspection\s*\{[^}]*height:\s*calc\(100dvh - 32px\)/s);
     assert.match(STYLESHEET, /\.map-inspection-panels\s*\{[^}]*min-height:\s*0[^}]*overflow:\s*hidden/s);
     assert.match(STYLESHEET, /#map-inspection\s*\{[^}]*pointer-events:\s*none/s);
+    assert.match(
+        STYLESHEET,
+        /#map-inspection-tab-style\s*\{[^}]*text-overflow:\s*ellipsis/s
+    );
     assert.match(STYLESHEET, /#map-histogram-panel,\s*#layer-style-editor,\s*#vector-feature-inspector,\s*#vector-time-series,\s*#vector-feature-profile\s*\{[^}]*height:\s*100%[^}]*overflow-y:\s*auto/s);
     assert.doesNotMatch(STYLESHEET, /\.map-inspection-panels:has\(/);
 });
@@ -278,7 +286,7 @@ test("inspector publication can reveal Map layers through composition", () => {
     );
     assert.match(
         COMPOSITION_SOURCE,
-        /onHistogramRequested: \(\) => mapInspection\.showHistogram\(\)/
+        /onHistogramRequested: \(\) => mapInspection\.showHistogram\([\s\S]*?layer\.visible && layer\.datasetKind === "raster"[\s\S]*?\.length[\s\S]*?\)/
     );
     assert.doesNotMatch(COMPOSITION_SOURCE, /layoutController\.showWorkspace\("histogram"\)/);
     assert.match(COMPOSITION_SOURCE, /new MapInspectionController\(\)/);

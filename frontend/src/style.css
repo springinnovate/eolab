@@ -3534,6 +3534,12 @@ article.raster-histogram-summary {
   color: var(--brand-press);
 }
 
+#map-inspection-tab-style {
+  max-width: min(220px, 42vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .map-inspection-tab[hidden] {
   display: none;
 }
@@ -3646,7 +3652,20 @@ article.raster-histogram-summary {
 }
 #close-vector-inspector { flex: 0 0 28px; height: 28px; padding: 0; line-height: 1; font-size: 1.1rem; }
 .vector-feature-status { margin: 12px 0; color: var(--text-2); font-size: 0.78rem; }
-#vector-feature-result h3 { margin: 0 0 10px; overflow-wrap: anywhere; font-size: 0.86rem; }
+.vector-feature-result-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 10px;
+}
+.vector-feature-result-heading h3 {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 0.86rem;
+}
+.vector-feature-result-heading .secondary-button { flex: 0 0 auto; }
 .vector-feature-navigation { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; }
 .vector-feature-navigation span { text-align: center; color: var(--text-2); font-size: 0.75rem; }
 .vector-feature-attributes {

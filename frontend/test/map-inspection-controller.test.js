@@ -80,17 +80,20 @@ test("automatic presentation does not move focus and close retains results", () 
 
 test("histogram and style have independent visibility on one persistent surface", () => {
     const h = fixture();
-    h.controller.showStyle();
+    h.controller.showStyle("Coastal resistance.tif");
     assert.equal(h.analysisToolsButton.hidden, true);
     assert.equal(h.style.getAttribute("data-map-inspection-active"), "true");
     assert.equal(h.styleTab.getAttribute("aria-selected"), "true");
-    h.controller.showHistogram();
+    assert.equal(h.styleTab.textContent, "Style · Coastal resistance.tif");
+    assert.equal(h.styleTab.title, "Style Coastal resistance.tif");
+    h.controller.showHistogram(2);
     assert.equal(h.style.hidden, false);
     assert.equal(h.histogram.hidden, false);
     assert.equal(h.style.getAttribute("data-map-inspection-active"), "false");
     assert.equal(h.histogram.getAttribute("data-map-inspection-active"), "true");
     assert.equal(h.styleTab.hidden, false);
     assert.equal(h.histogramTab.hidden, false);
+    assert.equal(h.histogramTab.textContent, "Raster histogram · 2");
     h.controller.closeHistogram();
     assert.equal(h.style.hidden, false);
     assert.equal(h.style.getAttribute("data-map-inspection-active"), "true");
@@ -103,6 +106,55 @@ test("histogram and style have independent visibility on one persistent surface"
     h.controller.destroy();
     assert.equal(h.analysisToolsButton.hidden, false);
     assert.deepEqual(h.calls, ["show", "hide"]);
+});
+
+test("combined map results prefer counted features and retain style context", () => {
+    const h = fixture();
+    h.controller.showStyle("Parcels");
+    h.controller.showHistogram(1);
+    h.controller.showFeatureInspector();
+    assert.equal(h.featureTab.textContent, "Features…");
+    assert.equal(h.featureTab.title, "Inspecting vector features");
+    assert.equal(h.feature.getAttribute("data-map-inspection-active"), "true");
+
+    h.controller.setFeatureResultCount(1, { loading: true });
+    assert.equal(h.featureTab.textContent, "Features · 1…");
+    assert.equal(
+        h.featureTab.title,
+        "1 feature found; vector inspection continues"
+    );
+    h.controller.setFeatureResultCount(3);
+    assert.equal(h.featureTab.textContent, "Features · 3");
+    assert.equal(
+        h.featureTab.title,
+        "3 features at the selected map location"
+    );
+    assert.equal(h.histogram.hidden, false);
+    assert.equal(h.style.hidden, false);
+
+    h.controller.hideFeatureInspector();
+    assert.equal(h.featureTab.textContent, "Features");
+    assert.equal(h.histogram.getAttribute("data-map-inspection-active"), "true");
+    assert.equal(h.styleTab.textContent, "Style · Parcels");
+    h.controller.hideStyle();
+    assert.equal(h.styleTab.textContent, "Style");
+    h.controller.destroy();
+});
+
+test("map result counts reject invalid presentation values", () => {
+    const h = fixture();
+    for (const count of [-1, 1.5, NaN]) {
+        assert.throws(
+            () => h.controller.showHistogram(count),
+            /non-negative integer/
+        );
+        assert.throws(
+            () => h.controller.setFeatureResultCount(count),
+            /non-negative integer/
+        );
+    }
+    assert.throws(() => h.controller.showStyle(""), /non-empty string/);
+    h.controller.destroy();
 });
 
 test("vector feature inspection shares the map-side surface independently", () => {

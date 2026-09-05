@@ -56,6 +56,10 @@ test('one editor keeps its layer identity through reorder and persists opacity o
     h.editor.open('a');
     assert.equal(h.root.hidden, false);
     assert.equal(h.surface.open, true);
+    assert.equal(
+        h.doc.querySelector('#map-inspection-tab-style').textContent,
+        'Style · a.tif',
+    );
     assert.equal(h.doc.activeElement, h.editor.closeButton);
     h.setLayers([...h.layers].reverse());
     h.editor.refresh();

@@ -36,26 +36,31 @@ export class MapInspectionController {
         this.tools = [
             {
                 name: "feature",
+                label: "Features",
                 panel: this.feature,
                 tab: documentContext.querySelector("#map-inspection-tab-feature"),
             },
             {
                 name: "time-series",
+                label: "Series",
                 panel: this.vectorTimeSeries,
                 tab: documentContext.querySelector("#map-inspection-tab-time-series"),
             },
             {
                 name: "feature-profile",
+                label: "Series",
                 panel: this.vectorFeatureProfile,
                 tab: documentContext.querySelector("#map-inspection-tab-feature-profile"),
             },
             {
                 name: "histogram",
+                label: "Raster histogram",
                 panel: this.histogram,
                 tab: documentContext.querySelector("#map-inspection-tab-histogram"),
             },
             {
                 name: "style",
+                label: "Style",
                 panel: this.style,
                 tab: documentContext.querySelector("#map-inspection-tab-style"),
             },
@@ -96,8 +101,21 @@ export class MapInspectionController {
         this.#renderDock();
     }
 
-    /** Reveal histogram results without changing analysis. @return {void} */
-    showHistogram() {
+    /**
+     * Reveal histogram results and identify how many visible rasters participated.
+     *
+     * @param {number|null} [resultCount=null] Visible raster result count.
+     * @return {void}
+     */
+    showHistogram(resultCount = null) {
+        if (resultCount !== null) {
+            this.#validateCount(resultCount);
+        }
+        this.#setToolLabel(
+            "histogram",
+            resultCount === null ? "Raster histogram" :
+                `Raster histogram · ${resultCount}`
+        );
         this.#showTool("histogram");
     }
 
@@ -108,14 +126,30 @@ export class MapInspectionController {
         this.map.focus();
     }
 
-    /** Reveal styling alongside any open histogram without stealing its state. @return {void} */
-    showStyle() {
+    /**
+     * Reveal styling alongside retained inspection results.
+     *
+     * @param {string|null} [layerLabel=null] User-facing style target label.
+     * @return {void}
+     */
+    showStyle(layerLabel = null) {
+        if (layerLabel !== null && (
+            typeof layerLabel !== "string" || layerLabel.trim().length === 0
+        )) {
+            throw new TypeError("Style layer label must be a non-empty string.");
+        }
+        this.#setToolLabel(
+            "style",
+            layerLabel === null ? "Style" : `Style · ${layerLabel}`,
+            layerLabel === null ? "" : `Style ${layerLabel}`
+        );
         this.#showTool("style");
     }
 
     /** Hide styling without closing an open histogram or changing its sample. @return {void} */
     hideStyle() {
         this.#hideTool("style");
+        this.#resetToolLabel("style");
     }
 
     /**
@@ -124,7 +158,38 @@ export class MapInspectionController {
      * @return {void}
      */
     showFeatureInspector() {
+        this.#setToolLabel("feature", "Features…", "Inspecting vector features");
         this.#showTool("feature");
+    }
+
+    /**
+     * Present the number of features returned by the current map click.
+     *
+     * @param {number} resultCount Number of inspected vector features.
+     * @param {Object} [options] Presentation options.
+     * @param {boolean} [options.loading=false] Whether peer requests remain active.
+     * @return {void}
+     */
+    setFeatureResultCount(resultCount, { loading = false } = {}) {
+        this.#validateCount(resultCount);
+        if (typeof loading !== "boolean") {
+            throw new TypeError("Feature loading state must be boolean.");
+        }
+        if (this.feature.hidden) return;
+        if (loading && resultCount === 0) {
+            this.#setToolLabel(
+                "feature", "Features…", "Inspecting vector features"
+            );
+            return;
+        }
+        const noun = resultCount === 1 ? "feature" : "features";
+        this.#setToolLabel(
+            "feature",
+            `Features · ${resultCount}${loading ? "…" : ""}`,
+            loading
+                ? `${resultCount} ${noun} found; vector inspection continues`
+                : `${resultCount} ${noun} at the selected map location`
+        );
     }
 
     /**
@@ -134,6 +199,7 @@ export class MapInspectionController {
      */
     hideFeatureInspector() {
         this.#hideTool("feature");
+        this.#resetToolLabel("feature");
     }
 
     /**
@@ -248,7 +314,8 @@ export class MapInspectionController {
      * Resolve one controller-owned presentation descriptor.
      *
      * @param {string} name Stable presentation name.
-     * @return {{name:string,panel:HTMLElement,tab:HTMLButtonElement}} Tool descriptor.
+     * @return {{name:string,label:string,panel:HTMLElement,tab:HTMLButtonElement}}
+     * Tool descriptor.
      * @throws {RangeError} When the controller receives an unknown tool name.
      */
     #tool(name) {
@@ -257,6 +324,46 @@ export class MapInspectionController {
             throw new RangeError(`Unknown map inspection tool: ${name}`);
         }
         return tool;
+    }
+
+    /**
+     * Validate a result count at the presentation boundary.
+     *
+     * @param {number} count Candidate non-negative integer count.
+     * @return {void}
+     * @throws {TypeError} When count is not a non-negative integer.
+     */
+    #validateCount(count) {
+        if (!Number.isInteger(count) || count < 0) {
+            throw new TypeError(
+                "Map inspection result count must be a non-negative integer."
+            );
+        }
+    }
+
+    /**
+     * Set the visible and accessible label for one dock tool.
+     *
+     * @param {string} name Stable presentation name.
+     * @param {string} label Visible tab label.
+     * @param {string} [title=""] Optional full hover label.
+     * @return {void}
+     */
+    #setToolLabel(name, label, title = "") {
+        const { tab } = this.#tool(name);
+        tab.textContent = label;
+        tab.title = title;
+    }
+
+    /**
+     * Restore one dock tool's stable base label.
+     *
+     * @param {string} name Stable presentation name.
+     * @return {void}
+     */
+    #resetToolLabel(name) {
+        const tool = this.#tool(name);
+        this.#setToolLabel(name, tool.label);
     }
 
     /**
@@ -376,6 +483,7 @@ export class MapInspectionController {
         this.feature.hidden = true;
         this.vectorTimeSeries.hidden = true;
         this.vectorFeatureProfile.hidden = true;
+        for (const { name } of this.tools) this.#resetToolLabel(name);
         this.activeTool = null;
         this.activationOrder = [];
         this.minimized = false;

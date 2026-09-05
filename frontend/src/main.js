@@ -706,7 +706,12 @@ async function initializeCatalog(
         leafletMap,
         leaflet: L,
         onTileError: reportMapTileError,
-        onHistogramRequested: () => mapInspection.showHistogram(),
+        onHistogramRequested: () => mapInspection.showHistogram(Math.max(
+            1,
+            mapLayerController.snapshots().filter((layer) =>
+                layer.visible && layer.datasetKind === "raster"
+            ).length
+        )),
         onStyleRequested: (key) => layerStyleEditor?.open(key),
         onBivariateRenderingChange: (selectedKeys) =>
             mapLayerController.setIndividualRendering(selectedKeys),
@@ -822,7 +827,15 @@ async function initializeCatalog(
             if (visible) mapInspection.showFeatureInspector();
             else mapInspection.hideFeatureInspector();
         },
-        onSampleChange: (sample) => vectorTimeSeries.setSample(sample),
+        onSampleChange: (sample) => {
+            vectorTimeSeries.setSample(sample);
+            if (sample.state === "loading" || sample.state === "ready") {
+                mapInspection.setFeatureResultCount(
+                    sample.observations.length,
+                    { loading: sample.state === "loading" }
+                );
+            }
+        },
         onCurrentObservationChange: (observation) =>
             vectorFeatureProfile.setCurrentObservation(observation),
         onFeatureProfileRequested: () => {
@@ -833,6 +846,7 @@ async function initializeCatalog(
             vectorFeatureProfile.close();
             vectorTimeSeries.open();
         },
+        onStyleRequested: (sourceId) => layerStyleEditor.open(sourceId),
     });
     /**
      * Fan one map exploration intent out to independent raster and vector peers.

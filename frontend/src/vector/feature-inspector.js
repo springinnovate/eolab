@@ -164,6 +164,8 @@ export class VectorFeatureInspectorController {
      * single-feature plotting intent without knowing its implementation.
      * @param {()=>void} configuration.onTimeSeriesRequested Publishes analysis
      * intent for all selected features without knowing its implementation.
+     * @param {(sourceId:string)=>void} configuration.onStyleRequested Publishes
+     * styling intent with the selected feature's opaque source identity.
      * @param {Document} [configuration.documentContext=document] DOM owner.
      * @param {typeof fetch} [configuration.fetchImplementation=globalThis.fetch]
      * HTTP implementation.
@@ -180,6 +182,7 @@ export class VectorFeatureInspectorController {
         onCurrentObservationChange,
         onFeatureProfileRequested,
         onTimeSeriesRequested,
+        onStyleRequested,
         documentContext = document,
         fetchImplementation = globalThis.fetch,
         now = () => globalThis.performance.now(),
@@ -202,6 +205,9 @@ export class VectorFeatureInspectorController {
         if (typeof onTimeSeriesRequested !== "function") {
             throw new TypeError("onTimeSeriesRequested must be a function.");
         }
+        if (typeof onStyleRequested !== "function") {
+            throw new TypeError("onStyleRequested must be a function.");
+        }
         if (typeof now !== "function") {
             throw new TypeError("now must be a function.");
         }
@@ -214,6 +220,7 @@ export class VectorFeatureInspectorController {
         this.onCurrentObservationChange = onCurrentObservationChange;
         this.onFeatureProfileRequested = onFeatureProfileRequested;
         this.onTimeSeriesRequested = onTimeSeriesRequested;
+        this.onStyleRequested = onStyleRequested;
         this.document = documentContext;
         this.fetchImplementation = fetchImplementation;
         this.now = now;
@@ -227,6 +234,9 @@ export class VectorFeatureInspectorController {
         );
         this.featureProfileButton = documentContext.querySelector(
             "#open-vector-feature-profile"
+        );
+        this.styleButton = documentContext.querySelector(
+            "#style-inspected-vector-layer"
         );
         this.status = documentContext.querySelector("#vector-feature-status");
         this.result = documentContext.querySelector("#vector-feature-result");
@@ -251,6 +261,12 @@ export class VectorFeatureInspectorController {
         this.onOpenTimeSeries = () => {
             if (!this.timeSeriesButton.disabled) this.onTimeSeriesRequested();
         };
+        this.onOpenStyle = () => {
+            const selected = this.results[this.resultIndex];
+            if (selected !== undefined && !this.styleButton.disabled) {
+                this.onStyleRequested(selected.target.sourceId);
+            }
+        };
         this.onPrevious = () => this.showResult(this.resultIndex - 1);
         this.onNext = () => this.showResult(this.resultIndex + 1);
         this.onKeydown = (event) => {
@@ -270,9 +286,12 @@ export class VectorFeatureInspectorController {
             this.onOpenFeatureProfile
         );
         this.timeSeriesButton.addEventListener("click", this.onOpenTimeSeries);
+        this.styleButton.addEventListener("click", this.onOpenStyle);
         this.previous.addEventListener("click", this.onPrevious);
         this.next.addEventListener("click", this.onNext);
         this.document.addEventListener("keydown", this.onKeydown);
+        this.styleButton.hidden = true;
+        this.styleButton.disabled = true;
         this.#updateTimeSeriesAction(0);
         this.syncVisibleLayers();
     }
@@ -433,7 +452,9 @@ export class VectorFeatureInspectorController {
         const initialMessage = `Inspecting ${targets.length} visible vector ` +
             `layer${targets.length === 1 ? "" : "s"}…`;
         this.status.textContent = initialMessage;
-        if (this.panel.hidden) this.onInspectionChange(true);
+        // Every accepted click reactivates feature inspection even when its
+        // retained tab was already open behind Histogram or Style.
+        this.onInspectionChange(true);
         this.#publishSample(
             "loading",
             [],
@@ -599,6 +620,9 @@ export class VectorFeatureInspectorController {
         const observation = vectorInspectionObservation({ feature, target });
         this.result.hidden = false;
         this.layerName.textContent = target.label;
+        this.styleButton.hidden = false;
+        this.styleButton.disabled = false;
+        this.styleButton.setAttribute("aria-label", `Style ${target.label}`);
         this.position.textContent = `${this.resultIndex + 1} of ${this.results.length}`;
         this.previous.disabled = this.resultIndex === 0;
         this.next.disabled = this.resultIndex === this.results.length - 1;
@@ -656,6 +680,11 @@ export class VectorFeatureInspectorController {
         this.result.hidden = true;
         this.#updateTimeSeriesAction(0);
         this.featureProfileButton.disabled = true;
+        this.styleButton.hidden = true;
+        this.styleButton.disabled = true;
+        this.styleButton.setAttribute(
+            "aria-label", "Style selected vector layer"
+        );
         this.onCurrentObservationChange(null);
         this.attributes.replaceChildren();
         this.clearHighlight();
@@ -686,6 +715,7 @@ export class VectorFeatureInspectorController {
             this.onOpenFeatureProfile
         );
         this.timeSeriesButton.removeEventListener("click", this.onOpenTimeSeries);
+        this.styleButton.removeEventListener("click", this.onOpenStyle);
         this.previous.removeEventListener("click", this.onPrevious);
         this.next.removeEventListener("click", this.onNext);
         this.document.removeEventListener("keydown", this.onKeydown);

@@ -64,7 +64,7 @@ export class MapLayerStyleEditor {
         this.isRaster = this.rasterViewer.openStyle(key);
         this.refresh();
         if (this.key === null) return;
-        this.inspection.showStyle();
+        this.inspection.showStyle(this.title.textContent);
         this.closeButton.focus();
     }
 
