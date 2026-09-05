@@ -503,9 +503,12 @@ def _append_label_rule(
             f"{{{OGC_NAMESPACE}}}Function",
             {"name": "interiorPoint" if geometry_kind == "polygon" else "centroid"},
         )
-        # GeoTools trims this to the empty name, selecting the default geometry.
-        # Keep a text node: its SLD DOM parser rejects self-closing PropertyName.
-        ElementTree.SubElement(anchor, f"{{{OGC_NAMESPACE}}}PropertyName").text = " "
+        # property("") selects the default geometry without a source-column guess.
+        # Unlike an empty PropertyName, this survives GeoServer's SLD round-trip.
+        default_geometry = ElementTree.SubElement(
+            anchor, f"{{{OGC_NAMESPACE}}}Function", {"name": "property"},
+        )
+        ElementTree.SubElement(default_geometry, f"{{{OGC_NAMESPACE}}}Literal")
     label_expression = ElementTree.SubElement(
         text_symbolizer,
         f"{{{SLD_NAMESPACE}}}Label",

@@ -399,10 +399,11 @@ def test_sld_generation_adds_independently_scaled_vector_labels(
     anchor = text_symbolizer.find("./sld:Geometry/ogc:Function", namespaces)
     if geometry_kind == "polygon" or (geometry_kind == "line" and fixed_placement):
         assert anchor.attrib["name"] == ("interiorPoint" if geometry_kind == "polygon" else "centroid")
-        geometry_property = anchor.find("ogc:PropertyName", namespaces)
-        # GeoServer's DOM parser requires a text node before trimming the name.
-        assert geometry_property.text is not None
-        assert geometry_property.text.strip() == ""
+        # Empty Literal survives GeoServer normalization; empty PropertyName does not.
+        geometry_property = anchor.find("ogc:Function", namespaces)
+        assert geometry_property.attrib["name"] == "property"
+        assert geometry_property.find("ogc:Literal", namespaces).text is None
+        assert anchor.find("ogc:PropertyName", namespaces) is None
         assert list(text_symbolizer)[0].tag == f"{{{SLD_NAMESPACE}}}Geometry"
     else:
         assert anchor is None
