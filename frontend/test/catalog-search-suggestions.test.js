@@ -109,7 +109,7 @@ function createSuggestionFixture() {
 test("Catalog filter descriptions are executable parser-owned syntax", () => {
   assert.deepEqual(
     CATALOG_SEARCH_FILTERS.map((filter) => filter.field),
-    ["format", "type", "type", "date"],
+    ["type", "type", "date"],
   );
   for (const filter of CATALOG_SEARCH_FILTERS.filter(
     (candidate) => candidate.searchImmediately,
@@ -119,10 +119,10 @@ test("Catalog filter descriptions are executable parser-owned syntax", () => {
 });
 
 test("Catalog suggestions follow the current token and omit used fields", () => {
-  assert.deepEqual(getCatalogSearchTokenRange("forest fo", 9), {
+  assert.deepEqual(getCatalogSearchTokenRange("forest ty", 9), {
     start: 7,
     end: 9,
-    text: "fo",
+    text: "ty",
   });
   assert.deepEqual(
     getCatalogSearchSuggestions("forest ty", 9).map((filter) => filter.field),
@@ -149,13 +149,13 @@ test("Catalog suggestions follow the current token and omit used fields", () => 
 test("Catalog suggestion replacement preserves the rest of the query", () => {
   assert.deepEqual(
     applyCatalogSearchSuggestion(
-      "forest fo date:2024",
+      "forest ty date:2024",
       9,
       CATALOG_SEARCH_FILTERS[0],
     ),
     {
-      value: "forest format:cog date:2024",
-      caretPosition: 17,
+      value: "forest type:raster date:2024",
+      caretPosition: 18,
     },
   );
 });

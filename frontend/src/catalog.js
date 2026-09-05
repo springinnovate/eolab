@@ -5,10 +5,7 @@ const CATALOG_SUBSTRING_PROPERTIES = [
     "eolab_datetime_text",
     "eolab_end_datetime_text"
 ];
-const CATALOG_DATA_ASSET_MEDIA_TYPE_PROPERTY = "assets.data.type";
 const CATALOG_COLLECTION_PROPERTY = "collection";
-const COG_MEDIA_TYPE =
-    "image/tiff; application=geotiff; profile=cloud-optimized";
 const CATALOG_FILTER_FIELD_PATTERN = /^[a-z][a-z0-9_-]*$/i;
 const CATALOG_DATE_PERIOD_PATTERN =
     /^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?$/;
@@ -37,15 +34,6 @@ export const MOUNTED_VECTOR_COLLECTION_ID = "eolab-mounted-vectors";
  * }>>}
  */
 export const CATALOG_SEARCH_FILTERS = Object.freeze([
-    Object.freeze({
-        field: "format",
-        token: "format:cog",
-        value: "cog",
-        label: "Cloud-optimized rasters",
-        description: "Only cloud-optimized GeoTIFF Items.",
-        keywords: Object.freeze(["format", "cog", "datatype", "raster"]),
-        searchImmediately: true
-    }),
     Object.freeze({
         field: "type",
         token: "type:raster",
@@ -523,7 +511,6 @@ export function buildCatalogSearch(searchText) {
     }
 
     const literalTokens = [];
-    let hasCogFormatFilter = false;
     let datasetCollectionId = null;
     let datetime = null;
     for (const token of normalizedSearchText.split(/\s+/)) {
@@ -579,25 +566,6 @@ export function buildCatalogSearch(searchText) {
             continue;
         }
         if (
-            normalizedFieldName === "format" &&
-            supportedFilters !== undefined
-        ) {
-            if (!supportedFilters.some(
-                (filter) => normalizedFieldValue === filter.value
-            )) {
-                throw new CatalogSearchSyntaxError(
-                    "The supported format filter is format:cog."
-                );
-            }
-            if (hasCogFormatFilter) {
-                throw new CatalogSearchSyntaxError(
-                    "The format filter may appear only once."
-                );
-            }
-            hasCogFormatFilter = true;
-            continue;
-        }
-        if (
             normalizedFieldName === "type" &&
             supportedFilters !== undefined
         ) {
@@ -623,15 +591,6 @@ export function buildCatalogSearch(searchText) {
     }
 
     const filters = literalTokens.map((token) => buildSubstringFilter(token));
-    if (hasCogFormatFilter) {
-        filters.push({
-            op: "=",
-            args: [
-                { property: CATALOG_DATA_ASSET_MEDIA_TYPE_PROPERTY },
-                COG_MEDIA_TYPE
-            ]
-        });
-    }
     if (datasetCollectionId !== null) {
         filters.push({
             op: "=",

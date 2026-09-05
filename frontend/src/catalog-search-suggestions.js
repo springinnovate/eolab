@@ -7,10 +7,6 @@
 
 import { CATALOG_SEARCH_FILTERS } from "./catalog.js";
 
-const CATALOG_SEARCH_SUGGESTIONS = Object.freeze(
-    CATALOG_SEARCH_FILTERS.filter((filter) => filter.token !== "format:cog")
-);
-
 /**
  * @typedef {Object} CatalogSearchTokenRange
  * @property {number} start Inclusive token start.
@@ -47,14 +43,14 @@ export function getCatalogSearchTokenRange(value, caretPosition) {
  *
  * @param {string} value Complete Catalog search text.
  * @param {number} caretPosition Current input caret offset.
- * @param {ReadonlyArray<Object>} [filters=CATALOG_SEARCH_SUGGESTIONS] Filters
- * promoted by the search input.
+ * @param {ReadonlyArray<Object>} [filters=CATALOG_SEARCH_FILTERS] Supported
+ * parser-owned filter descriptions.
  * @return {ReadonlyArray<Object>} Filters relevant to the current token.
  */
 export function getCatalogSearchSuggestions(
     value,
     caretPosition,
-    filters = CATALOG_SEARCH_SUGGESTIONS
+    filters = CATALOG_SEARCH_FILTERS
 ) {
     const range = getCatalogSearchTokenRange(value, caretPosition);
     const otherTokens = [
@@ -130,13 +126,13 @@ function getCatalogSearchSuggestionOptionId(filter) {
 export class CatalogSearchSuggestions {
     /**
      * @param {Document} [documentContext=document] Catalog document.
-     * @param {ReadonlyArray<Object>} [filters=CATALOG_SEARCH_SUGGESTIONS]
-     * Filters promoted by the search input.
+     * @param {ReadonlyArray<Object>} [filters=CATALOG_SEARCH_FILTERS]
+     * Parser-owned supported filter descriptions.
      * @throws {Error} When required Catalog search markup is absent.
      */
     constructor(
         documentContext = document,
-        filters = CATALOG_SEARCH_SUGGESTIONS
+        filters = CATALOG_SEARCH_FILTERS
     ) {
         this.document = documentContext;
         this.filters = filters;
