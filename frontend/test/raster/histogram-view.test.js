@@ -118,6 +118,51 @@ test("constant and non-uniform bins retain correct positions and finite heights"
   assert.ok(bars.every(bar => [...bar.attributes.values()].every(value => !/NaN|Infinity/.test(value))));
 });
 
+test("candidate style thresholds are colored, labeled, and clamped to the plot", () => {
+  const chart = new FakeSvgElement("svg");
+  chart.clientWidth = 391;
+  const markers = [
+    { label: "lower 5%", value: -100, color: "#123456" },
+    { label: "middle 50%", value: 10, color: "#abcdef" },
+    { label: "upper 95%", value: 100, color: "#fedcba" },
+  ];
+
+  renderRasterHistogramChart(
+    chart,
+    RASTER_STATISTICS,
+    DEFAULT_RASTER_STYLE,
+    FAKE_SVG_DOCUMENT,
+    "Raster value",
+    markers,
+  );
+
+  const group = chart.children.find(child =>
+    child.classList.contains("raster-histogram-thresholds")
+  );
+  const lines = group.children.filter(child =>
+    child.classList.contains("raster-histogram-threshold")
+  );
+  const labels = group.children.filter(child =>
+    child.classList.contains("raster-histogram-threshold-label")
+  );
+  assert.deepEqual(lines.map(line => line.style.stroke), markers.map(marker => marker.color));
+  assert.deepEqual(lines.map(line => Number(line.attributes.get("x1"))), [48, 213.5, 379]);
+  assert.deepEqual(labels.map(label => label.textContent), ["L", "M", "U"]);
+  assert.match(chart.attributes.get("aria-label"), /lower 5% at -1\.000e\+2/);
+
+  assert.throws(
+    () => renderRasterHistogramChart(
+      chart,
+      RASTER_STATISTICS,
+      DEFAULT_RASTER_STYLE,
+      FAKE_SVG_DOCUMENT,
+      "Raster value",
+      [{ label: "lower", value: 0, color: "red" }],
+    ),
+    /threshold markers are invalid/,
+  );
+});
+
 test("resizing redraws the plot and stale observers cannot revive cleared charts", () => {
   const { ResizeObserver, instances } = createFakeResizeObservers();
   const documentContext = { ...FAKE_SVG_DOCUMENT, defaultView: { ResizeObserver } };

@@ -18,6 +18,7 @@ import { requireRasterControl } from "./required-control.js";
 import {
     RasterSamplingAreaControlsView,
 } from "./sampling-area-controls-view.js";
+import { RasterStyleHistogramView } from "./style-histogram-view.js";
 
 /**
  * @typedef {Object} RasterControlHandlers
@@ -27,9 +28,12 @@ import {
  * @property {() => void} onResetStyle Restores the initial raster style.
  * @property {() => void} onPercentileInput Updates percentile estimates.
  * @property {() => void} onApplyPercentiles Applies the percentile range.
+ * @property {() => void} onOpenHistogram Opens the full raster-analysis view.
  * @property {() => void} onRetryStatistics Retries raster statistics.
  * @property {(key: string) => void} onSelectHistogram Activates one retained
  * raster selected from the histogram summaries.
+ * @property {(key: string) => void} onStyleHistogram Opens Style for one
+ * retained raster selected from the histogram summaries.
  * @property {(value: string) => void} onSampleWindowRangeInput Changes the
  * sample-window size from the range control.
  * @property {(value: string) => void} onSampleWindowNumberInput Changes the
@@ -60,6 +64,7 @@ export class RasterControlsView {
     #percentileView;
     #root;
     #samplingAreaView;
+    #styleHistogramView;
 
     /**
      * Resolve the complete raster-control DOM contract once at startup.
@@ -84,6 +89,9 @@ export class RasterControlsView {
             documentContext
         );
         this.#samplingAreaView = new RasterSamplingAreaControlsView(
+            documentContext
+        );
+        this.#styleHistogramView = new RasterStyleHistogramView(
             documentContext
         );
     }
@@ -137,6 +145,7 @@ export class RasterControlsView {
         this.#histogramView.bind(handlers);
         this.#percentileView.bind(handlers);
         this.#samplingAreaView.bind(handlers);
+        this.#styleHistogramView.bind(handlers);
     }
 
     /** Remove every listener installed by {@link bind}. @return {void} */
@@ -146,6 +155,7 @@ export class RasterControlsView {
         this.#histogramView.unbind();
         this.#percentileView.unbind();
         this.#samplingAreaView.unbind();
+        this.#styleHistogramView.unbind();
     }
 
     /**
@@ -308,6 +318,50 @@ export class RasterControlsView {
      */
     renderHistogram(statistics, style, valueLabel = "Raster value") {
         this.#histogramView.renderHistogram(statistics, style, valueLabel);
+    }
+
+    /**
+     * Render the keyed style target's distribution and candidate thresholds.
+     *
+     * @param {Object} statistics Validated raster statistics snapshot.
+     * @param {Object} style Candidate raster color and range snapshot.
+     * @param {string} scopeLabel Readable sampling scope.
+     * @param {string} [valueLabel="Raster value"] Horizontal-axis label.
+     * @param {{lower:number,middle:number,upper:number}|null}
+     * [percentiles=null] Draft percentile positions, when applicable.
+     * @return {void}
+     */
+    renderStyleHistogram(
+        statistics,
+        style,
+        scopeLabel,
+        valueLabel = "Raster value",
+        percentiles = null
+    ) {
+        this.#styleHistogramView.render(
+            statistics,
+            style,
+            scopeLabel,
+            valueLabel,
+            percentiles
+        );
+    }
+
+    /**
+     * Present style-histogram loading or unavailable guidance.
+     *
+     * @param {string} scopeLabel Readable sampling scope.
+     * @param {string} message Current histogram status.
+     * @param {boolean} [isBusy=false] Whether statistics are loading.
+     * @return {void}
+     */
+    renderStyleHistogramState(scopeLabel, message, isBusy = false) {
+        this.#styleHistogramView.renderState(scopeLabel, message, isBusy);
+    }
+
+    /** Hide and release the keyed style-histogram preview. @return {void} */
+    clearStyleHistogram() {
+        this.#styleHistogramView.clear();
     }
 
     /** Hide and empty the fixed-bin histogram chart. @return {void} */

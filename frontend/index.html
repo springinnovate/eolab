@@ -1238,58 +1238,36 @@
                           </div>
                         </div>
                         <div class="raster-appearance-body">
-
                           <label class="raster-palette" for="raster-palette">
                             <span>Color palette</span>
                             <select id="raster-palette"></select>
                           </label>
-                          <div class="raster-style-stops">
-                            <label for="raster-minimum">
-                              <span>Display minimum</span>
-                              <input id="raster-minimum" type="number" step="any" aria-describedby="raster-style-error" />
-                            </label>
-                            <input id="raster-minimum-color" type="color" aria-label="Minimum color" aria-describedby="raster-style-error" />
-                            <label for="raster-minimum-opacity">
-                              <span>Opacity %</span>
-                              <input id="raster-minimum-opacity" type="number" min="0" max="100" step="1" value="100" aria-label="Minimum color opacity (%)" aria-describedby="raster-style-error" />
-                            </label>
-                            <label for="raster-midpoint">
-                              <span>Display midpoint</span>
-                              <input id="raster-midpoint" type="number" step="any" aria-describedby="raster-style-error" />
-                            </label>
-                            <input id="raster-midpoint-color" type="color" aria-label="Midpoint color" aria-describedby="raster-style-error" />
-                            <label for="raster-midpoint-opacity">
-                              <span>Opacity %</span>
-                              <input id="raster-midpoint-opacity" type="number" min="0" max="100" step="1" value="100" aria-label="Midpoint color opacity (%)" aria-describedby="raster-style-error" />
-                            </label>
-                            <label for="raster-maximum">
-                              <span>Display maximum</span>
-                              <input id="raster-maximum" type="number" step="any" aria-describedby="raster-style-error" />
-                            </label>
-                            <input id="raster-maximum-color" type="color" aria-label="Maximum color" aria-describedby="raster-style-error" />
-                            <label for="raster-maximum-opacity">
-                              <span>Opacity %</span>
-                              <input id="raster-maximum-opacity" type="number" min="0" max="100" step="1" value="100" aria-label="Maximum color opacity (%)" aria-describedby="raster-style-error" />
-                            </label>
-                          </div>
-                          <div class="raster-legend" id="raster-legend" role="img"></div>
-                          <div class="raster-legend-labels" aria-hidden="true">
-                            <span><small>Minimum</small><span id="raster-legend-minimum"></span></span>
-                            <span><small>Midpoint</small><span id="raster-legend-midpoint"></span></span>
-                            <span><small>Maximum</small><span id="raster-legend-maximum"></span></span>
-                          </div>
-                          <p class="raster-style-error" id="raster-style-error" role="status"></p>
-                          <p
-                            class="raster-appearance-status"
-                            id="raster-appearance-status"
-                            role="status"
-                            aria-live="polite"
-                            aria-atomic="true"
-                          ></p>
-                          <button class="secondary-button" id="reset-raster-style" type="button">
-                            Reset colors, opacity and range
-                          </button>
-                          <details class="style-percentiles"><summary>Use histogram range</summary><div
+                          <section
+                            class="raster-style-histogram"
+                            id="raster-style-histogram"
+                            aria-labelledby="raster-style-histogram-heading"
+                            aria-busy="false"
+                            hidden
+                          >
+                            <div class="raster-style-histogram-heading">
+                              <h4 id="raster-style-histogram-heading">Distribution and color stretch</h4>
+                              <span id="raster-style-histogram-scope"></span>
+                            </div>
+                            <svg
+                              class="raster-histogram-chart"
+                              id="raster-style-histogram-chart"
+                              role="img"
+                              hidden
+                            ></svg>
+                            <p
+                              class="raster-histogram-status"
+                              id="raster-style-histogram-status"
+                              role="status"
+                              aria-live="polite"
+                              aria-atomic="true"
+                            ></p>
+                          </section>
+                          <div
                             class="raster-percentile-controls"
                             id="raster-percentile-controls"
                             role="group"
@@ -1346,9 +1324,65 @@
                               id="apply-raster-percentiles"
                               type="button"
                             >
-                              Apply histogram range
+                              Apply 5/50/95 stretch to map
                             </button>
-                          </div></details>
+                          </div>
+                          <details class="raster-style-exact-controls">
+                            <summary>Exact values, colors and opacity</summary>
+                            <div class="raster-style-exact-controls-body">
+                              <div class="raster-style-stops">
+                                <label for="raster-minimum">
+                                  <span>Display minimum</span>
+                                  <input id="raster-minimum" type="number" step="any" aria-describedby="raster-style-error" />
+                                </label>
+                                <input id="raster-minimum-color" type="color" aria-label="Minimum color" aria-describedby="raster-style-error" />
+                                <label for="raster-minimum-opacity">
+                                  <span>Opacity %</span>
+                                  <input id="raster-minimum-opacity" type="number" min="0" max="100" step="1" value="100" aria-label="Minimum color opacity (%)" aria-describedby="raster-style-error" />
+                                </label>
+                                <label for="raster-midpoint">
+                                  <span>Display midpoint</span>
+                                  <input id="raster-midpoint" type="number" step="any" aria-describedby="raster-style-error" />
+                                </label>
+                                <input id="raster-midpoint-color" type="color" aria-label="Midpoint color" aria-describedby="raster-style-error" />
+                                <label for="raster-midpoint-opacity">
+                                  <span>Opacity %</span>
+                                  <input id="raster-midpoint-opacity" type="number" min="0" max="100" step="1" value="100" aria-label="Midpoint color opacity (%)" aria-describedby="raster-style-error" />
+                                </label>
+                                <label for="raster-maximum">
+                                  <span>Display maximum</span>
+                                  <input id="raster-maximum" type="number" step="any" aria-describedby="raster-style-error" />
+                                </label>
+                                <input id="raster-maximum-color" type="color" aria-label="Maximum color" aria-describedby="raster-style-error" />
+                                <label for="raster-maximum-opacity">
+                                  <span>Opacity %</span>
+                                  <input id="raster-maximum-opacity" type="number" min="0" max="100" step="1" value="100" aria-label="Maximum color opacity (%)" aria-describedby="raster-style-error" />
+                                </label>
+                              </div>
+                              <div class="raster-legend" id="raster-legend" role="img"></div>
+                              <div class="raster-legend-labels" aria-hidden="true">
+                                <span><small>Minimum</small><span id="raster-legend-minimum"></span></span>
+                                <span><small>Midpoint</small><span id="raster-legend-midpoint"></span></span>
+                                <span><small>Maximum</small><span id="raster-legend-maximum"></span></span>
+                              </div>
+                              <p class="raster-style-error" id="raster-style-error" role="status"></p>
+                            </div>
+                          </details>
+                          <p
+                            class="raster-appearance-status"
+                            id="raster-appearance-status"
+                            role="status"
+                            aria-live="polite"
+                            aria-atomic="true"
+                          ></p>
+                          <div class="raster-style-actions">
+                            <button class="secondary-button" id="reset-raster-style" type="button">
+                              Reset style
+                            </button>
+                            <button class="secondary-button" id="open-raster-histogram-analysis" type="button">
+                              Open full analysis
+                            </button>
+                          </div>
                         </div>
                       </section></div>
         <div id="layer-paired-style" hidden><div id="raster-bivariate-panel" hidden>

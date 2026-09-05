@@ -11,6 +11,10 @@ const FOCUSED_VIEW_IMPORTS = {
         "./value-format.js",
     ],
     "percentile-controls-view.js": ["./required-control.js"],
+    "style-histogram-view.js": [
+        "./histogram-view.js",
+        "./required-control.js",
+    ],
     "bivariate-controls-view.js": [
         "./bivariate.js",
         "./paired-statistics.js",
@@ -90,6 +94,13 @@ test("focused raster views validate only their semantic subgroup roots", async (
         ),
         "utf8"
     );
+    const styleHistogramSource = await readFile(
+        new URL(
+            "../../src/raster/style-histogram-view.js",
+            import.meta.url
+        ),
+        "utf8"
+    );
     const bivariateSource = await readFile(
         new URL(
             "../../src/raster/bivariate-controls-view.js",
@@ -107,6 +118,9 @@ test("focused raster views validate only their semantic subgroup roots", async (
     assert.doesNotMatch(histogramSource, /"#apply-raster-percentiles"/);
     assert.match(percentileSource, /"#raster-percentile-controls"/);
     assert.doesNotMatch(percentileSource, /"#raster-histogram"/);
+    assert.match(styleHistogramSource, /"#raster-style-histogram"/);
+    assert.doesNotMatch(styleHistogramSource, /"#raster-style-controls"/);
+    assert.doesNotMatch(styleHistogramSource, /"#raster-percentile-controls"/);
     assert.match(bivariateSource, /"#raster-bivariate-controls"/);
     assert.match(bivariateSource, /"#raster-bivariate-statistics"/);
     assert.doesNotMatch(bivariateSource, /"#raster-(appearance|style-controls)"/);

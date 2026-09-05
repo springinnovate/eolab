@@ -18,6 +18,8 @@ import { formatRasterPixelValue } from "./value-format.js";
  * @property {() => void} onRetryStatistics Retries raster statistics.
  * @property {(key: string) => void} onSelectHistogram Activates one retained
  * raster whose histogram summary was selected.
+ * @property {(key: string) => void} onStyleHistogram Opens Style for one
+ * retained raster represented by a histogram summary.
  */
 
 /**
@@ -431,13 +433,22 @@ export class RasterHistogramControlsView {
         ) {
             throw new TypeError("Raster histogram summary is invalid");
         }
-        const button = this.documentContext.createElement(summary.automatic ? "article" : "button");
-        button.type = "button";
-        button.className = "raster-histogram-summary";
-        button.setAttribute("aria-label", `Histogram — ${summary.label}`);
+        const container = this.documentContext.createElement("article");
+        container.className = "raster-histogram-summary";
+        container.setAttribute("aria-label", `Histogram — ${summary.label}`);
+        const content = summary.automatic
+            ? container
+            : this.documentContext.createElement("button");
         if (!summary.automatic) {
-            button.setAttribute("aria-controls", "raster-histogram");
-            button.setAttribute("aria-expanded", "false");
+            content.type = "button";
+            content.className = "raster-histogram-summary-select";
+            content.setAttribute("aria-controls", "raster-histogram");
+            content.setAttribute("aria-expanded", "false");
+            content.setAttribute(
+                "aria-label",
+                `Show detailed histogram for ${summary.label}`
+            );
+            container.append(content);
         }
 
         const name = this.documentContext.createElement("span");
@@ -459,7 +470,7 @@ export class RasterHistogramControlsView {
                 : "Histogram unavailable",
         }[summary.state];
         status.hidden = summary.state === "ready";
-        button.append(name, status);
+        content.append(name, status);
         if (summary.automatic && summary.state === "ready" && summary.statistics) {
             const chart = this.documentContext.createElementNS(
                 "http://www.w3.org/2000/svg", "svg"
@@ -469,11 +480,23 @@ export class RasterHistogramControlsView {
                 chart, summary.statistics, summary.style, this.documentContext, summary.valueLabel
             );
             this.summaryCharts.push(chart);
-            button.append(chart);
+            content.append(chart);
         } else if (summary.state === "ready" && summary.counts !== null && summary.counts.length > 0) {
-            button.append(this.#createSummaryPreview(summary));
+            content.append(this.#createSummaryPreview(summary));
         }
-        button.append(scope);
+        content.append(scope);
+        const actions = this.documentContext.createElement("div");
+        actions.className = "raster-histogram-summary-actions";
+        const style = this.documentContext.createElement("button");
+        style.type = "button";
+        style.className = "secondary-button";
+        style.textContent = "Style this raster";
+        style.setAttribute("aria-controls", "layer-style-editor");
+        style.setAttribute("aria-label", `Style ${summary.label}`);
+        style.addEventListener("click", () =>
+            this.handlers?.onStyleHistogram(summary.key)
+        );
+        actions.append(style);
         if (summary.automatic) {
             if (summary.canRetry) {
                 const retry = this.documentContext.createElement("button");
@@ -484,16 +507,22 @@ export class RasterHistogramControlsView {
                 retry.addEventListener("click", () =>
                     this.handlers?.onRetryHistogram(summary.key)
                 );
-                button.append(retry);
+                actions.append(retry);
             }
-            return button;
+            container.append(actions);
+            return container;
         }
         const handleSelect = () => {
             this.handlers?.onSelectHistogram(summary.key);
         };
-        button.addEventListener("click", handleSelect);
-        this.summaryButtons.push({ button, handleSelect, key: summary.key });
-        return button;
+        content.addEventListener("click", handleSelect);
+        this.summaryButtons.push({
+            button: content,
+            handleSelect,
+            key: summary.key,
+        });
+        container.append(actions);
+        return container;
     }
 
     /**

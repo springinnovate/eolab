@@ -1374,6 +1374,29 @@ h5 {
   vector-effect: non-scaling-stroke;
 }
 
+.raster-histogram-threshold-outline,
+.raster-histogram-threshold {
+  vector-effect: non-scaling-stroke;
+}
+
+.raster-histogram-threshold-outline {
+  stroke: rgb(255 255 255 / 88%);
+  stroke-width: 4px;
+}
+
+.raster-histogram-threshold {
+  stroke-width: 2px;
+}
+
+.raster-histogram-threshold-label {
+  fill: var(--text-1);
+  stroke: var(--surface-1);
+  stroke-width: 3px;
+  paint-order: stroke;
+  text-anchor: middle;
+  font: 700 10px/1 system-ui, sans-serif;
+}
+
 .raster-histogram-tooltip {
   pointer-events: none;
 }
@@ -2945,12 +2968,41 @@ h5 {
   text-align: left;
 }
 
-article.raster-histogram-summary { grid-template-columns: minmax(0, 1fr); cursor: default; }
+article.raster-histogram-summary {
+  cursor: default;
+  grid-template-columns: minmax(0, 1fr);
+}
+.raster-histogram-summary-select {
+  display: grid;
+  min-width: 0;
+  cursor: pointer;
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 10px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  padding: 0;
+  color: inherit;
+  text-align: left;
+}
+.raster-histogram-summary-actions {
+  display: flex;
+  flex-wrap: wrap;
+  grid-column: 1 / -1;
+  gap: 6px;
+  margin-top: 4px;
+}
+.raster-histogram-summary-actions .secondary-button {
+  margin: 0;
+  padding: 5px 8px;
+  font-size: 0.68rem;
+}
 .raster-histogram-list[hidden] { display: none; }
 .raster-histogram-overview:has(#raster-histogram-list[hidden]) { display: none; }
 
-button.raster-histogram-summary:hover,
-.raster-histogram-summary[aria-expanded="true"] {
+.raster-histogram-summary-select:hover,
+.raster-histogram-summary-select[aria-expanded="true"] {
   border-color: var(--brand);
   background: var(--surface-selected);
 }
@@ -3830,6 +3882,7 @@ button.raster-histogram-summary:hover,
 }
 #map-histogram-panel .raster-histogram-summary { padding: 0; border: 0; background: transparent; gap: 6px; }
 #map-histogram-panel .raster-histogram-summary + .raster-histogram-summary { padding-top: 12px; border-top: 1px solid var(--border-1); }
+#map-histogram-panel .raster-histogram-summary-select { padding: 0; }
 #map-histogram-panel .raster-histogram-summary-name { padding-right: 36px; }
 #map-histogram-panel .raster-histogram-empty { padding-right: 36px; }
 #map-histogram-panel .raster-histogram-summary-name,
@@ -3874,6 +3927,55 @@ button.raster-histogram-summary:hover,
 #layer-style-editor .raster-appearance-body { overflow: visible; padding: 0; }
 #layer-style-editor .raster-appearance-heading { margin: 14px 0 10px; }
 #layer-style-editor h3 { margin: 0; font-size: 0.85rem; }
+#layer-style-editor .raster-appearance-body { display: grid; gap: 12px; }
+.raster-style-histogram {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  padding: 10px;
+}
+.raster-style-histogram[hidden] { display: none; }
+.raster-style-histogram-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 5px 12px;
+}
+.raster-style-histogram-heading h4 { margin: 0; font-size: 0.78rem; }
+.raster-style-histogram-heading span {
+  color: var(--text-3);
+  font-size: 0.68rem;
+}
+.raster-style-histogram .raster-histogram-chart { height: 180px; }
+.raster-style-histogram[aria-busy="true"] .raster-histogram-chart { opacity: 0.58; }
+.raster-style-histogram .raster-histogram-status {
+  min-height: 1.2em;
+  margin: 0;
+  color: var(--text-2);
+  font-size: 0.72rem;
+}
+#layer-style-editor .raster-percentile-controls {
+  margin: 0;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius);
+  padding: 10px;
+}
+.raster-style-exact-controls {
+  border-top: 1px solid var(--border-2);
+  padding-top: 10px;
+}
+.raster-style-exact-controls > summary {
+  cursor: pointer;
+  color: var(--text-1);
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+.raster-style-exact-controls-body { padding-top: 10px; }
+.raster-style-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.raster-style-actions .secondary-button { margin: 0; }
 
 .vector-style-controls {
   display: grid;

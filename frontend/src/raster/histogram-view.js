@@ -68,6 +68,60 @@ function formatHistogramBinTooltip(
 }
 
 /**
+ * Draw candidate style thresholds over a histogram without changing its data.
+ *
+ * @param {SVGSVGElement} chart Histogram chart element.
+ * @param {Object} plot Plot coordinates in SVG units.
+ * @param {Object} scales Validated histogram scales.
+ * @param {Array<{label:string,value:number,color:string}>} markers Candidate
+ * style thresholds.
+ * @param {Document} documentContext DOM document; injectable for tests.
+ * @return {void}
+ */
+function drawHistogramThresholdMarkers(
+    chart,
+    plot,
+    scales,
+    markers,
+    documentContext
+) {
+    if (markers.length === 0) return;
+    const group = documentContext.createElementNS(SVG_NAMESPACE, "g");
+    group.classList.add("raster-histogram-thresholds");
+    group.setAttribute("aria-hidden", "true");
+    for (const marker of markers) {
+        const x = Math.max(
+            plot.left,
+            Math.min(
+                plot.left + plot.width,
+                plot.left + (marker.value - scales.minimum) /
+                    scales.span * plot.width
+            )
+        );
+        const outline = documentContext.createElementNS(SVG_NAMESPACE, "line");
+        outline.classList.add("raster-histogram-threshold-outline");
+        outline.setAttribute("x1", String(x));
+        outline.setAttribute("x2", String(x));
+        outline.setAttribute("y1", String(plot.top));
+        outline.setAttribute("y2", String(plot.bottom));
+        const line = documentContext.createElementNS(SVG_NAMESPACE, "line");
+        line.classList.add("raster-histogram-threshold");
+        line.setAttribute("x1", String(x));
+        line.setAttribute("x2", String(x));
+        line.setAttribute("y1", String(plot.top));
+        line.setAttribute("y2", String(plot.bottom));
+        line.style.stroke = marker.color;
+        const label = documentContext.createElementNS(SVG_NAMESPACE, "text");
+        label.classList.add("raster-histogram-threshold-label");
+        label.setAttribute("x", String(x));
+        label.setAttribute("y", String(plot.top + 11));
+        label.textContent = marker.label.slice(0, 1).toUpperCase();
+        group.append(outline, line, label);
+    }
+    chart.append(group);
+}
+
+/**
  * Render the validated fixed-bin distribution into its SVG chart.
  *
  * SVG elements do not implement HTMLElement.hidden, so visibility is changed
@@ -79,6 +133,8 @@ function formatHistogramBinTooltip(
  * @param {Document} documentContext DOM document; injectable for tests.
  * @param {number} width Current chart content width in CSS pixels.
  * @param {string} valueLabel X-axis name including known units.
+ * @param {Array<{label:string,value:number,color:string}>} markers Candidate
+ * style thresholds.
  * @return {void}
  */
 function drawRasterHistogramChart(
@@ -87,7 +143,8 @@ function drawRasterHistogramChart(
     style,
     documentContext,
     width,
-    valueLabel
+    valueLabel,
+    markers
 ) {
     const { counts, edges } = statistics.histogram;
     const plot = { left: 48, top: 28, width: width - 60, height: HISTOGRAM_PLOT_HEIGHT, bottom: 28 + HISTOGRAM_PLOT_HEIGHT };
@@ -101,6 +158,11 @@ function drawRasterHistogramChart(
     const provenance = statistics.estimated
         ? "Approximate sampled"
         : "Exact bounded";
+    const markerDescription = markers.length === 0
+        ? ""
+        : " Style thresholds: " + markers.map((marker) =>
+            `${marker.label} at ${formatRasterPixelValue(marker.value)}`
+        ).join(", ") + ".";
     title.textContent =
         `${provenance} band 1 histogram with ${counts.length} bins from ` +
         `${statistics.validSampleCount.toLocaleString()} valid values. ` +
@@ -112,7 +174,8 @@ function drawRasterHistogramChart(
         )}, ${formatRasterPixelValue(statistics.percentiles.p50)}, and ` +
         `${formatRasterPixelValue(statistics.percentiles.p95)}. ` +
         `Horizontal axis: ${valueLabel}${scales.offset === 0 ? "" : `, tick offset ${scales.offset}`}. ` +
-        `Vertical axis: percentage of valid sampled pixels, from 0 to ${scales.maximumPercent}%.`;
+        `Vertical axis: percentage of valid sampled pixels, from 0 to ${scales.maximumPercent}%.` +
+        markerDescription;
     chart.replaceChildren(title);
     drawHistogramAxes(chart, plot, scales, valueLabel, documentContext);
     for (const [binIndex, count] of counts.entries()) {
@@ -141,6 +204,13 @@ function drawRasterHistogramChart(
         chart.append(bar);
         bars.push(bar);
     }
+    drawHistogramThresholdMarkers(
+        chart,
+        plot,
+        scales,
+        markers,
+        documentContext
+    );
     const tooltip = createHistogramTooltip(documentContext, tooltipWidth);
     let activeBar = null;
     for (const [binIndex, bar] of bars.entries()) {
@@ -196,12 +266,43 @@ function drawRasterHistogramChart(
  * @param {Object} style Committed raster color-map style.
  * @param {Document} [documentContext=globalThis.document] Owning DOM document.
  * @param {string} [valueLabel="Raster value"] X-axis label with known units.
+ * @param {Array<{label:string,value:number,color:string}>} [markers=[]]
+ * Candidate style thresholds drawn over the distribution.
  * @return {void}
+ * @throws {TypeError} If marker identity, value, or color is invalid.
  */
-export function renderRasterHistogramChart(chart, statistics, style, documentContext = globalThis.document, valueLabel = "Raster value") {
+export function renderRasterHistogramChart(
+    chart,
+    statistics,
+    style,
+    documentContext = globalThis.document,
+    valueLabel = "Raster value",
+    markers = []
+) {
+    if (
+        !Array.isArray(markers) ||
+        markers.some((marker) => (
+            marker === null ||
+            typeof marker !== "object" ||
+            typeof marker.label !== "string" ||
+            marker.label === "" ||
+            !Number.isFinite(marker.value) ||
+            !/^#[0-9a-f]{6}$/i.test(marker.color)
+        ))
+    ) {
+        throw new TypeError("Raster histogram threshold markers are invalid");
+    }
     clearRasterHistogramChart(chart);
     let width = Math.max(180, chart.clientWidth || HISTOGRAM_CHART_WIDTH);
-    drawRasterHistogramChart(chart, statistics, style, documentContext, width, valueLabel);
+    drawRasterHistogramChart(
+        chart,
+        statistics,
+        style,
+        documentContext,
+        width,
+        valueLabel,
+        markers
+    );
     const Observer = documentContext.defaultView?.ResizeObserver;
     if (!Observer) return;
     /** Refit live coordinates; never redraw a replaced or cleared chart. */
@@ -211,7 +312,15 @@ export function renderRasterHistogramChart(chart, statistics, style, documentCon
         // Ignore hidden/detached charts; they redraw when visible again.
         if (!(nextWidth > 0) || Math.abs(nextWidth - width) < 0.5) return;
         width = Math.max(180, nextWidth);
-        drawRasterHistogramChart(chart, statistics, style, documentContext, width, valueLabel);
+        drawRasterHistogramChart(
+            chart,
+            statistics,
+            style,
+            documentContext,
+            width,
+            valueLabel,
+            markers
+        );
     });
     chartObservers.set(chart, observer);
     observer.observe(chart);

@@ -707,6 +707,7 @@ async function initializeCatalog(
         leaflet: L,
         onTileError: reportMapTileError,
         onHistogramRequested: () => mapInspection.showHistogram(),
+        onStyleRequested: (key) => layerStyleEditor?.open(key),
         onBivariateRenderingChange: (selectedKeys) =>
             mapLayerController.setIndividualRendering(selectedKeys),
     }, {

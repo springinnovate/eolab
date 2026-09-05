@@ -227,6 +227,8 @@ function createFakeControlsView() {
         displayedStatistics: null,
         renderedStatistics: [],
         percentilePresentation: null,
+        styleHistogram: null,
+        styleHistogramState: null,
         applyPercentilesEnabled: true,
         statisticsStatus: "",
         appearanceStatus: "",
@@ -286,6 +288,32 @@ function createFakeControlsView() {
             this.displayedStatistics = statistics;
             this.histogramValueLabel = valueLabel;
             this.renderedStatistics.push(statistics);
+        },
+        renderStyleHistogram(
+            statistics,
+            style,
+            scopeLabel,
+            valueLabel,
+            percentiles
+        ) {
+            this.styleHistogram = {
+                statistics,
+                style: { ...style },
+                scopeLabel,
+                valueLabel,
+                percentiles: percentiles === null
+                    ? null
+                    : { ...percentiles },
+            };
+            this.styleHistogramState = null;
+        },
+        renderStyleHistogramState(scopeLabel, message, isBusy) {
+            this.styleHistogram = null;
+            this.styleHistogramState = { scopeLabel, message, isBusy };
+        },
+        clearStyleHistogram() {
+            this.styleHistogram = null;
+            this.styleHistogramState = null;
         },
         clearHistogram() {
             this.displayedStatistics = null;
@@ -542,6 +570,46 @@ test('histogram axis units follow each analyzed data asset', async () => {
     await flushPromises();
     assert.equal(h.controlsView.histogramValueLabel, "Raster value (%)");
     assert.equal(h.controlsView.layerHistograms[0].valueLabel, "Raster value (%)");
+    h.destroy();
+});
+
+test("keyed raster styling previews histogram thresholds and links both tools", async () => {
+    const styleRequests = [];
+    const h = visibleLayerFixture(undefined, {}, {
+        onStyleRequested: (key) => styleRequests.push(key),
+    });
+    const item = { ...createRasterItem("style-histogram"), assets: { data: {
+        href: "file:///scan-source/folder/style-histogram.tif",
+        "raster:bands": [{ unit: "%" }],
+    } } };
+    await h.viewer.show(item);
+    await flushPromises();
+    const key = h.layerStackView.activeKey;
+    await h.viewer.show(createRasterItem("style-histogram-neighbor"));
+    await flushPromises();
+    assert.notEqual(h.layerStackView.activeKey, key);
+
+    assert.equal(h.viewer.openStyle(key), true);
+    assert.equal(h.controlsView.styleHistogram.statistics.itemId, item.id);
+    assert.equal(h.controlsView.styleHistogram.scopeLabel, "Whole raster");
+    assert.equal(h.controlsView.styleHistogram.valueLabel, "Raster value (%)");
+    assert.deepEqual(
+        h.controlsView.styleHistogram.percentiles,
+        { lower: 5, middle: 50, upper: 95 }
+    );
+    h.controlsView.handlers.onPercentileInput();
+    assert.deepEqual(
+        h.controlsView.styleHistogram.percentiles,
+        { lower: 5, middle: 50, upper: 95 }
+    );
+
+    h.controlsView.handlers.onOpenHistogram();
+    assert.equal(h.controlsView.histogramWidgetOpenCount, 1);
+    h.controlsView.handlers.onStyleHistogram(key);
+    assert.deepEqual(styleRequests, [key]);
+
+    h.viewer.closeStyle();
+    assert.equal(h.controlsView.styleHistogram, null);
     h.destroy();
 });
 

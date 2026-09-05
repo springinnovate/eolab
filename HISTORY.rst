@@ -4,6 +4,7 @@ History
 Unreleased
 ----------
 
+* Show a color-mapped raster histogram beside visible percentile stretch controls, with direct navigation between Style and full analysis.
 * Remove the COG storage-format filter from Catalog search.
 * Sample broad raster histograms from suitable embedded COG overviews before falling back to bounded full-resolution reads.
 * Restore blue–yellow–red raster defaults and add named vector labels, thin black outlines, and automatic numeric coloring.
