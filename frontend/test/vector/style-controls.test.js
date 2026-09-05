@@ -4,13 +4,72 @@ import test from "node:test";
 import { VectorStyleControls } from "../../src/vector/style-controls.js";
 import { FakeRasterControlDocument } from "../../test-support/raster/fake-controls-document.js";
 
+/**
+ * Create a deterministic timeout queue for debounce assertions.
+ *
+ * @return {Object} Injectable timer functions and test inspection helpers.
+ */
+function debounceClock() {
+    let nextHandle = 0;
+    const callbacks = new Map();
+    return {
+        /**
+         * Retain one callback until the clock is flushed.
+         * @param {() => void} callback Scheduled callback.
+         * @return {number} Opaque timeout handle.
+         */
+        schedule(callback) {
+            const handle = ++nextHandle;
+            callbacks.set(handle, callback);
+            return handle;
+        },
+        /**
+         * Remove one scheduled callback.
+         * @param {number} handle Opaque timeout handle.
+         * @return {void}
+         */
+        cancel(handle) {
+            callbacks.delete(handle);
+        },
+        /** Run every currently scheduled callback once. @return {void} */
+        flush() {
+            const current = [...callbacks.values()];
+            callbacks.clear();
+            for (const callback of current) callback();
+        },
+        /**
+         * Return the number of callbacks waiting for the quiet period.
+         * @return {number} Pending callback count.
+         */
+        pendingCount() {
+            return callbacks.size;
+        },
+    };
+}
+
+/**
+ * Flush the debounce clock and promise continuations.
+ * @param {Object} fixture Style control test fixture.
+ * @return {Promise<void>} Resolves after automatic style application settles.
+ */
+async function settleStyle(fixture) {
+    fixture.clock.flush();
+    await new Promise(resolve => setTimeout(resolve, 0));
+}
+
 function styleFixture() {
     const documentContext = new FakeRasterControlDocument();
-    const controls = new VectorStyleControls(documentContext);
+    const clock = debounceClock();
+    const controls = new VectorStyleControls(documentContext, {
+        schedule: clock.schedule,
+        cancel: clock.cancel,
+        debounceMilliseconds: 450,
+    });
     const applied = [];
     return {
         controls,
         documentContext,
+        clock,
         applied,
         target(geometryKind, style) {
             return {
@@ -123,8 +182,10 @@ test("vector style controls apply one complete validated state", async () => {
     fixture.controls.fillColor.value = "#00ff00";
     fixture.controls.fillOpacity.value = "55";
     fixture.controls.strokeWidth.value = "4";
-    fixture.controls.applyButton.dispatchEvent(new Event("click"));
-    await new Promise(resolve => setTimeout(resolve, 0));
+    fixture.controls.strokeWidth.dispatchEvent(new Event("input"));
+    assert.equal(fixture.controls.status.textContent, "Changes pending...");
+    assert.equal(fixture.applied.length, 0);
+    await settleStyle(fixture);
 
     assert.deepEqual(fixture.applied, [{
         geometryKind: "polygon",
@@ -138,7 +199,7 @@ test("vector style controls apply one complete validated state", async () => {
         graduated: null,
         label: null,
     }]);
-    assert.equal(fixture.controls.status.textContent, "Style applied to the map.");
+    assert.equal(fixture.controls.status.textContent, "Style updated on the map.");
     fixture.controls.destroy();
 });
 
@@ -159,10 +220,31 @@ test("vector controls retain automatic appearance, show fallback notices, and al
     assert.equal(fixture.controls.status.textContent, target.notice);
     fixture.controls.labelEnabled.checked = false;
     fixture.controls.labelEnabled.dispatchEvent(new Event("change"));
-    fixture.controls.applyButton.dispatchEvent(new Event("click"));
-    await new Promise(resolve => setTimeout(resolve, 0));
+    await settleStyle(fixture);
     assert.equal(fixture.applied[0].label, null);
     assert.equal(fixture.applied[0].strokeWidth, 0.75);
+    fixture.controls.destroy();
+});
+
+test("vector style controls coalesce rapid edits into the latest style", async () => {
+    const fixture = styleFixture();
+    fixture.controls.show(fixture.target("line", {
+        geometryKind: "line",
+        strokeColor: "#f97316",
+        strokeOpacity: 1,
+        strokeWidth: 2,
+    }));
+
+    fixture.controls.strokeWidth.value = "3";
+    fixture.controls.strokeWidth.dispatchEvent(new Event("input"));
+    fixture.controls.strokeWidth.value = "4";
+    fixture.controls.strokeWidth.dispatchEvent(new Event("input"));
+
+    assert.equal(fixture.clock.pendingCount(), 1);
+    assert.equal(fixture.applied.length, 0);
+    await settleStyle(fixture);
+    assert.equal(fixture.applied.length, 1);
+    assert.equal(fixture.applied[0].strokeWidth, 4);
     fixture.controls.destroy();
 });
 
@@ -185,8 +267,8 @@ test("vector style controls apply a field-backed optional label", async () => {
     fixture.controls.labelHaloWidth.value = "2";
     fixture.controls.labelPlacement.value = "follow-line";
     fixture.controls.labelMinimumZoom.value = "7";
-    fixture.controls.applyButton.dispatchEvent(new Event("click"));
-    await new Promise(resolve => setTimeout(resolve, 0));
+    fixture.controls.labelMinimumZoom.dispatchEvent(new Event("input"));
+    await settleStyle(fixture);
 
     assert.deepEqual(fixture.applied[0].label, {
         field: "value",
@@ -234,8 +316,7 @@ test("vector category controls preserve colors as the bounded limit changes", as
         "#123456",
     );
     assert.equal(fixture.controls.categoryList.children.length, 5);
-    fixture.controls.applyButton.dispatchEvent(new Event("click"));
-    await new Promise(resolve => setTimeout(resolve, 0));
+    await settleStyle(fixture);
 
     assert.equal(fixture.applied[0].categorical.field, "name");
     assert.equal(fixture.applied[0].categorical.limit, 3);
@@ -243,6 +324,34 @@ test("vector category controls preserve colors as the bounded limit changes", as
     assert.equal(fixture.applied[0].categorical.rules[0].color, "#123456");
     assert.equal(fixture.applied[0].categorical.otherColor, "#9ca3af");
     assert.equal(fixture.applied[0].categorical.missingColor, "#d1d5db");
+    fixture.controls.destroy();
+});
+
+test("same-layer refresh preserves an in-flight category discovery", async () => {
+    const fixture = styleFixture();
+    const baseTarget = fixture.target("polygon", {
+        geometryKind: "polygon",
+        fillColor: "#a855f7",
+        fillOpacity: 0.38,
+        strokeColor: "#581c87",
+        strokeOpacity: 1,
+        strokeWidth: 2,
+    });
+    const summary = await baseTarget.summarize("name");
+    let finishSummary;
+    fixture.controls.show({
+        ...baseTarget,
+        summarize: () => new Promise(resolve => { finishSummary = resolve; }),
+    });
+    fixture.controls.mode.value = "categories";
+    fixture.controls.mode.dispatchEvent(new Event("change"));
+
+    fixture.controls.show(baseTarget);
+    finishSummary(summary);
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    assert.equal(fixture.controls.categoryList.children.length, 5);
+    assert.equal(fixture.clock.pendingCount(), 1);
     fixture.controls.destroy();
 });
 
@@ -282,8 +391,7 @@ test("graduated controls classify, palette, and optionally style missing values"
     missing.children[0].dispatchEvent(new Event("change"));
     missing.children[1].value = "#abcdef";
     missing.children[1].dispatchEvent(new Event("input"));
-    fixture.controls.applyButton.dispatchEvent(new Event("click"));
-    await new Promise(resolve => setTimeout(resolve, 0));
+    await settleStyle(fixture);
 
     assert.deepEqual(fixture.applied[0].graduated, {
         field: "value",
@@ -319,7 +427,7 @@ test("graduated controls reject incomplete or non-increasing custom breaks", asy
     const firstBoundary = fixture.controls.graduatedList.children[0].children[1].children[1];
     firstBoundary.value = "";
     firstBoundary.dispatchEvent(new Event("input"));
-    assert.equal(fixture.controls.applyButton.disabled, true);
+    assert.equal(fixture.clock.pendingCount(), 0);
     assert.equal(
         fixture.controls.graduatedStatus.textContent,
         "Enter a finite number for every class break.",
@@ -328,7 +436,7 @@ test("graduated controls reject incomplete or non-increasing custom breaks", asy
 
     firstBoundary.value = "2";
     firstBoundary.dispatchEvent(new Event("input"));
-    assert.equal(fixture.controls.applyButton.disabled, true);
+    assert.equal(fixture.clock.pendingCount(), 0);
     assert.equal(
         fixture.controls.graduatedStatus.textContent,
         "Class breaks must increase from top to bottom.",
@@ -336,7 +444,7 @@ test("graduated controls reject incomplete or non-increasing custom breaks", asy
 
     firstBoundary.value = "0.5";
     firstBoundary.dispatchEvent(new Event("input"));
-    assert.equal(fixture.controls.applyButton.disabled, false);
+    assert.equal(fixture.clock.pendingCount(), 1);
     assert.equal(firstBoundary.getAttribute("aria-invalid"), null);
     fixture.controls.destroy();
 });
@@ -392,17 +500,99 @@ test("closing during an apply cannot disable or overwrite a reopened form", asyn
         fields: [{ name: "name", type: "str" }],
         apply: () => new Promise(resolve => { finishApply = resolve; }),
     });
-    fixture.controls.applyButton.dispatchEvent(new Event("click"));
-    assert.equal(fixture.controls.applyButton.disabled, true);
-    assert.equal(fixture.controls.status.textContent, "Applying style...");
+    fixture.controls.strokeWidth.value = "4";
+    fixture.controls.strokeWidth.dispatchEvent(new Event("input"));
+    fixture.clock.flush();
+    assert.equal(fixture.controls.strokeWidth.disabled, false);
+    assert.equal(fixture.controls.status.textContent, "Updating map...");
     fixture.controls.hide();
     fixture.controls.show(fixture.target("line", style));
-    assert.equal(fixture.controls.applyButton.disabled, false);
+    assert.equal(fixture.controls.strokeWidth.disabled, false);
     fixture.controls.status.textContent = "New target";
     finishApply(style);
     await new Promise(resolve => setTimeout(resolve, 0));
 
     assert.equal(fixture.controls.status.textContent, "New target");
-    assert.equal(fixture.controls.applyButton.disabled, false);
+    assert.equal(fixture.controls.strokeWidth.disabled, false);
+    fixture.controls.destroy();
+});
+
+test("edits remain enabled and the newest style follows an in-flight update", async () => {
+    const fixture = styleFixture();
+    const requested = [];
+    let finishFirst;
+    const style = {
+        geometryKind: "line",
+        strokeColor: "#f97316",
+        strokeOpacity: 1,
+        strokeWidth: 2,
+    };
+    fixture.controls.show({
+        ...fixture.target("line", style),
+        async apply(nextStyle) {
+            requested.push(nextStyle);
+            if (requested.length === 1) {
+                return new Promise(resolve => { finishFirst = resolve; });
+            }
+            return nextStyle;
+        },
+    });
+
+    fixture.controls.strokeWidth.value = "3";
+    fixture.controls.strokeWidth.dispatchEvent(new Event("input"));
+    fixture.clock.flush();
+    fixture.controls.strokeWidth.value = "5";
+    fixture.controls.strokeWidth.dispatchEvent(new Event("input"));
+    assert.equal(fixture.controls.strokeWidth.disabled, false);
+    fixture.clock.flush();
+    assert.equal(fixture.controls.status.textContent, "Latest changes queued...");
+
+    finishFirst(requested[0]);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.deepEqual(requested.map(({ strokeWidth }) => strokeWidth), [3, 5]);
+    assert.equal(fixture.controls.status.textContent, "Style updated on the map.");
+    fixture.controls.destroy();
+});
+
+test("a failed automatic update reports the error and permits another edit", async () => {
+    const fixture = styleFixture();
+    fixture.controls.show({
+        ...fixture.target("line", {
+            geometryKind: "line",
+            strokeColor: "#f97316",
+            strokeOpacity: 1,
+            strokeWidth: 2,
+        }),
+        async apply() {
+            throw new Error("Vector renderer unavailable.");
+        },
+    });
+
+    fixture.controls.strokeWidth.value = "3";
+    fixture.controls.strokeWidth.dispatchEvent(new Event("input"));
+    await settleStyle(fixture);
+    assert.equal(fixture.controls.status.textContent, "Vector renderer unavailable.");
+    assert.equal(fixture.controls.root.getAttribute("aria-busy"), null);
+
+    fixture.controls.strokeWidth.value = "4";
+    fixture.controls.strokeWidth.dispatchEvent(new Event("input"));
+    assert.equal(fixture.clock.pendingCount(), 1);
+    fixture.controls.destroy();
+});
+
+test("closing before the quiet period cancels the pending update", () => {
+    const fixture = styleFixture();
+    fixture.controls.show(fixture.target("line", {
+        geometryKind: "line",
+        strokeColor: "#f97316",
+        strokeOpacity: 1,
+        strokeWidth: 2,
+    }));
+    fixture.controls.strokeWidth.value = "3";
+    fixture.controls.strokeWidth.dispatchEvent(new Event("input"));
+
+    fixture.controls.hide();
+    fixture.clock.flush();
+    assert.equal(fixture.applied.length, 0);
     fixture.controls.destroy();
 });

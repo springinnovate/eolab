@@ -21,6 +21,7 @@ import {
 const LONG_LABEL_NOTE =
     "Labels may overlap to keep names visible. Centered and point labels wrap " +
     "across lines and stay anchored as you zoom.";
+const VECTOR_STYLE_DEBOUNCE_MILLISECONDS = 450;
 
 /** Own vector style form state without knowing map or raster implementations. */
 export class VectorStyleControls {
@@ -28,8 +29,15 @@ export class VectorStyleControls {
      * Bind the fixed vector symbol controls.
      *
      * @param {Document} [documentContext=globalThis.document] Owning document.
+     * @param {{schedule?:(callback:()=>void,delay:number)=>any,
+     * cancel?:(handle:any)=>void,debounceMilliseconds?:number}} [timing]
+     * Injectable timeout functions and delay for deterministic browser tests.
      */
-    constructor(documentContext = globalThis.document) {
+    constructor(documentContext = globalThis.document, {
+        schedule = globalThis.setTimeout,
+        cancel = globalThis.clearTimeout,
+        debounceMilliseconds = VECTOR_STYLE_DEBOUNCE_MILLISECONDS,
+    } = {}) {
         this.document = documentContext;
         this.root = documentContext.querySelector("#layer-vector-style");
         this.heading = documentContext.querySelector("#vector-style-heading");
@@ -70,7 +78,6 @@ export class VectorStyleControls {
         this.labelPlacement = documentContext.querySelector("#vector-label-placement");
         this.labelMinimumZoom = documentContext.querySelector("#vector-label-minimum-zoom");
         this.labelNote = documentContext.querySelector("#vector-label-note");
-        this.applyButton = documentContext.querySelector("#apply-vector-style");
         this.status = documentContext.querySelector("#vector-style-status");
         this.symbolInputs = [
             this.fillColor,
@@ -115,38 +122,59 @@ export class VectorStyleControls {
         this.graduatedMissingInputs = [];
         this.target = null;
         this.generation = 0;
-        this.busy = false;
-        /** Update range-value text after an opacity control changes. @return {void} */
-        this.onRangeInput = () => this.#renderRangeValues();
+        this.scheduleTimeout = schedule;
+        this.cancelTimeout = cancel;
+        this.debounceMilliseconds = Math.max(0, Number(debounceMilliseconds) || 0);
+        this.debounceTimer = null;
+        this.editRevision = 0;
+        this.applyInFlight = false;
+        this.applyQueued = false;
+        /** Render symbol feedback and queue the latest complete style. @return {void} */
+        this.onSymbolInput = () => {
+            this.#renderRangeValues();
+            this.#recordStyleChange();
+        };
         /** Synchronize label controls and guidance after a label input. @return {void} */
         this.onLabelInput = () => {
             this.#synchronizeLabelInputs();
             this.#renderLabelNote();
+            this.#recordStyleChange();
         };
         /** Start the asynchronous color-mode transition. @return {void} */
-        this.onModeChange = () => void this.#changeColorMode();
+        this.onModeChange = () => {
+            this.#recordStyleChange(true);
+            void this.#changeColorMode().then(() => this.#scheduleStyleApply());
+        };
         /** Reset and reload categories after the selected field changes. @return {void} */
         this.onCategoryFieldChange = () => {
             this.categorySummary = null;
             this.categoryColors.clear();
             this.paletteGeneration = 0;
-            void this.#loadCategories();
+            this.#recordStyleChange(true);
+            void this.#loadCategories().then(() => this.#scheduleStyleApply());
         };
         /** Re-render retained category values after the limit changes. @return {void} */
-        this.onCategoryLimitInput = () => this.#renderCategories();
+        this.onCategoryLimitInput = () => {
+            this.#renderCategories();
+            this.#recordStyleChange();
+        };
         /** Replace generated category colors on explicit user request. @return {void} */
-        this.onCategoryRegenerate = () => this.#regenerateCategoryColors();
+        this.onCategoryRegenerate = () => {
+            if (this.#regenerateCategoryColors()) this.#recordStyleChange();
+        };
         /** Reload numeric classes after a server-controlled option changes. @return {void} */
         this.onGraduatedClassificationChange = () => {
             this.graduatedSummary = null;
             this.graduatedBreakValues = [];
             this.graduatedRuleSeed = null;
-            void this.#loadGraduated();
+            this.#recordStyleChange(true);
+            void this.#loadGraduated().then(() => this.#scheduleStyleApply());
         };
         /** Repaint current ranges after the palette changes. @return {void} */
-        this.onGraduatedPaletteChange = () => this.#renderGraduated();
-        /** Start the asynchronous complete-style application. @return {void} */
-        this.onApply = () => void this.#apply();
+        this.onGraduatedPaletteChange = () => {
+            this.#renderGraduated();
+            this.#recordStyleChange();
+        };
         this.mode.addEventListener("change", this.onModeChange);
         this.categoryField.addEventListener("change", this.onCategoryFieldChange);
         this.categoryLimit.addEventListener("input", this.onCategoryLimitInput);
@@ -155,12 +183,14 @@ export class VectorStyleControls {
         this.graduatedMethod.addEventListener("change", this.onGraduatedClassificationChange);
         this.graduatedClassCount.addEventListener("change", this.onGraduatedClassificationChange);
         this.graduatedPalette.addEventListener("change", this.onGraduatedPaletteChange);
-        this.fillOpacity.addEventListener("input", this.onRangeInput);
-        this.strokeOpacity.addEventListener("input", this.onRangeInput);
+        for (const input of this.symbolInputs) {
+            input.addEventListener("input", this.onSymbolInput);
+        }
         this.labelEnabled.addEventListener("change", this.onLabelInput);
-        this.labelField.addEventListener("change", this.onLabelInput);
-        this.labelMinimumZoom.addEventListener("input", this.onLabelInput);
-        this.applyButton.addEventListener("click", this.onApply);
+        for (const input of this.labelInputs) {
+            input.addEventListener("input", this.onLabelInput);
+            input.addEventListener("change", this.onLabelInput);
+        }
     }
 
     /**
@@ -178,15 +208,21 @@ export class VectorStyleControls {
         const changedTarget = this.target?.key !== target.key;
         if (changedTarget) {
             this.generation += 1;
+            this.editRevision += 1;
+            this.#cancelDebouncedApply();
+            this.applyQueued = false;
             this.categoryRequest += 1;
             this.categoryLoading = false;
             this.graduatedRequest += 1;
             this.graduatedLoading = false;
+            this.root.removeAttribute("aria-busy");
         }
         this.labelFields = Array.isArray(target.fields) ? target.fields : [];
         this.categoryFields = vectorCategoricalFields(this.labelFields);
         this.graduatedFields = vectorNumericFields(this.labelFields);
-        this.target = { ...target, fields: this.labelFields };
+        const nextTarget = { ...target, fields: this.labelFields };
+        if (changedTarget) this.target = nextTarget;
+        else Object.assign(this.target, nextTarget);
         this.root.hidden = false;
         if (!changedTarget) return;
         this.heading.textContent = `${style.geometryKind[0].toUpperCase()}${style.geometryKind.slice(1)} style`;
@@ -267,7 +303,7 @@ export class VectorStyleControls {
         };
         this.graduatedMissingEnabled = graduated?.missingColor !== null && graduated !== null;
         this.graduatedMissingColor = graduated?.missingColor ?? "#d1d5db";
-        this.status.textContent = target.notice ?? "";
+        this.status.textContent = target.notice ?? "Changes update the map automatically.";
         this.categoryStatus.textContent = "";
         this.categoryList.replaceChildren();
         this.graduatedStatus.textContent = "";
@@ -283,6 +319,9 @@ export class VectorStyleControls {
     /** Hide and forget the current target. @return {void} */
     hide() {
         if (this.target !== null) this.generation += 1;
+        this.editRevision += 1;
+        this.#cancelDebouncedApply();
+        this.applyQueued = false;
         this.categoryRequest += 1;
         this.graduatedRequest += 1;
         this.target = null;
@@ -293,7 +332,7 @@ export class VectorStyleControls {
         this.graduatedRangePrefixes = [];
         this.graduatedCountOutputs = [];
         this.graduatedRuleSeed = null;
-        this.#setBusy(false);
+        this.root.removeAttribute("aria-busy");
         this.root.hidden = true;
     }
 
@@ -308,83 +347,151 @@ export class VectorStyleControls {
         this.graduatedMethod.removeEventListener("change", this.onGraduatedClassificationChange);
         this.graduatedClassCount.removeEventListener("change", this.onGraduatedClassificationChange);
         this.graduatedPalette.removeEventListener("change", this.onGraduatedPaletteChange);
-        this.fillOpacity.removeEventListener("input", this.onRangeInput);
-        this.strokeOpacity.removeEventListener("input", this.onRangeInput);
+        for (const input of this.symbolInputs) {
+            input.removeEventListener("input", this.onSymbolInput);
+        }
         this.labelEnabled.removeEventListener("change", this.onLabelInput);
-        this.labelField.removeEventListener("change", this.onLabelInput);
-        this.labelMinimumZoom.removeEventListener("input", this.onLabelInput);
-        this.applyButton.removeEventListener("click", this.onApply);
+        for (const input of this.labelInputs) {
+            input.removeEventListener("input", this.onLabelInput);
+            input.removeEventListener("change", this.onLabelInput);
+        }
     }
 
     /**
-     * Apply the complete form state through the narrow target callback.
+     * Record one user edit and reset the quiet-period timer.
      *
-     * @return {Promise<void>} Resolves after validation and the current apply
-     * request finish, or immediately when no target can accept a request.
+     * @param {boolean} [waitingForData=false] Whether an asynchronous summary
+     * must finish before the complete style can be validated.
+     * @return {void}
      */
-    async #apply() {
-        if (this.target === null || this.busy) return;
+    #recordStyleChange(waitingForData = false) {
+        if (this.target === null) return;
+        this.editRevision += 1;
+        this.applyQueued = false;
+        this.#cancelDebouncedApply();
+        if (waitingForData) {
+            this.status.textContent = "Preparing style...";
+            return;
+        }
+        this.#scheduleStyleApply();
+    }
+
+    /** Cancel the current quiet-period timer, if any. @return {void} */
+    #cancelDebouncedApply() {
+        if (this.debounceTimer === null) return;
+        this.cancelTimeout(this.debounceTimer);
+        this.debounceTimer = null;
+    }
+
+    /**
+     * Validate and schedule the latest complete style after the quiet period.
+     *
+     * @return {void}
+     */
+    #scheduleStyleApply() {
+        if (this.target === null) return;
+        this.#cancelDebouncedApply();
+        if (this.categoryLoading || this.graduatedLoading) {
+            this.status.textContent = "Preparing style...";
+            return;
+        }
         let style;
         try {
-            style = normalizeVectorStyle({
-                geometryKind: this.target.style.geometryKind,
-                fillColor: this.fillGroup.hidden ? null : this.fillColor.value,
-                fillOpacity: this.fillGroup.hidden
-                    ? null : Number(this.fillOpacity.value) / 100,
-                strokeColor: this.strokeColor.value,
-                strokeOpacity: Number(this.strokeOpacity.value) / 100,
-                strokeWidth: Number(this.strokeWidth.value),
-                pointSize: this.pointGroup.hidden ? null : Number(this.pointSize.value),
-                categorical: this.mode.value === "categories"
-                    ? this.#categoricalState() : null,
-                graduated: this.mode.value === "graduated"
-                    ? this.#graduatedState() : null,
-                label: this.labelEnabled.checked ? this.#labelState() : null,
-            });
+            style = this.#completeStyleState();
         } catch (error) {
             this.status.textContent = error.message;
             return;
         }
-        const target = this.target;
         const generation = this.generation;
-        this.#setBusy(true);
-        this.status.textContent = "Applying style...";
-        try {
-            const appliedStyle = normalizeVectorStyle(await target.apply(style));
-            if (this.generation !== generation) return;
-            this.target = { ...target, style: appliedStyle };
-            this.status.textContent = "Style applied to the map.";
-            if (appliedStyle.categorical !== null) {
-                this.categoryLimit.value = String(appliedStyle.categorical.limit);
-            }
-            if (appliedStyle.graduated !== null) {
-                this.graduatedClassCount.value = String(appliedStyle.graduated.classCount);
-            }
-            this.#renderLabelNote();
-        } catch (error) {
-            if (this.generation === generation) {
-                this.status.textContent = error.message;
-            }
-        } finally {
-            if (this.generation === generation) this.#setBusy(false);
-        }
+        const revision = this.editRevision;
+        this.status.textContent = "Changes pending...";
+        this.debounceTimer = this.scheduleTimeout(() => {
+            this.debounceTimer = null;
+            void this.#applyStyle(style, generation, revision);
+        }, this.debounceMilliseconds);
     }
 
     /**
-     * Lock or unlock every editable field for one atomic style request.
+     * Build one normalized complete style from the current form.
      *
-     * @param {boolean} busy Whether a style request owns the form.
-     * @return {void}
+     * @return {Object} Complete validated vector style.
      */
-    #setBusy(busy) {
-        this.busy = busy;
-        if (busy) this.root.setAttribute("aria-busy", "true");
-        else this.root.removeAttribute("aria-busy");
-        this.applyButton.disabled = busy;
-        for (const input of this.symbolInputs) input.disabled = busy;
-        this.#synchronizeLabelInputs();
-        this.#synchronizeCategoryInputs();
-        this.#synchronizeGraduatedInputs();
+    #completeStyleState() {
+        return normalizeVectorStyle({
+            geometryKind: this.target.style.geometryKind,
+            fillColor: this.fillGroup.hidden ? null : this.fillColor.value,
+            fillOpacity: this.fillGroup.hidden
+                ? null : Number(this.fillOpacity.value) / 100,
+            strokeColor: this.strokeColor.value,
+            strokeOpacity: Number(this.strokeOpacity.value) / 100,
+            strokeWidth: Number(this.strokeWidth.value),
+            pointSize: this.pointGroup.hidden ? null : Number(this.pointSize.value),
+            categorical: this.mode.value === "categories"
+                ? this.#categoricalState() : null,
+            graduated: this.mode.value === "graduated"
+                ? this.#graduatedState() : null,
+            label: this.labelEnabled.checked ? this.#labelState() : null,
+        });
+    }
+
+    /**
+     * Serialize one complete style through the existing narrow target callback.
+     *
+     * @param {Object} style Complete style captured after the quiet period.
+     * @param {number} generation Editor generation that owns the request.
+     * @param {number} revision User-edit revision represented by the style.
+     * @return {Promise<void>} Resolves after the request and any queued update.
+     */
+    async #applyStyle(style, generation, revision) {
+        if (
+            this.target === null || this.generation !== generation ||
+            this.editRevision !== revision
+        ) return;
+        if (this.applyInFlight) {
+            this.applyQueued = true;
+            this.status.textContent = "Latest changes queued...";
+            return;
+        }
+        const target = this.target;
+        this.applyInFlight = true;
+        this.root.setAttribute("aria-busy", "true");
+        this.status.textContent = "Updating map...";
+        try {
+            const appliedStyle = normalizeVectorStyle(await target.apply(style));
+            if (this.generation !== generation) return;
+            this.target.style = appliedStyle;
+            if (this.editRevision === revision) {
+                this.status.textContent = "Style updated on the map.";
+                if (appliedStyle.categorical !== null) {
+                    this.categoryLimit.value = String(appliedStyle.categorical.limit);
+                }
+                if (appliedStyle.graduated !== null) {
+                    this.graduatedClassCount.value = String(appliedStyle.graduated.classCount);
+                }
+                this.#renderLabelNote();
+            }
+        } catch (error) {
+            if (
+                this.generation === generation &&
+                this.editRevision === revision
+            ) {
+                this.status.textContent = error.message;
+            }
+        } finally {
+            this.applyInFlight = false;
+            this.root.removeAttribute("aria-busy");
+            if (this.applyQueued && this.target !== null) {
+                this.applyQueued = false;
+                let nextStyle;
+                try {
+                    nextStyle = this.#completeStyleState();
+                } catch (error) {
+                    this.status.textContent = error.message;
+                    return;
+                }
+                void this.#applyStyle(nextStyle, this.generation, this.editRevision);
+            }
+        }
     }
 
     /**
@@ -777,19 +884,13 @@ export class VectorStyleControls {
     #synchronizeCategoryInputs() {
         const categorical = this.mode.value === "categories";
         const unavailable = this.categoryFields.length === 0;
-        this.mode.disabled = this.busy;
-        const disabled = this.busy || this.categoryLoading || unavailable;
+        const disabled = this.categoryLoading || unavailable;
+        this.mode.disabled = false;
         this.categoryField.disabled = disabled;
         this.categoryLimit.disabled = disabled || !categorical;
         this.categoryRegenerate.disabled =
             disabled || !categorical || this.categorySummary === null;
         for (const input of this.categoryColorInputs) input.disabled = disabled;
-        this.applyButton.disabled =
-            this.busy ||
-            (categorical && (this.categoryLoading || this.categorySummary === null)) ||
-            (this.mode.value === "graduated" &&
-                (this.graduatedLoading || !this.#graduatedSummaryMatchesControls() ||
-                    this.#graduatedBreakError() !== null));
     }
 
     /**
@@ -800,27 +901,21 @@ export class VectorStyleControls {
     #synchronizeGraduatedInputs() {
         const graduated = this.mode.value === "graduated";
         const unavailable = this.graduatedFields.length === 0;
-        const disabled = this.busy || this.graduatedLoading || unavailable;
-        this.mode.disabled = this.busy;
+        const disabled = this.graduatedLoading || unavailable;
+        this.mode.disabled = false;
         this.graduatedField.disabled = disabled;
         this.graduatedMethod.disabled = disabled || !graduated;
         this.graduatedClassCount.disabled = disabled || !graduated;
-        this.graduatedPalette.disabled = this.busy || unavailable || !graduated;
+        this.graduatedPalette.disabled = unavailable || !graduated;
         for (const input of this.graduatedBoundaryInputs) {
             input.disabled = disabled || !graduated;
         }
         if (this.graduatedMissingInputs.length === 2) {
             const [enabled, missingColor] = this.graduatedMissingInputs;
-            enabled.disabled = this.busy || this.graduatedLoading;
+            enabled.disabled = this.graduatedLoading;
             missingColor.disabled =
-                this.busy || this.graduatedLoading || !enabled.checked;
+                this.graduatedLoading || !enabled.checked;
         }
-        this.applyButton.disabled =
-            this.busy ||
-            (this.mode.value === "categories" &&
-                (this.categoryLoading || this.categorySummary === null)) ||
-            (graduated && (this.graduatedLoading || !this.#graduatedSummaryMatchesControls() ||
-                this.#graduatedBreakError() !== null));
     }
 
     /**
@@ -856,10 +951,10 @@ export class VectorStyleControls {
     /**
      * Replace every generated color while retaining values and ordering.
      *
-     * @return {void}
+     * @return {boolean} Whether colors were regenerated.
      */
     #regenerateCategoryColors() {
-        if (this.categorySummary === null || this.busy || this.categoryLoading) return;
+        if (this.categorySummary === null || this.categoryLoading) return false;
         this.paletteGeneration += 1;
         for (const [index, entry] of this.categorySummary.values.entries()) {
             this.categoryColors.set(
@@ -868,6 +963,7 @@ export class VectorStyleControls {
             );
         }
         this.#renderCategories();
+        return true;
     }
 
     /**
@@ -946,7 +1042,10 @@ export class VectorStyleControls {
         input.type = "color";
         input.value = currentColor;
         input.setAttribute("aria-label", `${label} color`);
-        input.addEventListener("input", () => onColor(input.value));
+        input.addEventListener("input", () => {
+            onColor(input.value);
+            this.#recordStyleChange();
+        });
         this.categoryColorInputs.push(input);
         const name = this.document.createElement("span");
         name.className = "vector-category-name";
@@ -1101,6 +1200,7 @@ export class VectorStyleControls {
                 this.#refreshGraduatedRows();
                 this.#renderGraduatedStatus();
                 this.#synchronizeGraduatedInputs();
+                this.#recordStyleChange();
             });
             name.append(boundary);
             this.graduatedBoundaryInputs.push(boundary);
@@ -1183,14 +1283,16 @@ export class VectorStyleControls {
         const color = this.document.createElement("input");
         color.type = "color";
         color.value = this.graduatedMissingColor;
-        color.disabled = this.busy || this.graduatedLoading || !enabled.checked;
+        color.disabled = this.graduatedLoading || !enabled.checked;
         color.setAttribute("aria-label", "No value color");
         enabled.addEventListener("change", () => {
             this.graduatedMissingEnabled = enabled.checked;
-            color.disabled = this.busy || this.graduatedLoading || !enabled.checked;
+            color.disabled = this.graduatedLoading || !enabled.checked;
+            this.#recordStyleChange();
         });
         color.addEventListener("input", () => {
             this.graduatedMissingColor = color.value;
+            this.#recordStyleChange();
         });
         const name = this.document.createElement("span");
         name.className = "vector-category-name";
@@ -1277,8 +1379,8 @@ export class VectorStyleControls {
      */
     #synchronizeLabelInputs() {
         const unavailable = this.labelFields.length === 0;
-        this.labelEnabled.disabled = this.busy || unavailable;
-        const fieldsDisabled = this.busy || unavailable || !this.labelEnabled.checked;
+        this.labelEnabled.disabled = unavailable;
+        const fieldsDisabled = unavailable || !this.labelEnabled.checked;
         for (const input of this.labelInputs) input.disabled = fieldsDisabled;
     }
 
