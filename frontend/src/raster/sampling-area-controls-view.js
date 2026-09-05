@@ -17,6 +17,7 @@ import { requireRasterControl } from "./required-control.js";
  * @property {(value: string) => void} onSampleWindowNumberChange Commits the
  * numeric sample-window size.
  * @property {() => void} onClearSampleWindow Restores whole-raster statistics.
+ * @property {() => void} onUseMapWindow Selects a map-centered sample box.
  * @property {() => void} onUseTemporaryAoi Selects the retained uploaded AOI.
  */
 
@@ -36,6 +37,14 @@ export class RasterSamplingAreaControlsView {
             documentContext,
             "#raster-sampling-area-controls"
         );
+        this.samplingAreaSummary = requireRasterControl(
+            documentContext,
+            "#raster-sampling-area-summary"
+        );
+        this.wholeRasterChoiceLabel = requireRasterControl(
+            documentContext,
+            "#raster-sampling-area-whole-label"
+        );
         this.sampleWindowRange = requireRasterControl(
             documentContext,
             "#raster-sample-window-range"
@@ -48,9 +57,21 @@ export class RasterSamplingAreaControlsView {
             documentContext,
             "#clear-raster-sample-window"
         );
+        this.useMapWindowButton = requireRasterControl(
+            documentContext,
+            "#use-map-window-for-raster"
+        );
+        this.mapBoxControls = requireRasterControl(
+            documentContext,
+            "#raster-map-box-controls"
+        );
         this.useTemporaryAoiButton = requireRasterControl(
             documentContext,
             "#use-temporary-aoi-for-raster"
+        );
+        this.temporaryAoiDetail = requireRasterControl(
+            documentContext,
+            "#raster-sampling-aoi-detail"
         );
         this.sampleWindowStatus = requireRasterControl(
             documentContext,
@@ -66,6 +87,7 @@ export class RasterSamplingAreaControlsView {
         this.boundSampleWindowNumberChange =
             this.#handleSampleWindowNumberChange.bind(this);
         this.boundClearSampleWindow = this.#handleClearSampleWindow.bind(this);
+        this.boundUseMapWindow = this.#handleUseMapWindow.bind(this);
         this.boundUseTemporaryAoi = this.#handleUseTemporaryAoi.bind(this);
     }
 
@@ -90,11 +112,15 @@ export class RasterSamplingAreaControlsView {
             this.boundSampleWindowNumberChange
         );
         this.clearSampleWindowButton.addEventListener(
-            "click",
+            "change",
             this.boundClearSampleWindow
         );
+        this.useMapWindowButton.addEventListener(
+            "change",
+            this.boundUseMapWindow
+        );
         this.useTemporaryAoiButton.addEventListener(
-            "click",
+            "change",
             this.boundUseTemporaryAoi
         );
     }
@@ -114,11 +140,15 @@ export class RasterSamplingAreaControlsView {
             this.boundSampleWindowNumberChange
         );
         this.clearSampleWindowButton.removeEventListener(
-            "click",
+            "change",
             this.boundClearSampleWindow
         );
+        this.useMapWindowButton.removeEventListener(
+            "change",
+            this.boundUseMapWindow
+        );
         this.useTemporaryAoiButton.removeEventListener(
-            "click",
+            "change",
             this.boundUseTemporaryAoi
         );
         this.handlers = null;
@@ -162,16 +192,6 @@ export class RasterSamplingAreaControlsView {
     }
 
     /**
-     * Set whether the whole-raster restore action is available.
-     *
-     * @param {boolean} isEnabled Whether a selected window can be cleared.
-     * @return {void}
-     */
-    setClearSampleWindowEnabled(isEnabled) {
-        this.clearSampleWindowButton.disabled = !isEnabled;
-    }
-
-    /**
      * Label the action that clears a selected histogram window.
      *
      * @param {string} label Whole-raster restore or sampled-histogram clear
@@ -183,7 +203,7 @@ export class RasterSamplingAreaControlsView {
         if (typeof label !== "string" || label.trim() === "") {
             throw new TypeError("Histogram clear label must not be blank");
         }
-        this.clearSampleWindowButton.textContent = label;
+        this.wholeRasterChoiceLabel.textContent = label;
     }
 
     /**
@@ -221,12 +241,16 @@ export class RasterSamplingAreaControlsView {
             this.useTemporaryAoiButton.removeAttribute("aria-label");
             this.useTemporaryAoiButton.title =
                 "This histogram does not support uploaded AOI sampling.";
+            this.temporaryAoiDetail.textContent =
+                "Unavailable for a two-raster comparison.";
             return;
         }
         if (temporaryAoi === null) {
             this.useTemporaryAoiButton.removeAttribute("aria-label");
             this.useTemporaryAoiButton.title =
                 "Upload a polygonal AOI to enable this area.";
+            this.temporaryAoiDetail.textContent =
+                "Upload an AOI below to enable this area.";
             return;
         }
         const description =
@@ -234,6 +258,8 @@ export class RasterSamplingAreaControlsView {
             `layer ${temporaryAoi.selectedDataset}`;
         this.useTemporaryAoiButton.setAttribute("aria-label", description);
         this.useTemporaryAoiButton.title = description;
+        this.temporaryAoiDetail.textContent =
+            `${temporaryAoi.filename} · ${temporaryAoi.selectedDataset}`;
     }
 
     /**
@@ -241,16 +267,19 @@ export class RasterSamplingAreaControlsView {
      *
      * @param {"none"|"wholeRaster"|"selectedArea"|"temporaryAoi"} mode
      * Active area, or no selected histogram area for the raster.
+     * @param {string} [label=""] Readable active sampling-area description.
      * @return {void}
      */
-    setSamplingAreaMode(mode) {
-        this.clearSampleWindowButton.setAttribute(
-            "aria-pressed",
-            String(mode === "wholeRaster")
-        );
-        this.useTemporaryAoiButton.setAttribute(
-            "aria-pressed",
-            String(mode === "temporaryAoi")
+    setSamplingAreaMode(mode, label = "") {
+        if (!["none", "wholeRaster", "selectedArea", "temporaryAoi"].includes(mode)) {
+            throw new RangeError(`Unknown raster sampling-area mode: ${mode}`);
+        }
+        this.clearSampleWindowButton.checked = mode === "wholeRaster";
+        this.useMapWindowButton.checked = mode === "selectedArea";
+        this.useTemporaryAoiButton.checked = mode === "temporaryAoi";
+        this.mapBoxControls.hidden = mode !== "selectedArea";
+        this.samplingAreaSummary.textContent = label || (
+            mode === "none" ? "No raster selected" : "Whole raster"
         );
     }
 
@@ -271,11 +300,22 @@ export class RasterSamplingAreaControlsView {
 
     /** Forward whole-raster restoration. @return {void} */
     #handleClearSampleWindow() {
-        this.handlers.onClearSampleWindow();
+        if (this.clearSampleWindowButton.checked) {
+            this.handlers.onClearSampleWindow();
+        }
+    }
+
+    /** Forward map-centered box selection. @return {void} */
+    #handleUseMapWindow() {
+        if (this.useMapWindowButton.checked) {
+            this.handlers.onUseMapWindow();
+        }
     }
 
     /** Forward temporary-AOI selection. @return {void} */
     #handleUseTemporaryAoi() {
-        this.handlers.onUseTemporaryAoi();
+        if (this.useTemporaryAoiButton.checked) {
+            this.handlers.onUseTemporaryAoi();
+        }
     }
 }

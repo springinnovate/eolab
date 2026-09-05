@@ -41,6 +41,7 @@ import { RasterStyleHistogramView } from "./style-histogram-view.js";
  * @property {(value: string) => void} onSampleWindowNumberChange Commits the
  * numeric sample-window size.
  * @property {() => void} onClearSampleWindow Restores whole-raster statistics.
+ * @property {() => void} onUseMapWindow Selects a map-centered sample box.
  * @property {() => void} onUseTemporaryAoi Selects the retained uploaded AOI.
  * @property {(mode: string) => void} onBivariateModeChange Changes explicit
  * overlay/bivariate mode.
@@ -430,16 +431,6 @@ export class RasterControlsView {
     }
 
     /**
-     * Set whether the whole-raster restore action is available.
-     *
-     * @param {boolean} isEnabled Whether a selected window can be cleared.
-     * @return {void}
-     */
-    setClearSampleWindowEnabled(isEnabled) {
-        this.#samplingAreaView.setClearSampleWindowEnabled(isEnabled);
-    }
-
-    /**
      * Label the action that clears a selected histogram window.
      *
      * @param {string} label Whole-raster restore or sampled-histogram clear.
@@ -469,7 +460,7 @@ export class RasterControlsView {
      * @return {void}
      */
     setSamplingAreaMode(mode, label = "") {
-        this.#samplingAreaView.setSamplingAreaMode(mode);
+        this.#samplingAreaView.setSamplingAreaMode(mode, label);
         this.#histogramView.setSamplingAreaMode(mode, label);
     }
 

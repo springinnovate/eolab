@@ -208,6 +208,7 @@ test("RasterControlsView owns style values and semantic control events", () => {
         onSampleWindowNumberInput: (value) => received.push(["number", value]),
         onSampleWindowNumberChange: (value) => received.push(["change", value]),
         onClearSampleWindow: () => received.push(["whole"]),
+        onUseMapWindow: () => received.push(["box"]),
         onUseTemporaryAoi: () => received.push(["aoi"]),
     });
     documentContext
@@ -254,6 +255,7 @@ test("RasterControlsView exposes accessible explicit histogram-area choices", ()
         onSampleWindowNumberInput() {},
         onSampleWindowNumberChange() {},
         onClearSampleWindow: () => received.push("whole"),
+        onUseMapWindow: () => received.push("box"),
         onUseTemporaryAoi: () => received.push("aoi"),
     });
     const temporaryAoi = {
@@ -263,25 +265,35 @@ test("RasterControlsView exposes accessible explicit histogram-area choices", ()
     };
 
     view.setTemporaryAoiAvailability(temporaryAoi);
-    view.setSamplingAreaMode("temporaryAoi");
+    view.setSamplingAreaMode(
+        "temporaryAoi",
+        "AOI · area.gpkg · boundary"
+    );
     assert.equal(
         documentContext.querySelector("#raster-histogram")
             .getAttribute("data-sampling-area"),
         "temporaryAoi"
     );
-    documentContext
-        .querySelector("#clear-raster-sample-window")
-        .dispatchEvent(new Event("click"));
-    documentContext
-        .querySelector("#use-temporary-aoi-for-raster")
-        .dispatchEvent(new Event("click"));
+    const wholeChoice = documentContext.querySelector(
+        "#clear-raster-sample-window"
+    );
+    const mapBoxChoice = documentContext.querySelector(
+        "#use-map-window-for-raster"
+    );
+    const aoiChoice = documentContext.querySelector(
+        "#use-temporary-aoi-for-raster"
+    );
+    wholeChoice.checked = true;
+    wholeChoice.dispatchEvent(new Event("change"));
+    mapBoxChoice.checked = true;
+    mapBoxChoice.dispatchEvent(new Event("change"));
+    aoiChoice.checked = true;
+    aoiChoice.dispatchEvent(new Event("change"));
 
-    assert.deepEqual(received, ["whole", "aoi"]);
+    assert.deepEqual(received, ["whole", "box", "aoi"]);
     assert.equal(
-        documentContext
-            .querySelector("#use-temporary-aoi-for-raster")
-            .getAttribute("aria-pressed"),
-        "true"
+        documentContext.querySelector("#raster-sampling-area-summary").textContent,
+        "AOI · area.gpkg · boundary"
     );
     assert.match(
         documentContext
@@ -293,16 +305,18 @@ test("RasterControlsView exposes accessible explicit histogram-area choices", ()
     view.setClearSampleWindowLabel("Clear selected histogram");
     view.setSamplingAreaMode("none");
     assert.equal(
-        documentContext.querySelector("#clear-raster-sample-window").textContent,
+        documentContext.querySelector("#raster-sampling-area-whole-label")
+            .textContent,
         "Clear selected histogram"
     );
     for (const selector of [
         "#clear-raster-sample-window",
+        "#use-map-window-for-raster",
         "#use-temporary-aoi-for-raster",
     ]) {
         assert.equal(
-            documentContext.querySelector(selector).getAttribute("aria-pressed"),
-            "false"
+            documentContext.querySelector(selector).checked,
+            false
         );
     }
     assert.throws(
@@ -512,7 +526,6 @@ test("RasterControlsView preserves the raster viewer compatibility surface", () 
         "setSampleWindowSize",
         "setSampleWindowInvalid",
         "setSampleWindowStatus",
-        "setClearSampleWindowEnabled",
         "setClearSampleWindowLabel",
         "setTemporaryAoiAvailability",
         "setSamplingAreaMode",

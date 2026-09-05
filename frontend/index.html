@@ -454,269 +454,6 @@
 
                     </div>
           </section>
-          <button
-            class="workspace-disclosure"
-            id="toggle-raster-interpretation"
-            type="button"
-            aria-controls="eomap-raster-interpretation-region"
-            aria-expanded="false"
-          >
-            Sampling
-          </button>
-          <section
-            class="eomap-workspace-region raster-interpretation-region"
-            id="eomap-raster-interpretation-region"
-            role="region"
-            aria-labelledby="toggle-raster-interpretation"
-            aria-hidden="true"
-            hidden
-          >
-                  <div
-                    class="workspace-region-body raster-interpretation-body"
-                    id="eomap-raster-interpretation-body"
-                    aria-hidden="false"
-                  >
-
-                  <fieldset
-                    class="raster-style-controls"
-                    id="raster-style-controls"
-                    hidden
-                  >
-                  <legend>Sample area</legend>
-                  <section
-                    class="raster-control-group raster-active-raster"
-                    id="raster-active-controls"
-                    aria-labelledby="raster-active-raster-heading"
-                    aria-describedby="raster-sample-window-status raster-histogram-status"
-                  >
-                    <strong id="raster-active-raster-heading">Top raster</strong>
-                    <p
-                      class="raster-active-layer-label"
-                      id="raster-active-layer-label"
-                    ></p>
-                  </section>
-                  <section
-                    class="raster-control-group raster-sample-window"
-                    id="raster-sampling-area-controls"
-                    aria-labelledby="raster-sampling-area-heading"
-                  >
-                    <strong id="raster-sampling-area-heading">Sampling area</strong>
-                    <p id="raster-sample-window-description">
-                      Choose the geographic area used by every map-layer histogram.
-                    </p>
-                    <div class="raster-sample-window-size">
-                      <label for="raster-sample-window-range">
-                        <span>Window size (1–300 km)</span>
-                        <input
-                          id="raster-sample-window-range"
-                          type="range"
-                          min="1"
-                          max="300"
-                          step="1"
-                          value="200"
-                          aria-describedby="raster-sample-window-description raster-sample-window-status"
-                        />
-                      </label>
-                      <label for="raster-sample-window-number">
-                        <span>km</span>
-                        <input
-                          id="raster-sample-window-number"
-                          type="number"
-                          min="1"
-                          max="300"
-                          step="1"
-                          value="200"
-                          inputmode="numeric"
-                          aria-label="Window size in kilometers"
-                          aria-describedby="raster-sample-window-description raster-sample-window-status"
-                        />
-                      </label>
-                    </div>
-                    <div class="raster-sample-window-actions">
-                      <button
-                        class="secondary-button"
-                        id="clear-raster-sample-window"
-                        type="button"
-                        aria-pressed="true"
-                        disabled
-                      >
-                        Use whole raster
-                      </button>
-                      <button
-                        class="secondary-button"
-                        id="use-temporary-aoi-for-raster"
-                        type="button"
-                        aria-pressed="false"
-                        disabled
-                      >
-                        Use uploaded AOI
-                      </button>
-                    </div>
-                    <p
-                      class="raster-sample-window-status"
-                      id="raster-sample-window-status"
-                      role="status"
-                      aria-live="polite"
-                      aria-atomic="true"
-                    >
-                      Whole-raster histogram selected. Click the map or use Analysis tools to analyze the map center.
-                    </p>
-                  </section>
-                  </fieldset>
-
-                  <details class="analysis-aoi-disclosure" id="analysis-aoi-disclosure">
-                    <summary
-                      id="toggle-analysis-aoi"
-                      aria-controls="temporary-aoi"
-                      aria-expanded="false"
-                    >
-                      Upload or manage a sampling AOI
-                    </summary>
-                    <section
-                      class="temporary-aoi-card"
-                      id="temporary-aoi"
-                      data-eomap-region="raster-interpretation"
-                      aria-labelledby="temporary-aoi-heading"
-                      aria-busy="false"
-                    >
-                      <div class="temporary-aoi-heading">
-                        <div>
-                          <p class="section-label">Sampling area</p>
-                          <h3 id="temporary-aoi-heading">Temporary AOI</h3>
-                        </div>
-                        <p>Not added to the Catalog</p>
-                      </div>
-                      <p class="temporary-aoi-copy" id="temporary-aoi-help">
-                        Upload one GeoPackage or zipped Shapefile. Files are validated,
-                        displayed temporarily, and removed automatically after expiration.
-                      </p>
-                      <form class="temporary-aoi-upload" id="temporary-aoi-upload-form">
-                        <label for="temporary-aoi-file">
-                          <span>AOI file</span>
-                          <input
-                            id="temporary-aoi-file"
-                            name="file"
-                            type="file"
-                            accept=".gpkg,.zip,application/geopackage+sqlite3,application/zip"
-                            aria-describedby="temporary-aoi-help temporary-aoi-status temporary-aoi-error"
-                            required
-                          />
-                        </label>
-                        <button
-                          class="secondary-button"
-                          id="upload-temporary-aoi"
-                          type="submit"
-                        >
-                          Upload AOI
-                        </button>
-                      </form>
-                      <div
-                        class="temporary-aoi-upload-progress"
-                        id="temporary-aoi-upload-progress-container"
-                        hidden
-                      >
-                        <label for="temporary-aoi-upload-progress">
-                          Approximate upload progress
-                        </label>
-                        <progress
-                          id="temporary-aoi-upload-progress"
-                          max="100"
-                          value="0"
-                          aria-describedby="temporary-aoi-upload-progress-detail temporary-aoi-status"
-                        ></progress>
-                        <p id="temporary-aoi-upload-progress-detail"></p>
-                      </div>
-                      <form
-                        class="temporary-aoi-selection"
-                        id="temporary-aoi-selection-form"
-                        aria-labelledby="temporary-aoi-selection-heading"
-                        hidden
-                      >
-                        <strong id="temporary-aoi-selection-heading">Choose a spatial dataset</strong>
-                        <p>
-                          <span id="temporary-aoi-selection-filename"></span> contains
-                          more than one usable spatial dataset. Nothing will be displayed
-                          until you choose one.
-                        </p>
-                        <label for="temporary-aoi-dataset">
-                          <span>Dataset or layer</span>
-                          <select
-                            id="temporary-aoi-dataset"
-                            aria-describedby="temporary-aoi-status temporary-aoi-error"
-                          ></select>
-                        </label>
-                        <div class="temporary-aoi-selection-actions">
-                          <button class="secondary-button" type="submit">Display dataset</button>
-                          <button
-                            class="secondary-button"
-                            id="cancel-temporary-aoi-selection"
-                            type="button"
-                          >
-                            Cancel upload
-                          </button>
-                        </div>
-                      </form>
-                      <dl class="temporary-aoi-details" id="temporary-aoi-details" hidden>
-                        <div>
-                          <dt>File</dt>
-                          <dd id="temporary-aoi-filename"></dd>
-                        </div>
-                        <div>
-                          <dt>Layer</dt>
-                          <dd id="temporary-aoi-layer"></dd>
-                        </div>
-                        <div>
-                          <dt>Expires</dt>
-                          <dd><time id="temporary-aoi-expiration"></time></dd>
-                        </div>
-                      </dl>
-                      <div
-                        class="temporary-aoi-actions"
-                        id="temporary-aoi-actions"
-                        role="group"
-                        aria-label="Temporary AOI map actions"
-                        hidden
-                      >
-                        <button
-                          class="secondary-button"
-                          id="toggle-temporary-aoi"
-                          type="button"
-                          aria-pressed="true"
-                        >
-                          Hide
-                        </button>
-                        <button
-                          class="secondary-button"
-                          id="zoom-temporary-aoi"
-                          type="button"
-                        >
-                          Zoom to AOI
-                        </button>
-                        <button
-                          class="secondary-button is-danger"
-                          id="remove-temporary-aoi"
-                          type="button"
-                        >
-                          Remove
-                        </button>
-                      </div>
-                      <p
-                        class="temporary-aoi-status"
-                        id="temporary-aoi-status"
-                        role="status"
-                        aria-live="polite"
-                        aria-atomic="true"
-                      ></p>
-                      <p
-                        class="temporary-aoi-error"
-                        id="temporary-aoi-error"
-                        role="alert"
-                        aria-atomic="true"
-                      ></p>
-                    </section>
-                  </details>
-                  </div>
-                </section>
         </div>
 
         <footer class="panel-footer">
@@ -779,7 +516,7 @@
               aria-selected="false" tabindex="-1" hidden>Series</button>
             <button id="map-inspection-tab-histogram" class="map-inspection-tab"
               type="button" role="tab" aria-controls="map-histogram-panel"
-              aria-selected="false" tabindex="-1" hidden>Raster</button>
+              aria-selected="false" tabindex="-1" hidden>Raster histogram</button>
             <button id="map-inspection-tab-style" class="map-inspection-tab"
               type="button" role="tab" aria-controls="layer-style-editor"
               aria-selected="false" tabindex="-1" hidden>Style</button>
@@ -963,10 +700,239 @@
           <section id="map-histogram-panel" role="tabpanel"
             aria-labelledby="map-inspection-tab-histogram" hidden>
             <header class="map-histogram-toolbar">
-              <h2 id="map-histogram-heading" class="visually-hidden">Raster analysis</h2>
+              <h2 id="map-histogram-heading">Raster value histograms</h2>
               <button id="close-map-histogram" class="secondary-button" type="button"
-                aria-label="Close raster analysis">×</button>
+                aria-label="Close raster histogram">×</button>
             </header>
+            <details class="raster-sampling-disclosure" id="raster-sampling-disclosure">
+              <summary aria-controls="raster-sampling-disclosure-body">
+                <span>Sampling area</span>
+                <span id="raster-sampling-area-summary">No raster selected</span>
+                <span class="raster-disclosure-chevron" aria-hidden="true"></span>
+              </summary>
+              <div class="raster-sampling-disclosure-body"
+                id="raster-sampling-disclosure-body">
+                <fieldset class="raster-style-controls" id="raster-style-controls" hidden>
+                  <legend class="visually-hidden">Choose a raster histogram sampling area</legend>
+                  <section class="raster-control-group raster-active-raster"
+                    id="raster-active-controls"
+                    aria-labelledby="raster-active-raster-heading"
+                    aria-describedby="raster-sample-window-status raster-histogram-status">
+                    <strong id="raster-active-raster-heading">Raster</strong>
+                    <p class="raster-active-layer-label" id="raster-active-layer-label"></p>
+                  </section>
+                  <section class="raster-control-group raster-sample-window"
+                    id="raster-sampling-area-controls"
+                    aria-labelledby="raster-sampling-area-heading">
+                    <strong id="raster-sampling-area-heading">Histogram area</strong>
+                    <p id="raster-sample-window-description">
+                      Choose the geographic area used by every visible raster histogram.
+                    </p>
+                    <div class="raster-sampling-area-options" role="radiogroup"
+                      aria-labelledby="raster-sampling-area-heading">
+                      <label class="raster-sampling-area-option"
+                        for="clear-raster-sample-window">
+                        <input id="clear-raster-sample-window" type="radio"
+                          name="raster-sampling-area" value="wholeRaster" checked />
+                        <span>
+                          <strong id="raster-sampling-area-whole-label">Whole raster</strong>
+                          <small>Use all available raster values.</small>
+                        </span>
+                      </label>
+                      <label class="raster-sampling-area-option"
+                        for="use-map-window-for-raster">
+                        <input id="use-map-window-for-raster" type="radio"
+                          name="raster-sampling-area" value="selectedArea" />
+                        <span>
+                          <strong>Box around map location</strong>
+                          <small>Start at the map center; click the map to reposition.</small>
+                        </span>
+                      </label>
+                      <div class="raster-map-box-controls" id="raster-map-box-controls" hidden>
+                        <div class="raster-sample-window-size">
+                          <label for="raster-sample-window-range">
+                            <span>Box size (1–300 km)</span>
+                            <input id="raster-sample-window-range" type="range"
+                              min="1" max="300" step="1" value="200"
+                              aria-describedby="raster-sample-window-description raster-sample-window-status" />
+                          </label>
+                          <label for="raster-sample-window-number">
+                            <span>km</span>
+                            <input id="raster-sample-window-number" type="number"
+                              min="1" max="300" step="1" value="200"
+                              inputmode="numeric" aria-label="Box size in kilometers"
+                              aria-describedby="raster-sample-window-description raster-sample-window-status" />
+                          </label>
+                        </div>
+                      </div>
+                      <label class="raster-sampling-area-option"
+                        for="use-temporary-aoi-for-raster">
+                        <input id="use-temporary-aoi-for-raster" type="radio"
+                          name="raster-sampling-area" value="temporaryAoi" disabled />
+                        <span>
+                          <strong>Uploaded AOI</strong>
+                          <small id="raster-sampling-aoi-detail">Upload an AOI below to enable this area.</small>
+                        </span>
+                      </label>
+                    </div>
+                    <p class="raster-sample-window-status"
+                      id="raster-sample-window-status" role="status"
+                      aria-live="polite" aria-atomic="true">
+                      Select a raster to choose its histogram area.
+                    </p>
+                  </section>
+                </fieldset>
+                <details class="raster-sampling-aoi" id="raster-sampling-aoi-disclosure">
+                  <summary aria-controls="temporary-aoi">
+                    <span>Upload or manage an AOI</span>
+                    <span>GeoPackage or zipped Shapefile</span>
+                    <span class="raster-disclosure-chevron" aria-hidden="true"></span>
+                  </summary>
+                    <section
+                      class="temporary-aoi-card"
+                      id="temporary-aoi"
+                      data-eomap-region="raster-interpretation"
+                      aria-labelledby="temporary-aoi-heading"
+                      aria-busy="false"
+                    >
+                      <div class="temporary-aoi-heading">
+                        <div>
+                          <p class="section-label">Sampling area</p>
+                          <h3 id="temporary-aoi-heading">Temporary AOI</h3>
+                        </div>
+                        <p>Not added to the Catalog</p>
+                      </div>
+                      <p class="temporary-aoi-copy" id="temporary-aoi-help">
+                        Upload one GeoPackage or zipped Shapefile. Files are validated,
+                        displayed temporarily, and removed automatically after expiration.
+                      </p>
+                      <form class="temporary-aoi-upload" id="temporary-aoi-upload-form">
+                        <label for="temporary-aoi-file">
+                          <span>AOI file</span>
+                          <input
+                            id="temporary-aoi-file"
+                            name="file"
+                            type="file"
+                            accept=".gpkg,.zip,application/geopackage+sqlite3,application/zip"
+                            aria-describedby="temporary-aoi-help temporary-aoi-status temporary-aoi-error"
+                            required
+                          />
+                        </label>
+                        <button
+                          class="secondary-button"
+                          id="upload-temporary-aoi"
+                          type="submit"
+                        >
+                          Upload AOI
+                        </button>
+                      </form>
+                      <div
+                        class="temporary-aoi-upload-progress"
+                        id="temporary-aoi-upload-progress-container"
+                        hidden
+                      >
+                        <label for="temporary-aoi-upload-progress">
+                          Approximate upload progress
+                        </label>
+                        <progress
+                          id="temporary-aoi-upload-progress"
+                          max="100"
+                          value="0"
+                          aria-describedby="temporary-aoi-upload-progress-detail temporary-aoi-status"
+                        ></progress>
+                        <p id="temporary-aoi-upload-progress-detail"></p>
+                      </div>
+                      <form
+                        class="temporary-aoi-selection"
+                        id="temporary-aoi-selection-form"
+                        aria-labelledby="temporary-aoi-selection-heading"
+                        hidden
+                      >
+                        <strong id="temporary-aoi-selection-heading">Choose a spatial dataset</strong>
+                        <p>
+                          <span id="temporary-aoi-selection-filename"></span> contains
+                          more than one usable spatial dataset. Nothing will be displayed
+                          until you choose one.
+                        </p>
+                        <label for="temporary-aoi-dataset">
+                          <span>Dataset or layer</span>
+                          <select
+                            id="temporary-aoi-dataset"
+                            aria-describedby="temporary-aoi-status temporary-aoi-error"
+                          ></select>
+                        </label>
+                        <div class="temporary-aoi-selection-actions">
+                          <button class="secondary-button" type="submit">Display dataset</button>
+                          <button
+                            class="secondary-button"
+                            id="cancel-temporary-aoi-selection"
+                            type="button"
+                          >
+                            Cancel upload
+                          </button>
+                        </div>
+                      </form>
+                      <dl class="temporary-aoi-details" id="temporary-aoi-details" hidden>
+                        <div>
+                          <dt>File</dt>
+                          <dd id="temporary-aoi-filename"></dd>
+                        </div>
+                        <div>
+                          <dt>Layer</dt>
+                          <dd id="temporary-aoi-layer"></dd>
+                        </div>
+                        <div>
+                          <dt>Expires</dt>
+                          <dd><time id="temporary-aoi-expiration"></time></dd>
+                        </div>
+                      </dl>
+                      <div
+                        class="temporary-aoi-actions"
+                        id="temporary-aoi-actions"
+                        role="group"
+                        aria-label="Temporary AOI map actions"
+                        hidden
+                      >
+                        <button
+                          class="secondary-button"
+                          id="toggle-temporary-aoi"
+                          type="button"
+                          aria-pressed="true"
+                        >
+                          Hide
+                        </button>
+                        <button
+                          class="secondary-button"
+                          id="zoom-temporary-aoi"
+                          type="button"
+                        >
+                          Zoom to AOI
+                        </button>
+                        <button
+                          class="secondary-button is-danger"
+                          id="remove-temporary-aoi"
+                          type="button"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                      <p
+                        class="temporary-aoi-status"
+                        id="temporary-aoi-status"
+                        role="status"
+                        aria-live="polite"
+                        aria-atomic="true"
+                      ></p>
+                      <p
+                        class="temporary-aoi-error"
+                        id="temporary-aoi-error"
+                        role="alert"
+                        aria-atomic="true"
+                      ></p>
+                    </section>
+                </details>
+              </div>
+            </details>
             <section class="raster-point-samples" id="raster-point-samples"
               aria-labelledby="raster-point-samples-heading" aria-live="polite"
               aria-atomic="true" aria-busy="false" hidden>

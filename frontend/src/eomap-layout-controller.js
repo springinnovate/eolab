@@ -44,12 +44,6 @@ const WORKSPACE_DISCLOSURES = [
         panelSelector: "#eomap-map-layers-region",
         scrollSelector: "#eomap-map-layers-body",
     },
-    {
-        name: "histogram",
-        toggleSelector: "#toggle-raster-interpretation",
-        panelSelector: "#eomap-raster-interpretation-region",
-        scrollSelector: "#eomap-raster-interpretation-body",
-    },
 ];
 
 /**
@@ -125,14 +119,6 @@ export class EomapLayoutController {
             documentContext,
             "#eomap-operational-status-body"
         );
-        this.analysisAoiDisclosure = requireLayoutElement(
-            documentContext,
-            "#analysis-aoi-disclosure"
-        );
-        this.analysisAoiToggle = requireLayoutElement(
-            documentContext,
-            "#toggle-analysis-aoi"
-        );
         this.operationalStatusIsExpanded =
             this.operationalToggle.getAttribute("aria-expanded") !== "false";
         this.controlPanelIsCollapsed =
@@ -143,10 +129,6 @@ export class EomapLayoutController {
         this.boundDocumentKeydown = this.#handleDocumentKeydown.bind(this);
         this.boundCollapsePanel = this.#handleCollapsePanel.bind(this);
         this.boundOpenPanel = this.#handleOpenPanel.bind(this);
-        this.boundAnalysisAoiToggle =
-            this.#handleAnalysisAoiToggle.bind(this);
-        this.boundAnalysisAoiKeydown =
-            this.#handleAnalysisAoiKeydown.bind(this);
         this.operationalToggle.addEventListener(
             "click",
             this.boundOperationalToggle
@@ -160,21 +142,12 @@ export class EomapLayoutController {
             this.boundCollapsePanel
         );
         this.openPanelButton.addEventListener("click", this.boundOpenPanel);
-        this.analysisAoiDisclosure.addEventListener(
-            "toggle",
-            this.boundAnalysisAoiToggle
-        );
-        this.analysisAoiDisclosure.addEventListener(
-            "keydown",
-            this.boundAnalysisAoiKeydown
-        );
 
         this.workspaceDisclosures = WORKSPACE_DISCLOSURES.map(
             (configuration, index) =>
                 this.#createWorkspaceDisclosure(configuration, index)
         );
         this.#synchronizeOperationalStatusPresentation();
-        this.#synchronizeAnalysisAoiPresentation();
         this.#synchronizeWorkspacePresentation();
         this.#synchronizeControlPanelPresentation();
     }
@@ -211,7 +184,7 @@ export class EomapLayoutController {
      * feature presentation request without giving this controller feature
      * state or sibling implementation knowledge.
      *
-     * @param {"catalog"|"map-layers"|"histogram"} name Workspace name.
+     * @param {"catalog"|"map-layers"} name Workspace name.
      * @param {boolean} [moveFocus=false] Whether its disclosure receives focus.
      * @return {void}
      * @throws {RangeError} If the name is outside the static layout contract.
@@ -270,14 +243,6 @@ export class EomapLayoutController {
             this.boundCollapsePanel
         );
         this.openPanelButton.removeEventListener("click", this.boundOpenPanel);
-        this.analysisAoiDisclosure.removeEventListener(
-            "toggle",
-            this.boundAnalysisAoiToggle
-        );
-        this.analysisAoiDisclosure.removeEventListener(
-            "keydown",
-            this.boundAnalysisAoiKeydown
-        );
         for (const workspaceDisclosure of this.workspaceDisclosures) {
             workspaceDisclosure.toggle.removeEventListener(
                 "click",
@@ -407,44 +372,6 @@ export class EomapLayoutController {
             "aria-hidden",
             String(!this.operationalStatusIsExpanded)
         );
-    }
-
-    /** Synchronize the native AOI disclosure's explicit ARIA state. @return {void} */
-    #synchronizeAnalysisAoiPresentation() {
-        this.analysisAoiToggle.setAttribute(
-            "aria-expanded",
-            String(Boolean(this.analysisAoiDisclosure.open))
-        );
-    }
-
-    /** Synchronize AOI disclosure state after a native toggle. @return {void} */
-    #handleAnalysisAoiToggle() {
-        this.#synchronizeAnalysisAoiPresentation();
-    }
-
-    /**
-     * Close the nearest open AOI disclosure before Escape reaches the sidebar.
-     *
-     * @param {KeyboardEvent} event Keyboard event originating in the details.
-     * @return {void}
-     */
-    #handleAnalysisAoiKeydown(event) {
-        const focusedElement = this.documentContext.activeElement;
-        if (
-            event.key !== "Escape" ||
-            !this.analysisAoiDisclosure.open ||
-            focusedElement === null ||
-            focusedElement === undefined ||
-            !this.analysisAoiDisclosure.contains(focusedElement) ||
-            this.#focusOwnsEscape(focusedElement)
-        ) {
-            return;
-        }
-        event.preventDefault();
-        event.stopPropagation();
-        this.analysisAoiDisclosure.open = false;
-        this.#synchronizeAnalysisAoiPresentation();
-        this.analysisAoiToggle.focus();
     }
 
     /** Synchronize the whole sidebar's accessible presentation. @return {void} */

@@ -3,7 +3,10 @@ import test from "node:test";
 
 import { MapLayerController } from "../../src/map-layers/controller.js";
 import { LeafletLayerSet } from "../../src/map-layers/leaflet-layer-set.js";
-import { initializeRasterViewer } from "../../src/raster/raster-viewer.js";
+import {
+    initializeRasterViewer,
+    RASTER_SAMPLE_WINDOW_RESIZE_DEBOUNCE_MILLISECONDS,
+} from "../../src/raster/raster-viewer.js";
 import { RasterAnalysisRequestError } from "../../src/raster/analysis-api.js";
 import { DEFAULT_RASTER_STYLE } from "../../src/raster/style.js";
 import {
@@ -332,9 +335,6 @@ function createFakeControlsView() {
         setSampleWindowStatus(message) {
             this.sampleWindowStatus = message;
         },
-        setClearSampleWindowEnabled(isEnabled) {
-            this.clearSampleWindowEnabled = isEnabled;
-        },
         setClearSampleWindowLabel(label) {
             this.clearSampleWindowLabel = label;
         },
@@ -344,8 +344,9 @@ function createFakeControlsView() {
         setTemporaryAoiCompatible(isCompatible) {
             this.temporaryAoiCompatible = isCompatible;
         },
-        setSamplingAreaMode(mode) {
+        setSamplingAreaMode(mode, label = "") {
             this.samplingAreaMode = mode;
+            this.samplingAreaLabel = label;
         },
         showHistogramWidget() {
             this.histogramWidgetOpenCount =
@@ -2745,6 +2746,90 @@ test("hidden WMS renderers do not gate active Catalog analysis", async () => {
     viewer.destroy();
 });
 
+test("map box starts at map center and resizes after a debounce", async () => {
+    const timers = new Map();
+    let nextTimerId = 1;
+    const clock = {
+        setTimeout(callback, delay) {
+            const id = nextTimerId;
+            nextTimerId += 1;
+            timers.set(id, { callback, delay });
+            return id;
+        },
+        clearTimeout(id) {
+            timers.delete(id);
+        },
+    };
+    const leafletMap = createFakeMap();
+    const { leaflet } = createFakeLeaflet();
+    const controlsView = createFakeControlsView();
+    const statisticsRequests = [];
+    const viewer = initializeRasterViewer(
+        {
+            wmsUrl: "/geoserver/eolab/wms",
+            leafletMap,
+            leaflet,
+            onTileError() {},
+        },
+        {
+            controlsView,
+            layerStackView: createFakeLayerStackView(),
+            publishRaster: async (item) => ({
+                layerName: `eolab:${item.id}`,
+                bbox: [-180, -90, 180, 90],
+            }),
+            loadStatistics: async (item, samplingArea) => {
+                const selectedBounds = selectedBoundsFromArea(samplingArea);
+                statisticsRequests.push({ item, selectedBounds });
+                return createLayerStatistics(item, selectedBounds);
+            },
+            samplePixel: async () => ({ inBounds: true, value: 1 }),
+            viewport: { innerWidth: 1280, innerHeight: 720 },
+            clock,
+        }
+    );
+
+    await viewer.show(createRasterItem("centered-box"));
+    await flushPromises();
+    controlsView.handlers.onUseMapWindow();
+    await flushPromises();
+
+    const centeredRequest = statisticsRequests.find(
+        ({ selectedBounds }) => selectedBounds !== null
+    );
+    assert.ok(centeredRequest);
+    assert.equal(
+        (centeredRequest.selectedBounds.west + centeredRequest.selectedBounds.east) / 2,
+        0
+    );
+    assert.equal(
+        (centeredRequest.selectedBounds.south + centeredRequest.selectedBounds.north) / 2,
+        0
+    );
+    assert.match(controlsView.samplingAreaLabel, /200 km × 200 km map box/);
+
+    controlsView.handlers.onSampleWindowNumberInput("75");
+    controlsView.handlers.onSampleWindowNumberInput("90");
+    assert.equal(timers.size, 1);
+    const pending = [...timers.values()][0];
+    assert.equal(
+        pending.delay,
+        RASTER_SAMPLE_WINDOW_RESIZE_DEBOUNCE_MILLISECONDS
+    );
+    assert.match(
+        controlsView.sampleWindowStatus,
+        /Updating the selected map box to 90 km × 90 km/
+    );
+    timers.clear();
+    pending.callback();
+    await flushPromises();
+
+    const resizedRequest = statisticsRequests.at(-1);
+    assert.notDeepEqual(resizedRequest.selectedBounds, centeredRequest.selectedBounds);
+    assert.match(controlsView.samplingAreaLabel, /90 km × 90 km map box/);
+    viewer.destroy();
+});
+
 test("explicit sampling refreshes every raster layer to one shared area", async () => {
     const leafletMap = createFakeMap();
     const { leaflet, rectangleLayers } = createFakeLeaflet();
@@ -2795,12 +2880,6 @@ test("explicit sampling refreshes every raster layer to one shared area", async 
     assert.ok(firstSelectionLayer);
     assert.equal(controlsView.displayedStatistics.itemId, first.id);
     assert.equal(controlsView.displayedStatistics.scope, "selectedArea");
-    controlsView.handlers.onSampleWindowNumberInput("55");
-    assert.match(
-        controlsView.sampleWindowStatus,
-        /current histogram still uses the 42 km window/
-    );
-
     await viewer.show(second);
     await flushPromises();
     controlsView.handlers.onSampleWindowNumberInput("80");
