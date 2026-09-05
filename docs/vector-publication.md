@@ -64,7 +64,10 @@ accepting sibling layers only through that neutral adapter contract.
 `vector/defaults.js` owns browser default-selection policy using only Catalog
 field metadata and explicit numeric results. The existing vector map adapter
 coordinates publication, optional classification, and style application before
-the layer is attached. The controls consume the same defaults. No vector
+the layer is attached. `vector/style-controls.js` owns complete form state,
+validation, the 450 ms quiet period, and serialized automatic style requests.
+It keeps accepting edits during a running request and queues the newest valid
+style behind it. The controls consume the same defaults. No vector
 component imports raster analysis or rendering, and numeric reads remain
 available independently of GeoServer and map state.
 
@@ -193,12 +196,13 @@ assigns a deterministic low-to-high color sequence from Blue–yellow–red, Blu
 Viridis, Yellow-to-red, or Purples, and can separately style nulls when they exist.
 Each internal upper bound is an editable number shared by its adjacent rules, so
 an edit cannot create a gap or overlap. Empty, non-finite, repeated, or decreasing
-breaks disable Apply and identify the problem inline. Counts remain visible for
-generated ranges and are hidden after an edit because they no longer describe the
-custom thresholds. Changing the field, method, or class count regenerates the
-server suggestion; reopening a retained style preserves its exact applied values.
+breaks pause the automatic map update and identify the problem inline. Counts
+remain visible for generated ranges and are hidden after an edit because they no
+longer describe the custom thresholds. Changing the field, method, or class count
+regenerates the server suggestion; reopening a retained style preserves its exact
+applied values.
 
-On apply, `VectorStyleService` repeats the bounded field read to revalidate the
+For each automatic update, `VectorStyleService` repeats the bounded field read to revalidate the
 current Catalog source, numeric field type, source signature, and missing-value
 availability. It then publishes the submitted model-validated adjacent ranges as
 GeoServer comparison filters instead of replacing them with the generated

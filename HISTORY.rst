@@ -4,6 +4,7 @@ History
 Unreleased
 ----------
 
+* Apply valid vector style edits automatically after a short debounce, with serialized requests and no Apply button.
 * Edit exact numeric break values for graduated vector styles while preserving adjacent, open-ended ranges.
 * Show a color-mapped raster histogram beside visible percentile stretch controls, with direct navigation between Style and full analysis.
 * Remove the COG storage-format filter from Catalog search.
