@@ -50,7 +50,11 @@ test("temporary AOI is a labeled section within Raster histogram sampling", () =
 
   assert.match(
     histogramPanel,
-    /<details[^>]*id="raster-sampling-disclosure"[^>]*open>/,
+    /<details[^>]*id="raster-sampling-disclosure"[^>]*>/,
+  );
+  assert.doesNotMatch(
+    histogramPanel,
+    /<details[^>]*id="raster-sampling-disclosure"[^>]*\bopen\b/,
   );
   assert.match(
     samplingDisclosure,

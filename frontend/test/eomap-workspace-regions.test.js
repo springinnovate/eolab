@@ -318,7 +318,8 @@ test("raster histogram owns its sampling controls, AOI, and results", () => {
         assert.match(exploration.source, new RegExp(`id="${id}"`));
         assert.doesNotMatch(panel.source, new RegExp(`id="${id}"`));
     }
-    assert.match(disclosure.source, /<details[^>]*open>/);
+    assert.match(disclosure.source, /^\s*<details[^>]*>/);
+    assert.doesNotMatch(disclosure.source, /^\s*<details[^>]*\bopen\b/);
     assert.match(disclosure.source, />\s*Sampling area\s*</);
     assert.match(disclosure.source, /id="raster-sampling-area-summary"/);
     assert.match(disclosure.source, /class="raster-disclosure-chevron"[^>]*aria-hidden="true"/);
