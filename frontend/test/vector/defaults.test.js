@@ -55,7 +55,7 @@ test("default labels preserve symbol parameters and use geometry-aware placement
         const styled = deriveDefaultVectorStyle(symbol, fields);
         assert.equal(styled.label.field, "NAME");
         assert.equal(styled.label.placement, placement);
-        assert.equal(styled.label.minimumZoom, 6);
+        assert.equal(styled.label.minimumZoom, 0);
         assert.equal(styled.label.haloColor, "#ffffff");
         assert.equal(styled.strokeWidth, symbol.strokeWidth);
         assert.equal(styled.graduated, null);

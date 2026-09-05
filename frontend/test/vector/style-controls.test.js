@@ -94,7 +94,7 @@ test("vector style controls show fields owned by each geometry", () => {
     assert.equal(fixture.controls.labelFontColor.value, "#111827");
     assert.equal(fixture.controls.labelHaloColor.value, "#ffffff");
     assert.equal(fixture.controls.labelHaloWidth.value, "1.5");
-    assert.equal(fixture.controls.labelMinimumZoom.value, "6");
+    assert.equal(fixture.controls.labelMinimumZoom.value, "0");
 
     fixture.controls.show(fixture.target("point", {
         geometryKind: "point",
@@ -153,6 +153,7 @@ test("vector controls retain automatic appearance, show fallback notices, and al
     fixture.controls.show(target);
     assert.equal(fixture.controls.labelEnabled.checked, true);
     assert.equal(fixture.controls.labelField.value, "name");
+    assert.equal(fixture.controls.labelMinimumZoom.value, "0");
     assert.equal(fixture.controls.graduatedPalette.value, "blue-yellow-red");
     assert.equal(fixture.controls.graduatedMethod.value, "percentile-interval");
     assert.equal(fixture.controls.status.textContent, target.notice);

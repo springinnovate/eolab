@@ -16,7 +16,7 @@ export const VECTOR_LABEL_DEFAULTS = Object.freeze({
     fontColor: "#111827",
     haloColor: "#ffffff",
     haloWidth: 1.5,
-    minimumZoom: 6,
+    minimumZoom: 0,
 });
 
 /** Initial bounded classification and low-to-high palette selection. */

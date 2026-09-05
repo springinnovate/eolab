@@ -76,6 +76,7 @@ test("new vectors get authorized named numeric styles before WMS and preserve la
     const publication = await f.controller.show(ITEM, f.adapter);
     assert.deepEqual(f.calls.map(call => call[0]), ["publish", "classify", "style", "wms"]);
     assert.equal(publication.style.label.field, "name");
+    assert.equal(publication.style.label.minimumZoom, 0);
     assert.equal(publication.style.graduated.field, "score");
     assert.deepEqual(publication.style.graduated.rules.map(rule => rule.color), ["#2b83ba", "#ffffbf", "#d7191c"]);
     assert.equal(publication.style.graduated.missingColor, "#d1d5db");

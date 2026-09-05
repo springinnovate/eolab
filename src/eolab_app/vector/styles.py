@@ -60,7 +60,7 @@ def vector_style_name(
     resource_name: str,
     style: VectorStyle,
 ) -> str:
-    """Build a content-addressed GeoServer style name for one layer.
+    """Address one layer's validated settings and generated rendering content.
 
     Args:
         resource_name: Authoritative server-side vector resource identity.
@@ -75,7 +75,10 @@ def vector_style_name(
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
-    style_digest = sha256(style_document).hexdigest()[:12]
+    # Include generated policy so a deployment cannot reuse tiles rendered with
+    # older label-placement rules even when the saved settings are unchanged.
+    rendered_style = build_vector_sld("vector-style", style)
+    style_digest = sha256(style_document + b"\0" + rendered_style).hexdigest()[:12]
     return f"vector-style-{resource_digest}-{style_digest}"
 
 
@@ -456,6 +459,9 @@ def _append_label_rule(
         geometry_kind: Point, line, or polygon geometry class.
         label: Complete validated label presentation.
         opacity_multiplier: Neutral whole-layer opacity from zero through one.
+
+    Returns:
+        None. Appends the independently scaled label rule in place.
     """
     rule = ElementTree.SubElement(
         feature_type_style,
@@ -514,6 +520,10 @@ def _append_label_rule(
     )
     if geometry_kind == "line" and label.placement != "center":
         _append_vendor_option(text_symbolizer, "followLine", "true")
+    if geometry_kind == "polygon":
+        # Small polygons must not silently introduce another scale threshold:
+        # text may extend beyond the shape while still avoiding other labels.
+        _append_vendor_option(text_symbolizer, "goodnessOfFit", "0")
     _append_vendor_option(text_symbolizer, "conflictResolution", "true")
 
 

@@ -319,10 +319,12 @@ def test_sld_generation_uses_only_the_geometry_symbolizer(
         ("polygon", "center", "PointPlacement"),
     ],
 )
+@pytest.mark.parametrize("minimum_zoom", [0, 6])
 def test_sld_generation_adds_independently_scaled_vector_labels(
     geometry_kind: str,
     placement: str,
     placement_element: str,
+    minimum_zoom: int,
 ) -> None:
     """Serialize authoritative fields, font, halo, placement, and scale.
 
@@ -330,6 +332,10 @@ def test_sld_generation_adds_independently_scaled_vector_labels(
         geometry_kind: Point, line, or polygon style family.
         placement: Geometry-appropriate label placement.
         placement_element: Expected SLD placement element.
+        minimum_zoom: Zero for all scales, or an explicit label cutoff.
+
+    Returns:
+        None. Asserts the public SLD output for every geometry and scale policy.
     """
     base_style = default_vector_style(geometry_kind)
     label = VectorLabelStyle(
@@ -341,7 +347,7 @@ def test_sld_generation_adds_independently_scaled_vector_labels(
         haloColor="#FEDCBA",
         haloWidth=2,
         placement=placement,
-        minimumZoom=6,
+        minimumZoom=minimum_zoom,
     )
     style = VectorStyle.model_validate({
         **base_style.model_dump(by_alias=True),
@@ -355,10 +361,11 @@ def test_sld_generation_adds_independently_scaled_vector_labels(
         f".//sld:{placement_element}", namespaces
     ) is not None
     assert root.find(".//ogc:PropertyName", namespaces).text == "display name"
-    maximum_scale = float(
-        root.find(".//sld:MaxScaleDenominator", namespaces).text
-    )
-    assert maximum_scale == pytest.approx(559082264.0287178 / 64)
+    maximum_scale = root.find(".//sld:MaxScaleDenominator", namespaces)
+    if minimum_zoom == 0:
+        assert maximum_scale is None
+    else:
+        assert float(maximum_scale.text) == pytest.approx(559082264.0287178 / 64)
     text_symbolizer = root.find(".//sld:TextSymbolizer", namespaces)
     font_parameters = {
         parameter.attrib["name"]: parameter.text
@@ -380,6 +387,9 @@ def test_sld_generation_adds_independently_scaled_vector_labels(
         for option in text_symbolizer.findall("./sld:VendorOption", namespaces)
     }
     assert vendor_options["conflictResolution"] == "true"
+    assert vendor_options.get("goodnessOfFit") == (
+        "0" if geometry_kind == "polygon" else None
+    )
     assert ("followLine" in vendor_options) is (geometry_kind == "line")
     child_names = [child.tag.rsplit("}", 1)[-1] for child in text_symbolizer]
     assert child_names.index("Fill") < child_names.index("VendorOption")
@@ -495,6 +505,36 @@ def test_vector_style_name_changes_only_with_resource_or_rendering() -> None:
     assert vector_style_name(resource_name, default_style) != (
         vector_style_name("another-resource", default_style)
     )
+
+
+def test_vector_style_identity_includes_generated_rendering_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Invalidate cached tiles when SLD policy changes for saved settings.
+
+    Args:
+        monkeypatch: Fixture replacing the SLD generator at its owning boundary.
+
+    Returns:
+        None. Asserts that unchanged settings acquire a new rendering identity.
+    """
+    style = default_vector_style("polygon")
+    before = vector_style_name("polygon-resource", style)
+
+    def changed_renderer(style_name: str, style: VectorStyle) -> bytes:
+        """Simulate a deployment changing its generated SLD policy.
+
+        Args:
+            style_name: Stable style name passed to the generator.
+            style: Complete validated appearance to render.
+
+        Returns:
+            Valid XML with distinct generated content.
+        """
+        return build_vector_sld(style_name, style) + b"<!-- updated policy -->"
+
+    monkeypatch.setattr("eolab_app.vector.styles.build_vector_sld", changed_renderer)
+    assert vector_style_name("polygon-resource", style) != before
 
 
 def test_style_service_uses_catalog_identity_and_current_publication(

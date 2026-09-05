@@ -118,7 +118,7 @@ polygons have blue fills at 70% opacity and 0.75 px black outlines; lines use a
 recognizable text name (case-insensitive `name`, then `display_name`,
 `common_name`, `label`, `title`, `nm`, or a sole `name_*`/`*_name`/`nm_*`/`*_nm`
 field, including the workshop's `node_nm`). Labels use
-12 px dark text, a 1.5 px white halo, and minimum zoom 6. Point labels sit above
+12 px dark text, a 1.5 px white halo, and minimum zoom 0. Point labels sit above
 the symbol; line labels follow the line; polygon labels are centered.
 
 When exactly one numeric field remains after excluding obvious ID, code, and
@@ -199,9 +199,14 @@ default in the fixed publication response; browser initialization enables a
 recognized name as described above. An enabled label contains an exact field
 from the Item's current STAC Table Extension columns, closed font-family and weight choices, bounded font
 and halo values, geometry-aware placement, and a zoom from zero through 22.
-The minimum zoom becomes a label-only `MaxScaleDenominator` rule, so hiding
-labels at small scales never hides the underlying geometry. The SLD requests
-GeoServer's normal conflict resolution. Attribute values are neither copied
+Positive minimum zooms become a label-only `MaxScaleDenominator` rule; zero
+omits the scale cutoff. Hiding labels at small scales never hides the underlying
+geometry. Polygon labels use `goodnessOfFit=0` so names can extend beyond small
+polygons at an overview scale instead of being silently rejected by GeoServer's
+default polygon-fit threshold. The SLD retains normal conflict resolution.
+The content style identity includes the generated SLD as well as validated
+settings, so changed placement policy invalidates older cached rendering.
+Attribute values are neither copied
 through the browser nor truncated: GeoServer evaluates the selected field for
 each feature, and may omit a long one-line value when it cannot place the label
 without a conflict. Wrapping, explicit truncation, decluttering quality, and
