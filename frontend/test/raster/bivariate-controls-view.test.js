@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { getBivariateColorForValues } from "../../src/raster/bivariate.js";
 
 import {
   BivariateRasterControlsView,
@@ -84,12 +85,23 @@ class FakeBivariateDocument {
       "#retry-raster-paired-statistics",
       "#raster-bivariate-histogram",
       "#raster-bivariate-histogram-summary",
+      ...["x", "y"].flatMap((axis) => [
+        `#bivariate-${axis}-range-status`, `#apply-bivariate-${axis}-range`,
+        ...["lower", "middle", "upper"].flatMap((name) => [
+          `#bivariate-${axis}-${name}`, `#bivariate-${axis}-${name}-value`,
+        ]),
+      ]),
     ];
     this.elements = new Map(selectors.map((selector) => [
       selector,
       new FakeElement(selector.slice(1), this),
     ]));
     const mode = this.elements.get("#raster-comparison-mode");
+    for (const axis of ["x", "y"]) {
+      for (const [name, value] of Object.entries({ lower: 5, middle: 50, upper: 95 })) {
+        this.elements.get(`#bivariate-${axis}-${name}`).value = String(value);
+      }
+    }
     for (const value of ["overlay", "bivariate"]) {
       const option = new FakeElement("option", this);
       option.value = value;
@@ -258,6 +270,8 @@ test("bivariate controls forward native mode, palette, swap, and retry actions",
   const actions = [];
   view.populatePalettes();
   view.bind({
+    onBivariatePercentileInput: (axis) => actions.push(["percentile", axis]),
+    onApplyBivariatePercentiles: (axis) => actions.push(["apply", axis]),
     onBivariateModeChange: (mode) => actions.push(["mode", mode]),
     onBivariatePaletteChange: (palette) => actions.push(["palette", palette]),
     onBivariateSwapAxes: () => actions.push(["swap"]),
@@ -270,12 +284,52 @@ test("bivariate controls forward native mode, palette, swap, and retry actions",
   view.palette.dispatchEvent(new Event("change"));
   view.swapButton.dispatchEvent(new Event("click"));
   view.retryButton.dispatchEvent(new Event("click"));
+  view.rangeControls.x.inputs.lower.dispatchEvent(new Event("input"));
+  view.rangeControls.y.apply.dispatchEvent(new Event("click"));
   view.unbind();
+  view.rangeControls.x.inputs.lower.dispatchEvent(new Event("input"));
+  view.rangeControls.y.apply.dispatchEvent(new Event("click"));
 
   assert.deepEqual(actions, [
     ["mode", "bivariate"],
     ["palette", "steelRose"],
     ["swap"],
     ["retry"],
+    ["percentile", "x"],
+    ["apply", "y"],
   ]);
+});
+
+test("paired range controls show estimates, validity, and disabled unavailable actions", () => {
+  const view = new BivariateRasterControlsView(new FakeBivariateDocument());
+  assert.deepEqual(view.readPercentiles("x"), { lower: 5, middle: 50, upper: 95 });
+  view.renderPercentiles("x", {
+    values: { lower: "2", middle: "4", upper: "9" },
+    message: "Estimated from the map sample", applicable: true, invalid: false,
+  });
+  assert.equal(view.rangeControls.x.values.middle.textContent, "50% ≈ 4");
+  assert.equal(view.rangeControls.x.apply.disabled, false);
+  view.renderPercentiles("x", {
+    values: null, message: "Waiting", applicable: false, invalid: false,
+  });
+  assert.equal(view.rangeControls.x.apply.disabled, true);
+  assert.equal(view.rangeControls.x.values.middle.textContent, "50% ≈ —");
+  view.renderPercentiles("y", {
+    values: null, message: "Choose increasing percentiles", applicable: false, invalid: true,
+  });
+  assert.equal(view.rangeControls.y.inputs.lower.getAttribute("aria-invalid"), "true");
+});
+
+test("the 2D legend uses actual threshold spacing including an off-center midpoint", () => {
+  const view = new BivariateRasterControlsView(new FakeBivariateDocument());
+  const state = {
+    ...PRESENTATION, active: true,
+    xStyle: { ...PRESENTATION.xStyle, minimum: 2, midpoint: 3, maximum: 20 },
+    yStyle: { ...PRESENTATION.yStyle, minimum: 100, midpoint: 125, maximum: 132 },
+  };
+  view.renderMode(state);
+  assert.equal(view.legend.children[1].style.fill, getBivariateColorForValues(
+    state.paletteName, state.xStyle, state.yStyle, 2 + 18 / 24, 100 + 32 / 24,
+  ));
+  assert.equal(view.legendXRange.textContent, "temperature.tif: 2.000e+0 to 2.000e+1");
 });

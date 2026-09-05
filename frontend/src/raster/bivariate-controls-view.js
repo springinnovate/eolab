@@ -3,7 +3,6 @@ import { requireRasterControl } from "./required-control.js";
 import {
     BIVARIATE_RASTER_PALETTES,
     getBivariateAxisCssColor,
-    getBivariateColorAt,
     getBivariateColorForValues,
     getBivariateDensityWeight,
     getBivariateHistogramCellColor,
@@ -183,6 +182,18 @@ export class BivariateRasterControlsView {
             "#raster-bivariate-histogram-summary"
         );
         this.handlers = null;
+        this.rangeControls = Object.fromEntries(["x", "y"].map((axis) => [axis, {
+            inputs: Object.fromEntries(["lower", "middle", "upper"].map((name) => [
+                name, requireRasterControl(documentContext, `#bivariate-${axis}-${name}`),
+            ])),
+            values: Object.fromEntries(["lower", "middle", "upper"].map((name) => [
+                name, requireRasterControl(documentContext, `#bivariate-${axis}-${name}-value`),
+            ])),
+            status: requireRasterControl(documentContext, `#bivariate-${axis}-range-status`),
+            apply: requireRasterControl(documentContext, `#apply-bivariate-${axis}-range`),
+            onInput: () => this.handlers?.onBivariatePercentileInput(axis),
+            onApply: () => this.handlers?.onApplyBivariatePercentiles(axis),
+        }]));
         this.cells = new Map();
         this.activeCell = null;
         this.statistics = null;
@@ -220,6 +231,12 @@ export class BivariateRasterControlsView {
         this.palette.addEventListener("change", this.boundPaletteChange);
         this.swapButton.addEventListener("click", this.boundSwap);
         this.retryButton.addEventListener("click", this.boundRetry);
+        for (const controls of Object.values(this.rangeControls)) {
+            for (const input of Object.values(controls.inputs)) {
+                input.addEventListener("input", controls.onInput);
+            }
+            controls.apply.addEventListener("click", controls.onApply);
+        }
     }
 
     /** Remove every direct listener installed by {@link bind}. @return {void} */
@@ -228,7 +245,41 @@ export class BivariateRasterControlsView {
         this.palette.removeEventListener("change", this.boundPaletteChange);
         this.swapButton.removeEventListener("click", this.boundSwap);
         this.retryButton.removeEventListener("click", this.boundRetry);
+        for (const controls of Object.values(this.rangeControls)) {
+            for (const input of Object.values(controls.inputs)) {
+                input.removeEventListener("input", controls.onInput);
+            }
+            controls.apply.removeEventListener("click", controls.onApply);
+        }
         this.handlers = null;
+    }
+
+    /**
+     * Read the draft percentile positions for an axis without applying them.
+     * @param {"x"|"y"} axis Paired axis.
+     * @return {{lower:number,middle:number,upper:number}} Slider percentages.
+     */
+    readPercentiles(axis) {
+        return Object.fromEntries(Object.entries(this.rangeControls[axis].inputs)
+            .map(([name, input]) => [name, Number(input.value)]));
+    }
+
+    /**
+     * Present estimates and availability supplied by the raster coordinator.
+     * @param {"x"|"y"} axis Paired axis.
+     * @param {{values:Object|null,message:string,applicable:boolean,invalid:boolean}} state
+     * Formatted estimates, sample scope or failure, and validity.
+     * @return {void}
+     */
+    renderPercentiles(axis, state) {
+        const controls = this.rangeControls[axis];
+        const percentiles = this.readPercentiles(axis);
+        for (const name of ["lower", "middle", "upper"]) {
+            controls.inputs[name].setAttribute("aria-invalid", String(state.invalid));
+            controls.values[name].textContent = `${percentiles[name]}% ≈ ${state.values?.[name] ?? "—"}`;
+        }
+        controls.status.textContent = state.message;
+        controls.apply.disabled = !state.applicable;
     }
 
     /**
@@ -668,10 +719,12 @@ export class BivariateRasterControlsView {
                     width: cellSize + 0.1,
                     height: cellSize + 0.1,
                 });
-                cell.style.fill = getBivariateColorAt(
+                cell.style.fill = getBivariateColorForValues(
                     state.paletteName,
-                    x,
-                    y
+                    state.xStyle,
+                    state.yStyle,
+                    state.xStyle.minimum + x * (state.xStyle.maximum - state.xStyle.minimum),
+                    state.yStyle.minimum + y * (state.yStyle.maximum - state.yStyle.minimum)
                 );
                 children.push(cell);
             }

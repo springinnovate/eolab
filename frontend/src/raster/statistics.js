@@ -353,8 +353,47 @@ export function estimateRasterHistogramPercentile(statistics, percentile) {
         return statistics.sampleMaximum;
     }
 
-    const { counts, edges } = statistics.histogram;
-    const target = statistics.validSampleCount * percentile / 100;
+    const value = estimateHistogramPercentile(
+        statistics.histogram, statistics.validSampleCount,
+        statistics.sampleMinimum, statistics.sampleMaximum, percentile
+    );
+    let lowerBound = statistics.sampleMinimum;
+    let upperBound = statistics.percentiles.p05;
+    if (percentile > 5 && percentile < 50) {
+        lowerBound = statistics.percentiles.p05;
+        upperBound = statistics.percentiles.p50;
+    } else if (percentile > 50 && percentile < 95) {
+        lowerBound = statistics.percentiles.p50;
+        upperBound = statistics.percentiles.p95;
+    } else if (percentile > 95) {
+        lowerBound = statistics.percentiles.p95;
+        upperBound = statistics.sampleMaximum;
+    }
+    return Math.max(lowerBound, Math.min(upperBound, value));
+}
+
+/**
+ * Interpolate a percentile from a validated histogram or paired marginal.
+ * No exact quantiles are implied by these fixed-bin estimates.
+ *
+ * @param {{counts:number[],edges:number[]}} histogram Validated distribution.
+ * @param {number} sampleCount Positive total count.
+ * @param {number} minimum Observed sample minimum.
+ * @param {number} maximum Observed sample maximum.
+ * @param {number} percentile Percentile from zero through 100.
+ * @return {number} Estimate clamped to the observed sample range.
+ * @throws {Error} If the requested percentile is invalid.
+ */
+export function estimateHistogramPercentile(
+    histogram, sampleCount, minimum, maximum, percentile
+) {
+    if (!Number.isFinite(percentile) || percentile < 0 || percentile > 100) {
+        throw new Error("Raster percentile must be between 0 and 100.");
+    }
+    if (minimum === maximum || percentile === 0) return minimum;
+    if (percentile === 100) return maximum;
+    const { counts, edges } = histogram;
+    const target = sampleCount * percentile / 100;
     let cumulative = 0;
     for (let binIndex = 0; binIndex < counts.length; binIndex += 1) {
         const nextCumulative = cumulative + counts[binIndex];
@@ -362,21 +401,9 @@ export function estimateRasterHistogramPercentile(statistics, percentile) {
             const fraction = (target - cumulative) / counts[binIndex];
             const value = edges[binIndex] +
                 fraction * (edges[binIndex + 1] - edges[binIndex]);
-            let lowerBound = statistics.sampleMinimum;
-            let upperBound = statistics.percentiles.p05;
-            if (percentile > 5 && percentile < 50) {
-                lowerBound = statistics.percentiles.p05;
-                upperBound = statistics.percentiles.p50;
-            } else if (percentile > 50 && percentile < 95) {
-                lowerBound = statistics.percentiles.p50;
-                upperBound = statistics.percentiles.p95;
-            } else if (percentile > 95) {
-                lowerBound = statistics.percentiles.p95;
-                upperBound = statistics.sampleMaximum;
-            }
-            return Math.max(lowerBound, Math.min(upperBound, value));
+            return Math.max(minimum, Math.min(maximum, value));
         }
         cumulative = nextCumulative;
     }
-    return statistics.sampleMaximum;
+    return maximum;
 }
