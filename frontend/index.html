@@ -1365,6 +1365,56 @@
                           <span>Coordinated palette</span>
                           <select id="raster-bivariate-palette"></select>
                         </label>
+                        <details class="style-percentiles">
+                          <summary>Use histogram range for X</summary>
+                          <div class="raster-percentile-controls" role="group" aria-label="X histogram color range">
+                            <label for="bivariate-x-lower">
+                              <span>Lower</span>
+                              <input id="bivariate-x-lower" type="range" min="0" max="100" step="1" value="5"
+                                aria-describedby="bivariate-x-lower-value bivariate-x-range-status" />
+                              <output id="bivariate-x-lower-value" for="bivariate-x-lower"></output>
+                            </label>
+                            <label for="bivariate-x-middle">
+                              <span>Middle</span>
+                              <input id="bivariate-x-middle" type="range" min="0" max="100" step="1" value="50"
+                                aria-describedby="bivariate-x-middle-value bivariate-x-range-status" />
+                              <output id="bivariate-x-middle-value" for="bivariate-x-middle"></output>
+                            </label>
+                            <label for="bivariate-x-upper">
+                              <span>Upper</span>
+                              <input id="bivariate-x-upper" type="range" min="0" max="100" step="1" value="95"
+                                aria-describedby="bivariate-x-upper-value bivariate-x-range-status" />
+                              <output id="bivariate-x-upper-value" for="bivariate-x-upper"></output>
+                            </label>
+                            <p id="bivariate-x-range-status" role="status"></p>
+                            <button class="secondary-button" id="apply-bivariate-x-range" type="button" disabled>Apply X histogram range</button>
+                          </div>
+                        </details>
+                        <details class="style-percentiles">
+                          <summary>Use histogram range for Y</summary>
+                          <div class="raster-percentile-controls" role="group" aria-label="Y histogram color range">
+                            <label for="bivariate-y-lower">
+                              <span>Lower</span>
+                              <input id="bivariate-y-lower" type="range" min="0" max="100" step="1" value="5"
+                                aria-describedby="bivariate-y-lower-value bivariate-y-range-status" />
+                              <output id="bivariate-y-lower-value" for="bivariate-y-lower"></output>
+                            </label>
+                            <label for="bivariate-y-middle">
+                              <span>Middle</span>
+                              <input id="bivariate-y-middle" type="range" min="0" max="100" step="1" value="50"
+                                aria-describedby="bivariate-y-middle-value bivariate-y-range-status" />
+                              <output id="bivariate-y-middle-value" for="bivariate-y-middle"></output>
+                            </label>
+                            <label for="bivariate-y-upper">
+                              <span>Upper</span>
+                              <input id="bivariate-y-upper" type="range" min="0" max="100" step="1" value="95"
+                                aria-describedby="bivariate-y-upper-value bivariate-y-range-status" />
+                              <output id="bivariate-y-upper-value" for="bivariate-y-upper"></output>
+                            </label>
+                            <p id="bivariate-y-range-status" role="status"></p>
+                            <button class="secondary-button" id="apply-bivariate-y-range" type="button" disabled>Apply Y histogram range</button>
+                          </div>
+                        </details>
                         <figure class="raster-bivariate-legend-figure">
                           <svg
                             class="raster-bivariate-legend"
@@ -1379,7 +1429,8 @@
                         </figure>
                         <p class="raster-bivariate-explanation">
                           Map colors combine both raster palettes. Click the map
-                          to see exact values.
+                          to see exact values. Returning to 1D restores each
+                          raster's individual style and range.
                         </p>
                         <p class="raster-bivariate-histogram-guidance">
                           Selecting 2D opens Histogram and calculates the paired

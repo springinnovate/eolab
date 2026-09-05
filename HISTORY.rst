@@ -4,6 +4,7 @@ History
 Unreleased
 ----------
 
+* Adjust each 2D raster color range using percentiles from the paired histogram.
 * Show raster and vector counts in the expanded and collapsed Map layers heading.
 * Keep map-side tools reachable in a bounded, tabbed dock with retained state and independently scrollable content.
 

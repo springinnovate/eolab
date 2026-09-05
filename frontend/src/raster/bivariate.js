@@ -414,6 +414,7 @@ export function getBivariateColorAt(paletteName, x, y) {
 
 /** Own explicit overlay/bivariate mode and deterministic X/Y assignments. */
 export class BivariateRasterMode {
+    #ranges = new Map();
     /**
      * Create inactive normal-overlay state with the default palette.
      *
@@ -445,11 +446,13 @@ export class BivariateRasterMode {
             );
         }
         this.active = true;
+        this.#ranges.clear();
         [this.xKey, this.yKey] = eligibleKeys;
     }
 
     /** Leave bivariate mode and remove both role assignments. @return {void} */
     leave() {
+        this.#ranges.clear();
         this.active = false;
         this.xKey = null;
         this.yKey = null;
@@ -477,6 +480,32 @@ export class BivariateRasterMode {
     setPalette(paletteName) {
         requirePalette(paletteName);
         this.paletteName = paletteName;
+    }
+
+    /**
+     * Store a 2D-only numeric range by raster identity, so it follows axis swaps.
+     *
+     * @param {string} key Current pair's Catalog key.
+     * @param {{minimum:number,midpoint:number,maximum:number}} range Thresholds.
+     * @return {void}
+     * @throws {Error} If the key or ordered finite range is invalid.
+     */
+    setRange(key, range) {
+        const { minimum, midpoint, maximum } = range;
+        if (!this.contains(key) || ![minimum, midpoint, maximum].every(Number.isFinite) ||
+            !(minimum < midpoint && midpoint < maximum)) {
+            throw new Error("Choose three distinct, increasing values for the 2D range.");
+        }
+        this.#ranges.set(key, Object.freeze({ minimum, midpoint, maximum }));
+    }
+
+    /**
+     * Return a 2D override without changing the retained ordinary raster style.
+     * @param {string} key Current raster identity.
+     * @return {Readonly<Object>|null} Committed range, or the ordinary default.
+     */
+    getRange(key) {
+        return this.#ranges.get(key) ?? null;
     }
 
     /**

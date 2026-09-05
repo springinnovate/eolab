@@ -50,6 +50,7 @@ import { RasterStatisticsController } from "./statistics-controller.js";
 import { RasterStatisticsRequestQueue } from "./statistics-request-queue.js";
 import { getHistogramValueLabel } from "./histogram-axes.js";
 import {
+    estimateRasterPairedHistogramPercentile,
     normalizeRasterPairedSamplingArea,
     WHOLE_RASTER_OVERLAP_SAMPLING_AREA,
 } from "./paired-statistics.js";
@@ -803,6 +804,8 @@ export function initializeRasterViewer(
          * @return {void}
          */
         () => {
+            bivariateStatistics = null;
+            updateBivariatePercentileValues();
             controlsView.setPairedStatisticsLoading?.(
                 "Calculating the 2D histogram..."
             );
@@ -844,6 +847,7 @@ export function initializeRasterViewer(
                     getBivariatePresentation()
                 );
             }
+            updateBivariatePercentileValues();
             renderLayerStack();
         },
         /**
@@ -854,6 +858,8 @@ export function initializeRasterViewer(
          */
         (error) => {
             if (!bivariateMode.active) return;
+            bivariateStatistics = null;
+            updateBivariatePercentileValues();
             controlsView.renderPairedStatisticsError?.(
                 error,
                 canRetryRasterStatistics(error)
@@ -1563,8 +1569,8 @@ export function initializeRasterViewer(
         }
         const axisStyles = getBivariateAxisStyles(
             bivariateMode.paletteName,
-            candidates.xCandidate.rasterStyle,
-            candidates.yCandidate.rasterStyle
+            { ...candidates.xCandidate.rasterStyle, ...bivariateMode.getRange(bivariateMode.xKey) },
+            { ...candidates.yCandidate.rasterStyle, ...bivariateMode.getRange(bivariateMode.yKey) }
         );
         return {
             paletteName: bivariateMode.paletteName,
@@ -1668,6 +1674,7 @@ export function initializeRasterViewer(
             active: true,
             ...presentation,
         });
+        updateBivariatePercentileValues();
         if (bivariateStatistics !== null) {
             controlsView.renderPairedStatistics?.(
                 bivariateStatistics,
@@ -3393,6 +3400,59 @@ export function initializeRasterViewer(
     }
 
     /**
+     * Preview both axes from the current paired marginals. Missing statistics,
+     * invalid percentile ordering, and constant/collapsed ranges cannot apply.
+     *
+     * @return {Object<string,Object>} Applicable numeric ranges indexed by axis.
+     */
+    function updateBivariatePercentileValues() {
+        const ranges = {};
+        for (const axis of ["x", "y"]) {
+            const percentiles = controlsView.readBivariatePercentiles(axis);
+            const { lower, middle, upper } = percentiles;
+            let message = "Waiting for a current 2D histogram.";
+            let values = null;
+            let invalid = false;
+            if (![lower, middle, upper].every(Number.isFinite) ||
+                !(0 <= lower && lower < middle && middle < upper && upper <= 100)) {
+                message = "Choose increasing percentiles between 0 and 100.";
+                invalid = true;
+            } else if (bivariateMode.active && bivariateStatistics !== null) {
+                const estimates = [lower, middle, upper].map((percentile) =>
+                    estimateRasterPairedHistogramPercentile(bivariateStatistics, axis, percentile));
+                const [minimum, midpoint, maximum] = estimates;
+                values = Object.fromEntries(["lower", "middle", "upper"].map((name, index) =>
+                    [name, formatRasterPixelValue(estimates[index])]));
+                invalid = !(minimum < midpoint && midpoint < maximum);
+                message = invalid
+                    ? "These percentiles give the same value. Choose a wider range or another sample."
+                    : `Estimated from ${bivariateStatistics.scope === "wholeOverlap" ? "whole overlap" : "the map sample"}; only pixels valid in both rasters.`;
+                if (!invalid) ranges[axis] = { minimum, midpoint, maximum };
+            }
+            controlsView.renderBivariatePercentiles(axis, {
+                values, message, invalid, applicable: ranges[axis] !== undefined,
+            });
+        }
+        return ranges;
+    }
+
+    /**
+     * Apply a current paired-histogram range only to the selected 2D axis.
+     * Updates all color presentations together without requesting more samples.
+     *
+     * @param {"x"|"y"} axis Paired axis whose draft controls should be applied.
+     * @return {void}
+     */
+    function handleApplyBivariatePercentiles(axis) {
+        if (!bivariateMode.active) return;
+        const range = updateBivariatePercentileValues()[axis];
+        if (range === undefined) return;
+        bivariateMode.setRange(bivariateMode[`${axis}Key`], range);
+        applyBivariatePresentation();
+        renderLayerStack();
+    }
+
+    /**
      * Apply the editing session's ordered histogram-estimated percentile range.
      * Requires applicable statistics and an ordinary, non-paired style target.
      *
@@ -3811,6 +3871,8 @@ export function initializeRasterViewer(
         onBivariateModeChange: handleBivariateModeChange,
         onBivariatePaletteChange: handleBivariatePaletteChange,
         onBivariateSwapAxes: handleBivariateSwapAxes,
+        onBivariatePercentileInput: updateBivariatePercentileValues,
+        onApplyBivariatePercentiles: handleApplyBivariatePercentiles,
         onRetryPairedStatistics: handleRetryPairedStatistics,
     });
     const mapContainer = leafletMap.getContainer();

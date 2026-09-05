@@ -44,6 +44,8 @@ import {
  * the coordinated two-axis palette.
  * @property {() => void} onBivariateSwapAxes Swaps deterministic X/Y roles.
  * @property {() => void} onRetryPairedStatistics Retries paired statistics.
+ * @property {(axis:"x"|"y") => void} onBivariatePercentileInput Previews an axis range.
+ * @property {(axis:"x"|"y") => void} onApplyBivariatePercentiles Applies an axis range.
  */
 
 /**
@@ -219,6 +221,25 @@ export class RasterControlsView {
      */
     readPercentiles() {
         return this.#percentileView.readPercentiles();
+    }
+
+    /**
+     * Read draft histogram percentiles for one 2D axis.
+     * @param {"x"|"y"} axis Paired axis.
+     * @return {{lower:number,middle:number,upper:number}} Percentile positions.
+     */
+    readBivariatePercentiles(axis) {
+        return this.#bivariateView.readPercentiles(axis);
+    }
+
+    /**
+     * Present a 2D axis's estimated values and application availability.
+     * @param {"x"|"y"} axis Paired axis.
+     * @param {Object} state Formatted estimates, message, and validity.
+     * @return {void}
+     */
+    renderBivariatePercentiles(axis, state) {
+        this.#bivariateView.renderPercentiles(axis, state);
     }
 
     /**

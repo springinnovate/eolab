@@ -161,10 +161,17 @@ function createFakeLayer(details = {}) {
  */
 function pairedStatistics() {
     return {
-        pairedSampleCount: 1,
+        scope: "wholeOverlap",
+        pairedSampleCount: 32,
+        xMinimum: 0,
+        xMaximum: 32,
+        yMinimum: 100,
+        yMaximum: 132,
         histogram: {
             xEdges: Array.from({ length: 33 }, (_, index) => index),
             yEdges: Array.from({ length: 33 }, (_, index) => index + 100),
+            xMarginalCounts: Array(32).fill(1),
+            yMarginalCounts: Array(32).fill(1),
         },
     };
 }
@@ -343,6 +350,13 @@ function createFakeControlsView() {
         },
         setBivariateAvailability(canEnter, guidance) {
             this.bivariateAvailability = { canEnter, guidance };
+        },
+        readBivariatePercentiles(axis) {
+            return this.bivariatePercentiles?.[axis] ?? { lower: 5, middle: 50, upper: 95 };
+        },
+        renderBivariatePercentiles(axis, state) {
+            this.bivariateRanges ??= {};
+            this.bivariateRanges[axis] = state;
         },
         renderBivariateMode(state) {
             this.bivariateMode = state;
@@ -1455,6 +1469,94 @@ test("selecting 2D opens paired analysis without a map interaction", async () =>
     assert.equal(controlsView.bivariateMode.active, false);
     viewer.destroy();
     mapLayerController.destroy();
+});
+
+test("2D percentiles restyle current axes without changing ordinary styles or reading again", async () => {
+    let pairedReads = 0;
+    const h = visibleLayerFixture(undefined, {
+        loadPairedStatistics: async () => { pairedReads++; return pairedStatistics(); },
+    });
+    await h.viewer.show(createRasterItem("first"));
+    await h.viewer.show(createRasterItem("second"));
+    await flushPromises();
+    const originals = h.mapLayers.retainedRecords.map(record => structuredClone(record.state.rasterStyle));
+    h.controlsView.handlers.onBivariateModeChange("bivariate");
+    await flushPromises();
+    const xKey = h.layerStackView.layers.find(layer => layer.roleBadge?.label === "X").key;
+    const xLayer = h.mapLayers.getLeafletLayer(xKey);
+    const initialY = h.controlsView.bivariateMode.yStyle;
+    h.controlsView.bivariatePercentiles = { x: { lower: 10, middle: 25, upper: 90 } };
+    h.controlsView.handlers.onBivariatePercentileInput("x");
+    assert.equal(h.controlsView.bivariateRanges.x.applicable, true);
+    const before = xLayer.parameterUpdates.length;
+    h.controlsView.handlers.onApplyBivariatePercentiles("x");
+    assert.equal(xLayer.parameterUpdates.length, before + 1);
+    assert.match(xLayer.parameters.env, /min:3\.2;med:8;max:28\.8/);
+    assert.deepEqual(h.controlsView.bivariateMode.yStyle, initialY);
+    assert.deepEqual(h.controlsView.pairedPresentation.xStyle, h.controlsView.bivariateMode.xStyle);
+    assert.deepEqual(h.layerStackView.layers.find(layer => layer.key === xKey).legend.labels, [3.2, 8, 28.8]);
+    assert.equal(pairedReads, 1);
+    assert.deepEqual(h.mapLayers.retainedRecords.map(record => record.state.rasterStyle), originals);
+
+    h.controlsView.handlers.onBivariateSwapAxes();
+    await flushPromises();
+    assert.equal(h.controlsView.bivariateMode.yStyle.midpoint, 8);
+    assert.equal(h.layerStackView.layers.find(layer => layer.key === xKey).roleBadge.label, "Y");
+    h.controlsView.handlers.onBivariatePaletteChange("steelRose");
+    assert.equal(h.controlsView.bivariateMode.yStyle.midpoint, 8);
+    h.controlsView.handlers.onBivariateModeChange("overlay");
+    await flushPromises();
+    assert.deepEqual(h.mapLayers.retainedRecords.map(record => record.state.rasterStyle), originals);
+    assert.match(xLayer.parameters.env, /min:-4;med:3;max:20/);
+    h.controlsView.handlers.onBivariateModeChange("bivariate");
+    await flushPromises();
+    assert.equal(h.controlsView.bivariateMode.xStyle.midpoint, 3);
+    h.destroy();
+});
+
+test("2D range application rejects stale samples, failed reads, invalid drafts, and constant data", async () => {
+    const reads = [];
+    const h = visibleLayerFixture(undefined, { loadPairedStatistics: () => {
+        const read = createDeferred(); reads.push(read); return read.promise;
+    } });
+    await h.viewer.show(createRasterItem("first"));
+    await h.viewer.show(createRasterItem("second"));
+    await flushPromises();
+    h.controlsView.handlers.onBivariateModeChange("bivariate");
+    await flushPromises();
+    const layers = h.wmsLayers;
+    const updates = () => layers.map(layer => layer.parameterUpdates.length);
+    let before = updates();
+    h.controlsView.handlers.onApplyBivariatePercentiles("x");
+    assert.equal(h.controlsView.bivariateRanges.x.applicable, false);
+    assert.deepEqual(updates(), before);
+    reads[0].resolve(pairedStatistics());
+    await flushPromises();
+    h.controlsView.bivariatePercentiles = { x: { lower: 50, middle: 50, upper: 95 } };
+    before = updates();
+    h.controlsView.handlers.onApplyBivariatePercentiles("x");
+    assert.equal(h.controlsView.bivariateRanges.x.invalid, true);
+    assert.deepEqual(updates(), before);
+    h.controlsView.bivariatePercentiles = null;
+    h.viewer.exploreAt({ lng: 1, lat: 1 });
+    await flushPromises();
+    assert.equal(h.controlsView.bivariateRanges.x.applicable, false);
+    h.controlsView.handlers.onApplyBivariatePercentiles("x");
+    assert.deepEqual(updates(), before);
+    reads[1].reject(new Error("Sample failed"));
+    await flushPromises();
+    assert.equal(h.controlsView.bivariateRanges.x.applicable, false);
+    h.viewer.exploreAt({ lng: 2, lat: 2 });
+    await flushPromises();
+    reads[2].resolve({ ...pairedStatistics(), scope: "selectedArea", xMinimum: 4, xMaximum: 4 });
+    await flushPromises();
+    h.controlsView.handlers.onApplyBivariatePercentiles("x");
+    assert.equal(h.controlsView.bivariateRanges.x.applicable, false);
+    assert.match(h.controlsView.bivariateRanges.x.message, /same value/);
+    assert.equal(h.controlsView.bivariateRanges.y.applicable, true);
+    assert.match(h.controlsView.bivariateRanges.y.message, /map sample/);
+    assert.deepEqual(updates(), before);
+    h.destroy();
 });
 
 test("raster viewer owns the displayed layer lifecycle and detaches cleanly", async () => {

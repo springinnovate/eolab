@@ -1,6 +1,29 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+test("2D ranges follow raster identity across swaps and never survive a different pair", () => {
+  const mode = new BivariateRasterMode();
+  const range = { minimum: 2, midpoint: 4, maximum: 12 };
+  assert.throws(() => mode.setRange("first", range), /increasing/);
+  mode.enter(["first", "second"]);
+  mode.setRange("first", range);
+  range.midpoint = 9;
+  assert.equal(mode.getRange("first").midpoint, 4);
+  assert.equal(mode.getRange("second"), null);
+  mode.swap();
+  assert.equal(mode.getRange(mode.yKey).midpoint, 4);
+  for (const invalid of [
+    { minimum: 4, midpoint: 4, maximum: 12 },
+    { minimum: 4, midpoint: 2, maximum: 12 },
+    { minimum: 0, midpoint: 2, maximum: Infinity },
+  ]) assert.throws(() => mode.setRange("first", invalid), /increasing/);
+  mode.enter(["first", "third"]);
+  assert.equal(mode.getRange("first"), null);
+  mode.setRange("first", range);
+  mode.leave();
+  assert.equal(mode.getRange("first"), null);
+});
+
 import {
   BIVARIATE_RASTER_PALETTES,
   BivariateRasterMode,

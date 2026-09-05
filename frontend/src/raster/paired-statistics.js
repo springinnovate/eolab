@@ -1,11 +1,31 @@
 /** Domain validation and lookup helpers for paired raster statistics. */
 import { validateRasterSelectedBounds } from "./geometry.js";
+import { estimateHistogramPercentile } from "./statistics.js";
 
 export const RASTER_PAIRED_HISTOGRAM_BIN_COUNT = 32;
 export const RASTER_PAIRED_SAMPLE_GRID_MAX_DIMENSION = 127;
 export const WHOLE_RASTER_OVERLAP_SAMPLING_AREA = Object.freeze({
     kind: "wholeOverlap",
 });
+
+/**
+ * Estimate a percentile from one marginal of the current paired sample.
+ * Only cells valid in both rasters contribute, exactly as in the 2D chart.
+ *
+ * @param {Object} statistics Validated paired-statistics response.
+ * @param {"x"|"y"} axis Ordered paired axis.
+ * @param {number} percentile Requested percentile from zero through 100.
+ * @return {number} Bounded histogram estimate, not an exact quantile.
+ * @throws {Error} If the axis or percentile is invalid.
+ */
+export function estimateRasterPairedHistogramPercentile(statistics, axis, percentile) {
+    if (axis !== "x" && axis !== "y") throw new Error("Unknown paired axis.");
+    return estimateHistogramPercentile({
+        counts: statistics.histogram[`${axis}MarginalCounts`],
+        edges: statistics.histogram[`${axis}Edges`],
+    }, statistics.pairedSampleCount, statistics[`${axis}Minimum`],
+    statistics[`${axis}Maximum`], percentile);
+}
 
 /**
  * Normalize the paired statistics sampling-area union.

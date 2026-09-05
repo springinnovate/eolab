@@ -2,12 +2,29 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  estimateRasterPairedHistogramPercentile,
   findRasterPairedHistogramCell,
   getHighestDensityPairedCell,
   normalizeRasterPairedSamplingArea,
   validateRasterPairedStatisticsForSelection,
   WHOLE_RASTER_OVERLAP_SAMPLING_AREA,
 } from "../../src/raster/paired-statistics.js";
+
+test("paired marginal percentiles estimate independent axes and reject invalid input", () => {
+  const statistics = pairedStatistics();
+  const estimate = (axis, percentile) => estimateRasterPairedHistogramPercentile(statistics, axis, percentile);
+  assert.equal(estimate("x", 0), 0);
+  assert.equal(estimate("y", 100), 32);
+  assert.equal(estimate("x", 50), 3 + 6 / 7);
+  assert.equal(estimate("y", 50), 2 + 6 / 7);
+  assert.equal(estimate("x", 95), 20 + (12 * .95 - 7) / 5);
+  for (const percentile of [-1, 101, NaN, Infinity]) {
+    assert.throws(() => estimate("x", percentile), /between 0 and 100/);
+  }
+  assert.throws(() => estimate("z", 50), /Unknown paired axis/);
+  statistics.xMinimum = statistics.xMaximum = 8;
+  for (const percentile of [0, 5, 50, 95, 100]) assert.equal(estimate("x", percentile), 8);
+});
 
 function pairedStatistics() {
   const size = 32;
