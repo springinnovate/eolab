@@ -190,12 +190,20 @@ the first range has no lower bound, internal lower bounds are exclusive and
 upper bounds inclusive, and the last range has no upper bound. This keeps
 features outside an incomplete sample's observed extent visible. The browser
 assigns a deterministic low-to-high color sequence from Blue–yellow–red, Blues,
-Viridis, Yellow-to-red, or Purples, and can separately style nulls when they exist. On
-apply, `VectorStyleService` repeats the current bounded classification and
-requires the submitted ranges to match before generating GeoServer comparison
-filters. A changed source or class result therefore stops styling rather than
-publishing stale breaks. The map-layer view consumes only the vector adapter's
-neutral legend entries and does not know numeric-style internals.
+Viridis, Yellow-to-red, or Purples, and can separately style nulls when they exist.
+Each internal upper bound is an editable number shared by its adjacent rules, so
+an edit cannot create a gap or overlap. Empty, non-finite, repeated, or decreasing
+breaks disable Apply and identify the problem inline. Counts remain visible for
+generated ranges and are hidden after an edit because they no longer describe the
+custom thresholds. Changing the field, method, or class count regenerates the
+server suggestion; reopening a retained style preserves its exact applied values.
+
+On apply, `VectorStyleService` repeats the bounded field read to revalidate the
+current Catalog source, numeric field type, source signature, and missing-value
+availability. It then publishes the submitted model-validated adjacent ranges as
+GeoServer comparison filters instead of replacing them with the generated
+suggestion. The map-layer view consumes only the vector adapter's neutral legend
+entries and does not know numeric-style internals.
 
 The vector style can optionally add one `TextSymbolizer`. Labels are `null` by
 default in the fixed publication response; browser initialization enables a

@@ -263,6 +263,18 @@ test("graduated controls classify, palette, and optionally style missing values"
 
     assert.equal(fixture.controls.graduatedField.value, "value");
     assert.equal(fixture.controls.graduatedList.children.length, 4);
+    const firstBoundary = fixture.controls.graduatedList.children[0].children[1].children[1];
+    const secondBoundary = fixture.controls.graduatedList.children[1].children[1].children[1];
+    firstBoundary.value = "0.75";
+    firstBoundary.dispatchEvent(new Event("input"));
+    secondBoundary.value = "2.25";
+    secondBoundary.dispatchEvent(new Event("input"));
+    assert.match(fixture.controls.graduatedStatus.textContent, /Exact custom ranges/);
+    assert.equal(fixture.controls.graduatedList.children[0].children[2].textContent, "—");
+    assert.equal(
+        fixture.controls.graduatedList.children[2].children[1].children[0].textContent,
+        "Values > 2.25",
+    );
     fixture.controls.graduatedPalette.value = "viridis";
     fixture.controls.graduatedPalette.dispatchEvent(new Event("change"));
     const missing = fixture.controls.graduatedList.children[3];
@@ -279,13 +291,89 @@ test("graduated controls classify, palette, and optionally style missing values"
         classCount: 3,
         palette: "viridis",
         rules: [
-            { minimum: null, maximum: 1, color: "#440154" },
-            { minimum: 1, maximum: 2, color: "#21918c" },
-            { minimum: 2, maximum: null, color: "#fde725" },
+            { minimum: null, maximum: 0.75, color: "#440154" },
+            { minimum: 0.75, maximum: 2.25, color: "#21918c" },
+            { minimum: 2.25, maximum: null, color: "#fde725" },
         ],
         missingColor: "#abcdef",
     });
     assert.equal(fixture.applied[0].categorical, null);
+    fixture.controls.destroy();
+});
+
+test("graduated controls reject incomplete or non-increasing custom breaks", async () => {
+    const fixture = styleFixture();
+    fixture.controls.show(fixture.target("polygon", {
+        geometryKind: "polygon",
+        fillColor: "#a855f7",
+        fillOpacity: 0.38,
+        strokeColor: "#581c87",
+        strokeOpacity: 1,
+        strokeWidth: 2,
+    }));
+    fixture.controls.mode.value = "graduated";
+    fixture.controls.graduatedClassCount.value = "3";
+    fixture.controls.mode.dispatchEvent(new Event("change"));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const firstBoundary = fixture.controls.graduatedList.children[0].children[1].children[1];
+    firstBoundary.value = "";
+    firstBoundary.dispatchEvent(new Event("input"));
+    assert.equal(fixture.controls.applyButton.disabled, true);
+    assert.equal(
+        fixture.controls.graduatedStatus.textContent,
+        "Enter a finite number for every class break.",
+    );
+    assert.equal(firstBoundary.getAttribute("aria-invalid"), "true");
+
+    firstBoundary.value = "2";
+    firstBoundary.dispatchEvent(new Event("input"));
+    assert.equal(fixture.controls.applyButton.disabled, true);
+    assert.equal(
+        fixture.controls.graduatedStatus.textContent,
+        "Class breaks must increase from top to bottom.",
+    );
+
+    firstBoundary.value = "0.5";
+    firstBoundary.dispatchEvent(new Event("input"));
+    assert.equal(fixture.controls.applyButton.disabled, false);
+    assert.equal(firstBoundary.getAttribute("aria-invalid"), null);
+    fixture.controls.destroy();
+});
+
+test("graduated controls retain exact applied breaks when reopened", async () => {
+    const fixture = styleFixture();
+    fixture.controls.show(fixture.target("polygon", {
+        geometryKind: "polygon",
+        fillColor: "#a855f7",
+        fillOpacity: 0.38,
+        strokeColor: "#581c87",
+        strokeOpacity: 1,
+        strokeWidth: 2,
+        graduated: {
+            field: "value",
+            method: "percentile-interval",
+            classCount: 3,
+            palette: "blue-yellow-red",
+            rules: [
+                { minimum: null, maximum: 0.25, color: "#2b83ba" },
+                { minimum: 0.25, maximum: 2.75, color: "#ffffbf" },
+                { minimum: 2.75, maximum: null, color: "#d7191c" },
+            ],
+            missingColor: null,
+        },
+    }));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    assert.equal(
+        fixture.controls.graduatedList.children[0].children[1].children[1].value,
+        "0.25",
+    );
+    assert.equal(
+        fixture.controls.graduatedList.children[1].children[1].children[1].value,
+        "2.75",
+    );
+    assert.match(fixture.controls.graduatedStatus.textContent, /Exact custom ranges/);
     fixture.controls.destroy();
 });
 
