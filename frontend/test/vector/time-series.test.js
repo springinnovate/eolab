@@ -6,6 +6,7 @@ import {
   buildVectorTimeSeriesSeries,
   summarizeVectorTimeSeriesFields,
   VECTOR_TIME_SERIES_LAYER_LABEL,
+  vectorTimeSeriesPresentation,
   VectorTimeSeriesController,
 } from "../../src/vector/time-series.js";
 
@@ -51,6 +52,7 @@ function fixture() {
   );
   documentContext.querySelector("#vector-time-series-table").hidden = true;
   const visibility = [];
+  const presentations = [];
   const zoomRequests = [];
   const controller = new VectorTimeSeriesController({
     documentContext,
@@ -58,12 +60,19 @@ function fixture() {
       visibility.push({ visible, moveFocus });
       documentContext.querySelector("#vector-time-series").hidden = !visible;
     },
+    onPresentationChange: (identity) => presentations.push(identity),
     onSourceLayerZoom: (sourceId) => {
       zoomRequests.push(sourceId);
       return true;
     },
   });
-  return { controller, documentContext, visibility, zoomRequests };
+  return {
+    controller,
+    documentContext,
+    visibility,
+    presentations,
+    zoomRequests,
+  };
 }
 
 test("field summaries expose heterogeneous coverage without coercion", () => {
@@ -109,6 +118,26 @@ test("every inspection result is a distinct naturally ordered point", () => {
   );
 });
 
+test("series presentation identifies its field, features, and source layers", () => {
+  const series = buildVectorTimeSeriesSeries(observations(), {
+    xField: VECTOR_TIME_SERIES_LAYER_LABEL,
+    yField: "score",
+    direction: "ascending",
+  });
+  assert.deepEqual(vectorTimeSeriesPresentation(series.points, "score"), {
+    label: "score · 3 features",
+    title: "score across 3 features · Layers (2): risk-2.shp, risk-10.shp",
+    heading: "score across 3 features",
+    context: "Layers (2): risk-2.shp, risk-10.shp",
+  });
+  assert.equal(
+    vectorTimeSeriesPresentation(series.points, "score", { loading: true })
+      .label,
+    "score · 3 features…",
+  );
+  assert.equal(vectorTimeSeriesPresentation([], "score"), null);
+});
+
 test("controller renders axes and table while retaining controls across samples", () => {
   const h = fixture();
   h.controller.setSample({
@@ -131,6 +160,18 @@ test("controller renders axes and table while retaining controls across samples"
     h.documentContext.querySelector("#vector-time-series-status").textContent,
     "3 of 4 inspection results plotted. 1 omitted because a selected field was missing or the Y value was not numeric.",
   );
+  assert.equal(
+    h.documentContext.querySelector("#vector-time-series-heading").textContent,
+    "score across 3 features",
+  );
+  assert.equal(
+    h.documentContext.querySelector("#vector-time-series-context").textContent,
+    "Layers (2): risk-2.shp, risk-10.shp",
+  );
+  assert.deepEqual(h.presentations.at(-1), {
+    label: "score · 3 features",
+    title: "score across 3 features · Layers (2): risk-2.shp, risk-10.shp",
+  });
 
   const x = h.documentContext.querySelector("#vector-time-series-x");
   const y = h.documentContext.querySelector("#vector-time-series-y");
@@ -157,6 +198,11 @@ test("controller renders axes and table while retaining controls across samples"
   assert.match(
     h.documentContext.querySelector("#vector-time-series-status").textContent,
     /No inspection result has both year and a finite year value/,
+  );
+  assert.equal(h.presentations.at(-1), null);
+  assert.equal(
+    h.documentContext.querySelector("#vector-time-series-heading").textContent,
+    "Across features",
   );
   assert.deepEqual(h.visibility, [{ visible: true, moveFocus: false }]);
 });

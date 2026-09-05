@@ -3534,6 +3534,8 @@ article.raster-histogram-summary {
   color: var(--brand-press);
 }
 
+#map-inspection-tab-time-series,
+#map-inspection-tab-feature-profile,
 #map-inspection-tab-style {
   max-width: min(220px, 42vw);
   overflow: hidden;
@@ -3692,6 +3694,17 @@ article.raster-histogram-summary {
   background: var(--surface-1);
 }
 .vector-time-series-header h2 { margin: 0; font-size: 1rem; }
+.vector-series-heading { min-width: 0; }
+.vector-series-heading h2,
+.vector-series-context {
+  overflow-wrap: anywhere;
+}
+.vector-series-context {
+  margin: 3px 0 0;
+  color: var(--text-2);
+  font-size: 0.72rem;
+}
+.vector-series-context[hidden] { display: none; }
 #close-vector-time-series { flex: 0 0 28px; height: 28px; padding: 0; line-height: 1; font-size: 1.1rem; }
 #close-vector-feature-profile { flex: 0 0 28px; height: 28px; padding: 0; line-height: 1; font-size: 1.1rem; }
 .vector-time-series-controls {

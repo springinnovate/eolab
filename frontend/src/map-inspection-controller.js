@@ -42,13 +42,13 @@ export class MapInspectionController {
             },
             {
                 name: "time-series",
-                label: "Series",
+                label: "Across features",
                 panel: this.vectorTimeSeries,
                 tab: documentContext.querySelector("#map-inspection-tab-time-series"),
             },
             {
                 name: "feature-profile",
-                label: "Series",
+                label: "Feature fields",
                 panel: this.vectorFeatureProfile,
                 tab: documentContext.querySelector("#map-inspection-tab-feature-profile"),
             },
@@ -223,6 +223,17 @@ export class MapInspectionController {
     }
 
     /**
+     * Identify the field-across-features presentation in its retained dock tab.
+     *
+     * @param {{label:string,title:string}|null} identity Plot identity, or null
+     * to restore the stable base label.
+     * @return {void}
+     */
+    setVectorTimeSeriesIdentity(identity) {
+        this.#setToolIdentity("time-series", identity);
+    }
+
+    /**
      * Hide vector time-series analysis without clearing its retained settings.
      *
      * @param {boolean} [moveFocus=false] Restore focus to the map.
@@ -237,6 +248,17 @@ export class MapInspectionController {
     showVectorFeatureProfile() {
         this.#closeToolState("time-series");
         this.#showTool("feature-profile");
+    }
+
+    /**
+     * Identify the single-feature field presentation in its retained dock tab.
+     *
+     * @param {{label:string,title:string}|null} identity Plot identity, or null
+     * to restore the stable base label.
+     * @return {void}
+     */
+    setVectorFeatureProfileIdentity(identity) {
+        this.#setToolIdentity("feature-profile", identity);
     }
 
     /**
@@ -364,6 +386,32 @@ export class MapInspectionController {
     #resetToolLabel(name) {
         const tool = this.#tool(name);
         this.#setToolLabel(name, tool.label);
+    }
+
+    /**
+     * Apply one analysis-owned identity without exposing analysis data here.
+     *
+     * @param {string} name Stable presentation name.
+     * @param {{label:string,title:string}|null} identity Presentation identity.
+     * @return {void}
+     */
+    #setToolIdentity(name, identity) {
+        if (identity === null) {
+            this.#resetToolLabel(name);
+            return;
+        }
+        if (
+            typeof identity !== "object" ||
+            typeof identity.label !== "string" ||
+            identity.label.trim().length === 0 ||
+            typeof identity.title !== "string" ||
+            identity.title.trim().length === 0
+        ) {
+            throw new TypeError(
+                "Map tool identity requires non-empty label and title strings."
+            );
+        }
+        this.#setToolLabel(name, identity.label, identity.title);
     }
 
     /**

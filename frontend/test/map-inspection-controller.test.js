@@ -154,6 +154,17 @@ test("map result counts reject invalid presentation values", () => {
         );
     }
     assert.throws(() => h.controller.showStyle(""), /non-empty string/);
+    assert.throws(
+        () => h.controller.setVectorTimeSeriesIdentity({ label: "", title: "x" }),
+        /non-empty label and title/
+    );
+    assert.throws(
+        () => h.controller.setVectorFeatureProfileIdentity({
+            label: "Feature · A",
+            title: "",
+        }),
+        /non-empty label and title/
+    );
     h.controller.destroy();
 });
 
@@ -229,11 +240,20 @@ test("open dock tabs support wrapping horizontal keyboard navigation", () => {
 
 test("vector time series is an independent retained map-side panel", () => {
     const h = fixture();
+    h.controller.setVectorTimeSeriesIdentity({
+        label: "R2024 · 4 features",
+        title: "R2024 across 4 features · Layer: corridors.shp",
+    });
     h.controller.showFeatureInspector();
     h.controller.showVectorTimeSeries();
     assert.equal(h.feature.hidden, false);
     assert.equal(h.vectorTimeSeries.hidden, false);
     assert.equal(h.vectorFeatureProfile.hidden, true);
+    assert.equal(h.timeSeriesTab.textContent, "R2024 · 4 features");
+    assert.equal(
+        h.timeSeriesTab.title,
+        "R2024 across 4 features · Layer: corridors.shp"
+    );
     assert.deepEqual(h.calls, ["show"]);
     h.controller.hideFeatureInspector();
     assert.equal(h.vectorTimeSeries.hidden, false);
@@ -241,6 +261,8 @@ test("vector time series is an independent retained map-side panel", () => {
     h.controller.hideVectorTimeSeries(true);
     assert.equal(h.doc.activeElement, h.map);
     assert.deepEqual(h.calls, ["show", "hide"]);
+    h.controller.setVectorTimeSeriesIdentity(null);
+    assert.equal(h.timeSeriesTab.textContent, "Across features");
 });
 
 test("feature details collapse without closing retained series state", () => {
@@ -268,12 +290,17 @@ test("feature details collapse without closing retained series state", () => {
 
 test("the two series modes share one exclusive presentation position", () => {
     const h = fixture();
+    h.controller.setVectorFeatureProfileIdentity({
+        label: "Feature · Northern corridor",
+        title: "Fields from Northern corridor · Layer: corridors.shp",
+    });
     h.controller.showFeatureInspector();
     h.controller.showVectorTimeSeries();
     h.controller.showVectorFeatureProfile();
     assert.equal(h.feature.hidden, false);
     assert.equal(h.vectorTimeSeries.hidden, true);
     assert.equal(h.vectorFeatureProfile.hidden, false);
+    assert.equal(h.featureProfileTab.textContent, "Feature · Northern corridor");
     h.controller.showVectorTimeSeries();
     assert.equal(h.vectorTimeSeries.hidden, false);
     assert.equal(h.vectorFeatureProfile.hidden, true);

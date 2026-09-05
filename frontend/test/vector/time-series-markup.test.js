@@ -17,6 +17,8 @@ test("vector time-series controls and accessible outputs are present", () => {
     "toggle-vector-inspector-details",
     "vector-feature-inspector-details",
     "vector-time-series",
+    "vector-time-series-heading",
+    "vector-time-series-context",
     "close-vector-time-series",
     "vector-time-series-x",
     "vector-time-series-y",
@@ -45,7 +47,7 @@ test("vector time-series controls and accessible outputs are present", () => {
   assert.match(MARKUP, /<label for="vector-time-series-direction">/);
   assert.match(MARKUP, /<label for="vector-time-series-chart-type">/);
   assert.match(MARKUP, />Plot one field across features<\/button>/);
-  assert.match(MARKUP, />Series plot<\/h2>/);
+  assert.match(MARKUP, />Across features<\/h2>/);
   assert.doesNotMatch(MARKUP, />Time series<\/button>/);
   assert.match(MARKUP, /id="vector-time-series-chart"[^>]+role="img"/);
   assert.match(STYLESHEET, /#vector-time-series\[hidden\]/);
@@ -60,6 +62,7 @@ test("vector time-series controls and accessible outputs are present", () => {
   assert.match(STYLESHEET, /\.series-chart-axis/);
   assert.match(STYLESHEET, /\.series-chart-point\.is-selected/);
   assert.match(STYLESHEET, /\.vector-time-series-selection\[hidden\]/);
+  assert.match(STYLESHEET, /\.vector-series-context\[hidden\]/);
 });
 
 test("feature-field plotting has searchable, accessible series controls", () => {
@@ -67,6 +70,8 @@ test("feature-field plotting has searchable, accessible series controls", () => 
     "open-vector-feature-profile",
     "vector-feature-profile-action-help",
     "vector-feature-profile",
+    "vector-feature-profile-heading",
+    "vector-feature-profile-context",
     "close-vector-feature-profile",
     "vector-feature-profile-title-field",
     "vector-feature-profile-field-search",
@@ -84,6 +89,7 @@ test("feature-field plotting has searchable, accessible series controls", () => 
     assert.match(MARKUP, new RegExp(`id="${identifier}"`));
   }
   assert.match(MARKUP, />Plot fields from this feature<\/button>/);
+  assert.match(MARKUP, />Feature fields<\/h2>/);
   assert.match(
     MARKUP,
     />Plot several numeric fields from this feature, such as R2000–R2024\.<\/span>/,

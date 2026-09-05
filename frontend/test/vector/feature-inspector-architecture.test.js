@@ -134,6 +134,10 @@ test("feature-field analysis is a sibling behind neutral observation and chart c
     /vectorFeatureProfile\.setCurrentObservation\(observation\)/,
   );
   assert.match(
+    COMPOSITION_SOURCE,
+    /mapInspection\.setVectorFeatureProfileIdentity\(identity\)/,
+  );
+  assert.match(
     FEATURE_PROFILE_SOURCE,
     /from "\.\/inspection-observation\.js"/,
   );
@@ -176,6 +180,10 @@ test("time-series analysis consumes neutral samples without sibling knowledge", 
   );
   assert.match(COMPOSITION_SOURCE, /sourceId:\s*record\.entry\.key/);
   assert.match(COMPOSITION_SOURCE, /onSourceLayerZoom:\s*\(sourceId\)\s*=>/);
+  assert.match(
+    COMPOSITION_SOURCE,
+    /mapInspection\.setVectorTimeSeriesIdentity\(identity\)/,
+  );
   assert.match(
     COMPOSITION_SOURCE,
     /return zoomRetainedMapLayer\(record\.entry\.item\)/,

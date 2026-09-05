@@ -62,6 +62,59 @@ export function suggestFeatureProfileTitle(observation) {
 }
 
 /**
+ * Build the visible identity for one feature-field plot.
+ *
+ * The configured title field wins when it contains a useful scalar. A
+ * conventional name field is the next choice, followed by the stable feature
+ * ID and a generic final fallback. The source layer and feature ID remain
+ * explicit context even when a friendly name is available.
+ *
+ * @param {Object} observation Validated inspection observation.
+ * @param {string|null} [titleField=null] Configured chart-title field.
+ * @return {{label:string,title:string,heading:string,context:string}} Identity.
+ */
+export function vectorFeatureProfilePresentation(
+    observation,
+    titleField = null
+) {
+    validateVectorInspectionObservations([observation]);
+    if (titleField !== null && typeof titleField !== "string") {
+        throw new TypeError("Feature profile title field must be a string.");
+    }
+    const suggestedField = suggestFeatureProfileTitle(observation);
+    const candidates = [titleField, suggestedField].filter((field, index, all) =>
+        typeof field === "string" &&
+        field !== FEATURE_PROFILE_TITLE_NONE &&
+        field !== FEATURE_PROFILE_TITLE_LAYER &&
+        all.indexOf(field) === index
+    );
+    let featureLabel = null;
+    for (const field of candidates) {
+        const value = observation.properties[field];
+        if (value === null || value === undefined) continue;
+        const text = String(value).trim();
+        if (text.length > 0) {
+            featureLabel = text;
+            break;
+        }
+    }
+    const featureId = observation.featureId === null
+        ? null
+        : String(observation.featureId);
+    featureLabel ??= featureId ?? "Selected feature";
+    const featureContext = featureId === null
+        ? "Feature ID unavailable"
+        : `Feature ID: ${featureId}`;
+    return Object.freeze({
+        label: `Feature · ${featureLabel}`,
+        title: `Fields from ${featureLabel} · Layer: ` +
+            `${observation.layerLabel} · ${featureContext}`,
+        heading: featureLabel,
+        context: `Layer: ${observation.layerLabel} · ${featureContext}`,
+    });
+}
+
+/**
  * Select the largest repeated numeric field-name family as an initial series.
  *
  * A family replaces the last number with a marker, so R2000 through R2024 are
@@ -151,15 +204,32 @@ export class VectorFeatureProfileController {
      * @param {Object} configuration Collaborators.
      * @param {(visible:boolean,moveFocus:boolean)=>void}
      * configuration.onVisibilityChange Requests presentation through composition.
+     * @param {(identity:{label:string,title:string}|null)=>void}
+     * configuration.onPresentationChange Publishes a bounded dock identity
+     * through application composition.
      * @param {Document} [configuration.documentContext=document] DOM owner.
      */
-    constructor({ onVisibilityChange, documentContext = document }) {
+    constructor({
+        onVisibilityChange,
+        onPresentationChange,
+        documentContext = document,
+    }) {
         if (typeof onVisibilityChange !== "function") {
             throw new TypeError("onVisibilityChange must be a function.");
         }
+        if (typeof onPresentationChange !== "function") {
+            throw new TypeError("onPresentationChange must be a function.");
+        }
         this.onVisibilityChange = onVisibilityChange;
+        this.onPresentationChange = onPresentationChange;
         this.document = documentContext;
         this.panel = documentContext.querySelector("#vector-feature-profile");
+        this.heading = documentContext.querySelector(
+            "#vector-feature-profile-heading"
+        );
+        this.context = documentContext.querySelector(
+            "#vector-feature-profile-context"
+        );
         this.closeButton = documentContext.querySelector(
             "#close-vector-feature-profile"
         );
@@ -321,11 +391,16 @@ export class VectorFeatureProfileController {
         this.chartTitle.textContent = "";
         const settings = this.#currentSettings();
         if (this.currentObservation === null || settings === null) {
+            this.#renderPresentation(null);
             this.titleField.replaceChildren();
             this.fieldList.replaceChildren();
             this.status.textContent = "Inspect a vector feature first.";
             return;
         }
+        this.#renderPresentation(vectorFeatureProfilePresentation(
+            this.currentObservation,
+            settings.titleField
+        ));
         this.#renderTitleOptions(settings);
         this.direction.value = settings.direction;
         this.chartType.value = settings.chartType;
@@ -468,6 +543,30 @@ export class VectorFeatureProfileController {
     }
 
     /**
+     * Render analysis-owned feature context and publish only its dock identity.
+     *
+     * @param {{label:string,title:string,heading:string,context:string}|null}
+     * presentation Current presentation identity, or null without a feature.
+     * @return {void}
+     */
+    #renderPresentation(presentation) {
+        if (presentation === null) {
+            this.heading.textContent = "Feature fields";
+            this.context.textContent = "";
+            this.context.hidden = true;
+            this.onPresentationChange(null);
+            return;
+        }
+        this.heading.textContent = presentation.heading;
+        this.context.textContent = presentation.context;
+        this.context.hidden = false;
+        this.onPresentationChange({
+            label: presentation.label,
+            title: presentation.title,
+        });
+    }
+
+    /**
      * Present selected fields and missing values in an accessible compact table.
      *
      * @param {Object[]} points Ordered profile points.
@@ -502,6 +601,7 @@ export class VectorFeatureProfileController {
         this.selectMatchingButton.removeEventListener("click", this.onSelectMatching);
         this.clearFieldsButton.removeEventListener("click", this.onClearFields);
         this.document.removeEventListener("keydown", this.onKeydown);
+        this.onPresentationChange(null);
         this.onVisibilityChange(false, false);
     }
 }

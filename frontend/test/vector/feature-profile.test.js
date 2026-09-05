@@ -8,6 +8,7 @@ import {
   numericFeatureFields,
   suggestFeatureProfileFields,
   suggestFeatureProfileTitle,
+  vectorFeatureProfilePresentation,
   VectorFeatureProfileController,
 } from "../../src/vector/feature-profile.js";
 
@@ -42,14 +43,16 @@ function fixture() {
   );
   documentContext.querySelector("#vector-feature-profile-table").hidden = true;
   const visibility = [];
+  const presentations = [];
   const controller = new VectorFeatureProfileController({
     documentContext,
     onVisibilityChange: (visible, moveFocus) => {
       visibility.push({ visible, moveFocus });
       documentContext.querySelector("#vector-feature-profile").hidden = !visible;
     },
+    onPresentationChange: (identity) => presentations.push(identity),
   });
-  return { controller, documentContext, visibility };
+  return { controller, documentContext, visibility, presentations };
 }
 
 test("field discovery chooses repeated numeric names and a conventional title", () => {
@@ -68,6 +71,20 @@ test("field discovery chooses repeated numeric names and a conventional title", 
     "R2001",
   ]);
   assert.equal(suggestFeatureProfileTitle(current), "node_nm");
+  assert.deepEqual(vectorFeatureProfilePresentation(current), {
+    label: "Feature · Northern corridor",
+    title: "Fields from Northern corridor · Layer: corridors.shp · " +
+      "Feature ID: corridors.1",
+    heading: "Northern corridor",
+    context: "Layer: corridors.shp · Feature ID: corridors.1",
+  });
+  assert.equal(
+    vectorFeatureProfilePresentation(observation({
+      featureId: "corridors.2",
+      properties: { node_nm: "", R2000: 2 },
+    })).heading,
+    "corridors.2",
+  );
 });
 
 test("profile points use field-name numbers and preserve missing-value gaps", () => {
@@ -107,6 +124,21 @@ test("controller plots suggested fields and updates from partial search actions"
       .textContent,
     "Northern corridor",
   );
+  assert.equal(
+    h.documentContext.querySelector("#vector-feature-profile-heading")
+      .textContent,
+    "Northern corridor",
+  );
+  assert.equal(
+    h.documentContext.querySelector("#vector-feature-profile-context")
+      .textContent,
+    "Layer: corridors.shp · Feature ID: corridors.1",
+  );
+  assert.deepEqual(h.presentations.at(-1), {
+    label: "Feature · Northern corridor",
+    title: "Fields from Northern corridor · Layer: corridors.shp · " +
+      "Feature ID: corridors.1",
+  });
   assert.equal(
     h.documentContext.querySelector("#vector-feature-profile-field-list")
       .children.length,

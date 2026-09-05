@@ -510,10 +510,10 @@
               aria-selected="false" tabindex="-1" hidden>Features</button>
             <button id="map-inspection-tab-time-series" class="map-inspection-tab"
               type="button" role="tab" aria-controls="vector-time-series"
-              aria-selected="false" tabindex="-1" hidden>Series</button>
+              aria-selected="false" tabindex="-1" hidden>Across features</button>
             <button id="map-inspection-tab-feature-profile" class="map-inspection-tab"
               type="button" role="tab" aria-controls="vector-feature-profile"
-              aria-selected="false" tabindex="-1" hidden>Series</button>
+              aria-selected="false" tabindex="-1" hidden>Feature fields</button>
             <button id="map-inspection-tab-histogram" class="map-inspection-tab"
               type="button" role="tab" aria-controls="map-histogram-panel"
               aria-selected="false" tabindex="-1" hidden>Raster histogram</button>
@@ -578,7 +578,11 @@
           <section id="vector-time-series" role="tabpanel"
             aria-labelledby="map-inspection-tab-time-series" hidden>
             <header class="vector-time-series-header">
-              <h2 id="vector-time-series-heading">Series plot</h2>
+              <div class="vector-series-heading">
+                <h2 id="vector-time-series-heading">Across features</h2>
+                <p id="vector-time-series-context" class="vector-series-context"
+                  hidden></p>
+              </div>
               <button id="close-vector-time-series" class="secondary-button"
                 type="button" aria-label="Close vector series">×</button>
             </header>
@@ -640,7 +644,11 @@
           <section id="vector-feature-profile" role="tabpanel"
             aria-labelledby="map-inspection-tab-feature-profile" hidden>
             <header class="vector-time-series-header">
-              <h2 id="vector-feature-profile-heading">Series plot</h2>
+              <div class="vector-series-heading">
+                <h2 id="vector-feature-profile-heading">Feature fields</h2>
+                <p id="vector-feature-profile-context" class="vector-series-context"
+                  hidden></p>
+              </div>
               <button id="close-vector-feature-profile" class="secondary-button"
                 type="button" aria-label="Close feature-field plot">×</button>
             </header>

@@ -786,6 +786,8 @@ async function initializeCatalog(
             if (visible) mapInspection.showVectorTimeSeries();
             else mapInspection.hideVectorTimeSeries(moveFocus);
         },
+        onPresentationChange: (identity) =>
+            mapInspection.setVectorTimeSeriesIdentity(identity),
         onSourceLayerZoom: (sourceId) => {
             const record = mapLayerController.getRecord(sourceId);
             if (record === null || record.adapter !== vectorMapLayerAdapter) {
@@ -799,6 +801,8 @@ async function initializeCatalog(
             if (visible) mapInspection.showVectorFeatureProfile();
             else mapInspection.hideVectorFeatureProfile(moveFocus);
         },
+        onPresentationChange: (identity) =>
+            mapInspection.setVectorFeatureProfileIdentity(identity),
     });
     vectorFeatureInspector = new VectorFeatureInspectorController({
         leaflet: L,
