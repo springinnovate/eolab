@@ -55,14 +55,18 @@ EOLab then chooses one of two server-owned plans:
   `estimated: false`.
 - `sampleGrid` uses exactly one center observation per cell with at most 127
   cells on the envelope's longest edge and an aspect-preserving shorter edge.
-  It reads at most 16,129 unique native blocks and at most 9 GiB of cumulative
-  decoded source work. The response is marked `estimated: true`.
+  When the signed GeoTIFF has a suitable embedded overview, the sampler uses
+  the coarsest level that still contains the final grid and whose read buffer
+  is at most 512 pixels on each edge. Otherwise it reads at most 16,129 unique
+  full-resolution native blocks and at most 9 GiB of cumulative decoded source
+  work. The response is marked `estimated: true`.
 
 The sample-grid limits are fixed ceilings, not browser controls. A request that
-cannot satisfy them fails before pixel I/O. Each admitted native block is read
-at most once without a broad `out_shape` read, a boundless read, or an arbitrary
-full-extent WMS request. The 9 GiB limit measures cumulative decoded work; only
-one bounded native block is retained at a time.
+cannot satisfy them fails before pixel I/O. Overview-backed reads use one
+bounded decimated window and center-sample it in memory. The fallback reads each
+admitted native block at most once without a broad `out_shape` read, a boundless
+read, or an arbitrary full-extent WMS request. The 9 GiB fallback limit measures
+cumulative decoded work; only one bounded native block is retained at a time.
 
 Only one non-empty band with a supported scalar datatype and native block edges
 no larger than 1,024 pixels is accepted. CRS and affine georeferencing must be

@@ -4,7 +4,8 @@ from pathlib import Path
 
 import numpy
 import pytest
-from rasterio.enums import MaskFlags
+import rasterio
+from rasterio.enums import MaskFlags, Resampling
 from rasterio.transform import from_origin
 from rasterio.windows import Window
 
@@ -112,6 +113,87 @@ class _NativeBlockDataset:
             row_start:row_start + int(window.height),
             column_start:column_start + int(window.width),
         ].copy()
+
+
+class _OverviewDataset(_NativeBlockDataset):
+    """Provide advertised overview factors and record decimated reads."""
+
+    def __init__(
+        self,
+        values: numpy.ndarray,
+        *,
+        block_shape: tuple[int, int],
+        overview_factors: tuple[int, ...],
+    ) -> None:
+        """Create a source with a controlled embedded-overview pyramid.
+
+        Args:
+            values: Two-dimensional band-one source values.
+            block_shape: Native source block height and width.
+            overview_factors: Advertised overview decimation factors.
+        """
+        super().__init__(values, block_shape=block_shape)
+        self.overview_factors = overview_factors
+        self.overview_reads: list[
+            tuple[Window, tuple[int, int], Resampling]
+        ] = []
+
+    def overviews(self, band: int) -> list[int]:
+        """Return controlled overview factors for band one.
+
+        Args:
+            band: One-based band index.
+
+        Returns:
+            Advertised overview factors.
+        """
+        assert band == 1
+        return list(self.overview_factors)
+
+    def read(
+        self,
+        band: int,
+        *,
+        window: Window,
+        out_shape: tuple[int, int],
+        masked: bool,
+        resampling: Resampling,
+    ) -> numpy.ndarray:
+        """Return one nearest-neighbor decimated source window.
+
+        Args:
+            band: One-based band index.
+            window: Integral source window.
+            out_shape: Requested overview-level height and width.
+            masked: Whether Rasterio should apply a validity mask.
+            resampling: Requested decimation algorithm.
+
+        Returns:
+            Controlled decimated values with ``out_shape``.
+        """
+        assert band == 1
+        assert masked is False
+        self.overview_reads.append((window, out_shape, resampling))
+        read_height, read_width = out_shape
+        source_height = int(window.height)
+        source_width = int(window.width)
+        rows = int(window.row_off) + numpy.minimum(
+            source_height - 1,
+            numpy.floor(
+                (numpy.arange(read_height) + 0.5)
+                * source_height
+                / read_height
+            ).astype(numpy.int64),
+        )
+        columns = int(window.col_off) + numpy.minimum(
+            source_width - 1,
+            numpy.floor(
+                (numpy.arange(read_width) + 0.5)
+                * source_width
+                / read_width
+            ).astype(numpy.int64),
+        )
+        return self.values[numpy.ix_(rows, columns)].copy()
 
 
 class _PlanningDataset:
@@ -236,6 +318,73 @@ def test_sample_grid_is_deterministic_and_reads_only_proven_blocks() -> None:
         row, column = plan.cell_positions[cell_index][0]
         sample_row, sample_column = divmod(cell_index, plan.width)
         assert sample[sample_row, sample_column] == values[row, column]
+
+
+def test_sample_grid_prefers_coarsest_suitable_embedded_overview() -> None:
+    """Use one bounded overview read instead of scattered native blocks."""
+    values = numpy.arange(600 * 1_000, dtype=numpy.int32).reshape((600, 1_000))
+    source_window = Window(100, 100, 800, 400)
+    dataset = _OverviewDataset(
+        values,
+        block_shape=(32, 32),
+        overview_factors=(2, 4, 8),
+    )
+
+    sample, plan = read_source_window_sample_grid(
+        dataset,  # type: ignore[arg-type]
+        source_window,
+    )
+
+    assert (plan.width, plan.height) == (127, 63)
+    assert sample.shape == (63, 127)
+    assert dataset.overview_reads == [
+        (source_window, (100, 200), Resampling.nearest),
+    ]
+    assert dataset.read_windows == []
+
+
+def test_sample_grid_reads_a_real_internal_geotiff_overview(
+    tmp_path: Path,
+) -> None:
+    """Keep the optimized reader compatible with Rasterio overview I/O.
+
+    Args:
+        tmp_path: Temporary directory for one internally overviewed GeoTIFF.
+    """
+    source_path = tmp_path / "overviewed.tif"
+    values = numpy.arange(1_024 * 1_024, dtype=numpy.int32).reshape(
+        (1_024, 1_024)
+    )
+    with rasterio.open(
+        source_path,
+        "w",
+        driver="GTiff",
+        width=values.shape[1],
+        height=values.shape[0],
+        count=1,
+        dtype=values.dtype,
+        crs="EPSG:4326",
+        transform=from_origin(-180, 90, 360 / 1_024, 180 / 1_024),
+        tiled=True,
+        blockxsize=128,
+        blockysize=128,
+        nodata=-9999,
+    ) as destination:
+        destination.write(values, 1)
+        destination.build_overviews((2, 4, 8), Resampling.nearest)
+
+    with rasterio.open(source_path) as dataset:
+        assert dataset.overviews(1) == [2, 4, 8]
+        assert tuple(Path(name) for name in dataset.files) == (source_path,)
+        sample, plan = read_source_window_sample_grid(
+            dataset,
+            Window(0, 0, dataset.width, dataset.height),
+        )
+
+    assert (plan.width, plan.height) == (127, 127)
+    assert sample.shape == (127, 127)
+    assert sample.count() == 127 * 127
+    assert float(sample.min()) < float(sample.max())
 
 
 def test_huge_source_grid_is_planned_under_fixed_limits_without_source_reads() -> None:

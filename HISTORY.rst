@@ -4,6 +4,7 @@ History
 Unreleased
 ----------
 
+* Sample broad raster histograms from suitable embedded COG overviews before falling back to bounded full-resolution reads.
 * Restore blue–yellow–red raster defaults and add named vector labels, thin black outlines, and automatic numeric coloring.
 * Show vector labels from zoom 0 with fixed anchors, wrapped text, overlap, and tile-edge margins; automatically color the latest annual or first non-ID numeric measurement.
 * Adjust each 2D raster color range using percentiles from the paired histogram.
