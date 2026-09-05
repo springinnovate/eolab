@@ -109,7 +109,7 @@ function createSuggestionFixture() {
 test("Catalog filter descriptions are executable parser-owned syntax", () => {
   assert.deepEqual(
     CATALOG_SEARCH_FILTERS.map((filter) => filter.field),
-    ["format", "type", "type", "date"],
+    ["type", "type", "date"],
   );
   for (const filter of CATALOG_SEARCH_FILTERS.filter(
     (candidate) => candidate.searchImmediately,
@@ -119,18 +119,18 @@ test("Catalog filter descriptions are executable parser-owned syntax", () => {
 });
 
 test("Catalog suggestions follow the current token and omit used fields", () => {
-  assert.deepEqual(getCatalogSearchTokenRange("forest fo", 9), {
+  assert.deepEqual(getCatalogSearchTokenRange("forest ty", 9), {
     start: 7,
     end: 9,
-    text: "fo",
+    text: "ty",
   });
   assert.deepEqual(
-    getCatalogSearchSuggestions("forest fo", 9).map((filter) => filter.field),
-    ["format"],
+    getCatalogSearchSuggestions("forest ty", 9).map((filter) => filter.field),
+    ["type", "type"],
   );
   assert.deepEqual(
     getCatalogSearchSuggestions("datatype", 8).map((filter) => filter.token),
-    ["format:cog", "type:raster", "type:vector"],
+    ["type:raster", "type:vector"],
   );
   assert.deepEqual(
     getCatalogSearchSuggestions("forest date:202", 15).map(
@@ -142,20 +142,20 @@ test("Catalog suggestions follow the current token and omit used fields", () => 
     getCatalogSearchSuggestions("type:raster ", 12).map(
       (filter) => filter.field,
     ),
-    ["format", "date"],
+    ["date"],
   );
 });
 
 test("Catalog suggestion replacement preserves the rest of the query", () => {
   assert.deepEqual(
     applyCatalogSearchSuggestion(
-      "forest fo date:2024",
+      "forest ty date:2024",
       9,
       CATALOG_SEARCH_FILTERS[0],
     ),
     {
-      value: "forest format:cog date:2024",
-      caretPosition: 17,
+      value: "forest type:raster date:2024",
+      caretPosition: 18,
     },
   );
 });
@@ -164,23 +164,23 @@ test("Catalog search suggestions open, navigate, and apply from the keyboard", (
   const fixture = createSuggestionFixture();
   let inputEvents = 0;
   fixture.input.addEventListener("input", () => inputEvents += 1);
-  fixture.input.value = "forest fo";
+  fixture.input.value = "forest ty";
   fixture.input.setSelectionRange(9, 9);
 
   fixture.input.dispatchEvent(new Event("focus"));
   assert.equal(fixture.panel.hidden, false);
   assert.equal(fixture.input.getAttribute("aria-expanded"), "true");
-  assert.equal(fixture.list.children.length, 1);
+  assert.equal(fixture.list.children.length, 2);
 
   fixture.input.dispatchEvent(keyboardEvent("ArrowDown"));
   assert.equal(
     fixture.input.getAttribute("aria-activedescendant"),
-    "catalog-search-suggestion-format-cog",
+    "catalog-search-suggestion-type-raster",
   );
   fixture.input.dispatchEvent(keyboardEvent("Enter"));
 
-  assert.equal(fixture.input.value, "forest format:cog");
-  assert.equal(fixture.input.selectionStart, 17);
+  assert.equal(fixture.input.value, "forest type:raster");
+  assert.equal(fixture.input.selectionStart, 18);
   assert.equal(fixture.panel.hidden, true);
   assert.equal(fixture.input.getAttribute("aria-expanded"), "false");
   assert.equal(inputEvents, 1);
@@ -198,12 +198,11 @@ test("Raster and vector type suggestions have unique accessible options", () => 
   assert.deepEqual(
     fixture.list.children.map((option) => option.id),
     [
-      "catalog-search-suggestion-format-cog",
       "catalog-search-suggestion-type-raster",
       "catalog-search-suggestion-type-vector",
     ],
   );
-  fixture.list.children[2].dispatchEvent(new Event("click"));
+  fixture.list.children[1].dispatchEvent(new Event("click"));
   assert.equal(fixture.input.value, "type:vector");
   assert.equal(inputEvents, 1);
 });
@@ -214,7 +213,7 @@ test("Incomplete date help leaves the caret ready without running a search", () 
   fixture.input.addEventListener("input", () => inputEvents += 1);
   fixture.input.dispatchEvent(new Event("focus"));
 
-  fixture.list.children[3].dispatchEvent(new Event("click"));
+  fixture.list.children[2].dispatchEvent(new Event("click"));
 
   assert.equal(fixture.input.value, "date:");
   assert.equal(fixture.input.selectionStart, 5);
@@ -249,6 +248,10 @@ test("Arrow Up starts at the final Catalog suggestion", () => {
 
 test("Catalog suggestion markup and CSS form an overlaid accessible listbox", () => {
   const markup = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+  const mainSource = readFileSync(
+    new URL("../src/main.js", import.meta.url),
+    "utf8",
+  );
   const stylesheet = readFileSync(
     new URL("../src/style.css", import.meta.url),
     "utf8",
@@ -257,6 +260,7 @@ test("Catalog suggestion markup and CSS form an overlaid accessible listbox", ()
   assert.match(markup, /id="catalog-search"[\s\S]*role="combobox"/);
   assert.match(markup, /id="catalog-search-suggestion-list"[\s\S]*role="listbox"/);
   assert.match(markup, /Words match filenames, descriptions, and indexed dates/);
+  assert.match(mainSource, /new CatalogSearchSuggestions\(document\)/);
   assert.match(
     stylesheet,
     /\.catalog-search-suggestions\s*\{[^}]*position:\s*absolute[^}]*z-index:/s,

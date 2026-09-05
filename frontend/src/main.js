@@ -23,7 +23,6 @@ import {
     formatScanTiming,
     formatScanStatusSummary,
     getCatalogVisualization,
-    CATALOG_SEARCH_FILTERS,
     MOUNTED_DATASET_TYPES,
 } from "./catalog.js";
 import { CatalogSearchSuggestions } from "./catalog-search-suggestions.js";
@@ -514,7 +513,7 @@ async function initializeCatalog(
         "#catalog-results-scroll"
     );
     const catalogSearchInput = document.querySelector("#catalog-search");
-    new CatalogSearchSuggestions(document, CATALOG_SEARCH_FILTERS);
+    new CatalogSearchSuggestions(document);
     const catalogSearchError = document.querySelector("#catalog-search-error");
     const surpriseCatalogButton = document.querySelector(
         "#surprise-catalog"

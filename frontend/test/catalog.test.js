@@ -37,8 +37,6 @@ const expectedSubstringProperties = [
   "eolab_datetime_text",
   "eolab_end_datetime_text",
 ];
-const cogMediaType =
-  "image/tiff; application=geotiff; profile=cloud-optimized";
 const rasterTypeFilter = {
   op: "=",
   args: [
@@ -117,29 +115,7 @@ test("buildSubstringFilter treats partial and invalid dates as literal text", ()
   );
 });
 
-test("buildCatalogSearch combines literal text and COG metadata", () => {
-  const combinedFilter = {
-    op: "and",
-    args: [
-      expectedSubstringFilter("barley"),
-      {
-        op: "=",
-        args: [
-          { property: "assets.data.type" },
-          cogMediaType,
-        ],
-      },
-    ],
-  };
-  assert.deepEqual(catalogFilter(" barley FORMAT:COG "), combinedFilter);
-  assert.deepEqual(catalogFilter("format:cog barley"), combinedFilter);
-  assert.deepEqual(catalogFilter("format:cog"), {
-    op: "=",
-    args: [
-      { property: "assets.data.type" },
-      cogMediaType,
-    ],
-  });
+test("buildCatalogSearch preserves literal filenames and dates", () => {
   assert.deepEqual(
     catalogFilter("my_cog_filename.tif"),
     expectedSubstringFilter("my\\_cog\\_filename.tif"),
@@ -163,20 +139,6 @@ test("buildCatalogSearch combines each literal search term with AND", () => {
       expectedSubstringFilter("2020"),
     ],
   });
-  assert.deepEqual(catalogFilter("ESA 2020 format:cog"), {
-    op: "and",
-    args: [
-      expectedSubstringFilter("ESA"),
-      expectedSubstringFilter("2020"),
-      {
-        op: "=",
-        args: [
-          { property: "assets.data.type" },
-          cogMediaType,
-        ],
-      },
-    ],
-  });
 });
 
 test("buildCatalogSearch filters mounted raster and vector Items", () => {
@@ -184,21 +146,13 @@ test("buildCatalogSearch filters mounted raster and vector Items", () => {
   assert.deepEqual(catalogFilter("type:vector"), vectorTypeFilter);
   assert.deepEqual(
     buildCatalogSearch(
-      "barley type:raster format:cog " +
-        "date:2020-01-01..2020-03-31",
+      "barley type:raster date:2020-01-01..2020-03-31",
     ),
     {
       filter: {
         op: "and",
         args: [
           expectedSubstringFilter("barley"),
-          {
-            op: "=",
-            args: [
-              { property: "assets.data.type" },
-              cogMediaType,
-            ],
-          },
           rasterTypeFilter,
         ],
       },
@@ -213,21 +167,9 @@ test("buildCatalogSearch builds inclusive UTC day and date-range searches", () =
     datetime: "2025-01-15T00:00:00Z/2025-01-15T23:59:59.999999Z",
   });
   assert.deepEqual(
-    buildCatalogSearch("ESA date:2024-02-29..2025-01-15 format:cog"),
+    buildCatalogSearch("ESA date:2024-02-29..2025-01-15"),
     {
-      filter: {
-        op: "and",
-        args: [
-          expectedSubstringFilter("ESA"),
-          {
-            op: "=",
-            args: [
-              { property: "assets.data.type" },
-              cogMediaType,
-            ],
-          },
-        ],
-      },
+      filter: expectedSubstringFilter("ESA"),
       datetime: "2024-02-29T00:00:00Z/2025-01-15T23:59:59.999999Z",
     },
   );
@@ -308,7 +250,6 @@ test("buildCatalogSearch rejects syntax outside the field contract", () => {
   const invalidSearches = [
     "format:",
     "format:geotiff",
-    "format:cog format:cog",
     "type:",
     "type:points",
     "type:raster type:raster",
@@ -318,7 +259,7 @@ test("buildCatalogSearch rejects syntax outside the field contract", () => {
     "viewable:true",
     "datatype:cog",
     "collection:rasters",
-    "barley & format:cog",
+    "barley & type:raster",
   ];
   for (const invalidSearch of invalidSearches) {
     assert.throws(
@@ -336,11 +277,11 @@ test("Catalog search help presents raster and vector type filters", () => {
 
   assert.match(
     catalogMarkup,
-    /type:raster, type:vector, format:cog, or date:YYYY-MM-DD/,
+    /type:raster, type:vector, or date:YYYY-MM-DD/,
   );
   assert.match(
     catalogMarkup,
-    /ESA type:raster format:cog date:2020-01-01\.\.2020-12-31/,
+    /ESA type:raster date:2020-01-01\.\.2020-12-31/,
   );
 });
 
@@ -392,7 +333,7 @@ test("CatalogSurpriseClient sends active filters and prior Item identity", async
 
   assert.deepEqual(
     await client.surprise(
-      "barley type:raster format:cog date:2020-01..2020-03",
+      "barley type:raster date:2020-01..2020-03",
       { collection: "collection-a", id: "item-previous" },
     ),
     selectedItem,
@@ -402,7 +343,7 @@ test("CatalogSurpriseClient sends active filters and prior Item identity", async
   assert.equal(capturedRequest.options.method, "POST");
   assert.deepEqual(JSON.parse(capturedRequest.options.body), {
     search: buildCatalogSearchRequest(
-      "barley type:raster format:cog date:2020-01..2020-03",
+      "barley type:raster date:2020-01..2020-03",
     ),
     exclude: { collection: "collection-a", id: "item-previous" },
   });
@@ -478,31 +419,6 @@ test("CatalogSearchClient sends a standard STAC CQL2 substring search", async ()
   });
 });
 
-test("CatalogSearchClient sends the parsed COG filter", async () => {
-  let capturedRequest;
-  const client = new CatalogSearchClient("/stac", async (url, options) => {
-    capturedRequest = { url, options };
-    return itemCollectionResponse();
-  });
-
-  await client.search("barley format:cog");
-
-  assert.equal(capturedRequest.url, "/stac/search");
-  assert.deepEqual(JSON.parse(capturedRequest.options.body).filter, {
-    op: "and",
-    args: [
-      expectedSubstringFilter("barley"),
-      {
-        op: "=",
-        args: [
-          { property: "assets.data.type" },
-          cogMediaType,
-        ],
-      },
-    ],
-  });
-});
-
 test("CatalogSearchClient limits results to the selected dataset type", async () => {
   let capturedRequest;
   const client = new CatalogSearchClient("/stac", async (url, options) => {
@@ -519,31 +435,19 @@ test("CatalogSearchClient limits results to the selected dataset type", async ()
   );
 });
 
-test("CatalogSearchClient combines STAC datetime with text and format", async () => {
+test("CatalogSearchClient combines STAC datetime with text", async () => {
   let capturedRequest;
   const client = new CatalogSearchClient("/stac", async (url, options) => {
     capturedRequest = { url, options };
     return itemCollectionResponse();
   });
 
-  await client.search("barley format:cog date:2020-01..2020-03");
+  await client.search("barley date:2020-01..2020-03");
 
   assert.deepEqual(JSON.parse(capturedRequest.options.body), {
     limit: 20,
     "filter-lang": "cql2-json",
-    filter: {
-      op: "and",
-      args: [
-        expectedSubstringFilter("barley"),
-        {
-          op: "=",
-          args: [
-            { property: "assets.data.type" },
-            cogMediaType,
-          ],
-        },
-      ],
-    },
+    filter: expectedSubstringFilter("barley"),
     datetime: "2020-01-01T00:00:00Z/2020-03-31T23:59:59.999999Z",
   });
 });
