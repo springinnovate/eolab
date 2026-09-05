@@ -3837,6 +3837,7 @@ article.raster-histogram-summary {
 }
 #map-histogram-panel .raster-style-controls {
   display: grid;
+  order: 0;
   gap: 12px;
   margin: 0;
   border: 0;
