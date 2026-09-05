@@ -708,6 +708,7 @@
               <summary aria-controls="raster-sampling-disclosure-body">
                 <span>Sampling area</span>
                 <span id="raster-sampling-area-summary">No raster selected</span>
+                <span class="raster-disclosure-chevron" aria-hidden="true"></span>
               </summary>
               <div class="raster-sampling-disclosure-body"
                 id="raster-sampling-disclosure-body">
@@ -781,7 +782,12 @@
                     </p>
                   </section>
                 </fieldset>
-                <div class="raster-sampling-aoi">
+                <details class="raster-sampling-aoi" id="raster-sampling-aoi-disclosure">
+                  <summary aria-controls="temporary-aoi">
+                    <span>Upload or manage an AOI</span>
+                    <span>GeoPackage or zipped Shapefile</span>
+                    <span class="raster-disclosure-chevron" aria-hidden="true"></span>
+                  </summary>
                     <section
                       class="temporary-aoi-card"
                       id="temporary-aoi"
@@ -924,7 +930,7 @@
                         aria-atomic="true"
                       ></p>
                     </section>
-                </div>
+                </details>
               </div>
             </details>
             <section class="raster-point-samples" id="raster-point-samples"

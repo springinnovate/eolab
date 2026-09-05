@@ -301,6 +301,7 @@ test("raster histogram owns its sampling controls, AOI, and results", () => {
     const exploration = requireElementRange("map-histogram-panel");
     const disclosure = requireElementRange("raster-sampling-disclosure");
     const sampling = requireElementRange("raster-sampling-area-controls");
+    const aoiDisclosure = requireElementRange("raster-sampling-aoi-disclosure");
     const temporaryAoi = requireElementRange("temporary-aoi");
     assert.ok(exploration.start > panel.end);
     assert.match(exploration.source, /role="tabpanel"/);
@@ -320,6 +321,11 @@ test("raster histogram owns its sampling controls, AOI, and results", () => {
     assert.match(disclosure.source, /<details[^>]*open>/);
     assert.match(disclosure.source, />\s*Sampling area\s*</);
     assert.match(disclosure.source, /id="raster-sampling-area-summary"/);
+    assert.match(disclosure.source, /class="raster-disclosure-chevron"[^>]*aria-hidden="true"/);
+    assert.match(aoiDisclosure.source, /^\s*<details[^>]*>/);
+    assert.doesNotMatch(aoiDisclosure.source, /^\s*<details[^>]*\bopen\b/);
+    assert.match(aoiDisclosure.source, /<summary[^>]*aria-controls="temporary-aoi"/);
+    assert.match(aoiDisclosure.source, />\s*Upload or manage an AOI\s*</);
     assert.match(sampling.source, /geographic area used by every visible raster histogram/);
     for (const choice of [
         "clear-raster-sample-window",
@@ -368,6 +374,9 @@ test("Raster histogram leads with sampling before results and mode", () => {
     assert.match(STYLESHEET, /#map-histogram-panel,[^{]*\{[^}]*height:\s*100%[^}]*overflow-y:\s*auto/s);
     assert.match(STYLESHEET, /\.map-histogram-toolbar\s*\{[^}]*display:\s*flex[^}]*justify-content:\s*space-between/s);
     assert.match(STYLESHEET, /\.map-histogram-toolbar h2\s*\{[^}]*font-size:\s*1rem/s);
+    assert.match(STYLESHEET, /\.raster-disclosure-chevron\s*\{[^}]*border:\s*1px solid var\(--border-1\)[^}]*border-radius:\s*50%/s);
+    assert.match(STYLESHEET, /details\[open\] > summary > \.raster-disclosure-chevron::before\s*\{[^}]*rotate\(45deg\)/s);
+    assert.match(STYLESHEET, /\.raster-sampling-aoi > summary\s*\{[^}]*display:\s*grid[^}]*cursor:\s*pointer/s);
     assert.match(STYLESHEET, /#map-histogram-panel \.raster-bivariate-statistics,\s*#map-histogram-panel \.raster-histogram\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/s);
     assert.match(STYLESHEET, /#map-histogram-panel \.raster-histogram-heading\s*\{[^}]*padding-right:\s*36px/s);
     assert.match(STYLESHEET, /#open-analysis-tools\[hidden\],[^{]*\{\s*display:\s*none/s);
@@ -542,6 +551,7 @@ test("semantic regions preserve one DOM instance of every owned control", () => 
         "raster-sampling-disclosure",
         "raster-sampling-disclosure-body",
         "raster-sampling-area-summary",
+        "raster-sampling-aoi-disclosure",
         "raster-style-controls",
         "raster-active-controls",
         "raster-sampling-area-controls",
