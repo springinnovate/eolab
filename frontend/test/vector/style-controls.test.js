@@ -19,6 +19,7 @@ function debounceClock() {
          * @return {number} Opaque timeout handle.
          */
         schedule(callback) {
+            assert.equal(this, undefined);
             const handle = ++nextHandle;
             callbacks.set(handle, callback);
             return handle;
@@ -29,6 +30,7 @@ function debounceClock() {
          * @return {void}
          */
         cancel(handle) {
+            assert.equal(this, undefined);
             callbacks.delete(handle);
         },
         /** Run every currently scheduled callback once. @return {void} */

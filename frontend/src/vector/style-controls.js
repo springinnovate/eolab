@@ -34,8 +34,8 @@ export class VectorStyleControls {
      * Injectable timeout functions and delay for deterministic browser tests.
      */
     constructor(documentContext = globalThis.document, {
-        schedule = globalThis.setTimeout,
-        cancel = globalThis.clearTimeout,
+        schedule = (callback, delay) => globalThis.setTimeout(callback, delay),
+        cancel = (handle) => globalThis.clearTimeout(handle),
         debounceMilliseconds = VECTOR_STYLE_DEBOUNCE_MILLISECONDS,
     } = {}) {
         this.document = documentContext;
@@ -379,7 +379,8 @@ export class VectorStyleControls {
     /** Cancel the current quiet-period timer, if any. @return {void} */
     #cancelDebouncedApply() {
         if (this.debounceTimer === null) return;
-        this.cancelTimeout(this.debounceTimer);
+        const cancel = this.cancelTimeout;
+        cancel(this.debounceTimer);
         this.debounceTimer = null;
     }
 
@@ -405,7 +406,8 @@ export class VectorStyleControls {
         const generation = this.generation;
         const revision = this.editRevision;
         this.status.textContent = "Changes pending...";
-        this.debounceTimer = this.scheduleTimeout(() => {
+        const schedule = this.scheduleTimeout;
+        this.debounceTimer = schedule(() => {
             this.debounceTimer = null;
             void this.#applyStyle(style, generation, revision);
         }, this.debounceMilliseconds);
