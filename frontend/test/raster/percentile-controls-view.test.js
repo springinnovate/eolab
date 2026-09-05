@@ -49,6 +49,11 @@ test("percentile adapter owns values, feedback, visibility, and listeners", () =
         documentContext.querySelector("#apply-raster-percentiles").disabled,
         false
     );
+    assert.equal(
+        documentContext.querySelector("#apply-raster-percentiles")
+            .textContent,
+        "Apply 5/50/95 stretch to map"
+    );
 
     view.renderPercentileValues(
         { lower: 50, middle: 5, upper: 95 },

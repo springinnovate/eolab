@@ -191,6 +191,8 @@ function canRetryRasterStatistics(error) {
  * layer snapshots after state changes.
  * @property {() => void} [onHistogramRequested] Notifies the composition root
  * that an explicit analysis action should reveal its presentation workspace.
+ * @property {(key:string) => void} [onStyleRequested] Notifies the composition
+ * root that a histogram action should open one retained layer's style editor.
  * @property {(selectedKeys:string[]|null)=>void}
  * [onBivariateRenderingChange] Requests isolated source rendering for selected
  * catalog keys, or ordinary composite rendering for null.
@@ -256,6 +258,12 @@ export function initializeRasterViewer(
          *
          * @return {void}
          */ () => {},
+        onStyleRequested = /**
+         * Leave style presentation unchanged without a composition callback.
+         *
+         * @param {string} _key Retained raster identity supplied by the view.
+         * @return {void}
+         */ (_key) => {},
         onBivariateRenderingChange = /**
          * Keep ordinary composite rendering without a composition callback.
          *
@@ -277,6 +285,9 @@ export function initializeRasterViewer(
 ) {
     if (typeof onHistogramRequested !== "function") {
         throw new TypeError("Histogram presentation callback must be callable");
+    }
+    if (typeof onStyleRequested !== "function") {
+        throw new TypeError("Style presentation callback must be callable");
     }
     if (typeof onBivariateRenderingChange !== "function") {
         throw new TypeError("Bivariate rendering callback must be callable");
@@ -1284,6 +1295,7 @@ export function initializeRasterViewer(
             }
         }
         renderLayerStack();
+        if (editingLayerKey === session.key) refreshStyle();
     }
 
     /**
@@ -1304,6 +1316,7 @@ export function initializeRasterViewer(
         }
         session.rasterStatisticsIsApplicable = false;
         renderLayerStack();
+        if (editingLayerKey === session.key) refreshStyle();
     }
 
     /**
@@ -1332,6 +1345,7 @@ export function initializeRasterViewer(
                 }
                 session.rasterStatisticsIsApplicable = false;
                 renderLayerStack();
+                if (editingLayerKey === session.key) refreshStyle();
             },
             /**
              * Store a current response in the captured inactive raster session.
@@ -2431,6 +2445,93 @@ export function initializeRasterViewer(
     }
 
     /**
+     * Describe the statistics scope retained by one keyed style target.
+     *
+     * @param {Object} session Retained raster session being styled.
+     * @return {string} Readable whole-raster, map-sample, or AOI scope.
+     */
+    function styleHistogramScopeLabel(session) {
+        const scope = session.rasterStatistics?.scope;
+        if (scope === "temporaryAoi" || (
+            scope === undefined && session.selectedTemporaryAoi !== null
+        )) {
+            return session.selectedTemporaryAoi === null
+                ? "Uploaded AOI"
+                : `Uploaded AOI · ${session.selectedTemporaryAoi.filename} · ` +
+                    session.selectedTemporaryAoi.selectedDataset;
+        }
+        if (scope === "selectedArea" || (
+            scope === undefined && session.selectedRasterBounds !== null
+        )) {
+            return session.selectedRasterWindowSizeKm === null
+                ? "Map sample"
+                : `Map sample · ${session.selectedRasterWindowSizeKm} km × ` +
+                    `${session.selectedRasterWindowSizeKm} km`;
+        }
+        return "Whole raster";
+    }
+
+    /**
+     * Return the lifecycle state associated with a style target's sample.
+     *
+     * @param {Object} session Retained raster session being styled.
+     * @return {{state:string,error:Error|null}} Statistics state and failure.
+     */
+    function styleHistogramLifecycle(session) {
+        const selected = session.selectedRasterBounds !== null ||
+            session.selectedTemporaryAoi !== null;
+        return selected
+            ? {
+                state: session.selectedRasterStatisticsState,
+                error: session.selectedRasterStatisticsError,
+            }
+            : {
+                state: session.wholeRasterStatisticsState,
+                error: session.wholeRasterStatisticsError,
+            };
+    }
+
+    /**
+     * Render histogram context for the explicitly keyed style target.
+     *
+     * @param {Object|null} [style=null] Candidate style preview. The session's
+     * committed style is used when omitted.
+     * @param {{lower:number,middle:number,upper:number}|null}
+     * [percentiles=null] Draft percentile positions, when applicable.
+     * @return {void}
+     */
+    function renderEditingStyleHistogram(style = null, percentiles = null) {
+        const session = editingSession();
+        if (editingLayerKey === null || session === null ||
+            bivariateMode.contains(session.key)) {
+            controlsView.clearStyleHistogram?.();
+            return;
+        }
+        const scopeLabel = styleHistogramScopeLabel(session);
+        if (session.rasterStatistics === null) {
+            const lifecycle = styleHistogramLifecycle(session);
+            const message = lifecycle.state === "loading"
+                ? "Calculating this raster's histogram…"
+                : lifecycle.state === "error"
+                    ? `Histogram unavailable: ${lifecycle.error?.message ?? "Unknown error"}`
+                    : "Histogram not available yet. Open full analysis to calculate it.";
+            controlsView.renderStyleHistogramState?.(
+                scopeLabel,
+                message,
+                lifecycle.state === "loading"
+            );
+            return;
+        }
+        controlsView.renderStyleHistogram?.(
+            session.rasterStatistics,
+            style ?? session.rasterStyle,
+            scopeLabel,
+            getHistogramValueLabel(session.item),
+            percentiles
+        );
+    }
+
+    /**
      * Update rendering availability without overwriting another style target.
      *
      * @param {boolean} available Whether the active analysis raster has a renderer.
@@ -2486,6 +2587,7 @@ export function initializeRasterViewer(
     function closeStyle() {
         if (rasterStyleCommitTimeout !== null) commitRasterStyle();
         editingLayerKey = null;
+        controlsView.clearStyleHistogram?.();
     }
 
     /**
@@ -2512,6 +2614,9 @@ export function initializeRasterViewer(
             session.rasterStatistics !== null
         );
         updateRasterPercentileValues();
+        if (session.rasterStatistics === null) {
+            renderEditingStyleHistogram(session.rasterStyle);
+        }
     }
 
     /**
@@ -2589,6 +2694,7 @@ export function initializeRasterViewer(
             return;
         }
         controlsView.renderLegend(candidate.style);
+        renderEditingStyleHistogram(candidate.style);
         renderLayerStack();
     }
 
@@ -2598,7 +2704,10 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function scheduleRasterStyleCommit() {
-        validateRasterStyleControls();
+        const candidate = validateRasterStyleControls();
+        if (candidate !== null) {
+            renderEditingStyleHistogram(candidate.style);
+        }
         if (rasterStyleCommitTimeout !== null) {
             clock.clearTimeout(rasterStyleCommitTimeout);
         }
@@ -2684,6 +2793,20 @@ export function initializeRasterViewer(
             isOrdered,
             applicable
         );
+        if (editingLayerKey !== null && session !== null) {
+            let previewStyle = session.rasterStyle;
+            if (isOrdered) {
+                previewStyle = deriveRasterStyleFromStatistics(
+                    controlsView.readStyle(),
+                    statistics,
+                    percentiles
+                );
+            }
+            renderEditingStyleHistogram(
+                previewStyle,
+                isOrdered ? percentiles : null
+            );
+        }
         return isOrdered ? percentiles : null;
     }
 
@@ -3840,6 +3963,7 @@ export function initializeRasterViewer(
         onResetStyle: handleResetStyle,
         onPercentileInput: updateRasterPercentileValues,
         onApplyPercentiles: handleApplyPercentiles,
+        onOpenHistogram: showHistogramWorkspace,
         onRetryStatistics: handleRetryStatistics,
         /**
          * Retry the active histogram or a visible secondary raster's request.
@@ -3863,6 +3987,7 @@ export function initializeRasterViewer(
             }
         },
         onSelectHistogram: handleSelectLayerHistogram,
+        onStyleHistogram: onStyleRequested,
         onSampleWindowRangeInput: setRasterSampleWindowSize,
         onSampleWindowNumberInput: setRasterSampleWindowSize,
         onSampleWindowNumberChange: handleSampleWindowNumberChange,

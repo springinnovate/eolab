@@ -197,7 +197,7 @@ test("pending and failed summaries do not present cached charts as the current s
             loading: "Updating histogram…", error: "Histogram unavailable", ready: "",
         }[state]);
         assert.equal(row.children[1].hidden, state === "ready");
-        assert.equal(row.children.at(-1).textContent, "200 km map sample");
+        assert.equal(row.children.at(-2).textContent, "200 km map sample");
         if (state === "ready") {
             assert.equal(row.children[2].classList.contains("raster-histogram-chart"), true);
             assert.equal(row.children[2].getAttribute("viewBox"), "0 0 640 190");
@@ -223,9 +223,11 @@ test("histogram adapter owns labeled per-raster summaries without double binding
     const documentContext = new FakeRasterControlDocument();
     const view = new RasterHistogramControlsView(documentContext);
     const selected = [];
+    const styled = [];
     view.bind({
         onRetryStatistics() {},
         onSelectHistogram: (key) => selected.push(key),
+        onStyleHistogram: (key) => styled.push(key),
     });
     view.setActiveRasterAvailable(true);
     view.setActiveLayer("second-raster.tif");
@@ -248,15 +250,21 @@ test("histogram adapter owns labeled per-raster summaries without double binding
 
     view.renderLayerHistograms(summaries, "second");
     const list = documentContext.querySelector("#raster-histogram-list");
-    const firstButton = list.children[0];
-    const secondButton = list.children[1];
+    const firstRow = list.children[0];
+    const secondRow = list.children[1];
+    const firstButton = firstRow.children[0];
+    const secondButton = secondRow.children[0];
     firstButton.dispatchEvent(new Event("click"));
+    firstRow.children[1].children[0].dispatchEvent(new Event("click"));
     view.showWidget();
 
     assert.deepEqual(selected, ["first"]);
+    assert.deepEqual(styled, ["first"]);
     assert.equal(list.children.length, 2);
-    assert.equal(firstButton.getAttribute("aria-label"),
+    assert.equal(firstRow.getAttribute("aria-label"),
         "Histogram — first-raster.tif");
+    assert.equal(firstButton.getAttribute("aria-label"),
+        "Show detailed histogram for first-raster.tif");
     assert.equal(
         firstButton.getAttribute("aria-controls"),
         "raster-histogram"
@@ -280,12 +288,12 @@ test("histogram adapter owns labeled per-raster summaries without double binding
 
     secondButton.focus();
     view.renderLayerHistograms(summaries, "first");
-    assert.equal(documentContext.activeElement, list.children[1]);
+    assert.equal(documentContext.activeElement, list.children[1].children[0]);
     firstButton.dispatchEvent(new Event("click"));
-    list.children[0].dispatchEvent(new Event("click"));
+    list.children[0].children[0].dispatchEvent(new Event("click"));
     assert.deepEqual(selected, ["first", "first"]);
 
     view.unbind();
-    list.children[0].dispatchEvent(new Event("click"));
+    list.children[0].children[0].dispatchEvent(new Event("click"));
     assert.deepEqual(selected, ["first", "first"]);
 });

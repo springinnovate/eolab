@@ -160,6 +160,9 @@ export class RasterPercentileControlsView {
         this.percentileError.textContent = isOrdered
             ? ""
             : "Choose lower, middle, and upper percentiles in increasing order.";
+        this.applyPercentilesButton.textContent =
+            `Apply ${percentiles.lower}/${percentiles.middle}/` +
+            `${percentiles.upper} stretch to map`;
         this.applyPercentilesButton.disabled = !isOrdered || !isApplicable;
     }
 
