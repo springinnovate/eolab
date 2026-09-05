@@ -734,6 +734,7 @@ async function initializeCatalog(
                 key,
                 style: record.state.style,
                 fields: record.state.labelFields,
+                notice: record.state.defaultStyleNotice,
                 summarize: (field) =>
                     record.adapter.summarizeCategories(record, field),
                 classify: (field, method, classCount) =>

@@ -26,11 +26,13 @@ class PublishedVectorAuthorization:
         source: Exact mounted source and native layer identity.
         source_signature: Complete filesystem identity approved at publication.
         style_name: Only WMS style authorized for this layer.
+        geometry_name: GeoServer geometry attribute retained with the style.
     """
 
     source: ResolvedVectorSource
     source_signature: VectorSourceSignature
     style_name: str
+    geometry_name: str | None = None
 
     def validate_parameters(
         self,
@@ -96,10 +98,13 @@ class PublishedVectorAuthorization:
             style_name == default_style_name
             and style == default_vector_style(style.geometry_kind)
         )
-        if (
-            not is_default_style
-            and vector_style_name(resource_name, style) != style_name
-        ):
+        try:
+            matches_style = is_default_style or vector_style_name(
+                resource_name, style, geometry_name=self.geometry_name,
+            ) == style_name
+        except ValueError as error:
+            raise PublishedLayerRequestError("Composite vector label geometry is unavailable") from error
+        if not matches_style:
             raise PublishedLayerRequestError(
                 "Composite vector style does not match its authorized identity"
             )
@@ -108,4 +113,5 @@ class PublishedVectorAuthorization:
             style,
             layer_name=layer_name,
             opacity_multiplier=opacity,
+            geometry_name=self.geometry_name,
         )

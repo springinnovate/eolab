@@ -33,6 +33,21 @@ VECTOR_CATEGORY_TEXT_LIMIT = 256
 VECTOR_NUMERIC_DEFAULT_CLASS_COUNT = 5
 VECTOR_NUMERIC_MINIMUM_CLASS_COUNT = 2
 VECTOR_NUMERIC_MAXIMUM_CLASS_COUNT = 9
+
+
+@dataclass(frozen=True)
+class VectorStylePublication:
+    """Internal result of publishing an authorized vector appearance.
+
+    Attributes:
+        style_name: Content-addressed GeoServer style identity.
+        geometry_name: GeoServer geometry attribute used by fixed labels, if any.
+    """
+
+    style_name: str
+    geometry_name: str | None = None
+
+
 VectorFormat = Literal[
     "shapefile",
     "geopackage",
@@ -47,8 +62,12 @@ VectorLabelPlacement = Literal["center", "above", "below", "follow-line"]
 VectorSourceKind = Literal["mounted", "remote"]
 VectorSourceSignature = tuple[tuple[str, int, int, int, int, int], ...]
 VectorCategoryScalar: TypeAlias = StrictBool | StrictInt | StrictFloat | StrictStr
-VectorClassificationMethod = Literal["equal-interval", "quantile"]
-VectorSequentialPalette = Literal["blues", "viridis", "yellow-red", "purples"]
+VectorClassificationMethod = Literal[
+    "equal-interval", "quantile", "percentile-interval",
+]
+VectorSequentialPalette = Literal[
+    "blues", "viridis", "yellow-red", "purples", "blue-yellow-red",
+]
 
 
 @dataclass(frozen=True)

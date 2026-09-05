@@ -7,11 +7,15 @@ const LABEL_FONT_WEIGHTS = new Set(["normal", "bold"]);
 const LABEL_PLACEMENTS = new Set(["center", "above", "below", "follow-line"]);
 const CATEGORY_KINDS = new Set(["boolean", "integer", "number", "string"]);
 const CATEGORY_MAXIMUM_LIMIT = 50;
-const CLASSIFICATION_METHODS = new Set(["equal-interval", "quantile"]);
-const SEQUENTIAL_PALETTE_NAMES = new Set(["blues", "viridis", "yellow-red", "purples"]);
+const CLASSIFICATION_METHODS = new Set(["equal-interval", "quantile", "percentile-interval"]);
+const SEQUENTIAL_PALETTE_NAMES = new Set(["blues", "viridis", "yellow-red", "purples", "blue-yellow-red"]);
 const NUMERIC_MINIMUM_CLASS_COUNT = 2;
 const NUMERIC_MAXIMUM_CLASS_COUNT = 9;
 const SEQUENTIAL_PALETTES = Object.freeze({
+    "blue-yellow-red": Object.freeze([
+        "#2b83ba", "#60a2bb", "#95c1bd", "#cae0be", "#ffffbf",
+        "#f5c696", "#eb8c6e", "#e15345", "#d7191c",
+    ]),
     blues: Object.freeze([
         "#f7fbff", "#deebf7", "#c6dbef", "#9ecae1", "#6baed6",
         "#4292c6", "#2171b5", "#08519c", "#08306b",
@@ -361,11 +365,11 @@ export function normalizeVectorNumericClassification(candidate) {
 }
 
 /**
- * Select perceptually ordered colors for one supported sequential palette.
+ * Select ordered colors for one supported numeric palette.
  *
  * @param {string} palette Supported palette identity.
  * @param {number} classCount Effective class count from the server.
- * @return {ReadonlyArray<string>} Frozen light-to-dark color sequence.
+ * @return {ReadonlyArray<string>} Frozen low-to-high color sequence.
  */
 export function sequentialPaletteColors(palette, classCount) {
     const name = option(palette, SEQUENTIAL_PALETTE_NAMES, "Sequential palette");

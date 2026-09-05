@@ -142,6 +142,30 @@ test("vector style controls apply one complete validated state", async () => {
     fixture.controls.destroy();
 });
 
+test("vector controls retain automatic appearance, show fallback notices, and allow labels off", async () => {
+    const { deriveDefaultVectorStyle } = await import("../../src/vector/defaults.js");
+    const fixture = styleFixture();
+    const style = deriveDefaultVectorStyle({
+        geometryKind: "polygon", fillColor: "#2b83ba", fillOpacity: 0.7,
+        strokeColor: "#000000", strokeOpacity: 1, strokeWidth: 0.75,
+    }, [{ name: "name", type: "str" }]);
+    const target = { ...fixture.target("polygon", style), notice: "Numeric coloring unavailable." };
+    fixture.controls.show(target);
+    assert.equal(fixture.controls.labelEnabled.checked, true);
+    assert.equal(fixture.controls.labelField.value, "name");
+    assert.equal(fixture.controls.labelMinimumZoom.value, "0");
+    assert.equal(fixture.controls.graduatedPalette.value, "blue-yellow-red");
+    assert.equal(fixture.controls.graduatedMethod.value, "percentile-interval");
+    assert.equal(fixture.controls.status.textContent, target.notice);
+    fixture.controls.labelEnabled.checked = false;
+    fixture.controls.labelEnabled.dispatchEvent(new Event("change"));
+    fixture.controls.applyButton.dispatchEvent(new Event("click"));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(fixture.applied[0].label, null);
+    assert.equal(fixture.applied[0].strokeWidth, 0.75);
+    fixture.controls.destroy();
+});
+
 test("vector style controls apply a field-backed optional label", async () => {
     const fixture = styleFixture();
     fixture.controls.show(fixture.target("line", {
@@ -177,9 +201,8 @@ test("vector style controls apply a field-backed optional label", async () => {
     });
     assert.equal(
         fixture.controls.labelNote.textContent,
-        "Labels use value at zoom 7 and closer. Long values are not " +
-            "truncated and may be omitted when GeoServer cannot place " +
-            "them without a conflict.",
+        "Labels use value at zoom 7 and closer. Labels may overlap to keep names visible. " +
+            "Centered and point labels wrap across lines and stay anchored as you zoom.",
     );
     fixture.controls.destroy();
 });
@@ -252,7 +275,7 @@ test("graduated controls classify, palette, and optionally style missing values"
 
     assert.deepEqual(fixture.applied[0].graduated, {
         field: "value",
-        method: "equal-interval",
+        method: "percentile-interval",
         classCount: 3,
         palette: "viridis",
         rules: [

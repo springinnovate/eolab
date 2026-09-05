@@ -205,7 +205,7 @@ class VectorStyleService:
             item: Authoritative Catalog Item.
             source: Exact source identity resolved from ``item``.
             field: Current numeric Catalog field.
-            method: Equal-interval or quantile classification.
+            method: Equal-interval, quantile, or percentile-interval classification.
             class_count: Requested number of classes.
 
         Returns:
@@ -465,7 +465,7 @@ class VectorStyleService:
                         "Style unavailable: this numeric field has no missing "
                         "values to style."
                     )
-            style_name = await self._styler.apply_style(
+            publication = await self._styler.apply_style(
                 request.item_id,
                 request.style,
             )
@@ -475,12 +475,13 @@ class VectorStyleService:
                     layer_name,
                     source,
                     authorization.source_signature,
-                    style_name,
+                    publication.style_name,
+                    publication.geometry_name,
                 )
             except PublishedLayerChangedError as error:
                 raise VectorConflictError(str(error)) from error
             return AppliedVectorStyle(
-                styleName=style_name,
+                styleName=publication.style_name,
                 style=request.style,
             )
 
@@ -618,12 +619,14 @@ def _classify_numeric_values(
 
     Args:
         values: Non-empty bounded finite numeric observations.
-        method: Equal-interval or quantile classification method.
+        method: Equal-interval, quantile, or percentile-interval classification.
         class_count: Requested class count within server limits.
 
     Returns:
         Adjacent classes covering every numeric value. Repeated quantile breaks
-        are collapsed, so the result may contain fewer requested classes.
+        and collapsed percentile intervals may produce fewer classes than
+        requested. Percentile intervals use nearest-rank 5th/95th percentiles;
+        their open-ended first and last classes retain the tails.
 
     Raises:
         ValueError: If inputs violate the internal classification contract.
@@ -647,6 +650,18 @@ def _classify_numeric_values(
                 minimum + span * index / class_count
                 for index in range(1, class_count)
             ]
+    elif method == "percentile-interval":
+        minimum = ordered[max(0, ceil(len(ordered) * 0.05) - 1)]
+        maximum = ordered[ceil(len(ordered) * 0.95) - 1]
+        if minimum < maximum:
+            # A weighted sum avoids overflowing the span for finite extremes.
+            for index in range(1, class_count):
+                fraction = index / class_count
+                boundary = minimum * (1 - fraction) + maximum * fraction
+                if minimum < boundary < maximum and (
+                    not boundaries or boundary > boundaries[-1]
+                ):
+                    boundaries.append(boundary)
     elif method == "quantile":
         for index in range(1, class_count):
             boundary = ordered[ceil(index * len(ordered) / class_count) - 1]

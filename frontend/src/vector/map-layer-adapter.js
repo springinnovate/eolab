@@ -7,6 +7,11 @@ import {
     summarizeCatalogVectorCategories,
 } from "./api.js";
 import { createVectorWmsLayer } from "./leaflet.js";
+import {
+    defaultVectorNumericField,
+    deriveDefaultVectorStyle,
+    VECTOR_NUMERIC_DEFAULTS,
+} from "./defaults.js";
 import { buildCatalogResultPresentation } from "../catalog-result-presentation.js";
 import {
     normalizeVectorNumericClassification,
@@ -219,7 +224,51 @@ export function createVectorMapLayerAdapter({
         throw new TypeError("onTileError must be a function.");
     }
     return Object.freeze({
-        publish,
+        /**
+         * Prepare default labels and colors before a new WMS layer is attached.
+         *
+         * Existing retained records never call this initializer. Saved styles
+         * are applied by the existing detached restoration lifecycle afterwards.
+         * Optional appearance failures retain the authorized fixed publication.
+         *
+         * @param {Object} item Authoritative Catalog vector Item.
+         * @return {Promise<Object>} Publication with applied defaults and any notice.
+         * @throws {Error} If the underlying publication fails.
+         */
+        async publish(item) {
+            const publication = await publish(item);
+            const fields = vectorLabelFields(item);
+            const numericField = defaultVectorNumericField(fields);
+            let candidate = deriveDefaultVectorStyle(publication.style, fields);
+            let defaultStyleNotice = "";
+            if (numericField !== null) {
+                try {
+                    const summary = await classify(item, numericField,
+                        VECTOR_NUMERIC_DEFAULTS.method, VECTOR_NUMERIC_DEFAULTS.classCount);
+                    candidate = deriveDefaultVectorStyle(publication.style, fields, summary);
+                } catch {
+                    defaultStyleNotice = "Automatic numeric coloring was unavailable. " +
+                        "Choose Color by in Style to try again or use another field.";
+                }
+            }
+            try {
+                // Content-address even a solid default so cached tiles from
+                // an older fixed initializer style cannot retain old colors.
+                const result = await style(item, candidate);
+                return {
+                    ...publication,
+                    styleName: result.styleName,
+                    style: normalizeVectorStyle(result.style),
+                    defaultStyleNotice,
+                };
+            } catch {
+                return {
+                    ...publication,
+                    defaultStyleNotice: "Automatic labels and coloring could not be applied. " +
+                        "The layer uses a single color; open Style to try again.",
+                };
+            }
+        },
         /**
          * Build a stable user-facing label.
          *
@@ -234,20 +283,21 @@ export function createVectorMapLayerAdapter({
         /**
          * Create adapter-owned state for one retained vector layer.
          *
-         * @param {{item:Object}} context Neutral retained-layer context.
+         * @param {{item:Object,publication:Object}} context Neutral retained-layer context.
          * @return {{item:Object,style:Object,labelFields:ReadonlyArray,
-         * layer:Object|null}} Vector-owned state.
+         * defaultStyleNotice:string,layer:Object|null}} Vector-owned state.
          */
         createState({ item, publication }) {
             return {
                 item,
                 style: normalizeVectorStyle(publication.style),
                 labelFields: vectorLabelFields(item),
+                defaultStyleNotice: publication.defaultStyleNotice ?? "",
                 layer: null,
             };
         },
         /**
-         * Create one bounded fixed-style WMS layer.
+         * Create one bounded WMS layer using the authorized initial appearance.
          *
          * @param {Object} record Neutral retained-layer record.
          * @param {() => void} reportTileError One-shot tile failure callback.
@@ -294,6 +344,7 @@ export function createVectorMapLayerAdapter({
                 style: applied,
             };
             record.state.style = applied;
+            record.state.defaultStyleNotice = "";
             record.state.layer.setParams({ styles: result.styleName });
             return applied;
         },
@@ -359,7 +410,7 @@ export function createVectorMapLayerAdapter({
          *
          * @param {Object} record Neutral retained-layer record.
          * @param {string} field Current numeric Catalog attribute field.
-         * @param {string} method Equal-interval or quantile classification.
+         * @param {string} method Equal-interval, quantile, or percentile-interval classification.
          * @param {number} classCount Requested bounded class count.
          * @return {Promise<Object>} Normalized numeric classification.
          */

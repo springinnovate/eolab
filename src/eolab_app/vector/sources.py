@@ -446,7 +446,7 @@ class PublishedVectorRegistry:
         """Create an empty process-local vector authorization registry."""
         self._sources: dict[
             str,
-            tuple[ResolvedVectorSource, VectorSourceSignature, str],
+            tuple[ResolvedVectorSource, VectorSourceSignature, str, str | None],
         ] = {}
 
     def authorize(
@@ -455,6 +455,7 @@ class PublishedVectorRegistry:
         source: ResolvedVectorSource,
         inspected_signature: VectorSourceSignature,
         style_name: str,
+        geometry_name: str | None = None,
     ) -> None:
         """Authorize a vector layer only if its complete source is unchanged.
 
@@ -463,6 +464,10 @@ class PublishedVectorRegistry:
             source: Exact mounted source and native layer identity.
             inspected_signature: Complete identity captured before publication.
             style_name: Geometry-specific initialized WMS style.
+            geometry_name: Authorized GeoServer geometry attribute for labels.
+
+        Returns:
+            None. Retains the current authorized vector rendering state.
 
         Raises:
             PublishedLayerChangedError: If the mounted source changed or
@@ -480,6 +485,7 @@ class PublishedVectorRegistry:
             source,
             inspected_signature,
             style_name,
+            geometry_name,
         )
 
     def require_current(
@@ -505,7 +511,7 @@ class PublishedVectorRegistry:
             raise PublishedLayerNotAuthorizedError(
                 "The WMS layer has not been approved for visualization"
             )
-        source, approved_signature, style_name = authorization
+        source, approved_signature, style_name, geometry_name = authorization
         try:
             current_signature = vector_source_signature(source)
         except OSError:
@@ -518,4 +524,5 @@ class PublishedVectorRegistry:
             source,
             approved_signature,
             style_name,
+            geometry_name,
         )

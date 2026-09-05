@@ -242,7 +242,7 @@ export async function summarizeCatalogVectorCategories(
  *
  * @param {Object} item Selected vector STAC Item.
  * @param {string} field Exact numeric Catalog attribute field.
- * @param {"equal-interval"|"quantile"} method Classification method.
+ * @param {"equal-interval"|"quantile"|"percentile-interval"} method Classification method.
  * @param {number} classCount Requested class count.
  * @param {typeof fetch} [fetchImplementation=globalThis.fetch] HTTP
  * implementation.

@@ -61,6 +61,13 @@ removal, and presentation-ready legends. It imports neither raster nor vector.
 The raster viewer continues to own raster analysis/control sessions while
 accepting sibling layers only through that neutral adapter contract.
 
+`vector/defaults.js` owns browser default-selection policy using only Catalog
+field metadata and explicit numeric results. The existing vector map adapter
+coordinates publication, optional classification, and style application before
+the layer is attached. The controls consume the same defaults. No vector
+component imports raster analysis or rendering, and numeric reads remain
+available independently of GeoServer and map state.
+
 ## Persisted identity and assessment
 
 Every vector handler emits `eolab:vector_source` with exactly:
@@ -105,8 +112,29 @@ not GeoServer state; selecting the Item again converges and reauthorizes it.
 ## Browser lifecycle and bounds
 
 Vector layers start with fixed `vector-point`, `vector-line`, or
-`vector-polygon` styles and never accept raster `env` substitutions. The
-vector-owned style workflow can replace that initializer style with a
+`vector-polygon` styles and never accept raster `env` substitutions. Points and
+polygons have blue fills at 70% opacity and 0.75 px black outlines; lines use a
+2 px blue stroke. Before displaying a newly added layer, the browser selects a
+recognizable text name (case-insensitive `name`, then `display_name`,
+`common_name`, `label`, `title`, `nm`, or a sole `name_*`/`*_name`/`nm_*`/`*_nm`
+field, including the workshop's `node_nm`). Labels use
+12 px dark text, a 1.5 px white halo, and minimum zoom 0. Point labels sit above
+the symbol; line labels use a fixed centroid; polygon labels use a fixed
+interior point. Follow-line placement remains available explicitly.
+
+After excluding obvious ID, code, and index fields, the browser chooses the
+latest annual numeric field (for example, `R2024` before `R2023`); otherwise it
+uses the first numeric measurement in Catalog field order. It requests five
+classes over the 5th–95th percentile range and applies blue–yellow–red colors
+before first display. Layers without an eligible field remain single color.
+The user can change the choice under **Color features by → Numeric ranges → Color by**.
+The label field remains selectable under **Label by**, and **Show labels** can
+turn labels off. Automatic classification/style failures retain an authorized
+base appearance and expose a notice in Style. Defaults run only on new
+publication preparation: selecting retained layers preserves edits, and saved
+style restoration takes precedence while the layer is still detached.
+
+The vector-owned style workflow can replace that initializer style with a
 content-addressed single-color, categorical, or graduated SLD. The browser submits only
 Catalog identity and a complete validated style; the server re-resolves the current Item,
 source signature, publication authorization, geometry family, and any selected
@@ -143,20 +171,26 @@ controls remain authoritative.
 
 Graduated numeric discovery follows that same vector-owned field-analysis
 boundary. The browser posts only Catalog identity, one current integer or
-floating-point field, `equal-interval` or `quantile`, and a requested class
-count from two through nine. The shared Fiona adapter reads at most 100,000
+floating-point field, `equal-interval`, `quantile`, or `percentile-interval`,
+and a requested class count from two through nine. The shared Fiona adapter reads at most 100,000
 features with geometry ignored and reports finite values, missing values,
 unsupported values, scan completeness, and source extent. Equal intervals use
 the observed minimum and maximum. Quantiles use deterministic nearest-rank
 breaks; repeated breaks collapse, so the response can honestly contain fewer
 classes than requested.
 
+Percentile intervals use nearest-rank 5th and 95th percentiles from the same
+bounded read, then divide that numeric span into equal intervals. Tails remain
+in the open-ended first and last classes. Repeated or numerically collapsed
+breaks are removed; a collapsed percentile range yields one class. Original
+equal-interval and quantile behavior is unchanged.
+
 Every returned class is adjacent and collectively covers all numeric values:
 the first range has no lower bound, internal lower bounds are exclusive and
 upper bounds inclusive, and the last range has no upper bound. This keeps
 features outside an incomplete sample's observed extent visible. The browser
-assigns a deterministic light-to-dark color sequence from Blues, Viridis,
-Yellow-to-red, or Purples, and can separately style nulls when they exist. On
+assigns a deterministic low-to-high color sequence from Blue–yellow–red, Blues,
+Viridis, Yellow-to-red, or Purples, and can separately style nulls when they exist. On
 apply, `VectorStyleService` repeats the current bounded classification and
 requires the submitted ranges to match before generating GeoServer comparison
 filters. A changed source or class result therefore stops styling rather than
@@ -164,16 +198,36 @@ publishing stale breaks. The map-layer view consumes only the vector adapter's
 neutral legend entries and does not know numeric-style internals.
 
 The vector style can optionally add one `TextSymbolizer`. Labels are `null` by
-default. An enabled label contains an exact field from the Item's current STAC
-Table Extension columns, closed font-family and weight choices, bounded font
+default in the fixed publication response; browser initialization enables a
+recognized name as described above. An enabled label contains an exact field
+from the Item's current STAC Table Extension columns, closed font-family and weight choices, bounded font
 and halo values, geometry-aware placement, and a zoom from zero through 22.
-The minimum zoom becomes a label-only `MaxScaleDenominator` rule, so hiding
-labels at small scales never hides the underlying geometry. The SLD requests
-GeoServer's normal conflict resolution. Attribute values are neither copied
-through the browser nor truncated: GeoServer evaluates the selected field for
-each feature, and may omit a long one-line value when it cannot place the label
-without a conflict. Wrapping, explicit truncation, decluttering quality, and
-large-layer label performance require separate dataset-specific work. For a
+Positive minimum zooms become a label-only `MaxScaleDenominator` rule; zero
+omits the scale cutoff. Hiding labels at small scales never hides the underlying
+geometry. Polygon labels use a full-feature `interiorPoint` expression instead
+of GeoServer's tile-clipped polygon placement. The vector publisher resolves
+the exact geometry attribute from the already authorized GeoServer feature type;
+missing or ambiguous geometry metadata rejects the style. Its internal style
+result carries that name through the vector style service, source registry, and
+WMS authorization, so composite opacity rendering uses the same anchor. No
+geometry name is accepted from or added to the browser API. Centered line labels
+similarly use a full-feature `centroid` expression. Naming the actual attribute
+lets GeoServer determine its CRS during rendering; generic default-geometry
+expressions do not reliably render labels in the deployed GeoTools version.
+Labels permit overlap (`conflictResolution=false`); fixed placements allow
+partials across tile edges and wrap at the larger of 120 px or 12 font sizes.
+The vector GeoServer publisher sets a bounded 256–884 px layer rendering margin
+from the validated font and halo, so adjacent tiles query features whose labels
+extend into their image. Unlabeled styles reset this margin to zero. This changes
+neither the public tile size limit nor the explicit feature-inspection buffer.
+Polygon labels also retain `goodnessOfFit=0`.
+The content style identity includes the generated SLD as well as validated
+settings, so changed placement policy invalidates older cached rendering.
+Attribute values are neither copied through the browser nor truncated: GeoServer
+evaluates the selected field for each feature. Crowded names may overlap; fixed
+anchors outside the viewport do not move inward to label a visible polygon
+fragment. Explicit follow-line placement remains geometry-dependent. Very long
+values and large-layer label performance still need dataset-specific review. For a
 categorical or graduated style, labels occupy a second `FeatureTypeStyle`; this keeps their
 unfiltered, independently scaled rule from suppressing the geometry
 `ElseFilter` while leaving label state independent from category selection.
@@ -224,7 +278,7 @@ Deployment still requires richpsharp to run the draft PR image against the
 production mount: scan a representative Shapefile and a two-layer GeoPackage,
 add each exact layer, reload/re-add it, and confirm WMS tiles plus distinct
 point/line/polygon styles. For label changes, choose a text and numeric field,
-confirm labels remain off by default, verify geometry-specific placement and
+confirm recognizable names are enabled automatically, verify geometry-specific placement and
 minimum zoom, and revisit a cached zoom after changing font or halo controls.
 For graduated styling, test an integer and floating-point field with both
 methods, change class count and palette, confirm repeated quantiles collapse

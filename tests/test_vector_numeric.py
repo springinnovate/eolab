@@ -4,13 +4,112 @@ import asyncio
 from pathlib import Path
 from threading import Event
 
+import fiona
 import pytest
 
+from eolab_app.catalog.geopackage import build_stac_items
+from eolab_app.vector.assessment import VectorAssessmentFinalizer
 from eolab_app.vector.errors import VectorConflictError
 from eolab_app.vector.fields import FionaVectorFieldReader
 from eolab_app.vector.models import CatalogVectorNumericClassificationRequest
 from eolab_app.vector.sources import MountedVectorResolver
 from tests.test_vector_categories import assessed_category_item, category_service
+from tests.test_vector_assessment import RecordingVectorAssessor, compatible_reader
+
+
+def assessed_numeric_item(
+    tmp_path: Path,
+    values: list[float | None],
+) -> dict[str, object]:
+    """Catalog and assess an exact numeric fixture without publishing it.
+
+    Args:
+        tmp_path: Isolated mounted source root.
+        values: Numeric or missing feature values written to the score field.
+
+    Returns:
+        Authoritative assessed Item for the fixture's only layer.
+    """
+    source_path = tmp_path / "numeric.gpkg"
+    with fiona.open(
+        source_path, mode="w", driver="GPKG", layer="measurements",
+        crs="EPSG:4326",
+        schema={"geometry": "Point", "properties": {"score": "float"}},
+    ) as dataset:
+        for value in values:
+            dataset.write({
+                "geometry": {"type": "Point", "coordinates": (0, 0)},
+                "properties": {"score": value},
+            })
+    item = build_stac_items(tmp_path, source_path)[0]
+    return asyncio.run(VectorAssessmentFinalizer(
+        MountedVectorResolver(tmp_path),
+        RecordingVectorAssessor(compatible_reader("point")),
+    ).finalize(item))
+
+
+def test_percentile_intervals_resist_outliers_without_geoserver(tmp_path: Path) -> None:
+    """Classify the central 90 percent while retaining both tails and null counts.
+
+    Args:
+        tmp_path: Isolated mounted source root.
+
+    Returns:
+        None.
+    """
+    values = [-10000.0, *map(float, range(1, 99)), 10000.0, None]
+    item = assessed_numeric_item(tmp_path, values)
+    summary = asyncio.run(category_service(item, tmp_path).classify_numeric(
+        numeric_request(item, "score", "percentile-interval", 5)
+    ))
+    assert summary.observed_minimum == -10000
+    assert summary.observed_maximum == 10000
+    assert [entry.maximum for entry in summary.classes[:-1]] == pytest.approx([22, 40, 58, 76])
+    assert [entry.count for entry in summary.classes] == [23, 18, 18, 18, 23]
+    assert summary.classes[0].minimum is None
+    assert summary.classes[-1].maximum is None
+    assert summary.numeric_value_count == 100
+    assert summary.null_count == 1
+    assert summary.complete
+
+
+@pytest.mark.parametrize("values", [[3.0] * 10, [0.0] * 96 + [100.0] * 4])
+def test_collapsed_percentile_range_has_one_complete_class(
+    tmp_path: Path, values: list[float],
+) -> None:
+    """Avoid invalid breaks when the central percentile range is constant.
+
+    Args:
+        tmp_path: Isolated mounted source root.
+        values: Constant data or a collapsed central range with a rare tail.
+
+    Returns:
+        None.
+    """
+    item = assessed_numeric_item(tmp_path, values)
+    summary = asyncio.run(category_service(item, tmp_path).classify_numeric(
+        numeric_request(item, "score", "percentile-interval", 5)
+    ))
+    assert summary.actual_class_count == 1
+    assert summary.classes[0].minimum is None
+    assert summary.classes[0].maximum is None
+    assert summary.classes[0].count == len(values)
+
+
+def test_missing_numeric_default_is_unavailable(tmp_path: Path) -> None:
+    """Return an actionable classification failure for an all-null field.
+
+    Args:
+        tmp_path: Isolated mounted source root.
+
+    Returns:
+        None.
+    """
+    item = assessed_numeric_item(tmp_path, [None] * 3)
+    with pytest.raises(VectorConflictError, match="no finite numeric values"):
+        asyncio.run(category_service(item, tmp_path).classify_numeric(
+            numeric_request(item, "score", "percentile-interval", 5)
+        ))
 
 
 def numeric_request(
