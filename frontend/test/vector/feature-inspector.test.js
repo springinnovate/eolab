@@ -82,6 +82,7 @@ function createFixture(fetchImplementation, { now = () => 0 } = {}) {
   const currentObservationChanges = [];
   let featureProfileRequests = 0;
   let timeSeriesRequests = 0;
+  const styleRequests = [];
   const controller = new VectorFeatureInspectorController({
     leaflet,
     leafletMap,
@@ -96,6 +97,7 @@ function createFixture(fetchImplementation, { now = () => 0 } = {}) {
       currentObservationChanges.push(observation),
     onFeatureProfileRequested: () => { featureProfileRequests += 1; },
     onTimeSeriesRequested: () => { timeSeriesRequests += 1; },
+    onStyleRequested: (sourceId) => styleRequests.push(sourceId),
     documentContext,
     fetchImplementation,
     now,
@@ -113,6 +115,7 @@ function createFixture(fetchImplementation, { now = () => 0 } = {}) {
     currentObservationChanges,
     get featureProfileRequests() { return featureProfileRequests; },
     get timeSeriesRequests() { return timeSeriesRequests; },
+    styleRequests,
     mapContainer,
   };
 }
@@ -247,6 +250,14 @@ test("inspector queries composed visible targets and navigates overlapping featu
   assert.equal(h.highlights.length, 2);
   assert.equal(h.removedLayers.length, 1);
   assert.equal(h.currentObservationChanges.at(-1).properties.name, "Second");
+  const styleButton = h.documentContext.querySelector(
+    "#style-inspected-vector-layer",
+  );
+  assert.equal(styleButton.hidden, false);
+  assert.equal(styleButton.disabled, false);
+  assert.equal(styleButton.getAttribute("aria-label"), "Style Parcels");
+  styleButton.dispatchEvent(new Event("click"));
+  assert.deepEqual(h.styleRequests, ["catalog|parcels"]);
 });
 
 test("inspector presents out-of-order layer results progressively in map order", async () => {
@@ -431,7 +442,7 @@ test("an empty click clears and closes a previous feature result", async () => {
   await h.controller.inspect(inspectionEvent(2, 3));
   features = [];
   await h.controller.inspect(inspectionEvent(4, 5));
-  assert.deepEqual(h.inspectionChanges, [true, false]);
+  assert.deepEqual(h.inspectionChanges, [true, true, false]);
   assert.equal(
     h.documentContext.querySelector("#vector-feature-inspector").hidden,
     true,
@@ -564,7 +575,7 @@ test("a newer click owns presentation and closing does not disable later inspect
   h.targets.length = 0;
   h.controller.syncVisibleLayers();
   assert.equal(h.handlers.has("click"), false);
-  assert.deepEqual(h.inspectionChanges, [true, false, true, false]);
+  assert.deepEqual(h.inspectionChanges, [true, true, false, true, false]);
   assert.equal(h.sampleChanges.at(-1).state, "invalidated");
 });
 

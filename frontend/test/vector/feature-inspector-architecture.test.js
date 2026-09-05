@@ -74,6 +74,14 @@ test("vector inspection coordination remains in the browser composition root", (
   );
   assert.match(COMPOSITION_SOURCE, /onInspectionChange:\s*\(visible\)\s*=>/);
   assert.match(COMPOSITION_SOURCE, /onSampleChange:\s*\(sample\)\s*=>/);
+  assert.match(
+    COMPOSITION_SOURCE,
+    /mapInspection\.setFeatureResultCount\(\s*sample\.observations\.length/,
+  );
+  assert.match(
+    COMPOSITION_SOURCE,
+    /onStyleRequested:\s*\(sourceId\)\s*=>\s*layerStyleEditor\.open\(sourceId\)/,
+  );
   assert.match(COMPOSITION_SOURCE, /onCurrentObservationChange:\s*\(observation\)\s*=>/);
   assert.match(COMPOSITION_SOURCE, /onFeatureProfileRequested:\s*\(\)\s*=>/);
   assert.match(COMPOSITION_SOURCE, /onTimeSeriesRequested:\s*\(\)\s*=>/);
@@ -95,6 +103,11 @@ test("vector inspection coordination remains in the browser composition root", (
     assert.equal(FEATURE_INFO_SOURCE.includes(forbiddenMapImplementation), false);
   }
   assert.doesNotMatch(STYLESHEET, /is-inspecting-vector-features/);
+  assert.doesNotMatch(INSPECTOR_SOURCE, /MapLayerStyleEditor/);
+  assert.match(
+    INSPECTOR_SOURCE,
+    /this\.onStyleRequested\(selected\.target\.sourceId\)/,
+  );
 });
 
 test("feature-field analysis is a sibling behind neutral observation and chart contracts", () => {
@@ -159,7 +172,7 @@ test("time-series analysis consumes neutral samples without sibling knowledge", 
   );
   assert.match(
     COMPOSITION_SOURCE,
-    /onSampleChange:\s*\(sample\)\s*=>\s*vectorTimeSeries\.setSample\(sample\)/,
+    /vectorTimeSeries\.setSample\(sample\)/,
   );
   assert.match(COMPOSITION_SOURCE, /sourceId:\s*record\.entry\.key/);
   assert.match(COMPOSITION_SOURCE, /onSourceLayerZoom:\s*\(sourceId\)\s*=>/);

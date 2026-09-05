@@ -507,7 +507,7 @@
             aria-label="Open map tools">
             <button id="map-inspection-tab-feature" class="map-inspection-tab"
               type="button" role="tab" aria-controls="vector-feature-inspector"
-              aria-selected="false" tabindex="-1" hidden>Feature</button>
+              aria-selected="false" tabindex="-1" hidden>Features</button>
             <button id="map-inspection-tab-time-series" class="map-inspection-tab"
               type="button" role="tab" aria-controls="vector-time-series"
               aria-selected="false" tabindex="-1" hidden>Series</button>
@@ -558,7 +558,12 @@
                 Click the map to inspect visible vector features.
               </p>
               <article id="vector-feature-result" hidden>
-                <h3 id="vector-feature-layer"></h3>
+                <div class="vector-feature-result-heading">
+                  <h3 id="vector-feature-layer"></h3>
+                  <button id="style-inspected-vector-layer" class="secondary-button"
+                    type="button" aria-label="Style selected vector layer"
+                    aria-controls="layer-style-editor" hidden disabled>Style this layer</button>
+                </div>
                 <nav class="vector-feature-navigation" aria-label="Inspected features">
                   <button id="previous-vector-feature" class="secondary-button"
                     type="button">Previous</button>
