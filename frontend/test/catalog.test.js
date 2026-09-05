@@ -336,12 +336,13 @@ test("Catalog search help presents raster and vector type filters", () => {
 
   assert.match(
     catalogMarkup,
-    /type:raster, type:vector, format:cog, or date:YYYY-MM-DD/,
+    /type:raster, type:vector, or date:YYYY-MM-DD/,
   );
   assert.match(
     catalogMarkup,
-    /ESA type:raster format:cog date:2020-01-01\.\.2020-12-31/,
+    /ESA type:raster date:2020-01-01\.\.2020-12-31/,
   );
+  assert.doesNotMatch(catalogMarkup, /format:cog/);
 });
 
 /**
