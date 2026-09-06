@@ -117,6 +117,24 @@ function createBivariateHistogramTooltip(documentContext) {
 }
 
 /**
+ * Build one pointer-transparent band that projects a marginal bin across the
+ * paired plot.
+ *
+ * @param {Document} documentContext Owning DOM document.
+ * @param {"x"|"y"} axis Projected histogram axis.
+ * @return {SVGRectElement} Hidden guide owned by the bivariate SVG.
+ */
+function createBivariateProjectionGuide(documentContext, axis) {
+    const guide = svgElement(documentContext, "rect", {
+        "aria-hidden": "true",
+        "data-projection-axis": axis,
+        hidden: "",
+    });
+    guide.classList.add("raster-bivariate-projection-guide");
+    return guide;
+}
+
+/**
  * Show compact text beside one SVG datum without leaving the chart view box.
  *
  * @param {Object} tooltip Tooltip returned by
@@ -536,21 +554,77 @@ export class BivariateRasterControlsView {
                 class: "raster-bivariate-plot",
             }),
         ];
+        const projectionGuides = {
+            x: createBivariateProjectionGuide(this.documentContext, "x"),
+            y: createBivariateProjectionGuide(this.documentContext, "y"),
+        };
+        children.push(projectionGuides.x, projectionGuides.y);
+        const marginalBars = { x: [], y: [] };
         const tooltip = createBivariateHistogramTooltip(
             this.documentContext
         );
         let activeHover = null;
+        /** Clear every transient plot band and projected marginal. @return {void} */
+        const clearProjection = () => {
+            projectionGuides.x.setAttribute("hidden", "");
+            projectionGuides.y.setAttribute("hidden", "");
+            for (const bar of [...marginalBars.x, ...marginalBars.y]) {
+                bar?.classList.remove("is-projected");
+            }
+        };
+        /**
+         * Project selected X and Y bins through the plot and into marginals.
+         *
+         * @param {{xBin?:number,yBin?:number}} projection Active bin indices.
+         * @return {void}
+         */
+        const showProjection = ({ xBin, yBin }) => {
+            clearProjection();
+            if (xBin !== undefined) {
+                projectionGuides.x.setAttribute(
+                    "x",
+                    String(HISTOGRAM_PLOT_X + xBin * cellSize)
+                );
+                projectionGuides.x.setAttribute("y", String(HISTOGRAM_PLOT_Y));
+                projectionGuides.x.setAttribute("width", String(cellSize));
+                projectionGuides.x.setAttribute(
+                    "height",
+                    String(HISTOGRAM_PLOT_SIZE)
+                );
+                projectionGuides.x.removeAttribute("hidden");
+                marginalBars.x[xBin]?.classList.add("is-projected");
+            }
+            if (yBin !== undefined) {
+                projectionGuides.y.setAttribute("x", String(HISTOGRAM_PLOT_X));
+                projectionGuides.y.setAttribute(
+                    "y",
+                    String(
+                        HISTOGRAM_PLOT_Y +
+                        (binCount - 1 - yBin) * cellSize
+                    )
+                );
+                projectionGuides.y.setAttribute(
+                    "width",
+                    String(HISTOGRAM_PLOT_SIZE)
+                );
+                projectionGuides.y.setAttribute("height", String(cellSize));
+                projectionGuides.y.removeAttribute("hidden");
+                marginalBars.y[yBin]?.classList.add("is-projected");
+            }
+        };
         /**
          * Emphasize one datum and show its transient in-chart readout.
          *
          * @param {SVGElement} target Hovered cell or marginal bar.
          * @param {string[]} lines Compact tooltip rows.
+         * @param {{xBin?:number,yBin?:number}} projection Projected bins.
          * @return {void}
          */
-        const showHover = (target, lines) => {
+        const showHover = (target, lines, projection) => {
             activeHover?.classList.remove("is-hovered");
             activeHover = target;
             target.classList.add("is-hovered");
+            showProjection(projection);
             showBivariateHistogramTooltip(
                 tooltip,
                 target,
@@ -568,6 +642,7 @@ export class BivariateRasterControlsView {
             if (activeHover !== target) return;
             target.classList.remove("is-hovered");
             activeHover = null;
+            clearProjection();
             tooltip.element.setAttribute("hidden", "");
         };
         for (const fraction of [0.25, 0.5, 0.75]) {
@@ -661,12 +736,12 @@ export class BivariateRasterControlsView {
                 );
                 cell.addEventListener("pointerenter", () => {
                     select();
-                    showHover(cell, tooltipLines);
+                    showHover(cell, tooltipLines, { xBin, yBin });
                 });
                 cell.addEventListener("pointerleave", () => hideHover(cell));
                 cell.addEventListener("focus", () => {
                     select();
-                    showHover(cell, tooltipLines);
+                    showHover(cell, tooltipLines, { xBin, yBin });
                 });
                 cell.addEventListener("blur", () => hideHover(cell));
                 cell.addEventListener("click", select);
@@ -720,9 +795,10 @@ export class BivariateRasterControlsView {
             ];
             bar.addEventListener(
                 "pointerenter",
-                () => showHover(bar, tooltipLines)
+                () => showHover(bar, tooltipLines, { xBin })
             );
             bar.addEventListener("pointerleave", () => hideHover(bar));
+            marginalBars.x[xBin] = bar;
             children.push(bar);
         });
         histogram.yMarginalCounts.forEach((count, yBin) => {
@@ -764,9 +840,10 @@ export class BivariateRasterControlsView {
             ];
             bar.addEventListener(
                 "pointerenter",
-                () => showHover(bar, tooltipLines)
+                () => showHover(bar, tooltipLines, { yBin })
             );
             bar.addEventListener("pointerleave", () => hideHover(bar));
+            marginalBars.y[yBin] = bar;
             children.push(bar);
         });
 
