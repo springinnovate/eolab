@@ -151,8 +151,20 @@ test("histogram adapter presents retained point values with layer identity", () 
             },
         ],
     });
+    assert.equal(region.hidden, false);
+    assert.equal(list.children.length, 1);
     assert.equal(list.children[0].children[1].textContent, "No data");
-    assert.equal(list.children[1].children[1].textContent, "Outside raster");
+
+    view.renderPointSamples({
+        position: { longitude: 1, latitude: 2 },
+        samples: [{
+            key: "outside", label: "outside.tif", axis: null,
+            state: "outside", value: null, errorMessage: "",
+        }],
+    });
+    assert.equal(region.hidden, true);
+    assert.equal(region.getAttribute("aria-busy"), "false");
+    assert.equal(list.children.length, 0);
 
     view.clearPointSamples();
     assert.equal(region.hidden, true);
