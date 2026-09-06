@@ -203,7 +203,67 @@ test("bivariate controls render labeled legend and inspectable ESOS-C histogram"
   assert.match(view.histogram.getAttribute("aria-label"), /temperature\.tif/);
   assert.doesNotMatch(view.histogram.getAttribute("aria-label"), /Raster A/);
   assert.match(view.histogram.getAttribute("aria-label"), /Densest bin/);
-  assert.match(view.histogramSummary.textContent, /^Densest · temperature\.tif /);
+  assert.equal(
+    view.histogram.children.some((child) => child.tagName === "TITLE"),
+    false,
+  );
+  assert.match(view.histogramSummary.textContent, /^Densest · X 6–7 · Y 4–5/);
+  const tooltip = view.histogram.children.find(
+    (child) => child.classList.contains("raster-bivariate-tooltip"),
+  );
+  assert.ok(tooltip);
+  assert.equal(tooltip.getAttribute("hidden"), "");
+  const xMarginals = view.histogram.children.filter(
+    (child) => child.classList.contains("raster-bivariate-marginal") &&
+      child.getAttribute("data-marginal-axis") === "x",
+  );
+  const yMarginals = view.histogram.children.filter(
+    (child) => child.classList.contains("raster-bivariate-marginal") &&
+      child.getAttribute("data-marginal-axis") === "y",
+  );
+  assert.equal(xMarginals.length, 32);
+  assert.equal(yMarginals.length, 32);
+
+  cell.dispatchEvent(new Event("pointerenter"));
+  assert.equal(cell.classList.contains("is-hovered"), true);
+  assert.equal(tooltip.getAttribute("hidden"), null);
+  assert.deepEqual(
+    tooltip.children.slice(1).map((line) => line.textContent),
+    ["X: 6–7", "Y: 4–5", "9 pixels · 100.00% of sample"],
+  );
+  const [, tooltipX, tooltipY] = tooltip.getAttribute("transform").match(
+    /translate\((\S+) (\S+)\)/,
+  );
+  const viewBoxHeight = Number(view.histogram.getAttribute("viewBox").split(" ").at(-1));
+  assert.ok(Number(tooltipX) >= 4 && Number(tooltipX) + 360 <= 656);
+  assert.ok(
+    Number(tooltipY) >= 4 &&
+      Number(tooltipY) + Number(tooltip.children[0].getAttribute("height")) <=
+        viewBoxHeight - 4,
+  );
+  cell.dispatchEvent(new Event("pointerleave"));
+  assert.equal(cell.classList.contains("is-hovered"), false);
+  assert.equal(tooltip.getAttribute("hidden"), "");
+
+  xMarginals[6].dispatchEvent(new Event("pointerenter"));
+  assert.equal(xMarginals[6].classList.contains("is-hovered"), true);
+  assert.deepEqual(
+    tooltip.children.slice(1, 3).map((line) => line.textContent),
+    ["X: 6–7", "9 pixels · 100.00% of sample"],
+  );
+  assert.equal(tooltip.children[3].getAttribute("hidden"), "");
+  assert.match(xMarginals[6].getAttribute("aria-label"), /temperature\.tif/);
+  xMarginals[6].dispatchEvent(new Event("pointerleave"));
+
+  yMarginals[4].dispatchEvent(new Event("pointerenter"));
+  assert.equal(yMarginals[4].classList.contains("is-hovered"), true);
+  assert.deepEqual(
+    tooltip.children.slice(1, 3).map((line) => line.textContent),
+    ["Y: 4–5", "9 pixels · 100.00% of sample"],
+  );
+  assert.match(yMarginals[4].getAttribute("aria-label"), /moisture\.tif/);
+  yMarginals[4].dispatchEvent(new Event("pointerleave"));
+  assert.equal(tooltip.getAttribute("hidden"), "");
   const xAxisTitles = view.histogram.children.filter(
     (child) => child.getAttribute("data-axis") === "x",
   );
