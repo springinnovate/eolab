@@ -68,6 +68,12 @@ admitted native block at most once without a broad `out_shape` read, a boundless
 read, or an arbitrary full-extent WMS request. The 9 GiB fallback limit measures
 cumulative decoded work; only one bounded native block is retained at a time.
 
+Paired 2D statistics apply the same overview preference independently to the X
+reference plan and the aligned Y positions. The native X-cell centers continue
+to own the geographic pairing, including across different source grids and
+CRSs. A paired source without a suitable overview retains the same bounded
+native-block fallback.
+
 Only one non-empty band with a supported scalar datatype and native block edges
 no larger than 1,024 pixels is accepted. CRS and affine georeferencing must be
 valid, and validity/georeferencing dependencies must be embedded in the signed

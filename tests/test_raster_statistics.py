@@ -9,7 +9,7 @@ import numpy
 import pytest
 import rasterio
 from pydantic import ValidationError
-from rasterio.enums import MaskFlags
+from rasterio.enums import MaskFlags, Resampling
 from rasterio.features import geometry_mask
 from rasterio.transform import Affine, from_bounds, from_origin
 from rasterio.warp import transform as transform_coordinates, transform_bounds
@@ -492,6 +492,108 @@ def test_paired_statistics_use_x_reference_grid_and_filter_pairwise_nodata(
     assert sum(statistics.histogram.x_marginal_counts) == 8
     assert sum(statistics.histogram.y_marginal_counts) == 8
     assert sum(map(sum, statistics.histogram.counts)) == 8
+
+
+def test_paired_statistics_use_internal_overviews_for_both_sources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep cold global pairs off the scattered native-block fallback.
+
+    Args:
+        tmp_path: Temporary directory for internally overviewed GeoTIFFs.
+        monkeypatch: Pytest collaborator for recording the owner boundary.
+
+    Returns:
+        None after proving both axes complete through bounded overview reads.
+    """
+    x_path = tmp_path / "overview-x.tif"
+    y_path = tmp_path / "overview-y.tif"
+    shape = (1_024, 1_024)
+    transform = from_origin(-180, 90, 360 / shape[1], 180 / shape[0])
+    for source_path, offset in ((x_path, 0), (y_path, 10)):
+        values = (
+            numpy.arange(shape[0] * shape[1], dtype=numpy.int32).reshape(shape)
+            + offset
+        )
+        with rasterio.open(
+            source_path,
+            "w",
+            driver="GTiff",
+            width=shape[1],
+            height=shape[0],
+            count=1,
+            dtype=values.dtype,
+            crs="EPSG:4326",
+            transform=transform,
+            tiled=True,
+            blockxsize=128,
+            blockysize=128,
+            nodata=-9999,
+        ) as destination:
+            destination.write(values, 1)
+            destination.build_overviews((2, 4, 8), Resampling.nearest)
+
+    overview_sources: list[str] = []
+    real_overview_reader = paired_statistics.read_planned_sample_grid_from_overview
+
+    def record_overview_read(
+        dataset: rasterio.io.DatasetReader,
+        source_window: Window,
+        plan: object,
+        cancellation_requested: object,
+    ) -> numpy.ma.MaskedArray | None:
+        """Record and delegate one paired overview read.
+
+        Args:
+            dataset: Open paired source.
+            source_window: Bounded window containing planned positions.
+            plan: Admitted sample-grid plan.
+            cancellation_requested: Optional cancellation predicate.
+
+        Returns:
+            Delegated bounded overview sample.
+        """
+        overview_sources.append(Path(dataset.name).name)
+        return real_overview_reader(
+            dataset,
+            source_window,
+            plan,  # type: ignore[arg-type]
+            cancellation_requested,  # type: ignore[arg-type]
+        )
+
+    def reject_native_fallback(*_: object) -> None:
+        """Fail if an overviewed paired source reaches native block reads.
+
+        Args:
+            *_: Unexpected native-reader arguments.
+
+        Returns:
+            None because the controlled call always fails.
+
+        Raises:
+            AssertionError: Always, because both sources have suitable
+                overviews.
+        """
+        raise AssertionError("paired overview source used native blocks")
+
+    monkeypatch.setattr(
+        paired_statistics,
+        "read_planned_sample_grid_from_overview",
+        record_overview_read,
+    )
+    monkeypatch.setattr(
+        paired_statistics,
+        "read_planned_sample_grid",
+        reject_native_fallback,
+    )
+
+    statistics = read_raster_paired_statistics(x_path, y_path, None)
+
+    assert overview_sources == [x_path.name, y_path.name]
+    assert (statistics.sample_width, statistics.sample_height) == (127, 127)
+    assert statistics.paired_sample_count == 127 * 127
+    assert statistics.approximate is True
 
 
 def test_paired_statistics_accept_constant_extreme_float64_values(
