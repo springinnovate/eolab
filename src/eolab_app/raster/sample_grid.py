@@ -316,13 +316,13 @@ def _mask_overview_nodata(
     return numpy.ma.array(values, mask=mask)
 
 
-def _read_overview_sample_grid(
+def _read_bounded_overview(
     dataset: rasterio.io.DatasetReader,
     source_window: Window,
     plan: "SampleGridPlan",
     cancellation_requested: RasterReadCancellationCheck | None,
 ) -> numpy.ma.MaskedArray | None:
-    """Read and center-sample one suitable embedded overview.
+    """Read one suitable embedded overview into a bounded masked array.
 
     Args:
         dataset: Open source used to build ``plan``.
@@ -331,8 +331,8 @@ def _read_overview_sample_grid(
         cancellation_requested: Optional thread-safe obsolescence predicate.
 
     Returns:
-        Final masked sample grid, or ``None`` when the overview pyramid has no
-        suitable level.
+        Bounded masked overview values, or ``None`` when the overview pyramid
+        has no suitable level.
 
     Raises:
         RasterReadCancelled: If every request waiter disconnects.
@@ -358,10 +358,43 @@ def _read_overview_sample_grid(
     require_active_raster_read(cancellation_requested)
     if values.shape != read_shape:
         raise ValueError("Raster overview read returned an unexpected shape")
-    overview = _mask_overview_nodata(dataset, values)
+    return _mask_overview_nodata(dataset, values)
+
+
+def _read_overview_sample_grid(
+    dataset: rasterio.io.DatasetReader,
+    source_window: Window,
+    plan: "SampleGridPlan",
+    cancellation_requested: RasterReadCancellationCheck | None,
+) -> numpy.ma.MaskedArray | None:
+    """Read and center-sample one suitable embedded overview.
+
+    Args:
+        dataset: Open source used to build ``plan``.
+        source_window: Positive integral source window represented by the grid.
+        plan: Admitted final sample-grid plan.
+        cancellation_requested: Optional thread-safe obsolescence predicate.
+
+    Returns:
+        Final masked sample grid, or ``None`` when the overview pyramid has no
+        suitable level.
+
+    Raises:
+        RasterReadCancelled: If every request waiter disconnects.
+        rasterio.errors.RasterioError: If the overview read fails.
+        ValueError: If Rasterio returns a shape other than the bounded request.
+    """
+    overview = _read_bounded_overview(
+        dataset,
+        source_window,
+        plan,
+        cancellation_requested,
+    )
+    if overview is None:
+        return None
     positions = _cell_positions(
-        read_shape[1],
-        read_shape[0],
+        overview.shape[1],
+        overview.shape[0],
         plan.width,
         plan.height,
     )
@@ -376,6 +409,84 @@ def _read_overview_sample_grid(
         count=len(positions),
     )
     return overview[rows, columns].reshape((plan.height, plan.width))
+
+
+def read_planned_sample_grid_from_overview(
+    dataset: rasterio.io.DatasetReader,
+    source_window: Window,
+    plan: "SampleGridPlan",
+    cancellation_requested: RasterReadCancellationCheck | None,
+) -> numpy.ma.MaskedArray | None:
+    """Sample explicit source positions through one bounded overview read.
+
+    The caller owns the spatial meaning of ``plan`` and supplies an integral
+    source window containing every non-empty position. Each requested native
+    pixel center is mapped to its nearest cell in the decimated read. Empty,
+    nodata, and non-finite cells remain masked.
+
+    Args:
+        dataset: Open source used to build ``plan``.
+        source_window: Positive integral source window containing the plan.
+        plan: Admitted explicit-position sample-grid plan.
+        cancellation_requested: Optional thread-safe obsolescence predicate.
+
+    Returns:
+        Masked values matching the plan shape, or ``None`` when the source has
+        no suitable embedded overview.
+
+    Raises:
+        RasterReadCancelled: If every request waiter disconnects.
+        rasterio.errors.RasterioError: If the bounded overview read fails.
+        ValueError: If a planned position lies outside ``source_window`` or
+            Rasterio returns an unexpected shape.
+    """
+    overview = _read_bounded_overview(
+        dataset,
+        source_window,
+        plan,
+        cancellation_requested,
+    )
+    if overview is None:
+        return None
+
+    row_offset = int(source_window.row_off)
+    column_offset = int(source_window.col_off)
+    source_height = int(source_window.height)
+    source_width = int(source_window.width)
+    overview_height, overview_width = overview.shape
+    values = numpy.zeros((plan.height, plan.width), dtype=numpy.float64)
+    mask = numpy.ones(values.shape, dtype=bool)
+    for cell_index, positions in enumerate(plan.cell_positions):
+        if not positions:
+            continue
+        row, column = positions[0]
+        local_row_center = row + 0.5 - row_offset
+        local_column_center = column + 0.5 - column_offset
+        if not (
+            0 <= local_row_center < source_height
+            and 0 <= local_column_center < source_width
+        ):
+            raise ValueError(
+                "Raster overview source window does not contain its sample plan"
+            )
+        overview_row = min(
+            overview_height - 1,
+            math.floor(local_row_center * overview_height / source_height),
+        )
+        overview_column = min(
+            overview_width - 1,
+            math.floor(local_column_center * overview_width / source_width),
+        )
+        selected = overview[overview_row, overview_column]
+        if numpy.ma.is_masked(selected):
+            continue
+        finite_value = float(selected)
+        if not math.isfinite(finite_value):
+            continue
+        sample_row, sample_column = divmod(cell_index, plan.width)
+        values[sample_row, sample_column] = finite_value
+        mask[sample_row, sample_column] = False
+    return numpy.ma.array(values, mask=mask)
 
 
 def _projected_sample_grid_dimensions(

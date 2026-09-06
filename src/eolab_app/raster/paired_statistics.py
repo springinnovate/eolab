@@ -8,6 +8,7 @@ import rasterio
 from affine import TransformNotInvertibleError
 from rasterio.transform import array_bounds, xy
 from rasterio.warp import transform, transform_bounds
+from rasterio.windows import Window
 
 from eolab_app.raster.bounded_window import (
     BOUNDED_SOURCE_WINDOW_PADDING_PIXELS,
@@ -29,9 +30,11 @@ from eolab_app.raster.read_cancellation import (
 from eolab_app.raster.sample_grid import (
     SAMPLE_GRID_MAX_TRANSFORMED_POSITIONS,
     SourcePosition,
+    overview_sample_grid_policy_parameters,
     plan_sample_grid_for_source_positions,
     plan_source_window_sample_grid,
     read_planned_sample_grid,
+    read_planned_sample_grid_from_overview,
     sample_grid_policy_parameters,
 )
 from eolab_app.raster.source_contract import (
@@ -42,21 +45,51 @@ from eolab_app.raster.source_contract import (
 from eolab_app.raster.statistics import NoValidRasterSamplesError
 
 
-RASTER_PAIRED_STATISTICS_ALGORITHM = "x-reference-nearest-paired-v1"
+RASTER_PAIRED_STATISTICS_ALGORITHM = "x-reference-nearest-paired-v2"
 
 
 def raster_paired_statistics_policy_parameters() -> tuple[int, ...]:
     """Return every fixed resource and histogram input in cache identity.
 
     Returns:
-        Histogram, grid, transformation, native-block, and decoded-work limits.
+        Histogram, grid, overview, transformation, native-block, and
+        decoded-work limits.
     """
     return (
         RASTER_PAIRED_STATISTICS_BIN_COUNT,
         BOUNDED_WGS84_DENSIFY_POINTS,
         BOUNDED_SOURCE_WINDOW_PADDING_PIXELS,
         *sample_grid_policy_parameters(),
+        *overview_sample_grid_policy_parameters(),
         BOUNDED_RASTER_MAX_NATIVE_BLOCK_DECODED_BYTES,
+    )
+
+
+def _source_window_for_positions(
+    cell_positions: tuple[tuple[SourcePosition, ...], ...],
+) -> Window | None:
+    """Return the smallest integral window containing explicit positions.
+
+    Args:
+        cell_positions: Row-major source positions with empty tuples for cells
+            outside the source.
+
+    Returns:
+        Minimal positive source-pixel window, or ``None`` when every cell is
+        empty.
+    """
+    positions = [position for cell in cell_positions for position in cell]
+    if not positions:
+        return None
+    rows = [position[0] for position in positions]
+    columns = [position[1] for position in positions]
+    row_start = min(rows)
+    column_start = min(columns)
+    return Window(
+        column_start,
+        row_start,
+        max(columns) - column_start + 1,
+        max(rows) - row_start + 1,
     )
 
 
@@ -255,9 +288,10 @@ def read_raster_paired_statistics(
 
     The X raster is asymmetric by design: its geographic overlap window owns
     the reference grid and sampling density. Swapping X and Y can therefore
-    change sampled positions and counts when source grids differ. Both sources
-    are read only through admitted native-block plans, and at most 127 by 127
-    paired cells reach the histogram.
+    change sampled positions and counts when source grids differ. Each source
+    prefers one bounded signed internal-overview read and otherwise uses its
+    admitted native-block plan. At most 127 by 127 paired cells reach the
+    histogram.
 
     Args:
         x_source_path: Authorized mounted X-reference GeoTIFF.
@@ -312,16 +346,35 @@ def read_raster_paired_statistics(
             x_plan.height,
             y_positions,
         )
-        x_sample = read_planned_sample_grid(
+        y_window = _source_window_for_positions(y_plan.cell_positions)
+        x_sample = read_planned_sample_grid_from_overview(
             x_dataset,
+            x_window,
             x_plan,
             cancellation_requested,
         )
-        y_sample = read_planned_sample_grid(
-            y_dataset,
-            y_plan,
-            cancellation_requested,
+        if x_sample is None:
+            x_sample = read_planned_sample_grid(
+                x_dataset,
+                x_plan,
+                cancellation_requested,
+            )
+        y_sample = (
+            read_planned_sample_grid_from_overview(
+                y_dataset,
+                y_window,
+                y_plan,
+                cancellation_requested,
+            )
+            if y_window is not None
+            else None
         )
+        if y_sample is None:
+            y_sample = read_planned_sample_grid(
+                y_dataset,
+                y_plan,
+                cancellation_requested,
+            )
         require_active_raster_read(cancellation_requested)
 
     paired_mask = numpy.logical_or(

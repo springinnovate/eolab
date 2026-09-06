@@ -18,7 +18,9 @@ from eolab_app.raster.sample_grid import (
     SAMPLE_GRID_MAX_DECODED_SOURCE_BYTES,
     SAMPLE_GRID_MAX_DIMENSION,
     SAMPLE_GRID_MAX_SOURCE_BLOCK_READS,
+    plan_sample_grid_for_source_positions,
     plan_source_window_sample_grid,
+    read_planned_sample_grid_from_overview,
     read_source_window_sample_grid,
 )
 from eolab_app.raster.source_contract import (
@@ -341,6 +343,46 @@ def test_sample_grid_prefers_coarsest_suitable_embedded_overview() -> None:
         (source_window, (100, 200), Resampling.nearest),
     ]
     assert dataset.read_windows == []
+
+
+def test_explicit_positions_are_mapped_through_one_bounded_overview() -> None:
+    """Read irregular paired positions without falling back to native blocks."""
+    values = numpy.arange(600 * 1_000, dtype=numpy.int32).reshape((600, 1_000))
+    source_window = Window(100, 100, 800, 400)
+    dataset = _OverviewDataset(
+        values,
+        block_shape=(32, 32),
+        overview_factors=(2, 4, 8),
+    )
+    positions = (
+        ((103, 103),),
+        ((300, 300),),
+        (),
+        ((496, 896),),
+    )
+    plan = plan_sample_grid_for_source_positions(
+        dataset,  # type: ignore[arg-type]
+        2,
+        2,
+        positions,
+    )
+
+    sample = read_planned_sample_grid_from_overview(
+        dataset,  # type: ignore[arg-type]
+        source_window,
+        plan,
+        None,
+    )
+
+    assert sample is not None
+    assert dataset.overview_reads == [
+        (source_window, (50, 100), Resampling.nearest),
+    ]
+    assert dataset.read_windows == []
+    assert sample.mask.tolist() == [[False, False], [True, False]]
+    assert sample[0, 0] == values[104, 104]
+    assert sample[0, 1] == values[304, 304]
+    assert sample[1, 1] == values[496, 896]
 
 
 def test_sample_grid_reads_a_real_internal_geotiff_overview(
