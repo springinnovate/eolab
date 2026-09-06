@@ -261,14 +261,6 @@ export class BivariateRasterControlsView {
             documentContext,
             "#raster-bivariate-panel"
         );
-        this.xLabel = requireRasterControl(
-            documentContext,
-            "#raster-bivariate-x-label"
-        );
-        this.yLabel = requireRasterControl(
-            documentContext,
-            "#raster-bivariate-y-label"
-        );
         this.palette = requireRasterControl(
             documentContext,
             "#raster-bivariate-palette"
@@ -322,7 +314,14 @@ export class BivariateRasterControlsView {
             "#raster-bivariate-histogram-summary"
         );
         this.handlers = null;
+        this.styleRanges = requireRasterControl(
+            documentContext, "#raster-bivariate-style-ranges"
+        );
+        this.rangePreviews = { x: null, y: null };
+        this.thresholdMarkers = null;
+        this.statisticsIsCurrent = false;
         this.rangeControls = Object.fromEntries(["x", "y"].map((axis) => [axis, {
+            label: requireRasterControl(documentContext, `#bivariate-${axis}-range-label`),
             inputs: Object.fromEntries(["lower", "middle", "upper"].map((name) => [
                 name, requireRasterControl(documentContext, `#bivariate-${axis}-${name}`),
             ])),
@@ -342,6 +341,7 @@ export class BivariateRasterControlsView {
         this.boundPaletteChange = this.#handlePaletteChange.bind(this);
         this.boundSwap = this.#handleSwap.bind(this);
         this.boundRetry = this.#handleRetry.bind(this);
+        this.boundRangeToggle = this.#renderThresholdMarkers.bind(this);
     }
 
     /** Populate the eight shared palette definitions exactly once. @return {void} */
@@ -371,6 +371,7 @@ export class BivariateRasterControlsView {
         this.palette.addEventListener("change", this.boundPaletteChange);
         this.swapButton.addEventListener("click", this.boundSwap);
         this.retryButton.addEventListener("click", this.boundRetry);
+        this.styleRanges.addEventListener("toggle", this.boundRangeToggle);
         for (const controls of Object.values(this.rangeControls)) {
             for (const input of Object.values(controls.inputs)) {
                 input.addEventListener("input", controls.onInput);
@@ -385,6 +386,7 @@ export class BivariateRasterControlsView {
         this.palette.removeEventListener("change", this.boundPaletteChange);
         this.swapButton.removeEventListener("click", this.boundSwap);
         this.retryButton.removeEventListener("click", this.boundRetry);
+        this.styleRanges.removeEventListener("toggle", this.boundRangeToggle);
         for (const controls of Object.values(this.rangeControls)) {
             for (const input of Object.values(controls.inputs)) {
                 input.removeEventListener("input", controls.onInput);
@@ -407,8 +409,9 @@ export class BivariateRasterControlsView {
     /**
      * Present estimates and availability supplied by the raster coordinator.
      * @param {"x"|"y"} axis Paired axis.
-     * @param {{values:Object|null,message:string,applicable:boolean,invalid:boolean}} state
-     * Formatted estimates, sample scope or failure, and validity.
+     * @param {{values:Object|null,range:Object|null,message:string,applicable:boolean,invalid:boolean}} state
+     * Formatted estimates, exact candidate thresholds, sample scope or failure,
+     * and validity. Only applicable ranges may appear as draft markers.
      * @return {void}
      */
     renderPercentiles(axis, state) {
@@ -420,6 +423,8 @@ export class BivariateRasterControlsView {
         }
         controls.status.textContent = state.message;
         controls.apply.disabled = !state.applicable;
+        this.rangePreviews[axis] = state.applicable ? state.range ?? null : null;
+        this.#renderThresholdMarkers();
     }
 
     /**
@@ -457,15 +462,27 @@ export class BivariateRasterControlsView {
         this.statisticsHeading.textContent =
             `${state.xLabel} vs. ${state.yLabel}`;
         this.statisticsHeading.title = this.statisticsHeading.textContent;
-        this.xLabel.textContent = `X axis: ${state.xLabel}`;
-        this.yLabel.textContent = `Y axis: ${state.yLabel}`;
         this.statisticsXLabel.textContent = state.xLabel;
         this.statisticsYLabel.textContent = state.yLabel;
+        this.rangeControls.x.label.textContent = state.xLabel;
+        this.rangeControls.y.label.textContent = state.yLabel;
         this.swapButton.setAttribute(
             "aria-label",
             `Swap X axis ${state.xLabel} with Y axis ${state.yLabel}`
         );
         this.#renderLegend(state);
+    }
+
+    /**
+     * Reveal the current pair's consolidated controls and focus its palette.
+     * The caller owns opening the histogram workspace before this navigation.
+     *
+     * @return {void}
+     */
+    openStyle() {
+        this.styleRanges.open = true;
+        this.#renderThresholdMarkers();
+        this.palette.focus();
     }
 
     /**
@@ -475,6 +492,9 @@ export class BivariateRasterControlsView {
      * @return {void}
      */
     setStatisticsLoading(message) {
+        this.statisticsIsCurrent = false;
+        this.rangePreviews = { x: null, y: null };
+        this.#renderThresholdMarkers();
         this.statisticsStatus.textContent = message;
         this.retryButton.hidden = true;
         this.histogram.setAttribute("aria-busy", "true");
@@ -488,6 +508,9 @@ export class BivariateRasterControlsView {
      * @return {void}
      */
     renderStatisticsError(error, canRetry) {
+        this.statisticsIsCurrent = false;
+        this.rangePreviews = { x: null, y: null };
+        this.#renderThresholdMarkers();
         this.statisticsStatus.textContent = error.message;
         this.retryButton.hidden = !canRetry;
         this.histogram.removeAttribute("aria-busy");
@@ -502,6 +525,7 @@ export class BivariateRasterControlsView {
      */
     renderStatistics(statistics, presentation) {
         this.statistics = statistics;
+        this.statisticsIsCurrent = true;
         this.labels = presentation;
         this.cells.clear();
         this.activeCell = null;
@@ -943,9 +967,14 @@ export class BivariateRasterControlsView {
             yAxisLabel.textContent = line;
             children.push(yAxisLabel);
         });
-        children.push(tooltip.element);
+        this.thresholdMarkers = svgElement(this.documentContext, "g", {
+            class: "raster-bivariate-thresholds",
+            "aria-hidden": "true",
+        });
+        children.push(this.thresholdMarkers, tooltip.element);
 
         this.histogram.replaceChildren(...children);
+        this.#renderThresholdMarkers();
         this.histogram.setAttribute("aria-label", summary);
         this.histogram.removeAttribute("aria-busy");
         this.histogram.removeAttribute("hidden");
@@ -959,6 +988,64 @@ export class BivariateRasterControlsView {
             `${statistics.pairedSampleCount.toLocaleString()} paired pixels · ` +
             `${statistics.approximate ? "approximate" : "exact"}`;
         this.retryButton.hidden = true;
+    }
+
+    /**
+     * Draw committed or draft L/M/U stops on the two marginal histograms.
+     * Replaces only the marker group so slider previews preserve the plot's
+     * hover, keyboard focus, and sampled-cell state. Drafts are shown only
+     * while the disclosure is open and the paired sample is current.
+     *
+     * @return {void}
+     */
+    #renderThresholdMarkers() {
+        if (this.thresholdMarkers === null) return;
+        this.thresholdMarkers.replaceChildren();
+        if (!this.statisticsIsCurrent || this.statistics === null) return;
+        for (const axis of ["x", "y"]) {
+            const style = this.labels[`${axis}Style`];
+            const preview = this.styleRanges.open ? this.rangePreviews[axis] : null;
+            const range = preview ?? style;
+            const edges = this.statistics.histogram[`${axis}Edges`];
+            const minimum = edges[0];
+            const span = edges.at(-1) - minimum;
+            const group = svgElement(this.documentContext, "g", {
+                "data-threshold-axis": axis,
+                "data-threshold-mode": preview === null ? "committed" : "preview",
+            });
+            for (const [index, name] of ["minimum", "midpoint", "maximum"].entries()) {
+                const fraction = Math.max(0, Math.min(1, (range[name] - minimum) / span));
+                const position = axis === "x"
+                    ? HISTOGRAM_PLOT_X + fraction * HISTOGRAM_PLOT_SIZE
+                    : HISTOGRAM_PLOT_Y + (1 - fraction) * HISTOGRAM_PLOT_SIZE;
+                const coordinates = axis === "x"
+                    ? { x1: position, x2: position,
+                        y1: HISTOGRAM_PLOT_Y - HISTOGRAM_MARGINAL_SIZE,
+                        y2: HISTOGRAM_PLOT_Y }
+                    : { x1: HISTOGRAM_PLOT_X + HISTOGRAM_PLOT_SIZE,
+                        x2: HISTOGRAM_PLOT_X + HISTOGRAM_PLOT_SIZE + HISTOGRAM_MARGINAL_SIZE,
+                        y1: position, y2: position };
+                const outline = svgElement(this.documentContext, "line", {
+                    ...coordinates, class: "raster-histogram-threshold-outline",
+                });
+                const line = svgElement(this.documentContext, "line", {
+                    ...coordinates, class: "raster-histogram-threshold",
+                    "data-threshold": name, "data-value": range[name],
+                });
+                line.style.stroke = style[`${name}Color`];
+                const label = svgElement(this.documentContext, "text", {
+                    x: axis === "x" ? position
+                        : HISTOGRAM_PLOT_X + HISTOGRAM_PLOT_SIZE + 12 + index * 16,
+                    y: axis === "x"
+                        ? HISTOGRAM_PLOT_Y - HISTOGRAM_MARGINAL_SIZE + 14 + index * 16
+                        : position + 5,
+                    class: "raster-histogram-threshold-label",
+                });
+                label.textContent = ["L", "M", "U"][index];
+                group.append(outline, line, label);
+            }
+            this.thresholdMarkers.append(group);
+        }
     }
 
     /**
@@ -994,6 +1081,9 @@ export class BivariateRasterControlsView {
     /** Clear paired result content while preserving explicit mode controls. @return {void} */
     clearStatistics() {
         this.statistics = null;
+        this.statisticsIsCurrent = false;
+        this.rangePreviews = { x: null, y: null };
+        this.thresholdMarkers = null;
         this.labels = null;
         this.cells.clear();
         this.activeCell = null;

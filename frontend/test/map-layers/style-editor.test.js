@@ -33,13 +33,20 @@ function fixture() {
     });
     doc.querySelectorAll = () => styleButtons.filter(button => layers.some(layer => layer.key === button.dataset.layerKey));
     const edits = [];
+    const pairedStyleRequests = [];
     const vectorStyleEvents = [];
     const editor = new MapLayerStyleEditor({ documentContext: doc, inspection,
         mapLayers: {
             snapshots: () => layers,
             setOpacity(key, value) { layers.find(layer => layer.key === key).opacity = value; edits.push([key, value]); },
         },
-        rasterViewer: { openStyle: key => key === 'a', closeStyle() {}, refreshStyle() {} },
+        rasterViewer: {
+            openStyle: key => key === 'a', closeStyle() {}, refreshStyle() {},
+            openPairedStyle(key) {
+                pairedStyleRequests.push(key);
+                inspection.showHistogram(2);
+            },
+        },
         vectorStyleControls: {
             show(target) { vectorStyleEvents.push(["show", target.key]); },
             hide() { vectorStyleEvents.push(["hide"]); },
@@ -47,7 +54,7 @@ function fixture() {
         getVectorStyleTarget: key => key === 'b' ? { key, style: {} } : null,
     });
     return { doc, root, histogram, surface, inspection, layers, styleButtons, edits, editor,
-        vectorStyleEvents,
+        vectorStyleEvents, pairedStyleRequests,
         setLayers(value) { layers = value; } };
 }
 
@@ -82,7 +89,6 @@ test('vector editor explains symbol controls, and removed targets close safely',
     const h = fixture();
     h.editor.open('b');
     assert.equal(h.editor.rasterControls.hidden, true);
-    assert.equal(h.editor.pairedControls.hidden, true);
     assert.match(h.editor.note.textContent, /geometry-specific colors and size/);
     assert.deepEqual(h.vectorStyleEvents.at(-1), ["show", "b"]);
     h.setLayers([h.layers[0]]);
@@ -131,17 +137,33 @@ test('closing falls back when a shortcut was removed, hidden, disabled, or in a 
     }
 });
 
-test('paired styles lock ordinary opacity and show the coordinated controls', () => {
+test('paired style shortcuts open the histogram without an ordinary style or opacity panel', () => {
     const h = fixture();
     h.layers[0].opacityLocked = true;
     h.layers[0].effectiveOpacity = 1;
     h.editor.open('a');
-    assert.equal(h.editor.opacity.disabled, true);
-    assert.equal(h.editor.opacity.value, '100');
-    assert.equal(h.editor.rasterControls.hidden, true);
-    assert.equal(h.editor.pairedControls.hidden, false);
+    assert.equal(h.root.hidden, true);
+    assert.equal(h.editor.key, null);
+    assert.equal(h.histogram.hidden, false);
+    assert.deepEqual(h.pairedStyleRequests, ['a']);
     h.editor.opacity.dispatchEvent(new Event('input'));
     assert.deepEqual(h.edits, []);
+    h.editor.destroy();
+});
+
+test('entering 2D replaces an open ordinary editor and 1D restores opacity editing', () => {
+    const h = fixture();
+    h.editor.open('a');
+    h.layers[0].opacityLocked = true;
+    h.editor.refresh();
+    assert.equal(h.root.hidden, true);
+    assert.equal(h.editor.key, null);
+    assert.deepEqual(h.pairedStyleRequests, ['a']);
+    h.layers[0].opacityLocked = false;
+    h.editor.open('a');
+    assert.equal(h.root.hidden, false);
+    assert.equal(h.editor.opacity.disabled, false);
+    assert.equal(h.editor.opacity.value, '40');
     h.editor.destroy();
 });
 

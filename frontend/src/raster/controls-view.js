@@ -548,6 +548,11 @@ export class RasterControlsView {
         this.#bivariateView.renderMode(state);
     }
 
+    /** Reveal and focus the paired controls in the histogram. @return {void} */
+    openBivariateStyle() {
+        this.#bivariateView.openStyle();
+    }
+
     /**
      * Present paired-statistics loading without discarding a current chart.
      *

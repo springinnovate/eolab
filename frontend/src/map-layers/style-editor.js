@@ -31,7 +31,6 @@ export class MapLayerStyleEditor {
         this.opacityValue = documentContext.querySelector("#layer-style-opacity-value");
         this.note = documentContext.querySelector("#layer-style-note");
         this.rasterControls = documentContext.querySelector("#layer-raster-style");
-        this.pairedControls = documentContext.querySelector("#layer-paired-style");
         this.closeButton = documentContext.querySelector("#close-layer-style");
         this.key = null;
         this.onClose = () => this.close();
@@ -53,7 +52,8 @@ export class MapLayerStyleEditor {
     }
 
     /**
-     * Open one layer's controls without changing the histogram target.
+     * Open ordinary controls or navigate to the active pair's histogram styles.
+     * Neither path changes the histogram's sampling target.
      * @param {string} key Retained layer identity.
      * @return {void}
      */
@@ -68,7 +68,7 @@ export class MapLayerStyleEditor {
         this.closeButton.focus();
     }
 
-    /** Synchronize controls with the independently keyed editing target. @return {void} */
+    /** Refresh the editing target, redirecting active pairs to 2D styles. @return {void} */
     refresh() {
         if (this.key === null) return;
         const layer = this.mapLayers.snapshots().find(
@@ -80,14 +80,18 @@ export class MapLayerStyleEditor {
         }
         this.title.textContent = layer.label;
         const locked = layer.opacityLocked === true;
+        if (locked && this.isRaster) {
+            const key = this.key;
+            this.close();
+            this.rasterViewer.openPairedStyle(key);
+            return;
+        }
         this.opacity.closest?.("label").removeAttribute("hidden");
         this.opacity.value = String(Math.round((layer.effectiveOpacity ?? layer.opacity ?? 1) * 100));
         this.opacity.disabled = locked;
         this.opacityValue.textContent = `${this.opacity.value}%`;
         this.opacity.setAttribute("aria-valuetext", `${this.opacity.value} percent`);
-        this.note.textContent = locked
-            ? "2D mode styles both visible rasters together. Opacity is fixed at 100%. Switch to 1D in Histogram for individual colors."
-            : !this.isRaster
+        this.note.textContent = !this.isRaster
                 ? "Layer opacity scales the complete symbol. Customize its geometry-specific colors and size below."
                 : layer.visible ? "Changes apply immediately." : "This layer is hidden. Styling it will not make it visible.";
         const vectorTarget = this.isRaster
@@ -95,7 +99,6 @@ export class MapLayerStyleEditor {
         if (vectorTarget === null) this.vectorStyleControls.hide();
         else this.vectorStyleControls.show(vectorTarget);
         this.rasterControls.hidden = !this.isRaster || locked;
-        this.pairedControls.hidden = !locked;
         this.rasterViewer.refreshStyle();
     }
 
