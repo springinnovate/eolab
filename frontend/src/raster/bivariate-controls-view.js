@@ -525,12 +525,9 @@ export class BivariateRasterControlsView {
             "viewBox",
             `0 0 ${HISTOGRAM_VIEWBOX_WIDTH} ${viewBoxHeight}`
         );
-        const title = svgElement(this.documentContext, "title");
-        title.textContent = summary;
         const plotRight = HISTOGRAM_PLOT_X + HISTOGRAM_PLOT_SIZE;
         const plotBottom = HISTOGRAM_PLOT_Y + HISTOGRAM_PLOT_SIZE;
         const children = [
-            title,
             svgElement(this.documentContext, "rect", {
                 x: HISTOGRAM_PLOT_X,
                 y: HISTOGRAM_PLOT_Y,

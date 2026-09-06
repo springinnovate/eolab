@@ -203,6 +203,10 @@ test("bivariate controls render labeled legend and inspectable ESOS-C histogram"
   assert.match(view.histogram.getAttribute("aria-label"), /temperature\.tif/);
   assert.doesNotMatch(view.histogram.getAttribute("aria-label"), /Raster A/);
   assert.match(view.histogram.getAttribute("aria-label"), /Densest bin/);
+  assert.equal(
+    view.histogram.children.some((child) => child.tagName === "TITLE"),
+    false,
+  );
   assert.match(view.histogramSummary.textContent, /^Densest · X 6–7 · Y 4–5/);
   const tooltip = view.histogram.children.find(
     (child) => child.classList.contains("raster-bivariate-tooltip"),
