@@ -119,11 +119,16 @@ export class MapInspectionController {
         this.#showTool("histogram");
     }
 
-    /** Hide histogram results and return focus to the map. @return {void} */
-    closeHistogram() {
+    /**
+     * Hide histogram results and optionally return focus to the map.
+     *
+     * @param {boolean} [moveFocus=true] Whether to restore focus to the map.
+     * @return {void}
+     */
+    closeHistogram(moveFocus = true) {
         if (this.histogram.hidden) return;
         this.#hideTool("histogram");
-        this.map.focus();
+        if (moveFocus) this.map.focus();
     }
 
     /**
