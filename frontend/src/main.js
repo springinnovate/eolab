@@ -868,7 +868,9 @@ async function initializeCatalog(
      * @return {void}
      */
     function exploreMap(event) {
-        rasterVisualization.exploreAt(event.latlng);
+        if (!rasterVisualization.exploreAt(event.latlng)) {
+            mapInspection.closeHistogram(false);
+        }
         void vectorFeatureInspector.inspect(event);
     }
     /**

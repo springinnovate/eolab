@@ -2830,6 +2830,57 @@ test("map box starts at map center and resizes after a debounce", async () => {
     viewer.destroy();
 });
 
+test("raster viewer ignores clicks outside every retained raster", async () => {
+    const leafletMap = createFakeMap();
+    const { leaflet, rectangleLayers } = createFakeLeaflet();
+    const controlsView = createFakeControlsView();
+    const pixelRequests = [];
+    let histogramPresentationRequests = 0;
+    const viewer = initializeRasterViewer(
+        {
+            wmsUrl: "/geoserver/eolab/wms",
+            leafletMap,
+            leaflet,
+            onTileError() {},
+            onHistogramRequested() {
+                histogramPresentationRequests += 1;
+            },
+        },
+        {
+            controlsView,
+            layerStackView: createFakeLayerStackView(),
+            publishRaster: async () => ({
+                layerName: "eolab:regional-raster",
+                bbox: [70, 15, 90, 30],
+            }),
+            loadStatistics: () => new Promise(() => {}),
+            samplePixel: async (item, point) => {
+                pixelRequests.push({ item, point });
+                return { inBounds: true, value: 1 };
+            },
+            viewport: { innerWidth: 1280, innerHeight: 720 },
+        }
+    );
+
+    await viewer.show(MOUNTED_GEOTIFF_ITEM);
+    assert.equal(viewer.exploreAt({ lng: 0, lat: 20 }), false);
+    await flushPromises();
+    assert.deepEqual(pixelRequests, []);
+    assert.equal(histogramPresentationRequests, 0);
+    assert.equal(controlsView.pointSamples ?? null, null);
+    assert.equal(
+        rectangleLayers.some((layer) => layer.kind === "selection"),
+        false
+    );
+
+    assert.equal(viewer.exploreAt({ lng: 80, lat: 20 }), true);
+    await flushPromises();
+    assert.equal(pixelRequests.length, 1);
+    assert.equal(histogramPresentationRequests, 1);
+    assert.ok(rectangleLayers.some((layer) => layer.kind === "selection"));
+    viewer.destroy();
+});
+
 test("explicit sampling refreshes every raster layer to one shared area", async () => {
     const leafletMap = createFakeMap();
     const { leaflet, rectangleLayers } = createFakeLeaflet();

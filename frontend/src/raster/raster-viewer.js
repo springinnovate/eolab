@@ -161,7 +161,8 @@ function canRetryRasterStatistics(error) {
  * @property {() => void} syncVisibleLayers Opt into histogram selection from
  * the top visible rasters and synchronize analysis without choosing a style target.
  * @property {(position:{lng:number,lat:number}) => boolean} exploreAt Select
- * one validated map window and request its histogram when analysis is active.
+ * one validated, in-bounds map window and request its histogram when analysis
+ * is active.
  * @property {(key:string) => boolean} openStyle Select a retained raster for
  * editing; return false when the key has no raster session.
  * @property {() => void} closeStyle Flush a pending edit and release its target.
@@ -1053,6 +1054,29 @@ export function initializeRasterViewer(
             item: activeRasterItem,
             axis: null,
         }];
+    }
+
+    /**
+     * Keep click participants whose authoritative published bounds contain a
+     * map position.
+     *
+     * Detached Catalog analysis has no published renderer, so the backend
+     * remains the authority for its point coverage. Retained layers use their
+     * validated publication response to avoid opening analysis for an empty
+     * click.
+     *
+     * @param {{longitude:number,latitude:number}} position Canonical point.
+     * @return {Object[]} In-bounds retained participants, or the detached
+     * participant whose coverage must be resolved by analysis.
+     */
+    function rasterPointSampleParticipantsAt(position) {
+        return rasterPointSampleParticipants().filter(({ key }) => {
+            const record = mapLayers.getRecord(key);
+            return record === null || publishedBoundsContainPosition(
+                record.state.publishedRaster.bbox,
+                position
+            );
+        });
     }
 
     /**
@@ -3224,8 +3248,9 @@ export function initializeRasterViewer(
     /**
      * Explore one composition-owned map position with the current window size.
      *
+     * Retained raster coverage is checked before any histogram state changes.
      * Uploaded-AOI analysis returns to the ordinary raster scope before the
-     * selected window is committed. Bounds validation and selection rendering
+     * selected window is committed. World validation and selection rendering
      * remain owned by the sample-window controller.
      *
      * @param {{lng:number,lat:number}} position Leaflet map position.
@@ -3235,6 +3260,15 @@ export function initializeRasterViewer(
         if (!canUseRasterMapInteractions()) {
             return false;
         }
+        const point = {
+            longitude: position.lng,
+            latitude: position.lat,
+        };
+        const participants = rasterPointSampleParticipantsAt(point);
+        if (participants.length === 0) {
+            pointSamplesController.clear();
+            return false;
+        }
         if (selectedTemporaryAoi !== null) {
             restoreWholeRasterStatistics();
         }
@@ -3242,8 +3276,8 @@ export function initializeRasterViewer(
             return false;
         }
         pointSamplesController.sample(
-            rasterPointSampleParticipants(),
-            { longitude: position.lng, latitude: position.lat }
+            participants,
+            point
         );
         return true;
     }
