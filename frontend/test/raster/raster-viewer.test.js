@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { MapLayerController } from "../../src/map-layers/controller.js";
+import { MapLayerStyleEditor } from "../../src/map-layers/style-editor.js";
 import { LeafletLayerSet } from "../../src/map-layers/leaflet-layer-set.js";
 import {
     initializeRasterViewer,
@@ -1688,6 +1689,7 @@ test("2D histogram DOM controls preview and apply each axis without resampling",
         readBivariatePercentiles: "readPercentiles",
         renderBivariatePercentiles: "renderPercentiles",
         renderBivariateMode: "renderMode",
+        openBivariateStyle: "openStyle",
         renderPairedStatistics: "renderStatistics",
         setPairedStatisticsLoading: "setStatisticsLoading",
         renderPairedStatisticsError: "renderStatisticsError",
@@ -1699,20 +1701,37 @@ test("2D histogram DOM controls preview and apply each axis without resampling",
         }
     }
     let pairedReads = 0;
+    let histogramOpens = 0;
     const h = visibleLayerFixture(undefined, {
         controlsView,
         loadPairedStatistics: async () => { pairedReads++; return pairedStatistics(); },
+    }, {
+        onHistogramRequested: () => { histogramOpens++; },
     });
     pairedView.bind(controlsView.handlers);
     await h.viewer.show(createRasterItem("first"));
     await h.viewer.show(createRasterItem("second"));
     await flushPromises();
     const originals = h.mapLayers.retainedRecords.map(record => structuredClone(record.state.rasterStyle));
+    const styleKey = h.mapLayers.retainedRecords[0].entry.key;
+    assert.equal(h.viewer.openPairedStyle(styleKey), false);
     pairedView.mode.value = "bivariate";
     pairedView.mode.dispatchEvent(new Event("change"));
     await flushPromises();
-    pairedView.styleRanges.open = true;
-    pairedView.styleRanges.dispatchEvent(new Event("toggle"));
+    documentContext.querySelectorAll = () => [];
+    let ordinaryStyleOpens = 0;
+    const editor = new MapLayerStyleEditor({
+        documentContext, mapLayers: h.mapLayers, rasterViewer: h.viewer,
+        inspection: { showStyle() { ordinaryStyleOpens++; }, hideStyle() {} },
+    });
+    const beforeNavigation = histogramOpens;
+    editor.open(styleKey);
+    assert.equal(editor.key, null);
+    assert.equal(ordinaryStyleOpens, 0);
+    assert.equal(histogramOpens, beforeNavigation + 1);
+    assert.equal(pairedView.styleRanges.open, true);
+    assert.equal(documentContext.activeElement, pairedView.palette);
+    assert.equal(h.viewer.openPairedStyle("missing"), false);
     const initialY = { ...pairedView.labels.yStyle };
     pairedView.rangeControls.x.inputs.middle.value = "25";
     pairedView.rangeControls.x.inputs.middle.dispatchEvent(new Event("input"));
@@ -1731,6 +1750,12 @@ test("2D histogram DOM controls preview and apply each axis without resampling",
     assert.equal(pairedView.labels.xStyle.midpoint, 8);
     assert.equal(pairedReads, 1);
     assert.deepEqual(h.mapLayers.retainedRecords.map(record => record.state.rasterStyle), originals);
+    pairedView.palette.value = "steelRose";
+    pairedView.palette.dispatchEvent(new Event("change"));
+    assert.equal(pairedView.labels.paletteName, "steelRose");
+    assert.equal(pairedView.labels.xStyle.midpoint, 8);
+    assert.equal(pairedView.labels.yStyle.midpoint, 124);
+    assert.equal(pairedReads, 1);
     pairedView.styleRanges.open = false;
     pairedView.styleRanges.dispatchEvent(new Event("toggle"));
     assert.equal(pairedView.thresholdMarkers.children[0].getAttribute("data-threshold-mode"), "committed");
@@ -1739,6 +1764,10 @@ test("2D histogram DOM controls preview and apply each axis without resampling",
     assert.equal(pairedView.labels.xStyle.midpoint, 124);
     assert.equal(pairedView.labels.yStyle.midpoint, 8);
     assert.equal(pairedView.rangeControls.x.label.textContent, pairedView.labels.xLabel);
+    pairedView.mode.value = "overlay";
+    pairedView.mode.dispatchEvent(new Event("change"));
+    assert.equal(h.viewer.openPairedStyle(styleKey), false);
+    editor.destroy();
     pairedView.unbind();
     h.destroy();
 });

@@ -235,9 +235,19 @@ test("Map layers owns compact rows; the bounded map-tool dock owns styling", () 
     }
     for (const id of [
         "layer-style-opacity", "raster-appearance-controls", "raster-percentile-controls",
-        "raster-bivariate-panel", "raster-bivariate-palette", "raster-bivariate-legend",
     ]) {
         assert.match(editor.source, new RegExp(`id="${id}"`));
+        assert.doesNotMatch(rendering.source, new RegExp(`id="${id}"`));
+    }
+    const histogram = requireElementRange("map-histogram-panel");
+    const pairedStyle = requireElementRange("raster-bivariate-style-ranges");
+    assert.ok(pairedStyle.start > histogram.start && pairedStyle.end < histogram.end);
+    for (const id of [
+        "raster-bivariate-panel", "raster-bivariate-palette", "raster-bivariate-legend",
+        "swap-raster-bivariate-axes",
+    ]) {
+        assert.match(pairedStyle.source, new RegExp(`id="${id}"`));
+        assert.doesNotMatch(editor.source, new RegExp(`id="${id}"`));
         assert.doesNotMatch(rendering.source, new RegExp(`id="${id}"`));
     }
     assert.match(rendering.source, /id="raster-layer-stack"/);

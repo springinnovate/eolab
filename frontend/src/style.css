@@ -3260,14 +3260,17 @@ article.raster-histogram-summary {
 
 /* Bivariate raster comparison ------------------------------------------ */
 
-.raster-bivariate-roles {
+.raster-bivariate-palette-controls {
   display: flex;
-  align-items: flex-start;
+  flex-wrap: wrap;
+  align-items: end;
   justify-content: space-between;
   gap: 10px;
+  margin-top: 10px;
 }
 
-.raster-bivariate-controls label {
+.raster-bivariate-controls label,
+.raster-bivariate-palette-controls label {
   display: grid;
   gap: 5px;
   color: var(--text-2);
@@ -3275,7 +3278,8 @@ article.raster-histogram-summary {
   font-weight: 600;
 }
 
-.raster-bivariate-controls select {
+.raster-bivariate-controls select,
+.raster-bivariate-palette-controls select {
   min-width: 0;
   border: 1px solid var(--border-1);
   border-radius: var(--radius);
@@ -3286,7 +3290,6 @@ article.raster-histogram-summary {
 
 .raster-bivariate-status,
 .raster-bivariate-explanation,
-.raster-bivariate-histogram-guidance,
 .raster-bivariate-density-legend,
 .raster-bivariate-histogram-summary {
   margin: 0;
@@ -3350,20 +3353,16 @@ article.raster-histogram-summary {
   display: none;
 }
 
-.raster-bivariate-roles {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 4px 8px;
-  color: var(--text-2);
-  font-size: 0.72rem;
-  font-weight: 600;
-}
-
-.raster-bivariate-roles .secondary-button {
-  grid-area: 1 / 2 / 3 / 3;
+.raster-bivariate-palette-controls .secondary-button {
   margin: 0;
   padding: 6px 8px;
+}
+
+.raster-bivariate-color-key > summary {
+  display: list-item;
+  cursor: pointer;
+  font-size: 0.75rem;
+  margin-bottom: 8px;
 }
 
 .raster-bivariate-legend-figure {

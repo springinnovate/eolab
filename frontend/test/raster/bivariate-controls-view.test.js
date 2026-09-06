@@ -61,6 +61,11 @@ class FakeElement extends EventTarget {
   getAttribute(name) {
     return this.attributes.get(name) ?? null;
   }
+
+  /** Focus this control in its owning fake document. @return {void} */
+  focus() {
+    this.ownerDocument.activeElement = this;
+  }
 }
 
 class FakeBivariateDocument {
@@ -71,8 +76,6 @@ class FakeBivariateDocument {
       "#raster-comparison-mode",
       "#raster-bivariate-status",
       "#raster-bivariate-panel",
-      "#raster-bivariate-x-label",
-      "#raster-bivariate-y-label",
       "#raster-bivariate-palette",
       "#swap-raster-bivariate-axes",
       "#raster-bivariate-legend",
@@ -520,6 +523,13 @@ test("2D range disclosure lives beside its histogram and markers cannot intercep
   assert.match(section, /<details[^>]*id="raster-bivariate-style-ranges"[^>]*>\s*<summary>Style rasters<\/summary>/);
   assert.doesNotMatch(section.match(/<details[^>]*>/)[0], /\bopen\b/);
   assert.ok(section.indexOf('id="raster-bivariate-style-ranges"') > section.indexOf("</svg>"));
+  for (const id of ['raster-bivariate-palette', 'swap-raster-bivariate-axes', 'raster-bivariate-legend']) {
+    assert.ok(section.includes(`id="${id}"`));
+    assert.equal(markup.split(`id="${id}"`).length, 2);
+    assert.ok(section.indexOf(`id="${id}"`) > section.indexOf('id="raster-bivariate-style-ranges"'));
+  }
+  assert.doesNotMatch(markup, /id="layer-paired-style"|id="raster-bivariate-[xy]-label"/);
+  assert.doesNotMatch(section, /id="layer-style-opacity"/);
   for (const axis of ["x", "y"]) {
     for (const name of ["lower", "middle", "upper"]) {
       assert.ok(section.includes(`id="bivariate-${axis}-${name}"`));
@@ -529,4 +539,15 @@ test("2D range disclosure lives beside its histogram and markers cannot intercep
   const stylesheet = readFileSync(new URL("../../src/style.css", import.meta.url), "utf8");
   assert.match(stylesheet, /\.raster-bivariate-thresholds\s*\{[^}]*pointer-events:\s*none/s);
   assert.match(stylesheet, /\.raster-bivariate-style-ranges > summary\s*\{[^}]*display:\s*list-item/s);
+});
+
+test('paired style navigation expands the histogram controls and focuses the palette', () => {
+  const documentContext = new FakeBivariateDocument();
+  const view = new BivariateRasterControlsView(documentContext);
+  view.renderMode({ active: true, ...PRESENTATION });
+  view.renderStatistics(pairedStatistics(), PRESENTATION);
+  view.openStyle();
+  assert.equal(view.styleRanges.open, true);
+  assert.equal(documentContext.activeElement, view.palette);
+  assert.equal(view.statisticsPanel.hidden, false);
 });

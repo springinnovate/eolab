@@ -261,14 +261,6 @@ export class BivariateRasterControlsView {
             documentContext,
             "#raster-bivariate-panel"
         );
-        this.xLabel = requireRasterControl(
-            documentContext,
-            "#raster-bivariate-x-label"
-        );
-        this.yLabel = requireRasterControl(
-            documentContext,
-            "#raster-bivariate-y-label"
-        );
         this.palette = requireRasterControl(
             documentContext,
             "#raster-bivariate-palette"
@@ -470,8 +462,6 @@ export class BivariateRasterControlsView {
         this.statisticsHeading.textContent =
             `${state.xLabel} vs. ${state.yLabel}`;
         this.statisticsHeading.title = this.statisticsHeading.textContent;
-        this.xLabel.textContent = `X axis: ${state.xLabel}`;
-        this.yLabel.textContent = `Y axis: ${state.yLabel}`;
         this.statisticsXLabel.textContent = state.xLabel;
         this.statisticsYLabel.textContent = state.yLabel;
         this.rangeControls.x.label.textContent = state.xLabel;
@@ -481,6 +471,18 @@ export class BivariateRasterControlsView {
             `Swap X axis ${state.xLabel} with Y axis ${state.yLabel}`
         );
         this.#renderLegend(state);
+    }
+
+    /**
+     * Reveal the current pair's consolidated controls and focus its palette.
+     * The caller owns opening the histogram workspace before this navigation.
+     *
+     * @return {void}
+     */
+    openStyle() {
+        this.styleRanges.open = true;
+        this.#renderThresholdMarkers();
+        this.palette.focus();
     }
 
     /**

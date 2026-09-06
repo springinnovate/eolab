@@ -165,6 +165,8 @@ function canRetryRasterStatistics(error) {
  * is active.
  * @property {(key:string) => boolean} openStyle Select a retained raster for
  * editing; return false when the key has no raster session.
+ * @property {(key:string) => boolean} openPairedStyle Reveal the shared 2D
+ * controls for a current pair member; return false for any other key.
  * @property {() => void} closeStyle Flush a pending edit and release its target.
  * @property {() => void} refreshStyle Refresh the editing target's availability
  * and percentile controls, discarding pending work if the target disappeared.
@@ -2604,6 +2606,20 @@ export function initializeRasterViewer(
     }
 
     /**
+     * Open the current pair's style disclosure without selecting or sampling.
+     * Uses the existing histogram navigation callback and controls adapter.
+     *
+     * @param {string} key Catalog identity of either current paired raster.
+     * @return {boolean} Whether this key belongs to the active 2D pair.
+     */
+    function openPairedStyle(key) {
+        if (!bivariateMode.contains(key)) return false;
+        showHistogramWorkspace();
+        controlsView.openBivariateStyle();
+        return true;
+    }
+
+    /**
      * Flush any pending valid edit and release the explicit editing target.
      * The floating editor's DOM lifecycle is owned by MapLayerStyleEditor.
      *
@@ -4123,6 +4139,7 @@ export function initializeRasterViewer(
         syncVisibleLayers,
         exploreAt,
         openStyle,
+        openPairedStyle,
         closeStyle,
         refreshStyle,
         activateAnalysis,
