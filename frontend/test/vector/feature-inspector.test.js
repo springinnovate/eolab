@@ -80,6 +80,7 @@ function createFixture(fetchImplementation, { now = () => 0 } = {}) {
   const inspectionChanges = [];
   const sampleChanges = [];
   const currentObservationChanges = [];
+  const currentNavigationChanges = [];
   let featureProfileRequests = 0;
   let timeSeriesRequests = 0;
   const styleRequests = [];
@@ -93,8 +94,10 @@ function createFixture(fetchImplementation, { now = () => 0 } = {}) {
       documentContext.querySelector("#vector-feature-inspector").hidden = !visible;
     },
     onSampleChange: (sample) => sampleChanges.push(sample),
-    onCurrentObservationChange: (observation) =>
-      currentObservationChanges.push(observation),
+    onCurrentObservationChange: (observation, navigation) => {
+      currentObservationChanges.push(observation);
+      currentNavigationChanges.push(navigation);
+    },
     onFeatureProfileRequested: () => { featureProfileRequests += 1; },
     onTimeSeriesRequested: () => { timeSeriesRequests += 1; },
     onStyleRequested: (sourceId) => styleRequests.push(sourceId),
@@ -113,6 +116,7 @@ function createFixture(fetchImplementation, { now = () => 0 } = {}) {
     inspectionChanges,
     sampleChanges,
     currentObservationChanges,
+    currentNavigationChanges,
     get featureProfileRequests() { return featureProfileRequests; },
     get timeSeriesRequests() { return timeSeriesRequests; },
     styleRequests,
@@ -250,6 +254,12 @@ test("inspector queries composed visible targets and navigates overlapping featu
   assert.equal(h.highlights.length, 2);
   assert.equal(h.removedLayers.length, 1);
   assert.equal(h.currentObservationChanges.at(-1).properties.name, "Second");
+  assert.deepEqual(h.currentNavigationChanges.at(-1), {
+    position: 2,
+    total: 2,
+    canPrevious: true,
+    canNext: false,
+  });
   const styleButton = h.documentContext.querySelector(
     "#style-inspected-vector-layer",
   );
@@ -258,6 +268,15 @@ test("inspector queries composed visible targets and navigates overlapping featu
   assert.equal(styleButton.getAttribute("aria-label"), "Style Parcels");
   styleButton.dispatchEvent(new Event("click"));
   assert.deepEqual(h.styleRequests, ["catalog|parcels"]);
+  h.controller.navigateResult("previous");
+  assert.equal(h.currentObservationChanges.at(-1).properties.name, "First");
+  assert.deepEqual(h.currentNavigationChanges.at(-1), {
+    position: 1,
+    total: 2,
+    canPrevious: false,
+    canNext: true,
+  });
+  assert.throws(() => h.controller.navigateResult("later"), /direction/);
 });
 
 test("inspector presents out-of-order layer results progressively in map order", async () => {
@@ -382,6 +401,7 @@ test("current numeric feature actions publish separate plotting intents", async 
   assert.equal(h.currentObservationChanges.at(-1).properties.node_nm, "North");
   h.controller.clearResults();
   assert.equal(h.currentObservationChanges.at(-1), null);
+  assert.equal(h.currentNavigationChanges.at(-1), null);
   assert.equal(profileButton.disabled, true);
 });
 

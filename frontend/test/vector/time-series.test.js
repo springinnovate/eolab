@@ -202,7 +202,7 @@ test("controller renders axes and table while retaining controls across samples"
   assert.equal(h.presentations.at(-1), null);
   assert.equal(
     h.documentContext.querySelector("#vector-time-series-heading").textContent,
-    "Across features",
+    "Field across features",
   );
   assert.deepEqual(h.visibility, [{ visible: true, moveFocus: false }]);
 });

@@ -158,8 +158,9 @@ export class VectorFeatureInspectorController {
      * Requests presentation changes without knowing the presentation owner.
      * @param {(sample:Readonly<Object>)=>void} configuration.onSampleChange
      * Publishes immutable bounded observations through application composition.
-     * @param {(observation:Readonly<Object>|null)=>void}
-     * configuration.onCurrentObservationChange Publishes the current paged result.
+     * @param {(observation:Readonly<Object>|null,navigation:Readonly<Object>|null)=>void}
+     * configuration.onCurrentObservationChange Publishes the current paged
+     * result and its immutable position within the inspector-owned result set.
      * @param {()=>void} configuration.onFeatureProfileRequested Publishes
      * single-feature plotting intent without knowing its implementation.
      * @param {()=>void} configuration.onTimeSeriesRequested Publishes analysis
@@ -267,8 +268,8 @@ export class VectorFeatureInspectorController {
                 this.onStyleRequested(selected.target.sourceId);
             }
         };
-        this.onPrevious = () => this.showResult(this.resultIndex - 1);
-        this.onNext = () => this.showResult(this.resultIndex + 1);
+        this.onPrevious = () => this.navigateResult("previous");
+        this.onNext = () => this.navigateResult("next");
         this.onKeydown = (event) => {
             if (event.key !== "Escape" || this.panel.hidden || !(
                 this.panel.contains(this.document.activeElement) ||
@@ -606,6 +607,23 @@ export class VectorFeatureInspectorController {
     }
 
     /**
+     * Move to an adjacent result while retaining ownership of selection state.
+     *
+     * @param {"previous"|"next"} direction Adjacent result to select.
+     * @return {void}
+     */
+    navigateResult(direction) {
+        if (direction !== "previous" && direction !== "next") {
+            throw new TypeError("Feature navigation direction must be previous or next.");
+        }
+        if (this.results.length === 0) return;
+        const offset = direction === "previous" ? -1 : 1;
+        const nextIndex = this.resultIndex + offset;
+        if (nextIndex < 0 || nextIndex >= this.results.length) return;
+        this.showResult(nextIndex);
+    }
+
+    /**
      * Present one result and replace its map highlight.
      *
      * @param {number} index Zero-based result index.
@@ -618,20 +636,26 @@ export class VectorFeatureInspectorController {
         this.resultIndex = Math.min(this.results.length - 1, Math.max(0, index));
         const { feature, target } = this.results[this.resultIndex];
         const observation = vectorInspectionObservation({ feature, target });
+        const navigation = Object.freeze({
+            position: this.resultIndex + 1,
+            total: this.results.length,
+            canPrevious: this.resultIndex > 0,
+            canNext: this.resultIndex < this.results.length - 1,
+        });
         this.result.hidden = false;
         this.layerName.textContent = target.label;
         this.styleButton.hidden = false;
         this.styleButton.disabled = false;
         this.styleButton.setAttribute("aria-label", `Style ${target.label}`);
-        this.position.textContent = `${this.resultIndex + 1} of ${this.results.length}`;
-        this.previous.disabled = this.resultIndex === 0;
-        this.next.disabled = this.resultIndex === this.results.length - 1;
+        this.position.textContent = `${navigation.position} of ${navigation.total}`;
+        this.previous.disabled = !navigation.canPrevious;
+        this.next.disabled = !navigation.canNext;
         this.featureProfileButton.disabled = Object.values(
             observation.properties
         ).filter((value) =>
             typeof value === "number" && Number.isFinite(value)
         ).length < 2;
-        this.onCurrentObservationChange(observation);
+        this.onCurrentObservationChange(observation, navigation);
         this.attributes.replaceChildren();
         const entries = vectorFeatureAttributes(feature, target.primaryGeometry);
         if (entries.length === 0) {
@@ -685,7 +709,7 @@ export class VectorFeatureInspectorController {
         this.styleButton.setAttribute(
             "aria-label", "Style selected vector layer"
         );
-        this.onCurrentObservationChange(null);
+        this.onCurrentObservationChange(null, null);
         this.attributes.replaceChildren();
         this.clearHighlight();
     }
