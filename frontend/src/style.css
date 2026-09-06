@@ -3688,7 +3688,7 @@ article.raster-histogram-summary {
   font-size: 0.86rem;
 }
 .vector-feature-result-heading .secondary-button { flex: 0 0 auto; }
-.vector-feature-navigation { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; }
+.vector-feature-navigation { display: grid; grid-template-columns: auto 1fr auto auto; align-items: center; gap: 8px; }
 .vector-feature-navigation span { text-align: center; color: var(--text-2); font-size: 0.75rem; }
 .vector-feature-profile-navigation { margin: 0 0 12px; }
 .vector-feature-attributes {

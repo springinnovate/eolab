@@ -5,9 +5,50 @@
  * @property {string} sourceId Opaque retained-source identity from composition.
  * @property {string} layerLabel User-facing source layer or filename.
  * @property {string|number|null} featureId Bounded feature identity.
+ * @property {{center:Readonly<number[]>,bounds:Readonly<number[]>|null}} focus
+ * Geometry-neutral map center and optional WGS 84 feature bounds.
  * @property {Readonly<Record<string,string|number|boolean|null>>} properties
  * Scalar attributes returned by the existing feature inspection.
  */
+
+/**
+ * Test whether a value is a finite WGS 84 longitude/latitude pair.
+ *
+ * @param {unknown} position Candidate coordinate pair.
+ * @return {boolean} Whether the position is valid.
+ */
+function isValidVectorFeaturePosition(position) {
+    return Array.isArray(position) && position.length === 2 &&
+        Number.isFinite(position[0]) && position[0] >= -180 &&
+        position[0] <= 180 && Number.isFinite(position[1]) &&
+        position[1] >= -90 && position[1] <= 90;
+}
+
+/**
+ * Validate one geometry-neutral selected-feature map target.
+ *
+ * @param {unknown} focus Candidate focus target.
+ * @return {Object} Valid center and optional bounds.
+ * @throws {TypeError} If coordinates are malformed or outside WGS 84.
+ */
+export function validateVectorFeatureFocus(focus) {
+    const bounds = focus?.bounds;
+    if (
+        !isValidVectorFeaturePosition(focus?.center) ||
+        !(
+            bounds === null ||
+            Array.isArray(bounds) && bounds.length === 4 &&
+            bounds.every(Number.isFinite) &&
+            bounds[0] >= -180 && bounds[2] <= 180 &&
+            bounds[1] >= -90 && bounds[3] <= 90 &&
+            bounds[0] <= bounds[2] && bounds[1] <= bounds[3] &&
+            bounds[2] - bounds[0] <= 180
+        )
+    ) {
+        throw new TypeError("Invalid vector feature focus target.");
+    }
+    return focus;
+}
 
 /**
  * Validate the closed inspection-observation boundary.
@@ -37,6 +78,7 @@ export function validateVectorInspectionObservations(observations) {
         ) {
             throw new TypeError("Invalid vector inspection observation.");
         }
+        validateVectorFeatureFocus(observation.focus);
         for (const value of Object.values(observation.properties)) {
             if (!(
                 value === null ||

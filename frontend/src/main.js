@@ -68,6 +68,9 @@ import { createSavedMapLeafletViewport } from "./saved-map-view/leaflet-viewport
 import { SavedMapViewLocalStorage } from "./saved-map-view/local-storage.js";
 import { VectorFeatureInspectorController } from "./vector/feature-inspector.js";
 import { VectorFeatureProfileController } from "./vector/feature-profile.js";
+import {
+    validateVectorFeatureFocus,
+} from "./vector/inspection-observation.js";
 import { createVectorMapLayerAdapter } from "./vector/map-layer-adapter.js";
 import { VectorStyleControls } from "./vector/style-controls.js";
 import { vectorLabelFields } from "./vector/style.js";
@@ -793,13 +796,7 @@ async function initializeCatalog(
         },
         onPresentationChange: (identity) =>
             mapInspection.setVectorTimeSeriesIdentity(identity),
-        onSourceLayerZoom: (sourceId) => {
-            const record = mapLayerController.getRecord(sourceId);
-            if (record === null || record.adapter !== vectorMapLayerAdapter) {
-                return false;
-            }
-            return zoomRetainedMapLayer(record.entry.item);
-        },
+        onFeatureZoom: zoomInspectedVectorFeature,
     });
     const vectorFeatureProfile = new VectorFeatureProfileController({
         onVisibilityChange: (visible, moveFocus) => {
@@ -810,6 +807,7 @@ async function initializeCatalog(
             mapInspection.setVectorFeatureProfileIdentity(identity),
         onNavigateFeature: (direction) =>
             vectorFeatureInspector?.navigateResult(direction),
+        onFeatureZoom: zoomInspectedVectorFeature,
     });
     vectorFeatureInspector = new VectorFeatureInspectorController({
         leaflet: L,
@@ -858,6 +856,7 @@ async function initializeCatalog(
             vectorTimeSeries.open();
         },
         onStyleRequested: (sourceId) => layerStyleEditor.open(sourceId),
+        onFeatureZoomRequested: zoomInspectedVectorFeature,
     });
     /**
      * Fan one map exploration intent out to independent raster and vector peers.
@@ -1427,6 +1426,39 @@ async function initializeCatalog(
      */
     function zoomRetainedMapLayer(item) {
         return zoomCatalogLayer(item);
+    }
+
+    /**
+     * Focus the map on a geometry-neutral selected-feature target.
+     *
+     * Already-returned line and polygon bounds fit with proportional padding.
+     * Points and geometry-free feature results use a neighborhood-scale center
+     * so bounded inspection never needs to request full feature geometry.
+     *
+     * @param {Object} focus Validated center and optional WGS 84 bounds.
+     * @return {boolean} Whether the map accepted the focus target.
+     */
+    function zoomInspectedVectorFeature(focus) {
+        try {
+            validateVectorFeatureFocus(focus);
+        } catch {
+            return false;
+        }
+        const [longitude, latitude] = focus.center;
+        const bounds = focus.bounds;
+        if (
+            bounds === null ||
+            bounds[0] === bounds[2] && bounds[1] === bounds[3]
+        ) {
+            leafletMap.setView([latitude, longitude], 14);
+            return true;
+        }
+        const [west, south, east, north] = bounds;
+        leafletMap.fitBounds(
+            L.latLngBounds([[south, west], [north, east]]).pad(0.15),
+            { maxZoom: 14 }
+        );
+        return true;
     }
 
     /**

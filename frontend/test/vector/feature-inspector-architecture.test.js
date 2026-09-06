@@ -84,6 +84,10 @@ test("vector inspection coordination remains in the browser composition root", (
   );
   assert.match(
     COMPOSITION_SOURCE,
+    /onFeatureZoomRequested:\s*zoomInspectedVectorFeature/,
+  );
+  assert.match(
+    COMPOSITION_SOURCE,
     /onCurrentObservationChange:\s*\(observation, navigation\)\s*=>/,
   );
   assert.match(COMPOSITION_SOURCE, /onFeatureProfileRequested:\s*\(\)\s*=>/);
@@ -137,6 +141,7 @@ test("feature-field analysis is a sibling behind neutral observation and chart c
     /vectorFeatureProfile\.setCurrentObservation\(observation, navigation\)/,
   );
   assert.match(COMPOSITION_SOURCE, /onNavigateFeature:\s*\(direction\)\s*=>/);
+  assert.match(COMPOSITION_SOURCE, /onFeatureZoom:\s*zoomInspectedVectorFeature/);
   assert.match(
     COMPOSITION_SOURCE,
     /vectorFeatureInspector\?\.navigateResult\(direction\)/,
@@ -187,15 +192,16 @@ test("time-series analysis consumes neutral samples without sibling knowledge", 
     /vectorTimeSeries\.setSample\(sample\)/,
   );
   assert.match(COMPOSITION_SOURCE, /sourceId:\s*record\.entry\.key/);
-  assert.match(COMPOSITION_SOURCE, /onSourceLayerZoom:\s*\(sourceId\)\s*=>/);
+  assert.match(COMPOSITION_SOURCE, /onFeatureZoom:\s*zoomInspectedVectorFeature/);
   assert.match(
     COMPOSITION_SOURCE,
     /mapInspection\.setVectorTimeSeriesIdentity\(identity\)/,
   );
-  assert.match(
-    COMPOSITION_SOURCE,
-    /return zoomRetainedMapLayer\(record\.entry\.item\)/,
-  );
+  assert.match(COMPOSITION_SOURCE, /function zoomInspectedVectorFeature\(focus\)/);
+  assert.match(COMPOSITION_SOURCE, /validateVectorFeatureFocus\(focus\)/);
+  assert.match(COMPOSITION_SOURCE, /leafletMap\.setView\(\[latitude, longitude\], 14\)/);
+  assert.match(COMPOSITION_SOURCE, /\.pad\(0\.15\)/);
+  assert.match(COMPOSITION_SOURCE, /\{ maxZoom: 14 \}/);
   for (const forbiddenNavigationKnowledge of [
     "getCatalogItemMapBounds",
     "fitBounds",
