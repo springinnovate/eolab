@@ -108,6 +108,23 @@ test("histogram and style have independent visibility on one persistent surface"
     assert.deepEqual(h.calls, ["show", "hide"]);
 });
 
+test("automatic histogram cleanup retains features and current focus", () => {
+    const h = fixture();
+    h.controller.showFeatureInspector();
+    h.controller.showHistogram(1);
+    h.featureTab.focus();
+
+    h.controller.closeHistogram(false);
+
+    assert.equal(h.histogram.hidden, true);
+    assert.equal(h.histogramTab.hidden, true);
+    assert.equal(h.feature.hidden, false);
+    assert.equal(h.feature.getAttribute("data-map-inspection-active"), "true");
+    assert.equal(h.doc.activeElement, h.featureTab);
+    assert.deepEqual(h.calls, ["show"]);
+    h.controller.destroy();
+});
+
 test("combined map results prefer counted features and retain style context", () => {
     const h = fixture();
     h.controller.showStyle("Parcels");

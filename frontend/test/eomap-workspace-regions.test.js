@@ -288,6 +288,10 @@ test("inspector publication can reveal Map layers through composition", () => {
         COMPOSITION_SOURCE,
         /onHistogramRequested: \(\) => mapInspection\.showHistogram\([\s\S]*?layer\.visible && layer\.datasetKind === "raster"[\s\S]*?\.length[\s\S]*?\)/
     );
+    assert.match(
+        COMPOSITION_SOURCE,
+        /onLayersChange: \(layers\) => \{[\s\S]*?!layers\.some\(\(layer\) =>[\s\S]*?layer\.visible && layer\.datasetKind === "raster"[\s\S]*?mapInspection\.closeHistogram\(false\);/
+    );
     assert.doesNotMatch(COMPOSITION_SOURCE, /layoutController\.showWorkspace\("histogram"\)/);
     assert.match(COMPOSITION_SOURCE, /new MapInspectionController\(\)/);
     assert.doesNotMatch(COMPOSITION_SOURCE, /stopSampleWindowSelection|onHistogramClose/);

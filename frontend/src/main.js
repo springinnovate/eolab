@@ -691,11 +691,16 @@ async function initializeCatalog(
             leafletMap,
             compositeLeafletRenderer,
         ),
-        onLayersChange: () => {
+        onLayersChange: (layers) => {
             refreshCatalogMapAction();
             rasterVisualization?.syncVisibleLayers();
             layerStyleEditor?.refresh();
             vectorFeatureInspector?.syncVisibleLayers();
+            if (!layers.some((layer) =>
+                layer.visible && layer.datasetKind === "raster"
+            )) {
+                mapInspection.closeHistogram(false);
+            }
             savedMapViewController?.scheduleRemember();
         },
         onItemZoom: zoomRetainedMapLayer,
