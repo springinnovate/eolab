@@ -3422,6 +3422,14 @@ article.raster-histogram-summary {
   pointer-events: none;
 }
 
+/* Keep both marginal previews visible while scrolling the axis controls. */
+.raster-bivariate-statistics:has(.raster-bivariate-style-ranges[open]) > .raster-bivariate-histogram {
+  position: sticky;
+  top: 42px;
+  z-index: 1;
+  max-height: 44dvh;
+}
+
 .raster-bivariate-thresholds .raster-histogram-threshold-label {
   font-size: 18px;
   stroke-width: 4px;
@@ -3463,6 +3471,24 @@ article.raster-histogram-summary {
   font-size: 0.75rem;
   font-weight: 600;
   overflow-wrap: anywhere;
+}
+
+.raster-bivariate-range label {
+  grid-template-columns: 68px minmax(60px, 1fr) minmax(105px, auto);
+}
+
+.raster-bivariate-range output {
+  grid-column: auto;
+}
+
+@media (max-width: 480px) {
+  .raster-bivariate-range label {
+    grid-template-columns: 68px minmax(60px, 1fr);
+  }
+
+  .raster-bivariate-range output {
+    grid-column: 2;
+  }
 }
 
 .raster-bivariate-range > p {
