@@ -3430,6 +3430,10 @@ article.raster-histogram-summary {
   max-height: 44dvh;
 }
 
+#map-histogram-panel:has(.raster-bivariate-style-ranges[open]) {
+  scroll-padding-top: calc(44dvh + 64px);
+}
+
 .raster-bivariate-thresholds .raster-histogram-threshold-label {
   font-size: 18px;
   stroke-width: 4px;
