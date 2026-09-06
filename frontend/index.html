@@ -473,6 +473,8 @@
         OPEN LABEL TO BE SET BY CONFIGURATION
       </button>
       <div class="map-position" id="map-position">0.000, 0.000</div>
+      <div id="raster-cursor-marker" class="raster-cursor-marker"
+        aria-hidden="true" hidden></div>
       <aside
         class="raster-cursor-values"
         id="raster-cursor-values"
@@ -485,6 +487,9 @@
           <span id="raster-cursor-position"></span>
         </header>
         <dl id="raster-cursor-value-list"></dl>
+        <p id="raster-cursor-pending" class="raster-cursor-value-help" hidden>
+          Picking next location…
+        </p>
         <p id="raster-cursor-value-limit" hidden></p>
         <p class="raster-cursor-value-help">
           Ctrl/Cmd+C copy values · Esc hide

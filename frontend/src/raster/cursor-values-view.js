@@ -1,4 +1,4 @@
-/** DOM presentation for transient raster values beneath the map pointer. */
+/** DOM presentation for raster values anchored at the last picked location. */
 import { formatRasterPixelValue } from "./value-format.js";
 import { requireRasterControl } from "./required-control.js";
 
@@ -101,7 +101,10 @@ export class RasterCursorValuesView {
             documentContext,
             "#restore-raster-cursor-values"
         );
+        this.marker = requireRasterControl(documentContext, "#raster-cursor-marker");
+        this.pending = requireRasterControl(documentContext, "#raster-cursor-pending");
         this.pointerPosition = null;
+        this.anchorPosition = null;
         this.snapshot = null;
         this.copyFeedbackTimeout = null;
         this.handlers = null;
@@ -137,7 +140,7 @@ export class RasterCursorValuesView {
     }
 
     /**
-     * Move the transient panel near the pointer without affecting samples.
+     * Retain the next pointer position while keeping the current pick anchored.
      *
      * @param {{clientX:number,clientY:number}} position Viewport coordinates.
      * @return {void}
@@ -150,7 +153,10 @@ export class RasterCursorValuesView {
             return;
         }
         this.pointerPosition = { ...position };
-        this.#applyPointerPosition();
+        if (this.snapshot !== null) {
+            this.pending.hidden = false;
+            this.root.setAttribute("aria-busy", "true");
+        }
     }
 
     /**
@@ -168,7 +174,9 @@ export class RasterCursorValuesView {
     }
 
     /**
-     * Render visible results; actual outside responses disappear from the list.
+     * Render visible results beside their picked location. Keep the prior pick
+     * during replacement loading, then commit the new position and values
+     * together on the first available result. Outside-only results disappear.
      *
      * @param {{position:Object,samples:Object[],omittedCount:number}} snapshot
      * Pixel-picker snapshot.
@@ -189,6 +197,12 @@ export class RasterCursorValuesView {
         const samples = snapshot.samples.filter(
             (sample) => sample.state !== "outside"
         );
+        if (this.snapshot !== null && samples.length > 0 &&
+            samples.every((sample) => sample.state === "loading")) {
+            this.pending.hidden = false;
+            this.root.setAttribute("aria-busy", "true");
+            return;
+        }
         if (samples.length === 0) {
             this.clear();
             return;
@@ -211,7 +225,15 @@ export class RasterCursorValuesView {
             row.append(name, value);
             return row;
         });
+        const changedPosition = this.snapshot === null ||
+            this.snapshot.position.latitude !== snapshot.position.latitude ||
+            this.snapshot.position.longitude !== snapshot.position.longitude;
+        if (changedPosition) {
+            this.anchorPosition = this.pointerPosition;
+            this.#clearCopyFeedback();
+        }
         this.snapshot = snapshot;
+        this.pending.hidden = true;
         this.position.textContent = formatPosition(snapshot.position);
         this.list.replaceChildren(...rows);
         this.limit.textContent = snapshot.omittedCount > 0
@@ -230,6 +252,9 @@ export class RasterCursorValuesView {
     clear() {
         this.#clearCopyFeedback();
         this.snapshot = null;
+        this.anchorPosition = null;
+        this.marker.hidden = true;
+        this.pending.hidden = true;
         this.position.textContent = "";
         this.list.replaceChildren();
         this.limit.textContent = "";
@@ -275,19 +300,23 @@ export class RasterCursorValuesView {
         this.#showCopyFeedback();
     }
 
-    /** Place the panel beside the pointer while keeping it on screen. */
+    /** Place marker and panel at the accepted pick, within the viewport. @return {void} */
     #applyPointerPosition() {
-        if (this.pointerPosition === null || this.root.hidden) return;
+        if (this.anchorPosition === null || this.root.hidden) return;
+        const { clientX, clientY } = this.anchorPosition;
+        this.marker.style.left = `${clientX}px`;
+        this.marker.style.top = `${clientY}px`;
+        this.marker.hidden = false;
         const { width, height } = this.root.getBoundingClientRect();
         const viewportWidth = this.documentContext.defaultView?.innerWidth ?? 1024;
         const viewportHeight = this.documentContext.defaultView?.innerHeight ?? 768;
-        let left = this.pointerPosition.clientX + POINTER_OFFSET_PIXELS;
-        let top = this.pointerPosition.clientY + POINTER_OFFSET_PIXELS;
+        let left = clientX + POINTER_OFFSET_PIXELS;
+        let top = clientY + POINTER_OFFSET_PIXELS;
         if (left + width > viewportWidth - VIEWPORT_EDGE_PIXELS) {
-            left = this.pointerPosition.clientX - width - POINTER_OFFSET_PIXELS;
+            left = clientX - width - POINTER_OFFSET_PIXELS;
         }
         if (top + height > viewportHeight - VIEWPORT_EDGE_PIXELS) {
-            top = this.pointerPosition.clientY - height - POINTER_OFFSET_PIXELS;
+            top = clientY - height - POINTER_OFFSET_PIXELS;
         }
         this.root.style.left = `${Math.max(VIEWPORT_EDGE_PIXELS, left)}px`;
         this.root.style.top = `${Math.max(VIEWPORT_EDGE_PIXELS, top)}px`;
