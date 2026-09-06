@@ -69,7 +69,7 @@ test("cursor-value view hides when every server result is outside", () => {
   assert.equal(documentContext.querySelector("#raster-cursor-values").hidden, true);
 });
 
-test("pixel picker follows the pointer while staying inside the viewport", () => {
+test("pixel picker anchors its marker and readout inside the viewport", () => {
   const documentContext = new FakeRasterControlDocument();
   documentContext.defaultView = { innerWidth: 300, innerHeight: 220 };
   const view = new RasterCursorValuesView(documentContext);
@@ -86,6 +86,57 @@ test("pixel picker follows the pointer while staying inside the viewport", () =>
 
   assert.equal(root.style.left, "156px");
   assert.equal(root.style.top, "148px");
+  const marker = documentContext.querySelector("#raster-cursor-marker");
+  assert.equal(marker.style.left, "290px");
+  assert.equal(marker.style.top, "210px");
+  assert.equal(marker.hidden, false);
+  view.clear();
+  assert.equal(marker.hidden, true);
+});
+
+test("replacement loading keeps the old marker, values, and clipboard until a result arrives", async () => {
+  const documentContext = new FakeRasterControlDocument();
+  const copied = [];
+  const view = new RasterCursorValuesView(documentContext, {
+    async writeText(text) { copied.push(text); },
+  });
+  view.bind({ onHide() {}, onShow() {} });
+  const root = documentContext.querySelector("#raster-cursor-values");
+  const marker = documentContext.querySelector("#raster-cursor-marker");
+  const pending = documentContext.querySelector("#raster-cursor-pending");
+  const list = documentContext.querySelector("#raster-cursor-value-list");
+  const old = {
+    position: { latitude: 1, longitude: 2 }, omittedCount: 0,
+    samples: [{ label: "rain", state: "value", value: 12, errorMessage: "" }],
+  };
+  view.move({ clientX: 100, clientY: 100 });
+  view.render(old);
+  const previousRows = list.children;
+  view.move({ clientX: 200, clientY: 200 });
+  view.render({ ...old, position: { latitude: 3, longitude: 4 }, samples: [
+    { label: "rain", state: "outside", value: null, errorMessage: "" },
+    { label: "height", state: "loading", value: null, errorMessage: "" },
+  ] });
+  assert.equal(root.hidden, false);
+  assert.equal(root.style.left, "114px");
+  assert.equal(marker.style.left, "100px");
+  assert.equal(list.children, previousRows);
+  assert.equal(pending.hidden, false);
+  const copyEvent = new Event("keydown", { cancelable: true });
+  Object.assign(copyEvent, { key: "c", ctrlKey: true });
+  documentContext.dispatchEvent(copyEvent);
+  await Promise.resolve();
+  assert.deepEqual(copied, [formatRasterCursorValuesForClipboard(old)]);
+  view.render({ ...old, position: { latitude: 3, longitude: 4 }, samples: [
+    { label: "height", state: "nodata", value: null, errorMessage: "" },
+  ] });
+  assert.equal(marker.style.left, "200px");
+  assert.equal(root.style.left, "214px");
+  assert.equal(pending.hidden, true);
+  assert.equal(list.children[0].children[1].textContent, "No data");
+  assert.equal(documentContext.querySelector("#raster-cursor-position").textContent,
+    "Lat 3.00000 · Lng 4.00000");
+  view.unbind();
 });
 
 test("pixel picker shortcuts copy, hide, and restore without owning policy", async () => {

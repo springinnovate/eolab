@@ -37,3 +37,16 @@ test("raster analysis remains independent from rendering implementations", async
         );
     }
 });
+
+test("cursor readout owns only DOM presentation and neutral value formatting", async () => {
+    const source = await readFile(
+        new URL("../../src/raster/cursor-values-view.js", import.meta.url),
+        "utf8"
+    );
+    const imports = [...source.matchAll(/from\s+["']([^"']+)["']/g)]
+        .map((match) => match[1]).sort();
+    assert.deepEqual(imports, ["./required-control.js", "./value-format.js"]);
+    const markup = await readFile(new URL("../../index.html", import.meta.url), "utf8");
+    assert.match(markup, /id="raster-cursor-marker"[^>]*aria-hidden="true"[^>]*hidden/);
+    assert.match(markup, /id="raster-cursor-pending"/);
+});

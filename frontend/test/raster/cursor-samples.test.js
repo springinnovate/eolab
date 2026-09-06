@@ -164,6 +164,46 @@ test("cursor stack applies a fixed participant ceiling and reports omissions", (
   controller.clear();
 });
 
+test("cursor movement retains presentation through dwell, including empty coverage", async () => {
+  const clock = createClock();
+  const snapshots = [];
+  const controller = new RasterCursorSamplesController(
+    async () => ({ inBounds: true, value: 12 }),
+    snapshot => snapshots.push(snapshot),
+    clock,
+  );
+  controller.move([participant(1)], { longitude: 1, latitude: 2 });
+  clock.runNext();
+  await Promise.resolve();
+  const previous = snapshots.at(-1);
+  controller.move([participant(1)], { longitude: 3, latitude: 4 });
+  assert.equal(snapshots.at(-1), previous);
+  controller.move([], { longitude: 30, latitude: 40 });
+  assert.equal(snapshots.at(-1), previous);
+  assert.equal(clock.pendingCount, 1);
+  clock.runNext();
+  assert.equal(snapshots.at(-1), null);
+});
+
+test("participant changes immediately invalidate the retained presentation", async () => {
+  const clock = createClock();
+  const snapshots = [];
+  const controller = new RasterCursorSamplesController(
+    async () => ({ inBounds: true, value: 12 }),
+    snapshot => snapshots.push(snapshot),
+    clock,
+  );
+  controller.move([participant(1), participant(2)], { longitude: 1, latitude: 2 });
+  clock.runNext();
+  await Promise.resolve();
+  controller.synchronize([participant(2)]);
+  assert.equal(snapshots.at(-1), null);
+  clock.runNext();
+  await Promise.resolve();
+  assert.deepEqual(snapshots.at(-1).samples.map(sample => sample.key), ["raster-2"]);
+  controller.clear();
+});
+
 test("cursor input and response contracts reject ambiguous state", async () => {
   const clock = createClock();
   const snapshots = [];

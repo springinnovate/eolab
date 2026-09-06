@@ -126,6 +126,8 @@ export class RasterCursorSamplesController {
 
     /**
      * Retain only the latest pointer position and sample it after one dwell.
+     * Keep the previous presentation available until replacement sampling starts
+     * or an empty participant set settles. The view owns the visual handoff.
      *
      * @param {RasterCursorSampleParticipant[]} participants In-bounds visible
      * rasters in top-first map order.
@@ -137,19 +139,11 @@ export class RasterCursorSamplesController {
         if (!isCanonicalWgs84Position(position)) {
             throw new TypeError("Raster cursor position must be canonical WGS 84");
         }
-        const hadPresentation = this.position !== null;
         this.#cancelWork();
         this.position = Object.freeze({ ...position });
         this.participants = normalized.participants;
         this.omittedCount = normalized.omittedCount;
         this.results = [];
-        if (hadPresentation) {
-            this.onChange(null);
-        }
-        if (this.participants.length === 0) {
-            this.position = null;
-            return;
-        }
         const generation = this.generation;
         this.timeoutId = this.clock.setTimeout(() => {
             this.timeoutId = null;
@@ -178,11 +172,13 @@ export class RasterCursorSamplesController {
                     participant.label === this.participants[index].label
             );
         if (!sameParticipants) {
-            this.move(participants, this.position);
+            const position = this.position;
+            this.clear();
+            this.move(participants, position);
         }
     }
 
-    /** Cancel queued and in-flight work and remove the transient readout. */
+    /** Cancel queued/in-flight work and remove the readout. @return {void} */
     clear() {
         const hadPresentation = this.position !== null;
         this.#cancelWork();
@@ -203,6 +199,10 @@ export class RasterCursorSamplesController {
      */
     #start(generation) {
         if (generation !== this.generation || this.position === null) {
+            return;
+        }
+        if (this.participants.length === 0) {
+            this.clear();
             return;
         }
         this.results = this.participants.map((participant) => ({

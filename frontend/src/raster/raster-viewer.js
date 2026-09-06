@@ -3786,14 +3786,14 @@ export function initializeRasterViewer(
         cursorSamplesController.clear();
     }
 
-    /** Suspend transient reads while Leaflet interprets pointer motion as drag. */
+    /** Suspend reads and clear screen anchors while the map moves. @return {void} */
     function handleMapDragStart() {
         mapDragging = true;
         rasterCursorPosition = null;
         cursorSamplesController.clear();
     }
 
-    /** Resume dwell-based cursor sampling after a completed map drag. */
+    /** Resume dwell-based sampling after map movement completes. @return {void} */
     function handleMapDragEnd() {
         mapDragging = false;
     }
@@ -4045,6 +4045,9 @@ export function initializeRasterViewer(
         leafletMap.off("mousemove", handleMapMouseMove);
         leafletMap.off("dragstart", handleMapDragStart);
         leafletMap.off("dragend", handleMapDragEnd);
+        leafletMap.off("movestart", handleMapDragStart);
+        leafletMap.off("moveend", handleMapDragEnd);
+        leafletMap.off("resize", handleMapMouseLeave);
     }
 
     controlsView.populatePalettes(RASTER_COLOR_PALETTES);
@@ -4102,6 +4105,9 @@ export function initializeRasterViewer(
     leafletMap.on("mousemove", handleMapMouseMove);
     leafletMap.on("dragstart", handleMapDragStart);
     leafletMap.on("dragend", handleMapDragEnd);
+    leafletMap.on("movestart", handleMapDragStart);
+    leafletMap.on("moveend", handleMapDragEnd);
+    leafletMap.on("resize", handleMapMouseLeave);
     mapContainer.addEventListener("mouseleave", handleMapMouseLeave);
 
     resetRasterSampleWindow();

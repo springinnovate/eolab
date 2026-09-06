@@ -8,6 +8,8 @@ import {
     RASTER_SAMPLE_WINDOW_RESIZE_DEBOUNCE_MILLISECONDS,
 } from "../../src/raster/raster-viewer.js";
 import { RasterAnalysisRequestError } from "../../src/raster/analysis-api.js";
+import { RasterCursorValuesView } from "../../src/raster/cursor-values-view.js";
+import { FakeRasterControlDocument } from "../../test-support/raster/fake-controls-document.js";
 import { DEFAULT_RASTER_STYLE } from "../../src/raster/style.js";
 import {
     EXACT_RASTER_STATISTICS,
@@ -1154,6 +1156,98 @@ test('cursor sampling follows every visible in-bounds raster and pauses for map 
     assert.ok(cursorValuesView.clearCount > 0);
     h.destroy();
     assert.equal(cursorValuesView.handlers, null);
+});
+
+test('cursor sampling and DOM hand off positions atomically and reject stale reads', async () => {
+    const timers = new Map();
+    let nextTimerId = 1;
+    const clock = {
+        setTimeout(callback) { const id = nextTimerId++; timers.set(id, callback); return id; },
+        clearTimeout(id) { timers.delete(id); },
+        runNext() {
+            const [id, callback] = timers.entries().next().value;
+            timers.delete(id);
+            callback();
+        },
+    };
+    const documentContext = new FakeRasterControlDocument();
+    const cursorValuesView = new RasterCursorValuesView(documentContext);
+    const root = documentContext.querySelector('#raster-cursor-values');
+    const marker = documentContext.querySelector('#raster-cursor-marker');
+    const position = documentContext.querySelector('#raster-cursor-position');
+    const list = documentContext.querySelector('#raster-cursor-value-list');
+    const requests = [];
+    const h = visibleLayerFixture(undefined, {
+        clock, cursorValuesView,
+        sampleCursorPixel: (_item, point, signal) => {
+            const deferred = createDeferred();
+            requests.push({ ...deferred, point, signal });
+            return deferred.promise;
+        },
+    });
+    await h.viewer.show(createRasterItem('anchored-picker'));
+    await flushPromises();
+    /**
+     * Send one pointer event through the actual viewer-to-sampler boundary.
+     * @param {number} x Longitude and screen-coordinate test seed.
+     * @return {void}
+     */
+    function move(x) {
+        h.leafletMap.emit('mousemove', {
+            latlng: { lng: x, lat: 1 },
+            originalEvent: { clientX: 100 + x, clientY: 100 },
+        });
+    }
+    move(1);
+    clock.runNext();
+    requests[0].resolve({ inBounds: true, value: 11 });
+    await flushPromises();
+    const oldPosition = position.textContent;
+    const oldRows = list.children;
+    move(2);
+    assert.equal(root.hidden, false);
+    assert.equal(marker.style.left, '101px');
+    clock.runNext();
+    assert.equal(position.textContent, oldPosition);
+    assert.equal(list.children, oldRows);
+    assert.equal(marker.style.left, '101px');
+    move(3);
+    assert.equal(requests[1].signal.aborted, true);
+    requests[1].resolve({ inBounds: true, value: 99 });
+    await flushPromises();
+    assert.equal(list.children, oldRows);
+    clock.runNext();
+    requests[2].resolve({ inBounds: true, value: 33 });
+    await flushPromises();
+    assert.equal(marker.style.left, '103px');
+    assert.equal(root.style.left, '117px');
+    assert.equal(position.textContent, 'Lat 1.00000 · Lng 3.00000');
+    assert.equal(list.children[0].children[1].textContent, '3.300e+1');
+
+    move(4);
+    clock.runNext();
+    h.leafletMap.emit('movestart', {});
+    assert.equal(requests[3].signal.aborted, true);
+    assert.equal(root.hidden, true);
+    assert.equal(marker.hidden, true);
+    move(5);
+    assert.equal(timers.size, 0);
+    requests[3].resolve({ inBounds: true, value: 44 });
+    await flushPromises();
+    assert.equal(marker.hidden, true);
+    h.leafletMap.emit('moveend', {});
+    move(6);
+    clock.runNext();
+    requests[4].resolve({ inBounds: true, value: 66 });
+    await flushPromises();
+    assert.equal(marker.hidden, false);
+    h.leafletMap.emit('resize', {});
+    assert.equal(root.hidden, true);
+    assert.equal(marker.hidden, true);
+    h.destroy();
+    for (const event of ['mousemove', 'movestart', 'moveend', 'resize']) {
+        assert.equal(h.leafletMap.handlers.get(event).size, 0);
+    }
 });
 
 test('active 2D analysis follows the top raster pair and exposes X Y badges', async () => {
