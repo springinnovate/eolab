@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { getBivariateColorForValues } from "../../src/raster/bivariate.js";
 
@@ -221,11 +222,27 @@ test("bivariate controls render labeled legend and inspectable ESOS-C histogram"
     (child) => child.classList.contains("raster-bivariate-marginal") &&
       child.getAttribute("data-marginal-axis") === "y",
   );
+  const xGuide = view.histogram.children.find(
+    (child) => child.getAttribute("data-projection-axis") === "x",
+  );
+  const yGuide = view.histogram.children.find(
+    (child) => child.getAttribute("data-projection-axis") === "y",
+  );
   assert.equal(xMarginals.length, 32);
   assert.equal(yMarginals.length, 32);
+  assert.equal(xGuide.getAttribute("hidden"), "");
+  assert.equal(yGuide.getAttribute("hidden"), "");
 
   cell.dispatchEvent(new Event("pointerenter"));
   assert.equal(cell.classList.contains("is-hovered"), true);
+  assert.equal(xGuide.getAttribute("hidden"), null);
+  assert.equal(yGuide.getAttribute("hidden"), null);
+  assert.equal(xGuide.getAttribute("x"), "238.75");
+  assert.equal(xGuide.getAttribute("width"), "13.125");
+  assert.equal(yGuide.getAttribute("y"), "428.375");
+  assert.equal(yGuide.getAttribute("height"), "13.125");
+  assert.equal(xMarginals[6].classList.contains("is-projected"), true);
+  assert.equal(yMarginals[4].classList.contains("is-projected"), true);
   assert.equal(tooltip.getAttribute("hidden"), null);
   assert.deepEqual(
     tooltip.children.slice(1).map((line) => line.textContent),
@@ -243,10 +260,17 @@ test("bivariate controls render labeled legend and inspectable ESOS-C histogram"
   );
   cell.dispatchEvent(new Event("pointerleave"));
   assert.equal(cell.classList.contains("is-hovered"), false);
+  assert.equal(xGuide.getAttribute("hidden"), "");
+  assert.equal(yGuide.getAttribute("hidden"), "");
+  assert.equal(xMarginals[6].classList.contains("is-projected"), false);
+  assert.equal(yMarginals[4].classList.contains("is-projected"), false);
   assert.equal(tooltip.getAttribute("hidden"), "");
 
   xMarginals[6].dispatchEvent(new Event("pointerenter"));
   assert.equal(xMarginals[6].classList.contains("is-hovered"), true);
+  assert.equal(xMarginals[6].classList.contains("is-projected"), true);
+  assert.equal(xGuide.getAttribute("hidden"), null);
+  assert.equal(yGuide.getAttribute("hidden"), "");
   assert.deepEqual(
     tooltip.children.slice(1, 3).map((line) => line.textContent),
     ["X: 6–7", "9 pixels · 100.00% of sample"],
@@ -254,15 +278,22 @@ test("bivariate controls render labeled legend and inspectable ESOS-C histogram"
   assert.equal(tooltip.children[3].getAttribute("hidden"), "");
   assert.match(xMarginals[6].getAttribute("aria-label"), /temperature\.tif/);
   xMarginals[6].dispatchEvent(new Event("pointerleave"));
+  assert.equal(xGuide.getAttribute("hidden"), "");
+  assert.equal(xMarginals[6].classList.contains("is-projected"), false);
 
   yMarginals[4].dispatchEvent(new Event("pointerenter"));
   assert.equal(yMarginals[4].classList.contains("is-hovered"), true);
+  assert.equal(yMarginals[4].classList.contains("is-projected"), true);
+  assert.equal(xGuide.getAttribute("hidden"), "");
+  assert.equal(yGuide.getAttribute("hidden"), null);
   assert.deepEqual(
     tooltip.children.slice(1, 3).map((line) => line.textContent),
     ["Y: 4–5", "9 pixels · 100.00% of sample"],
   );
   assert.match(yMarginals[4].getAttribute("aria-label"), /moisture\.tif/);
   yMarginals[4].dispatchEvent(new Event("pointerleave"));
+  assert.equal(yGuide.getAttribute("hidden"), "");
+  assert.equal(yMarginals[4].classList.contains("is-projected"), false);
   assert.equal(tooltip.getAttribute("hidden"), "");
   const xAxisTitles = view.histogram.children.filter(
     (child) => child.getAttribute("data-axis") === "x",
@@ -392,4 +423,20 @@ test("the 2D legend uses actual threshold spacing including an off-center midpoi
     state.paletteName, state.xStyle, state.yStyle, 2 + 18 / 24, 100 + 32 / 24,
   ));
   assert.equal(view.legendXRange.textContent, "temperature.tif: 2.000e+0 to 2.000e+1");
+});
+
+test("bivariate projection guides remain transient and pointer-transparent", () => {
+  const stylesheet = readFileSync(
+    new URL("../../src/style.css", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(
+    stylesheet,
+    /\.raster-bivariate-projection-guide\s*\{[^}]*pointer-events:\s*none/s,
+  );
+  assert.match(
+    stylesheet,
+    /\.raster-bivariate-projection-guide\[hidden\]\s*\{[^}]*display:\s*none/s,
+  );
 });

@@ -3404,6 +3404,19 @@ article.raster-histogram-summary {
   stroke-width: 1px;
 }
 
+.raster-bivariate-projection-guide {
+  fill: var(--brand);
+  fill-opacity: 0.14;
+  stroke: var(--brand-hover);
+  stroke-width: 1.5px;
+  pointer-events: none;
+  vector-effect: non-scaling-stroke;
+}
+
+.raster-bivariate-projection-guide[hidden] {
+  display: none;
+}
+
 .raster-bivariate-cell {
   stroke: rgb(47 47 47 / 45%);
   stroke-width: 0.7px;
@@ -3423,7 +3436,7 @@ article.raster-histogram-summary {
   stroke-width: 0.5px;
 }
 
-.raster-bivariate-marginal.is-hovered {
+.raster-bivariate-marginal:is(.is-hovered, .is-projected) {
   fill-opacity: 1;
   stroke: var(--brand-hover);
   stroke-width: 2px;
