@@ -3418,6 +3418,59 @@ article.raster-histogram-summary {
   stroke-width: 1px;
 }
 
+.raster-bivariate-thresholds {
+  pointer-events: none;
+}
+
+.raster-bivariate-thresholds .raster-histogram-threshold-label {
+  font-size: 18px;
+  stroke-width: 4px;
+}
+
+.raster-bivariate-style-ranges {
+  border: 1px solid var(--border-2);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin: 8px 0;
+}
+
+.raster-bivariate-style-ranges > summary {
+  display: list-item;
+  list-style: disclosure-closed inside;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.raster-bivariate-style-ranges[open] > summary {
+  list-style-type: disclosure-open;
+}
+
+.raster-bivariate-range-help {
+  font-size: 0.75rem;
+  color: var(--text-2);
+}
+
+.raster-bivariate-range {
+  min-width: 0;
+  margin: 12px 0 0;
+  padding: 8px 0 0;
+  border: 0;
+  border-top: 1px solid var(--border-2);
+}
+
+.raster-bivariate-range legend {
+  font-size: 0.75rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.raster-bivariate-range > p {
+  margin: 0;
+  font-size: 0.7rem;
+  color: var(--text-2);
+}
+
 .raster-bivariate-projection-guide {
   fill: var(--brand);
   fill-opacity: 0.14;

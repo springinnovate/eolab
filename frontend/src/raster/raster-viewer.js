@@ -3642,7 +3642,8 @@ export function initializeRasterViewer(
                 if (!invalid) ranges[axis] = { minimum, midpoint, maximum };
             }
             controlsView.renderBivariatePercentiles(axis, {
-                values, message, invalid, applicable: ranges[axis] !== undefined,
+                values, range: ranges[axis] ?? null, message, invalid,
+                applicable: ranges[axis] !== undefined,
             });
         }
         return ranges;

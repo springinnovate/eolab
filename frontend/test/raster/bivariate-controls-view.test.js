@@ -86,7 +86,9 @@ class FakeBivariateDocument {
       "#retry-raster-paired-statistics",
       "#raster-bivariate-histogram",
       "#raster-bivariate-histogram-summary",
+      "#raster-bivariate-style-ranges",
       ...["x", "y"].flatMap((axis) => [
+        `#bivariate-${axis}-range-label`,
         `#bivariate-${axis}-range-status`, `#apply-bivariate-${axis}-range`,
         ...["lower", "middle", "upper"].flatMap((name) => [
           `#bivariate-${axis}-${name}`, `#bivariate-${axis}-${name}-value`,
@@ -439,4 +441,92 @@ test("bivariate projection guides remain transient and pointer-transparent", () 
     stylesheet,
     /\.raster-bivariate-projection-guide\[hidden\]\s*\{[^}]*display:\s*none/s,
   );
+});
+
+/**
+ * Return the three rendered threshold lines for one paired axis.
+ * @param {BivariateRasterControlsView} view Rendered controls view.
+ * @param {"x"|"y"} axis Marginal axis.
+ * @return {FakeElement[]} Lines in L/M/U order.
+ */
+function thresholdLines(view, axis) {
+  const group = view.thresholdMarkers.children.find(
+    (element) => element.getAttribute("data-threshold-axis") === axis,
+  );
+  return group?.children.filter((element) => element.getAttribute("data-threshold")) ?? [];
+}
+
+test("marginal markers use numeric thresholds and inverted vertical coordinates", () => {
+  const view = new BivariateRasterControlsView(new FakeBivariateDocument());
+  view.renderMode({ active: true, ...PRESENTATION });
+  view.renderStatistics(pairedStatistics(), {
+    ...PRESENTATION,
+    xStyle: { ...PRESENTATION.xStyle, minimum: -2, midpoint: 8, maximum: 40 },
+  });
+  assert.deepEqual(thresholdLines(view, "x").map(line => Number(line.getAttribute("x1"))),
+    [160, 265, 580]);
+  assert.deepEqual(thresholdLines(view, "y").map(line => Number(line.getAttribute("y1"))),
+    [494, 284, 74]);
+  assert.deepEqual(thresholdLines(view, "x").map(line => Number(line.getAttribute("data-value"))),
+    [-2, 8, 40]);
+  assert.equal(view.rangeControls.x.label.textContent, PRESENTATION.xLabel);
+  assert.equal(view.rangeControls.y.label.textContent, PRESENTATION.yLabel);
+  for (const group of view.thresholdMarkers.children) {
+    assert.deepEqual(group.children.filter(child => child.tagName === "TEXT").map(child => child.textContent),
+      ["L", "M", "U"]);
+  }
+});
+
+test("range previews preserve histogram interactions and clear on stale or invalid data", () => {
+  const view = new BivariateRasterControlsView(new FakeBivariateDocument());
+  view.bind({});
+  view.renderStatistics(pairedStatistics(), PRESENTATION);
+  const cell = view.cells.get("6:4");
+  cell.dispatchEvent(new Event("focus"));
+  const candidate = {
+    values: { lower: "4", middle: "8", upper: "24" },
+    range: { minimum: 4, midpoint: 8, maximum: 24 },
+    message: "Estimated", applicable: true, invalid: false,
+  };
+  view.renderPercentiles("x", candidate);
+  assert.equal(thresholdLines(view, "x")[1].getAttribute("data-value"), "16");
+  view.styleRanges.open = true;
+  view.styleRanges.dispatchEvent(new Event("toggle"));
+  assert.equal(thresholdLines(view, "x")[1].getAttribute("data-value"), "8");
+  assert.equal(thresholdLines(view, "y")[1].getAttribute("data-value"), "16");
+  assert.equal(view.cells.get("6:4"), cell);
+  assert.equal(cell.classList.contains("is-hovered"), true);
+  view.renderPercentiles("x", { ...candidate, applicable: false, invalid: true });
+  assert.equal(thresholdLines(view, "x")[1].getAttribute("data-value"), "16");
+  view.renderPercentiles("x", candidate);
+  view.setStatisticsLoading("Loading");
+  assert.equal(view.thresholdMarkers.children.length, 0);
+  view.renderStatisticsError(new Error("Unavailable"), true);
+  view.styleRanges.dispatchEvent(new Event("toggle"));
+  assert.equal(view.thresholdMarkers.children.length, 0);
+  view.renderStatistics(pairedStatistics(), { ...PRESENTATION,
+    xStyle: PRESENTATION.yStyle, yStyle: PRESENTATION.xStyle });
+  assert.equal(thresholdLines(view, "x")[1].getAttribute("data-value"), "16");
+  view.clearStatistics();
+  view.styleRanges.dispatchEvent(new Event("toggle"));
+  assert.equal(view.histogram.children.length, 0);
+  view.unbind();
+});
+
+test("2D range disclosure lives beside its histogram and markers cannot intercept hover", () => {
+  const markup = readFileSync(new URL("../../index.html", import.meta.url), "utf8");
+  const section = markup.slice(markup.indexOf('<section class="raster-bivariate-statistics"'))
+    .split("</section>")[0];
+  assert.match(section, /<details[^>]*id="raster-bivariate-style-ranges"[^>]*>\s*<summary>Style rasters<\/summary>/);
+  assert.doesNotMatch(section.match(/<details[^>]*>/)[0], /\bopen\b/);
+  assert.ok(section.indexOf('id="raster-bivariate-style-ranges"') > section.indexOf("</svg>"));
+  for (const axis of ["x", "y"]) {
+    for (const name of ["lower", "middle", "upper"]) {
+      assert.ok(section.includes(`id="bivariate-${axis}-${name}"`));
+      assert.equal(markup.split(`id="bivariate-${axis}-${name}"`).length, 2);
+    }
+  }
+  const stylesheet = readFileSync(new URL("../../src/style.css", import.meta.url), "utf8");
+  assert.match(stylesheet, /\.raster-bivariate-thresholds\s*\{[^}]*pointer-events:\s*none/s);
+  assert.match(stylesheet, /\.raster-bivariate-style-ranges > summary\s*\{[^}]*display:\s*list-item/s);
 });

@@ -10,6 +10,7 @@ import {
 import { RasterAnalysisRequestError } from "../../src/raster/analysis-api.js";
 import { RasterCursorValuesView } from "../../src/raster/cursor-values-view.js";
 import { FakeRasterControlDocument } from "../../test-support/raster/fake-controls-document.js";
+import { BivariateRasterControlsView } from "../../src/raster/bivariate-controls-view.js";
 import { DEFAULT_RASTER_STYLE } from "../../src/raster/style.js";
 import {
     EXACT_RASTER_STATISTICS,
@@ -173,6 +174,8 @@ function pairedStatistics() {
         yMinimum: 100,
         yMaximum: 132,
         histogram: {
+            counts: Array.from({ length: 32 }, (_, y) =>
+                Array.from({ length: 32 }, (_, x) => x === y ? 1 : 0)),
             xEdges: Array.from({ length: 33 }, (_, index) => index),
             yEdges: Array.from({ length: 33 }, (_, index) => index + 100),
             xMarginalCounts: Array(32).fill(1),
@@ -1674,6 +1677,69 @@ test("2D percentiles restyle current axes without changing ordinary styles or re
     h.controlsView.handlers.onBivariateModeChange("bivariate");
     await flushPromises();
     assert.equal(h.controlsView.bivariateMode.xStyle.midpoint, 3);
+    h.destroy();
+});
+
+test("2D histogram DOM controls preview and apply each axis without resampling", async () => {
+    const documentContext = new FakeRasterControlDocument();
+    const pairedView = new BivariateRasterControlsView(documentContext);
+    const controlsView = createFakeControlsView();
+    for (const [adapter, method] of Object.entries({
+        readBivariatePercentiles: "readPercentiles",
+        renderBivariatePercentiles: "renderPercentiles",
+        renderBivariateMode: "renderMode",
+        renderPairedStatistics: "renderStatistics",
+        setPairedStatisticsLoading: "setStatisticsLoading",
+        renderPairedStatisticsError: "renderStatisticsError",
+        clearPairedStatistics: "clearStatistics",
+    })) controlsView[adapter] = pairedView[method].bind(pairedView);
+    for (const axis of ["x", "y"]) {
+        for (const [name, value] of Object.entries({ lower: 5, middle: 50, upper: 95 })) {
+            pairedView.rangeControls[axis].inputs[name].value = String(value);
+        }
+    }
+    let pairedReads = 0;
+    const h = visibleLayerFixture(undefined, {
+        controlsView,
+        loadPairedStatistics: async () => { pairedReads++; return pairedStatistics(); },
+    });
+    pairedView.bind(controlsView.handlers);
+    await h.viewer.show(createRasterItem("first"));
+    await h.viewer.show(createRasterItem("second"));
+    await flushPromises();
+    const originals = h.mapLayers.retainedRecords.map(record => structuredClone(record.state.rasterStyle));
+    pairedView.mode.value = "bivariate";
+    pairedView.mode.dispatchEvent(new Event("change"));
+    await flushPromises();
+    pairedView.styleRanges.open = true;
+    pairedView.styleRanges.dispatchEvent(new Event("toggle"));
+    const initialY = { ...pairedView.labels.yStyle };
+    pairedView.rangeControls.x.inputs.middle.value = "25";
+    pairedView.rangeControls.x.inputs.middle.dispatchEvent(new Event("input"));
+    const xMarkers = pairedView.thresholdMarkers.children[0];
+    assert.equal(xMarkers.getAttribute("data-threshold-mode"), "preview");
+    assert.equal(xMarkers.children.find(child => child.getAttribute("data-threshold") === "midpoint")
+        .getAttribute("data-value"), "8");
+    assert.notEqual(pairedView.labels.xStyle.midpoint, 8);
+    pairedView.rangeControls.x.apply.dispatchEvent(new Event("click"));
+    assert.equal(pairedView.labels.xStyle.midpoint, 8);
+    assert.deepEqual(pairedView.labels.yStyle, initialY);
+    pairedView.rangeControls.y.inputs.middle.value = "75";
+    pairedView.rangeControls.y.inputs.middle.dispatchEvent(new Event("input"));
+    pairedView.rangeControls.y.apply.dispatchEvent(new Event("click"));
+    assert.equal(pairedView.labels.yStyle.midpoint, 124);
+    assert.equal(pairedView.labels.xStyle.midpoint, 8);
+    assert.equal(pairedReads, 1);
+    assert.deepEqual(h.mapLayers.retainedRecords.map(record => record.state.rasterStyle), originals);
+    pairedView.styleRanges.open = false;
+    pairedView.styleRanges.dispatchEvent(new Event("toggle"));
+    assert.equal(pairedView.thresholdMarkers.children[0].getAttribute("data-threshold-mode"), "committed");
+    pairedView.swapButton.dispatchEvent(new Event("click"));
+    await flushPromises();
+    assert.equal(pairedView.labels.xStyle.midpoint, 124);
+    assert.equal(pairedView.labels.yStyle.midpoint, 8);
+    assert.equal(pairedView.rangeControls.x.label.textContent, pairedView.labels.xLabel);
+    pairedView.unbind();
     h.destroy();
 });
 
