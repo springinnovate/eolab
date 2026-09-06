@@ -207,6 +207,28 @@ test("controller renders axes and table while retaining controls across samples"
   assert.deepEqual(h.visibility, [{ visible: true, moveFocus: false }]);
 });
 
+test("categorical and numeric X fields use their expected spacing", () => {
+  const h = fixture();
+  h.controller.setSample({
+    state: "ready",
+    observations: observations(),
+    message: "Ready",
+  });
+  const chart = h.documentContext.querySelector("#vector-time-series-chart");
+  const positions = () => chart.children
+    .filter((element) =>
+      element.getAttribute("class") === "series-chart-point"
+    )
+    .map((element) => Number(element.getAttribute("cx")));
+
+  assert.deepEqual(positions(), [72, 364, 656]);
+
+  const x = h.documentContext.querySelector("#vector-time-series-x");
+  x.value = "year";
+  x.dispatchEvent(new Event("change"));
+  assert.deepEqual(positions(), [72, 72, 656]);
+});
+
 test("loading and invalidation retain settings without a stale chart", () => {
   const h = fixture();
   h.controller.setSample({

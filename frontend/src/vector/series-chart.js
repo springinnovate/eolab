@@ -139,7 +139,10 @@ export function renderOrdinalSeriesChart({
     const minimumX = numericX.length > 0 ? Math.min(...numericX) : null;
     const maximumX = numericX.length > 0 ? Math.max(...numericX) : null;
     const x = (index) => {
-        if (points.length === 1 || minimumX === maximumX) {
+        if (
+            points.length === 1 ||
+            (xScale === "numeric" && minimumX === maximumX)
+        ) {
             return CHART_MARGIN.left + plotWidth / 2;
         }
         if (xScale === "numeric") {

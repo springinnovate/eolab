@@ -91,6 +91,21 @@ function compareXValues(left, right) {
 }
 
 /**
+ * Select continuous spacing only when every plotted X value is finite numeric data.
+ *
+ * Mixed and textual values retain ordinal spacing so each inspected observation
+ * remains visible without coercing feature attributes.
+ *
+ * @param {{xValue:unknown}[]} points Valid plotted observations.
+ * @return {"ordinal"|"numeric"} Shared chart X-scale mode.
+ */
+function vectorTimeSeriesXScale(points) {
+    return points.every((point) =>
+        typeof point.xValue === "number" && Number.isFinite(point.xValue)
+    ) ? "numeric" : "ordinal";
+}
+
+/**
  * Build ordered chart points while retaining duplicate X observations.
  *
  * @param {VectorInspectionObservation[]} observations Inspection results.
@@ -427,6 +442,7 @@ export class VectorTimeSeriesController {
             chart: this.chart,
             points: series.points,
             chartType: this.settings.chartType,
+            xScale: vectorTimeSeriesXScale(series.points),
             xAxisLabel: this.#xAxisLabel(),
             yAxisLabel: this.settings.yField,
             ariaLabel: `Vector series ${this.settings.chartType} chart showing ` +
