@@ -4,6 +4,15 @@ History
 Unreleased
 ----------
 
+0.5.0 (2026-09-06)
+------------------
+
+* Keep the 2D histogram visible while styling, with focused range controls beneath the chart, improved hover feedback, and marginal projection guides.
+* Use embedded raster overviews for paired histograms, hide stale analysis, and omit raster point entries outside the clicked coverage.
+* Make map selections explicit, retain the anchored pixel picker during sampling, and zoom directly to a selected vector feature.
+* Navigate feature-profile results and identify vector plot sources while preserving numeric spacing on cross-feature axes.
+* Show histogram sampling controls and analysis context by default with clearer progressive-sampling disclosures.
+* Retry failed composite tiles and cache successful composite renders by plan and tile coordinates.
 * Apply valid vector style edits automatically after a short debounce, with serialized requests and no Apply button.
 * Edit exact numeric break values for graduated vector styles while preserving adjacent, open-ended ranges.
 * Show a color-mapped raster histogram beside visible percentile stretch controls, with direct navigation between Style and full analysis.
