@@ -44,6 +44,7 @@ function fixture() {
   documentContext.querySelector("#vector-feature-profile-table").hidden = true;
   const visibility = [];
   const presentations = [];
+  const navigationRequests = [];
   const controller = new VectorFeatureProfileController({
     documentContext,
     onVisibilityChange: (visible, moveFocus) => {
@@ -51,8 +52,15 @@ function fixture() {
       documentContext.querySelector("#vector-feature-profile").hidden = !visible;
     },
     onPresentationChange: (identity) => presentations.push(identity),
+    onNavigateFeature: (direction) => navigationRequests.push(direction),
   });
-  return { controller, documentContext, visibility, presentations };
+  return {
+    controller,
+    documentContext,
+    visibility,
+    presentations,
+    navigationRequests,
+  };
 }
 
 test("field discovery chooses repeated numeric names and a conventional title", () => {
@@ -75,15 +83,15 @@ test("field discovery chooses repeated numeric names and a conventional title", 
     label: "Feature · Northern corridor",
     title: "Fields from Northern corridor · Layer: corridors.shp · " +
       "Feature ID: corridors.1",
-    heading: "Northern corridor",
-    context: "Layer: corridors.shp · Feature ID: corridors.1",
+    heading: "Fields from feature",
+    context: "Northern corridor · Layer: corridors.shp · Feature ID: corridors.1",
   });
   assert.equal(
     vectorFeatureProfilePresentation(observation({
       featureId: "corridors.2",
       properties: { node_nm: "", R2000: 2 },
-    })).heading,
-    "corridors.2",
+    })).context,
+    "corridors.2 · Layer: corridors.shp · Feature ID: corridors.2",
   );
 });
 
@@ -127,12 +135,12 @@ test("controller plots suggested fields and updates from partial search actions"
   assert.equal(
     h.documentContext.querySelector("#vector-feature-profile-heading")
       .textContent,
-    "Northern corridor",
+    "Fields from feature",
   );
   assert.equal(
     h.documentContext.querySelector("#vector-feature-profile-context")
       .textContent,
-    "Layer: corridors.shp · Feature ID: corridors.1",
+    "Northern corridor · Layer: corridors.shp · Feature ID: corridors.1",
   );
   assert.deepEqual(h.presentations.at(-1), {
     label: "Feature · Northern corridor",
@@ -159,6 +167,56 @@ test("controller plots suggested fields and updates from partial search actions"
     1,
   );
   assert.deepEqual(h.visibility, [{ visible: true, moveFocus: false }]);
+});
+
+test("feature navigation publishes intent and redraws the current observation", () => {
+  const h = fixture();
+  h.controller.setCurrentObservation(observation(), {
+    position: 2,
+    total: 3,
+    canPrevious: true,
+    canNext: true,
+  });
+  assert.equal(
+    h.documentContext.querySelector("#vector-feature-profile-position").textContent,
+    "2 of 3 features",
+  );
+  const previous = h.documentContext.querySelector(
+    "#previous-vector-feature-profile",
+  );
+  const next = h.documentContext.querySelector("#next-vector-feature-profile");
+  assert.equal(previous.disabled, false);
+  assert.equal(next.disabled, false);
+  previous.dispatchEvent(new Event("click"));
+  next.dispatchEvent(new Event("click"));
+  assert.deepEqual(h.navigationRequests, ["previous", "next"]);
+
+  h.controller.setCurrentObservation(observation({
+    featureId: "corridors.2",
+    properties: { node_nm: "Southern corridor", R1999: 2, R2000: 4, R2001: 8 },
+  }), {
+    position: 3,
+    total: 3,
+    canPrevious: true,
+    canNext: false,
+  });
+  assert.equal(
+    h.documentContext.querySelector("#vector-feature-profile-chart-title").textContent,
+    "Southern corridor",
+  );
+  assert.equal(previous.disabled, false);
+  assert.equal(next.disabled, true);
+  next.dispatchEvent(new Event("click"));
+  assert.deepEqual(h.navigationRequests, ["previous", "next"]);
+  assert.throws(
+    () => h.controller.setCurrentObservation(observation(), {
+      position: 1,
+      total: 2,
+      canPrevious: true,
+      canNext: true,
+    }),
+    /Invalid feature-profile navigation state/,
+  );
 });
 
 test("numeric field-name spacing is reflected on the horizontal axis", () => {

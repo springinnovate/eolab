@@ -82,7 +82,10 @@ test("vector inspection coordination remains in the browser composition root", (
     COMPOSITION_SOURCE,
     /onStyleRequested:\s*\(sourceId\)\s*=>\s*layerStyleEditor\.open\(sourceId\)/,
   );
-  assert.match(COMPOSITION_SOURCE, /onCurrentObservationChange:\s*\(observation\)\s*=>/);
+  assert.match(
+    COMPOSITION_SOURCE,
+    /onCurrentObservationChange:\s*\(observation, navigation\)\s*=>/,
+  );
   assert.match(COMPOSITION_SOURCE, /onFeatureProfileRequested:\s*\(\)\s*=>/);
   assert.match(COMPOSITION_SOURCE, /onTimeSeriesRequested:\s*\(\)\s*=>/);
   assert.match(COMPOSITION_SOURCE, /vectorTimeSeries\.close\(\);/);
@@ -131,7 +134,12 @@ test("feature-field analysis is a sibling behind neutral observation and chart c
   );
   assert.match(
     COMPOSITION_SOURCE,
-    /vectorFeatureProfile\.setCurrentObservation\(observation\)/,
+    /vectorFeatureProfile\.setCurrentObservation\(observation, navigation\)/,
+  );
+  assert.match(COMPOSITION_SOURCE, /onNavigateFeature:\s*\(direction\)\s*=>/);
+  assert.match(
+    COMPOSITION_SOURCE,
+    /vectorFeatureInspector\?\.navigateResult\(direction\)/,
   );
   assert.match(
     COMPOSITION_SOURCE,

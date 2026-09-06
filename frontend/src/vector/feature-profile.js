@@ -9,6 +9,45 @@ import {
 export const FEATURE_PROFILE_TITLE_NONE = "__eolab_no_title__";
 export const FEATURE_PROFILE_TITLE_LAYER = "__eolab_layer_title__";
 
+/**
+ * Normalize and validate the inspector-owned position for the current feature.
+ *
+ * A missing position represents a standalone observation and therefore falls
+ * back to a one-feature result set. The profile only consumes this navigation
+ * state; it does not own or mutate the inspector result collection.
+ *
+ * @param {Object|null|undefined} navigation Inspector-owned feature position.
+ * @return {{position:number,total:number,canPrevious:boolean,canNext:boolean}}
+ * Validated immutable navigation state.
+ */
+function normalizeFeatureNavigation(navigation) {
+    const value = navigation ?? {
+        position: 1,
+        total: 1,
+        canPrevious: false,
+        canNext: false,
+    };
+    if (
+        !Number.isInteger(value.position) ||
+        !Number.isInteger(value.total) ||
+        value.total < 1 ||
+        value.position < 1 ||
+        value.position > value.total ||
+        typeof value.canPrevious !== "boolean" ||
+        typeof value.canNext !== "boolean" ||
+        value.canPrevious !== (value.position > 1) ||
+        value.canNext !== (value.position < value.total)
+    ) {
+        throw new TypeError("Invalid feature-profile navigation state.");
+    }
+    return Object.freeze({
+        position: value.position,
+        total: value.total,
+        canPrevious: value.canPrevious,
+        canNext: value.canNext,
+    });
+}
+
 const NATURAL_TEXT = new Intl.Collator("en", {
     numeric: true,
     sensitivity: "base",
@@ -109,8 +148,9 @@ export function vectorFeatureProfilePresentation(
         label: `Feature · ${featureLabel}`,
         title: `Fields from ${featureLabel} · Layer: ` +
             `${observation.layerLabel} · ${featureContext}`,
-        heading: featureLabel,
-        context: `Layer: ${observation.layerLabel} · ${featureContext}`,
+        heading: "Fields from feature",
+        context: `${featureLabel} · Layer: ${observation.layerLabel} · ` +
+            featureContext,
     });
 }
 
@@ -207,11 +247,15 @@ export class VectorFeatureProfileController {
      * @param {(identity:{label:string,title:string}|null)=>void}
      * configuration.onPresentationChange Publishes a bounded dock identity
      * through application composition.
+     * @param {(direction:"previous"|"next")=>void}
+     * configuration.onNavigateFeature Publishes navigation intent through
+     * application composition without knowing the inspector implementation.
      * @param {Document} [configuration.documentContext=document] DOM owner.
      */
     constructor({
         onVisibilityChange,
         onPresentationChange,
+        onNavigateFeature,
         documentContext = document,
     }) {
         if (typeof onVisibilityChange !== "function") {
@@ -220,8 +264,12 @@ export class VectorFeatureProfileController {
         if (typeof onPresentationChange !== "function") {
             throw new TypeError("onPresentationChange must be a function.");
         }
+        if (typeof onNavigateFeature !== "function") {
+            throw new TypeError("onNavigateFeature must be a function.");
+        }
         this.onVisibilityChange = onVisibilityChange;
         this.onPresentationChange = onPresentationChange;
+        this.onNavigateFeature = onNavigateFeature;
         this.document = documentContext;
         this.panel = documentContext.querySelector("#vector-feature-profile");
         this.heading = documentContext.querySelector(
@@ -232,6 +280,15 @@ export class VectorFeatureProfileController {
         );
         this.closeButton = documentContext.querySelector(
             "#close-vector-feature-profile"
+        );
+        this.previousFeature = documentContext.querySelector(
+            "#previous-vector-feature-profile"
+        );
+        this.nextFeature = documentContext.querySelector(
+            "#next-vector-feature-profile"
+        );
+        this.featurePosition = documentContext.querySelector(
+            "#vector-feature-profile-position"
         );
         this.titleField = documentContext.querySelector(
             "#vector-feature-profile-title-field"
@@ -270,10 +327,19 @@ export class VectorFeatureProfileController {
             "#vector-feature-profile-table-body"
         );
         this.currentObservation = null;
+        this.currentNavigation = null;
         this.settingsBySource = new Map();
         this.filter = "";
         this.modeActive = false;
         this.onClose = () => this.close({ moveFocus: true });
+        this.onPreviousFeature = () => {
+            if (!this.previousFeature.disabled) {
+                this.onNavigateFeature("previous");
+            }
+        };
+        this.onNextFeature = () => {
+            if (!this.nextFeature.disabled) this.onNavigateFeature("next");
+        };
         this.onSettingsChange = () => {
             const settings = this.#currentSettings();
             if (settings === null) return;
@@ -310,6 +376,8 @@ export class VectorFeatureProfileController {
             this.close({ moveFocus: true });
         };
         this.closeButton.addEventListener("click", this.onClose);
+        this.previousFeature.addEventListener("click", this.onPreviousFeature);
+        this.nextFeature.addEventListener("click", this.onNextFeature);
         this.titleField.addEventListener("change", this.onSettingsChange);
         this.direction.addEventListener("change", this.onSettingsChange);
         this.chartType.addEventListener("change", this.onSettingsChange);
@@ -354,11 +422,17 @@ export class VectorFeatureProfileController {
      * observation and reopens when a later feature becomes current.
      *
      * @param {Object|null} observation Current inspector result or null.
+     * @param {Object|null} [navigation=null] Inspector-owned result position.
      * @return {void}
      */
-    setCurrentObservation(observation) {
-        if (observation !== null) validateVectorInspectionObservations([observation]);
+    setCurrentObservation(observation, navigation = null) {
+        let normalizedNavigation = null;
+        if (observation !== null) {
+            validateVectorInspectionObservations([observation]);
+            normalizedNavigation = normalizeFeatureNavigation(navigation);
+        }
         this.currentObservation = observation;
+        this.currentNavigation = normalizedNavigation;
         if (observation === null && !this.panel.hidden) {
             this.onVisibilityChange(false, false);
         }
@@ -389,6 +463,7 @@ export class VectorFeatureProfileController {
         this.table.hidden = true;
         this.chartTitle.hidden = true;
         this.chartTitle.textContent = "";
+        this.#renderNavigation();
         const settings = this.#currentSettings();
         if (this.currentObservation === null || settings === null) {
             this.#renderPresentation(null);
@@ -551,7 +626,7 @@ export class VectorFeatureProfileController {
      */
     #renderPresentation(presentation) {
         if (presentation === null) {
-            this.heading.textContent = "Feature fields";
+            this.heading.textContent = "Fields from feature";
             this.context.textContent = "";
             this.context.hidden = true;
             this.onPresentationChange(null);
@@ -564,6 +639,25 @@ export class VectorFeatureProfileController {
             label: presentation.label,
             title: presentation.title,
         });
+    }
+
+    /**
+     * Render the inspector-owned position and available navigation actions.
+     *
+     * @return {void}
+     */
+    #renderNavigation() {
+        if (this.currentNavigation === null) {
+            this.featurePosition.textContent = "";
+            this.previousFeature.disabled = true;
+            this.nextFeature.disabled = true;
+            return;
+        }
+        const { position, total, canPrevious, canNext } = this.currentNavigation;
+        this.featurePosition.textContent = `${position} of ${total} ` +
+            `feature${total === 1 ? "" : "s"}`;
+        this.previousFeature.disabled = !canPrevious;
+        this.nextFeature.disabled = !canNext;
     }
 
     /**
@@ -594,6 +688,8 @@ export class VectorFeatureProfileController {
     /** Release listeners and request removal of retained presentation. @return {void} */
     destroy() {
         this.closeButton.removeEventListener("click", this.onClose);
+        this.previousFeature.removeEventListener("click", this.onPreviousFeature);
+        this.nextFeature.removeEventListener("click", this.onNextFeature);
         this.titleField.removeEventListener("change", this.onSettingsChange);
         this.direction.removeEventListener("change", this.onSettingsChange);
         this.chartType.removeEventListener("change", this.onSettingsChange);

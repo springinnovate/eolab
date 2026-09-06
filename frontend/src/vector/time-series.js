@@ -557,7 +557,7 @@ export class VectorTimeSeriesController {
      */
     #renderPresentation(presentation) {
         if (presentation === null) {
-            this.heading.textContent = "Across features";
+            this.heading.textContent = "Field across features";
             this.context.textContent = "";
             this.context.hidden = true;
             this.onPresentationChange(null);

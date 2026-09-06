@@ -42,13 +42,13 @@ export class MapInspectionController {
             },
             {
                 name: "time-series",
-                label: "Across features",
+                label: "Field across features",
                 panel: this.vectorTimeSeries,
                 tab: documentContext.querySelector("#map-inspection-tab-time-series"),
             },
             {
                 name: "feature-profile",
-                label: "Feature fields",
+                label: "Fields from feature",
                 panel: this.vectorFeatureProfile,
                 tab: documentContext.querySelector("#map-inspection-tab-feature-profile"),
             },

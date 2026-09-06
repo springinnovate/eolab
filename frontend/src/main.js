@@ -803,6 +803,8 @@ async function initializeCatalog(
         },
         onPresentationChange: (identity) =>
             mapInspection.setVectorFeatureProfileIdentity(identity),
+        onNavigateFeature: (direction) =>
+            vectorFeatureInspector?.navigateResult(direction),
     });
     vectorFeatureInspector = new VectorFeatureInspectorController({
         leaflet: L,
@@ -840,8 +842,8 @@ async function initializeCatalog(
                 );
             }
         },
-        onCurrentObservationChange: (observation) =>
-            vectorFeatureProfile.setCurrentObservation(observation),
+        onCurrentObservationChange: (observation, navigation) =>
+            vectorFeatureProfile.setCurrentObservation(observation, navigation),
         onFeatureProfileRequested: () => {
             vectorTimeSeries.close();
             vectorFeatureProfile.open();
