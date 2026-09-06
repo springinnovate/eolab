@@ -16,6 +16,7 @@ test("vector time-series controls and accessible outputs are present", () => {
     "open-vector-time-series",
     "toggle-vector-inspector-details",
     "vector-feature-inspector-details",
+    "zoom-inspected-vector-feature",
     "vector-time-series",
     "vector-time-series-heading",
     "vector-time-series-context",
@@ -28,7 +29,7 @@ test("vector time-series controls and accessible outputs are present", () => {
     "vector-time-series-chart",
     "vector-time-series-selection",
     "vector-time-series-selection-text",
-    "zoom-vector-time-series-source",
+    "zoom-vector-time-series-feature",
     "vector-time-series-table",
     "vector-time-series-table-body",
   ]) {
@@ -41,6 +42,14 @@ test("vector time-series controls and accessible outputs are present", () => {
   assert.match(
     MARKUP,
     /id="toggle-vector-inspector-details"[^>]+aria-controls="vector-feature-inspector-details"[^>]+aria-expanded="true"/,
+  );
+  assert.match(
+    MARKUP,
+    /id="zoom-inspected-vector-feature"[^>]+aria-controls="map"[^>]*>Zoom to feature</,
+  );
+  assert.match(
+    MARKUP,
+    /id="zoom-vector-time-series-feature"[^>]+aria-controls="map"[^>]*>Zoom to feature</,
   );
   assert.match(MARKUP, /<label for="vector-time-series-x">/);
   assert.match(MARKUP, /<label for="vector-time-series-y">/);
@@ -76,6 +85,7 @@ test("feature-field plotting has searchable, accessible series controls", () => 
     "previous-vector-feature-profile",
     "vector-feature-profile-position",
     "next-vector-feature-profile",
+    "zoom-vector-feature-profile-feature",
     "vector-feature-profile-title-field",
     "vector-feature-profile-field-search",
     "vector-feature-profile-select-matching",
@@ -96,6 +106,10 @@ test("feature-field plotting has searchable, accessible series controls", () => 
   assert.match(
     MARKUP,
     /class="vector-feature-navigation vector-feature-profile-navigation"[^>]+aria-label="Features in this inspection"/,
+  );
+  assert.match(
+    MARKUP,
+    /id="zoom-vector-feature-profile-feature"[^>]+aria-controls="map"[^>]*>Zoom to feature</,
   );
   assert.match(
     MARKUP,

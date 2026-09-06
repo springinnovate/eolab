@@ -10,30 +10,49 @@ import {
   VectorTimeSeriesController,
 } from "../../src/vector/time-series.js";
 
+/**
+ * Return one immutable geometry-neutral feature focus for controller tests.
+ *
+ * @param {number} longitude WGS 84 longitude.
+ * @param {number} latitude WGS 84 latitude.
+ * @param {number[]|null} [bounds=null] Optional WGS 84 feature bounds.
+ * @return {Readonly<Object>} Test focus contract.
+ */
+function focus(longitude, latitude, bounds = null) {
+  return Object.freeze({
+    center: Object.freeze([longitude, latitude]),
+    bounds: bounds === null ? null : Object.freeze(bounds),
+  });
+}
+
 function observations() {
   return [
     Object.freeze({
       sourceId: "catalog|risk-10",
       layerLabel: "risk-10.shp",
       featureId: "risk.10a",
+      focus: focus(10, 1, [9, 0, 11, 2]),
       properties: Object.freeze({ year: 2010, score: 8, group: "east" }),
     }),
     Object.freeze({
       sourceId: "catalog|risk-2",
       layerLabel: "risk-2.shp",
       featureId: "risk.2a",
+      focus: focus(2, 1),
       properties: Object.freeze({ year: 2002, score: 3, group: "west" }),
     }),
     Object.freeze({
       sourceId: "catalog|risk-2",
       layerLabel: "risk-2.shp",
       featureId: "risk.2b",
+      focus: focus(3, 1),
       properties: Object.freeze({ year: 2002, score: 5, group: "west" }),
     }),
     Object.freeze({
       sourceId: "catalog|risk-11",
       layerLabel: "risk-11.shp",
       featureId: "risk.11a",
+      focus: focus(11, 1),
       properties: Object.freeze({ year: null, score: "missing", group: "north" }),
     }),
   ];
@@ -61,8 +80,8 @@ function fixture() {
       documentContext.querySelector("#vector-time-series").hidden = !visible;
     },
     onPresentationChange: (identity) => presentations.push(identity),
-    onSourceLayerZoom: (sourceId) => {
-      zoomRequests.push(sourceId);
+    onFeatureZoom: (featureFocus) => {
+      zoomRequests.push(featureFocus);
       return true;
     },
   });
@@ -188,6 +207,7 @@ test("controller renders axes and table while retaining controls across samples"
       sourceId: "catalog|later",
       layerLabel: "later.shp",
       featureId: "later.1",
+      focus: focus(20, 10),
       properties: Object.freeze({ other: 4 }),
     })],
     message: "1 feature found.",
@@ -290,7 +310,7 @@ test("scatter mode preserves points and omits the connecting line", () => {
   assert.match(chart.getAttribute("aria-label"), /Vector series scatter chart/);
 });
 
-test("chart points identify observations and request source-layer zoom", () => {
+test("chart points identify observations and request selected-feature zoom", () => {
   const h = fixture();
   h.controller.setSample({
     state: "ready",
@@ -312,9 +332,12 @@ test("chart points identify observations and request source-layer zoom", () => {
       .textContent,
     /Source layer: risk-2\.shp · Feature: risk\.2a/,
   );
-  h.documentContext.querySelector("#zoom-vector-time-series-source")
+  const zoom = h.documentContext.querySelector(
+    "#zoom-vector-time-series-feature",
+  );
+  zoom
     .dispatchEvent(new Event("click"));
-  assert.deepEqual(h.zoomRequests, ["catalog|risk-2"]);
+  assert.deepEqual(h.zoomRequests, [focus(2, 1)]);
 
   const keyboardSelection = new Event("keydown", { cancelable: true });
   Object.defineProperty(keyboardSelection, "key", { value: "Enter" });
@@ -325,6 +348,8 @@ test("chart points identify observations and request source-layer zoom", () => {
       .textContent,
     /risk-10\.shp/,
   );
+  zoom.dispatchEvent(new Event("click"));
+  assert.deepEqual(h.zoomRequests.at(-1), focus(10, 1, [9, 0, 11, 2]));
 });
 
 test("a new inspection sample clears the selected series point", () => {
@@ -349,7 +374,7 @@ test("a new inspection sample clears the selected series point", () => {
     true,
   );
   assert.equal(
-    h.documentContext.querySelector("#zoom-vector-time-series-source").disabled,
+    h.documentContext.querySelector("#zoom-vector-time-series-feature").disabled,
     true,
   );
 });

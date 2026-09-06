@@ -570,6 +570,8 @@
                   <span id="vector-feature-position"></span>
                   <button id="next-vector-feature" class="secondary-button"
                     type="button">Next</button>
+                  <button id="zoom-inspected-vector-feature" class="secondary-button"
+                    type="button" aria-controls="map" disabled>Zoom to feature</button>
                 </nav>
                 <dl id="vector-feature-attributes" class="vector-feature-attributes"></dl>
               </article>
@@ -621,8 +623,8 @@
                 <span id="vector-time-series-selection-text" role="status"
                   aria-live="polite" aria-atomic="true"></span>
               </p>
-              <button id="zoom-vector-time-series-source" class="secondary-button"
-                type="button" disabled>Zoom to source layer</button>
+              <button id="zoom-vector-time-series-feature" class="secondary-button"
+                type="button" aria-controls="map" disabled>Zoom to feature</button>
             </div>
             <details id="vector-time-series-table" class="vector-time-series-table" hidden>
               <summary>Chart data</summary>
@@ -660,6 +662,9 @@
                 aria-live="polite" aria-atomic="true"></span>
               <button id="next-vector-feature-profile" class="secondary-button"
                 type="button" disabled>Next</button>
+              <button id="zoom-vector-feature-profile-feature"
+                class="secondary-button" type="button" aria-controls="map"
+                disabled>Zoom to feature</button>
             </nav>
             <div class="vector-feature-profile-controls">
               <label for="vector-feature-profile-title-field">

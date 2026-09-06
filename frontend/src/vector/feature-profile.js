@@ -250,12 +250,15 @@ export class VectorFeatureProfileController {
      * @param {(direction:"previous"|"next")=>void}
      * configuration.onNavigateFeature Publishes navigation intent through
      * application composition without knowing the inspector implementation.
+     * @param {(focus:Readonly<Object>)=>boolean} configuration.onFeatureZoom
+     * Publishes current-feature map navigation intent through composition.
      * @param {Document} [configuration.documentContext=document] DOM owner.
      */
     constructor({
         onVisibilityChange,
         onPresentationChange,
         onNavigateFeature,
+        onFeatureZoom,
         documentContext = document,
     }) {
         if (typeof onVisibilityChange !== "function") {
@@ -267,9 +270,13 @@ export class VectorFeatureProfileController {
         if (typeof onNavigateFeature !== "function") {
             throw new TypeError("onNavigateFeature must be a function.");
         }
+        if (typeof onFeatureZoom !== "function") {
+            throw new TypeError("onFeatureZoom must be a function.");
+        }
         this.onVisibilityChange = onVisibilityChange;
         this.onPresentationChange = onPresentationChange;
         this.onNavigateFeature = onNavigateFeature;
+        this.onFeatureZoom = onFeatureZoom;
         this.document = documentContext;
         this.panel = documentContext.querySelector("#vector-feature-profile");
         this.heading = documentContext.querySelector(
@@ -289,6 +296,9 @@ export class VectorFeatureProfileController {
         );
         this.featurePosition = documentContext.querySelector(
             "#vector-feature-profile-position"
+        );
+        this.zoomFeatureButton = documentContext.querySelector(
+            "#zoom-vector-feature-profile-feature"
         );
         this.titleField = documentContext.querySelector(
             "#vector-feature-profile-title-field"
@@ -340,6 +350,11 @@ export class VectorFeatureProfileController {
         this.onNextFeature = () => {
             if (!this.nextFeature.disabled) this.onNavigateFeature("next");
         };
+        this.onZoomFeature = () => {
+            if (this.currentObservation === null) return;
+            if (this.onFeatureZoom(this.currentObservation.focus)) return;
+            this.zoomFeatureButton.disabled = true;
+        };
         this.onSettingsChange = () => {
             const settings = this.#currentSettings();
             if (settings === null) return;
@@ -378,6 +393,7 @@ export class VectorFeatureProfileController {
         this.closeButton.addEventListener("click", this.onClose);
         this.previousFeature.addEventListener("click", this.onPreviousFeature);
         this.nextFeature.addEventListener("click", this.onNextFeature);
+        this.zoomFeatureButton.addEventListener("click", this.onZoomFeature);
         this.titleField.addEventListener("change", this.onSettingsChange);
         this.direction.addEventListener("change", this.onSettingsChange);
         this.chartType.addEventListener("change", this.onSettingsChange);
@@ -463,6 +479,7 @@ export class VectorFeatureProfileController {
         this.table.hidden = true;
         this.chartTitle.hidden = true;
         this.chartTitle.textContent = "";
+        this.zoomFeatureButton.disabled = this.currentObservation === null;
         this.#renderNavigation();
         const settings = this.#currentSettings();
         if (this.currentObservation === null || settings === null) {
@@ -690,6 +707,7 @@ export class VectorFeatureProfileController {
         this.closeButton.removeEventListener("click", this.onClose);
         this.previousFeature.removeEventListener("click", this.onPreviousFeature);
         this.nextFeature.removeEventListener("click", this.onNextFeature);
+        this.zoomFeatureButton.removeEventListener("click", this.onZoomFeature);
         this.titleField.removeEventListener("change", this.onSettingsChange);
         this.direction.removeEventListener("change", this.onSettingsChange);
         this.chartType.removeEventListener("change", this.onSettingsChange);

@@ -17,6 +17,7 @@ const TIME_SERIES_AVAILABLE_HELP =
 const TIME_SERIES_UNAVAILABLE_HELP =
     "Select at least two features at this location to plot one field across them.";
 const MAX_ATTRIBUTE_VALUE_CHARACTERS = 1000;
+const MAX_FEATURE_FOCUS_COORDINATE_ARRAYS = 20_000;
 
 /**
  * Format elapsed inspection time without implying unavailable precision.
@@ -28,6 +29,122 @@ function formatInspectionDuration(elapsedMilliseconds) {
     const boundedMilliseconds = Math.max(0, elapsedMilliseconds);
     if (boundedMilliseconds < 100) return "under 0.1 s";
     return `${(boundedMilliseconds / 1000).toFixed(1)} s`;
+}
+
+/**
+ * Derive finite WGS 84 bounds from geometry already present in a bounded
+ * feature-info response.
+ *
+ * The traversal is capped and does not cause another geometry request. Empty,
+ * malformed, out-of-world, or antimeridian-spanning geometry returns no bounds
+ * so callers can use the inspected map position instead.
+ *
+ * @param {Object|null} geometry Optional GeoJSON geometry.
+ * @return {number[]|null} West, south, east, north bounds, or null.
+ */
+function vectorFeatureGeometryBounds(geometry) {
+    if (geometry === null || typeof geometry !== "object") return null;
+    const geometryStack = [geometry];
+    const coordinateStack = [];
+    let visitedCoordinateArrays = 0;
+    let west = Infinity;
+    let south = Infinity;
+    let east = -Infinity;
+    let north = -Infinity;
+    let foundCoordinate = false;
+    let visitedGeometries = 0;
+    while (geometryStack.length > 0) {
+        const current = geometryStack.pop();
+        visitedGeometries += 1;
+        if (visitedGeometries > MAX_FEATURE_FOCUS_COORDINATE_ARRAYS) {
+            return null;
+        }
+        if (
+            current?.type === "GeometryCollection" &&
+            Array.isArray(current.geometries)
+        ) {
+            if (
+                visitedGeometries + geometryStack.length +
+                current.geometries.length >
+                MAX_FEATURE_FOCUS_COORDINATE_ARRAYS
+            ) {
+                return null;
+            }
+            for (const nestedGeometry of current.geometries) {
+                geometryStack.push(nestedGeometry);
+            }
+        } else if (Array.isArray(current?.coordinates)) {
+            coordinateStack.push(current.coordinates);
+        }
+    }
+    while (coordinateStack.length > 0) {
+        const coordinates = coordinateStack.pop();
+        visitedCoordinateArrays += 1;
+        if (visitedCoordinateArrays > MAX_FEATURE_FOCUS_COORDINATE_ARRAYS) {
+            return null;
+        }
+        if (
+            coordinates.length >= 2 &&
+            Number.isFinite(coordinates[0]) &&
+            Number.isFinite(coordinates[1])
+        ) {
+            const [longitude, latitude] = coordinates;
+            if (
+                longitude < -180 || longitude > 180 ||
+                latitude < -90 || latitude > 90
+            ) {
+                return null;
+            }
+            west = Math.min(west, longitude);
+            south = Math.min(south, latitude);
+            east = Math.max(east, longitude);
+            north = Math.max(north, latitude);
+            foundCoordinate = true;
+            continue;
+        }
+        if (!coordinates.every(Array.isArray)) return null;
+        if (
+            visitedCoordinateArrays + coordinateStack.length +
+            coordinates.length > MAX_FEATURE_FOCUS_COORDINATE_ARRAYS
+        ) {
+            return null;
+        }
+        for (const nestedCoordinates of coordinates) {
+            coordinateStack.push(nestedCoordinates);
+        }
+    }
+    if (!foundCoordinate || east - west > 180) return null;
+    return [west, south, east, north];
+}
+
+/**
+ * Build an immutable geometry-neutral map target for one inspected feature.
+ *
+ * @param {Object} configuration Focus inputs.
+ * @param {Object} configuration.feature Bounded GeoJSON feature result.
+ * @param {{lng:number,lat:number}} configuration.inspectionPosition Accepted
+ * WGS 84 map-click position.
+ * @return {Readonly<Object>} Center and optional already-returned feature bounds.
+ * @throws {TypeError} If the inspection position is outside WGS 84.
+ */
+function vectorFeatureFocus({ feature, inspectionPosition }) {
+    const longitude = inspectionPosition?.lng;
+    const latitude = inspectionPosition?.lat;
+    if (
+        !Number.isFinite(longitude) || longitude < -180 || longitude > 180 ||
+        !Number.isFinite(latitude) || latitude < -90 || latitude > 90
+    ) {
+        throw new TypeError("Invalid vector feature inspection position.");
+    }
+    const bounds = vectorFeatureGeometryBounds(feature?.geometry ?? null);
+    const center = bounds !== null &&
+        bounds[0] === bounds[2] && bounds[1] === bounds[3]
+        ? [bounds[0], bounds[1]]
+        : [longitude, latitude];
+    return Object.freeze({
+        center: Object.freeze(center),
+        bounds: bounds === null ? null : Object.freeze(bounds),
+    });
 }
 
 /**
@@ -47,12 +164,14 @@ function formatInspectionDuration(elapsedMilliseconds) {
  * Return an immutable scalar-only observation for sibling analysis tools.
  *
  * Geometry and nested values stay owned by the feature inspector. The analysis
- * boundary contains only the fields needed to order and chart inspected rows.
+ * boundary contains only chart fields and the small geometry-neutral map focus
+ * needed to navigate back to an inspected row.
  *
- * @param {{feature:Object,target:VectorFeatureInspectionTarget}} result Result.
+ * @param {{feature:Object,target:VectorFeatureInspectionTarget,
+ * inspectionPosition:{lng:number,lat:number}}} result Result.
  * @return {Readonly<Object>} Closed inspection-observation contract.
  */
-export function vectorInspectionObservation({ feature, target }) {
+export function vectorInspectionObservation({ feature, target, inspectionPosition }) {
     const properties = {};
     for (const [name, value] of Object.entries(feature.properties)) {
         if (
@@ -70,6 +189,7 @@ export function vectorInspectionObservation({ feature, target }) {
         featureId: typeof feature.id === "string" || typeof feature.id === "number"
             ? feature.id
             : null,
+        focus: vectorFeatureFocus({ feature, inspectionPosition }),
         properties: Object.freeze(properties),
     });
 }
@@ -167,6 +287,9 @@ export class VectorFeatureInspectorController {
      * intent for all selected features without knowing its implementation.
      * @param {(sourceId:string)=>void} configuration.onStyleRequested Publishes
      * styling intent with the selected feature's opaque source identity.
+     * @param {(focus:Readonly<Object>)=>boolean}
+     * configuration.onFeatureZoomRequested Publishes current-feature map
+     * navigation intent without owning viewport movement.
      * @param {Document} [configuration.documentContext=document] DOM owner.
      * @param {typeof fetch} [configuration.fetchImplementation=globalThis.fetch]
      * HTTP implementation.
@@ -184,6 +307,7 @@ export class VectorFeatureInspectorController {
         onFeatureProfileRequested,
         onTimeSeriesRequested,
         onStyleRequested,
+        onFeatureZoomRequested,
         documentContext = document,
         fetchImplementation = globalThis.fetch,
         now = () => globalThis.performance.now(),
@@ -209,6 +333,9 @@ export class VectorFeatureInspectorController {
         if (typeof onStyleRequested !== "function") {
             throw new TypeError("onStyleRequested must be a function.");
         }
+        if (typeof onFeatureZoomRequested !== "function") {
+            throw new TypeError("onFeatureZoomRequested must be a function.");
+        }
         if (typeof now !== "function") {
             throw new TypeError("now must be a function.");
         }
@@ -222,6 +349,7 @@ export class VectorFeatureInspectorController {
         this.onFeatureProfileRequested = onFeatureProfileRequested;
         this.onTimeSeriesRequested = onTimeSeriesRequested;
         this.onStyleRequested = onStyleRequested;
+        this.onFeatureZoomRequested = onFeatureZoomRequested;
         this.document = documentContext;
         this.fetchImplementation = fetchImplementation;
         this.now = now;
@@ -238,6 +366,9 @@ export class VectorFeatureInspectorController {
         );
         this.styleButton = documentContext.querySelector(
             "#style-inspected-vector-layer"
+        );
+        this.zoomFeatureButton = documentContext.querySelector(
+            "#zoom-inspected-vector-feature"
         );
         this.status = documentContext.querySelector("#vector-feature-status");
         this.result = documentContext.querySelector("#vector-feature-result");
@@ -268,6 +399,14 @@ export class VectorFeatureInspectorController {
                 this.onStyleRequested(selected.target.sourceId);
             }
         };
+        this.onZoomFeature = () => {
+            const selected = this.results[this.resultIndex];
+            if (selected === undefined || this.zoomFeatureButton.disabled) return;
+            const observation = vectorInspectionObservation(selected);
+            if (!this.onFeatureZoomRequested(observation.focus)) {
+                this.zoomFeatureButton.disabled = true;
+            }
+        };
         this.onPrevious = () => this.navigateResult("previous");
         this.onNext = () => this.navigateResult("next");
         this.onKeydown = (event) => {
@@ -288,11 +427,13 @@ export class VectorFeatureInspectorController {
         );
         this.timeSeriesButton.addEventListener("click", this.onOpenTimeSeries);
         this.styleButton.addEventListener("click", this.onOpenStyle);
+        this.zoomFeatureButton.addEventListener("click", this.onZoomFeature);
         this.previous.addEventListener("click", this.onPrevious);
         this.next.addEventListener("click", this.onNext);
         this.document.addEventListener("keydown", this.onKeydown);
         this.styleButton.hidden = true;
         this.styleButton.disabled = true;
+        this.zoomFeatureButton.disabled = true;
         this.#updateTimeSeriesAction(0);
         this.syncVisibleLayers();
     }
@@ -475,7 +616,14 @@ export class VectorFeatureInspectorController {
                     viewport,
                     signal: abortController.signal,
                 }, this.fetchImplementation);
-                results = features.map((feature) => ({ feature, target }));
+                results = features.map((feature) => ({
+                    feature,
+                    target,
+                    inspectionPosition: Object.freeze({
+                        lng: event.latlng.lng,
+                        lat: event.latlng.lat,
+                    }),
+                }));
             } catch (error) {
                 failure = error;
             }
@@ -635,7 +783,9 @@ export class VectorFeatureInspectorController {
         }
         this.resultIndex = Math.min(this.results.length - 1, Math.max(0, index));
         const { feature, target } = this.results[this.resultIndex];
-        const observation = vectorInspectionObservation({ feature, target });
+        const observation = vectorInspectionObservation(
+            this.results[this.resultIndex]
+        );
         const navigation = Object.freeze({
             position: this.resultIndex + 1,
             total: this.results.length,
@@ -646,6 +796,7 @@ export class VectorFeatureInspectorController {
         this.layerName.textContent = target.label;
         this.styleButton.hidden = false;
         this.styleButton.disabled = false;
+        this.zoomFeatureButton.disabled = false;
         this.styleButton.setAttribute("aria-label", `Style ${target.label}`);
         this.position.textContent = `${navigation.position} of ${navigation.total}`;
         this.previous.disabled = !navigation.canPrevious;
@@ -706,6 +857,7 @@ export class VectorFeatureInspectorController {
         this.featureProfileButton.disabled = true;
         this.styleButton.hidden = true;
         this.styleButton.disabled = true;
+        this.zoomFeatureButton.disabled = true;
         this.styleButton.setAttribute(
             "aria-label", "Style selected vector layer"
         );
@@ -740,6 +892,7 @@ export class VectorFeatureInspectorController {
         );
         this.timeSeriesButton.removeEventListener("click", this.onOpenTimeSeries);
         this.styleButton.removeEventListener("click", this.onOpenStyle);
+        this.zoomFeatureButton.removeEventListener("click", this.onZoomFeature);
         this.previous.removeEventListener("click", this.onPrevious);
         this.next.removeEventListener("click", this.onNext);
         this.document.removeEventListener("keydown", this.onKeydown);

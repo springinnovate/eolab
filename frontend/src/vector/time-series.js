@@ -143,6 +143,7 @@ export function buildVectorTimeSeriesSeries(observations, settings) {
             sourceId: observation.sourceId,
             layerLabel: observation.layerLabel,
             featureId: observation.featureId,
+            focus: observation.focus,
             xValue,
             xLabel: formatScalar(xValue),
             yValue,
@@ -234,14 +235,14 @@ export class VectorTimeSeriesController {
      * @param {(identity:{label:string,title:string}|null)=>void}
      * configuration.onPresentationChange Publishes a bounded dock identity
      * through application composition.
-     * @param {(sourceId:string)=>boolean} configuration.onSourceLayerZoom
-     * Requests source-layer navigation through application composition.
+     * @param {(focus:Readonly<Object>)=>boolean} configuration.onFeatureZoom
+     * Requests selected-feature navigation through application composition.
      * @param {Document} [configuration.documentContext=document] DOM owner.
      */
     constructor({
         onVisibilityChange,
         onPresentationChange,
-        onSourceLayerZoom,
+        onFeatureZoom,
         documentContext = document,
     }) {
         if (typeof onVisibilityChange !== "function") {
@@ -250,12 +251,12 @@ export class VectorTimeSeriesController {
         if (typeof onPresentationChange !== "function") {
             throw new TypeError("onPresentationChange must be a function.");
         }
-        if (typeof onSourceLayerZoom !== "function") {
-            throw new TypeError("onSourceLayerZoom must be a function.");
+        if (typeof onFeatureZoom !== "function") {
+            throw new TypeError("onFeatureZoom must be a function.");
         }
         this.onVisibilityChange = onVisibilityChange;
         this.onPresentationChange = onPresentationChange;
-        this.onSourceLayerZoom = onSourceLayerZoom;
+        this.onFeatureZoom = onFeatureZoom;
         this.document = documentContext;
         this.panel = documentContext.querySelector("#vector-time-series");
         this.heading = documentContext.querySelector(
@@ -289,8 +290,8 @@ export class VectorTimeSeriesController {
         this.selectionText = documentContext.querySelector(
             "#vector-time-series-selection-text"
         );
-        this.zoomSourceButton = documentContext.querySelector(
-            "#zoom-vector-time-series-source"
+        this.zoomFeatureButton = documentContext.querySelector(
+            "#zoom-vector-time-series-feature"
         );
         this.observations = Object.freeze([]);
         this.pointElements = [];
@@ -311,13 +312,13 @@ export class VectorTimeSeriesController {
             this.settings.chartType = this.chartType.value;
             this.render();
         };
-        this.onZoomSource = () => {
+        this.onZoomFeature = () => {
             if (this.selectedPoint === null) return;
-            if (this.onSourceLayerZoom(this.selectedPoint.sourceId)) return;
-            this.zoomSourceButton.disabled = true;
+            if (this.onFeatureZoom(this.selectedPoint.focus)) return;
+            this.zoomFeatureButton.disabled = true;
             this.selectionText.textContent =
                 `${this.#pointIdentity(this.selectedPoint)} · ` +
-                "Source layer is no longer available.";
+                "Feature location is unavailable.";
         };
         this.onKeydown = (event) => {
             if (
@@ -336,7 +337,7 @@ export class VectorTimeSeriesController {
         this.yField.addEventListener("change", this.onControlChange);
         this.direction.addEventListener("change", this.onControlChange);
         this.chartType.addEventListener("change", this.onControlChange);
-        this.zoomSourceButton.addEventListener("click", this.onZoomSource);
+        this.zoomFeatureButton.addEventListener("click", this.onZoomFeature);
         this.document.addEventListener("keydown", this.onKeydown);
         this.render();
     }
@@ -588,7 +589,7 @@ export class VectorTimeSeriesController {
         }
         this.selectionText.textContent = this.#pointIdentity(point);
         this.selection.hidden = false;
-        this.zoomSourceButton.disabled = false;
+        this.zoomFeatureButton.disabled = false;
     }
 
     /** Clear selected-point presentation and retained navigation identity. @return {void} */
@@ -597,7 +598,7 @@ export class VectorTimeSeriesController {
         this.pointElements = [];
         this.selection.hidden = true;
         this.selectionText.textContent = "";
-        this.zoomSourceButton.disabled = true;
+        this.zoomFeatureButton.disabled = true;
     }
 
     /**
@@ -631,7 +632,7 @@ export class VectorTimeSeriesController {
         this.yField.removeEventListener("change", this.onControlChange);
         this.direction.removeEventListener("change", this.onControlChange);
         this.chartType.removeEventListener("change", this.onControlChange);
-        this.zoomSourceButton.removeEventListener("click", this.onZoomSource);
+        this.zoomFeatureButton.removeEventListener("click", this.onZoomFeature);
         this.document.removeEventListener("keydown", this.onKeydown);
         this.onPresentationChange(null);
         this.onVisibilityChange(false, false);

@@ -18,6 +18,10 @@ function observation(overrides = {}) {
     sourceId: overrides.sourceId ?? "catalog|corridors",
     layerLabel: overrides.layerLabel ?? "corridors.shp",
     featureId: overrides.featureId ?? "corridors.1",
+    focus: Object.freeze(overrides.focus ?? {
+      center: Object.freeze([20, 10]),
+      bounds: Object.freeze([19, 9, 21, 11]),
+    }),
     properties: Object.freeze(overrides.properties ?? {
       node_nm: "Northern corridor",
       R1999: 1.5,
@@ -45,6 +49,7 @@ function fixture() {
   const visibility = [];
   const presentations = [];
   const navigationRequests = [];
+  const featureZoomRequests = [];
   const controller = new VectorFeatureProfileController({
     documentContext,
     onVisibilityChange: (visible, moveFocus) => {
@@ -53,6 +58,10 @@ function fixture() {
     },
     onPresentationChange: (identity) => presentations.push(identity),
     onNavigateFeature: (direction) => navigationRequests.push(direction),
+    onFeatureZoom: (focus) => {
+      featureZoomRequests.push(focus);
+      return true;
+    },
   });
   return {
     controller,
@@ -60,6 +69,7 @@ function fixture() {
     visibility,
     presentations,
     navigationRequests,
+    featureZoomRequests,
   };
 }
 
@@ -190,9 +200,18 @@ test("feature navigation publishes intent and redraws the current observation", 
   previous.dispatchEvent(new Event("click"));
   next.dispatchEvent(new Event("click"));
   assert.deepEqual(h.navigationRequests, ["previous", "next"]);
+  const zoom = h.documentContext.querySelector(
+    "#zoom-vector-feature-profile-feature",
+  );
+  assert.equal(zoom.disabled, false);
+  zoom.dispatchEvent(new Event("click"));
+  assert.deepEqual(h.featureZoomRequests, [{
+    center: [20, 10], bounds: [19, 9, 21, 11],
+  }]);
 
   h.controller.setCurrentObservation(observation({
     featureId: "corridors.2",
+    focus: Object.freeze({ center: [30, 15], bounds: null }),
     properties: { node_nm: "Southern corridor", R1999: 2, R2000: 4, R2001: 8 },
   }), {
     position: 3,
@@ -206,6 +225,10 @@ test("feature navigation publishes intent and redraws the current observation", 
   );
   assert.equal(previous.disabled, false);
   assert.equal(next.disabled, true);
+  zoom.dispatchEvent(new Event("click"));
+  assert.deepEqual(h.featureZoomRequests.at(-1), {
+    center: [30, 15], bounds: null,
+  });
   next.dispatchEvent(new Event("click"));
   assert.deepEqual(h.navigationRequests, ["previous", "next"]);
   assert.throws(
@@ -216,6 +239,17 @@ test("feature navigation publishes intent and redraws the current observation", 
       canNext: true,
     }),
     /Invalid feature-profile navigation state/,
+  );
+  assert.throws(
+    () => h.controller.setCurrentObservation(observation({
+      focus: { center: [181, 0], bounds: null },
+    }), {
+      position: 1,
+      total: 1,
+      canPrevious: false,
+      canNext: false,
+    }),
+    /Invalid vector feature focus target/,
   );
 });
 
