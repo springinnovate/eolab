@@ -3410,7 +3410,7 @@ article.raster-histogram-summary {
   vector-effect: non-scaling-stroke;
 }
 
-.raster-bivariate-cell:is(:hover, :focus, .is-selected, .is-sampled) {
+.raster-bivariate-cell:is(:hover, :focus, .is-hovered, .is-selected, .is-sampled) {
   outline: none;
   stroke: var(--text-1);
   stroke-opacity: 1 !important;
@@ -3421,6 +3421,13 @@ article.raster-histogram-summary {
   fill-opacity: 0.9;
   stroke: var(--surface-2);
   stroke-width: 0.5px;
+}
+
+.raster-bivariate-marginal.is-hovered {
+  fill-opacity: 1;
+  stroke: var(--brand-hover);
+  stroke-width: 2px;
+  vector-effect: non-scaling-stroke;
 }
 
 .raster-bivariate-axis {

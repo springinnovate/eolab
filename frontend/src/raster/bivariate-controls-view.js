@@ -11,6 +11,7 @@ import {
     findRasterPairedHistogramCell,
     getHighestDensityPairedCell,
 } from "./paired-statistics.js";
+import { formatHistogramTick } from "./histogram-axes.js";
 import { formatRasterPixelValue } from "./value-format.js";
 
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
@@ -21,6 +22,9 @@ const HISTOGRAM_PLOT_X = 160;
 const HISTOGRAM_PLOT_Y = 74;
 const HISTOGRAM_PLOT_SIZE = 420;
 const HISTOGRAM_MARGINAL_SIZE = 54;
+const HISTOGRAM_TOOLTIP_WIDTH = 360;
+const HISTOGRAM_TOOLTIP_LINE_HEIGHT = 16;
+const HISTOGRAM_TOOLTIP_MARGIN = 4;
 const AXIS_TITLE_MAXIMUM_LINE_LENGTH = 40;
 const AXIS_TITLE_LINE_HEIGHT = 22;
 
@@ -50,6 +54,124 @@ function svgElement(documentContext, name, attributes = {}) {
 function formatRange(minimum, maximum) {
     return `${formatRasterPixelValue(minimum)} to ` +
         formatRasterPixelValue(maximum);
+}
+
+/**
+ * Format one histogram bin with the compact precision used by 1D hover text.
+ *
+ * @param {number} minimum Inclusive lower bin edge.
+ * @param {number} maximum Exclusive upper bin edge.
+ * @return {string} Readable compact range.
+ */
+function formatHistogramBinRange(minimum, maximum) {
+    const precision = (maximum - minimum) / 100;
+    return `${formatHistogramTick(minimum, precision)}–${
+        formatHistogramTick(maximum, precision)
+    }`;
+}
+
+/**
+ * Format one paired-histogram count with its share of the paired sample.
+ *
+ * @param {number} count Pixels represented by the cell or marginal bin.
+ * @param {number} sampleCount Total valid paired pixels.
+ * @return {string} Pixel count and percentage matching 1D hover language.
+ */
+function formatPairedSampleCount(count, sampleCount) {
+    const percentage = count / sampleCount * 100;
+    return `${count.toLocaleString()} pixels · ${percentage.toFixed(2)}% of sample`;
+}
+
+/**
+ * Build the reusable in-chart tooltip for cells and marginal bars.
+ *
+ * The tooltip shares the standalone histogram's visual class while retaining
+ * a bivariate-specific hook for focused tests and future layout changes.
+ *
+ * @param {Document} documentContext Owning DOM document.
+ * @return {{element:SVGGElement,background:SVGRectElement,lines:SVGTextElement[]}}
+ * Tooltip group, background, and three reusable text rows.
+ */
+function createBivariateHistogramTooltip(documentContext) {
+    const element = svgElement(documentContext, "g");
+    element.classList.add(
+        "raster-histogram-tooltip",
+        "raster-bivariate-tooltip"
+    );
+    element.setAttribute("hidden", "");
+    element.setAttribute("aria-hidden", "true");
+    const background = svgElement(documentContext, "rect", {
+        width: HISTOGRAM_TOOLTIP_WIDTH,
+        rx: 3,
+    });
+    const lines = Array.from({ length: 3 }, (_, index) => svgElement(
+        documentContext,
+        "text",
+        {
+            x: 8,
+            y: 17 + index * HISTOGRAM_TOOLTIP_LINE_HEIGHT,
+        }
+    ));
+    element.append(background, ...lines);
+    return { element, background, lines };
+}
+
+/**
+ * Show compact text beside one SVG datum without leaving the chart view box.
+ *
+ * @param {Object} tooltip Tooltip returned by
+ * {@link createBivariateHistogramTooltip}.
+ * @param {SVGElement} target Hovered cell or marginal bar.
+ * @param {string[]} textLines Two or three non-empty tooltip lines.
+ * @param {number} viewBoxHeight Current chart view-box height.
+ * @return {void}
+ */
+function showBivariateHistogramTooltip(
+    tooltip,
+    target,
+    textLines,
+    viewBoxHeight
+) {
+    const tooltipHeight = 10 +
+        textLines.length * HISTOGRAM_TOOLTIP_LINE_HEIGHT;
+    tooltip.background.setAttribute("height", String(tooltipHeight));
+    tooltip.lines.forEach((line, index) => {
+        line.textContent = textLines[index] ?? "";
+        if (index < textLines.length) {
+            line.removeAttribute("hidden");
+        } else {
+            line.setAttribute("hidden", "");
+        }
+    });
+    const targetX = Number(target.getAttribute("x"));
+    const targetY = Number(target.getAttribute("y"));
+    const targetWidth = Number(target.getAttribute("width"));
+    const targetHeight = Number(target.getAttribute("height"));
+    const preferredX = targetX + targetWidth / 2 -
+        HISTOGRAM_TOOLTIP_WIDTH / 2;
+    const tooltipX = Math.max(
+        HISTOGRAM_TOOLTIP_MARGIN,
+        Math.min(
+            preferredX,
+            HISTOGRAM_VIEWBOX_WIDTH - HISTOGRAM_TOOLTIP_WIDTH -
+                HISTOGRAM_TOOLTIP_MARGIN
+        )
+    );
+    const preferredY = targetY > tooltipHeight + 2 * HISTOGRAM_TOOLTIP_MARGIN
+        ? targetY - tooltipHeight - HISTOGRAM_TOOLTIP_MARGIN
+        : targetY + targetHeight + HISTOGRAM_TOOLTIP_MARGIN;
+    const tooltipY = Math.max(
+        HISTOGRAM_TOOLTIP_MARGIN,
+        Math.min(
+            preferredY,
+            viewBoxHeight - tooltipHeight - HISTOGRAM_TOOLTIP_MARGIN
+        )
+    );
+    tooltip.element.setAttribute(
+        "transform",
+        `translate(${tooltipX} ${tooltipY})`
+    );
+    tooltip.element.removeAttribute("hidden");
 }
 
 /**
@@ -417,6 +539,40 @@ export class BivariateRasterControlsView {
                 class: "raster-bivariate-plot",
             }),
         ];
+        const tooltip = createBivariateHistogramTooltip(
+            this.documentContext
+        );
+        let activeHover = null;
+        /**
+         * Emphasize one datum and show its transient in-chart readout.
+         *
+         * @param {SVGElement} target Hovered cell or marginal bar.
+         * @param {string[]} lines Compact tooltip rows.
+         * @return {void}
+         */
+        const showHover = (target, lines) => {
+            activeHover?.classList.remove("is-hovered");
+            activeHover = target;
+            target.classList.add("is-hovered");
+            showBivariateHistogramTooltip(
+                tooltip,
+                target,
+                lines,
+                viewBoxHeight
+            );
+        };
+        /**
+         * Clear hover feedback only when the departing datum still owns it.
+         *
+         * @param {SVGElement} target Departing cell or marginal bar.
+         * @return {void}
+         */
+        const hideHover = (target) => {
+            if (activeHover !== target) return;
+            target.classList.remove("is-hovered");
+            activeHover = null;
+            tooltip.element.setAttribute("hidden", "");
+        };
         for (const fraction of [0.25, 0.5, 0.75]) {
             const offset = HISTOGRAM_PLOT_SIZE * fraction;
             children.push(
@@ -484,6 +640,20 @@ export class BivariateRasterControlsView {
                     yBin,
                     count
                 );
+                const tooltipLines = [
+                    `X: ${formatHistogramBinRange(
+                        histogram.xEdges[xBin],
+                        histogram.xEdges[xBin + 1]
+                    )}`,
+                    `Y: ${formatHistogramBinRange(
+                        histogram.yEdges[yBin],
+                        histogram.yEdges[yBin + 1]
+                    )}`,
+                    formatPairedSampleCount(
+                        count,
+                        statistics.pairedSampleCount
+                    ),
+                ];
                 cell.setAttribute("aria-label", description);
                 /** Select and announce this histogram cell. @return {void} */
                 const select = () => this.#selectCell(
@@ -492,8 +662,16 @@ export class BivariateRasterControlsView {
                     compactDescription,
                     cell
                 );
-                cell.addEventListener("pointerenter", select);
-                cell.addEventListener("focus", select);
+                cell.addEventListener("pointerenter", () => {
+                    select();
+                    showHover(cell, tooltipLines);
+                });
+                cell.addEventListener("pointerleave", () => hideHover(cell));
+                cell.addEventListener("focus", () => {
+                    select();
+                    showHover(cell, tooltipLines);
+                });
+                cell.addEventListener("blur", () => hideHover(cell));
                 cell.addEventListener("click", select);
                 cell.addEventListener("keydown", (event) => {
                     if (event.key === "Enter" || event.key === " ") {
@@ -513,6 +691,7 @@ export class BivariateRasterControlsView {
                 y: HISTOGRAM_PLOT_Y - height,
                 width: Math.max(1, cellSize - 1),
                 height,
+                "data-marginal-axis": "x",
             });
             bar.classList.add("raster-bivariate-marginal");
             const midpoint = (
@@ -522,6 +701,31 @@ export class BivariateRasterControlsView {
                 presentation.xStyle,
                 midpoint
             );
+            bar.setAttribute(
+                "aria-label",
+                `${presentation.xLabel} ${formatRange(
+                    histogram.xEdges[xBin],
+                    histogram.xEdges[xBin + 1]
+                )}; ${formatPairedSampleCount(
+                    count,
+                    statistics.pairedSampleCount
+                )}.`
+            );
+            const tooltipLines = [
+                `X: ${formatHistogramBinRange(
+                    histogram.xEdges[xBin],
+                    histogram.xEdges[xBin + 1]
+                )}`,
+                formatPairedSampleCount(
+                    count,
+                    statistics.pairedSampleCount
+                ),
+            ];
+            bar.addEventListener(
+                "pointerenter",
+                () => showHover(bar, tooltipLines)
+            );
+            bar.addEventListener("pointerleave", () => hideHover(bar));
             children.push(bar);
         });
         histogram.yMarginalCounts.forEach((count, yBin) => {
@@ -531,6 +735,7 @@ export class BivariateRasterControlsView {
                 y: HISTOGRAM_PLOT_Y + (binCount - 1 - yBin) * cellSize,
                 width,
                 height: Math.max(1, cellSize - 1),
+                "data-marginal-axis": "y",
             });
             bar.classList.add("raster-bivariate-marginal");
             const midpoint = (
@@ -540,6 +745,31 @@ export class BivariateRasterControlsView {
                 presentation.yStyle,
                 midpoint
             );
+            bar.setAttribute(
+                "aria-label",
+                `${presentation.yLabel} ${formatRange(
+                    histogram.yEdges[yBin],
+                    histogram.yEdges[yBin + 1]
+                )}; ${formatPairedSampleCount(
+                    count,
+                    statistics.pairedSampleCount
+                )}.`
+            );
+            const tooltipLines = [
+                `Y: ${formatHistogramBinRange(
+                    histogram.yEdges[yBin],
+                    histogram.yEdges[yBin + 1]
+                )}`,
+                formatPairedSampleCount(
+                    count,
+                    statistics.pairedSampleCount
+                ),
+            ];
+            bar.addEventListener(
+                "pointerenter",
+                () => showHover(bar, tooltipLines)
+            );
+            bar.addEventListener("pointerleave", () => hideHover(bar));
             children.push(bar);
         });
 
@@ -639,6 +869,7 @@ export class BivariateRasterControlsView {
             yAxisLabel.textContent = line;
             children.push(yAxisLabel);
         });
+        children.push(tooltip.element);
 
         this.histogram.replaceChildren(...children);
         this.histogram.setAttribute("aria-label", summary);
@@ -786,12 +1017,13 @@ export class BivariateRasterControlsView {
     #compactCellDescription(xBin, yBin, count) {
         const histogram = this.statistics.histogram;
         const percentage = count / this.statistics.pairedSampleCount * 100;
-        return `${this.labels.xLabel} ` +
-            `${formatRasterPixelValue(histogram.xEdges[xBin])}–` +
-            `${formatRasterPixelValue(histogram.xEdges[xBin + 1])} · ` +
-            `${this.labels.yLabel} ` +
-            `${formatRasterPixelValue(histogram.yEdges[yBin])}–` +
-            `${formatRasterPixelValue(histogram.yEdges[yBin + 1])} · ` +
+        return `X ${formatHistogramBinRange(
+            histogram.xEdges[xBin],
+            histogram.xEdges[xBin + 1]
+        )} · Y ${formatHistogramBinRange(
+            histogram.yEdges[yBin],
+            histogram.yEdges[yBin + 1]
+        )} · ` +
             `${count.toLocaleString()} pixels (${percentage.toFixed(1)}%)`;
     }
 

@@ -17,6 +17,7 @@ const FOCUSED_VIEW_IMPORTS = {
     ],
     "bivariate-controls-view.js": [
         "./bivariate.js",
+        "./histogram-axes.js",
         "./paired-statistics.js",
         "./required-control.js",
         "./value-format.js",
