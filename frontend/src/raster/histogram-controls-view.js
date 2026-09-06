@@ -156,7 +156,7 @@ export class RasterHistogramControlsView {
     }
 
     /**
-     * Render exact raster values retained from one map click.
+     * Render exact in-bounds raster values retained from one map click.
      *
      * @param {{position:Readonly<Object>,samples:ReadonlyArray<Object>}}
      * snapshot Immutable point-result snapshot from the raster owner.
@@ -189,7 +189,14 @@ export class RasterHistogramControlsView {
         ) {
             throw new TypeError("Raster point-sample snapshot is invalid");
         }
-        const rows = snapshot.samples.map((sample) => {
+        const samples = snapshot.samples.filter(
+            (sample) => sample.state !== "outside"
+        );
+        if (samples.length === 0) {
+            this.clearPointSamples();
+            return;
+        }
+        const rows = samples.map((sample) => {
             const row = this.documentContext.createElement("div");
             row.className = "raster-point-sample-row";
             row.setAttribute("data-state", sample.state);
@@ -213,7 +220,6 @@ export class RasterHistogramControlsView {
                     ? formatRasterPixelValue(sample.value)
                     : "",
                 nodata: "No data",
-                outside: "Outside raster",
                 error: sample.errorMessage === ""
                     ? "Unavailable"
                     : `Unavailable: ${sample.errorMessage}`,
@@ -225,7 +231,7 @@ export class RasterHistogramControlsView {
         this.pointSamples.hidden = false;
         this.pointSamples.setAttribute(
             "aria-busy",
-            String(snapshot.samples.some((sample) => sample.state === "loading"))
+            String(samples.some((sample) => sample.state === "loading"))
         );
     }
 

@@ -297,6 +297,14 @@ test("inspector publication can reveal Map layers through composition", () => {
     assert.doesNotMatch(COMPOSITION_SOURCE, /stopSampleWindowSelection|onHistogramClose/);
 });
 
+test("composition closes raster inspection when no raster accepts a click", () => {
+    assert.match(
+        COMPOSITION_SOURCE,
+        /if \(!rasterVisualization\.exploreAt\(event\.latlng\)\) \{\s*mapInspection\.closeHistogram\(false\);/
+    );
+    assert.match(COMPOSITION_SOURCE, /vectorFeatureInspector\.inspect\(event\)/);
+});
+
 test("map-layer Info can reveal Catalog through composition", () => {
     assert.match(
         COMPOSITION_SOURCE,
