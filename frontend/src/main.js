@@ -71,6 +71,8 @@ import { VectorFeatureProfileController } from "./vector/feature-profile.js";
 import {
     validateVectorFeatureFocus,
 } from "./vector/inspection-observation.js";
+import { VectorFilterControls } from "./vector/filter-controls.js";
+import { vectorFilterStatus } from "./vector/filter.js";
 import { createVectorMapLayerAdapter } from "./vector/map-layer-adapter.js";
 import { VectorStyleControls } from "./vector/style-controls.js";
 import { vectorLabelFields } from "./vector/style.js";
@@ -680,6 +682,7 @@ async function initializeCatalog(
     let layerStyleEditor = null;
     let savedMapViewController = null;
     let vectorFeatureInspector = null;
+    let vectorFilterControls = null;
     const mapLayerStackView = new MapLayerStackView();
     const compositeLeafletRenderer = new CompositeLeafletRenderer({
         leaflet: L,
@@ -699,6 +702,7 @@ async function initializeCatalog(
             rasterVisualization?.syncVisibleLayers();
             layerStyleEditor?.refresh();
             vectorFeatureInspector?.syncVisibleLayers();
+            vectorFilterControls?.refresh();
             if (!layers.some((layer) =>
                 layer.visible && layer.datasetKind === "raster"
             )) {
@@ -728,16 +732,32 @@ async function initializeCatalog(
         cursorValuesView: new RasterCursorValuesView(),
     });
     const vectorMapLayerAdapter = createVectorMapLayerAdapter({
+        onFilterChange: () => mapLayerController.render(),
         leaflet: L,
         leafletMap,
         wmsUrl: appGlobalConfiguration.wmsUrl,
         onTileError: reportMapTileError,
     });
+    vectorFilterControls = new VectorFilterControls({
+        inspection: mapInspection,
+        getTarget: (key) => {
+            const record = mapLayerController.getRecord(key);
+            if (record === null || record.adapter !== vectorMapLayerAdapter) return null;
+            return {
+                key, label: record.entry.label, fields: record.state.labelFields,
+                filter: record.state.filter, status: vectorFilterStatus(record.state),
+                apply: (candidate) => record.adapter.applyFilterState(record, candidate),
+                cancelPending: () => record.adapter.cancelPendingFilter(record),
+            };
+        },
+    });
+    mapLayerController.onFilter = (key) => vectorFilterControls.open(key);
     const vectorStyleControls = new VectorStyleControls();
     layerStyleEditor = new MapLayerStyleEditor({
         mapLayers: mapLayerController, rasterViewer: rasterVisualization,
         inspection: mapInspection,
         vectorStyleControls,
+        onFilterRequested: (key) => vectorFilterControls.open(key),
         getVectorStyleTarget: (key) => {
             const record = mapLayerController.getRecord(key);
             if (record === null || record.adapter !== vectorMapLayerAdapter) {
@@ -856,6 +876,7 @@ async function initializeCatalog(
             vectorTimeSeries.open();
         },
         onStyleRequested: (sourceId) => layerStyleEditor.open(sourceId),
+        onFilterRequested: (sourceId) => vectorFilterControls.open(sourceId),
         onFeatureZoomRequested: zoomInspectedVectorFeature,
     });
     /**

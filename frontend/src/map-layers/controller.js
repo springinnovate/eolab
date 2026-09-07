@@ -17,6 +17,10 @@ import { MapLayerStackView } from "./layer-stack-view.js";
  * @property {(record:Object)=>Object} snapshot Return presentation-ready
  * datasetKind ("raster" or "vector"), legend, optional role badge, and other
  * feature-owned snapshot fields.
+ * @property {(record:Object)=>Object} [exportFilterState] Export portable filtering
+ * independently of copyable appearance.
+ * @property {(record:Object,state:Object)=>Promise<Object>} [applyFilterState]
+ * Restore owner-validated filtering before a staged layer joins the map.
  * @property {(record:Object)=>Object} [exportSavedState] Return validated,
  * portable owner-specific style state.
  * @property {(record:Object,savedState:Object)=>Promise<void>|void}
@@ -97,6 +101,7 @@ export class MapLayerController {
         this.destroyed = false;
         this.view.bind({
             onStyle: (key) => this.onStyle?.(key),
+            onFilter: (key) => this.onFilter?.(key),
             onZoom: (key) =>
                 this.onItemZoom(this.#requireRecord(key).entry.item),
             onInfo: (key) =>

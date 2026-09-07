@@ -11,6 +11,37 @@ import { createSavedMapView, serializeSavedMapView } from "../../src/saved-map-v
 
 const ZERO_REVISION = `sha256:${"0".repeat(64)}`;
 
+test("saved filters restore before commit and invalid filters never expose an unfiltered layer", async () => {
+  for (const valid of [true, false]) {
+    const state = { enabled: false, match: "all", rules: [{ field: "year", operator: "gt", value: 2020 }] };
+    const view = createView(), calls = [];
+    const saved = createSavedMapView({
+      viewer: { version: "0.5.0", origin: "https://viewer.example" }, createdAt: "2026-09-01T12:00:00Z",
+      viewport: { center: { latitude: 0, longitude: 0 }, zoom: 4 },
+      layers: [{ catalogItem: { collection: "vectors", id: "quakes" }, sourceRevision: null,
+        visible: true, opacity: 1, style: { kind: "vector", definition: {} }, filter: state }],
+    });
+    const layers = { retainedRecords: [], commitStaged(staged) { calls.push("commit"); this.retainedRecords = staged; } };
+    const controller = new SavedMapViewController({ view,
+      viewport: { snapshot: () => saved.viewport, restore() {} }, mapLayers: layers,
+      catalogItems: { get: async (identity) => identity },
+      catalogVisualization: { clear() {}, prepare: async (item) => item, sourceRevision: () => null,
+        stage: async (item) => ({ record: { entry: { item, label: "Quakes" }, adapter: {
+          applySavedState() { calls.push("style"); },
+          applyFilterState(_record, restored) {
+            calls.push("filter"); assert.deepEqual(restored, state);
+            if (!valid) throw new Error("Filter field is no longer present");
+          },
+        } } }),
+      }, viewerVersion: "0.5.0", viewerOrigin: "https://viewer.example",
+    });
+    await controller.openSharedFragment(await encodeSavedMapViewFragment(serializeSavedMapView(saved), { maximumInputBytes: 512 * 1024 }));
+    assert.deepEqual(calls, ["style", "filter", "commit"]);
+    assert.equal(layers.retainedRecords.length, valid ? 1 : 0);
+    if (!valid) assert.match(view.result.details[0], /Filter field is no longer present/);
+  }
+});
+
 /**
  * Create an inspectable view boundary for controller tests.
  *
@@ -136,6 +167,7 @@ test("saved map controller copies ordered Catalog layers and current viewport", 
     entry: { item, visible: true, opacity: 0.4, label: "Roads" },
     adapter: {
       exportSavedState: () => ({ kind: "vector", definition: { width: 2 } }),
+      exportFilterState: () => ({ enabled: false, match: "all", rules: [{ field: "year", operator: "gt", value: 2020 }] }),
     },
   };
   const controller = new SavedMapViewController({
@@ -159,6 +191,8 @@ test("saved map controller copies ordered Catalog layers and current viewport", 
   }));
   assert.deepEqual(copied.layers[0].catalogItem, item);
   assert.equal(copied.layers[0].sourceRevision, ZERO_REVISION);
+  assert.deepEqual(copied.layers[0].filter, record.adapter.exportFilterState());
+  assert.equal(Object.hasOwn(copied.layers[0].style, "filter"), false);
   assert.equal(view.copied, true);
   assert.deepEqual(view.busy, [true, false]);
 });

@@ -306,6 +306,7 @@ def create_wms_proxy_router(
                 )
             try:
                 authorization.validate_parameters(operation, normalized_query)
+                query_entries = authorization.prepare_query(operation, query_entries)
             except PublishedLayerRequestError as error:
                 raise HTTPException(status_code=400, detail=str(error)) from error
 

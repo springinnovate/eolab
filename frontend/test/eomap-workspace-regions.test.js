@@ -260,7 +260,7 @@ test("Map layers owns compact rows; the bounded map-tool dock owns styling", () 
         STYLESHEET,
         /#map-inspection-tab-style\s*\{[^}]*text-overflow:\s*ellipsis/s
     );
-    assert.match(STYLESHEET, /#map-histogram-panel,\s*#layer-style-editor,\s*#vector-feature-inspector,\s*#vector-time-series,\s*#vector-feature-profile\s*\{[^}]*height:\s*100%[^}]*overflow-y:\s*auto/s);
+    assert.match(STYLESHEET, /#map-histogram-panel,\s*#layer-style-editor,\s*#vector-filter-panel,\s*#vector-feature-inspector,\s*#vector-time-series,\s*#vector-feature-profile\s*\{[^}]*height:\s*100%[^}]*overflow-y:\s*auto/s);
     assert.doesNotMatch(STYLESHEET, /\.map-inspection-panels:has\(/);
 });
 

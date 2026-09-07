@@ -3652,6 +3652,7 @@ article.raster-histogram-summary {
 
 #map-inspection-tab-time-series,
 #map-inspection-tab-feature-profile,
+#map-inspection-tab-filter,
 #map-inspection-tab-style {
   max-width: min(220px, 42vw);
   overflow: hidden;
@@ -3682,6 +3683,7 @@ article.raster-histogram-summary {
 
 #map-histogram-panel,
 #layer-style-editor,
+#vector-filter-panel,
 #vector-feature-inspector,
 #vector-time-series,
 #vector-feature-profile {
@@ -3703,6 +3705,7 @@ article.raster-histogram-summary {
 #open-analysis-tools[hidden],
 #map-histogram-panel[hidden],
 #layer-style-editor[hidden],
+#vector-filter-panel[hidden],
 #vector-feature-inspector[hidden],
 #vector-time-series[hidden],
 #vector-feature-profile[hidden],
@@ -3711,6 +3714,7 @@ article.raster-histogram-summary {
 
 #map-histogram-panel:not([data-map-inspection-active="true"]),
 #layer-style-editor:not([data-map-inspection-active="true"]),
+#vector-filter-panel:not([data-map-inspection-active="true"]),
 #vector-feature-inspector:not([data-map-inspection-active="true"]),
 #vector-time-series:not([data-map-inspection-active="true"]),
 #vector-feature-profile:not([data-map-inspection-active="true"]) {
@@ -4496,4 +4500,24 @@ summary:hover > .raster-disclosure-chevron {
     height: auto;
     max-height: none;
   }
+}
+
+/* Filter editing and always-visible applied-state indicators. */
+#vector-filter-panel { padding: 16px; }
+#vector-filter-title { overflow-wrap: anywhere; font-weight: 600; }
+.vector-filter-options, .vector-filter-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-block: 12px; }
+.vector-filter-options label { display: flex; align-items: center; gap: 6px; }
+.vector-filter-rule { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(100px, 1fr); gap: 8px; padding: 10px; margin-block: 8px; border: 1px solid var(--border-1); border-radius: 8px; }
+.vector-filter-rule select, .vector-filter-rule input { width: 100%; min-width: 0; box-sizing: border-box; padding: 6px 8px; font: inherit; border: 1px solid var(--border-1); border-radius: var(--radius); background: var(--surface-2); color: var(--text-1); }
+#vector-filter-applied { overflow-wrap: anywhere; font-size: 0.85rem; }
+.vector-filter-help { color: var(--text-2); font-size: 0.8rem; }
+#vector-filter-status.is-error { color: #b42318; }
+.map-layer-filter-status { grid-column: 2 / -1; justify-self: start; font-size: 0.75rem; }
+.map-filter-indicators { display: flex; flex: 0 0 auto; flex-direction: column; align-items: flex-end; gap: 5px; max-height: min(120px, 20dvh); overflow-y: auto; pointer-events: auto; }
+#map-filter-indicators { max-width: min(420px, 55vw); }
+.map-filter-indicators[hidden],
+#app:has(#map-inspection:popover-open) #map-filter-indicators { display: none; }
+.map-filter-indicator { max-width: 100%; overflow-wrap: anywhere; white-space: normal; text-align: left; font-size: 0.78rem; }
+@media (max-width: 600px) {
+  #map-filter-indicators { max-width: calc(100vw - 80px); max-height: 16vh; }
 }

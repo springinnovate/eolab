@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pydantic import ValidationError
 
 from eolab_app.rendering.errors import PublishedLayerRequestError
+from eolab_app.vector.filters import VectorFilter, filter_ecql, filter_vector_sld
 from eolab_app.vector.models import (
     ResolvedVectorSource,
     VectorStyle,
@@ -27,12 +28,16 @@ class PublishedVectorAuthorization:
         source_signature: Complete filesystem identity approved at publication.
         style_name: Only WMS style authorized for this layer.
         geometry_name: GeoServer geometry attribute retained with the style.
+        upstream_layer_name: Original authorized publication for a filtered view.
+        filter: Validated per-view predicate, never an arbitrary expression.
     """
 
     source: ResolvedVectorSource
     source_signature: VectorSourceSignature
     style_name: str
     geometry_name: str | None = None
+    upstream_layer_name: str | None = None
+    filter: VectorFilter | None = None
 
     def validate_parameters(
         self,
@@ -53,6 +58,35 @@ class PublishedVectorAuthorization:
             raise PublishedLayerRequestError(
                 "env is not supported for vector layers"
             )
+
+    def prepare_query(
+        self, operation: str, query: list[tuple[str, str]],
+    ) -> list[tuple[str, str]]:
+        """Translate authorized public identities into an upstream WMS request.
+
+        Args:
+            operation: Validated lowercase WMS operation.
+            query: Globally bounded and feature-validated public query entries.
+
+        Returns:
+            Server-owned upstream query entries.
+        """
+        if self.filter is None:
+            return query
+        normalized = {key.lower(): value for key, value in query}
+        predicate = filter_ecql(self.filter)
+        feature_id = normalized.get("featureid")
+        if feature_id is not None:
+            # The public boundary already restricts this to one safe feature ID.
+            predicate = f"({predicate}) AND IN ('{feature_id}')"
+        forwarded = [
+            (key, self.upstream_layer_name if key.lower() in {"layer", "layers", "query_layers"} else value)
+            for key, value in query
+            if key.lower() not in {"tiled", "tilesorigin", "featureid"}
+        ]
+        if operation != "getlegendgraphic":
+            forwarded.append(("cql_filter", predicate))
+        return forwarded
 
     def build_composite_sld(
         self,
@@ -92,6 +126,7 @@ class PublishedVectorAuthorization:
             raise PublishedLayerRequestError(
                 "Composite vector style is invalid"
             ) from error
+        layer_name = self.upstream_layer_name or layer_name
         resource_name = layer_name.partition(":")[2]
         default_style_name = f"vector-{style.geometry_kind}"
         is_default_style = (
@@ -108,10 +143,11 @@ class PublishedVectorAuthorization:
             raise PublishedLayerRequestError(
                 "Composite vector style does not match its authorized identity"
             )
-        return build_vector_sld(
+        document = build_vector_sld(
             style_name,
             style,
             layer_name=layer_name,
             opacity_multiplier=opacity,
             geometry_name=self.geometry_name,
         )
+        return filter_vector_sld(document, self.filter) if self.filter is not None else document

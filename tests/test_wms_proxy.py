@@ -65,6 +65,18 @@ class _FixedVectorAuthorization:
             raise PublishedLayerNotAuthorizedError("not an approved vector")
         return self
 
+    def prepare_query(self, operation, query):
+        """Forward validated fixed-style queries unchanged.
+
+        Args:
+            operation: Normalized WMS operation.
+            query: Validated public query entries.
+
+        Returns:
+            Unmodified upstream entries.
+        """
+        return query
+
     def validate_parameters(
         self,
         operation: str,

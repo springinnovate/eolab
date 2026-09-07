@@ -2,7 +2,9 @@
 
 from dataclasses import dataclass
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+from eolab_app.routes.http_disconnect import HttpClientDisconnectedError, run_until_http_disconnect
+from eolab_app.vector.filters import AppliedVectorFilter, CatalogVectorFilterRequest, VectorFilterCount
 
 from eolab_app.routes.vector_http import vector_http_exception
 from eolab_app.vector.errors import VectorFeatureError
@@ -163,5 +165,44 @@ def create_vector_feature(
             return await style_service.classify_numeric(request)
         except VectorFeatureError as error:
             raise vector_http_exception(error) from error
+
+    @router.post("/filters", response_model=AppliedVectorFilter)
+    async def filter_vector(request: CatalogVectorFilterRequest) -> AppliedVectorFilter:
+        """Authorize one per-map attribute filter.
+
+        Args:
+            request: Authoritative Catalog identity and bounded rules.
+
+        Returns:
+            Browser-safe rendering identity and validated rules.
+
+        Raises:
+            HTTPException: If validation or current source authorization fails.
+        """
+        try:
+            return await publication_service.apply_filter(request)
+        except VectorFeatureError as error:
+            raise vector_http_exception(error) from error
+
+    @router.post("/filter-counts", response_model=VectorFilterCount)
+    async def count_vector_filter(request: CatalogVectorFilterRequest, http_request: Request) -> VectorFilterCount:
+        """Count a filtered layer independently of viewport rendering.
+
+        Args:
+            request: Authoritative Catalog identity and bounded rules.
+            http_request: Connection owning cancellable count work.
+
+        Returns:
+            Exact matched/total counts or explicit unavailable counts.
+
+        Raises:
+            HTTPException: If validation fails or the browser disconnects.
+        """
+        try:
+            return await run_until_http_disconnect(http_request, publication_service.count_filter(request))
+        except VectorFeatureError as error:
+            raise vector_http_exception(error) from error
+        except HttpClientDisconnectedError as error:
+            raise HTTPException(status_code=499, detail="The filter count request was canceled") from error
 
     return VectorFeature(router=router, registry=registry)

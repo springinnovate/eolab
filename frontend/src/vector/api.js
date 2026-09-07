@@ -72,6 +72,7 @@ async function vectorRenderingError(response, action) {
  * @param {string} actionLabel User-facing failure action.
  * @param {typeof fetch} fetchImplementation HTTP implementation.
  * @param {Object} [additionalBody={}] Additional action-owned request fields.
+ * @param {AbortSignal} [signal] Optional HTTP cancellation signal.
  * @return {Promise<Object>} Parsed response document.
  * @throws {VectorRenderingRequestError} If HTTP or JSON contracts fail.
  */
@@ -81,11 +82,13 @@ async function postVectorAction(
     actionLabel,
     fetchImplementation,
     additionalBody = {},
+    signal = undefined,
 ) {
     let response;
     try {
         response = await fetchImplementation(`/api/vector-rendering/${action}`, {
             method: "POST",
+            ...(signal === undefined ? {} : { signal }),
             headers: {
                 Accept: "application/json",
                 "Content-Type": "application/json",
@@ -97,6 +100,7 @@ async function postVectorAction(
             }),
         });
     } catch (error) {
+        if (error.name === "AbortError") throw error;
         throw new VectorRenderingRequestError(
             `Vector ${actionLabel} could not reach the application.`
         );
@@ -279,4 +283,38 @@ export async function classifyCatalogVectorNumbers(
             "Vector numeric classification returned an invalid response."
         );
     }
+}
+
+/**
+ * Authorize a vector filter without changing global layer configuration.
+ * @param {Object} item Authoritative Catalog Item.
+ * @param {Object} filter Validated rule builder state.
+ * @param {AbortSignal} [signal] Request cancellation.
+ * @param {typeof fetch} [fetchImplementation=globalThis.fetch] HTTP implementation.
+ * @return {Promise<Object>} Applied rules and opaque rendering identity.
+ */
+export async function filterCatalogVector(item, filter, signal, fetchImplementation = globalThis.fetch) {
+    const result = await postVectorAction(item, "filters", "filtering", fetchImplementation, { filter }, signal);
+    if (typeof result?.layerName !== "string" || !/^eolab:[a-zA-Z0-9_.:-]+$/.test(result.layerName) ||
+        JSON.stringify(result.filter) !== JSON.stringify(filter)) {
+        throw new VectorRenderingRequestError("Vector filtering returned an invalid response.");
+    }
+    return result;
+}
+
+/**
+ * Request exact counts independently of rendering; never accept partial totals.
+ * @param {Object} item Authoritative Catalog Item.
+ * @param {Object} filter Applied rules.
+ * @param {AbortSignal} [signal] Count cancellation.
+ * @param {typeof fetch} [fetchImplementation=globalThis.fetch] HTTP implementation.
+ * @return {Promise<Object>} Exact counts or explicit unavailable counts.
+ */
+export async function countCatalogVectorFilter(item, filter, signal, fetchImplementation = globalThis.fetch) {
+    const result = await postVectorAction(item, "filter-counts", "filter count", fetchImplementation, { filter }, signal);
+    const valid = result?.complete === false ? result.matched === null && result.total === null :
+        result?.complete === true && Number.isSafeInteger(result.matched) && Number.isSafeInteger(result.total) &&
+        result.matched >= 0 && result.total >= result.matched;
+    if (!valid) throw new VectorRenderingRequestError("Vector filter count returned an invalid response.");
+    return result;
 }

@@ -9,6 +9,7 @@ export class MapLayerStyleEditor {
      * @param {Object} [dependencies.vectorStyleControls] Vector-owned controls.
      * @param {(key:string)=>Object|null} [dependencies.getVectorStyleTarget]
      * Composition callback returning one narrow vector style target.
+     * @param {(key:string)=>void} [dependencies.onFilterRequested] Open filtering through composition.
      * @param {Document} [dependencies.documentContext=document] Owning document.
      */
     constructor({
@@ -17,6 +18,7 @@ export class MapLayerStyleEditor {
         inspection,
         vectorStyleControls = { show() {}, hide() {} },
         getVectorStyleTarget = () => null,
+        onFilterRequested = () => {},
         documentContext = document,
     }) {
         this.mapLayers = mapLayers;
@@ -33,6 +35,9 @@ export class MapLayerStyleEditor {
         this.rasterControls = documentContext.querySelector("#layer-raster-style");
         this.closeButton = documentContext.querySelector("#close-layer-style");
         this.key = null;
+        this.filterButton = documentContext.querySelector("#filter-styled-vector-layer");
+        this.onFilter = () => { if (this.key !== null) onFilterRequested(this.key); };
+        this.filterButton?.addEventListener("click", this.onFilter);
         this.onClose = () => this.close();
         this.onKeydown = (event) => {
             if (event.key !== "Escape" || this.key === null ||
@@ -96,6 +101,7 @@ export class MapLayerStyleEditor {
                 : layer.visible ? "Changes apply immediately." : "This layer is hidden. Styling it will not make it visible.";
         const vectorTarget = this.isRaster
             ? null : this.getVectorStyleTarget(this.key);
+        if (this.filterButton) this.filterButton.hidden = vectorTarget === null;
         if (vectorTarget === null) this.vectorStyleControls.hide();
         else this.vectorStyleControls.show(vectorTarget);
         this.rasterControls.hidden = !this.isRaster || locked;
@@ -126,6 +132,7 @@ export class MapLayerStyleEditor {
     destroy() {
         this.close();
         this.closeButton.removeEventListener("click", this.onClose);
+        this.filterButton?.removeEventListener("click", this.onFilter);
         this.opacity.removeEventListener("input", this.onOpacity);
         this.document.removeEventListener("keydown", this.onKeydown, true);
     }

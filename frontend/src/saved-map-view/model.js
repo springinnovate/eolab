@@ -173,7 +173,8 @@ function validateLayer(candidate) {
     requirePlainObject(candidate, "Saved layer");
     requireExactKeys(
         candidate,
-        ["catalogItem", "sourceRevision", "visible", "opacity", "style"],
+        ["catalogItem", "sourceRevision", "visible", "opacity", "style",
+            ...(Object.hasOwn(candidate, "filter") ? ["filter"] : [])],
         "Saved layer"
     );
     requirePlainObject(candidate.catalogItem, "Catalog Item identity");
@@ -225,12 +226,19 @@ function validateLayer(candidate) {
         "Saved layer style"
     );
     requirePlainObject(candidate.style.definition, "Saved style definition");
+    if (Object.hasOwn(candidate, "filter")) {
+        requirePlainObject(candidate.filter, "Saved filter");
+        if (JSON.stringify(candidate.filter).length > 8192) {
+            throw new SavedMapViewValidationError("Saved filter exceeds its size limit.");
+        }
+    }
     return Object.freeze({
         catalogItem,
         sourceRevision: candidate.sourceRevision,
         visible: candidate.visible,
         opacity: candidate.opacity,
         style: structuredClone(candidate.style),
+        ...(Object.hasOwn(candidate, "filter") ? { filter: structuredClone(candidate.filter) } : {}),
     });
 }
 

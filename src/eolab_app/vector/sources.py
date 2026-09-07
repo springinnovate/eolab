@@ -1,6 +1,11 @@
 """Resolve exact catalog vector source identities inside the scan mount."""
 
+from collections import OrderedDict
+from dataclasses import replace
+from hashlib import sha256
+from threading import Lock
 from pathlib import Path, PurePosixPath
+from eolab_app.vector.filters import VectorFilter
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
@@ -444,6 +449,8 @@ class PublishedVectorRegistry:
 
     def __init__(self) -> None:
         """Create an empty process-local vector authorization registry."""
+        self._filters: OrderedDict[str, tuple[str, VectorSourceSignature, VectorFilter]] = OrderedDict()
+        self._filter_lock = Lock()
         self._sources: dict[
             str,
             tuple[ResolvedVectorSource, VectorSourceSignature, str, str | None],
@@ -488,6 +495,32 @@ class PublishedVectorRegistry:
             geometry_name,
         )
 
+    def authorize_filter(self, layer_name: str, candidate: VectorFilter) -> str:
+        """Retain a bounded immutable per-map view of a current publication.
+
+        Args:
+            layer_name: Original authorized vector publication identity.
+            candidate: Catalog-validated filter state.
+
+        Returns:
+            Opaque filtered identity, or the original identity when inactive.
+
+        Raises:
+            PublishedLayerChangedError: If the published source changed.
+            PublishedLayerNotAuthorizedError: If the source is not published.
+        """
+        authorization = self.require_current(layer_name)
+        if not candidate.active:
+            return layer_name
+        identity = repr((layer_name, authorization.source_signature)) + candidate.model_dump_json()
+        alias = "eolab:filtered-" + sha256(identity.encode("utf-8")).hexdigest()
+        with self._filter_lock:
+            self._filters[alias] = (layer_name, authorization.source_signature, candidate)
+            self._filters.move_to_end(alias)
+            while len(self._filters) > 256:
+                self._filters.popitem(last=False)
+        return alias
+
     def require_current(
         self,
         layer_name: str,
@@ -506,6 +539,17 @@ class PublishedVectorRegistry:
             PublishedLayerChangedError: If any source component changed
                 afterward.
         """
+        if layer_name.startswith("eolab:filtered-"):
+            with self._filter_lock:
+                view = self._filters.get(layer_name)
+                if view is None:
+                    raise PublishedLayerChangedError("The vector filter expired; reapply it or reload the map")
+                self._filters.move_to_end(layer_name)
+            base_name, signature, candidate = view
+            authorization = self.require_current(base_name)
+            if authorization.source_signature != signature:
+                raise PublishedLayerChangedError("The filtered source changed; reassess the layer")
+            return replace(authorization, upstream_layer_name=base_name, filter=candidate)
         authorization = self._sources.get(layer_name)
         if authorization is None:
             raise PublishedLayerNotAuthorizedError(
