@@ -503,11 +503,12 @@
         hidden
       >Pixel picker hidden · Press P to show</button>
       <div class="map-tool-openers">
-        <div id="map-filter-indicators" aria-label="Active layer filters" hidden></div>
+        <div id="map-filter-indicators" class="map-filter-indicators" aria-label="Active layer filters" hidden></div>
         <button id="open-analysis-tools" class="secondary-button" type="button"
           aria-label="Open analysis tools using visible data at the map center">Analysis tools</button>
       </div>
       <aside id="map-inspection" popover="manual" aria-label="Map exploration">
+        <div id="map-inspection-filter-indicators" class="map-filter-indicators" aria-label="Active layer filters" hidden></div>
         <header class="map-inspection-dock-header">
           <div id="map-inspection-tabs" class="map-inspection-tabs" role="tablist"
             aria-label="Open map tools">

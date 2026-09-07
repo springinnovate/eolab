@@ -143,6 +143,8 @@ class FakeLayerStackDocument {
       ["#raster-layer-list", new FakeLayerStackElement("ol", this)],
       ["#raster-layer-stack-status", new FakeLayerStackElement("p", this)],
       ["#map-layer-counts", new FakeLayerStackElement("span", this)],
+      ["#map-filter-indicators", new FakeLayerStackElement("div", this)],
+      ["#map-inspection-filter-indicators", new FakeLayerStackElement("div", this)],
     ]);
     this.elements.get("#raster-layer-stack").parentElement =
       this.layerScrollContainer;
@@ -262,6 +264,29 @@ function gradientLegend(style) {
     labels: [style.minimum, style.midpoint, style.maximum],
   };
 }
+
+test("active filter summaries remain actionable in map and dock slots", () => {
+  const documentContext = new FakeLayerStackDocument();
+  const view = new MapLayerStackView(documentContext);
+  const opened = [];
+  view.bind({ onFilter: (key) => opened.push(key) });
+  const layer = { ...LAYERS[0], canFilter: true, filterActive: true,
+    filterStatus: "5 of 100 features match" };
+  view.render([layer], layer.key);
+  for (const selector of ["#map-filter-indicators", "#map-inspection-filter-indicators"]) {
+    const slot = documentContext.querySelector(selector);
+    assert.equal(slot.hidden, false);
+    assert.equal(slot.children.length, 1);
+    assert.match(slot.children[0].textContent, /5 of 100 features match/);
+    slot.children[0].dispatchEvent(new Event("click"));
+  }
+  assert.deepEqual(opened, [layer.key, layer.key]);
+  view.render([{ ...layer, visible: false }], layer.key);
+  for (const selector of ["#map-filter-indicators", "#map-inspection-filter-indicators"]) {
+    assert.equal(documentContext.querySelector(selector).hidden, true);
+    assert.equal(documentContext.querySelector(selector).children.length, 0);
+  }
+});
 
 const LAYERS = [
   {

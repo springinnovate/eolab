@@ -6,7 +6,9 @@ Each retained vector layer has a dedicated **Filter** panel. Add up to 12
 field/comparison/value conditions, then choose Match all (AND) or Match any (OR).
 Complete edits apply after 450 ms. Invalid drafts show a message and leave the
 previous applied filter in use. Disable preserves rules; Clear removes them.
-The layer row and the map's top controls link back to the filter. Active counts
+The layer row and the map's top controls link back to the filter. With map tools
+open, the summary appears above the dock so the panel cannot cover it. Both
+presentation slots consume the same neutral layer snapshot. Active counts
 describe the whole layer, never the current viewport or a sampled estimate.
 
 The initial operators are numeric comparisons, case-sensitive text equality,
@@ -126,7 +128,7 @@ remain part of the backend suite.
 Local checks for this draft:
 
 - `.venv-312/python.exe -m pytest -q --tb=short`: all 543 backend tests pass.
-- `node --test --test-reporter=dot` in `frontend`: all 564 browser-module tests pass.
+- `node --test --test-reporter=dot` in `frontend`: all 565 browser-module tests pass.
 - `node node_modules/vite/bin/vite.js build` in `frontend`: production build passes
   (Vite reports its advisory bundle-size warning).
 - Browser review of the real filter controls and dock: the two-condition example

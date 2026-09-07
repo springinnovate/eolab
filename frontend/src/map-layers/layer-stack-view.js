@@ -48,7 +48,9 @@ export class MapLayerStackView {
      */
     constructor(documentContext = globalThis.document) {
         this.documentContext = documentContext;
-        this.filterIndicators = documentContext.querySelector("#map-filter-indicators");
+        this.filterIndicators = [
+            "#map-filter-indicators", "#map-inspection-filter-indicators",
+        ].map((selector) => documentContext.querySelector(selector)).filter(Boolean);
         this.root = requireLayerStackElement(
             documentContext,
             "#raster-layer-stack"
@@ -171,23 +173,25 @@ export class MapLayerStackView {
     }
 
     /**
-     * Show clickable active-filter summaries above the map.
+     * Show active-filter summaries in the map and dock presentation slots.
      * @param {Object[]} layers Neutral retained-layer presentation snapshots.
      * @return {void}
      */
     #renderFilters(layers) {
-        if (this.filterIndicators === null) return;
-        const buttons = layers.filter((layer) => layer.visible && layer.filterActive).map((layer) => {
-            const button = this.documentContext.createElement("button");
-            button.type = "button";
-            button.className = "secondary-button map-filter-indicator";
-            button.textContent = `${layer.label} · ${layer.filterStatus} · Filter`;
-            button.title = `Edit filter for ${layer.label}. Counts cover the whole layer.`;
-            button.addEventListener("click", () => this.handlers?.onFilter?.(layer.key));
-            return button;
-        });
-        this.filterIndicators.replaceChildren(...buttons);
-        this.filterIndicators.hidden = buttons.length === 0;
+        const active = layers.filter((layer) => layer.visible && layer.filterActive);
+        for (const container of this.filterIndicators) {
+            const buttons = active.map((layer) => {
+                const button = this.documentContext.createElement("button");
+                button.type = "button";
+                button.className = "secondary-button map-filter-indicator";
+                button.textContent = `${layer.label} · ${layer.filterStatus} · Filter`;
+                button.title = `Edit filter for ${layer.label}. Counts cover the whole layer.`;
+                button.addEventListener("click", () => this.handlers?.onFilter?.(layer.key));
+                return button;
+            });
+            container.replaceChildren(...buttons);
+            container.hidden = buttons.length === 0;
+        }
     }
 
     /**
