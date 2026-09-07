@@ -42,6 +42,16 @@ DEFAULT_ENVIRONMENT = {
 }
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    """Expose an explicit disposable database for real processing tests.
+
+    Args:
+        parser: Pytest command-line option registrar.
+    """
+    parser.addoption("--processing-dsn", default=None,
+                     help="Disposable PostgreSQL DSN; database name must start eolab_processing_test")
+
+
 @pytest.fixture
 def configured_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     """Set the complete default deployment environment for a test.

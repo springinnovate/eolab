@@ -1,10 +1,12 @@
 """Hard-deadline process boundary for untrusted GDAL operations."""
 
-import asyncio
-from multiprocessing import get_context
-from multiprocessing.queues import Queue
-from queue import Empty
 from typing import Any, Literal
+
+from eolab_app.execution.bounded_process import (
+    ProcessDeadlineError,
+    ProcessResultWriter,
+    run_bounded_process,
+)
 
 from eolab_app.temporary_aoi.errors import (
     TemporaryAoiError,
@@ -23,7 +25,7 @@ ProcessingOperation = Literal["discover", "geometry"]
 
 
 def _processing_worker(
-    result_queue: Queue[Any],
+    result_queue: ProcessResultWriter,
     operation: ProcessingOperation,
     arguments: tuple[Any, ...],
 ) -> None:
@@ -77,40 +79,15 @@ async def run_bounded_operation(
         TemporaryAoiRequestError: If the worker reports a request failure.
         TemporaryAoiTooLargeError: If the worker reports a resource failure.
     """
-    if timeout_seconds <= 0:
-        raise ValueError("Processing timeout must be greater than zero")
-    process_context = get_context("spawn")
-    result_queue = process_context.Queue(maxsize=1)
-    process = process_context.Process(
-        target=_processing_worker,
-        args=(result_queue, operation, arguments),
-        daemon=True,
-    )
-    process.start()
     try:
-        try:
-            status, error_type, payload = await asyncio.to_thread(
-                result_queue.get,
-                True,
-                timeout_seconds,
-            )
-        except (Empty, EOFError, OSError) as error:
-            process.terminate()
-            await asyncio.to_thread(process.join)
-            raise TemporaryAoiValidationError(
-                f"AOI {operation} processing exceeded the "
-                f"{timeout_seconds:g}-second limit"
-            ) from error
-        await asyncio.to_thread(process.join, 1)
-        if process.is_alive():
-            process.terminate()
-            await asyncio.to_thread(process.join)
-    finally:
-        if process.is_alive():
-            process.terminate()
-            await asyncio.to_thread(process.join)
-        result_queue.close()
-        result_queue.join_thread()
+        status, error_type, payload = await run_bounded_process(
+            _processing_worker, (operation, arguments), timeout_seconds,
+        )
+    except ProcessDeadlineError as error:
+        raise TemporaryAoiValidationError(
+            f"AOI {operation} processing exceeded the "
+            f"{timeout_seconds:g}-second limit"
+        ) from error
 
     if status == "success":
         return payload
