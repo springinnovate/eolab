@@ -307,6 +307,7 @@ export class VectorFeatureInspectorController {
         onFeatureProfileRequested,
         onTimeSeriesRequested,
         onStyleRequested,
+        onFilterRequested = () => {},
         onFeatureZoomRequested,
         documentContext = document,
         fetchImplementation = globalThis.fetch,
@@ -349,6 +350,8 @@ export class VectorFeatureInspectorController {
         this.onFeatureProfileRequested = onFeatureProfileRequested;
         this.onTimeSeriesRequested = onTimeSeriesRequested;
         this.onStyleRequested = onStyleRequested;
+        this.onFilterRequested = onFilterRequested;
+        this.filterButton = documentContext.querySelector("#filter-inspected-vector-layer");
         this.onFeatureZoomRequested = onFeatureZoomRequested;
         this.document = documentContext;
         this.fetchImplementation = fetchImplementation;
@@ -393,6 +396,11 @@ export class VectorFeatureInspectorController {
         this.onOpenTimeSeries = () => {
             if (!this.timeSeriesButton.disabled) this.onTimeSeriesRequested();
         };
+        this.onOpenFilter = () => {
+            const selected = this.results[this.resultIndex];
+            if (selected !== undefined) this.onFilterRequested(selected.target.sourceId);
+        };
+        this.filterButton?.addEventListener("click", this.onOpenFilter);
         this.onOpenStyle = () => {
             const selected = this.results[this.resultIndex];
             if (selected !== undefined && !this.styleButton.disabled) {
@@ -431,6 +439,7 @@ export class VectorFeatureInspectorController {
         this.previous.addEventListener("click", this.onPrevious);
         this.next.addEventListener("click", this.onNext);
         this.document.addEventListener("keydown", this.onKeydown);
+        if (this.filterButton) this.filterButton.hidden = true;
         this.styleButton.hidden = true;
         this.styleButton.disabled = true;
         this.zoomFeatureButton.disabled = true;
@@ -794,6 +803,7 @@ export class VectorFeatureInspectorController {
         });
         this.result.hidden = false;
         this.layerName.textContent = target.label;
+        if (this.filterButton) this.filterButton.hidden = false;
         this.styleButton.hidden = false;
         this.styleButton.disabled = false;
         this.zoomFeatureButton.disabled = false;
@@ -855,6 +865,7 @@ export class VectorFeatureInspectorController {
         this.result.hidden = true;
         this.#updateTimeSeriesAction(0);
         this.featureProfileButton.disabled = true;
+        if (this.filterButton) this.filterButton.hidden = true;
         this.styleButton.hidden = true;
         this.styleButton.disabled = true;
         this.zoomFeatureButton.disabled = true;
@@ -892,6 +903,7 @@ export class VectorFeatureInspectorController {
         );
         this.timeSeriesButton.removeEventListener("click", this.onOpenTimeSeries);
         this.styleButton.removeEventListener("click", this.onOpenStyle);
+        this.filterButton?.removeEventListener("click", this.onOpenFilter);
         this.zoomFeatureButton.removeEventListener("click", this.onZoomFeature);
         this.previous.removeEventListener("click", this.onPrevious);
         this.next.removeEventListener("click", this.onNext);

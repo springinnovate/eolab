@@ -2,10 +2,13 @@
 
 import {
     classifyCatalogVectorNumbers,
+    filterCatalogVector,
+    countCatalogVectorFilter,
     publishCatalogVector,
     styleCatalogVector,
     summarizeCatalogVectorCategories,
 } from "./api.js";
+import { EMPTY_VECTOR_FILTER, normalizeVectorFilter, vectorFilterStatus } from "./filter.js";
 import { createVectorWmsLayer } from "./leaflet.js";
 import {
     defaultVectorNumericField,
@@ -204,6 +207,9 @@ async function adaptPortableVectorStyleToTarget(
  * @param {(item:Object,field:string,method:string,classCount:number)=>Promise<Object>}
  * [configuration.classify=classifyCatalogVectorNumbers] Bounded numeric
  * classification API adapter.
+ * @param {Function} [configuration.filter=filterCatalogVector] Cancellable filter registration.
+ * @param {Function} [configuration.countFilter=countCatalogVectorFilter] Exact count boundary.
+ * @param {(record:Object)=>void} [configuration.onFilterChange] Composition callback after applied-state changes.
  * @return {Object} Immutable adapter consumed by the shared layer lifecycle.
  */
 export function createVectorMapLayerAdapter({
@@ -216,6 +222,9 @@ export function createVectorMapLayerAdapter({
     style = styleCatalogVector,
     summarize = summarizeCatalogVectorCategories,
     classify = classifyCatalogVectorNumbers,
+    filter = filterCatalogVector,
+    countFilter = countCatalogVectorFilter,
+    onFilterChange = () => {},
 }) {
     if (typeof fitToBounds !== "boolean") {
         throw new TypeError("fitToBounds must be boolean.");
@@ -290,6 +299,13 @@ export function createVectorMapLayerAdapter({
         createState({ item, publication }) {
             return {
                 item,
+                filter: structuredClone(EMPTY_VECTOR_FILTER),
+                filterCount: null,
+                filterCounting: false,
+                filterGeneration: 0,
+                filterApplyAbort: null,
+                filterCountAbort: null,
+                disposed: false,
                 style: normalizeVectorStyle(publication.style),
                 labelFields: vectorLabelFields(item),
                 defaultStyleNotice: publication.defaultStyleNotice ?? "",
@@ -347,6 +363,72 @@ export function createVectorMapLayerAdapter({
             record.state.defaultStyleNotice = "";
             record.state.layer.setParams({ styles: result.styleName });
             return applied;
+        },
+        /**
+         * Invalidate an in-flight apply without losing the current map predicate.
+         * @param {Object} record Retained vector record.
+         * @return {void}
+         */
+        cancelPendingFilter(record) {
+            record.state.filterGeneration++;
+            record.state.filterApplyAbort?.abort();
+            record.state.filterApplyAbort = null;
+        },
+        /**
+         * Apply one validated filter, then count it independently of rendering.
+         * @param {Object} record Retained vector record.
+         * @param {Object} candidate Complete portable filter state.
+         * @return {Promise<Object|null>} Applied state, or null for stale replies.
+         */
+        async applyFilterState(record, candidate) {
+            const normalized = normalizeVectorFilter(candidate, record.state.labelFields);
+            this.cancelPendingFilter(record);
+            const generation = record.state.filterGeneration;
+            const controller = new AbortController();
+            record.state.filterApplyAbort = controller;
+            const result = await filter(record.state.item, normalized, controller.signal);
+            if (record.state.disposed || generation !== record.state.filterGeneration) return null;
+            record.state.filterApplyAbort = null;
+            record.state.filter = normalizeVectorFilter(result.filter, record.state.labelFields);
+            record.publication = { ...record.publication, layerName: result.layerName };
+            record.state.layer?.setParams({ layers: result.layerName });
+            record.state.filterCountAbort?.abort();
+            record.state.filterCount = null;
+            record.state.filterCounting = normalized.enabled && normalized.rules.length > 0;
+            onFilterChange(record);
+            if (record.state.filterCounting) {
+                const counter = new AbortController();
+                record.state.filterCountAbort = counter;
+                void countFilter(record.state.item, normalized, counter.signal).then((count) => {
+                    if (!counter.signal.aborted && !record.state.disposed) record.state.filterCount = count;
+                }).catch(() => {
+                    // Counts are optional; the rendering predicate stays applied.
+                }).finally(() => {
+                    if (counter.signal.aborted || record.state.disposed) return;
+                    record.state.filterCounting = false;
+                    record.state.filterCountAbort = null;
+                    onFilterChange(record);
+                });
+            }
+            return record.state.filter;
+        },
+        /**
+         * Export filter state separately from copyable visual appearance.
+         * @param {Object} record Retained vector record.
+         * @return {Object} Validated portable filter rules.
+         */
+        exportFilterState(record) {
+            return normalizeVectorFilter(record.state.filter, record.state.labelFields);
+        },
+        /**
+         * Cancel removed-layer work so late responses cannot revive its state.
+         * @param {Object} record Removed vector record.
+         * @return {void}
+         */
+        removed(record) {
+            record.state.disposed = true;
+            this.cancelPendingFilter(record);
+            record.state.filterCountAbort?.abort();
         },
         /**
          * Export only the validated vector appearance owned by this adapter.
@@ -427,6 +509,9 @@ export function createVectorMapLayerAdapter({
         snapshot(record) {
             return {
                 datasetKind: "vector",
+                canFilter: true,
+                filterActive: record.state.filter?.enabled === true && record.state.filter.rules.length > 0,
+                filterStatus: vectorFilterStatus(record.state),
                 legend: vectorStyleLegend(record.state.style),
             };
         },

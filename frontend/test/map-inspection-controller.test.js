@@ -20,6 +20,7 @@ function fixture() {
     );
     const vectorTimeSeries = doc.querySelector("#vector-time-series");
     const vectorFeatureProfile = doc.querySelector("#vector-feature-profile");
+    doc.querySelector("#vector-filter-panel").hidden = true;
     histogram.hidden = style.hidden = feature.hidden =
         vectorTimeSeries.hidden = vectorFeatureProfile.hidden = true;
     const close = doc.querySelector("#close-map-histogram");

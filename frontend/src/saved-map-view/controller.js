@@ -339,6 +339,7 @@ export class SavedMapViewController {
             visible: record.entry.visible,
             opacity: record.entry.opacity,
             style: record.adapter.exportSavedState(record),
+            ...(record.adapter.exportFilterState ? { filter: record.adapter.exportFilterState(record) } : {}),
         };
     }
 
@@ -413,6 +414,13 @@ export class SavedMapViewController {
                 await record.adapter.applySavedState(record, layer.style);
             } catch (error) {
                 styleWarning = asError(error).message;
+            }
+            // A failed filter must never restore an unexpectedly unfiltered layer.
+            if (Object.hasOwn(layer, "filter")) {
+                if (typeof record.adapter.applyFilterState !== "function") {
+                    throw new Error("This layer does not support saved filters.");
+                }
+                await record.adapter.applyFilterState(record, layer.filter);
             }
             const notices = [];
             if (changed) notices.push("source changed; current data was used");

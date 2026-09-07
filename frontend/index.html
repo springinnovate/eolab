@@ -503,6 +503,7 @@
         hidden
       >Pixel picker hidden · Press P to show</button>
       <div class="map-tool-openers">
+        <div id="map-filter-indicators" aria-label="Active layer filters" hidden></div>
         <button id="open-analysis-tools" class="secondary-button" type="button"
           aria-label="Open analysis tools using visible data at the map center">Analysis tools</button>
       </div>
@@ -522,6 +523,9 @@
             <button id="map-inspection-tab-histogram" class="map-inspection-tab"
               type="button" role="tab" aria-controls="map-histogram-panel"
               aria-selected="false" tabindex="-1" hidden>Raster histogram</button>
+            <button id="map-inspection-tab-filter" class="map-inspection-tab"
+              type="button" role="tab" aria-controls="vector-filter-panel"
+              aria-selected="false" tabindex="-1" hidden>Filter</button>
             <button id="map-inspection-tab-style" class="map-inspection-tab"
               type="button" role="tab" aria-controls="layer-style-editor"
               aria-selected="false" tabindex="-1" hidden>Style</button>
@@ -565,6 +569,8 @@
               <article id="vector-feature-result" hidden>
                 <div class="vector-feature-result-heading">
                   <h3 id="vector-feature-layer"></h3>
+                  <button id="filter-inspected-vector-layer" class="secondary-button"
+                    type="button" hidden>Filter layer</button>
                   <button id="style-inspected-vector-layer" class="secondary-button"
                     type="button" aria-label="Style selected vector layer"
                     aria-controls="layer-style-editor" hidden disabled>Style this layer</button>
@@ -1108,6 +1114,31 @@
                 role="status" aria-live="polite" aria-atomic="true"></p>
             </section>
           </section>
+<section id="vector-filter-panel" hidden role="tabpanel"
+  aria-labelledby="map-inspection-tab-filter vector-filter-title">
+  <header class="layer-style-header">
+    <h2>Filter features</h2>
+    <button id="close-vector-filter" class="secondary-button" type="button">Close</button>
+  </header>
+  <p id="vector-filter-title"></p>
+  <div class="vector-filter-options">
+    <label><input id="vector-filter-enabled" type="checkbox" checked> Enable filter</label>
+    <label>Match <select id="vector-filter-match">
+      <option value="all">all conditions (AND)</option>
+      <option value="any">any condition (OR)</option>
+    </select></label>
+  </div>
+  <div id="vector-filter-rules" aria-label="Filter conditions"></div>
+  <div class="vector-filter-actions">
+    <button id="vector-filter-add" class="secondary-button" type="button">Add condition</button>
+    <button id="vector-filter-clear" class="secondary-button" type="button">Clear filter</button>
+  </div>
+  <p id="vector-filter-status" role="status" aria-live="polite"></p>
+  <p id="vector-filter-applied"></p>
+  <p id="vector-filter-count" role="status" aria-live="polite"></p>
+  <p class="vector-filter-help">Counts cover the whole layer. Filtering also applies to labels,
+    feature inspection, and new feature plots. Colors and class ranges stay the same.</p>
+</section>
 <section id="layer-style-editor" hidden role="tabpanel"
       aria-labelledby="map-inspection-tab-style layer-style-title">
       <header class="layer-style-header">
@@ -1115,6 +1146,7 @@
         <button id="close-layer-style" class="secondary-button" type="button" aria-label="Close style editor">Close</button>
       </header>
       <p id="layer-style-title"></p>
+      <button id="filter-styled-vector-layer" class="secondary-button" type="button" hidden>Filter features…</button>
       <div class="layer-style-body">
         <label class="layer-style-opacity" for="layer-style-opacity">
           <span>Layer opacity</span>

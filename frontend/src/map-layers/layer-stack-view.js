@@ -25,6 +25,7 @@ function requireLayerStackElement(documentContext, selector) {
 /**
  * @typedef {Object} MapLayerStackViewHandlers
  * @property {(key: string) => void} onStyle Open one retained layer style editor.
+ * @property {(key: string) => void} [onFilter] Open an adapter-supported filter editor.
  * @property {(key: string) => void} onZoom Fit the map to one retained layer.
  * @property {(key: string) => void} onInfo Open one retained layer's Catalog
  * Item details.
@@ -47,6 +48,7 @@ export class MapLayerStackView {
      */
     constructor(documentContext = globalThis.document) {
         this.documentContext = documentContext;
+        this.filterIndicators = documentContext.querySelector("#map-filter-indicators");
         this.root = requireLayerStackElement(
             documentContext,
             "#raster-layer-stack"
@@ -108,6 +110,7 @@ export class MapLayerStackView {
      */
     render(layers, activeKey, requestedFocus = null) {
         this.#renderCounts(layers);
+        this.#renderFilters(layers);
         if (
             this.keyboardDrag !== null &&
             !layers.some((layer) => layer.key === this.keyboardDrag.key)
@@ -165,6 +168,26 @@ export class MapLayerStackView {
             return count === 0 ? [] : [`${count} ${kind}${count === 1 ? "" : "s"}`];
         });
         this.counts.textContent = `· ${parts.length === 0 ? "Empty" : parts.join(" · ")}`;
+    }
+
+    /**
+     * Show clickable active-filter summaries above the map.
+     * @param {Object[]} layers Neutral retained-layer presentation snapshots.
+     * @return {void}
+     */
+    #renderFilters(layers) {
+        if (this.filterIndicators === null) return;
+        const buttons = layers.filter((layer) => layer.visible && layer.filterActive).map((layer) => {
+            const button = this.documentContext.createElement("button");
+            button.type = "button";
+            button.className = "secondary-button map-filter-indicator";
+            button.textContent = `${layer.label} · ${layer.filterStatus} · Filter`;
+            button.title = `Edit filter for ${layer.label}. Counts cover the whole layer.`;
+            button.addEventListener("click", () => this.handlers?.onFilter?.(layer.key));
+            return button;
+        });
+        this.filterIndicators.replaceChildren(...buttons);
+        this.filterIndicators.hidden = buttons.length === 0;
     }
 
     /**
@@ -300,8 +323,13 @@ export class MapLayerStackView {
         remove.title = `Remove from map: ${layer.label}`;
         const rowActions = this.documentContext.createElement("div");
         rowActions.className = "map-layer-row-actions";
+        const filterActions = layer.canFilter ? [this.#button(
+            layer.filterActive ? "Filter ●" : "Filter", `Filter ${accessibleName}`,
+            layer.key, "filter", () => this.handlers?.onFilter?.(layer.key), focusTargets,
+        )] : [];
         rowActions.append(
             style,
+            ...filterActions,
             zoom,
             info,
             copyStyle,
@@ -309,6 +337,14 @@ export class MapLayerStackView {
             remove
         );
         row.append(reorder, primary, rowActions);
+        if (layer.filterStatus) {
+            const filterStatus = this.#button(
+                layer.filterStatus, `Edit filter for ${accessibleName}: ${layer.filterStatus}`,
+                layer.key, "filter-status", () => this.handlers?.onFilter?.(layer.key), focusTargets,
+            );
+            filterStatus.classList.add("map-layer-filter-status");
+            row.append(filterStatus);
+        }
         const legend = this.#buildLegend(layer.legend);
         if (legend !== null) row.append(legend);
         if (layer.error) {

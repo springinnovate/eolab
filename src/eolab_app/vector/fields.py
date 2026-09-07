@@ -1,6 +1,8 @@
 """Bounded geometry-free Fiona field reads for vector styling."""
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from time import monotonic
+from eolab_app.vector.filters import VectorFilter, VectorFilterCount, matches_filter
 from dataclasses import dataclass
 from math import isfinite
 from threading import Event
@@ -148,89 +150,106 @@ class FionaVectorFieldReader:
             ValueError: If ``feature_limit`` is not positive.
             VectorConflictError: If the source or selected field cannot be read.
         """
-        if (
-            source.source_kind != "mounted"
-            or source.source_path is None
-            or source.source_format not in {"shapefile", "geopackage"}
-        ):
-            raise VectorConflictError(
-                "Field summary unavailable: this vector source is not a "
-                "supported mounted layer."
-            )
+        values: list[Any] = []
+        complete = self._visit_properties(
+            source, (field,), feature_limit, cancel_event,
+            lambda properties: values.append(properties.get(field)),
+        )
+        return _BoundedFieldValues(values=tuple(values), complete=complete)
+
+    def count_filter(
+        self, source: ResolvedVectorSource, candidate: VectorFilter,
+        feature_limit: int, cancel_event: Event,
+    ) -> VectorFilterCount:
+        """Count an entire filtered view without retaining feature data.
+
+        Args:
+            source: Exact Catalog-derived mounted source.
+            candidate: Validated scalar predicate.
+            feature_limit: Maximum rows visited, plus one exhaustion probe.
+            cancel_event: Cooperative cancellation checked per row.
+
+        Returns:
+            Exact matched/total counts only when the bounded read is complete.
+        """
+        total = matched = 0
+        deadline = monotonic() + 20
+
+        def visit(properties: Mapping[str, Any]) -> None:
+            """Accumulate counts and enforce the time budget.
+
+            Args:
+                properties: Selected scalar properties from one row.
+
+            Returns:
+                None.
+            """
+            nonlocal total, matched
+            total += 1
+            matched += int(matches_filter(candidate, properties))
+            if monotonic() >= deadline:
+                cancel_event.set()
+
+        complete = self._visit_properties(
+            source, tuple(dict.fromkeys(rule.field for rule in candidate.rules)),
+            feature_limit, cancel_event, visit,
+        )
+        return VectorFilterCount(matched=matched, total=total, complete=True) if complete else VectorFilterCount()
+
+    def _visit_properties(
+        self, source: ResolvedVectorSource, fields: tuple[str, ...],
+        feature_limit: int, cancel_event: Event,
+        visit: Callable[[Mapping[str, Any]], None],
+    ) -> bool:
+        """Visit bounded properties through the exact-source Fiona boundary.
+
+        Args:
+            source: Catalog-derived mounted file and native layer.
+            fields: Unique authoritative non-geometry fields.
+            feature_limit: Maximum visited rows.
+            cancel_event: Cooperative cancellation signal.
+            visit: Owner-provided scalar accumulator; must not retain geometry.
+
+        Returns:
+            Whether the iterator was exhausted without cancellation.
+
+        Raises:
+            ValueError: If the feature limit is not positive.
+            VectorConflictError: If the exact source or fields cannot be read.
+        """
+        if source.source_kind != "mounted" or source.source_path is None or source.source_format not in {"shapefile", "geopackage"}:
+            raise VectorConflictError("Field summary unavailable: unsupported mounted layer.")
         if feature_limit < 1:
             raise ValueError("feature_limit must be positive")
-        open_options: dict[str, Any] = {
-            "include_fields": [field],
-            "ignore_geometry": True,
-        }
+        options: dict[str, Any] = {"include_fields": list(fields), "ignore_geometry": True}
         if source.layer_name is not None:
-            open_options["layer"] = source.layer_name
+            options["layer"] = source.layer_name
         try:
-            with fiona.open(source.source_path, **open_options) as collection:
-                properties = collection.schema.get("properties", {})
-                if field not in properties:
-                    raise VectorConflictError(
-                        "Field summary unavailable: the selected field is not "
-                        "present in the current source layer."
-                    )
-                return self._read_collection(
-                    collection,
-                    field,
-                    feature_limit,
-                    cancel_event,
-                )
+            with fiona.open(source.source_path, **options) as collection:
+                if any(field not in collection.schema.get("properties", {}) for field in fields):
+                    raise VectorConflictError("Field summary unavailable: the selected field is not present in the current source layer.")
+                iterator = iter(collection)
+                for _ in range(feature_limit):
+                    if cancel_event.is_set():
+                        return False
+                    try:
+                        feature = next(iterator)
+                    except StopIteration:
+                        return True
+                    properties = feature.get("properties")
+                    visit(properties if isinstance(properties, Mapping) else {})
+                if cancel_event.is_set():
+                    return False
+                try:
+                    next(iterator)
+                except StopIteration:
+                    return True
+                return False
         except VectorConflictError:
             raise
         except (FionaError, OSError, ValueError) as error:
-            raise VectorConflictError(
-                "Field summary unavailable: the current vector source could "
-                "not be read safely."
-            ) from error
+            raise VectorConflictError("Field summary unavailable: the current vector source could not be read safely.") from error
 
-    def _read_collection(
-        self,
-        collection: Any,
-        field: str,
-        feature_limit: int,
-        cancel_event: Event,
-    ) -> _BoundedFieldValues:
-        """Read one already-open collection with cooperative cancellation.
-
-        Args:
-            collection: Open Fiona collection restricted to the selected field.
-            field: Exact property name in the collection schema.
-            feature_limit: Maximum features included in the result.
-            cancel_event: Cooperative cancellation signal.
-
-        Returns:
-            Raw selected-property values with source-exhaustion state.
-        """
-        values: list[Any] = []
-        iterator = iter(collection)
-        exhausted = False
-        while len(values) < feature_limit and not cancel_event.is_set():
-            try:
-                feature = next(iterator)
-            except StopIteration:
-                exhausted = True
-                break
-            properties = feature.get("properties")
-            values.append(
-                properties.get(field) if isinstance(properties, Mapping) else None
-            )
-        if (
-            not exhausted
-            and not cancel_event.is_set()
-            and len(values) == feature_limit
-        ):
-            try:
-                next(iterator)
-            except StopIteration:
-                exhausted = True
-        return _BoundedFieldValues(
-            values=tuple(values),
-            complete=exhausted and not cancel_event.is_set(),
-        )
 
 
 def _bounded_category_value(value: Any) -> VectorCategoryScalar | object:

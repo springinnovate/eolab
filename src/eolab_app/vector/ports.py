@@ -4,6 +4,7 @@ from pathlib import Path
 from threading import Event
 from typing import Any, Protocol
 
+from eolab_app.vector.filters import VectorFilter, VectorFilterCount
 from eolab_app.vector.models import (
     CatalogVectorRequest,
     ResolvedVectorSource,
@@ -111,6 +112,23 @@ class VectorPublisher(Protocol):
 
 class VectorFieldReader(Protocol):
     """Bounded mounted-source field reader for vector styling."""
+
+    def count_filter(
+        self, source: ResolvedVectorSource, candidate: VectorFilter,
+        feature_limit: int, cancel_event: Event,
+    ) -> VectorFilterCount:
+        """Count a bounded whole-layer predicate without reading geometry.
+
+        Args:
+            source: Exact Catalog-derived source and layer.
+            candidate: Catalog-validated predicate.
+            feature_limit: Maximum features inspected.
+            cancel_event: Cooperative cancellation signal.
+
+        Returns:
+            Exact counts or an explicit incomplete result.
+        """
+        ...
 
     def read_categories(
         self,

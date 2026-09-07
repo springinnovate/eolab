@@ -15,6 +15,7 @@ export class MapInspectionController {
         );
         this.histogram = documentContext.querySelector("#map-histogram-panel");
         this.style = documentContext.querySelector("#layer-style-editor");
+        this.filter = documentContext.querySelector("#vector-filter-panel");
         this.feature = documentContext.querySelector("#vector-feature-inspector");
         this.featureDetails = documentContext.querySelector(
             "#vector-feature-inspector-details"
@@ -57,6 +58,12 @@ export class MapInspectionController {
                 label: "Raster histogram",
                 panel: this.histogram,
                 tab: documentContext.querySelector("#map-inspection-tab-histogram"),
+            },
+            {
+                name: "filter",
+                label: "Filter",
+                panel: this.filter,
+                tab: documentContext.querySelector("#map-inspection-tab-filter"),
             },
             {
                 name: "style",
@@ -149,6 +156,22 @@ export class MapInspectionController {
             layerLabel === null ? "" : `Style ${layerLabel}`
         );
         this.#showTool("style");
+    }
+
+    /**
+     * Reveal a dedicated layer filter editor.
+     * @param {string} layerLabel User-facing retained layer label.
+     * @return {void}
+     */
+    showFilter(layerLabel) {
+        this.#setToolLabel("filter", `Filter · ${layerLabel}`, `Filter ${layerLabel}`);
+        this.#showTool("filter");
+    }
+
+    /** Hide the filter editor without closing other tools. @return {void} */
+    hideFilter() {
+        this.#hideTool("filter");
+        this.#resetToolLabel("filter");
     }
 
     /** Hide styling without closing an open histogram or changing its sample. @return {void} */
@@ -533,6 +556,7 @@ export class MapInspectionController {
         this.document.removeEventListener("keydown", this.onKeydown);
         this.histogram.hidden = true;
         this.style.hidden = true;
+        this.filter.hidden = true;
         this.feature.hidden = true;
         this.vectorTimeSeries.hidden = true;
         this.vectorFeatureProfile.hidden = true;

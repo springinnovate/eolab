@@ -188,6 +188,7 @@ def create_app(
         geoserver_rest_client,
         app_global_configuration.geoserver_internal_url,
     )
+    vector_field_reader = FionaVectorFieldReader()
     vector_feature = create_vector_feature(
         VectorAssessmentService(
             app_global_configuration.scan_mount_path,
@@ -200,13 +201,14 @@ def create_app(
             vector_source_resolver,
             vector_publisher,
             published_vectors,
+            field_reader=vector_field_reader,
         ),
         VectorStyleService(
             vector_catalog,
             vector_source_resolver,
             vector_publisher,
             published_vectors,
-            FionaVectorFieldReader(),
+            vector_field_reader,
         ),
         published_vectors,
     )

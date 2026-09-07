@@ -26,6 +26,20 @@ class PublishedLayerAuthorization(Protocol):
         """
         ...
 
+    def prepare_query(
+        self, operation: str, query: list[tuple[str, str]],
+    ) -> list[tuple[str, str]]:
+        """Translate authorized public identities into an upstream WMS request.
+
+        Args:
+            operation: Validated lowercase WMS operation.
+            query: Globally bounded and feature-validated public query entries.
+
+        Returns:
+            Server-owned upstream query entries.
+        """
+        ...
+
     def build_composite_sld(
         self,
         layer_name: str,
