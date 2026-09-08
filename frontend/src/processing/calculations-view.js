@@ -105,12 +105,12 @@ export class CalculationsView {
         e.validation.textContent = state.validation;
         e.validation.classList.toggle("is-error", !state.valid && state.validation !== "Checking expressions…");
         e.review.disabled = !state.source || !state.area || !state.valid || state.phase === "planning";
-        e.review.textContent = state.phase === "planning" ? "Reviewing…" : "Review calculation";
+        e.review.textContent = state.phase === "planning" ? "Reviewing…" : "Review analysis";
         e.run.hidden = !state.plan;
         e.rerun.hidden = !state.resultIsCurrent || state.hasWork;
-        e.run.textContent = state.followWanted && !e.follow.disabled ? "Run & follow sampling box" : "Run calculation";
+        e.run.textContent = state.followWanted && !e.follow.disabled ? "Run & follow sampling box" : "Run analysis";
         e.stop.hidden = !state.hasWork && !state.following;
-        e.stop.textContent = state.following ? "Stop following / cancel" : "Cancel calculation";
+        e.stop.textContent = state.following ? "Stop following / cancel" : "Cancel analysis";
         e.retry.hidden = !state.recoverable;
         e.status.textContent = state.message || (state.current ? describeJobProgress(state.current)
             : state.following ? "Following sampling box — click the map to calculate again." : "");
@@ -137,7 +137,7 @@ export class CalculationsView {
         if (historySignature !== this.signatures.history) {
             const children = state.jobs.filter(job => job.status !== "deleted").map(job => {
                 const root = this.element("div"); root.className = "calculation-history-row";
-                const button = this.element("button", `${job.calculations?.map(row => row.label).join(", ") ?? "Calculation"} · ${describeJobProgress(job)}`);
+                const button = this.element("button", `${job.calculations?.map(row => row.label).join(", ") ?? "Raster analysis"} · ${describeJobProgress(job)}`);
                 button.type = "button"; button.className = "secondary-button";
                 button.addEventListener("click", () => this.handlers.onInspect(job.jobId));
                 root.append(button, this.element("small", `${new Date(job.createdAt).toLocaleString()} · ${describeClipArea(job.area)}`));
@@ -150,13 +150,13 @@ export class CalculationsView {
             e.history.replaceChildren(this.element("p", state.historyError || "Results remain available for 24 hours in this browser session."), ...children);
             this.signatures.history = historySignature;
         }
-        for (const opener of this.openers) opener.textContent = state.hasWork ? "Calculations · working" : "Calculations";
+        for (const opener of this.openers) opener.textContent = state.resultPending ? "Custom raster analysis · working" : "Custom raster analysis";
     }
     /** Present inline values with coverage and optional exports. @param {Object} state Controller snapshot. @return {void} */
     renderResult(state) {
         const root = this.elements.result;
         const job = state.result;
-        if (!job) { root.replaceChildren(this.element("p", "Your values will appear here. Set a calculation, review, and Run.")); return; }
+        if (!job) { root.replaceChildren(this.element("p", "Your values will appear here. Set up an analysis, review, and Run.")); return; }
         const source = Object.values(job.sources ?? {})[0];
         const label = state.resultIntent?.source.label ?? state.sources.find(item => item.itemId === source?.itemId && item.collectionId === source?.collectionId)?.label ?? source?.itemId ?? "Raster";
         root.replaceChildren(this.element("h3", state.resultIsCurrent ? "Result for current settings" : "Previous / saved result"),

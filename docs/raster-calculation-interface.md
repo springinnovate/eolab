@@ -1,8 +1,9 @@
-# Raster calculation interface
+# Custom raster analysis interface
 
-The Calculations tool operates on one Catalog raster, bound to `a`. Open it from
-Calculate in Map layers, a 1D histogram, Calculate X/Y under a 2D histogram, or
-Calculations on the map toolbar. X/Y entries select just that axis's raster.
+The Custom raster analysis tool operates on one Catalog raster, bound to `a`.
+Open it from Custom raster analysis in Map layers, a 1D histogram, or the map
+toolbar, or Analyze X/Y under a 2D histogram. X/Y entries select just that axis's
+raster. The compact dock tab is labeled Raster analysis.
 
 Choose the current histogram box, a ready uploaded AOI, or explicitly Whole raster.
 Enter up to five labeled expressions, or add an example. Debounced expression
@@ -27,17 +28,23 @@ Only one calculation workflow from this editor is admitted at a time. A new box
 aborts obsolete planning, retains only the latest requested area, and requests
 cancellation of an accepted predecessor. Replacement admission waits for terminal
 cancellation; `cancelling` still owns the server's worker capacity. The previous
-result remains visible, labeled with its original source/area and marked previous
-until the new result arrives. Late or superseded completions cannot replace it.
+result remains visible in grey cards, labeled with its original source/area and
+marked previous until the new result arrives. A prominent **Calculating new
+result…** banner and spinner appear immediately, including during debounce,
+planning, and cancellation of superseded work. Rerunning unchanged settings also
+mutes the saved values. Reviews alone, stopped requests, and errors awaiting
+recovery do not claim a new result is being calculated. Late or superseded
+completions cannot replace the saved result.
 Native resource-limit or connection errors pause follow and remain visible.
 Work-limit errors retain the backend's requested amount, configured limit, and
 reduction guidance in the panel. Native block admission reports a conservative
 estimate; decoded work and the serialized AOI geometry report their byte counts.
 The AOI limit concerns its processing geometry snapshot, not the uploaded file size.
 
-The matching committed rectangle pulses during accepted calculation work. It
-does not pulse for an older cancelled request or a different rectangle. Reduced
-motion uses a static dashed outline. Text status and measured native-block
+The matching committed rectangle has moving dashes and a pulsing fill during
+accepted calculation work. It does not animate for an older cancelled request or
+a different rectangle. Reduced motion uses a static dashed outline and status
+indicator; the working banner remains visible. Text status and measured native-block
 progress are available independently of animation. The calculation panel remains
 foreground during follow-mode map clicks while other inspection tools retain
 their results.
@@ -75,7 +82,7 @@ neutral selected-area contract. Neither Processing frontend nor backend imports
 histogram, map-layer, AOI, renderer, or GeoServer implementations.
 
 Browser composition supplies Catalog identities and immutable selections, routes
-Calculate entry points, forwards ready AOI lifecycle references, and connects
+analysis entry points, forwards ready AOI lifecycle references, and connects
 calculation activity to the raster viewer's area-associated presentation method.
 Raster controls and Map layers emit callbacks, with no Processing imports. The
 sample-window controller owns matching/clearing its SVG activity class. The dock

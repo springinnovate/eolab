@@ -37,7 +37,7 @@ export class MapInspectionController {
         this.map = documentContext.querySelector("#map");
         this.closeButton = documentContext.querySelector("#close-map-histogram");
         this.tools = [
-            { name: "calculations", label: "Calculations", panel: this.calculations,
+            { name: "calculations", label: "Raster analysis", panel: this.calculations,
                 tab: documentContext.querySelector("#map-inspection-tab-calculations") },
             {
                 name: "downloads", label: "Downloads", panel: this.downloads,
