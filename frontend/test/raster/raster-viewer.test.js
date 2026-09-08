@@ -598,20 +598,22 @@ test("download intents preserve distinct 1D and 2D boxes without waiting for sta
 });
 
 test("calculation entry points emit source identities and committed areas without reading histogram results", async () => {
-    const calculations = [], areas = [];
+    const calculations = [], areas = [], committed = [];
     const h = visibleLayerFixture(async () => { throw new Error("Statistics busy"); }, {}, {
         onCalculateRequested: (item, area) => calculations.push({ item, area }),
         onSamplingAreaChange: area => areas.push(area),
     });
     await h.viewer.show(createRasterItem("calculate-x"));
     await h.viewer.show(createRasterItem("calculate-y"));
-    h.viewer.exploreAt({ lng: 78, lat: 22 });
+    h.viewer.exploreAt({ lng: 78, lat: 22 }, {onSelected: area => committed.push(area)});
     const oneD = h.viewer.getSelectedArea();
+    assert.deepEqual(committed, [oneD], "a successful click synchronously reports its committed area");
     h.controlsView.handlers.onCalculateHistogram(h.layerStackView.activeKey);
     assert.deepEqual(calculations.at(-1).area, oneD);
     assert.deepEqual(areas.at(-1), oneD);
     h.controlsView.handlers.onBivariateModeChange("bivariate");
-    h.viewer.exploreAt({ lng: 80, lat: 24 });
+    h.viewer.exploreAt({ lng: 80, lat: 24 }, {onSelected: area => committed.push(area)});
+    assert.deepEqual(committed.at(-1), h.viewer.getSelectedArea());
     h.controlsView.handlers.onCalculatePairedHistogram("x");
     h.controlsView.handlers.onCalculatePairedHistogram("y");
     assert.deepEqual(calculations.at(-1).area, h.viewer.getSelectedArea());
@@ -622,7 +624,7 @@ test("calculation entry points emit source identities and committed areas withou
 for (const mode of ["overlay", "bivariate"]) {
     for (const retainSelection of [false, true]) {
         test(`rejected maximum box keeps ${mode} controls available with retained selection ${retainSelection}`, async () => {
-            const requests = [], timers = new Map();
+            const requests = [], timers = new Map(), committed = [];
             let timerId = 0, histogramRequests = 0, pixelRequests = 0;
             const h = visibleLayerFixture(async (item, area) => {
                 requests.push(area);
@@ -667,7 +669,8 @@ for (const mode of ["overlay", "bivariate"]) {
                 // Both the map click and reopening Analysis tools use exploreAt.
                 for (let attempt = 0; attempt < 2; attempt += 1) {
                     const presentationsBefore = histogramRequests;
-                    assert.equal(h.viewer.exploreAt({lng: -60, lat: -20}), true);
+                    assert.equal(h.viewer.exploreAt({lng: -60, lat: -20}, {onSelected: area => committed.push(area)}), true);
+                    assert.equal(committed.length, 0, "a rejected box must not recalculate the retained old area");
                     assert.equal(histogramRequests, presentationsBefore + 1);
                     assert.match(h.controlsView.sampleWindowStatus, /pole or date line/);
                     assert.deepEqual(h.viewer.getSelectedArea(), previousArea);
@@ -680,7 +683,8 @@ for (const mode of ["overlay", "bivariate"]) {
                 const number = documentContext.querySelector("#raster-sample-window-number");
                 number.value = "1000";
                 number.dispatchEvent(new Event("input"));
-                assert.equal(h.viewer.exploreAt({lng: -60, lat: -20}), true);
+                assert.equal(h.viewer.exploreAt({lng: -60, lat: -20}, {onSelected: area => committed.push(area)}), true);
+                assert.deepEqual(committed, [h.viewer.getSelectedArea()]);
                 await flushPromises();
                 assert.ok(requests.length > requestCount);
                 assert.notDeepEqual(h.viewer.getSelectedArea(), previousArea);

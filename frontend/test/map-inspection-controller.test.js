@@ -94,6 +94,23 @@ test("Downloads shares the dock while retaining histogram results and independen
     h.controller.destroy();
 });
 
+test("active-tool subscriptions report expanded presentation, support detachment, and clear on destroy", () => {
+    const h = fixture(); const changes = [];
+    const unsubscribe = h.controller.subscribeActiveTool(tool => changes.push(tool));
+    h.controller.showCalculations();
+    h.controller.showHistogram(1, {activate:false});
+    h.controller.showFeatureInspector({activate:false});
+    assert.deepEqual(changes, [null, "calculations"]);
+    h.minimizeButton.dispatchEvent(new Event("click"));
+    h.minimizeButton.dispatchEvent(new Event("click"));
+    h.histogramTab.dispatchEvent(new Event("click"));
+    assert.deepEqual(changes, [null, "calculations", null, "calculations", "histogram"]);
+    unsubscribe(); h.controller.showDownloads();
+    assert.equal(changes.at(-1), "histogram");
+    const final = []; h.controller.subscribeActiveTool(tool => final.push(tool));
+    h.controller.destroy(); assert.deepEqual(final, ["downloads", null]);
+});
+
 test("histogram and style have independent visibility on one persistent surface", () => {
     const h = fixture();
     h.controller.showStyle("Coastal resistance.tif");

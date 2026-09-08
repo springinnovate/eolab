@@ -161,7 +161,7 @@ function canRetryRasterStatistics(error) {
  * one selected raster Item.
  * @property {() => void} syncVisibleLayers Opt into histogram selection from
  * the top visible rasters and synchronize analysis without choosing a style target.
- * @property {(position:{lng:number,lat:number}) => boolean} exploreAt Select
+ * @property {(position:{lng:number,lat:number}, options?:{onSelected?:(area:Object|null)=>void}) => boolean} exploreAt Select
  * one validated, in-bounds map window and request its histogram when analysis
  * is active.
  * @property {(key:string) => boolean} openStyle Select a retained raster for
@@ -3349,10 +3349,13 @@ export function initializeRasterViewer(
      * remain owned by the sample-window controller.
      *
      * @param {{lng:number,lat:number}} position Leaflet map position.
+     * @param {Object} [options] Composition-owned selection notification.
+     * @param {function(Object|null):void} [options.onSelected] Called synchronously
+     * with the committed sampling area only when the box is accepted.
      * @return {boolean} Whether raster coverage makes the histogram workspace
      * relevant, including guidance when the requested box cannot be selected.
      */
-    function exploreAt(position) {
+    function exploreAt(position, { onSelected = () => {} } = {}) {
         if (!canUseRasterMapInteractions()) {
             return false;
         }
@@ -3378,6 +3381,7 @@ export function initializeRasterViewer(
             participants,
             point
         );
+        onSelected(getSelectedArea());
         return true;
     }
 

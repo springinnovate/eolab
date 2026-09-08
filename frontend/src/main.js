@@ -751,6 +751,7 @@ async function initializeCatalog(
         onEditArea: editProcessingArea,
         onActivity: area => rasterVisualization?.setSamplingActivity(area),
     });
+    mapInspection.subscribeActiveTool(tool => calculations.setActive(tool === "calculations"));
     const downloads = new DownloadsController({
         api: processingApi, jobs: processingJobs, view: new DownloadsView(),
         onInspectCalculation: id => calculations.inspect(id),
@@ -793,7 +794,7 @@ async function initializeCatalog(
             mapLayerController.snapshots().filter((layer) =>
                 layer.visible && layer.datasetKind === "raster"
             ).length
-        )),
+        ), { activate: !calculations.isActive }),
         onStyleRequested: (key) => layerStyleEditor?.open(key),
         onBivariateRenderingChange: (selectedKeys) =>
             mapLayerController.setIndividualRendering(selectedKeys),
@@ -923,7 +924,7 @@ async function initializeCatalog(
             })),
         wmsUrl: appGlobalConfiguration.wmsUrl,
         onInspectionChange: (visible) => {
-            if (visible) mapInspection.showFeatureInspector();
+            if (visible) mapInspection.showFeatureInspector({ activate: !calculations.isActive });
             else mapInspection.hideFeatureInspector();
         },
         onSampleChange: (sample) => {
@@ -958,12 +959,16 @@ async function initializeCatalog(
      * @return {void}
      */
     function exploreMap(event) {
-        if (!rasterVisualization.exploreAt(event.latlng)) {
+        if (!rasterVisualization.exploreAt(event.latlng, {
+            onSelected: area => {
+                calculations.setSelection(area);
+                calculations.calculateSelection();
+            },
+        })) {
             mapInspection.closeHistogram(false);
             calculations.setSelection(null);
         }
         void vectorFeatureInspector.inspect(event);
-        if (calculations.isFollowing) mapInspection.showCalculations();
     }
     /**
      * Open analysis tools at the map center through the pointer-click path.

@@ -513,8 +513,8 @@ export class RasterHistogramControlsView {
         const calculate = this.documentContext.createElement("button");
         calculate.type = "button";
         calculate.className = "secondary-button";
-        calculate.textContent = "Custom raster analysis";
-        calculate.setAttribute("aria-label", `Custom raster analysis of ${summary.label}`);
+        calculate.textContent = "Raster calculator";
+        calculate.setAttribute("aria-label", `Raster calculator of ${summary.label}`);
         calculate.addEventListener("click", () => this.handlers?.onCalculateHistogram?.(summary.key));
         actions.append(download, calculate);
         if (summary.automatic) {

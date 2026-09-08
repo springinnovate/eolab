@@ -37,7 +37,7 @@ export class MapInspectionController {
         this.map = documentContext.querySelector("#map");
         this.closeButton = documentContext.querySelector("#close-map-histogram");
         this.tools = [
-            { name: "calculations", label: "Raster analysis", panel: this.calculations,
+            { name: "calculations", label: "Raster calculator", panel: this.calculations,
                 tab: documentContext.querySelector("#map-inspection-tab-calculations") },
             {
                 name: "downloads", label: "Downloads", panel: this.downloads,
@@ -84,6 +84,8 @@ export class MapInspectionController {
         this.activeTool = null;
         this.activationOrder = [];
         this.minimized = false;
+        this.activityListeners = new Set();
+        this.reportedActiveTool = null;
         this.onClose = () => this.closeHistogram();
         this.onMinimize = () => {
             this.minimized = !this.minimized;
@@ -120,9 +122,11 @@ export class MapInspectionController {
      * Reveal histogram results and identify how many visible rasters participated.
      *
      * @param {number|null} [resultCount=null] Visible raster result count.
+     * @param {Object} [options] Presentation options.
+     * @param {boolean} [options.activate=true] Whether to activate the tab.
      * @return {void}
      */
-    showHistogram(resultCount = null) {
+    showHistogram(resultCount = null, options = {}) {
         if (resultCount !== null) {
             this.#validateCount(resultCount);
         }
@@ -131,7 +135,7 @@ export class MapInspectionController {
             resultCount === null ? "Raster histogram" :
                 `Raster histogram · ${resultCount}`
         );
-        this.#showTool("histogram");
+        this.#showTool("histogram", options);
     }
 
     /**
@@ -203,11 +207,13 @@ export class MapInspectionController {
     /**
      * Reveal vector feature results without changing retained map layers.
      *
+     * @param {Object} [options] Presentation options.
+     * @param {boolean} [options.activate=true] Whether to activate the tab.
      * @return {void}
      */
-    showFeatureInspector() {
+    showFeatureInspector(options = {}) {
         this.#setToolLabel("feature", "Features…", "Inspecting vector features");
-        this.#showTool("feature");
+        this.#showTool("feature", options);
     }
 
     /**
@@ -324,12 +330,16 @@ export class MapInspectionController {
      * Reveal and activate one retained map tool.
      *
      * @param {string} name Stable presentation name from this controller's tool set.
+     * @param {Object} [options] Presentation options.
+     * @param {boolean} [options.activate=true] Activate, or retain the current foreground tool.
      * @return {void}
      */
-    #showTool(name) {
+    #showTool(name, { activate = true } = {}) {
+        if (typeof activate !== "boolean") throw new TypeError("Tool activation must be boolean.");
         const tool = this.#tool(name);
         tool.panel.hidden = false;
-        this.#activateTool(name);
+        if (activate) this.#activateTool(name);
+        else this.#synchronize();
     }
 
     /**
@@ -533,6 +543,16 @@ export class MapInspectionController {
         else this.root.hidePopover();
     }
 
+    /** Report expanded foreground presentation without knowing any tool's behavior.
+     * @param {function(string|null):void} listener Receives the active tool or null.
+     * @return {function():void} Unsubscribe callback.
+     */
+    subscribeActiveTool(listener) {
+        this.activityListeners.add(listener);
+        listener(this.minimized ? null : this.activeTool);
+        return () => this.activityListeners.delete(listener);
+    }
+
     /**
      * Render tabs, active-panel visibility, and minimized presentation state.
      *
@@ -559,6 +579,11 @@ export class MapInspectionController {
             panel.setAttribute(
                 "aria-hidden", String(!active || this.minimized)
             );
+        }
+        const active = this.minimized ? null : this.activeTool;
+        if (active !== this.reportedActiveTool) {
+            this.reportedActiveTool = active;
+            for (const listener of this.activityListeners) listener(active);
         }
     }
 
@@ -588,5 +613,6 @@ export class MapInspectionController {
         this.minimized = false;
         this.setFeatureInspectorExpanded(true);
         this.#synchronize();
+        this.activityListeners.clear();
     }
 }

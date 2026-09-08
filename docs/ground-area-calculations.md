@@ -80,7 +80,7 @@ for a smaller area or simpler AOI; they never return sampled area as exact area.
 
 The existing owner/session, immutable AOI snapshot, Catalog authorization,
 source signatures, progress, cancellation, disk reservation and publication
-contracts remain in effect. Replacing a followed sampling box uses the same
+contracts remain in effect. Clicking a new box in the active Raster calculator uses the same
 cancel-before-replacement workflow and visibly marks the previous result.
 
 ## Architecture and deployment
