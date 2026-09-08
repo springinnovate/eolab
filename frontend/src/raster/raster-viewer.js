@@ -3334,7 +3334,8 @@ export function initializeRasterViewer(
      * remain owned by the sample-window controller.
      *
      * @param {{lng:number,lat:number}} position Leaflet map position.
-     * @return {boolean} Whether an active raster accepted the position.
+     * @return {boolean} Whether raster coverage makes the histogram workspace
+     * relevant, including guidance when the requested box cannot be selected.
      */
     function exploreAt(position) {
         if (!canUseRasterMapInteractions()) {
@@ -3353,7 +3354,10 @@ export function initializeRasterViewer(
             restoreWholeRasterStatistics();
         }
         if (rasterSampleWindowController.selectAt(position) === null) {
-            return false;
+            // A rejected box is not absent raster coverage. Keep its controls
+            // available so the user can reduce the size or choose whole scope.
+            showHistogramWorkspace();
+            return true;
         }
         pointSamplesController.sample(
             participants,
