@@ -3570,6 +3570,40 @@ article.raster-histogram-summary {
 }
 .map-tool-openers .secondary-button { box-shadow: var(--elevation-panel); }
 
+.map-analysis-more {
+  position: relative;
+  min-width: 0;
+}
+
+.map-analysis-more > summary {
+  cursor: pointer;
+  list-style: none;
+  white-space: nowrap;
+}
+
+.map-analysis-more > summary::-webkit-details-marker { display: none; }
+
+.map-analysis-more-menu {
+  position: absolute;
+  z-index: 4;
+  top: calc(100% + 6px);
+  right: 0;
+  display: grid;
+  min-width: 210px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius);
+  background: var(--surface-1);
+  padding: 6px;
+  box-shadow: var(--elevation-panel);
+}
+
+.map-analysis-more-menu .secondary-button {
+  width: 100%;
+  box-shadow: none;
+  text-align: left;
+  white-space: normal;
+}
+
 #map-inspection {
   box-sizing: border-box;
   position: fixed;
@@ -3606,7 +3640,7 @@ article.raster-histogram-summary {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
   border: 1px solid var(--border-1);
   border-radius: var(--radius);
@@ -3615,13 +3649,23 @@ article.raster-histogram-summary {
   box-shadow: var(--elevation-panel);
 }
 
+.map-inspection-dock-title {
+  min-width: 0;
+  overflow: hidden;
+  padding-inline: 6px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
 .map-inspection-tabs {
+  grid-column: 1 / -1;
   display: flex;
+  flex-wrap: wrap;
   min-width: 0;
   gap: 3px;
-  overflow-x: auto;
-  overscroll-behavior-x: contain;
-  scrollbar-width: thin;
+  overflow: visible;
 }
 
 .map-inspection-tab {
@@ -3660,6 +3704,10 @@ article.raster-histogram-summary {
 }
 
 .map-inspection-tab[hidden] {
+  display: none;
+}
+
+#map-inspection[data-minimized="true"] .map-inspection-tabs {
   display: none;
 }
 
@@ -4531,6 +4579,17 @@ summary:hover > .raster-disclosure-chevron {
     padding: 1rem;
     overflow-wrap: anywhere;
 }
+.map-analysis-advanced-section {
+    margin: 0.75rem 0;
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius);
+    padding: 0.65rem;
+}
+.map-analysis-advanced-section > summary {
+    cursor: pointer;
+    font-weight: 650;
+}
+.map-analysis-advanced-section > summary + * { margin-top: 0.7rem; }
 #downloads-form { display: grid; gap: 0.55rem; }
 #downloads-form select { width: 100%; min-width: 0; }
 #downloads-panel p { font-size: 0.85rem; line-height: 1.45; }

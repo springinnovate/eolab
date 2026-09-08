@@ -168,7 +168,10 @@ test("DOM review and job cards show grid, real progress, direct links and indepe
     const link = card.children.find(child => child.textContent === "Download COG");
     assert.equal(link.href, `/api/processing/jobs/${id}/result`);
     card.children.at(-1).dispatchEvent(new Event("click")); assert.deepEqual(actions,[id]);
-    assert.match(doc.querySelector("#open-downloads").textContent,/1 ready/);
+    assert.match(doc.querySelector("#open-downloads").textContent,/History & exports · 1 ready/);
+    assert.equal(doc.querySelector("#map-tools-more-summary").textContent, "More");
+    view.render({ ...h.view.state, jobs: [{ ...job, status: "running" }] });
+    assert.equal(doc.querySelector("#map-inspection-more-summary").textContent, "More · 1 working");
     assert.equal(describeJobProgress({ ...job, status:"running", progress:{phase:"clipping",completedBlocks:3,totalBlocks:10} }),"Clipping · 3 of 10 source blocks");
     assert.match(describeJobProgress({ ...job, status:"running", progress:{phase:"creating_cog"} }),/Preparing download/);
     view.unbind();

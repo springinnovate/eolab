@@ -503,22 +503,38 @@
         hidden
       >Pixel picker hidden · Press P to show</button>
       <div class="map-tool-openers">
-        <button id="open-calculations" class="secondary-button" type="button" aria-controls="calculations-panel">Raster calculator</button>
-        <button id="open-downloads" class="secondary-button" type="button"
-          aria-controls="downloads-panel">Downloads</button>
+        <button id="open-calculations" class="secondary-button" type="button" aria-controls="calculations-panel">Summarize</button>
         <div id="map-filter-indicators" class="map-filter-indicators" aria-label="Active layer filters" hidden></div>
         <button id="open-analysis-tools" class="secondary-button" type="button"
           aria-label="Open analysis tools using visible data at the map center">Analysis tools</button>
+        <details id="map-tools-more" class="map-analysis-more">
+          <summary id="map-tools-more-summary" class="secondary-button">More</summary>
+          <div class="map-analysis-more-menu">
+            <button id="open-downloads" class="secondary-button" type="button"
+              aria-controls="downloads-panel">History &amp; exports</button>
+          </div>
+        </details>
       </div>
       <aside id="map-inspection" popover="manual" aria-label="Map exploration">
         <div id="map-inspection-filter-indicators" class="map-filter-indicators" aria-label="Active layer filters" hidden></div>
         <header class="map-inspection-dock-header">
+          <strong id="map-inspection-dock-title" class="map-inspection-dock-title">Map analysis</strong>
+          <button id="toggle-map-inspection-dock" class="secondary-button"
+            type="button" aria-controls="map-inspection-panels"
+            aria-expanded="true">Minimize</button>
+          <details id="map-inspection-more" class="map-analysis-more">
+            <summary id="map-inspection-more-summary" class="secondary-button">More</summary>
+            <div class="map-analysis-more-menu">
+              <button id="open-downloads-dock" class="secondary-button" type="button"
+                aria-controls="downloads-panel">History &amp; exports</button>
+            </div>
+          </details>
           <div id="map-inspection-tabs" class="map-inspection-tabs" role="tablist"
             aria-label="Open map tools">
-            <button id="map-inspection-tab-calculations" class="map-inspection-tab" type="button" role="tab" aria-controls="calculations-panel" aria-selected="false" tabindex="-1" hidden>Raster calculator</button>
+            <button id="map-inspection-tab-calculations" class="map-inspection-tab" type="button" role="tab" aria-controls="calculations-panel" aria-selected="false" tabindex="-1" hidden>Summarize</button>
             <button id="map-inspection-tab-downloads" class="map-inspection-tab"
               type="button" role="tab" aria-controls="downloads-panel"
-              aria-selected="false" tabindex="-1" hidden>Downloads</button>
+              aria-selected="false" tabindex="-1" hidden>History &amp; exports</button>
             <button id="map-inspection-tab-feature" class="map-inspection-tab"
               type="button" role="tab" aria-controls="vector-feature-inspector"
               aria-selected="false" tabindex="-1" hidden>Features</button>
@@ -530,7 +546,7 @@
               aria-selected="false" tabindex="-1" hidden>Fields from feature</button>
             <button id="map-inspection-tab-histogram" class="map-inspection-tab"
               type="button" role="tab" aria-controls="map-histogram-panel"
-              aria-selected="false" tabindex="-1" hidden>Raster histogram</button>
+              aria-selected="false" tabindex="-1" hidden>Explore</button>
             <button id="map-inspection-tab-filter" class="map-inspection-tab"
               type="button" role="tab" aria-controls="vector-filter-panel"
               aria-selected="false" tabindex="-1" hidden>Filter</button>
@@ -538,15 +554,10 @@
               type="button" role="tab" aria-controls="layer-style-editor"
               aria-selected="false" tabindex="-1" hidden>Style</button>
           </div>
-          <button id="toggle-map-inspection-dock" class="secondary-button"
-            type="button" aria-controls="map-inspection-panels"
-            aria-expanded="true">Minimize</button>
-          <button id="open-downloads-dock" class="secondary-button" type="button"
-            aria-controls="downloads-panel">Downloads</button>
         </header>
         <div id="map-inspection-panels" class="map-inspection-panels">
           <section id="calculations-panel" role="tabpanel" aria-labelledby="map-inspection-tab-calculations" hidden>
-            <div class="downloads-actions"><h2>Raster calculator</h2><button id="calculations-close" class="secondary-button" type="button" aria-label="Close raster calculator">×</button></div>
+            <div class="downloads-actions"><h2>Summarize raster</h2><button id="calculations-close" class="secondary-button" type="button" aria-label="Close raster summary calculator">&times;</button></div>
             <p>Choose a raster and enter a formula. Click the map to calculate for a new sampling area, or calculate the current selection below.</p>
             <details id="calculations-editor" open><summary>Calculation settings</summary>
             <form id="calculations-form">
@@ -554,7 +565,7 @@
               <select id="calculations-source"></select>
               <label for="calculations-area">Calculate over</label><select id="calculations-area"></select>
               <p id="calculations-area-description"></p>
-              <button id="calculations-edit-area" class="secondary-button" type="button">Choose box or upload AOI</button>
+              <button id="calculations-edit-area" class="secondary-button" type="button">Change area in Explore</button>
               <div id="calculations-rows"></div>
               <div class="downloads-actions">
                 <button id="calculations-add" class="secondary-button" type="button">Add formula</button>
@@ -597,14 +608,20 @@
             </div>
             <progress id="calculations-progress" aria-label="Native source blocks calculated" hidden></progress>
             <section id="calculations-result" aria-label="Calculation result"></section>
-            <details><summary>Calculation history</summary><button id="calculations-refresh" class="secondary-button" type="button">Refresh history</button><div id="calculations-history"></div></details>
           </section>
           <section id="downloads-panel" role="tabpanel" aria-labelledby="map-inspection-tab-downloads" hidden>
             <header class="map-histogram-toolbar">
-              <h2>Raster clip downloads</h2>
-              <button id="downloads-close" class="secondary-button" type="button" aria-label="Close Downloads">×</button>
+              <h2>History &amp; exports</h2>
+              <button id="downloads-close" class="secondary-button" type="button" aria-label="Close history and exports">&times;</button>
             </header>
-            <p>Download original raster values from a selected box or uploaded AOI. Files remain available for 24 hours after completion in this browser session.</p>
+            <p>Review earlier calculation results or create and retrieve raster clips. Results remain available for 24 hours in this browser session.</p>
+            <details class="map-analysis-advanced-section">
+              <summary>Previous calculation results</summary>
+              <button id="calculations-refresh" class="secondary-button" type="button">Refresh calculation history</button>
+              <div id="calculations-history"></div>
+            </details>
+            <details id="downloads-clip-tools" class="map-analysis-advanced-section" open>
+              <summary>Raster clips</summary>
             <form id="downloads-form">
               <label for="downloads-source">Raster</label>
               <select id="downloads-source"></select>
@@ -628,6 +645,7 @@
             </header>
             <p id="downloads-job-message" role="status" aria-live="polite"></p>
             <div id="downloads-jobs"></div>
+            </details>
           </section>
           <section id="vector-feature-inspector" role="tabpanel"
             aria-labelledby="map-inspection-tab-feature" hidden>

@@ -339,7 +339,7 @@ export class MapLayerStackView {
                 "Download clip", `Download clip of ${accessibleName}`, layer.key,
                 "download", () => this.handlers?.onDownload?.(layer.key), focusTargets,
             ), this.#button(
-                "Raster calculator", `Raster calculator of ${accessibleName}`, layer.key,
+                "Summarize", "Summarize " + accessibleName, layer.key,
                 "calculate", () => this.handlers?.onCalculate?.(layer.key), focusTargets,
             )] : []),
             zoom,

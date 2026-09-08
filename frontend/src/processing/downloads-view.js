@@ -14,8 +14,18 @@ export class DownloadsView {
             "source", "area", "area-description", "review", "create", "plan", "message", "jobs", "job-message",
             "pending", "retry-submission", "refresh", "edit-area", "close", "form",
         ].map(name => [name, documentContext.querySelector(`#downloads-${name}`)]));
-        this.opener = documentContext.querySelector("#open-downloads");
-        this.dockOpener = documentContext.querySelector("#open-downloads-dock");
+        this.openers = [
+            documentContext.querySelector("#open-downloads"),
+            documentContext.querySelector("#open-downloads-dock"),
+        ];
+        this.moreSummaries = [
+            documentContext.querySelector("#map-tools-more-summary"),
+            documentContext.querySelector("#map-inspection-more-summary"),
+        ];
+        this.moreMenus = [
+            documentContext.querySelector("#map-tools-more"),
+            documentContext.querySelector("#map-inspection-more"),
+        ];
         this.listeners = [];
         this.sourceSignature = "";
         this.jobSignature = "";
@@ -25,9 +35,16 @@ export class DownloadsView {
     /** Connect fixed controls to semantic callbacks. @param {Object} handlers User intent handlers. @return {void} */
     bind(handlers) {
         this.handlers = handlers;
+        const openEvents = this.openers.map((opener, index) => [
+            opener,
+            "click",
+            () => {
+                this.moreMenus[index].open = false;
+                handlers.onOpen();
+            },
+        ]);
         const events = [
-            [this.opener, "click", handlers.onOpen],
-            [this.dockOpener, "click", handlers.onOpen],
+            ...openEvents,
             [this.elements.close, "click", handlers.onClose],
             [this.elements.source, "change", () => handlers.onSource(Number(this.elements.source.value))],
             [this.elements.area, "change", () => handlers.onArea(this.elements.area.value)],
@@ -100,10 +117,20 @@ export class DownloadsView {
         this.planId = state.plan?.planId ?? null;
         const active = state.jobs.filter(job => ACTIVE_JOB_STATES.has(job.status)).length;
         const ready = state.jobs.filter(job => job.status === "ready").length;
-        this.opener.textContent = `Downloads${active ? ` · ${active} working` : ready ? ` · ${ready} ready` : ""}${state.pending ? " · unconfirmed" : ""}`;
-        this.opener.title = "Open Downloads and recover clips from this browser session";
-        this.dockOpener.textContent = `Downloads${active + ready ? ` · ${active + ready}` : ""}`;
-        this.dockOpener.title = this.opener.textContent;
+        const activity = active
+            ? String(active) + " working"
+            : state.pending ? "action needed" : "";
+        const readyLabel = ready ? " \u00b7 " + ready + " ready" : "";
+        for (const summary of this.moreSummaries) {
+            summary.textContent = "More" + (activity ? " \u00b7 " + activity : "");
+            summary.title = activity
+                ? "Open more map tools; " + activity
+                : "Open more map tools";
+        }
+        for (const opener of this.openers) {
+            opener.textContent = "History & exports" + readyLabel;
+            opener.title = "Open calculation history and raster clip exports";
+        }
         const jobSignature = JSON.stringify([state.jobs, [...state.jobActions], state.sources]);
         if (this.jobSignature !== jobSignature) {
             const focus = this.document.activeElement?.getAttribute("data-download-action");

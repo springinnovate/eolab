@@ -41,6 +41,7 @@ function fixture() {
         vectorTimeSeries,
         vectorFeatureProfile,
         panels: doc.querySelector("#map-inspection-panels"),
+        dockTitle: doc.querySelector("#map-inspection-dock-title"),
         minimizeButton: doc.querySelector("#toggle-map-inspection-dock"),
         featureTab: doc.querySelector("#map-inspection-tab-feature"),
         timeSeriesTab: doc.querySelector("#map-inspection-tab-time-series"),
@@ -81,13 +82,17 @@ test("automatic presentation does not move focus and close retains results", () 
     h.controller.destroy();
 });
 
-test("Downloads shares the dock while retaining histogram results and independent close", () => {
+test("History and exports is transient while retained analysis results remain available", () => {
     const h = fixture();
     h.controller.showHistogram();
     h.controller.showDownloads();
     const downloads = h.doc.querySelector("#downloads-panel");
     assert.equal(downloads.getAttribute("data-map-inspection-active"), "true");
     assert.equal(h.histogram.hidden, false);
+    h.histogramTab.dispatchEvent(new Event("click"));
+    assert.equal(downloads.hidden, true);
+    assert.equal(h.histogram.getAttribute("data-map-inspection-active"), "true");
+    h.controller.showDownloads();
     h.controller.hideDownloads();
     assert.equal(downloads.hidden, true);
     assert.equal(h.histogram.getAttribute("data-map-inspection-active"), "true");
@@ -102,7 +107,9 @@ test("active-tool subscriptions report expanded presentation, support detachment
     h.controller.showFeatureInspector({activate:false});
     assert.deepEqual(changes, [null, "calculations"]);
     h.minimizeButton.dispatchEvent(new Event("click"));
+    assert.equal(h.dockTitle.textContent, "Map analysis · Summarize");
     h.minimizeButton.dispatchEvent(new Event("click"));
+    assert.equal(h.dockTitle.textContent, "Map analysis");
     h.histogramTab.dispatchEvent(new Event("click"));
     assert.deepEqual(changes, [null, "calculations", null, "calculations", "histogram"]);
     unsubscribe(); h.controller.showDownloads();
@@ -126,7 +133,8 @@ test("histogram and style have independent visibility on one persistent surface"
     assert.equal(h.histogram.getAttribute("data-map-inspection-active"), "true");
     assert.equal(h.styleTab.hidden, false);
     assert.equal(h.histogramTab.hidden, false);
-    assert.equal(h.histogramTab.textContent, "Raster histogram · 2");
+    assert.equal(h.histogramTab.textContent, "Explore");
+    assert.equal(h.histogramTab.title, "2 raster results");
     h.controller.closeHistogram();
     assert.equal(h.style.hidden, false);
     assert.equal(h.style.getAttribute("data-map-inspection-active"), "true");
