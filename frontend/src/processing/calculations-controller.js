@@ -18,8 +18,7 @@ export class CalculationsController {
         Object.assign(this, { api, jobs, storage, view, getContext, onOpen, onClose, onActivity, clock, requestId });
         this.state = { sources: [], source: null, selectedArea: null, area: null, areaChoice: "selection",
             availableAoi: null, calculations: [{ label: "Mean", expression: "mean(a)" }],
-            valid: false, validation: "", plan: null, phase: "idle", message: "", followWanted: false,
-            following: false, result: null, resultIntent: null, current: null, jobs: [], historyError: "" };
+            valid: false, validation: "", plan: null, phase: "idle", message: "", active: false, checking: false, result: null, resultIntent: null, current: null, jobs: [], historyError: "" };
         this.record = storage.read();
         this.desired = null;
         this.sequence = 0;
@@ -32,13 +31,7 @@ export class CalculationsController {
             onSource: index => this.edit({ source: this.state.sources[index] ?? null }),
             onArea: choice => this.chooseArea(choice),
             onCalculations: calculations => this.edit({ calculations }),
-            onFollow: checked => {
-                if (!checked && this.state.following) this.stopFollowing();
-                this.state.followWanted = checked;
-                this.render();
-            },
-            onReview: () => void this.review(), onRun: () => void this.run(),
-            onRerun: () => void this.rerun(),
+            onRun: () => void this.run(),
             onStop: () => this.stop(), onRetry: () => { this.blocked = false; void this.advance(); },
             onRefresh: () => void jobs.refresh(), onInspect: id => this.inspect(id),
             onCancel: id => void this.jobAction(id, "cancel"), onDelete: id => void this.jobAction(id, "delete"),
@@ -79,33 +72,50 @@ export class CalculationsController {
 
     /** Snapshot editor intent; never fall back from no selection to whole raster. @return {Object} Frozen intent. */
     intent() {
+        if (!this.state.source) throw new Error("Choose a Catalog raster.");
         if (!this.state.area) throw new Error("Choose a sampling box, uploaded AOI, or Whole raster.");
         return calculationIntent(this.state);
     }
 
-    /** Whether map selection should retain this tool's foreground presentation. @return {boolean} Follow mode. */
-    get isFollowing() { return this.state.following; }
+    /** Whether the calculator is the expanded foreground panel. @return {boolean} Active presentation. */
+    get isActive() { return this.state.active; }
 
-    /** Pause follow mode and invalidate unaccepted planning. @return {void} */
-    stopFollowing() {
-        this.state.following = false;
+    /** Receive presentation state from composition, without importing the dock.
+     * @param {boolean} active Whether this panel is active and expanded. @return {void}
+     */
+    setActive(active) {
+        if (typeof active !== "boolean") throw new TypeError("Calculator activity must be boolean.");
+        if (this.state.active === active) return;
+        this.state.active = active;
+        if (!active) this.invalidate();
+        else this.estimate();
+        this.render();
+    }
+
+    /** Invalidate unaccepted intent and cancel obsolete automatic work. @return {void} */
+    invalidate() {
+        const target = this.desired;
         this.desired = null;
         this.sequence += 1;
         this.planAbort?.abort();
         this.clock.clearTimeout(this.debounce);
         this.discardReview();
+        if (target?.plan) void this.api.discardPlan(target.plan.planId).catch(() => {});
         if (!this.record) this.state.phase = "idle";
         if (this.record?.automatic) this.requestCancellation();
     }
 
-    /** Apply an editor change; validation never submits work. @param {Object} change Changed fields. @return {void} */
+    /** Apply an editor change; debounced checks never submit a job.
+     * @param {Object} change Changed fields. @return {void}
+     */
     edit(change) {
-        this.stopFollowing();
+        this.invalidate();
         Object.assign(this.state, change);
+        if (!this.record) this.blocked = false;
         this.state.message = "";
-        this.state.phase = this.record ? this.state.phase : "idle";
         this.state.valid = false;
-        this.state.validation = "Checking expressions…";
+        this.state.checking = true;
+        this.state.validation = "Checking formula…";
         this.validationAbort?.abort();
         const version = ++this.validationSequence;
         this.clock.clearTimeout(this.validationTimer);
@@ -113,23 +123,35 @@ export class CalculationsController {
         this.render();
     }
 
-    /** Validate using the backend grammar only. @param {number} version Edit version. @return {Promise<void>} Validation. */
+    /** Check formulas with the backend grammar, then estimate without submitting.
+     * @param {number} version Edit version. @return {Promise<void>} Validation.
+     */
     async validate(version = this.validationSequence) {
         this.validationAbort = new AbortController();
         try {
             await this.api.validateCalculation(this.state.calculations, this.validationAbort.signal);
             if (version !== this.validationSequence || this.destroyed) return;
             this.state.valid = true;
-            this.state.validation = "Expressions are valid.";
+            this.state.checking = false;
+            this.state.validation = "Formula is valid.";
+            if (this.desired?.execute) {
+                this.desired.ready = this.desired.debounced;
+                void this.advance();
+            } else this.estimate();
         } catch (error) {
             if (version !== this.validationSequence || this.destroyed || error.name === "AbortError") return;
             this.state.valid = false;
+            this.state.checking = false;
             this.state.validation = error.message;
+            this.invalidate();
+            this.state.message = "Fix the formula before calculating.";
         }
         this.render();
     }
 
-    /** Choose explicit scope; follow mode is available only for map boxes. @param {string} choice Scope. @return {void} */
+    /** Choose explicit scope; map clicks calculate only a selected map box.
+     * @param {string} choice Scope. @return {void}
+     */
     chooseArea(choice) {
         const area = choice === "whole" ? { kind: "wholeRaster" } : choice === "uploaded"
             ? this.state.availableAoi && { kind: "temporaryAoi", temporaryAoiId: this.state.availableAoi.id }
@@ -137,35 +159,38 @@ export class CalculationsController {
         this.edit({ areaChoice: choice, area });
     }
 
-    /** Observe AOI lifecycle without altering accepted snapshots. @param {Object|null} aoi Ready reference. @return {void} */
+    /** Observe AOI lifecycle without altering accepted snapshots.
+     * @param {Object|null} aoi Ready reference. @return {void}
+     */
     setTemporaryAoi(aoi) {
         this.state.availableAoi = aoi;
         if (this.state.area?.kind === "temporaryAoi" && this.state.area.temporaryAoiId !== aoi?.id) this.edit({ area: null });
         this.render();
     }
 
-    /** Receive committed areas, not pointer previews. @param {Object|null} area Sampling snapshot. @return {void} */
+    /** Receive committed area context; only an explicit click intent starts work.
+     * @param {Object|null} area Sampling snapshot. @return {void}
+     */
     setSelection(area) {
         const next = area ? normalizeRasterSamplingArea(area) : null;
         if (identity(next) === identity(this.state.selectedArea)) return;
         this.state.selectedArea = next;
         if (this.state.areaChoice !== "selection") return;
+        this.invalidate();
         this.state.area = next;
-        this.sequence += 1;
-        this.planAbort?.abort();
-        this.discardReview();
-        if (!this.state.following) { if (!this.record) this.state.phase = "idle"; this.render(); return; }
-        if (next?.kind !== "selectedArea") { this.stopFollowing(); this.render(); return; }
-        this.desired = { intent: this.intent(), ready: false, automatic: true, sequence: this.sequence };
-        this.requestCancellation();
-        this.state.phase = "waiting";
-        this.state.message = "Waiting for the latest box…";
-        this.clock.clearTimeout(this.debounce);
-        this.debounce = this.clock.setTimeout(() => {
-            if (this.desired) this.desired.ready = true;
-            void this.advance();
-        }, 650);
+        if (!this.record) this.blocked = false;
+        this.state.message = "";
+        this.estimate(650);
         this.render();
+    }
+
+    /** Debounce a completed map click while this calculator is active.
+     * Repeated clicks in the same box are intentional recalculations.
+     * @return {void}
+     */
+    calculateSelection() {
+        if (!this.isActive || this.state.areaChoice !== "selection" || this.state.area?.kind !== "selectedArea") return;
+        this.queueCalculation(true);
     }
 
     /** Mark durable cancellation before recovering uncertain submissions. @return {void} */
@@ -177,71 +202,81 @@ export class CalculationsController {
         void this.advance();
     }
 
-    /** Discard obsolete review metadata; a disconnected release expires safely. @return {void} */
+    /** Discard obsolete metadata; a disconnected release expires safely. @return {void} */
     discardReview() {
         const plan = this.state.plan;
         this.state.plan = null;
         if (plan) void this.api.discardPlan(plan.planId).catch(() => {});
     }
 
-    /** Review one current intent without submitting a job. @return {Promise<void>} Estimate. */
-    async review() {
-        this.stopFollowing();
-        const sequence = this.sequence;
-        this.planAbort = new AbortController();
-        this.state.phase = "planning";
-        this.state.message = "Reading native raster metadata…";
-        this.render();
-        try {
-            const plan = await this.api.planCalculation(this.intent(), this.planAbort.signal);
-            if (sequence === this.sequence && !this.destroyed) {
-                this.state.plan = plan;
-                this.state.valid = true;
-                this.state.message = "Review the native work below, then Run.";
-            } else {
-                void this.api.discardPlan(plan.planId).catch(() => {});
+    /** Queue an automatic metadata estimate on the same lane as execution planning.
+     * @param {number} delay Optional debounce in milliseconds. @return {void}
+     */
+    estimate(delay = 0) {
+        if (!this.isActive || !this.state.valid || !this.state.source || !this.state.area ||
+            this.desired || this.state.plan || this.blocked || this.destroyed) return;
+        const intent = this.intent();
+        if (this.record && identity(this.record.intent) === identity(intent)) return;
+        const target = { intent, execute: false, ready: delay === 0, sequence: ++this.sequence };
+        this.desired = target;
+        if (delay) this.debounce = this.clock.setTimeout(() => {
+            if (this.desired === target) { target.ready = true; void this.advance(); }
+        }, delay);
+        else void this.advance();
+    }
+
+    /** Queue one explicit calculation, reusing a matching automatic estimate.
+     * @param {boolean} automatic Whether a map click requested the job. @return {void}
+     */
+    queueCalculation(automatic) {
+        if (this.destroyed || (!this.state.valid && !this.state.checking)) return;
+        if (this.blocked && this.record) { this.render(); return; }
+        let intent;
+        try { intent = this.intent(); }
+        catch (error) { this.state.message = error.message; this.render(); return; }
+        // A double press must not submit the same manual intent twice.
+        if (!automatic && ((this.desired?.execute && identity(this.desired.intent) === identity(intent)) ||
+            (this.record && !this.record.cancelRequested && identity(this.record.intent) === identity(intent)))) return;
+        this.blocked = false;
+        let target = this.desired;
+        if (!target || identity(target.intent) !== identity(intent)) {
+            const plan = this.state.plan;
+            this.state.plan = null;
+            this.invalidate();
+            target = { intent, plan, sequence: ++this.sequence };
+            this.desired = target;
+        }
+        Object.assign(target, { execute: true, automatic, debounced: !automatic, ready: !automatic && this.state.valid });
+        this.clock.clearTimeout(this.debounce);
+        if (automatic) this.debounce = this.clock.setTimeout(() => {
+            if (this.desired === target) {
+                target.debounced = true;
+                target.ready = this.state.valid;
+                void this.advance();
             }
-        } catch (error) {
-            if (sequence === this.sequence && error.name !== "AbortError") this.state.message = error.message;
-        } finally {
-            if (sequence === this.sequence) this.state.phase = "idle";
-            this.render();
-        }
-    }
-
-    /** Start one reviewed run and optionally arm subsequent box clicks. @return {Promise<void>} Dispatch. */
-    async run() {
-        if (!this.state.plan || this.destroyed) return;
-        if (Date.parse(this.state.plan.expiresAt) <= Date.now()) {
-            this.state.plan = null; this.state.message = "Estimate expired. Review again."; this.render(); return;
-        }
-        this.blocked = false;
-        this.state.following = this.state.followWanted && this.state.area?.kind === "selectedArea" && this.state.areaChoice === "selection";
-        this.desired = { intent: this.intent(), plan: this.state.plan, ready: true,
-            automatic: this.state.following, sequence: ++this.sequence };
-        this.state.plan = null;
+        }, 650);
         this.requestCancellation();
-        await this.advance();
+        this.state.phase = "waiting";
+        this.state.message = automatic ? "Waiting for the latest sampling box…" : "Preparing calculation…";
+        this.render();
+        void this.advance();
     }
 
-    /** Recalculate unchanged, previously reviewed settings. @return {Promise<void>} Fresh plan and run. */
-    async rerun() {
-        if (!this.state.resultIsCurrent || this.state.hasWork) return;
-        this.blocked = false;
-        this.desired = { intent: this.intent(), ready: true, automatic: this.state.following, sequence: ++this.sequence };
-        await this.advance();
-    }
+    /** Calculate the current selection, obtaining a fresh estimate when needed.
+     * @return {Promise<void>} Submission progress.
+     */
+    async run() { this.queueCalculation(false); await this.advance(); }
 
-    /** Stop automatic requests and cancel this editor's active work. @return {void} */
+    /** Cancel this calculation; a later map click is a new explicit request. @return {void} */
     stop() {
-        this.stopFollowing();
+        this.invalidate();
         this.requestCancellation();
-        if (!this.record) this.state.message = "Calculation stopped.";
+        if (!this.record) this.state.message = "Calculation cancelled.";
         this.render();
     }
 
-    /** Closing pauses automatic work; explicit one-off jobs continue in history. @return {void} */
-    close() { this.stopFollowing(); this.render(); this.onClose(); }
+    /** Close automatic work; explicit one-off jobs continue in history. @return {void} */
+    close() { this.setActive(false); this.onClose(); }
 
     /**
      * Drain one durable workflow before admitting the newest requested area.
@@ -282,7 +317,7 @@ export class CalculationsController {
                 this.state.current = job;
                 if (ACTIVE_JOB_STATES.has(job.status)) {
                     this.state.phase = this.record.cancelRequested ? "cancelling" : job.status;
-                    this.state.message = this.record.cancelRequested ? "Cancelling the previous calculation before starting the latest box…" : "";
+                    this.state.message = this.record.cancelRequested ? "Cancelling calculation…" : "";
                     if (this.record.cancelRequested && job.status !== "cancelling") await this.jobs.action(job.jobId, "cancel");
                     return;
                 }
@@ -290,8 +325,7 @@ export class CalculationsController {
                     this.state.result = job; this.state.resultIntent = this.record.intent;
                     this.state.message = "Calculation complete.";
                 } else if (["failed", "interrupted"].includes(job.status) && !this.record.cancelRequested) {
-                    this.state.message = job.error?.detail ?? "Calculation interrupted. Review and run again.";
-                    this.state.following = false;
+                    this.state.message = job.error?.detail ?? "Calculation interrupted. Click Calculate to try again.";
                 } else if (this.record.cancelRequested || job.status === "cancelled") {
                     this.state.message = this.desired ? "Waiting for the latest sampling box…" : "Calculation cancelled.";
                 }
@@ -301,10 +335,14 @@ export class CalculationsController {
             }
             if (!this.desired?.ready) return;
             const target = this.desired;
-            this.state.phase = "planning";
-            this.state.message = "Reading native raster metadata for the latest box…";
+            this.state.phase = target.execute ? "planning" : "estimating";
+            this.state.message = "Checking calculation size…";
             this.planAbort = new AbortController();
             this.render();
+            if (target.plan && Date.parse(target.plan.expiresAt) <= Date.now()) {
+                void this.api.discardPlan(target.plan.planId).catch(() => {});
+                target.plan = null;
+            }
             let plan;
             try { plan = target.plan ?? await this.api.planCalculation(target.intent, this.planAbort.signal); }
             catch (error) { if (target !== this.desired || error.name === "AbortError") return; throw error; }
@@ -312,6 +350,16 @@ export class CalculationsController {
                 void this.api.discardPlan(plan.planId).catch(() => {});
                 return;
             }
+            target.plan = plan;
+            if (!target.execute) {
+                this.state.plan = plan;
+                this.desired = null;
+                this.state.phase = "idle";
+                this.state.message = "Ready to calculate.";
+                return;
+            }
+            // A click may reuse an in-flight estimate, but still waits for its debounce.
+            if (!target.ready) { target.plan = plan; this.state.phase = "waiting"; return; }
             const record = { intent: target.intent, automatic: target.automatic, cancelRequested: false,
                 pending: { planId: plan.planId, requestId: this.requestId() }, jobId: null };
             this.storage.write(record);
@@ -319,10 +367,10 @@ export class CalculationsController {
             this.desired = null;
         } catch (error) {
             this.blocked = true;
+            if (this.desired?.plan) void this.api.discardPlan(this.desired.plan.planId).catch(() => {});
             this.desired = null;
-            this.state.following = false;
             this.state.phase = "error";
-            this.state.message = `${error.message}${this.record ? " Recover / retry to confirm or cancel the same job safely." : " Review again to retry."}`;
+            this.state.message = `${error.message}${this.record ? " Recover / retry to confirm or cancel the same job safely." : " Click Calculate or select a new sampling box to retry."}`;
         } finally {
             this.advanceRunning = false;
             this.render();
@@ -354,7 +402,7 @@ export class CalculationsController {
     inspect(id) {
         const job = this.jobs.jobs.find(item => item.jobId === id && item.operation === "raster.aggregate.v1");
         if (!job) return;
-        this.stopFollowing();
+        this.invalidate();
         this.state.result = job;
         this.state.resultIntent = null;
         this.onOpen(); this.render();
@@ -374,10 +422,10 @@ export class CalculationsController {
         try { currentIntent = this.intent(); } catch { /* Incomplete editor is expected. */ }
         this.state.resultIsCurrent = !!this.state.resultIntent && identity(currentIntent) === identity(this.state.resultIntent);
         this.state.recoverable = !!this.record && this.blocked;
-        this.state.hasWork = !!this.record || !!this.desired || this.state.phase === "planning";
+        this.state.hasWork = !!this.record || !!this.desired?.execute;
         // A replacement includes debounce/admission, but excludes a review alone,
         // stopped work, and failures awaiting an explicit recovery action.
-        this.state.resultPending = !this.blocked && (!!this.desired || (!!this.record && !this.record.cancelRequested));
+        this.state.resultPending = !this.blocked && (!!this.desired?.execute || (!!this.record && !this.record.cancelRequested));
         this.view.render(this.state);
         const active = this.record && !this.record.cancelRequested && !this.blocked;
         this.onActivity(active ? this.record.intent.area : null);

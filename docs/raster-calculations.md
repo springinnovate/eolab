@@ -11,7 +11,7 @@ JSON provenance. A final calculation reads **native pixels**, independently of
 histogram samples, styling, rendering, and GeoServer. COG overviews do not preserve
 arbitrary predicates or sums and are never substituted for native values.
 
-The [Custom raster analysis editor](raster-calculation-interface.md) displays
+The [Raster calculator](raster-calculation-interface.md) displays
 inline results and optional CSV/provenance downloads. Shared Downloads/history
 distinguishes calculation CSVs from clipped COGs. Owned calculation jobs also
 remain available through the API and direct result URLs.

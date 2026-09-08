@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { MapInspectionController } from "../../src/map-inspection-controller.js";
 import { CalculationsController } from "../../src/processing/calculations-controller.js";
 import { CalculationsView, calculationValue } from "../../src/processing/calculations-view.js";
 import { CalculationSessionStorage } from "../../src/processing/calculation-session.js";
@@ -43,24 +44,146 @@ function fixture(overrides = {}, data = new Map()) {
     const jobs = new ProcessingJobs(api,clock);
     const view = {bind(handlers){this.handlers=handlers;},render(state){this.state=state;},unbind(){}};
     const activity = [];
+    const document = new FakeRasterControlDocument();
+    document.addEventListener = () => {}; document.removeEventListener = () => {};
+    for (const id of ["calculations-panel", "downloads-panel", "map-histogram-panel", "layer-style-editor",
+        "vector-filter-panel", "vector-feature-inspector", "vector-time-series", "vector-feature-profile"]) document.querySelector(`#${id}`).hidden = true;
+    const root = document.querySelector("#map-inspection"); root.showPopover = () => {}; root.hidePopover = () => {};
+    const dock = new MapInspectionController({documentContext:document});
     const options = {api,jobs,view,storage,getContext:()=>({sources:[source],area:box(77)}),clock,
-        onOpen(){},onClose(){},onEditArea(){},onActivity: area=>activity.push(area),requestId:()=>`request-${String(id).padStart(16,"0")}`};
+        onOpen:()=>dock.showCalculations(),onClose:()=>dock.hideCalculations(),onEditArea(){},onActivity: area=>activity.push(area),requestId:()=>`request-${String(id).padStart(16,"0")}`};
     const controller = new CalculationsController(options);
+    dock.subscribeActiveTool(tool=>controller.setActive(tool === "calculations"));
+    const click = west => { controller.setSelection(box(west)); controller.calculateSelection(); };
     const tick = async delay => { const due=[...timers.entries()].filter(([,item])=>item.delay===delay); for(const [key,item]of due){timers.delete(key);item.fn();}await flush(); };
     const finish = async (status="ready",value="12.5") => {
         const old=server.get(controller.record.jobId);
         server.set(old.jobId,{...old,status,result:status==="ready"?{url:`/api/processing/jobs/${old.jobId}/result`,provenanceUrl:`/api/processing/jobs/${old.jobId}/provenance`,rows:[{label:"Mean",expression:"mean(a)",value,valueType:"float",state:"ok",aggregates:[{function:"mean",matchedPixels:8,validPixels:8,invalidArithmeticPixels:0}]}]}:null});
         await jobs.refresh(); await flush();
     };
-    const run = async follow => {controller.open();await tick(400);await controller.review();view.handlers.onFollow(!!follow);await controller.review();await controller.run();await flush();};
-    return {controller,api,jobs,storage,view,requests,server,plans,tick,finish,run,activity,data,options};
+    const run = async automatic => {
+        controller.open(); await tick(400);
+        if (automatic) { controller.calculateSelection(); await tick(650); }
+        else await controller.run();
+        await flush();
+    };
+    return {controller,api,jobs,storage,view,requests,server,plans,tick,finish,run,activity,data,options,click,dock,document};
 }
 
-test("typing and ordinary box changes validate without planning or job admission", async () => {
+test("typing and area context changes automatically check formulas and size without submitting", async () => {
     const h=fixture();h.controller.open();h.controller.edit({calculations:[{label:"N",expression:"count(a>10)"}]});
     h.controller.setSelection(box(78));await h.tick(400);
-    assert.deepEqual(h.requests.map(r=>r[0]),["validate"]);
+    assert.deepEqual(h.requests.map(r=>r[0]),["validate","plan"]);
     assert.equal(h.view.state.valid,true);
+});
+
+test("the first active-panel click calculates without Run, including a repeated box", async () => {
+    const h = fixture(); h.controller.open(); await h.tick(400);
+    assert.equal(h.requests.filter(r => r[0] === "submit").length, 0);
+    assert.equal(h.view.state.message, "Ready to calculate.");
+    h.click(77); await h.tick(650);
+    assert.equal(h.requests.filter(r => r[0] === "submit").length, 1);
+    assert.equal(h.controller.record.automatic, true);
+    await h.finish(); h.click(77); await h.tick(650);
+    assert.equal(h.requests.filter(r => r[0] === "submit").length, 2);
+});
+
+test("a click waits for formula validation and invalid formulas never submit", async () => {
+    for (const invalid of [false, true]) {
+        const response = deferred();
+        const h = fixture({validateCalculation: () => response.promise});
+        h.controller.open(); h.click(78); await h.tick(650); await h.tick(400);
+        assert.equal(h.requests.some(r => r[0] === "submit"), false);
+        if (invalid) response.reject(new Error("Unknown function bad"));
+        else response.resolve({valid:true});
+        await flush();
+        assert.equal(h.requests.some(r => r[0] === "submit"), !invalid);
+        if (invalid) {
+            assert.match(h.view.state.validation, /Unknown function/);
+            assert.equal(h.view.state.resultPending, false);
+            h.click(79); await h.tick(650);
+            assert.equal(h.requests.some(r => r[0] === "submit"), false);
+        }
+    }
+});
+
+test("clicking during an automatic estimate reuses it but still debounces admission", async () => {
+    const response = deferred(); const h = fixture(); let planningCalls = 0;
+    const original = h.api.planCalculation;
+    h.api.planCalculation = async intent => { planningCalls++; const plan = await original(intent); await response.promise; return plan; };
+    h.controller.open(); await h.tick(400); h.controller.calculateSelection();
+    response.resolve(); await flush();
+    assert.equal(h.requests.some(r => r[0] === "submit"), false);
+    await h.tick(650);
+    assert.equal(planningCalls, 1);
+    assert.equal(h.requests.filter(r => r[0] === "submit").length, 1);
+});
+
+test("real dock tab changes and minimization cancel automatic work and stop map admission", async () => {
+    for (const minimize of [false, true]) {
+        const h = fixture(); await h.run(true);
+        if (minimize) h.document.querySelector("#toggle-map-inspection-dock").dispatchEvent(new Event("click"));
+        else h.dock.showHistogram();
+        await flush();
+        assert.equal(h.controller.isActive, false);
+        assert.equal(h.requests.filter(r => r[0] === "cancel").length, 1);
+        await h.finish("cancelled"); h.click(78); await h.tick(650);
+        assert.equal(h.requests.filter(r => r[0] === "submit").length, 1);
+        h.document.querySelector("#map-inspection-tab-calculations").dispatchEvent(new Event("click"));
+        await flush();
+        assert.equal(h.controller.isActive, true);
+        assert.equal(h.requests.filter(r => r[0] === "submit").length, 1, "reactivation alone does not calculate");
+        h.click(79); await h.tick(650);
+        assert.equal(h.requests.filter(r => r[0] === "submit").length, 2);
+    }
+});
+
+test("background raster and feature results retain the calculator without transient cancellation", async () => {
+    const h = fixture(); await h.run(true); const transitions = [];
+    h.dock.subscribeActiveTool(tool => transitions.push(tool));
+    h.dock.showHistogram(2, {activate: !h.controller.isActive});
+    h.dock.showFeatureInspector({activate: !h.controller.isActive});
+    h.dock.setFeatureResultCount(3); await flush();
+    assert.deepEqual(transitions, ["calculations"]);
+    assert.equal(h.controller.isActive, true);
+    assert.equal(h.requests.filter(r => r[0] === "cancel").length, 0);
+    assert.equal(h.document.querySelector("#map-inspection-tab-feature").hidden, false);
+});
+
+test("late checks after hiding cannot plan or submit, and late estimates are released", async () => {
+    for (const stage of ["validateCalculation", "planCalculation"]) {
+        const response = deferred(); const h = fixture({[stage]: () => response.promise});
+        h.controller.open(); await h.tick(400); h.dock.showDownloads();
+        response.resolve(stage === "planCalculation" ? {planId:"p".repeat(32),grid} : {valid:true});
+        await flush();
+        assert.equal(h.view.state.plan, null);
+        assert.equal(h.requests.some(r => r[0] === "submit"), false);
+        if (stage === "planCalculation") assert.ok(h.requests.some(r => r[0] === "discard"));
+        else assert.equal(h.requests.some(r => r[0] === "plan"), false);
+    }
+});
+
+test("double Calculate during size checking admits only one manual job", async () => {
+    const response = deferred(); const h = fixture(); const original = h.api.planCalculation;
+    h.api.planCalculation = async intent => { const plan = await original(intent); await response.promise; return plan; };
+    h.controller.open(); await h.tick(400); void h.controller.run(); void h.controller.run();
+    response.resolve(); await flush();
+    assert.equal(h.requests.filter(r => r[0] === "plan").length, 1);
+    assert.equal(h.requests.filter(r => r[0] === "submit").length, 1);
+    assert.equal(h.controller.record.automatic, false);
+    h.dock.showDownloads(); await flush();
+    assert.equal(h.requests.filter(r => r[0] === "cancel").length, 0, "accepted manual jobs survive hiding");
+});
+
+test("accepted map calculations reveal results without collapsing checks or later edits", async () => {
+    const h = fixture(); h.controller.open(); await h.tick(400);
+    const doc = new FakeRasterControlDocument(); const view = new CalculationsView(doc);
+    view.bind(h.view.handlers); view.elements.editor.open = true;
+    view.render(h.view.state); assert.equal(view.elements.editor.open, true);
+    h.click(77); await h.tick(650); view.render(h.view.state);
+    assert.equal(view.elements.editor.open, false);
+    view.elements.editor.open = true; view.render(h.view.state);
+    assert.equal(view.elements.editor.open, true, "progress never fights the user's disclosure choice");
 });
 
 test("explicit Run freezes intent, publishes measured progress and inline result", async () => {
@@ -74,7 +197,7 @@ test("explicit Run freezes intent, publishes measured progress and inline result
 });
 
 test("follow clicks cancel old work and retain only the latest area until cancellation completes", async () => {
-    const h=fixture();await h.run(true);h.controller.setSelection(box(78));h.controller.setSelection(box(79));
+    const h=fixture();await h.run(true);h.click(78);h.click(79);
     await h.tick(650);assert.equal(h.requests.filter(r=>r[0]==="submit").length,1);
     assert.equal(h.requests.filter(r=>r[0]==="cancel").length,1);
     assert.equal(h.activity.at(-1),null);
@@ -89,8 +212,8 @@ test("a stale plan resolving after a newer box never submits and does not strand
     const old=deferred();let signal;
     const original=h.api.planCalculation;
     h.api.planCalculation=(intent,s)=>{signal=s;return old.promise;};
-    h.controller.setSelection(box(78));await h.tick(650);
-    h.api.planCalculation=original;h.controller.setSelection(box(79));await h.tick(650);
+    h.click(78);await h.tick(650);
+    h.api.planCalculation=original;h.click(79);await h.tick(650);
     assert.ok(signal.aborted);old.resolve({planId:"z".repeat(32)});await flush();
     assert.equal(h.requests.filter(r=>r[0]==="submit").length,2);
     assert.deepEqual(h.controller.record.intent.area,box(79));
@@ -99,8 +222,8 @@ test("a stale plan resolving after a newer box never submits and does not strand
 test("click during submission cancels its eventual accepted job before admitting a replacement", async () => {
     const h=fixture();const acceptance=deferred();const original=h.api.submitCalculation;
     h.api.submitCalculation=async value=>{const job=await original(value);await acceptance.promise;return job;};
-    h.controller.open();await h.tick(400);h.view.handlers.onFollow(true);await h.controller.review();void h.controller.run();await flush();
-    h.controller.setSelection(box(79));await h.tick(650);
+    h.controller.open();await h.tick(400);h.controller.calculateSelection();await h.tick(650);
+    h.click(79);await h.tick(650);
     assert.equal(h.storage.read().cancelRequested,true);
     acceptance.resolve();await flush();assert.equal(h.view.state.current.status,"cancelling");
     h.api.submitCalculation=original;await h.finish("cancelled");
@@ -114,40 +237,46 @@ test("uncertain submission persists its key and superseded cancellation through 
     h.controller.destroy();h.api.submitCalculation=original;
     const recovered=new CalculationsController(h.options);await recovered.start();await flush();
     const submissions=h.requests.filter(r=>r[0]==="submit");assert.deepEqual(submissions[0][1],submissions[1][1]);
-    assert.equal(recovered.isFollowing,false);assert.equal(h.server.get(saved.pending.planId).status,"cancelling");
+    assert.equal(recovered.isActive,false);assert.equal(h.server.get(saved.pending.planId).status,"cancelling");
 });
 
-test("editing formulas or closing pauses follow mode and cancels its job", async () => {
+test("editing formulas or closing cancels obsolete map-triggered work", async () => {
     for(const close of [false,true]){
         const h=fixture();await h.run(true);
         if(close)h.controller.close();else h.controller.edit({calculations:[{label:"Min",expression:"min(a)"}]});
-        await flush();assert.equal(h.controller.isFollowing,false);
+        await flush();assert.equal(h.controller.isActive,!close);
         assert.equal(h.requests.filter(r=>r[0]==="cancel").length,1);
     }
 });
 
 test("a completed superseded job cannot replace the prior visible result", async () => {
     const h=fixture();await h.run(true);await h.finish("ready","1");const result=h.view.state.result;
-    h.controller.setSelection(box(78));await h.tick(650);
-    h.controller.setSelection(box(79));await h.finish("ready","999");
+    h.click(78);await h.tick(650);
+    h.click(79);await h.finish("ready","999");
     assert.equal(h.view.state.result.jobId,result.jobId);
     assert.equal(h.view.state.resultIsCurrent,false);
 });
 
-test("whole raster and AOI are explicit and never armed by follow checkbox", async () => {
-    const h=fixture();h.controller.open();h.controller.chooseArea("whole");h.view.handlers.onFollow(true);
-    await h.controller.review();await h.controller.run();await flush();assert.equal(h.controller.isFollowing,false);
-    assert.equal(h.controller.record.intent.area.kind,"wholeRaster");
-    h.controller.setTemporaryAoi({id:"a".repeat(32)});h.controller.chooseArea("uploaded");await h.controller.review();
-    h.controller.setTemporaryAoi(null);assert.equal(h.view.state.plan,null);assert.equal(h.view.state.area,null);
-    assert.equal(h.controller.record.intent.area.kind,"wholeRaster");
+test("whole raster and AOI require Calculate and never respond to map clicks", async () => {
+    for (const scope of ["whole", "uploaded"]) {
+        const h=fixture(); h.controller.open();
+        h.controller.setTemporaryAoi({id:"a".repeat(32)}); h.controller.chooseArea(scope); await h.tick(400);
+        h.click(79); await h.tick(650);
+        assert.equal(h.requests.some(r=>r[0]==="submit"),false);
+        await h.controller.run(); await flush();
+        const accepted=h.controller.record.intent.area;
+        assert.equal(accepted.kind,scope==="whole"?"wholeRaster":"temporaryAoi");
+        h.controller.setTemporaryAoi(null);
+        assert.equal(h.controller.record.intent.area,accepted);
+        if(scope==="uploaded") assert.equal(h.view.state.area,null);
+    }
 });
 
 test("capacity refusal pauses follow and errors preserve the last visible result", async () => {
     const h=fixture();await h.run(true);await h.finish();const result=h.view.state.result;
     h.api.planCalculation=async()=>{throw new ProcessingRequestError("Native work limit",422);};
-    h.controller.setSelection(box(79));await h.tick(650);
-    assert.equal(h.view.state.phase,"error");assert.equal(h.controller.isFollowing,false);
+    h.click(79);await h.tick(650);
+    assert.equal(h.view.state.phase,"error");assert.equal(h.controller.blocked,true);
     assert.equal(h.view.state.result,result);assert.match(h.view.state.message,/Native work limit/);
 });
 
@@ -165,11 +294,11 @@ for (const [kind, code, message] of [
             ? { ok: true, json: async () => ({ jobs: [] }) }
             : { ok: false, status: 413, json: async () => ({ detail: { code, message } }) });
         h.api.planCalculation = client.planCalculation.bind(client);
-        h.controller.setSelection(box(79));
+        h.click(79);
         await h.tick(650);
 
-        assert.equal(h.controller.isFollowing, false);
-        assert.equal(h.view.state.message, `${message} Review again to retry.`);
+        assert.equal(h.controller.blocked, true);
+        assert.equal(h.view.state.message, `${message} Click Calculate or select a new sampling box to retry.`);
         assert.equal(h.view.state.result, previous);
         assert.equal(h.requests.filter(request => request[0] === "submit").length, 1);
         const document = new FakeRasterControlDocument();
@@ -177,15 +306,18 @@ for (const [kind, code, message] of [
         view.bind(h.view.handlers);
         view.render(h.view.state);
         assert.equal(document.querySelector("#calculations-status").textContent, h.view.state.message);
-        assert.equal(view.elements.run.hidden, true);
+        assert.equal(view.elements.run.textContent, "Calculate");
     });
 }
 
-test("unavailable storage refuses submission and expired review requires another estimate", async () => {
-    const h=fixture();h.controller.open();await h.controller.review();h.view.state.plan.expiresAt="2000-01-01";
-    await h.controller.run();assert.equal(h.requests.filter(r=>r[0]==="submit").length,0);
-    await h.controller.review();h.controller.storage=new CalculationSessionStorage(null);await h.controller.run();
-    assert.equal(h.requests.filter(r=>r[0]==="submit").length,0);assert.match(h.view.state.message,/storage/);
+test("expired estimates refresh automatically and unavailable storage refuses submission", async () => {
+    const h=fixture();h.controller.open();await h.tick(400);h.view.state.plan.expiresAt="2000-01-01";
+    await h.controller.run();await flush();
+    assert.equal(h.requests.filter(r=>r[0]==="plan").length,2);
+    assert.equal(h.requests.filter(r=>r[0]==="submit").length,1);
+    await h.finish();
+    h.controller.storage=new CalculationSessionStorage(null);await h.controller.run();await flush();
+    assert.equal(h.requests.filter(r=>r[0]==="submit").length,1);assert.match(h.view.state.message,/storage/);
 });
 
 test("shared job polling coalesces concurrent editors and protects accepted jobs", async () => {
@@ -240,7 +372,7 @@ test("area examples insert editable single-raster expressions without submitting
         view.elements.template.value = template;
         view.elements.template.dispatchEvent(new Event("change"));
         assert.equal(h.view.state.calculations.at(-1).expression, expression);
-        assert.equal(h.requests.some(request => ["plan","submit"].includes(request[0])), false);
+        assert.equal(h.requests.some(request => request[0] === "submit"), false);
     }
 });
 
@@ -255,7 +387,7 @@ test("a pending replacement mutes saved values from the first follow click until
     assert.equal(result.classList.contains("is-previous"), false);
     assert.equal(view.elements["status-summary"].hidden, true);
 
-    h.controller.setSelection(box(78)); render();
+    h.click(78); render();
     assert.equal(h.view.state.phase, "waiting");
     assert.equal(result.classList.contains("is-previous"), true);
     assert.equal(result.getAttribute("aria-busy"), "true");
@@ -263,7 +395,7 @@ test("a pending replacement mutes saved values from the first follow click until
     const savedCard = result.children[2];
     await h.tick(650); render();
     assert.equal(result.children[2], savedCard, "progress retains the card and its expanded details");
-    h.controller.setSelection(box(79)); await h.tick(650); render();
+    h.click(79); await h.tick(650); render();
     assert.equal(h.view.state.current.status, "cancelling");
     assert.equal(view.elements["status-summary"].hidden, false, "replacement remains pending while the prior job cancels");
     await h.finish("cancelled"); render();
@@ -275,18 +407,18 @@ test("a pending replacement mutes saved values from the first follow click until
     assert.equal(view.elements["status-summary"].hidden, true);
 });
 
-test("rerunning unchanged settings marks the saved result as previous, but reviewing alone does not", async () => {
+test("recalculating mutes saved results while metadata checks alone leave them readable", async () => {
     const h = fixture(); await h.run(false); await h.finish();
     const doc = new FakeRasterControlDocument();
     const view = new CalculationsView(doc); view.bind(h.view.handlers);
     const response = deferred(); const plan = h.api.planCalculation;
     h.api.planCalculation = () => response.promise;
-    const review = h.controller.review(); view.render(h.view.state);
+    h.controller.estimate(); view.render(h.view.state);
     assert.equal(view.elements["status-summary"].hidden, true);
     assert.equal(view.elements.result.classList.contains("is-previous"), false);
-    response.resolve(await plan(h.controller.intent())); await review;
+    response.resolve(await plan(h.controller.intent())); await flush();
     h.api.planCalculation = plan;
-    await h.controller.rerun(); view.render(h.view.state);
+    await h.controller.run(); await flush(); view.render(h.view.state);
     assert.equal(h.view.state.resultIsCurrent, true);
     assert.equal(view.elements.result.classList.contains("is-previous"), true);
     assert.equal(view.elements.result.children[0].textContent, "Previous / saved result");
@@ -300,7 +432,7 @@ test("refused and uncertain replacement requests clear the busy banner while pre
     for (const stage of ["planCalculation", "submitCalculation"]) {
         const h = fixture(); await h.run(true); await h.finish();
         h.api[stage] = async () => { throw new Error("Request failed"); };
-        h.controller.setSelection(box(78)); await h.tick(650);
+        h.click(78); await h.tick(650);
         const doc = new FakeRasterControlDocument();
         const view = new CalculationsView(doc); view.bind(h.view.handlers); view.render(h.view.state);
         assert.equal(view.elements["status-summary"].hidden, true);
@@ -325,14 +457,14 @@ test("calculation API serializes identities, explicit scopes, and useful validat
 
 test("stopping a metadata review leaves the editor usable and ignores its late result", async () => {
     const response=deferred();const h=fixture({planCalculation:()=>response.promise});
-    h.controller.open();const review=h.controller.review();h.controller.stop();
-    response.resolve({planId:"x".repeat(32)});await review;
+    h.controller.open();await h.tick(400);h.controller.stop();
+    response.resolve({planId:"x".repeat(32)});await flush();
     assert.equal(h.view.state.phase,"idle");assert.equal(h.view.state.plan,null);assert.equal(h.view.state.hasWork,false);
 });
 
 test("leaving raster coverage pauses follow and cancels rather than relabeling old results", async () => {
     const h=fixture();await h.run(true);h.controller.setSelection(null);await flush();
-    assert.equal(h.controller.isFollowing,false);assert.equal(h.view.state.area,null);
+    assert.equal(h.controller.isActive,true);assert.equal(h.view.state.area,null);
     assert.equal(h.requests.filter(r=>r[0]==="cancel").length,1);
 });
 

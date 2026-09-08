@@ -473,8 +473,8 @@ export class BivariateRasterControlsView {
         this.statisticsXLabel.textContent = state.xLabel;
         this.statisticsYLabel.textContent = state.yLabel;
         for (const { axis, button, calculate } of this.downloadButtons) {
-            button.textContent = calculate ? `Analyze ${axis.toUpperCase()}` : `Download ${axis.toUpperCase()} clip`;
-            button.setAttribute("aria-label", `${calculate ? "Custom raster analysis of" : "Download clip of"} ${axis.toUpperCase()}: ${state[`${axis}Label`]}`);
+            button.textContent = calculate ? `Calculator · ${axis.toUpperCase()}` : `Download ${axis.toUpperCase()} clip`;
+            button.setAttribute("aria-label", `${calculate ? "Raster calculator of" : "Download clip of"} ${axis.toUpperCase()}: ${state[`${axis}Label`]}`);
         }
         this.rangeControls.x.label.textContent = state.xLabel;
         this.rangeControls.y.label.textContent = state.yLabel;

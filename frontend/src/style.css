@@ -4560,7 +4560,6 @@ summary:hover > .raster-disclosure-chevron {
 .calculation-expression { display: grid; gap: 0.35rem; margin: 0.8rem 0; padding: 0.6rem; border: 1px solid #cbd5e1; border-radius: 0.4rem; }
 .calculation-expression textarea { font-family: monospace; resize: vertical; }
 .calculation-expression button { justify-self: end; }
-.calculation-follow { display: flex; align-items: center; gap: 0.4rem; margin-top: 0.6rem; }
 .calculation-hint { font-size: 0.85rem; color: #475569; }
 .calculation-functions { padding-left: 1.25rem; font-size: 0.85rem; line-height: 1.5; }
 .calculation-functions li { margin: 0.55rem 0; }
