@@ -288,6 +288,10 @@ export class SummaryStatisticsController {
         if (!this.engine || this.destroyed) return;
         this.state.jobs = engineState.jobs;
         this.state.historyError = engineState.historyError;
+        if (this.state.saved) {
+            const saved = engineState.jobs.find(job => job.jobId === this.state.saved.jobId) ?? this.state.saved;
+            this.state.saved = saved.status === "deleted" ? null : saved;
+        }
         this.state.recoverable = engineState.recoverable;
         this.state.recoveryMessage = engineState.recoverable ? engineState.message : "";
         for (const card of this.state.statistics) {

@@ -195,3 +195,26 @@ test("unused-plan release failure pauses other automatic cards until an explicit
     assert.equal(h.controller.engine.blocked,true);assert.equal(a.error,true);
     h.api.discardPlan=async()=>{};h.controller.request(b.id,"manual");await flush();assert.equal(h.submits(),1);
 });
+
+test("inspected history refreshes a running job without rewriting the editable cards",async()=>{
+    const h=fixture();await h.open();const card=h.controller.state.statistics[0];
+    h.controller.request(card.id,"manual");await flush();const jobId=h.controller.engine.record.jobId;
+    h.controller.inspect(jobId);assert.equal(h.controller.state.saved.status,"running");
+    await h.finish();assert.equal(h.controller.state.saved.status,"ready");assert.equal(h.controller.state.statistics[0],card);
+    await h.controller.engine.jobAction(jobId,"delete");await flush();assert.equal(h.controller.state.saved,null);
+});
+test("reload recovers a manual job into its card without admitting another calculation",async()=>{
+    const h=fixture();await h.open();const card=h.controller.state.statistics[0];
+    h.controller.request(card.id,"manual");await flush();const id=h.controller.engine.record.jobId;h.controller.destroy();
+    const restored=fixture({listJobs:async()=>[...h.server.values()],getJob:async id=>h.server.get(id)},h.data);
+    await restored.controller.start();assert.equal(restored.submits(),0);assert.equal(restored.controller.engine.record.jobId,id);
+    const old=h.server.get(id);h.server.set(id,{...old,status:"ready",result:{url:"/api/processing/jobs/"+id+"/result",provenanceUrl:"/api/processing/jobs/"+id+"/provenance",rows:[{...old.calculations[0],value:"9",valueType:"float",state:"ok",aggregates:[]}]}});
+    await restored.jobs.refresh();await flush();assert.equal(restored.controller.state.statistics[0].result.row.value,"9");assert.equal(restored.submits(),0);
+});
+test("reload cancels recovered automatic work and never resumes sampling on its own",async()=>{
+    const h=fixture();await h.open();const card=h.controller.state.statistics[0];
+    h.controller.editStatistic(card.id,{expression:"sum(a)"});await h.tick();const id=h.controller.engine.record.jobId;h.controller.destroy();
+    const restored=fixture({listJobs:async()=>[...h.server.values()],getJob:async id=>h.server.get(id),cancelJob:async id=>{const job={...h.server.get(id),status:"cancelled"};h.server.set(id,job);return job;}},h.data);
+    await restored.controller.start();await flush();await restored.jobs.refresh();await flush();
+    assert.equal(h.server.get(id).status,"cancelled");assert.equal(restored.submits(),0);assert.equal(restored.controller.state.statistics[0].result,null);
+});
