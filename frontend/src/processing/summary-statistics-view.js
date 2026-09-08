@@ -54,11 +54,14 @@ export class SummaryStatisticsView extends CalculationsView {
         remove.addEventListener("click", () => this.handlers.onRemove(card.id));
         heading.append(label);
         const binding = this.element("label"); binding.className = "summary-raster-binding";
-        const bindingText = this.element("span");
-        bindingText.append(this.element("span", "In this formula, "), this.element("code", "a"), this.element("span", " represents"));
+        const variable = this.element("code", "a"); variable.className = "summary-raster-variable";
+        variable.title = "Raster represented by a in the formula";
         const source = this.element("select"); source.setAttribute("aria-label", `Raster for summary statistic ${card.id}`);
+        const bindingHelp = this.element("span", "Raster represented by a in the formula");
+        bindingHelp.className = "summary-variable-help"; bindingHelp.id = `summary-variable-help-${card.id}`;
+        source.setAttribute("aria-describedby", bindingHelp.id);
         source.addEventListener("change", () => this.handlers.onEdit(card.id, { source: this.sources[Number(source.value)] ?? null }));
-        binding.append(bindingText, source);
+        binding.append(variable, source, bindingHelp);
         const equation = this.element("div"); equation.className = "summary-equation";
         const expression = this.element("textarea"); expression.rows = 1; expression.maxLength = 4096; expression.spellcheck = false;
         expression.placeholder = "Formula, e.g. mean(a)";
