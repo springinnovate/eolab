@@ -572,7 +572,10 @@
             </details>
             <p id="calculations-plan" class="download-plan" hidden></p>
             <div class="downloads-actions"><button id="calculations-run" class="primary-button" type="button" hidden>Run calculation</button><button id="calculations-stop" class="secondary-button" type="button" hidden>Cancel calculation</button><button id="calculations-retry" class="secondary-button" type="button" hidden>Recover / retry</button></div>
-            <p id="calculations-status" role="status" aria-live="polite"></p>
+            <div id="calculations-status-region" role="status" aria-live="polite">
+              <strong id="calculations-status-summary" hidden></strong>
+              <p id="calculations-status"></p>
+            </div>
             <progress id="calculations-progress" aria-label="Native source blocks calculated" hidden></progress>
             <section id="calculations-result" aria-label="Calculation result"></section>
             <button id="calculations-rerun" class="secondary-button" type="button" hidden>Run again</button>

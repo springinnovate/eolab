@@ -18,7 +18,7 @@ export class CalculationsView {
         this.document = documentContext;
         this.elements = Object.fromEntries(["source", "area", "area-description", "rows", "add", "form", "review",
             "run", "rerun", "stop", "follow", "validation", "plan", "status", "progress", "result", "history", "refresh",
-            "retry", "close", "edit-area", "template", "editor"].map(name => [name, documentContext.querySelector(`#calculations-${name}`)]));
+            "retry", "close", "edit-area", "template", "editor", "status-region", "status-summary"].map(name => [name, documentContext.querySelector(`#calculations-${name}`)]));
         this.openers = [documentContext.querySelector("#open-calculations")];
         this.listeners = [];
         this.rows = [];
@@ -115,6 +115,10 @@ export class CalculationsView {
         e.status.textContent = state.message || (state.current ? describeJobProgress(state.current)
             : state.following ? "Following sampling box — click the map to calculate again." : "");
         if (state.following && state.message === "Calculation complete.") e.status.textContent += " Click another location to calculate again.";
+        e["status-region"].classList.toggle("is-working", !!state.resultPending);
+        e["status-summary"].hidden = !state.resultPending;
+        e["status-summary"].textContent = state.resultPending
+            ? state.result ? "Calculating new result…" : "Calculating result…" : "";
         const progress = state.current?.progress;
         e.progress.hidden = state.current?.status !== "running" || !(progress?.totalBlocks > 0);
         if (!e.progress.hidden) { e.progress.max = progress.totalBlocks; e.progress.value = progress.completedBlocks ?? 0; }
@@ -125,6 +129,10 @@ export class CalculationsView {
         }
         const resultSignature = JSON.stringify([state.result, state.resultIsCurrent]);
         if (resultSignature !== this.signatures.result) { this.renderResult(state); this.signatures.result = resultSignature; }
+        const previous = !!state.result && (!state.resultIsCurrent || state.resultPending);
+        e.result.classList.toggle("is-previous", !!previous);
+        e.result.setAttribute("aria-busy", String(!!state.resultPending));
+        if (state.result) e.result.children[0].textContent = previous ? "Previous / saved result" : "Result for current settings";
         const historySignature = JSON.stringify([state.jobs, state.historyError]);
         if (historySignature !== this.signatures.history) {
             const children = state.jobs.filter(job => job.status !== "deleted").map(job => {

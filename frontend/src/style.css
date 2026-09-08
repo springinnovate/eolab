@@ -4567,6 +4567,22 @@ summary:hover > .raster-disclosure-chevron {
 .calculation-result-row strong { display: block; font-size: 1.6rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .calculation-result-row code { display: block; overflow-wrap: anywhere; }
 .calculation-result-row details { margin-top: 0.5rem; font-size: 0.85rem; }
+#calculations-result.is-previous .calculation-result-row {
+    color: #64748b;
+    background: #f1f5f9;
+    border-left-color: #94a3b8;
+}
+#calculations-status-region.is-working {
+    margin: 0.75rem 0;
+    padding: 0.8rem;
+    border: 2px solid #0f766e;
+    border-radius: 0.5rem;
+    background: #f0fdfa;
+    color: #115e59;
+}
+#calculations-status-summary { font-size: 1rem; }
+#calculations-status-region.is-working p { margin-bottom: 0; }
+#calculations-status:empty { display: none; }
 .calculation-history-row { display: grid; gap: 0.4rem; padding: 0.6rem 0; border-bottom: 1px solid #cbd5e1; }
 #calculations-progress { width: 100%; }
 .leaflet-pane path.is-calculating { stroke: #0f766e; stroke-width: 4; animation: calculation-pulse 1.3s ease-in-out infinite; }

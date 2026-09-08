@@ -213,6 +213,73 @@ test("inline values keep large counts lossless, explain nulls, and use owned CSV
     const field=view.rows[0].expression;field.focus();view.render(h.view.state);assert.equal(doc.activeElement,field);
 });
 
+test("a pending replacement mutes saved values from the first follow click until completion", async () => {
+    const h = fixture();
+    await h.run(true); await h.finish();
+    const doc = new FakeRasterControlDocument();
+    const view = new CalculationsView(doc); view.bind(h.view.handlers);
+    const render = () => view.render(h.view.state);
+    render();
+    const result = view.elements.result;
+    assert.equal(result.classList.contains("is-previous"), false);
+    assert.equal(view.elements["status-summary"].hidden, true);
+
+    h.controller.setSelection(box(78)); render();
+    assert.equal(h.view.state.phase, "waiting");
+    assert.equal(result.classList.contains("is-previous"), true);
+    assert.equal(result.getAttribute("aria-busy"), "true");
+    assert.equal(view.elements["status-summary"].textContent, "Calculating new result…");
+    const savedCard = result.children[2];
+    await h.tick(650); render();
+    assert.equal(result.children[2], savedCard, "progress retains the card and its expanded details");
+    h.controller.setSelection(box(79)); await h.tick(650); render();
+    assert.equal(h.view.state.current.status, "cancelling");
+    assert.equal(view.elements["status-summary"].hidden, false, "replacement remains pending while the prior job cancels");
+    await h.finish("cancelled"); render();
+    assert.equal(result.classList.contains("is-previous"), true);
+    await h.finish("ready", "42"); render();
+    assert.equal(result.children[2].children[1].textContent, "42");
+    assert.equal(result.classList.contains("is-previous"), false);
+    assert.equal(result.getAttribute("aria-busy"), "false");
+    assert.equal(view.elements["status-summary"].hidden, true);
+});
+
+test("rerunning unchanged settings marks the saved result as previous, but reviewing alone does not", async () => {
+    const h = fixture(); await h.run(false); await h.finish();
+    const doc = new FakeRasterControlDocument();
+    const view = new CalculationsView(doc); view.bind(h.view.handlers);
+    const response = deferred(); const plan = h.api.planCalculation;
+    h.api.planCalculation = () => response.promise;
+    const review = h.controller.review(); view.render(h.view.state);
+    assert.equal(view.elements["status-summary"].hidden, true);
+    assert.equal(view.elements.result.classList.contains("is-previous"), false);
+    response.resolve(await plan(h.controller.intent())); await review;
+    h.api.planCalculation = plan;
+    await h.controller.rerun(); view.render(h.view.state);
+    assert.equal(h.view.state.resultIsCurrent, true);
+    assert.equal(view.elements.result.classList.contains("is-previous"), true);
+    assert.equal(view.elements.result.children[0].textContent, "Previous / saved result");
+    assert.equal(view.elements["status-summary"].textContent, "Calculating new result…");
+    h.controller.stop(); await flush(); view.render(h.view.state);
+    assert.equal(view.elements["status-summary"].hidden, true, "stopping does not promise another result");
+    assert.equal(view.elements.result.getAttribute("aria-busy"), "false");
+});
+
+test("refused and uncertain replacement requests clear the busy banner while preserving saved results", async () => {
+    for (const stage of ["planCalculation", "submitCalculation"]) {
+        const h = fixture(); await h.run(true); await h.finish();
+        h.api[stage] = async () => { throw new Error("Request failed"); };
+        h.controller.setSelection(box(78)); await h.tick(650);
+        const doc = new FakeRasterControlDocument();
+        const view = new CalculationsView(doc); view.bind(h.view.handlers); view.render(h.view.state);
+        assert.equal(view.elements["status-summary"].hidden, true);
+        assert.equal(view.elements["status-region"].classList.contains("is-working"), false);
+        assert.equal(view.elements.result.classList.contains("is-previous"), true);
+        assert.match(view.elements.status.textContent, /Request failed/);
+        assert.equal(view.elements.result.getAttribute("aria-busy"), "false");
+    }
+});
+
 test("calculation API serializes identities, explicit scopes, and useful validation errors", async () => {
     const calls=[];
     const api=new ProcessingApiClient(async(url,options)=>{

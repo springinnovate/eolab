@@ -375,6 +375,9 @@ export class CalculationsController {
         this.state.resultIsCurrent = !!this.state.resultIntent && identity(currentIntent) === identity(this.state.resultIntent);
         this.state.recoverable = !!this.record && this.blocked;
         this.state.hasWork = !!this.record || !!this.desired || this.state.phase === "planning";
+        // A replacement includes debounce/admission, but excludes a review alone,
+        // stopped work, and failures awaiting an explicit recovery action.
+        this.state.resultPending = !this.blocked && (!!this.desired || (!!this.record && !this.record.cancelRequested));
         this.view.render(this.state);
         const active = this.record && !this.record.cancelRequested && !this.blocked;
         this.onActivity(active ? this.record.intent.area : null);
