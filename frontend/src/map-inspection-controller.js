@@ -10,6 +10,7 @@ export class MapInspectionController {
         this.document = documentContext;
         this.root = documentContext.querySelector("#map-inspection");
         this.panels = documentContext.querySelector("#map-inspection-panels");
+        this.dockTitle = documentContext.querySelector("#map-inspection-dock-title");
         this.minimizeButton = documentContext.querySelector(
             "#toggle-map-inspection-dock"
         );
@@ -37,10 +38,10 @@ export class MapInspectionController {
         this.map = documentContext.querySelector("#map");
         this.closeButton = documentContext.querySelector("#close-map-histogram");
         this.tools = [
-            { name: "calculations", label: "Raster calculator", panel: this.calculations,
+            { name: "calculations", label: "Summarize", panel: this.calculations,
                 tab: documentContext.querySelector("#map-inspection-tab-calculations") },
             {
-                name: "downloads", label: "Downloads", panel: this.downloads,
+                name: "downloads", label: "History & exports", panel: this.downloads,
                 tab: documentContext.querySelector("#map-inspection-tab-downloads"),
             },
             {
@@ -63,7 +64,7 @@ export class MapInspectionController {
             },
             {
                 name: "histogram",
-                label: "Raster histogram",
+                label: "Explore",
                 panel: this.histogram,
                 tab: documentContext.querySelector("#map-inspection-tab-histogram"),
             },
@@ -132,8 +133,8 @@ export class MapInspectionController {
         }
         this.#setToolLabel(
             "histogram",
-            resultCount === null ? "Raster histogram" :
-                `Raster histogram · ${resultCount}`
+            "Explore",
+            resultCount === null ? "" : String(resultCount) + " raster results"
         );
         this.#showTool("histogram", options);
     }
@@ -381,6 +382,9 @@ export class MapInspectionController {
     #activateTool(name) {
         const tool = this.#tool(name);
         if (tool.panel.hidden) return;
+        if (name !== "downloads" && !this.downloads.hidden) {
+            this.#closeToolState("downloads");
+        }
         this.activeTool = name;
         this.activationOrder = this.activationOrder.filter(
             (candidate) => candidate !== name
@@ -562,6 +566,12 @@ export class MapInspectionController {
         this.panels.hidden = this.minimized;
         this.root.setAttribute("data-minimized", String(this.minimized));
         this.root.setAttribute("data-active-tool", this.activeTool ?? "");
+        const activeLabel = this.activeTool === null
+            ? ""
+            : this.#tool(this.activeTool).label;
+        this.dockTitle.textContent = this.minimized && activeLabel
+            ? "Map analysis \u00b7 " + activeLabel
+            : "Map analysis";
         this.minimizeButton.textContent = this.minimized ? "Expand" : "Minimize";
         this.minimizeButton.setAttribute(
             "aria-expanded", String(!this.minimized)

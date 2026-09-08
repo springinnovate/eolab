@@ -217,6 +217,9 @@ test("Map layers owns compact rows; the bounded map-tool dock owns styling", () 
     assert.match(inspection.source, /popover="manual"/);
     assert.match(editor.source, /role="tabpanel"/);
     assert.match(inspection.source, /id="map-inspection-tabs"[^>]+role="tablist"/);
+    assert.match(inspection.source, /id="map-inspection-dock-title"[^>]*>Map analysis/);
+    assert.match(inspection.source, /id="map-inspection-more-summary"[^>]*>More/);
+    assert.match(inspection.source, /id="open-downloads-dock"[\s\S]*?>History &amp; exports/);
     assert.match(
         inspection.source,
         /id="style-inspected-vector-layer"[\s\S]*?aria-controls="layer-style-editor"/
@@ -257,6 +260,8 @@ test("Map layers owns compact rows; the bounded map-tool dock owns styling", () 
     assert.match(STYLESHEET, /#map-inspection\s*\{[^}]*position:\s*fixed/s);
     assert.match(STYLESHEET, /#map-inspection\s*\{[^}]*height:\s*calc\(100dvh - 32px\)/s);
     assert.match(STYLESHEET, /\.map-inspection-panels\s*\{[^}]*min-height:\s*0[^}]*overflow:\s*hidden/s);
+    assert.match(STYLESHEET, /\.map-inspection-tabs\s*\{[^}]*flex-wrap:\s*wrap[^}]*overflow:\s*visible/s);
+    assert.match(STYLESHEET, /#map-inspection\[data-minimized="true"\] \.map-inspection-tabs\s*\{[^}]*display:\s*none/s);
     assert.match(STYLESHEET, /#map-inspection\s*\{[^}]*pointer-events:\s*none/s);
     assert.match(
         STYLESHEET,
@@ -389,7 +394,7 @@ test("Raster histogram leads with sampling before results and mode", () => {
     assert.match(requireElementRange("close-map-histogram").source,
         /aria-label="Close raster histogram">×/);
     assert.match(requireElementRange("map-inspection-tab-histogram").source,
-        />Raster histogram</);
+        />Explore</);
     const mode = requireElementRange("raster-bivariate-controls");
     assert.match(mode.source, /class="visually-hidden">Histogram mode/);
     assert.match(mode.source, /aria-describedby="raster-bivariate-status"/);

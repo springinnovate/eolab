@@ -156,7 +156,7 @@ export class CalculationsView {
             e.history.replaceChildren(this.element("p", state.historyError || "Results remain available for 24 hours in this browser session."), ...children);
             this.signatures.history = historySignature;
         }
-        for (const opener of this.openers) opener.textContent = state.resultPending ? "Raster calculator · working" : "Raster calculator";
+        for (const opener of this.openers) opener.textContent = state.resultPending ? "Summarize \u00b7 working" : "Summarize";
     }
     /** Present inline values with coverage and optional exports. @param {Object} state Controller snapshot. @return {void} */
     renderResult(state) {
