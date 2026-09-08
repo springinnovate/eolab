@@ -1,6 +1,6 @@
 """Operation-neutral job lifecycle, storage values, and Processing policy."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Generic, Literal, TypeVar
@@ -140,6 +140,7 @@ class Artifact:
     size: int
     sha256: str
     filename: str
+    media_type: str = field(default="application/octet-stream", kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -151,3 +152,4 @@ class ArtifactDownload:
     size: int
     sha256: str
     lease_id: str
+    media_type: str

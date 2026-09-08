@@ -1,8 +1,9 @@
-"""Raster clip planning, explicit admission, ownership, and download workflows."""
+"""Owned processing job lifecycle and explicit raster-clip planning/submission."""
 
 import asyncio
 import hashlib
 from datetime import datetime, timezone
+from pathlib import PurePath
 from typing import Any
 
 from eolab_app.execution.bounded_process import (
@@ -97,8 +98,8 @@ def public_job(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-class RasterClipService:
-    """Own the external clip workflow while storage and native I/O remain lower-level."""
+class ProcessingService:
+    """Own job lifecycle and supported operation commands through narrow providers."""
 
     def __init__(
         self,
@@ -108,7 +109,7 @@ class RasterClipService:
         artifacts: ClipArtifactStore,
         limits: RasterClipLimits,
     ) -> None:
-        """Compose clip capabilities without acquiring peer-service implementation state.
+        """Compose job storage and currently supported raster-operation capabilities.
 
         Args:
             authorizer: Catalog-owned current-source authorization port.
@@ -159,7 +160,9 @@ class RasterClipService:
             )
         return area
 
-    async def plan(self, owner: str, request: ClipPlanRequest) -> dict[str, Any]:
+    async def plan_raster_clip(
+        self, owner: str, request: ClipPlanRequest
+    ) -> dict[str, Any]:
         """Create a bounded metadata plan; this does not accept an export job.
 
         Args:
@@ -238,7 +241,9 @@ class RasterClipService:
                     asyncio.to_thread(self.jobs.finish_plan, identifier, owner, None)
                 )
 
-    async def submit(self, owner: str, request: JobSubmitRequest) -> dict[str, Any]:
+    async def submit_raster_clip(
+        self, owner: str, request: JobSubmitRequest
+    ) -> dict[str, Any]:
         """Revalidate the plan, then durably accept an idempotent clip job.
 
         Args:
@@ -355,20 +360,24 @@ class RasterClipService:
                 data = await asyncio.to_thread(path.read_bytes)
                 size = len(data)
                 sha256 = hashlib.sha256(data).hexdigest()
-                filename = artifact["filename"].removesuffix(".tif") + ".json"
+                filename = str(PurePath(artifact["filename"]).with_suffix(".json"))
+                media_type = "application/json"
             else:
                 size, sha256, filename = (
                     artifact["size"],
                     artifact["sha256"],
                     artifact["filename"],
                 )
+                # Results created before media types were recorded were all
+                # raster clips; preserve their existing download content type.
+                media_type = artifact.get("media_type", "image/tiff")
                 if path.stat().st_size != size:
                     raise ProcessingError(
                         "result_changed",
-                        "This clip file is no longer intact. Create a new clip.",
+                        "This result file is no longer intact. Submit a new job.",
                         410,
                     )
-            return ArtifactDownload(path, filename, size, sha256, lease)
+            return ArtifactDownload(path, filename, size, sha256, lease, media_type)
         except BaseException:
             await asyncio.to_thread(self.jobs.transfer_heartbeat, lease, True)
             raise

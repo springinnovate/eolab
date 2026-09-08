@@ -25,7 +25,7 @@ from eolab_app.processing.models import (
     ProcessingError,
 )
 from eolab_app.processing.clip_models import ClipArea, RasterClipLimits
-from eolab_app.processing.service import RasterClipService, prepare_clip_job
+from eolab_app.processing.service import ProcessingService, prepare_clip_job
 from eolab_app.processing.worker import RasterClipWorker
 import eolab_app.processing.worker as worker_module
 from eolab_app.processing.raster_clip import create_clip
@@ -107,7 +107,7 @@ def boundary(tmp_path: Path, store: PostgresJobStore) -> Any:
     areas = TemporaryAoiService(tmp_path / "aois")
     artifacts = LocalClipArtifacts(tmp_path / "outputs", (path,))
     artifacts.initialize()
-    service = RasterClipService(authorizer, areas, store, artifacts, store.limits)
+    service = ProcessingService(authorizer, areas, store, artifacts, store.limits)
     worker = RasterClipWorker(authorizer, store, artifacts, store.limits)
     app = FastAPI()
     app.include_router(create_processing_router(service))
@@ -565,6 +565,33 @@ def test_expired_plan_and_idempotency_key_conflict(
         headers=HEADERS,
     )
     assert conflict.status_code == 409
+
+
+def test_previously_created_clip_download_retains_its_content_type(
+    boundary: Any, store: PostgresJobStore
+) -> None:
+    """Serve retained clip results whose stored metadata predates media types.
+
+    Args:
+        boundary: Real API, worker, and raster output fixture.
+        store: Disposable database used to model the earlier metadata format.
+    """
+    client, worker, source, artifacts, app = boundary
+    job = submitted(client, planned(client))
+    assert asyncio.run(worker.run_once())
+    url = f"/api/processing/jobs/{job['jobId']}/result"
+    current = client.get(url)
+    assert current.status_code == 200
+    assert current.headers["content-type"] == "image/tiff"
+    with psycopg.connect(store.conninfo) as connection:
+        connection.execute(
+            "UPDATE processing.jobs SET artifact=artifact-'media_type' WHERE id=%s",
+            (job["jobId"],),
+        )
+    previous = client.get(url)
+    assert previous.status_code == 200
+    assert previous.content == current.content
+    assert previous.headers["content-type"] == "image/tiff"
 
 
 def test_worker_composition_requires_only_catalog_and_processing_configuration(

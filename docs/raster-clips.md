@@ -229,6 +229,15 @@ and reuse the common lifecycle instead of duplicating it. No arbitrary operation
 payload or executable command is accepted by the public API. Existing clip JSON
 fields and persisted job specifications retain their shape.
 
+`ProcessingService` exposes shared job lifecycle methods and explicit
+`plan_raster_clip` / `submit_raster_clip` commands. HTTP routes use job terminology
+for listing, cancellation, status, and downloads; only the operation commands and
+their raster-specific schemas refer to clips. `LeasedJobResponse` takes its media
+type from the owned artifact descriptor, preserving resumable delivery for other
+file formats. Retained results written before media types were recorded keep
+their TIFF content type. This does not add another executable operation or a
+generic operation-submission endpoint.
+
 Future operations can reuse job ownership, durable admission, execution fencing,
 and artifact delivery, but should introduce their own validated specifications,
 resource estimates, algorithms, and result contracts when a second operation is

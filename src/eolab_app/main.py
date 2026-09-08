@@ -25,7 +25,7 @@ from eolab_app.processing.artifacts import LocalClipArtifacts
 from eolab_app.processing.job_store import PostgresJobStore
 from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.clip_models import RasterClipLimits
-from eolab_app.processing.service import RasterClipService
+from eolab_app.processing.service import ProcessingService
 from eolab_app.processing.worker import RasterClipWorker, serve as serve_processing
 from eolab_app.raster.catalog import StacRasterCatalog
 from eolab_app.raster.geoserver import GeoServerRasterPublisher
@@ -273,7 +273,7 @@ def create_app(
     application.include_router(raster_feature.router)
     application.include_router(vector_feature.router)
     processing_limits = RasterClipLimits()
-    application.include_router(create_processing_router(RasterClipService(
+    application.include_router(create_processing_router(ProcessingService(
         raster_source_authorizer,
         temporary_aoi_service,
         PostgresJobStore(processing_limits),

@@ -1,4 +1,9 @@
-"""Thin same-origin HTTP delivery for owned raster clip jobs and downloads."""
+"""Thin same-origin HTTP delivery for owned processing jobs and downloads.
+
+Job listing, status, cancellation, deletion, and leased artifact delivery share
+one lifecycle. Raster-clip planning and submission are explicitly named operation
+commands; raster clipping is the only operation currently exposed by this API.
+"""
 
 import asyncio
 from contextlib import suppress
@@ -24,7 +29,7 @@ from eolab_app.processing.clip_models import (
     ClipJobsResponse,
     ClipPlanResponse,
 )
-from eolab_app.processing.service import RasterClipService
+from eolab_app.processing.service import ProcessingService
 from eolab_app.raster.errors import RasterFeatureError
 from eolab_app.routes.raster_http import raster_http_exception
 from eolab_app.routes.http_disconnect import (
@@ -76,7 +81,7 @@ class BoundedProcessingRoute(APIRoute):
             async for chunk in request.stream():
                 if len(body) + len(chunk) > 16 * 1024:
                     raise HTTPException(
-                        413, "Clip requests must be smaller than 16 KiB."
+                        413, "Processing requests must be smaller than 16 KiB."
                     )
                 body.extend(chunk)
             delivered = False
@@ -164,26 +169,25 @@ async def _result(awaitable: Any) -> Any:
     except RasterFeatureError as error:
         raise raster_http_exception(error) from error
     except HttpClientDisconnectedError as error:
-        raise HTTPException(499, "The clip planning request was cancelled") from error
+        raise HTTPException(499, "The processing plan request was cancelled") from error
 
 
-class LeasedClipResponse(FileResponse):
+class LeasedJobResponse(FileResponse):
     """Range-capable file delivery that keeps expiry cleanup away from transfers."""
 
     def __init__(
-        self, artifact: ArtifactDownload, service: RasterClipService, provenance: bool
+        self, artifact: ArtifactDownload, service: ProcessingService
     ) -> None:
         """Configure an immutable result response after owner authorization.
 
         Args:
-            artifact: Confined file and transfer capability.
+            artifact: Confined file, media type, and transfer capability.
             service: Owner of the transfer lifecycle.
-            provenance: Select JSON content type rather than GeoTIFF.
         """
         super().__init__(
             artifact.path,
             filename=artifact.filename,
-            media_type="application/json" if provenance else "image/tiff",
+            media_type=artifact.media_type,
             headers={
                 "ETag": f'"{artifact.sha256}"',
                 "Cache-Control": "private, no-store",
@@ -210,7 +214,7 @@ class LeasedClipResponse(FileResponse):
             while True:
                 await asyncio.sleep(30)
                 if not await self.service.transfer_heartbeat(self.lease):
-                    raise RuntimeError("Clip transfer lease expired")
+                    raise RuntimeError("Job transfer lease expired")
 
         # Keep file transfer completion inside this response's lifetime rather
         # than delegating it to an ASGI path-send extension after returning.
@@ -241,8 +245,8 @@ class LeasedClipResponse(FileResponse):
                 await self.service.transfer_heartbeat(self.lease, release=True)
 
 
-def create_processing_router(service: RasterClipService) -> APIRouter:
-    """Expose clip operations without embedding native work in request handlers.
+def create_processing_router(service: ProcessingService) -> APIRouter:
+    """Expose owned job lifecycle and explicitly supported operation commands.
 
     Args:
         service: Composed processing application owner.
@@ -261,7 +265,7 @@ def create_processing_router(service: RasterClipService) -> APIRouter:
         response_model=ClipPlanResponse,
         openapi_extra=MUTATION_SCHEMA,
     )
-    async def plan(
+    async def plan_raster_clip(
         body: ClipPlanRequest, request: Request, response: Response
     ) -> dict[str, Any]:
         """Plan a bounded native clip from a catalog source and explicit area.
@@ -276,7 +280,7 @@ def create_processing_router(service: RasterClipService) -> APIRouter:
         """
         return await _result(
             run_until_http_disconnect(
-                request, service.plan(_owner(request, response), body)
+                request, service.plan_raster_clip(_owner(request, response), body)
             )
         )
 
@@ -286,7 +290,7 @@ def create_processing_router(service: RasterClipService) -> APIRouter:
         response_model=ClipJobResponse,
         openapi_extra=MUTATION_SCHEMA,
     )
-    async def submit(
+    async def submit_raster_clip(
         body: JobSubmitRequest, request: Request, response: Response
     ) -> dict[str, Any]:
         """Accept one reviewed plan with idempotent durable queue admission.
@@ -299,7 +303,7 @@ def create_processing_router(service: RasterClipService) -> APIRouter:
         Returns:
             Accepted public job, recoverable after the browser disconnects.
         """
-        job = await _result(service.submit(_owner(request, response), body))
+        job = await _result(service.submit_raster_clip(_owner(request, response), body))
         response.headers["Location"] = f"/api/processing/jobs/{job['jobId']}"
         return job
 
@@ -359,7 +363,7 @@ def create_processing_router(service: RasterClipService) -> APIRouter:
     async def delete(
         job_id: JobId, request: Request, response: Response
     ) -> dict[str, Any]:
-        """Revoke a terminal clip result and schedule safe artifact cleanup.
+        """Revoke a terminal job result and schedule safe artifact cleanup.
 
         Args:
             job_id: Strict owned terminal job ID.
@@ -375,7 +379,7 @@ def create_processing_router(service: RasterClipService) -> APIRouter:
 
     @router.api_route("/jobs/{job_id}/result", methods=["GET", "HEAD"])
     async def result(job_id: JobId, request: Request, response: Response) -> Response:
-        """Download an owned immutable GeoTIFF using standard HTTP ranges.
+        """Download an owned immutable job result using standard HTTP ranges.
 
         Args:
             job_id: Strict owned job ID.
@@ -387,15 +391,15 @@ def create_processing_router(service: RasterClipService) -> APIRouter:
         """
         range_header = request.headers.get("range", "")
         if len(range_header) > 128 or "," in range_header:
-            raise HTTPException(416, "Use one byte range per clip download request.")
+            raise HTTPException(416, "Use one byte range per job download request.")
         artifact = await _result(service.download(_owner(request, response), job_id))
-        return LeasedClipResponse(artifact, service, False)
+        return LeasedJobResponse(artifact, service)
 
     @router.get("/jobs/{job_id}/provenance")
     async def provenance(
         job_id: JobId, request: Request, response: Response
     ) -> Response:
-        """Download the owned clip's path-free provenance and checksum.
+        """Download the owned job's path-free provenance and checksum.
 
         Args:
             job_id: Strict owned job ID.
@@ -408,6 +412,6 @@ def create_processing_router(service: RasterClipService) -> APIRouter:
         artifact = await _result(
             service.download(_owner(request, response), job_id, provenance=True)
         )
-        return LeasedClipResponse(artifact, service, True)
+        return LeasedJobResponse(artifact, service)
 
     return router

@@ -1,6 +1,6 @@
 """Raster-clip inputs and result details layered on shared Processing contracts."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Annotated, Literal
 from datetime import datetime
 
@@ -150,3 +150,4 @@ class ClipArtifact(Artifact):
     """Extend shared artifact metadata with the clip's valid-pixel count."""
 
     valid_pixels: int
+    media_type: str = field(default="image/tiff", kw_only=True)
