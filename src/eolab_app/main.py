@@ -23,7 +23,8 @@ from eolab_app.diagnostics.service import RenderingDiagnosticsService
 from eolab_app.diagnostics.tracker import GetMapRequestTracker
 from eolab_app.processing.artifacts import LocalClipArtifacts
 from eolab_app.processing.job_store import PostgresJobStore
-from eolab_app.processing.models import ProcessingError, ProcessingLimits
+from eolab_app.processing.models import ProcessingError
+from eolab_app.processing.clip_models import RasterClipLimits
 from eolab_app.processing.service import RasterClipService
 from eolab_app.processing.worker import RasterClipWorker, serve as serve_processing
 from eolab_app.raster.catalog import StacRasterCatalog
@@ -271,7 +272,7 @@ def create_app(
     )
     application.include_router(raster_feature.router)
     application.include_router(vector_feature.router)
-    processing_limits = ProcessingLimits()
+    processing_limits = RasterClipLimits()
     application.include_router(create_processing_router(RasterClipService(
         raster_source_authorizer,
         temporary_aoi_service,
@@ -381,7 +382,7 @@ async def run_processing_worker() -> None:
         asyncio.CancelledError: After orderly native-child shutdown.
     """
     settings = load_processing_worker_settings()
-    limits = ProcessingLimits()
+    limits = RasterClipLimits()
     artifacts = LocalClipArtifacts(settings.processing_data_path, (Path.cwd(), settings.scan_mount_path))
     artifacts.initialize()
     jobs = PostgresJobStore(limits)

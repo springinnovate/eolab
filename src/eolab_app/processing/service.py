@@ -11,13 +11,15 @@ from eolab_app.execution.bounded_process import (
 )
 from eolab_app.processing.models import (
     ArtifactDownload,
+    JobSubmitRequest,
+    PreparedJobPlan,
+    ProcessingError,
+)
+from eolab_app.processing.clip_models import (
     ClipArea,
     ClipPlanRequest,
     ClipSpec,
-    ClipSubmitRequest,
-    PreparedJobPlan,
-    ProcessingError,
-    ProcessingLimits,
+    RasterClipLimits,
 )
 from eolab_app.processing.ports import ClipArtifactStore, JobStore
 from eolab_app.processing.raster_clip import clip_process_target
@@ -104,7 +106,7 @@ class RasterClipService:
         areas: TemporaryAoiSamplingAreaReader,
         jobs: JobStore,
         artifacts: ClipArtifactStore,
-        limits: ProcessingLimits,
+        limits: RasterClipLimits,
     ) -> None:
         """Compose clip capabilities without acquiring peer-service implementation state.
 
@@ -236,7 +238,7 @@ class RasterClipService:
                     asyncio.to_thread(self.jobs.finish_plan, identifier, owner, None)
                 )
 
-    async def submit(self, owner: str, request: ClipSubmitRequest) -> dict[str, Any]:
+    async def submit(self, owner: str, request: JobSubmitRequest) -> dict[str, Any]:
         """Revalidate the plan, then durably accept an idempotent clip job.
 
         Args:

@@ -9,7 +9,8 @@ from eolab_app.execution.bounded_process import (
     ProcessDeadlineError,
     run_bounded_process,
 )
-from eolab_app.processing.models import ClipSpec, ProcessingError, ProcessingLimits
+from eolab_app.processing.models import ProcessingError
+from eolab_app.processing.clip_models import ClipSpec, RasterClipLimits
 from eolab_app.processing.ports import ClipArtifactStore, JobStore
 from eolab_app.processing.raster_clip import clip_process_target
 from eolab_app.raster.errors import RasterFeatureError
@@ -26,7 +27,7 @@ class RasterClipWorker:
         authorizer: RasterSourceAuthorizer,
         jobs: JobStore,
         artifacts: ClipArtifactStore,
-        limits: ProcessingLimits,
+        limits: RasterClipLimits,
     ) -> None:
         """Compose the worker's narrow capabilities.
 

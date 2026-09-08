@@ -15,9 +15,11 @@ from starlette.responses import FileResponse
 
 from eolab_app.processing.models import (
     ArtifactDownload,
-    ClipPlanRequest,
-    ClipSubmitRequest,
+    JobSubmitRequest,
     ProcessingError,
+)
+from eolab_app.processing.clip_models import (
+    ClipPlanRequest,
     ClipJobResponse,
     ClipJobsResponse,
     ClipPlanResponse,
@@ -285,7 +287,7 @@ def create_processing_router(service: RasterClipService) -> APIRouter:
         openapi_extra=MUTATION_SCHEMA,
     )
     async def submit(
-        body: ClipSubmitRequest, request: Request, response: Response
+        body: JobSubmitRequest, request: Request, response: Response
     ) -> dict[str, Any]:
         """Accept one reviewed plan with idempotent durable queue admission.
 

@@ -1,16 +1,13 @@
-"""Strict public requests and versioned internal raster-clip values."""
+"""Operation-neutral job lifecycle, storage values, and Processing policy."""
 
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-
-from eolab_app.raster.models import CatalogRasterRequest, Wgs84Bounds
+from pydantic import BaseModel, ConfigDict, Field
 
 OpaqueId = Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")]
-OPERATION_VERSION = "raster.clip.v1"
 
 
 @dataclass(frozen=True)
@@ -28,29 +25,8 @@ class PreparedJobPlan:
     reserved_bytes: int
 
 
-class ClipPlanRequest(CatalogRasterRequest):
-    """A catalog raster and exactly one explicit, lifecycle-valid clip area."""
-
-    selectedBounds: Wgs84Bounds | None = None
-    temporaryAoiId: Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{32}$")] | None = None
-
-    @model_validator(mode="after")
-    def require_explicit_area(self) -> "ClipPlanRequest":
-        """Require one area; omission must never become a whole-raster export.
-
-        Returns:
-            Validated request.
-
-        Raises:
-            ValueError: If neither or both selection variants were supplied.
-        """
-        if (self.selectedBounds is None) == (self.temporaryAoiId is None):
-            raise ValueError("Choose exactly one histogram box or temporary AOI")
-        return self
-
-
-class ClipSubmitRequest(BaseModel):
-    """Accept a reviewed plan with a client-generated idempotency key."""
+class JobSubmitRequest(BaseModel):
+    """Accept a reviewed operation plan with a client-generated idempotency key."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     planId: OpaqueId
@@ -59,107 +35,42 @@ class ClipSubmitRequest(BaseModel):
     ]
 
 
-class ClipArea(BaseModel):
-    """Job-owned polygon snapshot, never an uploaded file or mutable AOI store."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    kind: Literal["bounds", "aoi"]
-    bounds: tuple[float, float, float, float]
-    geometries: tuple[dict[str, object], ...] = ()
-
-
-class ClipGrid(BaseModel):
-    """Planned native window and conservative work/storage estimates."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    crs: str
-    transform: tuple[float, float, float, float, float, float]
-    window: tuple[int, int, int, int]
-    width: int
-    height: int
-    dtype: str
-    nodata: str | None
-    nativeBlocks: int
-    decodedBytes: int
-    estimatedRawBytes: int
-    reservedBytes: int
-
-
-class ClipSpec(BaseModel):
-    """Durable, path-free job specification fenced to a catalog signature."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    operation: Literal["raster.clip.v1"] = OPERATION_VERSION
-    source: CatalogRasterRequest
-    sourceSignature: tuple[int, int, int, int]
-    area: ClipArea
-    grid: ClipGrid
-
-
-class ClipAreaSummary(BaseModel):
-    """Browser-safe area description without copying the AOI into every poll."""
-
-    kind: Literal["bounds", "aoi"]
-    bounds: tuple[float, float, float, float]
-
-
-class ClipPlanLimits(BaseModel):
-    """Published native size, runtime, and download lifetime limits."""
+class JobPlanLimits(BaseModel):
+    """Published output-size, runtime, and download-lifetime limits."""
 
     maxRawBytes: int
     runtimeSeconds: float
     downloadLifetimeSeconds: int
 
 
-class ClipPlanResponse(BaseModel):
-    """Versioned, reviewable plan returned before job admission."""
-
-    planId: OpaqueId
-    operation: Literal["raster.clip.v1"]
-    source: CatalogRasterRequest
-    area: ClipAreaSummary
-    grid: ClipGrid
-    expiresAt: datetime
-    format: Literal["COG"]
-    resolution: Literal["native"]
-    allTouched: Literal[True]
-    limits: ClipPlanLimits
-
-
-class ClipResultResponse(BaseModel):
-    """Owned immutable download metadata; URLs require the browser session."""
+class JobResultResponse(BaseModel):
+    """Owned download metadata shared by operation-specific result contracts."""
 
     url: str
     provenanceUrl: str
     filename: str
     bytes: int
     sha256: str
-    validPixels: int
 
 
-class ClipFailureResponse(BaseModel):
-    """Sanitized terminal failure retained with its job."""
+class JobFailureResponse(BaseModel):
+    """Sanitized terminal failure retained with its processing job."""
 
     code: str
     detail: str
 
 
-class ClipProgressResponse(BaseModel):
-    """Phase-based progress; COG finalization has no misleading percentage."""
+class JobProgressResponse(BaseModel):
+    """Named operation progress, extended with operation-specific work counts."""
 
-    phase: (
-        Literal["clipping", "creating_cog", "validating", "checksumming", "ready"]
-        | None
-    ) = None
-    completedBlocks: int | None = None
-    totalBlocks: int | None = None
+    phase: str | None = None
 
 
-class ClipJobResponse(BaseModel):
-    """Owned job lifecycle and optional ready result, independent of the map."""
+class JobResponse(BaseModel):
+    """Shared owned job lifecycle, independent of operation inputs and algorithms."""
 
     jobId: OpaqueId
-    operation: Literal["raster.clip.v1"]
+    operation: str
     status: Literal[
         "queued",
         "running",
@@ -174,29 +85,24 @@ class ClipJobResponse(BaseModel):
     createdAt: datetime
     updatedAt: datetime
     expiresAt: datetime
-    source: CatalogRasterRequest | None
-    grid: ClipGrid | None
-    area: ClipAreaSummary | None
-    progress: ClipProgressResponse
-    error: ClipFailureResponse | None
-    result: ClipResultResponse | None
+    progress: JobProgressResponse
+    error: JobFailureResponse | None
+    result: JobResultResponse | None
 
 
-class ClipJobsResponse(BaseModel):
-    """Bounded, session-owned recovery listing."""
+JobResponseType = TypeVar("JobResponseType", bound=JobResponse)
 
-    jobs: list[ClipJobResponse]
+
+class JobListResponse(BaseModel, Generic[JobResponseType]):
+    """Bounded owned job listing, parameterized by supported operation contracts."""
+
+    jobs: list[JobResponseType]
 
 
 @dataclass(frozen=True)
 class ProcessingLimits:
-    """Deployment-wide clip policy; resource checks are not caller options."""
+    """Deployment-wide scheduling, native execution, and result-lifetime policy."""
 
-    max_raw_bytes: int = 1024**3
-    max_decoded_bytes: int = 4 * 1024**3
-    max_native_blocks: int = 65_536
-    max_geometry_bytes: int = 8 * 1024**2
-    max_coordinates: int = 500_000
     plan_timeout_seconds: float = 15
     runtime_seconds: float = 600
     plan_ttl_seconds: int = 300
@@ -205,6 +111,7 @@ class ProcessingLimits:
     max_owner_unfinished: int = 2
     max_stored_bytes: int = 20 * 1024**3
     free_space_floor: int = 2 * 1024**3
+    result_metadata_reservation_bytes: int = 9 * 1024**2
     lease_seconds: int = 20
     transfer_seconds: int = 120
 
@@ -228,11 +135,10 @@ class ProcessingError(Exception):
 
 @dataclass(frozen=True)
 class Artifact:
-    """Validated, immutable result metadata returned by the native child."""
+    """Validated immutable file metadata, extended by its operation if needed."""
 
     size: int
     sha256: str
-    valid_pixels: int
     filename: str
 
 

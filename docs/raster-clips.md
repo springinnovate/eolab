@@ -219,6 +219,16 @@ adapter do not parse raster fields or construct AOI summaries. Admission, leases
 cancellation, and expiration are shared job responsibilities. The HTTP API still
 accepts only the explicitly supported raster-clip operation.
 
+`processing/models.py` owns reusable submission, job status/timestamps, progress,
+failure, download metadata, listing, storage values, and scheduling-limit models.
+`processing/clip_models.py` contains the native grid, area, source-fenced clip
+specification, clip request/plan, and raster-specific result details. Clip response
+models extend the shared job and download models; the list uses the same generic
+envelope. Future operations define their own validated inputs and result details
+and reuse the common lifecycle instead of duplicating it. No arbitrary operation
+payload or executable command is accepted by the public API. Existing clip JSON
+fields and persisted job specifications retain their shape.
+
 Future operations can reuse job ownership, durable admission, execution fencing,
 and artifact delivery, but should introduce their own validated specifications,
 resource estimates, algorithms, and result contracts when a second operation is

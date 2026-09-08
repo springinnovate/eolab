@@ -16,13 +16,13 @@ from rasterio.features import geometry_mask
 from rasterio.shutil import copy as copy_raster
 from rasterio.windows import Window, transform as window_transform
 
-from eolab_app.processing.models import (
-    Artifact,
+from eolab_app.processing.models import ProcessingError
+from eolab_app.processing.clip_models import (
+    ClipArtifact,
     ClipArea,
     ClipGrid,
     ClipSpec,
-    ProcessingError,
-    ProcessingLimits,
+    RasterClipLimits,
 )
 from eolab_app.raster.bounded_window import (
     NoRasterBoundsOverlapError,
@@ -64,7 +64,7 @@ def _require_signature(path: Path, signature: tuple[int, ...]) -> None:
 
 
 def _selection(
-    dataset: Any, area: ClipArea, limits: ProcessingLimits
+    dataset: Any, area: ClipArea, limits: RasterClipLimits
 ) -> SelectedRasterArea:
     """Resolve an immutable explicit area through neutral grid mechanisms.
 
@@ -99,7 +99,7 @@ def _selection(
 
 
 def _grid(
-    dataset: Any, selected: SelectedRasterArea, limits: ProcessingLimits
+    dataset: Any, selected: SelectedRasterArea, limits: RasterClipLimits
 ) -> ClipGrid:
     """Admit source work before materializing block indexes or reading pixels.
 
@@ -171,7 +171,7 @@ def _require_source(dataset: Any, path: Path) -> None:
 
 
 def plan_clip(
-    path: Path, signature: tuple[int, ...], area: ClipArea, limits: ProcessingLimits
+    path: Path, signature: tuple[int, ...], area: ClipArea, limits: RasterClipLimits
 ) -> ClipGrid:
     """Inspect only metadata and geometry under the caller's process deadline.
 
@@ -210,8 +210,8 @@ def _progress(directory: Path, phase: str, complete: int, total: int) -> None:
 
 
 def create_clip(
-    path: Path, spec: ClipSpec, directory: Path, limits: ProcessingLimits
-) -> Artifact:
+    path: Path, spec: ClipSpec, directory: Path, limits: RasterClipLimits
+) -> ClipArtifact:
     """Stream native blocks to a masked, lossless COG and validate the result.
 
     Args:
@@ -388,8 +388,11 @@ def create_clip(
     _progress(directory, "checksumming", len(blocks), len(blocks))
     with result.open("rb") as stream:
         digest = hashlib.file_digest(stream, "sha256").hexdigest()
-    artifact = Artifact(
-        result.stat().st_size, digest, valid_count, f"{spec.source.item_id}-clip.tif"
+    artifact = ClipArtifact(
+        size=result.stat().st_size,
+        sha256=digest,
+        filename=f"{spec.source.item_id}-clip.tif",
+        valid_pixels=valid_count,
     )
     provenance = {
         "operation": spec.operation,

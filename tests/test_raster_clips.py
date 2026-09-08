@@ -19,12 +19,12 @@ from eolab_app.execution.bounded_process import (
     ProcessDeadlineError,
     run_bounded_process,
 )
-from eolab_app.processing.models import (
+from eolab_app.processing.models import ProcessingError
+from eolab_app.processing.clip_models import (
     ClipArea,
     ClipPlanRequest,
     ClipSpec,
-    ProcessingError,
-    ProcessingLimits,
+    RasterClipLimits,
 )
 from eolab_app.processing.raster_clip import create_clip, plan_clip
 from eolab_app.raster.models import CatalogRasterRequest
@@ -34,7 +34,7 @@ SOURCE = {
     "collectionId": "eolab-mounted-geotiffs",
     "itemId": "geotiff-0123456789abcdef01234567",
 }
-LIMITS = ProcessingLimits()
+LIMITS = RasterClipLimits()
 
 
 def write_source(
@@ -81,7 +81,7 @@ def write_source(
 
 
 def make_spec(
-    path: Path, area: ClipArea, limits: ProcessingLimits = LIMITS
+    path: Path, area: ClipArea, limits: RasterClipLimits = LIMITS
 ) -> ClipSpec:
     """Plan a real fixture without reading its data band.
 

@@ -21,12 +21,10 @@ from eolab_app.processing.artifacts import LocalClipArtifacts
 from eolab_app.processing.job_store import PostgresJobStore
 from eolab_app.processing.models import (
     Artifact,
-    ClipArea,
-    ClipSpec,
     PreparedJobPlan,
     ProcessingError,
-    ProcessingLimits,
 )
+from eolab_app.processing.clip_models import ClipArea, RasterClipLimits
 from eolab_app.processing.service import RasterClipService, prepare_clip_job
 from eolab_app.processing.worker import RasterClipWorker
 import eolab_app.processing.worker as worker_module
@@ -63,7 +61,7 @@ def store(request: pytest.FixtureRequest) -> PostgresJobStore:
             pytest.fail(
                 "Processing tests require a disposable eolab_processing_test* database"
             )
-    result = PostgresJobStore(ProcessingLimits(), dsn)
+    result = PostgresJobStore(RasterClipLimits(), dsn)
     result.migrate()
     result.migrate()  # Exercise redeployment of an already initialized schema.
     with psycopg.connect(dsn) as connection:
@@ -352,10 +350,10 @@ def test_global_admission_concurrency_fencing_and_restart_recovery(
     assert sum(claim is not None for claim in claims) == 1
     claim = next(claim for claim in claims if claim)
     assert not store.heartbeat(claim["id"], "stale-token", {})
-    assert not store.finish(claim["id"], "stale-token", Artifact(1, "x", 1, "x.tif"))
+    assert not store.finish(claim["id"], "stale-token", Artifact(1, "x", "x.tif"))
     store.cancel(claim["id"], "owner")
     assert not store.finish(
-        claim["id"], claim["attempt_id"], Artifact(1, "x", 1, "x.tif")
+        claim["id"], claim["attempt_id"], Artifact(1, "x", "x.tif")
     )
     assert store.finish(claim["id"], claim["attempt_id"], None)
     assert store.get(claim["id"], "owner")["status"] == "cancelled"

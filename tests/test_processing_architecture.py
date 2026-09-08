@@ -87,3 +87,11 @@ def test_processing_deployment_is_separate_bounded_and_source_read_only() -> Non
     sql = Path("src/eolab_app/processing/schema.sql").read_text()
     assert "pgstac." not in sql.lower()
     assert "CREATE SCHEMA IF NOT EXISTS processing" in sql
+
+
+def test_shared_job_models_and_storage_do_not_depend_on_clip_models() -> None:
+    """Keep reusable lifecycle contracts independent of any operation's schema."""
+    for name in ("models.py", "ports.py", "job_store.py"):
+        dependencies = imports(Path("src/eolab_app/processing") / name)
+        assert "eolab_app.processing.clip_models" not in dependencies
+        assert not {module for module in dependencies if module.startswith("eolab_app.raster")}

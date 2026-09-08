@@ -468,7 +468,7 @@ class PostgresJobStore:
                     "UPDATE processing.jobs SET status='ready',artifact=%s,reserved_bytes=%s,expires_at=now()+%s*interval '1 second',updated_at=now(),progress=%s WHERE id=%s AND status='running' AND lease_until>now() AND deadline_at>now() RETURNING id",
                     (
                         Jsonb(asdict(artifact)),
-                        artifact.size + self.limits.max_geometry_bytes + 1024**2,
+                        artifact.size + self.limits.result_metadata_reservation_bytes,
                         self.limits.result_ttl_seconds,
                         Jsonb({"phase": "ready"}),
                         identifier,
