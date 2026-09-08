@@ -342,10 +342,12 @@ export class BivariateRasterControlsView {
         this.boundSwap = this.#handleSwap.bind(this);
         this.boundRetry = this.#handleRetry.bind(this);
         this.boundRangeToggle = this.#renderThresholdMarkers.bind(this);
-        this.downloadButtons = ["x", "y"].map(axis => ({
+        this.downloadButtons = ["x", "y"].flatMap(axis => [
+            { axis, calculate: true, button: requireRasterControl(documentContext, `#calculate-bivariate-${axis}`),
+                onClick: () => this.handlers?.onCalculatePairedHistogram?.(axis) }, {
             axis, button: requireRasterControl(documentContext, `#download-bivariate-${axis}`),
             onClick: () => this.handlers?.onDownloadPairedHistogram?.(axis),
-        }));
+        }]);
     }
 
     /** Populate the eight shared palette definitions exactly once. @return {void} */
@@ -470,9 +472,9 @@ export class BivariateRasterControlsView {
         this.statisticsHeading.title = this.statisticsHeading.textContent;
         this.statisticsXLabel.textContent = state.xLabel;
         this.statisticsYLabel.textContent = state.yLabel;
-        for (const { axis, button } of this.downloadButtons) {
-            button.textContent = `Download ${axis.toUpperCase()} clip`;
-            button.setAttribute("aria-label", `Download ${axis.toUpperCase()} clip of ${state[`${axis}Label`]}`);
+        for (const { axis, button, calculate } of this.downloadButtons) {
+            button.textContent = calculate ? `Calculate ${axis.toUpperCase()}` : `Download ${axis.toUpperCase()} clip`;
+            button.setAttribute("aria-label", `${calculate ? "Calculate" : "Download clip of"} ${axis.toUpperCase()}: ${state[`${axis}Label`]}`);
         }
         this.rangeControls.x.label.textContent = state.xLabel;
         this.rangeControls.y.label.textContent = state.yLabel;

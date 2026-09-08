@@ -63,6 +63,7 @@ export class RasterSampleWindowController {
         this.previewLayer = null;
         this.selectionLayer = null;
         this.selectionBounds = null;
+        this.activityBounds = null;
     }
 
     /**
@@ -144,6 +145,20 @@ export class RasterSampleWindowController {
             "selection"
         ).addTo(this.leafletMap);
         this.selectionBounds = bounds;
+        this.renderActivity();
+    }
+
+    /** Mark activity only on the matching committed box. @param {Object|null} bounds Active request area. @return {void} */
+    setActivityBounds(bounds) {
+        this.activityBounds = bounds;
+        this.renderActivity();
+    }
+
+    /** Synchronize passive SVG feedback without altering sampling. @return {void} */
+    renderActivity() {
+        const matches = this.activityBounds && this.selectionBounds &&
+            ["west", "south", "east", "north"].every(key => this.activityBounds[key] === this.selectionBounds[key]);
+        this.selectionLayer?.getElement?.()?.classList.toggle("is-calculating", !!matches);
     }
 
     /**
@@ -221,6 +236,7 @@ export class RasterSampleWindowController {
             this.selectionLayer.setBounds(sampleWindow.leafletBounds);
         }
         this.selectionBounds = sampleWindow.bounds;
+        this.renderActivity();
         this.onSelect(sampleWindow.bounds, Object.freeze({
             longitude: position.lng,
             latitude: position.lat,

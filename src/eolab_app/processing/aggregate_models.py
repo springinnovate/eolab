@@ -30,43 +30,26 @@ class NamedCalculation(BaseModel):
     expression: Annotated[str, Field(min_length=1, max_length=4096)]
 
 
-class AggregatePlanRequest(BaseModel):
-    """Exactly one catalog binding, bounded expressions, and an explicit area."""
+class AggregateValidationRequest(BaseModel):
+    """Bounded language validation independent of source lookup and raster I/O."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-    sources: Annotated[
-        dict[Alias, CatalogRasterRequest], Field(min_length=1, max_length=1)
-    ]
+    alias: Alias = "a"
     calculations: Annotated[
         tuple[NamedCalculation, ...], Field(min_length=1, max_length=5)
     ]
-    selectedBounds: Wgs84Bounds | None = None
-    temporaryAoiId: Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{32}$")] | None = None
-    wholeRaster: Literal[True] | None = None
 
     @model_validator(mode="after")
-    def validate_intent(self) -> "AggregatePlanRequest":
-        """Validate the bounded language and one-of selection before any I/O.
+    def validate_language(self) -> "AggregateValidationRequest":
+        """Check the same bounded language used by planning and execution.
 
         Returns:
             The checked request.
 
         Raises:
-            ValueError: For ambiguous area, aliases, labels, or expression budget.
+            ValueError: For invalid aliases, labels, types, or expression budget.
         """
-        if (
-            sum(
-                value is not None
-                for value in (
-                    self.selectedBounds,
-                    self.temporaryAoiId,
-                    self.wholeRaster,
-                )
-            )
-            != 1
-        ):
-            raise ValueError("Choose one box, uploaded AOI, or explicit whole raster")
-        alias = next(iter(self.sources))
+        alias = self.alias
         if alias in FUNCTIONS | {"where", "areaha"}:
             raise ValueError("The raster alias cannot be a function or keyword")
         if len({item.label for item in self.calculations}) != len(self.calculations):
@@ -86,6 +69,48 @@ class AggregatePlanRequest(BaseModel):
             raise ValueError(
                 "All expressions together must use at most 256 syntax nodes"
             )
+        return self
+
+
+class AggregatePlanRequest(BaseModel):
+    """Exactly one catalog binding, bounded expressions, and an explicit area."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    sources: Annotated[
+        dict[Alias, CatalogRasterRequest], Field(min_length=1, max_length=1)
+    ]
+    calculations: Annotated[
+        tuple[NamedCalculation, ...], Field(min_length=1, max_length=5)
+    ]
+    selectedBounds: Wgs84Bounds | None = None
+    temporaryAoiId: Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{32}$")] | None = None
+    wholeRaster: Literal[True] | None = None
+
+    @model_validator(mode="after")
+    def validate_intent(self) -> "AggregatePlanRequest":
+        """Validate area and reuse the I/O-free expression contract.
+
+        Returns:
+            The checked request.
+
+        Raises:
+            ValueError: For ambiguous area or invalid calculation language.
+        """
+        if (
+            sum(
+                value is not None
+                for value in (
+                    self.selectedBounds,
+                    self.temporaryAoiId,
+                    self.wholeRaster,
+                )
+            )
+            != 1
+        ):
+            raise ValueError("Choose one box, uploaded AOI, or explicit whole raster")
+        AggregateValidationRequest(
+            alias=next(iter(self.sources)), calculations=self.calculations
+        )
         return self
 
 

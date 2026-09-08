@@ -17,6 +17,7 @@ export class MapInspectionController {
         this.style = documentContext.querySelector("#layer-style-editor");
         this.filter = documentContext.querySelector("#vector-filter-panel");
         this.downloads = documentContext.querySelector("#downloads-panel");
+        this.calculations = documentContext.querySelector("#calculations-panel");
         this.feature = documentContext.querySelector("#vector-feature-inspector");
         this.featureDetails = documentContext.querySelector(
             "#vector-feature-inspector-details"
@@ -36,6 +37,8 @@ export class MapInspectionController {
         this.map = documentContext.querySelector("#map");
         this.closeButton = documentContext.querySelector("#close-map-histogram");
         this.tools = [
+            { name: "calculations", label: "Calculations", panel: this.calculations,
+                tab: documentContext.querySelector("#map-inspection-tab-calculations") },
             {
                 name: "downloads", label: "Downloads", panel: this.downloads,
                 tab: documentContext.querySelector("#map-inspection-tab-downloads"),
@@ -172,6 +175,12 @@ export class MapInspectionController {
         this.#setToolLabel("filter", `Filter · ${layerLabel}`, `Filter ${layerLabel}`);
         this.#showTool("filter");
     }
+
+    /** Reveal calculations independently of peer tools. @return {void} */
+    showCalculations() { this.#showTool("calculations"); }
+
+    /** Hide calculations without changing peer panels. @return {void} */
+    hideCalculations() { this.#hideTool("calculations"); }
 
     /** Reveal the Downloads tool while retaining peer panels. @return {void} */
     showDownloads() { this.#showTool("downloads"); }
@@ -569,6 +578,7 @@ export class MapInspectionController {
         this.style.hidden = true;
         this.filter.hidden = true;
         this.downloads.hidden = true;
+        this.calculations.hidden = true;
         this.feature.hidden = true;
         this.vectorTimeSeries.hidden = true;
         this.vectorFeatureProfile.hidden = true;

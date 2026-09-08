@@ -256,6 +256,8 @@ export function initializeRasterViewer(
         leafletMap,
         leaflet,
         onTileError,
+        onCalculateRequested = () => {},
+        onSamplingAreaChange = () => {},
         onDownloadRequested = /** @param {Object} _item Catalog source. @param {Object|null} _area Explicit selection. @return {void} */ (_item, _area) => {},
         onLayersChange = /**
          * Ignore layer snapshots when no application observer is supplied.
@@ -1509,6 +1511,18 @@ export function initializeRasterViewer(
         });
     }
 
+    /** Forward a 1D calculation intent. @param {string} key Source key. @return {void} */
+    function calculateHistogram(key) {
+        const session = key === activeLayerKey ? { item: activeRasterItem } : getBivariateCandidateSession(key);
+        if (session?.item) onCalculateRequested(session.item, getSelectedArea(key, "1d"));
+    }
+
+    /** Forward one paired axis for single-raster calculations. @param {string} axis X/Y. @return {void} */
+    function calculatePairedHistogram(axis) {
+        const pair = getBivariatePairCandidates();
+        if (pair) onCalculateRequested(pair[`${axis}Candidate`].item, getSelectedArea(null, "2d"));
+    }
+
     /** Forward the exact 1D source and area through composition. @param {string} key Histogram session. @return {void} */
     function downloadHistogram(key) {
         const session = key === activeLayerKey ? { item: activeRasterItem } : getBivariateCandidateSession(key);
@@ -1575,6 +1589,7 @@ export function initializeRasterViewer(
      * @return {void}
      */
     function renderRasterSamplingAreaControls() {
+        onSamplingAreaChange(getSelectedArea());
         const samplingMode = getRasterSamplingAreaMode();
         const [presentedBounds, presentedWindowSizeKm] =
             getPresentedSampleWindow();
@@ -4172,6 +4187,8 @@ export function initializeRasterViewer(
         onSelectHistogram: handleSelectLayerHistogram,
         onStyleHistogram: onStyleRequested,
         onDownloadHistogram: downloadHistogram,
+        onCalculateHistogram: calculateHistogram,
+        onCalculatePairedHistogram: calculatePairedHistogram,
         onDownloadPairedHistogram: downloadPairedHistogram,
         onSampleWindowRangeInput: setRasterSampleWindowSize,
         onSampleWindowNumberInput: setRasterSampleWindowSize,
@@ -4221,6 +4238,7 @@ export function initializeRasterViewer(
         remove,
         setTemporaryAoi,
         getSelectedArea,
+        setSamplingActivity: area => rasterSampleWindowController.setActivityBounds(area?.kind === "selectedArea" ? area.selectedBounds : null),
         destroy,
         /**
          * Return whether at least one raster layer is currently displayed.

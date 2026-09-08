@@ -79,6 +79,10 @@ import { vectorLabelFields } from "./vector/style.js";
 import { VectorTimeSeriesController } from "./vector/time-series.js";
 import { initializeTemporaryAoi } from "./temporary-aoi/temporary-aoi.js";
 import { ProcessingApiClient } from "./processing/api.js";
+import { CalculationsController } from "./processing/calculations-controller.js";
+import { CalculationsView } from "./processing/calculations-view.js";
+import { CalculationSessionStorage } from "./processing/calculation-session.js";
+import { ProcessingJobs } from "./processing/jobs.js";
 import { DownloadsController } from "./processing/downloads-controller.js";
 import { DownloadsView } from "./processing/downloads-view.js";
 import { PendingSubmissionStorage } from "./processing/pending-submission.js";
@@ -727,8 +731,29 @@ async function initializeCatalog(
         onItemZoom: zoomRetainedMapLayer,
         onItemInfo: inspectRetainedMapLayer,
     });
+    const processingApi = new ProcessingApiClient();
+    const processingJobs = new ProcessingJobs(processingApi);
+    const processingContext = () => ({
+        sources: mapLayerController.snapshots().filter(layer => layer.datasetKind === "raster")
+            .map(layer => clipSource(layer.item)),
+        area: rasterVisualization?.getSelectedArea() ?? null,
+    });
+    const editProcessingArea = () => {
+        mapInspection.showHistogram();
+        document.querySelector("#raster-sampling-disclosure").open = true;
+        document.querySelector("#raster-sampling-aoi-disclosure").open = true;
+        document.querySelector("#raster-sampling-disclosure summary").focus();
+    };
+    const calculations = new CalculationsController({
+        api: processingApi, jobs: processingJobs, view: new CalculationsView(),
+        storage: new CalculationSessionStorage(browserSessionStorage()), getContext: processingContext,
+        onOpen: () => mapInspection.showCalculations(), onClose: () => mapInspection.hideCalculations(),
+        onEditArea: editProcessingArea,
+        onActivity: area => rasterVisualization?.setSamplingActivity(area),
+    });
     const downloads = new DownloadsController({
-        api: new ProcessingApiClient(), view: new DownloadsView(),
+        api: processingApi, jobs: processingJobs, view: new DownloadsView(),
+        onInspectCalculation: id => calculations.inspect(id),
         storage: new PendingSubmissionStorage(browserSessionStorage()),
         getContext: () => ({
             sources: mapLayerController.snapshots()
@@ -749,13 +774,20 @@ async function initializeCatalog(
         const record = mapLayerController.getRecord(key);
         if (record) downloads.open(clipSource(record.entry.item));
     };
+    mapLayerController.onCalculate = (key) => {
+        const record = mapLayerController.getRecord(key);
+        if (record) calculations.open(clipSource(record.entry.item));
+    };
     void downloads.start();
+    void calculations.start();
     rasterVisualization = initializeRasterViewer({
         wmsUrl: appGlobalConfiguration.wmsUrl,
         leafletMap,
         leaflet: L,
         onTileError: reportMapTileError,
         onDownloadRequested: (item, area) => downloads.open(clipSource(item), area),
+        onCalculateRequested: (item, area) => calculations.open(clipSource(item), area),
+        onSamplingAreaChange: area => calculations.setSelection(area),
         onHistogramRequested: () => mapInspection.showHistogram(Math.max(
             1,
             mapLayerController.snapshots().filter((layer) =>
@@ -928,8 +960,10 @@ async function initializeCatalog(
     function exploreMap(event) {
         if (!rasterVisualization.exploreAt(event.latlng)) {
             mapInspection.closeHistogram(false);
+            calculations.setSelection(null);
         }
         void vectorFeatureInspector.inspect(event);
+        if (calculations.isFollowing) mapInspection.showCalculations();
     }
     /**
      * Open analysis tools at the map center through the pointer-click path.
@@ -949,7 +983,7 @@ async function initializeCatalog(
         "click",
         openAnalysisToolsAtMapCenter
     );
-    onRasterViewerReady(rasterVisualization, downloads);
+    onRasterViewerReady(rasterVisualization, downloads, calculations);
     /**
      * Apply the scanner-owned visualization decision to the map action.
      *
@@ -1759,11 +1793,12 @@ async function startApplication() {
     const refreshCatalog = await initializeCatalog(
         appGlobalConfiguration,
         leafletMap,
-        (rasterViewer, downloads) => {
+        (rasterViewer, downloads, calculations) => {
             temporaryAoi.subscribeSamplingArea(
                 rasterViewer.setTemporaryAoi
             );
             temporaryAoi.subscribeSamplingArea(aoi => downloads.setTemporaryAoi(aoi));
+            temporaryAoi.subscribeSamplingArea(aoi => calculations.setTemporaryAoi(aoi));
         },
         catalogPaneControls,
         mapInspection,

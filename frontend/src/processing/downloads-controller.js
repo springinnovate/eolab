@@ -2,7 +2,8 @@
 import { normalizeRasterSamplingArea } from "../selected-area.js";
 import { ProcessingRequestError } from "./api.js";
 
-export const ACTIVE_JOB_STATES = new Set(["queued", "running", "cancelling"]);
+import { ProcessingJobs } from "./jobs.js";
+export { ACTIVE_JOB_STATES } from "./jobs.js";
 
 /** Copy catalog identity without retaining a mutable Item. @param {Object} source Catalog source plus label. @return {Readonly<Object>} Snapshot. */
 function snapshotSource(source) {
@@ -20,16 +21,18 @@ export class DownloadsController {
     /**
      * @param {Object} dependencies Owned adapters and composition callbacks.
      * @param {Object} dependencies.api Processing API client.
+     * @param {ProcessingJobs} [dependencies.jobs] Shared session polling/history.
      * @param {Object} dependencies.view Downloads DOM adapter.
      * @param {Object} dependencies.storage Pending-submission storage.
      * @param {Function} dependencies.getContext Returns catalog sources and the presented area.
      * @param {Function} dependencies.onOpen Opens the dock's Downloads tool.
      * @param {Function} dependencies.onClose Closes that tool.
      * @param {Function} dependencies.onEditArea Opens existing sampling controls.
+     * @param {Function} [dependencies.onInspectCalculation] Opens a calculation result.
      * @param {Object} [dependencies.clock=globalThis] Timer provider.
      * @param {Function} [dependencies.requestId] Generates a unique idempotency key.
      */
-    constructor({ api, view, storage, getContext, onOpen, onClose, onEditArea,
+    constructor({ api, jobs, view, storage, getContext, onOpen, onClose, onEditArea, onInspectCalculation,
         clock = globalThis, requestId = () => globalThis.crypto.randomUUID() }) {
         Object.assign(this, { api, view, storage, getContext, onOpen, clock, requestId });
         this.state = { sources: [], source: null, area: null, selectedArea: null,
@@ -38,10 +41,14 @@ export class DownloadsController {
             submitting: false, jobActions: new Set() };
         this.planSequence = 0;
         this.planAbort = null;
-        this.timer = null;
-        this.refreshing = null;
-        this.jobRevision = 0;
         this.destroyed = false;
+        this.ownsJobs = !jobs;
+        this.jobs = jobs ?? new ProcessingJobs(api, clock);
+        this.unsubscribe = this.jobs.subscribe(store => {
+            this.state.jobs = store.jobs;
+            this.state.jobMessage = store.error;
+            this.render();
+        });
         view.bind({
             onOpen: () => this.open(), onClose,
             onSource: (index) => this.selectSource(index),
@@ -52,6 +59,7 @@ export class DownloadsController {
             onRefresh: () => void this.refresh(),
             onCancel: (id) => void this.jobAction(id, "cancel"),
             onDelete: (id) => void this.jobAction(id, "delete"),
+            onInspectCalculation,
         });
         this.render();
     }
@@ -176,8 +184,7 @@ export class DownloadsController {
         const { planId, requestId } = this.state.pending;
         try {
             const job = await this.api.submitClip({ planId, requestId });
-            this.jobRevision += 1;
-            this.state.jobs = [job, ...this.state.jobs.filter(item => item.jobId !== job.jobId)];
+            this.jobs.accept(job);
             this.state.plan = null;
             this.storage.clear();
             this.state.pending = null;
@@ -202,29 +209,12 @@ export class DownloadsController {
 
     /** Refresh owned history with a single in-flight poll. @return {Promise<void>} Current listing. */
     refresh() {
-        if (this.refreshing) return this.refreshing;
-        const revision = this.jobRevision;
-        this.refreshing = this.api.listJobs().then((jobs) => {
-            if (this.destroyed || revision !== this.jobRevision) return;
-            // This tool presents raster clips. Other Processing operations have
-            // their own result contracts and must not be shown as COG downloads.
-            this.state.jobs = jobs.filter(job => job.operation === "raster.clip.v1");
-            this.state.jobMessage = "";
-        }).catch((error) => {
-            if (!this.destroyed) this.state.jobMessage = `Downloads unavailable: ${error.message} Use Refresh to retry.`;
-        }).finally(() => {
-            this.refreshing = null;
-            if (!this.destroyed) { this.render(); this.scheduleRefresh(); }
-        });
-        return this.refreshing;
+        return this.jobs.refresh();
     }
 
     /** Poll active work promptly and retained result expiration less often. @return {void} */
     scheduleRefresh() {
-        this.clock.clearTimeout(this.timer);
-        if (this.destroyed) return;
-        const active = this.state.jobs.some(job => ACTIVE_JOB_STATES.has(job.status));
-        this.timer = this.clock.setTimeout(() => void this.refresh(), active ? 2000 : 30000);
+        this.jobs.schedule();
     }
 
     /** Perform one lifecycle action while preventing duplicate button dispatch. @param {string} id Job identity. @param {"cancel"|"delete"} action Intent. @return {Promise<void>} Action and refresh completion. */
@@ -233,9 +223,7 @@ export class DownloadsController {
         this.state.jobActions.add(id);
         this.render();
         try {
-            if (action === "cancel") await this.api.cancelJob(id);
-            else await this.api.deleteJob(id);
-            await this.refresh();
+            await this.jobs.action(id, action);
         } catch (error) { this.state.jobMessage = error.message; }
         finally { this.state.jobActions.delete(id); this.render(); }
     }
@@ -247,7 +235,8 @@ export class DownloadsController {
     destroy() {
         this.destroyed = true;
         this.planAbort?.abort();
-        this.clock.clearTimeout(this.timer);
+        this.unsubscribe();
+        if (this.ownsJobs) this.jobs.destroy();
         this.view.unbind();
     }
 }

@@ -510,7 +510,13 @@ export class RasterHistogramControlsView {
         download.textContent = "Download clip";
         download.setAttribute("aria-label", `Download clip of ${summary.label}`);
         download.addEventListener("click", () => this.handlers?.onDownloadHistogram?.(summary.key));
-        actions.append(download);
+        const calculate = this.documentContext.createElement("button");
+        calculate.type = "button";
+        calculate.className = "secondary-button";
+        calculate.textContent = "Calculate";
+        calculate.setAttribute("aria-label", `Calculate values from ${summary.label}`);
+        calculate.addEventListener("click", () => this.handlers?.onCalculateHistogram?.(summary.key));
+        actions.append(download, calculate);
         if (summary.automatic) {
             if (summary.canRetry) {
                 const retry = this.documentContext.createElement("button");

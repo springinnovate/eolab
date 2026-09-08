@@ -20,6 +20,11 @@ export class FakeRasterControlElement extends EventTarget {
         this.classNames = [];
         this.scrollRequests = [];
         this.classList = {
+            toggle: (className, force) => {
+                const enabled = force ?? !this.classNames.includes(className);
+                if (enabled) this.classList.add(className); else this.classList.remove(className);
+                return enabled;
+            },
             add: (className) => {
                 if (!this.classNames.includes(className)) {
                     this.classNames.push(className);

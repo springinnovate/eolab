@@ -3682,6 +3682,7 @@ article.raster-histogram-summary {
 }
 
 #map-histogram-panel,
+#calculations-panel,
 #downloads-panel,
 #layer-style-editor,
 #vector-filter-panel,
@@ -3705,6 +3706,7 @@ article.raster-histogram-summary {
 #map-inspection:not(:popover-open),
 #open-analysis-tools[hidden],
 #map-histogram-panel[hidden],
+#calculations-panel[hidden],
 #downloads-panel[hidden],
 #layer-style-editor[hidden],
 #vector-filter-panel[hidden],
@@ -3715,6 +3717,7 @@ article.raster-histogram-summary {
 .layer-style-opacity[hidden] { display: none; }
 
 #map-histogram-panel:not([data-map-inspection-active="true"]),
+#calculations-panel:not([data-map-inspection-active="true"]),
 #downloads-panel:not([data-map-inspection-active="true"]),
 #layer-style-editor:not([data-map-inspection-active="true"]),
 #vector-filter-panel:not([data-map-inspection-active="true"]),
@@ -4547,3 +4550,25 @@ summary:hover > .raster-disclosure-chevron {
 .download-job .secondary-button { display: inline-block; margin: 0.25rem 0.35rem 0 0; text-decoration: none; }
 .download-job progress { width: 100%; }
 #downloads-message:empty, #downloads-job-message:empty { display: none; }
+/* Calculation editor and passive activity on the committed sampling rectangle. */
+#calculations-panel { padding: 0.75rem; overflow-wrap: anywhere; }
+#calculations-panel p { font-size: 0.85rem; line-height: 1.45; }
+#calculations-form { display: grid; gap: 0.5rem; padding-top: 0.6rem; }
+#calculations-panel summary { cursor: pointer; font-weight: 600; }
+#calculations-panel select, #calculations-panel textarea,
+#calculations-panel input[type="text"] { width: 100%; min-width: 0; box-sizing: border-box; border: 1px solid var(--border-1); border-radius: var(--radius); padding: 7px 8px; background: var(--surface-2); color: var(--text-1); }
+.calculation-expression { display: grid; gap: 0.35rem; margin: 0.8rem 0; padding: 0.6rem; border: 1px solid #cbd5e1; border-radius: 0.4rem; }
+.calculation-expression textarea { font-family: monospace; resize: vertical; }
+.calculation-expression button { justify-self: end; }
+.calculation-follow { display: flex; align-items: center; gap: 0.4rem; margin-top: 0.6rem; }
+.calculation-hint { font-size: 0.85rem; color: #475569; }
+.calculation-result-row { padding: 0.7rem; margin: 0.5rem 0; border-left: 3px solid #0f766e; background: #f0fdfa; }
+.calculation-result-row h4 { margin: 0 0 0.35rem; }
+.calculation-result-row strong { display: block; font-size: 1.6rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.calculation-result-row code { display: block; overflow-wrap: anywhere; }
+.calculation-result-row details { margin-top: 0.5rem; font-size: 0.85rem; }
+.calculation-history-row { display: grid; gap: 0.4rem; padding: 0.6rem 0; border-bottom: 1px solid #cbd5e1; }
+#calculations-progress { width: 100%; }
+.leaflet-pane path.is-calculating { stroke: #0f766e; stroke-width: 4; animation: calculation-pulse 1.3s ease-in-out infinite; }
+@keyframes calculation-pulse { 50% { stroke-opacity: 0.35; fill-opacity: 0.2; } }
+@media (prefers-reduced-motion: reduce) { .leaflet-pane path.is-calculating { animation: none; stroke-dasharray: 6 4; } }

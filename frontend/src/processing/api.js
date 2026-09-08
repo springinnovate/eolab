@@ -37,8 +37,24 @@ function validateJob(job) {
     if (job.result) {
         processingDownloadUrl(job.result.url, job.jobId, "result");
         processingDownloadUrl(job.result.provenanceUrl, job.jobId, "provenance");
+        if (job.operation === "raster.aggregate.v1") validateCalculationRows(job.result.rows);
     }
     return job;
+}
+
+/** Validate the bounded typed table consumed by inline results. @param {Object[]} rows API values. @return {void} */
+function validateCalculationRows(rows) {
+    if (!Array.isArray(rows) || rows.length < 1 || rows.length > 5 || rows.some(row =>
+        typeof row.label !== "string" || typeof row.expression !== "string" ||
+        !["ok", "no_matches", "no_valid_data", "invalid_arithmetic", "overflow"].includes(row.state) ||
+        !(row.value === null || typeof row.value === "string" &&
+            (row.valueType === "integer" ? /^-?\d+$/.test(row.value) : row.valueType === "float" && Number.isFinite(Number(row.value)))) ||
+        !Array.isArray(row.aggregates) || row.aggregates.some(aggregate =>
+            typeof aggregate.function !== "string" ||
+            ![aggregate.validPixels, aggregate.matchedPixels, aggregate.invalidArithmeticPixels]
+                .every(value => Number.isSafeInteger(value) && value >= 0)))) {
+        throw new Error("Processing returned an invalid calculation result table.");
+    }
 }
 
 /** Own HTTP serialization and cookie-session establishment for Downloads. */
@@ -103,6 +119,50 @@ export class ProcessingApiClient {
         return validateJob(await this.request("/raster-clips", "POST", submission));
     }
 
+    /** Validate expressions without opening a raster. @param {Object[]} calculations Named expressions. @param {AbortSignal} signal Superseded edit. @return {Promise<Object>} Validation. */
+    async validateCalculation(calculations, signal) {
+        await this.ensureSession();
+        return this.request("/raster-calculations/validate", "POST", { alias: "a", calculations }, signal);
+    }
+
+    /** Review one immutable calculation intent. @param {Object} intent Source, expressions, and area. @param {AbortSignal} signal Superseded plan. @return {Promise<Object>} Estimate. */
+    async planCalculation(intent, signal) {
+        const area = normalizeRasterSamplingArea(intent.area);
+        await this.ensureSession();
+        const plan = await this.request("/raster-calculations/plan", "POST", {
+            sources: { a: { collectionId: intent.source.collectionId, itemId: intent.source.itemId } },
+            calculations: intent.calculations,
+            ...(area.kind === "selectedArea" ? { selectedBounds: area.selectedBounds }
+                : area.kind === "temporaryAoi" ? { temporaryAoiId: area.temporaryAoiId } : { wholeRaster: true }),
+        }, signal);
+        opaqueId(plan.planId);
+        validateGrid(plan.grid);
+        if (plan.operation !== "raster.aggregate.v1" || !Number.isFinite(Date.parse(plan.expiresAt)) ||
+            !Number.isSafeInteger(plan.grid.nativeBlocks) || plan.grid.nativeBlocks < 1 ||
+            !Number.isSafeInteger(plan.grid.decodedBytes) || plan.grid.decodedBytes < 1) {
+            throw new Error("Processing returned an invalid calculation estimate.");
+        }
+        return plan;
+    }
+
+    /** Submit or recover the same calculation. @param {Object} submission Stable IDs. @return {Promise<Object>} Owned job. */
+    async submitCalculation(submission) {
+        await this.ensureSession();
+        return validateJob(await this.request("/raster-calculations", "POST", submission));
+    }
+
+    /** Read a tracked job even if it falls outside recent history. @param {string} id Job ID. @return {Promise<Object>} Owned job. */
+    async getJob(id) {
+        await this.ensureSession();
+        return validateJob(await this.request(`/jobs/${opaqueId(id)}`));
+    }
+
+    /** Release used or replaced review state; accepted jobs keep their snapshots. @param {string} id Plan ID. @return {Promise<Object>} Idempotent acknowledgement. */
+    async discardPlan(id) {
+        await this.ensureSession();
+        return this.request(`/plans/${opaqueId(id)}`, "DELETE");
+    }
+
     /** Cancel an owned active job. @param {string} id Job ID. @return {Promise<Object>} Updated job. */
     async cancelJob(id) {
         await this.ensureSession();
@@ -135,7 +195,9 @@ export class ProcessingApiClient {
         if (!response.ok) {
             const detail = data?.detail;
             throw new ProcessingRequestError(
-                typeof detail === "string" ? detail : detail?.message ?? `Processing request failed (${response.status}).`,
+                typeof detail === "string" ? detail : Array.isArray(detail)
+                    ? detail.map(item => item.msg).join("; ")
+                    : detail?.message ?? `Processing request failed (${response.status}).`,
                 response.status, detail?.code ?? null,
             );
         }

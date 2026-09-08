@@ -205,6 +205,19 @@ class PostgresJobStore:
             )
             return cursor.fetchone()
 
+    def discard_plan(self, identifier: str, owner: str) -> None:
+        """Delete only completed owned review state; accepted jobs are independent.
+
+        Args:
+            identifier: Opaque plan ID, including an already removed plan.
+            owner: Current session hash.
+        """
+        with self._transaction(locked=True) as cursor:
+            cursor.execute(
+                "DELETE FROM processing.plans WHERE id=%s AND owner=%s AND planning_until IS NULL",
+                (identifier, owner),
+            )
+
     def submit(
         self, owner: str, plan_id: str, request_key: str, expected: PreparedJobPlan
     ) -> dict[str, Any]:

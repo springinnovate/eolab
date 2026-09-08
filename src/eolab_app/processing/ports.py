@@ -65,6 +65,15 @@ class JobStore(Protocol):
         """
         ...
 
+    def discard_plan(self, identifier: str, owner: str) -> None:
+        """Release an owned completed plan without touching native-work fencing.
+
+        Args:
+            identifier: Opaque completed plan ID.
+            owner: Current session hash.
+        """
+        ...
+
     def submit(
         self, owner: str, plan_id: str, request_key: str, expected: PreparedJobPlan
     ) -> dict[str, Any]:
