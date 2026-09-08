@@ -68,6 +68,8 @@ export class SummaryStatisticsView extends CalculationsView {
         const valueGroup = this.element("div"); valueGroup.className = "summary-value-group";
         valueGroup.setAttribute("aria-live", "polite");
         const value = this.element("strong", "—"); value.className = "summary-value";
+        const separator = this.element("span", "–"); separator.className = "summary-value-separator";
+        separator.setAttribute("aria-hidden", "true");
         const caption = this.element("small", "No value yet");
         const valueActions = this.element("div"); valueActions.className = "summary-value-actions";
         const copy = this.element("button"); copy.type = "button"; copy.className = "summary-copy";
@@ -80,8 +82,9 @@ export class SummaryStatisticsView extends CalculationsView {
         copyIcon.append(copyPath); copy.append(copyIcon);
         copy.addEventListener("click", () => void this.copyCurrentValue(card.id));
         const copyStatus = this.element("small"); copyStatus.setAttribute("role", "status"); copyStatus.hidden = true;
-        valueActions.append(caption, copy);
-        valueGroup.append(value, valueActions, copyStatus); equation.append(expression, valueGroup);
+        valueActions.append(separator, value, copy);
+        valueGroup.append(valueActions, caption, copyStatus);
+        heading.append(valueGroup); equation.append(expression);
         const statusRow = this.element("div"); statusRow.className = "summary-status-row";
         const status = this.element("span"); status.id = `summary-statistic-status-${card.id}`;
         status.setAttribute("role", "status"); status.setAttribute("aria-live", "polite");
@@ -112,6 +115,7 @@ export class SummaryStatisticsView extends CalculationsView {
         for (const card of state.statistics) {
             const row = this.cards.get(card.id);
             if (row.label.value !== card.label) row.label.value = card.label;
+            row.label.size = Math.max(4, Math.min(26, (card.label || row.label.placeholder).length + 1));
             if (row.expression.value !== card.expression) row.expression.value = card.expression;
             if (row.sourceSignature !== sourceSignature) {
                 const options = state.sources.map((source, index) => {
