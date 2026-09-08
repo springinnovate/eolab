@@ -623,10 +623,12 @@ for (const mode of ["overlay", "bivariate"]) {
             const range = documentContext.querySelector("#raster-sample-window-range");
             assert.ok(Number.isFinite(Number(range.value)));
             assert.equal(range.getAttribute("aria-valuetext"), "200 kilometers");
-            h.controlsView.handlers.onBivariateModeChange(mode);
             h.viewer.exploreAt({lng: 78, lat: 22});
             await flushPromises();
             const original = h.viewer.getSelectedArea();
+            // Entering 2D copies bounds: the origin must survive that value copy.
+            h.controlsView.handlers.onBivariateModeChange(mode);
+            await flushPromises();
             const before = requests.length;
             const number = documentContext.querySelector("#raster-sample-window-number");
             for (const size of [1000, 5000]) {

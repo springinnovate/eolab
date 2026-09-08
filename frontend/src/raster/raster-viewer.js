@@ -350,6 +350,7 @@ export function initializeRasterViewer(
     let selectedRasterBounds = null;
     let selectedTemporaryAoi = null;
     let availableTemporaryAoi = null;
+    let selectedRasterCenter = null;
     let selectedRasterWindowSizeKm = null;
     let activeRasterItem = null;
     let selectedRasterStatistics = null;
@@ -359,6 +360,7 @@ export function initializeRasterViewer(
     let bivariateCandidates = [];
     let bivariateStatistics = null;
     let bivariateSelectedBounds = null;
+    let bivariateSelectedCenter = null;
     let bivariateSelectedWindowSizeKm = null;
 
     /**
@@ -403,6 +405,7 @@ export function initializeRasterViewer(
             wholeRasterStatisticsError: null,
             selectedRasterBounds: null,
             selectedTemporaryAoi: availableTemporaryAoi,
+            selectedRasterCenter: null,
             selectedRasterWindowSizeKm: null,
             selectedRasterStatistics: null,
             selectedRasterStatisticsState: "idle",
@@ -438,6 +441,7 @@ export function initializeRasterViewer(
             wholeRasterStatisticsError: null,
             selectedRasterBounds: null,
             selectedTemporaryAoi: availableTemporaryAoi,
+            selectedRasterCenter: null,
             selectedRasterWindowSizeKm: null,
             selectedRasterStatistics: null,
             selectedRasterStatisticsState: "idle",
@@ -468,6 +472,7 @@ export function initializeRasterViewer(
             wholeRasterStatisticsError: source.wholeRasterStatisticsError,
             selectedRasterBounds: source.selectedRasterBounds,
             selectedTemporaryAoi: source.selectedTemporaryAoi,
+            selectedRasterCenter: source.selectedRasterCenter,
             selectedRasterWindowSizeKm: source.selectedRasterWindowSizeKm,
             selectedRasterStatistics: source.selectedRasterStatistics,
             selectedRasterStatisticsState: source.selectedRasterStatisticsState,
@@ -675,6 +680,7 @@ export function initializeRasterViewer(
             wholeRasterStatisticsError,
             selectedRasterBounds,
             selectedTemporaryAoi,
+            selectedRasterCenter,
             selectedRasterWindowSizeKm,
             selectedRasterStatistics,
             selectedRasterStatisticsState,
@@ -703,6 +709,7 @@ export function initializeRasterViewer(
         wholeRasterStatisticsError = session.wholeRasterStatisticsError;
         selectedRasterBounds = session.selectedRasterBounds;
         selectedTemporaryAoi = session.selectedTemporaryAoi;
+        selectedRasterCenter = session.selectedRasterCenter;
         selectedRasterWindowSizeKm = session.selectedRasterWindowSizeKm;
         selectedRasterStatistics = session.selectedRasterStatistics;
         selectedRasterStatisticsState = session.selectedRasterStatisticsState;
@@ -1276,6 +1283,7 @@ export function initializeRasterViewer(
         if (samplingArea.kind === "wholeRaster") {
             session.selectedRasterBounds = null;
             session.selectedTemporaryAoi = null;
+            session.selectedRasterCenter = null;
             session.selectedRasterWindowSizeKm = null;
             session.selectedRasterStatistics = null;
             session.selectedRasterStatisticsState = "idle";
@@ -1287,6 +1295,9 @@ export function initializeRasterViewer(
             : null;
         session.selectedTemporaryAoi = samplingArea.kind === "temporaryAoi"
             ? selectedTemporaryAoi
+            : null;
+        session.selectedRasterCenter = samplingArea.kind === "selectedArea"
+            ? selectedRasterCenter
             : null;
         session.selectedRasterWindowSizeKm = samplingArea.kind === "selectedArea"
             ? selectedRasterWindowSizeKm
@@ -1549,12 +1560,13 @@ export function initializeRasterViewer(
     /**
      * Return the sampling window presented by the current histogram mode.
      *
-     * @return {[Object|null,number|null]} Bounds and committed side length.
+     * @return {[Object|null,number|null,Object|null]} Bounds, committed side length,
+     * and original WGS 84 click coordinates.
      */
     function getPresentedSampleWindow() {
         return bivariateMode.active
-            ? [bivariateSelectedBounds, bivariateSelectedWindowSizeKm]
-            : [selectedRasterBounds, selectedRasterWindowSizeKm];
+            ? [bivariateSelectedBounds, bivariateSelectedWindowSizeKm, bivariateSelectedCenter]
+            : [selectedRasterBounds, selectedRasterWindowSizeKm, selectedRasterCenter];
     }
 
     /**
@@ -1830,6 +1842,7 @@ export function initializeRasterViewer(
         bivariateSelectedBounds = selectedRasterBounds === null
             ? null
             : { ...selectedRasterBounds };
+        bivariateSelectedCenter = selectedRasterCenter;
         bivariateSelectedWindowSizeKm = selectedRasterWindowSizeKm;
         rasterStatisticsController.clear();
         resetPendingRasterStatisticsState();
@@ -1880,6 +1893,7 @@ export function initializeRasterViewer(
         bivariateMode.leave();
         onBivariateRenderingChange(null);
         bivariateSelectedBounds = null;
+        bivariateSelectedCenter = null;
         bivariateSelectedWindowSizeKm = null;
         controlsView.renderBivariateMode?.({ active: false });
         controlsView.clearPairedStatistics?.();
@@ -3195,6 +3209,7 @@ export function initializeRasterViewer(
     function restoreWholeRasterStatistics() {
         if (bivariateMode.active) {
             bivariateSelectedBounds = null;
+            bivariateSelectedCenter = null;
             bivariateSelectedWindowSizeKm = null;
             rasterSampleWindowController.clearSelection();
             renderRasterSamplingAreaControls();
@@ -3206,6 +3221,7 @@ export function initializeRasterViewer(
         resetPendingRasterStatisticsState();
         selectedRasterBounds = null;
         selectedTemporaryAoi = null;
+        selectedRasterCenter = null;
         selectedRasterWindowSizeKm = null;
         selectedRasterStatistics = null;
         selectedRasterStatisticsState = "idle";
@@ -3275,14 +3291,16 @@ export function initializeRasterViewer(
      * Commit one map rectangle and replace selected-area statistics.
      *
      * @param {Object} bounds Canonical selected WGS 84 bounds.
+     * @param {Readonly<{longitude:number,latitude:number}>} center Original click.
      * @return {void}
      */
-    function selectRasterSampleWindow(bounds) {
+    function selectRasterSampleWindow(bounds, center) {
         if (!canUseRasterMapInteractions()) {
             return;
         }
         cancelRasterSampleWindowResize();
         if (bivariateMode.active) {
+            bivariateSelectedCenter = center;
             bivariateSelectedBounds = bounds;
             bivariateSelectedWindowSizeKm =
                 rasterSampleWindowController.windowSizeKm;
@@ -3292,6 +3310,7 @@ export function initializeRasterViewer(
             requestBivariateStatistics();
             return;
         }
+        selectedRasterCenter = center;
         selectedRasterBounds = bounds;
         selectedTemporaryAoi = null;
         selectedRasterWindowSizeKm = rasterSampleWindowController.windowSizeKm;
@@ -3364,6 +3383,7 @@ export function initializeRasterViewer(
     function scheduleRasterSampleWindowResize(bounds) {
         cancelRasterSampleWindowResize();
         const scheduledBivariateMode = bivariateMode.active;
+        const [, , center] = getPresentedSampleWindow();
         rasterSampleWindowResizeTimeout = clock.setTimeout(() => {
             rasterSampleWindowResizeTimeout = null;
             const [currentBounds] = getPresentedSampleWindow();
@@ -3374,7 +3394,7 @@ export function initializeRasterViewer(
             ) {
                 return;
             }
-            rasterSampleWindowController.resizeSelection(bounds);
+            rasterSampleWindowController.selectAt({lng: center.longitude, lat: center.latitude});
         }, RASTER_SAMPLE_WINDOW_RESIZE_DEBOUNCE_MILLISECONDS);
     }
 
@@ -3439,6 +3459,7 @@ export function initializeRasterViewer(
         resetPendingRasterStatisticsState();
         selectedRasterBounds = null;
         selectedTemporaryAoi = null;
+        selectedRasterCenter = null;
         selectedRasterWindowSizeKm = null;
         selectedRasterStatistics = null;
         selectedRasterStatisticsState = "idle";
@@ -3473,6 +3494,7 @@ export function initializeRasterViewer(
         resetPendingRasterStatisticsState();
         selectedRasterBounds = null;
         selectedTemporaryAoi = availableTemporaryAoi;
+        selectedRasterCenter = null;
         selectedRasterWindowSizeKm = null;
         selectedRasterStatistics = null;
         selectedRasterStatisticsState = "idle";
@@ -3902,6 +3924,7 @@ export function initializeRasterViewer(
         wholeRasterStatisticsError = null;
         selectedRasterBounds = null;
         selectedTemporaryAoi = null;
+        selectedRasterCenter = null;
         selectedRasterWindowSizeKm = null;
         selectedRasterStatistics = null;
         selectedRasterStatisticsState = "idle";
@@ -3909,6 +3932,7 @@ export function initializeRasterViewer(
         bivariateStatistics = null;
         bivariateCandidates = [];
         bivariateSelectedBounds = null;
+        bivariateSelectedCenter = null;
         bivariateSelectedWindowSizeKm = null;
         controlsView.setControlsVisible(false);
         controlsView.renderLayerHistograms([], null);
@@ -4005,6 +4029,7 @@ export function initializeRasterViewer(
     function replaceSessionTemporaryAoi(session, nextTemporaryAoi) {
         session.selectedRasterBounds = null;
         session.selectedTemporaryAoi = nextTemporaryAoi;
+        session.selectedRasterCenter = null;
         session.selectedRasterWindowSizeKm = null;
         session.selectedRasterStatistics = null;
         session.selectedRasterStatisticsState = "idle";

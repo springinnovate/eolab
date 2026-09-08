@@ -111,15 +111,15 @@ test("large invalid previews and clicks retain the previous selected bounds", ()
   assert.match(guidance.at(-1), /Whole overlap/);
 });
 
-test("continental resizes retain their clicked center across restored selections", () => {
+test("continental selections report immutable clicked centers independently of their envelopes", () => {
   const map = createFakeLeafletMap();
-  const controller = new RasterSampleWindowController(map, createFakeSampleLayerFactory([]), () => {}, () => {});
-  const original = controller.selectAt({lng: 78, lat: 22});
+  const selections = [];
+  const controller = new RasterSampleWindowController(map, createFakeSampleLayerFactory([]),
+    (bounds, center) => selections.push({bounds, center}), () => {});
   controller.setWindowSize(10000);
-  const continental = controller.resizeSelection(original);
+  const continental = controller.selectAt({lng: 78, lat: 22});
   assert.ok(continental.east - continental.west > 100);
-  controller.selectAt({lng: -30, lat: 0});
-  controller.restoreSelection(continental);
-  controller.setWindowSize(200);
-  assert.deepEqual(controller.resizeSelection(continental), original);
+  assert.ok(Math.abs((continental.south + continental.north) / 2 - 22) > 1);
+  assert.deepEqual(selections[0].center, {longitude: 78, latitude: 22});
+  assert.ok(Object.isFrozen(selections[0].center));
 });
