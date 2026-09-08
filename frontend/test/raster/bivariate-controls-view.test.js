@@ -78,6 +78,7 @@ class FakeBivariateDocument {
       "#raster-bivariate-panel",
       "#raster-bivariate-palette",
       "#swap-raster-bivariate-axes",
+      "#download-bivariate-x", "#download-bivariate-y",
       "#raster-bivariate-legend",
       "#raster-bivariate-legend-x-range",
       "#raster-bivariate-legend-y-range",

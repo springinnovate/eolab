@@ -11,9 +11,32 @@ whole-raster export, user-supplied source path, arbitrary URL, GDAL command, or
 reprojection option. Map styling, histogram sampling resolution, WMS publication,
 GeoServer availability, and the viewer are not prerequisites.
 
-This backend PR intentionally adds no map buttons. The separate UI issue will
-integrate these endpoints into Map layers, the histogram controls, and Downloads.
-The existing `/docs#/processing` API page can exercise the backend meanwhile.
+## Browser workflow
+
+Use **Download clip** on a raster in Map layers or an individual 1D histogram.
+The 2D histogram has separate **Download X clip** and **Download Y clip** actions.
+The **Downloads** toolbar/dock button stays accessible while other tools are open.
+
+Downloads captures the explicit selected histogram area when opened. The 1D and
+2D selections remain distinct; whole-raster and whole-overlap sampling do not
+become export areas. Choose a box in Sampling area, or explicitly select a ready
+uploaded AOI in Downloads. **Choose box or upload AOI** opens the existing area
+controls. Reopen Downloads to capture a changed histogram selection. Histogram
+results need not be ready or successful before reviewing a clip.
+
+**Review clip** reads metadata and presents the source, geographic area, native
+CRS/pixel size, dimensions, datatype, and estimated uncompressed size.
+**Create clip** accepts this fixed intent. Later map changes or AOI removal do
+not change accepted work. Job cards show measured block progress and named file
+preparation phases, plus cancel, download, provenance, delete, size, and expiry.
+Downloads go directly through the browser, without a JavaScript Blob buffer.
+
+Owned jobs recover through the session cookie after reload. The per-tab session
+storage contains only an unconfirmed plan ID, idempotency key, and display label;
+it is saved before dispatch. Reload or **Recover submission** retries that same
+request. No cookie, geometry, result file, or processing job is placed in a shared
+map link. Disabled session storage prevents submission with a clear explanation.
+The existing `/docs#/processing` API page also remains available.
 
 ## API workflow
 
@@ -194,9 +217,25 @@ does not invalidate accepted work or restore any uploaded attributes/files.
 
 ## Architecture and extension boundary
 
+The browser **Downloads** component (`frontend/src/processing`) owns review,
+submission recovery, polling, and job actions. **Used by:** the browser composition
+root, which connects the existing dock and source/area entry points.
+**Depends on:** its Processing API client, per-tab pending-submission storage,
+and the neutral immutable selected-area values. **Coordinates with:** Map layers,
+histogram controls, and temporary AOIs through root callbacks and lifecycle
+snapshots. None of those peers imports Downloads or vice versa.
+
+The existing bounds validation and sampling-area normalization move into
+`frontend/src/selected-area.js`; raster geometry/statistics retain their existing
+exports. Sampling and clipping now share the same frozen box/AOI values instead
+of duplicating validation. Backend services, APIs, queue/storage limits, AOI
+lifecycle, and rendering dependencies are unchanged. The dock adds only a tool
+descriptor and presentation methods. Remaining coupling is the intentional
+shared geographic selection contract and existing browser composition wiring.
+
 **Owner:** Processing (`models`, `service`, `worker`, `raster_clip`, storage ports
-and adapters). **Used by:** thin processing HTTP routes; the future Downloads UI
-will use that public API. **Depends on:** existing Catalog source-authorization
+and adapters). **Used by:** thin processing HTTP routes and the Downloads UI
+through that public API. **Depends on:** existing Catalog source-authorization
 port, neutral sampling-area reader, source identity/structure/native-block/grid
 mechanisms, bounded native process execution, and processing-owned PostgreSQL and
 artifact adapters. **Coordinates with:** temporary AOIs only through immutable

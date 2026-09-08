@@ -26,6 +26,7 @@ function requireLayerStackElement(documentContext, selector) {
  * @typedef {Object} MapLayerStackViewHandlers
  * @property {(key: string) => void} onStyle Open one retained layer style editor.
  * @property {(key: string) => void} [onFilter] Open an adapter-supported filter editor.
+ * @property {(key: string) => void} [onDownload] Review a raster clip through composition.
  * @property {(key: string) => void} onZoom Fit the map to one retained layer.
  * @property {(key: string) => void} onInfo Open one retained layer's Catalog
  * Item details.
@@ -334,6 +335,10 @@ export class MapLayerStackView {
         rowActions.append(
             style,
             ...filterActions,
+            ...(layer.datasetKind === "raster" ? [this.#button(
+                "Download clip", `Download clip of ${accessibleName}`, layer.key,
+                "download", () => this.handlers?.onDownload?.(layer.key), focusTargets,
+            )] : []),
             zoom,
             info,
             copyStyle,

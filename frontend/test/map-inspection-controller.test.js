@@ -21,6 +21,7 @@ function fixture() {
     const vectorTimeSeries = doc.querySelector("#vector-time-series");
     const vectorFeatureProfile = doc.querySelector("#vector-feature-profile");
     doc.querySelector("#vector-filter-panel").hidden = true;
+    doc.querySelector("#downloads-panel").hidden = true;
     histogram.hidden = style.hidden = feature.hidden =
         vectorTimeSeries.hidden = vectorFeatureProfile.hidden = true;
     const close = doc.querySelector("#close-map-histogram");
@@ -76,6 +77,19 @@ test("automatic presentation does not move focus and close retains results", () 
     assert.equal(h.histogram.children.at(-1), chart);
     assert.equal(chart.textContent, "Sampled drought distribution");
     assert.deepEqual(h.calls, ["show", "hide", "show"]);
+    h.controller.destroy();
+});
+
+test("Downloads shares the dock while retaining histogram results and independent close", () => {
+    const h = fixture();
+    h.controller.showHistogram();
+    h.controller.showDownloads();
+    const downloads = h.doc.querySelector("#downloads-panel");
+    assert.equal(downloads.getAttribute("data-map-inspection-active"), "true");
+    assert.equal(h.histogram.hidden, false);
+    h.controller.hideDownloads();
+    assert.equal(downloads.hidden, true);
+    assert.equal(h.histogram.getAttribute("data-map-inspection-active"), "true");
     h.controller.destroy();
 });
 

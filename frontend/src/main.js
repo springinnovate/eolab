@@ -78,6 +78,20 @@ import { VectorStyleControls } from "./vector/style-controls.js";
 import { vectorLabelFields } from "./vector/style.js";
 import { VectorTimeSeriesController } from "./vector/time-series.js";
 import { initializeTemporaryAoi } from "./temporary-aoi/temporary-aoi.js";
+import { ProcessingApiClient } from "./processing/api.js";
+import { DownloadsController } from "./processing/downloads-controller.js";
+import { DownloadsView } from "./processing/downloads-view.js";
+import { PendingSubmissionStorage } from "./processing/pending-submission.js";
+
+/** Copy the Catalog identity and title for a download intent. @param {Object} item Catalog Item. @return {Object} Clip source value. */
+function clipSource(item) {
+    return { collectionId: item.collection, itemId: item.id, label: item.properties?.title ?? item.id };
+}
+
+/** Access session storage without making restricted browsers lose the map. @return {Storage|null} Storage or unavailable. */
+function browserSessionStorage() {
+    try { return globalThis.sessionStorage; } catch { return null; }
+}
 import {
     applyRenderingDiagnosticsViewModel,
     buildRenderingDiagnosticsViewModel,
@@ -713,11 +727,35 @@ async function initializeCatalog(
         onItemZoom: zoomRetainedMapLayer,
         onItemInfo: inspectRetainedMapLayer,
     });
+    const downloads = new DownloadsController({
+        api: new ProcessingApiClient(), view: new DownloadsView(),
+        storage: new PendingSubmissionStorage(browserSessionStorage()),
+        getContext: () => ({
+            sources: mapLayerController.snapshots()
+                .filter(layer => layer.datasetKind === "raster")
+                .map(layer => clipSource(layer.item)),
+            area: rasterVisualization?.getSelectedArea() ?? null,
+        }),
+        onOpen: () => mapInspection.showDownloads(),
+        onClose: () => mapInspection.hideDownloads(),
+        onEditArea: () => {
+            mapInspection.showHistogram();
+            document.querySelector("#raster-sampling-disclosure").open = true;
+            document.querySelector("#raster-sampling-aoi-disclosure").open = true;
+            document.querySelector("#raster-sampling-disclosure summary").focus();
+        },
+    });
+    mapLayerController.onDownload = (key) => {
+        const record = mapLayerController.getRecord(key);
+        if (record) downloads.open(clipSource(record.entry.item));
+    };
+    void downloads.start();
     rasterVisualization = initializeRasterViewer({
         wmsUrl: appGlobalConfiguration.wmsUrl,
         leafletMap,
         leaflet: L,
         onTileError: reportMapTileError,
+        onDownloadRequested: (item, area) => downloads.open(clipSource(item), area),
         onHistogramRequested: () => mapInspection.showHistogram(Math.max(
             1,
             mapLayerController.snapshots().filter((layer) =>
@@ -911,7 +949,7 @@ async function initializeCatalog(
         "click",
         openAnalysisToolsAtMapCenter
     );
-    onRasterViewerReady(rasterVisualization);
+    onRasterViewerReady(rasterVisualization, downloads);
     /**
      * Apply the scanner-owned visualization decision to the map action.
      *
@@ -1721,10 +1759,11 @@ async function startApplication() {
     const refreshCatalog = await initializeCatalog(
         appGlobalConfiguration,
         leafletMap,
-        (rasterViewer) => {
+        (rasterViewer, downloads) => {
             temporaryAoi.subscribeSamplingArea(
                 rasterViewer.setTemporaryAoi
             );
+            temporaryAoi.subscribeSamplingArea(aoi => downloads.setTemporaryAoi(aoi));
         },
         catalogPaneControls,
         mapInspection,

@@ -179,6 +179,8 @@ function canRetryRasterStatistics(error) {
  * @property {(item: Object) => void} remove Remove one Item from the stack.
  * @property {(temporaryAoi: Readonly<Object>|null) => void} setTemporaryAoi
  * Receive ready lifecycle snapshots from the temporary-AOI public boundary.
+ * @property {(key?:string|null,mode?:string)=>Readonly<Object>|null} getSelectedArea
+ * Read an immutable explicit selection, independently of statistics readiness.
  * @property {() => void} destroy Permanently detach viewer listeners; the
  * viewer must not be reused afterward.
  * @property {boolean} isDisplayed Whether any raster layer is visible.
@@ -197,6 +199,8 @@ function canRetryRasterStatistics(error) {
  * that an explicit analysis action should reveal its presentation workspace.
  * @property {(key:string) => void} [onStyleRequested] Notifies the composition
  * root that a histogram action should open one retained layer's style editor.
+ * @property {(item:Object,area:Readonly<Object>|null)=>void} [onDownloadRequested]
+ * Notify composition of a raster and its explicit selected area.
  * @property {(selectedKeys:string[]|null)=>void}
  * [onBivariateRenderingChange] Requests isolated source rendering for selected
  * catalog keys, or ordinary composite rendering for null.
@@ -251,6 +255,7 @@ export function initializeRasterViewer(
         leafletMap,
         leaflet,
         onTileError,
+        onDownloadRequested = /** @param {Object} _item Catalog source. @param {Object|null} _area Explicit selection. @return {void} */ (_item, _area) => {},
         onLayersChange = /**
          * Ignore layer snapshots when no application observer is supplied.
          * Accepts no parameters; callback arguments are intentionally unused.
@@ -1468,6 +1473,43 @@ export function initializeRasterViewer(
     }
 
     /**
+     * Snapshot the presented area or a named 1D raster's area without reading results.
+     * Whole-raster/overlap sampling deliberately has no clip selection.
+     * @param {string|null} [key=null] Optional 1D session key.
+     * @param {"presented"|"1d"|"2d"} [mode="presented"] Selection owner.
+     * @return {Readonly<Object>|null} Frozen box/AOI selection or no explicit area.
+     */
+    function getSelectedArea(key = null, mode = "presented") {
+        if (mode === "2d" || (mode === "presented" && bivariateMode.active)) {
+            return bivariateSelectedBounds === null ? null : normalizeRasterSamplingArea({
+                kind: "selectedArea", selectedBounds: bivariateSelectedBounds,
+            });
+        }
+        const session = key === null || key === activeLayerKey ? {
+            selectedTemporaryAoi, selectedRasterBounds,
+        } : getBivariateCandidateSession(key);
+        if (!session) return null;
+        if (session.selectedTemporaryAoi) return normalizeRasterSamplingArea({
+            kind: "temporaryAoi", temporaryAoiId: session.selectedTemporaryAoi.id,
+        });
+        return session.selectedRasterBounds === null ? null : normalizeRasterSamplingArea({
+            kind: "selectedArea", selectedBounds: session.selectedRasterBounds,
+        });
+    }
+
+    /** Forward the exact 1D source and area through composition. @param {string} key Histogram session. @return {void} */
+    function downloadHistogram(key) {
+        const session = key === activeLayerKey ? { item: activeRasterItem } : getBivariateCandidateSession(key);
+        if (session?.item) onDownloadRequested(session.item, getSelectedArea(key, "1d"));
+    }
+
+    /** Forward the selected X/Y source with the 2D box. @param {"x"|"y"} axis Histogram axis. @return {void} */
+    function downloadPairedHistogram(axis) {
+        const pair = getBivariatePairCandidates();
+        if (pair) onDownloadRequested(pair[`${axis}Candidate`].item, getSelectedArea(null, "2d"));
+    }
+
+    /**
      * Release a superseded controller request's loading marker.
      *
      * @return {void}
@@ -1632,10 +1674,10 @@ export function initializeRasterViewer(
     function currentBivariateSamplingArea() {
         return bivariateSelectedBounds === null
             ? WHOLE_RASTER_OVERLAP_SAMPLING_AREA
-            : {
+            : normalizeRasterSamplingArea({
                 kind: "selectedArea",
                 selectedBounds: bivariateSelectedBounds,
-            };
+            });
     }
 
     /**
@@ -4100,6 +4142,8 @@ export function initializeRasterViewer(
         },
         onSelectHistogram: handleSelectLayerHistogram,
         onStyleHistogram: onStyleRequested,
+        onDownloadHistogram: downloadHistogram,
+        onDownloadPairedHistogram: downloadPairedHistogram,
         onSampleWindowRangeInput: setRasterSampleWindowSize,
         onSampleWindowNumberInput: setRasterSampleWindowSize,
         onSampleWindowNumberChange: handleSampleWindowNumberChange,
@@ -4147,6 +4191,7 @@ export function initializeRasterViewer(
         contains,
         remove,
         setTemporaryAoi,
+        getSelectedArea,
         destroy,
         /**
          * Return whether at least one raster layer is currently displayed.

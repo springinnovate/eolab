@@ -1,3 +1,5 @@
+import { validateRasterSelectedBounds } from "../selected-area.js";
+export { validateRasterSelectedBounds } from "../selected-area.js";
 /**
  * Raster sampling geometry expressed in domain-level WGS 84 values.
  *
@@ -53,15 +55,6 @@ export function isCanonicalWgs84Position(position) {
 }
 
 /**
- * Build the stable validation error used for malformed selected bounds.
- *
- * @return {Error} User-safe selected-bounds contract error.
- */
-function rasterSelectedBoundsContractError() {
-    return new Error("Raster statistics returned invalid selected bounds.");
-}
-
-/**
  * Enforce the fixed user-facing sample-size contract.
  *
  * @param {number} sideLengthKm Requested square side length in kilometers.
@@ -82,35 +75,6 @@ export function validateRasterSampleWindowSize(sideLengthKm) {
         );
     }
     return sideLengthKm;
-}
-
-/**
- * Validate one server-compatible WGS 84 statistics rectangle.
- *
- * @param {RasterSelectedBounds} bounds Candidate coordinate rectangle.
- * @return {RasterSelectedBounds} The validated non-wrapping WGS 84 bounds.
- * @throws {Error} If fields, ranges, or coordinate ordering are invalid.
- */
-export function validateRasterSelectedBounds(bounds) {
-    if (bounds === null || typeof bounds !== "object") {
-        throw rasterSelectedBoundsContractError();
-    }
-    const fieldNames = ["west", "south", "east", "north"];
-    if (
-        Object.keys(bounds).length !== fieldNames.length ||
-        !fieldNames.every((fieldName) => Object.hasOwn(bounds, fieldName))
-    ) {
-        throw rasterSelectedBoundsContractError();
-    }
-    const { west, south, east, north } = bounds;
-    if (
-        ![west, south, east, north].every(Number.isFinite) ||
-        west < -180 || east > 180 || south < -90 || north > 90 ||
-        !(west < east && south < north)
-    ) {
-        throw rasterSelectedBoundsContractError();
-    }
-    return bounds;
 }
 
 /**

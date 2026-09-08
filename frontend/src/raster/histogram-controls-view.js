@@ -20,6 +20,7 @@ import { formatRasterPixelValue } from "./value-format.js";
  * raster whose histogram summary was selected.
  * @property {(key: string) => void} onStyleHistogram Opens Style for one
  * retained raster represented by a histogram summary.
+ * @property {(key:string)=>void} [onDownloadHistogram] Review a clip of this source and selection.
  */
 
 /**
@@ -503,6 +504,13 @@ export class RasterHistogramControlsView {
             this.handlers?.onStyleHistogram(summary.key)
         );
         actions.append(style);
+        const download = this.documentContext.createElement("button");
+        download.type = "button";
+        download.className = "secondary-button";
+        download.textContent = "Download clip";
+        download.setAttribute("aria-label", `Download clip of ${summary.label}`);
+        download.addEventListener("click", () => this.handlers?.onDownloadHistogram?.(summary.key));
+        actions.append(download);
         if (summary.automatic) {
             if (summary.canRetry) {
                 const retry = this.documentContext.createElement("button");
