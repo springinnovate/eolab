@@ -28,6 +28,49 @@ from test_raster_clips import SOURCE
 ENDPOINT = "/api/processing/raster-calculations"
 
 
+def test_repeated_calculations_release_reviews_but_preserve_owned_job_recovery(
+    boundary: Any, store: Any
+) -> None:
+    """Interactive clicks exceed five runs without retaining used review slots.
+
+    Args:
+        boundary: Real API and Processing composition.
+        store: PostgreSQL adapter for the native-planning fence assertion.
+    """
+    from eolab_app.routes.processing import COOKIE
+
+    client, _, _, _, app = boundary
+    for _ in range(7):
+        plan = plan_calculation(client)
+        path = f"/api/processing/plans/{plan['planId']}"
+        with TestClient(app, base_url="https://testserver") as stranger:
+            assert stranger.delete(path, headers=HEADERS).status_code == 200
+        key = uuid4().hex
+        job = submit_calculation(client, plan, key)
+        assert client.delete(path).status_code == 403
+        assert client.delete(path, headers=HEADERS).status_code == 200
+        assert client.delete(path, headers=HEADERS).status_code == 200
+        assert submit_calculation(client, plan, key)["jobId"] == job["jobId"]
+        assert (
+            client.post(
+                f"/api/processing/jobs/{job['jobId']}/cancel", headers=HEADERS
+            ).json()["status"]
+            == "cancelled"
+        )
+    owner = hashlib.sha256(client.cookies[COOKIE].encode()).hexdigest()
+    active = store.reserve_plan(owner, request_body())
+    assert (
+        client.delete(f"/api/processing/plans/{active}", headers=HEADERS).status_code
+        == 200
+    )
+    with psycopg.connect(store.conninfo) as connection:
+        assert connection.execute(
+            "SELECT planning_until IS NOT NULL FROM processing.plans WHERE id=%s",
+            (active,),
+        ).fetchone() == (True,)
+    store.finish_plan(active, owner, None)
+
+
 def request_body(**selection: Any) -> dict:
     """Build explicit calculation intent for the signed fixture raster.
 

@@ -597,6 +597,28 @@ test("download intents preserve distinct 1D and 2D boxes without waiting for sta
     h.destroy();
 });
 
+test("calculation entry points emit source identities and committed areas without reading histogram results", async () => {
+    const calculations = [], areas = [];
+    const h = visibleLayerFixture(async () => { throw new Error("Statistics busy"); }, {}, {
+        onCalculateRequested: (item, area) => calculations.push({ item, area }),
+        onSamplingAreaChange: area => areas.push(area),
+    });
+    await h.viewer.show(createRasterItem("calculate-x"));
+    await h.viewer.show(createRasterItem("calculate-y"));
+    h.viewer.exploreAt({ lng: 78, lat: 22 });
+    const oneD = h.viewer.getSelectedArea();
+    h.controlsView.handlers.onCalculateHistogram(h.layerStackView.activeKey);
+    assert.deepEqual(calculations.at(-1).area, oneD);
+    assert.deepEqual(areas.at(-1), oneD);
+    h.controlsView.handlers.onBivariateModeChange("bivariate");
+    h.viewer.exploreAt({ lng: 80, lat: 24 });
+    h.controlsView.handlers.onCalculatePairedHistogram("x");
+    h.controlsView.handlers.onCalculatePairedHistogram("y");
+    assert.deepEqual(calculations.at(-1).area, h.viewer.getSelectedArea());
+    assert.notEqual(calculations.at(-1).item.id, calculations.at(-2).item.id);
+    h.destroy();
+});
+
 for (const mode of ["overlay", "bivariate"]) {
     for (const retainSelection of [false, true]) {
         test(`rejected maximum box keeps ${mode} controls available with retained selection ${retainSelection}`, async () => {

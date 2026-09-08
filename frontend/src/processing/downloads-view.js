@@ -1,47 +1,9 @@
 /** Accessible Downloads DOM adapter. No map, histogram, or upload implementation knowledge. */
-import { ACTIVE_JOB_STATES } from "./downloads-controller.js";
+import { ACTIVE_JOB_STATES } from "./jobs.js";
 import { processingDownloadUrl } from "./api.js";
 
-/**
- * Summarize an explicit CRS label or root WKT name/authority for display.
- * This reads presentation metadata only; projection remains backend-owned.
- * @param {string} crs Native CRS definition. @return {string} Compact name.
- */
-export function describeClipCrs(crs) {
-    const name = crs.match(/^(?:PROJCS|GEOGCS|PROJCRS|GEOGCRS|COMPD_CS)\["([^"]+)"/);
-    if (!name) return crs;
-    const authority = crs.match(/(?:AUTHORITY\["EPSG","(\d+)"\]|ID\["EPSG",(\d+)\])\]$/);
-    return authority ? `${name[1]} (EPSG:${authority[1] ?? authority[2]})` : name[1];
-}
-
-/** Format file sizes without implying compression precision. @param {number} bytes Byte count. @return {string} Human-readable size. */
-export function formatDownloadBytes(bytes) {
-    if (bytes < 1024) return `${bytes} B`;
-    const unit = bytes < 1024 ** 2 ? "KiB" : bytes < 1024 ** 3 ? "MiB" : "GiB";
-    const divisor = { KiB: 1024, MiB: 1024 ** 2, GiB: 1024 ** 3 }[unit];
-    return `${(bytes / divisor).toFixed(1)} ${unit}`;
-}
-
-/** Describe a public plan/job area. @param {Object|null} area Bounds or AOI summary. @return {string} Explicit geographic description. */
-export function describeClipArea(area) {
-    if (!area) return "No box or AOI selected. Choose a sampling area first.";
-    if (area.kind === "temporaryAoi") return "Uploaded AOI selected; review will show its geographic bounds.";
-    const values = area.selectedBounds
-        ? [area.selectedBounds.west, area.selectedBounds.south, area.selectedBounds.east, area.selectedBounds.north]
-        : area.bounds;
-    return `${area.kind === "aoi" ? "Uploaded AOI" : "Box"} · W ${values[0].toFixed(4)}°, S ${values[1].toFixed(4)}°, E ${values[2].toFixed(4)}°, N ${values[3].toFixed(4)}°`;
-}
-
-/** Describe measured blocks or a named phase, without invented percentages. @param {Object} job Server job snapshot. @return {string} User-facing progress. */
-export function describeJobProgress(job) {
-    if (job.status !== "running") return ({ queued: "Queued", cancelling: "Cancelling…", ready: "Ready to download",
-        failed: "Failed", cancelled: "Cancelled", interrupted: "Interrupted — review a new clip to retry",
-        expired: "Expired — create a new clip to download again", deleted: "Deleted" })[job.status] ?? job.status;
-    const progress = job.progress;
-    if (progress.phase === "clipping") return `Clipping · ${progress.completedBlocks ?? 0} of ${progress.totalBlocks ?? "?"} source blocks`;
-    return ({ creating_cog: "Preparing download · creating COG", validating: "Preparing download · validating file",
-        checksumming: "Preparing download · verifying checksum" })[progress.phase] ?? "Starting clip…";
-}
+import { describeClipCrs, formatDownloadBytes, describeClipArea, describeJobProgress } from "./presentation.js";
+export { describeClipCrs, formatDownloadBytes, describeClipArea, describeJobProgress } from "./presentation.js";
 
 /** Own fixed controls, review details, and retained job cards. */
 export class DownloadsView {
@@ -181,8 +143,10 @@ export class DownloadsView {
     jobCard(job, state) {
         const card = this.element("article", "");
         card.className = "download-job";
-        const source = state.sources.find(item => item.collectionId === job.source?.collectionId && item.itemId === job.source?.itemId);
-        card.append(this.element("h3", source?.label ?? job.result?.filename ?? job.source?.itemId ?? "Raster clip"),
+        const identity = job.source ?? Object.values(job.sources ?? {})[0];
+        const calculation = job.operation === "raster.aggregate.v1";
+        const source = state.sources.find(item => item.collectionId === identity?.collectionId && item.itemId === identity?.itemId);
+        card.append(this.element("h3", source?.label ?? job.result?.filename ?? job.source?.itemId ?? "Raster calculation"),
             this.element("p", describeJobProgress(job)));
         if (job.area) card.append(this.element("p", describeClipArea(job.area)));
         if (job.status === "running" && job.progress.phase === "clipping" && job.progress.totalBlocks > 0) {
@@ -196,7 +160,7 @@ export class DownloadsView {
         if (job.error) card.append(this.element("p", `${job.error.detail} (${job.error.code})`));
         if (job.result && job.status === "ready") {
             card.append(this.element("p", `${formatDownloadBytes(job.result.bytes)} · expires ${new Date(job.expiresAt).toLocaleString()}`));
-            for (const [kind, label, url] of [["result", "Download COG", job.result.url], ["provenance", "Provenance", job.result.provenanceUrl]]) {
+            for (const [kind, label, url] of [["result", calculation ? "Download CSV" : "Download COG", job.result.url], ["provenance", "Provenance", job.result.provenanceUrl]]) {
                 const link = this.element("a", label);
                 link.className = "secondary-button";
                 link.href = processingDownloadUrl(url, job.jobId, kind);
@@ -205,9 +169,17 @@ export class DownloadsView {
                 card.append(link);
             }
         }
+        if (calculation) {
+            const inspect = this.element("button", "View calculation results");
+            inspect.type = "button";
+            inspect.className = "secondary-button";
+            inspect.setAttribute("data-download-action", `${job.jobId}-inspect`);
+            inspect.addEventListener("click", () => this.handlers?.onInspectCalculation?.(job.jobId));
+            card.append(inspect);
+        }
         const active = ACTIVE_JOB_STATES.has(job.status);
         const action = active ? "cancel" : "delete";
-        const button = this.element("button", active ? "Cancel clip" : "Delete clip");
+        const button = this.element("button", active ? "Cancel job" : "Delete result");
         button.type = "button";
         button.className = "secondary-button";
         button.disabled = state.jobActions.has(job.jobId) || job.status === "cancelling";

@@ -34,6 +34,7 @@ from eolab_app.processing.aggregate_models import (
     AggregateJobResponse,
     AggregatePlanRequest,
     AggregatePlanResponse,
+    AggregateValidationRequest,
 )
 from eolab_app.processing.service import ProcessingService
 from eolab_app.raster.errors import RasterFeatureError
@@ -315,6 +316,23 @@ def create_processing_router(service: ProcessingService) -> APIRouter:
         response.headers["Location"] = f"/api/processing/jobs/{job['jobId']}"
         return job
 
+    @router.post("/raster-calculations/validate", openapi_extra=MUTATION_SCHEMA)
+    async def validate_raster_calculation(
+        body: AggregateValidationRequest, request: Request, response: Response
+    ) -> dict[str, bool]:
+        """Validate bounded expressions without source, storage, or native I/O.
+
+        Args:
+            body: Expressions checked by Processing's shared language schema.
+            request: Same-origin request context.
+            response: Private cookie and cache headers.
+
+        Returns:
+            Success after the language contract has validated all expressions.
+        """
+        _owner(request, response)
+        return {"valid": True}
+
     @router.post(
         "/raster-calculations/plan",
         response_model=AggregatePlanResponse,
@@ -364,6 +382,23 @@ def create_processing_router(service: ProcessingService) -> APIRouter:
         )
         response.headers["Location"] = f"/api/processing/jobs/{job['jobId']}"
         return job
+
+    @router.delete("/plans/{plan_id}", openapi_extra=MUTATION_SCHEMA)
+    async def discard_plan(
+        plan_id: JobId, request: Request, response: Response
+    ) -> dict[str, bool]:
+        """Discard a completed review after use or replacement, idempotently.
+
+        Args:
+            plan_id: Opaque review ID.
+            request: Same-origin owner context.
+            response: Private cookie/cache headers.
+
+        Returns:
+            Acknowledgement, without revealing another owner's plans.
+        """
+        await _result(service.discard_plan(_owner(request, response), plan_id))
+        return {"discarded": True}
 
     @router.get("/jobs", response_model=JobListResponse[SupportedJobResponse])
     async def jobs(request: Request, response: Response) -> dict[str, Any]:

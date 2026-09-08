@@ -7,6 +7,23 @@ import {
   createFakeSampleLayerFactory,
 } from "../../test-support/raster/fakes.js";
 
+test("processing activity follows only its exact committed rectangle and clears on replacement", () => {
+  const map = createFakeLeafletMap();
+  const layers = [];
+  const factory = createFakeSampleLayerFactory(layers);
+  const flags = [];
+  const controller = new RasterSampleWindowController(map, (bounds,kind) => {
+    const layer = factory(bounds,kind);
+    layer.getElement = () => ({classList:{toggle:(_,enabled)=>flags.push(enabled)}});
+    return layer;
+  }, () => {}, () => {});
+  const bounds = controller.selectAt({lng:78,lat:22});
+  controller.setActivityBounds(bounds); assert.equal(flags.at(-1),true);
+  controller.selectAt({lng:79,lat:22}); assert.equal(flags.at(-1),false);
+  controller.restoreSelection(bounds); assert.equal(flags.at(-1),true);
+  controller.setActivityBounds(null); assert.equal(flags.at(-1),false);
+});
+
 test("sample window previews and commits composition-owned positions", () => {
   const map = createFakeLeafletMap();
   const layers = [];

@@ -107,12 +107,12 @@ test("polling recovers owned jobs without any map layers and lifecycle buttons c
     assert.deepEqual(h.requests, [["cancel",id],["delete",id]]);
 });
 
-test("clip Downloads ignores calculation jobs in shared processing history", async () => {
+test("Downloads retains both operations in shared processing history", async () => {
     const calculation = { ...job, jobId: "b".repeat(32), operation: "raster.aggregate.v1",
         area: { kind: "wholeRaster", bounds: null }, source: undefined };
     const h = fixture({ listJobs: async () => [calculation, job] });
     await h.controller.start();
-    assert.deepEqual(h.view.state.jobs, [job]);
+    assert.deepEqual(h.view.state.jobs, [calculation, job]);
     assert.equal(h.view.state.jobMessage, "");
 });
 

@@ -400,6 +400,15 @@ class ProcessingService:
             **await self._area_snapshot(request.selectedBounds, request.temporaryAoiId)
         )
 
+    async def discard_plan(self, owner: str, identifier: str) -> None:
+        """Release obsolete review state without cancelling accepted job work.
+
+        Args:
+            owner: Current browser-session hash.
+            identifier: Opaque plan to discard; missing plans are a safe no-op.
+        """
+        await asyncio.to_thread(self.jobs.discard_plan, identifier, owner)
+
     async def plan_raster_calculation(
         self, owner: str, request: AggregatePlanRequest
     ) -> dict[str, Any]:

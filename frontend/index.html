@@ -503,6 +503,7 @@
         hidden
       >Pixel picker hidden · Press P to show</button>
       <div class="map-tool-openers">
+        <button id="open-calculations" class="secondary-button" type="button" aria-controls="calculations-panel">Custom raster analysis</button>
         <button id="open-downloads" class="secondary-button" type="button"
           aria-controls="downloads-panel">Downloads</button>
         <div id="map-filter-indicators" class="map-filter-indicators" aria-label="Active layer filters" hidden></div>
@@ -514,6 +515,7 @@
         <header class="map-inspection-dock-header">
           <div id="map-inspection-tabs" class="map-inspection-tabs" role="tablist"
             aria-label="Open map tools">
+            <button id="map-inspection-tab-calculations" class="map-inspection-tab" type="button" role="tab" aria-controls="calculations-panel" aria-selected="false" tabindex="-1" hidden>Raster analysis</button>
             <button id="map-inspection-tab-downloads" class="map-inspection-tab"
               type="button" role="tab" aria-controls="downloads-panel"
               aria-selected="false" tabindex="-1" hidden>Downloads</button>
@@ -543,6 +545,42 @@
             aria-controls="downloads-panel">Downloads</button>
         </header>
         <div id="map-inspection-panels" class="map-inspection-panels">
+          <section id="calculations-panel" role="tabpanel" aria-labelledby="map-inspection-tab-calculations" hidden>
+            <div class="downloads-actions"><h2>Custom raster analysis</h2><button id="calculations-close" class="secondary-button" type="button" aria-label="Close raster analysis">×</button></div>
+            <p>Explore raster values with your own expressions. Analyze your sampling area and see results here, with optional downloads.</p>
+            <details id="calculations-editor" open><summary>Analysis settings</summary>
+            <form id="calculations-form">
+              <label for="calculations-source">Raster · use <code>a</code> in expressions</label>
+              <select id="calculations-source"></select>
+              <label for="calculations-area">Analyze over</label><select id="calculations-area"></select>
+              <p id="calculations-area-description"></p>
+              <button id="calculations-edit-area" class="secondary-button" type="button">Choose box or upload AOI</button>
+              <div id="calculations-rows"></div>
+              <div class="downloads-actions">
+                <button id="calculations-add" class="secondary-button" type="button">Add expression</button>
+                <label for="calculations-template">Add example</label>
+                <select id="calculations-template"><option value="">Choose…</option><option value="mean">Mean</option><option value="count">Count above a threshold</option><option value="sum">Sum above a threshold</option><option value="percent">Percent above a threshold</option><option value="range">Range</option></select>
+              </div>
+              <details><summary>Expression help</summary><p>Use <code>a</code> for the selected raster. Operators: <code>+ - * / &lt; &lt;= &gt; &gt;= == != &amp;&amp; || !</code>. Functions: <code>count sum mean min max</code>.</p>
+                <p><code>count(a &gt; 10)</code> counts matching cells. <code>sum(a, where=a &gt; 10)</code> adds their values. <code>sum(a &gt; 10)</code> also counts matches. <code>100 * count(a &gt; 10) / count(a)</code> gives a percentage.</p>
+                <p>NoData is excluded. Calculations use native pixels and stored values, not histogram overviews or map colors. Ground area and multiple rasters are coming separately.</p></details>
+              <p id="calculations-validation" role="status" aria-live="polite"></p>
+              <label class="calculation-follow"><input id="calculations-follow" type="checkbox"> Follow sampling box after Run</label>
+              <p class="calculation-hint">Follow mode recalculates after each committed box change and cancels the previous calculation. Editing a formula or closing this tool pauses it.</p>
+              <button id="calculations-review" class="primary-button" type="submit">Review analysis</button>
+            </form>
+            </details>
+            <p id="calculations-plan" class="download-plan" hidden></p>
+            <div class="downloads-actions"><button id="calculations-run" class="primary-button" type="button" hidden>Run analysis</button><button id="calculations-stop" class="secondary-button" type="button" hidden>Cancel analysis</button><button id="calculations-retry" class="secondary-button" type="button" hidden>Recover / retry</button></div>
+            <div id="calculations-status-region" role="status" aria-live="polite">
+              <strong id="calculations-status-summary" hidden></strong>
+              <p id="calculations-status"></p>
+            </div>
+            <progress id="calculations-progress" aria-label="Native source blocks calculated" hidden></progress>
+            <section id="calculations-result" aria-label="Analysis result"></section>
+            <button id="calculations-rerun" class="secondary-button" type="button" hidden>Run again</button>
+            <details><summary>Analysis history</summary><button id="calculations-refresh" class="secondary-button" type="button">Refresh history</button><div id="calculations-history"></div></details>
+          </section>
           <section id="downloads-panel" role="tabpanel" aria-labelledby="map-inspection-tab-downloads" hidden>
             <header class="map-histogram-toolbar">
               <h2>Raster clip downloads</h2>
@@ -567,7 +605,7 @@
             <p id="downloads-pending" hidden></p>
             <button id="downloads-retry-submission" class="secondary-button" type="button" hidden>Recover submission</button>
             <header class="map-histogram-toolbar">
-              <h3>Your downloads</h3>
+              <h3>Your processing jobs</h3>
               <button id="downloads-refresh" class="secondary-button" type="button">Refresh</button>
             </header>
             <p id="downloads-job-message" role="status" aria-live="polite"></p>
@@ -1037,6 +1075,8 @@
                 viewBox="0 0 660 620" preserveAspectRatio="xMinYMin meet"
                 role="img" hidden></svg>
               <div class="downloads-actions">
+                <button id="calculate-bivariate-x" class="secondary-button" type="button">Analyze X</button>
+                <button id="calculate-bivariate-y" class="secondary-button" type="button">Analyze Y</button>
                 <button id="download-bivariate-x" class="secondary-button" type="button">Download X clip</button>
                 <button id="download-bivariate-y" class="secondary-button" type="button">Download Y clip</button>
               </div>
