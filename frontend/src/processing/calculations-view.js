@@ -21,9 +21,9 @@ export class CalculationsView {
     /** @param {Document} [documentContext=globalThis.document] Owning document. */
     constructor(documentContext = globalThis.document) {
         this.document = documentContext;
-        this.elements = Object.fromEntries(["source", "area", "area-description", "rows", "add", "form", "review",
-            "run", "rerun", "stop", "follow", "validation", "plan", "status", "progress", "result", "history", "refresh",
-            "retry", "close", "edit-area", "template", "editor", "status-region", "status-summary"].map(name => [name, documentContext.querySelector(`#calculations-${name}`)]));
+        this.elements = Object.fromEntries(["source", "area", "area-description", "rows", "add", "form",
+            "run", "stop", "validation", "plan", "status", "progress", "result", "history", "refresh",
+            "retry", "close", "edit-area", "template", "editor", "status-region", "status-summary", "map-hint"].map(name => [name, documentContext.querySelector(`#calculations-${name}`)]));
         this.openers = [documentContext.querySelector("#open-calculations")];
         this.listeners = [];
         this.rows = [];
@@ -40,11 +40,9 @@ export class CalculationsView {
             [e.close, "click", handlers.onClose], [e["edit-area"], "click", handlers.onEditArea],
             [e.source, "change", () => handlers.onSource(Number(e.source.value))],
             [e.area, "change", () => handlers.onArea(e.area.value)],
-            [e.follow, "change", () => handlers.onFollow(e.follow.checked)],
-            [e.form, "submit", event => { event.preventDefault(); handlers.onReview(); }],
+            [e.form, "submit", event => { event.preventDefault(); handlers.onRun(); }],
             [e.run, "click", () => { e.editor.open = false; handlers.onRun(); }], [e.stop, "click", handlers.onStop],
             [e.retry, "click", handlers.onRetry], [e.refresh, "click", handlers.onRefresh],
-            [e.rerun, "click", handlers.onRerun],
             [e.add, "click", () => handlers.onCalculations([...this.readRows(), { label: `Result ${this.rows.length + 1}`, expression: "mean(a)" }])],
             [e.template, "change", () => {
                 const templates = { mean: ["Mean", "mean(a)"], count: ["Count above 10", "count(a > 10)"],
@@ -70,13 +68,13 @@ export class CalculationsView {
                 const label = this.element("input"); label.type = "text"; label.maxLength = 80;
                 label.setAttribute("aria-label", `Result ${index + 1} label`);
                 const expression = this.element("textarea"); expression.rows = 2; expression.maxLength = 4096;
-                expression.spellcheck = false; expression.setAttribute("aria-label", `Result ${index + 1} expression`);
+                expression.spellcheck = false; expression.setAttribute("aria-label", `Result ${index + 1} formula`);
                 for (const input of [label, expression]) input.addEventListener("input", () => this.handlers.onCalculations(this.readRows()));
                 const remove = this.element("button", "Remove"); remove.type = "button"; remove.className = "secondary-button";
                 remove.disabled = values.length === 1; remove.setAttribute("aria-label", `Remove result ${index + 1}`);
                 remove.addEventListener("click", () => this.handlers.onCalculations(this.readRows().filter((_, i) => i !== index)));
                 const labelWrapper = this.element("label", `Result ${index + 1}`); labelWrapper.append(label);
-                const expressionWrapper = this.element("label", "Expression"); expressionWrapper.append(expression);
+                const expressionWrapper = this.element("label", "Formula"); expressionWrapper.append(expression);
                 root.append(labelWrapper, expressionWrapper, remove);
                 return { root, label, expression };
             });
@@ -92,6 +90,11 @@ export class CalculationsView {
     render(state) {
         const e = this.elements;
         this.renderRows(state.calculations);
+        if (["queued", "running"].includes(state.current?.status) &&
+            this.signatures.startedJob !== state.current.jobId) {
+            e.editor.open = false;
+            this.signatures.startedJob = state.current.jobId;
+        }
         const sources = JSON.stringify(state.sources);
         if (sources !== this.signatures.sources) {
             e.source.replaceChildren(...state.sources.map((source, index) => {
@@ -105,22 +108,19 @@ export class CalculationsView {
         e.area.replaceChildren(...options.map(([value, label]) => { const option = this.element("option", label); option.value = value; option.disabled = value === "uploaded" && !state.availableAoi; return option; }));
         e.area.value = state.areaChoice;
         e["area-description"].textContent = describeClipArea(state.area);
-        e.follow.checked = state.followWanted;
-        e.follow.disabled = state.areaChoice !== "selection" || state.area?.kind !== "selectedArea";
+        e["map-hint"].textContent = state.areaChoice === "selection" &&
+            !["wholeRaster", "temporaryAoi"].includes(state.area?.kind)
+            ? "Click the map to calculate for a new sampling area."
+            : "Click Calculate to use this area. Map clicks do not change this selection.";
         e.add.disabled = e.template.disabled = state.calculations.length >= 5;
         e.validation.textContent = state.validation;
-        e.validation.classList.toggle("is-error", !state.valid && state.validation !== "Checking expressions…");
-        e.review.disabled = !state.source || !state.area || !state.valid || state.phase === "planning";
-        e.review.textContent = state.phase === "planning" ? "Reviewing…" : "Review analysis";
-        e.run.hidden = !state.plan;
-        e.rerun.hidden = !state.resultIsCurrent || state.hasWork;
-        e.run.textContent = state.followWanted && !e.follow.disabled ? "Run & follow sampling box" : "Run analysis";
-        e.stop.hidden = !state.hasWork && !state.following;
-        e.stop.textContent = state.following ? "Stop following / cancel" : "Cancel analysis";
+        e.validation.classList.toggle("is-error", !state.valid && !state.checking);
+        e.run.disabled = !state.source || !state.area || !state.valid || state.checking || state.recoverable;
+        e.run.textContent = state.resultIsCurrent ? "Recalculate" : "Calculate";
+        e.stop.hidden = !state.hasWork;
+        e.stop.textContent = "Cancel calculation";
         e.retry.hidden = !state.recoverable;
-        e.status.textContent = state.message || (state.current ? describeJobProgress(state.current)
-            : state.following ? "Following sampling box — click the map to calculate again." : "");
-        if (state.following && state.message === "Calculation complete.") e.status.textContent += " Click another location to calculate again.";
+        e.status.textContent = state.message || (state.current ? describeJobProgress(state.current) : "");
         e["status-region"].classList.toggle("is-working", !!state.resultPending);
         e["status-summary"].hidden = !state.resultPending;
         e["status-summary"].textContent = state.resultPending
@@ -143,7 +143,7 @@ export class CalculationsView {
         if (historySignature !== this.signatures.history) {
             const children = state.jobs.filter(job => job.status !== "deleted").map(job => {
                 const root = this.element("div"); root.className = "calculation-history-row";
-                const button = this.element("button", `${job.calculations?.map(row => row.label).join(", ") ?? "Raster analysis"} · ${describeJobProgress(job)}`);
+                const button = this.element("button", `${job.calculations?.map(row => row.label).join(", ") ?? "Raster calculator"} · ${describeJobProgress(job)}`);
                 button.type = "button"; button.className = "secondary-button";
                 button.addEventListener("click", () => this.handlers.onInspect(job.jobId));
                 root.append(button, this.element("small", `${new Date(job.createdAt).toLocaleString()} · ${describeClipArea(job.area)}`));
@@ -156,13 +156,13 @@ export class CalculationsView {
             e.history.replaceChildren(this.element("p", state.historyError || "Results remain available for 24 hours in this browser session."), ...children);
             this.signatures.history = historySignature;
         }
-        for (const opener of this.openers) opener.textContent = state.resultPending ? "Custom raster analysis · working" : "Custom raster analysis";
+        for (const opener of this.openers) opener.textContent = state.resultPending ? "Raster calculator · working" : "Raster calculator";
     }
     /** Present inline values with coverage and optional exports. @param {Object} state Controller snapshot. @return {void} */
     renderResult(state) {
         const root = this.elements.result;
         const job = state.result;
-        if (!job) { root.replaceChildren(this.element("p", "Your values will appear here. Set up an analysis, review, and Run.")); return; }
+        if (!job) { root.replaceChildren(this.element("p", "Your result will appear here. Enter a formula, then click the map or Calculate.")); return; }
         const source = Object.values(job.sources ?? {})[0];
         const label = state.resultIntent?.source.label ?? state.sources.find(item => item.itemId === source?.itemId && item.collectionId === source?.collectionId)?.label ?? source?.itemId ?? "Raster";
         root.replaceChildren(this.element("h3", state.resultIsCurrent ? "Result for current settings" : "Previous / saved result"),
