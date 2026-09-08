@@ -14,61 +14,8 @@ export const DEFAULT_RASTER_PERCENTILES = Object.freeze({
     upper: 95
 });
 
-/** Immutable whole-raster member of the frontend sampling-area union. */
-export const WHOLE_RASTER_SAMPLING_AREA = Object.freeze({
-    kind: "wholeRaster"
-});
-
-/**
- * Normalize one strict raster-statistics sampling-area union.
- *
- * @param {Object} [samplingArea=WHOLE_RASTER_SAMPLING_AREA] Candidate whole,
- * selected-bounds, or temporary-AOI area.
- * @return {Readonly<Object>} Validated immutable sampling area.
- * @throws {TypeError} If the discriminator, owned field, or object shape is
- * invalid.
- */
-export function normalizeRasterSamplingArea(
-    samplingArea = WHOLE_RASTER_SAMPLING_AREA
-) {
-    if (samplingArea === null || typeof samplingArea !== "object") {
-        throw new TypeError("Raster statistics sampling area is invalid.");
-    }
-    const keys = Object.keys(samplingArea).sort();
-    if (
-        samplingArea.kind === "wholeRaster" &&
-        keys.length === 1 && keys[0] === "kind"
-    ) {
-        return WHOLE_RASTER_SAMPLING_AREA;
-    }
-    if (
-        samplingArea.kind === "selectedArea" &&
-        keys.length === 2 &&
-        keys[0] === "kind" &&
-        keys[1] === "selectedBounds"
-    ) {
-        return Object.freeze({
-            kind: "selectedArea",
-            selectedBounds: Object.freeze({
-                ...validateRasterSelectedBounds(samplingArea.selectedBounds)
-            })
-        });
-    }
-    if (
-        samplingArea.kind === "temporaryAoi" &&
-        keys.length === 2 &&
-        keys[0] === "kind" &&
-        keys[1] === "temporaryAoiId" &&
-        typeof samplingArea.temporaryAoiId === "string" &&
-        /^[A-Za-z0-9_-]{32}$/.test(samplingArea.temporaryAoiId)
-    ) {
-        return Object.freeze({
-            kind: "temporaryAoi",
-            temporaryAoiId: samplingArea.temporaryAoiId
-        });
-    }
-    throw new TypeError("Raster statistics sampling area is invalid.");
-}
+import { normalizeRasterSamplingArea, WHOLE_RASTER_SAMPLING_AREA } from "../selected-area.js";
+export { normalizeRasterSamplingArea, WHOLE_RASTER_SAMPLING_AREA } from "../selected-area.js";
 
 /**
  * Build a stable error for a malformed statistics response.

@@ -21,6 +21,7 @@ function fixture() {
     doc.querySelector('#vector-time-series').hidden = true;
     doc.querySelector('#vector-feature-profile').hidden = true;
     doc.querySelector('#vector-filter-panel').hidden = true;
+    doc.querySelector('#downloads-panel').hidden = true;
     const surface = doc.querySelector('#map-inspection');
     surface.showPopover = () => { surface.open = true; };
     surface.hidePopover = () => { surface.open = false; };

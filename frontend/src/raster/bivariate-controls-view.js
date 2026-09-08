@@ -342,6 +342,10 @@ export class BivariateRasterControlsView {
         this.boundSwap = this.#handleSwap.bind(this);
         this.boundRetry = this.#handleRetry.bind(this);
         this.boundRangeToggle = this.#renderThresholdMarkers.bind(this);
+        this.downloadButtons = ["x", "y"].map(axis => ({
+            axis, button: requireRasterControl(documentContext, `#download-bivariate-${axis}`),
+            onClick: () => this.handlers?.onDownloadPairedHistogram?.(axis),
+        }));
     }
 
     /** Populate the eight shared palette definitions exactly once. @return {void} */
@@ -367,6 +371,7 @@ export class BivariateRasterControlsView {
      */
     bind(handlers) {
         this.handlers = handlers;
+        for (const { button, onClick } of this.downloadButtons) button.addEventListener("click", onClick);
         this.mode.addEventListener("change", this.boundModeChange);
         this.palette.addEventListener("change", this.boundPaletteChange);
         this.swapButton.addEventListener("click", this.boundSwap);
@@ -382,6 +387,7 @@ export class BivariateRasterControlsView {
 
     /** Remove every direct listener installed by {@link bind}. @return {void} */
     unbind() {
+        for (const { button, onClick } of this.downloadButtons) button.removeEventListener("click", onClick);
         this.mode.removeEventListener("change", this.boundModeChange);
         this.palette.removeEventListener("change", this.boundPaletteChange);
         this.swapButton.removeEventListener("click", this.boundSwap);
@@ -464,6 +470,10 @@ export class BivariateRasterControlsView {
         this.statisticsHeading.title = this.statisticsHeading.textContent;
         this.statisticsXLabel.textContent = state.xLabel;
         this.statisticsYLabel.textContent = state.yLabel;
+        for (const { axis, button } of this.downloadButtons) {
+            button.textContent = `Download ${axis.toUpperCase()} clip`;
+            button.setAttribute("aria-label", `Download ${axis.toUpperCase()} clip of ${state[`${axis}Label`]}`);
+        }
         this.rangeControls.x.label.textContent = state.xLabel;
         this.rangeControls.y.label.textContent = state.yLabel;
         this.swapButton.setAttribute(

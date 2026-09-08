@@ -503,6 +503,8 @@
         hidden
       >Pixel picker hidden · Press P to show</button>
       <div class="map-tool-openers">
+        <button id="open-downloads" class="secondary-button" type="button"
+          aria-controls="downloads-panel">Downloads</button>
         <div id="map-filter-indicators" class="map-filter-indicators" aria-label="Active layer filters" hidden></div>
         <button id="open-analysis-tools" class="secondary-button" type="button"
           aria-label="Open analysis tools using visible data at the map center">Analysis tools</button>
@@ -512,6 +514,9 @@
         <header class="map-inspection-dock-header">
           <div id="map-inspection-tabs" class="map-inspection-tabs" role="tablist"
             aria-label="Open map tools">
+            <button id="map-inspection-tab-downloads" class="map-inspection-tab"
+              type="button" role="tab" aria-controls="downloads-panel"
+              aria-selected="false" tabindex="-1" hidden>Downloads</button>
             <button id="map-inspection-tab-feature" class="map-inspection-tab"
               type="button" role="tab" aria-controls="vector-feature-inspector"
               aria-selected="false" tabindex="-1" hidden>Features</button>
@@ -534,8 +539,40 @@
           <button id="toggle-map-inspection-dock" class="secondary-button"
             type="button" aria-controls="map-inspection-panels"
             aria-expanded="true">Minimize</button>
+          <button id="open-downloads-dock" class="secondary-button" type="button"
+            aria-controls="downloads-panel">Downloads</button>
         </header>
         <div id="map-inspection-panels" class="map-inspection-panels">
+          <section id="downloads-panel" role="tabpanel" aria-labelledby="map-inspection-tab-downloads" hidden>
+            <header class="map-histogram-toolbar">
+              <h2>Raster clip downloads</h2>
+              <button id="downloads-close" class="secondary-button" type="button" aria-label="Close Downloads">×</button>
+            </header>
+            <p>Download original raster values from a selected box or uploaded AOI. Files remain available for 24 hours after completion in this browser session.</p>
+            <form id="downloads-form">
+              <label for="downloads-source">Raster</label>
+              <select id="downloads-source"></select>
+              <label for="downloads-area">Clip area</label>
+              <select id="downloads-area"></select>
+              <p id="downloads-area-description"></p>
+              <p>The selected area is captured when Downloads opens. Reopen from a histogram to use a newer selection.</p>
+              <div class="downloads-actions">
+                <button id="downloads-edit-area" class="secondary-button" type="button">Choose box or upload AOI</button>
+                <button id="downloads-review" class="primary-button" type="submit" disabled>Review clip</button>
+              </div>
+            </form>
+            <section id="downloads-plan" class="download-plan" hidden></section>
+            <button id="downloads-create" class="primary-button" type="button" hidden>Create clip</button>
+            <p id="downloads-message" role="status" aria-live="polite"></p>
+            <p id="downloads-pending" hidden></p>
+            <button id="downloads-retry-submission" class="secondary-button" type="button" hidden>Recover submission</button>
+            <header class="map-histogram-toolbar">
+              <h3>Your downloads</h3>
+              <button id="downloads-refresh" class="secondary-button" type="button">Refresh</button>
+            </header>
+            <p id="downloads-job-message" role="status" aria-live="polite"></p>
+            <div id="downloads-jobs"></div>
+          </section>
           <section id="vector-feature-inspector" role="tabpanel"
             aria-labelledby="map-inspection-tab-feature" hidden>
             <header class="vector-feature-inspector-header">
@@ -997,6 +1034,10 @@
               <svg class="raster-bivariate-histogram" id="raster-bivariate-histogram"
                 viewBox="0 0 660 620" preserveAspectRatio="xMinYMin meet"
                 role="img" hidden></svg>
+              <div class="downloads-actions">
+                <button id="download-bivariate-x" class="secondary-button" type="button">Download X clip</button>
+                <button id="download-bivariate-y" class="secondary-button" type="button">Download Y clip</button>
+              </div>
               <details class="raster-bivariate-style-ranges" id="raster-bivariate-style-ranges">
                 <summary>Style rasters</summary>
                 <div id="raster-bivariate-panel" hidden>

@@ -568,6 +568,34 @@ function visibleLayerFixture(
         destroy() { viewer.destroy(); mapLayers.destroy(); } };
 }
 
+test("download intents preserve distinct 1D and 2D boxes without waiting for statistics", async () => {
+    const downloads = [];
+    const h = visibleLayerFixture(async () => { throw new Error("Statistics busy"); }, {}, {
+        onDownloadRequested: (item, area) => downloads.push({ item, area }),
+    });
+    await h.viewer.show(createRasterItem("download-x"));
+    await h.viewer.show(createRasterItem("download-y"));
+    await flushPromises();
+    assert.equal(h.viewer.getSelectedArea(), null);
+    h.viewer.exploreAt({ lng: 78, lat: 22 });
+    const oneD = h.viewer.getSelectedArea();
+    assert.ok(Object.isFrozen(oneD.selectedBounds));
+    h.controlsView.handlers.onDownloadHistogram(h.layerStackView.activeKey);
+    assert.deepEqual(downloads.at(-1).area, oneD);
+    h.controlsView.handlers.onBivariateModeChange("bivariate");
+    h.viewer.exploreAt({ lng: 80, lat: 24 });
+    const twoD = h.viewer.getSelectedArea();
+    assert.notDeepEqual(twoD, oneD);
+    h.controlsView.handlers.onDownloadPairedHistogram("x");
+    h.controlsView.handlers.onDownloadPairedHistogram("y");
+    assert.deepEqual(downloads.at(-1).area, twoD);
+    assert.deepEqual(downloads.at(-2).area, twoD);
+    assert.notEqual(downloads.at(-1).item.id, downloads.at(-2).item.id);
+    h.controlsView.handlers.onBivariateModeChange("overlay");
+    assert.deepEqual(h.viewer.getSelectedArea(), oneD);
+    h.destroy();
+});
+
 test('histogram axis units follow each analyzed data asset', async () => {
     const h = visibleLayerFixture();
     const item = { ...MOUNTED_GEOTIFF_ITEM, assets: { data: {

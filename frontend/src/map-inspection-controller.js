@@ -16,6 +16,7 @@ export class MapInspectionController {
         this.histogram = documentContext.querySelector("#map-histogram-panel");
         this.style = documentContext.querySelector("#layer-style-editor");
         this.filter = documentContext.querySelector("#vector-filter-panel");
+        this.downloads = documentContext.querySelector("#downloads-panel");
         this.feature = documentContext.querySelector("#vector-feature-inspector");
         this.featureDetails = documentContext.querySelector(
             "#vector-feature-inspector-details"
@@ -35,6 +36,10 @@ export class MapInspectionController {
         this.map = documentContext.querySelector("#map");
         this.closeButton = documentContext.querySelector("#close-map-histogram");
         this.tools = [
+            {
+                name: "downloads", label: "Downloads", panel: this.downloads,
+                tab: documentContext.querySelector("#map-inspection-tab-downloads"),
+            },
             {
                 name: "feature",
                 label: "Features",
@@ -167,6 +172,12 @@ export class MapInspectionController {
         this.#setToolLabel("filter", `Filter · ${layerLabel}`, `Filter ${layerLabel}`);
         this.#showTool("filter");
     }
+
+    /** Reveal the Downloads tool while retaining peer panels. @return {void} */
+    showDownloads() { this.#showTool("downloads"); }
+
+    /** Close Downloads without cancelling server work. @return {void} */
+    hideDownloads() { this.#hideTool("downloads"); }
 
     /** Hide the filter editor without closing other tools. @return {void} */
     hideFilter() {
@@ -557,6 +568,7 @@ export class MapInspectionController {
         this.histogram.hidden = true;
         this.style.hidden = true;
         this.filter.hidden = true;
+        this.downloads.hidden = true;
         this.feature.hidden = true;
         this.vectorTimeSeries.hidden = true;
         this.vectorFeatureProfile.hidden = true;

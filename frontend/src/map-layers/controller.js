@@ -102,6 +102,7 @@ export class MapLayerController {
         this.view.bind({
             onStyle: (key) => this.onStyle?.(key),
             onFilter: (key) => this.onFilter?.(key),
+            onDownload: (key) => this.onDownload?.(key),
             onZoom: (key) =>
                 this.onItemZoom(this.#requireRecord(key).entry.item),
             onInfo: (key) =>
