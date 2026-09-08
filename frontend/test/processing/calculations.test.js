@@ -214,9 +214,90 @@ test("a stale plan resolving after a newer box never submits and does not strand
     h.api.planCalculation=(intent,s)=>{signal=s;return old.promise;};
     h.click(78);await h.tick(650);
     h.api.planCalculation=original;h.click(79);await h.tick(650);
-    assert.ok(signal.aborted);old.resolve({planId:"z".repeat(32)});await flush();
+    assert.equal(signal?.aborted ?? false, false);old.resolve({planId:"z".repeat(32)});await flush();
     assert.equal(h.requests.filter(r=>r[0]==="submit").length,2);
     assert.deepEqual(h.controller.record.intent.area,box(79));
+});
+
+test("superseded HTTP planning drains before replacement and releases its returned identity", async () => {
+    const h = fixture(); const response = deferred(); const calls = []; let busy = false;
+    const client = new ProcessingApiClient(async (url, options) => {
+        if (url.endsWith('/jobs')) return {ok:true,json:async()=>({jobs:[]})};
+        calls.push([url, options]);
+        if (options.method === 'DELETE') return {ok:true,json:async()=>({discarded:true})};
+        if (busy) return {ok:false,status:429,json:async()=>({detail:{code:'plan_capacity',message:'Job planning is busy'}})};
+        busy = true;
+        // The server remains busy even if fetch rejects on a local abort.
+        const aborted = new Promise((_, reject) => options.signal?.addEventListener('abort',
+            () => reject(new DOMException('Superseded', 'AbortError')), {once:true}));
+        return Promise.race([response.promise, aborted]);
+    });
+    h.api.planCalculation = client.planCalculation.bind(client);
+    h.api.discardPlan = client.discardPlan.bind(client);
+    h.controller.open(); await h.tick(400);
+    for (const west of [78,79,80]) { h.click(west); await h.tick(650); }
+    assert.equal(calls.filter(([url])=>url.endsWith('/plan')).length, 1,
+        'a browser abort must not free the server planning lane');
+    assert.equal(h.controller.blocked, false);
+    const oldId = 'e'.repeat(32); busy = false;
+    response.resolve({ok:true,json:async()=>({planId:oldId,grid,operation:'raster.aggregate.v1',expiresAt:'2099-01-01T00:00:00Z'})});
+    // Subsequent planning uses the normal fixture once the old HTTP response drains.
+    h.api.planCalculation = async intent => {
+        assert.ok(calls.some(([url,options])=>url.endsWith(oldId)&&options.method==='DELETE'));
+        h.plans.set('f'.repeat(32),intent);
+        return {planId:'f'.repeat(32),grid,expiresAt:'2099-01-01T00:00:00Z'};
+    };
+    await flush();
+    assert.equal(h.requests.filter(r=>r[0]==='submit').length,1);
+    assert.deepEqual(h.controller.record.intent.area,box(80));
+});
+
+test("completed plan release is acknowledged before a replacement uses the last owner slot", async () => {
+    const h = fixture(); const release = deferred(); let occupied = true; let planCalls = 0;
+    const client = new ProcessingApiClient(async (url, options) => {
+        if (url.endsWith('/jobs')) return {ok:true,json:async()=>({jobs:[]})};
+        if (options.method === 'DELETE') {
+            await release.promise; occupied = false;
+            return {ok:true,json:async()=>({discarded:true})};
+        }
+        planCalls++;
+        if (occupied) return {ok:false,status:429,json:async()=>({detail:{code:'plan_capacity',message:'Too many plans'}})};
+        return {ok:true,json:async()=>({planId:'f'.repeat(32),grid,operation:'raster.aggregate.v1',expiresAt:'2099-01-01T00:00:00Z'})};
+    });
+    h.controller.open(); await h.tick(400);
+    h.api.planCalculation = client.planCalculation.bind(client);
+    h.api.discardPlan = client.discardPlan.bind(client);
+    h.click(79); await h.tick(650);
+    assert.equal(planCalls,0,'cleanup must finish before allocating another plan');
+    release.resolve(); await flush();
+    assert.equal(planCalls,1); assert.equal(h.controller.blocked,false);
+    assert.equal(h.requests.filter(r=>r[0]==='submit').length,1);
+});
+
+test("failed unused-plan cleanup is retained and retried before explicit replacement", async () => {
+    const h = fixture(); h.controller.open(); await h.tick(400);
+    const original = h.api.discardPlan; let fail = true;
+    h.api.discardPlan = async id => { if(fail)throw new Error('Release connection lost'); return original(id); };
+    h.click(78); await h.tick(650);
+    assert.equal(h.controller.blocked,true);
+    assert.equal(h.requests.filter(r=>r[0]==='plan').length,1);
+    assert.match(h.view.state.message,/Release connection lost/);
+    fail=false;h.click(79);await h.tick(650);
+    assert.equal(h.controller.blocked,false);
+    assert.equal(h.requests.filter(r=>r[0]==='submit').length,1);
+    assert.deepEqual(h.controller.record.intent.area,box(79));
+});
+
+test("destroy releases completed and late planning results without submitting", async () => {
+    for (const pending of [false,true]) {
+        const response=deferred(); const h=fixture();
+        if(pending)h.api.planCalculation=()=>response.promise;
+        h.controller.open();await h.tick(400);h.controller.destroy();
+        if(pending)response.resolve({planId:'d'.repeat(32)});
+        await flush();
+        assert.equal(h.requests.filter(r=>r[0]==='discard').length,1);
+        assert.equal(h.requests.filter(r=>r[0]==='submit').length,0);
+    }
 });
 
 test("click during submission cancels its eventual accepted job before admitting a replacement", async () => {
