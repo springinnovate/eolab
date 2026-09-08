@@ -47,8 +47,12 @@ export class SummaryStatisticsView extends CalculationsView {
         label.addEventListener("input", () => this.handlers.onEdit(card.id, { label: label.value }));
         const remove = this.element("button", "×"); remove.type = "button"; remove.className = "summary-remove";
         remove.setAttribute("aria-label", `Remove summary statistic ${card.id}`);
+        const removeTooltip = this.element("span", "Remove this calculation");
+        removeTooltip.className = "summary-remove-tooltip"; removeTooltip.id = `summary-remove-tooltip-${card.id}`;
+        removeTooltip.setAttribute("role", "tooltip");
+        remove.setAttribute("aria-describedby", removeTooltip.id); remove.append(removeTooltip);
         remove.addEventListener("click", () => this.handlers.onRemove(card.id));
-        heading.append(label, remove);
+        heading.append(label);
         const binding = this.element("label"); binding.className = "summary-raster-binding";
         const bindingText = this.element("span");
         bindingText.append(this.element("span", "In this formula, "), this.element("code", "a"), this.element("span", " represents"));
@@ -91,8 +95,8 @@ export class SummaryStatisticsView extends CalculationsView {
         const detailsTitle = this.element("summary", "Value details & downloads");
         const detailsBody = this.element("div"); details.append(detailsTitle, detailsBody);
         const size = this.element("small"); size.className = "summary-size";
-        root.append(heading, equation, binding, statusRow, progress, size, details);
-        return { root, label, source, expression, value, caption, copy, copyStatus, copyRevision: 0, status, run, stop, progress, details, detailsBody, size };
+        root.append(heading, equation, binding, statusRow, progress, size, details, remove);
+        return { root, label, source, expression, value, caption, copy, copyStatus, copyRevision: 0, status, run, stop, progress, details, detailsBody, size, remove };
     }
     render(state) {
         this.sources = state.sources;

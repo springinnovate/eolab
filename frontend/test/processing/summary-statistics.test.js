@@ -191,7 +191,11 @@ test("late validation cannot enqueue a superseded edit or a removed statistic",a
 test("removing an earlier card preserves peer DOM, value, and formula identity; Undo restores it",async()=>{
     const h=fixture();await h.open();h.controller.addStatistic("count");await h.tick();await h.finish("ready",["7"]);
     const [a,b]=h.controller.state.statistics;const row=h.view.cards.get(b.id);
-    h.controller.removeStatistic(a.id);assert.equal(h.view.cards.get(b.id),row);assert.equal(row.value.textContent,"7");
+    const removed=h.view.cards.get(a.id);
+    assert.equal(removed.root.children.includes(removed.remove),true);
+    assert.equal(removed.remove.children[0].textContent,"Remove this calculation");
+    removed.remove.dispatchEvent(new Event("click"));
+    assert.equal(h.view.cards.get(b.id),row);assert.equal(row.value.textContent,"7");
     h.controller.undoRemove();assert.equal(h.controller.state.statistics[0].id,a.id);assert.equal(h.view.cards.get(b.id),row);
 });
 test("manual mode waits for Calculate and accepted manual jobs survive navigation",async()=>{
