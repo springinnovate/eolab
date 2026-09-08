@@ -393,14 +393,14 @@ class PostgresJobStore:
         Crash recovery waits through the previous hard deadline plus exit grace.
         A lost DB connection cannot cause a second native child to start while
         the old child could still be running under its supervisor deadline.
-        Claim protocol 2 supports explicit operation dispatch; the migration's
-        trigger also fences unmodified legacy workers that do not declare it.
+        Claim protocol 3 adds fractional ellipsoidal area calculations. The
+        existing database trigger fences workers supporting earlier protocols.
 
         Returns:
             Claimed job or None while another attempt reserves the slot.
         """
         with self._transaction(locked=True) as cursor:
-            cursor.execute("SET LOCAL eolab.processing_claim_version = '2'")
+            cursor.execute("SET LOCAL eolab.processing_claim_version = '3'")
             cursor.execute(
                 "UPDATE processing.jobs SET status='interrupted',error=%s,updated_at=now() WHERE status IN ('running','cancelling') AND deadline_at<now()",
                 (
@@ -418,7 +418,7 @@ class PostgresJobStore:
             if cursor.fetchone():
                 return None
             cursor.execute(
-                "SELECT id FROM processing.jobs WHERE status='queued' AND minimum_claim_version<=2 ORDER BY created_at LIMIT 1 FOR UPDATE"
+                "SELECT id FROM processing.jobs WHERE status='queued' AND minimum_claim_version<=3 ORDER BY created_at LIMIT 1 FOR UPDATE"
             )
             row = cursor.fetchone()
             if not row:

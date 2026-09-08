@@ -2,7 +2,8 @@
 
 Tracking: parent [#335](https://github.com/springinnovate/eolab/issues/335), backend
 [#336](https://github.com/springinnovate/eolab/issues/336), interface
-[#337](https://github.com/springinnovate/eolab/issues/337).
+[#337](https://github.com/springinnovate/eolab/issues/337), ground area
+[#338](https://github.com/springinnovate/eolab/issues/338).
 
 Processing supports `raster.aggregate.v1`: one catalog raster, an explicit area,
 and up to five labeled scalar calculations. Results are a small table, CSV, and
@@ -10,10 +11,10 @@ JSON provenance. A final calculation reads **native pixels**, independently of
 histogram samples, styling, rendering, and GeoServer. COG overviews do not preserve
 arbitrary predicates or sums and are never substituted for native values.
 
-This first step exposes the API. The calculation editor and result presentation
-belong to #337. Existing clip Downloads shows only `raster.clip.v1` jobs so a CSV
-cannot be mislabeled as a COG. Owned calculation jobs remain available through the
-shared API history and direct result URLs.
+The [Custom raster analysis editor](raster-calculation-interface.md) displays
+inline results and optional CSV/provenance downloads. Shared Downloads/history
+distinguishes calculation CSVs from clipped COGs. Owned calculation jobs also
+remain available through the API and direct result URLs.
 
 ## API review and execution
 
@@ -39,7 +40,7 @@ See [clip lifecycle and storage](raster-clips.md) for the shared transport contr
      "calculations": [
        {"label": "Pixels above 10", "expression": "count(a > 10)"},
        {"label": "Sum above 10", "expression": "sum(a, where=a > 10)"},
-       {"label": "Mean value", "expression": "mean(a)"},
+        {"label": "Ground hectares above 10", "expression": "areaha(a > 10)"},
        {"label": "Percent above 10", "expression": "100 * count(a > 10) / count(a)"}
      ]
    }
@@ -55,7 +56,11 @@ See [clip lifecycle and storage](raster-clips.md) for the shared transport contr
    affine, window, dimensions, datatype, nodata, native block count, decoded bytes,
    estimated expression memory, stored scale/offset, and stored band unit. The
    response explicitly says `resolution: native`, `valueDomain: stored`, and
-   `inclusion: cell_center`.
+    `inclusion: cell_center` for numeric-only calculations. An expression using
+    `areaha` instead reports `inclusion: per_function` and `grid.groundArea`:
+    measurement method, ellipsoid, units, fractional inclusion, edge tolerance,
+    maximum segment length, strategy, and estimated polygon-cell work. Numeric
+    functions retain their center-cell rule within the same job.
 2. `POST /api/processing/raster-calculations` with
    `{"planId":"...","requestId":"<unique 16–80 character key>"}` explicitly
    accepts the reviewed calculation. It returns 202 and an owned job. Retry an
@@ -70,8 +75,8 @@ See [clip lifecycle and storage](raster-clips.md) for the shared transport contr
    same cookie authorizes downloads, HEAD, single byte ranges, cancellation,
    deletion, and recovery after reload. Paths and cookies never appear in results.
 
-The [FastAPI documentation](/docs#/processing) can exercise these endpoints before
-the editor exists. Keep the owner session; job identifiers alone grant no access.
+The [FastAPI documentation](/docs#/processing) can also exercise these endpoints.
+Keep the owner session; job identifiers alone grant no access.
 Accepted work is immutable and continues if the browser closes. Removing the AOI
 invalidates an unsubmitted plan, but accepted jobs retain their own geometry.
 
@@ -101,27 +106,34 @@ aggregate results is allowed, for example `max(a) - min(a)`.
 | `sum(a, where=a > 10)` | Sum original values of the matching cells |
 | `mean(a * 2, where=a >= 0)` | Pixel-weighted mean of the transformed matching values |
 | `min(a)` / `max(a)` | Smallest / largest selected valid value |
+| `areaha(a == 4)` | Ground hectares of class 4 intersecting the selection, including boundary fractions |
+| `100 * areaha(a > 10) / areaha(a == a)` | Percentage of valid selected ground area satisfying the condition |
 
-`where` takes a boolean pixel expression. `mean`, `min`, and `max` take numbers;
+`areaha` requires exactly one boolean pixel expression and does not accept `where`.
+Numeric functions' optional `where` takes a boolean pixel expression. `mean`, `min`, and `max` take numbers;
 `sum` and `count` also accept a condition. Scalar literals within a pixel aggregate
 broadcast over valid source cells. Scale/offset metadata is recorded but **not
 automatically applied**: calculations use the stored values, matching the current
 analysis value domain. Users can explicitly write `a * 2 - 1`. No expression-unit
 inference is claimed; the grid's unit is source metadata, not a computed result unit.
+A direct `areaha(...)` result explicitly carries `unit: ha`; compound scalar
+expressions leave `unit` null, including percentages and user conversions.
 
 Each source block is decoded once, then evaluated in tiles of at most 256 × 256
-cells. Integers are converted exactly from the supported native integer types to
+cells (64 × 64 for jobs with area geometry). Integers are converted exactly from the supported native integer types to
 float64 for pixel arithmetic. Numeric sums use float64 block sums with compensated
 combination across blocks; means use scaled block means and weighted combination.
 Floating results are not arbitrary-precision decimal arithmetic. Count reductions
 remain integer accumulators. All returned values are decimal **strings** with
 `valueType: integer | float`, preserving integer counts across JSON/JavaScript.
 
-The AOI/box uses the shared bounded geometry transformation and a center-cell
-mask (`all_touched=False`). Holes are respected; overlapping polygons are unioned
-and pixels counted once. No fractional boundary weighting is performed. This
-differs deliberately from clipping's all-touched export mask. `areaha` and physical
-area weighting are deferred to #338; EPSG:3857 cell dimensions are not hectares.
+Numeric aggregates use the shared bounded geometry transformation and center-cell
+mask (`all_touched=False`). Holes are respected; overlapping polygons count once.
+`areaha` instead measures each matching native cell's intersection with the AOI/box
+on the WGS84 ellipsoid, preserving fractional boundary cells, holes, and unioned
+overlaps. A sliver can have positive area without containing any pixel center.
+These are distinct from clipping's all-touched export mask. EPSG:3857 pixel
+dimensions are not ground hectares. See [ground-area methods and limits](ground-area-calculations.md).
 
 Source nodata, nonfinite values, and cells outside the selected area are missing,
 never zero. Arithmetic/domain errors invalidate the affected cell in that
@@ -130,11 +142,13 @@ there is no short-circuit recovery from missing data. Partially valid calculatio
 still produce a result and report excluded arithmetic cells. Each row includes
 per-aggregate `validPixels` (source-valid selected cells), `matchedPixels` (included
 cells after expression validity/condition), and `invalidArithmeticPixels`.
+For `areaha`, these diagnostics count cells with positive intersection; they are
+not hectare totals. NoData contributes neither area nor numeric values.
 
 | State | Result |
 | --- | --- |
 | `ok` | Finite result; coverage diagnostics may report excluded arithmetic cells |
-| `no_matches` | Valid data exists but nothing matches: count/sum is zero, mean/min/max is null |
+| `no_matches` | Valid data exists but nothing matches: count/sum/areaha is zero, mean/min/max is null |
 | `no_valid_data` | No valid source cell in the area: null, including count |
 | `invalid_arithmetic` | All eligible source cells have invalid expression arithmetic, or final scalar arithmetic is undefined: null |
 | `overflow` | A numeric accumulation or final scalar result overflows: null |
@@ -142,10 +156,12 @@ cells after expression validity/condition), and `invalidArithmeticPixels`.
 Missing aggregate operands propagate to the final scalar result. Nonempty scalar
 combinations keep `ok`; `no_matches` propagates when every aggregate reports it.
 A job can finish `ready` with null-valued rows: the result explains what happened.
-CSV stores label, expression, value, value_type, and state; potentially executable
+CSV stores label, expression, value, value_type, state, and unit; potentially executable
 spreadsheet text is escaped. Provenance retains original expressions, area
 geometry, source signature, native grid, value/inclusion policies, typed rows,
 coverage, creation time, and the CSV checksum.
+Area provenance also retains `grid.groundArea` and `functionInclusion`, distinguishing
+numeric centers from fractional area intersections.
 
 ## Ownership, resources, and deployment
 
@@ -162,6 +178,10 @@ bounded area projection, and native-work estimation that are now genuinely share
 by clipping and calculations. Kernel progress uses the existing artifact adapter.
 The worker explicitly dispatches two supported operations; it is not a registry
 for user code. The internal worker/artifact port names now describe both operations.
+`ground_area` is a Processing-owned geometry mechanism used by `raster_aggregate`;
+it depends on operation models, pyproj, Shapely, NumPy, and rasterio windows.
+pyproj and Shapely are installed by the existing application/worker image. Their
+geometry operations do not open or resample raster values.
 
 No histogram, renderer, GeoServer, temporary-AOI implementation, or pgSTAC dependency
 was added. Shared source and area contracts remain the intentional coupling.
@@ -174,6 +194,8 @@ needed. Initial calculation-specific ceilings are:
 | Native decoded source work | 4 GiB, at most 65,536 blocks, with conservative preallocation guard |
 | Estimated native/expression working memory | 512 MiB within the existing 2 GiB worker |
 | AOI snapshot / projected coordinates | 8 MiB / 500,000 |
+| Area polygon-cell work / execution transformations | 200,000 cells / 4,000,000 positions |
+| Area geometry memory estimate | Additional 128 MiB within the same 512 MiB admission ceiling |
 | Working/result reservation | 12 MiB per calculation job |
 | Planning / execution | Existing 15-second / 10-minute supervised deadlines |
 | Result lifetime | Existing 24-hour lifetime and transfer leases |
@@ -187,8 +209,10 @@ atomic publication, owner leases, restart recovery, and expiry remain shared wit
 clips. A filesystem-full failure cannot publish a partial CSV.
 
 Migration 2 adds an opaque operation discriminator and minimum worker claim
-protocol to jobs. New workers declare protocol 2 transaction-locally and select
-compatible work. A database trigger rejects a legacy worker's queued-to-running
+protocol to jobs. Workers now declare protocol 3 transaction-locally and select
+compatible work. Numeric-only calculations require protocol 2 and omit new area
+grid fields; area calculations require protocol 3. Clips retain protocol 1. The
+existing database trigger rejects an older worker's queued-to-running
 transition for a calculation job **before it starts native work**. Legacy clip
 rows retain protocol 1 and old TIFF/download defaults. The trigger is preserved
 when a legacy worker reapplies its older migration. During mixed-worker rollout,
@@ -196,9 +220,10 @@ a legacy worker encountering a calculation may back off until a new worker claim
 it. The shared advisory-lock key and execution fence are unchanged. Retired job
 summaries retain their operation even after source/area snapshots are cleaned.
 
-Deploy the updated application and worker together. Rolling back the application
-also removes its ability to interpret calculation history; drain/remove calculation
-jobs before a full rollback to clip-only code. Do not drop the compatibility trigger
+Deploy the updated application and worker together. Drain/remove area jobs before
+rolling the application back to code that cannot interpret area expressions/grid
+metadata. Drain/remove all calculation jobs before a full rollback to clip-only
+code. Do not drop the compatibility trigger
 while any queued calculation might be seen by a legacy worker.
 
 ## Tests

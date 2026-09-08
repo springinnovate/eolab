@@ -4,7 +4,14 @@ from dataclasses import dataclass, field, fields
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 from eolab_app.processing.models import (
     Artifact,
@@ -50,7 +57,7 @@ class AggregateValidationRequest(BaseModel):
             ValueError: For invalid aliases, labels, types, or expression budget.
         """
         alias = self.alias
-        if alias in FUNCTIONS | {"where", "areaha"}:
+        if alias in FUNCTIONS | {"where"}:
             raise ValueError("The raster alias cannot be a function or keyword")
         if len({item.label for item in self.calculations}) != len(self.calculations):
             raise ValueError("Calculation labels must be unique")
@@ -123,6 +130,22 @@ class AggregateArea(BaseModel):
     geometries: tuple[dict[str, object], ...] = ()
 
 
+class GroundAreaPlan(BaseModel):
+    """Reviewed ellipsoidal measurement method and bounded geometry work."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    method: Literal["ellipsoidal_cylindrical_equal_area"] = (
+        "ellipsoidal_cylindrical_equal_area"
+    )
+    ellipsoid: Literal["WGS84"] = "WGS84"
+    units: Literal["ha"] = "ha"
+    inclusion: Literal["fractional_cell_intersection"] = "fractional_cell_intersection"
+    edgeToleranceMetres: float
+    maximumSegmentMetres: float
+    estimatedGeometryCells: int
+    strategy: Literal["rectilinear", "cell_polygons"]
+
+
 class AggregateGrid(BaseModel):
     """Native grid, value domain, and conservative work/memory admission."""
 
@@ -140,6 +163,22 @@ class AggregateGrid(BaseModel):
     scale: str
     offset: str
     storedUnit: str | None
+    groundArea: GroundAreaPlan | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_grid(self, handler: SerializerFunctionWrapHandler) -> dict:
+        """Preserve the existing wire shape for numeric-only accepted jobs.
+
+        Args:
+            handler: Pydantic's normal field serializer.
+
+        Returns:
+            Grid fields, with area metadata only when that method is required.
+        """
+        result = handler(self)
+        if self.groundArea is None:
+            result.pop("groundArea", None)
+        return result
 
 
 class AggregateSpec(BaseModel):
@@ -167,6 +206,7 @@ class AggregateValue(BaseModel):
         "ok", "no_matches", "no_valid_data", "invalid_arithmetic", "overflow"
     ]
     aggregates: list[dict[str, str | int]]
+    unit: Literal["ha"] | None = None
 
 
 class AggregateResultResponse(JobResultResponse):
@@ -206,7 +246,7 @@ class AggregatePlanResponse(BaseModel):
     expiresAt: datetime
     resolution: Literal["native"] = "native"
     valueDomain: Literal["stored"] = "stored"
-    inclusion: Literal["cell_center"] = "cell_center"
+    inclusion: Literal["cell_center", "per_function"] = "cell_center"
     limits: dict[str, int | float]
 
 
@@ -220,6 +260,12 @@ class RasterAggregateLimits(ProcessingLimits):
     max_coordinates: int = 500_000
     max_memory_bytes: int = 512 * 1024**2
     result_reservation_bytes: int = 12 * 1024**2
+    # Rectilinear cells under whole-raster/rectangular selections need only row
+    # widths/heights. Other cases admit at most this many potential polygon cells.
+    max_area_geometry_cells: int = 200_000
+    max_area_transform_coordinates: int = 4_000_000
+    area_edge_tolerance_metres: float = 0.1
+    area_max_segment_metres: float = 10_000.0
 
     @classmethod
     def with_lifecycle(cls, limits: ProcessingLimits) -> "RasterAggregateLimits":

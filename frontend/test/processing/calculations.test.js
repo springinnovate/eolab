@@ -213,6 +213,37 @@ test("inline values keep large counts lossless, explain nulls, and use owned CSV
     const field=view.rows[0].expression;field.focus();view.render(h.view.state);assert.equal(doc.activeElement,field);
 });
 
+test("ground-area plans and inline results explain fractional coverage and label hectares", async () => {
+    const h = fixture(); await h.run(false); await h.finish();
+    const groundArea = {ellipsoid:"WGS84",edgeToleranceMetres:0.1,maximumSegmentMetres:10000,estimatedGeometryCells:0,strategy:"rectilinear"};
+    const areaGrid = {...grid,groundArea};
+    const row = {...h.view.state.result.result.rows[0],label:"Area",expression:"areaha(a == 4)",unit:"ha",
+        aggregates:[{function:"areaha",unit:"ha",matchedPixels:8,validPixels:8,invalidArithmeticPixels:0}]};
+    const state = {...h.view.state,plan:{grid:areaGrid},
+        result:{...h.view.state.result,grid:areaGrid,result:{...h.view.state.result.result,rows:[row]}}};
+    const doc = new FakeRasterControlDocument(); const view = new CalculationsView(doc);
+    view.bind(h.view.handlers); view.render(state);
+    assert.match(view.elements.plan.textContent, /numeric functions select cell centers/);
+    assert.match(view.elements.plan.textContent, /WGS84 ellipsoid, hectares, including partial pixels/);
+    const text = node => [node.textContent,...node.children.map(text)].join(" ");
+    assert.match(text(view.elements.result), /12.5 ha/);
+    assert.match(text(view.elements.result), /Area measurement.*0.1 m chord-deviation target/);
+    assert.match(text(view.elements.result), /Result unit: ha/);
+    assert.match(text(view.elements.result), /numeric functions use pixel centers/);
+});
+
+test("area examples insert editable single-raster expressions without submitting jobs", async () => {
+    for (const [template, expression] of [["area-threshold","areaha(a > 10)"],["area-class","areaha(a == 4)"]]) {
+        const h = fixture(); h.controller.open(); await h.tick(400);
+        const doc = new FakeRasterControlDocument(); const view = new CalculationsView(doc);
+        view.bind(h.view.handlers); view.render(h.view.state);
+        view.elements.template.value = template;
+        view.elements.template.dispatchEvent(new Event("change"));
+        assert.equal(h.view.state.calculations.at(-1).expression, expression);
+        assert.equal(h.requests.some(request => ["plan","submit"].includes(request[0])), false);
+    }
+});
+
 test("a pending replacement mutes saved values from the first follow click until completion", async () => {
     const h = fixture();
     await h.run(true); await h.finish();

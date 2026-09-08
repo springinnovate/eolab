@@ -20,11 +20,13 @@ from eolab_app.processing.aggregate_models import (
     AggregateArtifact,
     AggregateGrid,
     AggregateSpec,
+    GroundAreaPlan,
     NamedCalculation,
     RasterAggregateLimits,
 )
 from eolab_app.processing.artifacts import write_progress
 from eolab_app.processing.models import ProcessingError
+from eolab_app.processing.ground_area import GroundArea
 from eolab_app.processing.raster_expression import Calculation, compile_expression, walk
 from eolab_app.processing.raster_input import (
     native_work,
@@ -40,6 +42,9 @@ from eolab_app.raster.source_contract import (
 # Evaluate at most 65,536 pixels per expression tile, even when the source's
 # native blocks are larger. Keep admission and execution on this same tile size.
 TILE_SIDE = 256
+# Area intersections retain bounded GEOS objects alongside the numerical tile.
+AREA_TILE_SIDE = 64
+AREA_GEOMETRY_MEMORY_BYTES = 128 * 1024**2
 # Each native block retains its source values and one NumPy boolean validity mask.
 NATIVE_MASK_BYTES_PER_PIXEL = np.dtype(np.bool_).itemsize
 # GDAL's cache plus a separate 64 MiB allowance for geometry/native bookkeeping
@@ -80,7 +85,11 @@ def selection(
 
 
 def grid(
-    dataset: Any, window: Window, node_count: int, limits: RasterAggregateLimits
+    dataset: Any,
+    window: Window,
+    node_count: int,
+    limits: RasterAggregateLimits,
+    ground_area: GroundAreaPlan | None = None,
 ) -> AggregateGrid:
     """Admit native work and bounded expression memory for one plan.
 
@@ -89,6 +98,7 @@ def grid(
         window: Integral source window.
         node_count: Total bounded expression-tree nodes.
         limits: Work and memory ceilings.
+        ground_area: Optional ellipsoidal measurement metadata and geometry work.
 
     Returns:
         Deterministic metadata and conservative memory estimate.
@@ -104,8 +114,10 @@ def grid(
         bh * bw * (np.dtype(dataset.dtypes[0]).itemsize + NATIVE_MASK_BYTES_PER_PIXEL)
         + GDAL_CACHE_BYTES
         + NATIVE_BOOKKEEPING_BYTES
-        + TILE_SIDE**2 * (node_count + EXPRESSION_SCRATCH_ARRAYS)
+        + TILE_SIDE**2
+        * (node_count + EXPRESSION_SCRATCH_ARRAYS)
         * EXPRESSION_BYTES_PER_PIXEL
+        + (AREA_GEOMETRY_MEMORY_BYTES if ground_area is not None else 0)
     )
     if memory > limits.max_memory_bytes:
         raise ProcessingError(
@@ -132,6 +144,7 @@ def grid(
         scale=str(dataset.scales[0]),
         offset=str(dataset.offsets[0]),
         storedUnit=dataset.units[0],
+        groundArea=ground_area,
     )
 
 
@@ -159,11 +172,22 @@ def plan_aggregate(
     roots = [compile_expression(item.expression, alias) for item in calculations]
     nodes = sum(sum(1 for _ in walk(root)) for root in roots)
     require_signature(path, signature)
-    with rasterio.Env(GDAL_CACHEMAX=GDAL_CACHE_BYTES, GDAL_NUM_THREADS=str(GDAL_THREADS)):
+    with rasterio.Env(
+        GDAL_CACHEMAX=GDAL_CACHE_BYTES, GDAL_NUM_THREADS=str(GDAL_THREADS)
+    ):
         with rasterio.open(path) as dataset:
             require_source(dataset, path)
             window, _ = selection(dataset, area, limits)
-            result = grid(dataset, window, nodes, limits)
+            ground = (
+                GroundArea(dataset, area, limits, planning=True)
+                if any(node.op == "areaha" for root in roots for node in walk(root))
+                else None
+            )
+            if ground is not None:
+                window = ground.window
+            result = grid(
+                dataset, window, nodes, limits, ground.metadata if ground else None
+            )
     require_signature(path, signature)
     return result
 
@@ -204,11 +228,25 @@ def create_aggregate(
     reducers = [Calculation(root) for root in roots]
     nodes = sum(sum(1 for _ in walk(root)) for root in roots)
     require_signature(path, spec.sourceSignature)
-    with rasterio.Env(GDAL_CACHEMAX=GDAL_CACHE_BYTES, GDAL_NUM_THREADS=str(GDAL_THREADS)):
+    with rasterio.Env(
+        GDAL_CACHEMAX=GDAL_CACHE_BYTES, GDAL_NUM_THREADS=str(GDAL_THREADS)
+    ):
         with rasterio.open(path) as dataset:
             require_source(dataset, path)
             window, geometries = selection(dataset, spec.area, limits)
-            if grid(dataset, window, nodes, limits) != spec.grid:
+            ground = (
+                GroundArea(dataset, spec.area, limits)
+                if any(node.op == "areaha" for root in roots for node in walk(root))
+                else None
+            )
+            if ground is not None:
+                window = ground.window
+            if (
+                grid(
+                    dataset, window, nodes, limits, ground.metadata if ground else None
+                )
+                != spec.grid
+            ):
                 raise ProcessingError(
                     "plan_changed",
                     "The calculation grid or policy changed. Create a new plan.",
@@ -216,6 +254,7 @@ def create_aggregate(
                 )
             blocks = source_block_indexes_for_window(window, dataset.block_shapes[0])
             last_progress = 0.0
+            tile_side = AREA_TILE_SIDE if ground else TILE_SIDE
             for index, (row, column) in enumerate(blocks):
                 block = dataset.block_window(1, row, column)
                 native = read_native_raster_block(dataset, block)
@@ -223,21 +262,21 @@ def create_aggregate(
                 for y in range(
                     int(intersection.row_off),
                     int(intersection.row_off + intersection.height),
-                    TILE_SIDE,
+                    tile_side,
                 ):
                     for x in range(
                         int(intersection.col_off),
                         int(intersection.col_off + intersection.width),
-                        TILE_SIDE,
+                        tile_side,
                     ):
                         tile = Window(
                             x,
                             y,
                             min(
-                                TILE_SIDE, intersection.col_off + intersection.width - x
+                                tile_side, intersection.col_off + intersection.width - x
                             ),
                             min(
-                                TILE_SIDE,
+                                tile_side,
                                 intersection.row_off + intersection.height - y,
                             ),
                         )
@@ -250,6 +289,10 @@ def create_aggregate(
                         values = native[local.toslices()]
                         data = values.data.astype(np.float64)
                         valid = ~np.ma.getmaskarray(values) & np.isfinite(data)
+                        hectares = ground.weights(tile) if ground is not None else None
+                        area_valid = (
+                            valid & (hectares > 0) if hectares is not None else None
+                        )
                         if geometries:
                             valid &= geometry_mask(
                                 geometries,
@@ -259,7 +302,7 @@ def create_aggregate(
                                 invert=True,
                             )
                         for reducer in reducers:
-                            reducer.update(data, valid)
+                            reducer.update(data, valid, hectares, area_valid)
                 if time.monotonic() - last_progress > PROGRESS_INTERVAL_SECONDS:
                     write_progress(directory, "calculating", index + 1, len(blocks))
                     last_progress = time.monotonic()
@@ -272,7 +315,7 @@ def create_aggregate(
     result = directory / "result.csv"
     with result.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.writer(stream)
-        writer.writerow(["label", "expression", "value", "value_type", "state"])
+        writer.writerow(["label", "expression", "value", "value_type", "state", "unit"])
         for row in rows:
             writer.writerow(
                 [
@@ -281,6 +324,7 @@ def create_aggregate(
                     row["value"],
                     row["valueType"],
                     row["state"],
+                    row["unit"],
                 ]
             )
     with result.open("rb") as stream:
@@ -296,7 +340,12 @@ def create_aggregate(
         **spec.model_dump(mode="json", by_alias=True),
         "resolution": "native",
         "valueDomain": "stored",
-        "inclusion": "cell_center",
+        "inclusion": "per_function" if spec.grid.groundArea else "cell_center",
+        "functionInclusion": (
+            {"numeric": "cell_center", "areaha": "fractional_cell_intersection"}
+            if spec.grid.groundArea
+            else {"numeric": "cell_center"}
+        ),
         "createdAt": datetime.now(timezone.utc).isoformat(),
         **asdict(artifact),
     }

@@ -9,7 +9,7 @@ import numpy as np
 
 from eolab_app.processing.models import ProcessingError
 
-FUNCTIONS = frozenset({"count", "sum", "mean", "min", "max"})
+FUNCTIONS = frozenset({"count", "sum", "mean", "min", "max", "areaha"})
 MAX_NODES = 256
 MAX_DEPTH = 20
 TOKEN = re.compile(
@@ -170,7 +170,11 @@ class Parser:
             self.take(")")
             if any(node.op in FUNCTIONS for arg in args for node in walk(arg)):
                 raise self.error("Aggregates cannot be nested")
-            if token not in {"count", "sum"} and argument.boolean:
+            if token == "areaha" and (not argument.boolean or len(args) != 1):
+                raise self.error(
+                    "areaha requires one condition, for example areaha(a == 4)"
+                )
+            if token not in {"count", "sum", "areaha"} and argument.boolean:
                 raise self.error(f"{token} requires numeric values")
             left = self.node(token, args, scalar=True)
         else:
@@ -300,12 +304,15 @@ class Reduction:
         self.maximum = -math.inf
         self.overflow = False
 
-    def update(self, data: np.ndarray, base: np.ndarray) -> None:
+    def update(
+        self, data: np.ndarray, base: np.ndarray, hectares: np.ndarray | None = None
+    ) -> None:
         """Merge one bounded input tile using conservative validity masks.
 
         Args:
             data: Float64 stored values in one tile.
             base: In-area valid source mask.
+            hectares: Fractional cell hectares, required for an areaha reduction.
         """
         cache: dict[Node, tuple[Any, Any]] = {}
 
@@ -345,11 +352,19 @@ class Reduction:
         self.invalid += int(np.count_nonzero(base & ~np.asarray(valid, dtype=bool)))
         if self.node.args[0].boolean:
             eligible = eligible & values
-        selected = np.broadcast_to(values, data.shape)[eligible]
+        selected = (
+            hectares[eligible]
+            if self.node.op == "areaha"
+            else np.broadcast_to(values, data.shape)[eligible]
+        )
         count = selected.size
         prior_count = self.matched
         self.matched += count
-        if not count or self.node.op == "count" or self.node.args[0].boolean:
+        if (
+            not count
+            or self.node.op == "count"
+            or (self.node.args[0].boolean and self.node.op != "areaha")
+        ):
             return
         self.minimum = min(self.minimum, float(np.min(selected)))
         self.maximum = max(self.maximum, float(np.max(selected)))
@@ -361,7 +376,7 @@ class Reduction:
             self.mean = self.mean * (prior_count / self.matched) + block_mean * (
                 count / self.matched
             )
-        if self.node.op == "sum":
+        if self.node.op in {"sum", "areaha"}:
             with np.errstate(over="ignore", invalid="ignore"):
                 partial = float(np.sum(selected, dtype=np.float64))
             corrected = partial - self.compensation
@@ -382,15 +397,22 @@ class Reduction:
             return None, "invalid_arithmetic"
         if self.overflow:
             return None, "overflow"
-        if self.node.op == "count" or self.node.args[0].boolean:
+        if self.node.op == "count" or (
+            self.node.args[0].boolean and self.node.op != "areaha"
+        ):
             return self.matched, "ok" if self.matched else "no_matches"
         if self.matched == 0:
-            return (0 if self.node.op == "sum" else None), "no_matches"
+            return (
+                0.0
+                if self.node.op == "areaha"
+                else 0 if self.node.op == "sum" else None
+            ), "no_matches"
         value = {
             "sum": self.total,
             "mean": self.mean,
             "min": self.minimum,
             "max": self.maximum,
+            "areaha": self.total,
         }[self.node.op]
         return (value, "ok") if math.isfinite(value) else (None, "overflow")
 
@@ -409,15 +431,30 @@ class Calculation:
             node: Reduction(node) for node in walk(root) if node.op in FUNCTIONS
         }
 
-    def update(self, data: np.ndarray, valid: np.ndarray) -> None:
+    def update(
+        self,
+        data: np.ndarray,
+        valid: np.ndarray,
+        hectares: np.ndarray | None = None,
+        area_valid: np.ndarray | None = None,
+    ) -> None:
         """Feed the same native tile to each aggregate.
 
         Args:
             data: Bounded numerical values.
             valid: Source validity intersected with geographic inclusion.
+            hectares: Native cell/selection intersection hectares, or None.
+            area_valid: Source validity intersected with positive-area overlap.
         """
         for reduction in self.reductions.values():
-            reduction.update(data, valid)
+            if reduction.node.op == "areaha":
+                if hectares is None or area_valid is None:
+                    raise ValueError(
+                        "Area reductions require fractional hectares and an area-validity mask"
+                    )
+                reduction.update(data, area_valid, hectares)
+            else:
+                reduction.update(data, valid)
 
     def result(self) -> dict[str, Any]:
         """Finalize a JSON-safe result without losing integer counts.
@@ -461,6 +498,7 @@ class Calculation:
                 state = "no_matches"
         return {
             "value": None if value is None else str(value),
+            "unit": "ha" if self.root.op == "areaha" else None,
             "valueType": (
                 None
                 if value is None
@@ -473,6 +511,7 @@ class Calculation:
                     "validPixels": item.valid,
                     "matchedPixels": item.matched,
                     "invalidArithmeticPixels": item.invalid,
+                    **({"unit": "ha"} if node.op == "areaha" else {}),
                 }
                 for node, item in self.reductions.items()
             ],

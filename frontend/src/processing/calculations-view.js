@@ -11,6 +11,11 @@ export function calculationValue(row) {
     return Number.isFinite(value) ? value.toLocaleString(undefined, { maximumSignificantDigits: 10 }) : row.value;
 }
 
+/** Describe the server-reviewed ground-area method. @param {Object} method Area metadata. @return {string} Review/result explanation. */
+function describeGroundArea(method) {
+    return `Ground area: ${method.ellipsoid} ellipsoid, hectares, including partial pixels. Equal-area boundary intersections; ${method.edgeToleranceMetres} m chord-deviation target, at most ${method.maximumSegmentMetres.toLocaleString()} m per segment. Geometry estimate: up to ${method.estimatedGeometryCells.toLocaleString()} polygon cells${method.strategy === "rectilinear" ? "; row/column area optimization" : ""}.`;
+}
+
 /** Own DOM controls without owning requests or map state. */
 export class CalculationsView {
     /** @param {Document} [documentContext=globalThis.document] Owning document. */
@@ -44,6 +49,7 @@ export class CalculationsView {
             [e.template, "change", () => {
                 const templates = { mean: ["Mean", "mean(a)"], count: ["Count above 10", "count(a > 10)"],
                     sum: ["Sum above 10", "sum(a, where=a > 10)"], percent: ["Percent above 10", "100 * count(a > 10) / count(a)"],
+                    "area-threshold": ["Area above 10", "areaha(a > 10)"], "area-class": ["Area in class 4", "areaha(a == 4)"],
                     range: ["Range", "max(a) - min(a)"] };
                 const template = templates[e.template.value];
                 if (template && this.rows.length < 5) handlers.onCalculations([...this.readRows(), { label: template[0], expression: template[1] }]);
@@ -125,7 +131,7 @@ export class CalculationsView {
         e.plan.hidden = !state.plan;
         if (state.plan) {
             const g = state.plan.grid;
-            e.plan.textContent = `${g.width.toLocaleString()} × ${g.height.toLocaleString()} native pixels · ${g.nativeBlocks.toLocaleString()} source blocks · ${formatDownloadBytes(g.decodedBytes)} decoded. ${describeClipCrs(g.crs)}. Stored values; cells selected by their centers. Source unit: ${g.storedUnit || "unspecified"}.`;
+            e.plan.textContent = `${g.width.toLocaleString()} × ${g.height.toLocaleString()} native pixels · ${g.nativeBlocks.toLocaleString()} source blocks · ${formatDownloadBytes(g.decodedBytes)} decoded. ${describeClipCrs(g.crs)}. Stored values; numeric functions select cell centers. Source unit: ${g.storedUnit || "unspecified"}.${g.groundArea ? ` ${describeGroundArea(g.groundArea)}` : ""}`;
         }
         const resultSignature = JSON.stringify([state.result, state.resultIsCurrent]);
         if (resultSignature !== this.signatures.result) { this.renderResult(state); this.signatures.result = resultSignature; }
@@ -166,14 +172,20 @@ export class CalculationsView {
             invalid_arithmetic: "Undefined arithmetic; no numeric result.", overflow: "Numeric overflow; no finite result." };
         for (const row of job.result.rows) {
             const card = this.element("article"); card.className = "calculation-result-row";
-            const value = this.element("strong", calculationValue(row)); value.title = row.value ?? row.state;
+            const value = this.element("strong", `${calculationValue(row)}${row.unit ? ` ${row.unit}` : ""}`); value.title = row.value ?? row.state;
             card.append(this.element("h4", row.label), value, this.element("code", row.expression));
             if (states[row.state]) card.append(this.element("p", states[row.state]));
             const coverage = this.element("details"); coverage.append(this.element("summary", "Cell coverage & exact value"));
-            coverage.append(this.element("p", `Exact value: ${row.value ?? "undefined"}. Source unit: ${job.grid?.storedUnit || "unspecified"}. Expressions may change units.`));
+            coverage.append(this.element("p", `Exact value: ${row.value ?? "undefined"}. ${row.unit ? `Result unit: ${row.unit}.` : `Source unit: ${job.grid?.storedUnit || "unspecified"}. Expressions may change units.`}`));
             for (const aggregate of row.aggregates) coverage.append(this.element("p",
                 `${aggregate.function}: ${aggregate.matchedPixels.toLocaleString()} matched / ${aggregate.validPixels.toLocaleString()} valid cells; ${aggregate.invalidArithmeticPixels.toLocaleString()} excluded by arithmetic.`));
             card.append(coverage); root.append(card);
+        }
+        if (job.grid?.groundArea) {
+            const method = this.element("details");
+            method.append(this.element("summary", "Area measurement"), this.element("p", describeGroundArea(job.grid.groundArea)),
+                this.element("p", "Area coverage counts include any positive pixel intersection; numeric functions use pixel centers. Each areaha term is in hectares. Arithmetic can change final units."));
+            root.append(method);
         }
         const links = this.element("div"); links.className = "downloads-actions";
         for (const [kind, label, url] of [["result", "Download CSV", job.result.url], ["provenance", "Download provenance", job.result.provenanceUrl]]) {

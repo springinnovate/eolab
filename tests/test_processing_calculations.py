@@ -247,14 +247,16 @@ def test_operation_mismatch_and_language_rejected_before_admission(
     )
 
 
+@pytest.mark.parametrize("area_expression", [False, True])
 def test_aoi_snapshot_survives_removal_and_native_source_is_refenced(
-    boundary: Any, tmp_path: Path
+    boundary: Any, tmp_path: Path, area_expression: bool
 ) -> None:
     """Accepted geometry survives upload expiry, while modified rasters never execute.
 
     Args:
         boundary: Native source, worker, AOI and HTTP owners.
         tmp_path: AOI fixture storage.
+        area_expression: Exercise fractional area as well as numeric aggregates.
     """
     client, worker, source, artifacts, app = boundary
     upload = tmp_path / "aoi.gpkg"
@@ -270,7 +272,12 @@ def test_aoi_snapshot_survives_removal_and_native_source_is_refenced(
     )
     assert response.status_code == 201, response.text
     aoi = response.json()["id"]
-    plan = plan_calculation(client, temporaryAoiId=aoi)
+    expressions = (
+        {"calculations": [{"label": "Area", "expression": "areaha(a > 5000)"}]}
+        if area_expression
+        else {}
+    )
+    plan = plan_calculation(client, temporaryAoiId=aoi, **expressions)
     job = submit_calculation(client, plan)
     assert client.delete(f"/api/temporary-aois/{aoi}").status_code == 204
     rejected = client.post(
@@ -282,8 +289,16 @@ def test_aoi_snapshot_survives_removal_and_native_source_is_refenced(
     assert asyncio.run(worker.run_once())
     ready = client.get(f"/api/processing/jobs/{job['jobId']}").json()
     assert ready["status"] == "ready", ready
-    assert ready["result"]["rows"][0]["value"] == "3200"
-    plan = plan_calculation(client)
+    if area_expression:
+        from shapely.geometry import box
+        from test_ground_area import reference_area
+
+        assert float(ready["result"]["rows"][0]["value"]) == pytest.approx(
+            reference_area(box(0.1, 9.1, 0.9, 9.5)), rel=1e-8
+        )
+    else:
+        assert ready["result"]["rows"][0]["value"] == "3200"
+    plan = plan_calculation(client, selectedBounds=AREA, **expressions)
     stale = submit_calculation(client, plan)
     with source.open("ab") as stream:
         stream.write(b"changed")
@@ -353,8 +368,9 @@ def paused_calculation(queue: Any, operation: str, arguments: tuple) -> None:
 
 
 @pytest.mark.parametrize("stop", ["cancel", "shutdown", "deadline"])
+@pytest.mark.parametrize("area_expression", [False, True])
 def test_calculation_cancel_joins_native_child_and_removes_private_results(
-    boundary: Any, monkeypatch: pytest.MonkeyPatch, stop: str
+    boundary: Any, monkeypatch: pytest.MonkeyPatch, stop: str, area_expression: bool
 ) -> None:
     """Cancellation cannot expose a CSV finalized just before the request.
 
@@ -362,9 +378,17 @@ def test_calculation_cancel_joins_native_child_and_removes_private_results(
         boundary: Real HTTP, worker, files and PostgreSQL.
         monkeypatch: Controlled pause at the native publication boundary.
         stop: Explicit user cancellation, worker shutdown, or execution deadline.
+        area_expression: Exercise the area-capable worker and its private artifacts.
     """
     client, worker, source, artifacts, app = boundary
-    job = submit_calculation(client, plan_calculation(client))
+    expressions = (
+        {"calculations": [{"label": "Area", "expression": "areaha(a > 5000)"}]}
+        if area_expression
+        else {}
+    )
+    job = submit_calculation(
+        client, plan_calculation(client, selectedBounds=AREA, **expressions)
+    )
     monkeypatch.setattr(worker_module, "aggregate_process_target", paused_calculation)
     if stop == "deadline":
         worker.limits = replace(worker.limits, runtime_seconds=2)
