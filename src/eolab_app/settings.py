@@ -11,6 +11,49 @@ APPLICATION_VERSION_PATH = Path("/app/version")
 
 
 @dataclass(frozen=True)
+class ProcessingWorkerSettings:
+    """Validated configuration for the worker's Catalog and storage dependencies.
+
+    Attributes:
+        catalog_internal_url: Internal read-only Catalog API address.
+        scan_mount_path: Absolute read-only mounted input root.
+        processing_data_path: Absolute private writable artifact volume.
+    """
+
+    catalog_internal_url: str
+    scan_mount_path: Path
+    processing_data_path: Path
+
+    def __post_init__(self) -> None:
+        """Validate the worker's independent configuration boundary.
+
+        Raises:
+            ValueError: If Catalog URL is blank or either storage root is relative.
+        """
+        if not self.catalog_internal_url:
+            raise ValueError("CATALOG_INTERNAL_URL must not be blank")
+        if not self.scan_mount_path.is_absolute() or not self.processing_data_path.is_absolute():
+            raise ValueError("Worker source and processing paths must be absolute")
+
+
+def load_processing_worker_settings() -> ProcessingWorkerSettings:
+    """Read only the environment values needed by the processing worker.
+
+    Returns:
+        Worker configuration with no rendering credentials or viewer settings.
+
+    Raises:
+        KeyError: If a required worker environment value is absent.
+        ValueError: If a supplied value violates its owned contract.
+    """
+    return ProcessingWorkerSettings(
+        catalog_internal_url=os.environ["CATALOG_INTERNAL_URL"].strip(),
+        scan_mount_path=Path(os.environ["SCAN_MOUNT_PATH"]),
+        processing_data_path=Path(os.environ["PROCESSING_DATA_PATH"]),
+    )
+
+
+@dataclass(frozen=True)
 class Settings:
     """Validated runtime settings for the EOLab application.
 
@@ -49,6 +92,7 @@ class Settings:
         initial_latitude: Initial map-center latitude.
         initial_longitude: Initial map-center longitude.
         initial_zoom: Initial map zoom level.
+        processing_data_path: Persistent private clip volume shared with the worker.
     """
 
     app_title: str
@@ -85,6 +129,7 @@ class Settings:
     initial_latitude: float
     initial_longitude: float
     initial_zoom: float
+    processing_data_path: Path = Path("/processing-data").absolute()
 
     def __post_init__(self) -> None:
         """Validate the application settings contract.
@@ -114,6 +159,8 @@ class Settings:
 
         if not -90 <= self.initial_latitude <= 90:
             raise ValueError("INITIAL_LATITUDE must be between -90 and 90")
+        if not self.processing_data_path.is_absolute():
+            raise ValueError("PROCESSING_DATA_PATH must be an absolute path")
         if not -180 <= self.initial_longitude <= 180:
             raise ValueError("INITIAL_LONGITUDE must be between -180 and 180")
         if not 0 <= self.initial_zoom <= 22:
@@ -349,4 +396,5 @@ def load_settings(
         initial_latitude=float(os.environ["INITIAL_LATITUDE"]),
         initial_longitude=float(os.environ["INITIAL_LONGITUDE"]),
         initial_zoom=float(os.environ["INITIAL_ZOOM"]),
+        processing_data_path=Path(os.environ.get("PROCESSING_DATA_PATH", str(Path("/processing-data").absolute()))),
     )

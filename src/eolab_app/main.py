@@ -1,9 +1,13 @@
 """Compose the EOLab application, shared clients, and feature routers."""
 
 from collections.abc import AsyncIterator
-from contextlib import AsyncExitStack, asynccontextmanager
+import asyncio
+from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from datetime import timedelta
 from pathlib import Path
+import logging
+import signal
+import sys
 
 import httpx2
 from fastapi import FastAPI
@@ -17,6 +21,12 @@ from eolab_app.catalog.search_counts import number_matched_is_estimated
 from eolab_app.catalog.stac_api import StacApiWriter
 from eolab_app.diagnostics.service import RenderingDiagnosticsService
 from eolab_app.diagnostics.tracker import GetMapRequestTracker
+from eolab_app.processing.artifacts import LocalClipArtifacts
+from eolab_app.processing.job_store import PostgresJobStore
+from eolab_app.processing.models import ProcessingError
+from eolab_app.processing.clip_models import RasterClipLimits
+from eolab_app.processing.service import ProcessingService
+from eolab_app.processing.worker import RasterClipWorker, serve as serve_processing
 from eolab_app.raster.catalog import StacRasterCatalog
 from eolab_app.raster.geoserver import GeoServerRasterPublisher
 from eolab_app.raster.pixel_service import RasterPixelService
@@ -35,6 +45,7 @@ from eolab_app.routes.composite_map import create_composite_map_router
 from eolab_app.routes.diagnostics import create_diagnostics_router
 from eolab_app.routes.raster_analysis import create_raster_analysis_router
 from eolab_app.routes.rasters import create_raster_feature
+from eolab_app.routes.processing import create_processing_router
 from eolab_app.routes.scans import create_scan_router
 from eolab_app.routes.stac_proxy import (
     NumberMatchedEstimateLookup,
@@ -44,7 +55,7 @@ from eolab_app.routes.system import create_system_router
 from eolab_app.routes.temporary_aois import create_temporary_aoi_router
 from eolab_app.routes.vectors import create_vector_feature
 from eolab_app.routes.wms_proxy import create_wms_proxy_router
-from eolab_app.settings import APPLICATION_VERSION_PATH, load_settings
+from eolab_app.settings import APPLICATION_VERSION_PATH, load_settings, load_processing_worker_settings
 from eolab_app.temporary_aoi.service import TemporaryAoiService
 from eolab_app.vector.assessment import (
     VectorAssessmentFinalizer,
@@ -261,6 +272,17 @@ def create_app(
     )
     application.include_router(raster_feature.router)
     application.include_router(vector_feature.router)
+    processing_limits = RasterClipLimits()
+    application.include_router(create_processing_router(ProcessingService(
+        raster_source_authorizer,
+        temporary_aoi_service,
+        PostgresJobStore(processing_limits),
+        LocalClipArtifacts(
+            app_global_configuration.processing_data_path,
+            (Path.cwd(), app_global_configuration.scan_mount_path),
+        ),
+        processing_limits,
+    )))
     scan_manager = ScanManager(
         app_global_configuration.scan_mount_path,
         tuple(
@@ -347,3 +369,46 @@ def create_app(
     )
 
     return application
+
+
+async def run_processing_worker() -> None:
+    """Compose the dedicated worker through the existing settings boundary.
+
+    No web application, GeoServer client, or temporary AOI store is constructed.
+    The worker migrates only its owned schema before consuming durable jobs.
+
+    Raises:
+        ValueError: If source and artifact configuration is unsafe.
+        asyncio.CancelledError: After orderly native-child shutdown.
+    """
+    settings = load_processing_worker_settings()
+    limits = RasterClipLimits()
+    artifacts = LocalClipArtifacts(settings.processing_data_path, (Path.cwd(), settings.scan_mount_path))
+    artifacts.initialize()
+    jobs = PostgresJobStore(limits)
+    async with httpx2.AsyncClient(timeout=10) as client:
+        authorizer = CatalogRasterSourceAuthorizer(
+            StacRasterCatalog(client, settings.catalog_internal_url),
+            MountedRasterResolver(settings.scan_mount_path),
+        )
+        worker = RasterClipWorker(authorizer, jobs, artifacts, limits)
+        task = asyncio.current_task()
+        for event in (signal.SIGTERM, signal.SIGINT):
+            with suppress(NotImplementedError):
+                asyncio.get_running_loop().add_signal_handler(event, task.cancel)
+        while True:
+            try:
+                await asyncio.to_thread(jobs.migrate)
+                break
+            except ProcessingError:
+                logging.getLogger(__name__).warning("Processing schema is unavailable; retrying in five seconds")
+                await asyncio.sleep(5)
+        await serve_processing(worker)
+
+
+if __name__ == "__main__":
+    if sys.argv[1:] != ["processing-worker"]:
+        raise SystemExit("Use: python -m eolab_app.main processing-worker")
+    logging.basicConfig(level=logging.INFO)
+    with suppress(asyncio.CancelledError, KeyboardInterrupt):
+        asyncio.run(run_processing_worker())

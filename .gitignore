@@ -1,5 +1,7 @@
 .env
 .venv/
+.test-postgres/
+.test-processing-db/
 __pycache__/
 *.py[cod]
 *.egg-info/

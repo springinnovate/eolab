@@ -54,7 +54,8 @@ COPY --from=versioner /version /app/version
 
 RUN pip install --no-cache-dir . \
     && python -c "import fiona; import rasterio; assert 'ESRI Shapefile' in fiona.supported_drivers" \
-    && chown -R eolab:eolab /app
+    && mkdir -p /processing-data \
+    && chown -R eolab:eolab /app /processing-data
 
 USER eolab
 

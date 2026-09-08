@@ -1,0 +1,187 @@
+"""Confined private artifact storage, atomic publication, and disk accounting."""
+
+import json
+from pathlib import Path
+import re
+import shutil
+import time
+from typing import Any
+
+from eolab_app.processing.models import ProcessingError, ProcessingLimits
+
+
+class LocalClipArtifacts:
+    """Store clip attempts on one persistent volume outside mounted inputs."""
+
+    def __init__(self, root: Path, forbidden_roots: tuple[Path, ...] = ()) -> None:
+        """Validate separation before any file operation.
+
+        Args:
+            root: Absolute processing-owned volume root.
+            forbidden_roots: Source/application roots that must never contain it.
+
+        Raises:
+            ValueError: If the volume overlaps another owner's filesystem root.
+        """
+        if not root.is_absolute():
+            raise ValueError("Processing storage must be an absolute path")
+        self.root = root.resolve()
+        for forbidden in forbidden_roots:
+            other = forbidden.resolve()
+            if self.root.is_relative_to(other) or other.is_relative_to(self.root):
+                raise ValueError(
+                    "Processing storage must be separate from source and application roots"
+                )
+
+    def initialize(self) -> None:
+        """Initialize private directories in the writable worker container.
+
+        Raises:
+            OSError: If the configured volume is not writable.
+        """
+        self.root.mkdir(parents=True, exist_ok=True)
+        for name in ("attempts", "results"):
+            (self.root / name).mkdir(exist_ok=True)
+
+    def _directory(self, attempt: str, published: bool) -> Path:
+        """Resolve a strict internal attempt ID and prove path confinement.
+
+        Args:
+            attempt: Worker-generated 32-character hexadecimal attempt ID.
+            published: Select finished results rather than private attempts.
+
+        Returns:
+            Confined path without following an existing symlink out of storage.
+
+        Raises:
+            ValueError: If an ID or resolved path escapes the owned volume.
+        """
+        if not re.fullmatch(r"[a-f0-9]{32}", attempt):
+            raise ValueError("Invalid internal clip attempt ID")
+        parent = self.root / ("results" if published else "attempts")
+        candidate = parent / attempt
+        if candidate.resolve().parent != parent or parent.resolve().parent != self.root:
+            raise ValueError("Clip path escapes its owned storage")
+        return candidate
+
+    def prepare(self, attempt: str, reservation: int, limits: ProcessingLimits) -> Path:
+        """Check actual disk headroom and create one unique private attempt.
+
+        Args:
+            attempt: Fenced worker attempt ID.
+            reservation: Admitted worst-case scratch/output byte reservation.
+            limits: Free-space floor and global on-disk ceiling.
+
+        Returns:
+            Empty attempt directory.
+
+        Raises:
+            ProcessingError: If physical disk headroom is insufficient.
+        """
+        used = sum(
+            path.stat().st_size for path in self.root.glob("*/*/*") if path.is_file()
+        )
+        if (
+            shutil.disk_usage(self.root).free < reservation + limits.free_space_floor
+            or used + reservation > limits.max_stored_bytes
+        ):
+            raise ProcessingError(
+                "storage_full",
+                "There is not enough temporary storage for this clip.",
+                429,
+            )
+        path = self._directory(attempt, False)
+        path.mkdir(exist_ok=False)
+        return path
+
+    def publish(self, attempt: str, reservation: int) -> None:
+        """Atomically rename a closed, validated attempt on the same volume.
+
+        Args:
+            attempt: Fenced attempt whose child has exited successfully.
+            reservation: Admitted scratch/output ceiling, checked before publish.
+
+        Raises:
+            ProcessingError: If the completed output exceeds its reservation.
+            OSError: If atomic publication fails.
+        """
+        path = self._directory(attempt, False)
+        size = sum(child.stat().st_size for child in path.iterdir() if child.is_file())
+        if size > reservation:
+            raise ProcessingError(
+                "output_too_large",
+                "The completed clip exceeds its storage reservation.",
+                413,
+            )
+        path.replace(self._directory(attempt, True))
+
+    def result_path(self, attempt: str, provenance: bool = False) -> Path:
+        """Locate a finished file after the caller verifies owner and transfer lease.
+
+        Args:
+            attempt: Job-owned published attempt ID.
+            provenance: Select the immutable provenance JSON instead of GeoTIFF.
+
+        Returns:
+            Confined, existing artifact path.
+
+        Raises:
+            ProcessingError: If the immutable artifact is absent or not a file.
+        """
+        directory = self._directory(attempt, True)
+        path = directory / ("provenance.json" if provenance else "result.tif")
+        if not path.is_file() or path.resolve().parent != directory:
+            raise ProcessingError(
+                "result_missing",
+                "This clip file is no longer available. Create a new clip.",
+                410,
+            )
+        return path
+
+    def progress(self, attempt: str) -> dict[str, Any]:
+        """Read only bounded progress fields from the private child output.
+
+        Args:
+            attempt: Current fenced execution ID.
+
+        Returns:
+            Latest complete phase/progress record, or an empty mapping.
+        """
+        try:
+            path = self._directory(attempt, False) / "progress.json"
+            if path.stat().st_size > 1024:
+                return {}
+            return json.loads(path.read_text())
+        except (OSError, ValueError):
+            return {}
+
+    def remove(self, attempt: str) -> None:
+        """Remove only one verified attempt after native and transfer leases end.
+
+        Args:
+            attempt: Terminal job's strict internal attempt ID.
+
+        Raises:
+            OSError: If cleanup failed; the caller must retain its reservation.
+        """
+        for published in (False, True):
+            directory = self._directory(attempt, published)
+            if directory.exists():
+                shutil.rmtree(directory)
+
+    def remove_orphans(self, retained: set[str], minimum_age_seconds: float) -> None:
+        """Reap abandoned attempts only after their maximum possible runtime.
+
+        Args:
+            retained: IDs that still own database reservations or transfer leases.
+            minimum_age_seconds: Conservative hard-deadline plus exit grace.
+        """
+        for parent in ("attempts", "results"):
+            for path in (self.root / parent).iterdir():
+                if (
+                    path.name not in retained
+                    and re.fullmatch(r"[a-f0-9]{32}", path.name)
+                    and path.is_dir()
+                    and time.time() - path.stat().st_mtime > minimum_age_seconds
+                ):
+                    self.remove(path.name)
