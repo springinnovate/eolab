@@ -3364,10 +3364,6 @@ export function initializeRasterViewer(
     function scheduleRasterSampleWindowResize(bounds) {
         cancelRasterSampleWindowResize();
         const scheduledBivariateMode = bivariateMode.active;
-        const center = {
-            lng: (bounds.west + bounds.east) / 2,
-            lat: (bounds.south + bounds.north) / 2,
-        };
         rasterSampleWindowResizeTimeout = clock.setTimeout(() => {
             rasterSampleWindowResizeTimeout = null;
             const [currentBounds] = getPresentedSampleWindow();
@@ -3378,7 +3374,7 @@ export function initializeRasterViewer(
             ) {
                 return;
             }
-            rasterSampleWindowController.selectAt(center);
+            rasterSampleWindowController.resizeSelection(bounds);
         }, RASTER_SAMPLE_WINDOW_RESIZE_DEBOUNCE_MILLISECONDS);
     }
 

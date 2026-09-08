@@ -61,6 +61,7 @@ export class RasterSampleWindowController {
         this.previewLayer = null;
         this.selectionLayer = null;
         this.selectionBounds = null;
+        this.selectionCenters = new WeakMap();
     }
 
     /**
@@ -83,6 +84,24 @@ export class RasterSampleWindowController {
      */
     selectAt(position) {
         return this.#selectAt(position);
+    }
+
+    /**
+     * Resize retained bounds about the click that originally produced them.
+     * Geodesic corner envelopes are asymmetric in latitude, so their midpoint
+     * must not replace the clicked center. The weak keys survive mode/session
+     * switches without retaining obsolete selections. Externally restored
+     * rectangles without a known click use their geometric midpoint.
+     *
+     * @param {Object} bounds Current canonical WGS 84 selected bounds.
+     * @return {Object|null} Replacement bounds, or null on a world crossing.
+     * @throws {RangeError} If the configured size violates its contract.
+     */
+    resizeSelection(bounds) {
+        return this.#selectAt(this.selectionCenters.get(bounds) ?? {
+            lng: (bounds.west + bounds.east) / 2,
+            lat: (bounds.south + bounds.north) / 2,
+        });
     }
 
     /**
@@ -219,6 +238,7 @@ export class RasterSampleWindowController {
             this.selectionLayer.setBounds(sampleWindow.leafletBounds);
         }
         this.selectionBounds = sampleWindow.bounds;
+        this.selectionCenters.set(sampleWindow.bounds, {lng: position.lng, lat: position.lat});
         this.onSelect(sampleWindow.bounds);
         return sampleWindow.bounds;
     }

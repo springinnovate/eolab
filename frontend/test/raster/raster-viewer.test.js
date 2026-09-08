@@ -624,8 +624,9 @@ for (const mode of ["overlay", "bivariate"]) {
             assert.ok(Number.isFinite(Number(range.value)));
             assert.equal(range.getAttribute("aria-valuetext"), "200 kilometers");
             h.controlsView.handlers.onBivariateModeChange(mode);
-            h.viewer.exploreAt({lng: 0, lat: 0});
+            h.viewer.exploreAt({lng: 78, lat: 22});
             await flushPromises();
+            const original = h.viewer.getSelectedArea();
             const before = requests.length;
             const number = documentContext.querySelector("#raster-sample-window-number");
             for (const size of [1000, 5000]) {
@@ -647,6 +648,12 @@ for (const mode of ["overlay", "bivariate"]) {
             assert.equal(h.viewer.exploreAt({lng: 170, lat: 0}), false);
             assert.deepEqual(h.viewer.getSelectedArea(), selected);
             assert.match(h.controlsView.sampleWindowStatus, /Whole raster/);
+            number.value = "200";
+            number.dispatchEvent(new Event("input"));
+            const shrink = [...timers.values()][0];
+            timers.clear(); shrink.callback();
+            await flushPromises();
+            assert.deepEqual(h.viewer.getSelectedArea(), original);
             h.controlsView.handlers.onClearSampleWindow();
             await flushPromises();
             assert.equal(requests.at(-1).kind, mode === "overlay" ? "wholeRaster" : "wholeOverlap");
