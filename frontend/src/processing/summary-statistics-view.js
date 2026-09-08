@@ -114,7 +114,8 @@ export class SummaryStatisticsView extends CalculationsView {
             const text = result ? `${calculationValue(result.row)}${result.row.unit ? ` ${result.row.unit}` : ""}` : "—";
             if (row.value.textContent !== text) row.value.textContent = text;
             row.value.title = result?.row.value ?? result?.row.state ?? "No value yet";
-            const caption = result ? card.current ? "Current value" : "Previous value" : "No value yet";
+            const replacing = !!result && !card.current && (card.pending || !!card.requested || card.checking);
+            const caption = replacing ? "Calculating new value…" : result ? card.current ? "Current value" : "Previous value" : "No value yet";
             if (row.caption.textContent !== caption) row.caption.textContent = caption;
             row.details.hidden = !result;
             const resultSignature = JSON.stringify([result?.job.jobId, result?.row]);

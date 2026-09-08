@@ -79,6 +79,24 @@ test("renaming pending and completed statistics neither cancels nor recalculates
     await h.finish();assert.equal(card.current,true);
     h.controller.editStatistic(card.id,{label:""});await h.tick();assert.equal(h.submits(),1);assert.equal(card.current,true);
 });
+test("previous values are marked as being replaced during validation, planning, and calculation", async()=>{
+    const h=fixture();await h.open();const card=h.controller.state.statistics[0];
+    h.controller.request(card.id,"manual");await flush();await h.finish();
+    const row=h.view.cards.get(card.id);
+    h.controller.editStatistic(card.id,{expression:"sum(a)"});
+    assert.equal(row.root.classList.contains("is-previous"),true);
+    assert.equal(row.caption.textContent,"Calculating new value…");
+    assert.equal(row.value.textContent,"12.5");
+    await h.tick();
+    assert.equal(row.caption.textContent,"Calculating new value…");
+    await h.finish("ready",["42"]);
+    assert.equal(row.root.classList.contains("is-previous"),false);
+    assert.equal(row.caption.textContent,"Current value");
+    assert.equal(row.value.textContent,"42");
+    h.controller.editStatistic(card.id,{expression:"bad(a)"});await h.tick();
+    assert.equal(row.root.classList.contains("is-previous"),true);
+    assert.equal(row.caption.textContent,"Previous value");
+});
 test("one invalid formula does not block a valid peer or move values between cards",async()=>{
     const h=fixture();await h.open();h.controller.addStatistic("count");
     const [first,second]=h.controller.state.statistics;

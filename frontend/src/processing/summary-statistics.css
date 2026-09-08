@@ -17,10 +17,12 @@
 .summary-equation { display: grid; grid-template-columns: minmax(0, 1fr) minmax(80px, 36%); align-items: start; gap: 12px; }
 #calculations-panel .summary-equation textarea { resize: vertical; font: 0.85rem/1.4 monospace; min-height: 3.5em; }
 #calculations-panel .summary-equation textarea[aria-invalid="true"] { border-color: var(--status-danger); }
-.summary-value-group { display: grid; gap: 2px; text-align: right; min-width: 0; }
+.summary-value-group { display: grid; gap: 4px; text-align: right; min-width: 0; padding: 6px; border-radius: 4px; }
 .summary-value { font-size: 1.35rem; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; line-height: 1.25; }
 .summary-value-group small { color: var(--text-2); font-size: 0.7rem; }
-.summary-statistic.is-previous .summary-value { color: var(--text-2); }
+.summary-statistic.is-previous .summary-value-group { background: var(--surface-3, #e5e7eb); }
+.summary-statistic.is-previous .summary-value { color: var(--text-2); opacity: 0.22; font-weight: 400; }
+.summary-statistic.is-previous .summary-value-group small { color: var(--text-1); font-size: 0.78rem; font-weight: 600; }
 .summary-status-row { display: flex; align-items: center; gap: 8px; font-size: 0.78rem; min-width: 0; }
 .summary-status-row > span { flex: 1; color: var(--text-2); }
 .summary-status-row .secondary-button { padding: 4px 7px; font-size: 0.78rem; flex: none; }
