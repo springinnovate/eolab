@@ -11,6 +11,11 @@ whole-raster export, user-supplied source path, arbitrary URL, GDAL command, or
 reprojection option. Map styling, histogram sampling resolution, WMS publication,
 GeoServer availability, and the viewer are not prerequisites.
 
+Processing also supports [single-raster calculations](raster-calculations.md).
+Both operations share owned job history, worker admission, and artifact lifecycle.
+The clip Downloads panel selects `raster.clip.v1` entries; calculation rows have
+their own API contract and a separately tracked interface.
+
 ## Browser workflow
 
 Use **Download clip** on a raster in Map layers or an individual 1D histogram.

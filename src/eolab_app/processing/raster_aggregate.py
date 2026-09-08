@@ -1,0 +1,342 @@
+"""Plan native single-raster calculations and stream scalar results to artifacts."""
+
+from dataclasses import asdict
+from datetime import datetime, timezone
+import csv
+import hashlib
+import json
+from pathlib import Path
+import time
+from typing import Any, Literal
+
+import numpy as np
+import rasterio
+from rasterio.features import geometry_mask
+from rasterio.windows import Window, transform as window_transform
+
+from eolab_app.execution.bounded_process import ProcessResultWriter
+from eolab_app.processing.aggregate_models import (
+    AggregateArea,
+    AggregateArtifact,
+    AggregateGrid,
+    AggregateSpec,
+    NamedCalculation,
+    RasterAggregateLimits,
+)
+from eolab_app.processing.artifacts import write_progress
+from eolab_app.processing.models import ProcessingError
+from eolab_app.processing.raster_expression import Calculation, compile_expression, walk
+from eolab_app.processing.raster_input import (
+    native_work,
+    require_signature,
+    require_source,
+    select_area,
+)
+from eolab_app.raster.source_contract import (
+    read_native_raster_block,
+    source_block_indexes_for_window,
+)
+
+# Evaluate at most 65,536 pixels per expression tile, even when the source's
+# native blocks are larger. Keep admission and execution on this same tile size.
+TILE_SIDE = 256
+# Each native block retains its source values and one NumPy boolean validity mask.
+NATIVE_MASK_BYTES_PER_PIXEL = np.dtype(np.bool_).itemsize
+# GDAL's cache plus a separate 64 MiB allowance for geometry/native bookkeeping
+# make up the fixed 128 MiB portion of the conservative working-set estimate.
+GDAL_CACHE_BYTES = 64 * 1024**2
+NATIVE_BOOKKEEPING_BYTES = 64 * 1024**2
+GDAL_THREADS = 2
+# A cached expression node holds float64 values (8 bytes) and validity (1 byte).
+# Round up to 16 bytes per pixel to allow evaluation temporaries. Eight additional
+# tile-sized allocations cover input conversion, AOI/eligibility masks, selected
+# values and reduction temporaries. These are admission allowances, not measured
+# resident memory or a count of arrays every expression necessarily allocates.
+EXPRESSION_BYTES_PER_PIXEL = 16
+EXPRESSION_SCRATCH_ARRAYS = 8
+# Publish progress at most twice per second to bound filesystem update overhead.
+PROGRESS_INTERVAL_SECONDS = 0.5
+
+
+def selection(
+    dataset: Any, area: AggregateArea, limits: RasterAggregateLimits
+) -> tuple[Window, tuple]:
+    """Resolve one explicit operation area without reading pixel values.
+
+    Args:
+        dataset: Validated native dataset.
+        area: Frozen box/AOI or explicit whole-source selection.
+        limits: Coordinate-transformation limits.
+
+    Returns:
+        Integral source window and optional projected masking geometries.
+    """
+    if area.kind == "wholeRaster":
+        return Window(0, 0, dataset.width, dataset.height), ()
+    selected = select_area(
+        dataset, area.kind, area.bounds, area.geometries, limits.max_coordinates
+    )
+    return selected.source_window, selected.projected_geometries
+
+
+def grid(
+    dataset: Any, window: Window, node_count: int, limits: RasterAggregateLimits
+) -> AggregateGrid:
+    """Admit native work and bounded expression memory for one plan.
+
+    Args:
+        dataset: Validated one-band source.
+        window: Integral source window.
+        node_count: Total bounded expression-tree nodes.
+        limits: Work and memory ceilings.
+
+    Returns:
+        Deterministic metadata and conservative memory estimate.
+    """
+    blocks, decoded = native_work(
+        dataset, window, limits.max_native_blocks, limits.max_decoded_bytes
+    )
+    bh, bw = dataset.block_shapes[0]
+    # Sum the retained native block, fixed native overhead, and tile-sized
+    # expression/scratch budget. Counting all syntax nodes is conservative because
+    # scalar nodes and successive reductions need not hold full tiles together.
+    memory = (
+        bh * bw * (np.dtype(dataset.dtypes[0]).itemsize + NATIVE_MASK_BYTES_PER_PIXEL)
+        + GDAL_CACHE_BYTES
+        + NATIVE_BOOKKEEPING_BYTES
+        + TILE_SIDE**2 * (node_count + EXPRESSION_SCRATCH_ARRAYS)
+        * EXPRESSION_BYTES_PER_PIXEL
+    )
+    if memory > limits.max_memory_bytes:
+        raise ProcessingError(
+            "expression_memory_limit",
+            "The source blocks and expression need too much memory. Simplify the calculation or use a tiled source.",
+            413,
+        )
+    return AggregateGrid(
+        crs=dataset.crs.to_wkt(),
+        transform=tuple(window_transform(window, dataset.transform))[:6],
+        window=(
+            int(window.col_off),
+            int(window.row_off),
+            int(window.width),
+            int(window.height),
+        ),
+        width=int(window.width),
+        height=int(window.height),
+        dtype=dataset.dtypes[0],
+        nodata=None if dataset.nodata is None else str(dataset.nodata),
+        nativeBlocks=blocks,
+        decodedBytes=decoded,
+        estimatedMemoryBytes=memory,
+        scale=str(dataset.scales[0]),
+        offset=str(dataset.offsets[0]),
+        storedUnit=dataset.units[0],
+    )
+
+
+def plan_aggregate(
+    path: Path,
+    signature: tuple[int, ...],
+    area: AggregateArea,
+    calculations: tuple[NamedCalculation, ...],
+    alias: str,
+    limits: RasterAggregateLimits,
+) -> AggregateGrid:
+    """Plan only metadata, syntax and geometry inside a bounded child process.
+
+    Args:
+        path: Catalog-authorized mounted source.
+        signature: Scanner-approved source signature.
+        area: Explicit immutable selection.
+        calculations: Validated named result expressions.
+        alias: Single bound source alias.
+        limits: Operation-owned resource ceilings.
+
+    Returns:
+        Native grid and read/memory estimates, without reading the raster band.
+    """
+    roots = [compile_expression(item.expression, alias) for item in calculations]
+    nodes = sum(sum(1 for _ in walk(root)) for root in roots)
+    require_signature(path, signature)
+    with rasterio.Env(GDAL_CACHEMAX=GDAL_CACHE_BYTES, GDAL_NUM_THREADS=str(GDAL_THREADS)):
+        with rasterio.open(path) as dataset:
+            require_source(dataset, path)
+            window, _ = selection(dataset, area, limits)
+            result = grid(dataset, window, nodes, limits)
+    require_signature(path, signature)
+    return result
+
+
+def csv_text(value: str) -> str:
+    """Keep user-provided labels/expressions inert in spreadsheet applications.
+
+    Args:
+        value: Bounded user-provided text field.
+
+    Returns:
+        Text escaped against spreadsheet formula interpretation.
+    """
+    return (
+        "'" + value
+        if value.lstrip().startswith(("=", "+", "-", "@"))
+        or value.startswith(("\t", "\r", "\n"))
+        else value
+    )
+
+
+def create_aggregate(
+    path: Path, spec: AggregateSpec, directory: Path, limits: RasterAggregateLimits
+) -> AggregateArtifact:
+    """Reduce native blocks to a small validated CSV and provenance artifact.
+
+    Args:
+        path: Source reauthorized by the worker.
+        spec: Reviewed immutable intent and metadata plan.
+        directory: Confined private attempt directory.
+        limits: Native execution policy matching admission.
+
+    Returns:
+        Final closed artifact metadata and bounded inline result rows.
+    """
+    alias = next(iter(spec.sources))
+    roots = [compile_expression(item.expression, alias) for item in spec.calculations]
+    reducers = [Calculation(root) for root in roots]
+    nodes = sum(sum(1 for _ in walk(root)) for root in roots)
+    require_signature(path, spec.sourceSignature)
+    with rasterio.Env(GDAL_CACHEMAX=GDAL_CACHE_BYTES, GDAL_NUM_THREADS=str(GDAL_THREADS)):
+        with rasterio.open(path) as dataset:
+            require_source(dataset, path)
+            window, geometries = selection(dataset, spec.area, limits)
+            if grid(dataset, window, nodes, limits) != spec.grid:
+                raise ProcessingError(
+                    "plan_changed",
+                    "The calculation grid or policy changed. Create a new plan.",
+                    409,
+                )
+            blocks = source_block_indexes_for_window(window, dataset.block_shapes[0])
+            last_progress = 0.0
+            for index, (row, column) in enumerate(blocks):
+                block = dataset.block_window(1, row, column)
+                native = read_native_raster_block(dataset, block)
+                intersection = block.intersection(window)
+                for y in range(
+                    int(intersection.row_off),
+                    int(intersection.row_off + intersection.height),
+                    TILE_SIDE,
+                ):
+                    for x in range(
+                        int(intersection.col_off),
+                        int(intersection.col_off + intersection.width),
+                        TILE_SIDE,
+                    ):
+                        tile = Window(
+                            x,
+                            y,
+                            min(
+                                TILE_SIDE, intersection.col_off + intersection.width - x
+                            ),
+                            min(
+                                TILE_SIDE,
+                                intersection.row_off + intersection.height - y,
+                            ),
+                        )
+                        local = Window(
+                            x - block.col_off,
+                            y - block.row_off,
+                            tile.width,
+                            tile.height,
+                        )
+                        values = native[local.toslices()]
+                        data = values.data.astype(np.float64)
+                        valid = ~np.ma.getmaskarray(values) & np.isfinite(data)
+                        if geometries:
+                            valid &= geometry_mask(
+                                geometries,
+                                out_shape=data.shape,
+                                transform=window_transform(tile, dataset.transform),
+                                all_touched=False,
+                                invert=True,
+                            )
+                        for reducer in reducers:
+                            reducer.update(data, valid)
+                if time.monotonic() - last_progress > PROGRESS_INTERVAL_SECONDS:
+                    write_progress(directory, "calculating", index + 1, len(blocks))
+                    last_progress = time.monotonic()
+    require_signature(path, spec.sourceSignature)
+    rows = [
+        {"label": item.label, "expression": item.expression, **reducer.result()}
+        for item, reducer in zip(spec.calculations, reducers, strict=True)
+    ]
+    write_progress(directory, "writing_results", len(blocks), len(blocks))
+    result = directory / "result.csv"
+    with result.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(["label", "expression", "value", "value_type", "state"])
+        for row in rows:
+            writer.writerow(
+                [
+                    csv_text(row["label"]),
+                    csv_text(row["expression"]),
+                    row["value"],
+                    row["valueType"],
+                    row["state"],
+                ]
+            )
+    with result.open("rb") as stream:
+        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    source = next(iter(spec.sources.values()))
+    artifact = AggregateArtifact(
+        size=result.stat().st_size,
+        sha256=digest,
+        filename=f"{source.item_id}-calculations.csv",
+        rows=rows,
+    )
+    provenance = {
+        **spec.model_dump(mode="json", by_alias=True),
+        "resolution": "native",
+        "valueDomain": "stored",
+        "inclusion": "cell_center",
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+        **asdict(artifact),
+    }
+    (directory / "provenance.json").write_text(
+        json.dumps(provenance, allow_nan=False), encoding="utf-8"
+    )
+    require_signature(path, spec.sourceSignature)
+    return artifact
+
+
+def aggregate_process_target(
+    queue: ProcessResultWriter,
+    operation: Literal["plan", "calculate"],
+    arguments: tuple[Any, ...],
+) -> None:
+    """Run only the reviewed calculation kernels with sanitized IPC failures.
+
+    Args:
+        queue: Bounded one-result process channel.
+        operation: Explicit plan or calculate dispatch.
+        arguments: Validated picklable inputs.
+    """
+    try:
+        if operation == "plan":
+            value = plan_aggregate(*arguments)
+        elif operation == "calculate":
+            value = create_aggregate(*arguments)
+        else:
+            raise ValueError("Unsupported calculation operation")
+        queue.put(("ok", value))
+    except ProcessingError as error:
+        queue.put(("error", (error.code, error.detail, error.status)))
+    except Exception:
+        queue.put(
+            (
+                "error",
+                (
+                    "processing_failed",
+                    "The raster calculation could not be completed safely.",
+                    500,
+                ),
+            )
+        )

@@ -55,6 +55,9 @@ def test_mechanisms_and_storage_never_import_application_services() -> None:
         Path("src/eolab_app/processing/job_store.py"),
         Path("src/eolab_app/processing/artifacts.py"),
         Path("src/eolab_app/processing/raster_clip.py"),
+        Path("src/eolab_app/processing/raster_aggregate.py"),
+        Path("src/eolab_app/processing/raster_expression.py"),
+        Path("src/eolab_app/processing/raster_input.py"),
     ]
     for path in paths:
         assert not {
@@ -94,4 +97,5 @@ def test_shared_job_models_and_storage_do_not_depend_on_clip_models() -> None:
     for name in ("models.py", "ports.py", "job_store.py"):
         dependencies = imports(Path("src/eolab_app/processing") / name)
         assert "eolab_app.processing.clip_models" not in dependencies
+        assert "eolab_app.processing.aggregate_models" not in dependencies
         assert not {module for module in dependencies if module.startswith("eolab_app.raster")}

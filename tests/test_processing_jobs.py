@@ -17,7 +17,7 @@ import psycopg
 import pytest
 import rasterio
 
-from eolab_app.processing.artifacts import LocalClipArtifacts
+from eolab_app.processing.artifacts import LocalJobArtifacts
 from eolab_app.processing.job_store import PostgresJobStore
 from eolab_app.processing.models import (
     Artifact,
@@ -26,7 +26,7 @@ from eolab_app.processing.models import (
 )
 from eolab_app.processing.clip_models import ClipArea, RasterClipLimits
 from eolab_app.processing.service import ProcessingService, prepare_clip_job
-from eolab_app.processing.worker import RasterClipWorker
+from eolab_app.processing.worker import ProcessingWorker
 import eolab_app.processing.worker as worker_module
 from eolab_app.processing.raster_clip import create_clip
 from eolab_app.raster.catalog import StacRasterCatalog
@@ -48,7 +48,8 @@ def store(request: pytest.FixtureRequest) -> PostgresJobStore:
     """Use only an explicitly named disposable PostgreSQL database.
 
     Args:
-        request: Pytest command-line and fixture context.
+        request: Pytest command-line and fixture context, optionally parametrized
+            with the Processing limits used to compose this test's providers.
 
     Returns:
         Migrated, empty real processing adapter.
@@ -61,7 +62,7 @@ def store(request: pytest.FixtureRequest) -> PostgresJobStore:
             pytest.fail(
                 "Processing tests require a disposable eolab_processing_test* database"
             )
-    result = PostgresJobStore(RasterClipLimits(), dsn)
+    result = PostgresJobStore(getattr(request, "param", RasterClipLimits()), dsn)
     result.migrate()
     result.migrate()  # Exercise redeployment of an already initialized schema.
     with psycopg.connect(dsn) as connection:
@@ -105,10 +106,10 @@ def boundary(tmp_path: Path, store: PostgresJobStore) -> Any:
         MountedRasterResolver(tmp_path),
     )
     areas = TemporaryAoiService(tmp_path / "aois")
-    artifacts = LocalClipArtifacts(tmp_path / "outputs", (path,))
+    artifacts = LocalJobArtifacts(tmp_path / "outputs", (path,))
     artifacts.initialize()
     service = ProcessingService(authorizer, areas, store, artifacts, store.limits)
-    worker = RasterClipWorker(authorizer, store, artifacts, store.limits)
+    worker = ProcessingWorker(authorizer, store, artifacts, store.limits)
     app = FastAPI()
     app.include_router(create_processing_router(service))
     app.include_router(create_temporary_aoi_router(areas))
@@ -626,13 +627,13 @@ def test_worker_composition_requires_only_catalog_and_processing_configuration(
         """
         pytest.fail("Worker composition entered an unrelated web/AOI/rendering feature")
 
-    async def consume(worker: RasterClipWorker) -> None:
+    async def consume(worker: ProcessingWorker) -> None:
         """Check the composed worker without starting an endless test loop.
 
         Args:
             worker: Composed, migrated processing owner.
         """
-        assert isinstance(worker, RasterClipWorker)
+        assert isinstance(worker, ProcessingWorker)
         assert not await worker.run_once()
 
     monkeypatch.setattr(composition, "create_app", unexpected)

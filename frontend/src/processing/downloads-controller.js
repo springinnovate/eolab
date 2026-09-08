@@ -206,7 +206,9 @@ export class DownloadsController {
         const revision = this.jobRevision;
         this.refreshing = this.api.listJobs().then((jobs) => {
             if (this.destroyed || revision !== this.jobRevision) return;
-            this.state.jobs = jobs;
+            // This tool presents raster clips. Other Processing operations have
+            // their own result contracts and must not be shown as COG downloads.
+            this.state.jobs = jobs.filter(job => job.operation === "raster.clip.v1");
             this.state.jobMessage = "";
         }).catch((error) => {
             if (!this.destroyed) this.state.jobMessage = `Downloads unavailable: ${error.message} Use Refresh to retry.`;

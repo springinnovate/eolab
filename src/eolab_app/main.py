@@ -21,12 +21,12 @@ from eolab_app.catalog.search_counts import number_matched_is_estimated
 from eolab_app.catalog.stac_api import StacApiWriter
 from eolab_app.diagnostics.service import RenderingDiagnosticsService
 from eolab_app.diagnostics.tracker import GetMapRequestTracker
-from eolab_app.processing.artifacts import LocalClipArtifacts
+from eolab_app.processing.artifacts import LocalJobArtifacts
 from eolab_app.processing.job_store import PostgresJobStore
 from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.clip_models import RasterClipLimits
 from eolab_app.processing.service import ProcessingService
-from eolab_app.processing.worker import RasterClipWorker, serve as serve_processing
+from eolab_app.processing.worker import ProcessingWorker, serve as serve_processing
 from eolab_app.raster.catalog import StacRasterCatalog
 from eolab_app.raster.geoserver import GeoServerRasterPublisher
 from eolab_app.raster.pixel_service import RasterPixelService
@@ -277,7 +277,7 @@ def create_app(
         raster_source_authorizer,
         temporary_aoi_service,
         PostgresJobStore(processing_limits),
-        LocalClipArtifacts(
+        LocalJobArtifacts(
             app_global_configuration.processing_data_path,
             (Path.cwd(), app_global_configuration.scan_mount_path),
         ),
@@ -383,7 +383,7 @@ async def run_processing_worker() -> None:
     """
     settings = load_processing_worker_settings()
     limits = RasterClipLimits()
-    artifacts = LocalClipArtifacts(settings.processing_data_path, (Path.cwd(), settings.scan_mount_path))
+    artifacts = LocalJobArtifacts(settings.processing_data_path, (Path.cwd(), settings.scan_mount_path))
     artifacts.initialize()
     jobs = PostgresJobStore(limits)
     async with httpx2.AsyncClient(timeout=10) as client:
@@ -391,7 +391,7 @@ async def run_processing_worker() -> None:
             StacRasterCatalog(client, settings.catalog_internal_url),
             MountedRasterResolver(settings.scan_mount_path),
         )
-        worker = RasterClipWorker(authorizer, jobs, artifacts, limits)
+        worker = ProcessingWorker(authorizer, jobs, artifacts, limits)
         task = asyncio.current_task()
         for event in (signal.SIGTERM, signal.SIGINT):
             with suppress(NotImplementedError):
