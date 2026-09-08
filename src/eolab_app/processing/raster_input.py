@@ -108,14 +108,24 @@ def native_work(
 
     Returns:
         Native block count and decoded byte count.
+
+    Raises:
+        ProcessingError: If the conservative block estimate or decoded byte
+            count exceeds its limit, with both amounts in the public detail.
     """
     bh, bw = dataset.block_shapes[0]
-    if (math.ceil(window.width / bw) + 1) * (
+    # Include one boundary block per axis to bound index allocation before
+    # constructing the tuple. This is an admission estimate, not an exact count.
+    estimated_blocks = (math.ceil(window.width / bw) + 1) * (
         math.ceil(window.height / bh) + 1
-    ) > max_blocks:
+    )
+    if estimated_blocks > max_blocks:
         raise ProcessingError(
             "source_work_too_large",
-            "The source requires too many native blocks. Choose a smaller area.",
+            f"The selected area's conservative estimate is {estimated_blocks:,} "
+            f"native blocks; the limit is {max_blocks:,} "
+            f"({estimated_blocks - max_blocks:,} over the limit). "
+            f"Choose a smaller area with an estimate of {max_blocks:,} blocks or fewer.",
             413,
         )
     blocks = source_block_indexes_for_window(window, dataset.block_shapes[0])
@@ -123,7 +133,10 @@ def native_work(
     if decoded > max_decoded_bytes:
         raise ProcessingError(
             "source_work_too_large",
-            "The source layout requires too much decoded work. Choose a smaller area.",
+            f"The selected area requires {decoded:,} decoded bytes for source "
+            f"values and validity masks; the limit is {max_decoded_bytes:,} bytes "
+            f"({decoded - max_decoded_bytes:,} bytes over). Choose a smaller area "
+            f"requiring at most {max_decoded_bytes:,} decoded bytes.",
             413,
         )
     return len(blocks), decoded
