@@ -71,7 +71,6 @@ export class SummaryStatisticsView extends CalculationsView {
         const valueGroup = this.element("div"); valueGroup.className = "summary-value-group";
         valueGroup.setAttribute("aria-live", "polite");
         const value = this.element("strong", "—"); value.className = "summary-value";
-        const caption = this.element("small", "No value yet");
         const valueActions = this.element("div"); valueActions.className = "summary-value-actions";
         const copy = this.element("button"); copy.type = "button"; copy.className = "summary-copy";
         copy.setAttribute("aria-label", `Copy current value for summary statistic ${card.id}`);
@@ -84,7 +83,7 @@ export class SummaryStatisticsView extends CalculationsView {
         copy.addEventListener("click", () => void this.copyCurrentValue(card.id));
         const copyStatus = this.element("small"); copyStatus.setAttribute("role", "status"); copyStatus.hidden = true;
         valueActions.append(value, copy);
-        valueGroup.append(valueActions, caption, copyStatus);
+        valueGroup.append(valueActions);
         heading.append(valueGroup); equation.append(expression);
         const statusRow = this.element("div"); statusRow.className = "summary-status-row";
         const status = this.element("span"); status.id = `summary-statistic-status-${card.id}`;
@@ -95,12 +94,13 @@ export class SummaryStatisticsView extends CalculationsView {
         stop.addEventListener("click", () => this.handlers.onStop(card.id));
         statusRow.append(status, run, stop);
         const progress = this.element("progress"); progress.setAttribute("aria-label", `Progress for summary statistic ${card.id}`);
+        valueGroup.append(statusRow, progress, copyStatus);
         const details = this.element("details"); details.className = "summary-result-details";
         const detailsTitle = this.element("summary", "Value details & downloads");
         const detailsBody = this.element("div"); details.append(detailsTitle, detailsBody);
         const size = this.element("small"); size.className = "summary-size";
-        root.append(heading, equation, binding, statusRow, progress, size, details, remove);
-        return { root, label, source, expression, equation, value, caption, copy, copyStatus, copyRevision: 0, status, run, stop, progress, details, detailsBody, size, remove };
+        root.append(heading, equation, binding, size, details, remove);
+        return { root, label, source, expression, equation, value, copy, copyStatus, copyRevision: 0, status, statusRow, run, stop, progress, details, detailsBody, size, remove };
     }
     render(state) {
         this.sources = state.sources;
@@ -131,12 +131,15 @@ export class SummaryStatisticsView extends CalculationsView {
             row.expression.setAttribute("aria-invalid", String(card.error && !card.valid));
             row.root.setAttribute("aria-busy", String(card.pending));
             row.root.classList.toggle("is-previous", !!card.result && !card.current);
-            row.status.textContent = card.current && RESULT_STATES[card.result?.row.state] ? RESULT_STATES[card.result.row.state] : card.message;
+            const message = card.current ? RESULT_STATES[card.result?.row.state] ?? "" : card.message;
+            row.status.textContent = card.result && !card.current ? `Previous value · ${message}` : message;
+            row.status.hidden = !row.status.textContent;
             row.status.classList.toggle("is-error", card.error);
-            row.status.classList.toggle("is-working", card.pending || !!card.requested);
+            row.status.classList.toggle("is-working", card.pending || !!card.requested || card.checking);
             row.run.hidden = card.current || card.pending || !!card.requested;
             row.run.disabled = !card.valid || card.checking || !card.source || !state.area || state.recoverable;
             row.stop.hidden = !card.pending && !card.requested;
+            row.statusRow.hidden = row.status.hidden && row.run.hidden && row.stop.hidden;
             const progress = card.progress;
             row.progress.hidden = !card.pending || !(progress?.totalBlocks > 0);
             if (!row.progress.hidden) { row.progress.max = progress.totalBlocks; row.progress.value = progress.completedBlocks ?? 0; }
@@ -144,9 +147,6 @@ export class SummaryStatisticsView extends CalculationsView {
             const text = result ? `${calculationValue(result.row)}${result.row.unit ? ` ${result.row.unit}` : ""}` : "—";
             if (row.value.textContent !== text) row.value.textContent = text;
             row.value.title = result?.row.value ?? result?.row.state ?? "No value yet";
-            const replacing = !!result && !card.current && (card.pending || !!card.requested || card.checking);
-            const caption = replacing ? "Calculating new value…" : result ? card.current ? "Current value" : "Previous value" : "No value yet";
-            if (row.caption.textContent !== caption) row.caption.textContent = caption;
             row.details.hidden = !result;
             const resultSignature = JSON.stringify([result?.job.jobId, result?.row]);
             const copyValue = card.current && result?.row.state === "ok" && result.row.value != null ? result.row.value : null;
