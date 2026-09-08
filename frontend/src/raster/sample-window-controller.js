@@ -31,6 +31,8 @@ import { rasterSampleBoundsToLeaflet } from "./leaflet.js";
  *
  * @callback RasterSampleSelectionHandler
  * @param {Object} bounds Canonical WGS 84 selected bounds.
+ * @param {Readonly<{longitude:number,latitude:number}>} center Original click,
+ * retained by the caller with its bounds for subsequent resize and restore.
  * @return {void}
  */
 
@@ -66,7 +68,7 @@ export class RasterSampleWindowController {
     /**
      * Change the ground-distance side length used by later selections.
      *
-     * @param {number} sideLengthKm Integer side length from 1 through 300 km.
+     * @param {number} sideLengthKm Integer side length within the geometry limit.
      * @return {void}
      * @throws {RangeError} If the side length violates the window contract.
      */
@@ -219,7 +221,10 @@ export class RasterSampleWindowController {
             this.selectionLayer.setBounds(sampleWindow.leafletBounds);
         }
         this.selectionBounds = sampleWindow.bounds;
-        this.onSelect(sampleWindow.bounds);
+        this.onSelect(sampleWindow.bounds, Object.freeze({
+            longitude: position.lng,
+            latitude: position.lat,
+        }));
         return sampleWindow.bounds;
     }
 

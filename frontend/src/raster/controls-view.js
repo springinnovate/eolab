@@ -404,10 +404,11 @@ export class RasterControlsView {
      * Synchronize both sample-window size controls.
      *
      * @param {number|string} value Valid sample-window side length.
+     * @param {number} maximumSizeKm Geometry-owned maximum supplied by the caller.
      * @return {void}
      */
-    setSampleWindowSize(value) {
-        this.#samplingAreaView.setSampleWindowSize(value);
+    setSampleWindowSize(value, maximumSizeKm) {
+        this.#samplingAreaView.setSampleWindowSize(value, maximumSizeKm);
     }
 
     /**

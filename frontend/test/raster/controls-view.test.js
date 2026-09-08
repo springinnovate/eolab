@@ -214,7 +214,7 @@ test("RasterControlsView owns style values and semantic control events", () => {
     documentContext
         .querySelector("#raster-minimum-color")
         .dispatchEvent(new Event("input"));
-    documentContext.querySelector("#raster-sample-window-range").value = "80";
+    view.setSampleWindowSize(80, 14152);
     documentContext
         .querySelector("#raster-sample-window-range")
         .dispatchEvent(new Event("input"));

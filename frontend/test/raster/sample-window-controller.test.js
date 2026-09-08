@@ -94,3 +94,32 @@ test("sample window replaces its rectangle and supports complete teardown", () =
   assert.equal(map.layers.length, 0);
   assert.equal(guidance.at(-1), "");
 });
+
+test("large invalid previews and clicks retain the previous selected bounds", () => {
+  const map = createFakeLeafletMap();
+  const layers = [], selections = [], guidance = [];
+  const controller = new RasterSampleWindowController(map, createFakeSampleLayerFactory(layers),
+    bounds => selections.push(bounds), message => guidance.push(message));
+  controller.setWindowSize(5000);
+  const selected = controller.selectAt({lng: 78, lat: 22});
+  assert.ok(selected.east - selected.west > 40);
+  assert.equal(controller.previewAt({lng: 170, lat: 0}), false);
+  assert.equal(controller.selectAt({lng: 0, lat: 70}), null);
+  assert.equal(controller.selectedBounds, selected);
+  assert.deepEqual(selections, [selected]);
+  assert.match(guidance.at(-1), /previous selection is unchanged/);
+  assert.match(guidance.at(-1), /Whole overlap/);
+});
+
+test("continental selections report immutable clicked centers independently of their envelopes", () => {
+  const map = createFakeLeafletMap();
+  const selections = [];
+  const controller = new RasterSampleWindowController(map, createFakeSampleLayerFactory([]),
+    (bounds, center) => selections.push({bounds, center}), () => {});
+  controller.setWindowSize(10000);
+  const continental = controller.selectAt({lng: 78, lat: 22});
+  assert.ok(continental.east - continental.west > 100);
+  assert.ok(Math.abs((continental.south + continental.north) / 2 - 22) > 1);
+  assert.deepEqual(selections[0].center, {longitude: 78, latitude: 22});
+  assert.ok(Object.isFrozen(selections[0].center));
+});

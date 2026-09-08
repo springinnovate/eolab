@@ -38,6 +38,23 @@ leaves the map, or starts a drag. This keeps the readout responsive without
 restoring the former unbounded per-movement probe; the backend pixel-read
 semaphore remains the global concurrency boundary.
 
+## Map box size
+
+The histogram box defaults to 200 km. Its logarithmic slider and exact integer
+kilometer input support local through continental selections, up to 14,152 km.
+That upper bound comes from the existing spherical box construction: the
+half-diagonal must stay below a quarter of Earth's circumference. It is a
+geometry limit, not a histogram performance budget. Position-specific pole and
+date-line checks still apply, and an unsupported selection leaves the previous
+box intact. Use **Whole raster** (1D) or **Whole overlap** (2D) for global scope.
+Resizing a selected box retains its clicked center, including after switching
+between retained 1D and 2D selections; large geodesic envelopes do not shift it.
+
+Both controls feed the same debounced sampling selection. A larger box does not
+increase the sample-grid or source-read budgets below. Histograms remain
+approximate when sampled; native-resolution clip downloads retain their own
+independent output-size, storage, and execution limits.
+
 ## Bounded read policy
 
 Every statistics request first produces one clipped, integral source-pixel

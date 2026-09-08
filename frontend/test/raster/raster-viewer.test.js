@@ -10,6 +10,7 @@ import {
 } from "../../src/raster/raster-viewer.js";
 import { RasterAnalysisRequestError } from "../../src/raster/analysis-api.js";
 import { RasterCursorValuesView } from "../../src/raster/cursor-values-view.js";
+import { RasterSamplingAreaControlsView } from "../../src/raster/sampling-area-controls-view.js";
 import { FakeRasterControlDocument } from "../../test-support/raster/fake-controls-document.js";
 import { BivariateRasterControlsView } from "../../src/raster/bivariate-controls-view.js";
 import { DEFAULT_RASTER_STYLE } from "../../src/raster/style.js";
@@ -595,6 +596,141 @@ test("download intents preserve distinct 1D and 2D boxes without waiting for sta
     assert.deepEqual(h.viewer.getSelectedArea(), oneD);
     h.destroy();
 });
+
+for (const mode of ["overlay", "bivariate"]) {
+    for (const retainSelection of [false, true]) {
+        test(`rejected maximum box keeps ${mode} controls available with retained selection ${retainSelection}`, async () => {
+            const requests = [], timers = new Map();
+            let timerId = 0, histogramRequests = 0, pixelRequests = 0;
+            const h = visibleLayerFixture(async (item, area) => {
+                requests.push(area);
+                return createLayerStatistics(item, selectedBoundsFromArea(area));
+            }, {
+                clock: {
+                    setTimeout(callback) { const id = ++timerId; timers.set(id, callback); return id; },
+                    clearTimeout(id) { timers.delete(id); },
+                },
+                loadPairedStatistics: async (_x, _y, area) => {
+                    requests.push(area);
+                    return pairedStatistics();
+                },
+                samplePixel: async () => { pixelRequests += 1; return {inBounds: true, value: 1}; },
+            }, {
+                onHistogramRequested: () => { histogramRequests += 1; },
+            });
+            const documentContext = new FakeRasterControlDocument();
+            const sampling = new RasterSamplingAreaControlsView(documentContext);
+            sampling.bind(h.controlsView.handlers);
+            const setSize = h.controlsView.setSampleWindowSize.bind(h.controlsView);
+            h.controlsView.setSampleWindowSize = (size, maximum) => {
+                setSize(size);
+                sampling.setSampleWindowSize(size, maximum);
+            };
+            try {
+                await h.viewer.show(createRasterItem("rejected-box-x"));
+                await h.viewer.show(createRasterItem("rejected-box-y"));
+                h.controlsView.handlers.onBivariateModeChange(mode);
+                if (retainSelection) h.viewer.exploreAt({lng: -60, lat: -20});
+                await flushPromises();
+                const previousArea = h.viewer.getSelectedArea();
+                const previousPlot = mode === "overlay"
+                    ? h.controlsView.displayedStatistics : h.controlsView.pairedStatistics;
+                const requestCount = requests.length, pixelCount = pixelRequests;
+                const range = documentContext.querySelector("#raster-sample-window-range");
+                range.value = "1000";
+                range.dispatchEvent(new Event("input"));
+                assert.equal(h.controlsView.sampleWindowSizeKm, 14152);
+                for (const callback of timers.values()) callback();
+                timers.clear();
+                // Both the map click and reopening Analysis tools use exploreAt.
+                for (let attempt = 0; attempt < 2; attempt += 1) {
+                    const presentationsBefore = histogramRequests;
+                    assert.equal(h.viewer.exploreAt({lng: -60, lat: -20}), true);
+                    assert.equal(histogramRequests, presentationsBefore + 1);
+                    assert.match(h.controlsView.sampleWindowStatus, /pole or date line/);
+                    assert.deepEqual(h.viewer.getSelectedArea(), previousArea);
+                }
+                await flushPromises();
+                assert.equal(requests.length, requestCount);
+                assert.equal(pixelRequests, pixelCount);
+                assert.equal(mode === "overlay"
+                    ? h.controlsView.displayedStatistics : h.controlsView.pairedStatistics, previousPlot);
+                const number = documentContext.querySelector("#raster-sample-window-number");
+                number.value = "1000";
+                number.dispatchEvent(new Event("input"));
+                assert.equal(h.viewer.exploreAt({lng: -60, lat: -20}), true);
+                await flushPromises();
+                assert.ok(requests.length > requestCount);
+                assert.notDeepEqual(h.viewer.getSelectedArea(), previousArea);
+                assert.match(h.controlsView.samplingAreaLabel, /1000 km/);
+            } finally { sampling.unbind(); h.destroy(); }
+        });
+    }
+
+    test(`continental box controls debounce ${mode} analysis and preserve a rejected selection`, async () => {
+        const requests = [], timers = new Map();
+        let timerId = 0;
+        const h = visibleLayerFixture(async (item, area) => {
+            requests.push(area);
+            return createLayerStatistics(item, selectedBoundsFromArea(area));
+        }, {
+            clock: {
+                setTimeout(callback, delay) { const id = ++timerId; timers.set(id, {callback, delay}); return id; },
+                clearTimeout(id) { timers.delete(id); },
+            },
+            loadPairedStatistics: async (_x, _y, area) => { requests.push(area); return pairedStatistics(); },
+        });
+        const documentContext = new FakeRasterControlDocument();
+        const sampling = new RasterSamplingAreaControlsView(documentContext);
+        sampling.bind(h.controlsView.handlers);
+        const originalSetSize = h.controlsView.setSampleWindowSize.bind(h.controlsView);
+        h.controlsView.setSampleWindowSize = (size, maximum) => { originalSetSize(size); sampling.setSampleWindowSize(size, maximum); };
+        try {
+            await h.viewer.show(createRasterItem("large-box-x"));
+            await h.viewer.show(createRasterItem("large-box-y"));
+            await flushPromises();
+            const range = documentContext.querySelector("#raster-sample-window-range");
+            assert.ok(Number.isFinite(Number(range.value)));
+            assert.equal(range.getAttribute("aria-valuetext"), "200 kilometers");
+            h.viewer.exploreAt({lng: 78, lat: 22});
+            await flushPromises();
+            const original = h.viewer.getSelectedArea();
+            // Entering 2D copies bounds: the origin must survive that value copy.
+            h.controlsView.handlers.onBivariateModeChange(mode);
+            await flushPromises();
+            const before = requests.length;
+            const number = documentContext.querySelector("#raster-sample-window-number");
+            for (const size of [1000, 5000]) {
+                number.value = String(size);
+                number.dispatchEvent(new Event("input"));
+            }
+            assert.equal(requests.length, before);
+            assert.equal(timers.size, 1);
+            const pending = [...timers.values()][0];
+            assert.equal(pending.delay, RASTER_SAMPLE_WINDOW_RESIZE_DEBOUNCE_MILLISECONDS);
+            timers.clear(); pending.callback();
+            await flushPromises();
+            const selected = h.viewer.getSelectedArea();
+            assert.ok(selected.selectedBounds.east - selected.selectedBounds.west > 40);
+            assert.deepEqual(requests.at(-1).selectedBounds, selected.selectedBounds);
+            assert.match(h.controlsView.samplingAreaLabel, /5000 km/);
+            h.viewer.activateAnalysis(h.mapLayers.snapshots()[1].item);
+            assert.ok(Number.isFinite(Number(range.value)));
+            assert.equal(h.viewer.exploreAt({lng: 170, lat: 0}), true);
+            assert.deepEqual(h.viewer.getSelectedArea(), selected);
+            assert.match(h.controlsView.sampleWindowStatus, /Whole raster/);
+            number.value = "200";
+            number.dispatchEvent(new Event("input"));
+            const shrink = [...timers.values()][0];
+            timers.clear(); shrink.callback();
+            await flushPromises();
+            assert.deepEqual(h.viewer.getSelectedArea(), original);
+            h.controlsView.handlers.onClearSampleWindow();
+            await flushPromises();
+            assert.equal(requests.at(-1).kind, mode === "overlay" ? "wholeRaster" : "wholeOverlap");
+        } finally { sampling.unbind(); h.destroy(); }
+    });
+}
 
 test('histogram axis units follow each analyzed data asset', async () => {
     const h = visibleLayerFixture();
