@@ -12,8 +12,24 @@ reserve a native reader, or enqueue work. Review shows native dimensions, blocks
 decoded work, CRS and stored-value semantics. Run submits the reviewed intent.
 Settings collapse after Run to leave room for inline values, exact values and cell
 coverage. Run again recalculates unchanged settings with a fresh native plan.
-CSV/provenance downloads are optional. Area/volume functions and multiple
-rasters remain separate work under #335.
+CSV/provenance downloads are optional. Ground hectares are available through
+`areaha(condition)`; volume functions and multiple rasters remain separate work
+under #335.
+
+Expression help lists **sum, areaha, count, mean, min, and max** separately, with
+their purpose and an example for each. Separate operator/combination examples
+cover thresholds, classes, boolean conditions, and percentages. The example menu
+also offers **Area above a threshold (ha)** and **Area in a class (ha)**; users can
+edit the inserted expressions before review.
+
+Area review and results show the WGS84 ellipsoid method, fractional boundary
+inclusion, edge-refinement tolerance, and geometry work estimate. Direct area
+results display `ha` beside both their formatted and exact values, and CSV adds
+a unit column. Numeric aggregates still select pixel centers; area includes
+intersected portions of matching cells, so their coverage cell counts can differ.
+The help explains this distinction and links the result to its selected area.
+See [ground-area methods and limits](ground-area-calculations.md) for the supported
+CRS policy, approximation tolerance, and bounded geometry costs.
 
 ## Interactive sampling
 

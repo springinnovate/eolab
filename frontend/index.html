@@ -559,11 +559,32 @@
               <div class="downloads-actions">
                 <button id="calculations-add" class="secondary-button" type="button">Add expression</button>
                 <label for="calculations-template">Add example</label>
-                <select id="calculations-template"><option value="">Choose…</option><option value="mean">Mean</option><option value="count">Count above a threshold</option><option value="sum">Sum above a threshold</option><option value="percent">Percent above a threshold</option><option value="range">Range</option></select>
+                <select id="calculations-template"><option value="">Choose…</option><option value="mean">Mean</option><option value="count">Count above a threshold</option><option value="sum">Sum above a threshold</option><option value="area-threshold">Area above a threshold (ha)</option><option value="area-class">Area in a class (ha)</option><option value="percent">Percent above a threshold</option><option value="range">Range</option></select>
               </div>
-              <details><summary>Expression help</summary><p>Use <code>a</code> for the selected raster. Operators: <code>+ - * / &lt; &lt;= &gt; &gt;= == != &amp;&amp; || !</code>. Functions: <code>count sum mean min max</code>.</p>
-                <p><code>count(a &gt; 10)</code> counts matching cells. <code>sum(a, where=a &gt; 10)</code> adds their values. <code>sum(a &gt; 10)</code> also counts matches. <code>100 * count(a &gt; 10) / count(a)</code> gives a percentage.</p>
-                <p>NoData is excluded. Calculations use native pixels and stored values, not histogram overviews or map colors. Ground area and multiple rasters are coming separately.</p></details>
+              <details id="calculations-help"><summary>Expression help</summary>
+                <p>Use <code>a</code> for the selected raster. Add an example above, then change its expression or threshold.</p>
+                <h4>Functions</h4>
+                <ul class="calculation-functions">
+                  <li><code>sum(a)</code> — Add pixel values. To add only values above 10, use <code>sum(a, where=a &gt; 10)</code>.</li>
+                  <li><code>areaha(a == 4)</code> — Ground area in hectares where the value is 4. For values above a threshold, use <code>areaha(a &gt; 10)</code>. Includes the fraction of each matching pixel inside your box or AOI.</li>
+                  <li><code>count(a)</code> — Number of valid pixels. Use <code>count(a &gt; 10)</code> to count matching pixels.</li>
+                  <li><code>mean(a)</code> — Average pixel value. For a selected group, use <code>mean(a, where=a &gt; 10)</code>.</li>
+                  <li><code>min(a)</code> — Smallest pixel value.</li>
+                  <li><code>max(a)</code> — Largest pixel value.</li>
+                </ul>
+                <p><code>sum</code>, <code>count</code>, <code>mean</code>, <code>min</code>, and <code>max</code> accept an optional <code>where=condition</code>. <code>areaha</code> takes one condition.</p>
+                <h4>Operators and combinations</h4>
+                <ul class="calculation-functions">
+                  <li>Arithmetic: <code>+ - * /</code>. Example range: <code>max(a) - min(a)</code>.</li>
+                  <li>Comparisons: <code>&lt; &lt;= &gt; &gt;= == !=</code>. Example class: <code>a == 4</code>.</li>
+                  <li>Conditions: <code>&amp;&amp;</code> (and), <code>||</code> (or), <code>!</code> (not). Example: <code>areaha(a &gt; 10 &amp;&amp; a &lt;= 20)</code>.</li>
+                  <li>Percentage of valid pixels: <code>100 * count(a &gt; 10) / count(a)</code>.</li>
+                  <li>Percentage of valid ground area: <code>100 * areaha(a &gt; 10) / areaha(a == a)</code>.</li>
+                </ul>
+                <p><code>sum(a &gt; 10)</code> counts matches; <code>sum(a, where=a &gt; 10)</code> adds their values. Functions cannot be nested inside other functions.</p>
+                <p>NoData is excluded. Numeric functions select pixels by their centers. <code>areaha</code> measures their fractional intersection on the WGS 84 ellipsoid, including AOI holes and counting overlaps once. It requires a WGS84 geographic or projected raster; complex geometry may need a smaller area.</p>
+                <p>Calculations use native pixels and stored values. Each <code>areaha</code> term is in hectares; arithmetic can change the final units. Multiple-raster expressions are coming separately.</p>
+              </details>
               <p id="calculations-validation" role="status" aria-live="polite"></p>
               <label class="calculation-follow"><input id="calculations-follow" type="checkbox"> Follow sampling box after Run</label>
               <p class="calculation-hint">Follow mode recalculates after each committed box change and cancels the previous calculation. Editing a formula or closing this tool pauses it.</p>

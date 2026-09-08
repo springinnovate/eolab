@@ -4562,6 +4562,9 @@ summary:hover > .raster-disclosure-chevron {
 .calculation-expression button { justify-self: end; }
 .calculation-follow { display: flex; align-items: center; gap: 0.4rem; margin-top: 0.6rem; }
 .calculation-hint { font-size: 0.85rem; color: #475569; }
+.calculation-functions { padding-left: 1.25rem; font-size: 0.85rem; line-height: 1.5; }
+.calculation-functions li { margin: 0.55rem 0; }
+.calculation-functions code { overflow-wrap: anywhere; }
 .calculation-result-row { padding: 0.7rem; margin: 0.5rem 0; border-left: 3px solid #0f766e; background: #f0fdfa; }
 .calculation-result-row h4 { margin: 0 0 0.35rem; }
 .calculation-result-row strong { display: block; font-size: 1.6rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }

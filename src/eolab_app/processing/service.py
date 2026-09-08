@@ -82,7 +82,7 @@ def prepare_aggregate_job(
         },
         reserved_bytes=limits.result_reservation_bytes,
         operation=spec.operation,
-        minimum_claim_version=2,
+        minimum_claim_version=3 if spec.grid.groundArea else 2,
     )
 
 
@@ -482,10 +482,12 @@ class ProcessingService:
                 "expiresAt": plan["expires_at"],
                 "resolution": "native",
                 "valueDomain": "stored",
-                "inclusion": "cell_center",
+                "inclusion": "per_function" if spec.grid.groundArea else "cell_center",
                 "limits": {
                     "maxDecodedBytes": limits.max_decoded_bytes,
                     "maxNativeBlocks": limits.max_native_blocks,
+                    "maxAreaGeometryCells": limits.max_area_geometry_cells,
+                    "maxAreaTransformCoordinates": limits.max_area_transform_coordinates,
                     "runtimeSeconds": limits.runtime_seconds,
                     "downloadLifetimeSeconds": limits.result_ttl_seconds,
                 },
