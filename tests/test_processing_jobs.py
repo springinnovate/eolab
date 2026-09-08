@@ -48,7 +48,8 @@ def store(request: pytest.FixtureRequest) -> PostgresJobStore:
     """Use only an explicitly named disposable PostgreSQL database.
 
     Args:
-        request: Pytest command-line and fixture context.
+        request: Pytest command-line and fixture context, optionally parametrized
+            with the Processing limits used to compose this test's providers.
 
     Returns:
         Migrated, empty real processing adapter.
@@ -61,7 +62,7 @@ def store(request: pytest.FixtureRequest) -> PostgresJobStore:
             pytest.fail(
                 "Processing tests require a disposable eolab_processing_test* database"
             )
-    result = PostgresJobStore(RasterClipLimits(), dsn)
+    result = PostgresJobStore(getattr(request, "param", RasterClipLimits()), dsn)
     result.migrate()
     result.migrate()  # Exercise redeployment of an already initialized schema.
     with psycopg.connect(dsn) as connection:

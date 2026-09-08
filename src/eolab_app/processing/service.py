@@ -205,7 +205,8 @@ class ProcessingService:
             Independent geometry value with no file or AOI storage dependency.
 
         Raises:
-            ProcessingError: If the AOI expired or is too complex for clipping.
+            ProcessingError: If the AOI expired or its serialized geometry exceeds
+                the processing limit, including its byte size and allowed size.
         """
         if bounds is not None:
             area = {
@@ -224,10 +225,15 @@ class ProcessingService:
                     value.as_geojson() for value in resolved.geometries
                 ),
             }
-        if len(json.dumps(area).encode()) > self.limits.max_geometry_bytes:
+        geometry_bytes = len(json.dumps(area).encode("utf-8"))
+        if geometry_bytes > self.limits.max_geometry_bytes:
             raise ProcessingError(
                 "aoi_too_large",
-                "This AOI is too complex for processing. Simplify its geometry and try again.",
+                f"The selected area's serialized geometry is {geometry_bytes:,} bytes; "
+                f"the processing limit is {self.limits.max_geometry_bytes:,} bytes "
+                f"({geometry_bytes - self.limits.max_geometry_bytes:,} bytes over). "
+                "Simplify the AOI geometry so its processing snapshot is at most "
+                f"{self.limits.max_geometry_bytes:,} bytes, then try again.",
                 413,
             )
         return area

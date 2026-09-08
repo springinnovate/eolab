@@ -1,4 +1,4 @@
-"""Native single-raster scalar calculation kernel; no HTTP or job services."""
+"""Plan native single-raster calculations and stream scalar results to artifacts."""
 
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -37,7 +37,25 @@ from eolab_app.raster.source_contract import (
     source_block_indexes_for_window,
 )
 
+# Evaluate at most 65,536 pixels per expression tile, even when the source's
+# native blocks are larger. Keep admission and execution on this same tile size.
 TILE_SIDE = 256
+# Each native block retains its source values and one NumPy boolean validity mask.
+NATIVE_MASK_BYTES_PER_PIXEL = np.dtype(np.bool_).itemsize
+# GDAL's cache plus a separate 64 MiB allowance for geometry/native bookkeeping
+# make up the fixed 128 MiB portion of the conservative working-set estimate.
+GDAL_CACHE_BYTES = 64 * 1024**2
+NATIVE_BOOKKEEPING_BYTES = 64 * 1024**2
+GDAL_THREADS = 2
+# A cached expression node holds float64 values (8 bytes) and validity (1 byte).
+# Round up to 16 bytes per pixel to allow evaluation temporaries. Eight additional
+# tile-sized allocations cover input conversion, AOI/eligibility masks, selected
+# values and reduction temporaries. These are admission allowances, not measured
+# resident memory or a count of arrays every expression necessarily allocates.
+EXPRESSION_BYTES_PER_PIXEL = 16
+EXPRESSION_SCRATCH_ARRAYS = 8
+# Publish progress at most twice per second to bound filesystem update overhead.
+PROGRESS_INTERVAL_SECONDS = 0.5
 
 
 def selection(
@@ -79,11 +97,15 @@ def grid(
         dataset, window, limits.max_native_blocks, limits.max_decoded_bytes
     )
     bh, bw = dataset.block_shapes[0]
-    # Native masked block + GDAL cache/geometry overhead + expression arrays.
+    # Sum the retained native block, fixed native overhead, and tile-sized
+    # expression/scratch budget. Counting all syntax nodes is conservative because
+    # scalar nodes and successive reductions need not hold full tiles together.
     memory = (
-        bh * bw * (np.dtype(dataset.dtypes[0]).itemsize + 1)
-        + 128 * 1024**2
-        + TILE_SIDE**2 * (node_count + 8) * 16
+        bh * bw * (np.dtype(dataset.dtypes[0]).itemsize + NATIVE_MASK_BYTES_PER_PIXEL)
+        + GDAL_CACHE_BYTES
+        + NATIVE_BOOKKEEPING_BYTES
+        + TILE_SIDE**2 * (node_count + EXPRESSION_SCRATCH_ARRAYS)
+        * EXPRESSION_BYTES_PER_PIXEL
     )
     if memory > limits.max_memory_bytes:
         raise ProcessingError(
@@ -137,7 +159,7 @@ def plan_aggregate(
     roots = [compile_expression(item.expression, alias) for item in calculations]
     nodes = sum(sum(1 for _ in walk(root)) for root in roots)
     require_signature(path, signature)
-    with rasterio.Env(GDAL_CACHEMAX=64 * 1024**2, GDAL_NUM_THREADS="2"):
+    with rasterio.Env(GDAL_CACHEMAX=GDAL_CACHE_BYTES, GDAL_NUM_THREADS=str(GDAL_THREADS)):
         with rasterio.open(path) as dataset:
             require_source(dataset, path)
             window, _ = selection(dataset, area, limits)
@@ -182,7 +204,7 @@ def create_aggregate(
     reducers = [Calculation(root) for root in roots]
     nodes = sum(sum(1 for _ in walk(root)) for root in roots)
     require_signature(path, spec.sourceSignature)
-    with rasterio.Env(GDAL_CACHEMAX=64 * 1024**2, GDAL_NUM_THREADS="2"):
+    with rasterio.Env(GDAL_CACHEMAX=GDAL_CACHE_BYTES, GDAL_NUM_THREADS=str(GDAL_THREADS)):
         with rasterio.open(path) as dataset:
             require_source(dataset, path)
             window, geometries = selection(dataset, spec.area, limits)
@@ -238,7 +260,7 @@ def create_aggregate(
                             )
                         for reducer in reducers:
                             reducer.update(data, valid)
-                if time.monotonic() - last_progress > 0.5:
+                if time.monotonic() - last_progress > PROGRESS_INTERVAL_SECONDS:
                     write_progress(directory, "calculating", index + 1, len(blocks))
                     last_progress = time.monotonic()
     require_signature(path, spec.sourceSignature)
