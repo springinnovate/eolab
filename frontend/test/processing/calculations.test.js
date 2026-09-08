@@ -464,17 +464,23 @@ test("a pending replacement mutes saved values from the first follow click until
     const view = new CalculationsView(doc); view.bind(h.view.handlers);
     const render = () => view.render(h.view.state);
     render();
+    view.elements.editor.open = true;
     const result = view.elements.result;
     assert.equal(result.classList.contains("is-previous"), false);
     assert.equal(view.elements["status-summary"].hidden, true);
 
     h.click(78); render();
     assert.equal(h.view.state.phase, "waiting");
+    assert.equal(view.elements.editor.open, false,
+        "the first pending render enters result mode before job admission");
     assert.equal(result.classList.contains("is-previous"), true);
     assert.equal(result.getAttribute("aria-busy"), "true");
     assert.equal(view.elements["status-summary"].textContent, "Calculating new result…");
     const savedCard = result.children[2];
+    view.elements.editor.open = true;
     await h.tick(650); render();
+    assert.equal(view.elements.editor.open, true,
+        "job admission does not collapse settings a second time");
     assert.equal(result.children[2], savedCard, "progress retains the card and its expanded details");
     h.click(79); await h.tick(650); render();
     assert.equal(h.view.state.current.status, "cancelling");
@@ -494,7 +500,9 @@ test("recalculating mutes saved results while metadata checks alone leave them r
     const view = new CalculationsView(doc); view.bind(h.view.handlers);
     const response = deferred(); const plan = h.api.planCalculation;
     h.api.planCalculation = () => response.promise;
+    view.elements.editor.open = true;
     h.controller.estimate(); view.render(h.view.state);
+    assert.equal(view.elements.editor.open, true, "metadata estimates leave settings open");
     assert.equal(view.elements["status-summary"].hidden, true);
     assert.equal(view.elements.result.classList.contains("is-previous"), false);
     response.resolve(await plan(h.controller.intent())); await flush();
