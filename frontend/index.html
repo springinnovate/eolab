@@ -827,19 +827,21 @@
                       <div class="raster-map-box-controls" id="raster-map-box-controls" hidden>
                         <div class="raster-sample-window-size">
                           <label for="raster-sample-window-range">
-                            <span>Box size (1–300 km)</span>
+                            <span>Box size</span>
                             <input id="raster-sample-window-range" type="range"
-                              min="1" max="300" step="1" value="200"
+                              min="0" max="1000" step="any"
                               aria-describedby="raster-sample-window-description raster-sample-window-status" />
                           </label>
                           <label for="raster-sample-window-number">
                             <span>km</span>
                             <input id="raster-sample-window-number" type="number"
-                              min="1" max="300" step="1" value="200"
+                              min="1" step="1" value="200"
                               inputmode="numeric" aria-label="Box size in kilometers"
                               aria-describedby="raster-sample-window-description raster-sample-window-status" />
                           </label>
                         </div>
+                        <small>Local to continental scale. Enter an exact size in km.
+                          Use Whole raster / Whole overlap for global sampling.</small>
                       </div>
                       <label class="raster-sampling-area-option"
                         for="use-temporary-aoi-for-raster">

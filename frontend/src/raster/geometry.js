@@ -23,19 +23,26 @@ export const DEFAULT_RASTER_SAMPLE_WINDOW_SIZE_KM = 200;
 /** Smallest supported raster sample-window side length, in kilometers. */
 const MINIMUM_RASTER_SAMPLE_WINDOW_SIZE_KM = 1;
 
-/** Largest supported raster sample-window side length, in kilometers. */
-const MAXIMUM_RASTER_SAMPLE_WINDOW_SIZE_KM = 300;
+/** Mean Earth radius used for spherical WGS 84 sample-window calculations. */
+const WGS84_MEAN_RADIUS_KM = 6371.0088;
+
+/**
+ * Largest integer side whose half-diagonal stays below a quarter circumference.
+ * This is the existing non-polar geometry limit at the equator, not a sampling
+ * performance limit. A box nearer a pole or date line may need to be smaller.
+ */
+export const MAXIMUM_RASTER_SAMPLE_WINDOW_SIZE_KM =
+    Math.floor(Math.PI * WGS84_MEAN_RADIUS_KM / Math.sqrt(2));
 
 /** Guidance shown when a sample window cannot use the non-wrapping contract. */
 export const RASTER_SAMPLE_WINDOW_EDGE_GUIDANCE =
-    "Move the sample window away from the pole or date line.";
+    "This box reaches a pole or date line. Use a smaller box, move it, " +
+    "or choose Whole raster / Whole overlap for global sampling. " +
+    "The previous selection is unchanged.";
 
 /** Guidance shown when the pointer is outside the canonical map world. */
 export const RASTER_SAMPLE_WINDOW_MAP_BOUNDS_GUIDANCE =
     "Move the sample window inside the map bounds.";
-
-/** Mean Earth radius used for spherical WGS 84 sample-window calculations. */
-const WGS84_MEAN_RADIUS_KM = 6371.0088;
 
 /** Identify a valid sample window that crosses an unsupported world boundary. */
 export class RasterSampleWindowBoundaryError extends RangeError {}
@@ -55,11 +62,12 @@ export function isCanonicalWgs84Position(position) {
 }
 
 /**
- * Enforce the fixed user-facing sample-size contract.
+ * Enforce the integer size range supported by non-wrapping box geometry.
  *
  * @param {number} sideLengthKm Requested square side length in kilometers.
  * @return {number} The validated side length.
- * @throws {RangeError} If the side length is nonintegral or outside 1-300 km.
+ * @throws {RangeError} If the side length is nonintegral or outside the
+ * geometry-supported range.
  */
 export function validateRasterSampleWindowSize(sideLengthKm) {
     if (

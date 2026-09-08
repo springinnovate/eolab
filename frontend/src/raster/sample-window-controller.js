@@ -66,7 +66,7 @@ export class RasterSampleWindowController {
     /**
      * Change the ground-distance side length used by later selections.
      *
-     * @param {number} sideLengthKm Integer side length from 1 through 300 km.
+     * @param {number} sideLengthKm Integer side length within the geometry limit.
      * @return {void}
      * @throws {RangeError} If the side length violates the window contract.
      */

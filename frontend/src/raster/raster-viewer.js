@@ -21,6 +21,7 @@ import {
 } from "./bivariate.js";
 import {
     DEFAULT_RASTER_SAMPLE_WINDOW_SIZE_KM,
+    MAXIMUM_RASTER_SAMPLE_WINDOW_SIZE_KM,
     isCanonicalWgs84Position,
 } from "./geometry.js";
 import {
@@ -2324,7 +2325,8 @@ export function initializeRasterViewer(
             );
         }
         controlsView.setSampleWindowSize(
-            rasterSampleWindowController.windowSizeKm
+            rasterSampleWindowController.windowSizeKm,
+            MAXIMUM_RASTER_SAMPLE_WINDOW_SIZE_KM
         );
         controlsView.setSampleWindowInvalid(false);
         renderRasterSamplingAreaControls();
@@ -2382,7 +2384,8 @@ export function initializeRasterViewer(
             );
         }
         controlsView.setSampleWindowSize(
-            rasterSampleWindowController.windowSizeKm
+            rasterSampleWindowController.windowSizeKm,
+            MAXIMUM_RASTER_SAMPLE_WINDOW_SIZE_KM
         );
         controlsView.setSampleWindowInvalid(false);
         const [presentedBounds] = getPresentedSampleWindow();
@@ -3402,12 +3405,13 @@ export function initializeRasterViewer(
             cancelRasterSampleWindowResize();
             controlsView.setSampleWindowInvalid(true);
             controlsView.setSampleWindowStatus(
-                "Choose a window size from 1 through 300 km."
+                `Choose a whole-number window size from 1 through ` +
+                `${MAXIMUM_RASTER_SAMPLE_WINDOW_SIZE_KM} km.`
             );
             return false;
         }
         controlsView.setSampleWindowInvalid(false);
-        controlsView.setSampleWindowSize(sideLengthKm);
+        controlsView.setSampleWindowSize(sideLengthKm, MAXIMUM_RASTER_SAMPLE_WINDOW_SIZE_KM);
         const [presentedBounds, presentedWindowSizeKm] =
             getPresentedSampleWindow();
         if (

@@ -10,6 +10,7 @@ import {
 } from "../../src/raster/raster-viewer.js";
 import { RasterAnalysisRequestError } from "../../src/raster/analysis-api.js";
 import { RasterCursorValuesView } from "../../src/raster/cursor-values-view.js";
+import { RasterSamplingAreaControlsView } from "../../src/raster/sampling-area-controls-view.js";
 import { FakeRasterControlDocument } from "../../test-support/raster/fake-controls-document.js";
 import { BivariateRasterControlsView } from "../../src/raster/bivariate-controls-view.js";
 import { DEFAULT_RASTER_STYLE } from "../../src/raster/style.js";
@@ -595,6 +596,63 @@ test("download intents preserve distinct 1D and 2D boxes without waiting for sta
     assert.deepEqual(h.viewer.getSelectedArea(), oneD);
     h.destroy();
 });
+
+for (const mode of ["overlay", "bivariate"]) {
+    test(`continental box controls debounce ${mode} analysis and preserve a rejected selection`, async () => {
+        const requests = [], timers = new Map();
+        let timerId = 0;
+        const h = visibleLayerFixture(async (item, area) => {
+            requests.push(area);
+            return createLayerStatistics(item, selectedBoundsFromArea(area));
+        }, {
+            clock: {
+                setTimeout(callback, delay) { const id = ++timerId; timers.set(id, {callback, delay}); return id; },
+                clearTimeout(id) { timers.delete(id); },
+            },
+            loadPairedStatistics: async (_x, _y, area) => { requests.push(area); return pairedStatistics(); },
+        });
+        const documentContext = new FakeRasterControlDocument();
+        const sampling = new RasterSamplingAreaControlsView(documentContext);
+        sampling.bind(h.controlsView.handlers);
+        const originalSetSize = h.controlsView.setSampleWindowSize.bind(h.controlsView);
+        h.controlsView.setSampleWindowSize = (size, maximum) => { originalSetSize(size); sampling.setSampleWindowSize(size, maximum); };
+        try {
+            await h.viewer.show(createRasterItem("large-box-x"));
+            await h.viewer.show(createRasterItem("large-box-y"));
+            await flushPromises();
+            const range = documentContext.querySelector("#raster-sample-window-range");
+            assert.ok(Number.isFinite(Number(range.value)));
+            assert.equal(range.getAttribute("aria-valuetext"), "200 kilometers");
+            h.controlsView.handlers.onBivariateModeChange(mode);
+            h.viewer.exploreAt({lng: 0, lat: 0});
+            await flushPromises();
+            const before = requests.length;
+            const number = documentContext.querySelector("#raster-sample-window-number");
+            for (const size of [1000, 5000]) {
+                number.value = String(size);
+                number.dispatchEvent(new Event("input"));
+            }
+            assert.equal(requests.length, before);
+            assert.equal(timers.size, 1);
+            const pending = [...timers.values()][0];
+            assert.equal(pending.delay, RASTER_SAMPLE_WINDOW_RESIZE_DEBOUNCE_MILLISECONDS);
+            timers.clear(); pending.callback();
+            await flushPromises();
+            const selected = h.viewer.getSelectedArea();
+            assert.ok(selected.selectedBounds.east - selected.selectedBounds.west > 40);
+            assert.deepEqual(requests.at(-1).selectedBounds, selected.selectedBounds);
+            assert.match(h.controlsView.samplingAreaLabel, /5000 km/);
+            h.viewer.activateAnalysis(h.mapLayers.snapshots()[1].item);
+            assert.ok(Number.isFinite(Number(range.value)));
+            assert.equal(h.viewer.exploreAt({lng: 170, lat: 0}), false);
+            assert.deepEqual(h.viewer.getSelectedArea(), selected);
+            assert.match(h.controlsView.sampleWindowStatus, /Whole raster/);
+            h.controlsView.handlers.onClearSampleWindow();
+            await flushPromises();
+            assert.equal(requests.at(-1).kind, mode === "overlay" ? "wholeRaster" : "wholeOverlap");
+        } finally { sampling.unbind(); h.destroy(); }
+    });
+}
 
 test('histogram axis units follow each analyzed data asset', async () => {
     const h = visibleLayerFixture();

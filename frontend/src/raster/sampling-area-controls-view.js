@@ -7,6 +7,8 @@
  * lifecycle, statistics, or request decisions.
  */
 import { requireRasterControl } from "./required-control.js";
+/** Slider positions are presentation values; callbacks always carry kilometers. */
+const SAMPLE_WINDOW_SLIDER_STEPS = 1000;
 
 /**
  * @typedef {Object} RasterSamplingAreaHandlers
@@ -57,6 +59,10 @@ export class RasterSamplingAreaControlsView {
             documentContext,
             "#clear-raster-sample-window"
         );
+        this.sampleWindowRange.min = "0";
+        this.sampleWindowRange.max = String(SAMPLE_WINDOW_SLIDER_STEPS);
+        this.sampleWindowRange.step = "any";
+        this.maximumWindowSizeKm = null;
         this.useMapWindowButton = requireRasterControl(
             documentContext,
             "#use-map-window-for-raster"
@@ -82,6 +88,8 @@ export class RasterSamplingAreaControlsView {
         this.handlers = null;
         this.boundSampleWindowRangeInput =
             this.#handleSampleWindowRangeInput.bind(this);
+        this.boundSampleWindowRangeKeydown =
+            this.#handleSampleWindowRangeKeydown.bind(this);
         this.boundSampleWindowNumberInput =
             this.#handleSampleWindowNumberInput.bind(this);
         this.boundSampleWindowNumberChange =
@@ -103,6 +111,7 @@ export class RasterSamplingAreaControlsView {
             "input",
             this.boundSampleWindowRangeInput
         );
+        this.sampleWindowRange.addEventListener("keydown", this.boundSampleWindowRangeKeydown);
         this.sampleWindowNumber.addEventListener(
             "input",
             this.boundSampleWindowNumberInput
@@ -131,6 +140,7 @@ export class RasterSamplingAreaControlsView {
             "input",
             this.boundSampleWindowRangeInput
         );
+        this.sampleWindowRange.removeEventListener("keydown", this.boundSampleWindowRangeKeydown);
         this.sampleWindowNumber.removeEventListener(
             "input",
             this.boundSampleWindowNumberInput
@@ -158,10 +168,17 @@ export class RasterSamplingAreaControlsView {
      * Synchronize both sample-window size controls.
      *
      * @param {number|string} value Valid sample-window side length.
+     * @param {number} maximumSizeKm Geometry-owned maximum supplied by the caller.
      * @return {void}
      */
-    setSampleWindowSize(value) {
-        this.sampleWindowRange.value = String(value);
+    setSampleWindowSize(value, maximumSizeKm) {
+        this.maximumWindowSizeKm = maximumSizeKm;
+        this.sampleWindowNumber.max = String(maximumSizeKm);
+        this.sampleWindowRange.value = String(
+            Math.log(Number(value)) / Math.log(maximumSizeKm) *
+                SAMPLE_WINDOW_SLIDER_STEPS
+        );
+        this.sampleWindowRange.setAttribute("aria-valuetext", `${value} kilometers`);
         this.sampleWindowNumber.value = String(value);
     }
 
@@ -283,9 +300,39 @@ export class RasterSamplingAreaControlsView {
         );
     }
 
-    /** Forward a range size edit with its current text value. @return {void} */
+    /** Convert a logarithmic slider edit to integer kilometers. @return {void} */
     #handleSampleWindowRangeInput() {
-        this.handlers.onSampleWindowRangeInput(this.sampleWindowRange.value);
+        const kilometers = Math.round(this.maximumWindowSizeKm ** (
+            Number(this.sampleWindowRange.value) / SAMPLE_WINDOW_SLIDER_STEPS
+        ));
+        this.sampleWindowRange.setAttribute("aria-valuetext", `${kilometers} kilometers`);
+        this.handlers.onSampleWindowRangeInput(String(kilometers));
+    }
+
+    /**
+     * Keep keyboard steps useful after logarithmic positions round to kilometers.
+     * Arrow keys move at least one kilometer; Page keys move one tenth of the
+     * slider. Home and End select its endpoints.
+     *
+     * @param {KeyboardEvent} event Slider keyboard event.
+     * @return {void}
+     */
+    #handleSampleWindowRangeKeydown(event) {
+        const steps = {ArrowRight: 1, ArrowUp: 1, ArrowLeft: -1, ArrowDown: -1,
+            PageUp: 100, PageDown: -100};
+        if (!(event.key in steps) && event.key !== "Home" && event.key !== "End") return;
+        event.preventDefault();
+        const position = Number(this.sampleWindowRange.value);
+        const maximum = this.maximumWindowSizeKm;
+        const current = Math.round(maximum ** (position / SAMPLE_WINDOW_SLIDER_STEPS));
+        const step = steps[event.key];
+        const candidate = event.key === "Home" ? 1 : event.key === "End" ? maximum :
+            Math.round(maximum ** ((position + step) / SAMPLE_WINDOW_SLIDER_STEPS));
+        const next = Math.min(maximum, Math.max(1,
+            step > 0 ? Math.max(current + 1, candidate) :
+            step < 0 ? Math.min(current - 1, candidate) : candidate));
+        this.setSampleWindowSize(next, maximum);
+        this.handlers.onSampleWindowRangeInput(String(next));
     }
 
     /** Forward a numeric size edit with its current text value. @return {void} */
