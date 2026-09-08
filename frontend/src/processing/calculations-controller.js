@@ -14,7 +14,8 @@ export class CalculationsController {
      * public context and area/activity/presentation callbacks.
      */
     constructor({ api, jobs, storage, view, getContext, onOpen, onClose, onEditArea,
-        onActivity = () => {}, clock = globalThis, requestId = () => crypto.randomUUID() }) {
+        onActivity = () => {}, clock = globalThis, requestId = () => crypto.randomUUID(), canAutoSubmit = () => true }) {
+        this.canAutoSubmit = canAutoSubmit;
         Object.assign(this, { api, jobs, storage, view, getContext, onOpen, onClose, onActivity, clock, requestId });
         this.state = { sources: [], source: null, selectedArea: null, area: null, areaChoice: "selection",
             availableAoi: null, calculations: [{ label: "Mean", expression: "mean(a)" }],
@@ -239,9 +240,10 @@ export class CalculationsController {
     }
 
     /** Queue one explicit calculation, reusing a matching automatic estimate.
-     * @param {boolean} automatic Whether a map click requested the job. @return {void}
+     * @param {boolean} automatic Whether map sampling or an editor update requested the job.
+     * @param {boolean} [debounce=automatic] Whether the caller still needs the sampling delay. @return {void}
      */
-    queueCalculation(automatic) {
+    queueCalculation(automatic, debounce = automatic) {
         if (this.destroyed || (!this.state.valid && !this.state.checking)) return;
         if (this.blocked && this.record) { this.render(); return; }
         let intent;
@@ -259,9 +261,9 @@ export class CalculationsController {
             target = { intent, plan, sequence: ++this.sequence };
             this.desired = target;
         }
-        Object.assign(target, { execute: true, automatic, debounced: !automatic, ready: !automatic && this.state.valid });
+        Object.assign(target, { execute: true, automatic, debounced: !debounce, ready: !debounce && this.state.valid });
         this.clock.clearTimeout(this.debounce);
-        if (automatic) this.debounce = this.clock.setTimeout(() => {
+        if (debounce) this.debounce = this.clock.setTimeout(() => {
             if (this.desired === target) {
                 target.debounced = true;
                 target.ready = this.state.valid;
@@ -277,6 +279,20 @@ export class CalculationsController {
             : "Preparing calculation…";
         this.render();
         void this.advance();
+    }
+
+    /** Execute an already validated card batch on the durable, single-workflow lane.
+     * @param {Object} intent Public snapshot. @param {boolean} automatic Whether edits requested it.
+     * @return {void}
+     */
+    executeIntent(intent, automatic = false) {
+        const snapshot = calculationIntent(intent);
+        this.invalidate();
+        this.validationAbort?.abort();
+        this.clock.clearTimeout(this.validationTimer);
+        this.validationSequence++;
+        Object.assign(this.state, snapshot, { valid: true, checking: false, manualRequired: false, validation: "", message: "" });
+        this.queueCalculation(automatic, false);
     }
 
     /** Calculate the current selection, obtaining a fresh estimate when needed.
@@ -380,6 +396,14 @@ export class CalculationsController {
                 return;
             }
             target.plan = plan;
+            if (target.execute && target.automatic && !this.canAutoSubmit(plan, target.intent)) {
+                this.state.plan = plan;
+                this.state.manualRequired = true;
+                this.desired = null;
+                this.state.phase = "idle";
+                this.state.message = "Large or explicit area · Calculate to update.";
+                return;
+            }
             if (!target.execute) {
                 this.state.plan = plan;
                 this.desired = null;

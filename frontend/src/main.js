@@ -79,8 +79,8 @@ import { vectorLabelFields } from "./vector/style.js";
 import { VectorTimeSeriesController } from "./vector/time-series.js";
 import { initializeTemporaryAoi } from "./temporary-aoi/temporary-aoi.js";
 import { ProcessingApiClient } from "./processing/api.js";
-import { CalculationsController } from "./processing/calculations-controller.js";
-import { CalculationsView } from "./processing/calculations-view.js";
+import { SummaryStatisticsController as CalculationsController } from "./processing/summary-statistics-controller.js";
+import { SummaryStatisticsView as CalculationsView } from "./processing/summary-statistics-view.js";
 import { CalculationSessionStorage } from "./processing/calculation-session.js";
 import { ProcessingJobs } from "./processing/jobs.js";
 import { DownloadsController } from "./processing/downloads-controller.js";
@@ -104,6 +104,7 @@ import {
     RenderingDiagnosticsPoller,
 } from "./rendering-diagnostics.js";
 import "./style.css";
+import "./processing/summary-statistics.css";
 
 const CATALOG_SEARCH_DEBOUNCE_MILLISECONDS = 300;
 const CATALOG_LOAD_ROOT_MARGIN = "300px 0px";

@@ -1,175 +1,115 @@
-# Raster calculator interface
+# Summary statistic interface
 
-The Raster calculator operates on one Catalog raster, bound to `a`.
-Open it from Raster calculator in Map layers, a 1D histogram, or the map
-toolbar, or Calculator · X/Y under a 2D histogram. X/Y entries select just that
-axis's raster. The dock tab and panel both use Raster calculator.
+The **Summarize** workspace contains up to five editable summary statistic cards.
+Each card keeps its name, Catalog raster (`a`), formula, validation/progress, and
+value together. **Explore** and **Summarize** share the committed sampling area.
+Opening the workspace, returning to a tab, expanding the dock, renaming a statistic,
+or opening value details does not submit a calculation.
 
-Choose the current histogram box, a ready uploaded AOI, or explicitly Whole raster.
-Enter up to five labeled formulas, or add an example. After 400 ms without typing,
-formula validation uses the same backend grammar as planning; validation itself
-does not open sources, reserve a native reader, or enqueue work. When the active
-calculator has a valid source and area, it also automatically obtains a bounded
-metadata estimate. The estimate shows native dimensions, blocks, decoded work,
-CRS and stored-value semantics. Feedback progresses from **Checking formula…** to
-**Checking calculation size…** and **Ready to calculate**, or a specific error.
-There is no separate Review button. Checks alone never submit native calculations.
+The area is shown once above the cards. **Change** opens the existing Explore area
+controls. The scope menu supports the current map selection, a ready uploaded AOI,
+or Whole raster. Each statistic can choose its own raster, but each expression
+still operates on one raster bound to `a`; cross-raster expressions are separate
+work under #335. New cards inherit the preceding card's raster.
 
-**Calculate** submits the current intent, transparently refreshing an expired
-estimate. The button becomes **Recalculate** for unchanged completed settings.
-**Calculation settings** collapses when a job is accepted, including after a map
-click, leaving room for inline values, exact values and cell coverage. Subsequent
-progress does not override the user's disclosure choice.
-CSV/provenance downloads are optional. Ground hectares are available through
-`areaha(condition)`; volume functions and multiple rasters remain separate work
-under #335.
+**Add statistic** offers editable Mean, Sum, Count, Area, Percent, Range, and Custom
+presets. Custom cards can be named freely; an empty name uses `Summary statistic N`
+for submission. The compact accessible **×** removes a card, with one-step Undo.
+Removing an earlier card does not move another statistic's result or typing focus
+to a different formula. There is no separate settings/result mode or automatic
+collapse while a user edits.
 
-**Functions & examples** lists **sum, areaha, count, mean, min, and max** separately, with
-their purpose and an example for each. Separate operator/combination examples
-cover thresholds, classes, boolean conditions, and percentages. The example menu
-also offers **Area above a threshold (ha)** and **Area in a class (ha)**; users can
-edit the inserted formulas before calculating.
+## Updates and feedback
 
-Area review and results show the WGS84 ellipsoid method, fractional boundary
-inclusion, edge-refinement tolerance, and geometry work estimate. Direct area
-results display `ha` beside both their formatted and exact values, and CSV adds
-a unit column. Numeric aggregates still select pixel centers; area includes
-intersected portions of matching cells, so their coverage cell counts can differ.
-The help explains this distinction and links the result to its selected area.
-See [ground-area methods and limits](ground-area-calculations.md) for the supported
-CRS policy, approximation tolerance, and bounded geometry costs.
+**Update statistics automatically** is enabled by default and lives in the dock's
+**More** menu. Formula, raster, and area changes wait for a 700 ms pause before
+validating against the backend grammar. Validation is I/O-free and opens no raster.
+Each card validates separately, so an incomplete or invalid formula cannot prevent
+a valid peer from running. No expression is evaluated in browser JavaScript.
 
-## Interactive sampling
+Valid changed statistics request a native size plan and then update automatically
+when the area is a selected map box and the plan is within all these conservative
+browser thresholds:
 
-While Raster calculator is the active, expanded panel, a completed map click
-calculates the current valid formulas for the selected box after 650 ms. No
-initial Run or opt-in checkbox is required. The hint says **Click the map to
-calculate for a new sampling area.** Repeated clicks at the same location request
-a new calculation too. A click while formula validation is pending waits for its
-outcome; invalid formulas never submit a job. Hover, typing, resizing a box,
-opening/reactivating the tool, or merely changing area context only update checks.
-Uploaded AOIs and whole rasters always require Calculate, even when supplied as
-the histogram's current area, and show a corresponding explicit-action hint.
+- At most 128 native blocks.
+- At most 64 MiB of decoded source values/masks.
+- At most 25,000 estimated geometry cells for ground-area calculations.
 
-Switching to another dock tab, minimizing or closing the calculator, changing
-formulas, or leaving raster coverage invalidates queued automatic work and
-cancels accepted map-triggered work. Returning to the panel enables future map
-clicks without submitting anything on its own. Accepted manual Calculate jobs
-continue in history when the panel is hidden. A Cancel action cancels the current
-request; a later map click is a new explicit request while the panel stays active.
+These thresholds do not change backend resource limits. Larger plans, uploaded
+AOIs, and whole rasters stop at **Ready to calculate** and show the native work
+estimate beside a **Calculate** action. The same action updates a changed card in
+manual mode. There is no Recalculate button for an unchanged completed statistic.
+Turning automatic updates on affects future edits/clicks; it does not immediately
+run every existing card.
 
-Only one calculation workflow from this editor is admitted at a time. A new box
-supersedes obsolete planning, retains only the latest requested area, and requests
-cancellation of an accepted predecessor. Replacement admission waits for terminal
-cancellation; `cancelling` still owns the server's worker capacity. The previous
-result remains visible in grey cards, labeled with its original source/area and
-marked previous until the new result arrives. A prominent **Calculating new
-result…** banner and spinner appear immediately, including during debounce,
-planning, and cancellation of superseded work. Rerunning unchanged settings also
-mutes the saved values. Metadata checks alone, stopped requests, and errors awaiting
-recovery do not claim a new result is being calculated. Late or superseded
-completions cannot replace the saved result.
-Native resource-limit or connection errors remain visible without automatic
-retries. Calculate or a new map click can retry a refused request; uncertain
-accepted submissions require Recover / retry using the same durable identity.
-Work-limit errors retain the backend's requested amount, configured limit, and
-reduction guidance in the panel. Native block admission reports a conservative
-estimate; decoded work and the serialized AOI geometry report their byte counts.
-The AOI limit concerns its processing geometry snapshot, not the uploaded file size.
+Map clicks update the shared committed area while Summarize is active. Rapid edits
+and clicks coalesce. Unchanged completed expressions can reuse their current value;
+changing a name never causes a native scan. Each card shows checking, queued,
+calculating, failure, or completion feedback beside its own formula. Its previous
+value remains visible and explicitly labeled **Previous value** until a matching
+result arrives. Missing-data and undefined-arithmetic results include explanations.
 
-The matching committed rectangle has moving dashes and a pulsing fill during
-accepted calculation work. It does not animate for an older cancelled request or
-a different rectangle. Reduced motion uses a static dashed outline and status
-indicator; the working banner remains visible. Text status and measured native-block
-progress are available independently of animation. The calculation panel remains
-foreground during its map clicks while other inspection tools retain
-their results.
+Cards on the same raster and area with distinct names can be combined into one
+native scan. Other source groups wait on the existing single calculation workflow.
+Duplicate user-facing names are allowed and run as separate groups because the
+backend requires unique labels within a submission. Status per card does not imply
+an independent simultaneous server job.
 
-## Recovery and bounded review state
+Switching tabs, minimizing, or closing pauses queued automatic work and cancels its
+accepted job. Returning does not restart it. Accepted manual jobs can continue in
+history while the workspace is hidden. Editing a member of an active batch cancels
+the obsolete batch; unchanged siblings still awaiting values are retained for the
+replacement. Cancelled work holds its slot until the server reaches a terminal
+state. Late validation, stale plans, cancelled completions, and responses for removed
+cards cannot overwrite the current formula's value.
 
-`ProcessingJobs` owns one shared poller/history for clips and calculations. Both
-editors share the same API client/session establishment. Downloads uses operation-
-appropriate COG/CSV labels and links to inline calculation results. Histories
-survive changing or removing map layers; the owner cookie authorizes the results.
-Explicitly tracked active calculations remain polled even beyond the latest 50
-history entries. An older list response cannot erase newly accepted job state.
+## Results, exports, and history
 
-The calculation session record persists the immutable intent and request key
-before dispatch. It retains cancellation intent across uncertain submission
-responses, retries the same key, and cancels recovered superseded work. Reload
-recovers one-off jobs and cancels automatic jobs; it never silently submits a new
-calculation. Storage failure before submission refuses the run. Connection failures
-expose Recover / retry rather than creating another request identity.
+**Value details & downloads** is collapsed within each card. It contains the exact
+value, immutable source/area/formula context, cell coverage, ground-area method when
+applicable, and owned CSV/provenance links. Integer strings are formatted without
+losing precision. `areaha(condition)` produces ground hectares, including partial
+pixels; numeric functions use pixel centers. Units and arithmetic/null states come
+from the typed server result.
 
-Automatic estimates and execution share one controller planning lane. A click
-can reuse an in-flight matching estimate, but admission still waits for debounce
-and valid formulas. A stale estimate is discarded and cannot execute later.
-The browser keeps an already-dispatched metadata request connected until its
-bounded server work finishes. Aborting fetch does not acknowledge server cleanup;
-with a proxy or slow response it can also lose the identity of a completed plan.
-The next intent waits for that response and the acknowledgement of its plan
-release, preventing rapid clicks from filling the five-plan owner quota or racing
-the single native planner. Only the newest pending intent survives; this is the
-existing controller lane, not a server queue. Waiting feedback distinguishes
-finishing the previous check from running the new calculation.
-The UI releases used or replaced estimates through idempotent
-`DELETE /api/processing/plans/{plan_id}`. This is needed because five unreleased
-reviews exhaust the per-owner plan quota. The route only discards completed owned
-plans; it cannot release an active native-planning fence or another owner's plan.
-Accepted job input/provenance and same-key submission recovery are independent of
-the plan. Failure to release an accepted review is recoverable before more work is
-submitted. An unconfirmed obsolete-review release is bounded by the existing plan
-expiry. Clip review behavior and native job limits are unchanged.
+Exports preserve the submitted names and formulas even if a card is renamed later.
+A combined scan's CSV contains the statistics submitted in that scan. Earlier
+results, job cancellation/deletion, and raster clips stay under **More → History &
+exports**. Inspecting history opens a clearly labeled Saved calculation disclosure;
+it does not rewrite or relabel the editable cards.
 
-Unused-plan release failures retain their IDs in the controller and prevent new
-planning until an explicit Calculate/map-click attempt releases them successfully.
-Accepted-job release/recovery remains durable and uses the existing record. Closing
-the panel or destroying the controller releases known unused estimates and drains
-late results when the page is still connected. A tab/network disappearance still
-relies on server disconnect handling and bounded plan expiry; the UI never raises
-limits or blindly retries genuine capacity errors.
+**Formula reference** remains collapsed. It documents sum, areaha, count, mean, min,
+max, optional `where` conditions, comparisons, Boolean combinations, percentages,
+NoData, native-pixel semantics, and the distinction between fractional area and
+cell-center aggregates. See [ground-area methods and limits](ground-area-calculations.md).
 
-## Architecture
+## Recovery and architecture
 
-Owner: Processing. Its controller, DOM view and session record depend on the
-Processing API, shared job history/presentation, browser storage/timers, and the
-neutral selected-area contract. Neither Processing frontend nor backend imports
-histogram, map-layer, AOI, renderer, or GeoServer implementations.
+Processing owns the card coordinator, DOM view, and existing durable calculation
+executor. Browser composition still supplies Catalog identities, neutral selected
+areas, active-tool changes, explicit map-click intents, and area-associated activity.
+Neither the Processing browser code nor backend imports a map/histogram sibling.
+HTTP contracts, expressions, backend limits, storage schema, and shared polling are
+unchanged by #354.
 
-Browser composition supplies Catalog identities and immutable selections, routes
-analysis entry points, forwards ready AOI lifecycle references, and connects
-calculation activity to the raster viewer's area-associated presentation method.
-Raster controls and Map layers emit callbacks, with no Processing imports. The
-sample-window controller owns matching/clearing its SVG activity class. The dock
-owns tab visibility and keyboard navigation only. Its narrow
-`subscribeActiveTool(listener)` presentation contract reports an expanded active
-tool or null. Composition forwards that to `calculations.setActive`, and sends a
-separate `calculateSelection()` intent through `exploreAt`'s successful-selection
-callback. Rejected boxes retain histogram guidance without recalculating an old
-box. Background
-histogram/feature presentation can retain the active tab through an `activate`
-option; it never transiently deactivates/cancels the calculator.
+`SummaryStatisticsController` holds stable card identities and debounced validation.
+Its one `CalculationsController` executor admits batches through the original
+planning, release, idempotent submission, cancellation, and recovery lane. It never
+creates a controller/job poller per card. The executor's `executeIntent` boundary
+accepts validated immutable public intents, and an optional automatic-admission
+policy pauses expensive plans before submission. Original single-workflow tests
+remain alongside card interaction and asynchronous regression tests.
 
-Issue #345 changes the Processing browser controller/view, map dock, browser
-composition, raster viewer's committed-selection notification,
-layer/histogram/2D entry-point labels, HTML/CSS, documentation and
-tests. Existing composition-to-component edges carry the new presentation/click
-signals; no sibling implementation dependency is added, removed or redirected.
-No subsystem acquires knowledge of a peer. Public additions are limited to these
-required browser presentation/intent methods; HTTP and backend contracts remain
-unchanged. Remaining coupling is the existing Catalog source/selected-area and
-job lifecycle contracts, plus the explicit active-panel signal.
+`ProcessingJobs` owns one poller/history shared with raster downloads. Tracked active
+jobs remain polled beyond the latest history page. Per-tab storage persists the
+immutable intent/request key before submission, including cancellation intent and
+unreleased used-plan identities. Uncertain submissions expose **Recover / retry**
+and reuse the original key. Reload recovers manual jobs and cancels recovered
+automatic work without submitting a new calculation. Storage failure refuses work.
 
-Issue #347 changes only Processing's browser calculation controller, its owner/HTTP
-boundary tests, and this documentation. Cleanup stays on its existing planning
-lane, with no new public contract, backend policy, component dependency, or sibling
-knowledge. Superseded metadata now finishes before replacement; accepted native
-calculation jobs continue to use cancellation and terminal-state admission fences.
-
-Two backend public contracts support this UI: I/O-free `/raster-calculations/validate`
-using `AggregateValidationRequest` (also consumed by planning), and explicit plan
-release through the existing Processing service/storage port. Shared presentation
-formatters and polling move out of Downloads so neither editor depends on its peer.
-Clip pending submissions remain separate because their immutable export lifecycle
-has no latest-click cancellation intent. There is no new service, queue, mount,
-expression evaluator, resampling policy or cross-subsystem state manager.
+Metadata requests stay connected until bounded native cleanup completes. Superseded
+plans are released before the next batch, preventing planner races and exhaustion of
+the five-plan owner quota. Used plans are released after acceptance. Errors do not
+silently loop: uncertain accepted work needs recovery, and failed unused-plan release
+requires an explicit Calculate attempt before further admission. Page disappearance
+still relies on server disconnect handling and bounded expiry.

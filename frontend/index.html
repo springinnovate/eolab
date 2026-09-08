@@ -525,6 +525,7 @@
           <details id="map-inspection-more" class="map-analysis-more">
             <summary id="map-inspection-more-summary" class="secondary-button">More</summary>
             <div class="map-analysis-more-menu">
+              <label class="summary-auto-option"><input id="summary-auto" type="checkbox" checked>Update statistics automatically</label>
               <button id="open-downloads-dock" class="secondary-button" type="button"
                 aria-controls="downloads-panel">History &amp; exports</button>
             </div>
@@ -557,23 +558,14 @@
         </header>
         <div id="map-inspection-panels" class="map-inspection-panels">
           <section id="calculations-panel" role="tabpanel" aria-labelledby="map-inspection-tab-calculations" hidden>
-            <div class="downloads-actions"><h2>Summarize raster</h2><button id="calculations-close" class="secondary-button" type="button" aria-label="Close raster summary calculator">&times;</button></div>
-            <p>Choose a raster and enter a formula. Click the map to calculate for a new sampling area, or calculate the current selection below.</p>
-            <details id="calculations-editor" open><summary>Calculation settings</summary>
-            <form id="calculations-form">
-              <label for="calculations-source">Raster · use <code>a</code> in formulas</label>
-              <select id="calculations-source"></select>
-              <label for="calculations-area">Calculate over</label><select id="calculations-area"></select>
-              <p id="calculations-area-description"></p>
-              <button id="calculations-edit-area" class="secondary-button" type="button">Change area in Explore</button>
-              <div id="calculations-rows"></div>
-              <div class="downloads-actions">
-                <button id="calculations-add" class="secondary-button" type="button">Add formula</button>
-                <label for="calculations-template">Add example</label>
-                <select id="calculations-template"><option value="">Choose…</option><option value="mean">Mean</option><option value="count">Count above a threshold</option><option value="sum">Sum above a threshold</option><option value="area-threshold">Area above a threshold (ha)</option><option value="area-class">Area in a class (ha)</option><option value="percent">Percent above a threshold</option><option value="range">Range</option></select>
-              </div>
-              <details id="calculations-help"><summary>Functions &amp; examples</summary>
-                <p>Use <code>a</code> for the selected raster. Add an example above, then change its formula or threshold.</p>
+            <div class="downloads-actions summary-panel-heading"><h2>Summary statistics</h2><button id="calculations-close" class="secondary-button" type="button" aria-label="Close summary statistics">&times;</button></div>
+            <div class="summary-area-row"><label for="calculations-area">Area</label><select id="calculations-area"></select><button id="calculations-edit-area" class="summary-text-button" type="button">Change</button></div>
+            <p id="calculations-area-description" class="summary-area-details"></p>
+            <div id="calculations-rows"></div>
+            <div id="summary-undo" class="downloads-actions" hidden><span>Statistic removed.</span><button id="summary-undo-button" class="summary-text-button" type="button">Undo</button></div>
+            <div class="summary-add-row"><label class="visually-hidden" for="calculations-template">Add statistic</label><select id="calculations-template"><option value="">+ Add statistic</option><option value="mean">Mean</option><option value="count">Count above a threshold</option><option value="sum">Sum</option><option value="area-threshold">Area above a threshold (ha)</option><option value="area-class">Area in a class (ha)</option><option value="percent">Percent above a threshold</option><option value="range">Range</option><option value="custom">Custom</option></select></div>
+              <details id="calculations-help"><summary>Formula reference</summary>
+                <p>Use <code>a</code> for the raster selected in that statistic. Presets are editable.</p>
                 <h4>Functions</h4>
                 <ul class="calculation-functions">
                   <li><code>sum(a)</code> — Add pixel values. To add only values above 10, use <code>sum(a, where=a &gt; 10)</code>.</li>
@@ -596,18 +588,9 @@
                 <p>NoData is excluded. Numeric functions select pixels by their centers. <code>areaha</code> measures their fractional intersection on the WGS 84 ellipsoid, including AOI holes and counting overlaps once. It requires a WGS84 geographic or projected raster; complex geometry may need a smaller area.</p>
                 <p>Calculations use native pixels and stored values. Each <code>areaha</code> term is in hectares; arithmetic can change the final units. Multiple-raster expressions are coming separately.</p>
               </details>
-              <p id="calculations-validation" role="status" aria-live="polite"></p>
-            </form>
-            </details>
-            <p id="calculations-map-hint">Click the map to calculate for a new sampling area.</p>
-            <p id="calculations-plan" class="download-plan" hidden></p>
-            <div class="downloads-actions"><button id="calculations-run" class="primary-button" type="button">Calculate</button><button id="calculations-stop" class="secondary-button" type="button" hidden>Cancel calculation</button><button id="calculations-retry" class="secondary-button" type="button" hidden>Recover / retry</button></div>
-            <div id="calculations-status-region" role="status" aria-live="polite">
-              <strong id="calculations-status-summary" hidden></strong>
-              <p id="calculations-status"></p>
-            </div>
-            <progress id="calculations-progress" aria-label="Native source blocks calculated" hidden></progress>
-            <section id="calculations-result" aria-label="Calculation result"></section>
+            <p id="summary-recovery-status" role="status" aria-live="polite" hidden></p>
+            <button id="calculations-retry" class="secondary-button" type="button" hidden>Recover / retry</button>
+            <details id="summary-saved-result" hidden><summary>Saved calculation</summary><button id="summary-close-saved" class="summary-text-button" type="button">Close saved calculation</button><section id="calculations-result" aria-label="Saved calculation result"></section></details>
           </section>
           <section id="downloads-panel" role="tabpanel" aria-labelledby="map-inspection-tab-downloads" hidden>
             <header class="map-histogram-toolbar">
