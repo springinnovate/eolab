@@ -41,23 +41,23 @@ export class SummaryStatisticsView extends CalculationsView {
         remove.setAttribute("aria-label", `Remove summary statistic ${card.id}`);
         remove.addEventListener("click", () => this.handlers.onRemove(card.id));
         heading.append(label, remove);
-        const binding = this.element("label", "Raster a ="); binding.className = "summary-raster-binding";
+        const binding = this.element("label"); binding.className = "summary-raster-binding";
+        const bindingText = this.element("span");
+        bindingText.append(this.element("span", "In this formula, "), this.element("code", "a"), this.element("span", " represents"));
         const source = this.element("select"); source.setAttribute("aria-label", `Raster for summary statistic ${card.id}`);
         source.addEventListener("change", () => this.handlers.onEdit(card.id, { source: this.sources[Number(source.value)] ?? null }));
-        binding.append(source);
+        binding.append(bindingText, source);
         const equation = this.element("div"); equation.className = "summary-equation";
-        const formulaLabel = this.element("label", "Formula");
         const expression = this.element("textarea"); expression.rows = 2; expression.maxLength = 4096; expression.spellcheck = false;
-        expression.placeholder = "e.g., mean(a)";
+        expression.placeholder = "Formula, e.g. mean(a)";
         expression.setAttribute("aria-label", `Summary statistic ${card.id} formula`);
         expression.setAttribute("aria-describedby", `summary-statistic-status-${card.id}`);
         expression.addEventListener("input", () => this.handlers.onEdit(card.id, { expression: expression.value }));
-        formulaLabel.append(expression);
         const valueGroup = this.element("div"); valueGroup.className = "summary-value-group";
         valueGroup.setAttribute("aria-live", "polite");
         const value = this.element("strong", "—"); value.className = "summary-value";
         const caption = this.element("small", "No value yet");
-        valueGroup.append(value, caption); equation.append(formulaLabel, valueGroup);
+        valueGroup.append(value, caption); equation.append(expression, valueGroup);
         const statusRow = this.element("div"); statusRow.className = "summary-status-row";
         const status = this.element("span"); status.id = `summary-statistic-status-${card.id}`;
         status.setAttribute("role", "status"); status.setAttribute("aria-live", "polite");
@@ -71,7 +71,7 @@ export class SummaryStatisticsView extends CalculationsView {
         const detailsTitle = this.element("summary", "Value details & downloads");
         const detailsBody = this.element("div"); details.append(detailsTitle, detailsBody);
         const size = this.element("small"); size.className = "summary-size";
-        root.append(heading, binding, equation, statusRow, progress, size, details);
+        root.append(heading, equation, binding, statusRow, progress, size, details);
         return { root, label, source, expression, value, caption, status, run, stop, progress, details, detailsBody, size };
     }
     render(state) {

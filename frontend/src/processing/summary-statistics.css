@@ -12,13 +12,12 @@
 #calculations-panel input.summary-statistic-name[type="text"]:is(:hover, :focus) { border-color: var(--border-1); color: var(--text-1); }
 .summary-remove { flex: none; width: 28px; height: 28px; padding: 0; border: 0; background: transparent; color: var(--text-2); font: inherit; font-size: 1.25rem; cursor: pointer; }
 .summary-remove:hover { background: var(--surface-2); border-radius: var(--radius); }
-.summary-raster-binding { display: flex; align-items: center; gap: 8px; font-size: 0.78rem; color: var(--text-2); }
-#calculations-panel .summary-raster-binding select { flex: 1; width: auto; padding: 5px; }
+.summary-raster-binding { display: grid; gap: 4px; min-width: 0; font-size: 0.75rem; color: var(--text-2); }
+#calculations-panel .summary-raster-binding select { width: 100%; padding: 5px; }
 .summary-equation { display: grid; grid-template-columns: minmax(0, 1fr) minmax(80px, 36%); align-items: start; gap: 12px; }
-.summary-equation > label { display: grid; gap: 4px; font-size: 0.78rem; color: var(--text-2); min-width: 0; }
 #calculations-panel .summary-equation textarea { resize: vertical; font: 0.85rem/1.4 monospace; min-height: 3.5em; }
 #calculations-panel .summary-equation textarea[aria-invalid="true"] { border-color: var(--status-danger); }
-.summary-value-group { display: grid; gap: 2px; text-align: right; padding-top: 18px; min-width: 0; }
+.summary-value-group { display: grid; gap: 2px; text-align: right; min-width: 0; }
 .summary-value { font-size: 1.35rem; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; line-height: 1.25; }
 .summary-value-group small { color: var(--text-2); font-size: 0.7rem; }
 .summary-statistic.is-previous .summary-value { color: var(--text-2); }
