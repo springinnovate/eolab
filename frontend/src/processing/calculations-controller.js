@@ -21,6 +21,7 @@ export class CalculationsController {
             valid: false, validation: "", plan: null, phase: "idle", message: "", active: false, checking: false, result: null, resultIntent: null, current: null, jobs: [], historyError: "" };
         this.record = storage.read();
         this.desired = null;
+        this.plansToRelease = new Set();
         this.sequence = 0;
         this.validationSequence = 0;
         this.advanceRunning = false;
@@ -97,12 +98,12 @@ export class CalculationsController {
         const target = this.desired;
         this.desired = null;
         this.sequence += 1;
-        this.planAbort?.abort();
         this.clock.clearTimeout(this.debounce);
         this.discardReview();
-        if (target?.plan) void this.api.discardPlan(target.plan.planId).catch(() => {});
+        if (target?.plan) this.plansToRelease.add(target.plan.planId);
         if (!this.record) this.state.phase = "idle";
         if (this.record?.automatic) this.requestCancellation();
+        if (this.plansToRelease.size) void this.advance();
     }
 
     /** Apply an editor change; debounced checks never submit a job.
@@ -202,11 +203,23 @@ export class CalculationsController {
         void this.advance();
     }
 
-    /** Discard obsolete metadata; a disconnected release expires safely. @return {void} */
+    /** Retain obsolete plan identities until the server acknowledges release. @return {void} */
     discardReview() {
         const plan = this.state.plan;
         this.state.plan = null;
-        if (plan) void this.api.discardPlan(plan.planId).catch(() => {});
+        if (plan) this.plansToRelease.add(plan.planId);
+    }
+
+    /** Drain unused plans on the controller's existing planning lane.
+     * A failed release retains its identity for the next explicit attempt.
+     * @return {Promise<void>} Completion after every queued release is acknowledged.
+     */
+    async releasePlans() {
+        while (this.plansToRelease.size) {
+            const id = this.plansToRelease.values().next().value;
+            await this.api.discardPlan(id);
+            this.plansToRelease.delete(id);
+        }
     }
 
     /** Queue an automatic metadata estimate on the same lane as execution planning.
@@ -257,7 +270,11 @@ export class CalculationsController {
         }, 650);
         this.requestCancellation();
         this.state.phase = "waiting";
-        this.state.message = automatic ? "Waiting for the latest sampling box…" : "Preparing calculation…";
+        this.state.message = automatic
+            ? this.advanceRunning && !this.record
+                ? "Waiting for the previous calculation check to finish…"
+                : "Waiting for the latest sampling box…"
+            : "Preparing calculation…";
         this.render();
         void this.advance();
     }
@@ -287,6 +304,13 @@ export class CalculationsController {
         if (this.advanceRunning || this.destroyed || this.blocked) return;
         this.advanceRunning = true;
         try {
+            if (this.plansToRelease.size) {
+                this.state.phase = "releasing";
+                this.state.message = "Releasing the previous calculation check…";
+                this.render();
+                await this.releasePlans();
+                if (!this.record) { this.state.phase = "idle"; this.state.message = ""; }
+            }
             if (this.record?.pending) {
                 this.state.phase = "submitting";
                 this.state.message = "Confirming calculation submission…";
@@ -337,17 +361,22 @@ export class CalculationsController {
             const target = this.desired;
             this.state.phase = target.execute ? "planning" : "estimating";
             this.state.message = "Checking calculation size…";
-            this.planAbort = new AbortController();
             this.render();
             if (target.plan && Date.parse(target.plan.expiresAt) <= Date.now()) {
-                void this.api.discardPlan(target.plan.planId).catch(() => {});
+                this.plansToRelease.add(target.plan.planId);
                 target.plan = null;
+                await this.releasePlans();
             }
+            if (target !== this.desired || this.destroyed) return;
             let plan;
-            try { plan = target.plan ?? await this.api.planCalculation(target.intent, this.planAbort.signal); }
+            // Aborting fetch cannot acknowledge native cleanup, and can lose the
+            // ID of a plan already committed behind a proxy. Keep this bounded
+            // request connected, then release a superseded result before reuse.
+            try { plan = target.plan ?? await this.api.planCalculation(target.intent); }
             catch (error) { if (target !== this.desired || error.name === "AbortError") return; throw error; }
             if (target !== this.desired || this.destroyed) {
-                void this.api.discardPlan(plan.planId).catch(() => {});
+                this.plansToRelease.add(plan.planId);
+                await this.releasePlans();
                 return;
             }
             target.plan = plan;
@@ -367,16 +396,17 @@ export class CalculationsController {
             this.desired = null;
         } catch (error) {
             this.blocked = true;
-            if (this.desired?.plan) void this.api.discardPlan(this.desired.plan.planId).catch(() => {});
+            if (this.desired?.plan) this.plansToRelease.add(this.desired.plan.planId);
             this.desired = null;
             this.state.phase = "error";
             this.state.message = `${error.message}${this.record ? " Recover / retry to confirm or cancel the same job safely." : " Click Calculate or select a new sampling box to retry."}`;
         } finally {
+            if (this.destroyed) await this.releasePlans().catch(() => {});
             this.advanceRunning = false;
             this.render();
-            // A newer debounced box may have arrived while an aborted plan
-            // was still unwinding. Do not strand it behind that old request.
-            if (!this.blocked && !this.destroyed && !this.record && this.desired?.ready) {
+            // Newest intent waits for both old metadata and acknowledged cleanup.
+            if (!this.blocked && !this.destroyed && !this.record &&
+                (this.desired?.ready || this.plansToRelease.size)) {
                 queueMicrotask(() => void this.advance());
             }
         }
@@ -434,8 +464,12 @@ export class CalculationsController {
     /** Detach browser work, retaining server/recovery records. @return {void} */
     destroy() {
         this.destroyed = true;
-        this.planAbort?.abort(); this.validationAbort?.abort();
+        this.discardReview();
+        if (this.desired?.plan) this.plansToRelease.add(this.desired.plan.planId);
+        this.desired = null;
+        this.validationAbort?.abort();
         this.clock.clearTimeout(this.debounce); this.clock.clearTimeout(this.validationTimer);
         this.unsubscribe(); this.view.unbind(); this.onActivity(null);
+        if (!this.advanceRunning) void this.releasePlans().catch(() => {});
     }
 }

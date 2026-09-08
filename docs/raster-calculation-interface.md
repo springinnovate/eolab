@@ -59,7 +59,7 @@ continue in history when the panel is hidden. A Cancel action cancels the curren
 request; a later map click is a new explicit request while the panel stays active.
 
 Only one calculation workflow from this editor is admitted at a time. A new box
-aborts obsolete planning, retains only the latest requested area, and requests
+supersedes obsolete planning, retains only the latest requested area, and requests
 cancellation of an accepted predecessor. Replacement admission waits for terminal
 cancellation; `cancelling` still owns the server's worker capacity. The previous
 result remains visible in grey cards, labeled with its original source/area and
@@ -104,6 +104,14 @@ expose Recover / retry rather than creating another request identity.
 Automatic estimates and execution share one controller planning lane. A click
 can reuse an in-flight matching estimate, but admission still waits for debounce
 and valid formulas. A stale estimate is discarded and cannot execute later.
+The browser keeps an already-dispatched metadata request connected until its
+bounded server work finishes. Aborting fetch does not acknowledge server cleanup;
+with a proxy or slow response it can also lose the identity of a completed plan.
+The next intent waits for that response and the acknowledgement of its plan
+release, preventing rapid clicks from filling the five-plan owner quota or racing
+the single native planner. Only the newest pending intent survives; this is the
+existing controller lane, not a server queue. Waiting feedback distinguishes
+finishing the previous check from running the new calculation.
 The UI releases used or replaced estimates through idempotent
 `DELETE /api/processing/plans/{plan_id}`. This is needed because five unreleased
 reviews exhaust the per-owner plan quota. The route only discards completed owned
@@ -112,6 +120,14 @@ Accepted job input/provenance and same-key submission recovery are independent o
 the plan. Failure to release an accepted review is recoverable before more work is
 submitted. An unconfirmed obsolete-review release is bounded by the existing plan
 expiry. Clip review behavior and native job limits are unchanged.
+
+Unused-plan release failures retain their IDs in the controller and prevent new
+planning until an explicit Calculate/map-click attempt releases them successfully.
+Accepted-job release/recovery remains durable and uses the existing record. Closing
+the panel or destroying the controller releases known unused estimates and drains
+late results when the page is still connected. A tab/network disappearance still
+relies on server disconnect handling and bounded plan expiry; the UI never raises
+limits or blindly retries genuine capacity errors.
 
 ## Architecture
 
@@ -143,6 +159,12 @@ No subsystem acquires knowledge of a peer. Public additions are limited to these
 required browser presentation/intent methods; HTTP and backend contracts remain
 unchanged. Remaining coupling is the existing Catalog source/selected-area and
 job lifecycle contracts, plus the explicit active-panel signal.
+
+Issue #347 changes only Processing's browser calculation controller, its owner/HTTP
+boundary tests, and this documentation. Cleanup stays on its existing planning
+lane, with no new public contract, backend policy, component dependency, or sibling
+knowledge. Superseded metadata now finishes before replacement; accepted native
+calculation jobs continue to use cancellation and terminal-state admission fences.
 
 Two backend public contracts support this UI: I/O-free `/raster-calculations/validate`
 using `AggregateValidationRequest` (also consumed by planning), and explicit plan
