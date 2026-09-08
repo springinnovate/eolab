@@ -2,7 +2,7 @@
 
 Job listing, status, cancellation, deletion, and leased artifact delivery share
 one lifecycle. Raster-clip planning and submission are explicitly named operation
-commands; raster clipping is the only operation currently exposed by this API.
+commands, alongside single-raster calculation planning and submission.
 """
 
 import asyncio
@@ -16,18 +16,24 @@ from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Path, Request, Response
 from fastapi.routing import APIRoute
+from pydantic import Field
 from starlette.responses import FileResponse
 
 from eolab_app.processing.models import (
     ArtifactDownload,
     JobSubmitRequest,
+    JobListResponse,
     ProcessingError,
 )
 from eolab_app.processing.clip_models import (
     ClipPlanRequest,
     ClipJobResponse,
-    ClipJobsResponse,
     ClipPlanResponse,
+)
+from eolab_app.processing.aggregate_models import (
+    AggregateJobResponse,
+    AggregatePlanRequest,
+    AggregatePlanResponse,
 )
 from eolab_app.processing.service import ProcessingService
 from eolab_app.raster.errors import RasterFeatureError
@@ -37,6 +43,10 @@ from eolab_app.routes.http_disconnect import (
     run_until_http_disconnect,
     wait_for_http_disconnect,
 )
+
+SupportedJobResponse = Annotated[
+    ClipJobResponse | AggregateJobResponse, Field(discriminator="operation")
+]
 
 COOKIE = "__Host-eolab-processing"
 JobId = Annotated[str, Path(pattern=r"^[a-f0-9]{32}$")]
@@ -175,9 +185,7 @@ async def _result(awaitable: Any) -> Any:
 class LeasedJobResponse(FileResponse):
     """Range-capable file delivery that keeps expiry cleanup away from transfers."""
 
-    def __init__(
-        self, artifact: ArtifactDownload, service: ProcessingService
-    ) -> None:
+    def __init__(self, artifact: ArtifactDownload, service: ProcessingService) -> None:
         """Configure an immutable result response after owner authorization.
 
         Args:
@@ -307,7 +315,57 @@ def create_processing_router(service: ProcessingService) -> APIRouter:
         response.headers["Location"] = f"/api/processing/jobs/{job['jobId']}"
         return job
 
-    @router.get("/jobs", response_model=ClipJobsResponse)
+    @router.post(
+        "/raster-calculations/plan",
+        response_model=AggregatePlanResponse,
+        openapi_extra=MUTATION_SCHEMA,
+    )
+    async def plan_raster_calculation(
+        body: AggregatePlanRequest, request: Request, response: Response
+    ) -> dict[str, Any]:
+        """Review a native single-raster calculation without starting a job.
+
+        Args:
+            body: Validated source, explicit area, and named expressions.
+            request: Owner, origin, and disconnect context.
+            response: Private cookie and cache headers.
+
+        Returns:
+            Reviewable expiring native calculation plan.
+        """
+        return await _result(
+            run_until_http_disconnect(
+                request,
+                service.plan_raster_calculation(_owner(request, response), body),
+            )
+        )
+
+    @router.post(
+        "/raster-calculations",
+        status_code=202,
+        response_model=AggregateJobResponse,
+        openapi_extra=MUTATION_SCHEMA,
+    )
+    async def submit_raster_calculation(
+        body: JobSubmitRequest, request: Request, response: Response
+    ) -> dict[str, Any]:
+        """Accept a reviewed calculation through shared idempotent admission.
+
+        Args:
+            body: Reviewed plan and client request identifiers.
+            request: Same-origin owner context.
+            response: Private cookie and job location headers.
+
+        Returns:
+            Accepted owned calculation job.
+        """
+        job = await _result(
+            service.submit_raster_calculation(_owner(request, response), body)
+        )
+        response.headers["Location"] = f"/api/processing/jobs/{job['jobId']}"
+        return job
+
+    @router.get("/jobs", response_model=JobListResponse[SupportedJobResponse])
     async def jobs(request: Request, response: Response) -> dict[str, Any]:
         """Recover the current session's recent jobs and establish its cookie.
 
@@ -320,7 +378,7 @@ def create_processing_router(service: ProcessingService) -> APIRouter:
         """
         return {"jobs": await _result(service.list_owned(_owner(request, response)))}
 
-    @router.get("/jobs/{job_id}", response_model=ClipJobResponse)
+    @router.get("/jobs/{job_id}", response_model=SupportedJobResponse)
     async def get(
         job_id: JobId, request: Request, response: Response
     ) -> dict[str, Any]:
@@ -339,7 +397,7 @@ def create_processing_router(service: ProcessingService) -> APIRouter:
     @router.post(
         "/jobs/{job_id}/cancel",
         status_code=202,
-        response_model=ClipJobResponse,
+        response_model=SupportedJobResponse,
         openapi_extra=MUTATION_SCHEMA,
     )
     async def cancel(
@@ -358,7 +416,9 @@ def create_processing_router(service: ProcessingService) -> APIRouter:
         return await _result(service.cancel(_owner(request, response), job_id))
 
     @router.delete(
-        "/jobs/{job_id}", response_model=ClipJobResponse, openapi_extra=MUTATION_SCHEMA
+        "/jobs/{job_id}",
+        response_model=SupportedJobResponse,
+        openapi_extra=MUTATION_SCHEMA,
     )
     async def delete(
         job_id: JobId, request: Request, response: Response

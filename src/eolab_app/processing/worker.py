@@ -1,4 +1,4 @@
-"""Application workflow and supervision for the dedicated clip worker."""
+"""Application workflow and supervision for explicitly supported processing jobs."""
 
 import asyncio
 from contextlib import suppress
@@ -11,7 +11,9 @@ from eolab_app.execution.bounded_process import (
 )
 from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.clip_models import ClipSpec, RasterClipLimits
-from eolab_app.processing.ports import ClipArtifactStore, JobStore
+from eolab_app.processing.aggregate_models import AggregateSpec, RasterAggregateLimits
+from eolab_app.processing.raster_aggregate import aggregate_process_target
+from eolab_app.processing.ports import JobArtifactStore, JobStore
 from eolab_app.processing.raster_clip import clip_process_target
 from eolab_app.raster.errors import RasterFeatureError
 from eolab_app.raster.ports import RasterSourceAuthorizer
@@ -19,14 +21,14 @@ from eolab_app.raster.ports import RasterSourceAuthorizer
 LOGGER = logging.getLogger(__name__)
 
 
-class RasterClipWorker:
+class ProcessingWorker:
     """Own one attempt's workflow without teaching storage about application services."""
 
     def __init__(
         self,
         authorizer: RasterSourceAuthorizer,
         jobs: JobStore,
-        artifacts: ClipArtifactStore,
+        artifacts: JobArtifactStore,
         limits: RasterClipLimits,
     ) -> None:
         """Compose the worker's narrow capabilities.
@@ -41,6 +43,7 @@ class RasterClipWorker:
         self.jobs = jobs
         self.artifacts = artifacts
         self.limits = limits
+        self.aggregate_limits = RasterAggregateLimits.with_lifecycle(limits)
 
     async def _execute(self, row: dict[str, Any]) -> Any:
         """Authorize, run a native child, and publish only a validated result.
@@ -54,12 +57,30 @@ class RasterClipWorker:
         Raises:
             ProcessingError: If the source, resources, or native operation fail.
         """
-        spec = ClipSpec.model_validate(row["spec"])
-        authorized = await self.authorizer.authorize(spec.source)
+        operation = row["spec"]["operation"]
+        if operation == "raster.clip.v1":
+            spec = ClipSpec.model_validate(row["spec"])
+            source = spec.source
+            target, action, limits = clip_process_target, "clip", self.limits
+        elif operation == "raster.aggregate.v1":
+            spec = AggregateSpec.model_validate(row["spec"])
+            source = next(iter(spec.sources.values()))
+            target, action, limits = (
+                aggregate_process_target,
+                "calculate",
+                self.aggregate_limits,
+            )
+        else:
+            raise ProcessingError(
+                "unsupported_operation",
+                "This worker does not support the requested operation.",
+                422,
+            )
+        authorized = await self.authorizer.authorize(source)
         if tuple(authorized.source_signature.to_catalog()) != spec.sourceSignature:
             raise ProcessingError(
                 "source_changed",
-                "The raster changed before clipping. Create a new plan.",
+                "The raster changed before processing. Create a new plan.",
                 409,
             )
         directory = await asyncio.to_thread(
@@ -69,8 +90,8 @@ class RasterClipWorker:
             self.limits,
         )
         status, value = await run_bounded_process(
-            clip_process_target,
-            ("clip", (authorized.source_path, spec, directory, self.limits)),
+            target,
+            (action, (authorized.source_path, spec, directory, limits)),
             self.limits.runtime_seconds,
         )
         if status != "ok":
@@ -115,7 +136,7 @@ class RasterClipWorker:
                             None,
                             {
                                 "code": "interrupted",
-                                "detail": "The clip was cancelled or its worker lease ended.",
+                                "detail": "The job was cancelled or its worker lease ended.",
                             },
                         )
                         finished = True
@@ -133,7 +154,7 @@ class RasterClipWorker:
                         None,
                         {
                             "code": "interrupted",
-                            "detail": "This clip was cancelled before publication.",
+                            "detail": "This job was cancelled before publication.",
                         },
                     )
                     finished = True
@@ -147,7 +168,7 @@ class RasterClipWorker:
             elif isinstance(error, (TimeoutError, ProcessDeadlineError)):
                 detail = {
                     "code": "time_limit",
-                    "detail": "The clip exceeded its processing time limit. Choose a smaller area.",
+                    "detail": "The job exceeded its processing time limit. Choose a smaller area.",
                 }
             elif isinstance(error, RasterFeatureError):
                 detail = {
@@ -157,10 +178,10 @@ class RasterClipWorker:
             else:
                 detail = {
                     "code": "processing_failed",
-                    "detail": "The clip worker could not complete this operation.",
+                    "detail": "The job worker could not complete this operation.",
                 }
             # Log no raw source paths, session capabilities, or connection strings.
-            LOGGER.warning("Clip %s failed: %s", identifier, detail["code"])
+            LOGGER.warning("Processing job %s failed: %s", identifier, detail["code"])
             finished = await asyncio.to_thread(
                 self.jobs.finish, identifier, attempt, None, detail
             )
@@ -176,7 +197,7 @@ class RasterClipWorker:
                         None,
                         {
                             "code": "interrupted",
-                            "detail": "The worker stopped before the clip completed. Create a new clip to retry.",
+                            "detail": "The worker stopped before the job completed. Submit a new job to retry.",
                         },
                     )
         return True
@@ -198,7 +219,7 @@ class RasterClipWorker:
         )
 
 
-async def serve(worker: RasterClipWorker) -> None:
+async def serve(worker: ProcessingWorker) -> None:
     """Consume the queue using dependencies supplied by application composition.
 
     Args:
@@ -214,6 +235,6 @@ async def serve(worker: RasterClipWorker) -> None:
                 await asyncio.sleep(2)
         except (ProcessingError, OSError):
             LOGGER.warning(
-                "Clip worker storage is unavailable; retrying in five seconds"
+                "Processing worker storage is unavailable; retrying in five seconds"
             )
             await asyncio.sleep(5)

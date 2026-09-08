@@ -17,6 +17,13 @@ from rasterio.shutil import copy as copy_raster
 from rasterio.windows import Window, transform as window_transform
 
 from eolab_app.processing.models import ProcessingError
+from eolab_app.processing.artifacts import write_progress as _progress
+from eolab_app.processing.raster_input import (
+    require_signature as _require_signature,
+    require_source as _require_source,
+    select_area,
+    native_work,
+)
 from eolab_app.processing.clip_models import (
     ClipArtifact,
     ClipArea,
@@ -24,78 +31,29 @@ from eolab_app.processing.clip_models import (
     ClipSpec,
     RasterClipLimits,
 )
-from eolab_app.raster.bounded_window import (
-    NoRasterBoundsOverlapError,
-    selected_raster_area_for_wgs84_bounds,
-    selected_raster_area_for_wgs84_polygons,
-)
 from eolab_app.raster.models import SelectedRasterArea
 from eolab_app.raster.source_contract import (
-    decoded_source_bytes_for_blocks,
     read_native_raster_block,
-    require_bounded_source_structure,
-    require_raster_analysis_georeferencing,
-    require_signed_raster_dependencies,
     source_block_indexes_for_window,
 )
-from eolab_app.raster.source_identity import RasterSourceIdentity
-
-
-def _require_signature(path: Path, signature: tuple[int, ...]) -> None:
-    """Check the complete catalog signature before and after native work.
-
-    Args:
-        path: Catalog-authorized mounted source, never request-supplied.
-        signature: Expected inode, size, mtime, and ctime identity.
-
-    Raises:
-        ProcessingError: If the source disappeared or changed.
-    """
-    try:
-        current = tuple(RasterSourceIdentity.read(path).to_catalog())
-    except OSError:
-        current = ()
-    if current != signature:
-        raise ProcessingError(
-            "source_changed",
-            "The raster changed; scan it again and create a new clip plan.",
-            409,
-        )
 
 
 def _selection(
     dataset: Any, area: ClipArea, limits: RasterClipLimits
 ) -> SelectedRasterArea:
-    """Resolve an immutable explicit area through neutral grid mechanisms.
+    """Delegate the clip's explicit area to shared native-input mechanisms.
 
     Args:
-        dataset: Validated open source raster.
-        area: Job-owned WGS 84 bounds or polygon snapshot.
-        limits: Processing-owned geometry budget.
+        dataset: Validated open native raster.
+        area: Immutable clip bounds/AOI.
+        limits: Geometry budget owned by clipping.
 
     Returns:
-        Source window and projected mask geometries.
-
-    Raises:
-        ProcessingError: If the area has no overlap or cannot be projected.
+        Native window and projected mask geometry.
     """
-    try:
-        if area.kind == "bounds":
-            return selected_raster_area_for_wgs84_bounds(dataset, area.bounds)
-        return selected_raster_area_for_wgs84_polygons(
-            dataset,
-            area.geometries,
-            limits.max_coordinates,
-        )
-    except NoRasterBoundsOverlapError as error:
-        raise ProcessingError(
-            "no_overlap", "The selected area does not overlap this raster."
-        ) from error
-    except (ValueError, TypeError, OverflowError) as error:
-        raise ProcessingError(
-            "invalid_area",
-            "The selected area cannot be projected within the clip geometry limit.",
-        ) from error
+    return select_area(
+        dataset, area.kind, area.bounds, area.geometries, limits.max_coordinates
+    )
 
 
 def _grid(
@@ -126,14 +84,9 @@ def _grid(
             "This clip exceeds the native-resolution size or block limit. Choose a smaller area.",
             413,
         )
-    blocks = source_block_indexes_for_window(window, dataset.block_shapes[0])
-    decoded = decoded_source_bytes_for_blocks(dataset, blocks)
-    if decoded > limits.max_decoded_bytes:
-        raise ProcessingError(
-            "source_work_too_large",
-            "The source layout requires too much decoded work. Choose a smaller area.",
-            413,
-        )
+    block_count, decoded = native_work(
+        dataset, window, limits.max_native_blocks, limits.max_decoded_bytes
+    )
     return ClipGrid(
         crs=dataset.crs.to_wkt(),
         transform=tuple(window_transform(window, dataset.transform))[:6],
@@ -142,32 +95,12 @@ def _grid(
         height=height,
         dtype=dataset.dtypes[0],
         nodata=None if dataset.nodata is None else str(dataset.nodata),
-        nativeBlocks=len(blocks),
+        nativeBlocks=block_count,
         decodedBytes=decoded,
         estimatedRawBytes=raw_bytes,
         # Source-window staging + COG and overviews + finalization scratch.
         reservedBytes=4 * raw_bytes + 32 * 1024**2,
     )
-
-
-def _require_source(dataset: Any, path: Path) -> None:
-    """Apply existing signed-source policies without widening clip eligibility.
-
-    Args:
-        dataset: Open catalog source.
-        path: Authorized source path.
-
-    Raises:
-        ProcessingError: If the signed one-band input contract is unsupported.
-    """
-    try:
-        require_signed_raster_dependencies(dataset, path)
-        require_raster_analysis_georeferencing(dataset)
-        require_bounded_source_structure(dataset)
-        if dataset.driver != "GTiff":
-            raise ValueError("GeoTIFF required")
-    except ValueError as error:
-        raise ProcessingError("unsupported_source", str(error)) from error
 
 
 def plan_clip(
@@ -191,22 +124,6 @@ def plan_clip(
             grid = _grid(dataset, _selection(dataset, area, limits), limits)
     _require_signature(path, signature)
     return grid
-
-
-def _progress(directory: Path, phase: str, complete: int, total: int) -> None:
-    """Atomically expose bounded phase information to the supervising worker.
-
-    Args:
-        directory: Private attempt directory.
-        phase: Explicit processing phase.
-        complete: Completed native blocks.
-        total: Admitted native block count.
-    """
-    temporary = directory / "progress.tmp"
-    temporary.write_text(
-        json.dumps({"phase": phase, "completedBlocks": complete, "totalBlocks": total})
-    )
-    temporary.replace(directory / "progress.json")
 
 
 def create_clip(

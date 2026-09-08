@@ -31,7 +31,7 @@ from eolab_app.processing.models import (
 PROCESSING_ADVISORY_LOCK_ID = 7_610_329
 UNFINISHED = ("queued", "running", "cancelling")
 PUBLIC_COLUMNS = (
-    "id,owner,request_key,plan_id,created_at,updated_at,expires_at,status,"
+    "id,owner,request_key,plan_id,created_at,updated_at,expires_at,status,operation,"
     "CASE WHEN spec IS NULL THEN NULL ELSE summary END AS spec,"
     "reserved_bytes,attempt_id,lease_until,deadline_at,progress,artifact,error"
 )
@@ -261,17 +261,14 @@ class PostgresJobStore:
                     "The processing queue is full. Wait for an existing job to finish.",
                     429,
                 )
-            if (
-                count["bytes"] + expected.reserved_bytes
-                > self.limits.max_stored_bytes
-            ):
+            if count["bytes"] + expected.reserved_bytes > self.limits.max_stored_bytes:
                 raise ProcessingError(
                     "storage_full",
                     "Temporary processing storage is full. Delete an earlier result or try later.",
                     429,
                 )
             cursor.execute(
-                "INSERT INTO processing.jobs(id,owner,request_key,plan_id,expires_at,status,spec,reserved_bytes,summary) VALUES (%s,%s,%s,%s,now()+%s*interval '1 second','queued',%s,%s,%s) RETURNING *",
+                "INSERT INTO processing.jobs(id,owner,request_key,plan_id,expires_at,status,spec,reserved_bytes,summary,operation,minimum_claim_version) VALUES (%s,%s,%s,%s,now()+%s*interval '1 second','queued',%s,%s,%s,%s,%s) RETURNING *",
                 (
                     uuid4().hex,
                     owner,
@@ -281,6 +278,8 @@ class PostgresJobStore:
                     Jsonb(expected.specification),
                     expected.reserved_bytes,
                     Jsonb(expected.summary),
+                    expected.operation,
+                    expected.minimum_claim_version,
                 ),
             )
             return cursor.fetchone()
@@ -307,7 +306,9 @@ class PostgresJobStore:
             )
             row = cursor.fetchone()
         if not row:
-            raise ProcessingError("job_not_found", "This processing job is unavailable.", 404)
+            raise ProcessingError(
+                "job_not_found", "This processing job is unavailable.", 404
+            )
         return row
 
     def list_owned(self, owner: str) -> list[dict[str, Any]]:
@@ -379,11 +380,14 @@ class PostgresJobStore:
         Crash recovery waits through the previous hard deadline plus exit grace.
         A lost DB connection cannot cause a second native child to start while
         the old child could still be running under its supervisor deadline.
+        Claim protocol 2 supports explicit operation dispatch; the migration's
+        trigger also fences unmodified legacy workers that do not declare it.
 
         Returns:
             Claimed job or None while another attempt reserves the slot.
         """
         with self._transaction(locked=True) as cursor:
+            cursor.execute("SET LOCAL eolab.processing_claim_version = '2'")
             cursor.execute(
                 "UPDATE processing.jobs SET status='interrupted',error=%s,updated_at=now() WHERE status IN ('running','cancelling') AND deadline_at<now()",
                 (
@@ -401,7 +405,7 @@ class PostgresJobStore:
             if cursor.fetchone():
                 return None
             cursor.execute(
-                "SELECT id FROM processing.jobs WHERE status='queued' ORDER BY created_at LIMIT 1 FOR UPDATE"
+                "SELECT id FROM processing.jobs WHERE status='queued' AND minimum_claim_version<=2 ORDER BY created_at LIMIT 1 FOR UPDATE"
             )
             row = cursor.fetchone()
             if not row:

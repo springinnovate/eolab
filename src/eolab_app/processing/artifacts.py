@@ -10,8 +10,24 @@ from typing import Any
 from eolab_app.processing.models import ProcessingError, ProcessingLimits
 
 
-class LocalClipArtifacts:
-    """Store clip attempts on one persistent volume outside mounted inputs."""
+def write_progress(directory: Path, phase: str, complete: int, total: int) -> None:
+    """Atomically expose bounded native-kernel progress to its supervisor.
+
+    Args:
+        directory: Confined private attempt directory.
+        phase: Operation-owned named phase.
+        complete: Processed native block count.
+        total: Admitted native block count.
+    """
+    temporary = directory / "progress.tmp"
+    temporary.write_text(
+        json.dumps({"phase": phase, "completedBlocks": complete, "totalBlocks": total})
+    )
+    temporary.replace(directory / "progress.json")
+
+
+class LocalJobArtifacts:
+    """Store processing attempts on one persistent volume outside mounted inputs."""
 
     def __init__(self, root: Path, forbidden_roots: tuple[Path, ...] = ()) -> None:
         """Validate separation before any file operation.
@@ -57,11 +73,11 @@ class LocalClipArtifacts:
             ValueError: If an ID or resolved path escapes the owned volume.
         """
         if not re.fullmatch(r"[a-f0-9]{32}", attempt):
-            raise ValueError("Invalid internal clip attempt ID")
+            raise ValueError("Invalid internal job attempt ID")
         parent = self.root / ("results" if published else "attempts")
         candidate = parent / attempt
         if candidate.resolve().parent != parent or parent.resolve().parent != self.root:
-            raise ValueError("Clip path escapes its owned storage")
+            raise ValueError("Job path escapes its owned storage")
         return candidate
 
     def prepare(self, attempt: str, reservation: int, limits: ProcessingLimits) -> Path:
@@ -87,7 +103,7 @@ class LocalClipArtifacts:
         ):
             raise ProcessingError(
                 "storage_full",
-                "There is not enough temporary storage for this clip.",
+                "There is not enough temporary storage for this job.",
                 429,
             )
         path = self._directory(attempt, False)
@@ -110,17 +126,20 @@ class LocalClipArtifacts:
         if size > reservation:
             raise ProcessingError(
                 "output_too_large",
-                "The completed clip exceeds its storage reservation.",
+                "The completed result exceeds its storage reservation.",
                 413,
             )
         path.replace(self._directory(attempt, True))
 
-    def result_path(self, attempt: str, provenance: bool = False) -> Path:
+    def result_path(
+        self, attempt: str, provenance: bool = False, result_name: str = "result.tif"
+    ) -> Path:
         """Locate a finished file after the caller verifies owner and transfer lease.
 
         Args:
             attempt: Job-owned published attempt ID.
             provenance: Select the immutable provenance JSON instead of GeoTIFF.
+            result_name: Server-owned artifact name; defaults for legacy clips.
 
         Returns:
             Confined, existing artifact path.
@@ -129,7 +148,11 @@ class LocalClipArtifacts:
             ProcessingError: If the immutable artifact is absent or not a file.
         """
         directory = self._directory(attempt, True)
-        path = directory / ("provenance.json" if provenance else "result.tif")
+        if not re.fullmatch(r"result\.[a-z0-9]{1,8}", result_name):
+            raise ProcessingError(
+                "invalid_artifact", "Invalid processing result descriptor.", 500
+            )
+        path = directory / ("provenance.json" if provenance else result_name)
         if not path.is_file() or path.resolve().parent != directory:
             raise ProcessingError(
                 "result_missing",

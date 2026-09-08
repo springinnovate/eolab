@@ -12,7 +12,7 @@ const box = { kind: "selectedArea", selectedBounds: { west: 77, south: 22, east:
 const id = "a".repeat(32);
 const plan = { planId: id, expiresAt: "2099-01-01T00:00:00Z", area: { kind: "bounds", bounds: [77,22,78,23] },
     grid: { transform: [1000, 0, 0, 0, -1000, 0], width: 100, height: 120, crs: "EPSG:3857", dtype: "float32", estimatedRawBytes: 60000 } };
-const job = { jobId: id, status: "queued", source, area: plan.area, grid: plan.grid, progress: {}, result: null };
+const job = { jobId: id, operation: "raster.clip.v1", status: "queued", source, area: plan.area, grid: plan.grid, progress: {}, result: null };
 
 /** Create isolated controller adapters with real pending storage. @param {Object} overrides API overrides. @return {Object} Fixture. */
 function fixture(overrides = {}) {
@@ -105,6 +105,15 @@ test("polling recovers owned jobs without any map layers and lifecycle buttons c
     assert.equal(h.view.state.jobs.length, 1); assert.equal(h.timers.at(-1)[1], 2000);
     await h.controller.jobAction(id,"cancel"); await h.controller.jobAction(id,"delete");
     assert.deepEqual(h.requests, [["cancel",id],["delete",id]]);
+});
+
+test("clip Downloads ignores calculation jobs in shared processing history", async () => {
+    const calculation = { ...job, jobId: "b".repeat(32), operation: "raster.aggregate.v1",
+        area: { kind: "wholeRaster", bounds: null }, source: undefined };
+    const h = fixture({ listJobs: async () => [calculation, job] });
+    await h.controller.start();
+    assert.deepEqual(h.view.state.jobs, [job]);
+    assert.equal(h.view.state.jobMessage, "");
 });
 
 test("an older job listing cannot erase a newly accepted clip", async () => {

@@ -1,7 +1,8 @@
-"""Owned processing job lifecycle and explicit raster-clip planning/submission."""
+"""Owned processing lifecycle and explicit raster operation commands."""
 
 import asyncio
 import hashlib
+import json
 from datetime import datetime, timezone
 from pathlib import PurePath
 from typing import Any
@@ -22,9 +23,16 @@ from eolab_app.processing.clip_models import (
     ClipSpec,
     RasterClipLimits,
 )
-from eolab_app.processing.ports import ClipArtifactStore, JobStore
+from eolab_app.processing.aggregate_models import (
+    AggregateArea,
+    AggregatePlanRequest,
+    AggregateSpec,
+    RasterAggregateLimits,
+)
+from eolab_app.processing.raster_aggregate import aggregate_process_target
+from eolab_app.processing.ports import JobArtifactStore, JobStore
 from eolab_app.processing.raster_clip import clip_process_target
-from eolab_app.raster.models import CatalogRasterRequest
+from eolab_app.raster.models import CatalogRasterRequest, Wgs84Bounds
 from eolab_app.raster.ports import RasterSourceAuthorizer
 from eolab_app.sampling_area import (
     SamplingAreaUnavailableError,
@@ -49,7 +57,56 @@ def prepare_clip_job(spec: ClipSpec) -> PreparedJobPlan:
             "area": {"kind": spec.area.kind, "bounds": list(spec.area.bounds)},
         },
         reserved_bytes=spec.grid.reservedBytes,
+        operation=spec.operation,
     )
+
+
+def prepare_aggregate_job(
+    spec: AggregateSpec, limits: RasterAggregateLimits
+) -> PreparedJobPlan:
+    """Project checked calculation intent onto neutral job storage.
+
+    Args:
+        spec: Source-fenced native calculation specification.
+        limits: Calculation result reservation policy.
+
+    Returns:
+        Path-free specification and summary requiring the operation-aware worker.
+    """
+    data = spec.model_dump(mode="json", by_alias=True)
+    return PreparedJobPlan(
+        specification=data,
+        summary={
+            **{key: data[key] for key in ("sources", "calculations", "grid")},
+            "area": {"kind": spec.area.kind, "bounds": spec.area.bounds},
+        },
+        reserved_bytes=limits.result_reservation_bytes,
+        operation=spec.operation,
+        minimum_claim_version=2,
+    )
+
+
+def require_operation(row: dict[str, Any], operation: str) -> None:
+    """Keep reviewed plans and idempotency retries on their original command.
+
+    Args:
+        row: Authorized plan or job row.
+        operation: Explicit operation supported by the submitting endpoint.
+
+    Raises:
+        ProcessingError: When the supplied plan belongs to a different operation.
+    """
+    actual = (
+        row.get("operation")
+        or (row.get("spec") or {}).get("operation")
+        or "raster.clip.v1"
+    )
+    if actual != operation:
+        raise ProcessingError(
+            "operation_mismatch",
+            "This plan belongs to a different processing operation.",
+            409,
+        )
 
 
 def public_job(row: dict[str, Any]) -> dict[str, Any]:
@@ -67,14 +124,20 @@ def public_job(row: dict[str, Any]) -> dict[str, Any]:
     if status == "ready" and row["expires_at"] <= datetime.now(timezone.utc):
         status = "expired"
     ready = status == "ready"
+    operation = row.get("operation") or spec.get("operation") or "raster.clip.v1"
+    calculation = operation == "raster.aggregate.v1"
     return {
         "jobId": identifier,
-        "operation": "raster.clip.v1",
+        "operation": operation,
         "status": status,
         "createdAt": row["created_at"],
         "updatedAt": row["updated_at"],
         "expiresAt": row["expires_at"],
-        "source": spec.get("source"),
+        **(
+            {"sources": spec.get("sources"), "calculations": spec.get("calculations")}
+            if calculation
+            else {"source": spec.get("source")}
+        ),
         "grid": spec.get("grid"),
         "area": (
             {"kind": spec["area"]["kind"], "bounds": spec["area"]["bounds"]}
@@ -90,7 +153,11 @@ def public_job(row: dict[str, Any]) -> dict[str, Any]:
                 "filename": row["artifact"]["filename"],
                 "bytes": row["artifact"]["size"],
                 "sha256": row["artifact"]["sha256"],
-                "validPixels": row["artifact"]["valid_pixels"],
+                **(
+                    {"rows": row["artifact"]["rows"]}
+                    if calculation
+                    else {"validPixels": row["artifact"]["valid_pixels"]}
+                ),
             }
             if ready and row["artifact"]
             else None
@@ -106,7 +173,7 @@ class ProcessingService:
         authorizer: RasterSourceAuthorizer,
         areas: TemporaryAoiSamplingAreaReader,
         jobs: JobStore,
-        artifacts: ClipArtifactStore,
+        artifacts: JobArtifactStore,
         limits: RasterClipLimits,
     ) -> None:
         """Compose job storage and currently supported raster-operation capabilities.
@@ -123,12 +190,16 @@ class ProcessingService:
         self.jobs = jobs
         self.artifacts = artifacts
         self.limits = limits
+        self.aggregate_limits = RasterAggregateLimits.with_lifecycle(limits)
 
-    async def _area(self, request: ClipPlanRequest) -> ClipArea:
+    async def _area_snapshot(
+        self, bounds: Wgs84Bounds | None, aoi_id: str | None
+    ) -> dict[str, Any]:
         """Snapshot an explicit area and apply the job-owned serialization limit.
 
         Args:
-            request: Strict one-of area selection.
+            bounds: Explicit box, mutually exclusive with the AOI identifier.
+            aoi_id: Ready uploaded AOI when no box is provided.
 
         Returns:
             Independent geometry value with no file or AOI storage dependency.
@@ -136,29 +207,43 @@ class ProcessingService:
         Raises:
             ProcessingError: If the AOI expired or is too complex for clipping.
         """
-        if request.selectedBounds is not None:
-            bounds = request.selectedBounds
-            area = ClipArea(
-                kind="bounds",
-                bounds=(bounds.west, bounds.south, bounds.east, bounds.north),
-            )
+        if bounds is not None:
+            area = {
+                "kind": "bounds",
+                "bounds": (bounds.west, bounds.south, bounds.east, bounds.north),
+            }
         else:
             try:
-                resolved = await self.areas.resolve_for_sampling(request.temporaryAoiId)
+                resolved = await self.areas.resolve_for_sampling(aoi_id)
             except SamplingAreaUnavailableError as error:
                 raise ProcessingError("aoi_unavailable", error.detail, 409) from error
-            area = ClipArea(
-                kind="aoi",
-                bounds=resolved.bounds,
-                geometries=tuple(value.as_geojson() for value in resolved.geometries),
-            )
-        if len(area.model_dump_json().encode()) > self.limits.max_geometry_bytes:
+            area = {
+                "kind": "aoi",
+                "bounds": resolved.bounds,
+                "geometries": tuple(
+                    value.as_geojson() for value in resolved.geometries
+                ),
+            }
+        if len(json.dumps(area).encode()) > self.limits.max_geometry_bytes:
             raise ProcessingError(
                 "aoi_too_large",
-                "This AOI is too complex for a clip. Simplify its geometry and try again.",
+                "This AOI is too complex for processing. Simplify its geometry and try again.",
                 413,
             )
         return area
+
+    async def _area(self, request: ClipPlanRequest) -> ClipArea:
+        """Build clipping's area value from the shared immutable snapshot.
+
+        Args:
+            request: Explicit clip area selection.
+
+        Returns:
+            Clip-owned geometry and bounds value.
+        """
+        return ClipArea(
+            **await self._area_snapshot(request.selectedBounds, request.temporaryAoiId)
+        )
 
     async def plan_raster_clip(
         self, owner: str, request: ClipPlanRequest
@@ -260,6 +345,7 @@ class ProcessingService:
             self.jobs.find_request, owner, request.requestId
         )
         if existing:
+            require_operation(existing, "raster.clip.v1")
             if existing["plan_id"] != request.planId:
                 raise ProcessingError(
                     "request_conflict",
@@ -268,6 +354,7 @@ class ProcessingService:
                 )
             return public_job(existing)
         plan = await asyncio.to_thread(self.jobs.get_plan, request.planId, owner)
+        require_operation(plan, "raster.clip.v1")
         spec = ClipSpec.model_validate(plan["spec"])
         authorized = await self.authorizer.authorize(spec.source)
         if tuple(authorized.source_signature.to_catalog()) != spec.sourceSignature:
@@ -284,8 +371,174 @@ class ProcessingService:
                 409,
             )
         row = await asyncio.to_thread(
-            self.jobs.submit, owner, request.planId, request.requestId,
+            self.jobs.submit,
+            owner,
+            request.planId,
+            request.requestId,
             prepare_clip_job(spec),
+        )
+        return public_job(row)
+
+    async def _aggregate_area(self, request: AggregatePlanRequest) -> AggregateArea:
+        """Snapshot the shared box/AOI geometry or explicit whole-source intent.
+
+        Args:
+            request: Validated single-raster calculation request.
+
+        Returns:
+            Independent immutable area for the calculation kernel.
+        """
+        if request.wholeRaster:
+            return AggregateArea(kind="wholeRaster")
+        return AggregateArea(
+            **await self._area_snapshot(request.selectedBounds, request.temporaryAoiId)
+        )
+
+    async def plan_raster_calculation(
+        self, owner: str, request: AggregatePlanRequest
+    ) -> dict[str, Any]:
+        """Review native work and expression intent without reading band values.
+
+        Args:
+            owner: Current session hash.
+            request: Exactly one catalog raster, explicit area, and scalar expressions.
+
+        Returns:
+            Expiring immutable calculation plan with native work limits.
+
+        Raises:
+            ProcessingError: For resource, source, or area admission failures.
+        """
+        identifier = await asyncio.to_thread(
+            self.jobs.reserve_plan,
+            owner,
+            request.model_dump(mode="json", by_alias=True),
+        )
+        completed = False
+        limits = self.aggregate_limits
+        try:
+            async with asyncio.timeout(limits.plan_timeout_seconds):
+                alias, source = next(iter(request.sources.items()))
+                authorized = await self.authorizer.authorize(source)
+                area = await self._aggregate_area(request)
+                signature = tuple(authorized.source_signature.to_catalog())
+                status, value = await run_bounded_process(
+                    aggregate_process_target,
+                    (
+                        "plan",
+                        (
+                            authorized.source_path,
+                            signature,
+                            area,
+                            request.calculations,
+                            alias,
+                            limits,
+                        ),
+                    ),
+                    limits.plan_timeout_seconds,
+                )
+                if status != "ok":
+                    raise ProcessingError(*value)
+                await self.authorizer.require_current(authorized)
+                spec = AggregateSpec(
+                    sources=request.sources,
+                    sourceSignature=signature,
+                    area=area,
+                    calculations=request.calculations,
+                    grid=value,
+                )
+            plan = await asyncio.to_thread(
+                self.jobs.finish_plan,
+                identifier,
+                owner,
+                prepare_aggregate_job(spec, limits),
+            )
+            if plan is None:
+                raise ProcessingError(
+                    "plan_expired",
+                    "This calculation plan expired. Create a new one.",
+                    409,
+                )
+            completed = True
+            return {
+                "planId": identifier,
+                "operation": spec.operation,
+                **prepare_aggregate_job(spec, limits).summary,
+                "expiresAt": plan["expires_at"],
+                "resolution": "native",
+                "valueDomain": "stored",
+                "inclusion": "cell_center",
+                "limits": {
+                    "maxDecodedBytes": limits.max_decoded_bytes,
+                    "maxNativeBlocks": limits.max_native_blocks,
+                    "runtimeSeconds": limits.runtime_seconds,
+                    "downloadLifetimeSeconds": limits.result_ttl_seconds,
+                },
+            }
+        except (TimeoutError, ProcessDeadlineError) as error:
+            raise ProcessingError(
+                "planning_timeout",
+                "Calculation planning exceeded its time limit. Try a simpler area or try again.",
+                422,
+            ) from error
+        finally:
+            if not completed:
+                await asyncio.shield(
+                    asyncio.to_thread(self.jobs.finish_plan, identifier, owner, None)
+                )
+
+    async def submit_raster_calculation(
+        self, owner: str, request: JobSubmitRequest
+    ) -> dict[str, Any]:
+        """Revalidate and durably admit the reviewed calculation exactly once.
+
+        Args:
+            owner: Current session hash.
+            request: Reviewed plan ID and client-generated idempotency key.
+
+        Returns:
+            Accepted or previously accepted owned calculation job.
+
+        Raises:
+            ProcessingError: For expired or changed intent, conflicts, or capacity.
+        """
+        existing = await asyncio.to_thread(
+            self.jobs.find_request, owner, request.requestId
+        )
+        if existing:
+            require_operation(existing, "raster.aggregate.v1")
+            if existing["plan_id"] != request.planId:
+                raise ProcessingError(
+                    "request_conflict",
+                    "That request ID already belongs to another plan.",
+                    409,
+                )
+            return public_job(existing)
+        plan = await asyncio.to_thread(self.jobs.get_plan, request.planId, owner)
+        require_operation(plan, "raster.aggregate.v1")
+        spec = AggregateSpec.model_validate(plan["spec"])
+        authorized = await self.authorizer.authorize(next(iter(spec.sources.values())))
+        if tuple(authorized.source_signature.to_catalog()) != spec.sourceSignature:
+            raise ProcessingError(
+                "source_changed",
+                "The raster changed since planning. Create a new calculation plan.",
+                409,
+            )
+        area = await self._aggregate_area(
+            AggregatePlanRequest.model_validate(plan["request"])
+        )
+        if area != spec.area:
+            raise ProcessingError(
+                "area_changed",
+                "The AOI changed since planning. Create a new calculation plan.",
+                409,
+            )
+        row = await asyncio.to_thread(
+            self.jobs.submit,
+            owner,
+            request.planId,
+            request.requestId,
+            prepare_aggregate_job(spec, self.aggregate_limits),
         )
         return public_job(row)
 
@@ -352,10 +605,13 @@ class ProcessingService:
             self.jobs.acquire_transfer, identifier, owner
         )
         try:
-            path = await asyncio.to_thread(
-                self.artifacts.result_path, row["attempt_id"], provenance
-            )
             artifact = row["artifact"]
+            path = await asyncio.to_thread(
+                self.artifacts.result_path,
+                row["attempt_id"],
+                provenance,
+                result_name=artifact.get("result_name", "result.tif"),
+            )
             if provenance:
                 data = await asyncio.to_thread(path.read_bytes)
                 size = len(data)

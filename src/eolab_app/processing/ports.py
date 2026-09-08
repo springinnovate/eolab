@@ -230,7 +230,7 @@ class JobStore(Protocol):
         ...
 
 
-class ClipArtifactStore(Protocol):
+class JobArtifactStore(Protocol):
     """Storage capability; implementations do not invoke application services."""
 
     def prepare(self, attempt: str, reservation: int, limits: ProcessingLimits) -> Path:
@@ -262,12 +262,15 @@ class ClipArtifactStore(Protocol):
         """
         ...
 
-    def result_path(self, attempt: str, provenance: bool = False) -> Path:
+    def result_path(
+        self, attempt: str, provenance: bool = False, result_name: str = "result.tif"
+    ) -> Path:
         """Locate a finished file after the caller verifies owner and transfer lease.
 
         Args:
             attempt: Job-owned published attempt ID.
             provenance: Select the immutable provenance JSON instead of GeoTIFF.
+            result_name: Server-owned artifact descriptor, defaulting to legacy clips.
 
         Returns:
             Confined, existing artifact path.
