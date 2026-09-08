@@ -16,8 +16,10 @@
 .summary-remove:is(:hover, :focus-visible) .summary-remove-tooltip { display: block; }
 .summary-raster-binding { display: grid; gap: 4px; min-width: 0; font-size: 0.75rem; color: var(--text-2); }
 #calculations-panel .summary-raster-binding select { width: 100%; padding: 5px; }
-.summary-equation { min-width: 0; }
-#calculations-panel .summary-equation textarea { resize: vertical; font: 0.85rem/1.4 monospace; min-height: 3.5em; }
+.summary-equation { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; }
+#calculations-panel .summary-equation textarea, #calculations-panel .summary-equation::after { grid-area: 1 / 1; box-sizing: border-box; width: 100%; min-height: 0; max-height: 12em; margin: 0; padding: 5px 8px; border: 1px solid var(--border-1); font: 0.85rem/1.4 monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+#calculations-panel .summary-equation textarea { resize: vertical; overflow-y: auto; }
+#calculations-panel .summary-equation::after { content: attr(data-expression) " "; visibility: hidden; overflow: hidden; }
 #calculations-panel .summary-equation textarea[aria-invalid="true"] { border-color: var(--status-danger); }
 .summary-value-group { display: grid; gap: 3px; text-align: left; min-width: 0; border-radius: 4px; }
 .summary-value { font: 500 1.05rem/1.4 monospace; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
@@ -51,7 +53,7 @@
 @media (pointer: coarse) {
     .summary-statistic-heading { min-height: 40px; padding-right: 52px; }
     .summary-remove, .summary-text-button, .summary-copy { min-width: 44px; min-height: 44px; }
-    #calculations-panel input.summary-statistic-name[type="text"], #calculations-panel .summary-statistic input, #calculations-panel .summary-statistic textarea, #calculations-panel select { font-size: 16px; }
+    #calculations-panel input.summary-statistic-name[type="text"], #calculations-panel .summary-statistic input, #calculations-panel .summary-statistic textarea, #calculations-panel .summary-equation::after, #calculations-panel select { font-size: 16px; }
 }
 @media (prefers-reduced-motion: reduce) { .summary-status-row > span.is-working::before { animation: none; } }
 

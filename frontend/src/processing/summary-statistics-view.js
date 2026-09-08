@@ -60,7 +60,7 @@ export class SummaryStatisticsView extends CalculationsView {
         source.addEventListener("change", () => this.handlers.onEdit(card.id, { source: this.sources[Number(source.value)] ?? null }));
         binding.append(bindingText, source);
         const equation = this.element("div"); equation.className = "summary-equation";
-        const expression = this.element("textarea"); expression.rows = 2; expression.maxLength = 4096; expression.spellcheck = false;
+        const expression = this.element("textarea"); expression.rows = 1; expression.maxLength = 4096; expression.spellcheck = false;
         expression.placeholder = "Formula, e.g. mean(a)";
         expression.setAttribute("aria-label", `Summary statistic ${card.id} formula`);
         expression.setAttribute("aria-describedby", `summary-statistic-status-${card.id}`);
@@ -97,7 +97,7 @@ export class SummaryStatisticsView extends CalculationsView {
         const detailsBody = this.element("div"); details.append(detailsTitle, detailsBody);
         const size = this.element("small"); size.className = "summary-size";
         root.append(heading, equation, binding, statusRow, progress, size, details, remove);
-        return { root, label, source, expression, value, caption, copy, copyStatus, copyRevision: 0, status, run, stop, progress, details, detailsBody, size, remove };
+        return { root, label, source, expression, equation, value, caption, copy, copyStatus, copyRevision: 0, status, run, stop, progress, details, detailsBody, size, remove };
     }
     render(state) {
         this.sources = state.sources;
@@ -114,6 +114,8 @@ export class SummaryStatisticsView extends CalculationsView {
             const row = this.cards.get(card.id);
             if (row.label.value !== card.label) row.label.value = card.label;
             if (row.expression.value !== card.expression) row.expression.value = card.expression;
+            // A hidden, identically styled mirror sizes wrapped and multiline formulas without layout reads.
+            if (row.equation.getAttribute("data-expression") !== card.expression) row.equation.setAttribute("data-expression", card.expression);
             if (row.sourceSignature !== sourceSignature) {
                 const options = state.sources.map((source, index) => {
                     const option = this.element("option", source.label); option.value = String(index); return option;
