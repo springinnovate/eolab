@@ -2,6 +2,18 @@
 import { ACTIVE_JOB_STATES } from "./downloads-controller.js";
 import { processingDownloadUrl } from "./api.js";
 
+/**
+ * Summarize an explicit CRS label or root WKT name/authority for display.
+ * This reads presentation metadata only; projection remains backend-owned.
+ * @param {string} crs Native CRS definition. @return {string} Compact name.
+ */
+export function describeClipCrs(crs) {
+    const name = crs.match(/^(?:PROJCS|GEOGCS|PROJCRS|GEOGCRS|COMPD_CS)\["([^"]+)"/);
+    if (!name) return crs;
+    const authority = crs.match(/(?:AUTHORITY\["EPSG","(\d+)"\]|ID\["EPSG",(\d+)\])\]$/);
+    return authority ? `${name[1]} (EPSG:${authority[1] ?? authority[2]})` : name[1];
+}
+
 /** Format file sizes without implying compression precision. @param {number} bytes Byte count. @return {string} Human-readable size. */
 export function formatDownloadBytes(bytes) {
     if (bytes < 1024) return `${bytes} B`;
@@ -45,6 +57,7 @@ export class DownloadsView {
         this.listeners = [];
         this.sourceSignature = "";
         this.jobSignature = "";
+        this.planId = null;
     }
 
     /** Connect fixed controls to semantic callbacks. @param {Object} handlers User intent handlers. @return {void} */
@@ -118,7 +131,11 @@ export class DownloadsView {
         e["retry-submission"].hidden = !state.pending;
         e["retry-submission"].disabled = state.submitting;
         e.plan.hidden = !state.plan;
-        if (state.plan) this.renderPlan(state.plan, state.source);
+        if (state.plan && this.planId !== state.plan.planId) {
+            this.renderPlan(state.plan, state.source);
+            e.plan.scrollIntoView?.({ block: "nearest" });
+        }
+        this.planId = state.plan?.planId ?? null;
         const active = state.jobs.filter(job => ACTIVE_JOB_STATES.has(job.status)).length;
         const ready = state.jobs.filter(job => job.status === "ready").length;
         this.opener.textContent = `Downloads${active ? ` · ${active} working` : ready ? ` · ${ready} ready` : ""}${state.pending ? " · unconfirmed" : ""}`;
@@ -144,7 +161,7 @@ export class DownloadsView {
         const rows = [
             ["Raster", source.label], ["Area", describeClipArea(plan.area)],
             ["Output", "Cloud Optimized GeoTIFF · native values and validity mask"],
-            ["Native CRS", grid.crs],
+            ["Native CRS", describeClipCrs(grid.crs)],
             ["Pixel size", `${resolutionX.toPrecision(6)} × ${resolutionY.toPrecision(6)} in native CRS units`],
             ["Dimensions", `${grid.width.toLocaleString()} × ${grid.height.toLocaleString()} pixels · ${grid.dtype}`],
             ["Estimated size", `${formatDownloadBytes(grid.estimatedRawBytes)} uncompressed; downloaded size depends on compression`],
@@ -153,6 +170,11 @@ export class DownloadsView {
         for (const [label, value] of rows) details.append(this.element("dt", label), this.element("dd", value));
         this.elements.plan.replaceChildren(this.element("h3", "Review clip"), details,
             this.element("p", "The clip keeps the original pixel grid. Cells outside the box or polygon, including polygon holes, are masked. Map colors and histogram sampling do not change the downloaded values."));
+        if (describeClipCrs(grid.crs) !== grid.crs) {
+            const definition = this.element("details", "");
+            definition.append(this.element("summary", "Full native CRS definition"), this.element("pre", grid.crs));
+            this.elements.plan.append(definition);
+        }
     }
 
     /** Build one owned lifecycle card. @param {Object} job Public job. @param {Object} state Current presentation state. @return {HTMLElement} Job card. */
@@ -170,7 +192,7 @@ export class DownloadsView {
             progress.setAttribute("aria-label", "Source blocks clipped");
             card.append(progress);
         }
-        if (job.grid) card.append(this.element("p", `${job.grid.width} × ${job.grid.height} pixels · ${job.grid.crs}`));
+        if (job.grid) card.append(this.element("p", `${job.grid.width} × ${job.grid.height} pixels · ${describeClipCrs(job.grid.crs)}`));
         if (job.error) card.append(this.element("p", `${job.error.detail} (${job.error.code})`));
         if (job.result && job.status === "ready") {
             card.append(this.element("p", `${formatDownloadBytes(job.result.bytes)} · expires ${new Date(job.expiresAt).toLocaleString()}`));

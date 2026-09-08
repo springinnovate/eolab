@@ -3604,7 +3604,7 @@ article.raster-histogram-summary {
 .map-inspection-dock-header {
   pointer-events: auto;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 8px;
   min-width: 0;
@@ -4543,6 +4543,7 @@ summary:hover > .raster-disclosure-chevron {
 .download-plan dl { display: grid; grid-template-columns: minmax(6rem, 1fr) 2fr; gap: 0.5rem; font-size: 0.85rem; }
 .download-plan dt { font-weight: 600; }
 .download-plan dd { margin: 0; }
+.download-plan pre { white-space: pre-wrap; max-height: 12rem; overflow: auto; font-size: 0.75rem; }
 .download-job .secondary-button { display: inline-block; margin: 0.25rem 0.35rem 0 0; text-decoration: none; }
 .download-job progress { width: 100%; }
 #downloads-message:empty, #downloads-job-message:empty { display: none; }

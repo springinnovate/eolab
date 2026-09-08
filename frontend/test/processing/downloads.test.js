@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { DownloadsController } from "../../src/processing/downloads-controller.js";
-import { DownloadsView, describeJobProgress } from "../../src/processing/downloads-view.js";
+import { DownloadsView, describeJobProgress, describeClipCrs } from "../../src/processing/downloads-view.js";
 import { ProcessingApiClient, ProcessingRequestError, processingDownloadUrl } from "../../src/processing/api.js";
 import { PendingSubmissionStorage } from "../../src/processing/pending-submission.js";
 import { FakeRasterControlDocument } from "../../test-support/raster/fake-controls-document.js";
@@ -169,6 +169,13 @@ test("pending recovery ignores corrupt and oversized browser data", () => {
     for (const value of ["bad JSON", "x".repeat(3000), JSON.stringify({planId:"bad", requestId:"valid-request-1234",label:"raster"})]) {
         assert.equal(new PendingSubmissionStorage({ getItem: () => value }).read(),null);
     }
+});
+
+test("native CRS presentation uses the root authority, not the embedded geographic datum", () => {
+    assert.equal(describeClipCrs('PROJCS["WGS 84 / Pseudo-Mercator",GEOGCS["WGS 84",AUTHORITY["EPSG","4326"]],AUTHORITY["EPSG","3857"]]'), "WGS 84 / Pseudo-Mercator (EPSG:3857)");
+    assert.equal(describeClipCrs('PROJCRS["Custom grid",ID["EPSG",32643]]'), "Custom grid (EPSG:32643)");
+    assert.equal(describeClipCrs('PROJCS["Custom grid",GEOGCS["WGS 84",AUTHORITY["EPSG","4326"]],UNIT["metre",1]]'), "Custom grid");
+    assert.equal(describeClipCrs("EPSG:4326"), "EPSG:4326");
 });
 
 test("Downloads and sampling share only neutral selection values; peers never import Processing", () => {
