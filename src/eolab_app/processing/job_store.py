@@ -17,7 +17,13 @@ from eolab_app.processing.models import (
     ProcessingLimits,
 )
 
-MUTEX = 7_610_329
+# Processing owns this key in PostgreSQL's single-bigint, database-wide advisory
+# lock namespace. It serializes schema migration and shared admission, job-state,
+# storage, and transfer decisions; it is never held during native execution.
+# The integer is an assigned identifier, not a limit or a generated random value.
+# Keep it stable across releases so overlapping workers acquire the same lock.
+# Other components using this database must allocate a different advisory key.
+PROCESSING_ADVISORY_LOCK_ID = 7_610_329
 UNFINISHED = ("queued", "running", "cancelling")
 PUBLIC_COLUMNS = (
     "id,owner,request_key,plan_id,created_at,updated_at,expires_at,status,"
@@ -44,7 +50,7 @@ class PostgresJobStore:
         """Open a bounded transaction, optionally serializing admission changes.
 
         Args:
-            locked: Acquire the processing-only transaction advisory mutex.
+            locked: Acquire Processing's database-wide transaction advisory lock.
 
         Yields:
             Dictionary-row cursor; all operations are committed or rolled back.
@@ -61,7 +67,10 @@ class PostgresJobStore:
             ) as connection:
                 with connection.cursor() as cursor:
                     if locked:
-                        cursor.execute("SELECT pg_advisory_xact_lock(%s)", (MUTEX,))
+                        cursor.execute(
+                            "SELECT pg_advisory_xact_lock(%s)",
+                            (PROCESSING_ADVISORY_LOCK_ID,),
+                        )
                     yield cursor
         except psycopg.Error as error:
             raise ProcessingError(

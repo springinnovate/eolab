@@ -173,6 +173,16 @@ delay the queue by up to about ten minutes, deliberately avoiding duplicate nati
 work. Linux children also carry their own wall-clock alarm. Interrupted jobs are
 explicitly retryable by creating a new plan/job; partial TIFFs are never resumed.
 
+Processing owns `PROCESSING_ADVISORY_LOCK_ID = 7_610_329` in PostgreSQL's
+single-bigint advisory-lock namespace for this database. This is an assigned lock
+identifier, not a resource limit. Schema migration and shared admission, job-state,
+storage, and transfer decisions acquire it only for their short transactions;
+commit or rollback releases it. Native processing does not hold this lock. Keep
+the value stable across releases and operation types that share these budgets,
+including overlapping deployments. Other components in this database must use a
+different key. A future change to the key or key format requires a coordinated
+migration so old and new workers do not accidentally use independent locks.
+
 An attempt writes into private storage and closes/validates all output before an
 atomic same-volume directory rename. A still-current database fence is required
 to advertise it as ready. Cancellation or a stale worker cannot expose a partial
