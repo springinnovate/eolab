@@ -1,0 +1,352 @@
+/** Editable statistic cards over the existing durable calculation workflow. */
+import { calculationIntent } from "./calculation-session.js";
+import { CalculationsController } from "./calculations-controller.js";
+import { normalizeRasterSamplingArea } from "../selected-area.js";
+
+export const AUTOMATIC_CALCULATION_LIMITS = Object.freeze({ nativeBlocks: 128, decodedBytes: 64 * 1024 * 1024, geometryCells: 25000 });
+export const STATISTIC_PRESETS = Object.freeze({
+    mean: { label: "Mean", expression: "mean(a)" }, sum: { label: "Sum", expression: "sum(a)" },
+    count: { label: "Count above 10", expression: "count(a > 10)" },
+    "area-threshold": { label: "Area above 10", expression: "areaha(a > 10)" },
+    "area-class": { label: "Area in class 4", expression: "areaha(a == 4)" },
+    percent: { label: "Percent above 10", expression: "100 * count(a > 10) / count(a)" },
+    range: { label: "Range", expression: "max(a) - min(a)" }, custom: { label: "", expression: "" },
+});
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const sourceKey = source => source ? `${source.collectionId}\n${source.itemId}` : "";
+
+/** Conservative browser policy; backend resource limits still apply to every run. */
+export function canAutomaticallyCalculate(plan, intent) {
+    const grid = plan?.grid;
+    return intent.area.kind === "selectedArea" && !!grid &&
+        Number.isFinite(grid.nativeBlocks) && grid.nativeBlocks <= AUTOMATIC_CALCULATION_LIMITS.nativeBlocks &&
+        Number.isFinite(grid.decodedBytes) && grid.decodedBytes <= AUTOMATIC_CALCULATION_LIMITS.decodedBytes &&
+        (!grid.groundArea || (Number.isFinite(grid.groundArea.estimatedGeometryCells) &&
+            grid.groundArea.estimatedGeometryCells <= AUTOMATIC_CALCULATION_LIMITS.geometryCells));
+}
+
+/** Own card identities and local validation; serialize native work through one executor. */
+export class SummaryStatisticsController {
+    constructor(dependencies) {
+        const { api, jobs, view, getContext, onOpen, onClose, onEditArea, clock = globalThis } = dependencies;
+        Object.assign(this, { api, jobs, view, getContext, onOpen, onClose, clock });
+        this.serial = 0;
+        this.state = { sources: [], statistics: [], area: null, selectedArea: null, areaChoice: "selection",
+            availableAoi: null, active: false, automatic: true, jobs: [], historyError: "", saved: null, undo: false };
+        this.state.statistics.push(this.makeStatistic(STATISTIC_PRESETS.mean));
+        this.engine = new CalculationsController({ ...dependencies, canAutoSubmit: canAutomaticallyCalculate,
+            view: { bind: handlers => { this.engineHandlers = handlers; }, render: state => this.receive(state), unbind() {} },
+            onOpen() {}, onClose() {},
+        });
+        view.bind({ onOpen: () => this.open(), onClose: () => this.close(), onEditArea,
+            onArea: choice => this.chooseArea(choice), onAutomatic: value => this.setAutomatic(value),
+            onEdit: (id, change) => this.editStatistic(id, change), onAdd: preset => this.addStatistic(preset),
+            onRemove: id => this.removeStatistic(id), onUndo: () => this.undoRemove(),
+            onRun: id => this.request(id, "manual"), onStop: id => this.stopStatistic(id),
+            onRetry: () => this.engineHandlers.onRetry(), onRefresh: () => void jobs.refresh(),
+            onInspect: id => this.inspect(id), onCancel: id => void this.engine.jobAction(id, "cancel"),
+            onDelete: id => void this.engine.jobAction(id, "delete"),
+            onCloseSaved: () => { this.state.saved = null; this.render(); },
+        });
+        this.render();
+    }
+
+    makeStatistic(value, source = null) {
+        return { id: ++this.serial, label: value.label, expression: value.expression, source,
+            version: 0, valid: false, checking: false, requested: null, pending: false,
+            message: "Choose a raster", result: null, plan: null, manualRequired: false, error: false };
+    }
+    label(card) { return card.label.trim() || `Summary statistic ${card.id}`; }
+    key(card) { return JSON.stringify([sourceKey(card.source), card.expression.trim(), this.state.area]); }
+    get isActive() { return this.state.active && !this.destroyed; }
+
+    /** Recover the existing durable record without starting a new automatic calculation. */
+    async start() {
+        const record = this.engine.record;
+        if (record) {
+            this.state.area = this.state.selectedArea = record.intent.area;
+            this.state.areaChoice = record.intent.area.kind === "wholeRaster" ? "whole" : record.intent.area.kind === "temporaryAoi" ? "uploaded" : "selection";
+            this.state.sources = [record.intent.source];
+            this.state.statistics = record.intent.calculations.map(value => {
+                const card = this.makeStatistic(value, record.intent.source); card.valid = true; return card;
+            });
+            this.batch = { automatic: record.automatic, obsolete: record.cancelRequested,
+                intent: record.intent, cards: this.state.statistics.map(card => ({ id: card.id, key: this.key(card) })) };
+        }
+        await this.engine.start();
+        this.receive(this.engine.state);
+    }
+
+    /** Opening/reopening is presentation, never an automatic calculation trigger. */
+    open(source = null, area) {
+        const context = this.getContext();
+        const sources = [...(context.sources ?? [])];
+        for (const item of [source, ...this.state.statistics.map(card => card.source)]) {
+            if (item && !sources.some(other => sourceKey(other) === sourceKey(item))) sources.push(item);
+        }
+        this.state.sources = sources;
+        const selected = area === undefined ? context.area : area;
+        if (area !== undefined || !this.state.area) {
+            this.state.areaChoice = "selection";
+            this.setSelection(selected, false);
+        }
+        if (!this.state.statistics.length) this.state.statistics.push(this.makeStatistic(STATISTIC_PRESETS.mean));
+        for (const card of this.state.statistics) {
+            const next = (source && card === this.state.statistics[0]) ? source : card.source ?? sources[0] ?? null;
+            if (sourceKey(next) !== sourceKey(card.source)) this.editStatistic(card.id, { source: next }, false);
+            else if (!card.valid && !card.checking) this.validateLater(card, false);
+        }
+        this.onOpen();
+        this.render();
+    }
+
+    setActive(active) {
+        if (this.state.active === active) return;
+        this.state.active = active;
+        if (!active) {
+            for (const card of this.state.statistics) if (card.requested === "automatic") card.requested = null;
+            if (this.batch?.automatic) this.invalidateBatch();
+        }
+        this.render();
+    }
+    close() { this.setActive(false); this.onClose(); }
+    setAutomatic(value) {
+        this.state.automatic = !!value;
+        if (!value) {
+            for (const card of this.state.statistics) if (card.requested === "automatic") card.requested = null;
+            if (this.batch?.automatic) this.invalidateBatch();
+        }
+        // Enabling affects the next edit/click, not every existing card immediately.
+        this.render();
+    }
+
+    setTemporaryAoi(aoi) {
+        this.state.availableAoi = aoi;
+        if (this.state.areaChoice === "uploaded" && this.state.area?.temporaryAoiId !== aoi?.id) {
+            this.changeArea(aoi ? { kind: "temporaryAoi", temporaryAoiId: aoi.id } : null, false);
+        }
+        this.render();
+    }
+    setSelection(area, automatic = true) {
+        const next = area ? normalizeRasterSamplingArea(area) : null;
+        if (same(next, this.state.selectedArea)) return;
+        this.state.selectedArea = next;
+        if (this.state.areaChoice === "selection") this.changeArea(next, automatic);
+    }
+    chooseArea(choice) {
+        this.state.areaChoice = choice;
+        const area = choice === "whole" ? { kind: "wholeRaster" } : choice === "uploaded"
+            ? this.state.availableAoi && { kind: "temporaryAoi", temporaryAoiId: this.state.availableAoi.id }
+            : this.state.selectedArea;
+        this.changeArea(area, true);
+    }
+    changeArea(area, automatic) {
+        if (same(area, this.state.area)) return;
+        if (this.batch?.automatic || this.isActive) this.invalidateBatch();
+        this.state.area = area;
+        for (const card of this.state.statistics) {
+            card.plan = null; card.manualRequired = false; card.error = false;
+            card.requested = automatic && this.isActive && this.state.automatic && area ? "automatic" : null;
+            this.validateLater(card, false);
+        }
+        this.render();
+    }
+    calculateSelection() {
+        if (!this.isActive || !this.state.automatic || this.state.areaChoice !== "selection" || this.state.area?.kind !== "selectedArea") return;
+        for (const card of this.state.statistics) this.request(card.id, "automatic", true);
+    }
+
+    editStatistic(id, change, automatic = true) {
+        const card = this.state.statistics.find(item => item.id === id);
+        if (!card) return;
+        const oldKey = this.key(card);
+        Object.assign(card, change);
+        if (oldKey !== this.key(card)) {
+            this.invalidateBatch(id);
+            card.plan = null; card.manualRequired = false; card.error = false;
+            card.requested = automatic && this.isActive && this.state.automatic ? "automatic" : null;
+            this.validateLater(card, false);
+        }
+        // Names are presentation only; the immutable original export keeps its run label.
+        this.render();
+    }
+    addStatistic(preset) {
+        if (this.state.statistics.length >= 5 || !STATISTIC_PRESETS[preset]) return;
+        const card = this.makeStatistic(STATISTIC_PRESETS[preset], this.state.statistics.at(-1)?.source ?? this.state.sources[0] ?? null);
+        this.state.statistics.push(card);
+        this.validateLater(card, this.isActive && this.state.automatic);
+        this.render();
+        this.view.focusStatistic?.(card.id);
+    }
+    removeStatistic(id) {
+        const index = this.state.statistics.findIndex(card => card.id === id);
+        if (index < 0) return;
+        const [card] = this.state.statistics.splice(index, 1);
+        this.clock.clearTimeout(card.timer); card.abort?.abort(); card.version++;
+        this.removed = { card, index }; this.state.undo = true;
+        this.invalidateBatch(id);
+        this.render();
+        this.view.focusUndo?.();
+    }
+    undoRemove() {
+        if (!this.removed || this.state.statistics.length >= 5) return;
+        const { card, index } = this.removed;
+        card.pending = false; card.requested = null;
+        this.state.statistics.splice(index, 0, card);
+        this.removed = null; this.state.undo = false;
+        this.validateLater(card, this.isActive && this.state.automatic && card.result?.key !== this.key(card));
+        this.render(); this.view.focusStatistic?.(card.id);
+    }
+
+    /** Server grammar remains authoritative; one invalid statistic never invalidates its peers. */
+    validateLater(card, requestAutomatic) {
+        this.clock.clearTimeout(card.timer); card.abort?.abort();
+        const version = ++card.version;
+        card.valid = false; card.checking = true; card.error = false;
+        if (requestAutomatic) card.requested = "automatic";
+        card.message = "Checking formula…";
+        card.timer = this.clock.setTimeout(() => void this.validate(card, version), 700);
+    }
+    async validate(card, version) {
+        card.abort = new AbortController();
+        try {
+            if (!card.expression.trim()) throw new Error("Enter a formula");
+            await this.api.validateCalculation([{ label: this.label(card), expression: card.expression }], card.abort.signal);
+            if (this.destroyed || version !== card.version || !this.state.statistics.includes(card)) return;
+            card.valid = true; card.checking = false; card.message = "Ready to calculate";
+            if (card.result?.key === this.key(card)) card.requested = null;
+        } catch (error) {
+            if (this.destroyed || version !== card.version || error.name === "AbortError" || !this.state.statistics.includes(card)) return;
+            card.valid = false; card.checking = false; card.error = !!card.expression.trim();
+            card.message = error.message; card.requested = null;
+        }
+        this.render(); this.schedulePump();
+    }
+    request(id, kind, debounce = false) {
+        const card = this.state.statistics.find(item => item.id === id);
+        if (!card || !card.source || !this.state.area) return;
+        if (this.batch && !this.batch.obsolete && this.batch.cards.some(entry => entry.id === id && entry.key === this.key(card))) return;
+        card.requested = kind; card.error = false;
+        if (debounce) this.validateLater(card, false);
+        else if (!card.valid && !card.checking) this.validateLater(card, false);
+        this.render(); this.schedulePump();
+    }
+    stopStatistic(id) {
+        const card = this.state.statistics.find(item => item.id === id);
+        if (card) { card.requested = null; card.message = "Calculation cancelled"; }
+        this.invalidateBatch(id);
+        this.render();
+    }
+
+    /** Cancel a superseded batch, retaining unchanged sibling requests for the next shared scan. */
+    invalidateBatch(id) {
+        const batch = this.batch;
+        if (!batch || (id !== undefined && !batch.cards.some(card => card.id === id))) return;
+        if (!batch.obsolete) {
+            batch.obsolete = true;
+            for (const entry of batch.cards) {
+                const card = this.state.statistics.find(item => item.id === entry.id);
+                if (card && card.id !== id && id !== undefined && this.key(card) === entry.key &&
+                    (!batch.automatic || (this.isActive && this.state.automatic))) card.requested = batch.automatic ? "automatic" : "manual";
+            }
+            this.engine.stop();
+        }
+    }
+    schedulePump() {
+        if (this.pumpScheduled || this.destroyed) return;
+        this.pumpScheduled = true;
+        queueMicrotask(() => { this.pumpScheduled = false; this.pump(); });
+    }
+    pump() {
+        if (this.destroyed || this.batch || this.engine.record || this.engine.desired || this.engine.advanceRunning) return;
+        const eligible = this.state.statistics.filter(card => card.requested && card.valid && !card.checking && card.source && this.state.area &&
+            (card.requested === "manual" || (this.isActive && this.state.automatic)));
+        const first = eligible[0];
+        if (!first) return;
+        if (this.engine.blocked && first.requested !== "manual") {
+            for (const card of eligible) { card.requested = null; card.error = true; card.message = "Calculation paused after an error · Calculate to retry"; }
+            this.render(); return;
+        }
+        // Combine distinct labels on one raster into a single native scan. Other rasters wait.
+        const labels = new Set();
+        const group = eligible.filter(card => {
+            const label = this.label(card);
+            if (card.requested !== first.requested || sourceKey(card.source) !== sourceKey(first.source) || labels.has(label)) return false;
+            labels.add(label); return true;
+        });
+        const intent = calculationIntent({ source: first.source, area: this.state.area,
+            calculations: group.map(card => ({ label: this.label(card), expression: card.expression })) });
+        this.batch = { intent, previousJobId: this.engine.state.result?.jobId, automatic: first.requested === "automatic", obsolete: false,
+            cards: group.map(card => ({ id: card.id, key: this.key(card) })) };
+        for (const card of group) { card.requested = null; card.pending = true; card.error = false; card.message = "Checking calculation size…"; }
+        this.engine.executeIntent(intent, this.batch.automatic);
+        this.render();
+    }
+
+    /** Project durable progress onto matching cards; stale results never move between cards. */
+    receive(engineState) {
+        if (!this.engine || this.destroyed) return;
+        this.state.jobs = engineState.jobs;
+        this.state.historyError = engineState.historyError;
+        this.state.recoverable = engineState.recoverable;
+        this.state.recoveryMessage = engineState.recoverable ? engineState.message : "";
+        for (const card of this.state.statistics) {
+            if (card.result) {
+                const job = engineState.jobs.find(item => item.jobId === card.result.job.jobId);
+                if (job?.status === "deleted") card.result = null;
+            }
+        }
+        const batch = this.batch;
+        if (batch) {
+            const settled = !this.engine.record && !this.engine.desired && !this.engine.advanceRunning;
+            const job = engineState.result;
+            const matching = !batch.obsolete && same(engineState.resultIntent, batch.intent) && job?.status === "ready" && job.jobId !== batch.previousJobId;
+            batch.cards.forEach((entry, index) => {
+                const card = this.state.statistics.find(item => item.id === entry.id);
+                if (!card) return;
+                if (!batch.obsolete && this.key(card) === entry.key) {
+                    card.message = engineState.message || (engineState.current?.status === "running" ? "Calculating…" : "Waiting to calculate…");
+                    card.progress = engineState.current?.progress ?? null;
+                    card.error = engineState.phase === "error";
+                    if (engineState.plan) card.plan = engineState.plan;
+                    if (settled && matching && job.result?.rows[index]) {
+                        card.result = { key: entry.key, row: job.result.rows[index], job, source: batch.intent.source, area: batch.intent.area };
+                        card.message = "Up to date";
+                    } else if (settled && engineState.manualRequired) {
+                        card.manualRequired = true;
+                        card.message = "Ready to calculate · explicit confirmation needed";
+                    } else if (settled && !matching) {
+                        card.error = engineState.phase === "error" || !batch.obsolete;
+                    }
+                }
+                if (settled) { card.pending = false; card.progress = null; }
+            });
+            if (settled) { this.batch = null; this.schedulePump(); }
+        }
+        this.render();
+    }
+    inspect(id) {
+        const job = this.jobs.jobs.find(item => item.jobId === id && item.operation === "raster.aggregate.v1");
+        if (!job) return;
+        this.state.saved = job;
+        this.onOpen(); this.render();
+        this.view.focusSaved?.();
+    }
+    render() {
+        if (this.destroyed) return;
+        for (const card of this.state.statistics) {
+            card.current = !!card.result && card.result.key === this.key(card) && !card.pending && !card.requested && !card.checking && !card.error;
+            if (!card.pending && !card.checking && !card.error) {
+                card.message = !card.source ? "Choose a raster" : !this.state.area ? "Choose an area" : !card.valid ? "Enter a formula"
+                    : card.requested ? "Ready to calculate · queued" : card.current ? "Up to date"
+                    : card.manualRequired ? "Ready to calculate · explicit confirmation needed" : "Ready to calculate";
+            }
+        }
+        this.view.render(this.state);
+    }
+    destroy() {
+        this.destroyed = true;
+        for (const card of this.state.statistics) { this.clock.clearTimeout(card.timer); card.abort?.abort(); }
+        this.engine.destroy(); this.view.unbind();
+    }
+}
