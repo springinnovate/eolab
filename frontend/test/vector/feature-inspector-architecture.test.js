@@ -99,7 +99,7 @@ test("vector inspection coordination remains in the browser composition root", (
     COMPOSITION_SOURCE,
     /getContainer\(\)\.classList\.add\("leaflet-crosshair"\)/,
   );
-  assert.match(COMPOSITION_SOURCE, /rasterVisualization\.exploreAt\(event\.latlng\)/);
+  assert.match(COMPOSITION_SOURCE, /rasterVisualization\.exploreAt\(event\.latlng, \{/);
   assert.match(COMPOSITION_SOURCE, /vectorFeatureInspector\.inspect\(event\)/);
   assert.doesNotMatch(INSPECTOR_SOURCE, /\.on\("click"/);
   for (const forbiddenMapImplementation of [

@@ -309,10 +309,10 @@ test("inspector publication can reveal Map layers through composition", () => {
     assert.doesNotMatch(COMPOSITION_SOURCE, /stopSampleWindowSelection|onHistogramClose/);
 });
 
-test("composition closes raster inspection when no raster accepts a click", () => {
+test("composition calculates committed boxes and closes inspection when no raster accepts a click", () => {
     assert.match(
         COMPOSITION_SOURCE,
-        /if \(!rasterVisualization\.exploreAt\(event\.latlng\)\) \{\s*mapInspection\.closeHistogram\(false\);/
+        /if \(!rasterVisualization\.exploreAt\(event\.latlng, \{\s*onSelected: area => \{\s*calculations\.setSelection\(area\);\s*calculations\.calculateSelection\(\);\s*\},\s*\}\)\) \{\s*mapInspection\.closeHistogram\(false\);\s*calculations\.setSelection\(null\);/
     );
     assert.match(COMPOSITION_SOURCE, /vectorFeatureInspector\.inspect\(event\)/);
 });

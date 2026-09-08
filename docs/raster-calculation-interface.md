@@ -128,12 +128,15 @@ sample-window controller owns matching/clearing its SVG activity class. The dock
 owns tab visibility and keyboard navigation only. Its narrow
 `subscribeActiveTool(listener)` presentation contract reports an expanded active
 tool or null. Composition forwards that to `calculations.setActive`, and sends a
-separate `calculateSelection()` intent for completed map clicks. Background
+separate `calculateSelection()` intent through `exploreAt`'s successful-selection
+callback. Rejected boxes retain histogram guidance without recalculating an old
+box. Background
 histogram/feature presentation can retain the active tab through an `activate`
 option; it never transiently deactivates/cancels the calculator.
 
 Issue #345 changes the Processing browser controller/view, map dock, browser
-composition, layer/histogram/2D entry-point labels, HTML/CSS, documentation and
+composition, raster viewer's committed-selection notification,
+layer/histogram/2D entry-point labels, HTML/CSS, documentation and
 tests. Existing composition-to-component edges carry the new presentation/click
 signals; no sibling implementation dependency is added, removed or redirected.
 No subsystem acquires knowledge of a peer. Public additions are limited to these

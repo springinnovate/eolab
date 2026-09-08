@@ -959,12 +959,16 @@ async function initializeCatalog(
      * @return {void}
      */
     function exploreMap(event) {
-        if (!rasterVisualization.exploreAt(event.latlng)) {
+        if (!rasterVisualization.exploreAt(event.latlng, {
+            onSelected: area => {
+                calculations.setSelection(area);
+                calculations.calculateSelection();
+            },
+        })) {
             mapInspection.closeHistogram(false);
             calculations.setSelection(null);
         }
         void vectorFeatureInspector.inspect(event);
-        calculations.calculateSelection();
     }
     /**
      * Open analysis tools at the map center through the pointer-click path.
