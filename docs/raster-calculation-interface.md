@@ -30,6 +30,10 @@ cancellation; `cancelling` still owns the server's worker capacity. The previous
 result remains visible, labeled with its original source/area and marked previous
 until the new result arrives. Late or superseded completions cannot replace it.
 Native resource-limit or connection errors pause follow and remain visible.
+Work-limit errors retain the backend's requested amount, configured limit, and
+reduction guidance in the panel. Native block admission reports a conservative
+estimate; decoded work and the serialized AOI geometry report their byte counts.
+The AOI limit concerns its processing geometry snapshot, not the uploaded file size.
 
 The matching committed rectangle pulses during accepted calculation work. It
 does not pulse for an older cancelled request or a different rectangle. Reduced

@@ -151,6 +151,36 @@ test("capacity refusal pauses follow and errors preserve the last visible result
     assert.equal(h.view.state.result,result);assert.match(h.view.state.message,/Native work limit/);
 });
 
+for (const [kind, code, message] of [
+    ["native blocks", "source_work_too_large", "The selected area's conservative estimate is 1,450 native blocks; the limit is 500 (950 over the limit). Choose a smaller area with an estimate of 500 blocks or fewer."],
+    ["decoded bytes", "source_work_too_large", "The selected area requires 3,570 decoded bytes for source values and validity masks; the limit is 3,500 bytes (70 bytes over). Choose a smaller area requiring at most 3,500 decoded bytes."],
+    ["AOI geometry", "aoi_too_large", "The selected area's serialized geometry is 240 bytes; the processing limit is 100 bytes (140 bytes over). Simplify the AOI geometry so its processing snapshot is at most 100 bytes, then try again."],
+]) {
+    test(`${kind} limit details survive the API, follow controller, and panel`, async () => {
+        const h = fixture();
+        await h.run(true);
+        await h.finish();
+        const previous = h.view.state.result;
+        const client = new ProcessingApiClient(async url => url.endsWith("/jobs")
+            ? { ok: true, json: async () => ({ jobs: [] }) }
+            : { ok: false, status: 413, json: async () => ({ detail: { code, message } }) });
+        h.api.planCalculation = client.planCalculation.bind(client);
+        h.controller.setSelection(box(79));
+        await h.tick(650);
+
+        assert.equal(h.controller.isFollowing, false);
+        assert.equal(h.view.state.message, `${message} Review again to retry.`);
+        assert.equal(h.view.state.result, previous);
+        assert.equal(h.requests.filter(request => request[0] === "submit").length, 1);
+        const document = new FakeRasterControlDocument();
+        const view = new CalculationsView(document);
+        view.bind(h.view.handlers);
+        view.render(h.view.state);
+        assert.equal(document.querySelector("#calculations-status").textContent, h.view.state.message);
+        assert.equal(view.elements.run.hidden, true);
+    });
+}
+
 test("unavailable storage refuses submission and expired review requires another estimate", async () => {
     const h=fixture();h.controller.open();await h.controller.review();h.view.state.plan.expiresAt="2000-01-01";
     await h.controller.run();assert.equal(h.requests.filter(r=>r[0]==="submit").length,0);
