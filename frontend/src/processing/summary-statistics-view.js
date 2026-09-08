@@ -9,8 +9,16 @@ const RESULT_STATES = { no_matches: "No cells matched the condition.", no_valid_
 
 /** Keep DOM identities stable during edits, progress, removal, and undo. */
 export class SummaryStatisticsView extends CalculationsView {
-    constructor(documentContext = globalThis.document) {
+    /**
+     * Bind statistic presentation and the browser's optional clipboard writer.
+     * @param {Document} [documentContext=globalThis.document] Owning document.
+     * @param {Object} [browserContext] Browser capabilities supplied at the view boundary.
+     * @param {{writeText:(text:string)=>Promise<void>}|null} [browserContext.clipboard]
+     * Clipboard writer; unavailable or denied access is presented in the card.
+     */
+    constructor(documentContext = globalThis.document, { clipboard = documentContext.defaultView?.navigator?.clipboard ?? null } = {}) {
         super(documentContext);
+        this.clipboard = clipboard;
         this.cards = new Map();
         this.extra = Object.fromEntries(["auto", "undo", "undo-button", "saved-result", "close-saved", "recovery-status"]
             .map(name => [name, documentContext.querySelector(`#summary-${name}`)]));
@@ -57,7 +65,19 @@ export class SummaryStatisticsView extends CalculationsView {
         valueGroup.setAttribute("aria-live", "polite");
         const value = this.element("strong", "—"); value.className = "summary-value";
         const caption = this.element("small", "No value yet");
-        valueGroup.append(value, caption); equation.append(expression, valueGroup);
+        const valueActions = this.element("div"); valueActions.className = "summary-value-actions";
+        const copy = this.element("button"); copy.type = "button"; copy.className = "summary-copy";
+        copy.setAttribute("aria-label", `Copy current value for summary statistic ${card.id}`);
+        copy.title = "Copy current value (exact)";
+        const copyIcon = this.document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        for (const [name, value] of Object.entries({ viewBox: "0 0 24 24", width: "15", height: "15", "aria-hidden": "true", focusable: "false" })) copyIcon.setAttribute(name, value);
+        const copyPath = this.document.createElementNS("http://www.w3.org/2000/svg", "path");
+        for (const [name, value] of Object.entries({ d: "M8 8h12v13H8zM16 8V3H3v13h5", fill: "none", stroke: "currentColor", "stroke-width": "1.75", "stroke-linejoin": "round" })) copyPath.setAttribute(name, value);
+        copyIcon.append(copyPath); copy.append(copyIcon);
+        copy.addEventListener("click", () => void this.copyCurrentValue(card.id));
+        const copyStatus = this.element("small"); copyStatus.setAttribute("role", "status"); copyStatus.hidden = true;
+        valueActions.append(caption, copy);
+        valueGroup.append(value, valueActions, copyStatus); equation.append(expression, valueGroup);
         const statusRow = this.element("div"); statusRow.className = "summary-status-row";
         const status = this.element("span"); status.id = `summary-statistic-status-${card.id}`;
         status.setAttribute("role", "status"); status.setAttribute("aria-live", "polite");
@@ -72,7 +92,7 @@ export class SummaryStatisticsView extends CalculationsView {
         const detailsBody = this.element("div"); details.append(detailsTitle, detailsBody);
         const size = this.element("small"); size.className = "summary-size";
         root.append(heading, equation, binding, statusRow, progress, size, details);
-        return { root, label, source, expression, value, caption, status, run, stop, progress, details, detailsBody, size };
+        return { root, label, source, expression, value, caption, copy, copyStatus, copyRevision: 0, status, run, stop, progress, details, detailsBody, size };
     }
     render(state) {
         this.sources = state.sources;
@@ -119,6 +139,15 @@ export class SummaryStatisticsView extends CalculationsView {
             if (row.caption.textContent !== caption) row.caption.textContent = caption;
             row.details.hidden = !result;
             const resultSignature = JSON.stringify([result?.job.jobId, result?.row]);
+            const copyValue = card.current && result?.row.state === "ok" && result.row.value != null ? result.row.value : null;
+            const copySignature = JSON.stringify([resultSignature, copyValue]);
+            if (row.copySignature !== copySignature) {
+                row.copyRevision++; row.copying = false; row.copyValue = copyValue; row.copySignature = copySignature;
+                row.copyStatus.textContent = ""; row.copyStatus.hidden = true;
+            }
+            row.copy.hidden = !result;
+            row.copy.disabled = row.copyValue === null || row.copying;
+            row.copy.title = row.copyValue === null ? "Only current numeric values can be copied" : "Copy current value (exact)";
             if (result && resultSignature !== row.resultSignature) {
                 this.renderValueDetails(row.detailsBody, result); row.resultSignature = resultSignature;
             }
@@ -152,6 +181,33 @@ export class SummaryStatisticsView extends CalculationsView {
         this.renderHistory(state);
         for (const opener of this.openers) opener.textContent = state.statistics.some(card => card.pending) ? "Summarize · working" : "Summarize";
     }
+    /**
+     * Copy the exact scalar from the current result, without display rounding or units.
+     * Ignore completion if editing, replacement, removal, or teardown changes the card.
+     * @param {number} id Stable statistic identifier.
+     * @return {Promise<void>} Settles after clipboard feedback is presented, if still relevant.
+     */
+    async copyCurrentValue(id) {
+        const row = this.cards.get(id);
+        if (!row || row.copyValue == null || row.copying) return;
+        const revision = row.copyRevision;
+        row.copying = true; row.copy.disabled = true;
+        const stillCurrent = () => this.cards.get(id) === row && row.copyRevision === revision;
+        try {
+            if (typeof this.clipboard?.writeText !== "function") throw new Error("Clipboard unavailable");
+            await this.clipboard.writeText(String(row.copyValue));
+            if (stillCurrent()) row.copyStatus.textContent = "Copied exact value";
+        } catch {
+            if (stillCurrent()) {
+                row.copyStatus.textContent = "Could not copy. Select the exact value in Value details below.";
+                row.details.open = true;
+            }
+        } finally {
+            if (stillCurrent()) { row.copying = false; row.copy.disabled = false; row.copyStatus.hidden = false; }
+        }
+    }
+    /** Release listeners and invalidate pending clipboard feedback. @return {void} */
+    unbind() { super.unbind(); this.cards.clear(); }
     renderValueDetails(root, result) {
         const { row, job, source, area } = result;
         root.replaceChildren(this.element("p", `${source.label} · ${describeClipArea(area)}`),

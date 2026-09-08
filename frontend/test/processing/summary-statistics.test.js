@@ -13,7 +13,7 @@ const grid = { width: 100, height: 100, crs: "EPSG:3857", nativeBlocks: 4, decod
 const flush = async () => { for (let i = 0; i < 80; i++) await Promise.resolve(); };
 const deferred = () => { let resolve, reject; const promise = new Promise((a,b) => {resolve=a;reject=b;}); return {promise,resolve,reject}; };
 
-function fixture(overrides = {}, data = new Map()) {
+function fixture(overrides = {}, data = new Map(), browserContext = {}) {
     let serial = 0, jobSerial = 0;
     const timers = new Map(), requests = [], server = new Map(), plans = new Map();
     const clock = { setTimeout(fn, delay) { timers.set(++serial, { fn, delay }); return serial; }, clearTimeout(id) { timers.delete(id); } };
@@ -36,7 +36,7 @@ function fixture(overrides = {}, data = new Map()) {
     const jobs = new ProcessingJobs(api,clock);
     const storage = new CalculationSessionStorage({getItem:key=>data.get(key),setItem:(key,value)=>data.set(key,value),removeItem:key=>data.delete(key)});
     const document = new FakeRasterControlDocument();
-    const view = new SummaryStatisticsView(document);
+    const view = new SummaryStatisticsView(document, browserContext);
     let controller;
     controller = new SummaryStatisticsController({api,jobs,storage,view,clock,getContext:()=>({sources:[source,resistance],area:box(77)}),
         onOpen:()=>controller.setActive(true),onClose(){},onEditArea(){},requestId:()=>`request-${String(jobSerial).padStart(16,"0")}`});
@@ -96,6 +96,59 @@ test("previous values are marked as being replaced during validation, planning, 
     h.controller.editStatistic(card.id,{expression:"bad(a)"});await h.tick();
     assert.equal(row.root.classList.contains("is-previous"),true);
     assert.equal(row.caption.textContent,"Previous value");
+});
+test("copy uses exact current values without rounding or units and never submits work", async()=>{
+    const copied=[];
+    const h=fixture({},new Map(),{clipboard:{writeText:async value=>copied.push(value)}});
+    await h.open();const card=h.controller.state.statistics[0],row=h.view.cards.get(card.id);
+    assert.equal(row.copy.hidden,true);
+    h.controller.request(card.id,"manual");await flush();await h.finish("ready",["9007199254740993"]);
+    card.result.row.valueType="integer";card.result.row.unit="ha";h.controller.render();
+    const requests=h.requests.length;
+    row.copy.dispatchEvent(new Event("click"));await flush();
+    assert.deepEqual(copied,["9007199254740993"]);
+    assert.equal(row.copyStatus.textContent,"Copied exact value");
+    assert.equal(h.requests.length,requests);
+    h.controller.editStatistic(card.id,{expression:"sum(a)"});
+    assert.equal(row.copy.disabled,true);assert.equal(row.copyStatus.hidden,true);
+    await h.view.copyCurrentValue(card.id);assert.equal(copied.length,1);
+    await h.tick();await h.finish("ready",["0"]);
+    assert.equal(row.copy.disabled,false);await h.view.copyCurrentValue(card.id);
+    assert.deepEqual(copied,["9007199254740993","0"]);
+    card.result.row.value=null;card.result.row.state="no_valid_data";h.controller.render();
+    assert.equal(row.copy.disabled,true);await h.view.copyCurrentValue(card.id);
+    assert.equal(copied.length,2);
+});
+test("unavailable or denied clipboard access exposes exact-value details without throwing", async()=>{
+    for (const clipboard of [null,{writeText:async()=>{throw Error("Denied");}}]) {
+        const h=fixture({},new Map(),{clipboard});await h.open();const card=h.controller.state.statistics[0];
+        h.controller.request(card.id,"manual");await flush();await h.finish();
+        const row=h.view.cards.get(card.id);await h.view.copyCurrentValue(card.id);
+        assert.match(row.copyStatus.textContent,/Could not copy/);
+        assert.equal(row.details.open,true);assert.equal(row.copy.disabled,false);
+        assert.equal(h.submits(),1);
+    }
+});
+test("late clipboard feedback cannot label an edited, replaced, removed, or disposed value as copied", async()=>{
+    for (const change of ["edit","replace","remove","dispose"]) {
+        const writing=deferred();let writes=0;
+        const h=fixture({},new Map(),{clipboard:{writeText:()=>{writes++;return writing.promise;}}});
+        await h.open();const card=h.controller.state.statistics[0];
+        h.controller.request(card.id,"manual");await flush();await h.finish();
+        const row=h.view.cards.get(card.id);
+        const copying=h.view.copyCurrentValue(card.id);
+        await h.view.copyCurrentValue(card.id);assert.equal(writes,1);
+        if (change==="remove") h.controller.removeStatistic(card.id);
+        else if (change==="dispose") h.view.unbind();
+        else {
+            h.controller.editStatistic(card.id,{expression:"sum(a)"});
+            if (change==="replace") {await h.tick();await h.finish("ready",["42"]);}
+        }
+        writing.resolve();await copying;
+        assert.notEqual(row.copyStatus.textContent,"Copied exact value");
+        if (change==="edit") assert.equal(row.copy.disabled,true);
+        if (change==="replace") assert.equal(row.copy.disabled,false);
+    }
 });
 test("one invalid formula does not block a valid peer or move values between cards",async()=>{
     const h=fixture();await h.open();h.controller.addStatistic("count");

@@ -20,6 +20,10 @@
 .summary-value-group { display: grid; gap: 4px; text-align: right; min-width: 0; padding: 6px; border-radius: 4px; }
 .summary-value { font-size: 1.35rem; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; line-height: 1.25; }
 .summary-value-group small { color: var(--text-2); font-size: 0.7rem; }
+.summary-value-actions { display: flex; justify-content: flex-end; align-items: center; gap: 5px; }
+.summary-copy { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 24px; height: 24px; padding: 3px; border: 0; border-radius: 3px; background: transparent; color: var(--text-2); cursor: pointer; }
+.summary-copy:hover:not(:disabled) { background: var(--surface-2); color: var(--text-1); }
+.summary-copy:disabled { opacity: 0.3; cursor: default; }
 .summary-statistic.is-previous .summary-value-group { background: var(--surface-3, #e5e7eb); }
 .summary-statistic.is-previous .summary-value { color: var(--text-2); opacity: 0.22; font-weight: 400; }
 .summary-statistic.is-previous .summary-value-group small { color: var(--text-1); font-size: 0.78rem; font-weight: 600; }
@@ -46,7 +50,7 @@
     .summary-value-group { display: flex; flex-wrap: wrap; align-items: baseline; text-align: left; gap: 8px; padding-top: 0; }
 }
 @media (pointer: coarse) {
-    .summary-remove, .summary-text-button { min-width: 44px; min-height: 44px; }
+    .summary-remove, .summary-text-button, .summary-copy { min-width: 44px; min-height: 44px; }
     #calculations-panel input.summary-statistic-name[type="text"], #calculations-panel .summary-statistic input, #calculations-panel .summary-statistic textarea, #calculations-panel select { font-size: 16px; }
 }
 @media (prefers-reduced-motion: reduce) { .summary-status-row > span.is-working::before { animation: none; } }
