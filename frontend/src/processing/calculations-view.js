@@ -90,11 +90,11 @@ export class CalculationsView {
     render(state) {
         const e = this.elements;
         this.renderRows(state.calculations);
-        if (["queued", "running"].includes(state.current?.status) &&
-            this.signatures.startedJob !== state.current.jobId) {
+        const resultPending = !!state.resultPending;
+        if (resultPending && !this.signatures.resultPending) {
             e.editor.open = false;
-            this.signatures.startedJob = state.current.jobId;
         }
+        this.signatures.resultPending = resultPending;
         const sources = JSON.stringify(state.sources);
         if (sources !== this.signatures.sources) {
             e.source.replaceChildren(...state.sources.map((source, index) => {
