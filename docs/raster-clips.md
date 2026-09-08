@@ -212,6 +212,13 @@ Storage adapters and the supervisor do not import or invoke application services
 Histogram, rendering, AOI lifecycle, and Catalog implementations do not acquire
 knowledge of Processing or one another.
 
+Job persistence consumes a `PreparedJobPlan`: operation-owned serialized input,
+a bounded public summary, and a storage reservation. The clip owner derives these
+from its validated source, area, and grid; the `JobStore` contract and PostgreSQL
+adapter do not parse raster fields or construct AOI summaries. Admission, leases,
+cancellation, and expiration are shared job responsibilities. The HTTP API still
+accepts only the explicitly supported raster-clip operation.
+
 Future operations can reuse job ownership, durable admission, execution fencing,
 and artifact delivery, but should introduce their own validated specifications,
 resource estimates, algorithms, and result contracts when a second operation is

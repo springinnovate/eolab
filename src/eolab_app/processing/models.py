@@ -13,6 +13,21 @@ OpaqueId = Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")]
 OPERATION_VERSION = "raster.clip.v1"
 
 
+@dataclass(frozen=True)
+class PreparedJobPlan:
+    """Validated operation data supplied to storage by its application owner.
+
+    Attributes:
+        specification: JSON-compatible, path-free operation specification.
+        summary: Bounded public operation metadata, excluding large input payloads.
+        reserved_bytes: Conservative working/result storage reservation in bytes.
+    """
+
+    specification: dict[str, object]
+    summary: dict[str, object]
+    reserved_bytes: int
+
+
 class ClipPlanRequest(CatalogRasterRequest):
     """A catalog raster and exactly one explicit, lifecycle-valid clip area."""
 

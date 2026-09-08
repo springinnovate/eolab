@@ -1,11 +1,11 @@
-"""Narrow storage contracts used by clip workflows and worker composition."""
+"""Job persistence and artifact storage contracts used by Processing workflows."""
 
 from typing import Protocol, Any
 from pathlib import Path
-from eolab_app.processing.models import Artifact, ClipSpec, ProcessingLimits
+from eolab_app.processing.models import Artifact, PreparedJobPlan, ProcessingLimits
 
 
-class ClipJobStore(Protocol):
+class JobStore(Protocol):
     """Storage capability; implementations do not invoke application services."""
 
     def reserve_plan(self, owner: str, request: dict[str, Any]) -> str:
@@ -13,7 +13,7 @@ class ClipJobStore(Protocol):
 
         Args:
             owner: Hash of the opaque browser-session capability.
-            request: Strict catalog/area request, never a path.
+            request: Validated operation request, never a filesystem path.
 
         Returns:
             New opaque plan ID.
@@ -24,14 +24,14 @@ class ClipJobStore(Protocol):
         ...
 
     def finish_plan(
-        self, identifier: str, owner: str, spec: ClipSpec | None
+        self, identifier: str, owner: str, plan: PreparedJobPlan | None
     ) -> dict[str, Any] | None:
         """Release metadata capacity after the supervised child has exited.
 
         Args:
             identifier: Reserved plan ID.
             owner: Original session owner hash.
-            spec: Validated immutable plan, or None to discard a failed plan.
+            plan: Prepared operation data, or None to discard a failed plan.
 
         Returns:
             Completed plan row or None after removal.
@@ -46,7 +46,7 @@ class ClipJobStore(Protocol):
             owner: Current session hash.
 
         Returns:
-            Stored immutable plan and its original AOI reference for rechecking.
+            Stored plan and original request for operation-owned revalidation.
 
         Raises:
             ProcessingError: If the plan is unavailable to this owner.
@@ -66,7 +66,7 @@ class ClipJobStore(Protocol):
         ...
 
     def submit(
-        self, owner: str, plan_id: str, request_key: str, expected: ClipSpec
+        self, owner: str, plan_id: str, request_key: str, expected: PreparedJobPlan
     ) -> dict[str, Any]:
         """Atomically enqueue a validated snapshot and reserve disk/queue budgets.
 
@@ -74,7 +74,7 @@ class ClipJobStore(Protocol):
             owner: Current session hash.
             plan_id: Plan revalidated by the application owner.
             request_key: Client idempotency key.
-            expected: Source/area snapshot checked immediately before admission.
+            expected: Prepared operation data revalidated immediately before admission.
 
         Returns:
             Existing idempotent or newly queued owned job.
@@ -214,7 +214,7 @@ class ClipJobStore(Protocol):
         ...
 
     def cleaned(self, identifier: str) -> None:
-        """Release storage and polygon snapshots only after successful file removal.
+        """Release storage and operation payloads only after successful file removal.
 
         Args:
             identifier: Terminal job with completed cleanup.

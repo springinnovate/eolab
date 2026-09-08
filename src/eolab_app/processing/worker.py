@@ -10,7 +10,7 @@ from eolab_app.execution.bounded_process import (
     run_bounded_process,
 )
 from eolab_app.processing.models import ClipSpec, ProcessingError, ProcessingLimits
-from eolab_app.processing.ports import ClipArtifactStore, ClipJobStore
+from eolab_app.processing.ports import ClipArtifactStore, JobStore
 from eolab_app.processing.raster_clip import clip_process_target
 from eolab_app.raster.errors import RasterFeatureError
 from eolab_app.raster.ports import RasterSourceAuthorizer
@@ -24,7 +24,7 @@ class RasterClipWorker:
     def __init__(
         self,
         authorizer: RasterSourceAuthorizer,
-        jobs: ClipJobStore,
+        jobs: JobStore,
         artifacts: ClipArtifactStore,
         limits: ProcessingLimits,
     ) -> None:

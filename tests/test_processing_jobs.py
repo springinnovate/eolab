@@ -23,10 +23,11 @@ from eolab_app.processing.models import (
     Artifact,
     ClipArea,
     ClipSpec,
+    PreparedJobPlan,
     ProcessingError,
     ProcessingLimits,
 )
-from eolab_app.processing.service import RasterClipService
+from eolab_app.processing.service import RasterClipService, prepare_clip_job
 from eolab_app.processing.worker import RasterClipWorker
 import eolab_app.processing.worker as worker_module
 from eolab_app.processing.raster_clip import create_clip
@@ -330,7 +331,9 @@ def test_global_admission_concurrency_fencing_and_restart_recovery(
         tmp_path: Source grid for a real plan specification.
     """
     path = write_source(tmp_path / "source.tif", numpy.ones((100, 100), dtype="uint8"))
-    spec = make_spec(path, ClipArea(kind="bounds", bounds=(0.1, 9.1, 0.9, 9.9)))
+    spec = prepare_clip_job(
+        make_spec(path, ClipArea(kind="bounds", bounds=(0.1, 9.1, 0.9, 9.9)))
+    )
     plan_id = store.reserve_plan("owner", SOURCE)
     with pytest.raises(ProcessingError) as capacity:
         store.reserve_plan("another", SOURCE)
@@ -373,6 +376,39 @@ def test_global_admission_concurrency_fencing_and_restart_recovery(
         )
     assert store.claim() is None
     assert store.get(lost["id"], "owner")["status"] == "interrupted"
+
+
+def test_job_store_admits_operation_data_without_raster_fields(
+    store: PostgresJobStore,
+) -> None:
+    """Apply shared scheduling and storage policy to operation-owned opaque data.
+
+    Args:
+        store: Disposable real PostgreSQL adapter with no raster collaborators.
+    """
+    prepared = PreparedJobPlan(
+        specification={"operation": "test.summary.v1", "fields": ["year"]},
+        summary={"operation": "test.summary.v1", "label": "Year summary"},
+        reserved_bytes=4096,
+    )
+    plan_id = store.reserve_plan("owner", {"fields": ["year"]})
+    store.finish_plan(plan_id, "owner", prepared)
+    submitted_job = store.submit("owner", plan_id, "summary-request", prepared)
+    assert submitted_job["spec"] == prepared.specification
+    assert submitted_job["reserved_bytes"] == 4096
+    assert store.get(submitted_job["id"], "owner")["spec"] == prepared.summary
+    assert store.list_owned("owner")[0]["spec"] == prepared.summary
+    assert store.submit("owner", plan_id, "summary-request", prepared)["id"] == submitted_job["id"]
+    store.limits = replace(store.limits, max_stored_bytes=4096)
+    with pytest.raises(ProcessingError) as refused:
+        store.submit("owner", plan_id, "another-request", prepared)
+    assert refused.value.code == "storage_full"
+    claimed = store.claim()
+    assert claimed["spec"] == prepared.specification
+    assert store.heartbeat(claimed["id"], claimed["attempt_id"], {"phase": "summarizing"})
+    assert store.cancel(claimed["id"], "owner")["status"] == "cancelling"
+    assert store.finish(claimed["id"], claimed["attempt_id"], None)
+    assert store.get(claimed["id"], "owner")["status"] == "cancelled"
 
 
 def test_owner_disk_limits_and_transfer_lease_cleanup(

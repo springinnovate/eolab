@@ -15,10 +15,11 @@ from eolab_app.processing.models import (
     ClipPlanRequest,
     ClipSpec,
     ClipSubmitRequest,
+    PreparedJobPlan,
     ProcessingError,
     ProcessingLimits,
 )
-from eolab_app.processing.ports import ClipArtifactStore, ClipJobStore
+from eolab_app.processing.ports import ClipArtifactStore, JobStore
 from eolab_app.processing.raster_clip import clip_process_target
 from eolab_app.raster.models import CatalogRasterRequest
 from eolab_app.raster.ports import RasterSourceAuthorizer
@@ -26,6 +27,26 @@ from eolab_app.sampling_area import (
     SamplingAreaUnavailableError,
     TemporaryAoiSamplingAreaReader,
 )
+
+
+def prepare_clip_job(spec: ClipSpec) -> PreparedJobPlan:
+    """Project a validated clip specification onto operation-neutral storage data.
+
+    Args:
+        spec: Immutable native grid and source/area snapshot checked by clipping.
+
+    Returns:
+        Serialized specification, bounded public summary, and storage reservation.
+    """
+    return PreparedJobPlan(
+        specification=spec.model_dump(mode="json", by_alias=True),
+        summary={
+            "source": spec.source.model_dump(by_alias=True),
+            "grid": spec.grid.model_dump(mode="json"),
+            "area": {"kind": spec.area.kind, "bounds": list(spec.area.bounds)},
+        },
+        reserved_bytes=spec.grid.reservedBytes,
+    )
 
 
 def public_job(row: dict[str, Any]) -> dict[str, Any]:
@@ -81,7 +102,7 @@ class RasterClipService:
         self,
         authorizer: RasterSourceAuthorizer,
         areas: TemporaryAoiSamplingAreaReader,
-        jobs: ClipJobStore,
+        jobs: JobStore,
         artifacts: ClipArtifactStore,
         limits: ProcessingLimits,
     ) -> None:
@@ -176,7 +197,7 @@ class RasterClipService:
                     source=source, sourceSignature=signature, area=area, grid=value
                 )
             plan = await asyncio.to_thread(
-                self.jobs.finish_plan, identifier, owner, spec
+                self.jobs.finish_plan, identifier, owner, prepare_clip_job(spec)
             )
             if plan is None:
                 raise ProcessingError(
@@ -256,7 +277,8 @@ class RasterClipService:
                 409,
             )
         row = await asyncio.to_thread(
-            self.jobs.submit, owner, request.planId, request.requestId, spec
+            self.jobs.submit, owner, request.planId, request.requestId,
+            prepare_clip_job(spec),
         )
         return public_job(row)
 

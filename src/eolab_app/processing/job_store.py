@@ -1,4 +1,9 @@
-"""PostgreSQL adapter for atomic clip admission, leases, and owned job state."""
+"""PostgreSQL adapter for atomic job admission, leases, and owned processing state.
+
+Operation owners validate and serialize their specifications, summaries, and
+resource estimates before calling this adapter. Storage never interprets raster
+grids, AOI geometry, or any other operation-specific input fields.
+"""
 
 from contextlib import contextmanager
 from dataclasses import asdict
@@ -12,7 +17,7 @@ from psycopg.types.json import Jsonb
 
 from eolab_app.processing.models import (
     Artifact,
-    ClipSpec,
+    PreparedJobPlan,
     ProcessingError,
     ProcessingLimits,
 )
@@ -75,7 +80,7 @@ class PostgresJobStore:
         except psycopg.Error as error:
             raise ProcessingError(
                 "processing_unavailable",
-                "Clip processing is temporarily unavailable. Try again shortly.",
+                "Job processing is temporarily unavailable. Try again shortly.",
                 503,
             ) from error
 
@@ -94,7 +99,7 @@ class PostgresJobStore:
 
         Args:
             owner: Hash of the opaque browser-session capability.
-            request: Strict catalog/area request, never a path.
+            request: Validated operation request, never a filesystem path.
 
         Returns:
             New opaque plan ID.
@@ -115,7 +120,7 @@ class PostgresJobStore:
             if count["running"] or count["total"] >= 50 or count["owned"] >= 5:
                 raise ProcessingError(
                     "plan_capacity",
-                    "Clip planning is busy or too many plans are open. Wait briefly and try again.",
+                    "Job planning is busy or too many plans are open. Wait briefly and try again.",
                     429,
                 )
             cursor.execute(
@@ -131,20 +136,20 @@ class PostgresJobStore:
         return identifier
 
     def finish_plan(
-        self, identifier: str, owner: str, spec: ClipSpec | None
+        self, identifier: str, owner: str, plan: PreparedJobPlan | None
     ) -> dict[str, Any] | None:
         """Release metadata capacity after the supervised child has exited.
 
         Args:
             identifier: Reserved plan ID.
             owner: Original session owner hash.
-            spec: Validated immutable plan, or None to discard a failed plan.
+            plan: Prepared operation data, or None to discard a failed plan.
 
         Returns:
             Completed plan row or None after removal.
         """
         with self._transaction(locked=True) as cursor:
-            if spec is None:
+            if plan is None:
                 cursor.execute(
                     "DELETE FROM processing.plans WHERE id=%s AND owner=%s",
                     (identifier, owner),
@@ -152,7 +157,7 @@ class PostgresJobStore:
                 return None
             cursor.execute(
                 "UPDATE processing.plans SET planning_until=NULL,spec=%s WHERE id=%s AND owner=%s AND expires_at>now() RETURNING *",
-                (Jsonb(spec.model_dump(mode="json", by_alias=True)), identifier, owner),
+                (Jsonb(plan.specification), identifier, owner),
             )
             return cursor.fetchone()
 
@@ -164,7 +169,7 @@ class PostgresJobStore:
             owner: Current session hash.
 
         Returns:
-            Stored immutable plan and its original AOI reference for rechecking.
+            Stored plan and original request for operation-owned revalidation.
 
         Raises:
             ProcessingError: If the plan is unavailable to this owner.
@@ -178,7 +183,7 @@ class PostgresJobStore:
         if not row:
             raise ProcessingError(
                 "plan_unavailable",
-                "This clip plan expired or is unavailable. Create a new plan.",
+                "This job plan expired or is unavailable. Create a new plan.",
                 404,
             )
         return row
@@ -201,7 +206,7 @@ class PostgresJobStore:
             return cursor.fetchone()
 
     def submit(
-        self, owner: str, plan_id: str, request_key: str, expected: ClipSpec
+        self, owner: str, plan_id: str, request_key: str, expected: PreparedJobPlan
     ) -> dict[str, Any]:
         """Atomically enqueue a validated snapshot and reserve disk/queue budgets.
 
@@ -209,7 +214,7 @@ class PostgresJobStore:
             owner: Current session hash.
             plan_id: Plan revalidated by the application owner.
             request_key: Client idempotency key.
-            expected: Source/area snapshot checked immediately before admission.
+            expected: Prepared operation data revalidated immediately before admission.
 
         Returns:
             Existing idempotent or newly queued owned job.
@@ -236,12 +241,10 @@ class PostgresJobStore:
                 (plan_id, owner),
             )
             plan = cursor.fetchone()
-            if not plan or plan["spec"] != expected.model_dump(
-                mode="json", by_alias=True
-            ):
+            if not plan or plan["spec"] != expected.specification:
                 raise ProcessingError(
                     "plan_unavailable",
-                    "This clip plan is no longer available. Create a new plan.",
+                    "This job plan is no longer available. Create a new plan.",
                     409,
                 )
             cursor.execute(
@@ -255,16 +258,16 @@ class PostgresJobStore:
             ):
                 raise ProcessingError(
                     "queue_full",
-                    "The clip queue is full. Wait for an existing clip to finish.",
+                    "The processing queue is full. Wait for an existing job to finish.",
                     429,
                 )
             if (
-                count["bytes"] + expected.grid.reservedBytes
+                count["bytes"] + expected.reserved_bytes
                 > self.limits.max_stored_bytes
             ):
                 raise ProcessingError(
                     "storage_full",
-                    "Temporary clip storage is full. Delete an earlier result or try later.",
+                    "Temporary processing storage is full. Delete an earlier result or try later.",
                     429,
                 )
             cursor.execute(
@@ -275,18 +278,9 @@ class PostgresJobStore:
                     request_key,
                     plan_id,
                     self.limits.result_ttl_seconds,
-                    Jsonb(expected.model_dump(mode="json", by_alias=True)),
-                    expected.grid.reservedBytes,
-                    Jsonb(
-                        {
-                            "source": expected.source.model_dump(by_alias=True),
-                            "grid": expected.grid.model_dump(mode="json"),
-                            "area": {
-                                "kind": expected.area.kind,
-                                "bounds": expected.area.bounds,
-                            },
-                        }
-                    ),
+                    Jsonb(expected.specification),
+                    expected.reserved_bytes,
+                    Jsonb(expected.summary),
                 ),
             )
             return cursor.fetchone()
@@ -313,7 +307,7 @@ class PostgresJobStore:
             )
             row = cursor.fetchone()
         if not row:
-            raise ProcessingError("job_not_found", "This clip job is unavailable.", 404)
+            raise ProcessingError("job_not_found", "This processing job is unavailable.", 404)
         return row
 
     def list_owned(self, owner: str) -> list[dict[str, Any]]:
@@ -358,12 +352,12 @@ class PostgresJobStore:
             row = cursor.fetchone()
             if not row:
                 raise ProcessingError(
-                    "job_not_found", "This clip job is unavailable.", 404
+                    "job_not_found", "This processing job is unavailable.", 404
                 )
             if delete and row["status"] in UNFINISHED:
                 raise ProcessingError(
                     "job_active",
-                    "Cancel this clip and wait for it to stop before deleting it.",
+                    "Cancel this job and wait for it to stop before deleting it.",
                     409,
                 )
             status = (
@@ -396,7 +390,7 @@ class PostgresJobStore:
                     Jsonb(
                         {
                             "code": "interrupted",
-                            "detail": "The worker stopped before this clip completed. Create a new clip to retry.",
+                            "detail": "The worker stopped before this job completed. Submit a new job to retry.",
                         }
                     ),
                 ),
@@ -520,7 +514,7 @@ class PostgresJobStore:
             row = cursor.fetchone()
             if not row:
                 raise ProcessingError(
-                    "job_not_found", "This clip job is unavailable.", 404
+                    "job_not_found", "This processing job is unavailable.", 404
                 )
             cursor.execute(
                 "SELECT id FROM processing.jobs WHERE id=%s AND status='ready' AND expires_at>now()",
@@ -529,7 +523,7 @@ class PostgresJobStore:
             if not cursor.fetchone():
                 raise ProcessingError(
                     "result_unavailable",
-                    "This clip is not ready or its download has expired.",
+                    "This job result is not ready or its download has expired.",
                     409,
                 )
             cursor.execute(
@@ -540,7 +534,7 @@ class PostgresJobStore:
             if transfers["count"] >= 4 or transfers["total"] >= 64:
                 raise ProcessingError(
                     "download_busy",
-                    "Too many downloads of this clip are already open.",
+                    "Too many downloads of this job result are already open.",
                     429,
                 )
             lease = uuid4().hex
@@ -594,7 +588,7 @@ class PostgresJobStore:
             return cursor.fetchall()
 
     def cleaned(self, identifier: str) -> None:
-        """Release storage and polygon snapshots only after successful file removal.
+        """Release storage and operation payloads only after successful file removal.
 
         Args:
             identifier: Terminal job with completed cleanup.
@@ -604,7 +598,7 @@ class PostgresJobStore:
                 "UPDATE processing.jobs SET reserved_bytes=0,spec=NULL,artifact=NULL WHERE id=%s AND status NOT IN ('queued','running','cancelling','ready') AND NOT EXISTS (SELECT 1 FROM processing.transfers WHERE job_id=%s)",
                 (identifier, identifier),
             )
-            # Retain bounded-time idempotency tombstones, without geometry.
+            # Retain bounded-time idempotency tombstones, without input payloads.
             cursor.execute(
                 "DELETE FROM processing.jobs WHERE reserved_bytes=0 AND spec IS NULL AND updated_at<now()-interval '7 days'"
             )
