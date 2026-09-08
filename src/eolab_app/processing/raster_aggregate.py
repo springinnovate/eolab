@@ -1,4 +1,4 @@
-"""Native single-raster scalar calculation kernel; no HTTP or job services."""
+"""Plan native single-raster calculations and stream scalar results to artifacts."""
 
 from dataclasses import asdict
 from datetime import datetime, timezone
