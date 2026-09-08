@@ -4581,10 +4581,36 @@ summary:hover > .raster-disclosure-chevron {
     color: #115e59;
 }
 #calculations-status-summary { font-size: 1rem; }
+#calculations-status-summary:not([hidden])::before {
+    content: "";
+    display: inline-block;
+    width: 0.9em;
+    height: 0.9em;
+    margin-right: 0.55em;
+    vertical-align: -0.15em;
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: calculation-spin 0.8s linear infinite;
+}
 #calculations-status-region.is-working p { margin-bottom: 0; }
 #calculations-status:empty { display: none; }
 .calculation-history-row { display: grid; gap: 0.4rem; padding: 0.6rem 0; border-bottom: 1px solid #cbd5e1; }
 #calculations-progress { width: 100%; }
-.leaflet-pane path.is-calculating { stroke: #0f766e; stroke-width: 4; animation: calculation-pulse 1.3s ease-in-out infinite; }
-@keyframes calculation-pulse { 50% { stroke-opacity: 0.35; fill-opacity: 0.2; } }
-@media (prefers-reduced-motion: reduce) { .leaflet-pane path.is-calculating { animation: none; stroke-dasharray: 6 4; } }
+.leaflet-pane path.is-calculating {
+    stroke: #0f766e;
+    stroke-width: 4;
+    stroke-opacity: 1;
+    stroke-dasharray: 14 8;
+    fill: #14b8a6;
+    filter: drop-shadow(0 0 1px white);
+    animation: calculation-march 0.8s linear infinite, calculation-pulse 1.4s ease-in-out infinite;
+}
+@keyframes calculation-march { from { stroke-dashoffset: 22; } to { stroke-dashoffset: 0; } }
+@keyframes calculation-pulse { 0%, 100% { fill-opacity: 0.08; } 50% { fill-opacity: 0.25; } }
+@keyframes calculation-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+    .leaflet-pane path.is-calculating,
+    #calculations-status-summary:not([hidden])::before { animation: none; }
+    .leaflet-pane path.is-calculating { fill-opacity: 0.15; }
+}
