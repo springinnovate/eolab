@@ -70,8 +70,8 @@ export class SummaryStatisticsView extends CalculationsView {
         expression.addEventListener("input", () => this.handlers.onEdit(card.id, { expression: expression.value }));
         const valueGroup = this.element("div"); valueGroup.className = "summary-value-group";
         valueGroup.setAttribute("aria-live", "polite");
-        const value = this.element("strong", "—"); value.className = "summary-value";
-        const valueActions = this.element("div"); valueActions.className = "summary-value-actions";
+        const value = this.element("strong"); value.className = "summary-value";
+        const valueActions = this.element("div"); valueActions.className = "summary-value-actions"; valueActions.hidden = true;
         const copy = this.element("button"); copy.type = "button"; copy.className = "summary-copy";
         copy.setAttribute("aria-label", `Copy current value for summary statistic ${card.id}`);
         copy.title = "Copy current value (exact)";
@@ -100,7 +100,7 @@ export class SummaryStatisticsView extends CalculationsView {
         const detailsBody = this.element("div"); details.append(detailsTitle, detailsBody);
         const size = this.element("small"); size.className = "summary-size";
         root.append(heading, equation, binding, size, details, remove);
-        return { root, label, source, expression, equation, value, copy, copyStatus, copyRevision: 0, status, statusRow, run, stop, progress, details, detailsBody, size, remove };
+        return { root, label, source, expression, equation, value, valueActions, copy, copyStatus, copyRevision: 0, status, statusRow, run, stop, progress, details, detailsBody, size, remove };
     }
     render(state) {
         this.sources = state.sources;
@@ -144,9 +144,10 @@ export class SummaryStatisticsView extends CalculationsView {
             row.progress.hidden = !card.pending || !(progress?.totalBlocks > 0);
             if (!row.progress.hidden) { row.progress.max = progress.totalBlocks; row.progress.value = progress.completedBlocks ?? 0; }
             const result = card.result;
-            const text = result ? `${calculationValue(result.row)}${result.row.unit ? ` ${result.row.unit}` : ""}` : "—";
+            row.valueActions.hidden = !result;
+            const text = result ? `${calculationValue(result.row)}${result.row.unit ? ` ${result.row.unit}` : ""}` : "";
             if (row.value.textContent !== text) row.value.textContent = text;
-            row.value.title = result?.row.value ?? result?.row.state ?? "No value yet";
+            row.value.title = result?.row.value ?? result?.row.state ?? "";
             row.details.hidden = !result;
             const resultSignature = JSON.stringify([result?.job.jobId, result?.row]);
             const copyValue = card.current && result?.row.state === "ok" && result.row.value != null ? result.row.value : null;

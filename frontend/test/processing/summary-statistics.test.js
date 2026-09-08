@@ -60,6 +60,21 @@ test("opening and tab switching preserve cards and do not run native calculation
     h.controller.setActive(false);h.controller.open();await h.tick();assert.equal(h.submits(),1);
     assert.equal(card.current,true);
 });
+test("a new card shows calculation controls without an empty value, then displays zero and retains previous results", async()=>{
+    const h=fixture();await h.open();const card=h.controller.state.statistics[0];
+    const row=h.view.cards.get(card.id);
+    assert.equal(row.valueActions.hidden,true);assert.equal(row.value.textContent,"");
+    assert.equal(row.status.textContent,"Ready to calculate");assert.equal(row.run.hidden,false);
+    assert.equal(Boolean(row.run.disabled),false);assert.equal(row.statusRow.hidden,false);
+    row.run.dispatchEvent(new Event("click"));await flush();
+    assert.equal(row.valueActions.hidden,true);assert.equal(row.stop.hidden,false);
+    await h.finish("ready",["0"]);
+    assert.equal(row.valueActions.hidden,false);assert.equal(row.value.textContent,"0");
+    assert.equal(row.copy.disabled,false);assert.equal(row.run.hidden,true);assert.equal(row.statusRow.hidden,true);
+    h.controller.editStatistic(card.id,{expression:"max(a)"});
+    assert.equal(row.valueActions.hidden,false);assert.equal(row.value.textContent,"0");
+    assert.equal(row.root.classList.contains("is-previous"),true);assert.equal(row.copy.disabled,true);
+});
 test("valid edits debounce, keep formula focus, and put the value in its own card",async()=>{
     const h=fixture();await h.open();const card=h.controller.state.statistics[0];
     const row=h.view.cards.get(card.id);row.expression.focus();
