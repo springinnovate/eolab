@@ -2977,6 +2977,15 @@ article.raster-histogram-summary {
   padding: 5px 8px;
   font-size: 0.68rem;
 }
+.raster-histogram-summary-actions .raster-histogram-download {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  margin-inline-start: auto;
+  width: 30px;
+  padding: 5px;
+}
 .raster-histogram-list[hidden] { display: none; }
 .raster-histogram-overview:has(#raster-histogram-list[hidden]) { display: none; }
 

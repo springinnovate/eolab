@@ -236,10 +236,14 @@ test("histogram adapter owns labeled per-raster summaries without double binding
     const view = new RasterHistogramControlsView(documentContext);
     const selected = [];
     const styled = [];
+    const summarized = [];
+    const downloaded = [];
     view.bind({
         onRetryStatistics() {},
         onSelectHistogram: (key) => selected.push(key),
         onStyleHistogram: (key) => styled.push(key),
+        onCalculateHistogram: (key) => summarized.push(key),
+        onDownloadHistogram: (key) => downloaded.push(key),
     });
     view.setActiveRasterAvailable(true);
     view.setActiveLayer("second-raster.tif");
@@ -268,10 +272,19 @@ test("histogram adapter owns labeled per-raster summaries without double binding
     const secondButton = secondRow.children[0];
     firstButton.dispatchEvent(new Event("click"));
     firstRow.children[1].children[0].dispatchEvent(new Event("click"));
+    const actions = firstRow.children[1].children;
+    assert.deepEqual(actions.map(button => button.getAttribute("aria-label")), [
+        "Style first-raster.tif", "Summarize first-raster.tif over this area", "Download clip of first-raster.tif",
+    ]);
+    assert.equal(actions[2].title, "Download clip");
+    actions[1].dispatchEvent(new Event("click"));
+    actions[2].dispatchEvent(new Event("click"));
     view.showWidget();
 
     assert.deepEqual(selected, ["first"]);
     assert.deepEqual(styled, ["first"]);
+    assert.deepEqual(summarized, ["first"]);
+    assert.deepEqual(downloaded, ["first"]);
     assert.equal(list.children.length, 2);
     assert.equal(firstRow.getAttribute("aria-label"),
         "Histogram — first-raster.tif");

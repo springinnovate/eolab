@@ -506,8 +506,23 @@ export class RasterHistogramControlsView {
         actions.append(style);
         const download = this.documentContext.createElement("button");
         download.type = "button";
-        download.className = "secondary-button";
-        download.textContent = "Download clip";
+        download.className = "secondary-button raster-histogram-download";
+        download.title = "Download clip";
+        const downloadIcon = this.documentContext.createElementNS("http://www.w3.org/2000/svg", "svg");
+        downloadIcon.setAttribute("viewBox", "0 0 24 24");
+        downloadIcon.setAttribute("width", "16");
+        downloadIcon.setAttribute("height", "16");
+        downloadIcon.setAttribute("aria-hidden", "true");
+        downloadIcon.setAttribute("focusable", "false");
+        const downloadPath = this.documentContext.createElementNS("http://www.w3.org/2000/svg", "path");
+        downloadPath.setAttribute("d", "M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5");
+        downloadPath.setAttribute("fill", "none");
+        downloadPath.setAttribute("stroke", "currentColor");
+        downloadPath.setAttribute("stroke-width", "1.75");
+        downloadPath.setAttribute("stroke-linecap", "round");
+        downloadPath.setAttribute("stroke-linejoin", "round");
+        downloadIcon.append(downloadPath);
+        download.append(downloadIcon);
         download.setAttribute("aria-label", `Download clip of ${summary.label}`);
         download.addEventListener("click", () => this.handlers?.onDownloadHistogram?.(summary.key));
         const calculate = this.documentContext.createElement("button");
@@ -516,7 +531,7 @@ export class RasterHistogramControlsView {
         calculate.textContent = "Summarize this area";
         calculate.setAttribute("aria-label", "Summarize " + summary.label + " over this area");
         calculate.addEventListener("click", () => this.handlers?.onCalculateHistogram?.(summary.key));
-        actions.append(download, calculate);
+        actions.append(calculate, download);
         if (summary.automatic) {
             if (summary.canRetry) {
                 const retry = this.documentContext.createElement("button");
