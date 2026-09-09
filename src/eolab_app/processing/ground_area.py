@@ -377,7 +377,7 @@ class GroundArea:
         if geometry_cells > limits.max_area_geometry_cells:
             raise ProcessingError(
                 "area_geometry_limit",
-                f"Ground-area measurement may require {geometry_cells:,} polygon cells; the limit is {limits.max_area_geometry_cells:,}. Choose a smaller area or a rectangular box on a north-up WGS84/Web Mercator grid.",
+                f"Ground-area measurement may need to check {geometry_cells:,} raster cells in the selected area's bounding rectangle; the limit is {limits.max_area_geometry_cells:,}. Choose a smaller area or a rectangular box on a north-up WGS84/Web Mercator grid.",
                 413,
             )
         self.metadata = GroundAreaPlan(

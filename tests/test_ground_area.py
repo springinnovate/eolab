@@ -355,7 +355,7 @@ def test_area_admission_is_metadata_only_and_keeps_resource_fences(
     monkeypatch.setattr(kernel, "read_native_raster_block", forbidden)
     spec = make_spec(path, ["areaha(a>0)"])
     assert spec.grid.groundArea.estimatedGeometryCells == 100
-    with pytest.raises(ProcessingError, match="100 polygon cells.*99"):
+    with pytest.raises(ProcessingError, match="100 raster cells.*99"):
         make_spec(
             path, ["areaha(a>0)"], limits=replace(LIMITS, max_area_geometry_cells=99)
         )
@@ -370,6 +370,49 @@ def test_area_admission_is_metadata_only_and_keeps_resource_fences(
     )
     with pytest.raises(ProcessingError, match="coordinates"):
         make_spec(path, ["areaha(a>0)"], aoi, replace(LIMITS, max_coordinates=10))
+
+
+@pytest.mark.parametrize("rows,admitted", [(1000, True), (1001, False)])
+def test_default_country_scale_area_admission_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rows: int, admitted: bool
+) -> None:
+    """Admit two million candidate cells while rejecting larger native windows.
+
+    Args:
+        tmp_path: Isolated native fixture directory.
+        monkeypatch: Guard source-value reads during planning.
+        rows: Raster height on either side of the default two-million-cell cap.
+        admitted: Whether the full nonrectangular selection fits the policy.
+    """
+    polygon = Polygon([(0, 0), (20, 0), (20, 10), (0, 0)])
+    area = AggregateArea(
+        kind="aoi", bounds=polygon.bounds, geometries=(mapping(polygon),)
+    )
+    path = write_source(
+        tmp_path / "country.tif",
+        np.ones((rows, 2000), dtype="uint8"),
+        transform=from_origin(0, 10, 0.01, 10 / rows),
+    )
+
+    def forbidden(*args: Any) -> None:
+        """Fail if metadata admission attempts to inspect raster values.
+
+        Args:
+            args: Unused native-reader arguments.
+        """
+        pytest.fail("Area planning must not read source values")
+
+    monkeypatch.setattr(kernel, "read_native_raster_block", forbidden)
+    if admitted:
+        spec = make_spec(path, ["areaha(a>0)"], area)
+        assert spec.grid.groundArea.estimatedGeometryCells == 2_000_000
+        assert spec.grid.groundArea.inclusion == "fractional_cell_intersection"
+    else:
+        with pytest.raises(
+            ProcessingError,
+            match="2,002,000 raster cells.*bounding rectangle.*2,000,000",
+        ):
+            make_spec(path, ["areaha(a>0)"], area)
 
 
 def test_area_rejects_unreviewed_datum_and_wrapped_grid(tmp_path: Path) -> None:

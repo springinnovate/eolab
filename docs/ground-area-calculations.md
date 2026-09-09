@@ -72,7 +72,9 @@ also bounded, and only one clipped polygon is retained at a time.
 
 Whole-raster or rectangular selections on optimized grids need no polygon-cell
 overlays. Other selections conservatively estimate the **entire selected window**
-against a 200,000-cell geometry ceiling. This can reject a large AOI even when
+against a 2,000,000-cell geometry ceiling. This is a count of native raster cells
+in the selection's bounding rectangle, before evaluating the formula. It is not
+a polygon-feature or vertex count. This can reject a large AOI even when
 many of its cells are interior; interior-block optimization is a possible follow-up.
 Planning estimates do not promise all refinement will fit: execution can still
 stop at its cumulative transformation limit or supervised deadline. Failures ask
@@ -134,3 +136,11 @@ count together. One Windows run with Python 3.12, pyproj 3.8.0 and Shapely 2.1.2
 These small synthetic local TIFF timings exclude HTTP, queueing, process startup,
 and remote/storage latency. They demonstrate relative geometry cost, not a
 production throughput guarantee for large native rasters.
+
+The benchmark also includes a nonrectangular, country-scale polygon with a hole
+covering a full **2,000,000-cell** selected window. Its all-valid hectare result is
+checked against independent, densely sampled geodesic integration. A local
+Windows run planned this selection in **0.022 s** and executed the three
+reductions in **6.664 s**, using the existing bounded tiles and default resource
+limits. Complex boundaries and different source grids can require more work;
+the same coordinate, memory and supervised runtime ceilings still apply.
