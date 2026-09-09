@@ -1,4 +1,5 @@
 /** Domain validation and lookup helpers for paired raster statistics. */
+import { normalizeRasterSamplingArea } from "../selected-area.js";
 import { validateRasterSelectedBounds } from "./geometry.js";
 import { estimateHistogramPercentile } from "./statistics.js";
 
@@ -35,6 +36,7 @@ export function estimateRasterPairedHistogramPercentile(statistics, axis, percen
  * @throws {TypeError} If fields fall outside the paired public contract.
  */
 export function normalizeRasterPairedSamplingArea(samplingArea) {
+    if (samplingArea?.kind === "temporaryAoi") return normalizeRasterSamplingArea(samplingArea);
     if (
         samplingArea?.kind === "wholeOverlap" &&
         Object.keys(samplingArea).length === 1
@@ -101,7 +103,7 @@ export function validateRasterPairedStatistics(statistics) {
         throw pairedContractError("response data");
     }
     if (
-        !["wholeOverlap", "selectedArea"].includes(statistics.scope) ||
+        !["wholeOverlap", "selectedArea", "temporaryAoi"].includes(statistics.scope) ||
         statistics.referenceGrid !== "x" ||
         statistics.resampling !== "nearest" ||
         !["sampleGrid", "exactReferenceGrid"].includes(
@@ -112,6 +114,8 @@ export function validateRasterPairedStatistics(statistics) {
     ) {
         throw pairedContractError("sampling provenance");
     }
+    if ((statistics.scope === "temporaryAoi") !== (statistics.temporaryAoiId != null)) throw pairedContractError("AOI scope");
+    if (statistics.scope === "temporaryAoi") normalizeRasterSamplingArea({ kind: "temporaryAoi", temporaryAoiId: statistics.temporaryAoiId });
     const hasBounds = statistics.selectedBounds !== null;
     if ((statistics.scope === "selectedArea") !== hasBounds) {
         throw pairedContractError("scope");
@@ -219,6 +223,10 @@ export function validateRasterPairedStatisticsForSelection(
 ) {
     const validated = validateRasterPairedStatistics(statistics);
     const area = normalizeRasterPairedSamplingArea(samplingArea);
+    if (area.kind === "temporaryAoi") {
+        if (validated.scope !== "temporaryAoi" || validated.temporaryAoiId !== area.temporaryAoiId) throw pairedContractError("AOI identity");
+        return validated;
+    }
     if (area.kind === "wholeOverlap") {
         if (validated.scope !== "wholeOverlap") {
             throw pairedContractError("whole-overlap response scope");

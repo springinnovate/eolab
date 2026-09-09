@@ -1613,6 +1613,34 @@ test('color opacity stays per-layer, survives 2D, and resets with the style', as
     h.destroy();
 });
 
+test('a vector AOI drives both histogram modes and invalidation cannot fall back to the whole raster', async () => {
+    const areas = [], pairedAreas = [];
+    const h = visibleLayerFixture(async (_item, area) => {
+        areas.push(area); return area.kind === 'temporaryAoi' ? TEMPORARY_AOI_RASTER_STATISTICS : RASTER_STATISTICS;
+    }, { loadPairedStatistics: async (_x, _y, area) => { pairedAreas.push(area); return pairedStatistics(); } });
+    await h.viewer.show(createRasterItem('bottom'));
+    await h.viewer.show(createRasterItem('top'));
+    await flushPromises();
+    const aoi = { id: TEMPORARY_AOI_ID, filename: 'Countries · 1 of 200 features', selectedDataset: 'countries', expiresAt: '2099-01-01T00:00:00Z' };
+    h.viewer.setVectorSamplingAoi(aoi); await flushPromises();
+    assert.equal(h.viewer.getSelectedArea().temporaryAoiId, aoi.id);
+    assert.equal(areas.at(-1).temporaryAoiId, aoi.id);
+    await h.viewer.show(createRasterItem('added-after-selection')); await flushPromises();
+    assert.equal(h.viewer.getSelectedArea().temporaryAoiId, aoi.id);
+    assert.equal(areas.at(-1).temporaryAoiId, aoi.id);
+    assert.ok(h.mapLayers.retainedRecords.every(record => record.state.selectedTemporaryAoi?.id === aoi.id));
+    h.controlsView.handlers.onBivariateModeChange('bivariate');await flushPromises();
+    assert.equal(pairedAreas.at(-1).temporaryAoiId, aoi.id);
+    assert.equal(h.viewer.getSelectedArea().temporaryAoiId, aoi.id);
+    h.viewer.exploreAt({lng:-74,lat:41}); await flushPromises();
+    assert.equal(h.viewer.getSelectedArea().temporaryAoiId, aoi.id);
+    const count=areas.length+pairedAreas.length;
+    h.viewer.setVectorSamplingAoi(null);await flushPromises();
+    assert.equal(h.viewer.getSelectedArea(),null);
+    assert.equal(areas.length+pairedAreas.length,count);
+    h.destroy();
+});
+
 test('a late histogram cannot overwrite another layer editor or an edited range', async () => {
     const pending = createDeferred();
     const h = visibleLayerFixture(item => item.id.endsWith('later')
@@ -1734,7 +1762,7 @@ test("selecting 2D opens paired analysis without a map interaction", async () =>
     );
     assert.equal(controlsView.appearanceEnabled, false);
     assert.equal(controlsView.univariateHistogramVisible, false);
-    assert.equal(controlsView.temporaryAoiCompatible, false);
+    assert.equal(controlsView.temporaryAoiCompatible, true);
     assert.ok(layerStackView.layers.every((layer) => layer.opacityLocked));
     assert.ok(layerStackView.layers.every(
         (layer) => layer.effectiveOpacity === 1,

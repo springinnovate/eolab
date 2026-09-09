@@ -72,6 +72,8 @@ from eolab_app.vector.sources import (
     MountedVectorResolver,
     PublishedVectorRegistry,
 )
+from eolab_app.vector.sampling import VectorSamplingService
+from eolab_app.routes.vector_sampling import create_vector_sampling_router
 from eolab_app.vector.styling import VectorStyleService
 
 
@@ -272,6 +274,9 @@ def create_app(
     )
     application.include_router(raster_feature.router)
     application.include_router(vector_feature.router)
+    application.include_router(create_vector_sampling_router(VectorSamplingService(
+        vector_catalog, vector_source_resolver, temporary_aoi_service.retain_geometry,
+    )))
     processing_limits = RasterClipLimits()
     application.include_router(create_processing_router(ProcessingService(
         raster_source_authorizer,

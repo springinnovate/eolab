@@ -267,6 +267,10 @@ class RasterStatisticsService:
             if request.selected_bounds is not None
             else None
         )
+        try:
+            sampling_area = await self._resolve_sampling_area(request)
+        except SamplingAreaUnavailableError as error:
+            raise RasterConflictError(error.detail) from error
         cache_key: tuple[object, ...] = (
             "paired",
             request.x_raster.collection_id,
@@ -276,7 +280,7 @@ class RasterStatisticsService:
             request.y_raster.item_id,
             authorized_y.source_signature,
             RASTER_PAIRED_STATISTICS_ALGORITHM,
-            selected_bounds,
+            sampling_area.cache_identity(),
             raster_paired_statistics_policy_parameters(),
         )
         async with self._state_lock:
@@ -300,6 +304,7 @@ class RasterStatisticsService:
                             selected_bounds,
                             cache_key,
                             cancellation_requested,
+                            sampling_area,
                         )
                     )
                     task.add_done_callback(self._retrieve_task_exception)
@@ -320,6 +325,10 @@ class RasterStatisticsService:
                 self._source_authorizer.require_current(authorized_x),
                 self._source_authorizer.require_current(authorized_y),
             )
+            try:
+                await self._require_current_sampling_area(sampling_area)
+            except SamplingAreaUnavailableError as error:
+                raise RasterConflictError(error.detail) from error
             return cast(RasterPairedStatistics, cached)
         if work is None:
             raise RuntimeError("Paired raster statistics work was not established")
@@ -357,6 +366,7 @@ class RasterStatisticsService:
         selected_bounds: CanonicalWgs84Bounds | None,
         cache_key: tuple[object, ...],
         cancellation_requested: threading.Event,
+        sampling_area: RasterSamplingArea,
     ) -> RasterPairedStatistics:
         """Compute one ordered source pair within shared bounded capacity.
 
@@ -366,6 +376,7 @@ class RasterStatisticsService:
             selected_bounds: Optional canonical WGS 84 sampling rectangle.
             cache_key: Ordered identities, signatures, bounds, and policy.
             cancellation_requested: Thread-safe last-waiter signal.
+            sampling_area: Resolved lifecycle identity rechecked around reads.
 
         Returns:
             Newly computed bounded paired statistics.
@@ -387,18 +398,23 @@ class RasterStatisticsService:
                         raise RasterReadCancelled
                     work.started = True
                 require_active_raster_read(cancellation_requested.is_set)
+                await self._require_current_sampling_area(sampling_area)
                 await asyncio.gather(
                     self._source_authorizer.require_current(authorized_x),
                     self._source_authorizer.require_current(authorized_y),
                 )
+                await self._require_current_sampling_area(sampling_area)
+                options = {"temporary_aoi": sampling_area} if isinstance(sampling_area, TemporaryAoiSamplingArea) else {}
                 statistics = await asyncio.to_thread(
                     self._paired_statistics_reader,
                     authorized_x.source_path,
                     authorized_y.source_path,
                     selected_bounds,
                     cancellation_requested.is_set,
+                    **options,
                 )
                 require_active_raster_read(cancellation_requested.is_set)
+                await self._require_current_sampling_area(sampling_area)
                 await asyncio.gather(
                     self._source_authorizer.require_current(authorized_x),
                     self._source_authorizer.require_current(authorized_y),
@@ -540,7 +556,7 @@ class RasterStatisticsService:
 
     async def _resolve_sampling_area(
         self,
-        request: CatalogRasterStatisticsRequest,
+        request: CatalogRasterStatisticsRequest | CatalogRasterPairRequest,
     ) -> RasterSamplingArea:
         """Resolve the request's strict sampling-area union.
 

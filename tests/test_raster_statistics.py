@@ -1303,6 +1303,17 @@ def test_temporary_aoi_unions_overlapping_polygons_once(tmp_path: Path) -> None:
         for geometry in area.resolved_aoi.geometries
     )
 
+    paired_path = tmp_path / "paired-aoi-mask.tif"
+    _write_raster(paired_path, values * 2, transform=transform)
+    paired = read_raster_paired_statistics(source_path, paired_path, None, temporary_aoi=area)
+    assert paired.scope == "temporaryAoi"
+    assert paired.temporary_aoi_id == temporary_aoi_id
+    # Paired sampling retains its odd-size bounded grid; 1D uses an exact small window.
+    assert 0 < paired.paired_sample_count < statistics.valid_sample_count
+    assert sum(paired.histogram.x_marginal_counts) == paired.paired_sample_count
+    assert paired.y_minimum == 2 * paired.x_minimum
+    assert paired.y_maximum == 2 * paired.x_maximum
+
 
 def test_temporary_aoi_sample_grid_masks_a_large_interior_hole(
     monkeypatch: pytest.MonkeyPatch,

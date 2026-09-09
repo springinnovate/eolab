@@ -198,6 +198,7 @@ export async function loadCatalogRasterPairedStatistics(
     if (normalizedArea.kind === "selectedArea") {
         requestDocument.selectedBounds = normalizedArea.selectedBounds;
     }
+    if (normalizedArea.kind === "temporaryAoi") requestDocument.temporaryAoiId = normalizedArea.temporaryAoiId;
     const response = await fetchImplementation.call(
         globalThis,
         "/api/raster-analysis/paired-statistics",
