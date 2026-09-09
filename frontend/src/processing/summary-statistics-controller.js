@@ -159,6 +159,7 @@ export class SummaryStatisticsController {
             ? this.state.availableAoi && { kind: "temporaryAoi", temporaryAoiId: this.state.availableAoi.id }
             : this.state.selectedArea;
         this.changeArea(area, true);
+        this.render();
     }
     changeArea(area, automatic) {
         if (same(area, this.state.area)) return;

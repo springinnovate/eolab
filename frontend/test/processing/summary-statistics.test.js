@@ -79,6 +79,21 @@ test("the summary Area selector offers inline vector controls and never calculat
     assert.equal(h.submits(),1);
 });
 
+test("choosing vector from an empty selection immediately shows its controls without another validation", async()=>{
+    const h=fixture(); await h.open();
+    h.controller.setSelection(null,false); await h.tick();
+    assert.equal(h.controller.state.area,null);
+    assert.equal(h.view.vectorAreaControls.hidden,true);
+    const area=h.view.elements.area;
+    area.value="vector"; area.dispatchEvent(new Event("change"));
+    assert.equal(h.view.vectorAreaControls.hidden,false);
+    assert.equal(h.view.elements["edit-area"].hidden,true);
+    assert.match(h.view.elements["area-description"].textContent,/Choose a polygon layer below/);
+    assert.equal(h.view.cards.get(h.controller.state.statistics[0].id).run.disabled,true);
+    assert.equal(h.requests.filter(request=>request[0]==="plan").length,0);
+    assert.equal(h.submits(),0);
+});
+
 test("vector selection reviews exact scan size before submission and invalidates results when removed", async()=>{
     const h=fixture();await h.open();const card=h.controller.state.statistics[0];
     const id="V".repeat(32);
