@@ -599,6 +599,19 @@
                 <p>NoData is excluded. Numeric functions select pixels by their centers. <code>areaha</code> measures their fractional intersection on the WGS 84 ellipsoid, including AOI holes and counting overlaps once. It requires a WGS84 geographic or projected raster; complex geometry may need a smaller area.</p>
                 <p>Calculations use native pixels and stored values. Each <code>areaha</code> term is in hectares; arithmetic can change the final units. Multiple-raster expressions are coming separately.</p>
               </details>
+            <details id="summary-performance" class="summary-performance">
+              <summary>Performance tuning (experimental)</summary>
+              <label for="summary-chunk-pixels">Target pixels per batch</label>
+              <select id="summary-chunk-pixels" aria-describedby="summary-chunk-help">
+                <option value="">Current behavior</option>
+                <option value="65536">65,536 pixels</option>
+                <option value="262144">262,144 pixels</option>
+                <option value="1048576">1,048,576 pixels</option>
+                <option value="4194304">4,194,304 pixels</option>
+              </select>
+              <p id="summary-chunk-help">Shared by these statistics. Changes how many native pixels are processed together, not their resolution. Larger batches need more memory. Choose a size, then Calculate to compare timings.</p>
+              <div id="summary-performance-plans"></div>
+            </details>
             <p id="summary-recovery-status" role="status" aria-live="polite" hidden></p>
             <button id="calculations-retry" class="secondary-button" type="button" hidden>Recover / retry</button>
             <details id="summary-saved-result" hidden><summary>Saved calculation</summary><button id="summary-close-saved" class="summary-text-button" type="button">Close saved calculation</button><section id="calculations-result" aria-label="Saved calculation result"></section></details>

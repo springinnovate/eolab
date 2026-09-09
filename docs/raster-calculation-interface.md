@@ -46,7 +46,7 @@ Map clicks update the shared committed area while Summarize is active. Rapid edi
 and clicks coalesce. Unchanged completed expressions can reuse their current value;
 changing a name never causes a native scan. Each card shows checking, queued,
 calculating, failure, or completion feedback beside its own formula. Its previous
-value remains visible and explicitly labeled **Previous value** until a matching
+value remains visible and heavily grayed out until a matching
 result arrives. Missing-data and undefined-arithmetic results include explanations.
 
 Cards on the same raster and area with distinct names can be combined into one
@@ -82,6 +82,30 @@ it does not rewrite or relabel the editable cards.
 max, optional `where` conditions, comparisons, Boolean combinations, percentages,
 NoData, native-pixel semantics, and the distinction between fractional area and
 cell-center aggregates. See [ground-area methods and limits](ground-area-calculations.md).
+
+## Experimental performance tuning
+
+**Performance tuning (experimental)** is collapsed below Formula reference in
+Summarize. **Target pixels per batch** is shared by the cards; it changes execution
+size, never raster resolution. Current behavior is the default. Available targets
+are 65,536, 262,144, 1,048,576 and 4,194,304 total pixels; native block dimensions may
+require a larger read with smaller evaluation tiles.
+
+Changing the target clears obsolete reviews, marks prior values stale, cancels
+obsolete active work through the existing workflow, and waits for **Calculate**.
+It does not launch a benchmark just by changing the dropdown. Subsequent map clicks
+and formula changes retain the setting and normal automatic-admission limits.
+Accepted jobs keep immutable settings in their intent, result and history. Reload
+recovers an active job's original target without submitting again.
+
+After planning, the tuning disclosure shows requested/effective sizes, native
+blocks, combined reads and conservative working-memory estimates for each planned
+statistic. A memory refusal explains the 512 MiB ceiling and suggests a smaller
+batch. **Value details & downloads → Performance** and saved results show final
+read, calculation, result-writing and kernel timings with their measurement
+boundaries. Missing metrics on older saved results are explicitly identified.
+The details distinguish wall times from queue/startup/browser latency. No new
+poller or processing service is introduced.
 
 ## Recovery and architecture
 

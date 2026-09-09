@@ -196,6 +196,48 @@ def test_calculation_http_lifecycle_mixed_history_and_owned_csv(
     )
 
 
+def test_batched_plan_metrics_and_v3_worker_gate(boundary: Any, store: Any) -> None:
+    """Reviewed batches survive storage, old-worker exclusion, execution and recovery.
+
+    Args:
+        boundary: Real API, native worker, source and artifact composition.
+        store: Disposable PostgreSQL adapter.
+    """
+    client, worker, *_ = boundary
+    plan = plan_calculation(client, wholeRaster=True, targetChunkPixels=65536)
+    execution = plan["grid"]["execution"]
+    assert execution["targetChunkPixels"] == 65536
+    assert execution["readWindows"] < plan["grid"]["nativeBlocks"]
+    job = submit_calculation(client, plan)
+    with psycopg.connect(store.conninfo) as connection:
+        assert connection.execute(
+            "SELECT minimum_claim_version FROM processing.jobs WHERE id=%s",
+            (job["jobId"],),
+        ).fetchone() == (4,)
+        assert (
+            connection.execute(
+                "SELECT id FROM processing.jobs WHERE status='queued' AND minimum_claim_version<=3"
+            ).fetchall()
+            == []
+        )
+    with pytest.raises(psycopg.errors.CheckViolation):
+        with psycopg.connect(store.conninfo) as connection:
+            connection.execute("SET LOCAL eolab.processing_claim_version = '3'")
+            connection.execute(
+                "UPDATE processing.jobs SET status='running' WHERE id=%s",
+                (job["jobId"],),
+            )
+    assert asyncio.run(worker.run_once())
+    ready = client.get(f"/api/processing/jobs/{job['jobId']}").json()
+    assert ready["status"] == "ready", ready
+    metrics = ready["result"]["performance"]
+    assert metrics["execution"] == execution
+    assert metrics["readWindows"] == execution["readWindows"]
+    assert client.get(ready["result"]["provenanceUrl"]).json()["performance"] == metrics
+    assert ready["result"]["rows"][0]["value"] == "4999"
+    assert ready["progress"]["phase"] == "ready"
+
+
 def test_operation_mismatch_and_language_rejected_before_admission(
     boundary: Any,
 ) -> None:

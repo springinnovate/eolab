@@ -1,8 +1,8 @@
 """Fractional masks on a rectilinear equal-area grid without pixel polygons.
 
-For each row strip, Green's theorem gives the area to the left of x as the
-oriented boundary integral of clamp(edge_x, row_left, x) dy. Differencing that
-integral at column boundaries gives cell coverage, including holes and slivers.
+For each row strip, Green's theorem gives each cell's area as the oriented
+boundary integral of clamp(edge_x - cell_left, 0, cell_width) dy. Integrating
+directly per column avoids subtracting large cumulative areas at its boundaries.
 Only the AOI's oriented edges are retained; processing block size is immaterial.
 """
 
@@ -40,26 +40,26 @@ class AreaCoverage:
         """
         reverse_x = xs[-1] < xs[0]
         ascending_x = xs[::-1] if reverse_x else xs
-        origin = ascending_x[0]
-        stops = (ascending_x - origin)[None, :]
+        left = ascending_x[None, :-1]
+        stops = np.diff(ascending_x)[None, :]
         south, north = np.minimum(ys[:-1], ys[1:]), np.maximum(ys[:-1], ys[1:])
-        cumulative = np.zeros((len(south), len(xs)), dtype=np.float64)
+        areas = np.zeros((len(south), len(xs) - 1), dtype=np.float64)
         winding = np.zeros((len(south), len(xs) - 1), dtype=np.int32)
         boundary = np.zeros_like(winding, dtype=bool)
-        column_centers = (stops[:, :-1] + stops[:, 1:]) / 2
+        column_centers = (ascending_x[None, :-1] + ascending_x[None, 1:]) / 2
         row_centers = (south + north) / 2
         # Horizontal edges contribute zero area but identify subpixel strips.
         # Edges wholly left of the tile contribute neither area nor winding.
         edges = self.edges[
             (np.maximum(self.edges[:, 1], self.edges[:, 3]) > south.min())
             & (np.minimum(self.edges[:, 1], self.edges[:, 3]) < north.max())
-            & (np.maximum(self.edges[:, 0], self.edges[:, 2]) > origin)
+            & (np.maximum(self.edges[:, 0], self.edges[:, 2]) > ascending_x[0])
         ]
         for x0, y0, x1, y1 in edges:
             if y0 == y1:
                 rows = np.flatnonzero((south < y0) & (north > y0))
-                boundary[rows] |= (max(x0, x1) - origin > stops[:, :-1]) & (
-                    min(x0, x1) - origin < stops[:, 1:]
+                boundary[rows] |= (max(x0, x1) > ascending_x[None, :-1]) & (
+                    min(x0, x1) < ascending_x[None, 1:]
                 )
                 continue
             bottom = np.maximum(south, min(y0, y1))
@@ -68,15 +68,18 @@ class AreaCoverage:
             if not len(rows):
                 continue
             slope = (x1 - x0) / (y1 - y0)
-            start = x0 - origin + (bottom[rows] - y0) * slope
-            end = x0 - origin + (top[rows] - y0) * slope
-            low = np.minimum(start, end)[:, None]
-            high = np.maximum(start, end)[:, None]
-            boundary[rows] |= (high > stops[:, :-1]) & (low < stops[:, 1:])
+            start = x0 + (bottom[rows] - y0) * slope
+            end = x0 + (top[rows] - y0) * slope
+            low_x = np.minimum(start, end)[:, None]
+            high_x = np.maximum(start, end)[:, None]
+            boundary[rows] |= (high_x > ascending_x[None, :-1]) & (
+                low_x < ascending_x[None, 1:]
+            )
+            low, high = low_x - left, high_x - left
             center_rows = np.flatnonzero(
                 (row_centers >= min(y0, y1)) & (row_centers < max(y0, y1))
             )
-            crossing = x0 - origin + (row_centers[center_rows] - y0) * slope
+            crossing = x0 + (row_centers[center_rows] - y0) * slope
             winding[center_rows] += int(np.sign(y1 - y0)) * (
                 crossing[:, None] > column_centers
             )
@@ -92,9 +95,9 @@ class AreaCoverage:
             average = np.clip(low, 0, stops)
             np.divide(integral, high - low, out=average, where=high != low)
             signed_height = (top[rows] - bottom[rows]) * np.sign(y1 - y0)
-            cumulative[rows] += average * signed_height[:, None]
+            areas[rows] += average * signed_height[:, None]
         full_area = (north - south)[:, None] * np.diff(ascending_x)[None, :]
-        coverage = np.clip(np.diff(cumulative, axis=1) / full_area, 0, 1)
+        coverage = np.clip(areas / full_area, 0, 1)
         # Analytic membership suppresses cancellation noise in empty cells and
         # holes without rounding away genuinely thin positive-area slivers.
         coverage[(winding == 0) & ~boundary] = 0

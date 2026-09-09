@@ -82,7 +82,9 @@ def prepare_aggregate_job(
         },
         reserved_bytes=limits.result_reservation_bytes,
         operation=spec.operation,
-        minimum_claim_version=3 if spec.grid.groundArea else 2,
+        minimum_claim_version=(
+            4 if spec.grid.execution else 3 if spec.grid.groundArea else 2
+        ),
     )
 
 
@@ -154,7 +156,10 @@ def public_job(row: dict[str, Any]) -> dict[str, Any]:
                 "bytes": row["artifact"]["size"],
                 "sha256": row["artifact"]["sha256"],
                 **(
-                    {"rows": row["artifact"]["rows"]}
+                    {
+                        "rows": row["artifact"]["rows"],
+                        "performance": row["artifact"].get("performance"),
+                    }
                     if calculation
                     else {"validPixels": row["artifact"]["valid_pixels"]}
                 ),
@@ -448,6 +453,7 @@ class ProcessingService:
                             request.calculations,
                             alias,
                             limits,
+                            request.targetChunkPixels,
                         ),
                     ),
                     limits.plan_timeout_seconds,
@@ -485,6 +491,7 @@ class ProcessingService:
                 "inclusion": "per_function" if spec.grid.groundArea else "cell_center",
                 "limits": {
                     "maxDecodedBytes": limits.max_decoded_bytes,
+                    "maxMemoryBytes": limits.max_memory_bytes,
                     "maxNativeBlocks": limits.max_native_blocks,
                     "maxAreaGeometryCells": limits.max_area_geometry_cells,
                     "maxAreaTransformCoordinates": limits.max_area_transform_coordinates,

@@ -3,6 +3,7 @@ import { CalculationsView, calculationValue } from "./calculations-view.js";
 import { ACTIVE_JOB_STATES } from "./jobs.js";
 import { processingDownloadUrl } from "./api.js";
 import { describeClipArea, describeJobProgress, formatDownloadBytes } from "./presentation.js";
+import { executionDescription, performanceDescription } from "./calculation-performance.js";
 
 const RESULT_STATES = { no_matches: "No cells matched the condition.", no_valid_data: "No valid cells in this area.",
     invalid_arithmetic: "Undefined arithmetic; no numeric result.", overflow: "Numeric overflow; no finite result." };
@@ -21,7 +22,7 @@ export class SummaryStatisticsView extends CalculationsView {
         this.clipboard = clipboard;
         this.cards = new Map();
         this.vectorAreaControls = documentContext.querySelector("#calculations-vector-area");
-        this.extra = Object.fromEntries(["auto", "undo", "undo-button", "saved-result", "close-saved", "recovery-status"]
+        this.extra = Object.fromEntries(["auto", "undo", "undo-button", "saved-result", "close-saved", "recovery-status", "chunk-pixels", "performance-plans"]
             .map(name => [name, documentContext.querySelector(`#summary-${name}`)]));
     }
     bind(handlers) {
@@ -32,6 +33,7 @@ export class SummaryStatisticsView extends CalculationsView {
             [e.close, "click", handlers.onClose], [e["edit-area"], "click", handlers.onEditArea],
             [e.area, "change", () => handlers.onArea(e.area.value)],
             [x.auto, "change", () => handlers.onAutomatic(x.auto.checked)],
+            [x["chunk-pixels"], "change", () => handlers.onChunkPixels(x["chunk-pixels"].value === "" ? null : Number(x["chunk-pixels"].value))],
             [e.template, "change", () => { handlers.onAdd(e.template.value); e.template.value = ""; }],
             [x["undo-button"], "click", handlers.onUndo], [e.retry, "click", handlers.onRetry],
             [e.refresh, "click", handlers.onRefresh], [x["close-saved"], "click", handlers.onCloseSaved],
@@ -184,6 +186,17 @@ export class SummaryStatisticsView extends CalculationsView {
                 ? "Choose a polygon layer below. Edit its filter, then use the matching features."
                 : describeClipArea(state.area);
         x.auto.checked = state.automatic;
+        x["chunk-pixels"].value = state.targetChunkPixels == null ? "" : String(state.targetChunkPixels);
+        const planSignature = JSON.stringify(state.statistics.map(card => [card.label, card.plan?.grid]));
+        if (planSignature !== this.signatures.performance) {
+            x["performance-plans"].replaceChildren(...state.statistics.filter(card => card.plan?.grid.execution).map(card => {
+                const row = this.element("div");
+                row.append(this.element("strong", card.label || "Custom statistic"),
+                    ...executionDescription(card.plan.grid).map(text => this.element("p", text)));
+                return row;
+            }));
+            this.signatures.performance = planSignature;
+        }
         e.template.disabled = state.statistics.length >= 5;
         x.undo.hidden = !state.undo;
         x["undo-button"].disabled = state.statistics.length >= 5;
@@ -235,6 +248,9 @@ export class SummaryStatisticsView extends CalculationsView {
             const method = job.grid.groundArea;
             root.append(this.element("p", `Ground area: ${method.ellipsoid} ellipsoid, hectares, including partial pixels. ${method.edgeToleranceMetres} m chord-deviation target; at most ${method.maximumSegmentMetres.toLocaleString()} m per segment. Numeric functions select cell centers.`));
         }
+        const performance = this.element("details");
+        performance.append(this.element("summary", "Performance"), ...performanceDescription(job).map(text => this.element("p", text)));
+        root.append(performance);
         const links = this.element("div"); links.className = "downloads-actions";
         for (const [kind, label, url] of [["result", "Download CSV", job.result.url], ["provenance", "Download provenance", job.result.provenanceUrl]]) {
             const link = this.element("a", label); link.className = "secondary-button";

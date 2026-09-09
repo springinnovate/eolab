@@ -44,6 +44,9 @@
 .summary-status-row > span.is-error { color: var(--status-danger); }
 .summary-status-row > span.is-working::before { content: ""; display: inline-block; width: 0.65em; height: 0.65em; margin-right: 0.4em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: calculation-spin 0.8s linear infinite; }
 .summary-statistic progress { width: 100%; }
+.summary-performance { margin-top: 12px; font-size: 0.78rem; }
+.summary-performance label { display: block; margin: 8px 0 4px; }
+.summary-performance p { margin: 6px 0; color: var(--text-2); }
 .summary-result-details { font-size: 0.75rem; color: var(--text-2); }
 #calculations-panel .summary-result-details summary { font-weight: 400; }
 .summary-result-details code { overflow-wrap: anywhere; }

@@ -3,6 +3,13 @@ import { normalizeRasterSamplingArea } from "../selected-area.js";
 const KEY = "eolab.processing.calculation.v1";
 const ID = /^[A-Za-z0-9_-]{32}$/;
 
+/** Validate the optional total-pixel execution budget. @param {number|null} value Setting. @return {number|null} Budget. */
+export function chunkPixels(value) {
+    if (value == null) return null;
+    if (!Number.isSafeInteger(value) || value < 1 || value > 4194304) throw new TypeError("Batch size must be 1 to 4,194,304 pixels.");
+    return value;
+}
+
 /** Copy only the public calculation intent. @param {Object} value Candidate intent. @return {Readonly<Object>} Immutable snapshot. */
 export function calculationIntent(value) {
     const { collectionId, itemId, label } = value.source;
@@ -20,6 +27,7 @@ export function calculationIntent(value) {
         return Object.freeze({ label, expression });
     });
     return Object.freeze({ source: Object.freeze({ collectionId, itemId, label }),
+        ...(chunkPixels(value.targetChunkPixels) === null ? {} : { targetChunkPixels: value.targetChunkPixels }),
         area: normalizeRasterSamplingArea(value.area), calculations: Object.freeze(calculations) });
 }
 

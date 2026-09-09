@@ -60,6 +60,8 @@ def test_mechanisms_and_storage_never_import_application_services() -> None:
         Path("src/eolab_app/processing/raster_input.py"),
         Path("src/eolab_app/processing/ground_area.py"),
         Path("src/eolab_app/processing/area_coverage.py"),
+        Path("src/eolab_app/processing/aggregate_windows.py"),
+        Path("src/eolab_app/raster/source_contract.py"),
     ]
     for path in paths:
         assert not {

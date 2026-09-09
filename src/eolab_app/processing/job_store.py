@@ -400,7 +400,7 @@ class PostgresJobStore:
             Claimed job or None while another attempt reserves the slot.
         """
         with self._transaction(locked=True) as cursor:
-            cursor.execute("SET LOCAL eolab.processing_claim_version = '3'")
+            cursor.execute("SET LOCAL eolab.processing_claim_version = '4'")
             cursor.execute(
                 "UPDATE processing.jobs SET status='interrupted',error=%s,updated_at=now() WHERE status IN ('running','cancelling') AND deadline_at<now()",
                 (
@@ -418,7 +418,7 @@ class PostgresJobStore:
             if cursor.fetchone():
                 return None
             cursor.execute(
-                "SELECT id FROM processing.jobs WHERE status='queued' AND minimum_claim_version<=3 ORDER BY created_at LIMIT 1 FOR UPDATE"
+                "SELECT id FROM processing.jobs WHERE status='queued' AND minimum_claim_version<=4 ORDER BY created_at LIMIT 1 FOR UPDATE"
             )
             row = cursor.fetchone()
             if not row:

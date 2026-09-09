@@ -27,6 +27,7 @@ from eolab_app.raster.models import CatalogRasterRequest, Wgs84Bounds
 
 OPERATION_VERSION = "raster.aggregate.v1"
 Alias = Annotated[str, Field(pattern=r"^[A-Za-z][A-Za-z0-9_]{0,31}$")]
+ChunkPixels = Annotated[int, Field(strict=True, ge=1, le=4_194_304)]
 
 
 class NamedCalculation(BaseModel):
@@ -92,6 +93,7 @@ class AggregatePlanRequest(BaseModel):
     selectedBounds: Wgs84Bounds | None = None
     temporaryAoiId: Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{32}$")] | None = None
     wholeRaster: Literal[True] | None = None
+    targetChunkPixels: ChunkPixels | None = None
 
     @model_validator(mode="after")
     def validate_intent(self) -> "AggregatePlanRequest":
@@ -146,6 +148,32 @@ class GroundAreaPlan(BaseModel):
     strategy: Literal["rectilinear", "cell_polygons"]
 
 
+class AggregateExecutionPlan(BaseModel):
+    """Immutable maximum read/tile dimensions; edge windows can be smaller."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    targetChunkPixels: ChunkPixels | None = None
+    readWidth: Annotated[int, Field(gt=0)]
+    readHeight: Annotated[int, Field(gt=0)]
+    evaluationWidth: Annotated[int, Field(gt=0)]
+    evaluationHeight: Annotated[int, Field(gt=0)]
+    readWindows: Annotated[int, Field(gt=0, le=65_536)]
+
+
+class AggregatePerformance(BaseModel):
+    """Final bounded wall-time measurements, independent of transient progress."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    execution: AggregateExecutionPlan
+    readWindows: Annotated[int, Field(ge=1, le=65_536)]
+    evaluationTiles: Annotated[int, Field(ge=1, le=2**53 - 1)]
+    reducerUpdates: Annotated[int, Field(ge=1, le=2**53 - 1)]
+    readSeconds: Annotated[float, Field(ge=0, le=86_400, allow_inf_nan=False)]
+    calculationSeconds: Annotated[float, Field(ge=0, le=86_400, allow_inf_nan=False)]
+    resultWriteSeconds: Annotated[float, Field(ge=0, le=86_400, allow_inf_nan=False)]
+    kernelSeconds: Annotated[float, Field(ge=0, le=86_400, allow_inf_nan=False)]
+
+
 class AggregateGrid(BaseModel):
     """Native grid, value domain, and conservative work/memory admission."""
 
@@ -164,6 +192,7 @@ class AggregateGrid(BaseModel):
     offset: str
     storedUnit: str | None
     groundArea: GroundAreaPlan | None = None
+    execution: AggregateExecutionPlan | None = None
 
     @model_serializer(mode="wrap")
     def serialize_grid(self, handler: SerializerFunctionWrapHandler) -> dict:
@@ -178,6 +207,8 @@ class AggregateGrid(BaseModel):
         result = handler(self)
         if self.groundArea is None:
             result.pop("groundArea", None)
+        if self.execution is None:
+            result.pop("execution", None)
         return result
 
 
@@ -213,6 +244,7 @@ class AggregateResultResponse(JobResultResponse):
     """Small inline results plus owned CSV and provenance downloads."""
 
     rows: list[AggregateValue]
+    performance: AggregatePerformance | None = None
 
 
 class AggregateProgress(JobProgressResponse):
@@ -290,5 +322,6 @@ class AggregateArtifact(Artifact):
     """Server-generated CSV and bounded typed summary for an aggregate job."""
 
     rows: list[dict[str, object]]
+    performance: dict[str, object] | None = field(default=None, kw_only=True)
     media_type: str = field(default="text/csv", kw_only=True)
     result_name: str = field(default="result.csv", kw_only=True)

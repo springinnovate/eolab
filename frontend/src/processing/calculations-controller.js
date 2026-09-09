@@ -49,6 +49,7 @@ export class CalculationsController {
             this.state.sources = [intent.source];
             this.state.area = this.state.selectedArea = intent.area;
             this.state.calculations = intent.calculations.map(row => ({ ...row }));
+            this.state.targetChunkPixels = intent.targetChunkPixels ?? null;
             if (jobId) this.jobs.tracked.add(jobId);
             try { this.storage.write(this.record); }
             catch (error) { this.state.message = error.message; this.blocked = true; this.render(); }
@@ -291,7 +292,7 @@ export class CalculationsController {
         this.validationAbort?.abort();
         this.clock.clearTimeout(this.validationTimer);
         this.validationSequence++;
-        Object.assign(this.state, snapshot, { valid: true, checking: false, manualRequired: false, validation: "", message: "" });
+        Object.assign(this.state, snapshot, { targetChunkPixels: snapshot.targetChunkPixels ?? null, valid: true, checking: false, manualRequired: false, validation: "", message: "" });
         this.queueCalculation(automatic, false);
     }
 

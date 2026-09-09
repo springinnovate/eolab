@@ -1,5 +1,5 @@
 /** Editable statistic cards over the existing durable calculation workflow. */
-import { calculationIntent } from "./calculation-session.js";
+import { calculationIntent, chunkPixels } from "./calculation-session.js";
 import { CalculationsController } from "./calculations-controller.js";
 import { normalizeRasterSamplingArea } from "../selected-area.js";
 
@@ -32,7 +32,7 @@ export class SummaryStatisticsController {
         Object.assign(this, { api, jobs, view, getContext, onOpen, onClose, clock });
         this.serial = 0;
         this.state = { sources: [], statistics: [], area: null, selectedArea: null, areaChoice: "selection",
-            availableAoi: null, active: false, automatic: true, jobs: [], historyError: "", saved: null, undo: false };
+            availableAoi: null, active: false, automatic: true, jobs: [], historyError: "", saved: null, undo: false, targetChunkPixels: null };
         this.state.statistics.push(this.makeStatistic(STATISTIC_PRESETS.mean));
         this.engine = new CalculationsController({ ...dependencies, canAutoSubmit: canAutomaticallyCalculate,
             view: { bind: handlers => { this.engineHandlers = handlers; }, render: state => this.receive(state), unbind() {} },
@@ -40,6 +40,7 @@ export class SummaryStatisticsController {
         });
         view.bind({ onOpen: () => this.open(), onClose: () => this.close(), onEditArea,
             onArea: choice => this.chooseArea(choice), onAutomatic: value => this.setAutomatic(value),
+            onChunkPixels: value => this.setChunkPixels(value),
             onEdit: (id, change) => this.editStatistic(id, change), onAdd: preset => this.addStatistic(preset),
             onRemove: id => this.removeStatistic(id), onUndo: () => this.undoRemove(),
             onRun: id => this.request(id, "manual"), onStop: id => this.stopStatistic(id),
@@ -57,13 +58,14 @@ export class SummaryStatisticsController {
             message: "Choose a raster", result: null, plan: null, manualRequired: false, error: false };
     }
     label(card) { return card.label.trim() || `Summary statistic ${card.id}`; }
-    key(card) { return JSON.stringify([sourceKey(card.source), card.expression.trim(), this.state.area]); }
+    key(card) { return JSON.stringify([sourceKey(card.source), card.expression.trim(), this.state.area, this.state.targetChunkPixels]); }
     get isActive() { return this.state.active && !this.destroyed; }
 
     /** Recover the existing durable record without starting a new automatic calculation. */
     async start() {
         const record = this.engine.record;
         if (record) {
+            this.state.targetChunkPixels = record.intent.targetChunkPixels ?? null;
             this.state.area = this.state.selectedArea = record.intent.area;
             this.state.areaChoice = record.intent.area.kind === "wholeRaster" ? "whole" : record.intent.area.kind === "temporaryAoi" ? "uploaded" : "selection";
             this.state.sources = [record.intent.source];
@@ -135,6 +137,20 @@ export class SummaryStatisticsController {
         if (this.state.area?.temporaryAoiId === id) { this.invalidateBatch(); this.changeArea(null, false); }
         if (this.state.selectedArea?.temporaryAoiId === id) this.state.selectedArea = null;
         if (this.state.vectorArea?.id === id) this.state.vectorArea = null;
+        this.render();
+    }
+    /** Change execution settings without launching a benchmark or invalidating formula syntax.
+     * @param {number|null} value Total target pixels; null keeps legacy execution. @return {void}
+     */
+    setChunkPixels(value) {
+        const target = chunkPixels(value);
+        if (target === this.state.targetChunkPixels) return;
+        this.invalidateBatch();
+        this.engine.invalidate();
+        this.state.targetChunkPixels = target;
+        for (const card of this.state.statistics) {
+            card.plan = null; card.manualRequired = false; card.requested = null; card.error = false;
+        }
         this.render();
     }
     setTemporaryAoi(aoi) {
@@ -297,6 +313,7 @@ export class SummaryStatisticsController {
             labels.add(label); return true;
         });
         const intent = calculationIntent({ source: first.source, area: this.state.area,
+            targetChunkPixels: this.state.targetChunkPixels,
             calculations: group.map(card => ({ label: this.label(card), expression: card.expression })) });
         this.batch = { intent, previousJobId: this.engine.state.result?.jobId, automatic: first.requested !== "manual", obsolete: false,
             cards: group.map(card => ({ id: card.id, key: this.key(card) })) };

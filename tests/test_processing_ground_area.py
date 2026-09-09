@@ -52,7 +52,7 @@ def test_area_review_result_provenance_and_older_worker_fence(
         assert connection.execute(
             "SELECT minimum_claim_version FROM processing.jobs WHERE id=%s",
             (job["jobId"],),
-        ).fetchone() == (3,)
+        ).fetchone() == (4,)
         assert (
             connection.execute(
                 "SELECT id FROM processing.jobs WHERE status='queued' AND minimum_claim_version<=2"
@@ -88,7 +88,7 @@ def test_area_review_result_provenance_and_older_worker_fence(
     assert csv_rows[0]["unit"] == "ha" and csv_rows[0]["value"] == area["value"]
     with TestClient(app, base_url="https://testserver") as stranger:
         assert stranger.get(ready["result"]["url"]).status_code == 404
-    # Numeric-only jobs keep their existing schema and worker compatibility.
+    # New numeric plans also carry immutable execution metadata and require v4.
     numeric = plan_calculation(client)
     assert "groundArea" not in numeric["grid"]
     numeric_job = submit_calculation(client, numeric)
@@ -96,5 +96,5 @@ def test_area_review_result_provenance_and_older_worker_fence(
         assert connection.execute(
             "SELECT minimum_claim_version FROM processing.jobs WHERE id=%s",
             (numeric_job["jobId"],),
-        ).fetchone() == (2,)
+        ).fetchone() == (4,)
     assert asyncio.run(worker.run_once())

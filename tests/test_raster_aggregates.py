@@ -33,6 +33,7 @@ def make_spec(
     expressions: list[str],
     area: AggregateArea | None = None,
     limits: RasterAggregateLimits = LIMITS,
+    target_chunk_pixels: int | None = None,
 ) -> AggregateSpec:
     """Build an immutable native plan from a real closed fixture.
 
@@ -41,6 +42,7 @@ def make_spec(
         expressions: Ordered scalar expressions for alias a.
         area: Explicit selection, defaulting to explicit whole-raster intent.
         limits: Optional reduced admission budget.
+        target_chunk_pixels: Optional batch pixel budget.
 
     Returns:
         JSON-round-tripped specification ready for execution.
@@ -56,7 +58,9 @@ def make_spec(
         sourceSignature=signature,
         area=area,
         calculations=calculations,
-        grid=plan_aggregate(path, signature, area, calculations, "a", limits),
+        grid=plan_aggregate(
+            path, signature, area, calculations, "a", limits, target_chunk_pixels
+        ),
     )
     return AggregateSpec.model_validate_json(spec.model_dump_json(by_alias=True))
 

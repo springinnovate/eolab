@@ -388,3 +388,61 @@ test("reload cancels recovered automatic work and never resumes sampling on its 
     await restored.controller.start();await flush();await restored.jobs.refresh();await flush();
     assert.equal(h.server.get(id).status,"cancelled");assert.equal(restored.submits(),0);assert.equal(restored.controller.state.statistics[0].result,null);
 });
+
+test("batch tuning invalidates the result without running, persists on repeats, and can return to legacy", async()=>{
+    const h=fixture();await h.open();const card=h.controller.state.statistics[0];
+    h.controller.request(card.id,"manual");await flush();await h.finish();
+    const input=h.view.extra["chunk-pixels"];
+    input.value="65536";input.dispatchEvent(new Event("change"));await flush();
+    assert.equal(card.current,false);assert.equal(card.plan,null);assert.equal(h.submits(),1);
+    assert.equal(card.valid,true);assert.equal(h.view.cards.get(card.id).root.classList.contains("is-previous"),true);
+    h.controller.request(card.id,"manual");await flush();
+    assert.equal(h.controller.engine.record.intent.targetChunkPixels,65536);
+    await h.finish();
+    h.controller.setSelection(box(78));await h.tick();
+    assert.equal(h.controller.engine.record.intent.targetChunkPixels,65536);
+    await h.finish();
+    input.value="";input.dispatchEvent(new Event("change"));await flush();
+    h.controller.request(card.id,"manual");await flush();
+    assert.equal(h.controller.engine.record.intent.targetChunkPixels,undefined);
+    assert.equal(h.requests.filter(r=>r[0]==="plan").at(-1)[1].targetChunkPixels,undefined);
+});
+
+test("recovery preserves accepted batch settings without another submission",async()=>{
+    const h=fixture();await h.open();const card=h.controller.state.statistics[0];
+    h.controller.setChunkPixels(262144);h.controller.request(card.id,"manual");await flush();
+    const id=h.controller.engine.record.jobId;h.controller.destroy();
+    const restored=fixture({listJobs:async()=>[...h.server.values()],getJob:async id=>h.server.get(id)},h.data);
+    await restored.controller.start();
+    assert.equal(restored.submits(),0);assert.equal(restored.controller.engine.record.jobId,id);
+    assert.equal(restored.controller.state.targetChunkPixels,262144);
+    assert.equal(restored.view.extra["chunk-pixels"].value,"262144");
+    assert.equal(restored.controller.engine.intent().targetChunkPixels,262144);
+});
+
+test("changing batch size cancels obsolete work and waits before the next explicit calculation",async()=>{
+    const h=fixture();await h.open();const card=h.controller.state.statistics[0];
+    h.controller.setChunkPixels(65536);h.controller.request(card.id,"manual");await flush();
+    const oldIntent=h.controller.engine.record.intent;
+    h.controller.setChunkPixels(262144);await flush();
+    assert.equal(oldIntent.targetChunkPixels,65536);assert.ok(h.requests.some(r=>r[0]==="cancel"));
+    h.controller.request(card.id,"manual");await flush();assert.equal(h.submits(),1);
+    await h.finish("cancelled");await flush();
+    assert.equal(h.submits(),2);assert.equal(h.controller.engine.record.intent.targetChunkPixels,262144);
+});
+
+test("performance details retain measured timings and source-work units in cards and history",async()=>{
+    const h=fixture();await h.open();const card=h.controller.state.statistics[0];
+    h.controller.request(card.id,"manual");await flush();await h.finish();
+    const execution={targetChunkPixels:65536,readWidth:512,readHeight:128,evaluationWidth:512,evaluationHeight:128,readWindows:1};
+    const performance={execution,readWindows:1,evaluationTiles:1,reducerUpdates:1,readSeconds:.125,calculationSeconds:.25,resultWriteSeconds:.01,kernelSeconds:.6};
+    const job=card.result.job;
+    card.result.job={...job,grid:{...job.grid,execution,estimatedMemoryBytes:150*1024**2},result:{...job.result,performance}};
+    const root=h.document.createElement("div");h.view.renderValueDetails(root,card.result);
+    const text=node=>[node.textContent,...node.children.map(text)].join(" ");
+    assert.match(text(root),/4 native blocks in 1 reads/);
+    assert.match(text(root),/Kernel elapsed: 0.600 s/);
+    assert.match(text(root),/Queueing, worker startup/);
+    h.view.renderResult({result:card.result.job,sources:[source]});
+    assert.match(text(h.view.elements.result),/Read\/decode and source mask: 0.125 s/);
+});
