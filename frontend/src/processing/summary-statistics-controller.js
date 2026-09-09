@@ -86,9 +86,10 @@ export class SummaryStatisticsController {
         }
         this.state.sources = sources;
         const selected = area === undefined ? context.area : area;
-        if (area !== undefined || !this.state.area) {
-            this.state.areaChoice = "selection";
+        if (area !== undefined || (!this.state.area && this.state.areaChoice === "selection")) {
+            this.state.areaChoice = this.state.vectorArea && selected?.temporaryAoiId === this.state.vectorArea.id ? "vector" : "selection";
             this.setSelection(selected, false);
+            if (this.state.areaChoice === "vector") this.changeArea(selected, false);
         }
         if (!this.state.statistics.length) this.state.statistics.push(this.makeStatistic(STATISTIC_PRESETS.mean));
         for (const card of this.state.statistics) {
@@ -123,7 +124,7 @@ export class SummaryStatisticsController {
     /** Select a composed vector AOI; exact jobs require a size review first. */
     setVectorSamplingArea(info) {
         this.state.vectorArea = info;
-        this.state.areaChoice = "selection";
+        this.state.areaChoice = "vector";
         this.state.selectedArea = { kind: "temporaryAoi", temporaryAoiId: info.id };
         this.changeArea(this.state.selectedArea, false);
         this.render();
@@ -147,11 +148,14 @@ export class SummaryStatisticsController {
         const next = area ? normalizeRasterSamplingArea(area) : null;
         if (same(next, this.state.selectedArea)) return;
         this.state.selectedArea = next;
+        if (next && this.state.areaChoice === "vector" && this.state.vectorArea && this.state.area?.temporaryAoiId === this.state.vectorArea.id && next.temporaryAoiId !== this.state.vectorArea.id) {
+            this.state.areaChoice = "selection";
+        }
         if (this.state.areaChoice === "selection") this.changeArea(next, automatic);
     }
     chooseArea(choice) {
         this.state.areaChoice = choice;
-        const area = choice === "whole" ? { kind: "wholeRaster" } : choice === "uploaded"
+        const area = choice === "vector" ? null : choice === "whole" ? { kind: "wholeRaster" } : choice === "uploaded"
             ? this.state.availableAoi && { kind: "temporaryAoi", temporaryAoiId: this.state.availableAoi.id }
             : this.state.selectedArea;
         this.changeArea(area, true);

@@ -1,11 +1,17 @@
 # Sampling with a filtered vector layer
 
-In **Explore → Sampling area → Vector layer**, choose a mounted Shapefile or
-GeoPackage polygon layer. **Edit filter** opens the existing filter panel. Apply
-the filter (for example, `iso3 equals "PER"`), return to Sampling area, and choose
+In **Summarize → Area → Vector layer**, choose a mounted Shapefile or
+GeoPackage polygon layer directly below the Area selector. **Edit filter** opens
+the existing filter panel. Apply the filter (for example, `iso3 equals "PER"`),
+return to Summarize, and choose
 **Use these features**. All matching features contribute, regardless of the
 viewport or which features were clicked. Overlaps count once and holes remain
 excluded. No matches is an error, never a whole-layer or bounding-box fallback.
+The same controls remain available in **Explore → Sampling area → Vector layer**.
+Both placements share one selection, applied predicate and confirmation state.
+Choosing Vector layer in Summarize clears the calculation area until polygons
+are explicitly selected; reopening the panel does not silently restore the old
+map box. Applying the selection from Summarize keeps that panel active.
 
 The selected geometry drives 1D and 2D histogram masks, summary statistics and
 clip downloads through the existing temporary-AOI reference. Histogram samples
@@ -38,7 +44,9 @@ separately available.
   expiry and removal, without learning Catalog or vector filtering semantics.
   Raster statistics and processing continue to consume the shared AOI read port.
 - The browser vector controller owns source/filter selection, review and stale
-  responses. The browser composition root connects it to the existing AOI API
+  responses. Its existing view is mounted in Explore and Summarize; the summary
+  controller owns the Area choice and the visibility of its inline container.
+  The browser composition root connects it to the existing AOI API
   and overlay adapter, raster selection commands and summary cancellation.
   Vector, raster and AOI browser components do not import each other's
   implementations. The shared map-layer controller gains no feature logic.

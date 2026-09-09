@@ -20,15 +20,17 @@ export function vectorSelectionReview(area) {
 /** Create polygon AOIs and invalidate them when their source/filter changes. */
 export class VectorSamplingController {
     /**
-     * @param {Object} dependencies View, targets, AOI transport and composed callbacks.
+     * @param {Object} dependencies Views, targets, AOI transport and composed callbacks.
+     * @param {Object|Object[]} dependencies.view One or more synchronized selection views.
      */
     constructor({ view, getTargets, createArea, removeArea, onActivate, onInvalidate, onEditFilter, clock = globalThis }) {
         Object.assign(this, { view, getTargets, createArea, removeArea, onActivate, onInvalidate, onEditFilter, clock });
+        this.views = Array.isArray(view) ? view : [view];
         this.sequence = 0;
         this.state = { targets: [], key: "", phase: "idle", area: null, message: "Choose a polygon layer, then use its filtered features." };
-        view.bind({ onLayer: key => this.choose(key), onUse: () => void this.use(),
+        this.views.forEach(target => target.bind({ onLayer: key => this.choose(key), onUse: () => void this.use(),
             onConfirm: () => this.confirm(), onRemove: () => this.invalidate("Selection removed"),
-            onFilter: () => this.onEditFilter(this.state.key) });
+            onFilter: () => this.onEditFilter(this.state.key) }));
         this.refresh();
     }
     /** Refresh composition-supplied layer snapshots without interpreting renderer internals. */
@@ -105,10 +107,11 @@ export class VectorSamplingController {
     /** Render the applied predicate, never an uncommitted filter draft. */
     render() {
         const target = this.state.targets.find(value => value.key === this.state.key);
-        this.view.render({ ...this.state, filterSummary: vectorFilterSummary(target?.filter ?? EMPTY_VECTOR_FILTER) });
+        const state = { ...this.state, filterSummary: vectorFilterSummary(target?.filter ?? EMPTY_VECTOR_FILTER) };
+        this.views.forEach(view => view.render(state));
     }
     /** Cancel native extraction and release retained geometry on teardown. */
-    destroy() { this.invalidate(""); this.view.unbind(); }
+    destroy() { this.invalidate(""); this.views.forEach(view => view.unbind()); }
 }
 
 /**

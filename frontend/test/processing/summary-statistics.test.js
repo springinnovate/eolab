@@ -61,10 +61,30 @@ test("opening and tab switching preserve cards and do not run native calculation
     assert.equal(card.current,true);
 });
 
+test("the summary Area selector offers inline vector controls and never calculates the old box while choosing polygons", async()=>{
+    const h=fixture(); await h.open();
+    const area=h.view.elements.area;
+    assert.equal(area.children.find(option=>option.value==="vector").textContent,"Vector layer");
+    const card=h.controller.state.statistics[0];
+    h.controller.request(card.id,"manual"); await flush();
+    area.value="vector"; area.dispatchEvent(new Event("change")); await flush();
+    assert.equal(h.controller.state.area,null);
+    assert.equal(h.view.vectorAreaControls.hidden,false);
+    assert.equal(h.view.elements["edit-area"].hidden,true);
+    assert.ok(h.requests.some(request=>request[0]==="cancel"));
+    assert.equal(h.view.cards.get(card.id).run.disabled,true);
+    h.controller.setActive(false); h.controller.open(); await h.tick();
+    assert.equal(h.controller.state.areaChoice,"vector");
+    assert.equal(h.controller.state.area,null);
+    assert.equal(h.submits(),1);
+});
+
 test("vector selection reviews exact scan size before submission and invalidates results when removed", async()=>{
     const h=fixture();await h.open();const card=h.controller.state.statistics[0];
     const id="V".repeat(32);
     h.controller.setVectorSamplingArea({id,label:"Countries · 1 of 200 features"});await h.tick();
+    assert.equal(h.controller.state.areaChoice,"vector");
+    assert.equal(h.view.vectorAreaControls.hidden,false);
     assert.equal(h.submits(),0);
     h.controller.request(card.id,"manual");await flush();
     assert.equal(h.submits(),0);assert.equal(card.manualRequired,true);
@@ -75,7 +95,10 @@ test("vector selection reviews exact scan size before submission and invalidates
     assert.deepEqual(h.controller.engine.record.intent.area,{kind:"temporaryAoi",temporaryAoiId:id});
     await h.finish();assert.equal(card.current,true);
     assert.equal(h.view.cards.get(card.id).size.hidden,true);
+    h.controller.setSelection(null,false);
     h.controller.invalidateSamplingArea(id);assert.equal(card.current,false);assert.equal(h.controller.state.area,null);
+    assert.equal(h.controller.state.areaChoice,"vector");
+    assert.equal(h.view.vectorAreaControls.hidden,false);
     assert.equal(h.view.cards.get(card.id).root.classList.contains("is-previous"),true);
 });
 test("a new card shows calculation controls without an empty value, then displays zero and retains previous results", async()=>{

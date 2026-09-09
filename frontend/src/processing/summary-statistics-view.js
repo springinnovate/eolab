@@ -20,6 +20,7 @@ export class SummaryStatisticsView extends CalculationsView {
         super(documentContext);
         this.clipboard = clipboard;
         this.cards = new Map();
+        this.vectorAreaControls = documentContext.querySelector("#calculations-vector-area");
         this.extra = Object.fromEntries(["auto", "undo", "undo-button", "saved-result", "close-saved", "recovery-status"]
             .map(name => [name, documentContext.querySelector(`#summary-${name}`)]));
     }
@@ -171,13 +172,17 @@ export class SummaryStatisticsView extends CalculationsView {
         const e = this.elements, x = this.extra;
         const areaSignature = JSON.stringify([state.areaChoice, state.availableAoi]);
         if (areaSignature !== this.signatures.area) {
-            e.area.replaceChildren(...[["selection", "Current map selection"], ["uploaded", state.availableAoi ? `AOI · ${state.availableAoi.filename}` : "Uploaded AOI (none ready)"], ["whole", "Whole raster"]]
+            e.area.replaceChildren(...[["selection", "Current map selection"], ["vector", "Vector layer"], ["uploaded", state.availableAoi ? `AOI · ${state.availableAoi.filename}` : "Uploaded AOI (none ready)"], ["whole", "Whole raster"]]
                 .map(([value, label]) => { const option = this.element("option", label); option.value = value; option.disabled = value === "uploaded" && !state.availableAoi; return option; }));
             this.signatures.area = areaSignature;
         }
         e.area.value = state.areaChoice;
+        this.vectorAreaControls.hidden = state.areaChoice !== "vector";
+        e["edit-area"].hidden = state.areaChoice === "vector" || state.areaChoice === "whole";
         e["area-description"].textContent = state.area?.temporaryAoiId && state.area.temporaryAoiId === state.vectorArea?.id
-            ? `Vector selection · ${state.vectorArea.label}` : describeClipArea(state.area);
+            ? `Vector selection · ${state.vectorArea.label}` : state.areaChoice === "vector"
+                ? "Choose a polygon layer below. Edit its filter, then use the matching features."
+                : describeClipArea(state.area);
         x.auto.checked = state.automatic;
         e.template.disabled = state.statistics.length >= 5;
         x.undo.hidden = !state.undo;

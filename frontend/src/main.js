@@ -833,7 +833,9 @@ async function initializeCatalog(
     const vectorSamplingOverlay = new TemporaryAoiLayerController(leafletMap, L);
     const vectorSamplingLifecycle = new TemporaryAoiApiClient();
     vectorSampling = new VectorSamplingController({
-        view: new VectorSamplingView(),
+        view: [new VectorSamplingView(), new VectorSamplingView(document, {
+            root: "#calculations-vector-area", choice: null, disclosure: null,
+        })],
         getTargets: () => mapLayerController.retainedRecords
             .filter(record => record.adapter === vectorMapLayerAdapter && record.state.style?.geometryKind === "polygon")
             .map(record => ({ key: record.entry.key, label: record.entry.label, item: record.entry.item,
@@ -842,10 +844,12 @@ async function initializeCatalog(
         removeArea: id => vectorSamplingLifecycle.remove(id),
         onEditFilter: key => vectorFilterControls.open(key),
         onActivate: area => {
+            const returnToSummary = calculations.isActive;
             vectorSamplingOverlay.load(area);
             const label = `${area.filename} · ${area.matched} of ${area.total} features`;
             rasterVisualization.setVectorSamplingAoi({ ...area, filename: label });
             calculations.setVectorSamplingArea({ id: area.id, label });
+            if (returnToSummary) mapInspection.showCalculations();
         },
         onInvalidate: id => {
             vectorSamplingOverlay.clear();

@@ -1,13 +1,20 @@
 /** DOM adapter for selecting a filtered polygon layer as the sampling area. */
 export class VectorSamplingView {
-    /** @param {Document} documentContext Document containing the shared sampling controls. */
-    constructor(documentContext = document) {
+    /**
+     * Create a view over one placement of the shared vector controls.
+     * @param {Document} [documentContext=document] Owning document.
+     * @param {Object} [options] Mount selectors supplied by browser composition.
+     * @param {string} [options.root="#vector-sampling"] Control container selector.
+     * @param {string|null} [options.choice="#use-vector-for-raster"] Optional disclosure opener.
+     * @param {string|null} [options.disclosure="#vector-sampling-disclosure"] Optional disclosure.
+     */
+    constructor(documentContext = document, { root = "#vector-sampling", choice = "#use-vector-for-raster", disclosure = "#vector-sampling-disclosure" } = {}) {
         this.document = documentContext;
-        this.root = documentContext.querySelector("#vector-sampling");
+        this.root = documentContext.querySelector(root);
         this.elements = Object.fromEntries(["layer", "filter", "use", "confirm", "remove", "status", "predicate"]
-            .map(name => [name, this.root.querySelector(`[data-vector-sampling="${name}"]`)]));
-        this.choice = documentContext.querySelector("#use-vector-for-raster");
-        this.disclosure = documentContext.querySelector("#vector-sampling-disclosure");
+            .map(name => [name, documentContext.querySelector(`${root} [data-vector-sampling="${name}"]`)]));
+        this.choice = choice ? documentContext.querySelector(choice) : null;
+        this.disclosure = disclosure ? documentContext.querySelector(disclosure) : null;
         this.abort = new AbortController();
     }
     /** @param {Object} handlers Semantic layer, selection and review handlers. */
@@ -17,7 +24,7 @@ export class VectorSamplingView {
         for (const [name, handler] of [["use", "onUse"], ["confirm", "onConfirm"], ["remove", "onRemove"], ["filter", "onFilter"]]) {
             on(this.elements[name], "click", () => handlers[handler]());
         }
-        on(this.choice, "change", () => { this.disclosure.open = true; this.elements.layer.focus(); });
+        if (this.choice && this.disclosure) on(this.choice, "change", () => { this.disclosure.open = true; this.elements.layer.focus(); });
     }
     /** @param {Object} state Current selection and review state. */
     render(state) {
