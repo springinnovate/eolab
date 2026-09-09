@@ -86,9 +86,10 @@ export class SummaryStatisticsController {
         }
         this.state.sources = sources;
         const selected = area === undefined ? context.area : area;
-        if (area !== undefined || !this.state.area) {
-            this.state.areaChoice = "selection";
+        if (area !== undefined || (!this.state.area && this.state.areaChoice === "selection")) {
+            this.state.areaChoice = this.state.vectorArea && selected?.temporaryAoiId === this.state.vectorArea.id ? "vector" : "selection";
             this.setSelection(selected, false);
+            if (this.state.areaChoice === "vector") this.changeArea(selected, false);
         }
         if (!this.state.statistics.length) this.state.statistics.push(this.makeStatistic(STATISTIC_PRESETS.mean));
         for (const card of this.state.statistics) {
@@ -120,6 +121,22 @@ export class SummaryStatisticsController {
         this.render();
     }
 
+    /** Select a composed vector AOI; exact jobs require a size review first. */
+    setVectorSamplingArea(info) {
+        this.state.vectorArea = info;
+        this.state.areaChoice = "vector";
+        this.state.selectedArea = { kind: "temporaryAoi", temporaryAoiId: info.id };
+        this.changeArea(this.state.selectedArea, false);
+        this.render();
+    }
+    /** Cancel obsolete work even when its panel is no longer active. */
+    invalidateSamplingArea(id) {
+        if (this.batch?.intent.area?.temporaryAoiId === id) this.invalidateBatch();
+        if (this.state.area?.temporaryAoiId === id) { this.invalidateBatch(); this.changeArea(null, false); }
+        if (this.state.selectedArea?.temporaryAoiId === id) this.state.selectedArea = null;
+        if (this.state.vectorArea?.id === id) this.state.vectorArea = null;
+        this.render();
+    }
     setTemporaryAoi(aoi) {
         this.state.availableAoi = aoi;
         if (this.state.areaChoice === "uploaded" && this.state.area?.temporaryAoiId !== aoi?.id) {
@@ -131,14 +148,18 @@ export class SummaryStatisticsController {
         const next = area ? normalizeRasterSamplingArea(area) : null;
         if (same(next, this.state.selectedArea)) return;
         this.state.selectedArea = next;
+        if (next && this.state.areaChoice === "vector" && this.state.vectorArea && this.state.area?.temporaryAoiId === this.state.vectorArea.id && next.temporaryAoiId !== this.state.vectorArea.id) {
+            this.state.areaChoice = "selection";
+        }
         if (this.state.areaChoice === "selection") this.changeArea(next, automatic);
     }
     chooseArea(choice) {
         this.state.areaChoice = choice;
-        const area = choice === "whole" ? { kind: "wholeRaster" } : choice === "uploaded"
+        const area = choice === "vector" ? null : choice === "whole" ? { kind: "wholeRaster" } : choice === "uploaded"
             ? this.state.availableAoi && { kind: "temporaryAoi", temporaryAoiId: this.state.availableAoi.id }
             : this.state.selectedArea;
         this.changeArea(area, true);
+        this.render();
     }
     changeArea(area, automatic) {
         if (same(area, this.state.area)) return;
@@ -226,6 +247,7 @@ export class SummaryStatisticsController {
         const card = this.state.statistics.find(item => item.id === id);
         if (!card || !card.source || !this.state.area) return;
         if (this.batch && !this.batch.obsolete && this.batch.cards.some(entry => entry.id === id && entry.key === this.key(card))) return;
+        if (kind === "manual" && this.state.vectorArea && this.state.area?.temporaryAoiId === this.state.vectorArea.id && !card.manualRequired) kind = "review";
         card.requested = kind; card.error = false;
         if (debounce) this.validateLater(card, false);
         else if (!card.valid && !card.checking) this.validateLater(card, false);
@@ -260,10 +282,10 @@ export class SummaryStatisticsController {
     pump() {
         if (this.destroyed || this.batch || this.engine.record || this.engine.desired || this.engine.advanceRunning) return;
         const eligible = this.state.statistics.filter(card => card.requested && card.valid && !card.checking && card.source && this.state.area &&
-            (card.requested === "manual" || (this.isActive && this.state.automatic)));
+            (["manual", "review"].includes(card.requested) || (this.isActive && this.state.automatic)));
         const first = eligible[0];
         if (!first) return;
-        if (this.engine.blocked && first.requested !== "manual") {
+        if (this.engine.blocked && first.requested === "automatic") {
             for (const card of eligible) { card.requested = null; card.error = true; card.message = "Calculation paused after an error · Calculate to retry"; }
             this.render(); return;
         }
@@ -276,7 +298,7 @@ export class SummaryStatisticsController {
         });
         const intent = calculationIntent({ source: first.source, area: this.state.area,
             calculations: group.map(card => ({ label: this.label(card), expression: card.expression })) });
-        this.batch = { intent, previousJobId: this.engine.state.result?.jobId, automatic: first.requested === "automatic", obsolete: false,
+        this.batch = { intent, previousJobId: this.engine.state.result?.jobId, automatic: first.requested !== "manual", obsolete: false,
             cards: group.map(card => ({ id: card.id, key: this.key(card) })) };
         for (const card of group) { card.requested = null; card.pending = true; card.error = false; card.message = "Checking calculation size…"; }
         this.engine.executeIntent(intent, this.batch.automatic);

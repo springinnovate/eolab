@@ -561,6 +561,17 @@
             <div class="downloads-actions summary-panel-heading"><h2>Summary statistics</h2><button id="calculations-close" class="secondary-button" type="button" aria-label="Close summary statistics">&times;</button></div>
             <div class="summary-area-row"><label for="calculations-area">Area</label><select id="calculations-area"></select><button id="calculations-edit-area" class="summary-text-button" type="button">Change</button></div>
             <p id="calculations-area-description" class="summary-area-details"></p>
+            <section id="calculations-vector-area" class="temporary-aoi-card summary-vector-area" aria-label="Vector sampling area for summary statistics" hidden>
+              <label>Polygon layer <select data-vector-sampling="layer" aria-label="Sampling polygon layer"></select></label>
+              <small data-vector-sampling="predicate"></small>
+              <div class="downloads-actions">
+                <button type="button" class="secondary-button" data-vector-sampling="filter">Edit filter</button>
+                <button type="button" class="secondary-button" data-vector-sampling="use">Use these features</button>
+                <button type="button" class="secondary-button" data-vector-sampling="confirm" hidden>Continue with these features</button>
+                <button type="button" class="secondary-button" data-vector-sampling="remove" hidden>Clear selection</button>
+              </div>
+              <p data-vector-sampling="status" role="status"></p>
+            </section>
             <div id="calculations-rows"></div>
             <div id="summary-undo" class="downloads-actions" hidden><span>Statistic removed.</span><button id="summary-undo-button" class="summary-text-button" type="button">Undo</button></div>
             <div class="summary-add-row"><label class="visually-hidden" for="calculations-template">Add statistic</label><select id="calculations-template"><option value="">+ Add statistic</option><option value="mean">Mean</option><option value="count">Count above a threshold</option><option value="sum">Sum</option><option value="area-threshold">Area above a threshold (ha)</option><option value="area-class">Area in a class (ha)</option><option value="percent">Percent above a threshold</option><option value="range">Range</option><option value="custom">Custom</option></select></div>
@@ -900,6 +911,10 @@
                         <small>Local to continental scale. Enter an exact size in km.
                           Use Whole raster / Whole overlap for global sampling.</small>
                       </div>
+                      <label class="raster-sampling-area-option" for="use-vector-for-raster">
+                        <input id="use-vector-for-raster" type="radio" name="raster-sampling-area" value="vector" />
+                        <span><strong>Vector layer</strong><small>Use all polygon features that match a layer’s filter.</small></span>
+                      </label>
                       <label class="raster-sampling-area-option"
                         for="use-temporary-aoi-for-raster">
                         <input id="use-temporary-aoi-for-raster" type="radio"
@@ -917,6 +932,20 @@
                     </p>
                   </section>
                 </fieldset>
+                <details class="raster-sampling-aoi" id="vector-sampling-disclosure">
+                  <summary><span>Sample by vector layer</span><span class="raster-disclosure-chevron" aria-hidden="true"></span></summary>
+                  <section class="temporary-aoi-card" id="vector-sampling" aria-label="Vector sampling area">
+                    <label>Polygon layer <select data-vector-sampling="layer" aria-label="Sampling polygon layer"></select></label>
+                    <small data-vector-sampling="predicate"></small>
+                    <div class="downloads-actions">
+                      <button type="button" class="secondary-button" data-vector-sampling="filter">Edit filter</button>
+                      <button type="button" class="secondary-button" data-vector-sampling="use">Use these features</button>
+                      <button type="button" class="secondary-button" data-vector-sampling="confirm" hidden>Continue with these features</button>
+                      <button type="button" class="secondary-button" data-vector-sampling="remove" hidden>Clear selection</button>
+                    </div>
+                    <p data-vector-sampling="status" role="status"></p>
+                  </section>
+                </details>
                 <details class="raster-sampling-aoi" id="raster-sampling-aoi-disclosure">
                   <summary aria-controls="temporary-aoi">
                     <span>Upload or manage an AOI</span>

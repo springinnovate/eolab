@@ -77,6 +77,10 @@ import { createVectorMapLayerAdapter } from "./vector/map-layer-adapter.js";
 import { VectorStyleControls } from "./vector/style-controls.js";
 import { vectorLabelFields } from "./vector/style.js";
 import { VectorTimeSeriesController } from "./vector/time-series.js";
+import { VectorSamplingController, createVectorSamplingArea } from "./vector/sampling.js";
+import { VectorSamplingView } from "./vector/sampling-view.js";
+import { TemporaryAoiApiClient } from "./temporary-aoi/api.js";
+import { TemporaryAoiLayerController } from "./temporary-aoi/leaflet.js";
 import { initializeTemporaryAoi } from "./temporary-aoi/temporary-aoi.js";
 import { ProcessingApiClient } from "./processing/api.js";
 import { SummaryStatisticsController as CalculationsController } from "./processing/summary-statistics-controller.js";
@@ -702,6 +706,7 @@ async function initializeCatalog(
     let savedMapViewController = null;
     let vectorFeatureInspector = null;
     let vectorFilterControls = null;
+    let vectorSampling = null;
     const mapLayerStackView = new MapLayerStackView();
     const compositeLeafletRenderer = new CompositeLeafletRenderer({
         leaflet: L,
@@ -722,6 +727,7 @@ async function initializeCatalog(
             layerStyleEditor?.refresh();
             vectorFeatureInspector?.syncVisibleLayers();
             vectorFilterControls?.refresh();
+            vectorSampling?.refresh();
             if (!layers.some((layer) =>
                 layer.visible && layer.datasetKind === "raster"
             )) {
@@ -824,6 +830,33 @@ async function initializeCatalog(
         },
     });
     mapLayerController.onFilter = (key) => vectorFilterControls.open(key);
+    const vectorSamplingOverlay = new TemporaryAoiLayerController(leafletMap, L);
+    const vectorSamplingLifecycle = new TemporaryAoiApiClient();
+    vectorSampling = new VectorSamplingController({
+        view: [new VectorSamplingView(), new VectorSamplingView(document, {
+            root: "#calculations-vector-area", choice: null, disclosure: null,
+        })],
+        getTargets: () => mapLayerController.retainedRecords
+            .filter(record => record.adapter === vectorMapLayerAdapter && record.state.style?.geometryKind === "polygon")
+            .map(record => ({ key: record.entry.key, label: record.entry.label, item: record.entry.item,
+                filter: record.adapter.exportFilterState(record) })),
+        createArea: createVectorSamplingArea,
+        removeArea: id => vectorSamplingLifecycle.remove(id),
+        onEditFilter: key => vectorFilterControls.open(key),
+        onActivate: area => {
+            const returnToSummary = calculations.isActive;
+            vectorSamplingOverlay.load(area);
+            const label = `${area.filename} · ${area.matched} of ${area.total} features`;
+            rasterVisualization.setVectorSamplingAoi({ ...area, filename: label });
+            calculations.setVectorSamplingArea({ id: area.id, label });
+            if (returnToSummary) mapInspection.showCalculations();
+        },
+        onInvalidate: id => {
+            vectorSamplingOverlay.clear();
+            rasterVisualization.setVectorSamplingAoi(null);
+            calculations.invalidateSamplingArea(id);
+        },
+    });
     const vectorStyleControls = new VectorStyleControls();
     layerStyleEditor = new MapLayerStyleEditor({
         mapLayers: mapLayerController, rasterViewer: rasterVisualization,

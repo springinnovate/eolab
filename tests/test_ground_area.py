@@ -11,6 +11,7 @@ from affine import Affine
 import numpy as np
 from pyproj import Geod, Transformer
 import pytest
+from rasterio.shutil import copy as copy_raster
 from rasterio.transform import from_origin
 from shapely.geometry import Polygon, box, mapping
 
@@ -355,7 +356,7 @@ def test_area_admission_is_metadata_only_and_keeps_resource_fences(
     monkeypatch.setattr(kernel, "read_native_raster_block", forbidden)
     spec = make_spec(path, ["areaha(a>0)"])
     assert spec.grid.groundArea.estimatedGeometryCells == 100
-    with pytest.raises(ProcessingError, match="100 polygon cells.*99"):
+    with pytest.raises(ProcessingError, match="100 raster cells.*99"):
         make_spec(
             path, ["areaha(a>0)"], limits=replace(LIMITS, max_area_geometry_cells=99)
         )
@@ -370,6 +371,48 @@ def test_area_admission_is_metadata_only_and_keeps_resource_fences(
     )
     with pytest.raises(ProcessingError, match="coordinates"):
         make_spec(path, ["areaha(a>0)"], aoi, replace(LIMITS, max_coordinates=10))
+
+
+@pytest.mark.parametrize("rows", [1000, 1001])
+def test_country_scale_mask_admission_is_independent_of_pixel_polygon_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rows: int
+) -> None:
+    """Large rectilinear AOIs require no pixel-polygon budget or band reads.
+
+    Args:
+        tmp_path: Isolated native fixture directory.
+        monkeypatch: Guard source-value reads during planning.
+        rows: Raster height below or above the old two-million-pixel window cap.
+    """
+    polygon = Polygon([(0, 0), (20, 0), (20, 10), (0, 0)])
+    area = AggregateArea(
+        kind="aoi", bounds=polygon.bounds, geometries=(mapping(polygon),)
+    )
+    path = write_source(
+        tmp_path / "country.tif",
+        np.ones((rows, 2000), dtype="uint8"),
+        transform=from_origin(0, 10, 0.01, 10 / rows),
+    )
+
+    def forbidden(*args: Any) -> None:
+        """Fail if metadata admission attempts to inspect raster values.
+
+        Args:
+            args: Unused native-reader arguments.
+        """
+        pytest.fail("Area planning must not read source values")
+
+    monkeypatch.setattr(kernel, "read_native_raster_block", forbidden)
+    spec = make_spec(
+        path, ["areaha(a>0)"], area, replace(LIMITS, max_area_geometry_cells=0)
+    )
+    assert spec.grid.groundArea.estimatedGeometryCells == 0
+    assert spec.grid.groundArea.inclusion == "fractional_cell_intersection"
+    assert spec.grid.width * spec.grid.height == rows * 2000
+    with pytest.raises(ProcessingError, match="decoded"):
+        make_spec(path, ["areaha(a>0)"], area, replace(LIMITS, max_decoded_bytes=1))
+    with pytest.raises(ProcessingError, match="memory"):
+        make_spec(path, ["areaha(a>0)"], area, replace(LIMITS, max_memory_bytes=1))
 
 
 def test_area_rejects_unreviewed_datum_and_wrapped_grid(tmp_path: Path) -> None:
@@ -393,3 +436,99 @@ def test_area_rejects_unreviewed_datum_and_wrapped_grid(tmp_path: Path) -> None:
     )
     with pytest.raises(ProcessingError, match="-180 to 180"):
         make_spec(wrapped, ["areaha(a>0)"])
+
+
+def test_area_results_do_not_depend_on_source_blocks_or_processing_tiles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Latitude weights and fractional masks stay aligned across arbitrary tiles.
+
+    Args:
+        tmp_path: Isolated GeoTIFF copies with distinct block layouts.
+        monkeypatch: Vary the processing tile size independently of native blocks.
+    """
+    rows, columns = np.indices((257, 273))
+    values = ((rows + 3 * columns) % 5).astype("int16")
+    values[80:100, 90:110] = -9999
+    path = write_source(
+        tmp_path / "source.tif",
+        values,
+        nodata=-9999,
+        transform=from_origin(10, 75, 0.01, 0.01),
+    )
+    polygon = Polygon(
+        [
+            (10.0311, 72.5013),
+            (12.7017, 72.5119),
+            (12.5011, 74.9613),
+            (10.1023, 74.8127),
+        ],
+        [
+            [
+                (10.7013, 73.5011),
+                (11.3017, 73.5019),
+                (11.2011, 74.2013),
+                (10.7019, 74.2023),
+            ]
+        ],
+    )
+    area = AggregateArea(
+        kind="aoi", bounds=polygon.bounds, geometries=(mapping(polygon),)
+    )
+    baseline = None
+    baseline_counts = None
+    for side, tile in [(32, 17), (128, 64), (512, 256), (512, 512)]:
+        directory = tmp_path / f"block-{side}-tile-{tile}"
+        directory.mkdir()
+        tiled = directory / "source.tif"
+        copy_raster(
+            path, tiled, driver="GTiff", tiled=True, blockxsize=side, blockysize=side
+        )
+        monkeypatch.setattr(kernel, "TILE_SIDE", tile)
+        spec = make_spec(tiled, ["areaha(a>0)", "areaha(a == a)", "count(a>0)"], area)
+        result = create_aggregate(tiled, spec, directory, LIMITS)
+        measured = [float(row["value"]) for row in result.rows]
+        counts = [row["aggregates"] for row in result.rows]
+        if baseline is None:
+            baseline = measured
+            baseline_counts = counts
+        else:
+            assert measured == pytest.approx(baseline, rel=1e-11)
+            assert counts == baseline_counts
+        assert spec.grid.groundArea.estimatedGeometryCells == 0
+
+
+@pytest.mark.parametrize("crs", ["EPSG:3857", "EPSG:6933"])
+def test_projected_polygon_masks_match_independent_ground_area(
+    tmp_path: Path, crs: str
+) -> None:
+    """Projected row-weight masks retain ellipsoidal area and fractional holes.
+
+    Args:
+        tmp_path: Isolated native projected raster and outputs.
+        crs: Supported projected grid with separable row/column area weights.
+    """
+    x, y = Transformer.from_crs(4326, crs, always_xy=True).transform(12, 65)
+    path = write_source(
+        tmp_path / "projected.tif",
+        np.ones((100, 100), dtype="uint8"),
+        transform=from_origin(x - 50_000, y + 50_000, 1000, 1000),
+        crs=crs,
+    )
+    polygon = Polygon(
+        [(11.8, 64.9), (12.2, 64.92), (12.1, 65.1), (11.85, 65.05)],
+        [[(11.95, 64.98), (12.02, 64.98), (12, 65.02)]],
+    )
+    area = AggregateArea(
+        kind="aoi", bounds=polygon.bounds, geometries=(mapping(polygon),)
+    )
+    # Separate mask accuracy from the existing 0.1 m boundary-refinement policy.
+    limits = replace(
+        LIMITS, max_area_geometry_cells=0, area_edge_tolerance_metres=0.001
+    )
+    spec = make_spec(path, ["areaha(a>0)"], area, limits)
+    result = create_aggregate(path, spec, tmp_path, limits)
+    assert float(result.rows[0]["value"]) == pytest.approx(
+        reference_area(polygon), rel=1e-7
+    )
+    assert spec.grid.groundArea.estimatedGeometryCells == 0

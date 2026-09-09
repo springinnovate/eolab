@@ -151,6 +151,41 @@ class TemporaryAoiService:
         if self._expiration_task is None:
             self._expiration_task = asyncio.create_task(self._expiration_loop())
 
+    async def retain_geometry(
+        self, geometry: dict, bounds: tuple[float, float, float, float], label: str,
+    ) -> ResolvedTemporaryAoi:
+        """Retain a trusted bounded geometry snapshot using the AOI lifecycle.
+
+        Args:
+            geometry: Complete WGS84 collection validated by GeometryBuilder.
+            bounds: Canonical bounds computed with that collection.
+            label: Display-only source label; never a filesystem path.
+
+        Returns:
+            Immutable geometry and an expiring opaque lifecycle identity.
+
+        Raises:
+            TemporaryAoiConflictError: If retained selection capacity is full.
+        """
+        await self.expire()
+        async with self._lock:
+            if len(self._records) >= 64:
+                raise TemporaryAoiConflictError("Too many temporary areas; remove an unused area first")
+            self._ensure_root()
+            identifier = self._new_identifier()
+            identity = TemporaryAoiLifecycleIdentity(identifier, self._now() + self._ttl)
+            area = ResolvedTemporaryAoi(
+                identity=identity, bounds=bounds,
+                geometries=polygonal_geometries_from_feature_collection(geometry),
+            )
+            directory = self.root_path / identifier
+            directory.mkdir(mode=0o700)
+            self._records[identifier] = TemporaryAoiRecord(
+                id=identifier, filename=label[:256], directory=directory, choices={},
+                expires_at=identity.expires_at, replacement_id=None, ready_sampling_area=area,
+            )
+            return area
+
     async def close(self) -> None:
         """Stop expiration and remove every service-owned temporary file.
 

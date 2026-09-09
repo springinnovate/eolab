@@ -260,9 +260,9 @@ class RasterAggregateLimits(ProcessingLimits):
     max_coordinates: int = 500_000
     max_memory_bytes: int = 512 * 1024**2
     result_reservation_bytes: int = 12 * 1024**2
-    # Rectilinear cells under whole-raster/rectangular selections need only row
-    # widths/heights. Other cases admit at most this many potential polygon cells.
-    max_area_geometry_cells: int = 200_000
+    # Rectilinear grids use fractional masks and cached area weights, with no
+    # pixel polygons. Other grids admit at most this many potential polygon cells.
+    max_area_geometry_cells: int = 2_000_000
     max_area_transform_coordinates: int = 4_000_000
     area_edge_tolerance_metres: float = 0.1
     area_max_segment_metres: float = 10_000.0

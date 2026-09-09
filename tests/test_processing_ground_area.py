@@ -44,7 +44,7 @@ def test_area_review_result_provenance_and_older_worker_fence(
     assert method["ellipsoid"] == "WGS84" and method["units"] == "ha"
     assert method["inclusion"] == "fractional_cell_intersection"
     assert method["edgeToleranceMetres"] == 0.1
-    assert plan["limits"]["maxAreaGeometryCells"] == 200_000
+    assert plan["limits"]["maxAreaGeometryCells"] == 2_000_000
     request_key = uuid4().hex
     job = submit_calculation(client, plan, request_key)
     assert submit_calculation(client, plan, request_key)["jobId"] == job["jobId"]

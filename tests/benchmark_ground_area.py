@@ -7,6 +7,7 @@ Reported wall times exclude HTTP, process startup and queue waits.
 
 from dataclasses import dataclass
 import json
+import math
 from pathlib import Path
 import sys
 import tempfile
@@ -22,6 +23,7 @@ from shapely.geometry import Polygon, mapping
 
 from eolab_app.processing.aggregate_models import AggregateArea
 from eolab_app.processing.raster_aggregate import create_aggregate
+from test_ground_area import reference_area
 from test_raster_aggregates import LIMITS, make_spec
 from test_raster_clips import write_source
 
@@ -46,6 +48,10 @@ def main() -> None:
     polygon = Polygon(
         [(10.1, 45.1), (12.4, 45.2), (11.6, 47.4), (10.1, 45.1)],
         [[(11, 46), (11.2, 46), (11.1, 46.2), (11, 46)]],
+    )
+    country = Polygon(
+        [(-82, -20), (-62, -20), (-62, 0), (-70, -2), (-82, 0), (-82, -20)],
+        [[(-75, -15), (-72, -15), (-74, -11), (-75, -15)]],
     )
     cases = [
         Case(
@@ -80,6 +86,16 @@ def main() -> None:
             Affine(1000, 200, 500_000, 100, -1000, 5_000_000),
             "EPSG:32632",
         ),
+        Case(
+            "country-scale-polygon-with-hole",
+            1000,
+            2000,
+            from_origin(-82, 0, 0.01, 0.02),
+            "EPSG:4326",
+            AggregateArea(
+                kind="aoi", bounds=country.bounds, geometries=(mapping(country),)
+            ),
+        ),
     ]
     measurements = []
     with tempfile.TemporaryDirectory(prefix="eolab-area-benchmark-") as temporary:
@@ -106,6 +122,10 @@ def main() -> None:
             planned = perf_counter()
             result = create_aggregate(path, spec, output, LIMITS)
             end = perf_counter()
+            if case.name == "country-scale-polygon-with-hole":
+                assert math.isclose(
+                    float(result.rows[0]["value"]), reference_area(country), rel_tol=1e-6
+                ), "Country-scale area must match independent ellipsoidal integration"
             measurements.append(
                 {
                     "case": case.name,

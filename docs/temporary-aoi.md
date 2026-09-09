@@ -1,5 +1,9 @@
 # Temporary AOI uploads
 
+Filtered Catalog polygon selections also use this retention/expiry lifecycle;
+see [vector sampling](vector-sampling.md). They use a separate browser selection
+and do not replace the uploaded AOI.
+
 EOMap accepts one temporary Area of Interest (AOI) per browser session. This
 workflow is deliberately separate from mounted-source discovery: an upload is
 never written to `/scan-source`, scanned into a STAC Item, sent to pgSTAC, or

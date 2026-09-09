@@ -254,7 +254,9 @@ def create_aggregate(
                 )
             blocks = source_block_indexes_for_window(window, dataset.block_shapes[0])
             last_progress = 0.0
-            tile_side = AREA_TILE_SIDE if ground else TILE_SIDE
+            tile_side = (
+                AREA_TILE_SIDE if ground and not ground.rectilinear else TILE_SIDE
+            )
             for index, (row, column) in enumerate(blocks):
                 block = dataset.block_window(1, row, column)
                 native = read_native_raster_block(dataset, block)

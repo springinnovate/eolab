@@ -60,6 +60,62 @@ test("opening and tab switching preserve cards and do not run native calculation
     h.controller.setActive(false);h.controller.open();await h.tick();assert.equal(h.submits(),1);
     assert.equal(card.current,true);
 });
+
+test("the summary Area selector offers inline vector controls and never calculates the old box while choosing polygons", async()=>{
+    const h=fixture(); await h.open();
+    const area=h.view.elements.area;
+    assert.equal(area.children.find(option=>option.value==="vector").textContent,"Vector layer");
+    const card=h.controller.state.statistics[0];
+    h.controller.request(card.id,"manual"); await flush();
+    area.value="vector"; area.dispatchEvent(new Event("change")); await flush();
+    assert.equal(h.controller.state.area,null);
+    assert.equal(h.view.vectorAreaControls.hidden,false);
+    assert.equal(h.view.elements["edit-area"].hidden,true);
+    assert.ok(h.requests.some(request=>request[0]==="cancel"));
+    assert.equal(h.view.cards.get(card.id).run.disabled,true);
+    h.controller.setActive(false); h.controller.open(); await h.tick();
+    assert.equal(h.controller.state.areaChoice,"vector");
+    assert.equal(h.controller.state.area,null);
+    assert.equal(h.submits(),1);
+});
+
+test("choosing vector from an empty selection immediately shows its controls without another validation", async()=>{
+    const h=fixture(); await h.open();
+    h.controller.setSelection(null,false); await h.tick();
+    assert.equal(h.controller.state.area,null);
+    assert.equal(h.view.vectorAreaControls.hidden,true);
+    const area=h.view.elements.area;
+    area.value="vector"; area.dispatchEvent(new Event("change"));
+    assert.equal(h.view.vectorAreaControls.hidden,false);
+    assert.equal(h.view.elements["edit-area"].hidden,true);
+    assert.match(h.view.elements["area-description"].textContent,/Choose a polygon layer below/);
+    assert.equal(h.view.cards.get(h.controller.state.statistics[0].id).run.disabled,true);
+    assert.equal(h.requests.filter(request=>request[0]==="plan").length,0);
+    assert.equal(h.submits(),0);
+});
+
+test("vector selection reviews exact scan size before submission and invalidates results when removed", async()=>{
+    const h=fixture();await h.open();const card=h.controller.state.statistics[0];
+    const id="V".repeat(32);
+    h.controller.setVectorSamplingArea({id,label:"Countries · 1 of 200 features"});await h.tick();
+    assert.equal(h.controller.state.areaChoice,"vector");
+    assert.equal(h.view.vectorAreaControls.hidden,false);
+    assert.equal(h.submits(),0);
+    h.controller.request(card.id,"manual");await flush();
+    assert.equal(h.submits(),0);assert.equal(card.manualRequired,true);
+    assert.match(h.view.cards.get(card.id).size.textContent,/4 source blocks/);
+    assert.equal(h.view.cards.get(card.id).size.hidden,false);
+    h.controller.request(card.id,"manual");await flush();assert.equal(h.submits(),1);
+    assert.equal(h.view.cards.get(card.id).size.hidden,true);
+    assert.deepEqual(h.controller.engine.record.intent.area,{kind:"temporaryAoi",temporaryAoiId:id});
+    await h.finish();assert.equal(card.current,true);
+    assert.equal(h.view.cards.get(card.id).size.hidden,true);
+    h.controller.setSelection(null,false);
+    h.controller.invalidateSamplingArea(id);assert.equal(card.current,false);assert.equal(h.controller.state.area,null);
+    assert.equal(h.controller.state.areaChoice,"vector");
+    assert.equal(h.view.vectorAreaControls.hidden,false);
+    assert.equal(h.view.cards.get(card.id).root.classList.contains("is-previous"),true);
+});
 test("a new card shows calculation controls without an empty value, then displays zero and retains previous results", async()=>{
     const h=fixture();await h.open();const card=h.controller.state.statistics[0];
     const row=h.view.cards.get(card.id);
@@ -84,7 +140,7 @@ test("valid edits debounce, keep formula focus, and put the value in its own car
     assert.equal(card.current,true);assert.equal(row.value.textContent,"42");assert.equal(row.statusRow.hidden,true);
     assert.equal(row.run.hidden,true);assert.equal(h.document.activeElement,row.expression);
     h.controller.editStatistic(card.id,{expression:"bad(a)"});await h.tick();
-    assert.equal(h.submits(),1);assert.equal(row.value.textContent,"42");assert.match(row.status.textContent,/Previous value/);
+    assert.equal(h.submits(),1);assert.equal(row.value.textContent,"42");assert.equal(row.root.classList.contains("is-previous"),true);
     assert.match(row.status.textContent,/Unknown function/);assert.equal(row.expression.getAttribute("aria-invalid"),"true");
 });
 test("renaming pending and completed statistics neither cancels nor recalculates",async()=>{
@@ -100,11 +156,11 @@ test("previous values are marked as being replaced during validation, planning, 
     const row=h.view.cards.get(card.id);
     h.controller.editStatistic(card.id,{expression:"sum(a)"});
     assert.equal(row.root.classList.contains("is-previous"),true);
-    assert.equal(row.status.textContent,"Previous value · Checking formula…");
+    assert.equal(row.status.textContent,"Checking formula…");
     assert.equal(row.statusRow.hidden,false);
     assert.equal(row.value.textContent,"12.5");
     await h.tick();
-    assert.equal(row.status.textContent,"Previous value · Calculating…");
+    assert.equal(row.status.textContent,"Calculating…");
     await h.finish("ready",["42"]);
     assert.equal(row.root.classList.contains("is-previous"),false);
     assert.equal(row.status.textContent,"");
@@ -112,7 +168,7 @@ test("previous values are marked as being replaced during validation, planning, 
     assert.equal(row.value.textContent,"42");
     h.controller.editStatistic(card.id,{expression:"bad(a)"});await h.tick();
     assert.equal(row.root.classList.contains("is-previous"),true);
-    assert.equal(row.status.textContent,"Previous value · Unknown function bad");
+    assert.equal(row.status.textContent,"Unknown function bad");
 });
 test("copy uses exact current values without rounding or units and never submits work", async()=>{
     const copied=[];

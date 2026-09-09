@@ -83,6 +83,7 @@ export class RasterSamplingAreaControlsView {
             documentContext,
             "#raster-sample-window-status"
         );
+        this.vectorChoice = documentContext.querySelector("#use-vector-for-raster");
         this.temporaryAoi = null;
         this.temporaryAoiCompatible = true;
         this.handlers = null;
@@ -288,9 +289,10 @@ export class RasterSamplingAreaControlsView {
      * @return {void}
      */
     setSamplingAreaMode(mode, label = "") {
-        if (!["none", "wholeRaster", "selectedArea", "temporaryAoi"].includes(mode)) {
+        if (!["none", "wholeRaster", "selectedArea", "temporaryAoi", "vector"].includes(mode)) {
             throw new RangeError(`Unknown raster sampling-area mode: ${mode}`);
         }
+        if (this.vectorChoice) this.vectorChoice.checked = mode === "vector";
         this.clearSampleWindowButton.checked = mode === "wholeRaster";
         this.useMapWindowButton.checked = mode === "selectedArea";
         this.useTemporaryAoiButton.checked = mode === "temporaryAoi";

@@ -20,6 +20,7 @@ export class SummaryStatisticsView extends CalculationsView {
         super(documentContext);
         this.clipboard = clipboard;
         this.cards = new Map();
+        this.vectorAreaControls = documentContext.querySelector("#calculations-vector-area");
         this.extra = Object.fromEntries(["auto", "undo", "undo-button", "saved-result", "close-saved", "recovery-status"]
             .map(name => [name, documentContext.querySelector(`#summary-${name}`)]));
     }
@@ -132,7 +133,7 @@ export class SummaryStatisticsView extends CalculationsView {
             row.root.setAttribute("aria-busy", String(card.pending));
             row.root.classList.toggle("is-previous", !!card.result && !card.current);
             const message = card.current ? RESULT_STATES[card.result?.row.state] ?? "" : card.message;
-            row.status.textContent = card.result && !card.current ? `Previous value · ${message}` : message;
+            row.status.textContent = message;
             row.status.hidden = !row.status.textContent;
             row.status.classList.toggle("is-error", card.error);
             row.status.classList.toggle("is-working", card.pending || !!card.requested || card.checking);
@@ -162,7 +163,7 @@ export class SummaryStatisticsView extends CalculationsView {
             if (result && resultSignature !== row.resultSignature) {
                 this.renderValueDetails(row.detailsBody, result); row.resultSignature = resultSignature;
             }
-            row.size.hidden = !card.manualRequired;
+            row.size.hidden = !card.manualRequired || card.current || card.pending || !!card.requested;
             const grid = card.plan?.grid;
             row.size.textContent = card.manualRequired ? grid
                 ? `${grid.nativeBlocks.toLocaleString()} source blocks · ${formatDownloadBytes(grid.decodedBytes)} decoded. Calculate to confirm this scan.`
@@ -171,12 +172,17 @@ export class SummaryStatisticsView extends CalculationsView {
         const e = this.elements, x = this.extra;
         const areaSignature = JSON.stringify([state.areaChoice, state.availableAoi]);
         if (areaSignature !== this.signatures.area) {
-            e.area.replaceChildren(...[["selection", "Current map selection"], ["uploaded", state.availableAoi ? `AOI · ${state.availableAoi.filename}` : "Uploaded AOI (none ready)"], ["whole", "Whole raster"]]
+            e.area.replaceChildren(...[["selection", "Current map selection"], ["vector", "Vector layer"], ["uploaded", state.availableAoi ? `AOI · ${state.availableAoi.filename}` : "Uploaded AOI (none ready)"], ["whole", "Whole raster"]]
                 .map(([value, label]) => { const option = this.element("option", label); option.value = value; option.disabled = value === "uploaded" && !state.availableAoi; return option; }));
             this.signatures.area = areaSignature;
         }
         e.area.value = state.areaChoice;
-        e["area-description"].textContent = describeClipArea(state.area);
+        this.vectorAreaControls.hidden = state.areaChoice !== "vector";
+        e["edit-area"].hidden = state.areaChoice === "vector" || state.areaChoice === "whole";
+        e["area-description"].textContent = state.area?.temporaryAoiId && state.area.temporaryAoiId === state.vectorArea?.id
+            ? `Vector selection · ${state.vectorArea.label}` : state.areaChoice === "vector"
+                ? "Choose a polygon layer below. Edit its filter, then use the matching features."
+                : describeClipArea(state.area);
         x.auto.checked = state.automatic;
         e.template.disabled = state.statistics.length >= 5;
         x.undo.hidden = !state.undo;
