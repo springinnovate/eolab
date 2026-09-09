@@ -53,6 +53,7 @@ def test_mechanisms_and_storage_never_import_application_services() -> None:
         Path("src/eolab_app/execution/bounded_process.py"),
         Path("src/eolab_app/raster/bounded_window.py"),
         Path("src/eolab_app/processing/job_store.py"),
+        Path("src/eolab_app/processing/job_notifications.py"),
         Path("src/eolab_app/processing/artifacts.py"),
         Path("src/eolab_app/processing/raster_clip.py"),
         Path("src/eolab_app/processing/raster_aggregate.py"),
@@ -98,7 +99,7 @@ def test_processing_deployment_is_separate_bounded_and_source_read_only() -> Non
 
 def test_shared_job_models_and_storage_do_not_depend_on_clip_models() -> None:
     """Keep reusable lifecycle contracts independent of any operation's schema."""
-    for name in ("models.py", "ports.py", "job_store.py"):
+    for name in ("models.py", "ports.py", "job_store.py", "job_notifications.py"):
         dependencies = imports(Path("src/eolab_app/processing") / name)
         assert "eolab_app.processing.clip_models" not in dependencies
         assert "eolab_app.processing.aggregate_models" not in dependencies

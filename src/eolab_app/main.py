@@ -23,6 +23,7 @@ from eolab_app.diagnostics.service import RenderingDiagnosticsService
 from eolab_app.diagnostics.tracker import GetMapRequestTracker
 from eolab_app.processing.artifacts import LocalJobArtifacts
 from eolab_app.processing.job_store import PostgresJobStore
+from eolab_app.processing.job_notifications import PostgresJobWakeup
 from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.clip_models import RasterClipLimits
 from eolab_app.processing.service import ProcessingService
@@ -408,7 +409,7 @@ async def run_processing_worker() -> None:
             except ProcessingError:
                 logging.getLogger(__name__).warning("Processing schema is unavailable; retrying in five seconds")
                 await asyncio.sleep(5)
-        await serve_processing(worker)
+        await serve_processing(worker, PostgresJobWakeup())
 
 
 if __name__ == "__main__":

@@ -1,8 +1,58 @@
 # Request-to-result latency investigation (#364)
 
 Keep the batching and timing changes merged in #363. This investigation starts
-at `5dfcd785952076f6ac630427ceaefa2a25bc87d4`. The follow-up instrumentation
-described below adds measurements without changing scheduling or native work.
+at `5dfcd785952076f6ac630427ceaefa2a25bc87d4`. Instrumentation was deployed first;
+the measured plan-reuse and queue-wakeup changes below follow that baseline.
+
+## Reviewed-plan reuse and idle-worker wakeup
+
+Two sequential production runs at `9afcc93` used `mean(a)`, Human Footprint 2023,
+Countries filtered to Peru, and default batching. They returned the same mean
+4.748740795296266, with 841,871 valid pixels, 12 reads and 35 calculation tiles.
+Total request-to-display was 5.557 / 5.569 s; repeated planning took 1.283 / 1.303 s;
+queue wait was 1.665 / 1.550 s. Calculation native-process time was 2.336 / 2.399 s,
+including 0.951 / 0.983 s of kernel work. These are sequential observations, not
+controlled cold-cache benchmarks. Nested stages overlap browser durations.
+
+Summary-card confirmation now retains the existing reviewed plan only for an
+identical complete intent: source, area reference/bounds, formula batch, labels
+and execution budget. Expired plans still get released and replaced. Server
+submission still checks plan ownership/expiry, current source signatures, AOI
+lifecycle and resource admission. Nothing caches or reuses accepted results.
+
+Queue admission now sends an empty `eolab_processing_jobs` PostgreSQL NOTIFY in
+the same transaction as the inserted job. A rollback produces neither job nor
+notification. A dedicated autocommit listener commits LISTEN before the worker
+checks the queue. Hints coalesce into one event and are drained even during
+execution. An arrival between the empty claim and idle wait is retained; a hint
+never grants permission to execute. The existing locked claim, attempt fencing,
+single execution slot and cancellation acknowledgment remain authoritative.
+
+Missing notifications fall back to the existing two-second idle interval.
+Listener connection/setup is bounded by three seconds, failed reconnects are
+spaced by at least five seconds, and shutdown joins the reader and closes its
+connection, including cancellation during startup. This adds one database
+connection per worker, not another worker or processing lane. Psycopg async
+connections require a selector event loop; unsupported Windows loops fall back
+to polling. The Linux Compose deployment supports this listener.
+
+Owner: Processing. Used by: the summary panel and the existing worker composition
+entry point. Depends on: the existing Processing API/job store, PostgreSQL and
+asyncio. Coordinates with: no additional peers. Changed components: calculation
+controller, job-store adapter, worker loop, composition, tests and this report.
+Added edges: worker to the Processing-owned `JobWakeup` port; composition to
+`PostgresJobWakeup`; job-store adapter to that adapter module's channel constant.
+No cross-subsystem edge, new library, schema migration or public HTTP contract
+is introduced. No subsystem acquires sibling implementation knowledge. The
+fallback interval and dedicated connection are explicit operational tradeoffs.
+Native-process startup, kernel algorithms and browser polling are unchanged.
+
+Verification covers exact intent/expiry/rejection at the browser owner, listener
+registration and races, coalescing, reconnect, missing-hint fallback and shutdown.
+A real PostgreSQL test checks rollback versus committed admission, delivery to
+two listeners, idempotency and one successful claim. It requires the existing
+disposable `--processing-dsn` fixture; it must never target the application DB.
+The LISTEN-before-check ordering follows the [PostgreSQL LISTEN contract](https://www.postgresql.org/docs/current/sql-listen.html).
 
 ## Deployed instrumentation contract
 

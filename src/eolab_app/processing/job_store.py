@@ -14,6 +14,7 @@ from uuid import uuid4
 import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
+from eolab_app.processing.job_notifications import JOB_QUEUE_CHANNEL
 
 from eolab_app.processing.models import (
     Artifact,
@@ -295,7 +296,11 @@ class PostgresJobStore:
                     expected.minimum_claim_version,
                 ),
             )
-            return cursor.fetchone()
+            row = cursor.fetchone()
+            # PostgreSQL delivers this empty hint only if admission commits.
+            # No job IDs, owner capabilities, or operation inputs are broadcast.
+            cursor.execute("SELECT pg_notify(%s, '')", (JOB_QUEUE_CHANNEL,))
+            return row
 
     def get(self, identifier: str, owner: str) -> dict[str, Any]:
         """Read one owned job without exposing another session's existence.

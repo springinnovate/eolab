@@ -19,7 +19,7 @@ from eolab_app.processing.aggregate_models import (
     AggregateExecutionTiming,
 )
 from eolab_app.processing.raster_aggregate import aggregate_process_target
-from eolab_app.processing.ports import JobArtifactStore, JobStore
+from eolab_app.processing.ports import JobArtifactStore, JobStore, JobWakeup
 from eolab_app.processing.raster_clip import clip_process_target
 from eolab_app.raster.errors import RasterFeatureError
 from eolab_app.raster.ports import RasterSourceAuthorizer
@@ -240,22 +240,32 @@ class ProcessingWorker:
         )
 
 
-async def serve(worker: ProcessingWorker) -> None:
+async def serve(worker: ProcessingWorker, wakeup: JobWakeup | None = None) -> None:
     """Consume the queue using dependencies supplied by application composition.
 
     Args:
         worker: Composed worker with migrated storage and confined artifact paths.
+        wakeup: Optional queue-change hints; durable claims remain authoritative.
 
     Raises:
         asyncio.CancelledError: After stopping active native work on shutdown.
     """
-    while True:
-        try:
-            await worker.cleanup()
-            if not await worker.run_once():
-                await asyncio.sleep(2)
-        except (ProcessingError, OSError):
-            LOGGER.warning(
-                "Processing worker storage is unavailable; retrying in five seconds"
-            )
-            await asyncio.sleep(5)
+    try:
+        while True:
+            try:
+                if wakeup is not None:
+                    await wakeup.arm()
+                await worker.cleanup()
+                if not await worker.run_once():
+                    if wakeup is None:
+                        await asyncio.sleep(2)
+                    else:
+                        await wakeup.wait(2)
+            except (ProcessingError, OSError):
+                LOGGER.warning(
+                    "Processing worker storage is unavailable; retrying in five seconds"
+                )
+                await asyncio.sleep(5)
+    finally:
+        if wakeup is not None:
+            await wakeup.close()

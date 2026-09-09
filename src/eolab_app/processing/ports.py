@@ -5,6 +5,29 @@ from pathlib import Path
 from eolab_app.processing.models import Artifact, PreparedJobPlan, ProcessingLimits
 
 
+class JobWakeup(Protocol):
+    """Queue hints only; callers must still use durable admission and claims."""
+
+    async def arm(self) -> None:
+        """Arm notifications before checking the queue, clearing only older hints."""
+        ...
+
+    async def wait(self, timeout: float) -> bool:
+        """Wait for work without depending on notification delivery.
+
+        Args:
+            timeout: Maximum idle seconds before the caller checks storage again.
+
+        Returns:
+            Whether a hint arrived before the fallback polling deadline.
+        """
+        ...
+
+    async def close(self) -> None:
+        """Release listener resources when the worker shuts down."""
+        ...
+
+
 class JobStore(Protocol):
     """Storage capability; implementations do not invoke application services."""
 
