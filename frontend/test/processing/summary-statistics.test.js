@@ -14,7 +14,7 @@ const flush = async () => { for (let i = 0; i < 80; i++) await Promise.resolve()
 const deferred = () => { let resolve, reject; const promise = new Promise((a,b) => {resolve=a;reject=b;}); return {promise,resolve,reject}; };
 
 function fixture(overrides = {}, data = new Map(), browserContext = {}) {
-    let serial = 0, jobSerial = 0;
+    let serial = 0, jobSerial = 0, elapsed = 0;
     const timers = new Map(), requests = [], server = new Map(), plans = new Map();
     const clock = { setTimeout(fn, delay) { timers.set(++serial, { fn, delay }); return serial; }, clearTimeout(id) { timers.delete(id); } };
     const api = {
@@ -38,7 +38,7 @@ function fixture(overrides = {}, data = new Map(), browserContext = {}) {
     const document = new FakeRasterControlDocument();
     const view = new SummaryStatisticsView(document, browserContext);
     let controller;
-    controller = new SummaryStatisticsController({api,jobs,storage,view,clock,getContext:()=>({sources:[source,resistance],area:box(77)}),
+    controller = new SummaryStatisticsController({api,jobs,storage,view,clock,now:()=>elapsed,getContext:()=>({sources:[source,resistance],area:box(77)}),
         onOpen:()=>controller.setActive(true),onClose(){},onEditArea(){},requestId:()=>`request-${String(jobSerial).padStart(16,"0")}`});
     const tick = async (delay = 700) => { const due=[...timers.entries()].filter(([,t])=>t.delay===delay);for(const[id,t]of due){timers.delete(id);t.fn();}await flush(); };
     const finish = async (status="ready", values=["12.5"]) => {
@@ -49,7 +49,7 @@ function fixture(overrides = {}, data = new Map(), browserContext = {}) {
     };
     const open = async()=>{controller.open();await tick();};
     const submits=()=>requests.filter(r=>r[0]==="submit").length;
-    return {controller,api,jobs,storage,view,document,requests,server,plans,tick,finish,open,submits,data};
+    return {controller,api,jobs,storage,view,document,requests,server,plans,tick,finish,open,submits,data,elapse:ms=>{elapsed+=ms;}};
 }
 
 test("opening and tab switching preserve cards and do not run native calculations", async()=>{
@@ -77,6 +77,38 @@ test("the summary Area selector offers inline vector controls and never calculat
     assert.equal(h.controller.state.areaChoice,"vector");
     assert.equal(h.controller.state.area,null);
     assert.equal(h.submits(),1);
+});
+
+test("total wait includes debounce, planning, polling and the first result DOM update, then freezes", async()=>{
+    const h=fixture();await h.open();const card=h.controller.state.statistics[0];
+    h.controller.calculateSelection();h.elapse(700);await h.tick();
+    h.elapse(3300);
+    const render=h.view.render.bind(h.view);let displayed=false;
+    h.view.render=state=>{render(state);if(card.result&&!displayed){displayed=true;h.elapse(25);}};
+    await h.finish();
+    assert.equal(card.result.totalWaitSeconds,4.025);
+    const text=node=>[node.textContent,...node.children.map(text)].join(" ");
+    assert.match(text(h.view.cards.get(card.id).detailsBody),/Total wait → result displayed: 4.025 s/);
+    h.elapse(10000);h.controller.render();await h.jobs.refresh();
+    assert.equal(card.result.totalWaitSeconds,4.025);
+    h.controller.request(card.id,"manual");await flush();h.elapse(1500);await h.finish();
+    assert.equal(card.result.totalWaitSeconds,1.5);
+});
+
+test("total wait starts again at explicit confirmation, excluding time reading the review", async()=>{
+    const h=fixture();await h.open();const card=h.controller.state.statistics[0];
+    h.controller.setVectorSamplingArea({id:"V".repeat(32),label:"Peru"});await h.tick();
+    h.controller.request(card.id,"manual");await flush();assert.equal(card.manualRequired,true);
+    h.elapse(60000);h.controller.request(card.id,"manual");await flush();h.elapse(2500);await h.finish();
+    assert.equal(card.result.totalWaitSeconds,2.5);
+});
+
+test("replacement total wait includes obsolete job cancellation without inheriting its start", async()=>{
+    const h=fixture();await h.open();const card=h.controller.state.statistics[0];
+    h.controller.request(card.id,"manual");await flush();h.elapse(10000);
+    h.controller.setSelection(box(80));h.elapse(700);await h.tick();
+    h.elapse(2300);await h.finish("cancelled");await flush();h.elapse(1000);await h.finish();
+    assert.equal(card.result.totalWaitSeconds,4);
 });
 
 test("choosing vector from an empty selection immediately shows its controls without another validation", async()=>{
@@ -380,6 +412,7 @@ test("reload recovers a manual job into its card without admitting another calcu
     await restored.controller.start();assert.equal(restored.submits(),0);assert.equal(restored.controller.engine.record.jobId,id);
     const old=h.server.get(id);h.server.set(id,{...old,status:"ready",result:{url:"/api/processing/jobs/"+id+"/result",provenanceUrl:"/api/processing/jobs/"+id+"/provenance",rows:[{...old.calculations[0],value:"9",valueType:"float",state:"ok",aggregates:[]}]}});
     await restored.jobs.refresh();await flush();assert.equal(restored.controller.state.statistics[0].result.row.value,"9");assert.equal(restored.submits(),0);
+    assert.equal(restored.controller.state.statistics[0].result.totalWaitSeconds,undefined);
 });
 test("reload cancels recovered automatic work and never resumes sampling on its own",async()=>{
     const h=fixture();await h.open();const card=h.controller.state.statistics[0];

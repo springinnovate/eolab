@@ -13,10 +13,18 @@ export function executionDescription(grid) {
     ];
 }
 
-/** Describe final timings with precise measurement boundaries. @param {Object} job Completed job. @return {string[]} Lines. */
-export function performanceDescription(job) {
+/** Describe final timings with precise measurement boundaries.
+ * @param {Object} job Completed job.
+ * @param {number|undefined} totalWaitSeconds Browser request through result DOM update, if observed.
+ * @return {string[]} Lines.
+ */
+export function performanceDescription(job, totalWaitSeconds) {
     const p = job.result?.performance;
-    const lines = executionDescription(job.grid);
+    const lines = [...(Number.isFinite(totalWaitSeconds) && totalWaitSeconds >= 0
+        ? [`Total wait → result displayed: ${totalWaitSeconds.toFixed(3)} s.`,
+            "Measured in this tab from the calculation request through the result UI update, including debounce, planning, queueing and polling; excludes earlier confirmation time and the browser's subsequent paint."]
+        : ["Total wait unavailable for this result. Request-to-display timing is recorded only for statistic cards completed in this tab, without a page reload."]),
+    ...executionDescription(job.grid)];
     if (!p) return [...lines, "Timing measurements are unavailable for this saved result."];
     const seconds = n => `${n.toFixed(3)} s`;
     return [...lines,

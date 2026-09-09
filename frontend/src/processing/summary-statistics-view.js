@@ -152,7 +152,7 @@ export class SummaryStatisticsView extends CalculationsView {
             if (row.value.textContent !== text) row.value.textContent = text;
             row.value.title = result?.row.value ?? result?.row.state ?? "";
             row.details.hidden = !result;
-            const resultSignature = JSON.stringify([result?.job.jobId, result?.row]);
+            const resultSignature = JSON.stringify([result?.job.jobId, result?.row, result?.totalWaitSeconds]);
             const copyValue = card.current && result?.row.state === "ok" && result.row.value != null ? result.row.value : null;
             const copySignature = JSON.stringify([resultSignature, copyValue]);
             if (row.copySignature !== copySignature) {
@@ -249,7 +249,7 @@ export class SummaryStatisticsView extends CalculationsView {
             root.append(this.element("p", `Ground area: ${method.ellipsoid} ellipsoid, hectares, including partial pixels. ${method.edgeToleranceMetres} m chord-deviation target; at most ${method.maximumSegmentMetres.toLocaleString()} m per segment. Numeric functions select cell centers.`));
         }
         const performance = this.element("details");
-        performance.append(this.element("summary", "Performance"), ...performanceDescription(job).map(text => this.element("p", text)));
+        performance.append(this.element("summary", "Performance"), ...performanceDescription(job, result.totalWaitSeconds).map(text => this.element("p", text)));
         root.append(performance);
         const links = this.element("div"); links.className = "downloads-actions";
         for (const [kind, label, url] of [["result", "Download CSV", job.result.url], ["provenance", "Download provenance", job.result.provenanceUrl]]) {

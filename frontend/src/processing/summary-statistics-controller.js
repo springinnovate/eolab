@@ -28,7 +28,8 @@ export function canAutomaticallyCalculate(plan, intent) {
 /** Own card identities and local validation; serialize native work through one executor. */
 export class SummaryStatisticsController {
     constructor(dependencies) {
-        const { api, jobs, view, getContext, onOpen, onClose, onEditArea, clock = globalThis } = dependencies;
+        const { api, jobs, view, getContext, onOpen, onClose, onEditArea, clock = globalThis, now = () => performance.now() } = dependencies;
+        this.now = now;
         Object.assign(this, { api, jobs, view, getContext, onOpen, onClose, clock });
         this.serial = 0;
         this.state = { sources: [], statistics: [], area: null, selectedArea: null, areaChoice: "selection",
@@ -184,6 +185,7 @@ export class SummaryStatisticsController {
         for (const card of this.state.statistics) {
             card.plan = null; card.manualRequired = false; card.error = false;
             card.requested = automatic && this.isActive && this.state.automatic && area ? "automatic" : null;
+            card.requestStarted = card.requested ? this.now() : null;
             this.validateLater(card, false);
         }
         this.render();
@@ -202,6 +204,7 @@ export class SummaryStatisticsController {
             this.invalidateBatch(id);
             card.plan = null; card.manualRequired = false; card.error = false;
             card.requested = automatic && this.isActive && this.state.automatic ? "automatic" : null;
+            card.requestStarted = card.requested ? this.now() : null;
             this.validateLater(card, false);
         }
         // Names are presentation only; the immutable original export keeps its run label.
@@ -240,7 +243,7 @@ export class SummaryStatisticsController {
         this.clock.clearTimeout(card.timer); card.abort?.abort();
         const version = ++card.version;
         card.valid = false; card.checking = true; card.error = false;
-        if (requestAutomatic) card.requested = "automatic";
+        if (requestAutomatic) { card.requested = "automatic"; card.requestStarted = this.now(); }
         card.message = "Checking formula…";
         card.timer = this.clock.setTimeout(() => void this.validate(card, version), 700);
     }
@@ -265,6 +268,7 @@ export class SummaryStatisticsController {
         if (this.batch && !this.batch.obsolete && this.batch.cards.some(entry => entry.id === id && entry.key === this.key(card))) return;
         if (kind === "manual" && this.state.vectorArea && this.state.area?.temporaryAoiId === this.state.vectorArea.id && !card.manualRequired) kind = "review";
         card.requested = kind; card.error = false;
+        card.requestStarted = this.now();
         if (debounce) this.validateLater(card, false);
         else if (!card.valid && !card.checking) this.validateLater(card, false);
         this.render(); this.schedulePump();
@@ -316,7 +320,7 @@ export class SummaryStatisticsController {
             targetChunkPixels: this.state.targetChunkPixels,
             calculations: group.map(card => ({ label: this.label(card), expression: card.expression })) });
         this.batch = { intent, previousJobId: this.engine.state.result?.jobId, automatic: first.requested !== "manual", obsolete: false,
-            cards: group.map(card => ({ id: card.id, key: this.key(card) })) };
+            cards: group.map(card => ({ id: card.id, key: this.key(card), requestStarted: card.requestStarted })) };
         for (const card of group) { card.requested = null; card.pending = true; card.error = false; card.message = "Checking calculation size…"; }
         this.engine.executeIntent(intent, this.batch.automatic);
         this.render();
@@ -353,7 +357,8 @@ export class SummaryStatisticsController {
                     card.error = engineState.phase === "error";
                     if (engineState.plan) card.plan = engineState.plan;
                     if (settled && matching && job.result?.rows[index]) {
-                        card.result = { key: entry.key, row: job.result.rows[index], job, source: batch.intent.source, area: batch.intent.area };
+                        card.result = { key: entry.key, row: job.result.rows[index], job, source: batch.intent.source, area: batch.intent.area,
+                            requestStarted: entry.requestStarted };
                         card.message = "Up to date";
                     } else if (settled && engineState.manualRequired) {
                         card.manualRequired = true;
@@ -386,6 +391,17 @@ export class SummaryStatisticsController {
             }
         }
         this.view.render(this.state);
+        // Stop after the result DOM has been updated, including the view's work.
+        // Keep this browser-local: recovered jobs have no monotonic start time.
+        let measured = false;
+        for (const card of this.state.statistics) {
+            const result = card.result;
+            if (result && Number.isFinite(result.requestStarted) && result.totalWaitSeconds === undefined) {
+                result.totalWaitSeconds = Math.max(0, this.now() - result.requestStarted) / 1000;
+                measured = true;
+            }
+        }
+        if (measured) this.view.render(this.state);
     }
     destroy() {
         this.destroyed = true;
