@@ -409,7 +409,7 @@ export function initializeRasterViewer(
             wholeRasterStatisticsState: "idle",
             wholeRasterStatisticsError: null,
             selectedRasterBounds: null,
-            selectedTemporaryAoi: availableTemporaryAoi,
+            selectedTemporaryAoi: initialPolygonSamplingArea(),
             selectedRasterCenter: null,
             selectedRasterWindowSizeKm: null,
             selectedRasterStatistics: null,
@@ -445,7 +445,7 @@ export function initializeRasterViewer(
             wholeRasterStatisticsState: "idle",
             wholeRasterStatisticsError: null,
             selectedRasterBounds: null,
-            selectedTemporaryAoi: availableTemporaryAoi,
+            selectedTemporaryAoi: initialPolygonSamplingArea(),
             selectedRasterCenter: null,
             selectedRasterWindowSizeKm: null,
             selectedRasterStatistics: null,
@@ -1597,6 +1597,12 @@ export function initializeRasterViewer(
     function aoiOriginLabel(aoi) {
         return aoi && (aoi.id === vectorSamplingAoi?.id || aoi.id === invalidVectorSamplingId)
             ? "Vector selection" : "Uploaded AOI";
+    }
+
+    /** Preserve an active vector area when adding a raster. @return {Object|null} Initial area. */
+    function initialPolygonSamplingArea() {
+        const area = bivariateMode.active ? bivariateTemporaryAoi : selectedTemporaryAoi;
+        return aoiOriginLabel(area) === "Vector selection" ? area : availableTemporaryAoi;
     }
 
     /** Synchronize histogram-area choices with lifecycle state. @return {void} */

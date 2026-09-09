@@ -162,7 +162,7 @@ export class SummaryStatisticsView extends CalculationsView {
             if (result && resultSignature !== row.resultSignature) {
                 this.renderValueDetails(row.detailsBody, result); row.resultSignature = resultSignature;
             }
-            row.size.hidden = !card.manualRequired;
+            row.size.hidden = !card.manualRequired || card.current || card.pending || !!card.requested;
             const grid = card.plan?.grid;
             row.size.textContent = card.manualRequired ? grid
                 ? `${grid.nativeBlocks.toLocaleString()} source blocks · ${formatDownloadBytes(grid.decodedBytes)} decoded. Calculate to confirm this scan.`

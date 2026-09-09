@@ -69,9 +69,12 @@ test("vector selection reviews exact scan size before submission and invalidates
     h.controller.request(card.id,"manual");await flush();
     assert.equal(h.submits(),0);assert.equal(card.manualRequired,true);
     assert.match(h.view.cards.get(card.id).size.textContent,/4 source blocks/);
+    assert.equal(h.view.cards.get(card.id).size.hidden,false);
     h.controller.request(card.id,"manual");await flush();assert.equal(h.submits(),1);
+    assert.equal(h.view.cards.get(card.id).size.hidden,true);
     assert.deepEqual(h.controller.engine.record.intent.area,{kind:"temporaryAoi",temporaryAoiId:id});
     await h.finish();assert.equal(card.current,true);
+    assert.equal(h.view.cards.get(card.id).size.hidden,true);
     h.controller.invalidateSamplingArea(id);assert.equal(card.current,false);assert.equal(h.controller.state.area,null);
     assert.equal(h.view.cards.get(card.id).root.classList.contains("is-previous"),true);
 });

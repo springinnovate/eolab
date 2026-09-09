@@ -1625,6 +1625,9 @@ test('a vector AOI drives both histogram modes and invalidation cannot fall back
     h.viewer.setVectorSamplingAoi(aoi); await flushPromises();
     assert.equal(h.viewer.getSelectedArea().temporaryAoiId, aoi.id);
     assert.equal(areas.at(-1).temporaryAoiId, aoi.id);
+    await h.viewer.show(createRasterItem('added-after-selection')); await flushPromises();
+    assert.equal(h.viewer.getSelectedArea().temporaryAoiId, aoi.id);
+    assert.equal(areas.at(-1).temporaryAoiId, aoi.id);
     assert.ok(h.mapLayers.retainedRecords.every(record => record.state.selectedTemporaryAoi?.id === aoi.id));
     h.controlsView.handlers.onBivariateModeChange('bivariate');await flushPromises();
     assert.equal(pairedAreas.at(-1).temporaryAoiId, aoi.id);
