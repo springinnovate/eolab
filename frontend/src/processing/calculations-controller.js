@@ -14,7 +14,9 @@ export class CalculationsController {
      * public context and area/activity/presentation callbacks.
      */
     constructor({ api, jobs, storage, view, getContext, onOpen, onClose, onEditArea,
-        onActivity = () => {}, clock = globalThis, requestId = () => crypto.randomUUID(), canAutoSubmit = () => true }) {
+        onActivity = () => {}, clock = globalThis, requestId = () => crypto.randomUUID(), canAutoSubmit = () => true,
+        now = () => performance.now() }) {
+        this.now = now;
         this.canAutoSubmit = canAutoSubmit;
         Object.assign(this, { api, jobs, storage, view, getContext, onOpen, onClose, onActivity, clock, requestId });
         this.state = { sources: [], source: null, selectedArea: null, area: null, areaChoice: "selection",
@@ -333,8 +335,13 @@ export class CalculationsController {
                 this.state.message = "Confirming calculation submission…";
                 this.render();
                 let job;
-                try { job = await this.api.submitCalculation(this.record.pending); }
+                try {
+                    if (this.trace) this.trace.submissionStarted = this.now();
+                    job = await this.api.submitCalculation(this.record.pending);
+                    if (this.trace) this.trace.submissionFinished = this.now();
+                }
                 catch (error) {
+                    this.trace = null; // An uncertain/retried submission has no complete stage trace.
                     if (error instanceof ProcessingRequestError && error.status >= 400 && error.status < 500 && error.status !== 408) {
                         this.storage.clear(); this.record = null;
                     }
@@ -364,6 +371,7 @@ export class CalculationsController {
                 }
                 if (job.status === "ready" && !this.record.cancelRequested) {
                     this.state.result = job; this.state.resultIntent = this.record.intent;
+                    this.state.resultTiming = this.trace ?? null;
                     this.state.message = "Calculation complete.";
                 } else if (["failed", "interrupted"].includes(job.status) && !this.record.cancelRequested) {
                     this.state.message = job.error?.detail ?? "Calculation interrupted. Click Calculate to try again.";
@@ -372,6 +380,7 @@ export class CalculationsController {
                 }
                 this.jobs.tracked.delete(job.jobId);
                 this.storage.clear(); this.record = null; this.state.current = null;
+                this.trace = null;
                 this.state.phase = "idle";
             }
             if (!this.desired?.ready) return;
@@ -389,8 +398,11 @@ export class CalculationsController {
             // Aborting fetch cannot acknowledge native cleanup, and can lose the
             // ID of a plan already committed behind a proxy. Keep this bounded
             // request connected, then release a superseded result before reuse.
+            const planningStarted = this.now();
+            const planReused = !!target.plan;
             try { plan = target.plan ?? await this.api.planCalculation(target.intent); }
             catch (error) { if (target !== this.desired || error.name === "AbortError") return; throw error; }
+            const planningFinished = this.now();
             if (target !== this.desired || this.destroyed) {
                 this.plansToRelease.add(plan.planId);
                 await this.releasePlans();
@@ -418,6 +430,7 @@ export class CalculationsController {
                 pending: { planId: plan.planId, requestId: this.requestId() }, jobId: null };
             this.storage.write(record);
             this.record = record;
+            this.trace = { planningStarted, planningFinished, planReused, serverPlan: plan.timing ?? null };
             this.desired = null;
         } catch (error) {
             this.blocked = true;
@@ -460,6 +473,7 @@ export class CalculationsController {
         this.invalidate();
         this.state.result = job;
         this.state.resultIntent = null;
+        this.state.resultTiming = null;
         this.onOpen(); this.render();
     }
 

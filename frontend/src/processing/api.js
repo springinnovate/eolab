@@ -50,6 +50,16 @@ function validatePerformance(value) {
         value.readWindows !== value.execution.readWindows) throw new Error("Processing returned invalid performance measurements.");
 }
 
+/** Validate optional stage durations, allowing legacy responses without them.
+ * @param {Object|null} value Timing object. @param {string[]} fields Required stage names. @return {void}
+ */
+function validateStages(value, fields) {
+    if (value == null) return;
+    if (fields.some(key => !Number.isFinite(value[key]) || value[key] < 0)) {
+        throw new Error("Processing returned invalid stage timings.");
+    }
+}
+
 /** Validate a public owned job before presenting actions. @param {Object} job API response. @return {Object} Validated job. */
 function validateJob(job) {
     opaqueId(job?.jobId);
@@ -62,6 +72,8 @@ function validateJob(job) {
         if (job.operation === "raster.aggregate.v1") {
             validateCalculationRows(job.result.rows);
             validatePerformance(job.result.performance);
+            validateStages(job.result.executionTiming, ["queueSeconds", "preparationSeconds", "nativeProcessSeconds", "publicationSeconds"]);
+            if (job.result.queuedToReadySeconds != null) validateStages(job.result, ["queuedToReadySeconds"]);
         }
     }
     return job;
@@ -169,6 +181,7 @@ export class ProcessingApiClient {
             !Number.isSafeInteger(plan.grid.decodedBytes) || plan.grid.decodedBytes < 1) {
             throw new Error("Processing returned an invalid calculation estimate.");
         }
+        validateStages(plan.timing, ["reservationSeconds", "preparationSeconds", "nativeProcessSeconds", "finalizationSeconds"]);
         return plan;
     }
 

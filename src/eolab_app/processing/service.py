@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import json
+import time
 from datetime import datetime, timezone
 from pathlib import PurePath
 from typing import Any
@@ -26,6 +27,7 @@ from eolab_app.processing.clip_models import (
 from eolab_app.processing.aggregate_models import (
     AggregateArea,
     AggregatePlanRequest,
+    AggregatePlanTiming,
     AggregateSpec,
     RasterAggregateLimits,
 )
@@ -159,6 +161,10 @@ def public_job(row: dict[str, Any]) -> dict[str, Any]:
                     {
                         "rows": row["artifact"]["rows"],
                         "performance": row["artifact"].get("performance"),
+                        "executionTiming": row["artifact"].get("execution_timing"),
+                        "queuedToReadySeconds": max(
+                            0, (row["updated_at"] - row["created_at"]).total_seconds()
+                        ),
                     }
                     if calculation
                     else {"validPixels": row["artifact"]["valid_pixels"]}
@@ -429,11 +435,13 @@ class ProcessingService:
         Raises:
             ProcessingError: For resource, source, or area admission failures.
         """
+        started = time.perf_counter()
         identifier = await asyncio.to_thread(
             self.jobs.reserve_plan,
             owner,
             request.model_dump(mode="json", by_alias=True),
         )
+        reserved = time.perf_counter()
         completed = False
         limits = self.aggregate_limits
         try:
@@ -442,6 +450,7 @@ class ProcessingService:
                 authorized = await self.authorizer.authorize(source)
                 area = await self._aggregate_area(request)
                 signature = tuple(authorized.source_signature.to_catalog())
+                prepared = time.perf_counter()
                 status, value = await run_bounded_process(
                     aggregate_process_target,
                     (
@@ -458,6 +467,7 @@ class ProcessingService:
                     ),
                     limits.plan_timeout_seconds,
                 )
+                calculated = time.perf_counter()
                 if status != "ok":
                     raise ProcessingError(*value)
                 await self.authorizer.require_current(authorized)
@@ -489,6 +499,12 @@ class ProcessingService:
                 "resolution": "native",
                 "valueDomain": "stored",
                 "inclusion": "per_function" if spec.grid.groundArea else "cell_center",
+                "timing": AggregatePlanTiming(
+                    reservationSeconds=reserved - started,
+                    preparationSeconds=prepared - reserved,
+                    nativeProcessSeconds=calculated - prepared,
+                    finalizationSeconds=time.perf_counter() - calculated,
+                ).model_dump(),
                 "limits": {
                     "maxDecodedBytes": limits.max_decoded_bytes,
                     "maxMemoryBytes": limits.max_memory_bytes,

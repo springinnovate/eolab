@@ -240,11 +240,36 @@ class AggregateValue(BaseModel):
     unit: Literal["ha"] | None = None
 
 
+StageSeconds = Annotated[float, Field(ge=0, allow_inf_nan=False)]
+
+
+class AggregatePlanTiming(BaseModel):
+    """Monotonic server durations within one successful planning request."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    reservationSeconds: StageSeconds
+    preparationSeconds: StageSeconds
+    nativeProcessSeconds: StageSeconds
+    finalizationSeconds: StageSeconds
+
+
+class AggregateExecutionTiming(BaseModel):
+    """Worker stages and database-clock queue interval for one successful attempt."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    queueSeconds: StageSeconds
+    preparationSeconds: StageSeconds
+    nativeProcessSeconds: StageSeconds
+    publicationSeconds: StageSeconds
+
+
 class AggregateResultResponse(JobResultResponse):
     """Small inline results plus owned CSV and provenance downloads."""
 
     rows: list[AggregateValue]
     performance: AggregatePerformance | None = None
+    executionTiming: AggregateExecutionTiming | None = None
+    queuedToReadySeconds: StageSeconds | None = None
 
 
 class AggregateProgress(JobProgressResponse):
@@ -280,6 +305,7 @@ class AggregatePlanResponse(BaseModel):
     valueDomain: Literal["stored"] = "stored"
     inclusion: Literal["cell_center", "per_function"] = "cell_center"
     limits: dict[str, int | float]
+    timing: AggregatePlanTiming | None = None
 
 
 @dataclass(frozen=True)
@@ -323,5 +349,6 @@ class AggregateArtifact(Artifact):
 
     rows: list[dict[str, object]]
     performance: dict[str, object] | None = field(default=None, kw_only=True)
+    execution_timing: dict[str, float] | None = field(default=None, kw_only=True)
     media_type: str = field(default="text/csv", kw_only=True)
     result_name: str = field(default="result.csv", kw_only=True)

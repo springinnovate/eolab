@@ -16,17 +16,55 @@ export function executionDescription(grid) {
 /** Describe final timings with precise measurement boundaries.
  * @param {Object} job Completed job.
  * @param {number|undefined} totalWaitSeconds Browser request through result DOM update, if observed.
+ * @param {Object|undefined} stages Browser-local stage durations for this request.
  * @return {string[]} Lines.
  */
-export function performanceDescription(job, totalWaitSeconds) {
+export function performanceDescription(job, totalWaitSeconds, stages) {
     const p = job.result?.performance;
     const lines = [...(Number.isFinite(totalWaitSeconds) && totalWaitSeconds >= 0
         ? [`Total wait → result displayed: ${totalWaitSeconds.toFixed(3)} s.`,
             "Measured in this tab from the calculation request through the result UI update, including debounce, planning, queueing and polling; excludes earlier confirmation time and the browser's subsequent paint."]
         : ["Total wait unavailable for this result. Request-to-display timing is recorded only for statistic cards completed in this tab, without a page reload."]),
     ...executionDescription(job.grid)];
-    if (!p) return [...lines, "Timing measurements are unavailable for this saved result."];
     const seconds = n => `${n.toFixed(3)} s`;
+    if (stages) {
+        lines.push(
+            `Before planning (debounce, validation or previous-work wait): ${seconds(stages.beforePlanningSeconds)}.`,
+            `Planning round trip: ${seconds(stages.planningSeconds)}${stages.planReused ? " (existing plan reused)" : ""}.`,
+            `Between planning and submission: ${seconds(stages.beforeSubmissionSeconds)}.`,
+            `Submission round trip: ${seconds(stages.submissionSeconds)}.`,
+            `Submission response → result displayed: ${seconds(stages.afterSubmissionSeconds)}.`,
+            "These browser stages add up to total wait. Server stages below overlap them; do not add the two groups together.",
+        );
+        const plan = stages.serverPlan;
+        if (plan && !stages.planReused) lines.push(
+            `Inside server planning — admission: ${seconds(plan.reservationSeconds)}; source/AOI preparation: ${seconds(plan.preparationSeconds)}; native process (including startup and transfer): ${seconds(plan.nativeProcessSeconds)}; source recheck and plan storage: ${seconds(plan.finalizationSeconds)}.`,
+        );
+    }
+    const execution = job.result?.executionTiming;
+    const serverElapsed = job.result?.queuedToReadySeconds;
+    if (Number.isFinite(serverElapsed)) lines.push(`Server queued → ready: ${seconds(serverElapsed)} (database timestamps).`);
+    if (execution) {
+        lines.push(
+            `Queue wait: ${seconds(execution.queueSeconds)}.`,
+            `Worker preparation (source authorization and scratch): ${seconds(execution.preparationSeconds)}.`,
+            `Native process including startup, execution and result transfer: ${seconds(execution.nativeProcessSeconds)}.`,
+            `Source recheck and file publication: ${seconds(execution.publicationSeconds)}.`,
+        );
+        if (p && execution.nativeProcessSeconds >= p.kernelSeconds) lines.push(
+            `Native process outside the kernel: ${seconds(execution.nativeProcessSeconds - p.kernelSeconds)} (includes startup, IPC, final provenance/checks and process exit; not startup alone).`,
+        );
+        if (Number.isFinite(serverElapsed)) {
+            const other = serverElapsed - execution.queueSeconds - execution.preparationSeconds - execution.nativeProcessSeconds - execution.publicationSeconds;
+            if (other >= 0) lines.push(`Other server scheduling/completion time (estimated remainder): ${seconds(other)}.`);
+        }
+    }
+    if (stages && Number.isFinite(serverElapsed)) {
+        const residual = stages.submissionSeconds + stages.afterSubmissionSeconds - serverElapsed;
+        if (residual >= 0) lines.push(`Submission admission + result delivery (estimated remainder): ${seconds(residual)}. Includes request handling before queue insertion, completion/response transfer and polling delay; not a measurement of network time alone.`);
+    }
+    lines.push("Server intervals use one database clock or a worker's monotonic clock. Browser intervals use this tab's monotonic clock. Small residual differences can include database transaction timestamp boundaries. Timings are diagnostic and do not change scheduling.");
+    if (!p) return [...lines, "Kernel measurements are unavailable for this saved result."];
     return [...lines,
         `Kernel elapsed: ${seconds(p.kernelSeconds)}. Read/decode and source mask: ${seconds(p.readSeconds)}. Calculation: ${seconds(p.calculationSeconds)}. Write CSV and checksum: ${seconds(p.resultWriteSeconds)}.`,
         `${p.readWindows.toLocaleString()} reads; ${p.evaluationTiles.toLocaleString()} calculation tiles; ${p.reducerUpdates.toLocaleString()} statistic updates.`,

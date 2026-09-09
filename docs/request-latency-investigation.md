@@ -1,7 +1,61 @@
 # Request-to-result latency investigation (#364)
 
-Keep the batching and timing changes from #363. This investigation starts at
-`5dfcd785952076f6ac630427ceaefa2a25bc87d4`; it does not change runtime behavior.
+Keep the batching and timing changes merged in #363. This investigation starts
+at `5dfcd785952076f6ac630427ceaefa2a25bc87d4`. The follow-up instrumentation
+described below adds measurements without changing scheduling or native work.
+
+## Deployed instrumentation contract
+
+Statistic-card Performance details retain total wait and kernel measurements,
+and now show additive browser stages: before planning (including debounce,
+validation and waiting for previous work), planning round trip, the interval
+before submission, submission round trip, and submission-response to result DOM
+update. These use the same monotonic clock as total wait. A reused review is
+labelled; its previous server planning time is not shown as part of the current
+request. Incomplete traces after reload or uncertain submission/retry are
+omitted rather than inferred. Total wait remains available when its original
+start is still known. Each successful card keeps its own immutable trace.
+
+`AggregatePlanResponse.timing` optionally reports server admission/reservation,
+source/AOI preparation, the bounded native-process call (including bootstrap
+and transfer), and source recheck/plan finalization. These are monotonic durations
+within the service method; HTTP parsing/serialization and network time are
+outside them. Plan timings are local to that response, not part of the immutable
+calculation specification or persisted results.
+
+`AggregateResultResponse.executionTiming` optionally reports queue wait, worker
+source/scratch preparation, the bounded native-process call and source recheck/
+file publication. The worker stores this small path-free metadata through the
+existing artifact JSON storage. Old artifacts/workers return null. Queue wait
+uses the database's claim `updated_at` minus `created_at` from the immutable
+claimed row, captured before any heartbeat replaces `updated_at` in storage.
+The other worker stages use its monotonic clock. No DB schema change is needed.
+
+`AggregateResultResponse.queuedToReadySeconds` uses the database's ready
+`updated_at` minus `created_at`, only when a ready artifact is exposed. Both
+timestamps are from the same database clock. PostgreSQL transaction timestamps
+refer to transaction start, so commit/lock wait boundaries can affect small
+residuals. Expired/cancelled/failed jobs do not expose a ready result. Negative
+database intervals after a clock adjustment are clamped to zero.
+
+The UI labels the native-process minus kernel difference explicitly: it includes
+startup, IPC, provenance/final checks and process exit, not startup alone. It
+also shows nonnegative estimated remainders for other server scheduling/
+completion time and submission-admission plus delivery. The latter subtracts
+queued-to-ready duration from submission-dispatch to display duration; it
+includes API work before queue insertion, commit/response transfer and polling,
+and is **not** a network-only measurement. Browser/server timestamps are never
+subtracted. Nested server stages overlap browser stages and must not be added
+to the total again. This does not yet separate process import time from IPC or
+polling wait from network transfer.
+
+Timing fields are optional and finite/nonnegative at API boundaries. Existing
+kernel/provenance metrics remain unchanged; post-kernel worker metrics are
+stored in job metadata, not retroactively written into the provenance file.
+Processing owns all additions: operation response/artifact models, service and
+worker, browser API validation, controllers and performance views. Existing
+job-store and execution interfaces are unchanged. No new cross-subsystem
+dependencies, services, polling loops or worker claim versions are introduced.
 
 ## Current evidence
 
@@ -86,12 +140,12 @@ measurements and account for DB/request load. Do not remove process isolation,
 reuse unchecked plans, weaken cancellation acknowledgment or increase native
 concurrency merely to reduce latency.
 
-## Architecture and validation
+## Initial benchmark architecture and validation
 
-Only diagnostic test tooling and this report are added. Used by: developers
+The initial investigation added only diagnostic tooling and this report. Used by: developers
 investigating Processing. Depends on: existing Processing models/dispatch and
 the neutral bounded-process supervisor. Coordinates with: no application peers.
-No runtime imports, contracts or subsystem dependency relationships change.
+That benchmark introduced no runtime imports, contracts or subsystem dependency changes.
 
 Validation: the benchmark command above completed all three real plan/execution
 pairs with correct results. Formatting is checked with

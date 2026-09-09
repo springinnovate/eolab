@@ -1,8 +1,10 @@
 """Application workflow and supervision for explicitly supported processing jobs."""
 
 import asyncio
+from dataclasses import replace
 from contextlib import suppress
 import logging
+import time
 from typing import Any
 
 from eolab_app.execution.bounded_process import (
@@ -11,7 +13,11 @@ from eolab_app.execution.bounded_process import (
 )
 from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.clip_models import ClipSpec, RasterClipLimits
-from eolab_app.processing.aggregate_models import AggregateSpec, RasterAggregateLimits
+from eolab_app.processing.aggregate_models import (
+    AggregateSpec,
+    RasterAggregateLimits,
+    AggregateExecutionTiming,
+)
 from eolab_app.processing.raster_aggregate import aggregate_process_target
 from eolab_app.processing.ports import JobArtifactStore, JobStore
 from eolab_app.processing.raster_clip import clip_process_target
@@ -57,6 +63,7 @@ class ProcessingWorker:
         Raises:
             ProcessingError: If the source, resources, or native operation fail.
         """
+        started = time.perf_counter()
         operation = row["spec"]["operation"]
         if operation == "raster.clip.v1":
             spec = ClipSpec.model_validate(row["spec"])
@@ -89,11 +96,13 @@ class ProcessingWorker:
             row["reserved_bytes"],
             self.limits,
         )
+        prepared = time.perf_counter()
         status, value = await run_bounded_process(
             target,
             (action, (authorized.source_path, spec, directory, limits)),
             self.limits.runtime_seconds,
         )
+        calculated = time.perf_counter()
         if status != "ok":
             raise ProcessingError(*value)
         await self.authorizer.require_current(authorized)
@@ -102,6 +111,18 @@ class ProcessingWorker:
         # This bounded local-directory rename must finish before cancellation
         # can mark the attempt terminal and permit cleanup of its files.
         self.artifacts.publish(row["attempt_id"], row["reserved_bytes"])
+        if operation == "raster.aggregate.v1":
+            value = replace(
+                value,
+                execution_timing=AggregateExecutionTiming(
+                    queueSeconds=max(
+                        0, (row["updated_at"] - row["created_at"]).total_seconds()
+                    ),
+                    preparationSeconds=prepared - started,
+                    nativeProcessSeconds=calculated - prepared,
+                    publicationSeconds=time.perf_counter() - calculated,
+                ).model_dump(),
+            )
         return value
 
     async def run_once(self) -> bool:
