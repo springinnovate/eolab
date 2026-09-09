@@ -1,5 +1,6 @@
 /** Same-origin Processing API. Only catalog identities and opaque job/area IDs cross this boundary. */
 import { normalizeRasterSamplingArea } from "../selected-area.js";
+import { chunkPixels } from "./calculation-session.js";
 
 /** Browser-safe HTTP failure; transport failures remain ordinary errors. */
 export class ProcessingRequestError extends Error {
@@ -26,6 +27,27 @@ function validateGrid(grid) {
         !Array.isArray(grid.transform) || grid.transform.length !== 6 || !grid.transform.every(Number.isFinite)) {
         throw new Error("Processing returned an invalid native grid.");
     }
+    if (grid.execution) validateExecution(grid.execution);
+}
+
+/** Validate bounded execution metadata before presentation. @param {Object} value Plan. @return {void} */
+function validateExecution(value) {
+    chunkPixels(value.targetChunkPixels);
+    if (![value.readWidth, value.readHeight, value.evaluationWidth, value.evaluationHeight, value.readWindows]
+        .every(n => Number.isSafeInteger(n) && n > 0) || value.readWindows > 65536 ||
+        value.evaluationWidth > value.readWidth || value.evaluationHeight > value.readHeight) {
+        throw new Error("Processing returned invalid batch dimensions.");
+    }
+}
+
+/** Validate durable timing measurements. @param {Object|null} value Timings. @return {void} */
+function validatePerformance(value) {
+    if (value == null) return;
+    validateExecution(value.execution);
+    if (![value.readSeconds, value.calculationSeconds, value.resultWriteSeconds, value.kernelSeconds]
+        .every(n => Number.isFinite(n) && n >= 0 && n <= 86400) ||
+        ![value.readWindows, value.evaluationTiles, value.reducerUpdates].every(n => Number.isSafeInteger(n) && n > 0) ||
+        value.readWindows !== value.execution.readWindows) throw new Error("Processing returned invalid performance measurements.");
 }
 
 /** Validate a public owned job before presenting actions. @param {Object} job API response. @return {Object} Validated job. */
@@ -37,7 +59,10 @@ function validateJob(job) {
     if (job.result) {
         processingDownloadUrl(job.result.url, job.jobId, "result");
         processingDownloadUrl(job.result.provenanceUrl, job.jobId, "provenance");
-        if (job.operation === "raster.aggregate.v1") validateCalculationRows(job.result.rows);
+        if (job.operation === "raster.aggregate.v1") {
+            validateCalculationRows(job.result.rows);
+            validatePerformance(job.result.performance);
+        }
     }
     return job;
 }
@@ -128,10 +153,12 @@ export class ProcessingApiClient {
     /** Review one immutable calculation intent. @param {Object} intent Source, expressions, and area. @param {AbortSignal} signal Superseded plan. @return {Promise<Object>} Estimate. */
     async planCalculation(intent, signal) {
         const area = normalizeRasterSamplingArea(intent.area);
+        const targetChunkPixels = chunkPixels(intent.targetChunkPixels);
         await this.ensureSession();
         const plan = await this.request("/raster-calculations/plan", "POST", {
             sources: { a: { collectionId: intent.source.collectionId, itemId: intent.source.itemId } },
             calculations: intent.calculations,
+            ...(targetChunkPixels === null ? {} : { targetChunkPixels }),
             ...(area.kind === "selectedArea" ? { selectedBounds: area.selectedBounds }
                 : area.kind === "temporaryAoi" ? { temporaryAoiId: area.temporaryAoiId } : { wholeRaster: true }),
         }, signal);

@@ -20,10 +20,12 @@ from eolab_app.processing.aggregate_models import (
     AggregateArtifact,
     AggregateGrid,
     AggregateSpec,
+    AggregatePerformance,
     GroundAreaPlan,
     NamedCalculation,
     RasterAggregateLimits,
 )
+from eolab_app.processing.aggregate_windows import execution_plan, read_windows
 from eolab_app.processing.artifacts import write_progress
 from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.ground_area import GroundArea
@@ -36,7 +38,7 @@ from eolab_app.processing.raster_input import (
 )
 from eolab_app.raster.source_contract import (
     read_native_raster_block,
-    source_block_indexes_for_window,
+    read_native_raster_window,
 )
 
 # Evaluate at most 65,536 pixels per expression tile, even when the source's
@@ -59,6 +61,9 @@ GDAL_THREADS = 2
 # resident memory or a count of arrays every expression necessarily allocates.
 EXPRESSION_BYTES_PER_PIXEL = 16
 EXPRESSION_SCRATCH_ARRAYS = 8
+# Fractional coverage's row integrals, winding, masks and broadcast temporaries.
+# The fixed area allowance continues to cover cached axes, edges and GEOS setup.
+AREA_MASK_BYTES_PER_PIXEL = 160
 # Publish progress at most twice per second to bound filesystem update overhead.
 PROGRESS_INTERVAL_SECONDS = 0.5
 
@@ -90,6 +95,8 @@ def grid(
     node_count: int,
     limits: RasterAggregateLimits,
     ground_area: GroundAreaPlan | None = None,
+    target_chunk_pixels: int | None = None,
+    include_execution: bool = True,
 ) -> AggregateGrid:
     """Admit native work and bounded expression memory for one plan.
 
@@ -99,6 +106,8 @@ def grid(
         node_count: Total bounded expression-tree nodes.
         limits: Work and memory ceilings.
         ground_area: Optional ellipsoidal measurement metadata and geometry work.
+        target_chunk_pixels: Opt-in total-pixel budget for combined windows/tiles.
+        include_execution: False only when rechecking a pre-batching stored plan.
 
     Returns:
         Deterministic metadata and conservative memory estimate.
@@ -107,22 +116,44 @@ def grid(
         dataset, window, limits.max_native_blocks, limits.max_decoded_bytes
     )
     bh, bw = dataset.block_shapes[0]
+    tile_side = (
+        AREA_TILE_SIDE
+        if ground_area and ground_area.strategy != "rectilinear"
+        else TILE_SIDE
+    )
+    execution = execution_plan(
+        window, (bh, bw), dataset.width, dataset.height, target_chunk_pixels, tile_side
+    )
+    read_pixels = execution.readWidth * execution.readHeight
+    tile_pixels = execution.evaluationWidth * execution.evaluationHeight
     # Sum the retained native block, fixed native overhead, and tile-sized
     # expression/scratch budget. Counting all syntax nodes is conservative because
     # scalar nodes and successive reductions need not hold full tiles together.
     memory = (
-        bh * bw * (np.dtype(dataset.dtypes[0]).itemsize + NATIVE_MASK_BYTES_PER_PIXEL)
+        (read_pixels if target_chunk_pixels else bh * bw)
+        * (
+            np.dtype(dataset.dtypes[0]).itemsize
+            + NATIVE_MASK_BYTES_PER_PIXEL
+            + (1 if target_chunk_pixels else 0)
+        )
         + GDAL_CACHE_BYTES
         + NATIVE_BOOKKEEPING_BYTES
-        + TILE_SIDE**2
+        + (tile_pixels if target_chunk_pixels else TILE_SIDE**2)
         * (node_count + EXPRESSION_SCRATCH_ARRAYS)
         * EXPRESSION_BYTES_PER_PIXEL
         + (AREA_GEOMETRY_MEMORY_BYTES if ground_area is not None else 0)
+        + (
+            tile_pixels * AREA_MASK_BYTES_PER_PIXEL
+            if target_chunk_pixels
+            and ground_area
+            and ground_area.strategy == "rectilinear"
+            else 0
+        )
     )
     if memory > limits.max_memory_bytes:
         raise ProcessingError(
             "expression_memory_limit",
-            "The source blocks and expression need too much memory. Simplify the calculation or use a tiled source.",
+            f"The source, batch and expression need an estimated {memory / 1024**2:.1f} MiB of memory; the limit is {limits.max_memory_bytes / 1024**2:.0f} MiB. Choose a smaller batch, simplify the calculation or use a tiled source.",
             413,
         )
     return AggregateGrid(
@@ -145,6 +176,7 @@ def grid(
         offset=str(dataset.offsets[0]),
         storedUnit=dataset.units[0],
         groundArea=ground_area,
+        execution=execution if include_execution else None,
     )
 
 
@@ -155,6 +187,7 @@ def plan_aggregate(
     calculations: tuple[NamedCalculation, ...],
     alias: str,
     limits: RasterAggregateLimits,
+    target_chunk_pixels: int | None = None,
 ) -> AggregateGrid:
     """Plan only metadata, syntax and geometry inside a bounded child process.
 
@@ -165,6 +198,7 @@ def plan_aggregate(
         calculations: Validated named result expressions.
         alias: Single bound source alias.
         limits: Operation-owned resource ceilings.
+        target_chunk_pixels: Optional combined read/evaluation pixel budget.
 
     Returns:
         Native grid and read/memory estimates, without reading the raster band.
@@ -186,7 +220,12 @@ def plan_aggregate(
             if ground is not None:
                 window = ground.window
             result = grid(
-                dataset, window, nodes, limits, ground.metadata if ground else None
+                dataset,
+                window,
+                nodes,
+                limits,
+                ground.metadata if ground else None,
+                target_chunk_pixels,
             )
     require_signature(path, signature)
     return result
@@ -209,6 +248,62 @@ def csv_text(value: str) -> str:
     )
 
 
+def stable_selection_mask(
+    dataset: Any, selected: Window, read: Window, geometries: tuple, tile_side: int
+) -> np.ndarray:
+    """Preserve legacy GDAL cell-center decisions independently of batch dimensions.
+
+    GDAL rasterization at exact polygon boundaries can depend on the local affine
+    and window clipping. Rasterize the same native-block/legacy-tile windows as
+    before, then assemble their masks for the combined read.
+
+    Args:
+        dataset: Source metadata; no band reads are performed here.
+        selected: Full admitted selection window.
+        read: Combined block-aligned read inside that admitted block rectangle.
+        geometries: Projected selection geometries using the established policy.
+        tile_side: Legacy numeric or geometry-fallback evaluation ceiling.
+
+    Returns:
+        Boolean cell-center membership with the same shape as the combined read.
+    """
+    mask = np.zeros((int(read.height), int(read.width)), dtype=bool)
+    legacy = execution_plan(
+        read, dataset.block_shapes[0], dataset.width, dataset.height, None, tile_side
+    )
+    for block, _ in read_windows(
+        read, dataset.block_shapes[0], dataset.width, dataset.height, legacy
+    ):
+        intersection = block.intersection(selected)
+        for y in range(
+            int(intersection.row_off),
+            int(intersection.row_off + intersection.height),
+            tile_side,
+        ):
+            for x in range(
+                int(intersection.col_off),
+                int(intersection.col_off + intersection.width),
+                tile_side,
+            ):
+                tile = Window(
+                    x,
+                    y,
+                    min(tile_side, intersection.col_off + intersection.width - x),
+                    min(tile_side, intersection.row_off + intersection.height - y),
+                )
+                local = Window(
+                    x - read.col_off, y - read.row_off, tile.width, tile.height
+                )
+                mask[local.toslices()] = geometry_mask(
+                    geometries,
+                    out_shape=(int(tile.height), int(tile.width)),
+                    transform=window_transform(tile, dataset.transform),
+                    all_touched=False,
+                    invert=True,
+                )
+    return mask
+
+
 def create_aggregate(
     path: Path, spec: AggregateSpec, directory: Path, limits: RasterAggregateLimits
 ) -> AggregateArtifact:
@@ -223,6 +318,9 @@ def create_aggregate(
     Returns:
         Final closed artifact metadata and bounded inline result rows.
     """
+    started = time.perf_counter()
+    read_seconds = calculation_seconds = 0.0
+    read_count = tile_count = completed_blocks = 0
     alias = next(iter(spec.sources))
     roots = [compile_expression(item.expression, alias) for item in spec.calculations]
     reducers = [Calculation(root) for root in roots]
@@ -243,7 +341,17 @@ def create_aggregate(
                 window = ground.window
             if (
                 grid(
-                    dataset, window, nodes, limits, ground.metadata if ground else None
+                    dataset,
+                    window,
+                    nodes,
+                    limits,
+                    ground.metadata if ground else None,
+                    (
+                        spec.grid.execution.targetChunkPixels
+                        if spec.grid.execution
+                        else None
+                    ),
+                    include_execution=spec.grid.execution is not None,
                 )
                 != spec.grid
             ):
@@ -252,33 +360,61 @@ def create_aggregate(
                     "The calculation grid or policy changed. Create a new plan.",
                     409,
                 )
-            blocks = source_block_indexes_for_window(window, dataset.block_shapes[0])
             last_progress = 0.0
             tile_side = (
                 AREA_TILE_SIDE if ground and not ground.rectilinear else TILE_SIDE
             )
-            for index, (row, column) in enumerate(blocks):
-                block = dataset.block_window(1, row, column)
-                native = read_native_raster_block(dataset, block)
+            execution = spec.grid.execution or execution_plan(
+                window,
+                dataset.block_shapes[0],
+                dataset.width,
+                dataset.height,
+                None,
+                tile_side,
+            )
+            windows = read_windows(
+                window,
+                dataset.block_shapes[0],
+                dataset.width,
+                dataset.height,
+                execution,
+            )
+            reader = (
+                read_native_raster_block
+                if execution.targetChunkPixels is None
+                else read_native_raster_window
+            )
+            for block, native_blocks in windows:
+                read_started = time.perf_counter()
+                native = reader(dataset, block)
+                read_seconds += time.perf_counter() - read_started
+                read_count += 1
+                calculate_started = time.perf_counter()
                 intersection = block.intersection(window)
+                selection_valid = (
+                    stable_selection_mask(dataset, window, block, geometries, tile_side)
+                    if geometries and execution.targetChunkPixels
+                    else None
+                )
                 for y in range(
                     int(intersection.row_off),
                     int(intersection.row_off + intersection.height),
-                    tile_side,
+                    execution.evaluationHeight,
                 ):
                     for x in range(
                         int(intersection.col_off),
                         int(intersection.col_off + intersection.width),
-                        tile_side,
+                        execution.evaluationWidth,
                     ):
                         tile = Window(
                             x,
                             y,
                             min(
-                                tile_side, intersection.col_off + intersection.width - x
+                                execution.evaluationWidth,
+                                intersection.col_off + intersection.width - x,
                             ),
                             min(
-                                tile_side,
+                                execution.evaluationHeight,
                                 intersection.row_off + intersection.height - y,
                             ),
                         )
@@ -295,7 +431,9 @@ def create_aggregate(
                         area_valid = (
                             valid & (hectares > 0) if hectares is not None else None
                         )
-                        if geometries:
+                        if selection_valid is not None:
+                            valid &= selection_valid[local.toslices()]
+                        elif geometries:
                             valid &= geometry_mask(
                                 geometries,
                                 out_shape=data.shape,
@@ -305,15 +443,32 @@ def create_aggregate(
                             )
                         for reducer in reducers:
                             reducer.update(data, valid, hectares, area_valid)
+                        tile_count += 1
+                        # Release the tile before allocating the next one; no old
+                        # source view may retain the previous combined read.
+                        del values, data, valid, hectares, area_valid
+                del native, selection_valid
+                calculation_seconds += time.perf_counter() - calculate_started
+                completed_blocks += native_blocks
                 if time.monotonic() - last_progress > PROGRESS_INTERVAL_SECONDS:
-                    write_progress(directory, "calculating", index + 1, len(blocks))
+                    write_progress(
+                        directory,
+                        "calculating",
+                        completed_blocks,
+                        spec.grid.nativeBlocks,
+                    )
                     last_progress = time.monotonic()
     require_signature(path, spec.sourceSignature)
+    calculate_started = time.perf_counter()
     rows = [
         {"label": item.label, "expression": item.expression, **reducer.result()}
         for item, reducer in zip(spec.calculations, reducers, strict=True)
     ]
-    write_progress(directory, "writing_results", len(blocks), len(blocks))
+    calculation_seconds += time.perf_counter() - calculate_started
+    write_progress(
+        directory, "writing_results", completed_blocks, spec.grid.nativeBlocks
+    )
+    writing_started = time.perf_counter()
     result = directory / "result.csv"
     with result.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.writer(stream)
@@ -332,11 +487,22 @@ def create_aggregate(
     with result.open("rb") as stream:
         digest = hashlib.file_digest(stream, "sha256").hexdigest()
     source = next(iter(spec.sources.values()))
+    performance = AggregatePerformance(
+        execution=execution,
+        readWindows=read_count,
+        evaluationTiles=tile_count,
+        reducerUpdates=tile_count * len(reducers),
+        readSeconds=read_seconds,
+        calculationSeconds=calculation_seconds,
+        resultWriteSeconds=time.perf_counter() - writing_started,
+        kernelSeconds=time.perf_counter() - started,
+    )
     artifact = AggregateArtifact(
         size=result.stat().st_size,
         sha256=digest,
         filename=f"{source.item_id}-calculations.csv",
         rows=rows,
+        performance=performance.model_dump(mode="json"),
     )
     provenance = {
         **spec.model_dump(mode="json", by_alias=True),

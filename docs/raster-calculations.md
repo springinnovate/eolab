@@ -119,8 +119,10 @@ inference is claimed; the grid's unit is source metadata, not a computed result 
 A direct `areaha(...)` result explicitly carries `unit: ha`; compound scalar
 expressions leave `unit` null, including percentages and user conversions.
 
-Each source block is decoded once, then evaluated in tiles of at most 256 × 256
-cells (64 × 64 for jobs with area geometry). Integers are converted exactly from the supported native integer types to
+By default, each source block is read once, then evaluated in tiles of at most
+256 × 256 cells (64 × 64 only for grids requiring individual pixel geometry).
+Opt-in batching can combine those reads and enlarge evaluation tiles as described
+below. Integers are converted exactly from the supported native integer types to
 float64 for pixel arithmetic. Numeric sums use float64 block sums with compensated
 combination across blocks; means use scaled block means and weighted combination.
 Floating results are not arbitrary-precision decimal arithmetic. Count reductions
@@ -163,6 +165,62 @@ coverage, creation time, and the CSV checksum.
 Area provenance also retains `grid.groundArea` and `functionInclusion`, distinguishing
 numeric centers from fractional area intersections.
 
+## Experimental batch sizing and measurements (#360)
+
+An optional `targetChunkPixels` integer from 1 through 4,194,304 controls the target
+total pixels per combined read/evaluation tile. Omitted or null retains the existing
+one-native-block execution path. The browser offers current behavior, 65,536,
+262,144, 1,048,576 and 4,194,304 pixels. This never changes native resolution,
+source eligibility, NoData, formulas, geometry precision, or native-work limits.
+
+The Processing-owned `aggregate_windows` planner groups adjacent blocks width-first,
+then height, using integer multiples of native block dimensions. Groups begin on
+the admitted source block grid, cover every admitted block once, and are clipped
+only at source edges. It streams read windows without changing the shared
+`source_block_indexes_for_window` helper or clipping callers. A block larger than
+the target still requires a full-block read; calculation tiles honor the smaller
+budget. Individual-pixel geometry fallback remains capped at 64 × 64. Mask-and-weight
+area calculations on supported grids can use larger tiles.
+
+New plans include immutable `grid.execution`: `targetChunkPixels`, `readWidth`,
+`readHeight`, `evaluationWidth`, `evaluationHeight`, and `readWindows`. Dimensions
+are maxima; edges can be smaller. `estimatedMemoryBytes` includes retained source
+values/validity/selection mask, float64 expression nodes and scratch arrays, fixed
+GDAL/bookkeeping, and bounded area geometry/mask workspace. Admission rejects an
+oversized choice before pixel reads; it never raises the 512 MiB ceiling or silently
+shrinks a reviewed choice. The worker recomputes the same plan before execution.
+
+Numeric selection masks retain the legacy native-block/tile rasterization windows:
+GDAL's boundary-cell decisions can otherwise depend on the local rasterization
+window. Larger reads assemble those masks before reduction. Fractional masks use
+cell-local boundary integrals rather than subtracting cumulative areas, preventing
+batch width from changing tiny boundary fractions. Counts must agree across batch
+sizes; floating results may differ in last-place rounding because grouping changes
+the order of accumulation.
+
+Ready results expose `result.performance`, also saved in JSON provenance:
+
+- `readSeconds`: native read/decode plus construction of the source validity mask.
+- `calculationSeconds`: preparation/conversion, selection masks, area weights,
+  expression updates and final reductions. Cached geometry/axes setup is outside
+  this subtotal and inside kernel elapsed.
+- `resultWriteSeconds`: CSV writing, close and SHA-256 calculation.
+- `kernelSeconds`: entry to the calculation kernel through the CSV checksum,
+  including source opening/revalidation, setup and progress writes.
+- `readWindows`, `evaluationTiles`, `reducerUpdates`, and effective `execution`.
+
+These are monotonic wall times, not pure disk-I/O or CPU times. They exclude queue
+wait, child-process startup, provenance serialization/writing, final signature
+check, publication, and browser latency. Subtotals do not include all kernel setup.
+They survive job completion's `phase: ready` progress replacement. Older results
+without metrics remain readable. Progress remains **native blocks**, not batches.
+
+Run `python tests/benchmark_aggregate_batching.py --scratch D:/eolab-benchmark-360`
+for bounded synthetic TIFFs, numerical comparison and per-process peak resident
+memory where available. Each execution uses a fresh process. First-pass/warm-repeat
+labels describe order; caches are never claimed to be flushed. There are no flaky
+elapsed-time assertions in CI. See [benchmark results](raster-batching-benchmark.md).
+
 ## Ownership, resources, and deployment
 
 Processing owns validation, plans, execution, and result semantics. Thin routes
@@ -194,7 +252,7 @@ needed. Initial calculation-specific ceilings are:
 | Native decoded source work | 4 GiB, at most 65,536 blocks, with conservative preallocation guard |
 | Estimated native/expression working memory | 512 MiB within the existing 2 GiB worker |
 | AOI snapshot / projected coordinates | 8 MiB / 500,000 |
-| Area polygon-cell work / execution transformations | 200,000 cells / 4,000,000 positions |
+| Area polygon-cell work / execution transformations | 2,000,000 fallback cells / 4,000,000 positions; supported rectilinear grids use no pixel polygons |
 | Area geometry memory estimate | Additional 128 MiB within the same 512 MiB admission ceiling |
 | Working/result reservation | 12 MiB per calculation job |
 | Planning / execution | Existing 15-second / 10-minute supervised deadlines |
@@ -209,9 +267,10 @@ atomic publication, owner leases, restart recovery, and expiry remain shared wit
 clips. A filesystem-full failure cannot publish a partial CSV.
 
 Migration 2 adds an opaque operation discriminator and minimum worker claim
-protocol to jobs. Workers now declare protocol 3 transaction-locally and select
-compatible work. Numeric-only calculations require protocol 2 and omit new area
-grid fields; area calculations require protocol 3. Clips retain protocol 1. The
+protocol to jobs. Workers now declare protocol 4 transaction-locally and select
+compatible work. New plans with execution metadata require protocol 4, including
+current-behavior plans. Existing numeric plans without that metadata retain protocol
+2, and existing area plans retain protocol 3. Clips retain protocol 1. The
 existing database trigger rejects an older worker's queued-to-running
 transition for a calculation job **before it starts native work**. Legacy clip
 rows retain protocol 1 and old TIFF/download defaults. The trigger is preserved
@@ -220,7 +279,9 @@ a legacy worker encountering a calculation may back off until a new worker claim
 it. The shared advisory-lock key and execution fence are unchanged. Retired job
 summaries retain their operation even after source/area snapshots are cleaned.
 
-Deploy the updated application and worker together. Drain/remove area jobs before
+Deploy the updated application and worker together. Drain/remove new-format jobs
+before rolling back to a version that cannot deserialize execution metadata.
+Drain/remove area jobs before
 rolling the application back to code that cannot interpret area expressions/grid
 metadata. Drain/remove all calculation jobs before a full rollback to clip-only
 code. Do not drop the compatibility trigger

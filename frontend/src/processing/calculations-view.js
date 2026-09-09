@@ -1,5 +1,6 @@
 /** Accessible calculation editor and inline result presentation. */
 import { ACTIVE_JOB_STATES } from "./jobs.js";
+import { performanceDescription } from "./calculation-performance.js";
 import { processingDownloadUrl } from "./api.js";
 import { describeClipArea, describeClipCrs, describeJobProgress, formatDownloadBytes } from "./presentation.js";
 
@@ -187,6 +188,9 @@ export class CalculationsView {
                 this.element("p", "Area coverage counts include any positive pixel intersection; numeric functions use pixel centers. Each areaha term is in hectares. Arithmetic can change final units."));
             root.append(method);
         }
+        const performance = this.element("details");
+        performance.append(this.element("summary", "Performance"), ...performanceDescription(job).map(text => this.element("p", text)));
+        root.append(performance);
         const links = this.element("div"); links.className = "downloads-actions";
         for (const [kind, label, url] of [["result", "Download CSV", job.result.url], ["provenance", "Download provenance", job.result.provenanceUrl]]) {
             const link = this.element("a", label); link.className = "secondary-button";

@@ -156,6 +156,21 @@ def read_native_raster_block(
     Raises:
         rasterio.errors.RasterioError: If the bounded band read fails.
     """
+    return read_native_raster_window(dataset, window)
+
+
+def read_native_raster_window(
+    dataset: rasterio.io.DatasetReader, window: Window
+) -> numpy.ma.MaskedArray:
+    """Read a caller-admitted native window with the established validity policy.
+
+    Args:
+        dataset: Open source whose validity contract is established.
+        window: Bounded integral window inside the source, admitted by the caller.
+
+    Returns:
+        Native band-one values masked by nodata, without resampling or mask I/O.
+    """
     values = dataset.read(1, window=window, masked=False)
     nodata = dataset.nodatavals[0]
     if nodata is None:
