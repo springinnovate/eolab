@@ -140,7 +140,7 @@ test("valid edits debounce, keep formula focus, and put the value in its own car
     assert.equal(card.current,true);assert.equal(row.value.textContent,"42");assert.equal(row.statusRow.hidden,true);
     assert.equal(row.run.hidden,true);assert.equal(h.document.activeElement,row.expression);
     h.controller.editStatistic(card.id,{expression:"bad(a)"});await h.tick();
-    assert.equal(h.submits(),1);assert.equal(row.value.textContent,"42");assert.match(row.status.textContent,/Previous value/);
+    assert.equal(h.submits(),1);assert.equal(row.value.textContent,"42");assert.equal(row.root.classList.contains("is-previous"),true);
     assert.match(row.status.textContent,/Unknown function/);assert.equal(row.expression.getAttribute("aria-invalid"),"true");
 });
 test("renaming pending and completed statistics neither cancels nor recalculates",async()=>{
@@ -156,11 +156,11 @@ test("previous values are marked as being replaced during validation, planning, 
     const row=h.view.cards.get(card.id);
     h.controller.editStatistic(card.id,{expression:"sum(a)"});
     assert.equal(row.root.classList.contains("is-previous"),true);
-    assert.equal(row.status.textContent,"Previous value · Checking formula…");
+    assert.equal(row.status.textContent,"Checking formula…");
     assert.equal(row.statusRow.hidden,false);
     assert.equal(row.value.textContent,"12.5");
     await h.tick();
-    assert.equal(row.status.textContent,"Previous value · Calculating…");
+    assert.equal(row.status.textContent,"Calculating…");
     await h.finish("ready",["42"]);
     assert.equal(row.root.classList.contains("is-previous"),false);
     assert.equal(row.status.textContent,"");
@@ -168,7 +168,7 @@ test("previous values are marked as being replaced during validation, planning, 
     assert.equal(row.value.textContent,"42");
     h.controller.editStatistic(card.id,{expression:"bad(a)"});await h.tick();
     assert.equal(row.root.classList.contains("is-previous"),true);
-    assert.equal(row.status.textContent,"Previous value · Unknown function bad");
+    assert.equal(row.status.textContent,"Unknown function bad");
 });
 test("copy uses exact current values without rounding or units and never submits work", async()=>{
     const copied=[];

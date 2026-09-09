@@ -133,7 +133,7 @@ export class SummaryStatisticsView extends CalculationsView {
             row.root.setAttribute("aria-busy", String(card.pending));
             row.root.classList.toggle("is-previous", !!card.result && !card.current);
             const message = card.current ? RESULT_STATES[card.result?.row.state] ?? "" : card.message;
-            row.status.textContent = card.result && !card.current ? `Previous value · ${message}` : message;
+            row.status.textContent = message;
             row.status.hidden = !row.status.textContent;
             row.status.classList.toggle("is-error", card.error);
             row.status.classList.toggle("is-working", card.pending || !!card.requested || card.checking);
