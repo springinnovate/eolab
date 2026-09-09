@@ -2,8 +2,8 @@
 
 WGS84 cylindrical equal-area coordinates preserve ellipsoid surface area.
 Only boundaries are transformed; raster values stay on their original grid.
-Rectilinear EPSG:4326/3857/6933 grids use row heights and column widths where
-valid. Other footprints are adaptively densified before polygon intersection.
+Rectilinear EPSG:4326/3857/6933 grids multiply cached row/column area weights
+by numerical fractional AOI masks. Other grids retain bounded cell geometry.
 """
 
 import math
@@ -23,6 +23,7 @@ from eolab_app.processing.aggregate_models import (
     RasterAggregateLimits,
 )
 from eolab_app.processing.models import ProcessingError
+from eolab_app.processing.area_coverage import AreaCoverage
 
 # lat_ts=0 makes the x domain exactly +/- pi * WGS84's semimajor axis.
 AREA_CRS = "+proj=cea +lat_ts=0 +lon_0=0 +datum=WGS84 +units=m +type=crs"
@@ -367,12 +368,8 @@ class GroundArea:
             self.window = Window(x0, y0, x1 - x0, y1 - y0)
             if self.geometry.equals(self.geometry.envelope):
                 self.rectangle = self.geometry.bounds
-            shapely.prepare(self.geometry)
         geometry_cells = (
-            0
-            if self.rectilinear
-            and (self.geometry is None or self.rectangle is not None)
-            else int(self.window.width * self.window.height)
+            0 if self.rectilinear else int(self.window.width * self.window.height)
         )
         if geometry_cells > limits.max_area_geometry_cells:
             raise ProcessingError(
@@ -390,9 +387,10 @@ class GroundArea:
         # transformation repeats this guard as native footprints are measured.
         self._project_native(self._corners(self.window))
         self.axis_x = self.axis_y = None
+        self.coverage = None
         if self.rectilinear:
             # One cached coordinate per row/column, rather than repeated
-            # projection for every pixel/tile in a large rectangular selection.
+            # projection for every pixel/tile in the selected raster window.
             axis_count = int(self.window.width + self.window.height + 2)
             if axis_count > limits.max_coordinates:
                 raise ProcessingError(
@@ -430,6 +428,13 @@ class GroundArea:
                     )
                 )
             )[:, 1]
+            if self.geometry is not None and self.rectangle is None:
+                oriented = shapely.orient_polygons(self.geometry)
+                self.coverage = AreaCoverage(
+                    np.asarray(ring.coords)
+                    for polygon in shapely.get_parts(oriented)
+                    for ring in [polygon.exterior, *polygon.interiors]
+                )
 
     def _corners(self, window: Window) -> np.ndarray:
         """Construct the closed native footprint of an integral grid window.
@@ -500,23 +505,12 @@ class GroundArea:
                     * np.maximum(east - west, 0)[None, :]
                     / HECTARE_SQUARE_METRES
                 )
-            polygons = shapely.box(
-                west[None, :], south[:, None], east[None, :], north[:, None]
+            cell_hectares = (
+                (north - south)[:, None]
+                * (east - west)[None, :]
+                / HECTARE_SQUARE_METRES
             )
-            covered = shapely.covers(self.geometry, polygons)
-            partial = shapely.intersects(self.geometry, polygons) & ~covered
-            areas = (north - south)[:, None] * (east - west)[None, :] * covered
-            # Retain one clipped polygon at a time, including for complex AOIs.
-            for row, column in zip(*np.nonzero(partial), strict=True):
-                clipped = polygons[row, column].intersection(self.geometry)
-                if shapely.get_num_coordinates(clipped) > self.limits.max_coordinates:
-                    raise ProcessingError(
-                        "area_geometry_limit",
-                        "A clipped pixel exceeds the area coordinate limit. Simplify the AOI.",
-                        413,
-                    )
-                areas[row, column] = clipped.area
-            return areas / HECTARE_SQUARE_METRES
+            return self.coverage.mask(xs, ys) * cell_hectares
         areas = np.zeros((height, width), dtype=np.float64)
         for row in range(height):
             for column in range(width):

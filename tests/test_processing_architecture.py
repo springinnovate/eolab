@@ -59,6 +59,7 @@ def test_mechanisms_and_storage_never_import_application_services() -> None:
         Path("src/eolab_app/processing/raster_expression.py"),
         Path("src/eolab_app/processing/raster_input.py"),
         Path("src/eolab_app/processing/ground_area.py"),
+        Path("src/eolab_app/processing/area_coverage.py"),
     ]
     for path in paths:
         assert not {
@@ -99,4 +100,18 @@ def test_shared_job_models_and_storage_do_not_depend_on_clip_models() -> None:
         dependencies = imports(Path("src/eolab_app/processing") / name)
         assert "eolab_app.processing.clip_models" not in dependencies
         assert "eolab_app.processing.aggregate_models" not in dependencies
-        assert not {module for module in dependencies if module.startswith("eolab_app.raster")}
+        assert not {
+            module for module in dependencies if module.startswith("eolab_app.raster")
+        }
+
+
+def test_fractional_mask_is_numerical_and_has_no_geometry_or_service_dependency() -> (
+    None
+):
+    """Raster masks consume oriented coordinates rather than pixel geometries."""
+    dependencies = imports(Path("src/eolab_app/processing/area_coverage.py"))
+    assert not {
+        module
+        for module in dependencies
+        if module.startswith(("eolab_app", "shapely", "rasterio", "pyproj"))
+    }

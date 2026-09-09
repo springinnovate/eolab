@@ -32,11 +32,22 @@ No approximate datum substitution is attempted: pyproj transformers require
 longitudes. See the [Transformer contract](https://pyproj4.github.io/pyproj/stable/api/transformer.html).
 Selections keep the existing WGS84 AOI contract and straight edges in that CRS.
 
-For unrotated EPSG:4326, EPSG:3857 and EPSG:6933 grids, cell edges map to an
-equal-area rectangle. Cached column widths and row heights give cell areas, with
-exact rectangle clipping for a map box. This handles whole-world geographic grids
-without a signed geodesic polygon's half-globe ambiguity. Web Mercator area varies
+For unrotated EPSG:4326, EPSG:3857 and EPSG:6933 grids, a cached vertical stack of
+equal-area row heights and cached column widths give ground hectares per pixel.
+Each processing block slices these same axes and multiplies those weights by its
+fractional AOI coverage and native raster condition/validity masks. Block sizes
+do not change the grid, resolution or area method. Whole-world geographic grids
+have no signed-geodesic-polygon half-globe ambiguity. Web Mercator area varies
 with latitude; a nominal square kilometre near 60° latitude covers about 25 ha.
+
+Polygon masks are numerical. The valid, unioned AOI is projected once and compiled
+into oriented exterior/hole edges. For each row strip, a clipped boundary integral
+evaluated at column edges gives cumulative area; differences give fractional cell
+coverage. Analytic edge crossings identify empty cells without rounding away thin
+slivers. No pixel polygons, per-pixel projection, or GEOS pixel intersections are
+constructed on these grids, even for border pixels. Map rectangles use direct
+row/column clipping. This is mask-and-weight processing, not a coarser raster or
+an average of COG overview values.
 
 Other native cell edges and nonrectangular AOI edges use adaptive densification.
 Quarter, midpoint and three-quarter probes must deviate no more than **0.1 m**
@@ -64,18 +75,21 @@ have no inferred unit, including `100 * areaha(a > 10) / areaha(a == a)`.
 
 The existing 4 GiB decoded-native-work, 65,536-block, 512 MiB estimated-memory,
 15-second planning and 10-minute supervised execution ceilings still apply.
-Area jobs include an additional 128 MiB geometry memory allowance in that same
-admission estimate, and evaluate bounded 64 × 64 tiles. Rectilinear axes use at
+Area jobs include an additional 128 MiB geometry/mask memory allowance in that same
+admission estimate. Mask-and-weight calculations use bounded 256 × 256 expression
+tiles, independently of native TIFF block size; other grids retain bounded
+64 × 64 geometry tiles. Rectilinear axes use at
 most 500,000 cached coordinates. AOI planning has a cumulative 500,000 transformed
 position budget; execution has 4,000,000. Clipped polygon coordinate counts are
 also bounded, and only one clipped polygon is retained at a time.
 
-Whole-raster or rectangular selections on optimized grids need no polygon-cell
-overlays. Other selections conservatively estimate the **entire selected window**
-against a 2,000,000-cell geometry ceiling. This is a count of native raster cells
-in the selection's bounding rectangle, before evaluating the formula. It is not
-a polygon-feature or vertex count. This can reject a large AOI even when
-many of its cells are interior; interior-block optimization is a possible follow-up.
+All selections on supported rectilinear grids use **zero pixel polygons** and
+report `estimatedGeometryCells: 0`. The polygon-cell ceiling therefore does not
+restrict those windows, including large country polygons. Their native-read,
+coordinate, memory, geometry-input and supervised runtime limits still apply.
+Other grids conservatively estimate the **entire selected window** against the
+existing 2,000,000-cell geometry ceiling. The fallback is explicit; it never
+pretends that one latitude-only weight applies to a rotated or unsupported grid.
 Planning estimates do not promise all refinement will fit: execution can still
 stop at its cumulative transformation limit or supervised deadline. Failures ask
 for a smaller area or simpler AOI; they never return sampled area as exact area.
@@ -92,13 +106,15 @@ Owner: **Processing**.
 | Component | Used by | Depends on / coordinates with |
 | --- | --- | --- |
 | `ground_area` | Native aggregate planner/executor | Processing area/policy models; pyproj, Shapely, NumPy, rasterio windows |
+| `area_coverage` | Processing-owned `ground_area` | NumPy and already bounded, oriented AOI coordinates; no projection, pixel geometry, raster reader or service dependency |
 | Expression reducers / aggregate models | Existing validation, plans, worker and responses | Typed grammar, bounded hectare weights, explicit area metadata |
 | Aggregate kernel / service | Existing routes and supervised worker | Authorized native source reader, immutable area snapshot, existing job/artifact storage |
 | Job store | Existing worker claim | Opaque minimum claim protocol; no geometry knowledge |
 | Calculation DOM view / help | Existing browser composition and controller | Public review/results; no histogram, AOI or renderer implementation imports |
 
-New edges are aggregate kernel → Processing-owned `ground_area`, and that module
-→ pyproj/Shapely. Existing model and presentation edges carry additive area
+New internal edges are aggregate kernel → Processing-owned `ground_area`, that
+module → pyproj/Shapely, and `ground_area` → Processing-owned `area_coverage`.
+Existing model and presentation edges carry additive area
 metadata. No sibling implementation edges are added, removed, or redirected; no
 new service, route, queue, mount, or raster-value alignment mechanism is introduced.
 The intentional coupling is the existing immutable source/area contract plus
@@ -128,10 +144,10 @@ count together. One Windows run with Python 3.12, pyproj 3.8.0 and Shapely 2.1.2
 
 | Case | Selected native cells | Polygon-cell estimate | Plan | Execute |
 | --- | ---: | ---: | ---: | ---: |
-| Global 0.25° geographic raster | 1,036,800 | 0 | 0.011 s | 0.245 s |
-| Web Mercator partial box | 141,376 | 0 | 0.018 s | 0.118 s |
-| Polygon AOI with hole | 53,824 | 53,824 | 0.012 s | 0.190 s |
-| Rotated UTM grid | 16,384 | 16,384 | 0.009 s | 2.349 s |
+| Global 0.25° geographic raster | 1,036,800 | 0 | 0.013 s | 0.290 s |
+| Web Mercator partial box | 141,376 | 0 | 0.021 s | 0.148 s |
+| Polygon AOI with hole | 53,824 | 0 | 0.015 s | 0.163 s |
+| Rotated UTM grid | 16,384 | 16,384 | 0.010 s | 3.103 s |
 
 These small synthetic local TIFF timings exclude HTTP, queueing, process startup,
 and remote/storage latency. They demonstrate relative geometry cost, not a
@@ -139,8 +155,14 @@ production throughput guarantee for large native rasters.
 
 The benchmark also includes a nonrectangular, country-scale polygon with a hole
 covering a full **2,000,000-cell** selected window. Its all-valid hectare result is
-checked against independent, densely sampled geodesic integration. A local
-Windows run planned this selection in **0.022 s** and executed the three
-reductions in **6.664 s**, using the existing bounded tiles and default resource
-limits. Complex boundaries and different source grids can require more work;
+checked against independent, densely sampled geodesic integration. Before
+mask-and-weight processing, a local Windows run executed this case in **6.570 s**
+with 2,000,000 pixel polygons. With numerical masks it planned in **0.021 s** and
+executed in **4.861 s**, reporting zero pixel polygons and the same area within
+floating-point precision. These fixtures use small 32 × 32 native TIFF blocks.
+Tests additionally vary native blocks from 32 to 512 and processing tiles from
+17 to 512, verifying unchanged area totals and diagnostic counts. Other tests
+compare the numerical masks against independent cell intersections for concave
+boundaries, holes, multipart AOIs, thin strips, reversed axes and large world
+coordinate offsets. Complex boundaries and different grids can require more work;
 the same coordinate, memory and supervised runtime ceilings still apply.
