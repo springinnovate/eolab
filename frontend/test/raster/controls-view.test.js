@@ -325,6 +325,20 @@ test("RasterControlsView exposes accessible explicit histogram-area choices", ()
     );
 });
 
+test("composed controls display vector sampling without selecting the uploaded AOI", () => {
+    const documentContext = new FakeRasterDocument();
+    const view = new RasterControlsView(documentContext);
+    view.setTemporaryAoiAvailability({ id: "A".repeat(32), filename: "upload.gpkg", selectedDataset: "boundary" });
+    view.setSamplingAreaMode("vector", "Vector selection · Peru");
+    assert.equal(documentContext.querySelector("#use-vector-for-raster").checked, true);
+    assert.equal(documentContext.querySelector("#use-temporary-aoi-for-raster").checked, false);
+    assert.equal(documentContext.querySelector("#raster-histogram").getAttribute("data-sampling-area"), "vector");
+    assert.equal(documentContext.querySelector("#raster-sampling-area-summary").textContent, "Vector selection · Peru");
+    view.setSamplingAreaMode("temporaryAoi", "AOI · upload.gpkg");
+    assert.equal(documentContext.querySelector("#use-vector-for-raster").checked, false);
+    assert.equal(documentContext.querySelector("#use-temporary-aoi-for-raster").checked, true);
+});
+
 test("RasterControlsView clears histogram visibility through its DOM contract", () => {
     const documentContext = new FakeRasterDocument();
     const view = new RasterControlsView(documentContext);

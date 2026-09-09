@@ -915,7 +915,7 @@ export function initializeRasterViewer(
             return {
                 state: session.selectedRasterStatisticsState,
                 statistics: session.selectedRasterStatistics,
-                scope: `Uploaded AOI · ${session.selectedTemporaryAoi.filename}`,
+                scope: `${aoiOriginLabel(session.selectedTemporaryAoi)} · ${session.selectedTemporaryAoi.filename}`,
             };
         }
         if (session.selectedRasterBounds !== null) {
@@ -1589,10 +1589,17 @@ export function initializeRasterViewer(
     }
 
     /**
-     * Synchronize explicit histogram-area choices with lifecycle state.
+     * Describe the origin of an active or invalidated retained polygon area.
      *
-     * @return {void}
+     * @param {Object|null} aoi Retained display identity.
+     * @return {string} User-facing selection origin.
      */
+    function aoiOriginLabel(aoi) {
+        return aoi && (aoi.id === vectorSamplingAoi?.id || aoi.id === invalidVectorSamplingId)
+            ? "Vector selection" : "Uploaded AOI";
+    }
+
+    /** Synchronize histogram-area choices with lifecycle state. @return {void} */
     function renderRasterSamplingAreaControls() {
         onSamplingAreaChange(getSelectedArea());
         const samplingMode = getRasterSamplingAreaMode();
@@ -1617,13 +1624,13 @@ export function initializeRasterViewer(
                 : `${presentedWindowSizeKm} km × ` +
                   `${presentedWindowSizeKm} km map box`
             : presentedMode === "temporaryAoi"
-                ? `AOI · ${presentedAoi.filename}`
+                ? `${aoiOriginLabel(presentedAoi)} · ${presentedAoi.filename}`
                 : presentedMode === "none"
                     ? "No raster selected"
                 : bivariateMode.active
                     ? "Whole overlap"
                     : "Whole raster";
-        const vectorSelected = !!vectorSamplingAoi && presentedAoi?.id === vectorSamplingAoi.id;
+        const vectorSelected = presentedAoi && (presentedAoi.id === vectorSamplingAoi?.id || presentedAoi.id === invalidVectorSamplingId);
         controlsView.setSamplingAreaMode(vectorSelected ? "vector" : presentedMode, samplingLabel);
     }
 
@@ -2566,7 +2573,7 @@ export function initializeRasterViewer(
         )) {
             return session.selectedTemporaryAoi === null
                 ? "Uploaded AOI"
-                : `Uploaded AOI · ${session.selectedTemporaryAoi.filename} · ` +
+                : `${aoiOriginLabel(session.selectedTemporaryAoi)} · ${session.selectedTemporaryAoi.filename} · ` +
                     session.selectedTemporaryAoi.selectedDataset;
         }
         if (scope === "selectedArea" || (
@@ -3030,7 +3037,7 @@ export function initializeRasterViewer(
             : "source-cell window";
         const approximation = statistics.estimated ? "approximate" : "exact";
         const scopeDescription = statistics.scope === "temporaryAoi"
-            ? `Uploaded AOI ${selectedTemporaryAoi?.filename ?? "area"}, ` +
+            ? `${aoiOriginLabel(selectedTemporaryAoi)} ${selectedTemporaryAoi?.filename ?? "area"}, ` +
               `layer ${selectedTemporaryAoi?.selectedDataset ?? "selected"}, ` +
               `${approximation} bounded histogram`
             : statistics.scope === "selectedArea"
@@ -3210,7 +3217,7 @@ export function initializeRasterViewer(
         controlsView.setApplyPercentilesEnabled(false);
         const areaName = selectedTemporaryAoi === null
             ? "Selected-area"
-            : `Uploaded AOI ${selectedTemporaryAoi.filename}, layer ` +
+            : `${aoiOriginLabel(selectedTemporaryAoi)} ${selectedTemporaryAoi.filename}, layer ` +
               selectedTemporaryAoi.selectedDataset;
         controlsView.setStatisticsStatus(
             rasterStatistics === null
@@ -3296,14 +3303,13 @@ export function initializeRasterViewer(
                         ? " The paired distribution uses this shared area."
                         : ""
                 }`;
+        } else if ((bivariateMode.active ? bivariateTemporaryAoi : selectedTemporaryAoi) !== null) {
+            const area = bivariateMode.active ? bivariateTemporaryAoi : selectedTemporaryAoi;
+            nextStatus = `${aoiOriginLabel(area)} selected: ${area.filename}. ` +
+                "Polygon boundaries and holes define the histogram selection.";
         } else if (bivariateMode.active) {
             nextStatus = "Whole-overlap paired distribution selected. " +
                 "Click the map to use one shared WGS 84 window.";
-        } else if (selectedTemporaryAoi !== null) {
-            nextStatus =
-                `Uploaded AOI selected: ${selectedTemporaryAoi.filename}, ` +
-                `layer ${selectedTemporaryAoi.selectedDataset}. Map overlay ` +
-                "visibility does not change this histogram selection.";
         } else {
             nextStatus = "Whole-raster histogram selected. Click the map or " +
                 "use Analysis tools to analyze the map center.";
