@@ -565,3 +565,43 @@ test("a used review is released after acceptance; failed release is recoverable 
     assert.equal(h.controller.record.releasePlanId,null);
     assert.equal(h.requests.filter(r=>r[0]==="submit").length,1);
 });
+
+test("card confirmation reuses only an unexpired plan for the complete reviewed intent", async () => {
+    const changes = [
+        {},
+        { source: {...source,itemId:"other"} },
+        { area:box(80) },
+        { area:{kind:"temporaryAoi",temporaryAoiId:"v".repeat(32)} },
+        { calculations:[{label:"Mean",expression:"mean(a + 1)"}] },
+        { calculations:[{label:"Renamed",expression:"mean(a)"}] },
+        { calculations:[{label:"Mean",expression:"mean(a)"},{label:"Min",expression:"min(a)"}] },
+        { targetChunkPixels:1048576 },
+    ];
+    for (const change of changes) {
+        const h=fixture();h.controller.open();await h.tick(400);
+        const reviewed=h.controller.state.plan;
+        h.controller.executeIntent({...h.controller.intent(),...change});await flush();
+        const reused=Object.keys(change).length===0;
+        assert.equal(h.requests.filter(r=>r[0]==="plan").length,reused?1:2);
+        assert.equal(h.controller.record.pending,null);
+        assert.equal(h.controller.trace.planReused,reused);
+        assert.equal(h.requests.find(r=>r[0]==="submit")[1].planId===reviewed.planId,reused);
+        assert.ok(h.requests.some(r=>r[0]==="discard"&&r[1]===reviewed.planId));
+    }
+    const h=fixture();h.controller.open();await h.tick(400);
+    const expired=h.controller.state.plan;expired.expiresAt="2000-01-01";
+    h.controller.executeIntent(h.controller.intent());await flush();
+    assert.equal(h.requests.filter(r=>r[0]==="plan").length,2);
+    assert.equal(h.controller.trace.planReused,false);
+    assert.ok(h.requests.findIndex(r=>r[0]==="discard"&&r[1]===expired.planId)<h.requests.findIndex(r=>r[0]==="submit"));
+});
+
+test("server rejection of a reused plan does not submit a replacement or accept stale work", async () => {
+    const h=fixture();h.controller.open();await h.tick(400);
+    h.api.submitCalculation=async()=>{throw new ProcessingRequestError("The raster changed. Create a new plan.",409);};
+    h.controller.executeIntent(h.controller.intent());await flush();
+    assert.equal(h.requests.filter(r=>r[0]==="plan").length,1);
+    assert.equal(h.controller.record,null);
+    assert.equal(h.controller.blocked,true);
+    assert.match(h.view.state.message,/raster changed/);
+});

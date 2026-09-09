@@ -101,6 +101,9 @@ test("total wait starts again at explicit confirmation, excluding time reading t
     h.controller.request(card.id,"manual");await flush();assert.equal(card.manualRequired,true);
     h.elapse(60000);h.controller.request(card.id,"manual");await flush();h.elapse(2500);await h.finish();
     assert.equal(card.result.totalWaitSeconds,2.5);
+    assert.equal(h.requests.filter(r=>r[0]==="plan").length,1,"confirmation reuses the reviewed vector-area plan");
+    assert.equal(card.result.stages.planReused,true);
+    assert.equal(card.result.stages.planningSeconds,0);
 });
 
 test("browser stages add to total and distinguish planning from submission and delivery", async()=>{

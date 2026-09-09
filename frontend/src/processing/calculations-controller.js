@@ -290,11 +290,15 @@ export class CalculationsController {
      */
     executeIntent(intent, automatic = false) {
         const snapshot = calculationIntent(intent);
+        // Confirmation belongs to the complete reviewed batch. Keep that plan
+        // on this lane; advance checks expiry and submission reauthorizes it.
+        const plan = this.state.plan && identity(snapshot) === identity(this.intent()) ? this.state.plan : null;
+        if (plan) this.state.plan = null;
         this.invalidate();
         this.validationAbort?.abort();
         this.clock.clearTimeout(this.validationTimer);
         this.validationSequence++;
-        Object.assign(this.state, snapshot, { targetChunkPixels: snapshot.targetChunkPixels ?? null, valid: true, checking: false, manualRequired: false, validation: "", message: "" });
+        Object.assign(this.state, snapshot, { plan, targetChunkPixels: snapshot.targetChunkPixels ?? null, valid: true, checking: false, manualRequired: false, validation: "", message: "" });
         this.queueCalculation(automatic, false);
     }
 
