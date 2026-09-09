@@ -176,7 +176,8 @@ export class SummaryStatisticsView extends CalculationsView {
             this.signatures.area = areaSignature;
         }
         e.area.value = state.areaChoice;
-        e["area-description"].textContent = describeClipArea(state.area);
+        e["area-description"].textContent = state.area?.temporaryAoiId && state.area.temporaryAoiId === state.vectorArea?.id
+            ? `Vector selection · ${state.vectorArea.label}` : describeClipArea(state.area);
         x.auto.checked = state.automatic;
         e.template.disabled = state.statistics.length >= 5;
         x.undo.hidden = !state.undo;

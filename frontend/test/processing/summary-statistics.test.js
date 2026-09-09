@@ -60,6 +60,21 @@ test("opening and tab switching preserve cards and do not run native calculation
     h.controller.setActive(false);h.controller.open();await h.tick();assert.equal(h.submits(),1);
     assert.equal(card.current,true);
 });
+
+test("vector selection reviews exact scan size before submission and invalidates results when removed", async()=>{
+    const h=fixture();await h.open();const card=h.controller.state.statistics[0];
+    const id="V".repeat(32);
+    h.controller.setVectorSamplingArea({id,label:"Countries · 1 of 200 features"});await h.tick();
+    assert.equal(h.submits(),0);
+    h.controller.request(card.id,"manual");await flush();
+    assert.equal(h.submits(),0);assert.equal(card.manualRequired,true);
+    assert.match(h.view.cards.get(card.id).size.textContent,/4 source blocks/);
+    h.controller.request(card.id,"manual");await flush();assert.equal(h.submits(),1);
+    assert.deepEqual(h.controller.engine.record.intent.area,{kind:"temporaryAoi",temporaryAoiId:id});
+    await h.finish();assert.equal(card.current,true);
+    h.controller.invalidateSamplingArea(id);assert.equal(card.current,false);assert.equal(h.controller.state.area,null);
+    assert.equal(h.view.cards.get(card.id).root.classList.contains("is-previous"),true);
+});
 test("a new card shows calculation controls without an empty value, then displays zero and retains previous results", async()=>{
     const h=fixture();await h.open();const card=h.controller.state.statistics[0];
     const row=h.view.cards.get(card.id);
