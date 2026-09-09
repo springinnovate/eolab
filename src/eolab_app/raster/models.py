@@ -188,6 +188,11 @@ class CatalogRasterPairRequest(BaseModel):
         alias="selectedBounds",
     )
 
+    temporary_aoi_id: str | None = Field(
+        default=None, alias="temporaryAoiId", min_length=32, max_length=32,
+        pattern=r"^[A-Za-z0-9_-]{32}$", strict=True,
+    )
+
     @model_validator(mode="after")
     def require_distinct_rasters(self) -> "CatalogRasterPairRequest":
         """Require two different catalog identities for bivariate analysis.
@@ -198,6 +203,8 @@ class CatalogRasterPairRequest(BaseModel):
         Raises:
             ValueError: If X and Y identify the same catalog Item.
         """
+        if self.selected_bounds is not None and self.temporary_aoi_id is not None:
+            raise ValueError("selectedBounds and temporaryAoiId are mutually exclusive")
         if (
             self.x_raster.collection_id == self.y_raster.collection_id
             and self.x_raster.item_id == self.y_raster.item_id
@@ -329,7 +336,8 @@ class RasterPairedStatistics(BaseModel):
         histogram: Fixed 32-by-32 paired histogram with marginals.
     """
 
-    scope: Literal["wholeOverlap", "selectedArea"]
+    scope: Literal["wholeOverlap", "selectedArea", "temporaryAoi"]
+    temporary_aoi_id: str | None = Field(default=None, alias="temporaryAoiId", pattern=r"^[A-Za-z0-9_-]{32}$")
     selected_bounds: Wgs84Bounds | None = Field(alias="selectedBounds")
     reference_grid: Literal["x"] = Field(default="x", alias="referenceGrid")
     resampling: Literal["nearest"] = "nearest"
@@ -363,6 +371,8 @@ class RasterPairedStatistics(BaseModel):
         """
         if (self.scope == "selectedArea") != (self.selected_bounds is not None):
             raise ValueError("paired statistics scope and bounds disagree")
+        if (self.scope == "temporaryAoi") != (self.temporary_aoi_id is not None):
+            raise ValueError("paired statistics scope and AOI disagree")
         if self.source_pixel_count != self.source_width * self.source_height:
             raise ValueError("paired source pixel count is inconsistent")
         if self.sampled_cell_count != self.sample_width * self.sample_height:

@@ -1,19 +1,15 @@
 """Bounded container and geometry validation for temporary uploaded AOIs."""
 
-import json
 import math
 import stat
-from collections.abc import Iterable, Iterator, Sequence
-from numbers import Real
+from collections.abc import Iterable, Sequence
 from pathlib import Path, PurePosixPath
 from time import monotonic
 from typing import Any
 from zipfile import BadZipFile, ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
 import fiona
-from fiona.model import to_dict
-from fiona.transform import transform_geom
-from rasterio.features import is_valid_geom
+from eolab_app.bounded_geometry import GeometryBuilder, GeometryValidationError, MAX_FEATURES
 
 from eolab_app.temporary_aoi.errors import (
     TemporaryAoiTooLargeError,
@@ -27,20 +23,10 @@ MAX_ZIP_ENTRIES = 512
 MAX_ZIP_MEMBER_BYTES = 25 * 1024 * 1024
 MAX_ZIP_EXTRACTED_BYTES = 100 * 1024 * 1024
 MAX_ZIP_COMPRESSION_RATIO = 100.0
-MAX_FEATURES = 10_000
-MAX_COORDINATE_POSITIONS = 100_000
-MAX_BROWSER_GEOMETRY_BYTES = 2 * 1024 * 1024
 MAX_DATASET_CHOICES = 64
-MAX_GEOMETRY_NESTING_DEPTH = 32
 PROCESSING_TIME_SECONDS = 15.0
 SUPPORTED_GEOMETRY_TYPES = {
-    "Point",
-    "MultiPoint",
-    "LineString",
-    "MultiLineString",
-    "Polygon",
-    "MultiPolygon",
-    "GeometryCollection",
+    "Point", "MultiPoint", "LineString", "MultiLineString", "Polygon", "MultiPolygon", "GeometryCollection",
 }
 SHAPEFILE_COMPONENT_EXTENSIONS = {
     ".shp",
@@ -138,9 +124,7 @@ def read_browser_geometry(
         fiona.errors.FionaError: If GDAL cannot read the selected dataset.
     """
     deadline = monotonic() + processing_seconds
-    features: list[dict[str, Any]] = []
-    bounds = [math.inf, math.inf, -math.inf, -math.inf]
-    coordinate_count = 0
+    builder = GeometryBuilder()
     open_options: dict[str, object] = {}
     if choice.layer_name is not None:
         open_options["layer"] = choice.layer_name
@@ -174,57 +158,15 @@ def read_browser_geometry(
                     raise TemporaryAoiValidationError(
                         "AOI features must not contain null geometry"
                     )
-                geometry_mapping = dict(source_geometry.__geo_interface__)
-                transformed = transform_geom(
-                    dataset.crs,
-                    "EPSG:4326",
-                    geometry_mapping,
-                    antimeridian_cutting=False,
-                )
-                transformed_geometry = to_dict(transformed)
-                if (
-                    transformed_geometry.get("type") not in SUPPORTED_GEOMETRY_TYPES
-                    or not is_valid_geom(transformed_geometry)
-                ):
-                    raise TemporaryAoiValidationError(
-                        "AOI contains unsupported or malformed geometry"
-                    )
-                added_count = _merge_geometry_bounds(
-                    transformed_geometry,
-                    bounds,
-                    0,
-                )
-                coordinate_count += added_count
-                if coordinate_count > MAX_COORDINATE_POSITIONS:
-                    raise TemporaryAoiValidationError(
-                        "AOI geometry exceeds the "
-                        f"{MAX_COORDINATE_POSITIONS}-coordinate limit"
-                    )
-                features.append({
-                    "type": "Feature",
-                    "properties": {},
-                    "geometry": transformed_geometry,
-                })
-
-    if not features or not all(math.isfinite(value) for value in bounds):
-        raise TemporaryAoiValidationError("AOI has no finite spatial bounds")
-    feature_collection = {"type": "FeatureCollection", "features": features}
+                try:
+                    builder.add(dict(source_geometry.__geo_interface__), dataset.crs)
+                except GeometryValidationError as error:
+                    raise TemporaryAoiValidationError(str(error)) from error
     try:
-        output_bytes = len(json.dumps(
-            feature_collection,
-            allow_nan=False,
-            separators=(",", ":"),
-        ).encode("utf-8"))
-    except (TypeError, ValueError) as error:
-        raise TemporaryAoiValidationError(
-            "AOI geometry cannot be represented safely in the browser"
-        ) from error
-    if output_bytes > MAX_BROWSER_GEOMETRY_BYTES:
-        raise TemporaryAoiValidationError(
-            "AOI browser geometry exceeds the "
-            f"{MAX_BROWSER_GEOMETRY_BYTES}-byte limit"
-        )
-    return feature_collection, (bounds[0], bounds[1], bounds[2], bounds[3])
+        return builder.finish()
+    except GeometryValidationError as error:
+        raise TemporaryAoiValidationError(str(error)) from error
+
 
 
 def _discover_geopackage_candidates(
@@ -575,80 +517,3 @@ def _validate_spatial_metadata(source_path: Path, layer_name: str | None) -> Non
             or bounds[1] > bounds[3]
         ):
             raise ValueError("dataset has invalid finite bounds")
-
-
-def _merge_geometry_bounds(
-    geometry: dict[str, Any],
-    bounds: list[float],
-    depth: int,
-) -> int:
-    """Validate WGS 84 positions and merge them into aggregate bounds.
-
-    Args:
-        geometry: Transformed GeoJSON geometry mapping.
-        bounds: Mutable west, south, east, and north aggregate.
-        depth: Current GeometryCollection nesting depth.
-
-    Returns:
-        Number of coordinate positions contained in the geometry.
-
-    Raises:
-        TemporaryAoiValidationError: If positions are non-finite, outside the
-            canonical world, malformed, or absent.
-    """
-    if depth > MAX_GEOMETRY_NESTING_DEPTH:
-        raise TemporaryAoiValidationError(
-            "AOI geometry exceeds the supported nesting depth"
-        )
-    if geometry.get("type") == "GeometryCollection":
-        geometries = geometry.get("geometries")
-        if not isinstance(geometries, Sequence) or not geometries:
-            raise TemporaryAoiValidationError(
-                "AOI contains an empty or malformed GeometryCollection"
-            )
-        count = 0
-        for child in geometries:
-            if not isinstance(child, dict):
-                child = dict(child)
-            count += _merge_geometry_bounds(child, bounds, depth + 1)
-        return count
-    coordinates = geometry.get("coordinates")
-    positions = tuple(_iter_positions(coordinates))
-    if not positions:
-        raise TemporaryAoiValidationError("AOI contains empty geometry")
-    for longitude, latitude in positions:
-        if not -180 <= longitude <= 180 or not -90 <= latitude <= 90:
-            raise TemporaryAoiValidationError(
-                "AOI geometry is outside canonical WGS 84 bounds"
-            )
-        bounds[0] = min(bounds[0], longitude)
-        bounds[1] = min(bounds[1], latitude)
-        bounds[2] = max(bounds[2], longitude)
-        bounds[3] = max(bounds[3], latitude)
-    return len(positions)
-
-
-def _iter_positions(value: Any) -> Iterator[tuple[float, float]]:
-    """Yield finite longitude/latitude pairs from nested coordinates.
-
-    Args:
-        value: GeoJSON coordinates at any nesting depth.
-
-    Yields:
-        Floating-point longitude and latitude positions.
-
-    Raises:
-        TemporaryAoiValidationError: If coordinate nesting or ordinates are
-            malformed or non-finite.
-    """
-    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
-        raise TemporaryAoiValidationError("AOI has malformed coordinates")
-    if value and all(isinstance(ordinate, Real) for ordinate in value):
-        if len(value) < 2 or not all(math.isfinite(float(item)) for item in value):
-            raise TemporaryAoiValidationError(
-                "AOI coordinates must contain finite positions"
-            )
-        yield float(value[0]), float(value[1])
-        return
-    for child in value:
-        yield from _iter_positions(child)
