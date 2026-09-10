@@ -1,0 +1,174 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>org.springinnovate.eolab</groupId>
+  <artifactId>imagen-nodata-fix</artifactId>
+  <version>1.0.0</version>
+
+  <properties>
+    <maven.compiler.release>17</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <imagen.version>0.9.2</imagen.version>
+    <patch.skip>false</patch.skip>
+  </properties>
+
+  <repositories>
+    <repository>
+      <id>osgeo-release</id>
+      <url>https://repo.osgeo.org/repository/release/</url>
+    </repository>
+  </repositories>
+  <dependencies>
+    <dependency>
+      <groupId>org.eclipse.imagen</groupId><artifactId>scale</artifactId>
+      <version>${imagen.version}</version><scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.eclipse.imagen</groupId><artifactId>scale2</artifactId>
+      <version>${imagen.version}</version><scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.geotools</groupId><artifactId>gt-render</artifactId>
+      <version>35.1</version><scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId>
+      <version>5.11.4</version><scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <sourceDirectory>${project.build.directory}/generated-sources</sourceDirectory>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId><artifactId>maven-dependency-plugin</artifactId>
+        <version>3.8.1</version>
+        <executions>
+          <execution>
+            <id>upstream-sources</id><phase>generate-sources</phase><goals><goal>unpack</goal></goals>
+            <configuration>
+              <artifactItems>
+                <artifactItem>
+                  <groupId>org.eclipse.imagen</groupId><artifactId>scale</artifactId>
+                  <version>${imagen.version}</version><classifier>sources</classifier>
+                  <includes>**/ScaleCRIF.java,**/ScaleBilinearOpImage.java</includes>
+                </artifactItem>
+                <artifactItem>
+                  <groupId>org.eclipse.imagen</groupId><artifactId>scale2</artifactId>
+                  <version>${imagen.version}</version><classifier>sources</classifier>
+                  <includes>**/Scale2CRIF.java,**/Scale2BilinearOpImage.java</includes>
+                </artifactItem>
+              </artifactItems>
+              <outputDirectory>${project.build.sourceDirectory}</outputDirectory>
+            </configuration>
+          </execution>
+          <execution>
+            <id>upstream-jars</id><phase>generate-sources</phase><goals><goal>copy</goal></goals>
+            <configuration>
+              <artifactItems>
+                <artifactItem>
+                  <groupId>org.eclipse.imagen</groupId><artifactId>scale</artifactId>
+                  <version>${imagen.version}</version>
+                </artifactItem>
+                <artifactItem>
+                  <groupId>org.eclipse.imagen</groupId><artifactId>scale2</artifactId>
+                  <version>${imagen.version}</version>
+                </artifactItem>
+              </artifactItems>
+              <outputDirectory>${project.build.directory}/upstream</outputDirectory>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId><artifactId>maven-antrun-plugin</artifactId>
+        <version>3.1.0</version>
+        <executions>
+          <execution>
+            <id>preserve-unsigned-minimum</id><phase>process-sources</phase><goals><goal>run</goal></goals>
+            <configuration>
+              <skip>${patch.skip}</skip>
+              <target>
+                <checksum algorithm="SHA-256" file="${settings.localRepository}/org/eclipse/imagen/scale/${imagen.version}/scale-${imagen.version}-sources.jar"
+                          property="b4e2b8b2affccf89b298f106da0194013bf5968ea4a344c2961781369cf8a1ca" verifyproperty="scale.source.matches"/>
+                <checksum algorithm="SHA-256" file="${settings.localRepository}/org/eclipse/imagen/scale2/${imagen.version}/scale2-${imagen.version}-sources.jar"
+                          property="50ef73fc9706b462828d6b7923366cdb7094e0e4252e78b39ac904dab055dbcd" verifyproperty="scale2.source.matches"/>
+                <fail message="ImageN sources changed; re-audit the unsigned NoData patch.">
+                  <condition><not><and>
+                    <istrue value="${scale.source.matches}"/>
+                    <istrue value="${scale2.source.matches}"/>
+                  </and></not></condition>
+                </fail>
+                <!-- Restore pristine files on incremental builds before applying the patch. -->
+                <unzip src="${settings.localRepository}/org/eclipse/imagen/scale/${imagen.version}/scale-${imagen.version}-sources.jar"
+                       dest="${project.build.sourceDirectory}" overwrite="true">
+                  <patternset includes="**/ScaleCRIF.java,**/ScaleBilinearOpImage.java"/>
+                </unzip>
+                <unzip src="${settings.localRepository}/org/eclipse/imagen/scale2/${imagen.version}/scale2-${imagen.version}-sources.jar"
+                       dest="${project.build.sourceDirectory}" overwrite="true">
+                  <patternset includes="**/Scale2CRIF.java,**/Scale2BilinearOpImage.java"/>
+                </unzip>
+                <!-- RangeUshort exposes Short for binary compatibility. Interpret its bits
+                     as unsigned only for USHORT; signed negative sentinels stay negative. -->
+                <replace dir="${project.build.sourceDirectory}" includes="**/*CRIF.java"
+                         token="nodata.getMin().doubleValue()" failOnNoReplacements="true"
+                         value="(nodata.getDataType() == Range.DataType.USHORT ? Short.toUnsignedInt(nodata.getMin().shortValue()) : nodata.getMin().doubleValue())"/>
+                <replace dir="${project.build.sourceDirectory}" includes="**/*BilinearOpImage.java"
+                         token="nod.getMin().doubleValue()" failOnNoReplacements="true"
+                         value="(nod.getDataType() == Range.DataType.USHORT ? Short.toUnsignedInt(nod.getMin().shortValue()) : nod.getMin().doubleValue())"/>
+              </target>
+            </configuration>
+          </execution>
+          <execution>
+            <id>replace-classes-in-original-jars</id><phase>package</phase><goals><goal>run</goal></goals>
+            <configuration>
+              <target>
+                <mkdir dir="${project.build.directory}/patched"/>
+                <copy todir="${project.build.directory}/patched" overwrite="true">
+                  <fileset dir="${project.build.directory}/upstream" includes="*.jar"/>
+                </copy>
+                <!-- Keep all other upstream classes, licenses, manifests and registry resources. -->
+                <zip destfile="${project.build.directory}/patched/scale-${imagen.version}.jar" update="true">
+                  <fileset dir="${project.build.outputDirectory}" includes="**/ScaleCRIF*.class,**/ScaleBilinearOpImage*.class"/>
+                </zip>
+                <zip destfile="${project.build.directory}/patched/scale2-${imagen.version}.jar" update="true">
+                  <fileset dir="${project.build.outputDirectory}" includes="**/Scale2CRIF*.class,**/Scale2BilinearOpImage*.class"/>
+                </zip>
+              </target>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId><artifactId>maven-compiler-plugin</artifactId>
+        <version>3.13.0</version>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId>
+        <version>3.5.2</version>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId><artifactId>maven-failsafe-plugin</artifactId>
+        <version>3.5.2</version>
+        <executions>
+          <execution><goals><goal>integration-test</goal><goal>verify</goal></goals></execution>
+        </executions>
+        <configuration>
+          <!-- Re-run against the actual replacement jars, without loose patched classes. -->
+          <includes><include>**/ScaleNoDataTest.java</include></includes>
+          <classesDirectory>${project.build.directory}/empty</classesDirectory>
+          <classpathDependencyExcludes>
+            <classpathDependencyExclude>org.eclipse.imagen:scale</classpathDependencyExclude>
+            <classpathDependencyExclude>org.eclipse.imagen:scale2</classpathDependencyExclude>
+          </classpathDependencyExcludes>
+          <additionalClasspathElements>
+            <additionalClasspathElement>${project.build.directory}/patched/scale-${imagen.version}.jar</additionalClasspathElement>
+            <additionalClasspathElement>${project.build.directory}/patched/scale2-${imagen.version}.jar</additionalClasspathElement>
+          </additionalClasspathElements>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>

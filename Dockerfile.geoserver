@@ -10,6 +10,13 @@ COPY tests/fixtures/vectors/ /tests/fixtures/vectors/
 RUN mvn --batch-mode --no-transfer-progress package
 
 
+FROM maven:3.9.11-eclipse-temurin-17@sha256:e4a7ace3dc0d645ed97f8d9ad0b0d3f0b14fa8d150138f27f116d7105a639b82 AS imagen-nodata-builder
+
+WORKDIR /build
+COPY geoserver/imagen-nodata-fix/ ./
+RUN mvn --batch-mode --no-transfer-progress clean verify
+
+
 FROM docker.osgeo.org/geoserver:3.0.1@sha256:7cb827ba3f6d9fc04a6647fc0cfa6c254fc642407f0d99281fdf026d2540b558
 
 ADD --checksum=sha256:a95983fd96e865d2bcdf911cc500e7c82808c27ab9fd226bf96732b6c3d8c46e \
@@ -31,6 +38,16 @@ RUN /usr/local/bin/require-geoserver-vector-datastores
 
 COPY --from=reader-assessment-builder --chmod=0444 \
     /build/target/geoserver-reader-assessment-1.0.0.jar \
+    /usr/local/tomcat/webapps/geoserver/WEB-INF/lib/
+
+# Refuse to patch a different upstream binary after a future base-image update.
+RUN cd /usr/local/tomcat/webapps/geoserver/WEB-INF/lib \
+    && echo 'c4ee768025d2462981bd8da5d348e65042eb1e0a66fbc9652848eb2756a25d21  scale-0.9.2.jar' | sha256sum -c - \
+    && echo '4383052f86b195eaccb7019df0d8a6e45d24f5a3a7c25e954ee04580650b1af6  scale2-0.9.2.jar' | sha256sum -c -
+
+COPY --from=imagen-nodata-builder --chmod=0444 \
+    /build/target/patched/scale-0.9.2.jar \
+    /build/target/patched/scale2-0.9.2.jar \
     /usr/local/tomcat/webapps/geoserver/WEB-INF/lib/
 
 COPY --chmod=0444 geoserver/jmx-exporter.yml \
