@@ -17,6 +17,7 @@ from eolab_app.rendering.geoserver import (
     GEOSERVER_ERROR_EXCERPT_LIMIT,
     GEOSERVER_WORKSPACE_NAME,
     GeoServerPublicationGateway,
+    geoserver_layer_path,
     sanitize_geoserver_error_excerpt,
 )
 from eolab_app.rendering.geowebcache import GeoWebCacheLayerConfigurator
@@ -174,7 +175,7 @@ class GeoServerRasterPublisher:
         )
         layer_exists = await self._resource_exists(
             "inspect raster layer",
-            f"{self._layer_url(resource_name)}.json?quietOnNotFound=true",
+            f"{geoserver_layer_path(resource_name)}.json?quietOnNotFound=true",
         )
         return GeoServerPublicationState(
             workspace_exists,
@@ -331,7 +332,7 @@ class GeoServerRasterPublisher:
         await self._request(
             "assign raster style",
             "PUT",
-            f"{self._layer_url(resource_name)}.xml",
+            f"{geoserver_layer_path(resource_name)}.xml",
             accepted_statuses=frozenset({200}),
             content=(
                 "<layer><defaultStyle>"
@@ -374,25 +375,6 @@ class GeoServerRasterPublisher:
             accepted_statuses,
             **request_arguments,
         )
-
-    def _response_error(
-        self,
-        operation: str,
-        response: httpx2.Response,
-    ) -> RasterPublicationError:
-        """Classify, log, and return one rejected GeoServer response.
-
-        Args:
-            operation: Stable diagnostic name for the failed REST operation.
-            response: GeoServer response outside the accepted status contract.
-
-        Returns:
-            Browser-safe categorized publication error for the caller to raise.
-        """
-        error = self._gateway.response_error(operation, response)
-        if not isinstance(error, RasterPublicationError):
-            raise TypeError("Raster GeoServer gateway returned the wrong error type")
-        return error
 
     @staticmethod
     def _classify_response_failure(
@@ -583,18 +565,4 @@ class GeoServerRasterPublisher:
         return (
             f"{cls._coverage_store_url(resource_name)}/coverages/"
             f"{resource_name}"
-        )
-
-    @staticmethod
-    def _layer_url(resource_name: str) -> str:
-        """Build the workspace-relative layer REST path.
-
-        Args:
-            resource_name: Stable GeoServer layer name.
-
-        Returns:
-            Path below the configured GeoServer REST endpoint.
-        """
-        return (
-            f"/workspaces/{GEOSERVER_WORKSPACE_NAME}/layers/{resource_name}"
         )
