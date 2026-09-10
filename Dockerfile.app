@@ -1,4 +1,4 @@
-FROM alpine:3.21 AS versioner
+FROM alpine:3.21.7@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d AS versioner
 
 ARG SOURCE_COMMIT
 
@@ -19,7 +19,7 @@ RUN if [ "$SOURCE_COMMIT" = "Version cannot be determined outside a Coolify depl
     && test -s /version
 
 
-FROM node:22-alpine AS frontend-builder
+FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32 AS frontend-builder
 
 WORKDIR /build/frontend
 
@@ -27,16 +27,19 @@ COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 
 COPY frontend/ ./
-RUN npm run build
+RUN npm run build \
+    && (node --version; npm --version) > /frontend-build-versions.txt
 
 
-FROM python:3.12-slim AS runtime
+FROM python:3.12.14-slim-trixie@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     GDAL_DISABLE_READDIR_ON_OPEN=TRUE
 
 WORKDIR /app
+
+RUN python -c "import platform, sys; sys.exit(0 if platform.machine() == 'x86_64' else 'Reviewed application wheels require Linux amd64')"
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends libexpat1 \
@@ -45,15 +48,26 @@ RUN apt-get update \
 RUN addgroup --system eolab \
     && adduser --system --ingroup eolab --home /app eolab
 
+COPY deployment/application-*-requirements.txt Dockerfile.app /app/build-inputs/
+COPY deployment/application-build-report.py /usr/local/bin/application-build-report.py
+RUN python -m pip install --no-cache-dir --only-binary=:all: --require-hashes \
+        -r /app/build-inputs/application-build-requirements.txt \
+    && python -m pip install --no-cache-dir --only-binary=:all: --require-hashes \
+        -r /app/build-inputs/application-runtime-requirements.txt
+
 COPY pyproject.toml README.md LICENSE ./
 COPY src/ ./src/
 COPY --chmod=0555 deployment/require-read-only-scan-source.sh \
     /usr/local/bin/require-read-only-scan-source
 COPY --from=frontend-builder /build/frontend/dist/ ./src/eolab_app/static/
+COPY --from=frontend-builder /frontend-build-versions.txt /app/build-inputs/
 COPY --from=versioner /version /app/version
 
-RUN pip install --no-cache-dir . \
+RUN python -m pip install --no-cache-dir --no-index --no-build-isolation \
+        --check-build-dependencies --no-deps . \
+    && python -m pip check \
     && python -c "import fiona; import rasterio; assert 'ESRI Shapefile' in fiona.supported_drivers" \
+    && python /usr/local/bin/application-build-report.py > /app/build-environment.json \
     && mkdir -p /processing-data \
     && chown -R eolab:eolab /app /processing-data
 
