@@ -5,9 +5,7 @@ from dataclasses import dataclass
 
 import numpy
 import rasterio
-from affine import TransformNotInvertibleError
 from rasterio.enums import Resampling
-from rasterio.warp import transform as warp_transform
 from rasterio.windows import Window
 
 from eolab_app.raster.source_contract import (
@@ -489,108 +487,6 @@ def read_planned_sample_grid_from_overview(
     return numpy.ma.array(values, mask=mask)
 
 
-def _projected_sample_grid_dimensions(
-    maximum_dimension: int,
-    projected_bounds: tuple[float, float, float, float],
-) -> tuple[int, int]:
-    """Fit the selected maximum edge to a projected map rectangle's aspect.
-
-    Args:
-        maximum_dimension: Positive server-owned grid edge resolution.
-        projected_bounds: Ordered finite EPSG:3857 map rectangle.
-
-    Returns:
-        Positive height and width whose longest edge equals the selected
-        resolution and whose shorter edge follows the rectangle aspect ratio.
-    """
-    dimension = _odd_dimension(maximum_dimension)
-    west, south, east, north = projected_bounds
-    projected_width = east - west
-    projected_height = north - south
-    if projected_width >= projected_height:
-        return (
-            max(1, round(dimension * projected_height / projected_width)),
-            dimension,
-        )
-    return (
-        dimension,
-        max(1, round(dimension * projected_width / projected_height)),
-    )
-
-
-def _projected_cell_positions(
-    dataset: rasterio.io.DatasetReader,
-    projected_bounds: tuple[float, float, float, float],
-    sample_grid_width: int,
-    sample_grid_height: int,
-) -> tuple[tuple[SourcePosition, ...], ...]:
-    """Transform map-cell centers into honest source-pixel positions.
-
-    Positions outside a rotated/skewed raster remain absent instead of being
-    clamped to an edge pixel.
-
-    Args:
-        dataset: Open source with a valid CRS and invertible affine transform.
-        projected_bounds: Ordered EPSG:3857 sampling rectangle.
-        sample_grid_width: Positive sample-grid width in map-aligned cells.
-        sample_grid_height: Positive sample-grid height in map-aligned cells.
-
-    Returns:
-        One row-major source position for every map cell; cells outside the
-        raster contain an empty tuple.
-
-    Raises:
-        ValueError: If transformation yields a non-finite position or the
-            source affine transform is not invertible.
-        rasterio.errors.RasterioError: If CRS transformation fails.
-    """
-    west, south, east, north = projected_bounds
-    cell_width = (east - west) / sample_grid_width
-    cell_height = (north - south) / sample_grid_height
-    row_fraction, column_fraction = SAMPLE_GRID_CENTER_OFFSETS[0]
-    projected_x: list[float] = []
-    projected_y: list[float] = []
-    for sample_grid_row in range(sample_grid_height):
-        cell_north = north - sample_grid_row * cell_height
-        for sample_grid_column in range(sample_grid_width):
-            cell_west = west + sample_grid_column * cell_width
-            projected_x.append(cell_west + column_fraction * cell_width)
-            projected_y.append(cell_north - row_fraction * cell_height)
-
-    source_x, source_y = warp_transform(
-        "EPSG:3857",
-        dataset.crs,
-        projected_x,
-        projected_y,
-    )
-    try:
-        inverse_transform = ~dataset.transform
-    except TransformNotInvertibleError:
-        raise ValueError("Sampled raster affine transform is not invertible") from None
-    transformed_positions: list[SourcePosition | None] = []
-    for x, y in zip(source_x, source_y, strict=True):
-        if not math.isfinite(x) or not math.isfinite(y):
-            raise ValueError("Sampled raster position transformation is non-finite")
-        column_position, row_position = inverse_transform * (x, y)
-        if not math.isfinite(column_position) or not math.isfinite(row_position):
-            raise ValueError("Sampled raster pixel transformation is non-finite")
-        row = math.floor(row_position)
-        column = math.floor(column_position)
-        transformed_positions.append(
-            (row, column)
-            if 0 <= row < dataset.height and 0 <= column < dataset.width
-            else None
-        )
-
-    cells: list[tuple[SourcePosition, ...]] = []
-    for position in transformed_positions:
-        if position is None:
-            cells.append(())
-        else:
-            cells.append((position,))
-    return tuple(cells)
-
-
 def _block_index(
     position: SourcePosition,
     block_shape: tuple[int, int],
@@ -609,79 +505,14 @@ def _block_index(
     return row // block_height, column // block_width
 
 
-def _plan_for_dimension(
-    dataset: rasterio.io.DatasetReader,
-    maximum_dimension: int,
-    projected_bounds: tuple[float, float, float, float] | None,
-) -> SampleGridPlan:
-    """Build one candidate plan and calculate its exact native-block cost.
-
-    Args:
-        dataset: Open one-band source raster.
-        maximum_dimension: Maximum sample-grid edge for this candidate.
-        projected_bounds: Optional EPSG:3857 map rectangle. ``None`` retains
-            the direct source-grid planner used by lower-level callers.
-
-    Returns:
-        Candidate plan with unique block indexes and decoded-byte cost.
-
-    Raises:
-        ValueError: If a projected position is invalid or the source affine
-            transform is not invertible.
-        rasterio.errors.RasterioError: If CRS transformation fails.
-    """
-    if projected_bounds is None:
-        sample_grid_height, sample_grid_width = _sample_grid_dimensions(
-            dataset.width,
-            dataset.height,
-            maximum_dimension,
-        )
-        positions = _cell_positions(
-            dataset.width,
-            dataset.height,
-            sample_grid_width,
-            sample_grid_height,
-        )
-    else:
-        sample_grid_height, sample_grid_width = _projected_sample_grid_dimensions(
-            maximum_dimension,
-            projected_bounds,
-        )
-        positions = _projected_cell_positions(
-            dataset,
-            projected_bounds,
-            sample_grid_width,
-            sample_grid_height,
-        )
-    block_shape = tuple(int(value) for value in dataset.block_shapes[0])
-    block_indexes = tuple(sorted({
-        _block_index(position, block_shape)
-        for cell in positions
-        for position in cell
-    }))
-    decoded_source_bytes = decoded_source_bytes_for_blocks(
-        dataset,
-        block_indexes,
-    )
-    return SampleGridPlan(
-        width=sample_grid_width,
-        height=sample_grid_height,
-        cell_positions=positions,
-        block_indexes=block_indexes,
-        decoded_source_bytes=decoded_source_bytes,
-        points_per_cell=SAMPLE_GRID_MAX_POINTS_PER_CELL,
-    )
-
-
 def plan_source_window_sample_grid(
     dataset: rasterio.io.DatasetReader,
     source_window: Window,
 ) -> SampleGridPlan:
     """Plan a fixed center grid inside one bounded source-pixel window.
 
-    This is the rendering-independent sibling of the projected map-grid
-    planner. It uses the same native-block and decoded-work ceilings while
-    retaining source-window aspect ratio.
+    The grid retains source-window aspect ratio and satisfies the fixed
+    native-block and decoded-work ceilings before any source reads.
 
     Args:
         dataset: Open structurally authorized one-band raster.
@@ -735,57 +566,6 @@ def plan_source_window_sample_grid(
         sample_height,
         positions,
     )
-
-
-def plan_sample_grid(
-    dataset: rasterio.io.DatasetReader,
-    projected_bounds: tuple[float, float, float, float] | None = None,
-) -> SampleGridPlan:
-    """Plan the fixed 127-longest-edge center grid before source reads.
-
-    Args:
-        dataset: Open structurally authorized one-band raster.
-        projected_bounds: Optional ordered EPSG:3857 target rectangle.
-
-    Returns:
-        Fixed longest-edge grid whose unique native blocks and total
-        decoded work stay within the fixed public limits.
-
-    Raises:
-        ValueError: If the raster violates the sample-grid contract or the fixed grid
-            exceeds a source-work limit.
-        rasterio.errors.RasterioError: If CRS transformation fails.
-    """
-    require_bounded_source_structure(dataset)
-    if projected_bounds is not None and not (
-        all(math.isfinite(value) for value in projected_bounds)
-        and projected_bounds[0] < projected_bounds[2]
-        and projected_bounds[1] < projected_bounds[3]
-    ):
-        raise ValueError("Sampled raster projected bounds are invalid")
-
-    dimension = _odd_dimension(
-        SAMPLE_GRID_MAX_DIMENSION
-        if projected_bounds is not None
-        else min(SAMPLE_GRID_MAX_DIMENSION, max(dataset.width, dataset.height))
-    )
-    plan = _plan_for_dimension(dataset, dimension, projected_bounds)
-    block_count = len(plan.block_indexes)
-    if block_count > SAMPLE_GRID_MAX_SOURCE_BLOCK_READS:
-        raise ValueError(
-            f"The selected {plan.width} by {plan.height} sample grid requires "
-            f"{block_count} native source blocks; the fixed limit is "
-            f"{SAMPLE_GRID_MAX_SOURCE_BLOCK_READS}. Zoom farther into the "
-            "raster."
-        )
-    if plan.decoded_source_bytes > SAMPLE_GRID_MAX_DECODED_SOURCE_BYTES:
-        raise ValueError(
-            f"The selected {plan.width} by {plan.height} sample grid requires "
-            f"{plan.decoded_source_bytes} decoded source bytes; the fixed "
-            f"limit is {SAMPLE_GRID_MAX_DECODED_SOURCE_BYTES}. Zoom farther "
-            "into the raster."
-        )
-    return plan
 
 
 def _finite_block_value(
@@ -957,33 +737,6 @@ def read_planned_sample_grid(
         values[sample_grid_row, sample_grid_column] = selected
         mask[sample_grid_row, sample_grid_column] = False
     return numpy.ma.array(values, mask=mask)
-
-
-def read_sample_grid(
-    dataset: rasterio.io.DatasetReader,
-    projected_bounds: tuple[float, float, float, float] | None = None,
-    cancellation_requested: RasterReadCancellationCheck | None = None,
-) -> tuple[numpy.ma.MaskedArray, SampleGridPlan]:
-    """Read a projected or whole-source fixed center grid within work bounds.
-
-    Args:
-        dataset: Open structurally authorized one-band raster.
-        projected_bounds: Optional EPSG:3857 target rectangle.
-        cancellation_requested: Optional thread-safe obsolescence predicate.
-
-    Returns:
-        Masked sample-grid values and the exact bounded plan that produced them.
-
-    Raises:
-        ValueError: If planning cannot satisfy the fixed source-read contract.
-        RasterReadCancelled: If every request waiter disconnects.
-        rasterio.errors.RasterioError: If a bounded native-block read fails.
-    """
-    plan = plan_sample_grid(dataset, projected_bounds)
-    return (
-        read_planned_sample_grid(dataset, plan, cancellation_requested),
-        plan,
-    )
 
 
 def read_source_window_sample_grid(
