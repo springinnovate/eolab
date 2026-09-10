@@ -368,6 +368,20 @@ def test_clean_publication_creates_verifies_and_styles_exactly_once(
     assert create_requests[0].url.params["configure"] == "first"
     assert create_requests[0].url.params["coverageName"] == RESOURCE_NAME
     assert len(style_requests) == 1
+    assert str(style_requests[0].url) == (
+        "http://geoserver:8080/geoserver/rest/workspaces/eolab/"
+        f"layers/{RESOURCE_NAME}.xml"
+    )
+    layer_inspections = [
+        str(request.url)
+        for request in scenario.requests
+        if request.url.path.endswith(f"/layers/{RESOURCE_NAME}.json")
+    ]
+    expected_layer_url = (
+        "http://geoserver:8080/geoserver/rest/workspaces/eolab/"
+        f"layers/{RESOURCE_NAME}.json?quietOnNotFound=true"
+    )
+    assert layer_inspections == [expected_layer_url, expected_layer_url]
     assert b"<name>dynamic-raster</name>" in style_requests[0].content
     assert scenario.store_exists
     assert scenario.coverage_exists
@@ -486,13 +500,29 @@ def test_reader_failure_is_categorized_logged_sanitized_and_rolled_back(
     assert "/scan-source/private/raster.tif" not in log_text
 
 
+@pytest.mark.parametrize(
+    ("status", "category"),
+    [
+        (201, "upstream_failure"),
+        (204, "upstream_failure"),
+        (401, "authentication"),
+        (403, "authentication"),
+        (500, "upstream_failure"),
+    ],
+)
 def test_style_failure_preserves_publication_and_retry_only_restyles(
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    status: int,
+    category: str,
 ) -> None:
     """Retain healthy resources when styling fails and converge on retry.
 
     Args:
         tmp_path: Temporary directory containing the controlled source.
+        caplog: Captured publication diagnostics.
+        status: Rejected style-assignment HTTP status, including other 2xx.
+        category: Expected public failure category.
 
     Returns:
         None.
@@ -500,13 +530,24 @@ def test_style_failure_preserves_publication_and_retry_only_restyles(
     source_path = tmp_path / "raster.tif"
     source_path.write_bytes(b"raster")
     scenario = _GeoServerScenario(
-        style_responses=[(500, b"style update failed"), (200, b"")]
+        style_responses=[
+            (
+                status,
+                b"style update failed password=style-secret\n"
+                b"file:///private/raster.tif",
+            ),
+            (200, b""),
+        ]
     )
 
     with pytest.raises(RasterPublicationError) as raised:
         asyncio.run(_publish_adapter(scenario, source_path))
 
-    assert raised.value.category == "upstream_failure"
+    assert raised.value.category == category
+    assert "operation=assign raster style" in caplog.text
+    assert f"status={status}" in caplog.text
+    assert "style-secret" not in caplog.text
+    assert "/private/raster.tif" not in caplog.text
     assert scenario.store_exists
     assert scenario.coverage_exists
     assert scenario.layer_exists
