@@ -10,6 +10,13 @@ Draft edits and closing the panel do not submit analysis. Cancel is available
 during selection and calculation. If all statistic cards have been removed, the
 action opens the statistic editor without inventing a calculation.
 
+Alternatively, choose **Use these features** directly. If selection review is
+shown, finish with **Continue with these features** (including the near-global
+confirmation when applicable). Accepting the features while Summarize is active
+immediately runs configured valid statistics, even with automatic updates off;
+no additional **Calculate** click is needed. Small selections run as soon as
+selection completes. Accepting features in Explore does not implicitly calculate.
+
 The analysis predicate is independent of the map's rendering filter and is shown
 beside the selected sampling layer. Ordinary map filtering retains its existing
 debounce and **Apply filter** action, without implicitly starting analysis.
@@ -29,14 +36,15 @@ policies and may report different sample counts. Exact summaries retain their
 native-resolution processing limits. An explicit Calculate action plans and
 submits once; the redundant vector-specific review conversion has been removed.
 
-In Explore, an unfiltered selection of multiple features or an envelope over 5 million km²
+For direct **Use these features** in either placement, an unfiltered selection
+of multiple features or an envelope over 5 million km²
 requires review with an **Edit filter** action. An envelope over 100 million km²
 requires a second explicit near-global confirmation. These are conservative
 envelope checks, not estimates of polygon area or runtime. Confirmation does not
 override geometry or processing limits. Filter/source changes, layer removal,
 expiry and clearing invalidate the snapshot and obsolete pending work. A fresh
 selection uses the explicit filter action in Summarize or **Use these features**
-in Explore. Summarize's explicit action skips envelope confirmations while keeping
+in either placement. Summarize's filter action skips envelope confirmations while keeping
 all server limits. Superseded bounded extraction stays connected until it returns
 an opaque identity, which is removed before the next extraction. Failed removal
 retains the identity for retry. Obsolete Processing plans and jobs drain through

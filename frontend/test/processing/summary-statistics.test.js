@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
+import { VectorSamplingController } from "../../src/vector/sampling.js";
 import { SummaryStatisticsController, canAutomaticallyCalculate } from "../../src/processing/summary-statistics-controller.js";
 import { SummaryStatisticsView } from "../../src/processing/summary-statistics-view.js";
 import { CalculationSessionStorage } from "../../src/processing/calculation-session.js";
@@ -59,6 +61,78 @@ function fixture(overrides = {}, data = new Map(), browserContext = {}) {
 
 /** Read text throughout a fake DOM tree. @param {Object} node Test node. @return {string} Descendant text. */
 function visibleText(node) { return [node.textContent, ...node.children.map(visibleText)].join(" "); }
+
+/** Connect real selection and summary controllers through the production composition callback.
+ * @param {Object} h Summary workflow harness.
+ * @param {number[]} bbox Authoritative selection envelope.
+ * @return {Object} Bound selection view and lifecycle cleanup.
+ */
+function composedVectorSelection(h, bbox) {
+    const main = readFileSync(new URL("../../src/main.js", import.meta.url), "utf8");
+    const start = main.indexOf("onActivate: (area, calculate) => {");
+    const end = main.indexOf("\n        onInvalidate:", start);
+    assert.ok(start >= 0 && end > start, "Production vector activation callback exists");
+    const dependencies = {
+        calculations: h.controller,
+        vectorSamplingOverlay: { load() {} },
+        // Raster sampling can change the active dock: composition must capture intent first.
+        rasterVisualization: { setVectorSamplingAoi() { h.controller.setActive(false); } },
+        mapInspection: { showCalculations() { h.controller.setActive(true); } },
+    };
+    const { onActivate } = new Function(...Object.keys(dependencies),
+        `return ({${main.slice(start, end)}});`)(...Object.values(dependencies));
+    const filter = { enabled: true, match: "all", rules: [{ field: "iso3", operator: "eq", value: "PER" }] };
+    const view = { bind(handlers) { this.handlers = handlers; }, render(state) { this.state = state; }, unbind() {} };
+    const controller = new VectorSamplingController({
+        view, getTargets: () => [{ key: "countries", label: "Countries", item: { collection: "vectors", id: "countries" }, filter }],
+        createArea: async () => ({ id: "V".repeat(32), filename: "Countries", filter, bbox, matched: 1, total: 200,
+            expiresAt: "2099-01-01T00:00:00Z", geometry: { type: "FeatureCollection", features: [] } }),
+        removeArea: async () => {}, onActivate,
+        onInvalidate: id => h.controller.invalidateSamplingArea(id), onEditFilter() {},
+        clock: { setTimeout() {}, clearTimeout() {} },
+    });
+    return { view, destroy: () => controller.destroy() };
+}
+
+for (const [name, bbox, confirmations] of [
+    ["small selection", [-81, -19, -68, 0], 0],
+    ["reviewed selection", [-90, -30, -30, 30], 1],
+    ["near-global selection", [-180, -85, 180, 85], 2],
+]) {
+    test(`direct Use these features calculates after final acceptance: ${name}`, async () => {
+        const h = fixture(); await h.open(); h.controller.setAutomatic(false); h.controller.chooseArea("vector");
+        const selection = composedVectorSelection(h, bbox);
+        selection.view.handlers.onUse(); await flush(); await h.tick();
+        for (let index = 0; index < confirmations; index++) {
+            assert.equal(h.submits(), 0, "No calculation before the final feature confirmation");
+            selection.view.handlers.onConfirm(); await h.tick();
+        }
+        assert.equal(h.submits(), 1);
+        assert.equal(h.controller.engine.record.intent.area.temporaryAoiId, "V".repeat(32));
+        assert.equal(h.controller.isActive, true);
+        selection.view.handlers.onConfirm(); await h.tick();
+        assert.equal(h.submits(), 1, "A repeated confirmation cannot resubmit");
+        await h.finish(); assert.equal(h.controller.state.statistics[0].current, true);
+        selection.destroy();
+    });
+}
+
+test("direct Explore acceptance does not implicitly calculate", async () => {
+    const h = fixture(); await h.open(); h.controller.setAutomatic(false); h.controller.setActive(false);
+    const selection = composedVectorSelection(h, [-180, -85, 180, 85]);
+    selection.view.handlers.onUse(); await flush(); await h.tick();
+    selection.view.handlers.onConfirm(); selection.view.handlers.onConfirm(); await h.tick();
+    assert.equal(selection.view.state.phase, "active"); assert.equal(h.submits(), 0);
+    assert.equal(h.controller.isActive, false); selection.destroy();
+});
+
+test("direct feature acceptance with no statistics opens the editor", async () => {
+    const h = fixture(); await h.open(); h.controller.removeStatistic(h.controller.state.statistics[0].id);
+    const selection = composedVectorSelection(h, [-81, -19, -68, 0]);
+    selection.view.handlers.onUse(); await flush(); await h.tick();
+    assert.equal(h.submits(), 0); assert.equal(h.controller.state.statistics.length, 0);
+    assert.equal(h.document.activeElement, h.view.elements.template); selection.destroy();
+});
 
 test("applied vector action runs configured valid statistics once even with automatic updates disabled", async () => {
     const h = fixture(); await h.open(); h.controller.setAutomatic(false);

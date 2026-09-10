@@ -859,12 +859,17 @@ async function initializeCatalog(
             cancel: () => vectorSampling.invalidate("Selection cancelled"),
         } : null),
         onSelectionState: selection => calculations.setVectorSelectionState(selection),
+        /** Accept reviewed features and run configured statistics when accepting from Summarize.
+         * @param {Object} area Authoritative retained polygon AOI with display geometry.
+         * @param {boolean} calculate Explicit calculation intent from the filter action.
+         * @return {void}
+         */
         onActivate: (area, calculate) => {
             const returnToSummary = calculations.isActive;
             vectorSamplingOverlay.load(area);
             const label = `${area.filename} · ${area.matched} of ${area.total} features`;
             rasterVisualization.setVectorSamplingAoi({ ...area, filename: label });
-            calculations.setVectorSamplingArea({ id: area.id, label }, calculate);
+            calculations.setVectorSamplingArea({ id: area.id, label }, calculate || returnToSummary);
             if (returnToSummary) mapInspection.showCalculations();
         },
         onInvalidate: id => {
