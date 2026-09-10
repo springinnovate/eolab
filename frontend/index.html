@@ -135,6 +135,11 @@
               <ul id="scan-locations" class="scan-locations">
                 <li>Loading configured paths…</li>
               </ul>
+              <div id="scan-status-recovery" hidden>
+                <p id="scan-status-warning" class="scan-status" role="status"></p>
+                <button class="secondary-button" id="retry-scan-status" type="button"
+                  aria-describedby="scan-status-warning">Retry status check</button>
+              </div>
               <details id="scan-status-disclosure" class="scan-status-disclosure">
                 <summary id="scan-status-summary">No scan has run since startup</summary>
                 <div class="scan-status-details">
