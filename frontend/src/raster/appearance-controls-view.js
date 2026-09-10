@@ -92,7 +92,6 @@ export class RasterAppearanceControlsView {
         this.boundStyleChange = this.#handleStyleChange.bind(this);
         this.boundPaletteChange = this.#handlePaletteChange.bind(this);
         this.boundResetStyle = this.#handleResetStyle.bind(this);
-        this.isAvailable = false;
     }
 
     /**
@@ -153,7 +152,6 @@ export class RasterAppearanceControlsView {
      * @return {void}
      */
     setActiveRasterAvailable(isAvailable) {
-        this.isAvailable = isAvailable;
         this.#root.hidden = !isAvailable;
         this.#root.setAttribute("aria-hidden", String(!isAvailable));
     }
@@ -170,33 +168,6 @@ export class RasterAppearanceControlsView {
             ? label
             : `${label} — currently hidden on the map`;
         this.setStatus("");
-    }
-
-    /**
-     * Reveal the contextual appearance editor without changing raster style.
-     *
-     * @param {boolean} [moveFocus=false] Whether to focus the palette control.
-     * @return {void}
-     */
-    showWidget(moveFocus = false) {
-        if (!this.isAvailable) {
-            return;
-        }
-        this.#root.hidden = false;
-        this.#root.setAttribute("aria-hidden", "false");
-        if (moveFocus) {
-            this.palette.focus();
-        }
-    }
-
-    /**
-     * Hide the appearance editor while retaining every committed style value.
-     *
-     * @return {void}
-     */
-    hideWidget() {
-        this.#root.hidden = true;
-        this.#root.setAttribute("aria-hidden", "true");
     }
 
     /**

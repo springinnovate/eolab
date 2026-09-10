@@ -544,7 +544,6 @@ test("RasterControlsView preserves the raster viewer compatibility surface", () 
         "setTemporaryAoiAvailability",
         "setSamplingAreaMode",
         "showHistogramWidget",
-        "showAppearanceWidget",
         "setRenderingControlsAvailable",
         "setControlsVisible",
         "renderPointSamples",

@@ -60,12 +60,23 @@ test("appearance adapter owns style reads, direct presentation, and listeners", 
         documentContext.querySelector("#raster-appearance-controls").hidden,
         true
     );
-    view.setActiveRasterAvailable(true);
-    view.showWidget(true);
     assert.equal(
-        documentContext.activeElement,
-        documentContext.querySelector("#raster-palette")
+        documentContext.querySelector("#raster-appearance-controls")
+            .getAttribute("aria-hidden"),
+        "true"
     );
+    view.setActiveRasterAvailable(true);
+    assert.equal(
+        documentContext.querySelector("#raster-appearance-controls").hidden,
+        false
+    );
+    assert.equal(
+        documentContext.querySelector("#raster-appearance-controls")
+            .getAttribute("aria-hidden"),
+        "false"
+    );
+    assert.deepEqual(view.readStyle(), DEFAULT_RASTER_STYLE);
+    assert.equal(view.getPaletteName(), "viridis");
 
     const error = Object.assign(new Error("Invalid colors"), {
         fieldGroup: "colors",

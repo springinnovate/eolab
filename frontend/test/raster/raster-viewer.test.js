@@ -359,10 +359,6 @@ function createFakeControlsView() {
             this.histogramWidgetOpenCount =
                 (this.histogramWidgetOpenCount ?? 0) + 1;
         },
-        showAppearanceWidget() {
-            this.appearanceWidgetOpenCount =
-                (this.appearanceWidgetOpenCount ?? 0) + 1;
-        },
         renderLayerHistograms(summaries, activeKey) {
             this.layerHistograms = summaries.map((summary) => ({
                 ...summary,
