@@ -103,6 +103,9 @@ administration interface only on the same machine at
 
 ## First-run verification
 
+Before releasing a new image, follow [Application build inputs](application-build-inputs.md)
+to review its Python/native resolution and compare fresh Linux builds.
+
 After the application reports that its services are ready:
 
 1. Open **Status** and run **Scan directories** from the Catalog section.
