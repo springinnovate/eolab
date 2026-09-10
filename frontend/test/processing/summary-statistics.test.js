@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
+import { VectorSamplingController } from "../../src/vector/sampling.js";
 import { SummaryStatisticsController, canAutomaticallyCalculate } from "../../src/processing/summary-statistics-controller.js";
 import { SummaryStatisticsView } from "../../src/processing/summary-statistics-view.js";
 import { CalculationSessionStorage } from "../../src/processing/calculation-session.js";
@@ -59,6 +61,136 @@ function fixture(overrides = {}, data = new Map(), browserContext = {}) {
 
 /** Read text throughout a fake DOM tree. @param {Object} node Test node. @return {string} Descendant text. */
 function visibleText(node) { return [node.textContent, ...node.children.map(visibleText)].join(" "); }
+
+/** Connect real selection and summary controllers through the production composition callback.
+ * @param {Object} h Summary workflow harness.
+ * @param {number[]} bbox Authoritative selection envelope.
+ * @return {Object} Bound selection view and lifecycle cleanup.
+ */
+function composedVectorSelection(h, bbox) {
+    const main = readFileSync(new URL("../../src/main.js", import.meta.url), "utf8");
+    const start = main.indexOf("onActivate: (area, calculate) => {");
+    const end = main.indexOf("\n        onInvalidate:", start);
+    assert.ok(start >= 0 && end > start, "Production vector activation callback exists");
+    const dependencies = {
+        calculations: h.controller,
+        vectorSamplingOverlay: { load() {} },
+        // Raster sampling can change the active dock: composition must capture intent first.
+        rasterVisualization: { setVectorSamplingAoi() { h.controller.setActive(false); } },
+        mapInspection: { showCalculations() { h.controller.setActive(true); } },
+    };
+    const { onActivate } = new Function(...Object.keys(dependencies),
+        `return ({${main.slice(start, end)}});`)(...Object.values(dependencies));
+    const filter = { enabled: true, match: "all", rules: [{ field: "iso3", operator: "eq", value: "PER" }] };
+    const view = { bind(handlers) { this.handlers = handlers; }, render(state) { this.state = state; }, unbind() {} };
+    const controller = new VectorSamplingController({
+        view, getTargets: () => [{ key: "countries", label: "Countries", item: { collection: "vectors", id: "countries" }, filter }],
+        createArea: async () => ({ id: "V".repeat(32), filename: "Countries", filter, bbox, matched: 1, total: 200,
+            expiresAt: "2099-01-01T00:00:00Z", geometry: { type: "FeatureCollection", features: [] } }),
+        removeArea: async () => {}, onActivate,
+        onInvalidate: id => h.controller.invalidateSamplingArea(id), onEditFilter() {},
+        clock: { setTimeout() {}, clearTimeout() {} },
+    });
+    return { view, destroy: () => controller.destroy() };
+}
+
+for (const [name, bbox, confirmations] of [
+    ["small selection", [-81, -19, -68, 0], 0],
+    ["reviewed selection", [-90, -30, -30, 30], 1],
+    ["near-global selection", [-180, -85, 180, 85], 2],
+]) {
+    test(`direct Use these features calculates after final acceptance: ${name}`, async () => {
+        const h = fixture(); await h.open(); h.controller.setAutomatic(false); h.controller.chooseArea("vector");
+        const selection = composedVectorSelection(h, bbox);
+        selection.view.handlers.onUse(); await flush(); await h.tick();
+        for (let index = 0; index < confirmations; index++) {
+            assert.equal(h.submits(), 0, "No calculation before the final feature confirmation");
+            selection.view.handlers.onConfirm(); await h.tick();
+        }
+        assert.equal(h.submits(), 1);
+        assert.equal(h.controller.engine.record.intent.area.temporaryAoiId, "V".repeat(32));
+        assert.equal(h.controller.isActive, true);
+        selection.view.handlers.onConfirm(); await h.tick();
+        assert.equal(h.submits(), 1, "A repeated confirmation cannot resubmit");
+        await h.finish(); assert.equal(h.controller.state.statistics[0].current, true);
+        selection.destroy();
+    });
+}
+
+test("direct Explore acceptance does not implicitly calculate", async () => {
+    const h = fixture(); await h.open(); h.controller.setAutomatic(false); h.controller.setActive(false);
+    const selection = composedVectorSelection(h, [-180, -85, 180, 85]);
+    selection.view.handlers.onUse(); await flush(); await h.tick();
+    selection.view.handlers.onConfirm(); selection.view.handlers.onConfirm(); await h.tick();
+    assert.equal(selection.view.state.phase, "active"); assert.equal(h.submits(), 0);
+    assert.equal(h.controller.isActive, false); selection.destroy();
+});
+
+test("direct feature acceptance with no statistics opens the editor", async () => {
+    const h = fixture(); await h.open(); h.controller.removeStatistic(h.controller.state.statistics[0].id);
+    const selection = composedVectorSelection(h, [-81, -19, -68, 0]);
+    selection.view.handlers.onUse(); await flush(); await h.tick();
+    assert.equal(h.submits(), 0); assert.equal(h.controller.state.statistics.length, 0);
+    assert.equal(h.document.activeElement, h.view.elements.template); selection.destroy();
+});
+
+test("applied vector action runs configured valid statistics once even with automatic updates disabled", async () => {
+    const h = fixture(); await h.open(); h.controller.setAutomatic(false);
+    h.controller.addStatistic("custom"); await h.tick();
+    h.controller.setVectorSamplingArea({ id: "V".repeat(32), label: "Canada" }, true); await h.tick();
+    assert.equal(h.submits(), 1);
+    assert.equal(h.controller.engine.record.intent.calculations.length, 1);
+    assert.equal(h.controller.engine.record.intent.area.temporaryAoiId, "V".repeat(32));
+    await h.finish(); assert.equal(h.controller.state.statistics[0].current, true);
+    assert.equal(h.controller.state.statistics[1].result, null);
+});
+
+test("an applied selection with no statistics opens the editor without inventing a calculation", async () => {
+    const h = fixture(); await h.open();
+    h.controller.removeStatistic(h.controller.state.statistics[0].id);
+    h.controller.setVectorSamplingArea({ id: "V".repeat(32), label: "Canada" }, true); await h.tick();
+    assert.equal(h.controller.state.statistics.length, 0); assert.equal(h.submits(), 0);
+    assert.equal(h.document.activeElement, h.view.elements.template);
+});
+
+test("selection progress greys previous values and exposes cancellation before planning", async () => {
+    const h = fixture(); await h.open(); const card = h.controller.state.statistics[0];
+    h.controller.request(card.id, "manual"); await flush(); await h.finish();
+    h.controller.onCancelSelection = () => h.controller.setVectorSelectionState({ analysis: true, phase: "idle", message: "Selection cancelled" });
+    h.controller.setVectorSelectionState({ analysis: true, phase: "reading", message: "Reading polygons" });
+    const row = h.view.cards.get(card.id);
+    assert.equal(card.current, false); assert.equal(row.root.classList.contains("is-previous"), true);
+    assert.match(row.status.textContent, /Calculating/); assert.equal(row.stop.hidden, false);
+    row.stop.dispatchEvent(new Event("click"));
+    assert.match(row.status.textContent, /Selection cancelled/); assert.equal(row.stop.hidden, true);
+    assert.equal(h.submits(), 1);
+});
+
+test("late vector plans are released before the newest applied area is submitted", async () => {
+    const h = fixture(); await h.open(); const wait = deferred(), original = h.api.planCalculation;
+    let first = true;
+    h.api.planCalculation = async intent => { const plan = await original(intent); if (first) { first = false; await wait.promise; } return plan; };
+    h.controller.setVectorSamplingArea({ id: "A".repeat(32), label: "First" }, true); await h.tick();
+    h.controller.setVectorSelectionState({ analysis: true, phase: "reading", message: "Replacement" });
+    h.controller.setVectorSamplingArea({ id: "B".repeat(32), label: "Second" }, true); await h.tick();
+    assert.equal(h.submits(), 0); wait.resolve(); await flush();
+    assert.equal(h.submits(), 1); assert.equal(h.controller.engine.record.intent.area.temporaryAoiId, "B".repeat(32));
+    const operations = h.requests.map(row => row[0]);
+    assert.ok(operations.indexOf("discard") < operations.lastIndexOf("plan"));
+});
+
+test("a late accepted vector job is cancelled before a replacement runs and cannot publish its value", async () => {
+    const h = fixture(); await h.open(); const wait = deferred(), submit = h.api.submitCalculation;
+    let first = true;
+    h.api.submitCalculation = async request => { const job = await submit(request); if (first) { first = false; await wait.promise; } return job; };
+    h.controller.setVectorSamplingArea({ id: "A".repeat(32), label: "First" }, true); await h.tick();
+    h.controller.setVectorSelectionState({ analysis: true, phase: "reading", message: "Replacement" });
+    h.controller.setVectorSamplingArea({ id: "B".repeat(32), label: "Second" }, true); await h.tick();
+    wait.resolve(); await flush(); assert.equal(h.requests.filter(row => row[0] === "cancel").length, 1);
+    assert.equal(h.submits(), 1); await h.finish("ready", ["99"]);
+    assert.equal(h.controller.state.statistics[0].result, null); assert.equal(h.submits(), 2);
+    await h.finish("ready", ["7"]); assert.equal(h.controller.state.statistics[0].result.row.value, "7");
+});
 
 test("the active summary view queries only current markup and rejects every missing required control", () => {
     const document = new SummaryControlDocument();
@@ -240,14 +372,14 @@ test("total wait includes debounce, planning, polling and the first result DOM u
     assert.equal(card.result.totalWaitSeconds,1.5);
 });
 
-test("total wait starts again at explicit confirmation, excluding time reading the review", async()=>{
+test("one explicit vector calculation includes planning and needs no second confirmation", async()=>{
     const h=fixture();await h.open();const card=h.controller.state.statistics[0];
     h.controller.setVectorSamplingArea({id:"V".repeat(32),label:"Peru"});await h.tick();
-    h.controller.request(card.id,"manual");await flush();assert.equal(card.manualRequired,true);
-    h.elapse(60000);h.controller.request(card.id,"manual");await flush();h.elapse(2500);await h.finish();
+    h.controller.request(card.id,"manual");await flush();assert.equal(card.manualRequired,false);
+    assert.equal(h.submits(),1);h.elapse(2500);await h.finish();
     assert.equal(card.result.totalWaitSeconds,2.5);
-    assert.equal(h.requests.filter(r=>r[0]==="plan").length,1,"confirmation reuses the reviewed vector-area plan");
-    assert.equal(card.result.stages.planReused,true);
+    assert.equal(h.requests.filter(r=>r[0]==="plan").length,1);
+    assert.equal(card.result.stages.planReused,false);
     assert.equal(card.result.stages.planningSeconds,0);
 });
 
@@ -290,7 +422,7 @@ test("choosing vector from an empty selection immediately shows its controls wit
     assert.equal(h.submits(),0);
 });
 
-test("vector selection reviews exact scan size before submission and invalidates results when removed", async()=>{
+test("vector calculation submits on the first click and invalidates results when removed", async()=>{
     const h=fixture();await h.open();const card=h.controller.state.statistics[0];
     const id="V".repeat(32);
     h.controller.setVectorSamplingArea({id,label:"Countries · 1 of 200 features"});await h.tick();
@@ -298,9 +430,7 @@ test("vector selection reviews exact scan size before submission and invalidates
     assert.equal(h.view.vectorAreaControls.hidden,false);
     assert.equal(h.submits(),0);
     h.controller.request(card.id,"manual");await flush();
-    assert.equal(h.submits(),0);assert.equal(card.manualRequired,true);
-    assert.match(h.view.cards.get(card.id).size.textContent,/4 source blocks/);
-    assert.equal(h.view.cards.get(card.id).size.hidden,false);
+    assert.equal(h.submits(),1);assert.equal(card.manualRequired,false);
     h.controller.request(card.id,"manual");await flush();assert.equal(h.submits(),1);
     assert.equal(h.view.cards.get(card.id).size.hidden,true);
     assert.deepEqual(h.controller.engine.record.intent.area,{kind:"temporaryAoi",temporaryAoiId:id});

@@ -2,13 +2,29 @@
 
 In **Summarize → Area → Vector layer**, choose a mounted Shapefile or
 GeoPackage polygon layer directly below the Area selector. **Edit filter** opens
-the existing filter panel. Apply the filter (for example, `iso3 equals "PER"`),
-return to Summarize, and choose
-**Use these features**. All matching features contribute, regardless of the
+the existing filter panel with **Use filtered features & calculate**. This action
+commits the complete predicate (for example, `iso3 equals "PER"`), selects the
+authoritative polygon AOI, returns to Summarize, and runs configured valid
+statistics. No subsequent **Use these features** or second **Calculate** is needed.
+Draft edits and closing the panel do not submit analysis. Cancel is available
+during selection and calculation. If all statistic cards have been removed, the
+action opens the statistic editor without inventing a calculation.
+
+Alternatively, choose **Use these features** directly. If selection review is
+shown, finish with **Continue with these features** (including the near-global
+confirmation when applicable). Accepting the features while Summarize is active
+immediately runs configured valid statistics, even with automatic updates off;
+no additional **Calculate** click is needed. Small selections run as soon as
+selection completes. Accepting features in Explore does not implicitly calculate.
+
+The analysis predicate is independent of the map's rendering filter and is shown
+beside the selected sampling layer. Ordinary map filtering retains its existing
+debounce and **Apply filter** action, without implicitly starting analysis.
+All matching features contribute, regardless of the
 viewport or which features were clicked. Overlaps count once and holes remain
 excluded. No matches is an error, never a whole-layer or bounding-box fallback.
 The same controls remain available in **Explore → Sampling area → Vector layer**.
-Both placements share one selection, applied predicate and confirmation state.
+Both placements share the retained sampling selection and its applied predicate.
 Choosing Vector layer in Summarize clears the calculation area until polygons
 are explicitly selected; reopening the panel does not silently restore the old
 map box. Applying the selection from Summarize keeps that panel active.
@@ -17,16 +33,23 @@ The selected geometry drives 1D and 2D histogram masks, summary statistics and
 clip downloads through the existing temporary-AOI reference. Histogram samples
 are bounded approximations; the two histogram modes retain their existing grid
 policies and may report different sample counts. Exact summaries retain their
-native-resolution processing limits. Their first Calculate action reviews the
-planned source blocks and decoded bytes; the next confirms submission.
+native-resolution processing limits. An explicit Calculate action plans and
+submits once; the redundant vector-specific review conversion has been removed.
 
-An unfiltered selection of multiple features or an envelope over 5 million km²
+For direct **Use these features** in either placement, an unfiltered selection
+of multiple features or an envelope over 5 million km²
 requires review with an **Edit filter** action. An envelope over 100 million km²
 requires a second explicit near-global confirmation. These are conservative
 envelope checks, not estimates of polygon area or runtime. Confirmation does not
 override geometry or processing limits. Filter/source changes, layer removal,
 expiry and clearing invalidate the snapshot and obsolete pending work. A fresh
-selection requires **Use these features** again. The uploaded AOI remains
+selection uses the explicit filter action in Summarize or **Use these features**
+in either placement. Summarize's filter action skips envelope confirmations while keeping
+all server limits. Superseded bounded extraction stays connected until it returns
+an opaque identity, which is removed before the next extraction. Failed removal
+retains the identity for retry. Obsolete Processing plans and jobs drain through
+the existing release, idempotent-submission and cancellation lane. Previous values
+remain greyed out; late responses never become the current result. The uploaded AOI remains
 separately available.
 
 ## Ownership and dependencies

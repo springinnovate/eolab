@@ -35,6 +35,10 @@ export class VectorFilterControls {
         this.add = documentContext.querySelector("#vector-filter-add");
         this.clear = documentContext.querySelector("#vector-filter-clear");
         this.closeButton = documentContext.querySelector("#close-vector-filter");
+        this.applyButton = documentContext.querySelector("#vector-filter-apply");
+        this.cancelButton = documentContext.querySelector("#vector-filter-cancel");
+        this.help = documentContext.querySelector("#vector-filter-help");
+        this.attempt = 0;
         this.key = null;
         this.timer = null;
         this.generation = 0;
@@ -55,6 +59,14 @@ export class VectorFilterControls {
             this.#renderDraft(); this.#changed(true);
         });
         this.#listen(this.closeButton, "click", () => this.close());
+        this.#listen(this.applyButton, "click", () => { this.#cancelTimer(); void this.#apply(); });
+        this.#listen(this.cancelButton, "click", () => {
+            this.attempt++;
+            this.action?.cancel();
+            this.cancelButton.hidden = true;
+            this.applyButton.disabled = false;
+            this.status.textContent = "Selection cancelled. Edit the conditions or apply again.";
+        });
         this.#listen(this.root, "keydown", (event) => {
             if (event.key !== "Escape") return;
             event.preventDefault(); event.stopPropagation(); this.close();
@@ -64,9 +76,14 @@ export class VectorFilterControls {
     /**
      * Open the chosen vector's retained filter draft.
      * @param {string} key Retained layer identity.
+     * @param {Object|null} [action=null] Explicit analysis action supplied by composition.
+     * @param {Function} action.apply Apply a complete predicate and return success or null.
+     * @param {Function} action.complete Present the successfully selected area.
+     * @param {Function} action.cancel Cancel the explicitly applied selection.
+     * @param {Object|null} action.filter Current analysis predicate, if selected.
      * @return {void}
      */
-    open(key) {
+    open(key, action = null) {
         const target = this.getTarget(key);
         if (!target) return;
         if (this.key !== null) {
@@ -75,8 +92,15 @@ export class VectorFilterControls {
         }
         this.#cancelTimer();
         this.key = key;
+        this.action = action;
+        this.cancelButton.hidden = true;
+        this.generation++;
+        this.applyButton.textContent = action ? "Use filtered features & calculate" : "Apply filter";
+        this.help.textContent = action
+            ? "Use every matching polygon as the sampling area and calculate configured statistics. The sampling filter is independent of map styling and visibility."
+            : "Counts cover the whole layer. Filtering also applies to labels, feature inspection, and new feature plots. Colors and class ranges stay the same.";
         this.opener = this.document.activeElement;
-        this.draft = structuredClone(this.drafts.get(key) ?? target.filter ?? EMPTY_VECTOR_FILTER);
+        this.draft = structuredClone(this.drafts.get(key) ?? action?.filter ?? target.filter ?? EMPTY_VECTOR_FILTER);
         this.title.textContent = target.label;
         this.#renderDraft();
         this.refresh();
@@ -90,8 +114,10 @@ export class VectorFilterControls {
         if (this.key === null) return;
         const target = this.getTarget(this.key);
         if (!target) { this.close(); return; }
-        this.applied.textContent = `Applied: ${vectorFilterSummary(target.filter)}`;
-        this.count.textContent = target.status || "All features are included.";
+        this.applied.textContent = this.action
+            ? `Sampling filter: ${vectorFilterSummary(this.action.filter ?? target.filter)}`
+            : `Applied: ${vectorFilterSummary(target.filter)}`;
+        this.count.textContent = this.action ? "The complete selection is checked when you apply." : target.status || "All features are included.";
         this.add.disabled = target.fields.length === 0 || this.draft.rules.length >= MAX_VECTOR_FILTER_RULES;
     }
 
@@ -99,7 +125,7 @@ export class VectorFilterControls {
     close() {
         if (this.key === null) return;
         this.#saveDraft();
-        if (this.timer !== null) { this.#cancelTimer(); void this.#apply(); }
+        if (this.timer !== null) { this.#cancelTimer(); if (!this.action) void this.#apply(); }
         this.key = null;
         this.inspection.hideFilter();
         if (this.opener?.isConnected && !this.opener.disabled) this.opener.focus();
@@ -107,6 +133,8 @@ export class VectorFilterControls {
 
     /** Detach panel listeners and cancel timers on teardown. @return {void} */
     destroy() {
+        this.destroyed = true;
+        this.pendingAction?.cancel();
         this.#cancelTimer();
         this.generation++;
         for (const [element, type, listener] of this.listeners) element.removeEventListener(type, listener);
@@ -144,9 +172,10 @@ export class VectorFilterControls {
      */
     #changed(immediate = false) {
         this.generation++;
-        this.getTarget(this.key)?.cancelPending();
+        if (!this.action) this.getTarget(this.key)?.cancelPending();
         this.#cancelTimer(); this.#saveDraft();
         if (!this.#validate()) return;
+        if (this.action) { this.refresh(); return; }
         this.status.textContent = "Changes will apply automatically…";
         if (immediate) void this.#apply();
         else this.timer = this.setTimer(() => { this.timer = null; void this.#apply(); }, 450);
@@ -159,12 +188,14 @@ export class VectorFilterControls {
         if (!target) return null;
         try {
             const candidate = normalizeVectorFilter(this.draft, target.fields);
-            this.status.textContent = "Changes apply automatically. Text comparisons are case-sensitive.";
+            this.status.textContent = this.action ? "Apply when all conditions are ready. Text comparisons are case-sensitive." : "Changes apply automatically. Text comparisons are case-sensitive.";
             this.status.classList.remove("is-error");
+            this.applyButton.disabled = false;
             return candidate;
         } catch (error) {
             this.status.textContent = `${error.message} The previous applied filter remains in use.`;
             this.status.classList.add("is-error");
+            this.applyButton.disabled = true;
             return null;
         }
     }
@@ -175,16 +206,32 @@ export class VectorFilterControls {
         const candidate = this.#validate();
         if (!target || !candidate) return;
         const key = this.key, generation = this.generation;
+        const action = this.action;
+        const attempt = ++this.attempt;
+        this.pendingAction = action;
         this.status.textContent = "Applying filter…";
+        this.applyButton.disabled = true;
+        this.cancelButton.hidden = !action;
         try {
-            const result = await target.apply(candidate);
-            if (key !== this.key || generation !== this.generation || result === null) return;
+            const result = await (action ? action.apply(candidate) : target.apply(candidate));
+            if (result === null || attempt !== this.attempt || this.destroyed) return;
+            if (action) {
+                if (key === this.key && generation === this.generation) this.close();
+                action.complete(result);
+                return;
+            }
+            if (key !== this.key || generation !== this.generation) return;
             this.status.textContent = "Filter applied. Changes apply automatically.";
             this.refresh();
         } catch (error) {
-            if (key !== this.key || generation !== this.generation || error.name === "AbortError") return;
-            this.status.textContent = `${error.message} The previous applied filter remains in use.`;
+            if (key !== this.key || generation !== this.generation || attempt !== this.attempt || error.name === "AbortError") return;
+            this.status.textContent = action ? `${error.message} No new sampling area was selected.`
+                : `${error.message} The previous applied filter remains in use.`;
             this.status.classList.add("is-error");
+        } finally {
+            if (attempt === this.attempt) this.pendingAction = null;
+            if (attempt === this.attempt) this.cancelButton.hidden = true;
+            if (key === this.key && generation === this.generation && attempt === this.attempt) this.applyButton.disabled = false;
         }
     }
 

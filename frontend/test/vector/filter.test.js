@@ -124,3 +124,42 @@ test("adapter ignores out-of-order filter replies, preserves styles, and cancels
     assert.equal(record.state.filterCount, null);
     assert.equal(changes.length, 1);
 });
+
+test("analysis filters submit only the explicitly applied complete draft and expose cancellation", async () => {
+    const doc = new FakeRasterControlDocument(), applied = [], completed = [];
+    let resolve, cancellations = 0;
+    const controls = new VectorFilterControls({ documentContext: doc,
+        getTarget: () => ({ fields, filter: filter(), label: "Countries", status: "",
+            cancelPending() { throw Error("Analysis must not cancel rendering"); },
+            apply() { throw Error("Analysis must not require rendering authorization"); } }),
+        inspection: { showFilter() {}, hideFilter() {} },
+        setTimer() { throw Error("An analysis draft must not auto-apply"); }, clearTimer() {},
+    });
+    const action = { apply: candidate => { applied.push(candidate); return new Promise(done => { resolve = done; }); },
+        complete: area => completed.push(area), cancel: () => { cancellations++; resolve(null); } };
+    controls.open("countries", action);
+    assert.equal(controls.applyButton.textContent, "Use filtered features & calculate");
+    const input = controls.rules.children[0].children[2];
+    input.value = "2024"; input.dispatchEvent(new Event("input"));
+    assert.equal(applied.length, 0);
+    controls.applyButton.dispatchEvent(new Event("click"));
+    assert.deepEqual(applied, [filter(2024)]);
+    assert.equal(controls.cancelButton.hidden, false);
+    controls.cancelButton.dispatchEvent(new Event("click")); await flush();
+    assert.equal(cancellations, 1); assert.equal(completed.length, 0);
+    input.value = ""; input.dispatchEvent(new Event("input"));
+    assert.equal(controls.applyButton.disabled, true);
+    controls.close(); assert.equal(applied.length, 1);
+    controls.open("countries", action);
+    const next = controls.rules.children[0].children[2];
+    next.value = "2025"; next.dispatchEvent(new Event("input"));
+    controls.applyButton.dispatchEvent(new Event("click"));
+    resolve({ id: "new-area" }); await flush();
+    assert.deepEqual(completed, [{ id: "new-area" }]); assert.equal(controls.key, null);
+    controls.open("countries"); assert.equal(controls.applyButton.textContent, "Apply filter");
+    controls.open("countries", action);
+    controls.applyButton.dispatchEvent(new Event("click"));
+    controls.destroy();
+    await flush();
+    assert.equal(cancellations, 2); assert.equal(completed.length, 1);
+});

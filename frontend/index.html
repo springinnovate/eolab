@@ -1303,11 +1303,13 @@
   <div class="vector-filter-actions">
     <button id="vector-filter-add" class="secondary-button" type="button">Add condition</button>
     <button id="vector-filter-clear" class="secondary-button" type="button">Clear filter</button>
+    <button id="vector-filter-apply" type="button">Apply filter</button>
+    <button id="vector-filter-cancel" class="secondary-button" type="button" hidden>Cancel</button>
   </div>
   <p id="vector-filter-status" role="status" aria-live="polite"></p>
   <p id="vector-filter-applied"></p>
   <p id="vector-filter-count" role="status" aria-live="polite"></p>
-  <p class="vector-filter-help">Counts cover the whole layer. Filtering also applies to labels,
+  <p id="vector-filter-help" class="vector-filter-help">Counts cover the whole layer. Filtering also applies to labels,
     feature inspection, and new feature plots. Colors and class ranges stay the same.</p>
 </section>
 <section id="layer-style-editor" hidden role="tabpanel"
