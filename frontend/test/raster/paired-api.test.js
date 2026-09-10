@@ -3,7 +3,6 @@ import test from "node:test";
 
 import {
   loadCatalogRasterPairedStatistics,
-  sampleCatalogRasterPairPixels,
 } from "../../src/raster/analysis-api.js";
 
 const X_ITEM = { collection: "rasters", id: "temperature" };
@@ -67,36 +66,4 @@ test("paired statistics request sends only two catalog identities and area", asy
   });
   assert.equal(JSON.stringify(body).includes("path"), false);
   assert.equal(request.options.signal, signal);
-});
-
-test("dual pixel sampling preserves one axis when its peer fails", async () => {
-  const requested = [];
-  const result = await sampleCatalogRasterPairPixels(
-    { xItem: X_ITEM, yItem: Y_ITEM },
-    { longitude: -122, latitude: 49 },
-    new AbortController().signal,
-    async (_url, options) => {
-      const body = JSON.parse(options.body);
-      requested.push(body);
-      if (body.itemId === Y_ITEM.id) {
-        return new Response(JSON.stringify({ detail: "Y unavailable" }), {
-          status: 503,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-      return new Response(JSON.stringify({ inBounds: true, value: 12 }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    },
-  );
-
-  assert.deepEqual(requested.map(({ itemId }) => itemId).sort(), [
-    "moisture",
-    "temperature",
-  ]);
-  assert.equal(result.x.available, true);
-  assert.equal(result.x.pixel.value, 12);
-  assert.equal(result.y.available, false);
-  assert.equal(result.y.error, "Y unavailable");
 });

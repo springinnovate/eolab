@@ -476,15 +476,6 @@ export class RasterControlsView {
     }
 
     /**
-     * Reveal the contextual appearance editor without changing raster style.
-     *
-     * @return {void}
-     */
-    showAppearanceWidget() {
-        this.#appearanceView.showWidget();
-    }
-
-    /**
      * Set whether the active analysis target has a map renderer whose style
      * can be edited. Analysis and histogram visibility remain independent.
      *
