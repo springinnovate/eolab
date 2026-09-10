@@ -1,6 +1,16 @@
 /** Presentation of reviewed native execution sizes and durable wall-time metrics. */
 import { formatDownloadBytes } from "./presentation.js";
 
+/** Explain the nested cost of one warm-process invocation.
+ * @param {string} label Planning or calculation. @param {Object|undefined} timing Process details.
+ * @return {string[]} Lines, absent for older results.
+ */
+function processDescription(label, timing) {
+    if (!timing) return [];
+    const seconds = n => `${n.toFixed(3)} s`;
+    return [`${label} process: ${timing.reusedProcess ? "reused" : "first operation in this process"}. Readiness wait (including any startup): ${seconds(timing.readyWaitSeconds)}; operation: ${seconds(timing.operationSeconds)}; request/reply, cleanup and recycling: ${seconds(timing.overheadSeconds)}. These split the native-process duration. Prewarming completed before this request is excluded.`];
+}
+
 /** Describe the effective execution plan. @param {Object} grid Reviewed grid. @return {string[]} Lines. */
 export function executionDescription(grid) {
     const p = grid?.execution;
@@ -39,6 +49,7 @@ export function performanceDescription(job, totalWaitSeconds, stages) {
         const plan = stages.serverPlan;
         if (plan && !stages.planReused) lines.push(
             `Inside server planning — admission: ${seconds(plan.reservationSeconds)}; source/AOI preparation: ${seconds(plan.preparationSeconds)}; native process (including startup and transfer): ${seconds(plan.nativeProcessSeconds)}; source recheck and plan storage: ${seconds(plan.finalizationSeconds)}.`,
+            ...processDescription("Planning", plan.process),
         );
     }
     const execution = job.result?.executionTiming;
@@ -50,6 +61,7 @@ export function performanceDescription(job, totalWaitSeconds, stages) {
             `Worker preparation (source authorization and scratch): ${seconds(execution.preparationSeconds)}.`,
             `Native process including startup, execution and result transfer: ${seconds(execution.nativeProcessSeconds)}.`,
             `Source recheck and file publication: ${seconds(execution.publicationSeconds)}.`,
+            ...processDescription("Calculation", execution.process),
         );
         if (p && execution.nativeProcessSeconds >= p.kernelSeconds) lines.push(
             `Native process outside the kernel: ${seconds(execution.nativeProcessSeconds - p.kernelSeconds)} (includes startup, IPC, final provenance/checks and process exit; not startup alone).`,

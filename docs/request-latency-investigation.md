@@ -2,7 +2,75 @@
 
 Keep the batching and timing changes merged in #363. This investigation starts
 at `5dfcd785952076f6ac630427ceaefa2a25bc87d4`. Instrumentation was deployed first;
-the measured plan-reuse and queue-wakeup changes below follow that baseline.
+the measured plan-reuse, queue-wakeup and reusable-process changes below follow
+that baseline. Historical request-path observations are retained explicitly.
+
+## Reusable planning and execution processes
+
+Processing now prestarts one native process for API planning and a separate one
+for the job worker. Each accepts one admitted operation at a time and imports
+the fixed clip/calculation targets before reporting readiness. Raster datasets,
+AOI inputs and output directories remain request-owned: every operation opens
+and closes its own resources, with existing source authorization/signature
+checks before and after native work. No raster handles or result cache is added.
+
+The neutral supervisor captures the target's result but acknowledges it only
+after the entire target returns, including context cleanup, and request objects
+are released. Cancellation, deadline, transport failure or native crash kills
+and joins the old process before admission can release; its pipe is discarded.
+The next generation prestarts in the background. Shutdown prevents replacement
+and reaps startup/active/idle children. Linux operations retain their own hard
+alarm, including if the parent disappears; an idle child's pipe receives EOF.
+
+Processes recycle after 100 operations or a Linux peak RSS above 512 MiB.
+This is between-operation recycling, not permission to exceed existing
+admission or container limits. Libraries/GDAL can retain memory between jobs,
+so the tradeoff is additional idle memory and occasional replacement latency.
+The two roles remain separate, with unchanged single global planning and
+execution admission. Temporary-AOI/vector callers retain their one-shot path.
+
+Optional `timing.process` / `executionTiming.process` metadata divides native
+duration into readiness wait, full target execution, and request/reply plus
+cleanup/recycling overhead. `reusedProcess` means an earlier operation completed
+in the same interpreter; the first operation may already be prewarmed.
+Prewarming completed before the request is excluded, never assigned a fake zero
+startup measurement. Old results without these fields still render normally.
+
+Owner: Processing. Used by: its planner and job worker, wired by composition.
+Depends on: the neutral `execution.reusable_process` mechanism and existing
+catalog, AOI, job-store and artifact contracts. Coordinates with: no new sibling
+features. Added edges: Processing's service/worker/factory to the neutral
+supervisor; composition to the Processing-owned process factory. Neutral
+execution imports no application or domain subsystem. No infrastructure adapter
+calls a service; no new library, schema migration or concurrency increase.
+Only optional diagnostic fields extend public result contracts. The explicit
+native completion contract now permits a retained interpreter after all
+request work/cleanup finishes; cancellation still requires confirmed exit.
+
+Real-process tests cover reuse, large payloads, full-return acknowledgment,
+cancellation, deadline, crash, startup/shutdown, periodic recycling, and Linux
+RSS recycling. Real raster tests reopen changed sources, preserve nodata and
+aggregate results, reject changed source signatures, and verify a warm clip's
+COG and exact pixels. RSS recycling is platform-skipped on Windows.
+
+Run the same synthetic benchmark with and without `--warm`. Windows observations
+from this change (seconds, sequential samples, OS caches not flushed):
+
+| Mode | Pass | Plan round trip | Execution round trip | Kernel |
+| --- | ---: | ---: | ---: | ---: |
+| One-shot | 1 | 1.168 | 1.208 | 0.034 |
+| One-shot | 2 | 1.189 | 1.233 | 0.030 |
+| One-shot | 3 | 1.176 | 1.252 | 0.032 |
+| Warm | 1 | 1.040 | 0.052 | 0.026 |
+| Warm | 2 | 0.030 | 0.037 | 0.012 |
+| Warm | 3 | 0.024 | 0.051 | 0.013 |
+
+The warm planner's first request waited 1.005 s for startup; the executor had
+already prewarmed during that wait. Later requests reused both processes.
+The one-shot sample also overlapped test activity; these small observations
+establish the mechanism's effect, not a controlled production speedup. Native
+library caches can improve the kernel too. Live measurements must include the
+unchanged HTTP, database and browser polling path.
 
 ## Reviewed-plan reuse and idle-worker wakeup
 
@@ -45,7 +113,8 @@ Added edges: worker to the Processing-owned `JobWakeup` port; composition to
 No cross-subsystem edge, new library, schema migration or public HTTP contract
 is introduced. No subsystem acquires sibling implementation knowledge. The
 fallback interval and dedicated connection are explicit operational tradeoffs.
-Native-process startup, kernel algorithms and browser polling are unchanged.
+At this intermediate revision, native-process startup, kernel algorithms and
+browser polling were unchanged.
 
 Verification covers exact intent/expiry/rejection at the browser owner, listener
 registration and races, coalescing, reconnect, missing-hint fallback and shutdown.
@@ -107,13 +176,13 @@ worker, browser API validation, controllers and performance views. Existing
 job-store and execution interfaces are unchanged. No new cross-subsystem
 dependencies, services, polling loops or worker claim versions are introduced.
 
-## Current evidence
+## Initial evidence before optimizations
 
 One WWF Connectivity observation on that revision, Human Footprint 2023 mean
 over filtered Peru, showed **5.524 s total wait** and **1.090 s kernel elapsed**.
 The 4.434 s difference cannot yet be assigned to one stage.
 
-The actual request path contains these independently relevant stages:
+The initial request path contained these independently relevant stages:
 
 1. Summary cards debounce validation by 700 ms for automatic edits/map requests.
    Manual Calculate on an already valid card does not add that delay.
@@ -172,7 +241,7 @@ the breakdown of the production 5.524 s observation. No production data or
 credentials are accessed. Temporary fixture children are confined to the
 explicit scratch root and removed afterward.
 
-## Next measurements before selecting an optimization
+## Original measurement plan
 
 - Measure production planning round trip, submission round trip and first ready
   response with browser monotonic time. Keep confirmation pauses separate.

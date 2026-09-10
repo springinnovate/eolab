@@ -25,6 +25,7 @@ from eolab_app.processing.artifacts import LocalJobArtifacts
 from eolab_app.processing.job_store import PostgresJobStore
 from eolab_app.processing.job_notifications import PostgresJobWakeup
 from eolab_app.processing.models import ProcessingError
+from eolab_app.processing.native_processes import create_native_process
 from eolab_app.processing.clip_models import RasterClipLimits
 from eolab_app.processing.service import ProcessingService
 from eolab_app.processing.worker import ProcessingWorker, serve as serve_processing
@@ -246,6 +247,8 @@ def create_app(
             Control while the application serves requests.
         """
         async with AsyncExitStack() as client_stack:
+            client_stack.push_async_callback(planning_native.close)
+            planning_native.warm()
             await temporary_aoi_service.start()
             client_stack.push_async_callback(temporary_aoi_service.close)
             for client in (
@@ -279,6 +282,7 @@ def create_app(
         vector_catalog, vector_source_resolver, temporary_aoi_service.retain_geometry,
     )))
     processing_limits = RasterClipLimits()
+    planning_native = create_native_process(processing_limits)
     application.include_router(create_processing_router(ProcessingService(
         raster_source_authorizer,
         temporary_aoi_service,
@@ -288,6 +292,7 @@ def create_app(
             (Path.cwd(), app_global_configuration.scan_mount_path),
         ),
         processing_limits,
+        native=planning_native,
     )))
     scan_manager = ScanManager(
         app_global_configuration.scan_mount_path,
@@ -392,12 +397,15 @@ async def run_processing_worker() -> None:
     artifacts = LocalJobArtifacts(settings.processing_data_path, (Path.cwd(), settings.scan_mount_path))
     artifacts.initialize()
     jobs = PostgresJobStore(limits)
-    async with httpx2.AsyncClient(timeout=10) as client:
+    async with httpx2.AsyncClient(timeout=10) as client, AsyncExitStack() as lifecycle:
+        execution_native = create_native_process(limits)
+        lifecycle.push_async_callback(execution_native.close)
+        execution_native.warm()
         authorizer = CatalogRasterSourceAuthorizer(
             StacRasterCatalog(client, settings.catalog_internal_url),
             MountedRasterResolver(settings.scan_mount_path),
         )
-        worker = ProcessingWorker(authorizer, jobs, artifacts, limits)
+        worker = ProcessingWorker(authorizer, jobs, artifacts, limits, native=execution_native)
         task = asyncio.current_task()
         for event in (signal.SIGTERM, signal.SIGINT):
             with suppress(NotImplementedError):

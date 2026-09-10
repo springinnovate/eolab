@@ -9,6 +9,24 @@ const execution={targetChunkPixels:65536,readWidth:512,readHeight:128,evaluation
 const grid={width:512,height:128,crs:"EPSG:4326",dtype:"float32",transform:[1,0,0,0,-1,90],nativeBlocks:4,decodedBytes:262144,execution};
 const plan={planId:"P".repeat(32),operation:"raster.aggregate.v1",expiresAt:"2099-01-01T00:00:00Z",grid};
 
+test("warm-process metadata is validated and distinguishes readiness from repeated operation work", async()=>{
+    const process={readyWaitSeconds:0,operationSeconds:.2,overheadSeconds:.01,reusedProcess:true};
+    const timing={reservationSeconds:.01,preparationSeconds:.01,nativeProcessSeconds:.21,finalizationSeconds:.01,process};
+    for(const value of [process,{...process,readyWaitSeconds:-1},{...process,operationSeconds:".2"},{...process,reusedProcess:"yes"}]){
+        const client=new ProcessingApiClient(async path=>Response.json(path.endsWith("/jobs")?{jobs:[]}:{...plan,timing:{...timing,process:value}}));
+        if(value===process)await client.planCalculation(intent);
+        else await assert.rejects(()=>client.planCalculation(intent),/invalid/);
+    }
+    const stages={beforePlanningSeconds:0,planningSeconds:.25,beforeSubmissionSeconds:0,submissionSeconds:.1,afterSubmissionSeconds:2,serverPlan:timing};
+    const job={result:{executionTiming:{queueSeconds:.01,preparationSeconds:.01,nativeProcessSeconds:.21,publicationSeconds:.01,process}}};
+    const text=performanceDescription(job,2.35,stages).join(" ");
+    assert.match(text,/Planning process: reused/);
+    assert.match(text,/Calculation process: reused/);
+    assert.match(text,/Readiness wait \(including any startup\): 0.000 s; operation: 0.200 s/);
+    assert.match(text,/Prewarming completed before this request is excluded/);
+    assert.doesNotMatch(performanceDescription(job,2.1,{...stages,planReused:true}).join(" "),/Planning process:/);
+});
+
 test("stage metrics accept legacy absence and reject malformed durations at the API boundary",async()=>{
     for(const timing of [undefined,null,{reservationSeconds:0,preparationSeconds:.1,nativeProcessSeconds:1,finalizationSeconds:.2},{reservationSeconds:-1},{nativeProcessSeconds:"1"}]){
         const client=new ProcessingApiClient(async path=>Response.json(path.endsWith("/jobs")?{jobs:[]}:{...plan,timing}));

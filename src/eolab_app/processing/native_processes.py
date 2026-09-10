@@ -1,0 +1,27 @@
+"""Processing-owned configuration of its planning and execution process lanes."""
+
+from eolab_app.execution.reusable_process import ReusableProcess
+from eolab_app.processing.models import ProcessingLimits
+from eolab_app.processing.raster_aggregate import aggregate_process_target
+from eolab_app.processing.raster_clip import clip_process_target
+
+
+def create_native_process(limits: ProcessingLimits) -> ReusableProcess:
+    """Prepare one lane for both supported operations without admitting any work.
+
+    Used separately by API planning and the dedicated execution worker. Existing
+    database reservations still determine when each lane may execute a request.
+
+    Args:
+        limits: Existing startup/planning deadline policy.
+
+    Returns:
+        Unstarted lane, recycled after 100 operations or 512 MiB Linux peak RSS.
+        Operation memory admission and container limits remain unchanged.
+    """
+    return ReusableProcess(
+        (clip_process_target, aggregate_process_target),
+        max_jobs=100,
+        recycle_bytes=512 * 1024**2,
+        startup_seconds=limits.plan_timeout_seconds,
+    )

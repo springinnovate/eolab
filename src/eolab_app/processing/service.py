@@ -1,6 +1,7 @@
 """Owned processing lifecycle and explicit raster operation commands."""
 
 import asyncio
+from dataclasses import asdict
 import hashlib
 import json
 import time
@@ -10,8 +11,8 @@ from typing import Any
 
 from eolab_app.execution.bounded_process import (
     ProcessDeadlineError,
-    run_bounded_process,
 )
+from eolab_app.execution.reusable_process import ReusableProcess, run_process
 from eolab_app.processing.models import (
     ArtifactDownload,
     JobSubmitRequest,
@@ -186,6 +187,8 @@ class ProcessingService:
         jobs: JobStore,
         artifacts: JobArtifactStore,
         limits: RasterClipLimits,
+        *,
+        native: ReusableProcess | None = None,
     ) -> None:
         """Compose job storage and currently supported raster-operation capabilities.
 
@@ -195,12 +198,14 @@ class ProcessingService:
             jobs: Durable job and admission adapter.
             artifacts: Confined result-file adapter.
             limits: Deployment-owned resource and lifecycle policy.
+            native: Lifecycle-managed planning lane supplied by composition.
         """
         self.authorizer = authorizer
         self.areas = areas
         self.jobs = jobs
         self.artifacts = artifacts
         self.limits = limits
+        self.native = native
         self.aggregate_limits = RasterAggregateLimits.with_lifecycle(limits)
 
     async def _area_snapshot(
@@ -292,11 +297,13 @@ class ProcessingService:
                 authorized = await self.authorizer.authorize(source)
                 area = await self._area(request)
                 signature = tuple(authorized.source_signature.to_catalog())
-                status, value = await run_bounded_process(
+                outcome = await run_process(
                     clip_process_target,
                     ("plan", (authorized.source_path, signature, area, self.limits)),
                     self.limits.plan_timeout_seconds,
+                    self.native,
                 )
+                status, value = outcome.value
                 if status != "ok":
                     raise ProcessingError(*value)
                 await self.authorizer.require_current(authorized)
@@ -337,7 +344,7 @@ class ProcessingService:
             ) from error
         finally:
             if not completed:
-                # Supervisor has already joined its child before releasing this
+                # Supervisor has already joined its cancelled child before releasing this
                 # slot. A DB outage leaves a bounded expiring reservation.
                 await asyncio.shield(
                     asyncio.to_thread(self.jobs.finish_plan, identifier, owner, None)
@@ -451,7 +458,7 @@ class ProcessingService:
                 area = await self._aggregate_area(request)
                 signature = tuple(authorized.source_signature.to_catalog())
                 prepared = time.perf_counter()
-                status, value = await run_bounded_process(
+                outcome = await run_process(
                     aggregate_process_target,
                     (
                         "plan",
@@ -466,7 +473,9 @@ class ProcessingService:
                         ),
                     ),
                     limits.plan_timeout_seconds,
+                    self.native,
                 )
+                status, value = outcome.value
                 calculated = time.perf_counter()
                 if status != "ok":
                     raise ProcessingError(*value)
@@ -504,6 +513,7 @@ class ProcessingService:
                     preparationSeconds=prepared - reserved,
                     nativeProcessSeconds=calculated - prepared,
                     finalizationSeconds=time.perf_counter() - calculated,
+                    process=asdict(outcome.timing) if outcome.timing else None,
                 ).model_dump(),
                 "limits": {
                     "maxDecodedBytes": limits.max_decoded_bytes,

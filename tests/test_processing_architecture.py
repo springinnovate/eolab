@@ -75,6 +75,12 @@ def test_mechanisms_and_storage_never_import_application_services() -> None:
     }
     assert not {
         module
+        for module in imports(Path("src/eolab_app/execution/reusable_process.py"))
+        if module.startswith("eolab_app")
+        and not module.startswith("eolab_app.execution.")
+    }
+    assert not {
+        module
         for module in imports(paths[1])
         if module.startswith(("eolab_app.processing", "eolab_app.temporary_aoi"))
     }

@@ -49,7 +49,7 @@ class JobStore(Protocol):
     def finish_plan(
         self, identifier: str, owner: str, plan: PreparedJobPlan | None
     ) -> dict[str, Any] | None:
-        """Release metadata capacity after the supervised child has exited.
+        """Release metadata capacity after native operation completion or child exit.
 
         Args:
             identifier: Reserved plan ID.
@@ -194,7 +194,7 @@ class JobStore(Protocol):
         artifact: Artifact | None,
         error: dict[str, str] | None = None,
     ) -> bool:
-        """Commit completion only after the child exits and artifact is published.
+        """Commit only after native completion/cleanup and artifact publication.
 
         Args:
             identifier: Running job.
@@ -285,7 +285,7 @@ class JobArtifactStore(Protocol):
         """Atomically rename a closed, validated attempt on the same volume.
 
         Args:
-            attempt: Fenced attempt whose child has exited successfully.
+            attempt: Fenced attempt whose native operation completed successfully.
             reservation: Admitted scratch/output ceiling, checked before publish.
 
         Raises:

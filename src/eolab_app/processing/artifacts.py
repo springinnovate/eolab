@@ -114,7 +114,7 @@ class LocalJobArtifacts:
         """Atomically rename a closed, validated attempt on the same volume.
 
         Args:
-            attempt: Fenced attempt whose child has exited successfully.
+            attempt: Fenced attempt whose native operation completed successfully.
             reservation: Admitted scratch/output ceiling, checked before publish.
 
         Raises:

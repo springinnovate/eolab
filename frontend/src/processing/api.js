@@ -60,6 +60,13 @@ function validateStages(value, fields) {
     }
 }
 
+/** Validate optional native reuse/readiness metadata. @param {Object|null} value Process timing. @return {void} */
+function validateProcessTiming(value) {
+    if (value == null) return;
+    validateStages(value, ["readyWaitSeconds", "operationSeconds", "overheadSeconds"]);
+    if (typeof value.reusedProcess !== "boolean") throw new Error("Processing returned invalid process reuse metadata.");
+}
+
 /** Validate a public owned job before presenting actions. @param {Object} job API response. @return {Object} Validated job. */
 function validateJob(job) {
     opaqueId(job?.jobId);
@@ -73,6 +80,7 @@ function validateJob(job) {
             validateCalculationRows(job.result.rows);
             validatePerformance(job.result.performance);
             validateStages(job.result.executionTiming, ["queueSeconds", "preparationSeconds", "nativeProcessSeconds", "publicationSeconds"]);
+            validateProcessTiming(job.result.executionTiming?.process);
             if (job.result.queuedToReadySeconds != null) validateStages(job.result, ["queuedToReadySeconds"]);
         }
     }
@@ -182,6 +190,7 @@ export class ProcessingApiClient {
             throw new Error("Processing returned an invalid calculation estimate.");
         }
         validateStages(plan.timing, ["reservationSeconds", "preparationSeconds", "nativeProcessSeconds", "finalizationSeconds"]);
+        validateProcessTiming(plan.timing?.process);
         return plan;
     }
 

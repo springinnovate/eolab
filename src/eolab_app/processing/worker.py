@@ -1,7 +1,7 @@
 """Application workflow and supervision for explicitly supported processing jobs."""
 
 import asyncio
-from dataclasses import replace
+from dataclasses import asdict, replace
 from contextlib import suppress
 import logging
 import time
@@ -9,8 +9,8 @@ from typing import Any
 
 from eolab_app.execution.bounded_process import (
     ProcessDeadlineError,
-    run_bounded_process,
 )
+from eolab_app.execution.reusable_process import ReusableProcess, run_process
 from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.clip_models import ClipSpec, RasterClipLimits
 from eolab_app.processing.aggregate_models import (
@@ -36,6 +36,8 @@ class ProcessingWorker:
         jobs: JobStore,
         artifacts: JobArtifactStore,
         limits: RasterClipLimits,
+        *,
+        native: ReusableProcess | None = None,
     ) -> None:
         """Compose the worker's narrow capabilities.
 
@@ -44,11 +46,13 @@ class ProcessingWorker:
             jobs: Durable global admission and attempt fencing.
             artifacts: Confined scratch and atomic result-file storage.
             limits: Deployment-wide bounded processing policy.
+            native: Lifecycle-managed execution lane supplied by composition.
         """
         self.authorizer = authorizer
         self.jobs = jobs
         self.artifacts = artifacts
         self.limits = limits
+        self.native = native
         self.aggregate_limits = RasterAggregateLimits.with_lifecycle(limits)
 
     async def _execute(self, row: dict[str, Any]) -> Any:
@@ -97,11 +101,13 @@ class ProcessingWorker:
             self.limits,
         )
         prepared = time.perf_counter()
-        status, value = await run_bounded_process(
+        outcome = await run_process(
             target,
             (action, (authorized.source_path, spec, directory, limits)),
             self.limits.runtime_seconds,
+            self.native,
         )
+        status, value = outcome.value
         calculated = time.perf_counter()
         if status != "ok":
             raise ProcessingError(*value)
@@ -121,6 +127,7 @@ class ProcessingWorker:
                     preparationSeconds=prepared - started,
                     nativeProcessSeconds=calculated - prepared,
                     publicationSeconds=time.perf_counter() - calculated,
+                    process=asdict(outcome.timing) if outcome.timing else None,
                 ).model_dump(),
             )
         return value

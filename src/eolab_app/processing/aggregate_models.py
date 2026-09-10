@@ -243,6 +243,16 @@ class AggregateValue(BaseModel):
 StageSeconds = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 
 
+class NativeProcessTiming(BaseModel):
+    """Optional reusable-process timings, nested inside the native call duration."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    readyWaitSeconds: StageSeconds
+    operationSeconds: StageSeconds
+    overheadSeconds: StageSeconds
+    reusedProcess: Annotated[bool, Field(strict=True)]
+
+
 class AggregatePlanTiming(BaseModel):
     """Monotonic server durations within one successful planning request."""
 
@@ -251,6 +261,7 @@ class AggregatePlanTiming(BaseModel):
     preparationSeconds: StageSeconds
     nativeProcessSeconds: StageSeconds
     finalizationSeconds: StageSeconds
+    process: NativeProcessTiming | None = None
 
 
 class AggregateExecutionTiming(BaseModel):
@@ -261,6 +272,7 @@ class AggregateExecutionTiming(BaseModel):
     preparationSeconds: StageSeconds
     nativeProcessSeconds: StageSeconds
     publicationSeconds: StageSeconds
+    process: NativeProcessTiming | None = None
 
 
 class AggregateResultResponse(JobResultResponse):
@@ -349,6 +361,6 @@ class AggregateArtifact(Artifact):
 
     rows: list[dict[str, object]]
     performance: dict[str, object] | None = field(default=None, kw_only=True)
-    execution_timing: dict[str, float] | None = field(default=None, kw_only=True)
+    execution_timing: dict[str, object] | None = field(default=None, kw_only=True)
     media_type: str = field(default="text/csv", kw_only=True)
     result_name: str = field(default="result.csv", kw_only=True)

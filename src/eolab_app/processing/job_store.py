@@ -139,7 +139,7 @@ class PostgresJobStore:
     def finish_plan(
         self, identifier: str, owner: str, plan: PreparedJobPlan | None
     ) -> dict[str, Any] | None:
-        """Release metadata capacity after the supervised child has exited.
+        """Release metadata capacity after native operation completion or child exit.
 
         Args:
             identifier: Reserved plan ID.
@@ -466,7 +466,7 @@ class PostgresJobStore:
         artifact: Artifact | None,
         error: dict[str, str] | None = None,
     ) -> bool:
-        """Commit completion only after the child exits and artifact is published.
+        """Commit only after native completion/cleanup and artifact publication.
 
         Args:
             identifier: Running job.
