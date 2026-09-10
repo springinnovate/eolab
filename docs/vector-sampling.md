@@ -84,11 +84,23 @@ the API does not accept the returned outline as a calculation area.
   must be complete; exceeding a server limit rejects the selection.
 - Browser outlines are capped independently at 256 KiB compact GeoJSON and
   10,000 positions. Topology-preserving simplification normally keeps holes and
-  separate islands. If their irreducible number exceeds the display budget,
+  separate islands. If the full-detail attempts cannot meet the display budget,
   only simplified exteriors of the largest 500 polygon components are shown.
   Small islands and holes may therefore be absent from the approximate outline,
   but remain in every analysis. Explicit east/west dateline components are kept
   separate without longitude wrapping or union. Zoom uses the exact `bbox`.
+- Display simplification uses documented module-level policy constants in
+  `vector/display_geometry.py`: initial tolerance is envelope span / 16,384
+  (about 0.006% of span), with a 1e-9-degree positive span floor. Tolerance
+  doubles after each unsuccessful attempt. Nine full-detail attempts cover
+  span / 16,384 through span / 64; the tenth switches to the largest exteriors
+  at span / 32. Eighteen attempts total reach 8 times span. These are bounded
+  quality/work heuristics, not measured optimal values or proof that omitted
+  topology could never fit. Geometric growth explores fine through coarse
+  outlines, returning immediately when both display caps are met. Each attempt
+  simplifies the original polygons (or their original exteriors), so errors
+  do not accumulate from repeatedly simplifying the previous result. Exhaustion
+  fails explicitly; the supervised deadline remains the wall-clock bound.
 - New vector retention is rejected when 64 temporary area records are retained.
   Trusted retained snapshots also share a 32 MiB serialized-geometry budget;
   Python geometry objects use more memory than their serialized size. Removal

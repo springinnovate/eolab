@@ -10,6 +10,21 @@ MAX_DISPLAY_BYTES = 256 * 1024
 MAX_DISPLAY_COORDINATES = 10_000
 MAX_FALLBACK_COMPONENTS = 500
 
+# Display-quality heuristics, not geographic accuracy or latency guarantees.
+# Start at about 0.006% of the envelope span to retain recognizable detail.
+INITIAL_TOLERANCE_SPAN_DIVISOR = 16_384
+# A positive floor keeps tolerance progression usable for tiny envelopes.
+MIN_DISPLAY_SPAN_DEGREES = 1e-9
+# Geometric growth covers fine through coarse outlines in bounded work.
+TOLERANCE_GROWTH_FACTOR = 2
+# Nine full-detail passes cover span/16,384 through span/64. If none fits,
+# spend the remaining passes on the largest exteriors, starting at span/32.
+# This is a quality/work tradeoff, not proof that the topology cannot fit.
+FULL_DETAIL_ATTEMPTS = 9
+# Eighteen total passes reach 8 * span, including nine exterior-only passes.
+# Stop at the first fitting result; the supervised deadline still bounds time.
+MAX_SIMPLIFICATION_ATTEMPTS = 18
+
 
 def display_geometry(
     exact: dict,
@@ -19,9 +34,12 @@ def display_geometry(
 
     Simplification runs in the selection's time/memory-bounded native child.
     Topology-preserving simplification retains holes and disconnected polygons.
-    If irreducible component/hole counts exceed the display budget, show the
-    largest 500 exterior outlines. This fallback never substitutes an envelope
-    or changes retained analysis geometry. Canonical dateline components remain
+    If the full-detail passes cannot meet the display budget, show at most
+    MAX_FALLBACK_COMPONENTS exterior outlines, largest by area. The module
+    constants define the tolerance progression and bounded attempt counts;
+    neither the finest fitting tolerance nor a runtime improvement is promised.
+    This fallback never substitutes an envelope or changes retained analysis
+    geometry. Canonical dateline components remain
     separate; no longitude wrapping or polygon union is performed.
 
     Args:
@@ -41,12 +59,12 @@ def display_geometry(
         polygons.extend(
             [geometry] if geometry.geom_type == "Polygon" else geometry.geoms
         )
-    span = max(bounds[2] - bounds[0], bounds[3] - bounds[1], 1e-9)
-    tolerance = span / 16_384
-    for attempt in range(18):
-        if attempt == 9:
-            # Topological detail can have a nonzero minimum size. Bound this
-            # display-only fallback by importance, never by source row order.
+    span = max(bounds[2] - bounds[0], bounds[3] - bounds[1], MIN_DISPLAY_SPAN_DEGREES)
+    tolerance = span / INITIAL_TOLERANCE_SPAN_DIVISOR
+    for attempt in range(MAX_SIMPLIFICATION_ATTEMPTS):
+        if attempt == FULL_DETAIL_ATTEMPTS:
+            # After the full-detail attempt budget, bound this display-only
+            # fallback by importance, never by source row order.
             polygons = [
                 Polygon(polygon.exterior)
                 for polygon in sorted(
@@ -78,7 +96,7 @@ def display_geometry(
                 <= MAX_DISPLAY_BYTES
             ):
                 return result
-        tolerance *= 2
-    # At a tolerance exceeding the entire envelope, each retained exterior is
-    # a triangle. 500 such polygons fit the caps even at float repr precision.
+        tolerance *= TOLERANCE_GROWTH_FACTOR
+    # A coarse tolerance does not itself prove the serialized result fits;
+    # retain the explicit failure if no attempt satisfies both display caps.
     raise RuntimeError("Bounded polygon outline could not be constructed")
