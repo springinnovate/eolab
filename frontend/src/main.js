@@ -28,6 +28,7 @@ import {
 import { CatalogSearchSuggestions } from "./catalog-search-suggestions.js";
 import { CatalogVisualizationCoordinator } from "./catalog-visualization.js";
 import { initializeCatalogPaneControls } from "./catalog-pane-controller.js";
+import { CatalogScanControls } from "./catalog-scan-controls.js";
 import { getCatalogItemKey } from "./catalog-item-identity.js";
 import {
     buildCatalogResultPresentation,
@@ -112,8 +113,6 @@ import "./processing/summary-statistics.css";
 
 const CATALOG_SEARCH_DEBOUNCE_MILLISECONDS = 300;
 const CATALOG_LOAD_ROOT_MARGIN = "300px 0px";
-
-let scanPollTimeout = null;
 
 /**
  * Browser-safe application settings loaded from the backend.
@@ -1711,7 +1710,7 @@ function renderScanStatus(scanStatus) {
         scanning: scanStatus.currentFile
             ? `Latest file: ${scanStatus.currentFile}`
             : "Preparing discovered geospatial datasets.",
-        completed: "Scan completed. The catalog has been refreshed.",
+        completed: "Scan completed.",
         failed: "The scan stopped before it could complete."
     };
     scanStatusElement.textContent =
@@ -1740,70 +1739,17 @@ function renderScanStatus(scanStatus) {
 }
 
 /**
- * Polls scan progress until the current scan finishes.
- *
- * @param {Function} refreshCatalog Reloads the active Catalog search.
- * @param {boolean} refreshWhenComplete Whether completion should refresh STAC.
- * @return {Promise<void>} Resolves after the current status is displayed.
- */
-async function pollScan(refreshCatalog, refreshWhenComplete) {
-    const scanResponse = await fetch("/api/scans/current", {
-        headers: { Accept: "application/json" }
-    });
-    if (!scanResponse.ok) {
-        throw new Error(`Scan status returned ${scanResponse.status}`);
-    }
-
-    const scanStatus = await scanResponse.json();
-    renderScanStatus(scanStatus);
-    if (["discovering", "scanning"].includes(scanStatus.state)) {
-        scanPollTimeout = window.setTimeout(
-            pollScan.bind(null, refreshCatalog, true),
-            750
-        );
-    } else if (refreshWhenComplete && scanStatus.state === "completed") {
-        await refreshCatalog();
-    }
-}
-
-/**
- * Starts a mounted-directory scan from the Catalog panel.
- *
- * @param {Function} refreshCatalog Reloads the active Catalog search.
- * @return {Promise<void>} Resolves after polling has been scheduled.
- */
-async function startScan(refreshCatalog) {
-    try {
-        if (scanPollTimeout !== null) {
-            window.clearTimeout(scanPollTimeout);
-        }
-        document.querySelector("#scan-status-disclosure").open = true;
-        document.querySelector("#scan-errors-disclosure").open = false;
-        const startResponse = await fetch("/api/scans", {
-            method: "POST",
-            headers: { Accept: "application/json" }
-        });
-        if (!startResponse.ok && startResponse.status !== 409) {
-            throw new Error(`Starting scan returned ${startResponse.status}`);
-        }
-        await pollScan(refreshCatalog, true);
-    } catch (scanError) {
-        document.querySelector("#start-scan").disabled = false;
-        document.querySelector("#scan-status").textContent = scanError.message;
-    }
-}
-
-/**
  * Connects the mounted-directory scanner controls.
  *
- * @param {Function} refreshCatalog Reloads the active Catalog search.
- * @return {Promise<void>} Resolves after current scan state is displayed.
+ * @param {() => Promise<void>} refreshCatalog Reloads the active Catalog search.
+ * @return {Promise<void>} Resolves after a snapshot or recoverable status error.
  */
 async function initializeScanner(refreshCatalog) {
-    document
-        .querySelector("#start-scan")
-        .addEventListener("click", startScan.bind(null, refreshCatalog));
-    await pollScan(refreshCatalog, false);
+    const controls = new CatalogScanControls({
+        documentContext: document, windowContext: window,
+        renderStatus: renderScanStatus, refreshCatalog,
+    });
+    await controls.observe();
 }
 
 /**
