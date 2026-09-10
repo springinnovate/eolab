@@ -1,19 +1,25 @@
 """Application workflow and supervision for explicitly supported processing jobs."""
 
 import asyncio
+from dataclasses import asdict, replace
 from contextlib import suppress
 import logging
+import time
 from typing import Any
 
 from eolab_app.execution.bounded_process import (
     ProcessDeadlineError,
-    run_bounded_process,
 )
+from eolab_app.execution.reusable_process import ReusableProcess, run_process
 from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.clip_models import ClipSpec, RasterClipLimits
-from eolab_app.processing.aggregate_models import AggregateSpec, RasterAggregateLimits
+from eolab_app.processing.aggregate_models import (
+    AggregateSpec,
+    RasterAggregateLimits,
+    AggregateExecutionTiming,
+)
 from eolab_app.processing.raster_aggregate import aggregate_process_target
-from eolab_app.processing.ports import JobArtifactStore, JobStore
+from eolab_app.processing.ports import JobArtifactStore, JobStore, JobWakeup
 from eolab_app.processing.raster_clip import clip_process_target
 from eolab_app.raster.errors import RasterFeatureError
 from eolab_app.raster.ports import RasterSourceAuthorizer
@@ -30,6 +36,8 @@ class ProcessingWorker:
         jobs: JobStore,
         artifacts: JobArtifactStore,
         limits: RasterClipLimits,
+        *,
+        native: ReusableProcess | None = None,
     ) -> None:
         """Compose the worker's narrow capabilities.
 
@@ -38,11 +46,13 @@ class ProcessingWorker:
             jobs: Durable global admission and attempt fencing.
             artifacts: Confined scratch and atomic result-file storage.
             limits: Deployment-wide bounded processing policy.
+            native: Lifecycle-managed execution lane supplied by composition.
         """
         self.authorizer = authorizer
         self.jobs = jobs
         self.artifacts = artifacts
         self.limits = limits
+        self.native = native
         self.aggregate_limits = RasterAggregateLimits.with_lifecycle(limits)
 
     async def _execute(self, row: dict[str, Any]) -> Any:
@@ -57,6 +67,7 @@ class ProcessingWorker:
         Raises:
             ProcessingError: If the source, resources, or native operation fail.
         """
+        started = time.perf_counter()
         operation = row["spec"]["operation"]
         if operation == "raster.clip.v1":
             spec = ClipSpec.model_validate(row["spec"])
@@ -89,11 +100,15 @@ class ProcessingWorker:
             row["reserved_bytes"],
             self.limits,
         )
-        status, value = await run_bounded_process(
+        prepared = time.perf_counter()
+        outcome = await run_process(
             target,
             (action, (authorized.source_path, spec, directory, limits)),
             self.limits.runtime_seconds,
+            self.native,
         )
+        status, value = outcome.value
+        calculated = time.perf_counter()
         if status != "ok":
             raise ProcessingError(*value)
         await self.authorizer.require_current(authorized)
@@ -102,6 +117,19 @@ class ProcessingWorker:
         # This bounded local-directory rename must finish before cancellation
         # can mark the attempt terminal and permit cleanup of its files.
         self.artifacts.publish(row["attempt_id"], row["reserved_bytes"])
+        if operation == "raster.aggregate.v1":
+            value = replace(
+                value,
+                execution_timing=AggregateExecutionTiming(
+                    queueSeconds=max(
+                        0, (row["updated_at"] - row["created_at"]).total_seconds()
+                    ),
+                    preparationSeconds=prepared - started,
+                    nativeProcessSeconds=calculated - prepared,
+                    publicationSeconds=time.perf_counter() - calculated,
+                    process=asdict(outcome.timing) if outcome.timing else None,
+                ).model_dump(),
+            )
         return value
 
     async def run_once(self) -> bool:
@@ -219,22 +247,32 @@ class ProcessingWorker:
         )
 
 
-async def serve(worker: ProcessingWorker) -> None:
+async def serve(worker: ProcessingWorker, wakeup: JobWakeup | None = None) -> None:
     """Consume the queue using dependencies supplied by application composition.
 
     Args:
         worker: Composed worker with migrated storage and confined artifact paths.
+        wakeup: Optional queue-change hints; durable claims remain authoritative.
 
     Raises:
         asyncio.CancelledError: After stopping active native work on shutdown.
     """
-    while True:
-        try:
-            await worker.cleanup()
-            if not await worker.run_once():
-                await asyncio.sleep(2)
-        except (ProcessingError, OSError):
-            LOGGER.warning(
-                "Processing worker storage is unavailable; retrying in five seconds"
-            )
-            await asyncio.sleep(5)
+    try:
+        while True:
+            try:
+                if wakeup is not None:
+                    await wakeup.arm()
+                await worker.cleanup()
+                if not await worker.run_once():
+                    if wakeup is None:
+                        await asyncio.sleep(2)
+                    else:
+                        await wakeup.wait(2)
+            except (ProcessingError, OSError):
+                LOGGER.warning(
+                    "Processing worker storage is unavailable; retrying in five seconds"
+                )
+                await asyncio.sleep(5)
+    finally:
+        if wakeup is not None:
+            await wakeup.close()

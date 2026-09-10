@@ -358,7 +358,7 @@ export class SummaryStatisticsController {
                     if (engineState.plan) card.plan = engineState.plan;
                     if (settled && matching && job.result?.rows[index]) {
                         card.result = { key: entry.key, row: job.result.rows[index], job, source: batch.intent.source, area: batch.intent.area,
-                            requestStarted: entry.requestStarted };
+                            requestStarted: entry.requestStarted, stageTrace: engineState.resultTiming };
                         card.message = "Up to date";
                     } else if (settled && engineState.manualRequired) {
                         card.manualRequired = true;
@@ -397,7 +397,20 @@ export class SummaryStatisticsController {
         for (const card of this.state.statistics) {
             const result = card.result;
             if (result && Number.isFinite(result.requestStarted) && result.totalWaitSeconds === undefined) {
-                result.totalWaitSeconds = Math.max(0, this.now() - result.requestStarted) / 1000;
+                const displayed = this.now();
+                result.totalWaitSeconds = Math.max(0, displayed - result.requestStarted) / 1000;
+                const trace = result.stageTrace;
+                if (trace && [trace.planningStarted, trace.planningFinished, trace.submissionStarted, trace.submissionFinished].every(Number.isFinite)
+                    && result.requestStarted <= trace.planningStarted && trace.planningFinished <= trace.submissionStarted) {
+                    result.stages = {
+                        beforePlanningSeconds: (trace.planningStarted - result.requestStarted) / 1000,
+                        planningSeconds: (trace.planningFinished - trace.planningStarted) / 1000,
+                        beforeSubmissionSeconds: (trace.submissionStarted - trace.planningFinished) / 1000,
+                        submissionSeconds: (trace.submissionFinished - trace.submissionStarted) / 1000,
+                        afterSubmissionSeconds: (displayed - trace.submissionFinished) / 1000,
+                        planReused: trace.planReused, serverPlan: trace.serverPlan,
+                    };
+                }
                 measured = true;
             }
         }

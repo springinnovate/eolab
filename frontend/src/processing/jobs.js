@@ -14,6 +14,8 @@ export class ProcessingJobs {
         this.refreshing = null;
         this.timer = null;
         this.destroyed = false;
+        this.stopEvents = null;
+        this.eventRevision = 0;
     }
     /** Observe shared history. @param {Function} listener Receives store. @return {Function} Unsubscribe. */
     subscribe(listener) { this.listeners.add(listener); return () => this.listeners.delete(listener); }
@@ -30,6 +32,7 @@ export class ProcessingJobs {
     refresh() {
         if (this.refreshing) return this.refreshing;
         const revision = this.revision;
+        const eventRevision = this.eventRevision;
         this.refreshing = (async () => {
             try {
                 const jobs = await this.api.listJobs();
@@ -38,14 +41,26 @@ export class ProcessingJobs {
                 }
                 if (!this.destroyed && revision === this.revision) { this.jobs = jobs; this.error = ""; }
             } catch (error) { this.error = `Processing history unavailable: ${error.message}`; }
-        })().finally(() => { this.refreshing = null; this.notify(); this.schedule(); });
+        })().finally(() => {
+            this.refreshing = null; this.notify(); this.schedule();
+            // An event arriving during a read may describe a newer commit than
+            // that read saw. Coalesce the burst into exactly one subsequent read.
+            if (!this.destroyed && eventRevision !== this.eventRevision) void this.refresh();
+        });
         return this.refreshing;
     }
     /** Schedule progress/expiry updates. @return {void} */
     schedule() {
         this.clock.clearTimeout(this.timer);
+        const active = this.jobs.some(job => ACTIVE_JOB_STATES.has(job.status)) || this.tracked.size;
+        if (!this.destroyed && active && !this.stopEvents) this.stopEvents = this.api.watchJobs?.(() => {
+            if (this.destroyed) return;
+            this.eventRevision += 1;
+            void this.refresh();
+        }) ?? null;
+        if ((!active || this.destroyed) && this.stopEvents) { this.stopEvents(); this.stopEvents = null; }
         if (!this.destroyed) this.timer = this.clock.setTimeout(() => void this.refresh(),
-            this.jobs.some(job => ACTIVE_JOB_STATES.has(job.status)) || this.tracked.size ? 2000 : 30000);
+            active ? 2000 : 30000);
     }
     /** Mutate one owned job and refresh. @param {string} id Job ID. @param {string} action Cancel or delete. @return {Promise<Object|undefined>} Updated job. */
     async action(id, action) {
@@ -55,5 +70,8 @@ export class ProcessingJobs {
         return job;
     }
     /** Stop the shared poller. @return {void} */
-    destroy() { this.destroyed = true; this.clock.clearTimeout(this.timer); this.listeners.clear(); }
+    destroy() {
+        this.destroyed = true; this.clock.clearTimeout(this.timer); this.listeners.clear();
+        this.stopEvents?.(); this.stopEvents = null;
+    }
 }

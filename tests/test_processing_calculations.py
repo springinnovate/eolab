@@ -138,6 +138,7 @@ def test_calculation_http_lifecycle_mixed_history_and_owned_csv(
     """
     client, worker, source, artifacts, app = boundary
     plan = plan_calculation(client, wholeRaster=True)
+    assert plan["timing"]["nativeProcessSeconds"] >= 0
     assert plan["inclusion"] == "cell_center"
     assert plan["grid"]["width"] == 100
     key = uuid4().hex
@@ -147,6 +148,12 @@ def test_calculation_http_lifecycle_mixed_history_and_owned_csv(
     url = f"/api/processing/jobs/{job['jobId']}"
     ready = client.get(url).json()
     assert ready["status"] == "ready", ready
+    assert ready["result"]["executionTiming"]["queueSeconds"] >= 0
+    assert ready["result"]["queuedToReadySeconds"] >= 0
+    assert (
+        ready["result"]["executionTiming"]["nativeProcessSeconds"]
+        >= ready["result"]["performance"]["kernelSeconds"]
+    )
     assert ready["result"]["rows"][0]["value"] == "4999"
     assert float(ready["result"]["rows"][1]["value"]) == sum(range(5001, 10000))
     download = client.get(ready["result"]["url"])

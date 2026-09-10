@@ -101,6 +101,25 @@ test("total wait starts again at explicit confirmation, excluding time reading t
     h.controller.request(card.id,"manual");await flush();assert.equal(card.manualRequired,true);
     h.elapse(60000);h.controller.request(card.id,"manual");await flush();h.elapse(2500);await h.finish();
     assert.equal(card.result.totalWaitSeconds,2.5);
+    assert.equal(h.requests.filter(r=>r[0]==="plan").length,1,"confirmation reuses the reviewed vector-area plan");
+    assert.equal(card.result.stages.planReused,true);
+    assert.equal(card.result.stages.planningSeconds,0);
+});
+
+test("browser stages add to total and distinguish planning from submission and delivery", async()=>{
+    const h=fixture();await h.open();const card=h.controller.state.statistics[0];
+    const plan=h.api.planCalculation,submit=h.api.submitCalculation;
+    h.api.planCalculation=async intent=>{h.elapse(1200);return {...await plan(intent),timing:{reservationSeconds:.1,preparationSeconds:.2,nativeProcessSeconds:.7,finalizationSeconds:.1}};};
+    h.api.submitCalculation=async request=>{h.elapse(300);return submit(request);};
+    h.controller.calculateSelection();h.elapse(700);await h.tick();h.elapse(4000);await h.finish();
+    const s=card.result.stages;
+    assert.equal(s.beforePlanningSeconds,.7);assert.equal(s.planningSeconds,1.2);
+    assert.equal(s.submissionSeconds,.3);assert.equal(s.afterSubmissionSeconds,4);
+    assert.ok(Math.abs(s.beforePlanningSeconds+s.planningSeconds+s.beforeSubmissionSeconds+s.submissionSeconds+s.afterSubmissionSeconds-card.result.totalWaitSeconds)<1e-9);
+    assert.equal(s.serverPlan.nativeProcessSeconds,.7);
+    const text=node=>[node.textContent,...node.children.map(text)].join(" ");
+    assert.match(text(h.view.cards.get(card.id).detailsBody),/Planning round trip: 1.200 s/);
+    assert.match(text(h.view.cards.get(card.id).detailsBody),/Submission response → result displayed: 4.000 s/);
 });
 
 test("replacement total wait includes obsolete job cancellation without inheriting its start", async()=>{
@@ -357,6 +376,7 @@ test("uncertain submissions retain the same request identity during recovery",as
     assert.equal(h.controller.state.recoverable,true);const request=h.controller.engine.record.pending.requestId;
     h.controller.engineHandlers.onRetry();await flush();assert.equal(h.requests.find(r=>r[0]==="submit")[1].requestId,request);
     await h.finish();assert.equal(card.current,true);
+    assert.equal(card.result.stages,undefined);
 });
 test("exports retain exact integers, null explanations, source, and immutable formula context",async()=>{
     const h=fixture();await h.open();const card=h.controller.state.statistics[0];h.controller.request(card.id,"manual");await flush();await h.finish();

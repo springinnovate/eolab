@@ -50,6 +50,23 @@ function validatePerformance(value) {
         value.readWindows !== value.execution.readWindows) throw new Error("Processing returned invalid performance measurements.");
 }
 
+/** Validate optional stage durations, allowing legacy responses without them.
+ * @param {Object|null} value Timing object. @param {string[]} fields Required stage names. @return {void}
+ */
+function validateStages(value, fields) {
+    if (value == null) return;
+    if (fields.some(key => !Number.isFinite(value[key]) || value[key] < 0)) {
+        throw new Error("Processing returned invalid stage timings.");
+    }
+}
+
+/** Validate optional native reuse/readiness metadata. @param {Object|null} value Process timing. @return {void} */
+function validateProcessTiming(value) {
+    if (value == null) return;
+    validateStages(value, ["readyWaitSeconds", "operationSeconds", "overheadSeconds"]);
+    if (typeof value.reusedProcess !== "boolean") throw new Error("Processing returned invalid process reuse metadata.");
+}
+
 /** Validate a public owned job before presenting actions. @param {Object} job API response. @return {Object} Validated job. */
 function validateJob(job) {
     opaqueId(job?.jobId);
@@ -62,6 +79,9 @@ function validateJob(job) {
         if (job.operation === "raster.aggregate.v1") {
             validateCalculationRows(job.result.rows);
             validatePerformance(job.result.performance);
+            validateStages(job.result.executionTiming, ["queueSeconds", "preparationSeconds", "nativeProcessSeconds", "publicationSeconds"]);
+            validateProcessTiming(job.result.executionTiming?.process);
+            if (job.result.queuedToReadySeconds != null) validateStages(job.result, ["queuedToReadySeconds"]);
         }
     }
     return job;
@@ -84,10 +104,26 @@ function validateCalculationRows(rows) {
 
 /** Own HTTP serialization and cookie-session establishment for Downloads. */
 export class ProcessingApiClient {
-    /** @param {Function} [fetchImplementation=globalThis.fetch] Same-origin HTTP transport. */
-    constructor(fetchImplementation = globalThis.fetch) {
+    /** @param {Function} [fetchImplementation=globalThis.fetch] Same-origin HTTP transport.
+     * @param {Function|undefined} [eventSource=globalThis.EventSource] Optional browser SSE transport. */
+    constructor(fetchImplementation = globalThis.fetch, eventSource = globalThis.EventSource) {
         this.fetch = fetchImplementation;
+        this.EventSource = eventSource;
         this.session = null;
+    }
+
+    /** Watch hints after ordinary requests establish the owned session cookie.
+     * @param {Function} changed Request an authoritative job refresh.
+     * @return {Function|null} Close the connection, or null when SSE is unavailable. */
+    watchJobs(changed) {
+        if (typeof this.EventSource !== "function") return null;
+        try {
+            const source = new this.EventSource("/api/processing/events");
+            let closed = false;
+            const receive = event => { if (!closed && event.data === "{}") changed(); };
+            source.addEventListener("changed", receive);
+            return () => { if (!closed) { closed = true; source.removeEventListener("changed", receive); source.close(); } };
+        } catch { return null; } // The existing two-second poll remains authoritative.
     }
 
     /** Establish the cookie before concurrent requests. @return {Promise<Object>} Initial job listing. */
@@ -169,6 +205,8 @@ export class ProcessingApiClient {
             !Number.isSafeInteger(plan.grid.decodedBytes) || plan.grid.decodedBytes < 1) {
             throw new Error("Processing returned an invalid calculation estimate.");
         }
+        validateStages(plan.timing, ["reservationSeconds", "preparationSeconds", "nativeProcessSeconds", "finalizationSeconds"]);
+        validateProcessTiming(plan.timing?.process);
         return plan;
     }
 

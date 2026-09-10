@@ -14,6 +14,7 @@ from uuid import uuid4
 import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
+from eolab_app.processing.job_notifications import JOB_QUEUE_CHANNEL
 
 from eolab_app.processing.models import (
     Artifact,
@@ -138,7 +139,7 @@ class PostgresJobStore:
     def finish_plan(
         self, identifier: str, owner: str, plan: PreparedJobPlan | None
     ) -> dict[str, Any] | None:
-        """Release metadata capacity after the supervised child has exited.
+        """Release metadata capacity after native operation completion or child exit.
 
         Args:
             identifier: Reserved plan ID.
@@ -295,7 +296,11 @@ class PostgresJobStore:
                     expected.minimum_claim_version,
                 ),
             )
-            return cursor.fetchone()
+            row = cursor.fetchone()
+            # PostgreSQL delivers this empty hint only if admission commits.
+            # No job IDs, owner capabilities, or operation inputs are broadcast.
+            cursor.execute("SELECT pg_notify(%s, '')", (JOB_QUEUE_CHANNEL,))
+            return row
 
     def get(self, identifier: str, owner: str) -> dict[str, Any]:
         """Read one owned job without exposing another session's existence.
@@ -461,7 +466,7 @@ class PostgresJobStore:
         artifact: Artifact | None,
         error: dict[str, str] | None = None,
     ) -> bool:
-        """Commit completion only after the child exits and artifact is published.
+        """Commit only after native completion/cleanup and artifact publication.
 
         Args:
             identifier: Running job.

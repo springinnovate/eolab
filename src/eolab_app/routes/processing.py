@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 from fastapi import APIRouter, HTTPException, Path, Request, Response
 from fastapi.routing import APIRoute
 from pydantic import Field
-from starlette.responses import FileResponse
+from starlette.responses import FileResponse, StreamingResponse
 
 from eolab_app.processing.models import (
     ArtifactDownload,
@@ -37,6 +37,7 @@ from eolab_app.processing.aggregate_models import (
     AggregateValidationRequest,
 )
 from eolab_app.processing.service import ProcessingService
+from eolab_app.routes.processing_events import JobEventResponse
 from eolab_app.raster.errors import RasterFeatureError
 from eolab_app.routes.raster_http import raster_http_exception
 from eolab_app.routes.http_disconnect import (
@@ -412,6 +413,31 @@ def create_processing_router(service: ProcessingService) -> APIRouter:
             Bounded owned job summaries.
         """
         return {"jobs": await _result(service.list_owned(_owner(request, response)))}
+
+    @router.get(
+        "/events",
+        response_class=StreamingResponse,
+        responses={
+            200: {"content": {"text/event-stream": {"schema": {"type": "string"}}}}
+        },
+    )
+    async def events(request: Request, response: Response) -> Response:
+        """Stream same-origin owned-job hints; clients still use authorized reads.
+
+        Args:
+            request: Existing browser session and origin context.
+            response: Secure cookie and private-cache headers.
+
+        Returns:
+            Bounded SSE connection with an immediate snapshot-refresh hint.
+        """
+        origin = request.headers.get("origin")
+        if request.headers.get("sec-fetch-site") == "cross-site" or (
+            origin and urlsplit(origin).netloc != request.url.netloc
+        ):
+            raise HTTPException(403, "Use same-origin job updates.")
+        subscription = await _result(service.subscribe_jobs(_owner(request, response)))
+        return JobEventResponse(subscription, dict(response.headers))
 
     @router.get("/jobs/{job_id}", response_model=SupportedJobResponse)
     async def get(

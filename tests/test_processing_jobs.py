@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 import hashlib
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -19,6 +20,7 @@ import rasterio
 
 from eolab_app.processing.artifacts import LocalJobArtifacts
 from eolab_app.processing.job_store import PostgresJobStore
+from eolab_app.processing.job_notifications import PostgresJobWakeup
 from eolab_app.processing.models import (
     Artifact,
     PreparedJobPlan,
@@ -353,9 +355,7 @@ def test_global_admission_concurrency_fencing_and_restart_recovery(
     assert not store.heartbeat(claim["id"], "stale-token", {})
     assert not store.finish(claim["id"], "stale-token", Artifact(1, "x", "x.tif"))
     store.cancel(claim["id"], "owner")
-    assert not store.finish(
-        claim["id"], claim["attempt_id"], Artifact(1, "x", "x.tif")
-    )
+    assert not store.finish(claim["id"], claim["attempt_id"], Artifact(1, "x", "x.tif"))
     assert store.finish(claim["id"], claim["attempt_id"], None)
     assert store.get(claim["id"], "owner")["status"] == "cancelled"
     queued = store.submit("owner", plan_id, "next-request", spec)
@@ -397,14 +397,19 @@ def test_job_store_admits_operation_data_without_raster_fields(
     assert submitted_job["reserved_bytes"] == 4096
     assert store.get(submitted_job["id"], "owner")["spec"] == prepared.summary
     assert store.list_owned("owner")[0]["spec"] == prepared.summary
-    assert store.submit("owner", plan_id, "summary-request", prepared)["id"] == submitted_job["id"]
+    assert (
+        store.submit("owner", plan_id, "summary-request", prepared)["id"]
+        == submitted_job["id"]
+    )
     store.limits = replace(store.limits, max_stored_bytes=4096)
     with pytest.raises(ProcessingError) as refused:
         store.submit("owner", plan_id, "another-request", prepared)
     assert refused.value.code == "storage_full"
     claimed = store.claim()
     assert claimed["spec"] == prepared.specification
-    assert store.heartbeat(claimed["id"], claimed["attempt_id"], {"phase": "summarizing"})
+    assert store.heartbeat(
+        claimed["id"], claimed["attempt_id"], {"phase": "summarizing"}
+    )
     assert store.cancel(claimed["id"], "owner")["status"] == "cancelling"
     assert store.finish(claimed["id"], claimed["attempt_id"], None)
     assert store.get(claimed["id"], "owner")["status"] == "cancelled"
@@ -627,13 +632,15 @@ def test_worker_composition_requires_only_catalog_and_processing_configuration(
         """
         pytest.fail("Worker composition entered an unrelated web/AOI/rendering feature")
 
-    async def consume(worker: ProcessingWorker) -> None:
+    async def consume(worker: ProcessingWorker, wakeup: Any) -> None:
         """Check the composed worker without starting an endless test loop.
 
         Args:
             worker: Composed, migrated processing owner.
+            wakeup: Processing-owned notification adapter, constructed without I/O.
         """
         assert isinstance(worker, ProcessingWorker)
+        assert isinstance(wakeup, composition.PostgresJobWakeup)
         assert not await worker.run_once()
 
     monkeypatch.setattr(composition, "create_app", unexpected)
@@ -641,3 +648,74 @@ def test_worker_composition_requires_only_catalog_and_processing_configuration(
     monkeypatch.setattr(composition, "GeoServerRasterPublisher", unexpected)
     monkeypatch.setattr(composition, "serve_processing", consume)
     asyncio.run(composition.run_processing_worker())
+
+
+def test_queue_notification_is_committed_with_admission(store, tmp_path, monkeypatch):
+    """Notify only committed admissions and retain the durable single-worker fence.
+
+    Args:
+        store: Explicitly disposable PostgreSQL store.
+        tmp_path: Real raster for a supported operation specification.
+        monkeypatch: Inject one transaction rollback after INSERT and NOTIFY.
+    """
+    path = write_source(tmp_path / "source.tif", numpy.ones((100, 100), dtype="uint8"))
+    spec = prepare_clip_job(
+        make_spec(path, ClipArea(kind="bounds", bounds=(0.1, 9.1, 0.9, 9.9)))
+    )
+    plan_id = store.reserve_plan("owner", SOURCE)
+    store.finish_plan(plan_id, "owner", spec)
+
+    async def scenario():
+        """Check two listeners, commit/rollback delivery, and durable claims."""
+        listeners = [PostgresJobWakeup(store.conninfo) for _ in range(2)]
+        try:
+            for listener in listeners:
+                await listener.arm()
+                assert listener.reader is not None
+            assert await asyncio.to_thread(store.claim) is None
+            transaction = store._transaction
+
+            @contextmanager
+            def rolled_back(*args, **kwargs):
+                """Abort after admission's INSERT/NOTIFY but before commit.
+
+                Args:
+                    args: Store transaction positional options.
+                    kwargs: Store transaction keyword options.
+
+                Yields:
+                    The real PostgreSQL transaction cursor.
+                """
+                with transaction(*args, **kwargs) as cursor:
+                    yield cursor
+                    raise RuntimeError("rollback admission")
+
+            with monkeypatch.context() as patch:
+                patch.setattr(store, "_transaction", rolled_back)
+                with pytest.raises(RuntimeError, match="rollback admission"):
+                    await asyncio.to_thread(
+                        store.submit, "owner", plan_id, "rolled-back", spec
+                    )
+            assert not await listeners[0].wait(0.05)
+            assert await asyncio.to_thread(store.claim) is None
+            queued = await asyncio.to_thread(
+                store.submit, "owner", plan_id, "committed", spec
+            )
+            assert all(
+                await asyncio.gather(*(listener.wait(1) for listener in listeners))
+            )
+            duplicate = await asyncio.to_thread(
+                store.submit, "owner", plan_id, "committed", spec
+            )
+            assert duplicate["id"] == queued["id"]
+            claims = await asyncio.gather(
+                *(asyncio.to_thread(store.claim) for _ in listeners)
+            )
+            assert sum(claim is not None for claim in claims) == 1
+            assert next(claim for claim in claims if claim)["id"] == queued["id"]
+        finally:
+            await asyncio.gather(*(listener.close() for listener in listeners))
+
+    # Psycopg asynchronous connections require a selector loop on Windows too.
+    with asyncio.Runner(loop_factory=asyncio.SelectorEventLoop) as runner:
+        runner.run(scenario())
