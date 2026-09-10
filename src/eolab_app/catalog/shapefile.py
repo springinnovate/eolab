@@ -67,7 +67,7 @@ def discover_shapefile_datasets(
     """
     components_by_stem: dict[str, list[Path]] = {}
     for file_name in file_names:
-        component_extension = _component_extension(file_name)
+        component_extension = shapefile_component_extension(file_name)
         if component_extension is None:
             continue
         component_stem = file_name[: -len(component_extension)]
@@ -80,7 +80,7 @@ def discover_shapefile_datasets(
         shapefile_paths = [
             component_path
             for component_path in component_paths
-            if _component_extension(component_path.name) == ".shp"
+            if shapefile_component_extension(component_path.name) == ".shp"
         ]
         if shapefile_paths:
             datasets.append(
@@ -117,7 +117,7 @@ def build_stac_item(
     relative_path_text = relative_path.as_posix()
     components: dict[str, Path] = {}
     for component_path in component_paths:
-        component_extension = _component_extension(component_path.name)
+        component_extension = shapefile_component_extension(component_path.name)
         if component_extension in components:
             raise ValueError(
                 "Shapefile has duplicate components for "
@@ -236,14 +236,16 @@ def build_stac_item(
     return item
 
 
-def _component_extension(file_name: str) -> str | None:
+def shapefile_component_extension(file_name: str) -> str | None:
     """Return a recognized Shapefile component extension.
 
     Args:
-        file_name: Candidate companion-file name.
+        file_name: Basename of a filesystem file or ZIP member.
 
     Returns:
-        Canonical lower-case component extension, or ``None`` when unsupported.
+        First matching canonical suffix in ``SHAPEFILE_COMPONENT_TYPES`` order,
+        including compound ``.shp.xml``, or ``None`` when unsupported.
+        Matching is case-insensitive; the caller retains the exact stem.
     """
     lower_file_name = file_name.lower()
     for extension in SHAPEFILE_COMPONENT_TYPES:

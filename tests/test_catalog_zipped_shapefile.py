@@ -418,3 +418,40 @@ def test_zipped_item_requires_its_archive_source_asset() -> None:
             "zipped-shapefile-missing",
             {},
         )
+
+
+@pytest.mark.parametrize("dbf_stem", ("Roads", "roads"))
+def test_archive_component_matching_preserves_exact_stems(
+    tmp_path: Path,
+    dbf_stem: str,
+) -> None:
+    """Accept mixed extensions but never use a differently cased stem.
+
+    Args:
+        tmp_path: Isolated mounted source directory.
+        dbf_stem: Matching or mismatched stem for the required attribute file.
+    """
+    components = write_shapefile(tmp_path / "fixtures" / "Roads.shp", (1.0, 2.0))
+    archive_path = tmp_path / "mixed-case.zip"
+    with ZipFile(archive_path, mode="w", compression=ZIP_DEFLATED) as archive:
+        for component in components:
+            stem = dbf_stem if component.suffix == ".dbf" else component.stem
+            archive.write(component, arcname=f"nested/{stem}{component.suffix.upper()}")
+        archive.writestr("nested/Roads.ShP.XmL", "<metadata/>")
+        archive.writestr("nested/Roads.xml", "unrelated")
+        archive.writestr("nested/Roads.shp.bak", "unrelated")
+
+    result = build_dataset_metadata(
+        tmp_path,
+        DatasetCandidate(archive_path, "zipped-shapefile"),
+        create_default_dataset_handler_registry(),
+    )
+
+    if dbf_stem == "Roads":
+        assert result.error is None
+        (item,) = result.items
+        assert item["properties"]["title"] == "mixed-case.zip!/nested/Roads.SHP"
+        assert item["properties"]["table:row_count"] == 1
+    else:
+        assert result.items == ()
+        assert "missing required components: .dbf" in result.error
