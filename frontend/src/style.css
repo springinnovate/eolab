@@ -3679,6 +3679,8 @@ article.raster-histogram-summary {
   display: none;
 }
 
+.map-inspection-tabs[hidden] { display: none; }
+
 #map-inspection[data-minimized="true"] .map-inspection-tabs {
   display: none;
 }
@@ -3698,16 +3700,10 @@ article.raster-histogram-summary {
 }
 
 .map-click-summary {
-  pointer-events: auto;
-  flex: 0 0 auto;
+  grid-column: 1 / -1;
   min-width: 0;
-  padding: 8px 10px;
-  border: 1px solid var(--border-1);
-  border-radius: var(--radius);
-  background: var(--surface-1);
 }
 .map-click-summary[hidden], .map-click-results button[hidden] { display: none; }
-.map-click-summary > p { margin: 0 0 6px; color: var(--text-2); font-size: 0.72rem; }
 .map-click-results { display: flex; flex-wrap: wrap; gap: 6px; }
 .map-click-results button {
   flex: 1 1 170px;
@@ -3725,7 +3721,7 @@ article.raster-histogram-summary {
 .map-click-results span { margin-top: 3px; font-size: 0.72rem; color: var(--text-2); }
 .map-click-results button:disabled { cursor: default; }
 .map-click-results button:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
-.map-click-results button[data-unread="true"] { border-color: var(--brand); background: var(--surface-selected); }
+.map-click-results button[aria-pressed="true"] { border-color: var(--brand); background: var(--surface-selected); }
 .map-inspection-tab[data-unread="true"]::after { content: " •"; color: var(--brand); }
 .map-click-results button[data-loading="true"] strong::after {
   content: "";

@@ -217,7 +217,7 @@ test("Map layers owns compact rows; the bounded map-tool dock owns styling", () 
     assert.match(inspection.source, /popover="manual"/);
     assert.match(editor.source, /role="tabpanel"/);
     assert.match(inspection.source, /id="map-inspection-tabs"[^>]+role="tablist"/);
-    assert.match(inspection.source, /id="map-inspection-dock-title"[^>]*>Map inspection/);
+    assert.match(inspection.source, /id="map-inspection-dock-title"[^>]*>Map tools/);
     assert.match(inspection.source, /id="map-inspection-more-summary"[^>]*>More/);
     assert.match(inspection.source, /id="open-downloads-dock"[\s\S]*?>History &amp; exports/);
     assert.match(
@@ -386,6 +386,14 @@ test("raster histogram owns its sampling controls, AOI, and results", () => {
     assert.match(MARKUP, /id="raster-point-samples"[^>]*aria-live="polite"/s);
     assert.match(MARKUP, /id="raster-point-sample-list"/);
     assert.doesNotMatch(MARKUP, /analysis-aoi-disclosure|toggle-analysis-aoi/);
+});
+
+test("inspection header contains result navigation in consistent raster then feature order", () => {
+    const headerEnd = MARKUP.indexOf("</header>", requireMarkupPosition("map-inspection-dock-title"));
+    assert.ok(requireMarkupPosition("map-click-summary") < headerEnd);
+    assert.ok(requireMarkupPosition("map-click-histogram") < requireMarkupPosition("map-click-feature"));
+    assert.ok(requireMarkupPosition("map-inspection-tab-histogram") < requireMarkupPosition("map-inspection-tab-feature"));
+    assert.equal(countMarkupId("map-click-position"), 0);
 });
 
 test("Raster histogram leads with sampling before results and mode", () => {

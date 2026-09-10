@@ -43,6 +43,13 @@ background receive a New results indicator until that tool is opened. An empty
 feature result remains visible in the summary; a click outside all raster
 coverage does not retain a raster summary.
 
+The click location, Minimize/More actions, and result cards share one header.
+Cards show the selected view and replace their corresponding navigation tabs;
+other open tools remain in a compact keyboard-accessible row. Before a click,
+the header reads Map tools and retains ordinary tool navigation. Raster
+histograms precedes Features in both presentations. Minimizing hides cards and
+navigation together without discarding results or changing request lifecycles.
+
 Application composition begins each click and forwards display-only snapshots
 from the raster viewer and vector inspector. The raster viewer's optional
 `onHistogramChange` callback supplies `{state, message}` or null; the vector
