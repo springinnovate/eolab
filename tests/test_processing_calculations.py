@@ -389,7 +389,7 @@ def test_legacy_claim_protocol_cannot_consume_calculations(
         )
         conn.rollback()  # Observe legacy admission without leaving an unfenced test job.
     with psycopg.connect(store.conninfo) as conn:
-        conn.execute("DELETE FROM processing.schema_version WHERE version=2")
+        conn.execute("DELETE FROM processing.schema_version WHERE version>1")
         conn.execute(
             "ALTER TABLE processing.schema_version ADD CONSTRAINT schema_version_version_check CHECK(version=1)"
         )
@@ -397,7 +397,7 @@ def test_legacy_claim_protocol_cannot_consume_calculations(
     with psycopg.connect(store.conninfo) as conn:
         assert conn.execute(
             "SELECT version FROM processing.schema_version ORDER BY version"
-        ).fetchall() == [(1,), (2,)]
+        ).fetchall() == [(1,), (2,), (3,)]
 
 
 def paused_calculation(queue: Any, operation: str, arguments: tuple) -> None:

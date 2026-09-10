@@ -91,6 +91,12 @@ These other features are assessed only, not modified or coupled to Processing.
 
 ## Verification
 
+Current automated real-database verification uses the
+[disposable PostgreSQL lane](processing-postgres-tests.md):
+`python scripts/test_processing_postgres.py`. It includes the notification tests
+below and fails on skipped database coverage. The historical local/deployment
+results below predate this automated lane.
+
 Tests cover session-isolated fanout/caps, burst coalescing, shutdown before reader
 startup, same-origin enforcement, ASGI 2.0/2.4 streaming and disconnects, immediate
 snapshot frames, heartbeats, bounded slow clients and response lifetime. Browser
