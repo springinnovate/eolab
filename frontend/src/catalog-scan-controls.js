@@ -18,11 +18,12 @@ export class CatalogScanControls {
      * @param {Object} options Owned UI and browser capabilities.
      * @param {Document} options.documentContext Document containing scan controls.
      * @param {Window} options.windowContext Timer and page-lifecycle provider.
-     * @param {typeof fetch} [options.fetchImpl=globalThis.fetch] HTTP transport.
+     * @param {typeof fetch} [options.fetchImpl] HTTP transport; defaults to fetch
+     * bound to its browser global so storing it on the controls keeps its receiver.
      * @param {(status: Object) => void} options.renderStatus Render a server snapshot.
      * @param {() => Promise<void>} options.refreshCatalog Refresh the active search.
      */
-    constructor({ documentContext, windowContext, fetchImpl = globalThis.fetch,
+    constructor({ documentContext, windowContext, fetchImpl = globalThis.fetch.bind(globalThis),
         renderStatus, refreshCatalog }) {
         this.document = documentContext;
         this.window = windowContext;

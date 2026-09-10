@@ -24,9 +24,10 @@ function response(state = "scanning", id = "scan-1") {
  * Strict current-markup controls plus controllable browser transport and time.
  * @param {Array<*>} replies Responses, errors or functions accepting request options.
  * @param {() => Promise<void>} [refresh] Optional completion callback.
+ * @param {boolean} [useDefaultTransport=false] Exercise the native default binding.
  * @return {Object} Controller and externally observable test capabilities.
  */
-function fixture(replies, refresh = async () => {}) {
+function fixture(replies, refresh = async () => {}, useDefaultTransport = false) {
     const markup = readFileSync(new URL("../index.html", import.meta.url), "utf8");
     const elements = new Map();
     const document = { body: {}, activeElement: null, querySelector(selector) {
@@ -52,13 +53,13 @@ function fixture(replies, refresh = async () => {}) {
     window.clearTimeout = id => timers.delete(id);
     const requests = [], rendered = [], refreshes = [];
     const controls = new CatalogScanControls({ documentContext: document, windowContext: window,
-        fetchImpl: async (url, options) => {
+        ...(useDefaultTransport ? {} : { fetchImpl: async (url, options) => {
             requests.push({ url, ...options });
             assert.ok(replies.length, `Unexpected request to ${url}`);
             const reply = replies.shift();
             if (reply instanceof Error) throw reply;
             return typeof reply === "function" ? reply(options) : reply;
-        },
+        } }),
         renderStatus: status => {
             rendered.push(status);
             const start = document.querySelector("#start-scan");
@@ -306,5 +307,20 @@ test("finishing recovery does not steal focus after the user selects another con
     refresh.resolve();
     await recovery;
     assert.equal(f.document.activeElement, start);
+    f.controls.close();
+});
+
+test("the default fetch transport preserves the browser-global receiver", async context => {
+    const calls = [];
+    context.mock.method(globalThis, "fetch", async function (url) {
+        assert.equal(this, globalThis, "Native Window.fetch requires its global receiver");
+        calls.push(url);
+        return response("not_started");
+    });
+    const f = fixture([], undefined, true);
+    await f.controls.observe();
+    assert.deepEqual(calls, ["/api/scans/current"]);
+    assert.equal(f.rendered.at(-1).state, "not_started");
+    assert.equal(f.element("#scan-status-recovery").hidden, true);
     f.controls.close();
 });
