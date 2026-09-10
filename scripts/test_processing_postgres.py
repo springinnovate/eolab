@@ -71,6 +71,7 @@ def build_image(application_image: str | None) -> str:
         "&& /test-venv/bin/python -m pip install --no-cache-dir 'pytest==8.4.2'\n"
         "COPY pyproject.toml ./\nCOPY tests/ ./tests/\nCOPY scripts/ ./scripts/\n"
         "ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1\n"
+        'ENV PYTHONPATH="" PYTEST_ADDOPTS=""\n'
         "USER 65534:65534\nENTRYPOINT []\nHEALTHCHECK NONE\n"
     )
     tag = f"eolab-processing-test:{uuid4().hex}"
@@ -234,7 +235,8 @@ def run_suite(image: str, *, inject_failure: bool = False) -> int:
             network,
             "--read-only",
             "--tmpfs",
-            "/tmp:rw,exec,size=1g",
+            # Keep capacity above Processing's existing 2 GiB free-space floor.
+            "/tmp:rw,exec,size=4g",
             "--memory",
             "2g",
             "--cap-drop",

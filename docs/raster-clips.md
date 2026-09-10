@@ -300,7 +300,15 @@ recovery, queued/running/finalization cancellation, worker shutdown, owned sessi
 access, complete/range/HEAD downloads, expiration and transfer-safe cleanup.
 Import/deployment tests guard the architectural boundaries and read-only mounts.
 
-Run against a disposable database whose name begins `eolab_processing_test`:
+Use the automated [disposable PostgreSQL lane](processing-postgres-tests.md) to
+provision, run and remove an isolated test database:
+
+```sh
+python scripts/test_processing_postgres.py
+```
+
+For manual debugging only, supply an already-provisioned disposable database whose
+name begins `eolab_processing_test`:
 
 ```sh
 python -m pytest --processing-dsn=postgresql://USER@localhost:5432/eolab_processing_test

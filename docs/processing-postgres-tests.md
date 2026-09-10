@@ -50,8 +50,10 @@ The normal launcher also handles Ctrl+C on Windows with Docker's Linux engine.
 Every run has its own network, PostgreSQL container, runner and temporary image.
 Database storage and runner `/tmp` are disposable tmpfs; no source, data, Docker
 socket, production credentials or artifact directories are mounted. PostgreSQL
-has a 512 MiB memory limit; each runner has a 2 GiB limit and 1 GiB temporary
-storage. Concurrent verification therefore requires sufficient Docker capacity
+has a 512 MiB memory limit; each runner has a 2 GiB memory limit and a 4 GiB
+temporary filesystem capacity (allocated on demand). That capacity preserves
+Processing's existing 2 GiB free-space floor without weakening the guard.
+Concurrent verification therefore requires sufficient Docker capacity
 for two runs and image builds. Docker build cache and pulled base images remain
 available for later runs; no shared resource pruning is performed.
 
