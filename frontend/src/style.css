@@ -2350,6 +2350,8 @@ h5 {
 }
 
 .control-panel {
+  container-type: inline-size;
+  container-name: workspace-sidebar;
   position: absolute;
   z-index: 1100;
   inset: var(--workspace-edge) auto var(--workspace-edge)
@@ -2398,18 +2400,22 @@ h5 {
 }
 
 .panel-identity {
-  display: flex;
+  display: grid;
   min-width: 0;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 2px 14px;
+  gap: 2px;
+}
+
+.panel-identity h1,
+.panel-identity .subtitle {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .panel-identity h1 {
   min-width: 0;
   margin: 0;
   font-size: 1.15rem;
-  overflow-wrap: anywhere;
 }
 
 .panel-identity .subtitle {
@@ -2417,7 +2423,6 @@ h5 {
   margin: 0;
   color: var(--text-3);
   font-size: 0.8rem;
-  overflow-wrap: anywhere;
 }
 
 .panel-identity .subtitle:empty {
@@ -2436,6 +2441,43 @@ h5 {
   padding: 5px 9px;
   font-size: 0.8rem;
   white-space: nowrap;
+}
+
+.panel-header-action-icon {
+  display: none;
+}
+
+@container workspace-sidebar (max-width: 520px) {
+  .panel-header-actions {
+    gap: 6px;
+  }
+
+  .panel-header-actions .secondary-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    padding: 5px;
+  }
+
+  .panel-header-actions .saved-map-view-action[hidden] {
+    display: none;
+  }
+
+  .panel-header-action-icon {
+    display: block;
+    width: 15px;
+    height: 15px;
+  }
+
+  .panel-header-action-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
 }
 
 .saved-map-view-action {

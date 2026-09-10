@@ -36,7 +36,10 @@
               type="button"
               title="Return to the configured initial map"
             >
-              Reset view
+              <svg class="panel-header-action-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 11a9 9 0 1 1 3 8M3 4v7h7"></path>
+              </svg>
+              <span class="panel-header-action-label">Reset view</span>
             </button>
             <button
               class="secondary-button saved-map-view-action"
@@ -45,7 +48,10 @@
               title="Restore the map from immediately before reset"
               hidden
             >
-              Undo reset
+              <svg class="panel-header-action-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="m9 4-6 6 6 6M3 10h12a6 6 0 0 1 0 12"></path>
+              </svg>
+              <span class="panel-header-action-label">Undo reset</span>
             </button>
             <button
               class="secondary-button saved-map-view-action"
@@ -65,17 +71,22 @@
                 <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
                 <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
               </svg>
-              <span id="copy-map-link-label">Copy map link</span>
+              <span class="panel-header-action-label" id="copy-map-link-label">Copy map link</span>
             </button>
             <button
               class="secondary-button"
               id="toggle-operational-status"
               type="button"
               aria-label="Show status details"
+              title="Toggle status details"
               aria-controls="eomap-operational-status-body"
               aria-expanded="false"
             >
-              Status
+              <svg class="panel-header-action-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="9"></circle>
+                <path d="M12 11v6M12 7h.01"></path>
+              </svg>
+              <span class="panel-header-action-label">Status</span>
             </button>
             <button
               class="icon-button"
