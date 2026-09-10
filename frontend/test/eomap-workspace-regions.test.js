@@ -96,7 +96,7 @@ test("one sidebar owns the workspace disclosures and compact status", () => {
     assert.doesNotMatch(panel.source, /role="tab(?:list|panel)?"/);
     assert.match(
         panel.source,
-        /id="toggle-operational-status"[^>]*aria-label="Show status details"[^>]*aria-controls="eomap-operational-status-body"[^>]*aria-expanded="false"[^>]*>\s*Status/s
+        /id="toggle-operational-status"[^>]*aria-label="Show status details"[^>]*aria-controls="eomap-operational-status-body"[^>]*aria-expanded="false"[^>]*>[\s\S]*?<span class="panel-header-action-label">Status<\/span>\s*<\/button>/s
     );
     assert.match(
         panel.source,
@@ -122,7 +122,7 @@ test("compact header owns branding and actions while alerts stay outside hidden 
         assert.doesNotMatch(announcement.source, /aria-hidden|\shidden(?:\s|>)/);
     }
     assert.match(STYLESHEET, /\.panel-header\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) auto/s);
-    assert.match(STYLESHEET, /\.panel-identity\s*\{[^}]*min-width:\s*0[^}]*flex-wrap:\s*wrap/s);
+    assert.match(STYLESHEET, /\.panel-identity\s*\{[^}]*min-width:\s*0/s);
     assert.match(STYLESHEET, /\.panel-header-actions\s*\{[^}]*display:\s*flex[^}]*flex-shrink:\s*0/s);
     assert.doesNotMatch(STYLESHEET, /\.panel-header \.subtitle\s*\{[^}]*display:\s*none/s);
     assert.match(STYLESHEET, /\.operational-status-notice:not\(\.visually-hidden\)/);

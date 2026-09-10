@@ -188,7 +188,11 @@ function applyAppGlobalConfiguration(appGlobalConfiguration) {
     document.title = appGlobalConfiguration.appTitle;
     document.querySelector("#app-title").textContent =
         appGlobalConfiguration.appTitle;
+    document.querySelector("#app-title").title =
+        appGlobalConfiguration.appTitle;
     document.querySelector("#app-subtitle").textContent =
+        appGlobalConfiguration.appSubtitle;
+    document.querySelector("#app-subtitle").title =
         appGlobalConfiguration.appSubtitle;
     document.querySelector("#app-version").textContent =
         appGlobalConfiguration.appVersion;
