@@ -53,6 +53,20 @@ RSS recycling. Real raster tests reopen changed sources, preserve nodata and
 aggregate results, reject changed source signatures, and verify a warm clip's
 COG and exact pixels. RSS recycling is platform-skipped on Windows.
 
+Validation: 143 Python tests passed; 26 PostgreSQL integration cases require an
+explicitly disposable `--processing-dsn` and one Linux RSS case was skipped on
+Windows. The full frontend suite passed 690 tests and its Vite build passed
+(existing bundle-size advisory). No local Docker daemon/database was available.
+
+```text
+python -m pytest tests/test_reusable_process.py tests/test_processing_warm.py tests/test_processing_timings.py tests/test_processing_models.py tests/test_processing_architecture.py tests/test_processing_jobs.py tests/test_processing_calculations.py tests/test_processing_http.py tests/test_processing_wakeup.py tests/test_raster_clips.py tests/test_raster_aggregates.py tests/test_app.py tests/test_application_boundaries.py tests/test_compose_configuration.py -ra --tb=short --disable-warnings
+```
+
+From `frontend`: `node --test --test-reporter=dot` and
+`node node_modules/vite/bin/vite.js build`. Black checks the changed neutral
+supervisor, Processing factory/models/service/worker and benchmark/tests;
+`git diff --check` checks whitespace.
+
 Run the same synthetic benchmark with and without `--warm`. Windows observations
 from this change (seconds, sequential samples, OS caches not flushed):
 
@@ -71,6 +85,41 @@ The one-shot sample also overlapped test activity; these small observations
 establish the mechanism's effect, not a controlled production speedup. Native
 library caches can improve the kernel too. Live measurements must include the
 unchanged HTTP, database and browser polling path.
+
+### Live warm-process comparison
+
+Lilling Coolify deployment `s4p0cdrywzixqkxrpeimxddz` succeeded in 2m09s at
+`1ec002dee9d8558d37e75208c18427a6223d0704`. WWF Connectivity reports
+`0.5.0-79-g1ec002d`. Two equivalent Peru/Human Footprint 2023 mean calculations
+again returned exactly **4.748740795296266**, 841,871 matched/valid cells, 12 reads
+and 35 calculation tiles. The first execution was prewarmed; the second reported
+`reusedProcess=true`. Readiness wait rounded to 0.000 s in both.
+
+| Seconds | Previous deployment runs (`42083f7`) | Warm run 1 | Warm run 2 |
+| --- | --- | ---: | ---: |
+| Request → displayed | 4.258 / 4.249 | 2.327 | 2.262 |
+| Planning round trip (review reused) | 0 / 0 | 0 | 0 |
+| Submission round trip | 0.146 / 0.141 | 0.228 | 0.158 |
+| Submission response → displayed | 4.103 / 4.099 | 2.085 | 2.087 |
+| Server queued → ready | 2.536 / 2.508 | 1.154 | 1.038 |
+| Queue wait | 0.063 / 0.059 | 0.105 | 0.061 |
+| Worker preparation | 0.043 / 0.029 | 0.041 | 0.023 |
+| Calculation native process | 2.401 / 2.393 | 0.983 | 0.920 |
+| Full native operation | unavailable | 0.953 | 0.874 |
+| Request/reply, cleanup and recycling | unavailable | 0.030 | 0.047 |
+| Kernel | 0.961 / 0.946 | 0.945 | 0.866 |
+| Native process outside kernel | 1.440 / 1.447 | 0.038 | 0.054 |
+| Submission admission + delivery remainder | 1.714 / 1.732 | 1.159 | 1.207 |
+
+Total wait averaged 2.295 s versus 4.254 s (about 46% lower). Native overhead
+outside the kernel fell from about 1.44 s to 0.04–0.05 s. The remaining delivery
+residual is consistent with the unchanged two-second browser refresh schedule,
+not a direct measurement of network time. These sequential live observations
+are not controlled benchmarks, and nested stages overlap. Confirmation reused
+reviewed plans, so these runs do not measure fresh production planning; actual
+warm planning is covered by the real-process tests and local benchmark above.
+Ready job IDs: `058cf9098bd34fb8859810bbd32b0d1d` and
+`1821beec46b042d787d9e077721121c2`.
 
 ## Reviewed-plan reuse and idle-worker wakeup
 
