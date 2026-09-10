@@ -1209,25 +1209,6 @@ h5 {
   min-height: 1em;
 }
 
-.raster-histogram {
-  --histogram-link-color: var(--brand);
-  position: static;
-  order: 1;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  width: min(440px, calc(100vw - 32px));
-  max-height: min(52dvh, 480px);
-  min-width: 0;
-  gap: 8px;
-  pointer-events: auto;
-  border: 1px solid var(--border-1);
-  border-left: 4px solid var(--histogram-link-color);
-  border-radius: var(--radius);
-  background: rgb(255 255 255 / 98%);
-  padding: 13px 14px;
-  box-shadow: var(--elevation-panel);
-}
-
 .raster-histogram[hidden] {
   display: none;
 }
@@ -1268,23 +1249,6 @@ h5 {
   font-weight: 650;
 }
 
-.raster-appearance-controls {
-  position: static;
-  order: 2;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  width: min(310px, calc(100vw - 32px));
-  max-height: min(52dvh, 480px);
-  gap: 10px;
-  overflow: hidden;
-  pointer-events: auto;
-  border: 1px solid var(--border-1);
-  border-radius: var(--radius);
-  background: rgb(255 255 255 / 98%);
-  padding: 13px 14px;
-  box-shadow: var(--elevation-panel);
-}
-
 .raster-appearance-controls[hidden] {
   display: none;
 }
@@ -1298,14 +1262,6 @@ h5 {
 
 .raster-appearance-heading .section-label {
   margin: 0;
-}
-
-.raster-appearance-body {
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding-right: 3px;
-  scrollbar-gutter: stable;
 }
 
 .raster-histogram-heading {
@@ -2851,6 +2807,7 @@ h5 {
   gap: 12px;
   margin: 0 0 14px;
   overflow: visible;
+  pointer-events: auto;
   border: 1px solid var(--border-2);
   border-radius: 6px;
   background: var(--surface-2);
@@ -2876,8 +2833,11 @@ h5 {
 }
 
 .raster-appearance-body {
+  min-height: 0;
   overflow: visible;
+  overscroll-behavior: contain;
   padding-right: 0;
+  scrollbar-gutter: stable;
 }
 
 .raster-appearance-layer,
@@ -2908,8 +2868,7 @@ h5 {
   background: var(--surface-3);
 }
 
-.raster-bivariate-statistics,
-.raster-histogram {
+.raster-bivariate-statistics {
   order: 2;
 }
 
@@ -3027,13 +2986,17 @@ article.raster-histogram-summary {
 }
 
 .raster-histogram {
+  --histogram-link-color: var(--brand);
   position: static;
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   width: 100%;
   max-height: none;
+  min-width: 0;
   order: initial;
   gap: 10px;
   overflow: visible;
+  pointer-events: auto;
   border-color: color-mix(in srgb, var(--brand) 45%, var(--border-2));
   box-shadow: none;
 }
