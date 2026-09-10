@@ -168,4 +168,34 @@ required passwords, read-only data mount, startup, scanning, verification, and
 resource controls. More detailed behavioral and architecture contracts live in
 the [`docs`](docs) directory.
 
+## Development checks
+
+Follow [AGENTS.md](AGENTS.md) for change scope, architecture, and verification
+requirements. From the repository root, create a Python 3.12 virtual environment
+with `python -m venv .venv`, activate it (`source .venv/bin/activate` on POSIX,
+or `.venv\Scripts\Activate.ps1` in PowerShell), and install the development extra:
+
+```console
+python -m pip install -e ".[dev]"
+```
+
+The development extra pins Black 26.5.1. `pyproject.toml` requires that version,
+targets Python 3.12 (the minimum supported Python and application image version),
+and uses 88-character lines with Black's stable default style. Verify the
+installation with the existing request-latency benchmark check:
+
+```console
+python -m black --check --no-cache tests/benchmark_request_latency.py
+git diff --check
+```
+
+For Python changes, use the same non-mutating Black command with explicit paths
+to the files in the issue's scope. `--check` reports formatting differences
+without rewriting files; `--no-cache` forces a fresh check. This targeted workflow
+does not establish a repository-wide formatting baseline. Report pre-existing
+formatting debt without reformatting unrelated code. Past verification results
+in `docs/` remain historical reports, not a requirement to rerun or rewrite
+their entire scope. Run the relevant tests and other checks required by
+AGENTS.md separately; Black does not replace them.
+
 EOLab is open-source software under the [Apache License 2.0](LICENSE).
