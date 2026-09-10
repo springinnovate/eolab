@@ -35,7 +35,9 @@ Coolify terminal. It was not resolved afresh from broad ranges. The observed
 environment was Python 3.12.14, x86_64, Debian 13.6, glibc 2.41; Fiona 1.10.1
 with GDAL 3.9.2; Rasterio 1.5.1 with GDAL 3.12.4 and PROJ 9.8.1; PyProj 3.8.0
 with PROJ 9.8.1; Shapely 2.1.2 with GEOS 3.13.1; psycopg 3.3.5 with libpq
-180006; and NumPy 2.5.3. Separate GDAL versions are intentional wheel inputs,
+180006; and NumPy 2.5.3. The initial fresh builds also recorded Node 22.23.2,
+npm 10.9.8, NumPy's OpenBLAS 0.3.34.106.0, and Debian libexpat1
+2.8.3-1~deb13u1. Separate GDAL versions are intentional wheel inputs,
 not an instruction to consolidate native libraries.
 
 The base digests were queried from the official registry on the same date;
@@ -59,14 +61,19 @@ diff -u environment-one.json environment-two.json
 ```
 
 The Application build inputs workflow executes this comparison on a disposable
-Linux runner, retains both logs/reports/image identities, and runs the frontend
-tests against the pinned Node stage. Reusing content-addressed base layers is
+Linux runner, retains both logs/reports/image identities, rejects a deliberately
+wrong wheel hash, and runs frontend tests against the pinned Node stage. It also
+runs the existing backend/native suite as a non-root user against the installed
+application, with only pytest added in a temporary system-site-packages venv.
+Pytest's source `pythonpath` override is disabled. Database tests still skip
+without the explicit disposable database lane. Reusing content-addressed base layers is
 safe; using cached dependency installation layers is not fresh-build evidence.
 
 Before deployment, run the full backend/native fixtures and Processing
 PostgreSQL integration suite against the built image, including worker
 startup, reuse, cancellation, and shutdown. Issue #375 supplies the disposable
-database lane and `--application-image` contract. Final combined verification
+database lane: `python scripts/verify_processing_postgres.py --application-image
+eolab-check:two` performs its complete lifecycle acceptance checks. Final combined verification
 must follow its merge and #377's development-manifest merge; two matching
 inventories alone do not prove application correctness. Keep the draft pending
 that verification and coordinated deployment review.

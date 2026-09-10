@@ -39,6 +39,36 @@ jobs:
               > "artifacts/application-builds/image-$attempt.json"
           done
           diff -u artifacts/application-builds/environment-{1,2}.json
+      - name: Reject an unreviewed wheel hash
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep '^affine==' deployment/application-runtime-requirements.txt \
+            | sed 's/sha256:.*/sha256:0000000000000000000000000000000000000000000000000000000000000000/' \
+            > artifacts/application-builds/invalid-hash.txt
+          if docker run --rm --entrypoint python \
+            --mount "type=bind,src=$PWD/artifacts/application-builds,dst=/inputs,readonly" \
+            eolab-build-inputs:two -m pip download --no-cache-dir \
+            --only-binary=:all: --require-hashes --no-deps \
+            -r /inputs/invalid-hash.txt --dest /tmp/wheels \
+            > artifacts/application-builds/invalid-hash.log 2>&1; then
+            echo "Unreviewed hash was incorrectly accepted" >&2
+            exit 1
+          fi
+          grep -q 'DO NOT MATCH THE HASHES' artifacts/application-builds/invalid-hash.log
+      - name: Backend and native fixtures against the installed application
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --user 65534:65534 --entrypoint sh \
+            --mount "type=bind,src=$PWD,dst=/repository,readonly" \
+            eolab-build-inputs:two -ec '
+              python -m venv --system-site-packages /tmp/check
+              /tmp/check/bin/python -m pip install --no-cache-dir pytest==8.4.2
+              cd /repository
+              /tmp/check/bin/python -m pytest -o pythonpath= -p no:cacheprovider \
+                --basetemp=/tmp/eolab-build-tests -ra --tb=short
+            ' 2>&1 | tee artifacts/application-builds/backend-tests.log
       - name: Frontend tests in the recorded Node build stage
         run: |
           docker build --target frontend-builder -f Dockerfile.app -t eolab-build-inputs:frontend .
