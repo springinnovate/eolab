@@ -147,16 +147,17 @@ export class SummaryStatisticsView {
             row.source.value = String(state.sources.findIndex(source => source.collectionId === card.source?.collectionId && source.itemId === card.source?.itemId));
             row.source.disabled = !state.sources.length;
             row.expression.setAttribute("aria-invalid", String(card.error && !card.valid));
-            row.root.setAttribute("aria-busy", String(card.pending));
+            row.root.setAttribute("aria-busy", String(!!(card.pending || state.vectorSelecting)));
             row.root.classList.toggle("is-previous", !!card.result && !card.current);
             const message = card.current ? RESULT_STATES[card.result?.row.state] ?? "" : card.message;
-            row.status.textContent = message;
+            row.status.textContent = state.vectorCalculation && (card.pending || card.requested) && !message.startsWith("Calculating")
+                ? `Calculating · ${message}` : message;
             row.status.hidden = !row.status.textContent;
             row.status.classList.toggle("is-error", card.error);
             row.status.classList.toggle("is-working", card.pending || !!card.requested || card.checking);
-            row.run.hidden = card.current || card.pending || !!card.requested;
+            row.run.hidden = card.current || card.pending || !!card.requested || !!state.vectorSelecting;
             row.run.disabled = !card.valid || card.checking || !card.source || !state.area || state.recoverable;
-            row.stop.hidden = !card.pending && !card.requested;
+            row.stop.hidden = !card.pending && !card.requested && !state.vectorSelecting;
             row.statusRow.hidden = row.status.hidden && row.run.hidden && row.stop.hidden;
             const progress = card.progress;
             row.progress.hidden = !card.pending || !(progress?.totalBlocks > 0);
@@ -299,6 +300,8 @@ export class SummaryStatisticsView {
     }
     /** Focus a surviving formula after add/undo. @param {number} id Stable card identity. @return {void} */
     focusStatistic(id) { this.cards.get(id)?.expression.focus(); }
+    /** Focus the editor entry point without inventing a statistic. @return {void} */
+    focusAddStatistic() { this.elements.template.focus(); }
     /** Focus removal recovery. @return {void} */
     focusUndo() { this.extra["undo-button"].focus(); }
     /** Reveal the immutable saved-job presentation. @return {void} */

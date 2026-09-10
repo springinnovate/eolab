@@ -27,10 +27,14 @@ export function canAutomaticallyCalculate(plan, intent) {
 
 /** Own card identities and local validation; serialize native work through one executor. */
 export class SummaryStatisticsController {
+    /** Wire statistic cards to the existing Processing executor and composed actions.
+     * @param {Object} dependencies API, jobs, storage, view, clock and semantic callbacks.
+     * @param {Function} [dependencies.onCancelSelection] Cancel an in-progress area selection.
+     */
     constructor(dependencies) {
-        const { api, jobs, view, getContext, onOpen, onClose, onEditArea, clock = globalThis, now = () => performance.now() } = dependencies;
+        const { api, jobs, view, getContext, onOpen, onClose, onEditArea, onCancelSelection = () => {}, clock = globalThis, now = () => performance.now() } = dependencies;
         this.now = now;
-        Object.assign(this, { api, jobs, view, getContext, onOpen, onClose, clock });
+        Object.assign(this, { api, jobs, view, getContext, onOpen, onClose, onCancelSelection, clock });
         this.serial = 0;
         this.state = { sources: [], statistics: [], area: null, selectedArea: null, areaChoice: "selection",
             availableAoi: null, active: false, automatic: true, jobs: [], historyError: "", saved: null, undo: false, targetChunkPixels: null };
@@ -80,7 +84,11 @@ export class SummaryStatisticsController {
         this.receive(this.engine.state);
     }
 
-    /** Opening/reopening is presentation, never an automatic calculation trigger. */
+    /** Opening/reopening is presentation, never an automatic calculation trigger.
+     * @param {Object|null} [source=null] Optional catalog raster to bind to the first card.
+     * @param {Object|undefined} [area] Explicit area, otherwise use current context.
+     * @return {void}
+     */
     open(source = null, area) {
         const context = this.getContext();
         const sources = [...(context.sources ?? [])];
@@ -94,7 +102,6 @@ export class SummaryStatisticsController {
             this.setSelection(selected, false);
             if (this.state.areaChoice === "vector") this.changeArea(selected, false);
         }
-        if (!this.state.statistics.length) this.state.statistics.push(this.makeStatistic(STATISTIC_PRESETS.mean));
         for (const card of this.state.statistics) {
             const next = (source && card === this.state.statistics[0]) ? source : card.source ?? sources[0] ?? null;
             if (sourceKey(next) !== sourceKey(card.source)) this.editStatistic(card.id, { source: next }, false);
@@ -124,12 +131,41 @@ export class SummaryStatisticsController {
         this.render();
     }
 
-    /** Select a composed vector AOI; exact jobs require a size review first. */
-    setVectorSamplingArea(info) {
+    /** Select an authoritative opaque AOI and optionally execute the explicit action.
+     * @param {Object} info Opaque identity and presentation label.
+     * @param {boolean} [calculate=false] User explicitly requested filter and calculation.
+     * @return {void}
+     */
+    setVectorSamplingArea(info, calculate = false) {
+        this.state.vectorSelecting = false;
+        this.state.vectorCalculation = calculate;
+        this.state.selectionMessage = "";
         this.state.vectorArea = info;
         this.state.areaChoice = "vector";
         this.state.selectedArea = { kind: "temporaryAoi", temporaryAoiId: info.id };
         this.changeArea(this.state.selectedArea, false);
+        if (calculate) {
+            this.open();
+            for (const card of this.state.statistics) this.request(card.id, "manual");
+            if (!this.state.statistics.length) this.view.focusAddStatistic?.();
+        }
+        this.render();
+    }
+    /** Receive selection lifecycle through composition, without accessing vector state.
+     * @param {{phase:string,message:string,analysis:boolean}} selection Public progress snapshot.
+     * @return {void}
+     */
+    setVectorSelectionState(selection) {
+        if (!selection.analysis) return;
+        const selecting = ["reading", "selected"].includes(selection.phase);
+        if (selecting && !this.state.vectorSelecting) {
+            this.invalidateBatch();
+            this.engine.invalidate();
+            this.state.areaChoice = "vector";
+            this.changeArea(null, false);
+        }
+        this.state.vectorSelecting = selecting;
+        this.state.selectionMessage = selection.phase === "active" ? "" : selection.message;
         this.render();
     }
     /** Cancel obsolete work even when its panel is no longer active. */
@@ -178,9 +214,15 @@ export class SummaryStatisticsController {
         this.changeArea(area, true);
         this.render();
     }
+    /** Replace the current scope and release obsolete reviews before further admission.
+     * @param {Object|null} area Neutral sampling area.
+     * @param {boolean} automatic Whether normal automatic-update policy applies.
+     * @return {void}
+     */
     changeArea(area, automatic) {
         if (same(area, this.state.area)) return;
         if (this.batch?.automatic || this.isActive) this.invalidateBatch();
+        this.engine.invalidate();
         this.state.area = area;
         for (const card of this.state.statistics) {
             card.plan = null; card.manualRequired = false; card.error = false;
@@ -238,11 +280,16 @@ export class SummaryStatisticsController {
         this.render(); this.view.focusStatistic?.(card.id);
     }
 
-    /** Server grammar remains authoritative; one invalid statistic never invalidates its peers. */
+    /** Server grammar remains authoritative; one invalid statistic never invalidates its peers.
+     * @param {Object} card Owned statistic card.
+     * @param {boolean} requestAutomatic Whether a complete edit requests an automatic update.
+     * @return {void}
+     */
     validateLater(card, requestAutomatic) {
         this.clock.clearTimeout(card.timer); card.abort?.abort();
         const version = ++card.version;
         card.valid = false; card.checking = true; card.error = false;
+        card.cancelled = false;
         if (requestAutomatic) { card.requested = "automatic"; card.requestStarted = this.now(); }
         card.message = "Checking formula…";
         card.timer = this.clock.setTimeout(() => void this.validate(card, version), 700);
@@ -262,20 +309,30 @@ export class SummaryStatisticsController {
         }
         this.render(); this.schedulePump();
     }
+    /** Queue one card; an explicit manual action already authorizes submission.
+     * @param {number} id Stable card identity.
+     * @param {string} kind Manual or automatic execution intent.
+     * @param {boolean} [debounce=false] Whether formula validation must wait for editing.
+     * @return {void}
+     */
     request(id, kind, debounce = false) {
         const card = this.state.statistics.find(item => item.id === id);
         if (!card || !card.source || !this.state.area) return;
         if (this.batch && !this.batch.obsolete && this.batch.cards.some(entry => entry.id === id && entry.key === this.key(card))) return;
-        if (kind === "manual" && this.state.vectorArea && this.state.area?.temporaryAoiId === this.state.vectorArea.id && !card.manualRequired) kind = "review";
-        card.requested = kind; card.error = false;
+        card.requested = kind; card.error = false; card.cancelled = false;
         card.requestStarted = this.now();
         if (debounce) this.validateLater(card, false);
         else if (!card.valid && !card.checking) this.validateLater(card, false);
         this.render(); this.schedulePump();
     }
+    /** Cancel queued calculation or composed selection work without discarding old values.
+     * @param {number} id Stable card identity.
+     * @return {void}
+     */
     stopStatistic(id) {
+        if (this.state.vectorSelecting) this.onCancelSelection();
         const card = this.state.statistics.find(item => item.id === id);
-        if (card) { card.requested = null; card.message = "Calculation cancelled"; }
+        if (card) { card.requested = null; card.cancelled = true; card.message = "Calculation cancelled"; }
         this.invalidateBatch(id);
         this.render();
     }
@@ -380,15 +437,23 @@ export class SummaryStatisticsController {
         this.onOpen(); this.render();
         this.view.focusSaved?.();
     }
+    /** Present matching results and explicit selection/calculation lifecycle feedback.
+     * @return {void}
+     */
     render() {
         if (this.destroyed) return;
         for (const card of this.state.statistics) {
-            card.current = !!card.result && card.result.key === this.key(card) && !card.pending && !card.requested && !card.checking && !card.error;
+            card.current = !!card.result && card.result.key === this.key(card) && !card.pending && !card.requested && !card.checking && !card.error && !card.cancelled;
             if (!card.pending && !card.checking && !card.error) {
                 card.message = !card.source ? "Choose a raster" : !this.state.area ? "Choose an area" : !card.valid ? "Enter a formula"
                     : card.requested ? "Ready to calculate · queued" : card.current ? "Up to date"
                     : card.manualRequired ? "Ready to calculate · explicit confirmation needed" : "Ready to calculate";
             }
+        }
+        for (const card of this.state.statistics) {
+            if (card.cancelled) card.message = card.pending ? "Cancelling calculation…" : "Calculation cancelled";
+            if (this.state.vectorSelecting) card.message = "Calculating · selecting filtered features…";
+            else if (!this.state.area && this.state.selectionMessage) card.message = this.state.selectionMessage;
         }
         this.view.render(this.state);
         // Stop after the result DOM has been updated, including the view's work.

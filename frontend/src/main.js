@@ -764,6 +764,7 @@ async function initializeCatalog(
         storage: new CalculationSessionStorage(browserSessionStorage()), getContext: processingContext,
         onOpen: () => mapInspection.showCalculations(), onClose: () => mapInspection.hideCalculations(),
         onEditArea: editProcessingArea,
+        onCancelSelection: () => vectorSampling.invalidate("Selection cancelled"),
         onActivity: area => rasterVisualization?.setSamplingActivity(area),
     });
     mapInspection.subscribeActiveTool(tool => calculations.setActive(tool === "calculations"));
@@ -851,13 +852,19 @@ async function initializeCatalog(
                 filter: record.adapter.exportFilterState(record) })),
         createArea: createVectorSamplingArea,
         removeArea: id => vectorSamplingLifecycle.remove(id),
-        onEditFilter: key => vectorFilterControls.open(key),
-        onActivate: area => {
+        onEditFilter: key => vectorFilterControls.open(key, calculations.isActive ? {
+            filter: vectorSampling.selectedFilter(key),
+            apply: candidate => vectorSampling.use({ key, filter: candidate, analysis: true }),
+            complete: area => vectorSampling.activate(area.id, true),
+            cancel: () => vectorSampling.invalidate("Selection cancelled"),
+        } : null),
+        onSelectionState: selection => calculations.setVectorSelectionState(selection),
+        onActivate: (area, calculate) => {
             const returnToSummary = calculations.isActive;
             vectorSamplingOverlay.load(area);
             const label = `${area.filename} · ${area.matched} of ${area.total} features`;
             rasterVisualization.setVectorSamplingAoi({ ...area, filename: label });
-            calculations.setVectorSamplingArea({ id: area.id, label });
+            calculations.setVectorSamplingArea({ id: area.id, label }, calculate);
             if (returnToSummary) mapInspection.showCalculations();
         },
         onInvalidate: id => {

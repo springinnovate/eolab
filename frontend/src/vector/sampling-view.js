@@ -41,7 +41,7 @@ export class VectorSamplingView {
         this.elements.status.setAttribute("role", "status");
         this.elements.use.disabled = !state.key || state.phase === "reading";
         this.elements.filter.disabled = !state.key;
-        this.elements.use.hidden = ["review", "confirm"].includes(state.phase);
+        this.elements.use.hidden = !!state.analysis || ["review", "confirm"].includes(state.phase);
         this.elements.confirm.hidden = !["review", "confirm"].includes(state.phase);
         this.elements.confirm.textContent = state.phase === "confirm" ? "Yes, use this near-global selection" : "Continue with these features";
         this.elements.remove.hidden = !state.area && state.phase !== "reading";

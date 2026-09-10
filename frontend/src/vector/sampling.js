@@ -23,8 +23,10 @@ export class VectorSamplingController {
      * @param {Object} dependencies Views, targets, AOI transport and composed callbacks.
      * @param {Object|Object[]} dependencies.view One or more synchronized selection views.
      */
-    constructor({ view, getTargets, createArea, removeArea, onActivate, onInvalidate, onEditFilter, clock = globalThis }) {
+    constructor({ view, getTargets, createArea, removeArea, onActivate, onInvalidate, onEditFilter, onSelectionState = () => {}, clock = globalThis }) {
         Object.assign(this, { view, getTargets, createArea, removeArea, onActivate, onInvalidate, onEditFilter, clock });
+        this.onSelectionState = onSelectionState;
+        this.retired = new Set();
         this.views = Array.isArray(view) ? view : [view];
         this.sequence = 0;
         this.state = { targets: [], key: "", phase: "idle", area: null, message: "Choose a polygon layer, then use its filtered features." };
@@ -50,34 +52,89 @@ export class VectorSamplingController {
         this.state.key = key;
         this.render();
     }
-    /** Read a bounded snapshot; no raster jobs start until review has passed. */
-    async use() {
-        const target = this.state.targets.find(value => value.key === this.state.key);
-        if (!target) return;
+    /** Read the selected analysis predicate without exposing controller state.
+     * @param {string} key Retained catalog-layer identity.
+     * @return {Object|null} Independent copy of the committed predicate.
+     */
+    selectedFilter(key) {
+        return key === this.state.key && this.state.selectionFilter ? structuredClone(this.state.selectionFilter) : null;
+    }
+    /**
+     * Select a committed predicate on one bounded lane, reclaiming obsolete replies.
+     * @param {Object} [options={}] Explicit analysis selection options.
+     * @param {Object|null} [options.filter=null] Committed analysis filter, independent of rendering.
+     * @param {string} [options.key] Captured layer identity from the filter editor.
+     * @param {boolean} [options.analysis=false] Defer activation to the composed primary action.
+     * @return {Promise<Object|null>} Current retained area, or null if superseded.
+     * @throws {Error} If an explicit analysis selection or cleanup fails.
+     */
+    async use({ filter = null, analysis = false, key = this.state.key } = {}) {
+        const target = this.state.targets.find(value => value.key === key);
+        if (!target) return null;
         this.invalidate("");
+        this.state.key = key;
         const sequence = ++this.sequence;
         this.sourceIdentity = identity(target);
-        this.abort = new AbortController();
+        const candidate = structuredClone(filter ?? target.filter ?? EMPTY_VECTOR_FILTER);
+        this.state.selectionFilter = candidate;
+        this.state.analysis = analysis;
         this.state.phase = "reading"; this.state.message = "Reading filtered polygons…"; this.render();
         try {
-            const area = await this.createArea(target.item, target.filter ?? EMPTY_VECTOR_FILTER, this.abort.signal);
-            if (sequence !== this.sequence) { void this.removeArea(area.id).catch(() => {}); return; }
+            // Keep the bounded request connected so a committed AOI identity cannot
+            // be lost on abort. The next read waits for reclamation of its reply.
+            await this.reading;
+            await this.releaseRetired();
+            if (sequence !== this.sequence) return null;
+            const read = (async () => {
+                const area = await this.createArea(target.item, candidate, new AbortController().signal);
+                if (sequence !== this.sequence) {
+                    this.retired.add(area.id);
+                    await this.releaseRetired();
+                    return null;
+                }
+                return area;
+            })();
+            this.reading = read.catch(() => {});
+            const area = await read;
+            if (!area) return null;
+            if (sequence !== this.sequence) {
+                this.retired.add(area.id);
+                await this.releaseRetired();
+                return null;
+            }
             this.state.area = area;
             this.clock.clearTimeout(this.expiration);
             this.expiration = this.clock.setTimeout(() => this.invalidate("Selection expired. Use these features again to refresh it."),
                 Math.max(0, Date.parse(area.expiresAt) - Date.now()));
             this.state.review = vectorSelectionReview(area);
-            if (this.state.review.large) {
+            if (analysis) {
+                this.state.phase = "selected";
+                this.render();
+            } else if (this.state.review.large) {
                 this.state.phase = "review";
                 this.state.message = `This selects ${area.matched.toLocaleString()} of ${area.total.toLocaleString()} features. ` +
                     `Its bounding envelope is about ${Math.round(this.state.review.envelopeKm2).toLocaleString()} km². ` +
                     "Exact raster calculations may take a while. Did you mean to filter first?";
                 this.render();
             } else this.activate();
+            return area;
         } catch (error) {
-            if (sequence !== this.sequence) return;
+            if (sequence !== this.sequence) return null;
             this.state.phase = "error"; this.state.message = error.message; this.render();
+            if (analysis) throw error;
+            return null;
         }
+    }
+    /** Release obsolete opaque references; retain failures for explicit retry.
+     * @return {Promise<void>} Acknowledged lifecycle cleanup.
+     * @throws {Error} If the server cannot acknowledge removal.
+     */
+    async releaseRetired() {
+        if (this.releasing) return this.releasing;
+        this.releasing = (async () => {
+            for (const id of this.retired) { await this.removeArea(id); this.retired.delete(id); }
+        })();
+        try { await this.releasing; } finally { this.releasing = null; }
     }
     /** Confirm the displayed selection, with a second near-global decision. */
     confirm() {
@@ -87,31 +144,41 @@ export class VectorSamplingController {
             this.render();
         } else if (["review", "confirm"].includes(this.state.phase)) this.activate();
     }
-    /**
-     * Activate the reviewed reference and describe its display-only outline.
+    /** Activate the current opaque reference, without exporting geometry to analysis.
+     * @param {string|null} [id=null] Expected identity for a completed primary action.
+     * @param {boolean} [calculate=false] Explicit intent to run configured statistics.
      * @return {void}
      */
-    activate() {
+    activate(id = null, calculate = false) {
+        if (!this.state.area || (id !== null && this.state.area.id !== id)) return;
         this.state.phase = "active";
         const area = this.state.area;
         this.state.message = `Sampling ${area.matched.toLocaleString()} of ${area.total.toLocaleString()} features · polygon boundaries and holes respected. Map outline simplified; calculations use exact geometry.`;
-        this.onActivate(area);
+        this.onActivate(area, calculate);
         this.render();
     }
     /** @param {string} message Visible explanation for invalidating the retained selection. */
     invalidate(message) {
         ++this.sequence;
-        this.abort?.abort(); this.clock.clearTimeout(this.expiration);
+        this.clock.clearTimeout(this.expiration);
         const area = this.state.area;
         this.state.area = null; this.state.phase = "idle"; this.state.message = message; this.sourceIdentity = null;
-        if (area) { this.onInvalidate(area.id); void this.removeArea(area.id).catch(() => {}); }
+        this.state.selectionFilter = null;
+        if (area) {
+            this.onInvalidate(area.id); this.retired.add(area.id);
+            void this.releaseRetired().catch(error => {
+                this.state.message = `Area cleanup failed: ${error.message}. Retry the selection to release it.`;
+                this.render();
+            });
+        }
         this.render();
     }
     /** Render the applied predicate, never an uncommitted filter draft. */
     render() {
         const target = this.state.targets.find(value => value.key === this.state.key);
-        const state = { ...this.state, filterSummary: vectorFilterSummary(target?.filter ?? EMPTY_VECTOR_FILTER) };
+        const state = { ...this.state, filterSummary: vectorFilterSummary(this.state.selectionFilter ?? target?.filter ?? EMPTY_VECTOR_FILTER) };
         this.views.forEach(view => view.render(state));
+        this.onSelectionState({ phase: state.phase, message: state.message, analysis: !!state.analysis });
     }
     /** Cancel native extraction and release retained geometry on teardown. */
     destroy() { this.invalidate(""); this.views.forEach(view => view.unbind()); }
