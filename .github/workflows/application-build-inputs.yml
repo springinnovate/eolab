@@ -66,7 +66,11 @@ jobs:
               python -m venv --system-site-packages /tmp/check
               /tmp/check/bin/python -m pip install --no-cache-dir pytest==8.4.2
               cd /repository
+              /tmp/check/bin/python -m pytest tests/test_reusable_process.py \
+                -o pythonpath= -p no:cacheprovider --basetemp=/tmp/eolab-process-tests \
+                -ra --tb=short
               /tmp/check/bin/python -m pytest -o pythonpath= -p no:cacheprovider \
+                --ignore=tests/test_reusable_process.py \
                 --basetemp=/tmp/eolab-build-tests -ra --tb=short
             ' 2>&1 | tee artifacts/application-builds/backend-tests.log
       - name: Frontend tests in the recorded Node build stage
