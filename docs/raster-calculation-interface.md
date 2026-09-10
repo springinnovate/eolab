@@ -117,7 +117,22 @@ HTTP contracts, expressions, backend limits, storage schema, and shared polling 
 unchanged by #354.
 
 `SummaryStatisticsController` holds stable card identities and debounced validation.
-Its one `CalculationsController` executor admits batches through the original
+`SummaryStatisticsView` owns the controls declared in the current HTML. It does not
+inherit the retired single-editor view. Its Processing-local
+`calculation-result-view.js` dependency retains precise scalar formatting and
+immutable saved-job rendering; editable cards and saved snapshots remain different
+presentation contracts. Saved-result, history, download and sampling-activity
+styles remain in place. Only the absent editor's selectors and presentation tests
+were removed; their useful value, coverage, error and export assertions now run
+against the current summary view.
+
+All summary interaction tests use `SummaryControlDocument`, which reads the actual
+`frontend/index.html` identities and rejects unknown selectors. A mutation check
+removes each required control in turn and verifies that the view contract fails.
+This is a markup/interaction guard, not a browser layout simulation; presentation
+changes also require real-browser verification.
+
+The summary controller's one `CalculationsController` executor admits batches through the original
 planning, release, idempotent submission, cancellation, and recovery lane. It never
 creates a controller/job poller per card. The executor's `executeIntent` boundary
 accepts validated immutable public intents, and an optional automatic-admission
