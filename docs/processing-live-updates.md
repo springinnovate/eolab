@@ -43,8 +43,8 @@ revision protection remains in place.
   is two seconds. Streams end after five minutes, including time blocked on a
   slow client; final response closure has at most one extra second to flush.
 - `private, no-store, no-transform` and `X-Accel-Buffering: no` prevent caching
-  and request unbuffered proxy delivery. Deployment still needs live verification
-  through the actual reverse proxy.
+  and request unbuffered proxy delivery. Live browser verification through
+  Lilling's reverse proxy is recorded below.
 - Disconnect, response failure, expiry and application shutdown release stream
   capacity. Closing the notification connection never cancels a processing job.
 - PostgreSQL reconnect attempts are bounded and spaced by at least five seconds.
@@ -119,3 +119,50 @@ From `frontend`: `node --test --test-reporter=dot` and
 
 See [request latency investigation](request-latency-investigation.md) for earlier
 measurements and the unchanged total/browser/server timing boundaries.
+
+## Live demo verification
+
+Lilling Coolify deployment `3c8nbxai3tjfq9tdsx6szzvj` succeeded in 2m 16s,
+running code commit `960df4f99ff350bca583afdf0277b6d7d2dc976c` on
+`https://wwf-connectivity.ecoshard.org/`. The browser reports
+`0.5.0-81-g960df4f`. This documentation update follows that deployed code.
+
+Two new browser calculations used Human Footprint 2023, `mean(a)`, Countries
+filtered to `iso3 == PER`, and current/default batching. Both returned exactly
+**4.748740795296266**, **841,871 valid/matched pixels**, **12 reads** and **35
+calculation tiles**, matching the earlier warm-process runs.
+
+| Seconds | Warm processes, before SSE (two runs) | Warm processes + SSE (two runs) |
+| --- | --- | --- |
+| Request → result displayed | 2.327 / 2.262 | 1.350 / 1.278 |
+| Before planning | 0.013 / 0.016 | 0.015 / 0.015 |
+| Planning round trip (review reused) | 0.000 / 0.000 | 0.000 / 0.000 |
+| Between planning and submission | 0.001 / 0.001 | 0.001 / 0.001 |
+| Submission round trip | 0.228 / 0.158 | 0.128 / 0.165 |
+| Submission response → displayed | 2.085 / 2.087 | 1.206 / 1.098 |
+| Server queued → ready | 1.154 / 1.038 | 1.140 / 1.037 |
+| Queue wait | 0.105 / 0.061 | 0.057 / 0.060 |
+| Worker preparation | 0.041 / 0.023 | 0.042 / 0.027 |
+| Native execution process | 0.983 / 0.920 | 1.012 / 0.925 |
+| Native readiness wait | 0.000 / 0.000 | 0.000 / 0.000 |
+| Native operation | 0.953 / 0.874 | 0.964 / 0.878 |
+| Native communication/cleanup | 0.030 / 0.047 | 0.048 / 0.047 |
+| Kernel | 0.945 / 0.866 | 0.956 / 0.870 |
+| Publication | 0.001 / 0.001 | 0.001 / 0.001 |
+| Other server remainder | 0.025 / 0.032 | 0.028 / 0.024 |
+| Submission admission + result delivery remainder | 1.159 / 1.207 | 0.194 / 0.225 |
+
+The average observed total dropped by about **43%** (2.295 s → 1.314 s), while
+server queued-to-ready remained essentially unchanged. This is consistent with
+removing the browser's wait for its next two-second poll. Nested stages overlap;
+these are sequential live observations, not controlled cold-cache benchmarks.
+The delivery remainder also includes submission admission, HTTP handling and
+transfer; it is not pure network time or a separately measured SSE interval.
+
+New owned job IDs: `d514152a9f06402b9766d160e006fc39` and
+`683359e5f2574d5988e4e90531bb0b9d`. Both completed through the live UI before the
+normal two-second active fallback interval. Transport failure, owner isolation
+and polling recovery are covered by local tests; no production outage or
+cross-session access was induced. A separate anonymous command-line stream
+probe received HTTP 403 before opening the stream, so it did not validate live
+wire headers; the deployed browser workflow is the live verification evidence.
