@@ -520,10 +520,10 @@
           </div>
         </details>
       </div>
-      <aside id="map-inspection" popover="manual" aria-label="Map exploration">
+      <aside id="map-inspection" popover="manual" aria-label="Map inspection">
         <div id="map-inspection-filter-indicators" class="map-filter-indicators" aria-label="Active layer filters" hidden></div>
         <header class="map-inspection-dock-header">
-          <strong id="map-inspection-dock-title" class="map-inspection-dock-title">Map analysis</strong>
+          <strong id="map-inspection-dock-title" class="map-inspection-dock-title">Map inspection</strong>
           <button id="toggle-map-inspection-dock" class="secondary-button"
             type="button" aria-controls="map-inspection-panels"
             aria-expanded="true">Minimize</button>
@@ -552,7 +552,7 @@
               aria-selected="false" tabindex="-1" hidden>Fields from feature</button>
             <button id="map-inspection-tab-histogram" class="map-inspection-tab"
               type="button" role="tab" aria-controls="map-histogram-panel"
-              aria-selected="false" tabindex="-1" hidden>Explore</button>
+              aria-selected="false" tabindex="-1" hidden>Raster histograms</button>
             <button id="map-inspection-tab-filter" class="map-inspection-tab"
               type="button" role="tab" aria-controls="vector-filter-panel"
               aria-selected="false" tabindex="-1" hidden>Filter</button>
@@ -561,6 +561,17 @@
               aria-selected="false" tabindex="-1" hidden>Style</button>
           </div>
         </header>
+        <section id="map-click-summary" class="map-click-summary" aria-labelledby="map-click-position" hidden>
+          <p id="map-click-position"></p>
+          <div class="map-click-results">
+            <button id="map-click-histogram" type="button" aria-controls="map-histogram-panel" hidden>
+              <strong>Raster histograms</strong><span id="map-click-histogram-status" role="status"></span>
+            </button>
+            <button id="map-click-feature" type="button" aria-controls="vector-feature-inspector" hidden>
+              <strong>Features at click</strong><span id="map-click-feature-status" role="status"></span>
+            </button>
+          </div>
+        </section>
         <div id="map-inspection-panels" class="map-inspection-panels">
           <section id="calculations-panel" role="tabpanel" aria-labelledby="map-inspection-tab-calculations" hidden>
             <div class="downloads-actions summary-panel-heading"><h2>Summary statistics</h2><button id="calculations-close" class="secondary-button" type="button" aria-label="Close summary statistics">&times;</button></div>

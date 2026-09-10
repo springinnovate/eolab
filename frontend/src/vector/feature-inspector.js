@@ -603,8 +603,7 @@ export class VectorFeatureInspectorController {
         const initialMessage = `Inspecting ${targets.length} visible vector ` +
             `layer${targets.length === 1 ? "" : "s"}…`;
         this.status.textContent = initialMessage;
-        // Every accepted click reactivates feature inspection even when its
-        // retained tab was already open behind Histogram or Style.
+        // Composition reveals availability; the inspection workspace owns focus.
         this.onInspectionChange(true);
         this.#publishSample(
             "loading",
@@ -694,7 +693,7 @@ export class VectorFeatureInspectorController {
             this.status.textContent = featureSummary +
                 `${completedCount} of ${targetResults.length} vector layers ` +
                 `inspected in ${duration}; waiting for ${pendingCount} more…`;
-            this.#publishSample("loading", this.results, this.status.textContent);
+            this.#publishSample("loading", this.results, this.status.textContent, failureResults.length);
             return;
         }
         if (this.results.length > 0) {
@@ -705,21 +704,22 @@ export class VectorFeatureInspectorController {
             this.status.textContent = `${this.results.length} feature` +
                 `${this.results.length === 1 ? "" : "s"} found in ${duration}` +
                 `${failureSummary}.`;
-            this.#publishSample("ready", this.results, this.status.textContent);
+            this.#publishSample("ready", this.results, this.status.textContent, failureResults.length);
             return;
         }
         const failure = failureResults[0]?.failure;
         const message = failure instanceof VectorFeatureInfoError
             ? failure.message
-            : "No vector feature was found at that location.";
-        if (failure instanceof VectorFeatureInfoError) {
+            : failure ? "Vector inspection failed. Click the map to retry."
+                : "No vector feature was found at that location.";
+        if (failure) {
             this.status.textContent = `${message} Inspection finished in ${duration}.`;
         } else {
             this.status.textContent =
                 "Click the map to inspect visible vector features.";
             if (!this.panel.hidden) this.onInspectionChange(false);
         }
-        this.#publishSample("empty", [], message);
+        this.#publishSample("empty", [], message, failureResults.length);
     }
 
     /**
@@ -740,13 +740,14 @@ export class VectorFeatureInspectorController {
      * @param {"loading"|"ready"|"empty"|"invalidated"} state Sample state.
      * @param {Object[]} results Inspector-owned feature results.
      * @param {string} message Browser-safe sample status.
+     * @param {number} [failedLayers=0] Completed layers whose inspection failed.
      * @return {void}
      */
-    #publishSample(state, results, message) {
+    #publishSample(state, results, message, failedLayers = 0) {
         const observations = Object.freeze(
             results.map(vectorInspectionObservation)
         );
-        this.onSampleChange(Object.freeze({ state, observations, message }));
+        this.onSampleChange(Object.freeze({ state, observations, message, failedLayers }));
     }
 
     /**

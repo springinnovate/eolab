@@ -3697,6 +3697,53 @@ article.raster-histogram-summary {
   overflow: hidden;
 }
 
+.map-click-summary {
+  pointer-events: auto;
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius);
+  background: var(--surface-1);
+}
+.map-click-summary[hidden], .map-click-results button[hidden] { display: none; }
+.map-click-summary > p { margin: 0 0 6px; color: var(--text-2); font-size: 0.72rem; }
+.map-click-results { display: flex; flex-wrap: wrap; gap: 6px; }
+.map-click-results button {
+  flex: 1 1 170px;
+  min-width: 0;
+  padding: 7px 9px;
+  text-align: left;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius);
+  background: var(--surface-1);
+  color: var(--text-1);
+  cursor: pointer;
+}
+.map-click-results strong, .map-click-results span { display: block; overflow-wrap: anywhere; }
+.map-click-results strong { font-size: 0.76rem; }
+.map-click-results span { margin-top: 3px; font-size: 0.72rem; color: var(--text-2); }
+.map-click-results button:disabled { cursor: default; }
+.map-click-results button:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.map-click-results button[data-unread="true"] { border-color: var(--brand); background: var(--surface-selected); }
+.map-inspection-tab[data-unread="true"]::after { content: " •"; color: var(--brand); }
+.map-click-results button[data-loading="true"] strong::after {
+  content: "";
+  display: inline-block;
+  width: 9px; height: 9px;
+  margin-left: 6px;
+  border: 2px solid var(--border-1);
+  border-top-color: var(--brand);
+  border-radius: 50%;
+  animation: map-inspection-spin 0.8s linear infinite;
+}
+[data-inspection-loading="true"] .raster-histogram-chart,
+[data-inspection-loading="true"] #vector-feature-result { opacity: 0.35; }
+@keyframes map-inspection-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .map-click-results button[data-loading="true"] strong::after { animation: none; }
+}
+
 .map-inspection-panels[hidden] {
   display: none;
 }

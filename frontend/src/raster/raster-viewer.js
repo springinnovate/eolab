@@ -198,6 +198,8 @@ function canRetryRasterStatistics(error) {
  * layer snapshots after state changes.
  * @property {() => void} [onHistogramRequested] Notifies the composition root
  * that an explicit analysis action should reveal its presentation workspace.
+ * @property {(snapshot:{state:string,message:string}|null)=>void} [onHistogramChange]
+ * Receives current histogram participation and status without exposing analysis state.
  * @property {(key:string) => void} [onStyleRequested] Notifies the composition
  * root that a histogram action should open one retained layer's style editor.
  * @property {(item:Object,area:Readonly<Object>|null)=>void} [onDownloadRequested]
@@ -257,6 +259,7 @@ export function initializeRasterViewer(
         leaflet,
         onTileError,
         onCalculateRequested = () => {},
+        onHistogramChange = () => {},
         onSamplingAreaChange = () => {},
         onDownloadRequested = /** @param {Object} _item Catalog source. @param {Object|null} _area Explicit selection. @return {void} */ (_item, _area) => {},
         onLayersChange = /**
@@ -361,6 +364,7 @@ export function initializeRasterViewer(
     const bivariateMode = new BivariateRasterMode();
     let bivariateCandidates = [];
     let bivariateStatistics = null;
+    let pairedHistogramState = "idle";
     let bivariateSelectedBounds = null;
     let bivariateTemporaryAoi = null;
     let vectorSamplingAoi = null;
@@ -693,6 +697,7 @@ export function initializeRasterViewer(
         });
         syncBivariateCandidate(session);
         refreshStyle();
+        publishHistogramPresentation();
     }
 
     /**
@@ -839,6 +844,8 @@ export function initializeRasterViewer(
          */
         () => {
             bivariateStatistics = null;
+            pairedHistogramState = "loading";
+            publishHistogramPresentation();
             updateBivariatePercentileValues();
             controlsView.setPairedStatisticsLoading?.(
                 "Calculating the 2D histogram..."
@@ -854,6 +861,7 @@ export function initializeRasterViewer(
         (statistics) => {
             if (!bivariateMode.active) return;
             bivariateStatistics = statistics;
+            pairedHistogramState = "ready";
             const candidates = getBivariatePairCandidates();
             if (candidates === null) return;
             let rasterRangesChanged = false;
@@ -893,6 +901,8 @@ export function initializeRasterViewer(
         (error) => {
             if (!bivariateMode.active) return;
             bivariateStatistics = null;
+            pairedHistogramState = "error";
+            publishHistogramPresentation();
             updateBivariatePercentileValues();
             controlsView.renderPairedStatisticsError?.(
                 error,
@@ -1274,6 +1284,35 @@ export function initializeRasterViewer(
             ? activeLayerKey
             : null;
         controlsView.renderLayerHistograms(summaries, activeRetainedKey);
+        publishHistogramPresentation();
+    }
+
+    /** Publish display-only status for the current histogram targets and area.
+     * Uses the same owned sessions as the charts; no additional reads or timers.
+     * @return {void}
+     */
+    function publishHistogramPresentation() {
+        const detached = activeDetachedRasterSession();
+        const sessions = detached ? [detached] : followsVisibleLayers
+            ? visibleRasterRecords().map(record => record.state)
+            : activeLayerKey === null ? [] : [mapLayers.getRecord(activeLayerKey)?.state].filter(Boolean);
+        if (sessions.length === 0) { onHistogramChange(null); return; }
+        const presentations = sessions.map(getLayerHistogramPresentation);
+        const states = bivariateMode.active ? [pairedHistogramState] : presentations.map(item => item.state);
+        const loading = states.some(state => state === "loading" || state === "idle");
+        const failures = states.filter(state => state === "error").length;
+        const state = loading ? "loading" : failures ? "error" : "ready";
+        const aoi = bivariateMode.active ? bivariateTemporaryAoi : selectedTemporaryAoi;
+        const scope = bivariateMode.active
+            ? aoi ? `${aoiOriginLabel(aoi)} · ${aoi.filename}` : bivariateSelectedBounds ? "Map box · 2D comparison" : "Whole overlap · 2D comparison"
+            : presentations[0].scope;
+        const visibleCount = followsVisibleLayers ? allVisibleRasterRecords().length : sessions.length;
+        const participation = visibleCount > sessions.length
+            ? `Top ${sessions.length} of ${visibleCount} visible rasters`
+            : `${sessions.length} raster layer${sessions.length === 1 ? "" : "s"}`;
+        const progress = loading ? "Updating for this selection…" : failures
+            ? "Some histograms unavailable — see details" : "Ready";
+        onHistogramChange(Object.freeze({state, message: `${participation} · ${scope} · ${progress}`}));
     }
 
     /**
@@ -4010,6 +4049,7 @@ export function initializeRasterViewer(
         rasterCursorPosition = null;
         mapDragging = false;
         clearing = false;
+        onHistogramChange(null);
     }
 
     /**
