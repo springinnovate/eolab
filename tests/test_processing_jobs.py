@@ -55,10 +55,19 @@ def store(request: pytest.FixtureRequest) -> PostgresJobStore:
 
     Returns:
         Migrated, empty real processing adapter.
+
+    Raises:
+        pytest.fail.Exception: If the explicit or connected database is unsafe.
     """
     dsn = request.config.getoption("--processing-dsn")
     if dsn is None:
         pytest.skip("Pass --processing-dsn for real PostgreSQL integration tests")
+    if not psycopg.conninfo.conninfo_to_dict(dsn).get("dbname", "").startswith(
+        "eolab_processing_test"
+    ):
+        pytest.fail(
+            "Processing tests require an explicit disposable eolab_processing_test* database"
+        )
     with psycopg.connect(dsn) as connection:
         if not connection.info.dbname.startswith("eolab_processing_test"):
             pytest.fail(
