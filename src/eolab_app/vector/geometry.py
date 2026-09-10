@@ -10,10 +10,15 @@ from eolab_app.vector.errors import VectorConflictError
 from eolab_app.vector.filters import VectorFilter, matches_filter, validate_filter
 from eolab_app.vector.models import ResolvedVectorSource
 from eolab_app.vector.sources import vector_source_signature
+from eolab_app.vector.display_geometry import display_geometry
 
 MAX_SCANNED_FEATURES = 1_000_000
 GEOMETRY_READ_SECONDS = 15.0
 GEOMETRY_ADDRESS_SPACE_BYTES = 2 * 1024 * 1024 * 1024
+# Leave serialization headroom below Processing's independent 8 MiB snapshot
+# limit, and never admit more vertices than its/histograms' projection ceiling.
+MAX_EXACT_GEOMETRY_BYTES = 7 * 1024 * 1024
+MAX_EXACT_COORDINATES = 500_000
 
 
 def read_filtered_geometry(source: ResolvedVectorSource, candidate: VectorFilter, signature: tuple) -> dict:
@@ -25,7 +30,7 @@ def read_filtered_geometry(source: ResolvedVectorSource, candidate: VectorFilter
         signature: Exact component identity captured before admission.
 
     Returns:
-        Complete bounded collection, bounds and exact matched/total counts.
+        Exact bounded collection, separate display outline, exact bounds and counts.
 
     Raises:
         GeometryValidationError: If the complete selection cannot fit the budget.
@@ -38,7 +43,12 @@ def read_filtered_geometry(source: ResolvedVectorSource, candidate: VectorFilter
     options = {"enabled_drivers": ["GPKG" if source.source_format == "geopackage" else "ESRI Shapefile"]}
     if source.layer_name is not None:
         options["layer"] = source.layer_name
-    builder = GeometryBuilder(polygons_only=True)
+    builder = GeometryBuilder(
+        polygons_only=True,
+        maximum_coordinates=MAX_EXACT_COORDINATES,
+        maximum_bytes=MAX_EXACT_GEOMETRY_BYTES,
+        compact_serialization=False,
+    )
     total = matched = 0
     deadline = monotonic() + GEOMETRY_READ_SECONDS
     with fiona.Env(OGR_CT_FORCE_TRADITIONAL_GIS_ORDER="YES"):
@@ -57,7 +67,11 @@ def read_filtered_geometry(source: ResolvedVectorSource, candidate: VectorFilter
     geometry, bounds = builder.finish()
     if vector_source_signature(source) != signature:
         raise VectorConflictError("Vector source changed during sampling; refresh the layer")
-    return {"geometry": geometry, "bbox": bounds, "matched": matched, "total": total}
+    outline = display_geometry(geometry, bounds)
+    return {
+        "geometry": geometry, "displayGeometry": outline,
+        "bbox": bounds, "matched": matched, "total": total,
+    }
 
 
 def geometry_process(writer, source: ResolvedVectorSource, candidate: VectorFilter, signature: tuple) -> None:

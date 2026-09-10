@@ -87,11 +87,14 @@ export class VectorSamplingController {
             this.render();
         } else if (["review", "confirm"].includes(this.state.phase)) this.activate();
     }
-    /** Activate the reviewed opaque reference, without exporting geometry to raster APIs. */
+    /**
+     * Activate the reviewed reference and describe its display-only outline.
+     * @return {void}
+     */
     activate() {
         this.state.phase = "active";
         const area = this.state.area;
-        this.state.message = `Sampling ${area.matched.toLocaleString()} of ${area.total.toLocaleString()} features · polygon boundaries and holes respected.`;
+        this.state.message = `Sampling ${area.matched.toLocaleString()} of ${area.total.toLocaleString()} features · polygon boundaries and holes respected. Map outline simplified; calculations use exact geometry.`;
         this.onActivate(area);
         this.render();
     }

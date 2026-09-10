@@ -39,6 +39,7 @@ class TemporaryAoiRecord:
         expires_at: UTC expiration timestamp.
         replacement_id: Existing AOI removed only after this upload is ready.
         ready_sampling_area: Immutable polygonal geometry after selection.
+        retained_geometry_bytes: Serialized size charged to exact retention.
     """
 
     id: str
@@ -48,6 +49,7 @@ class TemporaryAoiRecord:
     expires_at: datetime
     replacement_id: str | None
     ready_sampling_area: ResolvedTemporaryAoi | None = None
+    retained_geometry_bytes: int = 0
 
 
 class TemporaryAoiChoiceResponse(BaseModel):

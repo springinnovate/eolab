@@ -1,6 +1,7 @@
 """Process-local lifecycle service for temporary uploaded AOIs."""
 
 import asyncio
+import json
 import re
 import secrets
 import shutil
@@ -43,6 +44,8 @@ TEMPORARY_AOI_TTL = timedelta(minutes=30)
 OPAQUE_IDENTIFIER_BYTES = 24
 UPLOAD_COPY_CHUNK_BYTES = 64 * 1024
 EXPIRATION_POLL_SECONDS = 30.0
+# Bound the larger trusted snapshots independently of the record-count limit.
+MAX_RETAINED_GEOMETRY_BYTES = 32 * 1024 * 1024
 UtcNow = Callable[[], datetime]
 
 
@@ -168,9 +171,17 @@ class TemporaryAoiService:
             TemporaryAoiConflictError: If retained selection capacity is full.
         """
         await self.expire()
+        geometry_bytes = len(json.dumps(geometry, allow_nan=False).encode("utf-8"))
         async with self._lock:
             if len(self._records) >= 64:
                 raise TemporaryAoiConflictError("Too many temporary areas; remove an unused area first")
+            retained_bytes = sum(
+                record.retained_geometry_bytes for record in self._records.values()
+            )
+            if geometry_bytes + retained_bytes > MAX_RETAINED_GEOMETRY_BYTES:
+                raise TemporaryAoiConflictError(
+                    "Temporary area geometry capacity is full; remove an unused area first"
+                )
             self._ensure_root()
             identifier = self._new_identifier()
             identity = TemporaryAoiLifecycleIdentity(identifier, self._now() + self._ttl)
@@ -183,6 +194,7 @@ class TemporaryAoiService:
             self._records[identifier] = TemporaryAoiRecord(
                 id=identifier, filename=label[:256], directory=directory, choices={},
                 expires_at=identity.expires_at, replacement_id=None, ready_sampling_area=area,
+                retained_geometry_bytes=geometry_bytes,
             )
             return area
 

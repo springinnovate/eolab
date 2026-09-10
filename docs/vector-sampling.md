@@ -37,8 +37,9 @@ separately available.
   publication, WFS, WMS, GeoServer or the raster implementation.
 - `bounded_geometry.py` owns neutral bounded CRS conversion and geometry
   validation, used by both uploads and vector selection. Vector selection
-  additionally requires valid polygon topology. No geometry is silently repaired,
-  simplified or replaced by its envelope.
+  additionally requires valid polygon topology. Analysis geometry is never
+  repaired, simplified or replaced by its envelope. `vector/display_geometry.py`
+  creates a separate approximate browser outline inside the same bounded child.
 - The backend composition root injects the AOI service's `retain_geometry`
   capability. AOI storage owns opaque identity, immutable polygon snapshots,
   expiry and removal, without learning Catalog or vector filtering semantics.
@@ -64,7 +65,10 @@ links or page reloads; abandoned references expire through the AOI lifecycle.
 `POST /api/vector-sampling/areas` accepts Catalog `collectionId`, `itemId`, and
 the existing typed `filter` contract. It never accepts a source path, arbitrary
 SQL or browser-supplied geometry. The response contains bounded display geometry,
-the exact matched/total count, applied filter and opaque AOI identity.
+the exact matched/total count, applied filter and opaque AOI identity. Its
+`geometry` field is **display-only**, while `bbox` is computed from every exact
+coordinate. Numeric consumers must resolve the opaque ID through AOI retention;
+the API does not accept the returned outline as a calculation area.
 
 - Two concurrent native selection reads per application process; busy requests
   are rejected rather than queued without a bound.
@@ -72,11 +76,30 @@ the exact matched/total count, applied filter and opaque AOI identity.
   cancellation reclaims the child before releasing its slot.
 - Linux native child address space: 2 GiB. Windows development relies on the
   remaining geometry, row and supervised time limits.
-- At most 1 million scanned rows, 10,000 matching features, 100,000 coordinate
-  positions, 32 nesting levels and 2 MiB serialized geometry. Results must be
-  complete; exceeding a limit rejects the selection.
+- At most 1 million scanned rows, 10,000 matching features, 500,000 exact
+  coordinate positions, 32 nesting levels and 7 MiB of exact serialized geometry
+  (default spaced JSON). The 7 MiB ceiling leaves headroom beneath Processing's
+  unchanged 8 MiB snapshot budget; the coordinate ceiling matches the existing
+  500,000-position histogram/Processing projection capacity. Exact selections
+  must be complete; exceeding a server limit rejects the selection.
+- Browser outlines are capped independently at 256 KiB compact GeoJSON and
+  10,000 positions. Topology-preserving simplification normally keeps holes and
+  separate islands. If their irreducible number exceeds the display budget,
+  only simplified exteriors of the largest 500 polygon components are shown.
+  Small islands and holes may therefore be absent from the approximate outline,
+  but remain in every analysis. Explicit east/west dateline components are kept
+  separate without longitude wrapping or union. Zoom uses the exact `bbox`.
 - New vector retention is rejected when 64 temporary area records are retained.
-  The existing configured AOI TTL (30 minutes by default) applies.
+  Trusted retained snapshots also share a 32 MiB serialized-geometry budget;
+  Python geometry objects use more memory than their serialized size. Removal
+  and expiry reclaim that budget. The configured TTL (30 minutes by default)
+  applies. Upload size, archive, geometry and replacement policies are unchanged.
+
+Raster block, decoded-byte, transformed-coordinate, memory and runtime limits
+remain independent and enforced. Blockwise raster reads bound pixel memory;
+they do not make geometry projection or repeated mask construction unlimited.
+The mask still uses the complete projected exact selection, and no new
+block-local geometry algorithm is introduced for this display-limit fix.
 
 The first version supports the same native mounted Shapefile/GeoPackage sources
 as filtered field reads. Additional vector containers should extend the exact
