@@ -26,7 +26,7 @@ from eolab_app.catalog.shapefile import (
     GEOJSON_GEOMETRY_TYPES,
     PROJECTION_EXTENSION,
     REQUIRED_COMPONENT_EXTENSIONS,
-    SHAPEFILE_COMPONENT_TYPES,
+    shapefile_component_extension,
 )
 from eolab_app.catalog.vector import (
     MOUNTED_VECTOR_COLLECTION_ID,
@@ -351,7 +351,7 @@ def _validated_shapefiles(
                 f"{limits.total_uncompressed_bytes}-byte total uncompressed limit"
             )
 
-        component_extension = _component_extension(member_path.name)
+        component_extension = shapefile_component_extension(member_path.name)
         if component_extension is None:
             continue
         component_stem = member_path.name[: -len(component_extension)]
@@ -662,19 +662,3 @@ def _gdal_zip_member_path(
     """
     mounted_archive_path = archive_path.resolve().as_posix()
     return f"/vsizip/{{{mounted_archive_path}}}/{member_path.as_posix()}"
-
-
-def _component_extension(file_name: str) -> str | None:
-    """Return a recognized internal Shapefile component extension.
-
-    Args:
-        file_name: Final path segment of an archive member.
-
-    Returns:
-        Canonical lower-case extension, or ``None`` for unrelated members.
-    """
-    lower_file_name = file_name.lower()
-    for extension in SHAPEFILE_COMPONENT_TYPES:
-        if lower_file_name.endswith(extension):
-            return extension
-    return None
