@@ -33,7 +33,12 @@ from eolab_app.processing.aggregate_models import (
     RasterAggregateLimits,
 )
 from eolab_app.processing.raster_aggregate import aggregate_process_target
-from eolab_app.processing.ports import JobArtifactStore, JobStore
+from eolab_app.processing.ports import (
+    JobArtifactStore,
+    JobStore,
+    JobChanges,
+    JobSubscription,
+)
 from eolab_app.processing.raster_clip import clip_process_target
 from eolab_app.raster.models import CatalogRasterRequest, Wgs84Bounds
 from eolab_app.raster.ports import RasterSourceAuthorizer
@@ -189,6 +194,7 @@ class ProcessingService:
         limits: RasterClipLimits,
         *,
         native: ReusableProcess | None = None,
+        changes: JobChanges | None = None,
     ) -> None:
         """Compose job storage and currently supported raster-operation capabilities.
 
@@ -199,6 +205,7 @@ class ProcessingService:
             artifacts: Confined result-file adapter.
             limits: Deployment-owned resource and lifecycle policy.
             native: Lifecycle-managed planning lane supplied by composition.
+            changes: Lifecycle-managed owned-job notification provider.
         """
         self.authorizer = authorizer
         self.areas = areas
@@ -206,7 +213,28 @@ class ProcessingService:
         self.artifacts = artifacts
         self.limits = limits
         self.native = native
+        self.changes = changes
         self.aggregate_limits = RasterAggregateLimits.with_lifecycle(limits)
+
+    async def subscribe_jobs(self, owner: str) -> JobSubscription:
+        """Subscribe to hints for the same owner used by ordinary job reads.
+
+        Args:
+            owner: Hashed session capability from the HTTP boundary.
+
+        Returns:
+            A subscription which the transport must close on every exit path.
+
+        Raises:
+            ProcessingError: If live updates are disabled or at capacity.
+        """
+        if self.changes is None:
+            raise ProcessingError(
+                "events_unavailable",
+                "Live updates are unavailable; use job status polling.",
+                503,
+            )
+        return self.changes.subscribe(owner)
 
     async def _area_snapshot(
         self, bounds: Wgs84Bounds | None, aoi_id: str | None

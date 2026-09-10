@@ -5,6 +5,40 @@ from pathlib import Path
 from eolab_app.processing.models import Artifact, PreparedJobPlan, ProcessingLimits
 
 
+class JobSubscription(Protocol):
+    """A bounded owner-specific change hint, never a result or authorization."""
+
+    async def wait(self, timeout: float) -> bool:
+        """Consume a coalesced hint or time out for a transport heartbeat.
+
+        Args:
+            timeout: Maximum wait in seconds.
+
+        Returns:
+            True for a pending hint, False after the timeout.
+        """
+        ...
+
+    def close(self) -> None:
+        """Release this subscription and its connection-capacity reservation."""
+        ...
+
+
+class JobChanges(Protocol):
+    """Processing's session-isolated change-subscription provider."""
+
+    def subscribe(self, owner: str) -> JobSubscription:
+        """Register before the consumer refreshes its authoritative job state.
+
+        Args:
+            owner: Hash obtained from the existing HTTP session capability.
+
+        Returns:
+            Bounded subscription that the consumer must close.
+        """
+        ...
+
+
 class JobWakeup(Protocol):
     """Queue hints only; callers must still use durable admission and claims."""
 

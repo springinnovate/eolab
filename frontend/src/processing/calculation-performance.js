@@ -33,7 +33,7 @@ export function performanceDescription(job, totalWaitSeconds, stages) {
     const p = job.result?.performance;
     const lines = [...(Number.isFinite(totalWaitSeconds) && totalWaitSeconds >= 0
         ? [`Total wait → result displayed: ${totalWaitSeconds.toFixed(3)} s.`,
-            "Measured in this tab from the calculation request through the result UI update, including debounce, planning, queueing and polling; excludes earlier confirmation time and the browser's subsequent paint."]
+            "Measured in this tab from the calculation request through the result UI update, including debounce, planning, queueing and result delivery (notifications or polling); excludes earlier confirmation time and the browser's subsequent paint."]
         : ["Total wait unavailable for this result. Request-to-display timing is recorded only for statistic cards completed in this tab, without a page reload."]),
     ...executionDescription(job.grid)];
     const seconds = n => `${n.toFixed(3)} s`;
@@ -73,7 +73,7 @@ export function performanceDescription(job, totalWaitSeconds, stages) {
     }
     if (stages && Number.isFinite(serverElapsed)) {
         const residual = stages.submissionSeconds + stages.afterSubmissionSeconds - serverElapsed;
-        if (residual >= 0) lines.push(`Submission admission + result delivery (estimated remainder): ${seconds(residual)}. Includes request handling before queue insertion, completion/response transfer and polling delay; not a measurement of network time alone.`);
+        if (residual >= 0) lines.push(`Submission admission + result delivery (estimated remainder): ${seconds(residual)}. Includes request handling before queue insertion, completion/response transfer and notification delivery or fallback polling; not a measurement of network time alone.`);
     }
     lines.push("Server intervals use one database clock or a worker's monotonic clock. Browser intervals use this tab's monotonic clock. Small residual differences can include database transaction timestamp boundaries. Timings are diagnostic and do not change scheduling.");
     if (!p) return [...lines, "Kernel measurements are unavailable for this saved result."];

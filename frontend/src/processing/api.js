@@ -104,10 +104,26 @@ function validateCalculationRows(rows) {
 
 /** Own HTTP serialization and cookie-session establishment for Downloads. */
 export class ProcessingApiClient {
-    /** @param {Function} [fetchImplementation=globalThis.fetch] Same-origin HTTP transport. */
-    constructor(fetchImplementation = globalThis.fetch) {
+    /** @param {Function} [fetchImplementation=globalThis.fetch] Same-origin HTTP transport.
+     * @param {Function|undefined} [eventSource=globalThis.EventSource] Optional browser SSE transport. */
+    constructor(fetchImplementation = globalThis.fetch, eventSource = globalThis.EventSource) {
         this.fetch = fetchImplementation;
+        this.EventSource = eventSource;
         this.session = null;
+    }
+
+    /** Watch hints after ordinary requests establish the owned session cookie.
+     * @param {Function} changed Request an authoritative job refresh.
+     * @return {Function|null} Close the connection, or null when SSE is unavailable. */
+    watchJobs(changed) {
+        if (typeof this.EventSource !== "function") return null;
+        try {
+            const source = new this.EventSource("/api/processing/events");
+            let closed = false;
+            const receive = event => { if (!closed && event.data === "{}") changed(); };
+            source.addEventListener("changed", receive);
+            return () => { if (!closed) { closed = true; source.removeEventListener("changed", receive); source.close(); } };
+        } catch { return null; } // The existing two-second poll remains authoritative.
     }
 
     /** Establish the cookie before concurrent requests. @return {Promise<Object>} Initial job listing. */

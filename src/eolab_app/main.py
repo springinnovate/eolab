@@ -26,6 +26,7 @@ from eolab_app.processing.job_store import PostgresJobStore
 from eolab_app.processing.job_notifications import PostgresJobWakeup
 from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.native_processes import create_native_process
+from eolab_app.processing.job_events import PostgresJobEvents
 from eolab_app.processing.clip_models import RasterClipLimits
 from eolab_app.processing.service import ProcessingService
 from eolab_app.processing.worker import ProcessingWorker, serve as serve_processing
@@ -249,6 +250,8 @@ def create_app(
         async with AsyncExitStack() as client_stack:
             client_stack.push_async_callback(planning_native.close)
             planning_native.warm()
+            client_stack.push_async_callback(processing_events.close)
+            processing_events.start()
             await temporary_aoi_service.start()
             client_stack.push_async_callback(temporary_aoi_service.close)
             for client in (
@@ -283,6 +286,7 @@ def create_app(
     )))
     processing_limits = RasterClipLimits()
     planning_native = create_native_process(processing_limits)
+    processing_events = PostgresJobEvents()
     application.include_router(create_processing_router(ProcessingService(
         raster_source_authorizer,
         temporary_aoi_service,
@@ -293,6 +297,7 @@ def create_app(
         ),
         processing_limits,
         native=planning_native,
+        changes=processing_events,
     )))
     scan_manager = ScanManager(
         app_global_configuration.scan_mount_path,

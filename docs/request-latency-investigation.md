@@ -5,6 +5,10 @@ at `5dfcd785952076f6ac630427ceaefa2a25bc87d4`. Instrumentation was deployed firs
 the measured plan-reuse, queue-wakeup and reusable-process changes below follow
 that baseline. Historical request-path observations are retained explicitly.
 
+The next increment adds [session-scoped SSE job updates](processing-live-updates.md)
+with the existing two-second polling safety net. The linked report documents
+the new transport, lifecycle limits, architecture and other polling candidates.
+
 ## Reusable planning and execution processes
 
 Processing now prestarts one native process for API planning and a separate one

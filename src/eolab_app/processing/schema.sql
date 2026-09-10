@@ -63,3 +63,23 @@ CREATE TABLE IF NOT EXISTS processing.transfers (
     expires_at timestamptz NOT NULL
 );
 CREATE INDEX IF NOT EXISTS transfers_job ON processing.transfers(job_id, expires_at);
+
+-- A hint is delivered only after the state transaction commits. The payload is
+-- an internal owner hash, never a session cookie, job result, input or path.
+CREATE OR REPLACE FUNCTION processing.notify_job_change() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.status IS NOT DISTINCT FROM OLD.status
+           AND NEW.progress IS NOT DISTINCT FROM OLD.progress THEN
+            RETURN NEW;
+        END IF;
+    END IF;
+    PERFORM pg_notify('eolab_processing_job_changes', NEW.owner);
+    RETURN NEW;
+END;
+$$;
+DROP TRIGGER IF EXISTS processing_job_change ON processing.jobs;
+CREATE TRIGGER processing_job_change AFTER INSERT OR UPDATE OF status, progress ON processing.jobs
+FOR EACH ROW EXECUTE FUNCTION processing.notify_job_change();
+INSERT INTO processing.schema_version VALUES (3) ON CONFLICT DO NOTHING;
