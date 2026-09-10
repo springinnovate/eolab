@@ -217,7 +217,7 @@ test("Map layers owns compact rows; the bounded map-tool dock owns styling", () 
     assert.match(inspection.source, /popover="manual"/);
     assert.match(editor.source, /role="tabpanel"/);
     assert.match(inspection.source, /id="map-inspection-tabs"[^>]+role="tablist"/);
-    assert.match(inspection.source, /id="map-inspection-dock-title"[^>]*>Map analysis/);
+    assert.match(inspection.source, /id="map-inspection-dock-title"[^>]*>Map tools/);
     assert.match(inspection.source, /id="map-inspection-more-summary"[^>]*>More/);
     assert.match(inspection.source, /id="open-downloads-dock"[\s\S]*?>History &amp; exports/);
     assert.match(
@@ -303,7 +303,7 @@ test("inspector publication can reveal Map layers through composition", () => {
     );
     assert.match(
         COMPOSITION_SOURCE,
-        /onHistogramRequested: \(\) => mapInspection\.showHistogram\([\s\S]*?layer\.visible && layer\.datasetKind === "raster"[\s\S]*?\.length[\s\S]*?\)/
+        /onHistogramRequested: \(\) => mapInspection\.showHistogram\([\s\S]*?activate: !selectingMapClick && !calculations\.isActive/
     );
     assert.match(
         COMPOSITION_SOURCE,
@@ -317,7 +317,7 @@ test("inspector publication can reveal Map layers through composition", () => {
 test("composition calculates committed boxes and closes inspection when no raster accepts a click", () => {
     assert.match(
         COMPOSITION_SOURCE,
-        /if \(!rasterVisualization\.exploreAt\(event\.latlng, \{\s*onSelected: area => \{\s*calculations\.setSelection\(area\);\s*calculations\.calculateSelection\(\);\s*\},\s*\}\)\) \{\s*mapInspection\.closeHistogram\(false\);\s*calculations\.setSelection\(null\);/
+        /rasterClickSelected = rasterVisualization\.exploreAt\(event\.latlng, \{\s*onSelected: area => \{\s*calculations\.setSelection\(area\);\s*calculations\.calculateSelection\(\);\s*\},\s*\}\);\s*if \(!rasterClickSelected\) \{\s*mapInspection\.closeHistogram\(false\);\s*calculations\.setSelection\(null\);/
     );
     assert.match(COMPOSITION_SOURCE, /vectorFeatureInspector\.inspect\(event\)/);
 });
@@ -388,13 +388,21 @@ test("raster histogram owns its sampling controls, AOI, and results", () => {
     assert.doesNotMatch(MARKUP, /analysis-aoi-disclosure|toggle-analysis-aoi/);
 });
 
+test("inspection header contains result navigation in consistent raster then feature order", () => {
+    const headerEnd = MARKUP.indexOf("</header>", requireMarkupPosition("map-inspection-dock-title"));
+    assert.ok(requireMarkupPosition("map-click-summary") < headerEnd);
+    assert.ok(requireMarkupPosition("map-click-histogram") < requireMarkupPosition("map-click-feature"));
+    assert.ok(requireMarkupPosition("map-inspection-tab-histogram") < requireMarkupPosition("map-inspection-tab-feature"));
+    assert.equal(countMarkupId("map-click-position"), 0);
+});
+
 test("Raster histogram leads with sampling before results and mode", () => {
     assert.match(requireElementRange("map-histogram-heading").source,
         />Raster value histograms</);
     assert.match(requireElementRange("close-map-histogram").source,
         /aria-label="Close raster histogram">×/);
     assert.match(requireElementRange("map-inspection-tab-histogram").source,
-        />Explore</);
+        />Raster histograms</);
     const mode = requireElementRange("raster-bivariate-controls");
     assert.match(mode.source, /class="visually-hidden">Histogram mode/);
     assert.match(mode.source, /aria-describedby="raster-bivariate-status"/);

@@ -520,12 +520,12 @@
           </div>
         </details>
       </div>
-      <aside id="map-inspection" popover="manual" aria-label="Map exploration">
+      <aside id="map-inspection" popover="manual" aria-label="Map inspection">
         <div id="map-inspection-filter-indicators" class="map-filter-indicators" aria-label="Active layer filters" hidden></div>
         <header class="map-inspection-dock-header">
-          <strong id="map-inspection-dock-title" class="map-inspection-dock-title">Map analysis</strong>
+          <strong id="map-inspection-dock-title" class="map-inspection-dock-title">Map tools</strong>
           <button id="toggle-map-inspection-dock" class="secondary-button"
-            type="button" aria-controls="map-inspection-panels"
+            type="button" aria-controls="map-click-summary map-inspection-tabs map-inspection-panels"
             aria-expanded="true">Minimize</button>
           <details id="map-inspection-more" class="map-analysis-more">
             <summary id="map-inspection-more-summary" class="secondary-button">More</summary>
@@ -535,12 +535,25 @@
                 aria-controls="downloads-panel">History &amp; exports</button>
             </div>
           </details>
-          <div id="map-inspection-tabs" class="map-inspection-tabs" role="tablist"
+          <section id="map-click-summary" class="map-click-summary" aria-labelledby="map-inspection-dock-title" hidden>
+            <div class="map-click-results">
+              <button id="map-click-histogram" type="button" aria-controls="map-histogram-panel" aria-pressed="false" hidden>
+                <strong>Raster histograms</strong><span id="map-click-histogram-status" role="status"></span>
+              </button>
+              <button id="map-click-feature" type="button" aria-controls="vector-feature-inspector" aria-pressed="false" hidden>
+                <strong>Features at click</strong><span id="map-click-feature-status" role="status"></span>
+              </button>
+            </div>
+          </section>
+          <div id="map-inspection-tabs" class="map-inspection-tabs" role="tablist" hidden
             aria-label="Open map tools">
             <button id="map-inspection-tab-calculations" class="map-inspection-tab" type="button" role="tab" aria-controls="calculations-panel" aria-selected="false" tabindex="-1" hidden>Summarize</button>
             <button id="map-inspection-tab-downloads" class="map-inspection-tab"
               type="button" role="tab" aria-controls="downloads-panel"
               aria-selected="false" tabindex="-1" hidden>History &amp; exports</button>
+            <button id="map-inspection-tab-histogram" class="map-inspection-tab"
+              type="button" role="tab" aria-controls="map-histogram-panel"
+              aria-selected="false" tabindex="-1" hidden>Raster histograms</button>
             <button id="map-inspection-tab-feature" class="map-inspection-tab"
               type="button" role="tab" aria-controls="vector-feature-inspector"
               aria-selected="false" tabindex="-1" hidden>Features</button>
@@ -550,9 +563,6 @@
             <button id="map-inspection-tab-feature-profile" class="map-inspection-tab"
               type="button" role="tab" aria-controls="vector-feature-profile"
               aria-selected="false" tabindex="-1" hidden>Fields from feature</button>
-            <button id="map-inspection-tab-histogram" class="map-inspection-tab"
-              type="button" role="tab" aria-controls="map-histogram-panel"
-              aria-selected="false" tabindex="-1" hidden>Explore</button>
             <button id="map-inspection-tab-filter" class="map-inspection-tab"
               type="button" role="tab" aria-controls="vector-filter-panel"
               aria-selected="false" tabindex="-1" hidden>Filter</button>

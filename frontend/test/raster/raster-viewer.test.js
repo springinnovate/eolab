@@ -565,6 +565,30 @@ function visibleLayerFixture(
         destroy() { viewer.destroy(); mapLayers.destroy(); } };
 }
 
+test("inspection summaries describe bounded raster participation and asynchronous results", async () => {
+    const snapshots = [];
+    const h = visibleLayerFixture(async (item, area) =>
+        createLayerStatistics(item, selectedBoundsFromArea(area)), {}, {
+        onHistogramChange: snapshot => snapshots.push(snapshot),
+    });
+    for (const suffix of ["summary-a", "summary-b", "summary-c"]) {
+        await h.viewer.show(createRasterItem(suffix));
+    }
+    h.viewer.exploreAt({ lng: 78, lat: 22 });
+    assert.ok(snapshots.some(snapshot => snapshot?.state === "loading"));
+    await flushPromises();
+    assert.equal(snapshots.at(-1).state, "ready");
+    assert.match(snapshots.at(-1).message, /Top 2 of 3 visible rasters/);
+    assert.match(snapshots.at(-1).message, /map sample/);
+    h.controlsView.handlers.onBivariateModeChange("bivariate");
+    await flushPromises();
+    assert.equal(snapshots.at(-1).state, "ready");
+    assert.match(snapshots.at(-1).message, /2D/);
+    h.viewer.clear();
+    assert.equal(snapshots.at(-1), null);
+    h.destroy();
+});
+
 test("download intents preserve distinct 1D and 2D boxes without waiting for statistics", async () => {
     const downloads = [];
     const h = visibleLayerFixture(async () => { throw new Error("Statistics busy"); }, {}, {

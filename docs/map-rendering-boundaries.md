@@ -33,6 +33,40 @@ neither the route nor the shared rendering package constructs feature services.
 
 ## Browser ownership
 
+### Map-click inspection
+
+The existing `MapInspectionController` owns the Map inspection surface, its
+foreground tool, and the two clickable result summaries. Repeated map clicks
+retain the foreground tool while Raster histograms and Features at click report
+independent loading, ready, empty, or failure states. Results arriving in the
+background receive a New results indicator until that tool is opened. An empty
+feature result remains visible in the summary; a click outside all raster
+coverage does not retain a raster summary.
+
+The click location, Minimize/More actions, and result cards share one header.
+Cards show the selected view and replace their corresponding navigation tabs;
+other open tools remain in a compact keyboard-accessible row. Before a click,
+the header reads Map tools and retains ordinary tool navigation. Raster
+histograms precedes Features in both presentations. Minimizing hides cards and
+navigation together without discarding results or changing request lifecycles.
+
+Application composition begins each click and forwards display-only snapshots
+from the raster viewer and vector inspector. The raster viewer's optional
+`onHistogramChange` callback supplies `{state, message}` or null; the vector
+sample contract additionally supplies `failedLayers` so partial failure is not
+reported as complete success. Neither result owner imports the presentation
+controller or its sibling. Cancellation, sampling, geometry, source identity,
+and stale-response checks remain with their existing owners.
+
+The raster summary describes the histogram's box, AOI, or whole-raster scope;
+the vector summary describes features at the click. Automatic visible-layer
+histograms retain their existing top-two limit, stated explicitly when more
+rasters are visible. Feature counts describe returned observations, not an
+unbounded dataset count. No additional reads, timers, or backend endpoints are
+introduced. Side-by-side result panels are deferred.
+
+### Retained layer lifecycle
+
 `frontend/src/catalog-item-identity.js` owns validation and serialization of a
 Catalog Item's composite Collection and Item identity. Catalog actions, map
 layers, and raster detail previews depend on that lower-level contract without

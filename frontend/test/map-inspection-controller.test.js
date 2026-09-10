@@ -82,6 +82,96 @@ test("automatic presentation does not move focus and close retains results", () 
     h.controller.destroy();
 });
 
+test("map-click summaries retain the chosen panel and expose unseen peer results", () => {
+    const h = fixture();
+    h.controller.showHistogram();
+    h.map.focus();
+    h.controller.beginMapClick({lat: 22, lng: 78});
+    h.controller.showHistogram(null, {activate: false});
+    h.controller.showFeatureInspector({activate: false});
+    h.controller.setClickResult("histogram", {state: "loading", message: "Map box · Updating…"});
+    h.controller.setClickResult("feature", {state: "ready", message: "3 features returned"});
+    assert.equal(h.controller.activeTool, "histogram");
+    assert.equal(h.doc.activeElement, h.map);
+    assert.equal(h.doc.querySelector("#map-click-feature").getAttribute("data-unread"), "true");
+    assert.equal(h.histogram.getAttribute("data-inspection-loading"), "true");
+    h.doc.querySelector("#map-click-feature").dispatchEvent(new Event("click"));
+    assert.equal(h.controller.activeTool, "feature");
+    assert.equal(h.doc.querySelector("#map-click-feature").getAttribute("data-unread"), "false");
+    h.controller.setClickResult("histogram", {state: "ready", message: "Map box · Ready"});
+    assert.equal(h.controller.activeTool, "feature");
+    assert.equal(h.histogramTab.getAttribute("data-unread"), "true");
+    h.controller.beginMapClick({lat: 24, lng: 80});
+    h.controller.showHistogram(null, {activate: false});
+    h.controller.showFeatureInspector({activate: false});
+    assert.equal(h.controller.activeTool, "feature");
+    assert.equal(h.histogramTab.getAttribute("data-unread"), "false");
+    assert.match(h.dockTitle.textContent, /24\.0000, 80\.0000/);
+    h.controller.destroy();
+});
+
+test("result cards replace duplicate tabs while other tools remain keyboard accessible", () => {
+    const h = fixture();
+    const tabs = h.doc.querySelector("#map-inspection-tabs");
+    const raster = h.doc.querySelector("#map-click-histogram");
+    const feature = h.doc.querySelector("#map-click-feature");
+    h.controller.showHistogram();
+    h.controller.showFeatureInspector({activate: false});
+    assert.equal(h.dockTitle.textContent, "Map tools");
+    assert.equal(h.histogramTab.hidden, false);
+    h.controller.beginMapClick({lat: 22, lng: 78});
+    h.controller.setClickResult("histogram", {state: "ready", message: "Ready"});
+    h.controller.setClickResult("feature", {state: "ready", message: "One feature"});
+    assert.equal(h.histogramTab.hidden, true);
+    assert.equal(h.featureTab.hidden, true);
+    assert.equal(tabs.hidden, true);
+    assert.equal(raster.getAttribute("aria-pressed"), "true");
+    assert.equal(feature.getAttribute("aria-pressed"), "false");
+    h.controller.showStyle("Countries");
+    h.controller.showCalculations();
+    raster.dispatchEvent(new Event("click"));
+    assert.equal(tabs.hidden, false);
+    const calculationsTab = h.doc.querySelector("#map-inspection-tab-calculations");
+    assert.equal(calculationsTab.tabIndex, 0, "other tools remain reachable from a selected result card");
+    const end = new Event("keydown");
+    Object.defineProperty(end, "key", {value: "End"});
+    calculationsTab.dispatchEvent(end);
+    assert.equal(h.doc.activeElement, h.styleTab, "keyboard navigation skips replaced tabs");
+    assert.equal(raster.getAttribute("aria-pressed"), "false");
+    feature.dispatchEvent(new Event("click"));
+    assert.equal(feature.getAttribute("aria-pressed"), "true");
+    h.minimizeButton.dispatchEvent(new Event("click"));
+    assert.equal(tabs.hidden, true);
+    assert.equal(h.doc.querySelector("#map-click-summary").hidden, true);
+    h.minimizeButton.dispatchEvent(new Event("click"));
+    assert.equal(feature.getAttribute("aria-pressed"), "true");
+    h.controller.setClickResult("histogram", null);
+    assert.equal(h.histogramTab.hidden, false, "retained histogram remains reachable without a click card");
+    h.controller.destroy();
+});
+
+test("empty and failed streams remain understandable without opening unavailable results", () => {
+    const h = fixture();
+    h.controller.beginMapClick({lat: 0, lng: 0});
+    h.controller.setClickResult("histogram", null);
+    h.controller.setClickResult("feature", {state: "empty", message: "No features at this click"});
+    assert.equal(h.doc.querySelector("#map-click-histogram").hidden, true);
+    assert.equal(h.doc.querySelector("#map-click-feature").disabled, true);
+    assert.equal(h.controller.activeTool, null);
+    assert.deepEqual(h.calls, ["show"]);
+    h.controller.setClickResult("feature", {state: "error", message: "Inspection unavailable"});
+    h.doc.querySelector("#map-click-feature").dispatchEvent(new Event("click"));
+    assert.equal(h.controller.activeTool, "feature");
+    h.controller.showCalculations();
+    h.controller.beginMapClick({lat: 1, lng: 1});
+    h.controller.showFeatureInspector({activate:false});
+    h.controller.showHistogram(null, {activate:false});
+    assert.equal(h.controller.activeTool, "calculations");
+    h.minimizeButton.dispatchEvent(new Event("click"));
+    assert.equal(h.doc.querySelector("#map-click-summary").hidden, true);
+    h.controller.destroy();
+});
+
 test("History and exports is transient while retained analysis results remain available", () => {
     const h = fixture();
     h.controller.showHistogram();
@@ -107,9 +197,9 @@ test("active-tool subscriptions report expanded presentation, support detachment
     h.controller.showFeatureInspector({activate:false});
     assert.deepEqual(changes, [null, "calculations"]);
     h.minimizeButton.dispatchEvent(new Event("click"));
-    assert.equal(h.dockTitle.textContent, "Map analysis · Summarize");
+    assert.equal(h.dockTitle.textContent, "Map tools · Summarize");
     h.minimizeButton.dispatchEvent(new Event("click"));
-    assert.equal(h.dockTitle.textContent, "Map analysis");
+    assert.equal(h.dockTitle.textContent, "Map tools");
     h.histogramTab.dispatchEvent(new Event("click"));
     assert.deepEqual(changes, [null, "calculations", null, "calculations", "histogram"]);
     unsubscribe(); h.controller.showDownloads();
@@ -133,7 +223,7 @@ test("histogram and style have independent visibility on one persistent surface"
     assert.equal(h.histogram.getAttribute("data-map-inspection-active"), "true");
     assert.equal(h.styleTab.hidden, false);
     assert.equal(h.histogramTab.hidden, false);
-    assert.equal(h.histogramTab.textContent, "Explore");
+    assert.equal(h.histogramTab.textContent, "Raster histograms");
     assert.equal(h.histogramTab.title, "2 raster results");
     h.controller.closeHistogram();
     assert.equal(h.style.hidden, false);

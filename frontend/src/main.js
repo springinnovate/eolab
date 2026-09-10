@@ -706,6 +706,9 @@ async function initializeCatalog(
     let vectorFeatureInspector = null;
     let vectorFilterControls = null;
     let vectorSampling = null;
+    let selectingMapClick = false;
+    let rasterClickSelected = false;
+    let latestHistogramPresentation = null;
     const mapLayerStackView = new MapLayerStackView();
     const compositeLeafletRenderer = new CompositeLeafletRenderer({
         leaflet: L,
@@ -730,6 +733,8 @@ async function initializeCatalog(
             if (!layers.some((layer) =>
                 layer.visible && layer.datasetKind === "raster"
             )) {
+                rasterClickSelected = false;
+                mapInspection.setClickResult("histogram", null);
                 mapInspection.closeHistogram(false);
             }
             savedMapViewController?.scheduleRemember();
@@ -795,12 +800,13 @@ async function initializeCatalog(
         onDownloadRequested: (item, area) => downloads.open(clipSource(item), area),
         onCalculateRequested: (item, area) => calculations.open(clipSource(item), area),
         onSamplingAreaChange: area => calculations.setSelection(area),
-        onHistogramRequested: () => mapInspection.showHistogram(Math.max(
-            1,
-            mapLayerController.snapshots().filter((layer) =>
-                layer.visible && layer.datasetKind === "raster"
-            ).length
-        ), { activate: !calculations.isActive }),
+        onHistogramRequested: () => mapInspection.showHistogram(null, {
+            activate: !selectingMapClick && !calculations.isActive,
+        }),
+        onHistogramChange: snapshot => {
+            latestHistogramPresentation = snapshot;
+            if (rasterClickSelected) mapInspection.setClickResult("histogram", snapshot);
+        },
         onStyleRequested: (key) => layerStyleEditor?.open(key),
         onBivariateRenderingChange: (selectedKeys) =>
             mapLayerController.setIndividualRendering(selectedKeys),
@@ -957,11 +963,27 @@ async function initializeCatalog(
             })),
         wmsUrl: appGlobalConfiguration.wmsUrl,
         onInspectionChange: (visible) => {
-            if (visible) mapInspection.showFeatureInspector({ activate: !calculations.isActive });
-            else mapInspection.hideFeatureInspector();
+            if (visible) mapInspection.showFeatureInspector({ activate: false });
+            else {
+                mapInspection.hideFeatureInspector();
+                mapInspection.setClickResult("feature", null);
+            }
         },
         onSampleChange: (sample) => {
             vectorTimeSeries.setSample(sample);
+            const returned = sample.observations.length;
+            const featureCount = `${returned} feature${returned === 1 ? "" : "s"} returned`;
+            const layerCount = new Set(sample.observations.map(observation => observation.sourceId)).size;
+            const message = sample.state === "loading"
+                ? `Updating for this click… ${featureCount}`
+                : sample.state === "ready"
+                    ? `${featureCount} across ${layerCount} layer${layerCount === 1 ? "" : "s"}` +
+                        (sample.failedLayers ? ` · ${sample.failedLayers} layer${sample.failedLayers === 1 ? "" : "s"} unavailable` : " · Ready")
+                    : sample.message;
+            mapInspection.setClickResult("feature", {
+                state: sample.failedLayers && sample.state !== "loading" ? "error" : sample.state,
+                message,
+            });
             if (sample.state === "loading" || sample.state === "ready") {
                 mapInspection.setFeatureResultCount(
                     sample.observations.length,
@@ -992,16 +1014,25 @@ async function initializeCatalog(
      * @return {void}
      */
     function exploreMap(event) {
-        if (!rasterVisualization.exploreAt(event.latlng, {
-            onSelected: area => {
-                calculations.setSelection(area);
-                calculations.calculateSelection();
-            },
-        })) {
-            mapInspection.closeHistogram(false);
-            calculations.setSelection(null);
+        mapInspection.beginMapClick(event.latlng);
+        rasterClickSelected = false;
+        selectingMapClick = true;
+        try {
+            rasterClickSelected = rasterVisualization.exploreAt(event.latlng, {
+                onSelected: area => {
+                    calculations.setSelection(area);
+                    calculations.calculateSelection();
+                },
+            });
+            if (!rasterClickSelected) {
+                mapInspection.closeHistogram(false);
+                calculations.setSelection(null);
+            }
+            mapInspection.setClickResult("histogram", rasterClickSelected ? latestHistogramPresentation : null);
+            void vectorFeatureInspector.inspect(event);
+        } finally {
+            selectingMapClick = false;
         }
-        void vectorFeatureInspector.inspect(event);
     }
     /**
      * Open analysis tools at the map center through the pointer-click path.
