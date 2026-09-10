@@ -23,13 +23,26 @@ class GeometryValidationError(ValueError):
 class GeometryBuilder:
     """Accumulate bounded, attribute-free WGS84 features without simplification."""
 
-    def __init__(self, *, polygons_only: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        polygons_only: bool = False,
+        maximum_coordinates: int = MAX_COORDINATE_POSITIONS,
+        maximum_bytes: int = MAX_BROWSER_GEOMETRY_BYTES,
+        compact_serialization: bool = True,
+    ) -> None:
         """Initialize a collection.
 
         Args:
             polygons_only: Require valid Polygon or MultiPolygon topology.
+            maximum_coordinates: Caller-owned cumulative coordinate ceiling.
+            maximum_bytes: Caller-owned serialized collection ceiling.
+            compact_serialization: Count compact JSON or default spaced JSON.
         """
         self.polygons_only = polygons_only
+        self.maximum_coordinates = maximum_coordinates
+        self.maximum_bytes = maximum_bytes
+        self.compact_serialization = compact_serialization
         self.features = []
         self.bounds = [math.inf, math.inf, -math.inf, -math.inf]
         self.coordinate_count = 0
@@ -51,8 +64,8 @@ class GeometryBuilder:
             raise GeometryValidationError(f"AOI exceeds the {MAX_FEATURES}-feature limit; filter first")
         # Check nesting/size before asking native code to transform the geometry.
         for index, _ in enumerate(_geometry_positions(source_geometry, canonical=False), 1):
-            if index + self.coordinate_count > MAX_COORDINATE_POSITIONS:
-                raise GeometryValidationError(f"AOI geometry exceeds the {MAX_COORDINATE_POSITIONS}-coordinate limit; filter first")
+            if index + self.coordinate_count > self.maximum_coordinates:
+                raise GeometryValidationError(f"AOI geometry exceeds the {self.maximum_coordinates}-coordinate limit; filter first")
         geometry = to_dict(transform_geom(crs, "EPSG:4326", source_geometry, antimeridian_cutting=False))
         if not is_valid_geom(geometry):
             raise GeometryValidationError("AOI contains unsupported or malformed geometry")
@@ -61,16 +74,23 @@ class GeometryBuilder:
             raise GeometryValidationError("Sampling requires valid polygons; repair the source geometry first")
         for longitude, latitude in _geometry_positions(geometry):
             self.coordinate_count += 1
-            if self.coordinate_count > MAX_COORDINATE_POSITIONS:
-                raise GeometryValidationError(f"AOI geometry exceeds the {MAX_COORDINATE_POSITIONS}-coordinate limit; filter first")
+            if self.coordinate_count > self.maximum_coordinates:
+                raise GeometryValidationError(f"AOI geometry exceeds the {self.maximum_coordinates}-coordinate limit; filter first")
             self.bounds[0] = min(self.bounds[0], longitude)
             self.bounds[1] = min(self.bounds[1], latitude)
             self.bounds[2] = max(self.bounds[2], longitude)
             self.bounds[3] = max(self.bounds[3], latitude)
         feature = {"type": "Feature", "properties": {}, "geometry": geometry}
-        self.byte_count += len(json.dumps(feature, allow_nan=False, separators=(",", ":")).encode("utf-8")) + 1
-        if self.byte_count + 42 > MAX_BROWSER_GEOMETRY_BYTES:
-            raise GeometryValidationError(f"AOI browser geometry exceeds the {MAX_BROWSER_GEOMETRY_BYTES}-byte limit; filter first")
+        separators = (",", ":") if self.compact_serialization else (", ", ": ")
+        self.byte_count += len(
+            json.dumps(feature, allow_nan=False, separators=separators).encode("utf-8")
+        ) + len(separators[0])
+        framing_bytes = 42 if self.compact_serialization else 48
+        if self.byte_count + framing_bytes > self.maximum_bytes:
+            label = "browser geometry" if self.compact_serialization else "exact geometry"
+            raise GeometryValidationError(
+                f"AOI {label} exceeds the {self.maximum_bytes}-byte limit; filter first"
+            )
         self.features.append(feature)
 
     def finish(self) -> tuple[dict, tuple[float, float, float, float]]:

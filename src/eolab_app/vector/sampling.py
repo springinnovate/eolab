@@ -38,7 +38,8 @@ class VectorSamplingService:
             request: Catalog identity and typed predicate, never a path or SQL.
 
         Returns:
-            Ready AOI plus exact counts and the applied filter snapshot.
+            Display-only geometry, exact bounds/counts, filter and opaque AOI ID.
+            Numeric consumers must resolve the ID, never use this outline.
 
         Raises:
             VectorConflictError: If busy, stale, empty, invalid or over budget.
@@ -66,7 +67,9 @@ class VectorSamplingService:
             label = str(item.get("properties", {}).get("title") or item["id"])[:256]
             area = await self.retain_geometry(result["geometry"], result["bbox"], label)
             return {
-                **result, "id": area.identity.reference, "state": "ready",
+                "geometry": result["displayGeometry"], "bbox": result["bbox"],
+                "matched": result["matched"], "total": result["total"],
+                "id": area.identity.reference, "state": "ready",
                 "filename": label, "selectedDataset": label,
                 "expiresAt": area.identity.expires_at.isoformat(),
                 "filter": candidate.model_dump(mode="json"),
