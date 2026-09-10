@@ -4618,17 +4618,12 @@ summary:hover > .raster-disclosure-chevron {
 .download-job .secondary-button { display: inline-block; margin: 0.25rem 0.35rem 0 0; text-decoration: none; }
 .download-job progress { width: 100%; }
 #downloads-message:empty, #downloads-job-message:empty { display: none; }
-/* Calculation editor and passive activity on the committed sampling rectangle. */
+/* Summary controls, saved results and passive activity on the sampling rectangle. */
 #calculations-panel { padding: 0.75rem; overflow-wrap: anywhere; }
 #calculations-panel p { font-size: 0.85rem; line-height: 1.45; }
-#calculations-form { display: grid; gap: 0.5rem; padding-top: 0.6rem; }
 #calculations-panel summary { cursor: pointer; font-weight: 600; }
 #calculations-panel select, #calculations-panel textarea,
 #calculations-panel input[type="text"] { width: 100%; min-width: 0; box-sizing: border-box; border: 1px solid var(--border-1); border-radius: var(--radius); padding: 7px 8px; background: var(--surface-2); color: var(--text-1); }
-.calculation-expression { display: grid; gap: 0.35rem; margin: 0.8rem 0; padding: 0.6rem; border: 1px solid #cbd5e1; border-radius: 0.4rem; }
-.calculation-expression textarea { font-family: monospace; resize: vertical; }
-.calculation-expression button { justify-self: end; }
-.calculation-hint { font-size: 0.85rem; color: #475569; }
 .calculation-functions { padding-left: 1.25rem; font-size: 0.85rem; line-height: 1.5; }
 .calculation-functions li { margin: 0.55rem 0; }
 .calculation-functions code { overflow-wrap: anywhere; }
@@ -4637,36 +4632,7 @@ summary:hover > .raster-disclosure-chevron {
 .calculation-result-row strong { display: block; font-size: 1.6rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .calculation-result-row code { display: block; overflow-wrap: anywhere; }
 .calculation-result-row details { margin-top: 0.5rem; font-size: 0.85rem; }
-#calculations-result.is-previous .calculation-result-row {
-    color: #64748b;
-    background: #f1f5f9;
-    border-left-color: #94a3b8;
-}
-#calculations-status-region.is-working {
-    margin: 0.75rem 0;
-    padding: 0.8rem;
-    border: 2px solid #0f766e;
-    border-radius: 0.5rem;
-    background: #f0fdfa;
-    color: #115e59;
-}
-#calculations-status-summary { font-size: 1rem; }
-#calculations-status-summary:not([hidden])::before {
-    content: "";
-    display: inline-block;
-    width: 0.9em;
-    height: 0.9em;
-    margin-right: 0.55em;
-    vertical-align: -0.15em;
-    border: 2px solid currentColor;
-    border-right-color: transparent;
-    border-radius: 50%;
-    animation: calculation-spin 0.8s linear infinite;
-}
-#calculations-status-region.is-working p { margin-bottom: 0; }
-#calculations-status:empty { display: none; }
 .calculation-history-row { display: grid; gap: 0.4rem; padding: 0.6rem 0; border-bottom: 1px solid #cbd5e1; }
-#calculations-progress { width: 100%; }
 .leaflet-pane path.is-calculating {
     stroke: #0f766e;
     stroke-width: 4;
@@ -4680,7 +4646,6 @@ summary:hover > .raster-disclosure-chevron {
 @keyframes calculation-pulse { 0%, 100% { fill-opacity: 0.08; } 50% { fill-opacity: 0.25; } }
 @keyframes calculation-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
-    .leaflet-pane path.is-calculating,
-    #calculations-status-summary:not([hidden])::before { animation: none; }
+    .leaflet-pane path.is-calculating { animation: none; }
     .leaflet-pane path.is-calculating { fill-opacity: 0.15; }
 }

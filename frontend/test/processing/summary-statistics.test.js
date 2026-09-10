@@ -4,7 +4,8 @@ import { SummaryStatisticsController, canAutomaticallyCalculate } from "../../sr
 import { SummaryStatisticsView } from "../../src/processing/summary-statistics-view.js";
 import { CalculationSessionStorage } from "../../src/processing/calculation-session.js";
 import { ProcessingJobs } from "../../src/processing/jobs.js";
-import { FakeRasterControlDocument } from "../../test-support/raster/fake-controls-document.js";
+import { ProcessingApiClient } from "../../src/processing/api.js";
+import { SummaryControlDocument, SUMMARY_MARKUP } from "../../test-support/processing/summary-document.js";
 
 const source = { collectionId: "rasters", itemId: "hfp", label: "Human footprint" };
 const resistance = { collectionId: "rasters", itemId: "resistance", label: "Resistance" };
@@ -13,6 +14,10 @@ const grid = { width: 100, height: 100, crs: "EPSG:3857", nativeBlocks: 4, decod
 const flush = async () => { for (let i = 0; i < 80; i++) await Promise.resolve(); };
 const deferred = () => { let resolve, reject; const promise = new Promise((a,b) => {resolve=a;reject=b;}); return {promise,resolve,reject}; };
 
+/** Build the real summary/controller/job boundary against current HTML identities.
+ * @param {Object} [overrides={}] API fault overrides. @param {Map} [data=new Map()] Session storage.
+ * @param {Object} [browserContext={}] Clipboard capability. @return {Object} Observable workflow harness.
+ */
 function fixture(overrides = {}, data = new Map(), browserContext = {}) {
     let serial = 0, jobSerial = 0, elapsed = 0;
     const timers = new Map(), requests = [], server = new Map(), plans = new Map();
@@ -35,7 +40,7 @@ function fixture(overrides = {}, data = new Map(), browserContext = {}) {
     };
     const jobs = new ProcessingJobs(api,clock);
     const storage = new CalculationSessionStorage({getItem:key=>data.get(key),setItem:(key,value)=>data.set(key,value),removeItem:key=>data.delete(key)});
-    const document = new FakeRasterControlDocument();
+    const document = new SummaryControlDocument();
     const view = new SummaryStatisticsView(document, browserContext);
     let controller;
     controller = new SummaryStatisticsController({api,jobs,storage,view,clock,now:()=>elapsed,getContext:()=>({sources:[source,resistance],area:box(77)}),
@@ -50,6 +55,146 @@ function fixture(overrides = {}, data = new Map(), browserContext = {}) {
     const open = async()=>{controller.open();await tick();};
     const submits=()=>requests.filter(r=>r[0]==="submit").length;
     return {controller,api,jobs,storage,view,document,requests,server,plans,tick,finish,open,submits,data,elapse:ms=>{elapsed+=ms;}};
+}
+
+/** Read text throughout a fake DOM tree. @param {Object} node Test node. @return {string} Descendant text. */
+function visibleText(node) { return [node.textContent, ...node.children.map(visibleText)].join(" "); }
+
+test("the active summary view queries only current markup and rejects every missing required control", () => {
+    const document = new SummaryControlDocument();
+    const view = new SummaryStatisticsView(document);
+    for (const selector of document.queries) {
+        const markup = SUMMARY_MARKUP.replace(`id="${selector.slice(1)}"`, 'id="removed-for-contract-test"');
+        assert.throws(() => new SummaryStatisticsView(new SummaryControlDocument(markup)), /absent from current HTML/);
+    }
+    assert.throws(() => document.querySelector("#calculations-editor"), /absent from current HTML/);
+    assert.equal(view.openEditor, undefined);
+    assert.equal(view.renderRows, undefined);
+    view.unbind();
+});
+
+test("unbind releases current fixed controls without dispatching new calculations", async () => {
+    const h = fixture(); await h.open();
+    h.view.unbind();
+    h.view.elements.template.value = "count";
+    h.view.elements.template.dispatchEvent(new Event("change"));
+    assert.equal(h.controller.state.statistics.length, 1);
+    assert.equal(h.submits(), 0);
+});
+
+test("area presets remain editable and the current menu enforces five statistics", async () => {
+    const h = fixture(); await h.open(); h.controller.setAutomatic(false);
+    for (const [preset, formula] of [["area-threshold", "areaha(a > 10)"], ["area-class", "areaha(a == 4)"], ["count", "count(a > 10)"], ["range", "max(a) - min(a)"]]) {
+        h.view.elements.template.value = preset;
+        h.view.elements.template.dispatchEvent(new Event("change"));
+        await h.tick();
+        const card = h.controller.state.statistics.at(-1);
+        assert.equal(h.view.cards.get(card.id).expression.value, formula);
+    }
+    assert.equal(h.view.elements.template.disabled, true);
+    assert.equal(h.submits(), 0);
+});
+
+test("saved inspection preserves exact integers, coverage, exports and live formula focus", async () => {
+    const h = fixture(); await h.open(); const card = h.controller.state.statistics[0];
+    h.controller.request(card.id, "manual"); await flush(); await h.finish("ready", ["9007199254740993"]);
+    const job = card.result.job;
+    job.result.rows[0].valueType = "integer";
+    h.controller.inspect(job.jobId);
+    const root = h.view.elements.result, row = h.view.cards.get(card.id);
+    assert.equal(root.children[0].textContent, "Previous / saved result");
+    assert.match(visibleText(root), /Human footprint/);
+    assert.match(visibleText(root), /Exact value: 9007199254740993/);
+    assert.equal(root.children[2].children[1].textContent, BigInt("9007199254740993").toLocaleString());
+    assert.match(visibleText(root), /8 matched \/ 8 valid cells/);
+    const links = root.children.at(-1).children;
+    assert.equal(links[0].href, `/api/processing/jobs/${job.jobId}/result`);
+    assert.equal(links[1].href, `/api/processing/jobs/${job.jobId}/provenance`);
+    assert.equal(links[0].getAttribute("download"), "");
+    const savedRow = root.children[2]; savedRow.children.at(-1).open = true;
+    row.expression.focus(); h.controller.render();
+    assert.equal(h.document.activeElement, row.expression);
+    assert.equal(root.children[2], savedRow);
+    assert.equal(savedRow.children.at(-1).open, true);
+    h.view.extra["close-saved"].dispatchEvent(new Event("click"));
+    assert.equal(h.view.extra["saved-result"].hidden, true);
+    assert.equal(h.view.cards.get(card.id), row);
+    assert.equal(h.submits(), 1);
+});
+
+test("saved results retain typed empty and arithmetic explanations", async () => {
+    const h = fixture(); await h.open(); const card = h.controller.state.statistics[0];
+    h.controller.request(card.id, "manual"); await flush(); await h.finish();
+    for (const [state, message] of [["no_matches", /No cells matched/], ["no_valid_data", /No valid cells/],
+        ["invalid_arithmetic", /Undefined arithmetic/], ["overflow", /Numeric overflow/]]) {
+        const job = structuredClone(card.result.job);
+        job.result.rows[0] = { ...job.result.rows[0], state, value: null };
+        h.controller.state.saved = job; h.controller.render();
+        assert.match(visibleText(h.view.elements.result), message);
+        assert.match(visibleText(h.view.elements.result), /Exact value: undefined/);
+        assert.equal(h.view.elements.result.children[2].children[1].textContent, "—");
+    }
+});
+
+test("saved jobs show progress and failure safely when their Catalog label is unavailable", async () => {
+    const h = fixture(); await h.open(); const card = h.controller.state.statistics[0];
+    h.controller.request(card.id, "manual"); await flush();
+    const job = h.server.get(h.controller.engine.record.jobId);
+    h.controller.state.sources = [];
+    h.controller.inspect(job.jobId);
+    assert.match(visibleText(h.view.elements.result), /hfp/);
+    assert.match(visibleText(h.view.elements.result), /Calculating|Processing/);
+    const message = '<img src=x onerror="alert(1)"> failed';
+    h.controller.state.saved = { ...job, status: "failed", error: { detail: message } };
+    h.controller.render();
+    const error = h.view.elements.result.children.at(-1);
+    assert.equal(error.textContent, message);
+    assert.equal(error.children.length, 0);
+});
+
+test("live and saved area results preserve units and fractional-coverage context", async () => {
+    const h = fixture(); await h.open(); const card = h.controller.state.statistics[0];
+    h.controller.request(card.id, "manual"); await flush(); await h.finish();
+    const job = structuredClone(card.result.job);
+    job.grid.groundArea = { ellipsoid: "WGS84", edgeToleranceMetres: 0.1, maximumSegmentMetres: 10000, estimatedGeometryCells: 0, strategy: "rectilinear" };
+    job.result.rows[0] = { ...job.result.rows[0], label: "Area", expression: "areaha(a == 4)", unit: "ha" };
+    card.result = { ...card.result, job, row: job.result.rows[0] };
+    h.controller.state.saved = job; h.controller.render();
+    assert.equal(h.view.cards.get(card.id).value.textContent, "12.5 ha");
+    assert.match(visibleText(h.view.cards.get(card.id).detailsBody), /WGS84 ellipsoid, hectares, including partial pixels/);
+    assert.match(visibleText(h.view.elements.result), /Area measurement.*0.1 m chord-deviation target/);
+    assert.match(visibleText(h.view.elements.result), /Result unit: ha/);
+    assert.match(visibleText(h.view.elements.result), /numeric functions use pixel centers/);
+});
+
+test("saved result exports still reject arbitrary and mismatched job URLs", async () => {
+    const h = fixture(); await h.open(); const card = h.controller.state.statistics[0];
+    h.controller.request(card.id, "manual"); await flush(); await h.finish();
+    for (const url of ["https://example.com/result", `/api/processing/jobs/${"x".repeat(32)}/result`]) {
+        h.controller.state.saved = structuredClone(card.result.job);
+        h.controller.state.saved.result.url = url;
+        assert.throws(() => h.controller.render(), /Invalid processing download address/);
+    }
+});
+
+for (const [code, message] of [["source_work_too_large", "The area needs 1,450 native blocks; the limit is 500."],
+    ["source_work_too_large", "The area needs 3,570 decoded bytes; the limit is 3,500."],
+    ["aoi_too_large", "The serialized geometry is 240 bytes; the limit is 100. Simplify the AOI."]]) {
+    test(`current cards preserve API refusal details: ${message}`, async () => {
+        const h = fixture(); await h.open(); const card = h.controller.state.statistics[0];
+        h.controller.request(card.id, "manual"); await flush(); await h.finish();
+        const api = new ProcessingApiClient(async url => url.endsWith("/jobs")
+            ? { ok: true, json: async () => ({ jobs: [] }) }
+            : { ok: false, status: 413, json: async () => ({ detail: { code, message } }) });
+        h.api.planCalculation = api.planCalculation.bind(api);
+        h.controller.editStatistic(card.id, { expression: "sum(a)" }); await h.tick();
+        const row = h.view.cards.get(card.id);
+        assert.ok(row.status.textContent.includes(message));
+        assert.equal(row.root.classList.contains("is-previous"), true);
+        assert.equal(row.run.hidden, false);
+        assert.equal(row.root.getAttribute("aria-busy"), "false");
+        assert.equal(h.submits(), 1);
+    });
 }
 
 test("opening and tab switching preserve cards and do not run native calculations", async()=>{
@@ -496,6 +641,7 @@ test("performance details retain measured timings and source-work units in cards
     assert.match(text(root),/4 native blocks in 1 reads/);
     assert.match(text(root),/Kernel elapsed: 0.600 s/);
     assert.match(text(root),/Queueing, worker startup/);
-    h.view.renderResult({result:card.result.job,sources:[source]});
+    h.controller.state.saved = card.result.job;
+    h.controller.render();
     assert.match(text(h.view.elements.result),/Read\/decode and source mask: 0.125 s/);
 });

@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { MapInspectionController } from "../../src/map-inspection-controller.js";
 import { CalculationsController } from "../../src/processing/calculations-controller.js";
-import { CalculationsView, calculationValue } from "../../src/processing/calculations-view.js";
 import { CalculationSessionStorage } from "../../src/processing/calculation-session.js";
 import { ProcessingJobs } from "../../src/processing/jobs.js";
 import { ProcessingApiClient, ProcessingRequestError } from "../../src/processing/api.js";
@@ -173,17 +172,6 @@ test("double Calculate during size checking admits only one manual job", async (
     assert.equal(h.controller.record.automatic, false);
     h.dock.showDownloads(); await flush();
     assert.equal(h.requests.filter(r => r[0] === "cancel").length, 0, "accepted manual jobs survive hiding");
-});
-
-test("accepted map calculations reveal results without collapsing checks or later edits", async () => {
-    const h = fixture(); h.controller.open(); await h.tick(400);
-    const doc = new FakeRasterControlDocument(); const view = new CalculationsView(doc);
-    view.bind(h.view.handlers); view.elements.editor.open = true;
-    view.render(h.view.state); assert.equal(view.elements.editor.open, true);
-    h.click(77); await h.tick(650); view.render(h.view.state);
-    assert.equal(view.elements.editor.open, false);
-    view.elements.editor.open = true; view.render(h.view.state);
-    assert.equal(view.elements.editor.open, true, "progress never fights the user's disclosure choice");
 });
 
 test("explicit Run freezes intent, publishes measured progress and inline result", async () => {
@@ -366,7 +354,7 @@ for (const [kind, code, message] of [
     ["decoded bytes", "source_work_too_large", "The selected area requires 3,570 decoded bytes for source values and validity masks; the limit is 3,500 bytes (70 bytes over). Choose a smaller area requiring at most 3,500 decoded bytes."],
     ["AOI geometry", "aoi_too_large", "The selected area's serialized geometry is 240 bytes; the processing limit is 100 bytes (140 bytes over). Simplify the AOI geometry so its processing snapshot is at most 100 bytes, then try again."],
 ]) {
-    test(`${kind} limit details survive the API, follow controller, and panel`, async () => {
+    test(`${kind} limit details survive the API and lifecycle controller`, async () => {
         const h = fixture();
         await h.run(true);
         await h.finish();
@@ -382,12 +370,6 @@ for (const [kind, code, message] of [
         assert.equal(h.view.state.message, `${message} Click Calculate or select a new sampling box to retry.`);
         assert.equal(h.view.state.result, previous);
         assert.equal(h.requests.filter(request => request[0] === "submit").length, 1);
-        const document = new FakeRasterControlDocument();
-        const view = new CalculationsView(document);
-        view.bind(h.view.handlers);
-        view.render(h.view.state);
-        assert.equal(document.querySelector("#calculations-status").textContent, h.view.state.message);
-        assert.equal(view.elements.run.textContent, "Calculate");
     });
 }
 
@@ -412,124 +394,6 @@ test("late validation cannot overwrite the latest edit", async () => {
     const response=deferred();const h=fixture({validateCalculation:()=>response.promise});
     h.controller.open();await h.tick(400);h.controller.edit({calculations:[{label:"Other",expression:"wrong"}]});
     response.resolve({valid:true});await flush();assert.equal(h.view.state.valid,false);
-});
-
-test("inline values keep large counts lossless, explain nulls, and use owned CSV links", async () => {
-    assert.equal(calculationValue({value:"9007199254740993",valueType:"integer"}),BigInt("9007199254740993").toLocaleString());
-    assert.equal(calculationValue({value:null}),"—");
-    const h=fixture();await h.run(false);await h.finish();
-    const doc=new FakeRasterControlDocument();const view=new CalculationsView(doc);view.bind(h.view.handlers);view.render(h.view.state);
-    const root=doc.querySelector("#calculations-result");
-    const text=node=>[node.textContent,...node.children.map(text)].join(" ");
-    assert.match(text(root),/12.5/);assert.match(text(root),/Human footprint/);assert.match(text(root),/Cell coverage/);
-    const link=root.children.at(-1).children[0];assert.match(link.href,/\/result$/);assert.equal(link.textContent,"Download CSV");
-    const field=view.rows[0].expression;field.focus();view.render(h.view.state);assert.equal(doc.activeElement,field);
-});
-
-test("ground-area plans and inline results explain fractional coverage and label hectares", async () => {
-    const h = fixture(); await h.run(false); await h.finish();
-    const groundArea = {ellipsoid:"WGS84",edgeToleranceMetres:0.1,maximumSegmentMetres:10000,estimatedGeometryCells:0,strategy:"rectilinear"};
-    const areaGrid = {...grid,groundArea};
-    const row = {...h.view.state.result.result.rows[0],label:"Area",expression:"areaha(a == 4)",unit:"ha",
-        aggregates:[{function:"areaha",unit:"ha",matchedPixels:8,validPixels:8,invalidArithmeticPixels:0}]};
-    const state = {...h.view.state,plan:{grid:areaGrid},
-        result:{...h.view.state.result,grid:areaGrid,result:{...h.view.state.result.result,rows:[row]}}};
-    const doc = new FakeRasterControlDocument(); const view = new CalculationsView(doc);
-    view.bind(h.view.handlers); view.render(state);
-    assert.match(view.elements.plan.textContent, /numeric functions select cell centers/);
-    assert.match(view.elements.plan.textContent, /WGS84 ellipsoid, hectares, including partial pixels/);
-    const text = node => [node.textContent,...node.children.map(text)].join(" ");
-    assert.match(text(view.elements.result), /12.5 ha/);
-    assert.match(text(view.elements.result), /Area measurement.*0.1 m chord-deviation target/);
-    assert.match(text(view.elements.result), /Result unit: ha/);
-    assert.match(text(view.elements.result), /numeric functions use pixel centers/);
-});
-
-test("area examples insert editable single-raster expressions without submitting jobs", async () => {
-    for (const [template, expression] of [["area-threshold","areaha(a > 10)"],["area-class","areaha(a == 4)"]]) {
-        const h = fixture(); h.controller.open(); await h.tick(400);
-        const doc = new FakeRasterControlDocument(); const view = new CalculationsView(doc);
-        view.bind(h.view.handlers); view.render(h.view.state);
-        view.elements.template.value = template;
-        view.elements.template.dispatchEvent(new Event("change"));
-        assert.equal(h.view.state.calculations.at(-1).expression, expression);
-        assert.equal(h.requests.some(request => request[0] === "submit"), false);
-    }
-});
-
-test("a pending replacement mutes saved values from the first follow click until completion", async () => {
-    const h = fixture();
-    await h.run(true); await h.finish();
-    const doc = new FakeRasterControlDocument();
-    const view = new CalculationsView(doc); view.bind(h.view.handlers);
-    const render = () => view.render(h.view.state);
-    render();
-    view.elements.editor.open = true;
-    const result = view.elements.result;
-    assert.equal(result.classList.contains("is-previous"), false);
-    assert.equal(view.elements["status-summary"].hidden, true);
-
-    h.click(78); render();
-    assert.equal(h.view.state.phase, "waiting");
-    assert.equal(view.elements.editor.open, false,
-        "the first pending render enters result mode before job admission");
-    assert.equal(result.classList.contains("is-previous"), true);
-    assert.equal(result.getAttribute("aria-busy"), "true");
-    assert.equal(view.elements["status-summary"].textContent, "Calculating new result…");
-    const savedCard = result.children[2];
-    view.elements.editor.open = true;
-    await h.tick(650); render();
-    assert.equal(view.elements.editor.open, true,
-        "job admission does not collapse settings a second time");
-    assert.equal(result.children[2], savedCard, "progress retains the card and its expanded details");
-    h.click(79); await h.tick(650); render();
-    assert.equal(h.view.state.current.status, "cancelling");
-    assert.equal(view.elements["status-summary"].hidden, false, "replacement remains pending while the prior job cancels");
-    await h.finish("cancelled"); render();
-    assert.equal(result.classList.contains("is-previous"), true);
-    await h.finish("ready", "42"); render();
-    assert.equal(result.children[2].children[1].textContent, "42");
-    assert.equal(result.classList.contains("is-previous"), false);
-    assert.equal(result.getAttribute("aria-busy"), "false");
-    assert.equal(view.elements["status-summary"].hidden, true);
-});
-
-test("recalculating mutes saved results while metadata checks alone leave them readable", async () => {
-    const h = fixture(); await h.run(false); await h.finish();
-    const doc = new FakeRasterControlDocument();
-    const view = new CalculationsView(doc); view.bind(h.view.handlers);
-    const response = deferred(); const plan = h.api.planCalculation;
-    h.api.planCalculation = () => response.promise;
-    view.elements.editor.open = true;
-    h.controller.estimate(); view.render(h.view.state);
-    assert.equal(view.elements.editor.open, true, "metadata estimates leave settings open");
-    assert.equal(view.elements["status-summary"].hidden, true);
-    assert.equal(view.elements.result.classList.contains("is-previous"), false);
-    response.resolve(await plan(h.controller.intent())); await flush();
-    h.api.planCalculation = plan;
-    await h.controller.run(); await flush(); view.render(h.view.state);
-    assert.equal(h.view.state.resultIsCurrent, true);
-    assert.equal(view.elements.result.classList.contains("is-previous"), true);
-    assert.equal(view.elements.result.children[0].textContent, "Previous / saved result");
-    assert.equal(view.elements["status-summary"].textContent, "Calculating new result…");
-    h.controller.stop(); await flush(); view.render(h.view.state);
-    assert.equal(view.elements["status-summary"].hidden, true, "stopping does not promise another result");
-    assert.equal(view.elements.result.getAttribute("aria-busy"), "false");
-});
-
-test("refused and uncertain replacement requests clear the busy banner while preserving saved results", async () => {
-    for (const stage of ["planCalculation", "submitCalculation"]) {
-        const h = fixture(); await h.run(true); await h.finish();
-        h.api[stage] = async () => { throw new Error("Request failed"); };
-        h.click(78); await h.tick(650);
-        const doc = new FakeRasterControlDocument();
-        const view = new CalculationsView(doc); view.bind(h.view.handlers); view.render(h.view.state);
-        assert.equal(view.elements["status-summary"].hidden, true);
-        assert.equal(view.elements["status-region"].classList.contains("is-working"), false);
-        assert.equal(view.elements.result.classList.contains("is-previous"), true);
-        assert.match(view.elements.status.textContent, /Request failed/);
-        assert.equal(view.elements.result.getAttribute("aria-busy"), "false");
-    }
 });
 
 test("calculation API serializes identities, explicit scopes, and useful validation errors", async () => {

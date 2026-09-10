@@ -1,5 +1,5 @@
 /** Compact, accessible statistic cards. No expression evaluation happens in the view. */
-import { CalculationsView, calculationValue } from "./calculations-view.js";
+import { calculationValue, renderSavedCalculation } from "./calculation-result-view.js";
 import { ACTIVE_JOB_STATES } from "./jobs.js";
 import { processingDownloadUrl } from "./api.js";
 import { describeClipArea, describeJobProgress, formatDownloadBytes } from "./presentation.js";
@@ -9,7 +9,7 @@ const RESULT_STATES = { no_matches: "No cells matched the condition.", no_valid_
     invalid_arithmetic: "Undefined arithmetic; no numeric result.", overflow: "Numeric overflow; no finite result." };
 
 /** Keep DOM identities stable during edits, progress, removal, and undo. */
-export class SummaryStatisticsView extends CalculationsView {
+export class SummaryStatisticsView {
     /**
      * Bind statistic presentation and the browser's optional clipboard writer.
      * @param {Document} [documentContext=globalThis.document] Owning document.
@@ -18,13 +18,23 @@ export class SummaryStatisticsView extends CalculationsView {
      * Clipboard writer; unavailable or denied access is presented in the card.
      */
     constructor(documentContext = globalThis.document, { clipboard = documentContext.defaultView?.navigator?.clipboard ?? null } = {}) {
-        super(documentContext);
+        this.document = documentContext;
+        this.elements = Object.fromEntries(["area", "area-description", "rows", "result", "history",
+            "refresh", "retry", "close", "edit-area", "template"]
+            .map(name => [name, documentContext.querySelector(`#calculations-${name}`)]));
+        this.openers = [documentContext.querySelector("#open-calculations")];
+        this.listeners = [];
+        this.signatures = {};
         this.clipboard = clipboard;
         this.cards = new Map();
         this.vectorAreaControls = documentContext.querySelector("#calculations-vector-area");
         this.extra = Object.fromEntries(["auto", "undo", "undo-button", "saved-result", "close-saved", "recovery-status", "chunk-pixels", "performance-plans"]
             .map(name => [name, documentContext.querySelector(`#summary-${name}`)]));
     }
+    /** Make a text-only card node. @param {string} tag HTML tag. @param {string} [text=""] Text. @return {HTMLElement} Node. */
+    element(tag, text = "") { const node = this.document.createElement(tag); node.textContent = text; return node; }
+
+    /** Bind the current summary controls to semantic intents. @param {Object<string, Function>} handlers Controller callbacks. @return {void} */
     bind(handlers) {
         this.handlers = handlers;
         const e = this.elements, x = this.extra;
@@ -40,6 +50,7 @@ export class SummaryStatisticsView extends CalculationsView {
         ];
         for (const [node, event, callback] of this.listeners) node.addEventListener(event, callback);
     }
+    /** Create a stable editable statistic surface. @param {Object} card Controller card with a stable numeric id. @return {Object} Card nodes and clipboard state. */
     createCard(card) {
         const root = this.element("article"); root.className = "summary-statistic";
         root.setAttribute("aria-label", `Summary statistic ${card.id}`);
@@ -105,6 +116,10 @@ export class SummaryStatisticsView extends CalculationsView {
         root.append(heading, equation, binding, size, details, remove);
         return { root, label, source, expression, equation, value, valueActions, copy, copyStatus, copyRevision: 0, status, statusRow, run, stop, progress, details, detailsBody, size, remove };
     }
+    /** Present current cards and independently inspected saved jobs.
+     * @param {Object} state Summary controller snapshot. @return {void}
+     * @throws {TypeError} If a result contains an invalid owned download address.
+     */
     render(state) {
         this.sources = state.sources;
         const sourceSignature = JSON.stringify(state.sources);
@@ -205,7 +220,7 @@ export class SummaryStatisticsView extends CalculationsView {
         x["recovery-status"].textContent = state.recoveryMessage ?? "";
         x["saved-result"].hidden = !state.saved;
         if (state.saved && this.signatures.saved !== JSON.stringify(state.saved)) {
-            this.renderResult({ result: state.saved, resultIsCurrent: false, sources: state.sources });
+            renderSavedCalculation(e.result, state.saved, state.sources);
             x["saved-result"].open = true; this.signatures.saved = JSON.stringify(state.saved);
         }
         this.renderHistory(state);
@@ -237,7 +252,12 @@ export class SummaryStatisticsView extends CalculationsView {
         }
     }
     /** Release listeners and invalidate pending clipboard feedback. @return {void} */
-    unbind() { super.unbind(); this.cards.clear(); }
+    unbind() {
+        for (const [node, event, callback] of this.listeners) node.removeEventListener(event, callback);
+        this.listeners = [];
+        this.cards.clear();
+    }
+    /** Render immutable context for one live card's result. @param {HTMLElement} root Details container. @param {Object} result Card result with row, job, source and area snapshots. @return {void} */
     renderValueDetails(root, result) {
         const { row, job, source, area } = result;
         root.replaceChildren(this.element("p", `${source.label} · ${describeClipArea(area)}`),
@@ -258,6 +278,7 @@ export class SummaryStatisticsView extends CalculationsView {
         }
         root.append(this.element("small", "Downloads preserve the formulas and names at the time of calculation."), links);
     }
+    /** Render owned history actions when job snapshots change. @param {Object} state Summary snapshot containing jobs and historyError. @return {void} */
     renderHistory(state) {
         const signature = JSON.stringify([state.jobs, state.historyError]);
         if (signature === this.signatures.history) return;
@@ -276,7 +297,10 @@ export class SummaryStatisticsView extends CalculationsView {
         this.elements.history.replaceChildren(this.element("p", state.historyError || "Results remain available for 24 hours in this browser session."), ...children);
         this.signatures.history = signature;
     }
+    /** Focus a surviving formula after add/undo. @param {number} id Stable card identity. @return {void} */
     focusStatistic(id) { this.cards.get(id)?.expression.focus(); }
+    /** Focus removal recovery. @return {void} */
     focusUndo() { this.extra["undo-button"].focus(); }
+    /** Reveal the immutable saved-job presentation. @return {void} */
     focusSaved() { this.extra["saved-result"].open = true; this.extra["saved-result"].scrollIntoView({ block: "nearest" }); }
 }

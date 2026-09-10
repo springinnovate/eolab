@@ -84,8 +84,8 @@ import { TemporaryAoiApiClient } from "./temporary-aoi/api.js";
 import { TemporaryAoiLayerController } from "./temporary-aoi/leaflet.js";
 import { initializeTemporaryAoi } from "./temporary-aoi/temporary-aoi.js";
 import { ProcessingApiClient } from "./processing/api.js";
-import { SummaryStatisticsController as CalculationsController } from "./processing/summary-statistics-controller.js";
-import { SummaryStatisticsView as CalculationsView } from "./processing/summary-statistics-view.js";
+import { SummaryStatisticsController } from "./processing/summary-statistics-controller.js";
+import { SummaryStatisticsView } from "./processing/summary-statistics-view.js";
 import { CalculationSessionStorage } from "./processing/calculation-session.js";
 import { ProcessingJobs } from "./processing/jobs.js";
 import { DownloadsController } from "./processing/downloads-controller.js";
@@ -750,8 +750,8 @@ async function initializeCatalog(
         document.querySelector("#raster-sampling-aoi-disclosure").open = true;
         document.querySelector("#raster-sampling-disclosure summary").focus();
     };
-    const calculations = new CalculationsController({
-        api: processingApi, jobs: processingJobs, view: new CalculationsView(),
+    const calculations = new SummaryStatisticsController({
+        api: processingApi, jobs: processingJobs, view: new SummaryStatisticsView(),
         storage: new CalculationSessionStorage(browserSessionStorage()), getContext: processingContext,
         onOpen: () => mapInspection.showCalculations(), onClose: () => mapInspection.hideCalculations(),
         onEditArea: editProcessingArea,
