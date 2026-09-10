@@ -14,8 +14,10 @@ but do not have a reviewed production resolution here.
 - `deployment/application-build-requirements.txt` records pip and setuptools.
   Setuptools 84 supplies its wheel builder; no separate wheel package is
   required. EOLab is installed with `--no-index --no-build-isolation --no-deps`
+  and `--check-build-dependencies`
   after these tools and runtime dependencies. Build hooks cannot silently
-  resolve another build environment. `pip check` checks the installed package
+  resolve another build environment, and an incompatible declared backend
+  requirement fails the build. `pip check` checks the installed package
   against the compatible project requirements.
 - All three application base images are digest pinned in `Dockerfile.app`.
   The frontend retains `package-lock.json` and `npm ci`. GeoServer and catalog

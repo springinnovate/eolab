@@ -56,6 +56,22 @@ jobs:
             exit 1
           fi
           grep -q 'DO NOT MATCH THE HASHES' artifacts/application-builds/invalid-hash.log
+      - name: Reject an incompatible declared build backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/application-builds/invalid-backend
+          printf '[build-system]\nrequires = ["setuptools>=9999"]\nbuild-backend = "setuptools.build_meta"\n' \
+            > artifacts/application-builds/invalid-backend/pyproject.toml
+          if docker run --rm --entrypoint python \
+            --mount "type=bind,src=$PWD/artifacts/application-builds/invalid-backend,dst=/candidate,readonly" \
+            eolab-build-inputs:2 -m pip wheel --no-index --no-build-isolation \
+            --check-build-dependencies --no-deps /candidate --wheel-dir /tmp/wheels \
+            > artifacts/application-builds/invalid-backend.log 2>&1; then
+            echo "Incompatible backend was incorrectly accepted" >&2
+            exit 1
+          fi
+          grep -q 'incompatible with setuptools>=9999' artifacts/application-builds/invalid-backend.log
       - name: Backend and native fixtures against the installed application
         shell: bash
         run: |

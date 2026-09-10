@@ -63,7 +63,8 @@ COPY --from=frontend-builder /build/frontend/dist/ ./src/eolab_app/static/
 COPY --from=frontend-builder /frontend-build-versions.txt /app/build-inputs/
 COPY --from=versioner /version /app/version
 
-RUN python -m pip install --no-cache-dir --no-index --no-build-isolation --no-deps . \
+RUN python -m pip install --no-cache-dir --no-index --no-build-isolation \
+        --check-build-dependencies --no-deps . \
     && python -m pip check \
     && python -c "import fiona; import rasterio; assert 'ESRI Shapefile' in fiona.supported_drivers" \
     && python /usr/local/bin/application-build-report.py > /app/build-environment.json \
