@@ -48,7 +48,7 @@ jobs:
             > artifacts/application-builds/invalid-hash.txt
           if docker run --rm --entrypoint python \
             --mount "type=bind,src=$PWD/artifacts/application-builds,dst=/inputs,readonly" \
-            eolab-build-inputs:two -m pip download --no-cache-dir \
+            eolab-build-inputs:2 -m pip download --no-cache-dir \
             --only-binary=:all: --require-hashes --no-deps \
             -r /inputs/invalid-hash.txt --dest /tmp/wheels \
             > artifacts/application-builds/invalid-hash.log 2>&1; then
@@ -62,7 +62,7 @@ jobs:
           set -euo pipefail
           docker run --rm --user 65534:65534 --entrypoint sh \
             --mount "type=bind,src=$PWD,dst=/repository,readonly" \
-            eolab-build-inputs:two -ec '
+            eolab-build-inputs:2 -ec '
               python -m venv --system-site-packages /tmp/check
               /tmp/check/bin/python -m pip install --no-cache-dir pytest==8.4.2
               cd /repository
