@@ -1,12 +1,22 @@
-"""Standalone REST skeleton. No task state or executable operations exist yet."""
+"""Authenticated HTTP boundary for bounded, ephemeral diagnostic jobs."""
 
-from typing import Annotated, NoReturn
+import hashlib
+import hmac
+from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import FastAPI, Header, Query, Request
+from fastapi import Depends, FastAPI, Header, Query, Request, Response
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
+from job_service.configuration import Settings, load_settings
+from job_service.manager import JobError, JobManager
+from job_service.operations import OPERATIONS
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
+from starlette.middleware.base import RequestResponseEndpoint
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from job_service.models import (
@@ -96,48 +106,121 @@ class RequestSizeLimit:
         await self.app(scope, replay, send)
 
 
-def not_implemented() -> NoReturn:
-    """Refuse every job action until ownership, storage and execution are implemented.
+def create_app(settings: Settings | None = None) -> FastAPI:
+    """Create the single-process service with a lifespan-owned execution manager.
 
-    Raises:
-        HTTPException: Always HTTP 501; no job is created or changed.
-    """
-    raise HTTPException(
-        501, "Job execution is not implemented; no job was created or changed."
-    )
-
-
-def create_app() -> FastAPI:
-    """Create a standalone API requiring no EOLab settings or infrastructure.
+    Args:
+        settings: Trusted deployment/test settings; defaults to JOBS_CALLERS.
 
     Returns:
-        An application with live discovery/docs and explicit job-action stubs.
+        HTTP app with bounded ephemeral job execution and public discovery/docs.
+
+    Raises:
+        ValueError: For invalid deployment configuration.
     """
+    configuration = settings if settings is not None else load_settings()
+    manager = JobManager(configuration)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        """Own admission and subprocess cleanup for this application instance.
+
+        Args:
+            app: Hosting ASGI application.
+
+        Yields:
+            Control while the manager is running.
+        """
+        await manager.start()
+        try:
+            yield
+        finally:
+            await manager.close()
+
     app = FastAPI(
-        title="Job service — API preview",
-        version="0.1.0",
-        description="Contract preview only. No operations are installed. All job actions return 501. "
-        "Authentication, ownership, scheduling, persistence and execution are not implemented. "
-        "Success schemas document the proposed contract, not available behavior.",
+        title="Job service",
+        version="0.2.0",
+        lifespan=lifespan,
+        description="One execution lane with a bounded priority queue. Jobs and results are "
+        "in memory and lost on restart. Use Authorize with a configured caller bearer token. "
+        "diagnostic.v1 supports normal, delay and exception modes. SSE and artifacts remain unavailable.",
         docs_url=f"{PREFIX}/docs",
         openapi_url=f"{PREFIX}/openapi.json",
         redoc_url=None,
         swagger_ui_oauth2_redirect_url=None,
     )
     app.add_middleware(RequestSizeLimit)
+    bearer = HTTPBearer(auto_error=False)
+
+    async def authenticate(
+        credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
+    ) -> str:
+        """Resolve a deployment-configured owner, never a submitted identity.
+
+        Args:
+            credentials: Parsed bearer header.
+
+        Returns:
+            Trusted stable caller name.
+
+        Raises:
+            HTTPException: If credentials are absent, invalid or unconfigured.
+        """
+        if not configuration.callers:
+            raise HTTPException(503, "Job callers are not configured")
+        if credentials is not None and len(credentials.credentials) <= 256:
+            digest = hashlib.sha256(credentials.credentials.encode()).hexdigest()
+            for owner, expected in configuration.callers.items():
+                if hmac.compare_digest(digest, expected):
+                    return owner
+        raise HTTPException(
+            401,
+            "Valid Job service bearer credentials required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    Owner = Annotated[str, Depends(authenticate)]
+
+    @app.exception_handler(JobError)
+    async def job_error(request: Request, exc: JobError) -> JSONResponse:
+        """Translate domain errors without exposing internal records.
+
+        Args:
+            request: Incoming request.
+            exc: Safe lifecycle error.
+
+        Returns:
+            Structured HTTP failure, including retry advice for full capacity.
+        """
+        status = {
+            "not_found": 404,
+            "conflict": 409,
+            "capacity": 503,
+            "invalid_request": 422,
+        }[exc.code]
+        response = error_response(status, exc.code, str(exc))
+        if status == 503:
+            response.headers["Retry-After"] = "1"
+        return response
 
     @app.exception_handler(HTTPException)
     async def http_error(request: Request, exc: HTTPException) -> JSONResponse:
-        """Normalize framework/stub failures.
+        """Normalize routing, authorization and unsupported-hook errors.
 
         Args:
-            request: Incoming request, not logged or reflected.
+            request: Incoming request.
             exc: HTTP boundary failure.
 
         Returns:
-            The service error envelope, preserving method Allow headers.
+            Safe error envelope with protocol headers preserved.
         """
-        codes = {501: "not_implemented", 404: "not_found", 405: "method_not_allowed"}
+        codes = {
+            501: "not_implemented",
+            404: "not_found",
+            405: "method_not_allowed",
+            401: "unauthorized",
+            503: "unavailable",
+        }
         response = error_response(
             exc.status_code,
             codes.get(exc.status_code, "request_failed"),
@@ -150,14 +233,14 @@ def create_app() -> FastAPI:
     async def invalid_request(
         request: Request, exc: RequestValidationError
     ) -> JSONResponse:
-        """Report structural validation errors without reflecting arbitrary inputs.
+        """Report invalid fields without reflecting submitted values.
 
         Args:
             request: Incoming request.
-            exc: Schema validation failure.
+            exc: Request validation error.
 
         Returns:
-            A 422 response identifying invalid fields.
+            422 error identifying at most eight fields.
         """
         fields = ", ".join(
             ".".join(map(str, error["loc"])) for error in exc.errors()[:8]
@@ -166,42 +249,50 @@ def create_app() -> FastAPI:
             422, "invalid_request", f"Invalid request fields: {fields}"
         )
 
-    @app.get(f"{PREFIX}/health", response_model=Health)
-    async def health() -> Health:
-        """Report HTTP readiness and disabled execution.
+    @app.middleware("http")
+    async def no_cache(
+        request: Request, call_next: RequestResponseEndpoint
+    ) -> Response:
+        """Prevent caching owner-scoped state and responses.
+
+        Args:
+            request: Incoming request.
+            call_next: Starlette's downstream HTTP dispatcher.
 
         Returns:
-            Stub mode with acceptsJobs=false.
+            Response with no-store caching policy.
         """
-        return Health()
+        response = await call_next(request)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.get(f"{PREFIX}/health", response_model=Health)
+    async def health() -> Health:
+        """Report readiness and configured admission.
+
+        Returns:
+            Ephemeral mode and current ability to accept authenticated jobs.
+        """
+        return Health(acceptsJobs=bool(configuration.callers) and manager.accepting)
 
     @app.get(f"{PREFIX}/operations", response_model=Operations)
     async def operations() -> Operations:
-        """List installed operation contracts.
+        """Discover code-installed operation schemas.
 
         Returns:
-            An empty list; even demo operations are not installed yet.
+            Registered operation descriptions.
         """
-        return Operations()
+        return Operations(
+            operations=[operation.describe() for operation in OPERATIONS.values()]
+        )
 
-    errors = {
-        501: {
-            "model": ErrorResponse,
-            "description": "Stub: no work is accepted or performed.",
-        },
-        422: {"model": ErrorResponse},
-        413: {"model": ErrorResponse},
-    }
+    errors = {code: {"model": ErrorResponse} for code in (401, 404, 409, 413, 422, 503)}
 
-    @app.post(
-        PREFIX,
-        response_model=JobSnapshot,
-        status_code=202,
-        responses=errors,
-        description="STUB: returns 501. Future 202 schema describes accepted work. Idempotency is not implemented.",
-    )
+    @app.post(PREFIX, response_model=JobSnapshot, status_code=202, responses=errors)
     async def submit(
         payload: SubmitJob,
+        owner: Owner,
+        response: Response,
         idempotency_key: Annotated[
             str,
             Header(
@@ -212,161 +303,166 @@ def create_app() -> FastAPI:
             ),
         ],
     ) -> JobSnapshot:
-        """Validate a proposed submission then refuse admission.
+        """Admit a job; repeated keys return the original retained job.
 
         Args:
-            payload: Immutable operation, inputs, priority and timeouts.
-            idempotency_key: Caller-provided duplicate-submission identity.
+            payload: Immutable invocation and timeout/priority settings.
+            owner: Authenticated caller.
+            response: Response used to publish the status Location.
+            idempotency_key: Caller-scoped retry identity.
 
         Returns:
-            A future job snapshot; never returned by this skeleton.
+            Current admitted job snapshot, possibly terminal on a retry.
 
         Raises:
-            HTTPException: Always 501 after validation.
+            JobError: For invalid operation, conflict or exhausted capacity.
         """
-        not_implemented()
+        snapshot = manager.submit(owner, idempotency_key, payload)
+        response.headers["Location"] = f"{PREFIX}/{snapshot.jobId}"
+        return snapshot
 
-    @app.get(
-        PREFIX,
-        response_model=JobPage,
-        responses=errors,
-        description="STUB: returns 501, not a fabricated empty history.",
-    )
+    @app.get(PREFIX, response_model=JobPage, responses=errors)
     async def list_jobs(
+        owner: Owner,
         status: JobStatus | None = None,
         limit: Annotated[int, Query(ge=1, le=100)] = 20,
         cursor: Annotated[str | None, Query(min_length=1, max_length=512)] = None,
     ) -> JobPage:
-        """Validate filters for a future owned-job listing.
+        """List only the authenticated caller's retained jobs.
 
         Args:
-            status: Optional status filter.
+            owner: Authenticated caller.
+            status: Optional current-state filter.
             limit: Maximum page length.
-            cursor: Opaque continuation cursor.
+            cursor: Retained last-seen job identity from the preceding page.
 
         Returns:
-            A future owned-job page.
+            Bounded admission-order page.
 
         Raises:
-            HTTPException: Always 501 after validation.
+            JobError: For an invalid or expired cursor.
         """
-        not_implemented()
+        return manager.list(owner, status, limit, cursor)
 
     @app.get(f"{PREFIX}/{{job_id}}", response_model=JobSnapshot, responses=errors)
-    async def get_job(job_id: UUID) -> JobSnapshot:
-        """Stub for status and progress.
+    async def get_job(job_id: UUID, owner: Owner) -> JobSnapshot:
+        """Read authoritative owned status.
 
         Args:
-            job_id: Opaque job identity.
+            job_id: Job identity.
+            owner: Authenticated caller.
 
         Returns:
-            A future job snapshot.
+            Current snapshot.
 
         Raises:
-            HTTPException: Always 501 after validation.
+            JobError: If the owned job is unavailable.
         """
-        not_implemented()
+        return manager.get(owner, job_id)
 
     @app.patch(f"{PREFIX}/{{job_id}}", response_model=JobSnapshot, responses=errors)
-    async def update_job(job_id: UUID, payload: UpdateJob) -> JobSnapshot:
-        """Stub for queued-priority updates; does not allow replacing inputs.
+    async def update_job(job_id: UUID, payload: UpdateJob, owner: Owner) -> JobSnapshot:
+        """Change queued priority without preempting running work.
 
         Args:
-            job_id: Opaque job identity.
-            payload: New queued priority.
+            job_id: Job identity.
+            payload: New priority.
+            owner: Authenticated caller.
 
         Returns:
-            A future job snapshot.
+            Updated snapshot.
 
         Raises:
-            HTTPException: Always 501 after validation.
+            JobError: If unavailable or no longer queued.
         """
-        not_implemented()
+        return manager.update(owner, job_id, payload.priority)
 
     @app.post(
         f"{PREFIX}/{{job_id}}/cancel", response_model=JobSnapshot, responses=errors
     )
-    async def cancel_job(job_id: UUID) -> JobSnapshot:
-        """Stub for cancellation; never claims that work stopped.
+    async def cancel_job(job_id: UUID, owner: Owner) -> JobSnapshot:
+        """Cancel queued work or request hard stopping of the running child.
 
         Args:
-            job_id: Opaque job identity.
+            job_id: Job identity.
+            owner: Authenticated caller.
 
         Returns:
-            A future snapshot reflecting cancellation/completion races.
+            Current state; cancelling becomes cancelled after child cleanup.
 
         Raises:
-            HTTPException: Always 501 after validation.
+            JobError: If the owned job is unavailable.
         """
-        not_implemented()
+        return manager.cancel(owner, job_id)
 
     @app.get(f"{PREFIX}/{{job_id}}/result", response_model=JobResult, responses=errors)
-    async def result(job_id: UUID) -> JobResult:
-        """Stub for a completed JSON/artifact result.
+    async def result(job_id: UUID, owner: Owner) -> JobResult:
+        """Retrieve owned successful output.
 
         Args:
-            job_id: Opaque job identity.
+            job_id: Job identity.
+            owner: Authenticated caller.
 
         Returns:
-            A future completed result.
+            Retained inline JSON result.
 
         Raises:
-            HTTPException: Always 501 after validation.
+            JobError: If unavailable or not succeeded.
         """
-        not_implemented()
+        return manager.result(owner, job_id)
 
-    @app.get(
-        f"{PREFIX}/{{job_id}}/artifacts/{{artifact_id}}",
-        responses=errors,
-        response_class=JSONResponse,
-        description="STUB: returns JSON 501; future success transfers artifact bytes, never a filesystem path.",
-    )
-    async def artifact(job_id: UUID, artifact_id: UUID) -> None:
-        """Stub for an owned artifact download.
+    @app.delete(f"{PREFIX}/{{job_id}}", status_code=204, responses=errors)
+    async def delete_job(job_id: UUID, owner: Owner) -> Response:
+        """Delete terminal state, result and its idempotency reservation.
 
         Args:
-            job_id: Opaque job identity.
-            artifact_id: Opaque artifact identity.
+            job_id: Job identity.
+            owner: Authenticated caller.
+
+        Returns:
+            Empty 204 response.
 
         Raises:
-            HTTPException: Always 501 after validation.
+            JobError: If unavailable or still active.
         """
-        not_implemented()
+        manager.delete(owner, job_id)
+        return Response(status_code=204)
 
     @app.get(
         f"{PREFIX}/{{job_id}}/events",
-        responses=errors,
-        description="STUB: JSON 501, not an SSE connection. Future events are hints to refresh GET status; reconnect/replay is not implemented.",
+        responses={**errors, 501: {"model": ErrorResponse}},
     )
-    async def events(
-        job_id: UUID,
-        last_event_id: Annotated[str | None, Header(max_length=128)] = None,
-    ) -> None:
-        """Stub for future job notifications; opens no stream.
+    async def events(job_id: UUID, owner: Owner) -> None:
+        """Reserve SSE for later; callers can poll authoritative status.
 
         Args:
-            job_id: Opaque job identity.
-            last_event_id: Proposed SSE reconnection cursor.
+            job_id: Job identity.
+            owner: Authenticated caller.
 
         Raises:
-            HTTPException: Always 501 after validation.
+            JobError: If the owned job is unavailable.
+            HTTPException: 501 for an owned job; no stream is opened.
         """
-        not_implemented()
+        manager.get(owner, job_id)
+        raise HTTPException(501, "Job events are not implemented; poll job status")
 
-    @app.delete(
-        f"{PREFIX}/{{job_id}}",
-        responses=errors,
-        description="STUB: returns 501. Future deletion only removes terminal jobs and retained results.",
+    @app.get(
+        f"{PREFIX}/{{job_id}}/artifacts/{{artifact_id}}",
+        responses={**errors, 501: {"model": ErrorResponse}},
     )
-    async def delete_job(job_id: UUID) -> None:
-        """Stub for terminal-job cleanup.
+    async def artifact(job_id: UUID, artifact_id: UUID, owner: Owner) -> None:
+        """Reserve file results for a later operation migration.
 
         Args:
-            job_id: Opaque job identity.
+            job_id: Job identity.
+            artifact_id: Reserved artifact identity.
+            owner: Authenticated caller.
 
         Raises:
-            HTTPException: Always 501 after validation.
+            JobError: If the owned job is unavailable.
+            HTTPException: 501; diagnostics produce no artifacts.
         """
-        not_implemented()
+        manager.get(owner, job_id)
+        raise HTTPException(501, "Artifact downloads are not implemented")
 
     return app

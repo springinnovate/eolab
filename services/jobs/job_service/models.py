@@ -1,4 +1,4 @@
-"""Version 0.1 HTTP contracts for the standalone Job service skeleton."""
+"""HTTP contracts for the standalone diagnostic Job service."""
 
 from datetime import datetime
 from typing import Annotated, Literal
@@ -26,12 +26,14 @@ class Contract(BaseModel):
 
 
 class SubmitJob(Contract):
-    """Immutable proposed job input; the skeleton never admits this request."""
+    """Immutable invocation of one installed operation."""
 
     operation: str = Field(
-        pattern=r"^[a-z][a-z0-9_.-]{0,127}$", examples=["demo.sum.v1"]
+        pattern=r"^[a-z][a-z0-9_.-]{0,127}$", examples=["diagnostic.v1"]
     )
-    inputs: dict[str, JsonValue] = Field(examples=[{"values": [10, 20, 30]}])
+    inputs: dict[str, JsonValue] = Field(
+        examples=[{"mode": "delay", "seconds": 5, "value": "hello"}]
+    )
     priority: Priority = Field(
         default=0, description="Higher starts first; ties use arrival order."
     )
@@ -55,23 +57,23 @@ class ErrorDetail(Contract):
 
 
 class ErrorResponse(Contract):
-    """Error envelope shared by stub, routing and validation failures."""
+    """Error envelope shared by lifecycle, routing and validation failures."""
 
     error: ErrorDetail
 
 
 class Health(Contract):
-    """HTTP readiness does not imply that job execution is implemented."""
+    """HTTP readiness and whether caller configuration enables admission."""
 
     service: Literal["jobs"] = "jobs"
-    mode: Literal["stub"] = "stub"
+    mode: Literal["ephemeral"] = "ephemeral"
     ready: Literal[True] = True
-    acceptsJobs: Literal[False] = False
-    apiVersion: Literal["0.1.0"] = "0.1.0"
+    acceptsJobs: bool = False
+    apiVersion: Literal["0.2.0"] = "0.2.0"
 
 
 class Operation(Contract):
-    """Description and JSON schemas of a future installed operation."""
+    """Description and JSON schemas of an installed operation."""
 
     name: str
     description: str
@@ -80,7 +82,7 @@ class Operation(Contract):
 
 
 class Operations(Contract):
-    """Actual registered operations; this skeleton has none."""
+    """Discoverable installed operations."""
 
     operations: list[Operation] = Field(default_factory=list)
 
@@ -93,7 +95,7 @@ class Progress(Contract):
 
 
 class JobSnapshot(Contract):
-    """Proposed future status response, not produced by the stub endpoints."""
+    """Authoritative retained state for one caller-owned job."""
 
     jobId: UUID
     operation: str
@@ -107,7 +109,7 @@ class JobSnapshot(Contract):
 
 
 class JobPage(Contract):
-    """Proposed owned-job page with an opaque continuation cursor."""
+    """Owned-job page with an opaque continuation cursor."""
 
     jobs: list[JobSnapshot]
     nextCursor: str | None = None
@@ -123,7 +125,7 @@ class Artifact(Contract):
 
 
 class JobResult(Contract):
-    """Proposed completed result with inline JSON and optional artifacts."""
+    """Completed inline JSON result; artifacts remain reserved for future work."""
 
     jobId: UUID
     value: JsonValue = None

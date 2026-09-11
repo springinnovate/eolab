@@ -1,6 +1,10 @@
-"""Exercise the standalone preview and its real ASGI proxy boundary."""
+"""Exercise diagnostic execution and its real ASGI proxy boundary."""
 
 import ast
+import json
+import time
+from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator
 from pathlib import Path
 from uuid import uuid4
 
@@ -16,65 +20,120 @@ from eolab_app.routes.jobs_proxy import create_jobs_proxy_router
 JOB = str(uuid4())
 ARTIFACT = str(uuid4())
 SUBMISSION = {
-    "operation": "demo.sum.v1",
-    "inputs": {"values": [10, 20, 30]},
+    "operation": "diagnostic.v1",
+    "inputs": {"mode": "normal", "value": [10, 20, 30]},
     "priority": 10,
 }
-KEY = {"Idempotency-Key": "demo-1"}
+TOKEN = "a" * 48
+KEY = {"Idempotency-Key": "demo-1", "Authorization": f"Bearer {TOKEN}"}
 BASE = "/api/jobs"
-HOOKS = [
-    ("POST", BASE, SUBMISSION),
-    ("GET", BASE, None),
-    ("GET", f"{BASE}/{JOB}", None),
-    ("PATCH", f"{BASE}/{JOB}", {"priority": 3}),
-    ("POST", f"{BASE}/{JOB}/cancel", None),
-    ("GET", f"{BASE}/{JOB}/result", None),
-    ("GET", f"{BASE}/{JOB}/artifacts/{ARTIFACT}", None),
-    ("GET", f"{BASE}/{JOB}/events", None),
-    ("DELETE", f"{BASE}/{JOB}", None),
-]
+
+
+@pytest.fixture(autouse=True)
+def callers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Configure one isolated test caller.
+
+    Args:
+        monkeypatch: Environment isolation fixture.
+    """
+    monkeypatch.setenv("JOBS_CALLERS", json.dumps({"alice": TOKEN, "bob": "b" * 48}))
+
+
+def wait_for(client: TestClient, job_id: str, expected: str) -> dict:
+    """Wait briefly for an authoritative lifecycle state.
+
+    Args:
+        client: Running API test client.
+        job_id: Submitted job identity.
+        expected: Desired status.
+
+    Returns:
+        Matching status response.
+
+    Raises:
+        AssertionError: If the state never arrives.
+    """
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        response = client.get(f"{BASE}/{job_id}", headers=KEY)
+        assert response.status_code == 200, response.text
+        snapshot = response.json()
+        if snapshot["status"] == expected:
+            return snapshot
+        time.sleep(0.02)
+    raise AssertionError(snapshot)
 
 
 @pytest.mark.parametrize("through_proxy", [False, True])
-@pytest.mark.parametrize("method,path,body", HOOKS)
-def test_all_hooks_are_explicit_stubs(
-    through_proxy: bool, method: str, path: str, body: dict | None
-) -> None:
-    """Real service/proxy requests never fabricate accepted work or SSE streams."""
+def test_success_lifecycle_through_real_boundary(through_proxy: bool) -> None:
+    """Execute and retrieve results directly and through the existing proxy.
+
+    Args:
+        through_proxy: Whether to exercise the HTTP composition boundary.
+    """
     service = create_app()
     if through_proxy:
-        client = httpx2.AsyncClient(transport=httpx2.ASGITransport(app=service))
-        app = FastAPI()
-        app.include_router(create_jobs_proxy_router(client))
+        upstream = httpx2.AsyncClient(transport=httpx2.ASGITransport(app=service))
+
+        @asynccontextmanager
+        async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+            """Start the real service on the proxy loop and close its client.
+
+            Args:
+                app: Proxy application.
+
+            Yields:
+                Control while both components are available.
+            """
+            async with service.router.lifespan_context(service), upstream:
+                yield
+
+        app = FastAPI(lifespan=lifespan)
+        app.include_router(create_jobs_proxy_router(upstream))
     else:
         app = service
     with TestClient(app) as browser:
-        response = browser.request(method, path, json=body, headers=KEY)
-        assert response.status_code == 501
-        assert response.json()["error"]["code"] == "not_implemented"
-        assert response.headers["content-type"].startswith("application/json")
-        assert response.headers["cache-control"] == "no-store"
-        assert "jobId" not in response.text
+        response = browser.post(BASE, json=SUBMISSION, headers=KEY)
+        assert response.status_code == 202, response.text
+        job_id = response.json()["jobId"]
+        assert response.headers["location"] == f"{BASE}/{job_id}"
+        wait_for(browser, job_id, "succeeded")
+        assert browser.get(f"{BASE}/{job_id}/result", headers=KEY).json()["value"] == {
+            "value": [10, 20, 30]
+        }
+        assert (
+            browser.post(BASE, json=SUBMISSION, headers=KEY).json()["jobId"] == job_id
+        )
+        assert browser.get(BASE, headers=KEY).json()["jobs"][0]["jobId"] == job_id
+        for suffix in ("events", f"artifacts/{ARTIFACT}"):
+            assert (
+                browser.get(f"{BASE}/{job_id}/{suffix}", headers=KEY).status_code == 501
+            )
+        assert browser.delete(f"{BASE}/{job_id}", headers=KEY).status_code == 204
+        assert browser.get(f"{BASE}/{job_id}", headers=KEY).status_code == 404
 
 
 def test_discovery_docs_and_schemas() -> None:
-    """Discovery distinguishes HTTP readiness from nonexistent execution."""
+    """Discovery advertises the installed diagnostic and authenticated execution."""
     with TestClient(create_app()) as client:
         health = client.get(f"{BASE}/health").json()
         assert health == {
             "service": "jobs",
-            "mode": "stub",
+            "mode": "ephemeral",
             "ready": True,
-            "acceptsJobs": False,
-            "apiVersion": "0.1.0",
+            "acceptsJobs": True,
+            "apiVersion": "0.2.0",
         }
-        assert client.get(f"{BASE}/operations").json() == {"operations": []}
+        assert (
+            client.get(f"{BASE}/operations").json()["operations"][0]["name"]
+            == "diagnostic.v1"
+        )
         assert f"{BASE}/openapi.json" in client.get(f"{BASE}/docs").text
         schema = client.get(f"{BASE}/openapi.json").json()
         post = schema["paths"][BASE]["post"]
-        assert "501" in post["responses"]
-        assert "202" in post["responses"]  # explicitly proposed, never returned
-        assert "STUB" in post["description"]
+        assert "401" in post["responses"]
+        assert "202" in post["responses"]
+        assert post["security"] == [{"HTTPBearer": []}]
         assert post["parameters"][0]["name"] == "Idempotency-Key"
         assert post["parameters"][0]["required"]
         models = schema["components"]["schemas"]
@@ -86,7 +145,7 @@ def test_discovery_docs_and_schemas() -> None:
 @pytest.mark.parametrize(
     "body,headers",
     [
-        (SUBMISSION, {}),
+        (SUBMISSION, {"Authorization": f"Bearer {TOKEN}"}),
         ({**SUBMISSION, "priority": True}, KEY),
         ({**SUBMISSION, "priority": 1001}, KEY),
         ({**SUBMISSION, "owner": "other"}, KEY),
@@ -97,7 +156,7 @@ def test_discovery_docs_and_schemas() -> None:
     ],
 )
 def test_submission_boundary(body: dict, headers: dict) -> None:
-    """Reject malformed contracts before the stub without exposing raw inputs."""
+    """Reject malformed contracts before admission without exposing raw inputs."""
     response = TestClient(create_app()).post(BASE, json=body, headers=headers)
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "invalid_request"
@@ -113,8 +172,8 @@ def test_submission_boundary(body: dict, headers: dict) -> None:
     ],
 )
 def test_invalid_job_identity_or_listing(path: str) -> None:
-    """Listing and IDs are validated even though no job storage exists."""
-    assert TestClient(create_app()).get(path).status_code == 422
+    """Listing and IDs are validated at the HTTP boundary."""
+    assert TestClient(create_app()).get(path, headers=KEY).status_code == 422
 
 
 def test_unknown_method_path_and_body_limit() -> None:
@@ -141,16 +200,19 @@ def test_composed_eolab_routes_to_independent_service(
         version_file_path, jobs_transport=httpx2.ASGITransport(app=create_app())
     )
     client = TestClient(app)
-    assert client.get(f"{BASE}/health").json()["mode"] == "stub"
-    assert client.get(f"{BASE}/operations").json() == {"operations": []}
+    assert client.get(f"{BASE}/health").json()["mode"] == "ephemeral"
+    assert (
+        client.get(f"{BASE}/operations").json()["operations"][0]["name"]
+        == "diagnostic.v1"
+    )
     assert client.get(f"{BASE}/docs").status_code == 200
-    assert client.get(f"{BASE}/openapi.json").json()["info"]["version"] == "0.1.0"
+    assert client.get(f"{BASE}/openapi.json").json()["info"]["version"] == "0.2.0"
     assert client.get("/healthz").status_code == 200
     assert "/api/processing/jobs" in app.openapi()["paths"]
     assert not any(path.startswith(BASE) for path in app.openapi()["paths"])
 
 
-def test_proxy_is_bounded_and_does_not_forward_credentials() -> None:
+def test_proxy_is_bounded_and_forwards_only_explicit_bearer_credentials() -> None:
     """Only the fixed prefix and minimal API headers cross the new HTTP edge."""
     seen = []
 
@@ -191,7 +253,8 @@ def test_proxy_is_bounded_and_does_not_forward_credentials() -> None:
     assert seen[0].url.host == "jobs"
     assert seen[0].url.path == BASE
     assert seen[0].headers["idempotency-key"] == "demo-1"
-    assert "cookie" not in seen[0].headers and "authorization" not in seen[0].headers
+    assert "cookie" not in seen[0].headers
+    assert seen[0].headers["authorization"] == "Bearer private"
     assert browser.get(f"{BASE}/health").json()["error"]["code"] == "response_too_large"
     assert browser.get(f"{BASE}/docs").status_code == 502
     count = len(seen)
