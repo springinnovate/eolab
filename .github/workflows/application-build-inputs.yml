@@ -101,7 +101,10 @@ jobs:
           docker run -d --name eolab-jobs-preview --read-only --cap-drop ALL \
             --security-opt no-new-privileges --cpus 1 --memory 256m \
             -p 127.0.0.1:8082:8080 eolab-jobs:preview
-          curl --fail --retry 20 --retry-connrefused --retry-delay 1 http://127.0.0.1:8082/api/jobs/health
+          # Docker can reset connections before Uvicorn is ready to accept them.
+          curl --fail --retry 20 --retry-all-errors --retry-delay 1 \
+            --connect-timeout 2 --max-time 5 --retry-max-time 30 \
+            http://127.0.0.1:8082/api/jobs/health
           curl --fail http://127.0.0.1:8082/api/jobs/openapi.json > artifacts/application-builds/jobs-openapi.json
           code=$(curl -s -o artifacts/application-builds/jobs-stub.json -w '%{http_code}' \
             -H 'Content-Type: application/json' -H 'Idempotency-Key: smoke-1' \
