@@ -49,6 +49,7 @@ from eolab_app.routes.raster_analysis import create_raster_analysis_router
 from eolab_app.routes.rasters import create_raster_feature
 from eolab_app.routes.processing import create_processing_router
 from eolab_app.routes.scans import create_scan_router
+from eolab_app.routes.jobs_proxy import create_jobs_proxy_router
 from eolab_app.routes.stac_proxy import (
     NumberMatchedEstimateLookup,
     create_stac_proxy_router,
@@ -85,6 +86,7 @@ def create_app(
     number_matched_estimate_lookup: NumberMatchedEstimateLookup = (
         number_matched_is_estimated
     ),
+    jobs_transport: httpx2.AsyncBaseTransport | None = None,
 ) -> FastAPI:
     """Create an application from the deployment environment.
 
@@ -103,6 +105,8 @@ def create_app(
             real network transport; tests pass a mock transport.
         number_matched_estimate_lookup: Determines whether pgSTAC estimated an
             Item Search count. Tests pass a database-free implementation.
+        jobs_transport: Independent Job service transport; tests may inject its
+            ASGI app without starting a container or contacting other services.
 
     Returns:
         A FastAPI application configured from the validated deployment
@@ -134,6 +138,12 @@ def create_app(
     geoserver_diagnostics_client = httpx2.AsyncClient(
         transport=geoserver_diagnostics_transport,
         timeout=3,
+    )
+    jobs_client = httpx2.AsyncClient(
+        transport=jobs_transport,
+        timeout=10,
+        trust_env=False,
+        limits=httpx2.Limits(max_connections=10, max_keepalive_connections=5),
     )
     raster_catalog = StacRasterCatalog(
         catalog_client,
@@ -251,6 +261,7 @@ def create_app(
                 geoserver_wms_client,
                 geoserver_rest_client,
                 geoserver_diagnostics_client,
+                jobs_client,
             ):
                 client_stack.push_async_callback(client.aclose)
             yield
@@ -331,6 +342,7 @@ def create_app(
         error_detail_limit=app_global_configuration.scan_error_detail_limit,
     )
     application.include_router(create_scan_router(scan_manager))
+    application.include_router(create_jobs_proxy_router(jobs_client))
     application.include_router(
         create_system_router(
             app_global_configuration.app_version,

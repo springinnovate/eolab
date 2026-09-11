@@ -45,5 +45,5 @@ eolab_app = ["static/*", "static/**/*", "processing/*.sql"]
 
 [tool.pytest.ini_options]
 addopts = "-q"
-pythonpath = ["src"]
+pythonpath = ["src", "services/jobs"]
 testpaths = ["tests"]

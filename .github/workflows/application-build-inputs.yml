@@ -6,6 +6,9 @@ on:
       - Dockerfile.app
       - pyproject.toml
       - deployment/application-*
+      - services/jobs/**
+      - src/eolab_app/routes/jobs_proxy.py
+      - tests/test_job_service.py
       - .github/workflows/application-build-inputs.yml
   workflow_dispatch:
 
@@ -85,10 +88,26 @@ jobs:
               /tmp/check/bin/python -m pytest tests/test_reusable_process.py \
                 -o pythonpath= -p no:cacheprovider --basetemp=/tmp/eolab-process-tests \
                 -ra --tb=short
-              /tmp/check/bin/python -m pytest -o pythonpath= -p no:cacheprovider \
+              /tmp/check/bin/python -m pytest -o pythonpath=services/jobs -p no:cacheprovider \
                 --ignore=tests/test_reusable_process.py \
                 --basetemp=/tmp/eolab-build-tests -ra --tb=short
             ' 2>&1 | tee artifacts/application-builds/backend-tests.log
+      - name: Build and smoke the standalone Job service image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --platform linux/amd64 -f services/jobs/Dockerfile -t eolab-jobs:preview .
+          trap 'docker logs eolab-jobs-preview; docker rm -f eolab-jobs-preview' EXIT
+          docker run -d --name eolab-jobs-preview --read-only --cap-drop ALL \
+            --security-opt no-new-privileges --cpus 1 --memory 256m \
+            -p 127.0.0.1:8082:8080 eolab-jobs:preview
+          curl --fail --retry 20 --retry-connrefused --retry-delay 1 http://127.0.0.1:8082/api/jobs/health
+          curl --fail http://127.0.0.1:8082/api/jobs/openapi.json > artifacts/application-builds/jobs-openapi.json
+          code=$(curl -s -o artifacts/application-builds/jobs-stub.json -w '%{http_code}' \
+            -H 'Content-Type: application/json' -H 'Idempotency-Key: smoke-1' \
+            --data '{"operation":"demo.sum.v1","inputs":{"values":[1,2]}}' http://127.0.0.1:8082/api/jobs)
+          test "$code" = 501
+          grep -q not_implemented artifacts/application-builds/jobs-stub.json
       - name: Frontend tests in the recorded Node build stage
         run: |
           docker build --target frontend-builder -f Dockerfile.app -t eolab-build-inputs:frontend .
