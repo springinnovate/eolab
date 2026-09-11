@@ -1,4 +1,4 @@
-/** Accessible Downloads DOM adapter. No map, histogram, or upload implementation knowledge. */
+/** Accessible Downloads DOM adapter. No map, histogram, or vector implementation knowledge. */
 import { ACTIVE_JOB_STATES } from "./jobs.js";
 import { processingDownloadUrl } from "./api.js";
 
@@ -86,13 +86,7 @@ export class DownloadsView {
         e.source.value = String(state.sources.findIndex(source => source.collectionId === state.source?.collectionId && source.itemId === state.source?.itemId));
         const selection = this.element("option", "Selected histogram area (captured when opened)");
         selection.value = "selection";
-        const uploaded = this.element("option", state.availableAoi
-            ? `Uploaded AOI · ${state.availableAoi.filename} · ${state.availableAoi.selectedDataset}`
-            : "Uploaded AOI — upload one in Sampling area");
-        uploaded.value = "uploaded";
-        uploaded.disabled = !state.availableAoi;
-        // Replacing options does not replace the focused select itself.
-        e.area.replaceChildren(selection, uploaded);
+        e.area.replaceChildren(selection);
         e.area.value = state.areaChoice;
         const locked = !!state.pending || state.submitting;
         e.source.disabled = locked || state.sources.length === 0;

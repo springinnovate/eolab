@@ -20,7 +20,7 @@ export class CalculationsController {
         this.canAutoSubmit = canAutoSubmit;
         Object.assign(this, { api, jobs, storage, view, getContext, onOpen, onClose, onActivity, clock, requestId });
         this.state = { sources: [], source: null, selectedArea: null, area: null, areaChoice: "selection",
-            availableAoi: null, calculations: [{ label: "Mean", expression: "mean(a)" }],
+            calculations: [{ label: "Mean", expression: "mean(a)" }],
             valid: false, validation: "", plan: null, phase: "idle", message: "", active: false, checking: false, result: null, resultIntent: null, current: null, jobs: [], historyError: "" };
         this.record = storage.read();
         this.desired = null;
@@ -78,7 +78,7 @@ export class CalculationsController {
     /** Snapshot editor intent; never fall back from no selection to whole raster. @return {Object} Frozen intent. */
     intent() {
         if (!this.state.source) throw new Error("Choose a Catalog raster.");
-        if (!this.state.area) throw new Error("Choose a sampling box, uploaded AOI, or Whole raster.");
+        if (!this.state.area) throw new Error("Choose a sampling box, catalog vector, or Whole raster.");
         return calculationIntent(this.state);
     }
 
@@ -158,19 +158,8 @@ export class CalculationsController {
      * @param {string} choice Scope. @return {void}
      */
     chooseArea(choice) {
-        const area = choice === "whole" ? { kind: "wholeRaster" } : choice === "uploaded"
-            ? this.state.availableAoi && { kind: "temporaryAoi", temporaryAoiId: this.state.availableAoi.id }
-            : this.state.selectedArea;
+        const area = choice === "whole" ? { kind: "wholeRaster" } : this.state.selectedArea;
         this.edit({ areaChoice: choice, area });
-    }
-
-    /** Observe AOI lifecycle without altering accepted snapshots.
-     * @param {Object|null} aoi Ready reference. @return {void}
-     */
-    setTemporaryAoi(aoi) {
-        this.state.availableAoi = aoi;
-        if (this.state.area?.kind === "temporaryAoi" && this.state.area.temporaryAoiId !== aoi?.id) this.edit({ area: null });
-        this.render();
     }
 
     /** Receive committed area context; only an explicit click intent starts work.

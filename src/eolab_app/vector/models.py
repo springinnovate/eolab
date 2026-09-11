@@ -17,8 +17,10 @@ from pydantic import (
     model_validator,
 )
 
+from eolab_app.catalog.vector_contract import (
+    CatalogVectorRequest as CatalogVectorRequest,
+)
 from eolab_app.catalog.vector import (
-    MOUNTED_VECTOR_COLLECTION_ID,
     VECTOR_SOURCE_METADATA_KEY,
 )
 
@@ -131,23 +133,6 @@ class VectorNumericRead:
     null_count: int
     unsupported_value_count: int
     complete: bool
-
-
-class CatalogVectorRequest(BaseModel):
-    """Identify one mounted-vector catalog Item without accepting paths."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    collection_id: Literal[MOUNTED_VECTOR_COLLECTION_ID] = Field(
-        alias="collectionId",
-    )
-    item_id: str = Field(
-        alias="itemId",
-        min_length=1,
-        max_length=128,
-        pattern=r"^[A-Za-z0-9][A-Za-z0-9._~-]*$",
-        strict=True,
-    )
 
 
 class CatalogVectorCategoryRequest(CatalogVectorRequest):

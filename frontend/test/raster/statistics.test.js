@@ -13,8 +13,8 @@ import {
   RASTER_STATISTICS,
   SELECTED_BOUNDS,
   SELECTED_RASTER_STATISTICS,
-  TEMPORARY_AOI_ID,
-  TEMPORARY_AOI_RASTER_STATISTICS,
+  CATALOG_SELECTION,
+  CATALOG_SELECTION_RASTER_STATISTICS,
 } from "../../test-support/raster/fixtures.js";
 
 test("raster statistics validate their fixed bounded response contract", () => {
@@ -24,8 +24,8 @@ test("raster statistics validate their fixed bounded response contract", () => {
     SELECTED_RASTER_STATISTICS,
   );
   assert.equal(
-    validateRasterStatistics(TEMPORARY_AOI_RASTER_STATISTICS),
-    TEMPORARY_AOI_RASTER_STATISTICS,
+    validateRasterStatistics(CATALOG_SELECTION_RASTER_STATISTICS),
+    CATALOG_SELECTION_RASTER_STATISTICS,
   );
 
   assert.throws(
@@ -68,10 +68,10 @@ test("raster statistics validate their fixed bounded response contract", () => {
   );
   assert.throws(
     () => validateRasterStatistics({
-      ...TEMPORARY_AOI_RASTER_STATISTICS,
-      temporaryAoiId: "../../server-file",
+      ...CATALOG_SELECTION_RASTER_STATISTICS,
+      catalogSelection: "../../server-file",
     }),
-    /invalid temporary-AOI scope/,
+    /Invalid catalog selection identity/,
   );
 });
 
@@ -105,17 +105,17 @@ test("raster statistics apply only to their current whole or selected scope", ()
   );
   assert.equal(
     rasterStatisticsMatchesSelection(
-      TEMPORARY_AOI_RASTER_STATISTICS,
-      { kind: "temporaryAoi", temporaryAoiId: TEMPORARY_AOI_ID },
+      CATALOG_SELECTION_RASTER_STATISTICS,
+      { kind: "catalogSelection", catalogSelection: CATALOG_SELECTION },
     ),
     true,
   );
   assert.equal(
     rasterStatisticsMatchesSelection(
-      TEMPORARY_AOI_RASTER_STATISTICS,
+      CATALOG_SELECTION_RASTER_STATISTICS,
       {
-        kind: "temporaryAoi",
-        temporaryAoiId: `X${TEMPORARY_AOI_ID.slice(1)}`,
+        kind: "catalogSelection",
+        catalogSelection: { ...CATALOG_SELECTION, sourceSignature: "b".repeat(64) },
       },
     ),
     false,

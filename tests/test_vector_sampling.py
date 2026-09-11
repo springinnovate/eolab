@@ -1,111 +1,138 @@
-"""Verify complete filtered masks, bounded reads and retained AOI lifecycles."""
+"""Catalog identity, direct native reads, and independent display admission."""
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from dataclasses import replace
+from pathlib import Path
 
-import fiona
 import pytest
-from shapely.geometry import shape
+from shapely.geometry import Polygon, box, mapping, shape
 
+from catalog_selection_support import FixtureCatalog, write_selection
 from eolab_app.bounded_geometry import GeometryValidationError
-from eolab_app.sampling_area import SamplingAreaUnavailableError
-from eolab_app.temporary_aoi.service import TemporaryAoiService
-from eolab_app.vector.filters import VectorFilter
-from eolab_app.vector.geometry import read_filtered_geometry
-from eolab_app.vector.models import ResolvedVectorSource
-from eolab_app.vector.sources import vector_source_signature
-from eolab_app.catalog.vector import MOUNTED_VECTOR_COLLECTION_ID
-from eolab_app.vector.filters import CatalogVectorFilterRequest
-from eolab_app.vector.sampling import VectorSamplingService
+from eolab_app.bounded_vector import polygon_features, selection_summary
+from eolab_app.catalog_selection import (
+    CatalogSelection,
+    ResolvedCatalogSelection,
+    SelectionUnavailableError,
+)
 from eolab_app.vector.errors import VectorConflictError
+from eolab_app.vector.filters import CatalogVectorFilterRequest, VectorFilter
+from eolab_app.vector.models import ResolvedVectorSource
+from eolab_app.vector.sampling import VectorSamplingService
 
 
 @pytest.fixture
-def source(tmp_path):
-    """Write two polygons, including a hole, in an exact named layer."""
-    path = tmp_path / "countries.gpkg"
-    with fiona.open(path, "w", driver="GPKG", layer="countries", crs="EPSG:4326",
-                    schema={"geometry": "Polygon", "properties": {"iso3": "str"}}) as dataset:
-        for iso3, rings in [
-            ("PER", [[[0,0],[4,0],[4,4],[0,4],[0,0]], [[1,1],[1,2],[2,2],[2,1],[1,1]]]),
-            ("BRA", [[[10,0],[14,0],[14,4],[10,4],[10,0]]]),
-        ]:
-            dataset.write({"geometry": {"type": "Polygon", "coordinates": rings}, "properties": {"iso3": iso3}})
-    return ResolvedVectorSource("mounted", "geopackage", path, "data", "countries")
+def source(tmp_path: Path) -> ResolvedCatalogSelection:
+    """Create real polygons with a hole and an exact 64-bit selection attribute."""
+    return write_selection(
+        tmp_path / "polygons.gpkg",
+        [
+            mapping(
+                Polygon(
+                    [(0, 0), (4, 0), (4, 4), (0, 4), (0, 0)],
+                    [[(1, 1), (1, 2), (2, 2), (2, 1), (1, 1)]],
+                )
+            ),
+            mapping(box(10, 0, 14, 4)),
+        ],
+        values=[6060007000, 3],
+        candidate=VectorFilter(
+            rules=[
+                {"field": "selected", "operator": "eq", "value": 6060007000},
+            ]
+        ),
+    )
 
 
-def filtered(code):
-    """Build an exact typed country predicate."""
-    return VectorFilter.model_validate({"rules": [{"field": "iso3", "operator": "eq", "value": code}]})
-
-
-def test_complete_filtered_polygon_preserves_hole_and_discards_attributes(source):
-    result = read_filtered_geometry(source, filtered("PER"), vector_source_signature(source))
+def test_complete_filtered_polygon_preserves_hole_without_snapshot(
+    source: ResolvedCatalogSelection,
+) -> None:
+    """Keep exact topology while returning only measured metadata and a descriptor."""
+    result = selection_summary(source)
     assert (result["matched"], result["total"]) == (1, 2)
     assert result["bbox"] == (0, 0, 4, 4)
-    feature = result["geometry"]["features"][0]
-    assert feature["properties"] == {}
-    assert shape(feature["geometry"]).area == 15
+    assert "geometry" not in result
+    with polygon_features(source) as features:
+        polygons = list(features)
+    assert len(polygons) == 1 and shape(polygons[0]).area == 15
+    assert "coordinates" not in source.selection.model_dump_json()
 
 
-def test_zero_matches_never_falls_back_to_unfiltered_geometry(source):
+def test_native_read_never_falls_back_after_zero_matches(
+    source: ResolvedCatalogSelection,
+) -> None:
+    """An empty native predicate is an explicit failure, never an unfiltered read."""
     with pytest.raises(GeometryValidationError, match="No matching"):
-        read_filtered_geometry(source, filtered("XXX"), vector_source_signature(source))
+        selection_summary(replace(source, where='"selected" = 123'))
 
 
-def test_entire_layer_requires_complete_bounded_read(source, monkeypatch):
-    monkeypatch.setattr("eolab_app.vector.geometry.MAX_SCANNED_FEATURES", 1)
-    with pytest.raises(GeometryValidationError, match="scan budget"):
-        read_filtered_geometry(source, filtered("PER"), vector_source_signature(source))
+def test_actual_feature_and_coordinate_budgets(
+    source: ResolvedCatalogSelection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Limits apply to retained feature geometry and actual scanned work."""
+    with monkeypatch.context() as patch:
+        patch.setattr("eolab_app.bounded_vector.MAX_SCANNED_FEATURES", 0)
+        with pytest.raises(GeometryValidationError, match="budget"):
+            selection_summary(source)
+    monkeypatch.setattr("eolab_app.bounded_vector.MAX_FEATURE_COORDINATES", 4)
+    with pytest.raises(GeometryValidationError, match="coordinate buffer"):
+        selection_summary(source)
 
 
-def test_source_identity_must_match_before_read(source):
-    with pytest.raises(Exception, match="source changed"):
-        read_filtered_geometry(source, filtered("PER"), ())
+@pytest.mark.parametrize(
+    "field,value",
+    [("assetKey", "other"), ("layerName", "other"), ("sourceSignature", "f" * 64)],
+)
+def test_descriptor_reauthorization_checks_all_source_identity(
+    source: ResolvedCatalogSelection,
+    field: str,
+    value: str,
+) -> None:
+    """A caller cannot substitute an asset, native layer, or stale source signature."""
+    catalog = FixtureCatalog(
+        ResolvedVectorSource("mounted", "geopackage", source.path, "data", "polygons")
+    )
+    service = VectorSamplingService(catalog, catalog)
+    with pytest.raises(SelectionUnavailableError, match="identity changed"):
+        asyncio.run(
+            service.resolve_for_sampling(
+                source.selection.model_copy(update={field: value})
+            )
+        )
 
 
-def test_retained_geometry_uses_existing_expiry_and_delete(source, tmp_path):
-    async def scenario():
-        now = datetime.now(timezone.utc)
-        service = TemporaryAoiService(tmp_path / "areas", now=lambda: now)
-        result = read_filtered_geometry(source, filtered("PER"), vector_source_signature(source))
-        try:
-            first = await service.retain_geometry(result["geometry"], result["bbox"], "Peru")
-            second = await service.retain_geometry(result["geometry"], result["bbox"], "Peru")
-            assert first.identity.reference != second.identity.reference
-            result["geometry"]["features"].clear()
-            assert len((await service.resolve_for_sampling(first.identity.reference)).geometries) == 1
-            await service.remove(first.identity.reference)
-            with pytest.raises(SamplingAreaUnavailableError):
-                await service.resolve_for_sampling(first.identity.reference)
-            now += timedelta(hours=1)
-            with pytest.raises(SamplingAreaUnavailableError):
-                await service.resolve_for_sampling(second.identity.reference)
-        finally:
-            await service.close()
-    asyncio.run(scenario())
+def test_selection_reauthorizes_after_restart_without_storage(
+    source: ResolvedCatalogSelection,
+) -> None:
+    """Fresh service instances reauthorize the same selection without a registry."""
+    catalog = FixtureCatalog(
+        ResolvedVectorSource("mounted", "geopackage", source.path, "data", "polygons")
+    )
+    request = CatalogVectorFilterRequest(
+        collectionId=source.selection.collection_id,
+        itemId=source.selection.item_id,
+        filter=source.selection.filter,
+    )
 
+    async def scenario() -> None:
+        """Exercise the production native selector independently of map outlines."""
+        first = VectorSamplingService(catalog, catalog)
+        response = await first.select(request)
+        descriptor = CatalogSelection.model_validate(response["selection"])
+        assert not {"id", "expiresAt", "geometry"}.intersection(response)
+        assert descriptor == source.selection
+        restarted = VectorSamplingService(catalog, catalog)
+        assert (
+            await restarted.resolve_for_sampling(descriptor)
+        ).selection == descriptor
+        invalid = request.model_copy(
+            update={
+                "filter": VectorFilter(
+                    rules=[{"field": "unknown", "operator": "eq", "value": 1}]
+                )
+            }
+        )
+        with pytest.raises(VectorConflictError, match="not in this layer"):
+            await first.select(invalid)
 
-def test_workflow_uses_catalog_fields_without_publication_and_retains_complete_geometry(source, tmp_path):
-    """Run the actual supervised child and AOI lifecycle without GeoServer state."""
-    class Catalog:
-        async def get_item(self, request):
-            return {"id": request.item_id, "properties": {"table:columns": [{"name": "iso3", "type": "str"}]}}
-    class Resolver:
-        def resolve(self, item):
-            return source
-    async def scenario():
-        lifecycle = TemporaryAoiService(tmp_path / "retained")
-        service = VectorSamplingService(Catalog(), Resolver(), lifecycle.retain_geometry)
-        request = CatalogVectorFilterRequest(collectionId=MOUNTED_VECTOR_COLLECTION_ID, itemId="countries", filter=filtered("PER"))
-        try:
-            result = await service.select(request)
-            assert result["matched"] == 1 and result["total"] == 2
-            assert result["filter"] == request.filter.model_dump(mode="json")
-            assert len((await lifecycle.resolve_for_sampling(result["id"])).geometries) == 1
-            invalid = request.model_copy(update={"filter": VectorFilter(rules=[{"field": "unknown", "operator": "eq", "value": 1}])})
-            with pytest.raises(VectorConflictError, match="not in this layer"):
-                await service.select(invalid)
-        finally:
-            await lifecycle.close()
     asyncio.run(scenario())

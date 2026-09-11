@@ -1,8 +1,13 @@
 """Public requests, responses, and internal raster value objects."""
 
+from eolab_app.catalog_selection import CatalogSelection
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Protocol
+
+from affine import Affine
+from numpy import bool_
+from numpy.typing import NDArray
 
 from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, model_validator
 from rasterio.windows import Window
@@ -62,11 +67,38 @@ class SelectedRasterArea:
 
     Attributes:
         source_window: Integer source-pixel window containing the selection.
-        projected_geometries: Polygonal selections in the source raster CRS.
+        projected_geometries: Bounded polygons or a streaming numeric-mask reader.
     """
 
     source_window: Window
-    projected_geometries: tuple[dict[str, object], ...]
+    projected_geometries: "tuple[dict[str, object], ...] | RasterAreaMask"
+
+
+class RasterAreaMask(Protocol):
+    """A bounded polygon-membership reader independent of its invoking feature."""
+
+    def mask(
+        self,
+        out_shape: tuple[int, int],
+        affine: Affine,
+        all_touched: bool,
+        invert: bool = False,
+    ) -> NDArray[bool_]:
+        """Read exact polygon membership on a caller-admitted numeric grid.
+
+        Args:
+            out_shape: Admitted grid rows and columns.
+            affine: Grid-to-source-CRS transformation.
+            all_touched: Caller-owned pixel inclusion rule.
+            invert: Return inside membership when true.
+
+        Returns:
+            Boolean membership with the supplied shape and inclusion policy.
+
+        Raises:
+            ValueError: If source integrity or bounded reading fails.
+        """
+        ...
 
 
 class CatalogRasterRequest(BaseModel):
@@ -128,8 +160,8 @@ class CatalogRasterStatisticsRequest(CatalogRasterRequest):
 
     Attributes:
         selected_bounds: Optional canonical WGS 84 rectangle; absence selects
-            the whole raster unless ``temporary_aoi_id`` is present.
-        temporary_aoi_id: Optional opaque ready-AOI lifecycle reference;
+            the whole raster unless ``catalog_selection`` is present.
+        catalog_selection: Optional immutable Catalog descriptor;
             absence selects bounds or the whole raster.
     """
 
@@ -137,30 +169,25 @@ class CatalogRasterStatisticsRequest(CatalogRasterRequest):
         default=None,
         alias="selectedBounds",
     )
-    temporary_aoi_id: str | None = Field(
-        default=None,
-        alias="temporaryAoiId",
-        min_length=32,
-        max_length=32,
-        pattern=r"^[A-Za-z0-9_-]{32}$",
-        strict=True,
+    catalog_selection: CatalogSelection | None = Field(
+        default=None, alias="catalogSelection"
     )
 
     @model_validator(mode="after")
     def require_strict_sampling_area_union(
         self,
     ) -> "CatalogRasterStatisticsRequest":
-        """Reject requests containing both rectangular and AOI sampling.
+        """Reject requests containing both rectangular and catalog selection sampling.
 
         Returns:
-            Validated request with whole-raster, bounds, or AOI sampling.
+            Validated request with whole-raster, bounds, or catalog selection sampling.
 
         Raises:
-            ValueError: If selected bounds and an AOI reference coexist.
+            ValueError: If selected bounds and an catalog selection reference coexist.
         """
-        if self.selected_bounds is not None and self.temporary_aoi_id is not None:
+        if self.selected_bounds is not None and self.catalog_selection is not None:
             raise ValueError(
-                "selectedBounds and temporaryAoiId are mutually exclusive"
+                "selectedBounds and catalogSelection are mutually exclusive"
             )
         return self
 
@@ -188,9 +215,8 @@ class CatalogRasterPairRequest(BaseModel):
         alias="selectedBounds",
     )
 
-    temporary_aoi_id: str | None = Field(
-        default=None, alias="temporaryAoiId", min_length=32, max_length=32,
-        pattern=r"^[A-Za-z0-9_-]{32}$", strict=True,
+    catalog_selection: CatalogSelection | None = Field(
+        default=None, alias="catalogSelection"
     )
 
     @model_validator(mode="after")
@@ -203,8 +229,10 @@ class CatalogRasterPairRequest(BaseModel):
         Raises:
             ValueError: If X and Y identify the same catalog Item.
         """
-        if self.selected_bounds is not None and self.temporary_aoi_id is not None:
-            raise ValueError("selectedBounds and temporaryAoiId are mutually exclusive")
+        if self.selected_bounds is not None and self.catalog_selection is not None:
+            raise ValueError(
+                "selectedBounds and catalogSelection are mutually exclusive"
+            )
         if (
             self.x_raster.collection_id == self.y_raster.collection_id
             and self.x_raster.item_id == self.y_raster.item_id
@@ -336,8 +364,10 @@ class RasterPairedStatistics(BaseModel):
         histogram: Fixed 32-by-32 paired histogram with marginals.
     """
 
-    scope: Literal["wholeOverlap", "selectedArea", "temporaryAoi"]
-    temporary_aoi_id: str | None = Field(default=None, alias="temporaryAoiId", pattern=r"^[A-Za-z0-9_-]{32}$")
+    scope: Literal["wholeOverlap", "selectedArea", "catalogSelection"]
+    catalog_selection: CatalogSelection | None = Field(
+        default=None, alias="catalogSelection", exclude_if=_exclude_none_from_response
+    )
     selected_bounds: Wgs84Bounds | None = Field(alias="selectedBounds")
     reference_grid: Literal["x"] = Field(default="x", alias="referenceGrid")
     resampling: Literal["nearest"] = "nearest"
@@ -371,8 +401,8 @@ class RasterPairedStatistics(BaseModel):
         """
         if (self.scope == "selectedArea") != (self.selected_bounds is not None):
             raise ValueError("paired statistics scope and bounds disagree")
-        if (self.scope == "temporaryAoi") != (self.temporary_aoi_id is not None):
-            raise ValueError("paired statistics scope and AOI disagree")
+        if (self.scope == "catalogSelection") != (self.catalog_selection is not None):
+            raise ValueError("paired statistics scope and catalog selection disagree")
         if self.source_pixel_count != self.source_width * self.source_height:
             raise ValueError("paired source pixel count is inconsistent")
         if self.sampled_cell_count != self.sample_width * self.sample_height:
@@ -442,9 +472,9 @@ class RasterStatistics(BaseModel):
 
     Attributes:
         band: Fixed source band summarized by this response.
-        scope: Whole-raster, rectangle, or temporary-AOI area discriminator.
+        scope: Whole-raster, rectangle, or catalog-selection area discriminator.
         selected_bounds: Canonical WGS 84 rectangle for ``selectedArea`` only.
-        temporary_aoi_id: Opaque lifecycle identity for ``temporaryAoi`` only.
+        catalog_selection: Opaque lifecycle identity for ``catalogSelection`` only.
         source_width: Width of the integral source envelope in pixels.
         source_height: Height of the integral source envelope in pixels.
         source_pixel_count: Pixel count of the integral source envelope.
@@ -462,12 +492,10 @@ class RasterStatistics(BaseModel):
     """
 
     band: Literal[1] = 1
-    scope: Literal["wholeRaster", "selectedArea", "temporaryAoi"]
+    scope: Literal["wholeRaster", "selectedArea", "catalogSelection"]
     selected_bounds: Wgs84Bounds | None = Field(alias="selectedBounds")
-    temporary_aoi_id: str | None = Field(
-        default=None,
-        alias="temporaryAoiId",
-        exclude_if=_exclude_none_from_response,
+    catalog_selection: CatalogSelection | None = Field(
+        default=None, alias="catalogSelection", exclude_if=_exclude_none_from_response
     )
     source_width: int = Field(alias="sourceWidth", gt=0)
     source_height: int = Field(alias="sourceHeight", gt=0)
@@ -498,13 +526,17 @@ class RasterStatistics(BaseModel):
                 histogram, or suggested range violate the response contract.
         """
         has_bounds = self.selected_bounds is not None
-        has_temporary_aoi = self.temporary_aoi_id is not None
-        if self.scope == "wholeRaster" and (has_bounds or has_temporary_aoi):
+        has_catalog_selection = self.catalog_selection is not None
+        if self.scope == "wholeRaster" and (has_bounds or has_catalog_selection):
             raise ValueError("wholeRaster statistics cannot identify a selected area")
-        if self.scope == "selectedArea" and (not has_bounds or has_temporary_aoi):
+        if self.scope == "selectedArea" and (not has_bounds or has_catalog_selection):
             raise ValueError("selectedArea statistics require only selected bounds")
-        if self.scope == "temporaryAoi" and (has_bounds or not has_temporary_aoi):
-            raise ValueError("temporaryAoi statistics require only an AOI identity")
+        if self.scope == "catalogSelection" and (
+            has_bounds or not has_catalog_selection
+        ):
+            raise ValueError(
+                "catalogSelection statistics require only a catalog selection descriptor"
+            )
         if self.estimated != (self.sampling_method == "sampleGrid"):
             raise ValueError(
                 "statistics estimate metadata must match its sampling method"

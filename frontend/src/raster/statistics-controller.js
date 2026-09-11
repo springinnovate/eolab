@@ -12,7 +12,7 @@ import { normalizeRasterSamplingArea } from "./statistics.js";
  *
  * @callback LoadRasterStatistics
  * @param {Object} target Active analysis target.
- * @param {Object} samplingArea Normalized whole/bounds/AOI area.
+ * @param {Object} samplingArea Normalized whole/bounds/polygon selection area.
  * @param {AbortSignal} signal Cancellation signal for stale work.
  * @return {Promise<Object>} Validated raster statistics.
  */
@@ -84,7 +84,7 @@ export class RasterStatisticsController {
      * Start a new statistics request for one analysis target.
      *
      * @param {Object} target Catalog Item or ordered Item pair.
-     * @param {Object} samplingArea Normalized whole/bounds/AOI area.
+     * @param {Object} samplingArea Normalized whole/bounds/polygon selection area.
      * @param {*} [context] Opaque request context returned to callbacks.
      * @return {Promise<Object|null>} Current statistics, or null after failure
      * or invalidation.

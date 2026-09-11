@@ -147,13 +147,13 @@ export class ProcessingApiClient {
     /**
      * Review a catalog raster and explicit immutable area, without starting work.
      * @param {{collectionId:string,itemId:string}} source Catalog identity.
-     * @param {Object} area Selected rectangle or ready AOI reference.
+     * @param {Object} area Selected rectangle or immutable catalog descriptor.
      * @param {AbortSignal} signal Cancels superseded planning.
      * @return {Promise<Object>} Native-grid estimate and expiring plan.
      */
     async planClip(source, area, signal) {
         const selected = normalizeRasterSamplingArea(area);
-        if (selected.kind === "wholeRaster") throw new Error("Select a box or uploaded AOI first.");
+        if (selected.kind === "wholeRaster") throw new Error("Select a box or catalog vector first.");
         if (![source.collectionId, source.itemId].every(value => typeof value === "string" && value.length > 0)) {
             throw new TypeError("A Catalog raster is required.");
         }
@@ -162,12 +162,12 @@ export class ProcessingApiClient {
             collectionId: source.collectionId, itemId: source.itemId,
             ...(selected.kind === "selectedArea"
                 ? { selectedBounds: selected.selectedBounds }
-                : { temporaryAoiId: selected.temporaryAoiId }),
+                : { catalogSelection: selected.catalogSelection }),
         }, signal);
         opaqueId(plan.planId);
         validateGrid(plan.grid);
         if (!Number.isFinite(Date.parse(plan.expiresAt)) || !Number.isSafeInteger(plan.grid.estimatedRawBytes) ||
-            plan.grid.estimatedRawBytes < 1 || !["bounds", "aoi"].includes(plan.area?.kind) ||
+            plan.grid.estimatedRawBytes < 1 || !["bounds", "catalogSelection", "aoi"].includes(plan.area?.kind) ||
             !Array.isArray(plan.area.bounds) || plan.area.bounds.length !== 4 || !plan.area.bounds.every(Number.isFinite)) {
             throw new Error("Processing returned an invalid clip estimate.");
         }
@@ -196,7 +196,7 @@ export class ProcessingApiClient {
             calculations: intent.calculations,
             ...(targetChunkPixels === null ? {} : { targetChunkPixels }),
             ...(area.kind === "selectedArea" ? { selectedBounds: area.selectedBounds }
-                : area.kind === "temporaryAoi" ? { temporaryAoiId: area.temporaryAoiId } : { wholeRaster: true }),
+                : area.kind === "catalogSelection" ? { catalogSelection: area.catalogSelection } : { wholeRaster: true }),
         }, signal);
         opaqueId(plan.planId);
         validateGrid(plan.grid);

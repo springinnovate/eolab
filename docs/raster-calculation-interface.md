@@ -7,7 +7,7 @@ Opening the workspace, returning to a tab, expanding the dock, renaming a statis
 or opening value details does not submit a calculation.
 
 The area is shown once above the cards. **Change** opens the existing Explore area
-controls. The scope menu supports the current map selection, a ready uploaded AOI,
+controls. The scope menu supports the current map selection, a Catalog-vector selection,
 or Whole raster. Each statistic can choose its own raster, but each expression
 still operates on one raster bound to `a`; cross-raster expressions are separate
 work under #335. New cards inherit the preceding card's raster.
@@ -35,12 +35,16 @@ browser thresholds:
 - At most 64 MiB of decoded source values/masks.
 - At most 25,000 estimated geometry cells for ground-area calculations.
 
-These thresholds do not change backend resource limits. Larger plans, uploaded
-AOIs, and whole rasters stop at **Ready to calculate** and show the native work
+These thresholds do not change backend resource limits. Larger plans, Catalog-vector selections, and whole rasters stop at **Ready to calculate** and show the native work
 estimate beside a **Calculate** action. The same action updates a changed card in
 manual mode. There is no Recalculate button for an unchanged completed statistic.
 Turning automatic updates on affects future edits/clicks; it does not immediately
 run every existing card.
+
+Explicit **Use filtered features & calculate** and **Use these features** actions
+in Summarize select the Catalog descriptor and run configured statistics as a
+manual intent, even when automatic updates are disabled. Large geographic
+selections retain the separate continue-with-these-features confirmation.
 
 Map clicks update the shared committed area while Summarize is active. Rapid edits
 and clicks coalesce. Unchanged completed expressions can reuse their current value;

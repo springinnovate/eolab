@@ -16,8 +16,8 @@ import {
   RASTER_STATISTICS,
   SELECTED_BOUNDS,
   SELECTED_RASTER_STATISTICS,
-  TEMPORARY_AOI_ID,
-  TEMPORARY_AOI_RASTER_STATISTICS,
+  CATALOG_SELECTION,
+  CATALOG_SELECTION_RASTER_STATISTICS,
 } from "../../test-support/raster/fixtures.js";
 
 test("publishCatalogRaster sends only the STAC Item identity", async () => {
@@ -178,28 +178,28 @@ test("loadCatalogRasterStatistics adds only validated selected bounds", async ()
   );
 });
 
-test("loadCatalogRasterStatistics sends only one opaque temporary AOI identity", async () => {
+test("loadCatalogRasterStatistics sends a path-free catalog selection without geometry", async () => {
   const requests = [];
   const abortController = new AbortController();
 
   const statistics = await loadCatalogRasterStatistics(
     MOUNTED_GEOTIFF_ITEM,
-    { kind: "temporaryAoi", temporaryAoiId: TEMPORARY_AOI_ID },
+    { kind: "catalogSelection", catalogSelection: CATALOG_SELECTION },
     abortController.signal,
     async (url, options) => {
       requests.push({ url, options });
-      return new Response(JSON.stringify(TEMPORARY_AOI_RASTER_STATISTICS), {
+      return new Response(JSON.stringify(CATALOG_SELECTION_RASTER_STATISTICS), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
     },
   );
 
-  assert.equal(statistics.temporaryAoiId, TEMPORARY_AOI_ID);
+  assert.deepEqual(statistics.catalogSelection, CATALOG_SELECTION);
   assert.deepEqual(JSON.parse(requests[0].options.body), {
     collectionId: "eolab-mounted-geotiffs",
     itemId: "geotiff-0123456789abcdef01234567",
-    temporaryAoiId: TEMPORARY_AOI_ID,
+    catalogSelection: CATALOG_SELECTION,
   });
   assert.equal("geometry" in JSON.parse(requests[0].options.body), false);
   await assert.rejects(
@@ -208,7 +208,7 @@ test("loadCatalogRasterStatistics sends only one opaque temporary AOI identity",
       {
         kind: "selectedArea",
         selectedBounds: SELECTED_BOUNDS,
-        temporaryAoiId: TEMPORARY_AOI_ID,
+        catalogSelection: CATALOG_SELECTION,
       },
       abortController.signal,
       async () => new Response(),

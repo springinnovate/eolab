@@ -117,7 +117,7 @@ export async function sampleCatalogRasterPixel(
  * Load bounded band-1 statistics for one catalog raster and sampling area.
  *
  * @param {Object} item Selected scanner-owned STAC Item.
- * @param {Object} samplingArea Strict whole/bounds/AOI sampling-area union.
+ * @param {Object} samplingArea Strict whole/bounds/polygon selection sampling-area union.
  * @param {AbortSignal} signal Cancellation signal for stale UI intent.
  * @param {typeof globalThis.fetch} [fetchImplementation=globalThis.fetch]
  * Browser fetch implementation.
@@ -137,8 +137,8 @@ export async function loadCatalogRasterStatistics(
     };
     if (normalizedArea.kind === "selectedArea") {
         requestDocument.selectedBounds = normalizedArea.selectedBounds;
-    } else if (normalizedArea.kind === "temporaryAoi") {
-        requestDocument.temporaryAoiId = normalizedArea.temporaryAoiId;
+    } else if (normalizedArea.kind === "catalogSelection") {
+        requestDocument.catalogSelection = normalizedArea.catalogSelection;
     }
     const response = await fetchImplementation.call(
         globalThis,
@@ -198,7 +198,7 @@ export async function loadCatalogRasterPairedStatistics(
     if (normalizedArea.kind === "selectedArea") {
         requestDocument.selectedBounds = normalizedArea.selectedBounds;
     }
-    if (normalizedArea.kind === "temporaryAoi") requestDocument.temporaryAoiId = normalizedArea.temporaryAoiId;
+    if (normalizedArea.kind === "catalogSelection") requestDocument.catalogSelection = normalizedArea.catalogSelection;
     const response = await fetchImplementation.call(
         globalThis,
         "/api/raster-analysis/paired-statistics",

@@ -322,7 +322,7 @@ export class RasterHistogramControlsView {
      * Label the histogram with the geographic area that produced it.
      * Matching map-overlay and widget colors provide the visual connection.
      *
-     * @param {"none"|"wholeRaster"|"selectedArea"|"temporaryAoi"|"vector"} mode
+     * @param {"none"|"wholeRaster"|"selectedArea"|"catalogSelection"|"vector"} mode
      * Active sampling-area discriminator.
      * @param {string} [label=""] Optional semantic sampling-area description.
      * @return {void}
@@ -333,7 +333,7 @@ export class RasterHistogramControlsView {
             none: "No sampled area",
             wholeRaster: "Whole raster",
             selectedArea: "Map sample",
-            temporaryAoi: "Uploaded AOI",
+            catalogSelection: "Historical polygon selection",
             vector: "Vector selection"
         };
         if (!(mode in labels)) {

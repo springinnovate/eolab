@@ -84,7 +84,6 @@ trigger/function, without changing job columns or catalog tables.
 | Clip downloads | Same two-second processing job poller | Included automatically in this change. |
 | Catalog scan progress/completion | Checks `/api/scans/current` every 750 ms during a scan | Best separate follow-up: publish scan progress and completion, then refresh catalog results immediately. Keep this owned by scanning/catalog. |
 | Rendering diagnostics | Five seconds while expanded; 60 seconds while collapsed; stopped when page hidden | Lower priority. Pushing samples could reduce duplicate browser checks, but upstream metrics still need collection. Keep the existing diagnostics boundary. |
-| Uploaded AOI preparation | One request with estimated progress stages, not a completion poll | Real progress events could improve feedback, but require an AOI-owned progress contract rather than replacing a polling delay. |
 | Histograms, pixel picking, formula/style edits | Direct requests, cancellation, debounces and bounded retries | No slow job-status polling to replace. |
 
 These other features are assessed only, not modified or coupled to Processing.

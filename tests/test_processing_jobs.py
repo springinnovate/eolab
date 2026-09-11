@@ -35,11 +35,13 @@ from eolab_app.raster.catalog import StacRasterCatalog
 from eolab_app.raster.source_authorization import CatalogRasterSourceAuthorizer
 from eolab_app.raster.sources import MountedRasterResolver
 from eolab_app.routes.processing import COOKIE, create_processing_router
-from eolab_app.routes.temporary_aois import create_temporary_aoi_router
-from eolab_app.temporary_aoi.service import TemporaryAoiService
+from eolab_app.routes.vector_sampling import create_vector_sampling_router
+from eolab_app.vector.catalog import StacVectorCatalog
+from eolab_app.vector.sources import MountedVectorResolver
+from eolab_app.vector.sampling import VectorSamplingService
 from app_support import mounted_geotiff_item
 from test_raster_clips import SOURCE, make_spec, write_source
-from test_temporary_aoi import write_geopackage_layer
+from catalog_selection_support import write_geopackage_layer, register_selection
 
 HEADERS = {"X-EOLab-Processing": "1"}
 AREA = {"west": 0.1, "south": 9.1, "east": 0.9, "north": 9.9}
@@ -98,6 +100,7 @@ def boundary(tmp_path: Path, store: PostgresJobStore) -> Any:
         tmp_path / "source.tif", numpy.arange(10_000, dtype="int16").reshape(100, 100)
     )
     item = mounted_geotiff_item(path.as_uri())
+    vector_items = {}
 
     def catalog(request: httpx2.Request) -> httpx2.Response:
         """Serve only the authoritative catalog Item, with no rendering state.
@@ -109,6 +112,13 @@ def boundary(tmp_path: Path, store: PostgresJobStore) -> Any:
             Scanner-signed mounted Item.
         """
         assert request.url.host == "catalog"
+        if "/eolab-mounted-vectors/" in request.url.path:
+            selected = vector_items.get(request.url.path.rsplit("/", 1)[-1])
+            return (
+                httpx2.Response(200, json=selected)
+                if selected
+                else httpx2.Response(404)
+            )
         return httpx2.Response(200, json=item)
 
     catalog_client = httpx2.AsyncClient(transport=httpx2.MockTransport(catalog))
@@ -116,21 +126,24 @@ def boundary(tmp_path: Path, store: PostgresJobStore) -> Any:
         StacRasterCatalog(catalog_client, "http://catalog"),
         MountedRasterResolver(tmp_path),
     )
-    areas = TemporaryAoiService(tmp_path / "aois")
+    areas = VectorSamplingService(
+        StacVectorCatalog(catalog_client, "http://catalog"),
+        MountedVectorResolver(tmp_path),
+    )
     artifacts = LocalJobArtifacts(tmp_path / "outputs", (path,))
     artifacts.initialize()
     service = ProcessingService(authorizer, areas, store, artifacts, store.limits)
-    worker = ProcessingWorker(authorizer, store, artifacts, store.limits)
+    worker = ProcessingWorker(authorizer, store, artifacts, store.limits, areas=areas)
     app = FastAPI()
+    app.state.vector_items = vector_items
     app.include_router(create_processing_router(service))
-    app.include_router(create_temporary_aoi_router(areas))
+    app.include_router(create_vector_sampling_router(areas))
     with TestClient(app, base_url="https://testserver") as client:
         yield client, worker, path, artifacts, app
-    asyncio.run(areas.close())
     asyncio.run(catalog_client.aclose())
 
 
-def planned(client: TestClient, aoi: str | None = None) -> dict[str, Any]:
+def planned(client: TestClient, aoi: dict[str, Any] | None = None) -> dict[str, Any]:
     """Create a real bounded metadata plan through HTTP.
 
     Args:
@@ -140,7 +153,7 @@ def planned(client: TestClient, aoi: str | None = None) -> dict[str, Any]:
     Returns:
         Reviewed native clip plan.
     """
-    selection = {"temporaryAoiId": aoi} if aoi else {"selectedBounds": AREA}
+    selection = {"catalogSelection": aoi} if aoi else {"selectedBounds": AREA}
     response = client.post(
         "/api/processing/raster-clips/plan",
         json={**SOURCE, **selection},
@@ -266,42 +279,40 @@ def test_real_plan_worker_download_ranges_ownership_and_idempotency(
     )
 
 
-def test_accepted_aoi_snapshot_survives_upload_removal_but_plan_does_not(
-    boundary: Any, tmp_path: Path
+def test_catalog_job_reauthorizes_after_restart_and_preserves_ready_result(
+    boundary: Any,
+    tmp_path: Path,
+    store: PostgresJobStore,
 ) -> None:
-    """Accepted jobs own geometry; admission still honors the live AOI lifecycle.
-
-    Args:
-        boundary: Real owners and worker.
-        tmp_path: AOI upload fixture storage.
-    """
+    """Durable jobs contain descriptors; ready artifacts outlive source removal."""
     client, worker, source, artifacts, app = boundary
-    upload = tmp_path / "aoi.gpkg"
+    vector = tmp_path / "selection.gpkg"
     geometry = {
         "type": "Polygon",
         "coordinates": [[[0.1, 9.1], [0.9, 9.1], [0.9, 9.9], [0.1, 9.9], [0.1, 9.1]]],
     }
     write_geopackage_layer(
-        upload, "area", crs="EPSG:4326", geometry_type="Polygon", geometry=geometry
+        vector, "area", crs="EPSG:4326", geometry_type="Polygon", geometry=geometry
     )
-    response = client.post(
-        "/api/temporary-aois", files={"file": ("aoi.gpkg", upload.read_bytes())}
-    )
-    assert response.status_code == 201, response.text
-    aoi = response.json()["id"]
-    plan = planned(client, aoi)
+    selection = register_selection(client, vector)
+    plan = planned(client, selection)
     job = submitted(client, plan)
-    assert client.delete(f"/api/temporary-aois/{aoi}").status_code == 204
+    # A fresh worker receives no geometry, source handle, or selection registry.
+    restarted = ProcessingWorker(
+        worker.authorizer, store, artifacts, store.limits, areas=worker.areas
+    )
+    assert asyncio.run(restarted.run_once())
+    ready = client.get(f"/api/processing/jobs/{job['jobId']}").json()
+    assert ready["status"] == "ready", ready
+    assert ready["area"]["kind"] == "catalogSelection"
+    app.state.vector_items.clear()
     rejected = client.post(
         "/api/processing/raster-clips",
         json={"planId": plan["planId"], "requestId": uuid4().hex},
         headers=HEADERS,
     )
     assert rejected.status_code == 409
-    assert asyncio.run(worker.run_once())
-    ready = client.get(f"/api/processing/jobs/{job['jobId']}").json()
-    assert ready["status"] == "ready", ready
-    assert ready["area"]["kind"] == "aoi"
+    assert client.get(f"/api/processing/jobs/{job['jobId']}/result").status_code == 200
 
 
 def test_source_change_and_queued_cancellation_never_publish(boundary: Any) -> None:
@@ -653,7 +664,6 @@ def test_worker_composition_requires_only_catalog_and_processing_configuration(
         assert not await worker.run_once()
 
     monkeypatch.setattr(composition, "create_app", unexpected)
-    monkeypatch.setattr(composition, "TemporaryAoiService", unexpected)
     monkeypatch.setattr(composition, "GeoServerRasterPublisher", unexpected)
     monkeypatch.setattr(composition, "serve_processing", consume)
     asyncio.run(composition.run_processing_worker())

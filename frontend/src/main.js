@@ -1,3 +1,4 @@
+import { VectorSelectionOverlay } from "./vector/selection-overlay.js";
 /**
  * Browser entry point and application composition root for EOLab.
  *
@@ -80,9 +81,6 @@ import { vectorLabelFields } from "./vector/style.js";
 import { VectorTimeSeriesController } from "./vector/time-series.js";
 import { VectorSamplingController, createVectorSamplingArea } from "./vector/sampling.js";
 import { VectorSamplingView } from "./vector/sampling-view.js";
-import { TemporaryAoiApiClient } from "./temporary-aoi/api.js";
-import { TemporaryAoiLayerController } from "./temporary-aoi/leaflet.js";
-import { initializeTemporaryAoi } from "./temporary-aoi/temporary-aoi.js";
 import { ProcessingApiClient } from "./processing/api.js";
 import { SummaryStatisticsController } from "./processing/summary-statistics-controller.js";
 import { SummaryStatisticsView } from "./processing/summary-statistics-view.js";
@@ -756,7 +754,7 @@ async function initializeCatalog(
     const editProcessingArea = () => {
         mapInspection.showHistogram();
         document.querySelector("#raster-sampling-disclosure").open = true;
-        document.querySelector("#raster-sampling-aoi-disclosure").open = true;
+        document.querySelector("#raster-sampling-vector-disclosure").open = true;
         document.querySelector("#raster-sampling-disclosure summary").focus();
     };
     const calculations = new SummaryStatisticsController({
@@ -783,7 +781,7 @@ async function initializeCatalog(
         onEditArea: () => {
             mapInspection.showHistogram();
             document.querySelector("#raster-sampling-disclosure").open = true;
-            document.querySelector("#raster-sampling-aoi-disclosure").open = true;
+            document.querySelector("#raster-sampling-vector-disclosure").open = true;
             document.querySelector("#raster-sampling-disclosure summary").focus();
         },
     });
@@ -840,8 +838,7 @@ async function initializeCatalog(
         },
     });
     mapLayerController.onFilter = (key) => vectorFilterControls.open(key);
-    const vectorSamplingOverlay = new TemporaryAoiLayerController(leafletMap, L);
-    const vectorSamplingLifecycle = new TemporaryAoiApiClient();
+    const vectorSamplingOverlay = new VectorSelectionOverlay(leafletMap, L);
     vectorSampling = new VectorSamplingController({
         view: [new VectorSamplingView(), new VectorSamplingView(document, {
             root: "#calculations-vector-area", choice: null, disclosure: null,
@@ -851,30 +848,29 @@ async function initializeCatalog(
             .map(record => ({ key: record.entry.key, label: record.entry.label, item: record.entry.item,
                 filter: record.adapter.exportFilterState(record) })),
         createArea: createVectorSamplingArea,
-        removeArea: id => vectorSamplingLifecycle.remove(id),
         onEditFilter: key => vectorFilterControls.open(key, calculations.isActive ? {
             filter: vectorSampling.selectedFilter(key),
             apply: candidate => vectorSampling.use({ key, filter: candidate, analysis: true }),
-            complete: area => vectorSampling.activate(area.id, true),
+            complete: area => vectorSampling.activate(area.selection, true),
             cancel: () => vectorSampling.invalidate("Selection cancelled"),
         } : null),
         onSelectionState: selection => calculations.setVectorSelectionState(selection),
         /** Accept reviewed features and run configured statistics when accepting from Summarize.
-         * @param {Object} area Authoritative retained polygon AOI with display geometry.
+         * @param {Object} area Authoritative catalog descriptor and selection metadata.
          * @param {boolean} calculate Explicit calculation intent from the filter action.
          * @return {void}
          */
         onActivate: (area, calculate) => {
             const returnToSummary = calculations.isActive;
-            vectorSamplingOverlay.load(area);
-            const label = `${area.filename} · ${area.matched} of ${area.total} features`;
-            rasterVisualization.setVectorSamplingAoi({ ...area, filename: label });
-            calculations.setVectorSamplingArea({ id: area.id, label }, calculate || returnToSummary);
+            void vectorSamplingOverlay.load(area);
+            const label = `${area.label} · ${area.matched} of ${area.total} features`;
+            rasterVisualization.setVectorSelection({ ...area, label });
+            calculations.setVectorSamplingArea({ selection: area.selection, label }, calculate || returnToSummary);
             if (returnToSummary) mapInspection.showCalculations();
         },
         onInvalidate: id => {
             vectorSamplingOverlay.clear();
-            rasterVisualization.setVectorSamplingAoi(null);
+            rasterVisualization.setVectorSelection(null);
             calculations.invalidateSamplingArea(id);
         },
     });
@@ -1820,18 +1816,11 @@ async function startApplication() {
         schedule: window.setTimeout.bind(window),
         invalidateMapSize: () => leafletMap.invalidateSize(),
     });
-    const temporaryAoi = initializeTemporaryAoi(leafletMap, L);
     const mapInspection = new MapInspectionController();
     const refreshCatalog = await initializeCatalog(
         appGlobalConfiguration,
         leafletMap,
-        (rasterViewer, downloads, calculations) => {
-            temporaryAoi.subscribeSamplingArea(
-                rasterViewer.setTemporaryAoi
-            );
-            temporaryAoi.subscribeSamplingArea(aoi => downloads.setTemporaryAoi(aoi));
-            temporaryAoi.subscribeSamplingArea(aoi => calculations.setTemporaryAoi(aoi));
-        },
+        () => {},
         catalogPaneControls,
         mapInspection,
         () => layoutController.showWorkspace("map-layers"),

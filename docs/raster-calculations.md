@@ -47,8 +47,8 @@ See [clip lifecycle and storage](raster-clips.md) for the shared transport contr
    ```
 
    Exactly one selection is required. Replace `selectedBounds` with
-   `"temporaryAoiId": "<ready uploaded AOI id>"` or `"wholeRaster": true`.
-   Missing selection never means the whole raster. A nonoverlapping box/AOI is a
+   `"catalogSelection": <server-issued selection descriptor>` or `"wholeRaster": true`.
+   Missing selection never means the whole raster. A nonoverlapping box/polygon selection is a
    planning error. Whole-source requests are subject to the same native work
    budgets; global rasters commonly require a smaller selected area.
 
@@ -77,8 +77,10 @@ See [clip lifecycle and storage](raster-clips.md) for the shared transport contr
 
 The [FastAPI documentation](/docs#/processing) can also exercise these endpoints.
 Keep the owner session; job identifiers alone grant no access.
-Accepted work is immutable and continues if the browser closes. Removing the AOI
-invalidates an unsubmitted plan, but accepted jobs retain their own geometry.
+Accepted work is immutable and continues if the browser closes. Later selection changes
+do not alter accepted jobs. Catalog-vector jobs retain an immutable descriptor
+and require their original source to remain available and unchanged through
+publication; historical geometry jobs retain their existing reader.
 
 ## Language and numerical meaning
 
@@ -131,7 +133,7 @@ remain integer accumulators. All returned values are decimal **strings** with
 
 Numeric aggregates use the shared bounded geometry transformation and center-cell
 mask (`all_touched=False`). Holes are respected; overlapping polygons count once.
-`areaha` instead measures each matching native cell's intersection with the AOI/box
+`areaha` instead measures each matching native cell's intersection with the polygon selection/box
 on the WGS84 ellipsoid, preserving fractional boundary cells, holes, and unioned
 overlaps. A sliver can have positive area without containing any pixel center.
 These are distinct from clipping's all-touched export mask. EPSG:3857 pixel
@@ -227,7 +229,7 @@ Processing owns validation, plans, execution, and result semantics. Thin routes
 are used by HTTP clients; service and worker composition depend on catalog
 authorization, the neutral immutable sampling-area reader, native source/window
 mechanisms, and Processing-owned storage. The expression module knows no HTTP,
-catalog, AOI, or renderer services. Job storage treats operation data as opaque.
+catalog, polygon selection, or renderer services. Job storage treats operation data as opaque.
 
 New modules: `aggregate_models` for this operation's schemas/policy,
 `raster_expression` for grammar/reducers, and `raster_aggregate` for native planning
@@ -241,7 +243,7 @@ it depends on operation models, pyproj, Shapely, NumPy, and rasterio windows.
 pyproj and Shapely are installed by the existing application/worker image. Their
 geometry operations do not open or resample raster values.
 
-No histogram, renderer, GeoServer, temporary-AOI implementation, or pgSTAC dependency
+No histogram, renderer, GeoServer, or pgSTAC dependency
 was added. Shared source and area contracts remain the intentional coupling.
 The API and worker continue using one deployment policy, queue, global execution
 fence, source mount, and private artifact volume. No new service or data mount is
@@ -251,7 +253,7 @@ needed. Initial calculation-specific ceilings are:
 | --- | --- |
 | Native decoded source work | 4 GiB, at most 65,536 blocks, with conservative preallocation guard |
 | Estimated native/expression working memory | 512 MiB within the existing 2 GiB worker |
-| AOI snapshot / projected coordinates | 8 MiB / 500,000 |
+| Retained feature / projected-coordinate buffer | 500,000 positions |
 | Area polygon-cell work / execution transformations | 2,000,000 fallback cells / 4,000,000 positions; supported rectilinear grids use no pixel polygons |
 | Area geometry memory estimate | Additional 128 MiB within the same 512 MiB admission ceiling |
 | Working/result reservation | 12 MiB per calculation job |
@@ -300,11 +302,11 @@ node node_modules/vite/bin/vite.js build
 ```
 
 Tests compare known native results with overview-equipped TIFFs, projected/rotated
-AOIs and holes, bounds-edge inclusion, NoData and zero, grammar/type/size limits,
+polygon selections and holes, bounds-edge inclusion, NoData and zero, grammar/type/size limits,
 scalar arithmetic, overflow, metadata-only planning, and native-work refusal.
 Real HTTP/PostgreSQL tests exercise owner isolation, idempotency, mixed clip and
 calculation jobs, wrong-operation submissions, CSV/range/provenance delivery,
-reload, AOI removal, source changes, cancellation/shutdown/deadline, transfer/expiry
+reload, polygon selection removal, source changes, cancellation/shutdown/deadline, transfer/expiry
 cleanup, repeated migrations, and rejection of legacy claim SQL. Existing import
 guards protect sibling independence; a Downloads regression protects clip-only
 presentation while the editor is implemented separately.

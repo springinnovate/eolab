@@ -198,7 +198,6 @@ test("Catalog owns discovery, inspection, and its explicit layer action only", (
         "raster-layer-stack",
         "raster-style-controls",
         "raster-histogram",
-        "temporary-aoi",
     ]) {
         assert.doesNotMatch(
             catalogInspector.source,
@@ -333,20 +332,17 @@ test("map-layer Info can reveal Catalog through composition", () => {
     );
 });
 
-test("raster histogram owns its sampling controls, AOI, and results", () => {
+test("raster histogram owns its sampling controls and results", () => {
     const panel = requireElementRange("control-panel");
     const exploration = requireElementRange("map-histogram-panel");
     const disclosure = requireElementRange("raster-sampling-disclosure");
     const sampling = requireElementRange("raster-sampling-area-controls");
-    const aoiDisclosure = requireElementRange("raster-sampling-aoi-disclosure");
-    const temporaryAoi = requireElementRange("temporary-aoi");
     assert.ok(exploration.start > panel.end);
     assert.match(exploration.source, /role="tabpanel"/);
     assert.match(exploration.source, /aria-labelledby="map-inspection-tab-histogram"/);
     for (const id of [
         "raster-sampling-disclosure",
         "raster-sampling-area-controls",
-        "temporary-aoi",
         "raster-comparison-mode",
         "raster-histogram-list",
         "raster-histogram",
@@ -360,15 +356,10 @@ test("raster histogram owns its sampling controls, AOI, and results", () => {
     assert.match(disclosure.source, />\s*Sampling area\s*</);
     assert.match(disclosure.source, /id="raster-sampling-area-summary"/);
     assert.match(disclosure.source, /class="raster-disclosure-chevron"[^>]*aria-hidden="true"/);
-    assert.match(aoiDisclosure.source, /^\s*<details[^>]*>/);
-    assert.doesNotMatch(aoiDisclosure.source, /^\s*<details[^>]*\bopen\b/);
-    assert.match(aoiDisclosure.source, /<summary[^>]*aria-controls="temporary-aoi"/);
-    assert.match(aoiDisclosure.source, />\s*Upload or manage an AOI\s*</);
     assert.match(sampling.source, /geographic area used by every visible raster histogram/);
     for (const choice of [
         "clear-raster-sample-window",
         "use-map-window-for-raster",
-        "use-temporary-aoi-for-raster",
     ]) {
         assert.match(
             sampling.source,
@@ -381,8 +372,6 @@ test("raster histogram owns its sampling controls, AOI, and results", () => {
     assert.match(exploration.source, /No visible raster layers/);
     assert.match(requireElementRange("raster-histogram-list").source,
         /aria-label="Raster histograms"/);
-    assert.match(temporaryAoi.source, /data-eomap-region="raster-interpretation"/);
-    assert.match(temporaryAoi.source, /aria-labelledby="temporary-aoi-heading"/);
     assert.match(MARKUP, /id="raster-point-samples"[^>]*aria-live="polite"/s);
     assert.match(MARKUP, /id="raster-point-sample-list"/);
     assert.doesNotMatch(MARKUP, /analysis-aoi-disclosure|toggle-analysis-aoi/);
@@ -422,7 +411,7 @@ test("Raster histogram leads with sampling before results and mode", () => {
     assert.match(STYLESHEET, /\.map-histogram-toolbar h2\s*\{[^}]*font-size:\s*1rem/s);
     assert.match(STYLESHEET, /\.raster-disclosure-chevron\s*\{[^}]*border:\s*1px solid var\(--border-1\)[^}]*border-radius:\s*50%/s);
     assert.match(STYLESHEET, /details\[open\] > summary > \.raster-disclosure-chevron::before\s*\{[^}]*rotate\(45deg\)/s);
-    assert.match(STYLESHEET, /\.raster-sampling-aoi > summary\s*\{[^}]*display:\s*grid[^}]*cursor:\s*pointer/s);
+    assert.match(STYLESHEET, /\.raster-sampling-vector > summary\s*\{[^}]*display:\s*grid[^}]*cursor:\s*pointer/s);
     assert.match(STYLESHEET, /#map-histogram-panel \.raster-bivariate-statistics,\s*#map-histogram-panel \.raster-histogram\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/s);
     assert.match(STYLESHEET, /#map-histogram-panel \.raster-histogram-heading\s*\{[^}]*padding-right:\s*36px/s);
     assert.match(STYLESHEET, /#open-analysis-tools\[hidden\],[^{]*\{\s*display:\s*none/s);
@@ -571,7 +560,7 @@ test("map overlays retain explicit non-reparenting region ownership", () => {
     );
     assert.match(
         MARKUP,
-        /id="temporary-aoi"[^>]*data-eomap-region="raster-interpretation"/s
+        /id="map-histogram-panel"[^>]*role="tabpanel"/s
     );
 });
 
@@ -597,19 +586,16 @@ test("semantic regions preserve one DOM instance of every owned control", () => 
         "raster-sampling-disclosure",
         "raster-sampling-disclosure-body",
         "raster-sampling-area-summary",
-        "raster-sampling-aoi-disclosure",
         "raster-style-controls",
         "raster-active-controls",
         "raster-sampling-area-controls",
         "use-map-window-for-raster",
         "raster-map-box-controls",
-        "raster-sampling-aoi-detail",
         "raster-sample-window-range",
         "raster-histogram-list",
         "raster-histogram",
         "raster-histogram-detail-layer",
         "raster-histogram-scope",
-        "temporary-aoi",
         "raster-point-samples",
         "raster-point-sample-list",
         "raster-cursor-values",

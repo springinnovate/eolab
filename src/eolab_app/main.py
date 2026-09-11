@@ -3,7 +3,6 @@
 from collections.abc import AsyncIterator
 import asyncio
 from contextlib import AsyncExitStack, asynccontextmanager, suppress
-from datetime import timedelta
 from pathlib import Path
 import logging
 import signal
@@ -55,11 +54,9 @@ from eolab_app.routes.stac_proxy import (
     create_stac_proxy_router,
 )
 from eolab_app.routes.system import create_system_router
-from eolab_app.routes.temporary_aois import create_temporary_aoi_router
 from eolab_app.routes.vectors import create_vector_feature
 from eolab_app.routes.wms_proxy import create_wms_proxy_router
 from eolab_app.settings import APPLICATION_VERSION_PATH, load_settings, load_processing_worker_settings
-from eolab_app.temporary_aoi.service import TemporaryAoiService
 from eolab_app.vector.assessment import (
     VectorAssessmentFinalizer,
     VectorAssessmentService,
@@ -150,17 +147,14 @@ def create_app(
         raster_source_resolver,
     )
     published_rasters = PublishedRasterRegistry()
-    temporary_aoi_service = TemporaryAoiService(
-        ttl=timedelta(
-            seconds=app_global_configuration.temporary_aoi_ttl_seconds
-        ),
-        maximum_upload_bytes=(
-            app_global_configuration.temporary_aoi_max_upload_bytes
-        ),
-        forbidden_roots=(
-            Path.cwd(),
-            app_global_configuration.scan_mount_path,
-        )
+    vector_catalog = StacVectorCatalog(
+        catalog_client, app_global_configuration.catalog_internal_url
+    )
+    vector_source_resolver = MountedVectorResolver(
+        app_global_configuration.scan_mount_path
+    )
+    vector_selection_reader = VectorSamplingService(
+        vector_catalog, vector_source_resolver
     )
     raster_pixel_service = RasterPixelService(
         raster_source_authorizer,
@@ -170,7 +164,7 @@ def create_app(
         raster_source_authorizer,
         app_global_configuration.raster_statistics_read_concurrency,
         app_global_configuration.raster_statistics_cache_entries,
-        temporary_aoi_reader=temporary_aoi_service,
+        catalog_selection_reader=vector_selection_reader,
     )
     raster_feature = create_raster_feature(
         RasterPublicationService(
@@ -252,8 +246,6 @@ def create_app(
             planning_native.warm()
             client_stack.push_async_callback(processing_events.close)
             processing_events.start()
-            await temporary_aoi_service.start()
-            client_stack.push_async_callback(temporary_aoi_service.close)
             for client in (
                 catalog_client,
                 geoserver_wms_client,
@@ -281,24 +273,26 @@ def create_app(
     )
     application.include_router(raster_feature.router)
     application.include_router(vector_feature.router)
-    application.include_router(create_vector_sampling_router(VectorSamplingService(
-        vector_catalog, vector_source_resolver, temporary_aoi_service.retain_geometry,
-    )))
+    application.include_router(create_vector_sampling_router(vector_selection_reader))
     processing_limits = RasterClipLimits()
     planning_native = create_native_process(processing_limits)
     processing_events = PostgresJobEvents()
-    application.include_router(create_processing_router(ProcessingService(
-        raster_source_authorizer,
-        temporary_aoi_service,
-        PostgresJobStore(processing_limits),
-        LocalJobArtifacts(
-            app_global_configuration.processing_data_path,
-            (Path.cwd(), app_global_configuration.scan_mount_path),
-        ),
-        processing_limits,
-        native=planning_native,
-        changes=processing_events,
-    )))
+    application.include_router(
+        create_processing_router(
+            ProcessingService(
+                raster_source_authorizer,
+                vector_selection_reader,
+                PostgresJobStore(processing_limits),
+                LocalJobArtifacts(
+                    app_global_configuration.processing_data_path,
+                    (Path.cwd(), app_global_configuration.scan_mount_path),
+                ),
+                processing_limits,
+                native=planning_native,
+                changes=processing_events,
+            )
+        )
+    )
     scan_manager = ScanManager(
         app_global_configuration.scan_mount_path,
         tuple(
@@ -345,12 +339,6 @@ def create_app(
     )
     application.include_router(create_diagnostics_router(rendering_diagnostics))
     application.include_router(
-        create_temporary_aoi_router(
-            temporary_aoi_service,
-            app_global_configuration.temporary_aoi_max_upload_bytes,
-        )
-    )
-    application.include_router(
         create_stac_proxy_router(
             catalog_client,
             app_global_configuration.catalog_internal_url,
@@ -390,7 +378,7 @@ def create_app(
 async def run_processing_worker() -> None:
     """Compose the dedicated worker through the existing settings boundary.
 
-    No web application, GeoServer client, or temporary AOI store is constructed.
+    No web application or GeoServer client is constructed.
     The worker migrates only its owned schema before consuming durable jobs.
 
     Raises:
@@ -410,7 +398,13 @@ async def run_processing_worker() -> None:
             StacRasterCatalog(client, settings.catalog_internal_url),
             MountedRasterResolver(settings.scan_mount_path),
         )
-        worker = ProcessingWorker(authorizer, jobs, artifacts, limits, native=execution_native)
+        areas = VectorSamplingService(
+            StacVectorCatalog(client, settings.catalog_internal_url),
+            MountedVectorResolver(settings.scan_mount_path),
+        )
+        worker = ProcessingWorker(
+            authorizer, jobs, artifacts, limits, native=execution_native, areas=areas
+        )
         task = asyncio.current_task()
         for event in (signal.SIGTERM, signal.SIGINT):
             with suppress(NotImplementedError):

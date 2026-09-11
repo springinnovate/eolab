@@ -587,7 +587,7 @@
             <div class="downloads-actions summary-panel-heading"><h2>Summary statistics</h2><button id="calculations-close" class="secondary-button" type="button" aria-label="Close summary statistics">&times;</button></div>
             <div class="summary-area-row"><label for="calculations-area">Area</label><select id="calculations-area"></select><button id="calculations-edit-area" class="summary-text-button" type="button">Change</button></div>
             <p id="calculations-area-description" class="summary-area-details"></p>
-            <section id="calculations-vector-area" class="temporary-aoi-card summary-vector-area" aria-label="Vector sampling area for summary statistics" hidden>
+            <section id="calculations-vector-area" class="vector-selection-card summary-vector-area" aria-label="Vector sampling area for summary statistics" hidden>
               <label>Polygon layer <select data-vector-sampling="layer" aria-label="Sampling polygon layer"></select></label>
               <small data-vector-sampling="predicate"></small>
               <div class="downloads-actions">
@@ -606,7 +606,7 @@
                 <h4>Functions</h4>
                 <ul class="calculation-functions">
                   <li><code>sum(a)</code> — Add pixel values. To add only values above 10, use <code>sum(a, where=a &gt; 10)</code>.</li>
-                  <li><code>areaha(a == 4)</code> — Ground area in hectares where the value is 4. For values above a threshold, use <code>areaha(a &gt; 10)</code>. Includes the fraction of each matching pixel inside your box or AOI.</li>
+                  <li><code>areaha(a == 4)</code> — Ground area in hectares where the value is 4. For values above a threshold, use <code>areaha(a &gt; 10)</code>. Includes the fraction of each matching pixel inside your box or selected polygons.</li>
                   <li><code>count(a)</code> — Number of valid pixels. Use <code>count(a &gt; 10)</code> to count matching pixels.</li>
                   <li><code>mean(a)</code> — Average pixel value. For a selected group, use <code>mean(a, where=a &gt; 10)</code>.</li>
                   <li><code>min(a)</code> — Smallest pixel value.</li>
@@ -622,7 +622,7 @@
                   <li>Percentage of valid ground area: <code>100 * areaha(a &gt; 10) / areaha(a == a)</code>.</li>
                 </ul>
                 <p><code>sum(a &gt; 10)</code> counts matches; <code>sum(a, where=a &gt; 10)</code> adds their values. Functions cannot be nested inside other functions.</p>
-                <p>NoData is excluded. Numeric functions select pixels by their centers. <code>areaha</code> measures their fractional intersection on the WGS 84 ellipsoid, including AOI holes and counting overlaps once. It requires a WGS84 geographic or projected raster; complex geometry may need a smaller area.</p>
+                <p>NoData is excluded. Numeric functions select pixels by their centers. <code>areaha</code> measures their fractional intersection on the WGS 84 ellipsoid, including polygon holes and counting overlaps once. It requires a WGS84 geographic or projected raster; complex geometry may need a smaller area.</p>
                 <p>Calculations use native pixels and stored values. Each <code>areaha</code> term is in hectares; arithmetic can change the final units. Multiple-raster expressions are coming separately.</p>
               </details>
             <details id="summary-performance" class="summary-performance">
@@ -663,7 +663,7 @@
               <p id="downloads-area-description"></p>
               <p>The selected area is captured when Downloads opens. Reopen from a histogram to use a newer selection.</p>
               <div class="downloads-actions">
-                <button id="downloads-edit-area" class="secondary-button" type="button">Choose box or upload AOI</button>
+                <button id="downloads-edit-area" class="secondary-button" type="button">Choose box or catalog vector</button>
                 <button id="downloads-review" class="primary-button" type="submit" disabled>Review clip</button>
               </div>
             </form>
@@ -954,15 +954,7 @@
                         <input id="use-vector-for-raster" type="radio" name="raster-sampling-area" value="vector" />
                         <span><strong>Vector layer</strong><small>Use all polygon features that match a layer’s filter.</small></span>
                       </label>
-                      <label class="raster-sampling-area-option"
-                        for="use-temporary-aoi-for-raster">
-                        <input id="use-temporary-aoi-for-raster" type="radio"
-                          name="raster-sampling-area" value="temporaryAoi" disabled />
-                        <span>
-                          <strong>Uploaded AOI</strong>
-                          <small id="raster-sampling-aoi-detail">Upload an AOI below to enable this area.</small>
-                        </span>
-                      </label>
+
                     </div>
                     <p class="raster-sample-window-status"
                       id="raster-sample-window-status" role="status"
@@ -971,9 +963,9 @@
                     </p>
                   </section>
                 </fieldset>
-                <details class="raster-sampling-aoi" id="vector-sampling-disclosure">
+                <details class="raster-sampling-vector" id="vector-sampling-disclosure">
                   <summary><span>Sample by vector layer</span><span class="raster-disclosure-chevron" aria-hidden="true"></span></summary>
-                  <section class="temporary-aoi-card" id="vector-sampling" aria-label="Vector sampling area">
+                  <section class="vector-selection-card" id="vector-sampling" aria-label="Vector sampling area">
                     <label>Polygon layer <select data-vector-sampling="layer" aria-label="Sampling polygon layer"></select></label>
                     <small data-vector-sampling="predicate"></small>
                     <div class="downloads-actions">
@@ -985,155 +977,7 @@
                     <p data-vector-sampling="status" role="status"></p>
                   </section>
                 </details>
-                <details class="raster-sampling-aoi" id="raster-sampling-aoi-disclosure">
-                  <summary aria-controls="temporary-aoi">
-                    <span>Upload or manage an AOI</span>
-                    <span>GeoPackage or zipped Shapefile</span>
-                    <span class="raster-disclosure-chevron" aria-hidden="true"></span>
-                  </summary>
-                    <section
-                      class="temporary-aoi-card"
-                      id="temporary-aoi"
-                      data-eomap-region="raster-interpretation"
-                      aria-labelledby="temporary-aoi-heading"
-                      aria-busy="false"
-                    >
-                      <div class="temporary-aoi-heading">
-                        <div>
-                          <p class="section-label">Sampling area</p>
-                          <h3 id="temporary-aoi-heading">Temporary AOI</h3>
-                        </div>
-                        <p>Not added to the Catalog</p>
-                      </div>
-                      <p class="temporary-aoi-copy" id="temporary-aoi-help">
-                        Upload one GeoPackage or zipped Shapefile. Files are validated,
-                        displayed temporarily, and removed automatically after expiration.
-                      </p>
-                      <form class="temporary-aoi-upload" id="temporary-aoi-upload-form">
-                        <label for="temporary-aoi-file">
-                          <span>AOI file</span>
-                          <input
-                            id="temporary-aoi-file"
-                            name="file"
-                            type="file"
-                            accept=".gpkg,.zip,application/geopackage+sqlite3,application/zip"
-                            aria-describedby="temporary-aoi-help temporary-aoi-status temporary-aoi-error"
-                            required
-                          />
-                        </label>
-                        <button
-                          class="secondary-button"
-                          id="upload-temporary-aoi"
-                          type="submit"
-                        >
-                          Upload AOI
-                        </button>
-                      </form>
-                      <div
-                        class="temporary-aoi-upload-progress"
-                        id="temporary-aoi-upload-progress-container"
-                        hidden
-                      >
-                        <label for="temporary-aoi-upload-progress">
-                          Approximate upload progress
-                        </label>
-                        <progress
-                          id="temporary-aoi-upload-progress"
-                          max="100"
-                          value="0"
-                          aria-describedby="temporary-aoi-upload-progress-detail temporary-aoi-status"
-                        ></progress>
-                        <p id="temporary-aoi-upload-progress-detail"></p>
-                      </div>
-                      <form
-                        class="temporary-aoi-selection"
-                        id="temporary-aoi-selection-form"
-                        aria-labelledby="temporary-aoi-selection-heading"
-                        hidden
-                      >
-                        <strong id="temporary-aoi-selection-heading">Choose a spatial dataset</strong>
-                        <p>
-                          <span id="temporary-aoi-selection-filename"></span> contains
-                          more than one usable spatial dataset. Nothing will be displayed
-                          until you choose one.
-                        </p>
-                        <label for="temporary-aoi-dataset">
-                          <span>Dataset or layer</span>
-                          <select
-                            id="temporary-aoi-dataset"
-                            aria-describedby="temporary-aoi-status temporary-aoi-error"
-                          ></select>
-                        </label>
-                        <div class="temporary-aoi-selection-actions">
-                          <button class="secondary-button" type="submit">Display dataset</button>
-                          <button
-                            class="secondary-button"
-                            id="cancel-temporary-aoi-selection"
-                            type="button"
-                          >
-                            Cancel upload
-                          </button>
-                        </div>
-                      </form>
-                      <dl class="temporary-aoi-details" id="temporary-aoi-details" hidden>
-                        <div>
-                          <dt>File</dt>
-                          <dd id="temporary-aoi-filename"></dd>
-                        </div>
-                        <div>
-                          <dt>Layer</dt>
-                          <dd id="temporary-aoi-layer"></dd>
-                        </div>
-                        <div>
-                          <dt>Expires</dt>
-                          <dd><time id="temporary-aoi-expiration"></time></dd>
-                        </div>
-                      </dl>
-                      <div
-                        class="temporary-aoi-actions"
-                        id="temporary-aoi-actions"
-                        role="group"
-                        aria-label="Temporary AOI map actions"
-                        hidden
-                      >
-                        <button
-                          class="secondary-button"
-                          id="toggle-temporary-aoi"
-                          type="button"
-                          aria-pressed="true"
-                        >
-                          Hide
-                        </button>
-                        <button
-                          class="secondary-button"
-                          id="zoom-temporary-aoi"
-                          type="button"
-                        >
-                          Zoom to AOI
-                        </button>
-                        <button
-                          class="secondary-button is-danger"
-                          id="remove-temporary-aoi"
-                          type="button"
-                        >
-                          Remove
-                        </button>
-                      </div>
-                      <p
-                        class="temporary-aoi-status"
-                        id="temporary-aoi-status"
-                        role="status"
-                        aria-live="polite"
-                        aria-atomic="true"
-                      ></p>
-                      <p
-                        class="temporary-aoi-error"
-                        id="temporary-aoi-error"
-                        role="alert"
-                        aria-atomic="true"
-                      ></p>
-                    </section>
-                </details>
+
               </div>
             </details>
             <section class="raster-point-samples" id="raster-point-samples"

@@ -1,7 +1,7 @@
 /** Editable statistic cards over the existing durable calculation workflow. */
 import { calculationIntent, chunkPixels } from "./calculation-session.js";
 import { CalculationsController } from "./calculations-controller.js";
-import { normalizeRasterSamplingArea } from "../selected-area.js";
+import { catalogSelectionsEqual, normalizeRasterSamplingArea } from "../selected-area.js";
 
 export const AUTOMATIC_CALCULATION_LIMITS = Object.freeze({ nativeBlocks: 128, decodedBytes: 64 * 1024 * 1024, geometryCells: 25000 });
 export const STATISTIC_PRESETS = Object.freeze({
@@ -37,7 +37,7 @@ export class SummaryStatisticsController {
         Object.assign(this, { api, jobs, view, getContext, onOpen, onClose, onCancelSelection, clock });
         this.serial = 0;
         this.state = { sources: [], statistics: [], area: null, selectedArea: null, areaChoice: "selection",
-            availableAoi: null, active: false, automatic: true, jobs: [], historyError: "", saved: null, undo: false, targetChunkPixels: null };
+            active: false, automatic: true, jobs: [], historyError: "", saved: null, undo: false, targetChunkPixels: null };
         this.state.statistics.push(this.makeStatistic(STATISTIC_PRESETS.mean));
         this.engine = new CalculationsController({ ...dependencies, canAutoSubmit: canAutomaticallyCalculate,
             view: { bind: handlers => { this.engineHandlers = handlers; }, render: state => this.receive(state), unbind() {} },
@@ -72,7 +72,7 @@ export class SummaryStatisticsController {
         if (record) {
             this.state.targetChunkPixels = record.intent.targetChunkPixels ?? null;
             this.state.area = this.state.selectedArea = record.intent.area;
-            this.state.areaChoice = record.intent.area.kind === "wholeRaster" ? "whole" : record.intent.area.kind === "temporaryAoi" ? "uploaded" : "selection";
+            this.state.areaChoice = record.intent.area.kind === "wholeRaster" ? "whole" : record.intent.area.kind === "catalogSelection" ? "vector" : "selection";
             this.state.sources = [record.intent.source];
             this.state.statistics = record.intent.calculations.map(value => {
                 const card = this.makeStatistic(value, record.intent.source); card.valid = true; return card;
@@ -98,7 +98,7 @@ export class SummaryStatisticsController {
         this.state.sources = sources;
         const selected = area === undefined ? context.area : area;
         if (area !== undefined || (!this.state.area && this.state.areaChoice === "selection")) {
-            this.state.areaChoice = this.state.vectorArea && selected?.temporaryAoiId === this.state.vectorArea.id ? "vector" : "selection";
+            this.state.areaChoice = this.state.vectorArea && catalogSelectionsEqual(selected?.catalogSelection, this.state.vectorArea.selection) ? "vector" : "selection";
             this.setSelection(selected, false);
             if (this.state.areaChoice === "vector") this.changeArea(selected, false);
         }
@@ -131,8 +131,8 @@ export class SummaryStatisticsController {
         this.render();
     }
 
-    /** Select an authoritative opaque AOI and optionally execute the explicit action.
-     * @param {Object} info Opaque identity and presentation label.
+    /** Select an authoritative Catalog descriptor and optionally execute the explicit action.
+     * @param {Object} info Catalog selection and presentation label.
      * @param {boolean} [calculate=false] User explicitly requested filter and calculation.
      * @return {void}
      */
@@ -142,7 +142,7 @@ export class SummaryStatisticsController {
         this.state.selectionMessage = "";
         this.state.vectorArea = info;
         this.state.areaChoice = "vector";
-        this.state.selectedArea = { kind: "temporaryAoi", temporaryAoiId: info.id };
+        this.state.selectedArea = normalizeRasterSamplingArea({ kind: "catalogSelection", catalogSelection: info.selection });
         this.changeArea(this.state.selectedArea, false);
         if (calculate) {
             this.open();
@@ -170,10 +170,10 @@ export class SummaryStatisticsController {
     }
     /** Cancel obsolete work even when its panel is no longer active. */
     invalidateSamplingArea(id) {
-        if (this.batch?.intent.area?.temporaryAoiId === id) this.invalidateBatch();
-        if (this.state.area?.temporaryAoiId === id) { this.invalidateBatch(); this.changeArea(null, false); }
-        if (this.state.selectedArea?.temporaryAoiId === id) this.state.selectedArea = null;
-        if (this.state.vectorArea?.id === id) this.state.vectorArea = null;
+        if (catalogSelectionsEqual(this.batch?.intent.area?.catalogSelection, id)) this.invalidateBatch();
+        if (catalogSelectionsEqual(this.state.area?.catalogSelection, id)) { this.invalidateBatch(); this.changeArea(null, false); }
+        if (catalogSelectionsEqual(this.state.selectedArea?.catalogSelection, id)) this.state.selectedArea = null;
+        if (catalogSelectionsEqual(this.state.vectorArea?.selection, id)) this.state.vectorArea = null;
         this.render();
     }
     /** Change execution settings without launching a benchmark or invalidating formula syntax.
@@ -190,27 +190,18 @@ export class SummaryStatisticsController {
         }
         this.render();
     }
-    setTemporaryAoi(aoi) {
-        this.state.availableAoi = aoi;
-        if (this.state.areaChoice === "uploaded" && this.state.area?.temporaryAoiId !== aoi?.id) {
-            this.changeArea(aoi ? { kind: "temporaryAoi", temporaryAoiId: aoi.id } : null, false);
-        }
-        this.render();
-    }
     setSelection(area, automatic = true) {
         const next = area ? normalizeRasterSamplingArea(area) : null;
         if (same(next, this.state.selectedArea)) return;
         this.state.selectedArea = next;
-        if (next && this.state.areaChoice === "vector" && this.state.vectorArea && this.state.area?.temporaryAoiId === this.state.vectorArea.id && next.temporaryAoiId !== this.state.vectorArea.id) {
+        if (next && this.state.areaChoice === "vector" && this.state.vectorArea && catalogSelectionsEqual(this.state.area?.catalogSelection, this.state.vectorArea.selection) && !catalogSelectionsEqual(next.catalogSelection, this.state.vectorArea.selection)) {
             this.state.areaChoice = "selection";
         }
         if (this.state.areaChoice === "selection") this.changeArea(next, automatic);
     }
     chooseArea(choice) {
         this.state.areaChoice = choice;
-        const area = choice === "vector" ? null : choice === "whole" ? { kind: "wholeRaster" } : choice === "uploaded"
-            ? this.state.availableAoi && { kind: "temporaryAoi", temporaryAoiId: this.state.availableAoi.id }
-            : this.state.selectedArea;
+        const area = choice === "vector" ? null : choice === "whole" ? { kind: "wholeRaster" } : this.state.selectedArea;
         this.changeArea(area, true);
         this.render();
     }

@@ -42,7 +42,6 @@ import { RasterStyleHistogramView } from "./style-histogram-view.js";
  * numeric sample-window size.
  * @property {() => void} onClearSampleWindow Restores whole-raster statistics.
  * @property {() => void} onUseMapWindow Selects a map-centered sample box.
- * @property {() => void} onUseTemporaryAoi Selects the retained uploaded AOI.
  * @property {(mode: string) => void} onBivariateModeChange Changes explicit
  * overlay/bivariate mode.
  * @property {(paletteName: string) => void} onBivariatePaletteChange Changes
@@ -443,19 +442,9 @@ export class RasterControlsView {
     }
 
     /**
-     * Present whether a retained ready AOI can be used for raster statistics.
-     *
-     * @param {Object|null} temporaryAoi Ready AOI display identity, or null.
-     * @return {void}
-     */
-    setTemporaryAoiAvailability(temporaryAoi) {
-        this.#samplingAreaView.setTemporaryAoiAvailability(temporaryAoi);
-    }
-
-    /**
      * Mark the active histogram-area choice without changing availability.
      *
-     * @param {"none"|"wholeRaster"|"selectedArea"|"temporaryAoi"} mode
+     * @param {"none"|"wholeRaster"|"selectedArea"|"catalogSelection"} mode
      * Active area, or no selected histogram area for the raster.
      * @param {string} [label=""] Optional semantic histogram scope label.
      * @return {void}

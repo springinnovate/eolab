@@ -6,7 +6,7 @@ Tracking: parent [#328](https://github.com/springinnovate/eolab/issues/328), bac
 
 The Processing component exports one catalog-authorized, single-band numeric
 GeoTIFF at its **native resolution, CRS, affine grid, and datatype**. An explicit
-histogram rectangle or a ready temporary AOI is required. There is no implicit
+histogram rectangle or an immutable Catalog-vector selection is required. There is no implicit
 whole-raster export, user-supplied source path, arbitrary URL, GDAL command, or
 reprojection option. Map styling, histogram sampling resolution, WMS publication,
 GeoServer availability, and the viewer are not prerequisites.
@@ -24,15 +24,15 @@ The **Downloads** toolbar/dock button stays accessible while other tools are ope
 
 Downloads captures the explicit selected histogram area when opened. The 1D and
 2D selections remain distinct; whole-raster and whole-overlap sampling do not
-become export areas. Choose a box in Sampling area, or explicitly select a ready
-uploaded AOI in Downloads. **Choose box or upload AOI** opens the existing area
-controls. Reopen Downloads to capture a changed histogram selection. Histogram
+become export areas. Choose a box or a filtered Catalog vector in Sampling area.
+**Choose sampling area** opens the existing area controls. Reopen Downloads to capture a changed histogram selection. Histogram
 results need not be ready or successful before reviewing a clip.
 
 **Review clip** reads metadata and presents the source, geographic area, native
 CRS/pixel size, dimensions, datatype, and estimated uncompressed size.
-**Create clip** accepts this fixed intent. Later map changes or AOI removal do
-not change accepted work. Job cards show measured block progress and named file
+**Create clip** accepts this fixed intent. Later map/filter changes do not change accepted work.
+The original Catalog sources must remain available and unchanged until execution
+and publication finish. Job cards show measured block progress and named file
 preparation phases, plus cancel, download, provenance, delete, size, and expiry.
 Downloads go directly through the browser, without a JavaScript Blob buffer.
 
@@ -72,11 +72,11 @@ or download a result. Sharing a map does not share processing jobs.
    }
    ```
 
-   For an AOI, replace `selectedBounds` with `"temporaryAoiId": "<ready AOI id>"`.
-   Reuse the existing `/api/temporary-aois` upload/selection API. No additional
-   upload service is needed. Bounds and AOI are mutually exclusive.
+   For a Catalog vector, replace `selectedBounds` with `catalogSelection` from
+   `POST /api/vector-sampling/areas`. The descriptor contains no paths or geometry.
+   Bounds and catalog selections are mutually exclusive.
 3. `POST /raster-clips` with `{"planId":"...","requestId":"..."}` rechecks the
-   current Catalog identity and the ready AOI, then returns HTTP 202 and `jobId`.
+   current raster and vector Catalog identities, then returns HTTP 202 and `jobId`.
    Generate a 16–80 character client request key using letters, digits, `_`, or
    `-`. **Retry an uncertain submission with the same plan and request ID.** It
    returns the same job even after the original plan expires. Reusing a request
@@ -97,7 +97,7 @@ or download a result. Sharing a map does not share processing jobs.
    cancel active jobs and wait before deleting them.
 
 Errors include a stable code and actionable detail. Admission/planning capacity
-uses 429, unavailable processing storage uses 503, a changed source/AOI uses 409,
+uses 429, unavailable processing storage uses 503, a changed raster or vector source uses 409,
 and oversized clips use 413. `no_overlap` fails planning; `no_valid_data` fails
 the job without publishing a file. A closed browser connection cancels planning,
 but **does not cancel an already accepted job**. Recover accepted jobs with
@@ -125,7 +125,7 @@ native blocks, embedded georeferencing and nodata, and no unsigned sidecars,
 alpha, or input dataset masks. Supported datatypes are uint8, uint16, int16,
 int32, float32, and float64, matching the neutral reader contract.
 
-Bounds edges and AOI polygon edges are densified and transformed to the source
+Bounds edges and polygon selection polygon edges are densified and transformed to the source
 CRS using the shared bounded-window mechanisms. The output is an integer native
 window with the existing conservative one-pixel envelope padding. Each intersecting
 native source block is decoded once, intersected with the window, masked, and
@@ -177,7 +177,7 @@ Initial fixed policy, shared by API and worker:
 | Retained plans | 5 per session, 50 globally, 5-minute lifetime |
 | Native output estimate, including validity | 1 GiB |
 | Decoded native source work | 4 GiB; at most 65,536 blocks; existing 64 MiB per-block ceiling |
-| AOI snapshot / transformed coordinates | 8 MiB / 500,000 |
+| Retained feature / projected-coordinate buffer | 500,000 positions |
 | Clip execution and finalization | 10 minutes |
 | Temporary result/scratch reservations | 20 GiB globally |
 | Physical free-space floor | 2 GiB, checked again before execution |
@@ -215,10 +215,11 @@ An attempt writes into private storage and closes/validates all output before an
 atomic same-volume directory rename. A still-current database fence is required
 to advertise it as ready. Cancellation or a stale worker cannot expose a partial
 file. Startup/periodic cleanup removes old orphan attempts and terminal job files
-after transfer leases end. It clears job-owned AOI snapshots and expired plans,
-then retains only bounded-time idempotency tombstones. Accepted AOI snapshots
-have their own job lifecycle: deleting or expiring the original temporary upload
-does not invalidate accepted work or restore any uploaded attributes/files.
+after transfer leases end. It clears expired job specifications and plans,
+then retains only bounded-time idempotency tombstones. Historical accepted jobs
+with embedded polygon geometry remain executable and their completed results
+remain readable. New catalog-selection jobs retain only their small descriptor;
+see [persisted compatibility](vector-sampling.md#persisted-compatibility).
 
 ## Architecture and extension boundary
 
@@ -227,14 +228,14 @@ submission recovery, polling, and job actions. **Used by:** the browser composit
 root, which connects the existing dock and source/area entry points.
 **Depends on:** its Processing API client, per-tab pending-submission storage,
 and the neutral immutable selected-area values. **Coordinates with:** Map layers,
-histogram controls, and temporary AOIs through root callbacks and lifecycle
-snapshots. None of those peers imports Downloads or vice versa.
+histogram controls, and vector selection through root callbacks and immutable
+selection values. None of those peers imports Downloads or vice versa.
 
 The existing bounds validation and sampling-area normalization move into
 `frontend/src/selected-area.js`; raster geometry/statistics retain their existing
-exports. Sampling and clipping now share the same frozen box/AOI values instead
-of duplicating validation. Backend services, APIs, queue/storage limits, AOI
-lifecycle, and rendering dependencies are unchanged. The dock adds only a tool
+exports. Sampling and clipping now share the same frozen box/catalog-descriptor values instead
+of duplicating validation. Backend services, APIs, queue/storage limits and
+rendering dependencies retain their existing owners. The dock adds only a tool
 descriptor and presentation methods. Remaining coupling is the intentional
 shared geographic selection contract and existing browser composition wiring.
 
@@ -243,23 +244,15 @@ and adapters). **Used by:** thin processing HTTP routes and the Downloads UI
 through that public API. **Depends on:** existing Catalog source-authorization
 port, neutral sampling-area reader, source identity/structure/native-block/grid
 mechanisms, bounded native process execution, and processing-owned PostgreSQL and
-artifact adapters. **Coordinates with:** temporary AOIs only through immutable
-geometry from the neutral reader; no AOI service/storage implementation import.
-
-Changes to existing components are limited to composition, deployment/settings,
-and two justified mechanism extractions. Statistics delegates its polygon
-projection/window calculation to `raster/bounded_window` with its original
-transformation budget and injectable transformer. Temporary AOIs delegate process
-supervision to `execution/bounded_process`, retaining their validation dispatch,
-error mapping, and time policy. The clip kernel shares those two real mechanisms.
-Storage adapters and the supervisor do not import or invoke application services.
-Histogram, rendering, AOI lifecycle, and Catalog implementations do not acquire
-knowledge of Processing or one another.
+artifact adapters. **Coordinates with:** analysis and Catalog-selection browser
+peers through composition. The kernel reads exact source polygons through the
+neutral reader; it never imports a histogram or rendering service. Catalog
+authorization remains outside storage/execution adapters.
 
 Job persistence consumes a `PreparedJobPlan`: operation-owned serialized input,
 a bounded public summary, and a storage reservation. The clip owner derives these
 from its validated source, area, and grid; the `JobStore` contract and PostgreSQL
-adapter do not parse raster fields or construct AOI summaries. Admission, leases,
+adapter do not parse raster fields or construct polygon selection summaries. Admission, leases,
 cancellation, and expiration are shared job responsibilities. The HTTP API still
 accepts only the explicitly supported raster-clip operation.
 
@@ -270,8 +263,8 @@ specification, clip request/plan, and raster-specific result details. Clip respo
 models extend the shared job and download models; the list uses the same generic
 envelope. Future operations define their own validated inputs and result details
 and reuse the common lifecycle instead of duplicating it. No arbitrary operation
-payload or executable command is accepted by the public API. Existing clip JSON
-fields and persisted job specifications retain their shape.
+payload or executable command is accepted by the public API. Box and historical accepted-job shapes remain readable; new catalog areas
+contain the small descriptor documented in [vector sampling](vector-sampling.md).
 
 `ProcessingService` exposes shared job lifecycle methods and explicit
 `plan_raster_clip` / `submit_raster_clip` commands. HTTP routes use job terminology
@@ -295,7 +288,7 @@ storage, and host I/O; separate worker limits do not eliminate disk contention.
 Native GeoTIFF tests verify exact values, zeros/nodata, polygons and holes, rotated
 and projected grids, metadata, COGs/overviews/checksums, size/work refusal, and hard
 native cancellation. Real PostgreSQL boundary tests cover idempotent concurrent
-admission, source and AOI lifecycle revalidation, global worker fencing, lease-loss
+admission, raster and vector-source revalidation, global worker fencing, lease-loss
 recovery, queued/running/finalization cancellation, worker shutdown, owned session
 access, complete/range/HEAD downloads, expiration and transfer-safe cleanup.
 Import/deployment tests guard the architectural boundaries and read-only mounts.

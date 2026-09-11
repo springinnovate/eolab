@@ -1,5 +1,9 @@
 """Application workflow and supervision for explicitly supported processing jobs."""
 
+from eolab_app.catalog_selection import (
+    CatalogSelectionReader,
+    SelectionUnavailableError,
+)
 import asyncio
 from dataclasses import asdict, replace
 from contextlib import suppress
@@ -38,6 +42,7 @@ class ProcessingWorker:
         limits: RasterClipLimits,
         *,
         native: ReusableProcess | None = None,
+        areas: CatalogSelectionReader | None = None,
     ) -> None:
         """Compose the worker's narrow capabilities.
 
@@ -48,6 +53,7 @@ class ProcessingWorker:
             limits: Deployment-wide bounded processing policy.
             native: Lifecycle-managed execution lane supplied by composition.
         """
+        self.areas = areas
         self.authorizer = authorizer
         self.jobs = jobs
         self.artifacts = artifacts
@@ -87,6 +93,22 @@ class ProcessingWorker:
                 "This worker does not support the requested operation.",
                 422,
             )
+        resolved_area = None
+        if spec.area.kind == "catalogSelection":
+            if self.areas is None:
+                raise ProcessingError(
+                    "selection_unavailable",
+                    "Catalog selection reader is unavailable.",
+                    409,
+                )
+            resolved_area = await self.areas.resolve_for_sampling(
+                spec.area.catalogSelection
+            )
+            spec = spec.model_copy(
+                update={
+                    "area": spec.area.model_copy(update={"resolved": resolved_area})
+                }
+            )
         authorized = await self.authorizer.authorize(source)
         if tuple(authorized.source_signature.to_catalog()) != spec.sourceSignature:
             raise ProcessingError(
@@ -112,6 +134,8 @@ class ProcessingWorker:
         if status != "ok":
             raise ProcessingError(*value)
         await self.authorizer.require_current(authorized)
+        if resolved_area is not None:
+            await self.areas.resolve_for_sampling(resolved_area.selection)
         # The heartbeat/fencing check in finish is still required after rename;
         # if cancellation wins the race, this private file is never advertised.
         # This bounded local-directory rename must finish before cancellation
@@ -198,7 +222,7 @@ class ProcessingWorker:
                     "code": "time_limit",
                     "detail": "The job exceeded its processing time limit. Choose a smaller area.",
                 }
-            elif isinstance(error, RasterFeatureError):
+            elif isinstance(error, (RasterFeatureError, SelectionUnavailableError)):
                 detail = {
                     "code": "source_unavailable",
                     "detail": "The catalog source is unavailable or changed. Create a new plan after checking the layer.",

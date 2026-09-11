@@ -1,5 +1,6 @@
 """Plan native single-raster calculations and stream scalar results to artifacts."""
 
+from eolab_app.bounded_vector import selection_mask
 from dataclasses import asdict
 from datetime import datetime, timezone
 import csv
@@ -11,7 +12,7 @@ from typing import Any, Literal
 
 import numpy as np
 import rasterio
-from rasterio.features import geometry_mask
+from numpy.typing import NDArray
 from rasterio.windows import Window, transform as window_transform
 
 from eolab_app.execution.bounded_process import ProcessResultWriter
@@ -40,6 +41,7 @@ from eolab_app.raster.source_contract import (
     read_native_raster_block,
     read_native_raster_window,
 )
+from eolab_app.raster.models import RasterAreaMask
 
 # Evaluate at most 65,536 pixels per expression tile, even when the source's
 # native blocks are larger. Keep admission and execution on this same tile size.
@@ -56,7 +58,7 @@ NATIVE_BOOKKEEPING_BYTES = 64 * 1024**2
 GDAL_THREADS = 2
 # A cached expression node holds float64 values (8 bytes) and validity (1 byte).
 # Round up to 16 bytes per pixel to allow evaluation temporaries. Eight additional
-# tile-sized allocations cover input conversion, AOI/eligibility masks, selected
+# tile-sized allocations cover input conversion, polygon selection/eligibility masks, selected
 # values and reduction temporaries. These are admission allowances, not measured
 # resident memory or a count of arrays every expression necessarily allocates.
 EXPRESSION_BYTES_PER_PIXEL = 16
@@ -69,13 +71,15 @@ PROGRESS_INTERVAL_SECONDS = 0.5
 
 
 def selection(
-    dataset: Any, area: AggregateArea, limits: RasterAggregateLimits
-) -> tuple[Window, tuple]:
+    dataset: rasterio.io.DatasetReader,
+    area: AggregateArea,
+    limits: RasterAggregateLimits,
+) -> tuple[Window, tuple[dict[str, object], ...] | RasterAreaMask]:
     """Resolve one explicit operation area without reading pixel values.
 
     Args:
         dataset: Validated native dataset.
-        area: Frozen box/AOI or explicit whole-source selection.
+        area: Frozen box/polygon selection or explicit whole-source selection.
         limits: Coordinate-transformation limits.
 
     Returns:
@@ -84,7 +88,12 @@ def selection(
     if area.kind == "wholeRaster":
         return Window(0, 0, dataset.width, dataset.height), ()
     selected = select_area(
-        dataset, area.kind, area.bounds, area.geometries, limits.max_coordinates
+        dataset,
+        area.kind,
+        area.bounds,
+        area.geometries,
+        limits.max_coordinates,
+        area.resolved,
     )
     return selected.source_window, selected.projected_geometries
 
@@ -249,8 +258,12 @@ def csv_text(value: str) -> str:
 
 
 def stable_selection_mask(
-    dataset: Any, selected: Window, read: Window, geometries: tuple, tile_side: int
-) -> np.ndarray:
+    dataset: rasterio.io.DatasetReader,
+    selected: Window,
+    read: Window,
+    geometries: tuple[dict[str, object], ...] | RasterAreaMask,
+    tile_side: int,
+) -> NDArray[np.bool_]:
     """Preserve legacy GDAL cell-center decisions independently of batch dimensions.
 
     GDAL rasterization at exact polygon boundaries can depend on the local affine
@@ -294,7 +307,7 @@ def stable_selection_mask(
                 local = Window(
                     x - read.col_off, y - read.row_off, tile.width, tile.height
                 )
-                mask[local.toslices()] = geometry_mask(
+                mask[local.toslices()] = selection_mask(
                     geometries,
                     out_shape=(int(tile.height), int(tile.width)),
                     transform=window_transform(tile, dataset.transform),
@@ -434,7 +447,7 @@ def create_aggregate(
                         if selection_valid is not None:
                             valid &= selection_valid[local.toslices()]
                         elif geometries:
-                            valid &= geometry_mask(
+                            valid &= selection_mask(
                                 geometries,
                                 out_shape=data.shape,
                                 transform=window_transform(tile, dataset.transform),

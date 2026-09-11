@@ -31,7 +31,10 @@ This is between-operation recycling, not permission to exceed existing
 admission or container limits. Libraries/GDAL can retain memory between jobs,
 so the tradeoff is additional idle memory and occasional replacement latency.
 The two roles remain separate, with unchanged single global planning and
-execution admission. Temporary-AOI/vector callers retain their one-shot path.
+execution admission. At that baseline, upload/vector callers retained their one-shot path. The
+current direct-source selection architecture is documented in
+[vector sampling](vector-sampling.md); the measurements below describe the
+original investigation commit.
 
 Optional `timing.process` / `executionTiming.process` metadata divides native
 duration into readiness wait, full target execution, and request/reply plus

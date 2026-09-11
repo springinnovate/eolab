@@ -14,7 +14,7 @@ export const DEFAULT_RASTER_PERCENTILES = Object.freeze({
     upper: 95
 });
 
-import { normalizeRasterSamplingArea, WHOLE_RASTER_SAMPLING_AREA } from "../selected-area.js";
+import { catalogSelectionsEqual, normalizeRasterSamplingArea, WHOLE_RASTER_SAMPLING_AREA } from "../selected-area.js";
 export { normalizeRasterSamplingArea, WHOLE_RASTER_SAMPLING_AREA } from "../selected-area.js";
 
 /**
@@ -51,24 +51,23 @@ export function validateRasterStatistics(statistics) {
     if (statistics.band !== 1) {
         throw rasterStatisticsContractError("band identity");
     }
-    const temporaryAoiId = statistics.temporaryAoiId ?? null;
-    const hasValidTemporaryAoiId =
-        typeof temporaryAoiId === "string" &&
-        /^[A-Za-z0-9_-]{32}$/.test(temporaryAoiId);
+    const catalogSelection = statistics.catalogSelection ?? null;
+    const hasValidCatalogSelectionId =
+        catalogSelection !== null && !!normalizeRasterSamplingArea({ kind: "catalogSelection", catalogSelection });
     if (
         statistics.scope === "wholeRaster" &&
-        (statistics.selectedBounds !== null || temporaryAoiId !== null)
+        (statistics.selectedBounds !== null || catalogSelection !== null)
     ) {
         throw rasterStatisticsContractError("whole-raster scope");
     }
     if (statistics.scope === "selectedArea") {
         validateRasterSelectedBounds(statistics.selectedBounds);
-        if (temporaryAoiId !== null) {
+        if (catalogSelection !== null) {
             throw rasterStatisticsContractError("selected-area scope");
         }
-    } else if (statistics.scope === "temporaryAoi") {
-        if (statistics.selectedBounds !== null || !hasValidTemporaryAoiId) {
-            throw rasterStatisticsContractError("temporary-AOI scope");
+    } else if (statistics.scope === "catalogSelection") {
+        if (statistics.selectedBounds !== null || !hasValidCatalogSelectionId) {
+            throw rasterStatisticsContractError("catalog-selection scope");
         }
     } else if (statistics.scope !== "wholeRaster") {
         throw rasterStatisticsContractError("statistics scope");
@@ -223,14 +222,13 @@ export function validateRasterStatisticsForSelection(
         }
     }
     if (
-        normalizedArea.kind === "temporaryAoi" &&
+        normalizedArea.kind === "catalogSelection" &&
         (
-            validatedStatistics.scope !== "temporaryAoi" ||
-            validatedStatistics.temporaryAoiId !==
-                normalizedArea.temporaryAoiId
+            validatedStatistics.scope !== "catalogSelection" ||
+            !catalogSelectionsEqual(validatedStatistics.catalogSelection, normalizedArea.catalogSelection)
         )
     ) {
-        throw rasterStatisticsContractError("temporary-AOI response identity");
+        throw rasterStatisticsContractError("catalog-selection response identity");
     }
     return validatedStatistics;
 }
@@ -247,10 +245,10 @@ export function rasterStatisticsMatchesSelection(
     samplingArea
 ) {
     const normalizedArea = normalizeRasterSamplingArea(samplingArea);
-    if (normalizedArea.kind === "temporaryAoi") {
+    if (normalizedArea.kind === "catalogSelection") {
         return (
-            statistics.scope === "temporaryAoi" &&
-            statistics.temporaryAoiId === normalizedArea.temporaryAoiId
+            statistics.scope === "catalogSelection" &&
+            catalogSelectionsEqual(statistics.catalogSelection, normalizedArea.catalogSelection)
         );
     }
     if (normalizedArea.kind === "wholeRaster") {

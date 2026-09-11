@@ -19,15 +19,16 @@ export function formatDownloadBytes(bytes) {
     return `${(bytes / divisor).toFixed(1)} ${unit}`;
 }
 
-/** Describe a public plan/job area. @param {Object|null} area Bounds or AOI summary. @return {string} Explicit geographic description. */
+/** Describe a public plan/job area. @param {Object|null} area Bounds or polygon selection summary. @return {string} Explicit geographic description. */
 export function describeClipArea(area) {
-    if (!area) return "No box or AOI selected. Choose a sampling area first.";
+    if (!area) return "No sampling area selected. Choose a box or catalog vector.";
     if (area.kind === "wholeRaster") return "Whole raster";
-    if (area.kind === "temporaryAoi") return "Uploaded AOI selected; review will show its geographic bounds.";
+    if (area.kind === "catalogSelection" && !Array.isArray(area.bounds)) return "Catalog vector selection; review will show its geographic bounds.";
     const values = area.selectedBounds
         ? [area.selectedBounds.west, area.selectedBounds.south, area.selectedBounds.east, area.selectedBounds.north]
         : area.bounds;
-    return `${area.kind === "aoi" ? "Uploaded AOI" : "Box"} · W ${values[0].toFixed(4)}°, S ${values[1].toFixed(4)}°, E ${values[2].toFixed(4)}°, N ${values[3].toFixed(4)}°`;
+    const label = area.kind === "aoi" ? "Historical polygon selection" : area.kind === "catalogSelection" ? "Catalog vector selection" : "Box";
+    return `${label} · W ${values[0].toFixed(4)}°, S ${values[1].toFixed(4)}°, E ${values[2].toFixed(4)}°, N ${values[3].toFixed(4)}°`;
 }
 
 /** Describe measured blocks or a named phase, without invented percentages. @param {Object} job Server job snapshot. @return {string} User-facing progress. */

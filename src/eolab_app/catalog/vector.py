@@ -4,7 +4,10 @@ from collections.abc import Iterable, Sequence
 from typing import Any
 
 
-MOUNTED_VECTOR_COLLECTION_ID = "eolab-mounted-vectors"
+from eolab_app.catalog.vector_contract import (
+    MOUNTED_VECTOR_COLLECTION_ID as MOUNTED_VECTOR_COLLECTION_ID,
+)
+
 VECTOR_SOURCE_METADATA_KEY = "eolab:vector_source"
 TABLE_EXTENSION = "https://stac-extensions.github.io/table/v1.2.0/schema.json"
 PRIMARY_GEOMETRY_COLUMN = "geometry"

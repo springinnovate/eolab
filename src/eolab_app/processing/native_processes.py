@@ -1,6 +1,7 @@
 """Processing-owned configuration of its planning and execution process lanes."""
 
 from eolab_app.execution.reusable_process import ReusableProcess
+from eolab_app.bounded_vector import summary_process
 from eolab_app.processing.models import ProcessingLimits
 from eolab_app.processing.raster_aggregate import aggregate_process_target
 from eolab_app.processing.raster_clip import clip_process_target
@@ -20,7 +21,7 @@ def create_native_process(limits: ProcessingLimits) -> ReusableProcess:
         Operation memory admission and container limits remain unchanged.
     """
     return ReusableProcess(
-        (clip_process_target, aggregate_process_target),
+        (clip_process_target, aggregate_process_target, summary_process),
         max_jobs=100,
         recycle_bytes=512 * 1024**2,
         startup_seconds=limits.plan_timeout_seconds,

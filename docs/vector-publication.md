@@ -50,7 +50,7 @@ Vector and raster publication coordinate only through the neutral WMS
 authorization protocol. Neither feature imports the other. The public WMS
 proxy asks each feature-owned registry for the requested layer and validates
 the authorized fixed style. Raster analysis, pixel reads, statistics, detail
-preview, and temporary AOI lifecycles do not depend on vector assessment or
+preview, and catalog-vector analysis selections do not depend on vector assessment or
 publication.
 
 In the browser, `catalog-visualization.js` is the composition-level dispatcher.

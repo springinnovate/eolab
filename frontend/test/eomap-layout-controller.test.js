@@ -604,6 +604,6 @@ test("layout controller retains a feature-neutral dependency boundary", () => {
     );
     assert.doesNotMatch(
         controllerSource,
-        /open-catalog-workspace|open-tools-workspace|show-temporary-aoi-workspace/
+        /temporary-aoi|raster-viewer|vector\/sampling/
     );
 });

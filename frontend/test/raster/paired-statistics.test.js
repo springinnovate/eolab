@@ -85,17 +85,17 @@ test("paired statistics validate Y-major matrix totals and provenance", () => {
   });
 });
 
-test("paired areas accept whole overlap, canonical selected bounds, or opaque AOIs", () => {
+test("paired areas accept whole overlap, canonical selected bounds, or catalog descriptors", () => {
   assert.equal(
     normalizeRasterPairedSamplingArea({ kind: "wholeOverlap" }),
     WHOLE_RASTER_OVERLAP_SAMPLING_AREA,
   );
   assert.throws(
     () => normalizeRasterPairedSamplingArea({
-      kind: "temporaryAoi",
-      temporaryAoiId: "not-an-opaque-reference",
+      kind: "catalogSelection",
+      catalogSelection: "not-an-opaque-reference",
     }),
-    /invalid/,
+    /invalid/i,
   );
   assert.throws(
     () => validateRasterPairedStatisticsForSelection(

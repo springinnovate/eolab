@@ -8,8 +8,8 @@ import {
   RASTER_STATISTICS,
   SELECTED_BOUNDS,
   SELECTED_RASTER_STATISTICS,
-  TEMPORARY_AOI_ID,
-  TEMPORARY_AOI_RASTER_STATISTICS,
+  CATALOG_SELECTION,
+  CATALOG_SELECTION_RASTER_STATISTICS,
 } from "../../test-support/raster/fixtures.js";
 
 test("RasterStatisticsController aborts and ignores stale Item results", async () => {
@@ -124,8 +124,8 @@ test("RasterStatisticsController retains its Item for a recoverable retry", asyn
   assert.deepEqual(results, [RASTER_STATISTICS]);
 });
 
-test("RasterStatisticsController aborts and ignores a replaced AOI lifecycle", async () => {
-  const replacementId = "R".repeat(32);
+test("RasterStatisticsController aborts and ignores a superseded catalog predicate", async () => {
+  const replacementId = { ...CATALOG_SELECTION, sourceSignature: "b".repeat(64) };
   const requests = [];
   const results = [];
   const controller = new RasterStatisticsController(
@@ -140,31 +140,31 @@ test("RasterStatisticsController aborts and ignores a replaced AOI lifecycle", a
 
   const firstRequest = controller.activate(
     MOUNTED_GEOTIFF_ITEM,
-    { kind: "temporaryAoi", temporaryAoiId: TEMPORARY_AOI_ID },
+    { kind: "catalogSelection", catalogSelection: CATALOG_SELECTION },
   );
   const replacementRequest = controller.activate(
     MOUNTED_GEOTIFF_ITEM,
-    { kind: "temporaryAoi", temporaryAoiId: replacementId },
+    { kind: "catalogSelection", catalogSelection: replacementId },
   );
 
   assert.equal(requests[0].signal.aborted, true);
   assert.deepEqual(
     requests.map(({ samplingArea }) => samplingArea),
     [
-      { kind: "temporaryAoi", temporaryAoiId: TEMPORARY_AOI_ID },
-      { kind: "temporaryAoi", temporaryAoiId: replacementId },
+      { kind: "catalogSelection", catalogSelection: CATALOG_SELECTION },
+      { kind: "catalogSelection", catalogSelection: replacementId },
     ],
   );
-  requests[0].resolve(TEMPORARY_AOI_RASTER_STATISTICS);
+  requests[0].resolve(CATALOG_SELECTION_RASTER_STATISTICS);
   requests[1].resolve({
-    ...TEMPORARY_AOI_RASTER_STATISTICS,
-    temporaryAoiId: replacementId,
+    ...CATALOG_SELECTION_RASTER_STATISTICS,
+    catalogSelection: replacementId,
   });
   await Promise.all([firstRequest, replacementRequest]);
 
   assert.deepEqual(results, [{
-    ...TEMPORARY_AOI_RASTER_STATISTICS,
-    temporaryAoiId: replacementId,
+    ...CATALOG_SELECTION_RASTER_STATISTICS,
+    catalogSelection: replacementId,
   }]);
 });
 
