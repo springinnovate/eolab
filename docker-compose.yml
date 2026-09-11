@@ -200,6 +200,40 @@ services:
         max-size: 10m
         max-file: "3"
 
+  # Independent API preview; does not execute jobs or depend on GIS/database services.
+  jobs:
+    build:
+      context: .
+      dockerfile: services/jobs/Dockerfile
+    restart: unless-stopped
+    init: true
+    cpus: 1
+    mem_limit: 256m
+    memswap_limit: 256m
+    pids_limit: 32
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    expose:
+      - "8080"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/jobs/health', timeout=3)
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
   app:
     build:
       context: .
