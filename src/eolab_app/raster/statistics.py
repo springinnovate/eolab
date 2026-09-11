@@ -1,11 +1,11 @@
 """Bounded raster sampling and distribution algorithms."""
 
+from eolab_app.bounded_vector import ProjectedCatalogSelection, selection_mask
 import math
 from pathlib import Path
 
 import numpy
 import rasterio
-from rasterio.features import geometry_mask
 from rasterio.warp import transform
 from rasterio.windows import Window, transform as window_transform
 
@@ -50,15 +50,14 @@ from eolab_app.raster.source_contract import (
 from eolab_app.sampling_area import (
     RasterSamplingArea,
     SelectedBoundsSamplingArea,
-    TemporaryAoiSamplingArea,
+    CatalogSelectionSamplingArea,
     WholeRasterSamplingArea,
 )
-
 
 RASTER_STATISTICS_ALGORITHM = "rendering-independent-bounded-area-v7"
 RASTER_STATISTICS_BIN_COUNT = 64
 RASTER_STATISTICS_MAX_TRANSFORMED_COORDINATES = 500_000
-# Match the ESOS-C AOI contract: a resampled cell contributes when the
+# Match the ESOS-C catalog selection contract: a resampled cell contributes when the
 # transformed selection touches it, including cells crossed only at an edge.
 RASTER_STATISTICS_SELECTION_ALL_TOUCHED = True
 
@@ -215,15 +214,17 @@ def strict_raster_value_range(
     )
 
 
-def selected_raster_area_for_temporary_aoi(
+def selected_raster_area_for_catalog_selection(
     dataset: rasterio.io.DatasetReader,
-    sampling_area: TemporaryAoiSamplingArea,
+    sampling_area: CatalogSelectionSamplingArea,
+    cancellation_requested: RasterReadCancellationCheck | None = None,
 ) -> SelectedRasterArea:
-    """Project an AOI using the statistics owner's transformation budget.
+    """Read a catalog selection using the statistics owner's transformation budget.
 
     Args:
         dataset: Open, georeferenced source raster.
-        sampling_area: Immutable geometry resolved by the AOI lifecycle owner.
+        sampling_area: Immutable catalog descriptor and authorized original source.
+        cancellation_requested: Optional thread-safe cancellation predicate.
 
     Returns:
         Projected polygon union and bounded source window.
@@ -232,11 +233,14 @@ def selected_raster_area_for_temporary_aoi(
         ValueError: If projection fails or exceeds the statistics budget.
         NoRasterBoundsOverlapError: If the selection misses the source grid.
     """
-    return selected_raster_area_for_wgs84_polygons(
+    reader = ProjectedCatalogSelection(
         dataset,
-        tuple(value.as_geojson() for value in sampling_area.resolved_aoi.geometries),
+        sampling_area.resolved,
         RASTER_STATISTICS_MAX_TRANSFORMED_COORDINATES,
-        coordinate_transform=transform,
+        cancellation_requested,
+    )
+    return SelectedRasterArea(
+        source_window=reader.source_window, projected_geometries=reader
     )
 
 
@@ -257,7 +261,7 @@ def read_raster_statistics(
 
     Args:
         source_path: Authorized mounted GeoTIFF.
-        sampling_area: Explicit whole, selected-bounds, or resolved AOI value.
+        sampling_area: Explicit whole, selected-bounds, or resolved catalog selection.
         cancellation_requested: Optional thread-safe obsolescence predicate.
 
     Returns:
@@ -283,10 +287,11 @@ def read_raster_statistics(
                 dataset,
                 sampling_area.bounds,
             )
-        elif isinstance(sampling_area, TemporaryAoiSamplingArea):
-            selected_area = selected_raster_area_for_temporary_aoi(
+        elif isinstance(sampling_area, CatalogSelectionSamplingArea):
+            selected_area = selected_raster_area_for_catalog_selection(
                 dataset,
                 sampling_area,
+                cancellation_requested,
             )
         elif isinstance(sampling_area, WholeRasterSamplingArea):
             selected_area = None
@@ -324,8 +329,8 @@ def read_raster_statistics(
                 source_width / sample_width,
                 source_height / sample_height,
             )
-            outside_selection = geometry_mask(
-                list(selected_area.projected_geometries),
+            outside_selection = selection_mask(
+                selected_area.projected_geometries,
                 out_shape=(sample_height, sample_width),
                 transform=source_sample_transform,
                 all_touched=RASTER_STATISTICS_SELECTION_ALL_TOUCHED,
@@ -386,15 +391,15 @@ def read_raster_statistics(
         if isinstance(sampling_area, SelectedBoundsSamplingArea)
         else None
     )
-    temporary_aoi_id = (
-        sampling_area.resolved_aoi.identity.reference
-        if isinstance(sampling_area, TemporaryAoiSamplingArea)
+    catalog_selection = (
+        sampling_area.resolved.selection
+        if isinstance(sampling_area, CatalogSelectionSamplingArea)
         else None
     )
     return RasterStatistics(
         scope=sampling_area.kind,
         selectedBounds=selected_bounds_model,
-        temporaryAoiId=temporary_aoi_id,
+        catalogSelection=catalog_selection,
         sourceWidth=source_width,
         sourceHeight=source_height,
         sourcePixelCount=source_pixel_count,

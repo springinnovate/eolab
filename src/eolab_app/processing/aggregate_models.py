@@ -1,5 +1,6 @@
 """Strict single-raster calculation plans and operation-specific result values."""
 
+from eolab_app.catalog_selection import CatalogSelection, ResolvedCatalogSelection
 from dataclasses import dataclass, field, fields
 from datetime import datetime
 from typing import Annotated, Literal
@@ -91,7 +92,7 @@ class AggregatePlanRequest(BaseModel):
         tuple[NamedCalculation, ...], Field(min_length=1, max_length=5)
     ]
     selectedBounds: Wgs84Bounds | None = None
-    temporaryAoiId: Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{32}$")] | None = None
+    catalogSelection: CatalogSelection | None = None
     wholeRaster: Literal[True] | None = None
     targetChunkPixels: ChunkPixels | None = None
 
@@ -110,13 +111,15 @@ class AggregatePlanRequest(BaseModel):
                 value is not None
                 for value in (
                     self.selectedBounds,
-                    self.temporaryAoiId,
+                    self.catalogSelection,
                     self.wholeRaster,
                 )
             )
             != 1
         ):
-            raise ValueError("Choose one box, uploaded AOI, or explicit whole raster")
+            raise ValueError(
+                "Choose one box, catalog selection, or explicit whole raster"
+            )
         AggregateValidationRequest(
             alias=next(iter(self.sources)), calculations=self.calculations
         )
@@ -124,12 +127,80 @@ class AggregatePlanRequest(BaseModel):
 
 
 class AggregateArea(BaseModel):
-    """Independent job-owned area snapshot; whole scope is explicit."""
+    """Durable catalog, box, whole-raster intent or historical polygon job input."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-    kind: Literal["bounds", "aoi", "wholeRaster"]
+    kind: Literal["bounds", "catalogSelection", "aoi", "wholeRaster"]
     bounds: tuple[float, float, float, float] | None = None
+    # Historical completed/pending jobs may contain v1 polygon snapshots.
+    # New requests cannot submit them; no live AOI service is retained.
     geometries: tuple[dict[str, object], ...] = ()
+    catalogSelection: CatalogSelection | None = None
+    resolved: ResolvedCatalogSelection | None = Field(default=None, exclude=True)
+
+    @model_validator(mode="after")
+    def require_area_contract(self) -> "AggregateArea":
+        """Validate durable selection shape at the operation's storage boundary.
+
+        Returns:
+            Validated area with explicit whole-raster or geographic intent.
+
+        Raises:
+            ValueError: If fields disagree with the selection discriminator.
+        """
+        if self.kind == "wholeRaster":
+            if (
+                self.bounds is not None
+                or self.geometries
+                or self.catalogSelection is not None
+                or self.resolved is not None
+            ):
+                raise ValueError("Whole-raster intent cannot contain selected geometry")
+            return self
+        # Clipping and aggregate selection shapes share the same persisted
+        # geographic contract; this is an operation-owned value validation only.
+        if self.bounds is None:
+            raise ValueError("A geographic selection requires bounds")
+        Wgs84Bounds(
+            west=self.bounds[0],
+            south=self.bounds[1],
+            east=self.bounds[2],
+            north=self.bounds[3],
+        )
+        if self.kind == "catalogSelection":
+            if self.catalogSelection is None or self.geometries:
+                raise ValueError(
+                    "Catalog areas require only a catalog selection descriptor"
+                )
+            if (
+                self.resolved is not None
+                and self.resolved.selection != self.catalogSelection
+            ):
+                raise ValueError("Resolved source does not match the catalog selection")
+        elif self.catalogSelection is not None or self.resolved is not None:
+            raise ValueError("Only catalog areas may carry a catalog source")
+        elif (self.kind == "aoi") != bool(self.geometries):
+            raise ValueError("Only historical polygon areas contain geometry")
+        return self
+
+    @model_serializer(mode="wrap")
+    def serialize_area(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, object]:
+        """Preserve old area fields and serialize new selections without geometry.
+
+        Args:
+            handler: Pydantic's serialization handler.
+
+        Returns:
+            The discriminator's path-free durable area representation.
+        """
+        data = handler(self)
+        data.pop(
+            "geometries" if self.kind == "catalogSelection" else "catalogSelection",
+            None,
+        )
+        return data
 
 
 class GroundAreaPlan(BaseModel):
@@ -195,7 +266,9 @@ class AggregateGrid(BaseModel):
     execution: AggregateExecutionPlan | None = None
 
     @model_serializer(mode="wrap")
-    def serialize_grid(self, handler: SerializerFunctionWrapHandler) -> dict:
+    def serialize_grid(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, object]:
         """Preserve the existing wire shape for numeric-only accepted jobs.
 
         Args:
@@ -326,7 +399,6 @@ class RasterAggregateLimits(ProcessingLimits):
 
     max_decoded_bytes: int = 4 * 1024**3
     max_native_blocks: int = 65_536
-    max_geometry_bytes: int = 8 * 1024**2
     max_coordinates: int = 500_000
     max_memory_bytes: int = 512 * 1024**2
     result_reservation_bytes: int = 12 * 1024**2

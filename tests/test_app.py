@@ -145,12 +145,6 @@ def test_load_settings_reads_scan_operational_limits(
     assert not set(configured_limits).intersection(settings.as_public_dict())
 
 
-
-
-
-
-
-
 def test_app_closes_every_http_pool_when_lifespan_exits_with_an_error(
     configured_environment: None,
     version_file_path: Path,
@@ -549,20 +543,6 @@ def test_raster_publication_rejects_a_mismatched_catalog_item(
     assert geoserver_requests == []
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def test_pixel_probe_samples_catalog_raster_without_geoserver(
     configured_environment: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -736,6 +716,9 @@ def test_raster_statistics_sample_a_projected_catalog_raster(
     monkeypatch.setenv("SCAN_MOUNT_PATH", str(tmp_path))
     monkeypatch.setenv("SCAN_PATHS_WITHIN_MOUNT", '["."]')
     item = _mounted_geotiff_item(source_path.as_uri())
+    from eolab_app.catalog.geopackage import build_stac_items
+
+    vector_item = build_stac_items(tmp_path, aoi_path)[0]
     geoserver_requests: list[httpx2.Request] = []
 
     def upstream_response(request: httpx2.Request) -> httpx2.Response:
@@ -748,7 +731,14 @@ def test_raster_statistics_sample_a_projected_catalog_raster(
             Catalog Item or a controlled unavailable GeoServer response.
         """
         if request.url.host == "stac-api":
-            return httpx2.Response(200, json=item)
+            return httpx2.Response(
+                200,
+                json=(
+                    vector_item
+                    if "/eolab-mounted-vectors/" in request.url.path
+                    else item
+                ),
+            )
         geoserver_requests.append(request)
         return httpx2.Response(503)
 
@@ -791,27 +781,30 @@ def test_raster_statistics_sample_a_projected_catalog_raster(
                 },
             },
         )
-        with aoi_path.open("rb") as source:
-            uploaded_aoi = client.post(
-                "/api/temporary-aois",
-                files={"file": ("sampling-area.gpkg", source)},
-            )
-        temporary_aoi_id = uploaded_aoi.json()["id"]
+        selected = client.post(
+            "/api/vector-sampling/areas",
+            json={
+                "collectionId": vector_item["collection"],
+                "itemId": vector_item["id"],
+                "filter": {"enabled": True, "match": "all", "rules": []},
+            },
+        )
+        assert selected.status_code == 200, selected.text
+        catalog_selection = selected.json()["selection"]
         aoi_response = client.post(
             "/api/raster-analysis/statistics",
             json={
                 **request_identity,
-                "temporaryAoiId": temporary_aoi_id,
+                "catalogSelection": catalog_selection,
             },
         )
-        assert client.delete(
-            f"/api/temporary-aois/{temporary_aoi_id}"
-        ).status_code == 204
+        with aoi_path.open("ab") as source:
+            source.write(b"changed")
         removed_aoi_response = client.post(
             "/api/raster-analysis/statistics",
             json={
                 **request_identity,
-                "temporaryAoiId": temporary_aoi_id,
+                "catalogSelection": catalog_selection,
             },
         )
 
@@ -879,15 +872,15 @@ def test_raster_statistics_sample_a_projected_catalog_raster(
 
     assert aoi_response.status_code == 200
     aoi_document = aoi_response.json()
-    assert aoi_document["scope"] == "temporaryAoi"
+    assert aoi_document["scope"] == "catalogSelection"
     assert aoi_document["selectedBounds"] is None
-    assert aoi_document["temporaryAoiId"] == temporary_aoi_id
+    assert aoi_document["catalogSelection"] == catalog_selection
     assert aoi_document["sampleMinimum"] == 10.0
     assert aoi_document["sampleMaximum"] == 30.0
     assert sum(aoi_document["histogram"]["counts"]) == 2
 
     assert removed_aoi_response.status_code == 409
-    assert "removed or expired" in removed_aoi_response.json()["detail"]
+    assert "identity changed" in removed_aoi_response.json()["detail"]
 
     assert outside_response.status_code == 409
     assert outside_response.json() == {
@@ -1209,14 +1202,6 @@ def test_pixel_probe_rejects_input_outside_its_public_contract(
     assert response.status_code == 422
 
 
-
-
-
-
-
-
-
-
 def test_load_settings_requires_complete_environment(
     configured_environment: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -1267,8 +1252,6 @@ def test_load_settings_rejects_blank_version(
         ("RASTER_PIXEL_READ_CONCURRENCY", "1.5"),
         ("RASTER_STATISTICS_READ_CONCURRENCY", "1.5"),
         ("RASTER_STATISTICS_CACHE_ENTRIES", "1.5"),
-        ("TEMPORARY_AOI_TTL_SECONDS", "not-a-number"),
-        ("TEMPORARY_AOI_MAX_UPLOAD_BYTES", "1.5"),
     ),
 )
 def test_load_settings_rejects_malformed_number(
@@ -1353,9 +1336,6 @@ def test_load_settings_rejects_invalid_scan_path_lists(
         ("RASTER_PIXEL_READ_CONCURRENCY", "0"),
         ("RASTER_STATISTICS_READ_CONCURRENCY", "0"),
         ("RASTER_STATISTICS_CACHE_ENTRIES", "0"),
-        ("TEMPORARY_AOI_TTL_SECONDS", "0"),
-        ("TEMPORARY_AOI_TTL_SECONDS", "nan"),
-        ("TEMPORARY_AOI_MAX_UPLOAD_BYTES", "0"),
     ),
 )
 def test_load_settings_rejects_out_of_range_number(

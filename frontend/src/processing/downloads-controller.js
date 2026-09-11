@@ -16,7 +16,7 @@ function explicitArea(area) {
     return normalizeRasterSamplingArea(area);
 }
 
-/** Own browser download state without importing map, histogram, or AOI implementations. */
+/** Own browser download state without importing map or histogram implementations. */
 export class DownloadsController {
     /**
      * @param {Object} dependencies Owned adapters and composition callbacks.
@@ -36,7 +36,7 @@ export class DownloadsController {
         clock = globalThis, requestId = () => globalThis.crypto.randomUUID() }) {
         Object.assign(this, { api, view, storage, getContext, onOpen, clock, requestId });
         this.state = { sources: [], source: null, area: null, selectedArea: null,
-            availableAoi: null, areaChoice: "selection", plan: null, jobs: [],
+            areaChoice: "selection", plan: null, jobs: [],
             busy: false, message: "", jobMessage: "", pending: storage.read(),
             submitting: false, jobActions: new Set() };
         this.planSequence = 0;
@@ -110,31 +110,13 @@ export class DownloadsController {
         this.render();
     }
 
-    /** Select the captured box/AOI or explicitly opt into the ready upload. @param {string} choice Area option. @return {void} */
+    /** Select the captured box or catalog-vector selection. @param {string} choice Area option. @return {void} */
     selectArea(choice) {
         if (this.state.pending || this.state.submitting) return;
         this.invalidatePlan();
         this.state.areaChoice = choice;
         this.state.area = choice === "selection" ? this.state.selectedArea
-            : choice === "uploaded" && this.state.availableAoi
-                ? explicitArea({ kind: "temporaryAoi", temporaryAoiId: this.state.availableAoi.id }) : null;
-        this.render();
-    }
-
-    /**
-     * Receive a ready AOI lifecycle reference; accepted jobs remain unchanged.
-     * @param {Readonly<Object>|null} aoi Ready public snapshot or removal/expiry.
-     * @return {void}
-     */
-    setTemporaryAoi(aoi) {
-        this.state.availableAoi = aoi;
-        if (this.state.area?.kind === "temporaryAoi" && this.state.area.temporaryAoiId !== aoi?.id &&
-            !this.state.pending && !this.state.submitting) {
-            this.invalidatePlan();
-            this.state.area = null;
-            this.state.selectedArea = null;
-            this.state.message = "The selected AOI is no longer available. Select a ready upload and review again.";
-        }
+            : null;
         this.render();
     }
 

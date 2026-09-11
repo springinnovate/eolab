@@ -1,5 +1,6 @@
 """Bounded X-reference pairing and two-dimensional raster statistics."""
 
+from eolab_app.bounded_vector import selection_mask, selection_summary
 import math
 from pathlib import Path
 
@@ -9,8 +10,7 @@ from affine import TransformNotInvertibleError
 from rasterio.transform import array_bounds, xy
 from rasterio.warp import transform, transform_bounds
 from rasterio.windows import Window, transform as window_transform
-from rasterio.features import geometry_mask
-from eolab_app.sampling_area import TemporaryAoiSamplingArea
+from eolab_app.sampling_area import CatalogSelectionSamplingArea
 
 from eolab_app.raster.bounded_window import (
     BOUNDED_SOURCE_WINDOW_PADDING_PIXELS,
@@ -45,12 +45,12 @@ from eolab_app.raster.source_contract import (
     require_signed_raster_dependencies,
 )
 from eolab_app.raster.statistics import (
-    NoValidRasterSamplesError, selected_raster_area_for_temporary_aoi,
+    NoValidRasterSamplesError,
+    selected_raster_area_for_catalog_selection,
     RASTER_STATISTICS_SELECTION_ALL_TOUCHED,
 )
 
-
-RASTER_PAIRED_STATISTICS_ALGORITHM = "x-reference-nearest-paired-v3-aoi"
+RASTER_PAIRED_STATISTICS_ALGORITHM = "x-reference-nearest-paired-v4-catalog-selection"
 
 
 def raster_paired_statistics_policy_parameters() -> tuple[int, ...]:
@@ -288,7 +288,7 @@ def read_raster_paired_statistics(
     y_source_path: Path,
     selected_bounds: CanonicalWgs84Bounds | None,
     cancellation_requested: RasterReadCancellationCheck | None = None,
-    temporary_aoi: TemporaryAoiSamplingArea | None = None,
+    catalog_selection: CatalogSelectionSamplingArea | None = None,
 ) -> RasterPairedStatistics:
     """Read bounded paired values on X and align Y with nearest neighbor.
 
@@ -303,7 +303,7 @@ def read_raster_paired_statistics(
         x_source_path: Authorized mounted X-reference GeoTIFF.
         y_source_path: Authorized mounted Y GeoTIFF.
         selected_bounds: Optional canonical WGS 84 sampling rectangle.
-        temporary_aoi: Optional immutable polygon selection; exclusive of bounds.
+        catalog_selection: Optional immutable polygon selection; exclusive of bounds.
         cancellation_requested: Optional thread-safe obsolescence predicate.
 
     Returns:
@@ -332,8 +332,13 @@ def read_raster_paired_statistics(
             _dataset_wgs84_bounds(x_dataset),
             _dataset_wgs84_bounds(y_dataset),
         )
-        if temporary_aoi is not None:
-            overlap_inputs = (*overlap_inputs, temporary_aoi.resolved_aoi.bounds)
+        if catalog_selection is not None:
+            overlap_inputs = (
+                *overlap_inputs,
+                selection_summary(catalog_selection.resolved, cancellation_requested)[
+                    "bbox"
+                ],
+            )
         if selected_bounds is not None:
             overlap_inputs = (*overlap_inputs, selected_bounds)
         overlap_bounds = _intersect_bounds(*overlap_inputs)
@@ -341,7 +346,13 @@ def read_raster_paired_statistics(
             x_dataset,
             overlap_bounds,
         )
-        polygon_area = selected_raster_area_for_temporary_aoi(x_dataset, temporary_aoi) if temporary_aoi else None
+        polygon_area = (
+            selected_raster_area_for_catalog_selection(
+                x_dataset, catalog_selection, cancellation_requested
+            )
+            if catalog_selection
+            else None
+        )
         x_window = x_area.source_window
         x_plan = plan_source_window_sample_grid(x_dataset, x_window)
         y_positions = _aligned_y_positions(
@@ -389,9 +400,12 @@ def read_raster_paired_statistics(
             sample_transform = window_transform(x_window, x_dataset.transform) * rasterio.Affine.scale(
                 x_window.width / x_plan.width, x_window.height / x_plan.height,
             )
-            outside = geometry_mask(list(polygon_area.projected_geometries),
-                out_shape=x_sample.shape, transform=sample_transform,
-                all_touched=RASTER_STATISTICS_SELECTION_ALL_TOUCHED)
+            outside = selection_mask(
+                polygon_area.projected_geometries,
+                out_shape=x_sample.shape,
+                transform=sample_transform,
+                all_touched=RASTER_STATISTICS_SELECTION_ALL_TOUCHED,
+            )
             x_sample = numpy.ma.array(numpy.ma.getdata(x_sample),
                 mask=numpy.logical_or(numpy.ma.getmaskarray(x_sample), outside))
         require_active_raster_read(cancellation_requested)
@@ -445,8 +459,14 @@ def read_raster_paired_statistics(
         else None
     )
     return RasterPairedStatistics(
-        scope="temporaryAoi" if temporary_aoi else "selectedArea" if selected_bounds is not None else "wholeOverlap",
-        temporaryAoiId=temporary_aoi.resolved_aoi.identity.reference if temporary_aoi else None,
+        scope=(
+            "catalogSelection"
+            if catalog_selection
+            else "selectedArea" if selected_bounds is not None else "wholeOverlap"
+        ),
+        catalogSelection=(
+            catalog_selection.resolved.selection if catalog_selection else None
+        ),
         selectedBounds=selected_bounds_model,
         sourceWidth=source_width,
         sourceHeight=source_height,
@@ -464,10 +484,7 @@ def read_raster_paired_statistics(
         histogram=RasterPairedHistogram(
             xEdges=[float(edge) for edge in x_edges],
             yEdges=[float(edge) for edge in y_edges],
-            counts=[
-                [int(count) for count in row]
-                for row in counts_yx
-            ],
+            counts=[[int(count) for count in row] for row in counts_yx],
             xMarginalCounts=[int(count) for count in x_marginals],
             yMarginalCounts=[int(count) for count in y_marginals],
         ),

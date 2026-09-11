@@ -1,10 +1,9 @@
 /**
  * DOM presentation adapter for raster histogram sampling-area controls.
  *
- * This adapter owns sample-window sizing and whole-window/temporary-AOI
+ * This adapter owns sample-window sizing and whole-window/catalog-selection
  * controls. Map exploration is coordinated separately by the composition root.
- * It presents state supplied by the raster coordinator and makes no map, AOI
- * lifecycle, statistics, or request decisions.
+ * It presents state supplied by the raster coordinator and makes no map, statistics, or request decisions.
  */
 import { requireRasterControl } from "./required-control.js";
 /** Slider positions are presentation values; callbacks always carry kilometers. */
@@ -20,7 +19,6 @@ const SAMPLE_WINDOW_SLIDER_STEPS = 1000;
  * numeric sample-window size.
  * @property {() => void} onClearSampleWindow Restores whole-raster statistics.
  * @property {() => void} onUseMapWindow Selects a map-centered sample box.
- * @property {() => void} onUseTemporaryAoi Selects the retained uploaded AOI.
  */
 
 /** Own direct DOM interaction and presentation for histogram sampling areas. */
@@ -71,21 +69,11 @@ export class RasterSamplingAreaControlsView {
             documentContext,
             "#raster-map-box-controls"
         );
-        this.useTemporaryAoiButton = requireRasterControl(
-            documentContext,
-            "#use-temporary-aoi-for-raster"
-        );
-        this.temporaryAoiDetail = requireRasterControl(
-            documentContext,
-            "#raster-sampling-aoi-detail"
-        );
         this.sampleWindowStatus = requireRasterControl(
             documentContext,
             "#raster-sample-window-status"
         );
         this.vectorChoice = documentContext.querySelector("#use-vector-for-raster");
-        this.temporaryAoi = null;
-        this.temporaryAoiCompatible = true;
         this.handlers = null;
         this.boundSampleWindowRangeInput =
             this.#handleSampleWindowRangeInput.bind(this);
@@ -97,7 +85,6 @@ export class RasterSamplingAreaControlsView {
             this.#handleSampleWindowNumberChange.bind(this);
         this.boundClearSampleWindow = this.#handleClearSampleWindow.bind(this);
         this.boundUseMapWindow = this.#handleUseMapWindow.bind(this);
-        this.boundUseTemporaryAoi = this.#handleUseTemporaryAoi.bind(this);
     }
 
     /**
@@ -129,10 +116,6 @@ export class RasterSamplingAreaControlsView {
             "change",
             this.boundUseMapWindow
         );
-        this.useTemporaryAoiButton.addEventListener(
-            "change",
-            this.boundUseTemporaryAoi
-        );
     }
 
     /** Remove every direct listener installed by {@link bind}. @return {void} */
@@ -157,10 +140,6 @@ export class RasterSamplingAreaControlsView {
         this.useMapWindowButton.removeEventListener(
             "change",
             this.boundUseMapWindow
-        );
-        this.useTemporaryAoiButton.removeEventListener(
-            "change",
-            this.boundUseTemporaryAoi
         );
         this.handlers = null;
     }
@@ -225,77 +204,19 @@ export class RasterSamplingAreaControlsView {
     }
 
     /**
-     * Present whether a retained ready AOI can be used for raster statistics.
+     * Present the current whole-raster, box, or catalog selection.
      *
-     * @param {Object|null} temporaryAoi Ready AOI display identity, or null.
-     * @return {void}
-     */
-    setTemporaryAoiAvailability(temporaryAoi) {
-        this.temporaryAoi = temporaryAoi;
-        this.#synchronizeTemporaryAoiAvailability();
-    }
-
-    /**
-     * Set whether the active analysis mode accepts temporary AOI lifecycle IDs.
-     *
-     * @param {boolean} isCompatible Whether temporary AOI selection is allowed.
-     * @return {void}
-     */
-    setTemporaryAoiCompatible(isCompatible) {
-        this.temporaryAoiCompatible = isCompatible;
-        this.#synchronizeTemporaryAoiAvailability();
-    }
-
-    /**
-     * Synchronize retained AOI availability with active-mode compatibility.
-     *
-     * @return {void}
-     */
-    #synchronizeTemporaryAoiAvailability() {
-        const temporaryAoi = this.temporaryAoi;
-        this.useTemporaryAoiButton.disabled =
-            temporaryAoi === null || !this.temporaryAoiCompatible;
-        if (!this.temporaryAoiCompatible) {
-            this.useTemporaryAoiButton.removeAttribute("aria-label");
-            this.useTemporaryAoiButton.title =
-                "This histogram does not support uploaded AOI sampling.";
-            this.temporaryAoiDetail.textContent =
-                "Unavailable for a two-raster comparison.";
-            return;
-        }
-        if (temporaryAoi === null) {
-            this.useTemporaryAoiButton.removeAttribute("aria-label");
-            this.useTemporaryAoiButton.title =
-                "Upload a polygonal AOI to enable this area.";
-            this.temporaryAoiDetail.textContent =
-                "Upload an AOI below to enable this area.";
-            return;
-        }
-        const description =
-            `Use uploaded AOI ${temporaryAoi.filename}, ` +
-            `layer ${temporaryAoi.selectedDataset}`;
-        this.useTemporaryAoiButton.setAttribute("aria-label", description);
-        this.useTemporaryAoiButton.title = description;
-        this.temporaryAoiDetail.textContent =
-            `${temporaryAoi.filename} · ${temporaryAoi.selectedDataset}`;
-    }
-
-    /**
-     * Mark the active histogram-area choice without changing availability.
-     *
-     * @param {"none"|"wholeRaster"|"selectedArea"|"temporaryAoi"} mode
-     * Active area, or no selected histogram area for the raster.
-     * @param {string} [label=""] Readable active sampling-area description.
+     * @param {string} mode Selection discriminator.
+     * @param {string} [label=""] Readable selected-area description.
      * @return {void}
      */
     setSamplingAreaMode(mode, label = "") {
-        if (!["none", "wholeRaster", "selectedArea", "temporaryAoi", "vector"].includes(mode)) {
+        if (!["none", "wholeRaster", "selectedArea", "catalogSelection", "vector"].includes(mode)) {
             throw new RangeError(`Unknown raster sampling-area mode: ${mode}`);
         }
-        if (this.vectorChoice) this.vectorChoice.checked = mode === "vector";
+        if (this.vectorChoice) this.vectorChoice.checked = ["vector", "catalogSelection"].includes(mode);
         this.clearSampleWindowButton.checked = mode === "wholeRaster";
         this.useMapWindowButton.checked = mode === "selectedArea";
-        this.useTemporaryAoiButton.checked = mode === "temporaryAoi";
         this.mapBoxControls.hidden = mode !== "selectedArea";
         this.samplingAreaSummary.textContent = label || (
             mode === "none" ? "No raster selected" : "Whole raster"
@@ -361,10 +282,4 @@ export class RasterSamplingAreaControlsView {
         }
     }
 
-    /** Forward temporary-AOI selection. @return {void} */
-    #handleUseTemporaryAoi() {
-        if (this.useTemporaryAoiButton.checked) {
-            this.handlers.onUseTemporaryAoi();
-        }
-    }
 }

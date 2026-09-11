@@ -72,7 +72,7 @@ def create_raster_analysis_router(
         """Summarize one catalog raster and normalized sampling area.
 
         Args:
-            request: Catalog identity and strict whole/bounds/AOI area union.
+            request: Catalog identity and strict whole/bounds/Catalog-selection area union.
             http_request: Incoming request used to detect cancellation.
 
         Returns:
@@ -81,6 +81,7 @@ def create_raster_analysis_router(
         Raises:
             HTTPException: If analysis fails or the browser disconnects.
         """
+
         try:
             return await run_until_http_disconnect(
                 http_request,

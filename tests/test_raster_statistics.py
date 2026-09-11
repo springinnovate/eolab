@@ -44,18 +44,14 @@ from eolab_app.raster.statistics import (
     strict_raster_value_range,
 )
 from eolab_app.raster.statistics_service import RasterStatisticsService
+from catalog_selection_support import write_selection
+from eolab_app.catalog_selection import CatalogSelection, SelectionUnavailableError
 from eolab_app.sampling_area import (
-    PolygonalWgs84Geometry,
     RasterSamplingArea,
-    ResolvedTemporaryAoi,
-    SamplingAreaUnavailableError,
     SelectedBoundsSamplingArea,
-    TemporaryAoiLifecycleIdentity,
-    TemporaryAoiSamplingArea,
+    CatalogSelectionSamplingArea,
     WholeRasterSamplingArea,
-    freeze_coordinates,
 )
-
 
 ITEM_ID = "geotiff-0123456789abcdef01234567"
 
@@ -336,15 +332,15 @@ def _statistics_result(
         if isinstance(area, SelectedBoundsSamplingArea)
         else None
     )
-    temporary_aoi_id = (
-        area.resolved_aoi.identity.reference
-        if isinstance(area, TemporaryAoiSamplingArea)
+    catalog_selection = (
+        area.resolved.selection
+        if isinstance(area, CatalogSelectionSamplingArea)
         else None
     )
     return RasterStatistics(
         scope=area.kind,
         selectedBounds=selected_bounds,
-        temporaryAoiId=temporary_aoi_id,
+        catalogSelection=catalog_selection,
         sourceWidth=1,
         sourceHeight=1,
         sourcePixelCount=1,
@@ -366,55 +362,6 @@ def _statistics_result(
             midpoint=value,
             maximum=value + 1,
         ),
-    )
-
-
-def _resolved_temporary_aoi(
-    temporary_aoi_id: str,
-    geometries: tuple[dict[str, object], ...],
-    *,
-    expires_at: datetime | None = None,
-) -> ResolvedTemporaryAoi:
-    """Build immutable lifecycle geometry for raster sampling tests.
-
-    Args:
-        temporary_aoi_id: Opaque 32-character lifecycle reference.
-        geometries: Polygon or MultiPolygon GeoJSON mappings.
-        expires_at: Optional fixed lifecycle expiration timestamp.
-
-    Returns:
-        Resolved immutable temporary-AOI sampling value.
-    """
-    immutable_geometries = tuple(
-        PolygonalWgs84Geometry(
-            geometry["type"],  # type: ignore[arg-type]
-            freeze_coordinates(geometry["coordinates"]),
-        )
-        for geometry in geometries
-    )
-    positions = [
-        position
-        for geometry in geometries
-        for polygon in (
-            [geometry["coordinates"]]
-            if geometry["type"] == "Polygon"
-            else geometry["coordinates"]
-        )
-        for ring in polygon  # type: ignore[union-attr]
-        for position in ring
-    ]
-    return ResolvedTemporaryAoi(
-        identity=TemporaryAoiLifecycleIdentity(
-            reference=temporary_aoi_id,
-            expires_at=expires_at or datetime(2030, 1, 1, tzinfo=timezone.utc),
-        ),
-        bounds=(
-            min(position[0] for position in positions),
-            min(position[1] for position in positions),
-            max(position[0] for position in positions),
-            max(position[1] for position in positions),
-        ),
-        geometries=immutable_geometries,
     )
 
 
@@ -1097,19 +1044,28 @@ def test_raster_statistics_request_enforces_the_strict_sampling_area_union() -> 
         "collectionId": "eolab-mounted-geotiffs",
         "itemId": ITEM_ID,
     }
-    temporary_aoi_id = "A" * 32
-    aoi_request = CatalogRasterStatisticsRequest.model_validate({
-        **identity,
-        "temporaryAoiId": temporary_aoi_id,
-    })
-
-    assert aoi_request.temporary_aoi_id == temporary_aoi_id
-    assert aoi_request.selected_bounds is None
-    for invalid_document in (
-        {**identity, "temporaryAoiId": "../server/path"},
+    catalog_selection = CatalogSelection(
+        collectionId="eolab-mounted-vectors",
+        itemId="polygons",
+        assetKey="data",
+        layerName="polygons",
+        sourceSignature="a" * 64,
+        filter={},
+    )
+    aoi_request = CatalogRasterStatisticsRequest.model_validate(
         {
             **identity,
-            "temporaryAoiId": temporary_aoi_id,
+            "catalogSelection": catalog_selection,
+        }
+    )
+
+    assert aoi_request.catalog_selection == catalog_selection
+    assert aoi_request.selected_bounds is None
+    for invalid_document in (
+        {**identity, "catalogSelection": "../server/path"},
+        {
+            **identity,
+            "catalogSelection": catalog_selection,
             "selectedBounds": {
                 "west": -1,
                 "south": -1,
@@ -1117,7 +1073,7 @@ def test_raster_statistics_request_enforces_the_strict_sampling_area_union() -> 
                 "north": 1,
             },
         },
-        {**identity, "temporaryAoiId": temporary_aoi_id, "geometry": {}},
+        {**identity, "catalogSelection": catalog_selection, "geometry": {}},
     ):
         with pytest.raises(ValidationError):
             CatalogRasterStatisticsRequest.model_validate(invalid_document)
@@ -1255,7 +1211,7 @@ def test_selected_area_masks_non_axis_aligned_projected_envelope(
     assert statistics.sample_minimum == statistics.sample_maximum == 7
 
 
-def test_temporary_aoi_unions_overlapping_polygons_once(tmp_path: Path) -> None:
+def test_catalog_selection_unions_overlapping_polygons_once(tmp_path: Path) -> None:
     """Count each finite source cell once across overlapping AOI polygons."""
     source_path = tmp_path / "aoi-mask.tif"
     values = numpy.arange(1, 25, dtype=numpy.float32).reshape((4, 6))
@@ -1271,43 +1227,44 @@ def test_temporary_aoi_unions_overlapping_polygons_once(tmp_path: Path) -> None:
             "coordinates": [[[(2.1, 0.1), (4.9, 0.1), (4.9, 3.9), (2.1, 3.9), (2.1, 0.1)]]],
         },
     )
-    temporary_aoi_id = "B" * 32
-    area = TemporaryAoiSamplingArea(
-        _resolved_temporary_aoi(temporary_aoi_id, polygons)
+    area = CatalogSelectionSamplingArea(
+        write_selection(tmp_path / "polygons.gpkg", list(polygons))
     )
 
     statistics = read_raster_statistics(source_path, area)
 
     with rasterio.open(source_path) as dataset:
         expected_inside = geometry_mask(
-            [geometry.as_geojson() for geometry in area.resolved_aoi.geometries],
+            polygons,
             out_shape=(dataset.height, dataset.width),
             transform=dataset.transform,
             all_touched=True,
             invert=True,
         )
-    assert statistics.scope == "temporaryAoi"
-    assert statistics.temporary_aoi_id == temporary_aoi_id
+    assert statistics.scope == "catalogSelection"
+    assert statistics.catalog_selection == area.resolved.selection
     assert statistics.valid_sample_count == int(expected_inside.sum())
     assert sum(statistics.histogram.counts) == int(expected_inside.sum())
     assert statistics.valid_sample_count < sum(
         int(
             geometry_mask(
-                [geometry.as_geojson()],
+                [geometry],
                 out_shape=values.shape,
                 transform=transform,
                 all_touched=True,
                 invert=True,
             ).sum()
         )
-        for geometry in area.resolved_aoi.geometries
+        for geometry in polygons
     )
 
     paired_path = tmp_path / "paired-aoi-mask.tif"
     _write_raster(paired_path, values * 2, transform=transform)
-    paired = read_raster_paired_statistics(source_path, paired_path, None, temporary_aoi=area)
-    assert paired.scope == "temporaryAoi"
-    assert paired.temporary_aoi_id == temporary_aoi_id
+    paired = read_raster_paired_statistics(
+        source_path, paired_path, None, catalog_selection=area
+    )
+    assert paired.scope == "catalogSelection"
+    assert paired.catalog_selection == area.resolved.selection
     # Paired sampling retains its odd-size bounded grid; 1D uses an exact small window.
     assert 0 < paired.paired_sample_count < statistics.valid_sample_count
     assert sum(paired.histogram.x_marginal_counts) == paired.paired_sample_count
@@ -1315,7 +1272,8 @@ def test_temporary_aoi_unions_overlapping_polygons_once(tmp_path: Path) -> None:
     assert paired.y_maximum == 2 * paired.x_maximum
 
 
-def test_temporary_aoi_sample_grid_masks_a_large_interior_hole(
+def test_catalog_selection_sample_grid_masks_a_large_interior_hole(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Exclude a buffered hole sentinel from broad sampled AOI statistics.
@@ -1348,16 +1306,20 @@ def test_temporary_aoi_sample_grid_masks_a_large_interior_hole(
         source_path,
         SelectedBoundsSamplingArea(outer_bounds),
     )
-    area = TemporaryAoiSamplingArea(_resolved_temporary_aoi(
-        "H" * 32,
-        ({
-            "type": "Polygon",
-            "coordinates": [
-                [(-8, -4), (8, -4), (8, 4), (-8, 4), (-8, -4)],
-                [(-4, -2.5), (-4, 2.5), (4, 2.5), (4, -2.5), (-4, -2.5)],
-            ],
-        },),
-    ))
+    area = CatalogSelectionSamplingArea(
+        write_selection(
+            tmp_path / "H.gpkg",
+            (
+                {
+                    "type": "Polygon",
+                    "coordinates": [
+                        [(-8, -4), (8, -4), (8, 4), (-8, 4), (-8, -4)],
+                        [(-4, -2.5), (-4, 2.5), (4, 2.5), (4, -2.5), (-4, -2.5)],
+                    ],
+                },
+            ),
+        )
+    )
 
     statistics = read_raster_statistics(source_path, area)
 
@@ -1367,7 +1329,7 @@ def test_temporary_aoi_sample_grid_masks_a_large_interior_hole(
     assert statistics.valid_sample_count < rectangle.valid_sample_count
 
 
-def test_temporary_aoi_distinguishes_no_overlap_from_nodata(tmp_path: Path) -> None:
+def test_catalog_selection_distinguishes_no_overlap_from_nodata(tmp_path: Path) -> None:
     """Keep absent intersections distinct from all-nodata intersections."""
     source_path = tmp_path / "empty-aoi-mask.tif"
     _write_raster(
@@ -1376,20 +1338,28 @@ def test_temporary_aoi_distinguishes_no_overlap_from_nodata(tmp_path: Path) -> N
         transform=from_origin(0, 2, 1, 1),
         nodata=-9999,
     )
-    inside = TemporaryAoiSamplingArea(_resolved_temporary_aoi(
-        "C" * 32,
-        ({
-            "type": "Polygon",
-            "coordinates": [[(0, 0), (2, 0), (2, 2), (0, 2), (0, 0)]],
-        },),
-    ))
-    outside = TemporaryAoiSamplingArea(_resolved_temporary_aoi(
-        "D" * 32,
-        ({
-            "type": "Polygon",
-            "coordinates": [[(10, 10), (11, 10), (11, 11), (10, 11), (10, 10)]],
-        },),
-    ))
+    inside = CatalogSelectionSamplingArea(
+        write_selection(
+            tmp_path / "C.gpkg",
+            (
+                {
+                    "type": "Polygon",
+                    "coordinates": [[(0, 0), (2, 0), (2, 2), (0, 2), (0, 0)]],
+                },
+            ),
+        )
+    )
+    outside = CatalogSelectionSamplingArea(
+        write_selection(
+            tmp_path / "D.gpkg",
+            (
+                {
+                    "type": "Polygon",
+                    "coordinates": [[(10, 10), (11, 10), (11, 11), (10, 11), (10, 10)]],
+                },
+            ),
+        )
+    )
 
     with pytest.raises(NoValidRasterSamplesError):
         read_raster_statistics(source_path, inside)
@@ -2146,114 +2116,64 @@ def test_final_waiter_cancelled_during_postcheck_is_not_cached() -> None:
     assert len(service._cache) == 1
 
 
-def test_statistics_service_rechecks_temporary_aoi_lifecycle() -> None:
-    """Reject AOI replacement around reads and keep it out of the cache."""
-    temporary_aoi_id = "E" * 32
-    first_aoi = _resolved_temporary_aoi(
-        temporary_aoi_id,
-        ({
-            "type": "Polygon",
-            "coordinates": [[(-1, -1), (1, -1), (1, 1), (-1, 1), (-1, -1)]],
-        },),
-    )
-    changed_aoi = _resolved_temporary_aoi(
-        temporary_aoi_id,
-        ({
-            "type": "Polygon",
-            "coordinates": [[(-2, -2), (2, -2), (2, 2), (-2, 2), (-2, -2)]],
-        },),
-        expires_at=datetime(2030, 1, 2, tzinfo=timezone.utc),
-    )
-    newer_aoi = _resolved_temporary_aoi(
-        temporary_aoi_id,
-        ({
-            "type": "Polygon",
-            "coordinates": [[(-3, -3), (3, -3), (3, 3), (-3, 3), (-3, -3)]],
-        },),
-        expires_at=datetime(2030, 1, 3, tzinfo=timezone.utc),
+def test_statistics_service_rechecks_catalog_selection(tmp_path: Path) -> None:
+    """Source revocation rejects cache hits and mid-read publication independently."""
+    resolved = write_selection(
+        tmp_path / "area.gpkg",
+        [
+            {
+                "type": "Polygon",
+                "coordinates": [[(-1, -1), (1, -1), (1, 1), (-1, 1), (-1, -1)]],
+            }
+        ],
     )
 
-    class AoiReader:
-        """Return mutable test ownership through an immutable read contract."""
+    class Reader:
+        available = True
 
-        def __init__(self) -> None:
-            """Start with the first ready AOI lifecycle."""
-            self.current = first_aoi
-            self.calls = 0
+        async def resolve_for_sampling(self, selection: CatalogSelection):
+            """Authorize only the current fixture descriptor."""
+            if not self.available or selection != resolved.selection:
+                raise SelectionUnavailableError("The catalog vector changed")
+            return resolved
 
-        async def resolve_for_sampling(
-            self,
-            requested_id: str,
-        ) -> ResolvedTemporaryAoi:
-            """Return the current lifecycle for the expected reference.
+    reader = Reader()
+    calls = []
 
-            Args:
-                requested_id: Opaque reference requested by the service.
-
-            Returns:
-                Current immutable resolved AOI.
-
-            Raises:
-                SamplingAreaUnavailableError: If the reference is unknown.
-            """
-            self.calls += 1
-            if requested_id != temporary_aoi_id:
-                raise SamplingAreaUnavailableError("AOI is unavailable")
-            return self.current
-
-    aoi_reader = AoiReader()
-    read_areas: list[TemporaryAoiSamplingArea] = []
-
-    def statistics_reader(
-        _: Path,
-        area: RasterSamplingArea,
-        __: object,
-    ) -> RasterStatistics:
-        """Record the resolved AOI and simulate a mid-read change.
-
-        Args:
-            _: Ignored authorized source path.
-            area: Immutable AOI supplied to the reader.
-            __: Ignored cancellation predicate.
-
-        Returns:
-            Valid AOI statistics.
-        """
-        assert isinstance(area, TemporaryAoiSamplingArea)
-        read_areas.append(area)
-        if len(read_areas) == 2:
-            aoi_reader.current = newer_aoi
-        return _statistics_result(float(len(read_areas)), area)
+    def compute(path, area, cancellation):
+        """Observe immutable input and optionally revoke it during the read."""
+        calls.append(area)
+        if len(calls) == 2:
+            reader.available = False
+        return _statistics_result(float(len(calls)), area)
 
     service = RasterStatisticsService(
         _SourceAuthorizer(),
         1,
         32,
-        temporary_aoi_reader=aoi_reader,
-        statistics_reader=statistics_reader,  # type: ignore[arg-type]
+        catalog_selection_reader=reader,
+        statistics_reader=compute,
     )
-    request = CatalogRasterStatisticsRequest.model_validate({
-        "collectionId": "eolab-mounted-geotiffs",
-        "itemId": ITEM_ID,
-        "temporaryAoiId": temporary_aoi_id,
-    })
+    request = CatalogRasterStatisticsRequest(
+        collectionId="eolab-mounted-geotiffs",
+        itemId=ITEM_ID,
+        catalogSelection=resolved.selection,
+    )
 
-    async def exercise_lifecycle() -> None:
-        """Exercise cache-hit and mid-read lifecycle rechecks.
-
-        Returns:
-            None.
-        """
+    async def exercise():
+        """Exercise cache admission and before-publication reauthorization."""
         first = await service.get(request)
         assert await service.get(request) is first
-        aoi_reader.current = changed_aoi
-        with pytest.raises(RasterConflictError, match="changed while"):
+        reader.available = False
+        with pytest.raises(RasterConflictError, match="changed"):
+            await service.get(request)
+        reader.available = True
+        service._cache.clear()
+        with pytest.raises(RasterConflictError, match="changed"):
             await service.get(request)
 
-    asyncio.run(exercise_lifecycle())
-    assert len(read_areas) == 2
-    assert read_areas[0].resolved_aoi.identity == first_aoi.identity
-    assert read_areas[1].resolved_aoi.identity == changed_aoi.identity
+    asyncio.run(exercise())
+    assert len(calls) == 2 and not service._cache
 
 
 def test_cancelled_statistics_request_keeps_admission_until_worker_finishes(

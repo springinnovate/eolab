@@ -156,9 +156,9 @@ Shapefiles and spatial GeoPackage layers can be added to the map. Other
 recognized vector containers may be searchable in the Catalog even when they
 are not yet renderable.
 
-For a one-off overlay that should not enter the shared Catalog, use **Upload
-AOI** with a GeoPackage or zipped Shapefile. Temporary AOIs expire and are not
-included in copied map links.
+For polygon-based analysis, choose a mounted Catalog vector layer and apply an
+attribute filter in **Sampling area → Vector layer**. The selection reads the
+original source directly. See [vector selections](docs/vector-sampling.md).
 
 ## Running your own EOLab workspace
 

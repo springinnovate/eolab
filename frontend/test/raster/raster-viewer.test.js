@@ -18,8 +18,8 @@ import {
     EXACT_RASTER_STATISTICS,
     MOUNTED_GEOTIFF_ITEM,
     RASTER_STATISTICS,
-    TEMPORARY_AOI_ID,
-    TEMPORARY_AOI_RASTER_STATISTICS,
+    CATALOG_SELECTION,
+    CATALOG_SELECTION_RASTER_STATISTICS,
 } from "../../test-support/raster/fixtures.js";
 
 /** Minimal add/remove event source with inspectable listener ownership. */
@@ -345,12 +345,6 @@ function createFakeControlsView() {
         setClearSampleWindowLabel(label) {
             this.clearSampleWindowLabel = label;
         },
-        setTemporaryAoiAvailability(temporaryAoi) {
-            this.availableTemporaryAoi = temporaryAoi;
-        },
-        setTemporaryAoiCompatible(isCompatible) {
-            this.temporaryAoiCompatible = isCompatible;
-        },
         setSamplingAreaMode(mode, label = "") {
             this.samplingAreaMode = mode;
             this.samplingAreaLabel = label;
@@ -509,7 +503,7 @@ function createLayerStatistics(item, selectedBounds = null) {
 /**
  * Return rectangular bounds from one normalized test sampling area.
  *
- * @param {Object} samplingArea Whole, selected, or temporary-AOI area.
+ * @param {Object} samplingArea Whole, rectangular, or catalog-vector area.
  * @return {Object|null} Selected rectangle or null for another scope.
  */
 function selectedBoundsFromArea(samplingArea) {
@@ -1636,26 +1630,26 @@ test('color opacity stays per-layer, survives 2D, and resets with the style', as
 test('a vector AOI drives both histogram modes and invalidation cannot fall back to the whole raster', async () => {
     const areas = [], pairedAreas = [];
     const h = visibleLayerFixture(async (_item, area) => {
-        areas.push(area); return area.kind === 'temporaryAoi' ? TEMPORARY_AOI_RASTER_STATISTICS : RASTER_STATISTICS;
+        areas.push(area); return area.kind === 'catalogSelection' ? CATALOG_SELECTION_RASTER_STATISTICS : RASTER_STATISTICS;
     }, { loadPairedStatistics: async (_x, _y, area) => { pairedAreas.push(area); return pairedStatistics(); } });
     await h.viewer.show(createRasterItem('bottom'));
     await h.viewer.show(createRasterItem('top'));
     await flushPromises();
-    const aoi = { id: TEMPORARY_AOI_ID, filename: 'Countries · 1 of 200 features', selectedDataset: 'countries', expiresAt: '2099-01-01T00:00:00Z' };
-    h.viewer.setVectorSamplingAoi(aoi); await flushPromises();
-    assert.equal(h.viewer.getSelectedArea().temporaryAoiId, aoi.id);
-    assert.equal(areas.at(-1).temporaryAoiId, aoi.id);
+    const aoi = { selection: CATALOG_SELECTION, label: 'Countries · 1 of 200 features' };
+    h.viewer.setVectorSelection(aoi); await flushPromises();
+    assert.deepEqual(h.viewer.getSelectedArea().catalogSelection, aoi.selection);
+    assert.deepEqual(areas.at(-1).catalogSelection, aoi.selection);
     await h.viewer.show(createRasterItem('added-after-selection')); await flushPromises();
-    assert.equal(h.viewer.getSelectedArea().temporaryAoiId, aoi.id);
-    assert.equal(areas.at(-1).temporaryAoiId, aoi.id);
-    assert.ok(h.mapLayers.retainedRecords.every(record => record.state.selectedTemporaryAoi?.id === aoi.id));
+    assert.deepEqual(h.viewer.getSelectedArea().catalogSelection, aoi.selection);
+    assert.deepEqual(areas.at(-1).catalogSelection, aoi.selection);
+    assert.ok(h.mapLayers.retainedRecords.every(record => JSON.stringify(record.state.selectedCatalogSelection?.selection) === JSON.stringify(aoi.selection)));
     h.controlsView.handlers.onBivariateModeChange('bivariate');await flushPromises();
-    assert.equal(pairedAreas.at(-1).temporaryAoiId, aoi.id);
-    assert.equal(h.viewer.getSelectedArea().temporaryAoiId, aoi.id);
+    assert.deepEqual(pairedAreas.at(-1).catalogSelection, aoi.selection);
+    assert.deepEqual(h.viewer.getSelectedArea().catalogSelection, aoi.selection);
     h.viewer.exploreAt({lng:-74,lat:41}); await flushPromises();
-    assert.equal(h.viewer.getSelectedArea().temporaryAoiId, aoi.id);
+    assert.deepEqual(h.viewer.getSelectedArea().catalogSelection, aoi.selection);
     const count=areas.length+pairedAreas.length;
-    h.viewer.setVectorSamplingAoi(null);await flushPromises();
+    h.viewer.setVectorSelection(null);await flushPromises();
     assert.equal(h.viewer.getSelectedArea(),null);
     assert.equal(areas.length+pairedAreas.length,count);
     h.destroy();
@@ -1782,7 +1776,6 @@ test("selecting 2D opens paired analysis without a map interaction", async () =>
     );
     assert.equal(controlsView.appearanceEnabled, false);
     assert.equal(controlsView.univariateHistogramVisible, false);
-    assert.equal(controlsView.temporaryAoiCompatible, true);
     assert.ok(layerStackView.layers.every((layer) => layer.opacityLocked));
     assert.ok(layerStackView.layers.every(
         (layer) => layer.effectiveOpacity === 1,
@@ -3688,112 +3681,23 @@ test("a failed publication preserves existing layers and can be retried", async 
     viewer.destroy();
 });
 
-test("AOI lifecycle restores whole-raster scope and replaces selected windows", async () => {
-    const leafletMap = createFakeMap();
-    const { leaflet, rectangleLayers } = createFakeLeaflet();
-    const controlsView = createFakeControlsView();
-    const aoiRequests = [];
-    const replacementId = "R".repeat(32);
-    const viewer = initializeRasterViewer(
-        {
-            wmsUrl: "/geoserver/eolab/wms",
-            leafletMap,
-            leaflet,
-            onTileError() {},
-        },
-        {
-            controlsView,
-            layerStackView: createFakeLayerStackView(),
-            publishRaster: async () => ({
-                layerName: "eolab:test-raster",
-                bbox: [-180, -90, 180, 90],
-            }),
-            loadStatistics: async (
-                _item,
-                samplingArea,
-                signal
-            ) => {
-                if (samplingArea.kind !== "temporaryAoi") {
-                    return createLayerStatistics(
-                        MOUNTED_GEOTIFF_ITEM,
-                        selectedBoundsFromArea(samplingArea)
-                    );
-                }
-                const deferred = createDeferred();
-                const temporaryAoiId = samplingArea.temporaryAoiId;
-                aoiRequests.push({ deferred, signal, temporaryAoiId });
-                return deferred.promise;
-            },
-            samplePixel: async () => ({ inBounds: true, value: 1 }),
-            viewport: { innerWidth: 1280, innerHeight: 720 },
-        }
-    );
-    await viewer.show(MOUNTED_GEOTIFF_ITEM);
-    await flushPromises();
-    const firstAoi = Object.freeze({
-        id: TEMPORARY_AOI_ID,
-        filename: "area.gpkg",
-        selectedDataset: "boundary",
-        expiresAt: "2030-01-01T01:00:00Z",
+test("catalog selection replacement aborts stale requests and clears a map box", async () => {
+    const requests=[];
+    const h=visibleLayerFixture(async (_item,area,signal) => {
+        if (area.kind !== "catalogSelection") return RASTER_STATISTICS;
+        const deferred=createDeferred(); requests.push({deferred,area,signal}); return deferred.promise;
     });
-    const replacementAoi = Object.freeze({
-        ...firstAoi,
-        id: replacementId,
-        filename: "replacement.zip",
-        selectedDataset: "inside/boundary.shp",
-    });
-
-    viewer.setTemporaryAoi(firstAoi);
-
-    assert.equal(aoiRequests.length, 1);
-    assert.equal(aoiRequests[0].temporaryAoiId, TEMPORARY_AOI_ID);
-    assert.equal(controlsView.samplingAreaMode, "temporaryAoi");
-    assert.equal(controlsView.availableTemporaryAoi.id, TEMPORARY_AOI_ID);
-    viewer.setTemporaryAoi(replacementAoi);
-
-    assert.equal(aoiRequests.length, 1);
-    assert.equal(aoiRequests[0].signal.aborted, true);
-    aoiRequests[0].deferred.resolve(TEMPORARY_AOI_RASTER_STATISTICS);
+    await h.viewer.show(createRasterItem("one")); await flushPromises();
+    h.viewer.setVectorSelection({selection:CATALOG_SELECTION,label:"First"});
     await flushPromises();
-    assert.equal(aoiRequests.length, 2);
-    assert.equal(aoiRequests[1].temporaryAoiId, replacementId);
-    aoiRequests[1].deferred.resolve({
-        ...TEMPORARY_AOI_RASTER_STATISTICS,
-        temporaryAoiId: replacementId,
-    });
+    const changed={...CATALOG_SELECTION,sourceSignature:"b".repeat(64)};
+    h.viewer.setVectorSelection({selection:changed,label:"Replacement"});
+    assert.ok(requests[0].signal.aborted);
+    requests[0].deferred.resolve(CATALOG_SELECTION_RASTER_STATISTICS); await flushPromises();
+    assert.deepEqual(h.viewer.getSelectedArea().catalogSelection,changed);
+    for (const request of requests.slice(1)) request.deferred.resolve({...CATALOG_SELECTION_RASTER_STATISTICS,catalogSelection:changed});
     await flushPromises();
-
-    assert.equal(controlsView.displayedStatistics.temporaryAoiId, replacementId);
-    assert.match(controlsView.statisticsStatus, /replacement\.zip/);
-    assert.match(controlsView.statisticsStatus, /inside\/boundary\.shp/);
-
-    controlsView.handlers.onClearSampleWindow();
-    assert.equal(controlsView.samplingAreaMode, "wholeRaster");
-    controlsView.handlers.onUseTemporaryAoi();
-    await flushPromises();
-    assert.equal(aoiRequests.length, 3);
-    assert.equal(aoiRequests[2].temporaryAoiId, replacementId);
-
-    viewer.setTemporaryAoi(null);
-    aoiRequests[2].deferred.resolve(TEMPORARY_AOI_RASTER_STATISTICS);
-    await flushPromises();
-
-    assert.equal(aoiRequests[2].signal.aborted, true);
-    assert.equal(controlsView.samplingAreaMode, "wholeRaster");
-    assert.equal(controlsView.availableTemporaryAoi, null);
-    assert.equal(controlsView.displayedStatistics.scope, "wholeRaster");
-
-    viewer.exploreAt({ lng: 2, lat: 2 });
-    await flushPromises();
-    const selectedWindow = rectangleLayers.at(-1);
-    assert.equal(selectedWindow.kind, "selection");
-    assert.equal(leafletMap.layers.has(selectedWindow), true);
-
-    viewer.setTemporaryAoi(replacementAoi);
-
-    assert.equal(aoiRequests.length, 4);
-    assert.equal(aoiRequests[3].temporaryAoiId, replacementId);
-    assert.equal(controlsView.samplingAreaMode, "temporaryAoi");
-    assert.equal(controlsView.availableTemporaryAoi.id, replacementId);
-    assert.equal(leafletMap.layers.has(selectedWindow), false);
+    h.viewer.setVectorSelection(null); await flushPromises();
+    assert.equal(h.viewer.getSelectedArea(),null);
+    h.destroy();
 });

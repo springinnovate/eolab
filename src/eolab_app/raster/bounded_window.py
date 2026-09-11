@@ -263,13 +263,13 @@ def _source_window_for_projected_geometries(
     )
 
 
-def selected_raster_area_for_wgs84_polygons(
+def project_wgs84_polygons(
     dataset: rasterio.io.DatasetReader,
     geometries: tuple[dict[str, object], ...],
     maximum_coordinates: int,
     coordinate_transform: Callable[..., tuple[list[float], list[float]]] = transform,
-) -> SelectedRasterArea:
-    """Project and bound an immutable polygonal selection for one raster grid.
+) -> tuple[dict[str, object], ...]:
+    """Project bounded polygons without clipping their source-pixel envelope.
 
     Every polygon edge is densified under a fixed transformed-coordinate
     ceiling before explicit longitude/latitude transformation. The resulting
@@ -283,10 +283,9 @@ def selected_raster_area_for_wgs84_polygons(
         coordinate_transform: Injectable CRS transformation mechanism.
 
     Returns:
-        Projected polygonal geometry and clipped source-pixel envelope.
+        Projected polygonal geometries, including those outside the raster.
 
     Raises:
-        NoRasterBoundsOverlapError: If the AOI envelope misses the raster.
         ValueError: If transformation produces a non-finite position or exceeds
             the explicit transformed-geometry ceiling.
         TypeError: If immutable geometry violates its owned contract.
@@ -346,7 +345,34 @@ def selected_raster_area_for_wgs84_polygons(
             "coordinates": polygons[0] if geometry_type == "Polygon" else polygons,
         })
 
-    projected_tuple = tuple(projected_geometries)
+    return tuple(projected_geometries)
+
+
+def selected_raster_area_for_wgs84_polygons(
+    dataset: rasterio.io.DatasetReader,
+    geometries: tuple[dict[str, object], ...],
+    maximum_coordinates: int,
+    coordinate_transform: Callable[..., tuple[list[float], list[float]]] = transform,
+) -> SelectedRasterArea:
+    """Project a bounded polygon union and clip its complete envelope to a raster.
+
+    Args:
+        dataset: Open georeferenced raster.
+        geometries: Validated exact polygonal WGS84 mappings.
+        maximum_coordinates: Caller-owned transformed-coordinate capacity.
+        coordinate_transform: Injectable longitude/latitude transformation.
+
+    Returns:
+        Projected polygons and their padded integral source window.
+
+    Raises:
+        NoRasterBoundsOverlapError: If the complete envelope misses the raster.
+        ValueError: If projection fails or exceeds coordinate capacity.
+        TypeError: If a polygon mapping is malformed.
+    """
+    projected_tuple = project_wgs84_polygons(
+        dataset, geometries, maximum_coordinates, coordinate_transform
+    )
     return SelectedRasterArea(
         source_window=_source_window_for_projected_geometries(
             dataset,

@@ -1,3 +1,4 @@
+import { CATALOG_SELECTION } from "../../test-support/raster/fixtures.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { MapInspectionController } from "../../src/map-inspection-controller.js";
@@ -326,18 +327,17 @@ test("a completed superseded job cannot replace the prior visible result", async
     assert.equal(h.view.state.resultIsCurrent,false);
 });
 
-test("whole raster and AOI require Calculate and never respond to map clicks", async () => {
-    for (const scope of ["whole", "uploaded"]) {
+test("whole raster and catalog selections require explicit Calculate", async () => {
+    for (const area of [{kind:"wholeRaster"}, {kind:"catalogSelection",catalogSelection:CATALOG_SELECTION}]) {
         const h=fixture(); h.controller.open();
-        h.controller.setTemporaryAoi({id:"a".repeat(32)}); h.controller.chooseArea(scope); await h.tick(400);
-        h.click(79); await h.tick(650);
+        h.controller.edit({areaChoice: area.kind === "wholeRaster" ? "whole" : "selection", area});
+        await h.tick(400);
+        h.controller.calculateSelection(); await h.tick(650);
         assert.equal(h.requests.some(r=>r[0]==="submit"),false);
         await h.controller.run(); await flush();
-        const accepted=h.controller.record.intent.area;
-        assert.equal(accepted.kind,scope==="whole"?"wholeRaster":"temporaryAoi");
-        h.controller.setTemporaryAoi(null);
-        assert.equal(h.controller.record.intent.area,accepted);
-        if(scope==="uploaded") assert.equal(h.view.state.area,null);
+        assert.deepEqual(h.controller.record.intent.area,area);
+        h.controller.setSelection(null);
+        assert.deepEqual(h.controller.record.intent.area,area);
     }
 });
 
@@ -435,7 +435,7 @@ test("card confirmation reuses only an unexpired plan for the complete reviewed 
         {},
         { source: {...source,itemId:"other"} },
         { area:box(80) },
-        { area:{kind:"temporaryAoi",temporaryAoiId:"v".repeat(32)} },
+        { area:{kind:"catalogSelection",catalogSelection:CATALOG_SELECTION} },
         { calculations:[{label:"Mean",expression:"mean(a + 1)"}] },
         { calculations:[{label:"Renamed",expression:"mean(a)"}] },
         { calculations:[{label:"Mean",expression:"mean(a)"},{label:"Min",expression:"min(a)"}] },

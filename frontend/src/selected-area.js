@@ -46,7 +46,7 @@ export const WHOLE_RASTER_SAMPLING_AREA = Object.freeze({
  * Normalize one strict raster-statistics sampling-area union.
  *
  * @param {Object} [samplingArea=WHOLE_RASTER_SAMPLING_AREA] Candidate whole,
- * selected-bounds, or temporary-AOI area.
+ * selected-bounds, or catalog-selection area.
  * @return {Readonly<Object>} Validated immutable sampling area.
  * @throws {TypeError} If the discriminator, owned field, or object shape is
  * invalid.
@@ -77,18 +77,50 @@ export function normalizeRasterSamplingArea(
             })
         });
     }
-    if (
-        samplingArea.kind === "temporaryAoi" &&
-        keys.length === 2 &&
-        keys[0] === "kind" &&
-        keys[1] === "temporaryAoiId" &&
-        typeof samplingArea.temporaryAoiId === "string" &&
-        /^[A-Za-z0-9_-]{32}$/.test(samplingArea.temporaryAoiId)
-    ) {
-        return Object.freeze({
-            kind: "temporaryAoi",
-            temporaryAoiId: samplingArea.temporaryAoiId
-        });
+    if (samplingArea.kind === "catalogSelection" && keys.length === 2 &&
+        keys[0] === "catalogSelection" && keys[1] === "kind") {
+        return Object.freeze({ kind: "catalogSelection", catalogSelection: validateCatalogSelection(samplingArea.catalogSelection) });
     }
     throw new TypeError("Raster statistics sampling area is invalid.");
+}
+
+/** Validate and copy an immutable catalog vector selection.
+ * @param {Object} value Public source identity and typed predicate.
+ * @return {Readonly<Object>} Deeply immutable descriptor.
+ * @throws {TypeError} For paths, geometry, malformed identity or filter fields.
+ */
+export function validateCatalogSelection(value) {
+    const keys = ["assetKey", "collectionId", "filter", "itemId", "layerName", "sourceSignature"];
+    if (!value || typeof value !== "object" || Object.keys(value).sort().join() !== keys.join() ||
+        value.collectionId !== "eolab-mounted-vectors" ||
+        typeof value.itemId !== "string" || value.itemId.length > 128 || !/^[A-Za-z0-9][A-Za-z0-9._~-]*$/.test(value.itemId) ||
+        ![value.assetKey, value.layerName].every(v => typeof v === "string" && v.length > 0 && v.length <= 256) ||
+        !/^[0-9a-f]{64}$/.test(value.sourceSignature)) throw new TypeError("Invalid catalog selection identity");
+    const input = value.filter;
+    if (!input || Object.keys(input).sort().join() !== "enabled,match,rules" ||
+        typeof input.enabled !== "boolean" || !["all", "any"].includes(input.match) ||
+        !Array.isArray(input.rules) || input.rules.length > 12) throw new TypeError("Invalid catalog selection filter");
+    const rules = input.rules.map(rule => {
+        if (!rule || Object.keys(rule).sort().join() !== "field,operator,value" ||
+            typeof rule.field !== "string" || !rule.field || rule.field.length > 256 || /[\u0000-\u001f]/.test(rule.field) ||
+            !["eq", "ne", "gt", "ge", "lt", "le", "contains", "missing", "present"].includes(rule.operator) ||
+            !(rule.value === null || typeof rule.value === "boolean" ||
+              typeof rule.value === "number" && Number.isFinite(rule.value) && Math.abs(rule.value) <= Number.MAX_SAFE_INTEGER ||
+              typeof rule.value === "string" && rule.value.length <= 256 && !/[\u0000-\u001f]/.test(rule.value))) throw new TypeError("Invalid catalog selection rule");
+        return Object.freeze({ field: rule.field, operator: rule.operator, value: rule.value });
+    });
+    const filter = Object.freeze({ enabled: input.enabled, match: input.match, rules: Object.freeze(rules) });
+    return Object.freeze({ collectionId: value.collectionId, itemId: value.itemId,
+        assetKey: value.assetKey, layerName: value.layerName, sourceSignature: value.sourceSignature, filter });
+}
+
+/** Compare immutable selections independently of JSON property order.
+ * @param {Object|null|undefined} left First descriptor.
+ * @param {Object|null|undefined} right Second descriptor.
+ * @return {boolean} Whether both descriptors identify the same exact selection.
+ * @throws {TypeError} When a present descriptor violates its public contract.
+ */
+export function catalogSelectionsEqual(left, right) {
+    return left != null && right != null &&
+        JSON.stringify(validateCatalogSelection(left)) === JSON.stringify(validateCatalogSelection(right));
 }

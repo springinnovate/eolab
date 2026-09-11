@@ -1,5 +1,6 @@
 """Bounded full-resolution clip kernel; no job, HTTP, or rendering services."""
 
+from eolab_app.bounded_vector import selection_mask
 from dataclasses import asdict
 from datetime import datetime, timezone
 import hashlib
@@ -12,7 +13,6 @@ from typing import Any, Literal
 import numpy
 import rasterio
 from eolab_app.execution.bounded_process import ProcessResultWriter
-from rasterio.features import geometry_mask
 from rasterio.shutil import copy as copy_raster
 from rasterio.windows import Window, transform as window_transform
 
@@ -45,14 +45,19 @@ def _selection(
 
     Args:
         dataset: Validated open native raster.
-        area: Immutable clip bounds/AOI.
+        area: Immutable clip bounds/polygon selection.
         limits: Geometry budget owned by clipping.
 
     Returns:
         Native window and projected mask geometry.
     """
     return select_area(
-        dataset, area.kind, area.bounds, area.geometries, limits.max_coordinates
+        dataset,
+        area.kind,
+        area.bounds,
+        area.geometries,
+        limits.max_coordinates,
+        area.resolved,
     )
 
 
@@ -223,7 +228,7 @@ def create_clip(
                         intersection.height,
                     )
                     values = native[local.toslices()]
-                    inside = geometry_mask(
+                    inside = selection_mask(
                         selected.projected_geometries,
                         out_shape=values.shape,
                         transform=window_transform(intersection, source.transform),

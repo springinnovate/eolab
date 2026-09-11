@@ -400,12 +400,14 @@ class PostgresJobStore:
         the old child could still be running under its supervisor deadline.
         Claim protocol 3 adds fractional ellipsoidal area calculations. The
         existing database trigger fences workers supporting earlier protocols.
+        Protocol 5 adds direct catalog-selection jobs without embedded geometry.
 
         Returns:
             Claimed job or None while another attempt reserves the slot.
         """
+
         with self._transaction(locked=True) as cursor:
-            cursor.execute("SET LOCAL eolab.processing_claim_version = '4'")
+            cursor.execute("SET LOCAL eolab.processing_claim_version = '5'")
             cursor.execute(
                 "UPDATE processing.jobs SET status='interrupted',error=%s,updated_at=now() WHERE status IN ('running','cancelling') AND deadline_at<now()",
                 (
@@ -423,7 +425,7 @@ class PostgresJobStore:
             if cursor.fetchone():
                 return None
             cursor.execute(
-                "SELECT id FROM processing.jobs WHERE status='queued' AND minimum_claim_version<=4 ORDER BY created_at LIMIT 1 FOR UPDATE"
+                "SELECT id FROM processing.jobs WHERE status='queued' AND minimum_claim_version<=5 ORDER BY created_at LIMIT 1 FOR UPDATE"
             )
             row = cursor.fetchone()
             if not row:

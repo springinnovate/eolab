@@ -95,7 +95,7 @@ parameters. Browser cancellation and sequence identity cover the complete
 pair, so swapping roles, changing the window, or leaving the mode cannot
 display an obsolete response.
 
-Temporary AOI lifecycle storage remains independent. Bivariate mode currently
-supports whole overlap and a shared rectangular sample window only, so the
-temporary-AOI action is disabled rather than translated into another
-subsystem's state.
+Bivariate sampling supports whole overlap, a shared rectangular sample window,
+or an immutable `catalogSelection` descriptor. Catalog selections preserve exact
+polygon masks on the X-reference grid and reauthorize vector identity around
+reads and cached responses. Optional map outlines do not gate sampling.

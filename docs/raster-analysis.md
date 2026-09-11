@@ -11,7 +11,7 @@ supplies a filesystem path, source window, CRS, histogram size, or work limit.
 
 - no area field, meaning the whole raster;
 - one canonical non-wrapping WGS 84 `selectedBounds` rectangle; or
-- one opaque, ready `temporaryAoiId`.
+- one immutable `catalogSelection` descriptor issued by Catalog selection.
 
 The application resolves the current catalog Asset inside the configured
 read-only mount and checks its scanner source signature before and after the
@@ -58,8 +58,8 @@ independent output-size, storage, and execution limits.
 ## Bounded read policy
 
 Every statistics request first produces one clipped, integral source-pixel
-envelope. WGS 84 bounds and temporary AOI polygon edges are densified before
-projection into the raster CRS. Temporary AOI polygons, holes, and
+envelope. WGS 84 bounds and catalog-selection polygon edges are densified before
+projection into the raster CRS. Catalog-selection polygons, holes, and
 MultiPolygons remain polygonal masks rather than being replaced by their
 bounding boxes; overlapping components are unioned so a cell cannot count
 twice. The response calls the selection an area, not a valid-data footprint.
@@ -107,10 +107,10 @@ distribution and an `exactSourceWindow` result as an exact bounded
 distribution. The histogram and color controls use this provenance instead of
 inferring accuracy from the active renderer.
 
-Whole-raster, rectangle, and temporary-AOI selection all use the same frontend
-adapter and request lifecycle. Hiding a temporary AOI overlay changes only map
-presentation; it does not change or refetch the selected analysis area.
-Removing, replacing, or expiring the AOI does invalidate that selection.
+Whole-raster, rectangle, and catalog-vector selection use the same frontend
+adapter and request lifecycle. Hiding or failing to draw the optional vector
+outline changes only map presentation. Source/filter changes invalidate pending
+selection work. Clearing a selection never silently requests whole-raster work.
 
 ## Cache, staleness, and cancellation
 
@@ -123,7 +123,7 @@ use HTTP 409 with `detail.code = "statistics_capacity_busy"` and a human-readabl
 Cache identity
 includes Collection and Item, source signature, normalized sampling-area
 identity, algorithm version, geometry policy, and every fixed exact/sample-grid
-planning parameter. Source and temporary-AOI lifecycle identities are rechecked
+planning parameter. Raster and catalog-vector source identities are rechecked
 around reads and cache-hit returns.
 
 Each browser request has an abort signal and sequence identity, so an obsolete

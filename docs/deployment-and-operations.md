@@ -183,8 +183,8 @@ least-recently-used tiles when the configured limit is reached.
   render concurrency.
 - Deleting the volume named by `EOLAB_DATABASE_VOLUME_NAME` permanently deletes
   the Catalog. Do this only when intentionally creating a new empty Catalog.
-- A temporary AOI upload is isolated from the source mount, STAC, and GeoServer
-  publication and expires automatically.
+- Catalog-vector selections read the original immutable mounted source. Both
+  the web application and Processing worker need the same read-only source mount.
 
 ## Detailed contracts
 
@@ -195,6 +195,6 @@ Use these documents when changing or troubleshooting a subsystem:
 - [Raster analysis](raster-analysis.md)
 - [Bivariate raster comparison](bivariate-raster.md)
 - [Vector publication](vector-publication.md)
-- [Temporary AOI uploads](temporary-aoi.md)
+- [Catalog-vector selections](vector-sampling.md)
 - [Saved map views](saved-map-views.md)
 - [Catalog dataset handlers](catalog-dataset-handlers.md)

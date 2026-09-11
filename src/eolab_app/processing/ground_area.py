@@ -3,7 +3,7 @@
 WGS84 cylindrical equal-area coordinates preserve ellipsoid surface area.
 Only boundaries are transformed; raster values stay on their original grid.
 Rectilinear EPSG:4326/3857/6933 grids multiply cached row/column area weights
-by numerical fractional AOI masks. Other grids retain bounded cell geometry.
+by numerical fractional polygon selection masks. Other grids retain bounded cell geometry.
 """
 
 import math
@@ -12,7 +12,7 @@ from typing import Any, Callable
 import numpy as np
 from pyproj import CRS, Transformer
 from pyproj.exceptions import ProjError
-from rasterio.windows import Window
+from rasterio.windows import Window, transform as window_transform
 import shapely
 from shapely.geometry import Polygon, box, shape
 from shapely.geometry.base import BaseGeometry
@@ -24,6 +24,7 @@ from eolab_app.processing.aggregate_models import (
 )
 from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.area_coverage import AreaCoverage
+from eolab_app.bounded_vector import polygon_features, native_bbox_for_grid
 
 # lat_ts=0 makes the x domain exactly +/- pi * WGS84's semimajor axis.
 AREA_CRS = "+proj=cea +lat_ts=0 +lon_0=0 +datum=WGS84 +units=m +type=crs"
@@ -60,7 +61,7 @@ class CoordinateBudget:
             raise ProcessingError(
                 "area_geometry_limit",
                 f"Ground-area measurement needs more than {self.maximum:,} transformed "
-                "coordinates. Choose a smaller area or simplify the AOI.",
+                "coordinates. Choose a smaller area or filter the source more narrowly.",
                 413,
             )
 
@@ -199,7 +200,7 @@ def transformed_polygon(
     if not result.is_valid:
         raise ProcessingError(
             "unsupported_area_crs",
-            "Ground-area boundaries become invalid after transformation. Choose a smaller area or simplify the AOI.",
+            "Ground-area boundaries become invalid after transformation. Choose a smaller area or filter the source more narrowly.",
         )
     return result
 
@@ -219,7 +220,7 @@ class GroundArea:
 
         Args:
             dataset: Authorized, validated native raster.
-            area: Immutable box/AOI or whole-raster selection.
+            area: Immutable box/polygon selection or whole-raster selection.
             limits: Processing-owned geometry and transformation policy.
             planning: Use the smaller metadata-stage coordinate budget.
 
@@ -227,6 +228,8 @@ class GroundArea:
             ProcessingError: For unsupported CRS/topology or excessive work.
         """
         self.transform = dataset.transform
+        self.catalog_source = area.resolved if area.kind == "catalogSelection" else None
+        self.dataset = dataset
         self.limits = limits
         self.budget = CoordinateBudget(
             limits.max_coordinates
@@ -297,7 +300,36 @@ class GroundArea:
         self.geometry = None
         self.rectangle = None
         self.window = Window(0, 0, dataset.width, dataset.height)
-        if area.kind != "wholeRaster":
+        if area.kind == "catalogSelection":
+            self.wgs_area = wgs_area
+            # A streaming planning pass uses the existing total transformation
+            # work ceiling while retaining only one feature at a time.
+            self.budget = CoordinateBudget(limits.max_area_transform_coordinates)
+            pixel_bounds = [math.inf, math.inf, -math.inf, -math.inf]
+            with polygon_features(self.catalog_source) as features:
+                for item in features:
+                    projected = transformed_polygon(
+                        shape(item), pixels, WINDOW_TOLERANCE_PIXELS, 64
+                    )
+                    left, top, right, bottom = projected.bounds
+                    pixel_bounds = [
+                        min(pixel_bounds[0], left),
+                        min(pixel_bounds[1], top),
+                        max(pixel_bounds[2], right),
+                        max(pixel_bounds[3], bottom),
+                    ]
+            left, top, right, bottom = pixel_bounds
+            pad = 2 * WINDOW_TOLERANCE_PIXELS
+            x0, y0 = max(0, math.floor(left - pad)), max(0, math.floor(top - pad))
+            x1, y1 = min(dataset.width, math.ceil(right + pad)), min(
+                dataset.height, math.ceil(bottom + pad)
+            )
+            if x0 >= x1 or y0 >= y1:
+                raise ProcessingError(
+                    "no_overlap", "The selected area does not overlap this raster."
+                )
+            self.window = Window(x0, y0, x1 - x0, y1 - y0)
+        elif area.kind != "wholeRaster":
             originals = (
                 [box(*area.bounds)]
                 if area.kind == "bounds"
@@ -319,7 +351,7 @@ class GroundArea:
             ):
                 raise ProcessingError(
                     "area_geometry_limit",
-                    "The AOI has too many coordinates for ground-area measurement. Simplify it.",
+                    "The polygon selection has too many coordinates for ground-area measurement. Simplify it.",
                     413,
                 )
             if area.kind == "bounds" and self.rectilinear:
@@ -352,7 +384,7 @@ class GroundArea:
             ):
                 raise ProcessingError(
                     "area_geometry_limit",
-                    "The AOI union exceeds the ground-area geometry limit. Simplify it.",
+                    "The polygon selection union exceeds the ground-area geometry limit. Simplify it.",
                     413,
                 )
             left, top, right, bottom = pixel_bounds
@@ -486,6 +518,67 @@ class GroundArea:
             ProcessingError: For excessive or unsupported transformed geometry.
         """
         height, width = int(tile.height), int(tile.width)
+        if self.catalog_source is not None:
+            # Union only projected candidates intersecting this tile. Union is
+            # essential for fractional areas: summing features double-counts
+            # overlap. No geometry is persisted or retained between tiles.
+            self.geometry = self.rectangle = self.coverage = None
+            # Corner envelopes prove containment only for a separable grid.
+            # For general projections, keep the conservative predicate stream.
+            footprint = None
+            if self.rectilinear:
+                corners = self._project_native(self._corners(tile))
+                footprint = box(*corners.min(axis=0), *corners.max(axis=0))
+            retained = []
+            count = 0
+            bbox = native_bbox_for_grid(
+                self.catalog_source,
+                self.dataset.crs,
+                window_transform(tile, self.transform),
+                (height, width),
+            )
+            with polygon_features(self.catalog_source, bbox) as features:
+                for item in features:
+                    geometry = transformed_polygon(
+                        shape(item),
+                        lambda p: project_points(p, self.wgs_area, self.budget),
+                        self.limits.area_edge_tolerance_metres,
+                        self.limits.area_max_segment_metres,
+                    )
+                    if footprint is None or geometry.intersects(footprint):
+                        count += shapely.get_num_coordinates(geometry)
+                        if count > self.limits.max_coordinates:
+                            raise ProcessingError(
+                                "area_geometry_limit",
+                                "The current raster tile exceeds the retained geometry buffer.",
+                                413,
+                            )
+                        retained.append(geometry)
+            if not retained:
+                return np.zeros((height, width), dtype=np.float64)
+            self.geometry = shapely.union_all(retained)
+            if (
+                not self.geometry.is_valid
+                or shapely.get_num_coordinates(self.geometry)
+                > self.limits.max_coordinates
+            ):
+                raise ProcessingError(
+                    "area_geometry_limit",
+                    "The current raster tile exceeds the union geometry buffer.",
+                    413,
+                )
+            self.rectangle = (
+                self.geometry.bounds
+                if self.geometry.equals(self.geometry.envelope)
+                else None
+            )
+            if self.rectilinear and self.rectangle is None:
+                oriented = shapely.orient_polygons(self.geometry)
+                self.coverage = AreaCoverage(
+                    np.asarray(ring.coords)
+                    for polygon in shapely.get_parts(oriented)
+                    for ring in [polygon.exterior, *polygon.interiors]
+                )
         if self.rectilinear:
             x, y = int(tile.col_off - self.window.col_off), int(
                 tile.row_off - self.window.row_off
@@ -534,7 +627,7 @@ class GroundArea:
                 if shapely.get_num_coordinates(polygon) > self.limits.max_coordinates:
                     raise ProcessingError(
                         "area_geometry_limit",
-                        "A clipped pixel exceeds the area coordinate limit. Simplify the AOI.",
+                        "A clipped pixel exceeds the area coordinate limit. Simplify the polygon selection.",
                         413,
                     )
                 areas[row, column] = polygon.area / HECTARE_SQUARE_METRES

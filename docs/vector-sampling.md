@@ -1,141 +1,139 @@
-# Sampling with a filtered vector layer
+# Sampling with a filtered Catalog vector
 
-In **Summarize → Area → Vector layer**, choose a mounted Shapefile or
-GeoPackage polygon layer directly below the Area selector. **Edit filter** opens
-the existing filter panel with **Use filtered features & calculate**. This action
-commits the complete predicate (for example, `iso3 equals "PER"`), selects the
-authoritative polygon AOI, returns to Summarize, and runs configured valid
-statistics. No subsequent **Use these features** or second **Calculate** is needed.
-Draft edits and closing the panel do not submit analysis. Cancel is available
-during selection and calculation. If all statistic cards have been removed, the
-action opens the statistic editor without inventing a calculation.
+In **Summarize → Area → Vector layer**, choose a mounted Shapefile or GeoPackage
+polygon layer. **Edit filter → Use filtered features & calculate** commits the
+typed predicate, selects its Catalog descriptor, returns to Summarize, and runs
+configured valid statistics in one action. Cancelling or closing a draft does
+not submit it. Cancel remains available during selection and calculation. If
+there are no statistic cards, the editor opens without inventing a calculation.
 
-Alternatively, choose **Use these features** directly. If selection review is
-shown, finish with **Continue with these features** (including the near-global
-confirmation when applicable). Accepting the features while Summarize is active
-immediately runs configured valid statistics, even with automatic updates off;
-no additional **Calculate** click is needed. Small selections run as soon as
-selection completes. Accepting features in Explore does not implicitly calculate.
+**Use these features** also remains available. Accepting a reviewed selection
+in Summarize runs configured statistics, even with automatic updates disabled;
+accepting it in Explore only changes the sampling area. Both placements share
+the selection. The analysis predicate is independent of the map rendering filter.
+All matching source features contribute regardless of viewport or map visibility.
 
-The analysis predicate is independent of the map's rendering filter and is shown
-beside the selected sampling layer. Ordinary map filtering retains its existing
-debounce and **Apply filter** action, without implicitly starting analysis.
-All matching features contribute, regardless of the
-viewport or which features were clicked. Overlaps count once and holes remain
-excluded. No matches is an error, never a whole-layer or bounding-box fallback.
-The same controls remain available in **Explore → Sampling area → Vector layer**.
-Both placements share the retained sampling selection and its applied predicate.
-Choosing Vector layer in Summarize clears the calculation area until polygons
-are explicitly selected; reopening the panel does not silently restore the old
-map box. Applying the selection from Summarize keeps that panel active.
+Selections drive 1D and 2D histograms, native summaries, calculations, fractional
+ground areas, and clips. Each feature keeps its existing numeric policy:
+histogram all-touched masks, native calculation cell centers, clip all-touched
+masks, or fractional ellipsoidal intersections. Overlapping polygons count once
+and holes remain excluded. Histogram modes keep their own grid policies and can
+report different sample counts.
 
-The selected geometry drives 1D and 2D histogram masks, summary statistics and
-clip downloads through the existing temporary-AOI reference. Histogram samples
-are bounded approximations; the two histogram modes retain their existing grid
-policies and may report different sample counts. Exact summaries retain their
-native-resolution processing limits. An explicit Calculate action plans and
-submits once; the redundant vector-specific review conversion has been removed.
+An unfiltered multi-feature selection or envelope exceeding 5 million km²
+requires review for direct **Use these features**; an envelope over 100 million km² requires another near-global
+confirmation. These envelope checks do not estimate polygon area or bypass
+resource limits. Source/filter changes invalidate pending selection work.
+Summarize's explicit filter action skips envelope confirmations while retaining
+server limits. Obsolete selection transports are aborted; the next bounded
+request waits for the prior one to settle. No server identity needs cleanup.
+No matches is an explicit error, never an unfiltered or bounding-box fallback.
 
-For direct **Use these features** in either placement, an unfiltered selection
-of multiple features or an envelope over 5 million km²
-requires review with an **Edit filter** action. An envelope over 100 million km²
-requires a second explicit near-global confirmation. These are conservative
-envelope checks, not estimates of polygon area or runtime. Confirmation does not
-override geometry or processing limits. Filter/source changes, layer removal,
-expiry and clearing invalidate the snapshot and obsolete pending work. A fresh
-selection uses the explicit filter action in Summarize or **Use these features**
-in either placement. Summarize's filter action skips envelope confirmations while keeping
-all server limits. Superseded bounded extraction stays connected until it returns
-an opaque identity, which is removed before the next extraction. Failed removal
-retains the identity for retry. Obsolete Processing plans and jobs drain through
-the existing release, idempotent-submission and cancellation lane. Previous values
-remain greyed out; late responses never become the current result. The uploaded AOI remains
-separately available.
+## Public descriptor
+
+`POST /api/vector-sampling/areas` accepts the existing `collectionId`, `itemId`,
+and typed `filter`. It resolves Catalog metadata and the exact mounted source,
+validates native fields, and returns counts, exact bounds, scalar work measures,
+and a `selection` descriptor:
+
+```json
+{
+  "collectionId": "eolab-mounted-vectors",
+  "itemId": "scanner-owned-item-id",
+  "assetKey": "data",
+  "layerName": "native-layer-name",
+  "sourceSignature": "<64 lowercase hexadecimal characters>",
+  "filter": {
+    "enabled": true,
+    "match": "all",
+    "rules": [{"field": "NEXT_SINK", "operator": "eq", "value": 6060007000}]
+  }
+}
+```
+
+Use that entire descriptor as `catalogSelection` in raster-statistics,
+paired-statistics, clip-plan, and calculation-plan requests. A selection is
+exclusive of a rectangle or explicit whole-raster intent. Requests accept no
+paths, arbitrary SQL, browser geometry, or opaque area IDs. Single/paired
+statistics use scope `catalogSelection` and echo the descriptor; whole/rectangle
+response fields retain their prior shape.
+
+`POST /api/vector-sampling/outline` accepts the descriptor separately and returns
+an approximate map outline. It may omit small components/holes to fit its
+256 KiB / 10,000-position display budget. Failure, cancellation, or hiding that
+outline does not invalidate numeric selection. Zoom uses exact measured bounds.
 
 ## Ownership and dependencies
 
-- `vector/sampling.py` owns Catalog authorization, typed filtering, source
-  identity checks and bounded extraction admission. It uses `vector/geometry.py`
-  in the existing supervised native-process executor. It does not depend on
-  publication, WFS, WMS, GeoServer or the raster implementation.
-- `bounded_geometry.py` owns neutral bounded CRS conversion and geometry
-  validation, used by both uploads and vector selection. Vector selection
-  additionally requires valid polygon topology. Analysis geometry is never
-  repaired, simplified or replaced by its envelope. `vector/display_geometry.py`
-  creates a separate approximate browser outline inside the same bounded child.
-- The backend composition root injects the AOI service's `retain_geometry`
-  capability. AOI storage owns opaque identity, immutable polygon snapshots,
-  expiry and removal, without learning Catalog or vector filtering semantics.
-  Raster statistics and processing continue to consume the shared AOI read port.
-- The browser vector controller owns source/filter selection, review and stale
-  responses. Its existing view is mounted in Explore and Summarize; the summary
-  controller owns the Area choice and the visibility of its inline container.
-  The browser composition root connects it to the existing AOI API
-  and overlay adapter, raster selection commands and summary cancellation.
-  Vector, raster and AOI browser components do not import each other's
-  implementations. The shared map-layer controller gains no feature logic.
-- The paired raster API gains an exclusive `temporaryAoiId` alternative to
-  `selectedBounds`. AOI lifecycle identity joins its existing source/policy cache
-  key and is checked before and after native reads and cached responses.
+- **Owner:** Catalog vector selection (`vector/sampling.py`) validates Catalog
+  identity, native asset/layer, immutable source signature, and typed predicates.
+  **Used by:** the selection route and injected analysis/Processing read port.
+  **Depends on:** Catalog metadata, mounted resolution, neutral predicate/source
+  contracts, and bounded process execution. It retains no geometry registry.
+- `catalog_selection.py` owns path-free descriptors and private resolved-source
+  capabilities. `attribute_filter.py` owns the existing rule semantics shared
+  with vector filtering. `bounded_vector.py` owns streaming original-source
+  reads, conservative candidate bounds, and bounded exact-mask mechanics.
+  These mechanisms have no rendering, GeoServer, or feature workflow.
+- Raster analysis owns histogram grids, numeric policy, cancellation, cache
+  identity, and source reauthorization. Processing owns native plans, durable
+  job descriptors, exact/fractional algorithms, and publication. Both depend on
+  neutral source contracts without importing each other's implementation.
+  **Coordinates with:** browser peers through composition and immutable values;
+  neither feature inspects rendering state.
+- The existing browser composition root connects vector selection, its optional
+  outline adapter, analysis selection, and Processing. No new coordinator,
+  top-level service, source copy, storage mount, or selection database is added.
 
-No new queue, storage mount, database migration or geometry upload endpoint is
-introduced. Completed jobs already persist their independent geometry snapshot
-in provenance. Vector AOIs remain temporary and are not restored by shared map
-links or page reloads; abandoned references expire through the AOI lifecycle.
+## Bounded direct reading
 
-## Limits
+Every read opens the original native layer. Numeric/null predicates use quoted,
+server-compiled OGR WHERE clauses; exact Python evaluation follows candidate
+reads. String/date rules remain post-filtered because driver collation differs.
+An OR with a post-filtered rule cannot prune its other native candidates.
 
-`POST /api/vector-sampling/areas` accepts Catalog `collectionId`, `itemId`, and
-the existing typed `filter` contract. It never accepts a source path, arbitrary
-SQL or browser-supplied geometry. The response contains bounded display geometry,
-the exact matched/total count, applied filter and opaque AOI identity. Its
-`geometry` field is **display-only**, while `bbox` is computed from every exact
-coordinate. Numeric consumers must resolve the opaque ID through AOI retention;
-the API does not accept the returned outline as a calculation area.
+Spatial pruning is conservative: canonical separable EPSG:4326/3857/6933 grids
+can bound EPSG:4326 source candidates using padded corner envelopes. Wrapped
+world edges and unproven CRS transformations use the unrestricted predicate
+stream. Exact projected geometry always determines final membership.
 
-- Two concurrent native selection reads per application process; busy requests
-  are rejected rather than queued without a bound.
-- 15-second supervised deadline, including child startup and cleanup;
-  cancellation reclaims the child before releasing its slot.
-- Linux native child address space: 2 GiB. Windows development relies on the
-  remaining geometry, row and supervised time limits.
-- At most 1 million scanned rows, 10,000 matching features, 500,000 exact
-  coordinate positions, 32 nesting levels and 7 MiB of exact serialized geometry
-  (default spaced JSON). The 7 MiB ceiling leaves headroom beneath Processing's
-  unchanged 8 MiB snapshot budget; the coordinate ceiling matches the existing
-  500,000-position histogram/Processing projection capacity. Exact selections
-  must be complete; exceeding a server limit rejects the selection.
-- Browser outlines are capped independently at 256 KiB compact GeoJSON and
-  10,000 positions. Topology-preserving simplification normally keeps holes and
-  separate islands. If the full-detail attempts cannot meet the display budget,
-  only simplified exteriors of the largest 500 polygon components are shown.
-  Small islands and holes may therefore be absent from the approximate outline,
-  but remain in every analysis. Explicit east/west dateline components are kept
-  separate without longitude wrapping or union. Zoom uses the exact `bbox`.
-- Display simplification uses documented module-level policy constants in
-  `vector/display_geometry.py`: initial tolerance is envelope span / 16,384
-  (about 0.006% of span), with a 1e-9-degree positive span floor. Tolerance
-  doubles after each unsuccessful attempt. Nine full-detail attempts cover
-  span / 16,384 through span / 64; the tenth switches to the largest exteriors
-  at span / 32. Eighteen attempts total reach 8 times span. These are bounded
-  quality/work heuristics, not measured optimal values or proof that omitted
-  topology could never fit. Geometric growth explores fine through coarse
-  outlines, returning immediately when both display caps are met. Each attempt
-  simplifies the original polygons (or their original exteriors), so errors
-  do not accumulate from repeatedly simplifying the previous result. Exhaustion
-  fails explicitly; the supervised deadline remains the wall-clock bound.
-- New vector retention is rejected when 64 temporary area records are retained.
-  Trusted retained snapshots also share a 32 MiB serialized-geometry budget;
-  Python geometry objects use more memory than their serialized size. Removal
-  and expiry reclaim that budget. The configured TTL (30 minutes by default)
-  applies. Upload size, archive, geometry and replacement policies are unchanged.
+Selection reads admit two native children per application process, each with a
+15-second supervised deadline and a 2 GiB Linux address-space ceiling. Streams
+check source signatures, cancellation, a 15-second work deadline, and at most
+one million candidate features. Each retained native/transformed feature is
+limited to 500,000 coordinates. There is no 7 MiB complete-selection JSON limit,
+10,000-match limit, TTL, or aggregate retained-selection budget.
 
-Raster block, decoded-byte, transformed-coordinate, memory and runtime limits
-remain independent and enforced. Blockwise raster reads bound pixel memory;
-they do not make geometry projection or repeated mask construction unlimited.
-The mask still uses the complete projected exact selection, and no new
-block-local geometry algorithm is introduced for this display-limit fix.
+Projection preserves the existing selection-wide densification rate for
+previously supported geometry. It retains one feature at a time; masks union
+per-feature membership on admitted grids. Fractional calculations union exact
+tile candidates before measuring intersections, retaining at most 500,000
+coordinates per tile and enforcing the existing 4-million transformed-position
+work limit. Unsupported transformations and exceeded actual work limits fail
+explicitly. Raster block, decoded-byte, output, concurrency, and operation
+deadlines remain independently enforced. Full selected geometry is never copied
+into requests, jobs, or provenance.
 
-The first version supports the same native mounted Shapefile/GeoPackage sources
-as filtered field reads. Additional vector containers should extend the exact
-source reader with their own bounded container handling.
+## Persisted compatibility
+
+New `ClipArea` / `AggregateArea` values use `kind: "catalogSelection"`, measured
+bounds, and the descriptor. A resolved local capability exists only during
+planning/execution and is excluded from serialization. The dedicated worker
+reauthorizes both Catalog sources before execution and before publication.
+Source removal or mutation fails pending work; completed results remain readable.
+
+The existing database claim fence requires protocol 5 for these jobs, so older
+workers cannot execute them. Rectangle/whole jobs retain their older claim
+versions and wire shape. No destructive data migration is performed.
+
+Historical accepted `kind: "aoi"` jobs retain their operation-owned geometry
+reader, including queued execution, result/provenance access, and idempotent
+submission recovery. An old unsubmitted plan with a non-null `temporaryAoiId`
+returns `legacy_selection_plan`; choose a Catalog vector and review a new plan.
+Old rectangle/whole plans containing a null retired field remain submittable.
+These historical schema checks do not restore upload, storage, expiry, or any
+live area service. Existing result expiry/cleanup policies are unchanged.
+
+Selection state is not added to shared map links. A page reload can recover
+owned Processing jobs with the existing session cookie. Removed upload intents
+cannot be restored as live browser selections.

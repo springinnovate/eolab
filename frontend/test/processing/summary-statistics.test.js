@@ -1,3 +1,4 @@
+import { CATALOG_SELECTION } from "../../test-support/raster/fixtures.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
@@ -76,7 +77,7 @@ function composedVectorSelection(h, bbox) {
         calculations: h.controller,
         vectorSamplingOverlay: { load() {} },
         // Raster sampling can change the active dock: composition must capture intent first.
-        rasterVisualization: { setVectorSamplingAoi() { h.controller.setActive(false); } },
+        rasterVisualization: { setVectorSelection() { h.controller.setActive(false); } },
         mapInspection: { showCalculations() { h.controller.setActive(true); } },
     };
     const { onActivate } = new Function(...Object.keys(dependencies),
@@ -85,9 +86,8 @@ function composedVectorSelection(h, bbox) {
     const view = { bind(handlers) { this.handlers = handlers; }, render(state) { this.state = state; }, unbind() {} };
     const controller = new VectorSamplingController({
         view, getTargets: () => [{ key: "countries", label: "Countries", item: { collection: "vectors", id: "countries" }, filter }],
-        createArea: async () => ({ id: "V".repeat(32), filename: "Countries", filter, bbox, matched: 1, total: 200,
-            expiresAt: "2099-01-01T00:00:00Z", geometry: { type: "FeatureCollection", features: [] } }),
-        removeArea: async () => {}, onActivate,
+        createArea: async () => ({ selection: CATALOG_SELECTION, label: "Countries", filter, bbox, matched: 1, total: 200 }),
+        onActivate,
         onInvalidate: id => h.controller.invalidateSamplingArea(id), onEditFilter() {},
         clock: { setTimeout() {}, clearTimeout() {} },
     });
@@ -108,7 +108,7 @@ for (const [name, bbox, confirmations] of [
             selection.view.handlers.onConfirm(); await h.tick();
         }
         assert.equal(h.submits(), 1);
-        assert.equal(h.controller.engine.record.intent.area.temporaryAoiId, "V".repeat(32));
+        assert.deepEqual(h.controller.engine.record.intent.area.catalogSelection, CATALOG_SELECTION);
         assert.equal(h.controller.isActive, true);
         selection.view.handlers.onConfirm(); await h.tick();
         assert.equal(h.submits(), 1, "A repeated confirmation cannot resubmit");
@@ -137,10 +137,10 @@ test("direct feature acceptance with no statistics opens the editor", async () =
 test("applied vector action runs configured valid statistics once even with automatic updates disabled", async () => {
     const h = fixture(); await h.open(); h.controller.setAutomatic(false);
     h.controller.addStatistic("custom"); await h.tick();
-    h.controller.setVectorSamplingArea({ id: "V".repeat(32), label: "Canada" }, true); await h.tick();
+    h.controller.setVectorSamplingArea({ selection: CATALOG_SELECTION, label: "Canada" }, true); await h.tick();
     assert.equal(h.submits(), 1);
     assert.equal(h.controller.engine.record.intent.calculations.length, 1);
-    assert.equal(h.controller.engine.record.intent.area.temporaryAoiId, "V".repeat(32));
+    assert.deepEqual(h.controller.engine.record.intent.area.catalogSelection, CATALOG_SELECTION);
     await h.finish(); assert.equal(h.controller.state.statistics[0].current, true);
     assert.equal(h.controller.state.statistics[1].result, null);
 });
@@ -148,7 +148,7 @@ test("applied vector action runs configured valid statistics once even with auto
 test("an applied selection with no statistics opens the editor without inventing a calculation", async () => {
     const h = fixture(); await h.open();
     h.controller.removeStatistic(h.controller.state.statistics[0].id);
-    h.controller.setVectorSamplingArea({ id: "V".repeat(32), label: "Canada" }, true); await h.tick();
+    h.controller.setVectorSamplingArea({ selection: CATALOG_SELECTION, label: "Canada" }, true); await h.tick();
     assert.equal(h.controller.state.statistics.length, 0); assert.equal(h.submits(), 0);
     assert.equal(h.document.activeElement, h.view.elements.template);
 });
@@ -170,11 +170,11 @@ test("late vector plans are released before the newest applied area is submitted
     const h = fixture(); await h.open(); const wait = deferred(), original = h.api.planCalculation;
     let first = true;
     h.api.planCalculation = async intent => { const plan = await original(intent); if (first) { first = false; await wait.promise; } return plan; };
-    h.controller.setVectorSamplingArea({ id: "A".repeat(32), label: "First" }, true); await h.tick();
+    h.controller.setVectorSamplingArea({ selection: { ...CATALOG_SELECTION, itemId: "first" }, label: "First" }, true); await h.tick();
     h.controller.setVectorSelectionState({ analysis: true, phase: "reading", message: "Replacement" });
-    h.controller.setVectorSamplingArea({ id: "B".repeat(32), label: "Second" }, true); await h.tick();
+    h.controller.setVectorSamplingArea({ selection: { ...CATALOG_SELECTION, itemId: "second" }, label: "Second" }, true); await h.tick();
     assert.equal(h.submits(), 0); wait.resolve(); await flush();
-    assert.equal(h.submits(), 1); assert.equal(h.controller.engine.record.intent.area.temporaryAoiId, "B".repeat(32));
+    assert.equal(h.submits(), 1); assert.equal(h.controller.engine.record.intent.area.catalogSelection.itemId, "second");
     const operations = h.requests.map(row => row[0]);
     assert.ok(operations.indexOf("discard") < operations.lastIndexOf("plan"));
 });
@@ -183,9 +183,9 @@ test("a late accepted vector job is cancelled before a replacement runs and cann
     const h = fixture(); await h.open(); const wait = deferred(), submit = h.api.submitCalculation;
     let first = true;
     h.api.submitCalculation = async request => { const job = await submit(request); if (first) { first = false; await wait.promise; } return job; };
-    h.controller.setVectorSamplingArea({ id: "A".repeat(32), label: "First" }, true); await h.tick();
+    h.controller.setVectorSamplingArea({ selection: { ...CATALOG_SELECTION, itemId: "first" }, label: "First" }, true); await h.tick();
     h.controller.setVectorSelectionState({ analysis: true, phase: "reading", message: "Replacement" });
-    h.controller.setVectorSamplingArea({ id: "B".repeat(32), label: "Second" }, true); await h.tick();
+    h.controller.setVectorSamplingArea({ selection: { ...CATALOG_SELECTION, itemId: "second" }, label: "Second" }, true); await h.tick();
     wait.resolve(); await flush(); assert.equal(h.requests.filter(row => row[0] === "cancel").length, 1);
     assert.equal(h.submits(), 1); await h.finish("ready", ["99"]);
     assert.equal(h.controller.state.statistics[0].result, null); assert.equal(h.submits(), 2);
@@ -311,7 +311,7 @@ test("saved result exports still reject arbitrary and mismatched job URLs", asyn
 
 for (const [code, message] of [["source_work_too_large", "The area needs 1,450 native blocks; the limit is 500."],
     ["source_work_too_large", "The area needs 3,570 decoded bytes; the limit is 3,500."],
-    ["aoi_too_large", "The serialized geometry is 240 bytes; the limit is 100. Simplify the AOI."]]) {
+    ["area_geometry_limit", "The current tile exceeds its retained geometry buffer. Filter the source more narrowly."]]) {
     test(`current cards preserve API refusal details: ${message}`, async () => {
         const h = fixture(); await h.open(); const card = h.controller.state.statistics[0];
         h.controller.request(card.id, "manual"); await flush(); await h.finish();
@@ -374,7 +374,7 @@ test("total wait includes debounce, planning, polling and the first result DOM u
 
 test("one explicit vector calculation includes planning and needs no second confirmation", async()=>{
     const h=fixture();await h.open();const card=h.controller.state.statistics[0];
-    h.controller.setVectorSamplingArea({id:"V".repeat(32),label:"Peru"});await h.tick();
+    h.controller.setVectorSamplingArea({selection:CATALOG_SELECTION,label:"Peru"});await h.tick();
     h.controller.request(card.id,"manual");await flush();assert.equal(card.manualRequired,false);
     assert.equal(h.submits(),1);h.elapse(2500);await h.finish();
     assert.equal(card.result.totalWaitSeconds,2.5);
@@ -424,8 +424,8 @@ test("choosing vector from an empty selection immediately shows its controls wit
 
 test("vector calculation submits on the first click and invalidates results when removed", async()=>{
     const h=fixture();await h.open();const card=h.controller.state.statistics[0];
-    const id="V".repeat(32);
-    h.controller.setVectorSamplingArea({id,label:"Countries · 1 of 200 features"});await h.tick();
+    const id=CATALOG_SELECTION;
+    h.controller.setVectorSamplingArea({selection:id,label:"Countries · 1 of 200 features"});await h.tick();
     assert.equal(h.controller.state.areaChoice,"vector");
     assert.equal(h.view.vectorAreaControls.hidden,false);
     assert.equal(h.submits(),0);
@@ -433,7 +433,7 @@ test("vector calculation submits on the first click and invalidates results when
     assert.equal(h.submits(),1);assert.equal(card.manualRequired,false);
     h.controller.request(card.id,"manual");await flush();assert.equal(h.submits(),1);
     assert.equal(h.view.cards.get(card.id).size.hidden,true);
-    assert.deepEqual(h.controller.engine.record.intent.area,{kind:"temporaryAoi",temporaryAoiId:id});
+    assert.deepEqual(h.controller.engine.record.intent.area,{kind:"catalogSelection",catalogSelection:id});
     await h.finish();assert.equal(card.current,true);
     assert.equal(h.view.cards.get(card.id).size.hidden,true);
     h.controller.setSelection(null,false);

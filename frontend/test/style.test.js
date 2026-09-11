@@ -27,7 +27,6 @@ test("controls retain distinct interactive and accessibility states", () => {
   assert.match(STYLESHEET, /\[aria-busy="true"\]/);
   assert.match(STYLESHEET, /\[aria-disabled="true"\]/);
   assert.match(STYLESHEET, /\.catalog-result:has\(\.catalog-result-details\.is-selected\)/);
-  assert.match(STYLESHEET, /\.temporary-aoi-error/);
   assert.match(
     STYLESHEET,
     /\.saved-map-view-action\[hidden\]\s*\{[^}]*display:\s*none;/s,
@@ -43,10 +42,6 @@ test("map overlays and inspection surfaces retain contrast contracts", () => {
   assert.match(
     STYLESHEET,
     /\.eolab-basemap\s*\{[^}]*opacity:[^}]*filter:/s,
-  );
-  assert.match(
-    STYLESHEET,
-    /\.temporary-aoi-overlay\s*\{[^}]*stroke:[^}]*stroke-width:/s,
   );
   assert.match(
     STYLESHEET,

@@ -1,5 +1,5 @@
 /** Domain validation and lookup helpers for paired raster statistics. */
-import { normalizeRasterSamplingArea } from "../selected-area.js";
+import { catalogSelectionsEqual, normalizeRasterSamplingArea } from "../selected-area.js";
 import { validateRasterSelectedBounds } from "./geometry.js";
 import { estimateHistogramPercentile } from "./statistics.js";
 
@@ -36,7 +36,7 @@ export function estimateRasterPairedHistogramPercentile(statistics, axis, percen
  * @throws {TypeError} If fields fall outside the paired public contract.
  */
 export function normalizeRasterPairedSamplingArea(samplingArea) {
-    if (samplingArea?.kind === "temporaryAoi") return normalizeRasterSamplingArea(samplingArea);
+    if (samplingArea?.kind === "catalogSelection") return normalizeRasterSamplingArea(samplingArea);
     if (
         samplingArea?.kind === "wholeOverlap" &&
         Object.keys(samplingArea).length === 1
@@ -103,7 +103,7 @@ export function validateRasterPairedStatistics(statistics) {
         throw pairedContractError("response data");
     }
     if (
-        !["wholeOverlap", "selectedArea", "temporaryAoi"].includes(statistics.scope) ||
+        !["wholeOverlap", "selectedArea", "catalogSelection"].includes(statistics.scope) ||
         statistics.referenceGrid !== "x" ||
         statistics.resampling !== "nearest" ||
         !["sampleGrid", "exactReferenceGrid"].includes(
@@ -114,8 +114,8 @@ export function validateRasterPairedStatistics(statistics) {
     ) {
         throw pairedContractError("sampling provenance");
     }
-    if ((statistics.scope === "temporaryAoi") !== (statistics.temporaryAoiId != null)) throw pairedContractError("AOI scope");
-    if (statistics.scope === "temporaryAoi") normalizeRasterSamplingArea({ kind: "temporaryAoi", temporaryAoiId: statistics.temporaryAoiId });
+    if ((statistics.scope === "catalogSelection") !== (statistics.catalogSelection != null)) throw pairedContractError("catalog selection scope");
+    if (statistics.scope === "catalogSelection") normalizeRasterSamplingArea({ kind: "catalogSelection", catalogSelection: statistics.catalogSelection });
     const hasBounds = statistics.selectedBounds !== null;
     if ((statistics.scope === "selectedArea") !== hasBounds) {
         throw pairedContractError("scope");
@@ -223,8 +223,8 @@ export function validateRasterPairedStatisticsForSelection(
 ) {
     const validated = validateRasterPairedStatistics(statistics);
     const area = normalizeRasterPairedSamplingArea(samplingArea);
-    if (area.kind === "temporaryAoi") {
-        if (validated.scope !== "temporaryAoi" || validated.temporaryAoiId !== area.temporaryAoiId) throw pairedContractError("AOI identity");
+    if (area.kind === "catalogSelection") {
+        if (validated.scope !== "catalogSelection" || !catalogSelectionsEqual(validated.catalogSelection, area.catalogSelection)) throw pairedContractError("catalog selection identity");
         return validated;
     }
     if (area.kind === "wholeOverlap") {

@@ -66,15 +66,19 @@ export const SELECTED_RASTER_STATISTICS = Object.freeze({
   selectedBounds: SELECTED_BOUNDS,
 });
 
-/** @type {string} Representative opaque ready temporary-AOI identity. */
-export const TEMPORARY_AOI_ID = "temporaryAoiIdentity012345678901";
+/** @type {Readonly<Object>} Complete immutable catalog selection. */
+export const CATALOG_SELECTION = Object.freeze({
+  collectionId: "eolab-mounted-vectors", itemId: "countries", assetKey: "data",
+  layerName: "countries", sourceSignature: "a".repeat(64),
+  filter: { enabled: true, match: "all", rules: [{ field: "iso3", operator: "eq", value: "PER" }] },
+});
 
-/** @type {Readonly<Object>} Representative temporary-AOI statistics. */
-export const TEMPORARY_AOI_RASTER_STATISTICS = Object.freeze({
+/** @type {Readonly<Object>} Representative catalog-selection statistics. */
+export const CATALOG_SELECTION_RASTER_STATISTICS = Object.freeze({
   ...RASTER_STATISTICS,
-  scope: "temporaryAoi",
+  scope: "catalogSelection",
   selectedBounds: null,
-  temporaryAoiId: TEMPORARY_AOI_ID,
+  catalogSelection: CATALOG_SELECTION,
 });
 
 /** @type {Readonly<Object>} Constant-value raster statistics. */

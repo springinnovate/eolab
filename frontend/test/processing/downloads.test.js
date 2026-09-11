@@ -1,3 +1,4 @@
+import { CATALOG_SELECTION } from "../../test-support/raster/fixtures.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync, readdirSync } from "node:fs";
@@ -44,21 +45,25 @@ test("review freezes the selected source and box independently of later map chan
     assert.deepEqual(h.view.state.jobs[0].area.bounds, [77,22,78,23]);
 });
 
-test("whole-raster selection cannot silently become an uploaded AOI or whole export", async () => {
-    const h = fixture(); h.setContext({ sources: [source], area: { kind: "wholeRaster" } });
-    h.controller.setTemporaryAoi({ id, filename: "aoi.gpkg", selectedDataset: "area" });
+test("whole-raster context never becomes an implicit clip export", async () => {
+    const h=fixture(); h.setContext({sources:[source],area:{kind:"wholeRaster"}});
     h.controller.open(); await h.controller.review();
-    assert.equal(h.requests.length, 0); assert.equal(h.view.state.area, null);
-    h.controller.selectArea("uploaded"); await h.controller.review();
-    assert.deepEqual(h.requests[0][1], { kind: "temporaryAoi", temporaryAoiId: id });
+    assert.equal(h.requests.length,0); assert.equal(h.view.state.area,null);
+    h.controller.open(source,{kind:"catalogSelection",catalogSelection:CATALOG_SELECTION});
+    await h.controller.review();
+    assert.deepEqual(h.requests[0][1],{kind:"catalogSelection",catalogSelection:CATALOG_SELECTION});
 });
 
-test("removing an AOI invalidates an unsubmitted review and preserves an accepted job", async () => {
-    const h = fixture(); h.controller.setTemporaryAoi({ id }); h.controller.open(); h.controller.selectArea("uploaded");
-    await h.controller.review(); h.controller.setTemporaryAoi(null);
-    assert.equal(h.view.state.plan, null); assert.equal(h.view.state.area, null);
-    h.controller.open(source, box); await h.controller.review(); await h.controller.submit();
-    h.controller.setTemporaryAoi(null); assert.equal(h.view.state.jobs.length, 1);
+test("new catalog intent invalidates review while an accepted job preserves its area", async () => {
+    const h=fixture(); h.controller.open(source,{kind:"catalogSelection",catalogSelection:CATALOG_SELECTION});
+    await h.controller.review(); assert.ok(h.view.state.plan);
+    const changed={...CATALOG_SELECTION,sourceSignature:"b".repeat(64)};
+    h.controller.open(source,{kind:"catalogSelection",catalogSelection:changed});
+    assert.equal(h.view.state.plan,null);
+    await h.controller.review(); await h.controller.submit();
+    const accepted=structuredClone(h.view.state.jobs[0]);
+    h.controller.open(source,box);
+    assert.deepEqual(h.view.state.jobs[0],accepted);
 });
 
 test("late planning results cannot replace a newer selection", async () => {
@@ -192,7 +197,9 @@ test("native CRS presentation uses the root authority, not the embedded geograph
 
 test("Downloads and sampling share only neutral selection values; peers never import Processing", () => {
     const root = new URL("../../src/",import.meta.url);
-    for (const directory of ["raster", "map-layers", "temporary-aoi"]) {
+    const markup = readFileSync(new URL("../../index.html", import.meta.url), "utf8");
+    assert.doesNotMatch(markup, /upload[\s\S]{0,24}AOI|temporary[- ]AOI/i);
+    for (const directory of ["raster", "map-layers", "vector"]) {
         for (const file of readdirSync(new URL(`${directory}/`,root)).filter(name=>name.endsWith(".js"))) {
             const source = readFileSync(new URL(`${directory}/${file}`,root),"utf8");
             assert.doesNotMatch(source,/from\s+["'][^"']*processing\//);
@@ -200,7 +207,7 @@ test("Downloads and sampling share only neutral selection values; peers never im
     }
     for (const file of readdirSync(new URL("processing/",root))) {
         const source = readFileSync(new URL(`processing/${file}`,root),"utf8");
-        assert.doesNotMatch(source,/from\s+["'][^"']*(?:raster\/|map-layers\/|temporary-aoi\/|map-inspection)/);
+        assert.doesNotMatch(source,/from\s+["'][^"']*(?:raster\/|map-layers\/|vector\/|map-inspection)/);
         assert.doesNotMatch(source,/\.blob\(|createObjectURL/);
     }
     assert.doesNotMatch(readFileSync(new URL("selected-area.js",root),"utf8"),/\bimport\b|\bfetch\b|\bdocument\b/);

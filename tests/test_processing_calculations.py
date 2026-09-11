@@ -22,6 +22,7 @@ from test_processing_jobs import (
     planned,
     submitted,
     write_geopackage_layer,
+    register_selection,
 )
 from test_raster_clips import SOURCE
 
@@ -297,10 +298,10 @@ def test_operation_mismatch_and_language_rejected_before_admission(
 
 
 @pytest.mark.parametrize("area_expression", [False, True])
-def test_aoi_snapshot_survives_removal_and_native_source_is_refenced(
+def test_catalog_selection_calculates_and_native_source_is_refenced(
     boundary: Any, tmp_path: Path, area_expression: bool
 ) -> None:
-    """Accepted geometry survives upload expiry, while modified rasters never execute.
+    """Catalog predicates drive calculations, while modified rasters never execute.
 
     Args:
         boundary: Native source, worker, AOI and HTTP owners.
@@ -316,25 +317,14 @@ def test_aoi_snapshot_survives_removal_and_native_source_is_refenced(
     write_geopackage_layer(
         upload, "area", crs="EPSG:4326", geometry_type="Polygon", geometry=geometry
     )
-    response = client.post(
-        "/api/temporary-aois", files={"file": ("aoi.gpkg", upload.read_bytes())}
-    )
-    assert response.status_code == 201, response.text
-    aoi = response.json()["id"]
+    aoi = register_selection(client, upload)
     expressions = (
         {"calculations": [{"label": "Area", "expression": "areaha(a > 5000)"}]}
         if area_expression
         else {}
     )
-    plan = plan_calculation(client, temporaryAoiId=aoi, **expressions)
+    plan = plan_calculation(client, catalogSelection=aoi, **expressions)
     job = submit_calculation(client, plan)
-    assert client.delete(f"/api/temporary-aois/{aoi}").status_code == 204
-    rejected = client.post(
-        ENDPOINT,
-        json={"planId": plan["planId"], "requestId": uuid4().hex},
-        headers=HEADERS,
-    )
-    assert rejected.status_code == 409
     assert asyncio.run(worker.run_once())
     ready = client.get(f"/api/processing/jobs/{job['jobId']}").json()
     assert ready["status"] == "ready", ready

@@ -209,7 +209,6 @@ test("RasterControlsView owns style values and semantic control events", () => {
         onSampleWindowNumberChange: (value) => received.push(["change", value]),
         onClearSampleWindow: () => received.push(["whole"]),
         onUseMapWindow: () => received.push(["box"]),
-        onUseTemporaryAoi: () => received.push(["aoi"]),
     });
     documentContext
         .querySelector("#raster-minimum-color")
@@ -256,23 +255,15 @@ test("RasterControlsView exposes accessible explicit histogram-area choices", ()
         onSampleWindowNumberChange() {},
         onClearSampleWindow: () => received.push("whole"),
         onUseMapWindow: () => received.push("box"),
-        onUseTemporaryAoi: () => received.push("aoi"),
     });
-    const temporaryAoi = {
-        id: "A".repeat(32),
-        filename: "area.gpkg",
-        selectedDataset: "boundary",
-    };
-
-    view.setTemporaryAoiAvailability(temporaryAoi);
     view.setSamplingAreaMode(
-        "temporaryAoi",
+        "catalogSelection",
         "AOI · area.gpkg · boundary"
     );
     assert.equal(
         documentContext.querySelector("#raster-histogram")
             .getAttribute("data-sampling-area"),
-        "temporaryAoi"
+        "catalogSelection"
     );
     const wholeChoice = documentContext.querySelector(
         "#clear-raster-sample-window"
@@ -280,28 +271,16 @@ test("RasterControlsView exposes accessible explicit histogram-area choices", ()
     const mapBoxChoice = documentContext.querySelector(
         "#use-map-window-for-raster"
     );
-    const aoiChoice = documentContext.querySelector(
-        "#use-temporary-aoi-for-raster"
-    );
     wholeChoice.checked = true;
     wholeChoice.dispatchEvent(new Event("change"));
     mapBoxChoice.checked = true;
     mapBoxChoice.dispatchEvent(new Event("change"));
-    aoiChoice.checked = true;
-    aoiChoice.dispatchEvent(new Event("change"));
 
-    assert.deepEqual(received, ["whole", "box", "aoi"]);
+    assert.deepEqual(received, ["whole", "box"]);
     assert.equal(
         documentContext.querySelector("#raster-sampling-area-summary").textContent,
         "AOI · area.gpkg · boundary"
     );
-    assert.match(
-        documentContext
-            .querySelector("#use-temporary-aoi-for-raster")
-            .getAttribute("aria-label"),
-        /area\.gpkg.*boundary/
-    );
-
     view.setClearSampleWindowLabel("Clear selected histogram");
     view.setSamplingAreaMode("none");
     assert.equal(
@@ -312,7 +291,6 @@ test("RasterControlsView exposes accessible explicit histogram-area choices", ()
     for (const selector of [
         "#clear-raster-sample-window",
         "#use-map-window-for-raster",
-        "#use-temporary-aoi-for-raster",
     ]) {
         assert.equal(
             documentContext.querySelector(selector).checked,
@@ -325,18 +303,15 @@ test("RasterControlsView exposes accessible explicit histogram-area choices", ()
     );
 });
 
-test("composed controls display vector sampling without selecting the uploaded AOI", () => {
+test("composed controls present one catalog selection consistently", () => {
     const documentContext = new FakeRasterDocument();
     const view = new RasterControlsView(documentContext);
-    view.setTemporaryAoiAvailability({ id: "A".repeat(32), filename: "upload.gpkg", selectedDataset: "boundary" });
-    view.setSamplingAreaMode("vector", "Vector selection · Peru");
-    assert.equal(documentContext.querySelector("#use-vector-for-raster").checked, true);
-    assert.equal(documentContext.querySelector("#use-temporary-aoi-for-raster").checked, false);
-    assert.equal(documentContext.querySelector("#raster-histogram").getAttribute("data-sampling-area"), "vector");
-    assert.equal(documentContext.querySelector("#raster-sampling-area-summary").textContent, "Vector selection · Peru");
-    view.setSamplingAreaMode("temporaryAoi", "AOI · upload.gpkg");
-    assert.equal(documentContext.querySelector("#use-vector-for-raster").checked, false);
-    assert.equal(documentContext.querySelector("#use-temporary-aoi-for-raster").checked, true);
+    for (const mode of ["vector", "catalogSelection"]) {
+        view.setSamplingAreaMode(mode, "Vector selection · Peru");
+        assert.equal(documentContext.querySelector("#use-vector-for-raster").checked, true);
+        assert.equal(documentContext.querySelector("#raster-histogram").getAttribute("data-sampling-area"), mode);
+    }
+    assert.equal(view.setTemporaryAoiAvailability, undefined);
 });
 
 test("RasterControlsView clears histogram visibility through its DOM contract", () => {
@@ -541,7 +516,6 @@ test("RasterControlsView preserves the raster viewer compatibility surface", () 
         "setSampleWindowInvalid",
         "setSampleWindowStatus",
         "setClearSampleWindowLabel",
-        "setTemporaryAoiAvailability",
         "setSamplingAreaMode",
         "showHistogramWidget",
         "setRenderingControlsAvailable",

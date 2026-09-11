@@ -1,5 +1,11 @@
 """Owned processing lifecycle and explicit raster operation commands."""
 
+from eolab_app.catalog_selection import (
+    CatalogSelection,
+    CatalogSelectionReader,
+    SelectionUnavailableError,
+)
+from eolab_app.bounded_vector import summary_process, READ_SECONDS
 import asyncio
 from dataclasses import asdict
 import hashlib
@@ -42,10 +48,6 @@ from eolab_app.processing.ports import (
 from eolab_app.processing.raster_clip import clip_process_target
 from eolab_app.raster.models import CatalogRasterRequest, Wgs84Bounds
 from eolab_app.raster.ports import RasterSourceAuthorizer
-from eolab_app.sampling_area import (
-    SamplingAreaUnavailableError,
-    TemporaryAoiSamplingAreaReader,
-)
 
 
 def prepare_clip_job(spec: ClipSpec) -> PreparedJobPlan:
@@ -66,6 +68,7 @@ def prepare_clip_job(spec: ClipSpec) -> PreparedJobPlan:
         },
         reserved_bytes=spec.grid.reservedBytes,
         operation=spec.operation,
+        minimum_claim_version=5 if spec.area.kind == "catalogSelection" else 1,
     )
 
 
@@ -91,7 +94,9 @@ def prepare_aggregate_job(
         reserved_bytes=limits.result_reservation_bytes,
         operation=spec.operation,
         minimum_claim_version=(
-            4 if spec.grid.execution else 3 if spec.grid.groundArea else 2
+            5
+            if spec.area.kind == "catalogSelection"
+            else 4 if spec.grid.execution else 3 if spec.grid.groundArea else 2
         ),
     )
 
@@ -188,7 +193,7 @@ class ProcessingService:
     def __init__(
         self,
         authorizer: RasterSourceAuthorizer,
-        areas: TemporaryAoiSamplingAreaReader,
+        areas: CatalogSelectionReader,
         jobs: JobStore,
         artifacts: JobArtifactStore,
         limits: RasterClipLimits,
@@ -200,7 +205,7 @@ class ProcessingService:
 
         Args:
             authorizer: Catalog-owned current-source authorization port.
-            areas: Neutral reader of ready immutable temporary AOI geometry.
+            areas: Neutral reader of immutable catalog-vector source capabilities.
             jobs: Durable job and admission adapter.
             artifacts: Confined result-file adapter.
             limits: Deployment-owned resource and lifecycle policy.
@@ -237,62 +242,53 @@ class ProcessingService:
         return self.changes.subscribe(owner)
 
     async def _area_snapshot(
-        self, bounds: Wgs84Bounds | None, aoi_id: str | None
+        self, bounds: Wgs84Bounds | None, selection: CatalogSelection | None
     ) -> dict[str, Any]:
-        """Snapshot an explicit area and apply the job-owned serialization limit.
+        """Resolve a box or catalog descriptor without retaining coordinates.
 
         Args:
-            bounds: Explicit box, mutually exclusive with the AOI identifier.
-            aoi_id: Ready uploaded AOI when no box is provided.
+            bounds: Explicit box, exclusive of a catalog selection.
+            selection: Immutable catalog source/native-layer/predicate definition.
 
         Returns:
-            Independent geometry value with no file or AOI storage dependency.
+            Path-free area plus a private, serialization-excluded read capability.
 
         Raises:
-            ProcessingError: If the AOI expired or its serialized geometry exceeds
-                the processing limit, including its byte size and allowed size.
+            ProcessingError: If the catalog selection is unavailable or empty.
         """
         if bounds is not None:
-            area = {
-                "kind": "bounds",
-                "bounds": (bounds.west, bounds.south, bounds.east, bounds.north),
-            }
-        else:
-            try:
-                resolved = await self.areas.resolve_for_sampling(aoi_id)
-            except SamplingAreaUnavailableError as error:
-                raise ProcessingError("aoi_unavailable", error.detail, 409) from error
-            area = {
-                "kind": "aoi",
-                "bounds": resolved.bounds,
-                "geometries": tuple(
-                    value.as_geojson() for value in resolved.geometries
-                ),
-            }
-        geometry_bytes = len(json.dumps(area).encode("utf-8"))
-        if geometry_bytes > self.limits.max_geometry_bytes:
-            raise ProcessingError(
-                "aoi_too_large",
-                f"The selected area's serialized geometry is {geometry_bytes:,} bytes; "
-                f"the processing limit is {self.limits.max_geometry_bytes:,} bytes "
-                f"({geometry_bytes - self.limits.max_geometry_bytes:,} bytes over). "
-                "Simplify the AOI geometry so its processing snapshot is at most "
-                f"{self.limits.max_geometry_bytes:,} bytes, then try again.",
-                413,
+            return {"kind": "bounds", "bounds": bounds.canonical_tuple()}
+        try:
+            resolved = await self.areas.resolve_for_sampling(selection)
+            outcome = await run_process(
+                summary_process, (resolved,), READ_SECONDS, self.native
             )
-        return area
+            success, summary = outcome.value
+            if not success:
+                raise ProcessingError("selection_unavailable", summary, 409)
+            await self.areas.resolve_for_sampling(selection)
+        except (SelectionUnavailableError, ValueError) as error:
+            raise ProcessingError("selection_unavailable", str(error), 409) from error
+        return {
+            "kind": "catalogSelection",
+            "bounds": summary["bbox"],
+            "catalogSelection": selection,
+            "resolved": resolved,
+        }
 
     async def _area(self, request: ClipPlanRequest) -> ClipArea:
-        """Build clipping's area value from the shared immutable snapshot.
+        """Build clipping's area value from the shared immutable selection.
 
         Args:
             request: Explicit clip area selection.
 
         Returns:
-            Clip-owned geometry and bounds value.
+            Clip-owned descriptor or box value.
         """
         return ClipArea(
-            **await self._area_snapshot(request.selectedBounds, request.temporaryAoiId)
+            **await self._area_snapshot(
+                request.selectedBounds, request.catalogSelection
+            )
         )
 
     async def plan_raster_clip(
@@ -335,6 +331,13 @@ class ProcessingService:
                 if status != "ok":
                     raise ProcessingError(*value)
                 await self.authorizer.require_current(authorized)
+                if area.catalogSelection is not None:
+                    try:
+                        await self.areas.resolve_for_sampling(area.catalogSelection)
+                    except SelectionUnavailableError as error:
+                        raise ProcessingError(
+                            "selection_unavailable", error.detail, 409
+                        ) from error
                 spec = ClipSpec(
                     source=source, sourceSignature=signature, area=area, grid=value
                 )
@@ -407,6 +410,12 @@ class ProcessingService:
             return public_job(existing)
         plan = await asyncio.to_thread(self.jobs.get_plan, request.planId, owner)
         require_operation(plan, "raster.clip.v1")
+        if plan["request"].get("temporaryAoiId") is not None:
+            raise ProcessingError(
+                "legacy_selection_plan",
+                "This historical AOI plan cannot be submitted again. Select a catalog vector and create a new plan.",
+                409,
+            )
         spec = ClipSpec.model_validate(plan["spec"])
         authorized = await self.authorizer.authorize(spec.source)
         if tuple(authorized.source_signature.to_catalog()) != spec.sourceSignature:
@@ -415,11 +424,19 @@ class ProcessingService:
                 "The raster changed since planning. Create a new clip plan.",
                 409,
             )
-        area = await self._area(ClipPlanRequest.model_validate(plan["request"]))
-        if area != spec.area:
+        area = await self._area(
+            ClipPlanRequest.model_validate(
+                {
+                    key: value
+                    for key, value in plan["request"].items()
+                    if key != "temporaryAoiId"
+                }
+            )
+        )
+        if area.model_dump() != spec.area.model_dump():
             raise ProcessingError(
                 "area_changed",
-                "The AOI changed since planning. Create a new clip plan.",
+                "The catalog selection changed since planning. Create a new clip plan.",
                 409,
             )
         row = await asyncio.to_thread(
@@ -432,7 +449,7 @@ class ProcessingService:
         return public_job(row)
 
     async def _aggregate_area(self, request: AggregatePlanRequest) -> AggregateArea:
-        """Snapshot the shared box/AOI geometry or explicit whole-source intent.
+        """Resolve a Catalog descriptor, box, or explicit whole-source intent.
 
         Args:
             request: Validated single-raster calculation request.
@@ -443,7 +460,9 @@ class ProcessingService:
         if request.wholeRaster:
             return AggregateArea(kind="wholeRaster")
         return AggregateArea(
-            **await self._area_snapshot(request.selectedBounds, request.temporaryAoiId)
+            **await self._area_snapshot(
+                request.selectedBounds, request.catalogSelection
+            )
         )
 
     async def discard_plan(self, owner: str, identifier: str) -> None:
@@ -508,6 +527,13 @@ class ProcessingService:
                 if status != "ok":
                     raise ProcessingError(*value)
                 await self.authorizer.require_current(authorized)
+                if area.catalogSelection is not None:
+                    try:
+                        await self.areas.resolve_for_sampling(area.catalogSelection)
+                    except SelectionUnavailableError as error:
+                        raise ProcessingError(
+                            "selection_unavailable", error.detail, 409
+                        ) from error
                 spec = AggregateSpec(
                     sources=request.sources,
                     sourceSignature=signature,
@@ -594,6 +620,12 @@ class ProcessingService:
             return public_job(existing)
         plan = await asyncio.to_thread(self.jobs.get_plan, request.planId, owner)
         require_operation(plan, "raster.aggregate.v1")
+        if plan["request"].get("temporaryAoiId") is not None:
+            raise ProcessingError(
+                "legacy_selection_plan",
+                "This historical AOI plan cannot be submitted again. Select a catalog vector and create a new plan.",
+                409,
+            )
         spec = AggregateSpec.model_validate(plan["spec"])
         authorized = await self.authorizer.authorize(next(iter(spec.sources.values())))
         if tuple(authorized.source_signature.to_catalog()) != spec.sourceSignature:
@@ -603,12 +635,18 @@ class ProcessingService:
                 409,
             )
         area = await self._aggregate_area(
-            AggregatePlanRequest.model_validate(plan["request"])
+            AggregatePlanRequest.model_validate(
+                {
+                    key: value
+                    for key, value in plan["request"].items()
+                    if key != "temporaryAoiId"
+                }
+            )
         )
-        if area != spec.area:
+        if area.model_dump() != spec.area.model_dump():
             raise ProcessingError(
                 "area_changed",
-                "The AOI changed since planning. Create a new calculation plan.",
+                "The catalog selection changed since planning. Create a new calculation plan.",
                 409,
             )
         row = await asyncio.to_thread(

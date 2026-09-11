@@ -58,7 +58,7 @@ reported as complete success. Neither result owner imports the presentation
 controller or its sibling. Cancellation, sampling, geometry, source identity,
 and stale-response checks remain with their existing owners.
 
-The raster summary describes the histogram's box, AOI, or whole-raster scope;
+The raster summary describes the histogram's box, Catalog-vector, or whole-raster scope;
 the vector summary describes features at the click. Automatic visible-layer
 histograms retain their existing top-two limit, stated explicitly when more
 rasters are visible. Feature counts describe returned observations, not an

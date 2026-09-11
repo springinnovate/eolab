@@ -25,7 +25,7 @@ accepted by the launcher.
 Coverage includes migration reruns and legacy schema upgrades, commit-only
 notifications, rollback silence, unchanged-state silence, owner isolation,
 idempotent admission, concurrent claims, stale-attempt fencing, cancellation,
-temporary AOI snapshots, source reauthorization and result cleanup. The fixture
+catalog descriptors, historical polygon-job compatibility, source reauthorization and result cleanup. The fixture
 continues to check the connected database name before migrations or truncation;
 it additionally rejects a missing or unsafe explicit database name before opening
 a connection. Manually using `pytest --processing-dsn=...` still requires a

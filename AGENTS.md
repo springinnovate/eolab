@@ -89,7 +89,7 @@ behavior into the nearest controller, route, viewer, service, or utility module.
   about browser components.
 
 - The browser composition root may coordinate catalog selection, the map,
-  analysis controls, style controls, rendering controllers, temporary AOIs,
+  analysis controls, style controls, rendering controllers, catalog-vector selections,
   and Processing. Sibling components must not import, call, authorize, pause,
   or inspect one another's implementation state.
 
@@ -110,7 +110,7 @@ behavior into the nearest controller, route, viewer, service, or utility module.
     - pixel picking and statistics must not depend on GeoServer, WMS
       publication, rendering eligibility, renderer state, map visibility, or
       detail previews;
-    - raster rendering must not own pixel picking, statistics, histograms, AOI
+    - raster rendering must not own pixel picking, statistics, histograms, polygon
       analysis, or Processing calculations;
     - styling may consume analysis results only through an explicit result
       contract or the browser composition layer.
@@ -127,8 +127,10 @@ behavior into the nearest controller, route, viewer, service, or utility module.
   mechanisms. They must not contain UI, rendering-selection, styling,
   histogram-presentation, feature-specific workflow, or GeoServer policy.
 
-- Temporary AOI storage and lifecycle management must remain independent of
-  catalog persistence and rendering publication.
+- Catalog-vector analysis selections must use immutable, path-free source and
+  predicate descriptors. Read original sources through neutral bounded contracts;
+  do not introduce selection storage, filtered copies, or complete geometry
+  snapshots. Optional display outlines must not authorize or gate analysis.
 
 - Infrastructure components must not import or call application-level
   services.
@@ -351,7 +353,7 @@ Untouched undocumented code is a separate finding.
   map viewer.
 - Preserve tests proving pixel and statistical analysis work without
   GeoServer or a published rendering layer.
-- Preserve Processing, temporary-AOI, source, authorization, cancellation,
+- Preserve Processing, catalog-selection, source, authorization, cancellation,
   staleness, and resource-limit contracts relevant to the change.
 - Add a dependency/import regression test when a demonstrated boundary is
   important and accidental reversal would be costly.

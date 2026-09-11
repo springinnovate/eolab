@@ -1,10 +1,18 @@
 """Raster-clip inputs and result details layered on shared Processing contracts."""
 
+from eolab_app.catalog_selection import CatalogSelection, ResolvedCatalogSelection
 from dataclasses import dataclass, field
 from typing import Annotated, Literal
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    model_validator,
+    model_serializer,
+    SerializerFunctionWrapHandler,
+)
 
 from eolab_app.processing.models import (
     Artifact,
@@ -25,7 +33,7 @@ class ClipPlanRequest(CatalogRasterRequest):
     """A catalog raster and exactly one explicit, lifecycle-valid clip area."""
 
     selectedBounds: Wgs84Bounds | None = None
-    temporaryAoiId: Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{32}$")] | None = None
+    catalogSelection: CatalogSelection | None = None
 
     @model_validator(mode="after")
     def require_explicit_area(self) -> "ClipPlanRequest":
@@ -37,18 +45,73 @@ class ClipPlanRequest(CatalogRasterRequest):
         Raises:
             ValueError: If neither or both selection variants were supplied.
         """
-        if (self.selectedBounds is None) == (self.temporaryAoiId is None):
-            raise ValueError("Choose exactly one histogram box or temporary AOI")
+        if (self.selectedBounds is None) == (self.catalogSelection is None):
+            raise ValueError("Choose exactly one histogram box or catalog selection")
         return self
 
 
 class ClipArea(BaseModel):
-    """Job-owned polygon snapshot, never an uploaded file or mutable AOI store."""
+    """Durable box or catalog descriptor, with a reader for historical polygon jobs."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-    kind: Literal["bounds", "aoi"]
+    kind: Literal["bounds", "catalogSelection", "aoi"]
     bounds: tuple[float, float, float, float]
+    # Historical completed/pending jobs may contain v1 polygon snapshots.
+    # New requests cannot submit them; no live AOI service is retained.
     geometries: tuple[dict[str, object], ...] = ()
+    catalogSelection: CatalogSelection | None = None
+    resolved: ResolvedCatalogSelection | None = Field(default=None, exclude=True)
+
+    @model_validator(mode="after")
+    def require_area_contract(self) -> "ClipArea":
+        """Validate the persisted selection discriminator before native execution.
+
+        Returns:
+            The validated operation-owned area.
+
+        Raises:
+            ValueError: For inconsistent catalog, box, or historical inputs.
+        """
+        Wgs84Bounds(
+            west=self.bounds[0],
+            south=self.bounds[1],
+            east=self.bounds[2],
+            north=self.bounds[3],
+        )
+        if self.kind == "catalogSelection":
+            if self.catalogSelection is None or self.geometries:
+                raise ValueError(
+                    "Catalog areas require only a catalog selection descriptor"
+                )
+            if (
+                self.resolved is not None
+                and self.resolved.selection != self.catalogSelection
+            ):
+                raise ValueError("Resolved source does not match the catalog selection")
+        elif self.catalogSelection is not None or self.resolved is not None:
+            raise ValueError("Only catalog areas may carry a catalog source")
+        elif (self.kind == "aoi") != bool(self.geometries):
+            raise ValueError("Only historical polygon areas contain geometry")
+        return self
+
+    @model_serializer(mode="wrap")
+    def serialize_area(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, object]:
+        """Preserve historical wire fields while new selections contain no geometry.
+
+        Args:
+            handler: Pydantic's serialization handler.
+
+        Returns:
+            Path-free area matching its versioned discriminator.
+        """
+        data = handler(self)
+        data.pop(
+            "geometries" if self.kind == "catalogSelection" else "catalogSelection",
+            None,
+        )
+        return data
 
 
 class ClipGrid(BaseModel):
@@ -80,9 +143,9 @@ class ClipSpec(BaseModel):
 
 
 class ClipAreaSummary(BaseModel):
-    """Browser-safe area description without copying the AOI into every poll."""
+    """Browser-safe area description without copying geometry into every poll."""
 
-    kind: Literal["bounds", "aoi"]
+    kind: Literal["bounds", "catalogSelection", "aoi"]
     bounds: tuple[float, float, float, float]
 
 
@@ -141,7 +204,6 @@ class RasterClipLimits(ProcessingLimits):
     max_raw_bytes: int = 1024**3
     max_decoded_bytes: int = 4 * 1024**3
     max_native_blocks: int = 65_536
-    max_geometry_bytes: int = 8 * 1024**2
     max_coordinates: int = 500_000
 
 

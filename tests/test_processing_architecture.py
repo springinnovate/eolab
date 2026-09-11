@@ -131,3 +131,51 @@ def test_fractional_mask_is_numerical_and_has_no_geometry_or_service_dependency(
         for module in dependencies
         if module.startswith(("eolab_app", "shapely", "rasterio", "pyproj"))
     }
+
+
+def test_direct_selection_mechanisms_have_no_feature_or_rendering_imports() -> None:
+    """Neutral source contracts stay below Catalog, rendering, and numeric owners."""
+    pending = [
+        Path("src/eolab_app/catalog_selection.py"),
+        Path("src/eolab_app/attribute_filter.py"),
+        Path("src/eolab_app/bounded_vector.py"),
+    ]
+    visited = set()
+    forbidden = (
+        "eolab_app.vector",
+        "eolab_app.rendering",
+        "eolab_app.processing",
+        "eolab_app.routes",
+        "eolab_app.raster.statistics",
+        "eolab_app.raster.pixel",
+        "eolab_app.raster.geoserver",
+        "eolab_app.raster.publication",
+    )
+    while pending:
+        path = pending.pop()
+        if path in visited:
+            continue
+        visited.add(path)
+        dependencies = imports(path)
+        assert not {name for name in dependencies if name.startswith(forbidden)}, path
+        for name in dependencies:
+            if name.startswith("eolab_app."):
+                dependency = Path("src", *name.split(".")).with_suffix(".py")
+                if dependency.is_file():
+                    pending.append(dependency)
+
+
+def test_retired_upload_runtime_is_absent() -> None:
+    """Keep removed upload/storage contracts from returning through active code."""
+    assert not list(Path("src/eolab_app/temporary_aoi").glob("*.py"))
+    assert not Path("src/eolab_app/routes/temporary_aois.py").exists()
+    assert not list(Path("frontend/src/temporary-aoi").glob("*.js"))
+    for path in [*Path("src").rglob("*.py"), *Path("frontend/src").rglob("*.js")]:
+        source = path.read_text(encoding="utf8")
+        assert "TemporaryAoi" not in source, path
+        if path != Path("src/eolab_app/processing/service.py"):
+            assert "temporaryAoiId" not in source, path
+    markup = Path("frontend/index.html").read_text(encoding="utf8")
+    assert "Upload AOI" not in markup and 'type="file"' not in markup
+    compose = Path("docker-compose.yml").read_text()
+    assert "TEMPORARY_AOI" not in compose

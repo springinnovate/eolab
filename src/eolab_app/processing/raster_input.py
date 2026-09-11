@@ -1,8 +1,11 @@
 """Shared source checks and native-area planning for clip and aggregate kernels."""
 
+from eolab_app.bounded_vector import ProjectedCatalogSelection
+from eolab_app.catalog_selection import ResolvedCatalogSelection
 import math
 from pathlib import Path
 from typing import Any
+from rasterio.io import DatasetReader
 
 from eolab_app.processing.models import ProcessingError
 from eolab_app.raster.bounded_window import (
@@ -10,7 +13,7 @@ from eolab_app.raster.bounded_window import (
     selected_raster_area_for_wgs84_bounds,
     selected_raster_area_for_wgs84_polygons,
 )
-from eolab_app.raster.models import SelectedRasterArea
+from eolab_app.raster.models import SelectedRasterArea, CanonicalWgs84Bounds
 from eolab_app.raster.source_contract import (
     decoded_source_bytes_for_blocks,
     source_block_indexes_for_window,
@@ -64,21 +67,39 @@ def require_source(dataset: Any, path: Path) -> None:
 
 
 def select_area(
-    dataset: Any, kind: str, bounds: Any, geometries: Any, max_coordinates: int
+    dataset: DatasetReader,
+    kind: str,
+    bounds: CanonicalWgs84Bounds | None,
+    geometries: tuple[dict[str, object], ...],
+    max_coordinates: int,
+    resolved: ResolvedCatalogSelection | None = None,
 ) -> SelectedRasterArea:
-    """Project an already-validated bounds/AOI value through neutral mechanisms.
+    """Project an already-validated bounds/polygon selection value through neutral mechanisms.
 
     Args:
         dataset: Validated open native raster.
-        kind: Explicit bounds or aoi variant.
+        kind: Explicit box, catalog descriptor, or historical polygon variant.
         bounds: Canonical WGS84 rectangle.
-        geometries: Immutable AOI polygons.
+        geometries: Immutable polygon selection polygons.
         max_coordinates: Transformation budget.
+        resolved: Reauthorized original vector source for catalog selections only.
 
     Returns:
         Native window and projected geometry for operation-owned inclusion rules.
+
+    Raises:
+        ProcessingError: If the area is unavailable, invalid, or exceeds bounded work.
     """
     try:
+        if kind == "catalogSelection":
+            if resolved is None:
+                raise ValueError(
+                    "Catalog source must be authorized before native execution"
+                )
+            reader = ProjectedCatalogSelection(dataset, resolved, max_coordinates)
+            return SelectedRasterArea(
+                source_window=reader.source_window, projected_geometries=reader
+            )
         if kind == "bounds":
             return selected_raster_area_for_wgs84_bounds(dataset, bounds)
         return selected_raster_area_for_wgs84_polygons(
