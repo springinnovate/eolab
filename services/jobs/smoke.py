@@ -1,4 +1,9 @@
-"""Verify a running diagnostic container with only Python's standard library."""
+"""Manual/CI smoke test for an already-running Job service, not runtime code.
+
+Creates and deletes diagnostic jobs through HTTP to verify the deployed image's
+startup, execution, error and cancellation paths. Called explicitly by the
+application-build workflow or an operator; the service never imports this script.
+"""
 
 import json
 import os
