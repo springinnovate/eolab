@@ -92,6 +92,10 @@ async def _calculate_outline(inputs: OutlineInput) -> OutlineResult:
         SelectionUnavailableError: For a changed identity or source.
         ValueError: For invalid polygons or exceeded work budgets.
     """
+    # The registry imports this module to list operations and validate requests.
+    # Load this dependency group only when executing an outline: geometry and
+    # source resolution transitively load Fiona/GDAL, Rasterio and Shapely. This
+    # keeps discovery and unrelated diagnostic jobs free of that native setup.
     import httpx2
     from eolab_app.vector.catalog import StacVectorCatalog
     from eolab_app.vector.geometry import build_outline
