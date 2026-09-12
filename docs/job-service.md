@@ -80,6 +80,24 @@ modes. The default mode is `normal`.
 
 ## Lifecycle and limits
 
+Set these `EOLAB_JOBS_*` variables in Compose/Coolify (without `EOLAB_` for
+standalone Python/Docker). Values are read once at startup; restart after editing.
+
+| Deployment variable | Default |
+|---|---:|
+| `EOLAB_JOBS_QUEUE_CAPACITY` | 32 |
+| `EOLAB_JOBS_RECORD_CAPACITY` | 128 |
+| `EOLAB_JOBS_RETENTION_SECONDS` | 3600 |
+| `EOLAB_JOBS_EXECUTION_TIMEOUT_SECONDS` | 60 |
+| `EOLAB_JOBS_QUEUE_TIMEOUT_SECONDS` | 60 |
+| `EOLAB_JOBS_MAX_TIMEOUT_SECONDS` | 300 |
+
+Explicitly empty, malformed, nonfinite or out-of-range limits fail startup.
+Record capacity must exceed queue capacity, and default timeouts must not exceed
+the configured maximum. Request timeouts stay within that maximum. The diagnostic
+operation independently caps its requested delay at 300 seconds.
+The following are the default values, not fixed deployment settings:
+
 - One running job, **32 waiting**, **128 retained records** across all callers.
   Retained records include active jobs.
 - Queue/execution deadlines separately default to **60 seconds**; clients may

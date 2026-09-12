@@ -2,14 +2,19 @@
 
 import hashlib
 import json
+import math
 import os
 import re
 from dataclasses import dataclass, field
+from collections.abc import Callable
+from typing import TypeVar
+
+Number = TypeVar("Number", int, float)
 
 
 @dataclass(frozen=True)
 class Settings:
-    """Single-replica limits; retained records include pending and finished jobs.
+    """Limits for one Job service instance, including pending and finished jobs.
 
     Caller keys are stable owner names; values are SHA-256 credential digests.
     Records and idempotency keys expire together after retention_seconds and
@@ -31,33 +36,68 @@ class Settings:
         Raises:
             ValueError: If configuration cannot provide bounded execution.
         """
-        if not (1 <= self.queue_capacity < self.record_capacity <= 10000):
-            raise ValueError("Invalid Job service capacities")
-        if (
-            not all(
-                0 < value <= 86400
-                for value in (
-                    self.retention_seconds,
-                    self.execution_seconds,
-                    self.queue_seconds,
-                    self.max_timeout_seconds,
-                )
-            )
-            or max(self.execution_seconds, self.queue_seconds)
-            > self.max_timeout_seconds
+        for name in ("queue_capacity", "record_capacity"):
+            value = getattr(self, name)
+            if type(value) is not int or not 1 <= value <= 10000:
+                raise ValueError(f"{name} must be an integer between 1 and 10000")
+        if self.queue_capacity >= self.record_capacity:
+            raise ValueError("record_capacity must exceed queue_capacity")
+        for name in (
+            "retention_seconds",
+            "execution_seconds",
+            "queue_seconds",
+            "max_timeout_seconds",
         ):
-            raise ValueError("Invalid Job service deadlines")
+            value = getattr(self, name)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or not 0 < value <= 86400
+            ):
+                raise ValueError(
+                    f"{name} must be finite, positive and at most 86400 seconds"
+                )
+        if max(self.execution_seconds, self.queue_seconds) > self.max_timeout_seconds:
+            raise ValueError(
+                "Default queue/execution timeouts must not exceed max_timeout_seconds"
+            )
+
+
+def _environment_number(
+    name: str, default: Number, parser: Callable[[str], Number]
+) -> Number:
+    """Parse an optional numeric setting; explicitly blank values are invalid.
+
+    Args:
+        name: Environment variable name.
+        default: Value used only when the variable is absent.
+        parser: Integer or floating-point conversion.
+
+    Returns:
+        Parsed value; Settings validates its range and related limits.
+
+    Raises:
+        ValueError: If the supplied text cannot be parsed.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return parser(raw)
+    except ValueError:
+        raise ValueError(f"{name} must be a valid {parser.__name__}") from None
 
 
 def load_settings() -> Settings:
-    """Read bearer credentials from JOBS_CALLERS without logging their values.
+    """Read caller credentials and limits from the process environment once.
 
     Returns:
         Settings with hashed caller credentials. An absent/empty map disables
         admission while leaving health and docs available.
 
     Raises:
-        ValueError: For malformed, duplicate or weakly sized credentials.
+        ValueError: For invalid credentials, numeric settings or limit combinations.
     """
     try:
         raw = json.loads(os.environ.get("JOBS_CALLERS") or "{}")
@@ -75,8 +115,29 @@ def load_settings() -> Settings:
             if digest in callers.values():
                 raise ValueError
             callers[owner] = digest
-        return Settings(callers=callers)
     except (ValueError, TypeError):
         raise ValueError(
             "Invalid JOBS_CALLERS; use unique random bearer tokens of 32–256 URL-safe characters"
         ) from None
+    defaults = Settings()
+    return Settings(
+        callers=callers,
+        queue_capacity=_environment_number(
+            "JOBS_QUEUE_CAPACITY", defaults.queue_capacity, int
+        ),
+        record_capacity=_environment_number(
+            "JOBS_RECORD_CAPACITY", defaults.record_capacity, int
+        ),
+        retention_seconds=_environment_number(
+            "JOBS_RETENTION_SECONDS", defaults.retention_seconds, float
+        ),
+        execution_seconds=_environment_number(
+            "JOBS_EXECUTION_TIMEOUT_SECONDS", defaults.execution_seconds, float
+        ),
+        queue_seconds=_environment_number(
+            "JOBS_QUEUE_TIMEOUT_SECONDS", defaults.queue_seconds, float
+        ),
+        max_timeout_seconds=_environment_number(
+            "JOBS_MAX_TIMEOUT_SECONDS", defaults.max_timeout_seconds, float
+        ),
+    )
