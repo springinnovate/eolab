@@ -1,4 +1,4 @@
-"""Bounded same-origin forwarding to the independent Job service preview."""
+"""Bounded same-origin forwarding to the independent Job service."""
 
 import re
 
@@ -33,9 +33,10 @@ def create_jobs_proxy_router(
 ) -> APIRouter:
     """Expose only the Job service prefix through an owned HTTP connection pool.
 
-    This preview buffers bounded JSON/docs responses. Real SSE and artifact
+    This proxy buffers bounded JSON/docs responses. Real SSE and artifact
     streaming require a later implementation; their endpoints currently return
-    JSON 501. Cookies, credentials and arbitrary response headers are not relayed.
+    JSON 501. Bearer authorization is relayed only to the fixed Jobs endpoint;
+    cookies and arbitrary identity/response headers are not relayed.
 
     Args:
         client: Composition-owned Job service HTTP client.
@@ -77,7 +78,13 @@ def create_jobs_proxy_router(
             body.extend(chunk)
         headers = {
             name: request.headers[name]
-            for name in ("accept", "content-type", "idempotency-key", "last-event-id")
+            for name in (
+                "accept",
+                "content-type",
+                "idempotency-key",
+                "last-event-id",
+                "authorization",
+            )
             if name in request.headers
         }
         headers["accept-encoding"] = "identity"
@@ -106,7 +113,13 @@ def create_jobs_proxy_router(
                     content.extend(chunk)
                 response_headers = {
                     name: upstream.headers[name]
-                    for name in ("content-type", "allow", "retry-after")
+                    for name in (
+                        "content-type",
+                        "allow",
+                        "retry-after",
+                        "www-authenticate",
+                        "location",
+                    )
                     if name in upstream.headers
                 }
                 response_headers["cache-control"] = "no-store"

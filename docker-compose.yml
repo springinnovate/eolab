@@ -207,6 +207,16 @@ services:
       dockerfile: services/jobs/Dockerfile
     restart: unless-stopped
     init: true
+    environment:
+      # JSON object mapping trusted caller names to unique random bearer tokens.
+      # Unset means health/docs work, but no jobs can be submitted.
+      JOBS_CALLERS: ${EOLAB_JOBS_CALLERS:-}
+      JOBS_QUEUE_CAPACITY: ${EOLAB_JOBS_QUEUE_CAPACITY-32}
+      JOBS_RECORD_CAPACITY: ${EOLAB_JOBS_RECORD_CAPACITY-128}
+      JOBS_RETENTION_SECONDS: ${EOLAB_JOBS_RETENTION_SECONDS-3600}
+      JOBS_EXECUTION_TIMEOUT_SECONDS: ${EOLAB_JOBS_EXECUTION_TIMEOUT_SECONDS-60}
+      JOBS_QUEUE_TIMEOUT_SECONDS: ${EOLAB_JOBS_QUEUE_TIMEOUT_SECONDS-60}
+      JOBS_MAX_TIMEOUT_SECONDS: ${EOLAB_JOBS_MAX_TIMEOUT_SECONDS-300}
     cpus: 1
     mem_limit: 256m
     memswap_limit: 256m

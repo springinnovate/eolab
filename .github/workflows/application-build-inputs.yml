@@ -9,6 +9,7 @@ on:
       - services/jobs/**
       - src/eolab_app/routes/jobs_proxy.py
       - tests/test_job_service.py
+      - tests/test_job_lifecycle.py
       - .github/workflows/application-build-inputs.yml
   workflow_dispatch:
 
@@ -98,19 +99,18 @@ jobs:
           set -euo pipefail
           docker build --platform linux/amd64 -f services/jobs/Dockerfile -t eolab-jobs:preview .
           trap 'docker logs eolab-jobs-preview; docker rm -f eolab-jobs-preview' EXIT
+          export JOBS_SMOKE_TOKEN=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')
+          echo "::add-mask::$JOBS_SMOKE_TOKEN"
+          export JOBS_CALLERS=$(python3 -c 'import json, os; print(json.dumps({"smoke": os.environ["JOBS_SMOKE_TOKEN"]}))')
           docker run -d --name eolab-jobs-preview --read-only --cap-drop ALL \
             --security-opt no-new-privileges --cpus 1 --memory 256m \
-            -p 127.0.0.1:8082:8080 eolab-jobs:preview
+            --env JOBS_CALLERS -p 127.0.0.1:8082:8080 eolab-jobs:preview
           # Docker can reset connections before Uvicorn is ready to accept them.
           curl --fail --retry 20 --retry-all-errors --retry-delay 1 \
             --connect-timeout 2 --max-time 5 --retry-max-time 30 \
             http://127.0.0.1:8082/api/jobs/health
           curl --fail http://127.0.0.1:8082/api/jobs/openapi.json > artifacts/application-builds/jobs-openapi.json
-          code=$(curl -s -o artifacts/application-builds/jobs-stub.json -w '%{http_code}' \
-            -H 'Content-Type: application/json' -H 'Idempotency-Key: smoke-1' \
-            --data '{"operation":"demo.sum.v1","inputs":{"values":[1,2]}}' http://127.0.0.1:8082/api/jobs)
-          test "$code" = 501
-          grep -q not_implemented artifacts/application-builds/jobs-stub.json
+          python3 services/jobs/smoke.py http://127.0.0.1:8082
       - name: Frontend tests in the recorded Node build stage
         run: |
           docker build --target frontend-builder -f Dockerfile.app -t eolab-build-inputs:frontend .
