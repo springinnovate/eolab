@@ -14,8 +14,11 @@ from job_service.runner import MAX_MESSAGE_BYTES
 
 
 @dataclass(frozen=True)
-class Outcome:
-    """Terminal process outcome after the child has been reaped."""
+class ExecutionResult:
+    """Terminal execution status and value after the child has been reaped.
+
+    This internal result includes cancellation/failure. The public JobResult in
+    models.py instead represents a retained successful result with a job ID."""
 
     status: JobStatus
     value: JsonValue = None
@@ -23,7 +26,7 @@ class Outcome:
 
 async def run_operation(
     payload: bytes, cancel: asyncio.Event, timeout: float
-) -> Outcome:
+) -> ExecutionResult:
     """Execute one installed operation, returning only after process exit.
 
     Args:
@@ -96,15 +99,15 @@ async def run_operation(
                 (exchange_task, cancel_task), return_when=asyncio.FIRST_COMPLETED
             )
             if cancel.is_set():
-                return Outcome("cancelled")
+                return ExecutionResult("cancelled")
             reply = json.loads(exchange_task.result())
             if not isinstance(reply, dict) or reply.get("ok") is not True:
-                return Outcome("failed")
-            return Outcome("succeeded", reply["value"])
+                return ExecutionResult("failed")
+            return ExecutionResult("succeeded", reply["value"])
     except TimeoutError:
-        return Outcome("cancelled" if cancel.is_set() else "timed_out")
+        return ExecutionResult("cancelled" if cancel.is_set() else "timed_out")
     except Exception:
-        return Outcome("failed")
+        return ExecutionResult("failed")
     finally:
         # Hard stop is appropriate for the installed diagnostic operation. A
         # slot is never released on a cancellation request alone.
