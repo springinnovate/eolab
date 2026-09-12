@@ -92,8 +92,12 @@ class Settings:
         initial_longitude: Initial map-center longitude.
         initial_zoom: Initial map zoom level.
         processing_data_path: Persistent private clip volume shared with the worker.
-        vector_outline_execution: Explicit legacy or Jobs outline pathway.
-        vector_outline_jobs_token: Private bearer token for the Jobs caller.
+        vector_outline_execution: Migration switch: legacy runs outlines inside
+            the application's child process; jobs submits them to the Job service.
+            Retained for rollout/rollback until the legacy pathway is retired.
+        vector_outline_jobs_token: Server-only bearer credential identifying the
+            application as a Jobs caller. Jobs uses that identity to restrict
+            status, result, cancellation and deletion to the owning caller.
     """
 
     app_title: str
