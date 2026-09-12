@@ -9,6 +9,9 @@ from pydantic import BaseModel, ConfigDict, FiniteFloat, JsonValue, model_valida
 from eolab_app.catalog_selection import CatalogSelection, SelectionUnavailableError
 
 # Fixed Compose service/mount contracts; job callers cannot redirect source access.
+# Public hostnames do not affect the Catalog's internal DNS name. Deployments
+# choose the host data directory with EOLAB_SCAN_MOUNT_PATH; Compose mounts it
+# at /scan-source in both the application and Jobs containers.
 CATALOG_URL = "http://stac-api:8080"
 SCAN_MOUNT = Path("/scan-source")
 
