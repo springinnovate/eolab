@@ -21,6 +21,12 @@ URL-safe strings; at most 32 named callers are supported. Empty configuration
 leaves docs/health/discovery available but disables job access. Invalid
 configuration fails startup without printing submitted secrets.
 
+The deployer sets the entire caller map as one JSON-valued environment variable,
+per service instance. `load_settings()` parses it at startup and hashes each token
+into `Settings.callers`. `create_app()` passes that same settings object to the
+manager and retains it for authentication. This is not a mutable global registry
+or an API users can edit; updating callers requires restarting the service.
+
 In Swagger, click **Authorize** and paste just the token. Each caller owns only
 its own jobs. Sharing a token means sharing ownership: this is not yet integrated
 with browser sessions. Do not put an administrator token in frontend code. Use
