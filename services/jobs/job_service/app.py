@@ -111,7 +111,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     """Create the single-process service with a lifespan-owned execution manager.
 
     Args:
-        settings: Trusted deployment/test settings; defaults to JOBS_CALLERS.
+        settings: Optional already-validated configuration for an embedded host
+            or isolated test. When supplied, environment loading is skipped.
+            Uvicorn's no-argument factory path loads the environment once.
 
     Returns:
         HTTP app with bounded ephemeral job execution and public discovery/docs.

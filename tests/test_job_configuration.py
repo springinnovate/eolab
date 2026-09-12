@@ -91,3 +91,18 @@ def test_compose_and_environment_template_cover_limits() -> None:
     for name in LIMITS:
         assert f"{name}: ${{EOLAB_{name}-" in compose
         assert f"EOLAB_{name}=" in example
+
+
+def test_injected_settings_do_not_read_unrelated_host_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep embedded/test construction deterministic without changing deployment loading.
+
+    Args:
+        monkeypatch: Environment fixture.
+    """
+    monkeypatch.setenv("JOBS_QUEUE_CAPACITY", "invalid-host-value")
+    with pytest.raises(ValueError, match="JOBS_QUEUE_CAPACITY"):
+        create_app()
+    with TestClient(create_app(Settings())) as client:
+        assert client.get("/api/jobs/health").status_code == 200
