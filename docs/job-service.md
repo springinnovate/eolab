@@ -75,6 +75,11 @@ For failure, submit with another new key:
 
 This raises in the child; the job becomes `failed` with a safe error. Subsequent
 jobs still run. No traceback, credentials or input values are returned in errors.
+The runner writes exception tracebacks to the service's stderr (visible in Docker
+or Coolify logs); the public response remains generic. Stderr is inherited rather
+than captured in memory, and Compose rotates retained logs. Treat operator logs
+as private diagnostics; installed operations should not put sensitive values in
+exception messages. Traceback logging does not capture local variables.
 `seconds` must be positive and at most 300 in delay mode, and zero/omitted in other
 modes. The default mode is `normal`.
 

@@ -2,6 +2,7 @@
 
 import json
 import sys
+import traceback
 
 from job_service.operations_registry import OPERATIONS
 
@@ -12,7 +13,8 @@ def main() -> None:
     """Validate the process boundary and emit one bounded JSON reply.
 
     Inputs arrive on stdin; no path/module is accepted from a public request.
-    Exceptions produce a safe failure envelope, never a traceback or inputs.
+    Exceptions produce a safe public failure envelope. Tracebacks go only to
+    inherited service stderr for operators; local variables are not captured.
     """
     try:
         payload = sys.stdin.buffer.read(MAX_MESSAGE_BYTES + 1)
@@ -27,6 +29,7 @@ def main() -> None:
         if len(encoded) > MAX_MESSAGE_BYTES:
             raise ValueError("Oversized process output")
     except Exception:
+        traceback.print_exc(file=sys.stderr)
         encoded = b'{"ok":false}'
     sys.stdout.buffer.write(encoded)
     sys.stdout.buffer.flush()

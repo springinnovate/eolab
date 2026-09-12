@@ -80,7 +80,10 @@ async def run_job(
                     env=child_environment(),
                     stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.DEVNULL,
+                    # Inherit the service's stderr for operator diagnostics.
+                    # This creates no parent capture buffer or pipe to deadlock;
+                    # Compose's existing rotated logging bounds retained logs.
+                    stderr=None,
                 )
             )
             process = await asyncio.shield(spawn_task)

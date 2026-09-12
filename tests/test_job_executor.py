@@ -3,6 +3,9 @@
 import asyncio
 import json
 import os
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -46,3 +49,60 @@ def test_restricted_environment_executes_real_runner(
         assert result.value == {"value": "caf\u00e9"}
 
     asyncio.run(scenario())
+
+
+def test_runner_stderr_preserves_traceback_without_changing_public_reply() -> None:
+    """Keep development diagnostics on stderr and the public failure on stdout."""
+    result = subprocess.run(
+        [sys.executable, "-m", "job_service.runner"],
+        input=json.dumps(
+            {
+                "operation": "diagnostic.v1",
+                "inputs": {"mode": "exception", "value": "private-echo-value"},
+            }
+        ).encode(),
+        cwd=Path(__file__).parents[1] / "services/jobs",
+        env=child_environment(),
+        capture_output=True,
+        timeout=10,
+        check=True,
+    )
+    assert json.loads(result.stdout) == {"ok": False}
+    assert b"Traceback" in result.stderr
+    assert b"RuntimeError: Requested diagnostic exception" in result.stderr
+    assert b"private-echo-value" not in result.stderr
+
+
+def test_executor_inherits_operator_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify the actual child launch forwards stderr without a capture buffer.
+
+    Args:
+        monkeypatch: Subprocess boundary observer.
+    """
+    original = asyncio.create_subprocess_exec
+    observed = []
+
+    async def capture(*args: object, **kwargs: object) -> asyncio.subprocess.Process:
+        """Observe launch settings while still executing a real process.
+
+        Args:
+            args: Executable arguments.
+            kwargs: Subprocess options.
+
+        Returns:
+            Real runner process.
+        """
+        observed.append(kwargs["stderr"])
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", capture)
+
+    async def scenario() -> None:
+        """Complete one real invocation with inherited stderr."""
+        result = await run_job(
+            b'{"operation":"diagnostic.v1","inputs":{}}', asyncio.Event(), 10
+        )
+        assert result.status == "succeeded"
+
+    asyncio.run(scenario())
+    assert observed == [None]
