@@ -97,7 +97,8 @@ async def resolve_selection(
         or source.source_path is None
     ):
         raise VectorConflictError(
-            "Sampling supports mounted Shapefile and GeoPackage polygon layers"
+            f"The selected source is {source.source_kind} {source.source_format}; "
+            "sampling requires a mounted Shapefile or GeoPackage polygon layer."
         )
     candidate = validate_filter(request.filter, catalog_vector_fields(item))
     signature = await asyncio.to_thread(vector_source_signature, source)

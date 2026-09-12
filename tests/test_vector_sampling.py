@@ -3,6 +3,7 @@
 import asyncio
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 from shapely.geometry import Polygon, box, mapping, shape
@@ -17,8 +18,41 @@ from eolab_app.catalog_selection import (
 )
 from eolab_app.vector.errors import VectorConflictError
 from eolab_app.vector.filters import CatalogVectorFilterRequest, VectorFilter
-from eolab_app.vector.models import ResolvedVectorSource
+from eolab_app.vector.models import ResolvedVectorSource, VectorFormat, VectorSourceKind
 from eolab_app.vector.sampling import VectorSamplingService
+
+
+@pytest.mark.parametrize(
+    "kind,format",
+    [("remote", "geopackage"), ("mounted", "geojson")],
+)
+def test_unsupported_selection_reports_source_without_private_path(
+    tmp_path: Path, kind: VectorSourceKind, format: VectorFormat
+) -> None:
+    """Explain the actual unsupported source without exposing its location."""
+
+    class UnsupportedCatalog(FixtureCatalog):
+        """Return metadata for a source that must never reach native reading."""
+
+        async def get_item(self, request: CatalogVectorFilterRequest) -> dict[str, Any]:
+            """Return the requested identity without opening an unsupported file."""
+            return {"id": request.item_id}
+
+    private_path = tmp_path / "private.geojson" if kind == "mounted" else None
+    catalog = UnsupportedCatalog(
+        ResolvedVectorSource(kind, format, private_path, "data", "polygons")
+    )
+    service = VectorSamplingService(catalog, catalog)
+    request = CatalogVectorFilterRequest(
+        collectionId="eolab-mounted-vectors", itemId="polygons", filter=VectorFilter()
+    )
+    with pytest.raises(VectorConflictError) as failure:
+        asyncio.run(service.select(request))
+    assert str(failure.value) == (
+        f"The selected source is {kind} {format}; "
+        "sampling requires a mounted Shapefile or GeoPackage polygon layer."
+    )
+    assert str(tmp_path) not in str(failure.value)
 
 
 @pytest.fixture
