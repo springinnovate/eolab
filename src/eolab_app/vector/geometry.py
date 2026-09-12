@@ -39,13 +39,20 @@ def geometry_process(
 
 
 def build_outline(resolved: ResolvedCatalogSelection) -> dict[str, Any]:
-    """Build the same bounded display outline in either execution pathway.
+    """Read matching polygons and simplify them into a map display outline.
+
+    Both the local process and the Job service call this algorithm. Polygons
+    are read from the original dataset one at a time; the input does not hold
+    their coordinates. The simplified result is for drawing, not analysis.
 
     Args:
-        resolved: Authorized original source and immutable predicate.
+        resolved: Server-resolved dataset path, native layer name, attribute
+            filter (for example, iso3 == "PER"), and file signatures used to
+            detect source changes while reading.
 
     Returns:
-        Approximate display geometry and exact selection bounds.
+        A dict with ``geometry`` (a simplified WGS84 FeatureCollection) and
+        ``bbox`` (the exact matching polygons' west, south, east, north bounds).
 
     Raises:
         ValueError: If geometry, source identity or bounded reading fails.
