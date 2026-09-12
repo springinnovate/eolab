@@ -249,7 +249,7 @@ class JobManager:
         )
 
     def update(self, owner: str, job_id: UUID, priority: int) -> JobSnapshot:
-        """Change queued priority without changing FIFO admission order.
+        """Change a queued job's priority; equal-priority jobs run in submission order.
 
         Args:
             owner: Authenticated principal.
