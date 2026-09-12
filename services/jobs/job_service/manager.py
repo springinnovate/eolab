@@ -11,7 +11,7 @@ from uuid import UUID, uuid4
 from pydantic import ValidationError
 
 from job_service.configuration import Settings
-from job_service.executor import run_operation
+from job_service.executor import run_job
 from job_service.models import (
     ErrorDetail,
     JobPage,
@@ -376,7 +376,7 @@ class JobManager:
             record: One admitted running job.
         """
         try:
-            outcome = await run_operation(
+            outcome = await run_job(
                 record.payload, record.cancellation, record.execution_seconds
             )
             status = "cancelled" if record.cancellation.is_set() else outcome.status

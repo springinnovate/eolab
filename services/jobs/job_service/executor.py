@@ -24,7 +24,7 @@ class ExecutionResult:
     value: JsonValue = None
 
 
-async def run_operation(
+async def run_job(
     payload: bytes, cancel: asyncio.Event, timeout: float
 ) -> ExecutionResult:
     """Execute one installed operation, returning only after process exit.

@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from job_service.app import create_app
 from job_service.configuration import Settings, load_settings
-from job_service.executor import run_operation
+from job_service.executor import run_job
 
 BASE = "/api/jobs"
 ALICE = {"Authorization": "Bearer " + "a" * 48}
@@ -356,7 +356,7 @@ def test_process_cancellation_reaps_before_return(
         """Cancel an actually spawned long delay and verify it is reaped."""
         cancellation = asyncio.Event()
         task = asyncio.create_task(
-            run_operation(
+            run_job(
                 json.dumps(
                     {
                         "operation": "diagnostic.v1",
