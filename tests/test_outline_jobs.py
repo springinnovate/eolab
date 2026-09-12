@@ -28,6 +28,24 @@ from eolab_app.vector.sources import MountedVectorResolver
 from eolab_app.vector.errors import VectorConflictError
 
 
+def test_outline_result_display_byte_budget() -> None:
+    """Accept the producer's exact byte boundary and reject one extra byte."""
+    from eolab_app.vector.display_geometry import MAX_DISPLAY_BYTES
+    from eolab_app.vector.outline_operation import (
+        MAX_OUTLINE_GEOMETRY_BYTES,
+        OutlineResult,
+    )
+
+    assert MAX_OUTLINE_GEOMETRY_BYTES == MAX_DISPLAY_BYTES
+    geometry = {"type": "FeatureCollection", "features": [], "padding": ""}
+    overhead = len(json.dumps(geometry, separators=(",", ":")).encode())
+    geometry["padding"] = " " * (MAX_DISPLAY_BYTES - overhead)
+    OutlineResult(geometry=geometry, bbox=(0, 0, 1, 1))
+    geometry["padding"] += " "
+    with pytest.raises(ValueError, match="Invalid bounded outline result"):
+        OutlineResult(geometry=geometry, bbox=(0, 0, 1, 1))
+
+
 @pytest.fixture
 def outline_case(tmp_path: Path) -> tuple[CatalogSelection, dict[str, Any], str]:
     """Serve authoritative fixture Catalog metadata beside real filtered polygons."""

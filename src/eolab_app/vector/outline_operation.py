@@ -14,6 +14,10 @@ from eolab_app.catalog_selection import CatalogSelection, SelectionUnavailableEr
 # at /scan-source in both the application and Jobs containers.
 CATALOG_URL = "http://stac-api:8080"
 SCAN_MOUNT = Path("/scan-source")
+# Maximum compact UTF-8 GeoJSON bytes in a returned map outline. Kept at the
+# display_geometry producer's MAX_DISPLAY_BYTES contract without importing its
+# native GIS dependencies during operation discovery. A contract test ties them.
+MAX_OUTLINE_GEOMETRY_BYTES = 256 * 1024
 
 
 class OutlineInput(BaseModel):
@@ -48,7 +52,7 @@ class OutlineResult(BaseModel):
                     self.geometry, allow_nan=False, separators=(",", ":")
                 ).encode()
             )
-            > 256 * 1024
+            > MAX_OUTLINE_GEOMETRY_BYTES
             or self.bbox[0] > self.bbox[2]
             or self.bbox[1] > self.bbox[3]
         ):
