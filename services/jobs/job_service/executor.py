@@ -13,6 +13,29 @@ from job_service.models import JobStatus
 from job_service.runner import MAX_MESSAGE_BYTES
 
 
+def child_environment() -> dict[str, str]:
+    """Build the minimal environment needed by the installed Python runner.
+
+    The parent holds JOBS_CALLERS bearer tokens and may have database/cloud
+    credentials. Algorithms must not inherit those service credentials. The
+    interpreter is an absolute path and imports from its fixed working directory,
+    so PATH/PYTHONPATH are unnecessary; JSON uses explicit byte encoding rather
+    than a locale. On Windows, preserve OS locations for system runtime loading.
+    Windows environment names are case-insensitive (often uppercase in os.environ).
+
+    Returns:
+        Only Windows OS locations and the read-only-image bytecode setting.
+        This is credential minimization, not an OS security sandbox.
+    """
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if os.name == "nt" and key.upper() in {"SYSTEMROOT", "WINDIR"}
+    }
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    return environment
+
+
 @dataclass(frozen=True)
 class ExecutionResult:
     """Terminal execution status and value after the child has been reaped.
@@ -48,21 +71,13 @@ async def run_job(
     spawn_task = None
     try:
         async with asyncio.timeout(timeout):
-            # Strip service credentials from the child. The operation has no
-            # source mounts, networking API, or configurable executable path.
-            environment = {
-                key: value
-                for key, value in os.environ.items()
-                if key in {"PATH", "SystemRoot", "WINDIR", "LANG", "LC_ALL"}
-            }
-            environment["PYTHONDONTWRITEBYTECODE"] = "1"
             spawn_task = asyncio.create_task(
                 asyncio.create_subprocess_exec(
                     sys.executable,
                     "-m",
                     "job_service.runner",
                     cwd=Path(__file__).resolve().parent.parent,
-                    env=environment,
+                    env=child_environment(),
                     stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.DEVNULL,

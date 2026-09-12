@@ -179,8 +179,12 @@ boundaries remain unchanged.
 
 The first version uses a fresh child per job for isolation/hard stopping; it does
 not prewarm native processes. Only installed code runs. Child environments omit
-caller credentials and other service secrets. The diagnostic spawns no descendants;
-process-tree handling, source authorization/mount resolution and workload-specific
+caller credentials and other service secrets.
+The runner uses an absolute interpreter path, a fixed module directory and binary
+JSON, so PATH, PYTHONPATH and locale settings are not needed. Only Windows OS
+locations and the bytecode-write setting are retained. This avoids casually
+exposing caller/database credentials to algorithms; it is not a security sandbox.
+The diagnostic spawns no descendants; process-tree handling, source authorization/mount resolution and workload-specific
 memory admission must precede installing more capable operations. Docker remains
 non-root, read-only, capability-dropped, one CPU and 256 MiB, without source mounts.
 
