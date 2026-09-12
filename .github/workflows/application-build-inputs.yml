@@ -7,6 +7,9 @@ on:
       - pyproject.toml
       - deployment/application-*
       - services/jobs/**
+      - src/eolab_app/vector/outline*
+      - src/eolab_app/vector/selection_source.py
+      - tests/test_outline_jobs.py
       - src/eolab_app/routes/jobs_proxy.py
       - tests/test_job_service.py
       - tests/test_job_lifecycle.py
@@ -103,7 +106,8 @@ jobs:
           echo "::add-mask::$JOBS_SMOKE_TOKEN"
           export JOBS_CALLERS=$(python3 -c 'import json, os; print(json.dumps({"smoke": os.environ["JOBS_SMOKE_TOKEN"]}))')
           docker run -d --name eolab-jobs-preview --read-only --cap-drop ALL \
-            --security-opt no-new-privileges --cpus 1 --memory 256m \
+            --security-opt no-new-privileges --cpus 1 --memory 2g \
+            --mount "type=bind,src=$PWD,dst=/scan-source,readonly" \
             --env JOBS_CALLERS -p 127.0.0.1:8082:8080 eolab-jobs:preview
           # Docker can reset connections before Uvicorn is ready to accept them.
           curl --fail --retry 20 --retry-all-errors --retry-delay 1 \

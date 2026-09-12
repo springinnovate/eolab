@@ -7,6 +7,9 @@ import traceback
 from job_service.operations_registry import OPERATIONS
 
 MAX_MESSAGE_BYTES = 65536
+# Bounded inline results include display outlines (256 KiB compact GeoJSON)
+# plus JSON spacing/envelope. Requests keep the separate 64 KiB ceiling.
+MAX_RESULT_BYTES = 512 * 1024
 
 
 def main() -> None:
@@ -28,7 +31,7 @@ def main() -> None:
         result = operation.result_model.model_validate(operation.execute(inputs))
         reply = {"ok": True, "value": result.model_dump(mode="json")}
         encoded = json.dumps(reply, allow_nan=False).encode()
-        if len(encoded) > MAX_MESSAGE_BYTES:
+        if len(encoded) > MAX_RESULT_BYTES:
             raise ValueError("Oversized process output")
     except Exception:
         traceback.print_exc(file=sys.stderr)

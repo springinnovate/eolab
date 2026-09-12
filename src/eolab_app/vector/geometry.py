@@ -28,27 +28,7 @@ def geometry_process(
         resolved: Authorized original source and predicate.
     """
     try:
-        with _limit_memory():
-            summary = selection_summary(resolved)
-            outline: dict[str, Any] = {"type": "FeatureCollection", "features": []}
-            with polygon_features(resolved) as features:
-                for geometry in features:
-                    part = display_geometry(
-                        {
-                            "type": "FeatureCollection",
-                            "features": [
-                                {
-                                    "type": "Feature",
-                                    "properties": {},
-                                    "geometry": geometry,
-                                }
-                            ],
-                        },
-                        summary["bbox"],
-                    )
-                    outline["features"].extend(part["features"])
-                    outline = display_geometry(outline, summary["bbox"])
-        writer.put((True, {"geometry": outline, "bbox": summary["bbox"]}))
+        writer.put((True, build_outline(resolved)))
     except Exception:
         writer.put(
             (
@@ -56,3 +36,39 @@ def geometry_process(
                 "The optional map outline could not be drawn within its display budget",
             )
         )
+
+
+def build_outline(resolved: ResolvedCatalogSelection) -> dict[str, Any]:
+    """Build the same bounded display outline in either execution pathway.
+
+    Args:
+        resolved: Authorized original source and immutable predicate.
+
+    Returns:
+        Approximate display geometry and exact selection bounds.
+
+    Raises:
+        ValueError: If geometry, source identity or bounded reading fails.
+        RuntimeError: If the outline cannot fit its display budget.
+    """
+    with _limit_memory():
+        summary = selection_summary(resolved)
+        outline: dict[str, Any] = {"type": "FeatureCollection", "features": []}
+        with polygon_features(resolved) as features:
+            for geometry in features:
+                part = display_geometry(
+                    {
+                        "type": "FeatureCollection",
+                        "features": [
+                            {
+                                "type": "Feature",
+                                "properties": {},
+                                "geometry": geometry,
+                            }
+                        ],
+                    },
+                    summary["bbox"],
+                )
+                outline["features"].extend(part["features"])
+                outline = display_geometry(outline, summary["bbox"])
+    return {"geometry": outline, "bbox": summary["bbox"]}

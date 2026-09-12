@@ -74,6 +74,7 @@ from eolab_app.vector.sources import (
     PublishedVectorRegistry,
 )
 from eolab_app.vector.sampling import VectorSamplingService
+from eolab_app.vector.outline_jobs import OutlineJobs
 from eolab_app.routes.vector_sampling import create_vector_sampling_router
 from eolab_app.vector.styling import VectorStyleService
 
@@ -164,7 +165,9 @@ def create_app(
         app_global_configuration.scan_mount_path
     )
     vector_selection_reader = VectorSamplingService(
-        vector_catalog, vector_source_resolver
+        vector_catalog, vector_source_resolver,
+        OutlineJobs(jobs_client, app_global_configuration.vector_outline_jobs_token)
+        if app_global_configuration.vector_outline_execution == "jobs" else None,
     )
     raster_pixel_service = RasterPixelService(
         raster_source_authorizer,

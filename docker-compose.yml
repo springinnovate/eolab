@@ -200,7 +200,7 @@ services:
         max-size: 10m
         max-file: "3"
 
-  # Independent API preview; does not execute jobs or depend on GIS/database services.
+  # Independent executor; installed outline work reads Catalog and the scan mount.
   jobs:
     build:
       context: .
@@ -218,14 +218,19 @@ services:
       JOBS_QUEUE_TIMEOUT_SECONDS: ${EOLAB_JOBS_QUEUE_TIMEOUT_SECONDS-60}
       JOBS_MAX_TIMEOUT_SECONDS: ${EOLAB_JOBS_MAX_TIMEOUT_SECONDS-300}
     cpus: 1
-    mem_limit: 256m
-    memswap_limit: 256m
+    mem_limit: 2g
+    memswap_limit: 2g
     pids_limit: 32
     read_only: true
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    volumes:
+      - type: bind
+        source: ${EOLAB_SCAN_MOUNT_PATH}
+        target: /scan-source
+        read_only: true
     expose:
       - "8080"
     healthcheck:
@@ -252,6 +257,8 @@ services:
         SOURCE_COMMIT: ${SOURCE_COMMIT:?SOURCE_COMMIT must identify the source revision}
     restart: unless-stopped
     environment:
+      - "VECTOR_OUTLINE_EXECUTION=${EOLAB_VECTOR_OUTLINE_EXECUTION-legacy}"
+      - "VECTOR_OUTLINE_JOBS_TOKEN=${EOLAB_VECTOR_OUTLINE_JOBS_TOKEN-}"
       - "APP_TITLE=${EOLAB_APP_TITLE:-EOLab}"
       - "APP_SUBTITLE=${EOLAB_APP_SUBTITLE:-Explore, visualize, and analyze Earth observation data}"
       - "CATALOG_URL=${EOLAB_CATALOG_URL:-/stac}"

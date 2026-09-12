@@ -3,6 +3,7 @@
 import json
 import math
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -91,6 +92,8 @@ class Settings:
         initial_longitude: Initial map-center longitude.
         initial_zoom: Initial map zoom level.
         processing_data_path: Persistent private clip volume shared with the worker.
+        vector_outline_execution: Explicit legacy or Jobs outline pathway.
+        vector_outline_jobs_token: Private bearer token for the Jobs caller.
     """
 
     app_title: str
@@ -126,6 +129,8 @@ class Settings:
     initial_longitude: float
     initial_zoom: float
     processing_data_path: Path = Path("/processing-data").absolute()
+    vector_outline_execution: str = "legacy"
+    vector_outline_jobs_token: str = field(default="", repr=False)
 
     def __post_init__(self) -> None:
         """Validate the application settings contract.
@@ -149,6 +154,12 @@ class Settings:
             "BASEMAP_URL": self.basemap_url,
             "BASEMAP_ATTRIBUTION": self.basemap_attribution,
         }
+        if self.vector_outline_execution not in {"legacy", "jobs"}:
+            raise ValueError("VECTOR_OUTLINE_EXECUTION must be legacy or jobs")
+        if self.vector_outline_execution == "jobs" and re.fullmatch(
+            r"[A-Za-z0-9._~-]{32,256}", self.vector_outline_jobs_token
+        ) is None:
+            raise ValueError("VECTOR_OUTLINE_JOBS_TOKEN must be a configured 32–256 character URL-safe Jobs credential")
         for environment_variable_name, setting_value in required_text_settings.items():
             if not setting_value:
                 raise ValueError(f"{environment_variable_name} must not be blank")
@@ -323,6 +334,8 @@ def load_settings(
         raise ValueError("SCAN_PATHS_WITHIN_MOUNT must be a JSON array of paths")
 
     return Settings(
+        vector_outline_execution=os.environ.get("VECTOR_OUTLINE_EXECUTION", "legacy"),
+        vector_outline_jobs_token=os.environ.get("VECTOR_OUTLINE_JOBS_TOKEN", ""),
         app_title=os.environ["APP_TITLE"].strip(),
         app_subtitle=os.environ["APP_SUBTITLE"].strip(),
         app_version=version_file_path.read_text(encoding="utf-8").strip(),

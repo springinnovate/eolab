@@ -1,8 +1,8 @@
 # Standalone Job service
 
-The `jobs` Compose service executes the installed `diagnostic.v1` operation.
-This first execution lifecycle does not migrate EOLab's existing raster, vector
-or Processing workloads. Open `/api/jobs/docs` on the app to try it.
+The `jobs` Compose service executes installed diagnostic and vector-outline
+operations. Optional outline migration is explicitly enabled per deployment;
+raster and Processing workloads remain unchanged. Open `/api/jobs/docs` to try it.
 
 ## Configure a caller
 
@@ -170,10 +170,11 @@ same **404** as missing jobs. Responses use `Cache-Control: no-store`.
 
 Listing is admission-ordered. Cursors refer to the last retained owned record and
 become invalid after it is deleted/expires. Pages reflect current state, not a
-frozen snapshot. No artifact files exist yet. Polling is sufficient for this
-diagnostic phase; notification delivery will be designed separately.
+frozen snapshot. No artifact files exist yet. The outline adapter uses bounded
+status polling; notification delivery will be designed separately.
 
-Requests are bounded to 64 KiB before decoding; subprocess messages to 64 KiB.
+Requests and subprocess inputs are bounded to 64 KiB before decoding;
+subprocess results are bounded to 512 KiB.
 The proxy retains its 1 MiB response bound and 10-second timeout: requests return
 state without holding HTTP connections through execution. Errors use the existing
 `{"error":{"code":"...","message":"..."}}` envelope.
@@ -190,9 +191,10 @@ API accepting module names or paths.
 stack and Python standard-library processes. **Coordinates with:** Compose and
 the existing proxy. That HTTP edge now carries Authorization to the fixed
 `http://jobs:8080` endpoint. Cookies/arbitrary identity headers are not forwarded.
-No new subsystem edge, application imports, source mounts, GIS dependencies or
-database are added. Existing Processing, raster/vector, catalog and rendering
-boundaries remain unchanged.
+The additive outline adapter adds a vector-to-Jobs execution edge. Registration
+imports the installed domain operation, which reuses existing source/outline
+functions and GIS dependencies. The scheduler never imports application services.
+No database connection is added; raster/Processing execution remains unchanged.
 
 The first version uses a fresh child per job for isolation/hard stopping; it does
 not prewarm native processes. Only installed code runs. Child environments omit
@@ -201,9 +203,11 @@ The runner uses an absolute interpreter path, a fixed module directory and binar
 JSON, so PATH, PYTHONPATH and locale settings are not needed. Only Windows OS
 locations and the bytecode-write setting are retained. This avoids casually
 exposing caller/database credentials to algorithms; it is not a security sandbox.
-The diagnostic spawns no descendants; process-tree handling, source authorization/mount resolution and workload-specific
-memory admission must precede installing more capable operations. Docker remains
-non-root, read-only, capability-dropped, one CPU and 256 MiB, without source mounts.
+Neither installed operation spawns descendant processes. Outline work preserves
+source authorization and the existing 2 GiB native address-space ceiling. Docker
+is non-root, read-only, capability-dropped, one CPU and 2 GiB, with only the
+read-only source bind. Future operations that spawn children need process-tree
+handling before installation.
 
 ## Local verification
 
@@ -217,7 +221,7 @@ Or, with Docker and the same environment variable:
 
 ```sh
 docker build --platform linux/amd64 -f services/jobs/Dockerfile -t eolab-jobs:diagnostic .
-docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges --cpus 1 --memory 256m --env JOBS_CALLERS -p 127.0.0.1:8082:8080 eolab-jobs:diagnostic
+docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges --cpus 1 --memory 2g --mount type=bind,src=/your/source,dst=/scan-source,readonly --env JOBS_CALLERS -p 127.0.0.1:8082:8080 eolab-jobs:diagnostic
 ```
 
 Open http://127.0.0.1:8082/api/jobs/docs and authorize. To smoke-test HTTP, set
@@ -233,3 +237,44 @@ Tests cover real subprocesses, API/proxy composition, ownership, priority/FIFO,
 cancellation, deadlines, failure recovery and retention. The existing build
 workflow smoke-tests the container with temporary credentials. No new workflow
 or production deployment is introduced.
+
+
+## Optional vector outline migration (#408)
+
+`vector.outline.v1` accepts `{ "selection": <CatalogSelection> }`. Its result is
+`{ "geometry": <approximate FeatureCollection>, "bbox": [west,south,east,north] }`.
+The operation resolves the immutable descriptor against the internal Catalog,
+checks the mounted source signature, runs the same outline kernel as the legacy
+path, then rechecks source/Catalog identity. Inputs never carry paths, URLs or
+complete geometry. The scheduler knows only the registered schema/function.
+
+Compose keeps `EOLAB_VECTOR_OUTLINE_EXECUTION=legacy` by default. Set it to `jobs`
+and set `EOLAB_VECTOR_OUTLINE_JOBS_TOKEN` to a token already configured for a
+dedicated caller in `EOLAB_JOBS_CALLERS` to exercise the new pathway. These are
+server credentials, never browser settings. Switch back to `legacy` and redeploy
+to roll back. A Jobs failure never silently starts local outline work.
+
+Only optional outline calls change: local selection, raster analysis and durable
+Processing remain independent. The adapter uses priority -10, 10 seconds waiting,
+15 seconds execution and bounded 100 ms status polling while the outline request
+is connected. This is temporary status observation using the existing Jobs API;
+no new SSE lifecycle is added. Cancellation recovers uncertain submissions with
+the same idempotency key before cancelling; terminal records are deleted. A
+cleanup outage is logged and Jobs deadlines/retention remain the backstop.
+
+The image now includes existing application modules and the reviewed application
+runtime wheels, including GIS libraries; no application server, GeoServer client
+or database connection is started by the operation. Reusing that resolution keeps
+packaging simple but includes some dependencies this operation does not use.
+The fixed Compose contracts are `http://stac-api:8080` and `/scan-source`, mounted
+read-only and verified by the existing startup guard. No source data is copied.
+Jobs health/diagnostic work does not require the Catalog to be online. The service
+gets 2 GiB rather than the diagnostic image's 256 MiB; it still executes one child
+at a time. The old application two-child budget remains, so combined deployments
+can now have two local vector selections plus one Jobs operation.
+
+Requests remain limited to 64 KiB. Inline process results are bounded at 512 KiB,
+allowing the existing 256 KiB compact GeoJSON display budget plus JSON spacing and
+envelope. Retained record count is unchanged; operators must budget memory for
+larger retained values if increasing it. Outline output is presentation-only and
+never substitutes for the exact original-source masks used in calculations.
