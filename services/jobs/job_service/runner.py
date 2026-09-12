@@ -12,12 +12,14 @@ MAX_MESSAGE_BYTES = 65536
 def main() -> None:
     """Validate the process boundary and emit one bounded JSON reply.
 
-    Inputs arrive on stdin; no path/module is accepted from a public request.
+    Inputs arrive as UTF-8 JSON bytes on binary stdin; json.loads decodes the bytes
+    into Python values. The extra byte detects oversized messages before parsing.
+    No path/module is accepted from a public request.
     Exceptions produce a safe public failure envelope. Tracebacks go only to
     inherited service stderr for operators; local variables are not captured.
     """
     try:
-        payload = sys.stdin.buffer.read(MAX_MESSAGE_BYTES + 1)
+        payload: bytes = sys.stdin.buffer.read(MAX_MESSAGE_BYTES + 1)
         if len(payload) > MAX_MESSAGE_BYTES:
             raise ValueError("Oversized process input")
         request = json.loads(payload)
