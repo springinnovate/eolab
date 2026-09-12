@@ -33,7 +33,7 @@ def geometry_process(
         writer.put(
             (
                 False,
-                "The optional map outline could not be drawn within its display budget",
+                "The map outline could not be drawn within its display budget",
             )
         )
 

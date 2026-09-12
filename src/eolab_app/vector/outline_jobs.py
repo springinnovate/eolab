@@ -1,4 +1,8 @@
-"""Vector-owned adapter for optional outlines executed by the Job service."""
+"""Vector-owned adapter for map display outlines executed by the Job service.
+
+An outline is a visual aid: analysis continues if drawing it fails. That
+independence does not mean the user must opt in to seeing the border.
+"""
 
 import asyncio
 import logging
@@ -64,7 +68,7 @@ class OutlineJobs:
             return result
 
     async def __call__(self, selection: CatalogSelection) -> dict[str, Any]:
-        """Return an optional outline; cancel abandoned work and release records.
+        """Return a map outline; cancel abandoned work and release records.
 
         The shielded submission yields a job ID even if its browser disconnects.
         A lost response is retried with the same idempotency key during cleanup.
@@ -77,7 +81,7 @@ class OutlineJobs:
             Existing geometry/bbox outline response.
 
         Raises:
-            VectorConflictError: If the optional operation is unavailable.
+            VectorConflictError: If the map outline operation is unavailable.
             asyncio.CancelledError: When the requesting client disconnects.
         """
         key = str(uuid4())
@@ -114,7 +118,7 @@ class OutlineJobs:
                 )
         except (httpx2.HTTPError, ValueError, KeyError, TimeoutError) as error:
             raise VectorConflictError(
-                "The optional map outline is unavailable; retry the selection."
+                "The map outline is unavailable; retry the selection."
             ) from error
         finally:
 
