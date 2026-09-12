@@ -15,9 +15,15 @@ from eolab_app.catalog_selection import CatalogSelection
 from eolab_app.vector.errors import VectorConflictError
 from eolab_app.vector.outline_operation import OutlineResult
 
+# Internal Compose DNS name and container port, shared with the Jobs proxy.
+# The public app hostname and host-port mappings do not change this address.
 JOBS_URL = "http://jobs:8080/api/jobs"
+# Maximum decoded JSON response buffered by this client (512 KiB). This allows
+# the 256 KiB outline plus its Jobs result envelope; it is not a geometry cap.
 REPLY_BYTES = 512 * 1024
 TERMINAL = {"succeeded", "failed", "cancelled", "timed_out", "expired"}
+# Check authoritative job status every 100 ms while waiting for completion or
+# cancellation. The surrounding request/cleanup deadlines bound these loops.
 POLL_SECONDS = 0.1
 logger = logging.getLogger(__name__)
 
