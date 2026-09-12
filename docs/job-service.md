@@ -137,6 +137,12 @@ and retained finished work. Choose actual limits for the container's resources.
 
 ## API
 
+`API_VERSION` in `models.py` is the manually maintained Job service HTTP contract
+version, shared by health and OpenAPI. It is independent of EOLab's package
+version in `pyproject.toml` and the Git build revision; it does not select a route
+or imply a separately deployed release. This contract moved from 0.1.0 stubs to
+0.2.0 authenticated execution.
+
 Job-specific endpoints require bearer authentication. Wrong-owner IDs return the
 same **404** as missing jobs. Responses use `Cache-Control: no-store`.
 

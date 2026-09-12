@@ -130,6 +130,7 @@ def test_discovery_docs_and_schemas() -> None:
         )
         assert f"{BASE}/openapi.json" in client.get(f"{BASE}/docs").text
         schema = client.get(f"{BASE}/openapi.json").json()
+        assert schema["info"]["version"] == health["apiVersion"]
         post = schema["paths"][BASE]["post"]
         assert "401" in post["responses"]
         assert "202" in post["responses"]

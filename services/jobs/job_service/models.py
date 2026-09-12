@@ -1,10 +1,14 @@
 """HTTP contracts for the standalone diagnostic Job service."""
 
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Final, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
+
+# Version of this service's HTTP contract, not EOLab's package/build version.
+# Bump deliberately when changing the documented Job service API contract.
+API_VERSION: Final = "0.2.0"
 
 Priority = Annotated[int, Field(strict=True, ge=-1000, le=1000)]
 JobStatus = Literal[
@@ -69,7 +73,7 @@ class Health(Contract):
     mode: Literal["ephemeral"] = "ephemeral"
     ready: Literal[True] = True
     acceptsJobs: bool = False
-    apiVersion: Literal["0.2.0"] = "0.2.0"
+    apiVersion: Literal["0.2.0"] = API_VERSION
 
 
 class Operation(Contract):

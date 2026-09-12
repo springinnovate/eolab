@@ -20,6 +20,7 @@ from starlette.middleware.base import RequestResponseEndpoint
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from job_service.models import (
+    API_VERSION,
     ErrorResponse,
     Health,
     JobPage,
@@ -139,7 +140,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(
         title="Job service",
-        version="0.2.0",
+        version=API_VERSION,
         lifespan=lifespan,
         description="One execution lane with a bounded priority queue. Jobs and results are "
         "in memory and lost on restart. Use Authorize with a configured caller bearer token. "
