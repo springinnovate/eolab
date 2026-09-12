@@ -292,7 +292,7 @@ def test_jobs_outage_is_local(
 def test_standalone_service_has_no_eolab_dependencies() -> None:
     """Keep feature and infrastructure dependencies out of the new service."""
     root = Path(__file__).parents[1]
-    for path in (root / "services/jobs/job_service").glob("*.py"):
+    for path in (root / "services/jobs/job_service").rglob("*.py"):
         for node in ast.walk(ast.parse(path.read_text())):
             imports = (
                 [alias.name for alias in node.names]

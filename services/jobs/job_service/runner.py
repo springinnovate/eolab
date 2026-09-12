@@ -3,7 +3,7 @@
 import json
 import sys
 
-from job_service.operations import OPERATIONS
+from job_service.operations_registry import OPERATIONS
 
 MAX_MESSAGE_BYTES = 65536
 

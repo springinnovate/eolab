@@ -20,7 +20,7 @@ from job_service.models import (
     JobStatus,
     SubmitJob,
 )
-from job_service.operations import OPERATIONS
+from job_service.operations_registry import OPERATIONS
 
 TERMINAL = frozenset({"succeeded", "failed", "cancelled", "timed_out", "expired"})
 

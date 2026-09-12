@@ -12,7 +12,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from job_service.configuration import Settings, load_settings
 from job_service.manager import JobError, JobManager
-from job_service.operations import OPERATIONS
+from job_service.operations_registry import OPERATIONS
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException

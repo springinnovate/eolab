@@ -1,13 +1,12 @@
-"""Installed operation definitions; the scheduler does not interpret algorithms."""
+"""Diagnostic algorithm and its operation-specific input/result contracts."""
 
 import json
 import time
-from dataclasses import dataclass
-from typing import Callable, Literal
+from typing import Literal
 
 from pydantic import BaseModel, Field, JsonValue, model_validator
 
-from job_service.models import Contract, Operation
+from job_service.models import Contract
 
 
 class DiagnosticInput(Contract):
@@ -58,38 +57,3 @@ def diagnostic(inputs: BaseModel) -> BaseModel:
     if request.mode == "delay":
         time.sleep(request.seconds)
     return DiagnosticResult(value=request.value)
-
-
-@dataclass(frozen=True)
-class InstalledOperation:
-    """Code-installed input/result validators and one executable algorithm."""
-
-    name: str
-    description: str
-    input_model: type[BaseModel]
-    result_model: type[BaseModel]
-    execute: Callable[[BaseModel], BaseModel]
-
-    def describe(self) -> Operation:
-        """Publish JSON schemas for discovery.
-
-        Returns:
-            Public operation contract without executable code or paths.
-        """
-        return Operation(
-            name=self.name,
-            description=self.description,
-            inputSchema=self.input_model.model_json_schema(),
-            resultSchema=self.result_model.model_json_schema(),
-        )
-
-
-OPERATIONS = {
-    "diagnostic.v1": InstalledOperation(
-        "diagnostic.v1",
-        "Echo a value, delay then echo, or raise a controlled exception.",
-        DiagnosticInput,
-        DiagnosticResult,
-        diagnostic,
-    )
-}

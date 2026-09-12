@@ -165,8 +165,8 @@ state without holding HTTP connections through execution. Errors use the existin
 
 **Owner:** `services/jobs/job_service`. `app.py` owns HTTP/authentication;
 `manager.py` owns ephemeral state/admission/priority/lifecycle; `executor.py`
-owns subprocess cleanup and transport; `operations.py` registers the diagnostic
-and its input/result models. `runner.py` is a private child entry point, not an
+owns subprocess cleanup and transport; `operations_registry.py` registers the diagnostic, whose algorithm and
+input/result models live together in `operations/diagnostic.py`. `runner.py` is a private child entry point, not an
 API accepting module names or paths.
 
 **Used by:** REST/Swagger through EOLab's proxy. **Depends on:** the existing web
