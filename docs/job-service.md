@@ -98,6 +98,12 @@ the configured maximum. Request timeouts stay within that maximum. The diagnosti
 operation independently caps its requested delay at 300 seconds.
 The following are the default values, not fixed deployment settings:
 
+Startup also imposes policy ceilings of 10,000 retained records and one day for
+retention/deadlines. These guard against accidentally unbounded memory/scan work
+and very long-lived state; they are not measured safe capacities for every
+container. The record limit must leave room beyond the waiting queue for running
+and retained finished work. Choose actual limits for the container's resources.
+
 - One running job, **32 waiting**, **128 retained records** across all callers.
   Retained records include active jobs.
 - Queue/execution deadlines separately default to **60 seconds**; clients may

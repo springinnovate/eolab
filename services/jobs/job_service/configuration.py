@@ -11,6 +11,12 @@ from typing import TypeVar
 
 Number = TypeVar("Number", int, float)
 
+# Deployment guardrails for this in-memory diagnostic service, not measured
+# memory guarantees. Record storage and periodic scans both grow with this count.
+MAX_RETAINED_RECORDS = 10_000
+# One day bounds retention and deadlines; it also matches the HTTP timeout ceiling.
+MAX_CONFIGURED_SECONDS = 24 * 60 * 60
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -38,8 +44,10 @@ class Settings:
         """
         for name in ("queue_capacity", "record_capacity"):
             value = getattr(self, name)
-            if type(value) is not int or not 1 <= value <= 10000:
-                raise ValueError(f"{name} must be an integer between 1 and 10000")
+            if type(value) is not int or not 1 <= value <= MAX_RETAINED_RECORDS:
+                raise ValueError(
+                    f"{name} must be an integer between 1 and {MAX_RETAINED_RECORDS}"
+                )
         if self.queue_capacity >= self.record_capacity:
             raise ValueError("record_capacity must exceed queue_capacity")
         for name in (
@@ -53,10 +61,10 @@ class Settings:
                 isinstance(value, bool)
                 or not isinstance(value, (int, float))
                 or not math.isfinite(value)
-                or not 0 < value <= 86400
+                or not 0 < value <= MAX_CONFIGURED_SECONDS
             ):
                 raise ValueError(
-                    f"{name} must be finite, positive and at most 86400 seconds"
+                    f"{name} must be finite, positive and at most {MAX_CONFIGURED_SECONDS} seconds"
                 )
         if max(self.execution_seconds, self.queue_seconds) > self.max_timeout_seconds:
             raise ValueError(
