@@ -32,6 +32,8 @@ def test_restricted_environment_executes_real_runner(
         "SYSTEMROOT",
         "WINDIR",
         "PYTHONDONTWRITEBYTECODE",
+        "OPENBLAS_NUM_THREADS",
+        "OMP_NUM_THREADS",
     }
     if os.name == "nt":
         assert environment["SYSTEMROOT"] == os.environ["SYSTEMROOT"]

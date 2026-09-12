@@ -3,15 +3,21 @@ FROM python:3.12.14-slim-trixie@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /service
 
-# Same reviewed Python/web-stack wheel resolution as the app, without GIS deps.
-COPY services/jobs/requirements.txt ./requirements.txt
-RUN python -m pip install --no-cache-dir --only-binary=:all: --require-hashes -r requirements.txt \
+# Installed vector work reuses the application's reviewed GIS wheel resolution.
+RUN apt-get update && apt-get install --yes --no-install-recommends libexpat1 \
+    && rm -rf /var/lib/apt/lists/*
+COPY deployment/application-runtime-requirements.txt /build-inputs/deployment/application-runtime-requirements.txt
+COPY services/jobs/requirements.txt /build-inputs/services/jobs/requirements.txt
+RUN python -m pip install --no-cache-dir --only-binary=:all: --require-hashes -r /build-inputs/services/jobs/requirements.txt \
     && python -m pip check \
     && addgroup --system jobs \
     && adduser --system --ingroup jobs --home /service jobs
 
 COPY services/jobs/job_service/ ./job_service/
+COPY src/eolab_app/ ./eolab_app/
+COPY --chmod=0555 deployment/require-read-only-scan-source.sh /usr/local/bin/require-read-only-scan-source
 USER jobs
+ENTRYPOINT ["/usr/local/bin/require-read-only-scan-source"]
 EXPOSE 8080
 HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
     CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/jobs/health', timeout=3)"]

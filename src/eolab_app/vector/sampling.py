@@ -1,9 +1,13 @@
-"""Catalog-owned immutable selection authorization, independent of outlines."""
+"""Coordinate vector selection checks, summaries, and map display outlines.
+
+Source/filter preparation lives in selection_source so local work and the Jobs
+operation use the same rules without the operation constructing this service.
+This service retains selection admission, reauthorization, and execution routing;
+an unavailable outline does not prevent numeric analysis of the selection.
+"""
 
 import asyncio
-import hashlib
-import json
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from eolab_app.catalog_selection import (
@@ -19,113 +23,36 @@ from eolab_app.execution.bounded_process import (
 from eolab_app.vector.errors import VectorConflictError, VectorFeatureError
 from eolab_app.vector.filters import (
     CatalogVectorFilterRequest,
-    VectorFilter,
-    validate_filter,
 )
 from eolab_app.vector.geometry import geometry_process, GEOMETRY_READ_SECONDS
 from eolab_app.bounded_vector import summary_process
-from eolab_app.vector.metadata import catalog_vector_fields
 from eolab_app.vector.ports import VectorCatalog
-from eolab_app.vector.sources import MountedVectorResolver, vector_source_signature
-
-
-def ogr_predicate(candidate: VectorFilter) -> str | None:
-    """Compile a conservative native predicate from schema-validated rules.
-
-    String comparisons retain exact Python post-filtering because driver
-    collations differ. An OR with such a rule requires all native candidates.
-
-    Args:
-        candidate: Schema-validated immutable predicate.
-
-    Returns:
-        Quoted OGR WHERE text, or no native restriction.
-    """
-    if not candidate.active:
-        return None
-    clauses = []
-    for rule in candidate.rules:
-        if rule.operator == "contains" or isinstance(rule.value, str):
-            if candidate.match == "any":
-                return None
-            continue
-        field = '"' + rule.field.replace('"', '""') + '"'
-        if rule.operator in {"missing", "present"}:
-            clauses.append(
-                f"{field} IS {'NOT ' if rule.operator == 'present' else ''}NULL"
-            )
-            continue
-        literal = (
-            str(int(rule.value)) if isinstance(rule.value, bool) else str(rule.value)
-        )
-        operator = {
-            "eq": "=",
-            "ne": "<>",
-            "gt": ">",
-            "ge": ">=",
-            "lt": "<",
-            "le": "<=",
-        }[rule.operator]
-        clauses.append(f"({field} IS NOT NULL AND {field} {operator} {literal})")
-    return (" AND " if candidate.match == "all" else " OR ").join(clauses) or None
+from eolab_app.vector.selection_source import resolve_selection
+from eolab_app.vector.sources import MountedVectorResolver
 
 
 class VectorSamplingService:
     """Authorize direct catalog selections without retaining geometry or IDs."""
 
-    def __init__(self, catalog: VectorCatalog, resolver: MountedVectorResolver) -> None:
+    def __init__(
+        self,
+        catalog: VectorCatalog,
+        resolver: MountedVectorResolver,
+        outline_executor: (
+            Callable[[CatalogSelection], Awaitable[dict[str, Any]]] | None
+        ) = None,
+    ) -> None:
         """Connect source authority and bounded execution.
 
         Args:
             catalog: Authoritative Catalog reader.
             resolver: Exact mounted vector source resolver.
+            outline_executor: Optional injected Jobs path; None retains local execution.
         """
         self.catalog = catalog
         self.resolver = resolver
         self._slots = asyncio.Semaphore(2)
-
-    async def _resolve(
-        self, request: CatalogVectorFilterRequest
-    ) -> ResolvedCatalogSelection:
-        """Validate source identity and compile its predicate.
-
-        Args:
-            request: Catalog identity and typed predicate.
-
-        Returns:
-            Private immutable source capability.
-
-        Raises:
-            VectorFeatureError: If source or predicate validation fails.
-        """
-        item = await self.catalog.get_item(request)
-        source = self.resolver.resolve(item)
-        if (
-            source.source_format not in {"geopackage", "shapefile"}
-            or source.source_path is None
-        ):
-            raise VectorConflictError(
-                "Sampling supports mounted Shapefile and GeoPackage polygon layers"
-            )
-        candidate = validate_filter(request.filter, catalog_vector_fields(item))
-        signature = await asyncio.to_thread(vector_source_signature, source)
-        digest = hashlib.sha256(json.dumps(signature).encode()).hexdigest()
-        selection = CatalogSelection(
-            collectionId=request.collection_id,
-            itemId=request.item_id,
-            assetKey=source.asset_key,
-            layerName=source.layer_name,
-            sourceSignature=digest,
-            filter=candidate,
-        )
-        paths = {p.name: p for p in (source.component_paths or (source.source_path,))}
-        return ResolvedCatalogSelection(
-            selection,
-            source.source_path,
-            "GPKG" if source.source_format == "geopackage" else "ESRI Shapefile",
-            tuple((paths[name], tuple(values)) for name, *values in signature),
-            ogr_predicate(candidate),
-        )
+        self._outline_executor = outline_executor
 
     async def resolve_for_sampling(
         self, selection: CatalogSelection
@@ -142,7 +69,7 @@ class VectorSamplingService:
             SelectionUnavailableError: If identity, source or predicate changed.
         """
         try:
-            resolved = await self._resolve(selection)
+            resolved = await resolve_selection(self.catalog, self.resolver, selection)
         except (VectorFeatureError, OSError, ValueError) as error:
             raise SelectionUnavailableError(
                 "The catalog vector is unavailable; select it again."
@@ -198,7 +125,7 @@ class VectorSamplingService:
         Raises:
             VectorConflictError: If empty, stale, busy or over actual read budget.
         """
-        resolved = await self._resolve(request)
+        resolved = await resolve_selection(self.catalog, self.resolver, request)
         result = await self._run(summary_process, resolved)
         return {
             **result,
@@ -219,6 +146,9 @@ class VectorSamplingService:
         Raises:
             VectorConflictError: If display work is unavailable or over budget.
         """
-        return await self._run(
-            geometry_process, await self.resolve_for_sampling(selection)
-        )
+        resolved = await self.resolve_for_sampling(selection)
+        if self._outline_executor is not None:
+            result = await self._outline_executor(selection)
+            await self.resolve_for_sampling(selection)
+            return result
+        return await self._run(geometry_process, resolved)

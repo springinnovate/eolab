@@ -10,7 +10,7 @@ from pathlib import Path
 from pydantic import JsonValue
 
 from job_service.models import JobStatus
-from job_service.runner import MAX_MESSAGE_BYTES
+from job_service.runner import MAX_RESULT_BYTES
 
 
 def child_environment() -> dict[str, str]:
@@ -24,7 +24,7 @@ def child_environment() -> dict[str, str]:
     Windows environment names are case-insensitive (often uppercase in os.environ).
 
     Returns:
-        Only Windows OS locations and the read-only-image bytecode setting.
+        Windows OS locations, read-only bytecode and bounded native thread settings.
         This is credential minimization, not an OS security sandbox.
     """
     environment = {
@@ -33,6 +33,10 @@ def child_environment() -> dict[str, str]:
         if os.name == "nt" and key.upper() in {"SYSTEMROOT", "WINDIR"}
     }
     environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    # Each admitted child owns one CPU lane; native libraries must not fan out
+    # to the host's CPU count or inherit an operator's unrelated thread settings.
+    environment["OPENBLAS_NUM_THREADS"] = "1"
+    environment["OMP_NUM_THREADS"] = "1"
     return environment
 
 
@@ -102,10 +106,10 @@ async def run_job(
                 process.stdin.close()
                 output = bytearray()
                 while chunk := await process.stdout.read(
-                    MAX_MESSAGE_BYTES + 1 - len(output)
+                    MAX_RESULT_BYTES + 1 - len(output)
                 ):
                     output.extend(chunk)
-                    if len(output) > MAX_MESSAGE_BYTES:
+                    if len(output) > MAX_RESULT_BYTES:
                         raise ValueError("Oversized operation output")
                 if await process.wait() != 0:
                     raise ValueError("Invalid operation output")

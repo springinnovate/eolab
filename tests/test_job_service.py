@@ -290,8 +290,8 @@ def test_jobs_outage_is_local(
     assert "private hostname" not in response.text
 
 
-def test_standalone_service_has_no_eolab_dependencies() -> None:
-    """Keep feature and infrastructure dependencies out of the new service."""
+def test_scheduler_has_only_explicit_operation_registration_edge() -> None:
+    """Only registration imports the approved domain operation, never services."""
     root = Path(__file__).parents[1]
     for path in (root / "services/jobs/job_service").rglob("*.py"):
         for node in ast.walk(ast.parse(path.read_text())):
@@ -300,6 +300,12 @@ def test_standalone_service_has_no_eolab_dependencies() -> None:
                 if isinstance(node, ast.Import)
                 else ([node.module or ""] if isinstance(node, ast.ImportFrom) else [])
             )
+            if path.name == "operations_registry.py":
+                imports = [
+                    name
+                    for name in imports
+                    if name != "eolab_app.vector.outline_operation"
+                ]
             assert not any(
                 name.startswith(
                     (
@@ -314,7 +320,7 @@ def test_standalone_service_has_no_eolab_dependencies() -> None:
             )
     dockerfile = (root / "services/jobs/Dockerfile").read_text()
     assert "USER jobs" in dockerfile
-    assert "COPY src/" not in dockerfile
+    assert "COPY src/eolab_app/" in dockerfile
     compose = (
         (root / "docker-compose.yml")
         .read_text()
@@ -323,27 +329,20 @@ def test_standalone_service_has_no_eolab_dependencies() -> None:
     )
     assert "dockerfile: services/jobs/Dockerfile" in compose
     assert "read_only: true" in compose
-    assert (
-        "depends_on:" not in compose
-        and "volumes:" not in compose
-        and "ports:" not in compose
-    )
+    assert "depends_on:" not in compose and "ports:" not in compose
+    assert "target: /scan-source" in compose
+    assert "mem_limit: 2g" in compose
+    operation = (root / "src/eolab_app/vector/outline_operation.py").read_text()
+    assert "VectorSamplingService" not in operation
+    assert "geoserver" not in operation.lower()
 
 
-def test_jobs_pins_are_reviewed_web_stack_subset() -> None:
-    """Independent image excludes GIS wheels without introducing new resolutions."""
+def test_jobs_pins_reuse_reviewed_application_resolution() -> None:
+    """GIS operation packaging introduces no independent dependency resolution."""
     root = Path(__file__).parents[1]
     jobs = {
         line
         for line in (root / "services/jobs/requirements.txt").read_text().splitlines()
         if line and not line.startswith("#")
     }
-    application = set(
-        (root / "deployment/application-runtime-requirements.txt")
-        .read_text()
-        .splitlines()
-    )
-    assert jobs <= application
-    assert not any(
-        line.startswith(("numpy", "rasterio", "fiona", "psycopg")) for line in jobs
-    )
+    assert jobs == {"-r ../../deployment/application-runtime-requirements.txt"}
