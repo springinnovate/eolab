@@ -60,7 +60,7 @@ class OutlineResult(BaseModel):
         return self
 
 
-def outline(inputs: OutlineInput) -> OutlineResult:
+def calculate_outline(inputs: OutlineInput) -> OutlineResult:
     """Execute Catalog-authorized outline computation in the Jobs child.
 
     GIS imports are lazy so service discovery and diagnostic jobs do not load
@@ -76,10 +76,10 @@ def outline(inputs: OutlineInput) -> OutlineResult:
         SelectionUnavailableError: If Catalog/source identity changed.
         ValueError: If source reading or display validation fails.
     """
-    return asyncio.run(_outline(inputs))
+    return asyncio.run(_calculate_outline(inputs))
 
 
-async def _outline(inputs: OutlineInput) -> OutlineResult:
+async def _calculate_outline(inputs: OutlineInput) -> OutlineResult:
     """Resolve before and after native work using the authoritative Catalog.
 
     Args:

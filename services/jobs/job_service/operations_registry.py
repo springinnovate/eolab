@@ -11,7 +11,11 @@ from job_service.operations.diagnostic import (
     DiagnosticResult,
     diagnostic,
 )
-from eolab_app.vector.outline_operation import OutlineInput, OutlineResult, outline
+from eolab_app.vector.outline_operation import (
+    OutlineInput,
+    OutlineResult,
+    calculate_outline,
+)
 
 
 @dataclass(frozen=True)
@@ -51,6 +55,6 @@ OPERATIONS = {
         "Build a simplified display outline from an immutable catalog selection.",
         OutlineInput,
         OutlineResult,
-        outline,
+        calculate_outline,
     ),
 }
