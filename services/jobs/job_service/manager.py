@@ -227,10 +227,10 @@ class JobManager:
             JobError: For an invalid or unavailable cursor.
         """
         self._maintain()
-        after = 0
+        cursor_sequence = 0
         if cursor:
             try:
-                after = self._owned(owner, UUID(cursor)).sequence
+                cursor_sequence = self._owned(owner, UUID(cursor)).sequence
             except (ValueError, JobError):
                 raise JobError(
                     "invalid_request", "Listing cursor is invalid or expired"
@@ -239,7 +239,7 @@ class JobManager:
             record
             for record in self.records.values()
             if record.owner == owner
-            and record.sequence > after
+            and record.sequence > cursor_sequence
             and (status is None or record.snapshot.status == status)
         ]
         page = matching[:limit]
