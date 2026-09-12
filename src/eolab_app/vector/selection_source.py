@@ -1,4 +1,11 @@
-"""Shared Catalog-to-source resolution for local and registered vector work."""
+"""Prepare the same vector source and filter for local work and Jobs operations.
+
+This is the source-resolution logic extracted from VectorSamplingService, not
+another Catalog search or a second implementation. It uses the existing
+VectorCatalog to fetch one Item and MountedVectorResolver to locate its dataset.
+It validates the attribute filter and records file signatures, but reads no
+features. The bounded vector reader applies the filter when it reads polygons.
+"""
 
 import asyncio
 import hashlib
@@ -62,15 +69,22 @@ async def resolve_selection(
     resolver: MountedVectorResolver,
     request: CatalogVectorFilterRequest,
 ) -> ResolvedCatalogSelection:
-    """Resolve Catalog identity and validated predicate to the original source.
+    """Locate a catalog vector dataset and prepare its attribute filter for reading.
+
+    No polygons are loaded or filtered here. The returned OGR WHERE expression
+    narrows candidates during reading; polygon_features also applies the exact
+    attribute rules so driver-specific string comparisons cannot change results.
 
     Args:
-        catalog: Authoritative internal Catalog reader.
-        resolver: Resolver confined to the read-only scan mount.
-        request: Path-free Catalog identity and predicate.
+        catalog: Existing reader that fetches the requested STAC Item.
+        resolver: Existing resolver that maps that Item's data Asset to an
+            allowed dataset path and native layer inside the read-only mount.
+        request: Catalog collection/item IDs and attribute filter. Callers name
+            a catalog entry, not a filesystem path; the server locates the file.
 
     Returns:
-        Private source capability with a complete component signature.
+        Server-only dataset path, driver, layer/filter selection, compiled OGR
+        WHERE expression, and file signatures for detecting source changes.
 
     Raises:
         VectorFeatureError: If identity, source or predicate is unavailable.

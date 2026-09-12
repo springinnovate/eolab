@@ -1,4 +1,10 @@
-"""Catalog-owned immutable selection authorization, independent of outlines."""
+"""Coordinate vector selection checks, summaries, and map display outlines.
+
+Source/filter preparation lives in selection_source so local work and the Jobs
+operation use the same rules without the operation constructing this service.
+This service retains selection admission, reauthorization, and execution routing;
+an unavailable outline does not prevent numeric analysis of the selection.
+"""
 
 import asyncio
 from collections.abc import Awaitable, Callable
