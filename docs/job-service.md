@@ -164,7 +164,7 @@ state without holding HTTP connections through execution. Errors use the existin
 ## Ownership and architecture
 
 **Owner:** `services/jobs/job_service`. `app.py` owns HTTP/authentication;
-`manager.py` owns ephemeral state/admission/priority/lifecycle; `execution.py`
+`manager.py` owns ephemeral state/admission/priority/lifecycle; `executor.py`
 owns subprocess cleanup and transport; `operations.py` registers the diagnostic
 and its input/result models. `runner.py` is a private child entry point, not an
 API accepting module names or paths.

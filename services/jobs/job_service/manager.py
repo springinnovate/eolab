@@ -11,7 +11,7 @@ from uuid import UUID, uuid4
 from pydantic import ValidationError
 
 from job_service.configuration import Settings
-from job_service.execution import run_operation
+from job_service.executor import run_operation
 from job_service.models import (
     ErrorDetail,
     JobPage,

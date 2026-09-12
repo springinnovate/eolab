@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from job_service.app import create_app
 from job_service.configuration import Settings, load_settings
-from job_service.execution import run_operation
+from job_service.executor import run_operation
 
 BASE = "/api/jobs"
 ALICE = {"Authorization": "Bearer " + "a" * 48}
