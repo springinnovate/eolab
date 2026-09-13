@@ -45,7 +45,7 @@ Snapshot projections expose `jobId`, `status`, and `error`, ignoring other serve
 metadata. These are client projections, not replacements for server wire models.
 
 The required `timeout_seconds` bounds submission, observation and retrieval;
-cleanup has a separate finite budget (5 seconds by default). This does not replace
+cleanup has a fixed 5-second budget (`CLEANUP_SECONDS`). This does not replace
 server queue/execution deadlines. Status checks keep the previous 100 ms cadence.
 Requests are bounded at 64 KiB and decoded responses at 512 KiB. UUID validation,
 response identity checks and JSON/schema checks happen at the client boundary.

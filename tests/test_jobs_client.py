@@ -49,12 +49,16 @@ def test_client_rejects_invalid_requests_before_transport() -> None:
     asyncio.run(scenario())
 
 
-def test_cleanup_outage_is_bounded(caplog: pytest.LogCaptureFixture) -> None:
+def test_cleanup_outage_is_bounded(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """An unavailable cancellation cannot hide the original client deadline.
 
     Args:
         caplog: Captures the safe cleanup warning.
+        monkeypatch: Shortens the module's cleanup deadline for this outage test.
     """
+    monkeypatch.setattr("eolab_jobs.client.CLEANUP_SECONDS", 0.05)
 
     async def scenario() -> None:
         """Simulate hung cleanup through HTTP and assert no cleanup survives."""
@@ -78,7 +82,7 @@ def test_cleanup_outage_is_bounded(caplog: pytest.LogCaptureFixture) -> None:
             return httpx2.Response(200, json={"jobId": job_id, "status": "running"})
 
         async with httpx2.AsyncClient(transport=httpx2.MockTransport(respond)) as http:
-            jobs = JobsClient(http, TOKEN, cleanup_seconds=0.05)
+            jobs = JobsClient(http, TOKEN)
             async with asyncio.timeout(1):
                 with pytest.raises(TimeoutError):
                     await jobs.run(

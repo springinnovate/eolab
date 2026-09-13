@@ -14,6 +14,7 @@ from pydantic import BaseModel, JsonValue
 DEFAULT_JOBS_URL = "http://jobs:8080/api/jobs"
 MAX_REQUEST_BYTES = 65536
 MAX_RESPONSE_BYTES = 512 * 1024
+CLEANUP_SECONDS = 5
 # Preserve the outline caller's 100 ms authoritative status-check cadence.
 POLL_SECONDS = 0.1
 TERMINAL = frozenset({"succeeded", "failed", "cancelled", "timed_out", "expired"})
@@ -72,7 +73,6 @@ class JobsClient:
         token: str,
         *,
         url: str = DEFAULT_JOBS_URL,
-        cleanup_seconds: float = 5,
     ) -> None:
         """Bind transport, credentials and a trusted deployment endpoint.
 
@@ -80,10 +80,9 @@ class JobsClient:
             client: Dedicated HTTP pool, closed by its composition owner.
             token: Private caller credential, never an operation input.
             url: Trusted /api/jobs endpoint; redirects are never followed.
-            cleanup_seconds: Finite cancellation/deletion cleanup budget.
 
         Raises:
-            ValueError: For an invalid endpoint or cleanup budget.
+            ValueError: For an invalid endpoint.
         """
         endpoint = httpx2.URL(url)
         if (
@@ -97,12 +96,9 @@ class JobsClient:
             )
         ):
             raise ValueError("Invalid Jobs endpoint")
-        if not math.isfinite(cleanup_seconds) or cleanup_seconds <= 0:
-            raise ValueError("Cleanup deadline must be finite and positive")
         self.client = client
         self._token = token
         self.url = url.rstrip("/")
-        self.cleanup_seconds = cleanup_seconds
 
     async def _request(
         self,
@@ -355,7 +351,7 @@ class JobsClient:
                 """Recover uncertain admission and settle this owned request."""
                 nonlocal snapshot
                 try:
-                    async with asyncio.timeout(self.cleanup_seconds):
+                    async with asyncio.timeout(CLEANUP_SECONDS):
                         if snapshot is None:
                             try:
                                 snapshot = await asyncio.shield(submission)
