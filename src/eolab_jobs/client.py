@@ -22,7 +22,12 @@ logger = logging.getLogger(__name__)
 
 
 class JobSnapshot(BaseModel):
-    """Client projection of identity/state; the service owns the full wire schema."""
+    """Validate a server reply's job UUID, known status and optional error object.
+
+    model_validate() converts the decoded JSON object into this typed snapshot
+    and rejects missing or invalid fields. Extra server metadata is ignored.
+    This does not validate an operation's result; that remains caller-owned.
+    """
 
     jobId: UUID
     status: Literal[
