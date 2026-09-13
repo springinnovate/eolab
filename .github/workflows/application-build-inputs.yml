@@ -12,7 +12,6 @@ on:
       - tests/test_outline_jobs.py
       - src/eolab_jobs/**
       - tests/test_jobs_client.py
-      - examples/jobs_diagnostic.py
       - src/eolab_app/routes/jobs_proxy.py
       - tests/test_job_service.py
       - tests/test_job_lifecycle.py

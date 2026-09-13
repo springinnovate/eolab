@@ -93,28 +93,18 @@ or oversized responses raise `ValueError`, and wait timeout/cancellation retain
 Python's `TimeoutError`/`asyncio.CancelledError`. The vector adapter translates
 these into its existing map-outline error and keeps numeric analysis independent.
 
-## Manual diagnostic
+## Diagnostic verification
 
-With EOLab installed in your Python environment and a running, authenticated Job
-service, run from the repository:
-
-```text
-python examples/jobs_diagnostic.py --url https://wwf-connectivity.ecoshard.org/api/jobs --mode normal
-python examples/jobs_diagnostic.py --url https://wwf-connectivity.ecoshard.org/api/jobs --mode delay --seconds 2
-python examples/jobs_diagnostic.py --url https://wwf-connectivity.ecoshard.org/api/jobs --mode exception --keep-result
-```
-
-The example prompts privately for an existing Jobs caller token. It prints the
-job UUID and result/status. Exception mode intentionally exits with code 1.
-`--keep-result` retains the record for Swagger or subsequent client inspection;
-without it terminal records are deleted. Ctrl+C cancels the awaiting task, which
-performs bounded server cleanup. The example uses a 60-second client deadline;
-configured server deadlines still apply.
+`tests/test_jobs_client.py` exercises `diagnostic.v1` in normal, delay and
+exception modes against the real Jobs HTTP application and native executor.
+It also verifies cancellation, deadlines, owner isolation and result retention.
+For manual service checks, use the existing `/api/jobs/docs` interface; no
+standalone example program is maintained.
 
 ## Architectural scope
 
 **Owner:** reusable Jobs protocol/lifecycle client. **Used by:** vector outlines
-and this diagnostic example/tests. **Depends on:** the existing Jobs API and its
+and diagnostic integration tests. **Depends on:** the existing Jobs API and its
 HTTP pool. **Coordinates with:** composition for credentials and pool shutdown.
 Issue #410 explicitly approves extraction with one production caller. The vector
 adapter retains domain policy. No service imports the client to schedule itself,
