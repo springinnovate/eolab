@@ -75,6 +75,7 @@ from eolab_app.vector.sources import (
 )
 from eolab_app.vector.sampling import VectorSamplingService
 from eolab_app.vector.outline_jobs import OutlineJobs
+from eolab_jobs.client import JobsClient
 from eolab_app.routes.vector_sampling import create_vector_sampling_router
 from eolab_app.vector.styling import VectorStyleService
 
@@ -168,7 +169,9 @@ def create_app(
         vector_catalog, vector_source_resolver,
         # Inject remote outline execution only for the migration's Jobs mode;
         # None preserves the service's existing local child-process pathway.
-        OutlineJobs(jobs_client, app_global_configuration.vector_outline_jobs_token)
+        OutlineJobs(
+            JobsClient(jobs_client, app_global_configuration.vector_outline_jobs_token)
+        )
         if app_global_configuration.vector_outline_execution == "jobs" else None,
     )
     raster_pixel_service = RasterPixelService(

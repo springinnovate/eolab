@@ -262,16 +262,13 @@ no new SSE lifecycle is added. Cancellation recovers uncertain submissions with
 the same idempotency key before cancelling; terminal records are deleted. A
 cleanup outage is logged and Jobs deadlines/retention remain the backstop.
 
-The outline caller currently owns its HTTP/lifecycle adapter. Transport,
-idempotent submission recovery, observation and cancellation are candidates for
-a reusable Jobs client when a second caller needs the same lifecycle. That
-client should accept an operation name and validated inputs; the vector adapter
-would keep outline-specific priority, deadlines, result validation and error
-translation. Prefer composing a client over subclassing an outline-shaped base
-class. A browser-facing proxy is not a second such caller: it forwards individual
-requests and must not cancel or delete a caller's job when forwarding completes.
-No shared client is extracted in this first migration because the repository's
-shared-module rule requires two callers with matching semantics.
+The outline adapter composes the reusable Python `eolab_jobs.client.JobsClient`
+for bounded transport, observation and cancellation. It retains outline-specific
+inputs, priority, deadlines, result validation and error translation. The client
+imports no Jobs server, scheduler, operation registry or GIS code. The existing
+browser proxy still forwards individual requests; it does not own their job
+lifetimes and must not cancel/delete them when forwarding completes.
+See [Python Jobs client](jobs-client.md) for retention policy and a diagnostic demo.
 
 The image now includes existing application modules and the reviewed application
 runtime wheels, including GIS libraries; no application server, GeoServer client

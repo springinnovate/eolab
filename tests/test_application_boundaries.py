@@ -141,3 +141,17 @@ def test_application_root_has_no_generic_shared_module() -> None:
         source_path.name
         for source_path in APPLICATION_SOURCE.glob("*.py")
     }.intersection(ROOT_GENERIC_MODULE_NAMES)
+
+
+def test_jobs_client_has_no_application_server_or_operation_dependencies() -> None:
+    """Keep the reusable client importable without service, feature or GIS code."""
+    for path in Path("src/eolab_jobs").rglob("*.py"):
+        roots = {name.split(".")[0] for name in imported_modules(path)}
+        assert roots <= {
+            "asyncio", "json", "logging", "math", "re", "typing", "uuid",
+            "httpx2", "pydantic", "eolab_jobs",
+        }
+        assert not reads_process_environment(path)
+    assert "eolab_jobs.client" in imported_modules(
+        APPLICATION_SOURCE / "vector" / "outline_jobs.py"
+    )
