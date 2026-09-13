@@ -180,6 +180,11 @@ class JobsClient:
     ) -> JobSnapshot:
         """Submit without automatic observation or cleanup.
 
+        This public boundary accepts a dictionary and freezes/validates it once.
+        The private _submit() sends those bytes and also serves run() recovery,
+        which must resend the exact original body after an uncertain admission.
+        Use run() instead when the client should own waiting and cancellation.
+
         Args:
             payload: Operation, inputs, priority and server deadline fields.
             idempotency_key: Reuse with identical inputs after an uncertain reply.
