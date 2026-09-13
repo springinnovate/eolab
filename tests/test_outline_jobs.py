@@ -21,6 +21,7 @@ from eolab_app.vector.catalog import StacVectorCatalog
 from eolab_app.vector.filters import CatalogVectorFilterRequest, VectorFilter
 from eolab_app.vector.geometry import build_outline
 from eolab_app.vector.outline_jobs import OutlineJobs
+from eolab_jobs.client import JobsClient
 from eolab_app.settings import load_settings
 from eolab_app.vector.outline_operation import OutlineInput
 from eolab_app.vector.sampling import VectorSamplingService
@@ -210,7 +211,7 @@ def test_adapter_result_and_uncertain_submission_cleanup(
         async with httpx2.AsyncClient(
             transport=httpx2.MockTransport(respond)
         ) as client:
-            adapter = OutlineJobs(client, "server-secret")
+            adapter = OutlineJobs(JobsClient(client, "server-secret"))
             if lost_submit:
                 with pytest.raises(VectorConflictError):
                     await adapter(selection)
@@ -250,7 +251,9 @@ def test_disconnect_cancels_admitted_job(outline_case: tuple) -> None:
         async with httpx2.AsyncClient(
             transport=httpx2.MockTransport(respond)
         ) as client:
-            task = asyncio.create_task(OutlineJobs(client, "secret")(selection))
+            task = asyncio.create_task(
+                OutlineJobs(JobsClient(client, "secret"))(selection)
+            )
             await admitted.wait()
             task.cancel()
             release.set()
