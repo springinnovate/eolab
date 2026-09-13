@@ -328,6 +328,8 @@ class JobsClient:
         key = idempotency_key if idempotency_key is not None else str(uuid4())
         body = self._submission(payload, key)
         submission = asyncio.create_task(self._submit(body, key))
+        # No server reply yet. Cleanup uses None to recognize an uncertain
+        # admission and recover its job ID before requesting cancellation.
         snapshot: JobSnapshot | None = None
         try:
             async with asyncio.timeout(timeout_seconds):
