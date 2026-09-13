@@ -7,10 +7,10 @@ HTTPX/Pydantic and standard Python modules, not application services, the Jobs
 server, an operation registry or GIS libraries.
 
 The application composition root supplies a dedicated `httpx2.AsyncClient`, the
-private caller token and, if needed, a trusted `/api/jobs` URL. Composition closes
+private caller token. Composition closes
 the HTTP pool after its consumers finish. The client owns no scheduler, cache,
-persistent store or background observer. The default URL remains the internal
-Compose endpoint `http://jobs:8080/api/jobs`; deployment credentials never become
+persistent store or background observer. The `JOBS_URL` module constant names the
+internal Compose endpoint `http://jobs:8080/api/jobs`; credentials never become
 operation inputs. Redirects are not followed, even when enabled on the HTTP pool.
 
 ## Submit and wait
@@ -23,7 +23,7 @@ from eolab_jobs.client import JobsClient
 
 async def example(token: str) -> None:
     async with httpx2.AsyncClient(timeout=5, trust_env=False) as http:
-        jobs = JobsClient(http, token, url="http://127.0.0.1:8083/api/jobs")
+        jobs = JobsClient(http, token)
         result = await jobs.run(
             {"operation": "diagnostic.v1", "inputs": {"value": "hello"}},
             timeout_seconds=30,

@@ -11,7 +11,7 @@ from uuid import UUID, uuid4
 import httpx2
 from pydantic import BaseModel, JsonValue
 
-DEFAULT_JOBS_URL = "http://jobs:8080/api/jobs"
+JOBS_URL = "http://jobs:8080/api/jobs"
 MAX_REQUEST_BYTES = 65536
 MAX_RESPONSE_BYTES = 512 * 1024
 CLEANUP_SECONDS = 5
@@ -71,34 +71,15 @@ class JobsClient:
         self,
         client: httpx2.AsyncClient,
         token: str,
-        *,
-        url: str = DEFAULT_JOBS_URL,
     ) -> None:
-        """Bind transport, credentials and a trusted deployment endpoint.
+        """Bind transport and credentials for the internal Compose Jobs service.
 
         Args:
             client: Dedicated HTTP pool, closed by its composition owner.
             token: Private caller credential, never an operation input.
-            url: Trusted /api/jobs endpoint; redirects are never followed.
-
-        Raises:
-            ValueError: For an invalid endpoint.
         """
-        endpoint = httpx2.URL(url)
-        if (
-            endpoint.scheme not in {"http", "https"}
-            or not endpoint.host
-            or (
-                endpoint.username
-                or endpoint.password
-                or endpoint.query
-                or endpoint.fragment
-            )
-        ):
-            raise ValueError("Invalid Jobs endpoint")
         self.client = client
         self._token = token
-        self.url = url.rstrip("/")
 
     async def _request(
         self,
@@ -108,7 +89,7 @@ class JobsClient:
         body: bytes | None = None,
         key: str | None = None,
     ) -> dict[str, Any]:
-        """Exchange bounded JSON only with the configured endpoint.
+        """Exchange bounded JSON only with the internal Jobs endpoint.
 
         Args:
             method: Client-selected HTTP method.
@@ -130,7 +111,7 @@ class JobsClient:
             headers["Idempotency-Key"] = key
         async with self.client.stream(
             method,
-            self.url + suffix,
+            JOBS_URL + suffix,
             headers=headers,
             content=body,
             follow_redirects=False,
