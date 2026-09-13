@@ -257,7 +257,6 @@ services:
         SOURCE_COMMIT: ${SOURCE_COMMIT:?SOURCE_COMMIT must identify the source revision}
     restart: unless-stopped
     environment:
-      - "VECTOR_OUTLINE_EXECUTION=${EOLAB_VECTOR_OUTLINE_EXECUTION-legacy}"
       - "VECTOR_OUTLINE_JOBS_TOKEN=${EOLAB_VECTOR_OUTLINE_JOBS_TOKEN-}"
       - "APP_TITLE=${EOLAB_APP_TITLE:-EOLab}"
       - "APP_SUBTITLE=${EOLAB_APP_SUBTITLE:-Explore, visualize, and analyze Earth observation data}"
