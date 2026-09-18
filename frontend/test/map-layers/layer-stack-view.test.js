@@ -145,6 +145,9 @@ class FakeLayerStackDocument {
       ["#map-layer-counts", new FakeLayerStackElement("span", this)],
       ["#map-layers-show-all", new FakeLayerStackElement("button", this)],
       ["#map-layers-hide-all", new FakeLayerStackElement("button", this)],
+      ["#map-layer-removal", new FakeLayerStackElement("div", this)],
+      ["#map-layer-removal-message", new FakeLayerStackElement("p", this)],
+      ["#undo-layer-removal", new FakeLayerStackElement("button", this)],
       ["#map-filter-indicators", new FakeLayerStackElement("div", this)],
       ["#map-inspection-filter-indicators", new FakeLayerStackElement("div", this)],
     ]);
@@ -784,4 +787,25 @@ test("bulk visibility actions track empty, mixed, all shown and all hidden state
   view.unbind();
   show.dispatchEvent(new Event("click"));
   assert.deepEqual(intents, [false, true], "Destroyed views stop forwarding intent");
+});
+
+test("Undo removal remains visible outside the empty layer stack and reports busy and retry states", () => {
+  const doc = new FakeLayerStackDocument();
+  const view = new MapLayerStackView(doc);
+  let undos = 0;
+  view.bind({ onUndoRemove: () => { undos++; } });
+  view.render([], null);
+  view.showRemoval("Field notes", false, null);
+  assert.equal(doc.querySelector("#raster-layer-stack").hidden, true);
+  assert.equal(doc.querySelector("#map-layer-removal").hidden, false);
+  const button = doc.querySelector("#undo-layer-removal");
+  assert.equal(button.textContent, "Undo remove layer");
+  view.showRemoval("Field notes", true, null);
+  assert.equal(button.disabled, true);
+  view.showRemoval("Field notes", false, "Device storage is full");
+  assert.equal(button.disabled, false);
+  assert.match(doc.querySelector("#map-layer-removal-message").textContent, /Device storage is full/);
+  view.showRemoval(null, false, null);
+  assert.equal(doc.querySelector("#map-layer-removal").hidden, true);
+  assert.equal(undos, 0);
 });

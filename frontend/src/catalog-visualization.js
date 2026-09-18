@@ -1,5 +1,6 @@
 /** Format-neutral Catalog preparation and mixed map-layer coordination. */
 
+import { getCatalogItemKey } from "./catalog-item-identity.js";
 import { getCatalogVisualization } from "./catalog.js";
 import { assessCatalogVector } from "./vector/api.js";
 
@@ -90,6 +91,37 @@ export class CatalogVisualizationCoordinator {
     }
 
     /**
+     * Restore a removed Catalog layer using a fresh Item and the existing publication, style and filter boundaries.
+     * Nothing attaches until every saved setting has been applied successfully.
+     * @param {import("./map-layers/controller.js").RemovedMapLayer} snapshot Removed layer data, including Catalog identity and presentation.
+     * @param {(identity:{collection:string,id:string})=>Promise<Object>} getItem Exact Catalog lookup supplied by composition.
+     * @param {()=>boolean} isCurrent Whether this Undo attempt still applies.
+     * @return {Promise<void>} Completion after the layer is attached.
+     * @throws {Error} If publication or settings fail, Undo was superseded, or the layer was re-added.
+     */
+    async restoreRemovedLayer(snapshot, getItem, isCurrent) {
+        let staged = null;
+        try {
+            const item = await this.prepare(await getItem(snapshot.item));
+            if (!isCurrent()) throw new Error("Layer restoration was superseded.");
+            staged = await this.stage(item, snapshot);
+            const { record } = staged;
+            record.entry.label = snapshot.label;
+            if (record.adapter.restoreRemovedStyle) await record.adapter.restoreRemovedStyle(record, snapshot.style);
+            else await record.adapter.applySavedState(record, snapshot.style);
+            if (Object.hasOwn(snapshot, "filter")) await record.adapter.applyFilterState(record, snapshot.filter);
+            if (!isCurrent()) throw new Error("Layer restoration was superseded.");
+            this.mapLayerController.restoreStagedLayer(staged, snapshot.index);
+        } catch (error) {
+            if (staged) {
+                staged.record.adapter.discardStaged?.(staged.record);
+                staged.layer.remove?.();
+            }
+            throw error;
+        }
+    }
+
+    /**
      * Return whether one Item is retained in the mixed layer stack.
      *
      * @param {Object} item Catalog STAC Item.
@@ -103,10 +135,12 @@ export class CatalogVisualizationCoordinator {
      * Remove one retained Item from the mixed layer stack.
      *
      * @param {Object} item Retained Catalog STAC Item.
+     * @param {boolean} [allowUndo=false] Whether this is an explicit user removal.
      * @return {void}
      */
-    remove(item) {
-        this.mapLayerController.remove(item);
+    remove(item, allowUndo = false) {
+        if (allowUndo) this.mapLayerController.removeWithUndo(getCatalogItemKey(item));
+        else this.mapLayerController.remove(item);
     }
 
     /**

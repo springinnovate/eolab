@@ -199,3 +199,46 @@ test("creating and loading annotations enforce the same layer limit", () => {
     saved.layers.push({ ...structuredClone(saved.layers[0]), id: "extra-layer" });
     assert.throws(() => readAnnotationLayers(saved), /exceed the storage limit/);
 });
+
+test("layer restoration keeps committed geometry, notes, names, filter and appearance with original IDs", () => {
+    const model = new AnnotationModel();
+    const layer = model.createLayer();
+    layer.name = "Workshop"; layer.filter = "river"; layer.position = 3; layer.visible = false; layer.opacity = 0.4;
+    layer.style.notes = true;
+    model.beginPolygon(layer.id);
+    [[0, 0], [2, 0], [1, 2]].forEach(point => model.addVertex(point));
+    const polygon = model.savePolygon(); polygon.name = "River"; polygon.note = "Flooding";
+    const snapshot = structuredClone(layer);
+    model.layers = [];
+    const restored = model.restoreRemovedLayer(snapshot);
+    assert.deepEqual(restored, snapshot);
+    assert.notEqual(restored, snapshot);
+    assert.deepEqual(readAnnotationLayers(model.document()), [snapshot]);
+    assert.throws(() => model.restoreRemovedLayer(snapshot), /already on the map/);
+    assert.equal(model.layers.length, 1);
+});
+
+test("restoring a removed annotation respects collection capacity without replacing existing layers", () => {
+    const model = new AnnotationModel();
+    const snapshot = structuredClone(model.createLayer());
+    model.layers = [];
+    for (let i = 0; i < 32; i++) model.createLayer();
+    const before = model.document();
+    assert.throws(() => model.restoreRemovedLayer(snapshot), /already has 32/);
+    assert.deepEqual(model.document(), before);
+});
+
+test("layer Undo rejects a document exceeding device storage capacity without mutating the collection", () => {
+    const model = new AnnotationModel();
+    const snapshot = structuredClone(model.createLayer());
+    model.layers = [];
+    const current = model.createLayer();
+    for (const layer of [snapshot, current]) {
+        layer.polygons = Array.from({ length: 450 }, (_, index) => ({
+            id: `${layer.id}-${index}`, name: "Site", note: "n".repeat(10000), vertices: [[0, 0], [2, 0], [1, 2]],
+        }));
+    }
+    assert.throws(() => model.restoreRemovedLayer(snapshot), /8 MiB/);
+    assert.equal(model.layers.length, 1);
+    assert.equal(model.layers[0], current);
+});

@@ -92,3 +92,57 @@ test("remote collections are not reinterpreted as mounted vectors", () => {
     assert.equal(coordinator.describe(remoteItem), null);
     assert.throws(() => coordinator.show(remoteItem), /no map visualization adapter/);
 });
+
+test("Undo re-fetches the source and applies appearance and filtering before attachment", async () => {
+    const calls = [];
+    let discarded = false;
+    const record = { entry: { label: "Fresh title" }, adapter: {
+        restoreRemovedStyle: async (_record, style) => { calls.push(["style", style]); },
+        applyFilterState: async (_record, filter) => { calls.push(["filter", filter]); },
+        discardStaged: () => { discarded = true; },
+    } };
+    const staged = { record, layer: {} };
+    const coordinator = new CatalogVisualizationCoordinator({}, {
+        stage: async () => { calls.push(["stage"]); return staged; },
+        restoreStagedLayer: (layer, index) => { calls.push(["attach", index]); assert.equal(layer, staged); },
+    }, {}, async item => { calls.push(["assess"]); return item; });
+    const snapshot = { item: VECTOR_ITEM, label: "My original label", style: { color: "red" }, filter: { enabled: true }, index: 2 };
+    await coordinator.restoreRemovedLayer(snapshot, async identity => { calls.push(["fetch", identity]); return VECTOR_ITEM; }, () => true);
+    assert.deepEqual(calls, [["fetch", VECTOR_ITEM], ["assess"], ["stage"], ["style", snapshot.style], ["filter", snapshot.filter], ["attach", 2]]);
+    assert.equal(record.entry.label, snapshot.label);
+    assert.equal(discarded, false);
+});
+
+test("filter failure and superseded Undo discard staged work without exposing an unfiltered layer", async () => {
+    for (const fails of [true, false]) {
+        let current = true, attached = false, discarded = false, removed = false;
+        const record = { entry: {}, adapter: {
+            applySavedState: async () => {},
+            applyFilterState: async () => {
+                if (fails) throw new Error("Filter unavailable");
+                current = false;
+            },
+            discardStaged: () => { discarded = true; },
+        } };
+        const coordinator = new CatalogVisualizationCoordinator({ stage: async () => ({ record, layer: { remove() { removed = true; } } }) }, {
+            restoreStagedLayer: () => { attached = true; },
+        }, {});
+        await assert.rejects(coordinator.restoreRemovedLayer({ item: RASTER_ITEM, filter: {} }, async () => RASTER_ITEM, () => current), fails ? /Filter unavailable/ : /superseded/);
+        assert.equal(attached, false);
+        assert.equal(discarded, true);
+        assert.equal(removed, true);
+    }
+});
+
+test("catalog user removal requests Undo while internal removal keeps its existing lifecycle", () => {
+    const calls = [];
+    const coordinator = new CatalogVisualizationCoordinator({}, {
+        remove: item => calls.push(["internal", item]),
+        removeWithUndo: key => calls.push(["user", key]),
+    }, {});
+    coordinator.remove(RASTER_ITEM);
+    coordinator.remove(RASTER_ITEM, true);
+    assert.equal(calls[0][0], "internal");
+    assert.equal(calls[1][0], "user");
+    assert.equal(typeof calls[1][1], "string");
+});

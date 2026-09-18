@@ -752,6 +752,9 @@ async function initializeCatalog(
         onOrderChange: layers => annotations?.observeLayerOrder(layers, true),
         onItemZoom: zoomRetainedMapLayer,
         onItemInfo: inspectRetainedMapLayer,
+        restoreRemovedLayer: (snapshot, isCurrent) => snapshot.item === null
+            ? annotations.restoreRemovedLayer(snapshot, isCurrent)
+            : catalogVisualization.restoreRemovedLayer(snapshot, identity => catalogItemClient.get(identity), isCurrent),
     });
     const processingApi = new ProcessingApiClient();
     const processingJobs = new ProcessingJobs(processingApi);
@@ -917,12 +920,13 @@ async function initializeCatalog(
         mapLayerController,
         vectorMapLayerAdapter
     );
+    const catalogItemClient = new SavedMapViewCatalogClient(catalogUrl);
     savedMapViewController = new SavedMapViewController({
         view: new SavedMapViewDomView(),
         viewport: createSavedMapLeafletViewport(leafletMap),
         mapLayers: mapLayerController,
         catalogVisualization,
-        catalogItems: new SavedMapViewCatalogClient(catalogUrl),
+        catalogItems: catalogItemClient,
         viewerVersion: appGlobalConfiguration.appVersion,
         viewerOrigin: globalThis.location.origin,
         storage: new SavedMapViewLocalStorage(),
@@ -1524,7 +1528,7 @@ async function initializeCatalog(
         }
         const datasetNoun = catalogVisualization.noun(item);
         if (catalogVisualization.contains(item)) {
-            catalogVisualization.remove(item);
+            catalogVisualization.remove(item, true);
             if (visualization.kind === "raster" && catalogItemsMatch(catalogState.selectedItem, item)) {
                 rasterVisualization.activateAnalysis(item);
             }

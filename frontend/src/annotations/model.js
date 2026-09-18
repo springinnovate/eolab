@@ -168,6 +168,24 @@ export class AnnotationModel {
     }
 
     /**
+     * Restore committed data from this tab's layer-removal snapshot without changing IDs.
+     * @param {AnnotationLayer} snapshot Previously owned layer data.
+     * @return {AnnotationLayer} Independent layer added to the collection.
+     * @throws {Error} If its ID is already present or the current collection would exceed storage limits.
+     */
+    restoreRemovedLayer(snapshot) {
+        if (this.layers.some(layer => layer.id === snapshot.id)) throw new Error("This annotation layer is already on the map.");
+        if (this.layers.length >= MAX_ANNOTATION_LAYERS) throw new Error(`This device already has ${MAX_ANNOTATION_LAYERS} annotation layers.`);
+        const layer = structuredClone(snapshot);
+        const document = { version: 1, layers: [layer, ...this.layers] };
+        if (new TextEncoder().encode(JSON.stringify(document)).byteLength > MAX_ANNOTATION_DOCUMENT_BYTES) {
+            throw new Error("Restoring this layer would exceed the 8 MiB annotation storage limit. Export and remove another layer first.");
+        }
+        this.layers.unshift(layer);
+        return layer;
+    }
+
+    /**
      * Start a new polygon or copy an existing one into an editing draft.
      * @param {string} layerId Owning layer.
      * @param {string|null} [polygonId=null] Polygon to edit, or a new drawing.

@@ -39,6 +39,7 @@ function requireLayerStackElement(documentContext, selector) {
  * @property {(key: string, targetIndex: number) => void} onReorder Move one
  * layer to a zero-based top-first position.
  * @property {(key: string) => void} onRemove Remove one retained layer.
+ * @property {()=>void} onUndoRemove Restore the most recently removed layer.
  */
 
 /** Own the map layer-list elements and their direct event listeners. */
@@ -74,6 +75,10 @@ export class MapLayerStackView {
         this.hideAll = requireLayerStackElement(documentContext, "#map-layers-hide-all");
         this.showAll.addEventListener("click", () => this.handlers?.onAllVisibility(true));
         this.hideAll.addEventListener("click", () => this.handlers?.onAllVisibility(false));
+        this.removalNotice = requireLayerStackElement(documentContext, "#map-layer-removal");
+        this.removalMessage = requireLayerStackElement(documentContext, "#map-layer-removal-message");
+        this.undoRemove = requireLayerStackElement(documentContext, "#undo-layer-removal");
+        this.undoRemove.addEventListener("click", () => this.handlers?.onUndoRemove());
         this.scrollContainer = this.root.parentElement ?? this.list;
         /** @type {MapLayerStackViewHandlers|null} */
         this.handlers = null;
@@ -81,6 +86,21 @@ export class MapLayerStackView {
         this.pointerDrag = null;
         /** @type {{key:string,originIndex:number}|null} */
         this.keyboardDrag = null;
+    }
+
+    /**
+     * Keep Undo visible even after the final layer is removed, independently of row rendering.
+     * @param {string|null} label Removed layer name, or null to hide the notice.
+     * @param {boolean} busy Whether restoration is in progress.
+     * @param {string|null} error Failure explanation; Undo remains available to retry.
+     * @return {void}
+     */
+    showRemoval(label, busy, error) {
+        this.removalNotice.hidden = label === null;
+        this.undoRemove.disabled = busy;
+        this.undoRemove.textContent = busy ? "Restoring layer…" : "Undo remove layer";
+        this.removalMessage.textContent = label === null ? "" : error
+            ? `Could not restore ${label}: ${error}` : `Removed ${label}.`;
     }
 
     /**

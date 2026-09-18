@@ -385,6 +385,22 @@ h5 {
   display: none;
 }
 
+.map-layer-removal {
+  margin-bottom: 8px;
+  padding: 8px;
+  border: 1px solid var(--border-1);
+  border-radius: 4px;
+  overflow-wrap: anywhere;
+}
+
+.map-layer-removal p {
+  margin: 0 0 6px;
+}
+
+.map-layer-removal .secondary-button {
+  padding: 4px 8px;
+}
+
 .map-layer-visibility-actions {
   display: flex;
   flex-wrap: wrap;

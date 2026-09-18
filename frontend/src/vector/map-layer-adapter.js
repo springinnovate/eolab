@@ -426,6 +426,14 @@ export function createVectorMapLayerAdapter({
          * @return {void}
          */
         removed(record) {
+            this.discardStaged(record);
+        },
+        /**
+         * Cancel filter requests for a detached layer whose preparation failed or became obsolete.
+         * @param {Object} record Vector layer being discarded.
+         * @return {void}
+         */
+        discardStaged(record) {
             record.state.disposed = true;
             this.cancelPendingFilter(record);
             record.state.filterCountAbort?.abort();
@@ -476,6 +484,18 @@ export function createVectorMapLayerAdapter({
                     classify
                 )
             );
+        },
+        /**
+         * Restore the exact appearance of the same removed vector, including chosen class ranges.
+         * @param {Object} record Freshly published vector layer.
+         * @param {Object} savedState Previously exported appearance.
+         * @return {Promise<void>} Completion after the style service validates and applies it.
+         * @throws {Error} If the current source no longer supports the saved appearance or styling fails.
+         */
+        async restoreRemovedStyle(record, savedState) {
+            const problem = checkPortableVectorStyleCompatibility(record, savedState);
+            if (problem) throw new Error(problem);
+            await this.applyStyle(record, savedState.definition);
         },
         /**
          * Read bounded typed categories for one authoritative Catalog field.
