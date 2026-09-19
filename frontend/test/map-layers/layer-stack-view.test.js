@@ -76,7 +76,28 @@ class FakeLayerStackElement extends EventTarget {
    * @return {void}
    */
   replaceChildren(...children) {
+    for (const child of this.children) child.parentElement = null;
     this.children = children;
+    for (const child of children) child.parentElement = this;
+  }
+
+  /** Detach this element from its parent. @return {void} */
+  remove() {
+    if (this.parentElement) this.parentElement.children = this.parentElement.children.filter(child => child !== this);
+    this.parentElement = null;
+  }
+
+  /**
+   * Move or append a child as the browser does, without cloning its controls.
+   * @param {FakeLayerStackElement} child Element to insert.
+   * @param {FakeLayerStackElement|null} reference Following sibling, or null to append.
+   * @return {void}
+   */
+  insertBefore(child, reference) {
+    child.remove();
+    const index = reference === null ? this.children.length : this.children.indexOf(reference);
+    this.children.splice(index, 0, child);
+    child.parentElement = this;
   }
 
   /**
@@ -145,12 +166,18 @@ class FakeLayerStackDocument {
       ["#map-layer-counts", new FakeLayerStackElement("span", this)],
       ["#map-layers-show-all", new FakeLayerStackElement("button", this)],
       ["#map-layers-hide-all", new FakeLayerStackElement("button", this)],
+      ["#map-layer-removal", new FakeLayerStackElement("li", this)],
+      ["#map-layer-removal-message", new FakeLayerStackElement("p", this)],
+      ["#undo-layer-removal", new FakeLayerStackElement("button", this)],
+      ["#dismiss-layer-removal", new FakeLayerStackElement("button", this)],
+      ["#map-layer-removal-error", new FakeLayerStackElement("p", this)],
       ["#map-filter-indicators", new FakeLayerStackElement("div", this)],
       ["#map-inspection-filter-indicators", new FakeLayerStackElement("div", this)],
     ]);
     this.elements.get("#raster-layer-stack").parentElement =
       this.layerScrollContainer;
     this.elements.get("#raster-layer-stack").hidden = true;
+    this.elements.get("#map-layer-removal").hidden = true;
   }
 
   /**
@@ -784,4 +811,70 @@ test("bulk visibility actions track empty, mixed, all shown and all hidden state
   view.unbind();
   show.dispatchEvent(new Event("click"));
   assert.deepEqual(intents, [false, true], "Destroyed views stop forwarding intent");
+});
+
+test("Undo removal replaces the final layer and reports busy and retry states", () => {
+  const doc = new FakeLayerStackDocument();
+  const view = new MapLayerStackView(doc);
+  let undos = 0;
+  view.bind({ onUndoRemove: () => { undos++; } });
+  view.render([], null);
+  view.showRemoval({ label: "Field notes", index: 0 }, false, null);
+  assert.equal(doc.querySelector("#raster-layer-stack").hidden, false);
+  assert.equal(doc.querySelector("#map-layer-removal").hidden, false);
+  const button = doc.querySelector("#undo-layer-removal");
+  assert.equal(button.textContent, "Undo");
+  view.showRemoval({ label: "Field notes", index: 0 }, true, null);
+  assert.equal(button.disabled, true);
+  view.showRemoval({ label: "Field notes", index: 0 }, false, "Device storage is full");
+  assert.equal(button.disabled, false);
+  assert.match(doc.querySelector("#map-layer-removal-error").textContent, /Device storage is full/);
+  button.dispatchEvent(new Event("click"));
+  view.showRemoval(null, false, null);
+  assert.equal(doc.querySelector("#map-layer-removal").hidden, true);
+  assert.equal(doc.querySelector("#raster-layer-stack").hidden, true);
+  assert.equal(undos, 1);
+});
+
+test("Undo stays at the removed row across rerenders and moves when another layer is removed", () => {
+  const doc = new FakeLayerStackDocument();
+  const view = new MapLayerStackView(doc);
+  let dismissals = 0;
+  view.bind({ onDismissRemoval: () => { dismissals++; view.showRemoval(null, false, null); } });
+  const list = doc.querySelector("#raster-layer-list");
+  const notice = doc.querySelector("#map-layer-removal");
+  const undo = doc.querySelector("#undo-layer-removal");
+  view.render([LAYERS[0], LAYERS[2]], null);
+  const firstRow = list.children[0];
+  view.showRemoval({ label: "Middle layer", index: 1 }, false, null);
+  assert.equal(list.children[1], notice);
+  assert.equal(list.children[0], firstRow, "only the placeholder is inserted; live layer controls are not rebuilt");
+  assert.equal(list.children.length, 3);
+  undo.focus();
+  view.render([LAYERS[0], LAYERS[2]], null);
+  assert.equal(list.children[1], notice);
+  assert.equal(doc.activeElement, undo);
+  view.render([LAYERS[2]], null);
+  view.showRemoval({ label: "First layer", index: 0 }, false, null);
+  assert.equal(list.children[0], notice);
+  assert.equal(list.children.length, 2, "there is only one Undo row");
+  doc.querySelector("#dismiss-layer-removal").dispatchEvent(new Event("click"));
+  assert.equal(dismissals, 1);
+  assert.equal(list.children.length, 1);
+  assert.equal(doc.querySelector("#raster-layer-stack").hidden, false);
+});
+
+test("pointer reorder ignores the Undo row when finding a real layer destination", () => {
+  const doc = new FakeLayerStackDocument();
+  const view = new MapLayerStackView(doc);
+  const moves = [];
+  view.bind({ onReorder: (key, index) => moves.push([key, index]) });
+  view.render(LAYERS, null);
+  view.showRemoval({ label: "Removed bottom layer", index: 3 }, false, null);
+  const rows = doc.querySelector("#raster-layer-list").children;
+  const handle = actionControl(rows[0], "reorder");
+  handle.dispatchEvent(interactionEvent("pointerdown", { pointerId: 9, button: 0, clientY: 10 }));
+  handle.dispatchEvent(interactionEvent("pointermove", { pointerId: 9, clientY: 300 }));
+  handle.dispatchEvent(interactionEvent("pointerup", { pointerId: 9 }));
+  assert.deepEqual(moves, [[LAYERS[0].key, 2]], "placeholder must not produce an out-of-range layer index");
 });

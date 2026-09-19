@@ -47,7 +47,24 @@ import { MapLayerStackView } from "./layer-stack-view.js";
  * Observe successful layer creation. Batch callers may suppress automatic
  * viewport fitting while restoring an authoritative saved viewport.
  * @property {(record:Object)=>void} [tileError] Observe an owned tile failure.
+ * @property {(record:Object,saved:Object)=>Promise<void>} [restoreRemovedStyle] Restore same-source appearance without recalculating classification ranges.
+ * @property {(record:Object)=>void} [discardStaged] Cancel work for a layer that was never attached.
+ * @property {(record:Object)=>Object} [copyLayerForUndo] Copy owner data needed to undo a local removal; may reject an unfinished draft.
  * @property {string} tileErrorMessage Browser-safe tile failure message.
+ */
+
+/**
+ * Data retained for one layer-removal Undo; no DOM nodes, requests or renderers.
+ * @typedef {Object} RemovedMapLayer
+ * @property {string} key Stable layer identity.
+ * @property {string} label Display name before removal.
+ * @property {number} index Previous top-first drawing position.
+ * @property {boolean} visible Previous visibility.
+ * @property {number} opacity Previous overlay opacity.
+ * @property {{collection:string,id:string}|null} item Catalog identity, or null for device-owned layers.
+ * @property {Object} [style] Catalog owner's saved appearance.
+ * @property {Object} [filter] Catalog owner's applied filter.
+ * @property {Object} [local] Local owner's committed layer contents.
  */
 
 /** Own retained layers without knowing any dataset-specific controls. */
@@ -66,6 +83,8 @@ export class MapLayerController {
      * higher-level consumer fit the map to one authoritative Catalog Item.
      * @param {(item:Object)=>void} [configuration.onItemInfo] Requests that a
      * higher-level consumer present one authoritative Catalog Item's details.
+     * @param {(snapshot:RemovedMapLayer,isCurrent:()=>boolean)=>Promise<void>} [configuration.restoreRemovedLayer]
+     * Composition callback that restores a snapshot through its owning component.
      * @param {MapLayerStack} [configuration.stack] Pure retained-layer state.
      * @param {LeafletLayerSet} [configuration.leafletLayers] Keyed Leaflet set.
      */
@@ -76,6 +95,7 @@ export class MapLayerController {
         onOrderChange = () => {},
         onItemZoom = () => {},
         onItemInfo = () => {},
+        restoreRemovedLayer = async () => { throw new Error("Layer restoration is unavailable."); },
         stack = new MapLayerStack(),
         leafletLayers = new LeafletLayerSet(leafletMap),
     }) {
@@ -98,6 +118,10 @@ export class MapLayerController {
         this.publicationGenerations = new Map();
         this.pendingPublications = new Map();
         this.pendingAdapters = new Map();
+        this.restoreRemovedLayer = restoreRemovedLayer;
+        this.removedLayer = null;
+        this.restoringLayer = null;
+        this.removalGeneration = 0;
         this.styleClipboard = null;
         this.pendingStylePastes = new Set();
         this.activationIntentSequence = 0;
@@ -123,7 +147,9 @@ export class MapLayerController {
             onVisibility: (key, visible) => this.setVisible(key, visible),
             onAllVisibility: (visible) => this.setAllVisible(visible),
             onReorder: (key, targetIndex) => this.reorder(key, targetIndex),
-            onRemove: (key) => this.removeKey(key),
+            onRemove: (key) => this.removeWithUndo(key),
+            onUndoRemove: () => void this.undoLayerRemoval(),
+            onDismissRemoval: () => this.dismissLayerRemoval(),
         });
         this.render();
     }
@@ -654,6 +680,7 @@ export class MapLayerController {
      * @return {void}
      */
     removeOwned(adapter) {
+        this.removalGeneration += 1;
         this.recordIntent();
         for (const [key, pendingAdapter] of this.pendingAdapters) {
             if (pendingAdapter === adapter) {
@@ -671,6 +698,122 @@ export class MapLayerController {
         if (this.stack.entries.length === 0) {
             this.view.setStatus("");
             this.render();
+        }
+    }
+
+    /**
+     * Remove a layer at the user's request, keeping only its data for one Undo.
+     * Owner capture can reject removal, for example when a polygon is being edited.
+     * @param {string} key Retained layer identity.
+     * @return {boolean} Whether removal succeeded; errors are shown in Map layers.
+     */
+    removeWithUndo(key) {
+        try {
+            const record = this.#requireRecord(key);
+            const { entry, adapter } = record;
+            const snapshot = {
+                key, label: entry.label,
+                index: this.stack.entries.findIndex(candidate => candidate.key === key),
+                visible: entry.visible, opacity: entry.opacity,
+                item: entry.item === null ? null : { collection: entry.item.collection, id: entry.item.id },
+                ...(entry.item === null
+                    ? { local: adapter.copyLayerForUndo(record) }
+                    : { style: structuredClone(adapter.exportSavedState(record)),
+                        ...(adapter.exportFilterState ? { filter: structuredClone(adapter.exportFilterState(record)) } : {}) }),
+            };
+            this.removeKey(key);
+            this.removalGeneration += 1;
+            this.removedLayer = snapshot;
+            this.view.showRemoval?.(snapshot, this.restoringLayer !== null, null);
+            this.view.announceStatus?.("");
+            return true;
+        } catch (error) {
+            this.view.setStatus(error.message);
+            return false;
+        }
+    }
+
+    /**
+     * Forget the current Undo offer and prevent a pending restore from attaching later.
+     * Keep keyboard focus near the dismissed row; existing map layers are unchanged.
+     * @return {void}
+     */
+    dismissLayerRemoval() {
+        const snapshot = this.removedLayer;
+        if (!snapshot) return;
+        this.removalGeneration += 1;
+        this.removedLayer = null;
+        this.view.showRemoval?.(null, false, null);
+        const next = this.stack.entries[Math.min(snapshot.index, this.stack.entries.length - 1)];
+        this.render({ key: next?.key ?? snapshot.key, action: "style" });
+        this.view.announceStatus?.("Layer removal undo dismissed.");
+    }
+
+    /**
+     * Restore the most recently removed layer; keep the record if restoration fails.
+     * Reset or a newer removal makes an in-flight restore obsolete before attachment.
+     * @return {Promise<void>} Completion with success or a visible retryable error.
+     */
+    async undoLayerRemoval() {
+        const snapshot = this.removedLayer;
+        if (!snapshot || this.restoringLayer || this.destroyed) return;
+        const generation = this.removalGeneration;
+        const isCurrent = () => !this.destroyed && this.removedLayer === snapshot && this.removalGeneration === generation;
+        this.restoringLayer = snapshot;
+        this.view.showRemoval?.(snapshot, true, null);
+        try {
+            await this.restoreRemovedLayer(snapshot, isCurrent);
+            if (isCurrent()) {
+                this.removedLayer = null;
+                this.view.showRemoval?.(null, false, null);
+                this.view.setStatus(`Restored ${snapshot.label}.`);
+                this.render({ key: snapshot.key, action: "style" });
+            }
+        } catch (error) {
+            if (isCurrent()) this.view.showRemoval?.(snapshot, false, error.message);
+        } finally {
+            this.restoringLayer = null;
+            if (this.removedLayer && !isCurrent()) this.view.showRemoval?.(this.removedLayer, false, null);
+        }
+    }
+
+    /**
+     * Attach one fully prepared Catalog layer at its previous position, without opening an editor or moving the map.
+     * @param {{key:string,record:Object,layer:Object}} staged Detached layer with its restored style and filter.
+     * @param {number} index Previous top-first position; clamped to the current stack.
+     * @return {void}
+     * @throws {Error} If the layer was re-added, the controller closed, or attachment fails.
+     */
+    restoreStagedLayer({ key, record, layer }, index) {
+        if (this.destroyed || this.records.has(key) || this.pendingPublications.has(key)) {
+            throw new Error("This layer is already on the map, being added, or the map has closed.");
+        }
+        const previousActive = this.stack.activeKey;
+        const presentation = record.entry;
+        try {
+            const { entry } = this.stack.add(presentation.item, presentation.label, this.recordIntent());
+            this.stack.setVisible(key, presentation.visible);
+            this.stack.setOpacity(key, presentation.opacity);
+            record.entry = entry;
+            this.records.set(key, record);
+            this.leafletLayers.add(key, layer, { visible: false, opacity: entry.opacity });
+            this.stack.moveTo(key, Math.min(index, this.stack.entries.length - 1));
+            this.stack.activeKey = previousActive;
+            this.#applyLeafletOrder();
+            record.adapter.added?.(record, { fitToBounds: false });
+            record.adapter.opacityChanged?.(record, entry.opacity);
+            if (!entry.visible) record.adapter.visibilityChanged?.(record, false);
+            this.leafletLayers.setVisible(key, entry.visible);
+            this.render();
+            this.onOrderChange(this.snapshots());
+        } catch (error) {
+            this.leafletLayers.remove(key);
+            if (this.stack.get(key)) this.stack.remove(key);
+            this.records.delete(key);
+            this.stack.activeKey = previousActive;
+            this.#applyLeafletOrder();
+            this.render();
+            throw error;
         }
     }
 
@@ -722,6 +865,7 @@ export class MapLayerController {
      * @return {void}
      */
     clear({ preserveLocal = false } = {}) {
+        this.removalGeneration += 1;
         this.recordIntent();
         for (const key of this.pendingPublications.keys()) {
             this.#invalidatePublication(key);
@@ -807,6 +951,8 @@ export class MapLayerController {
             return;
         }
         this.destroyed = true;
+        this.removedLayer = null;
+        this.view.showRemoval?.(null, false, null);
         this.clear();
         this.styleClipboard = null;
         this.pendingStylePastes.clear();

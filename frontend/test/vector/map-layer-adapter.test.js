@@ -383,6 +383,10 @@ test("copied graduated styles use the target vector classification", async () =>
     missingColor: null,
   });
   assert.equal(record.state.style.fillColor, "#a855f7");
+  fixture.numericCalls.length = 0;
+  await fixture.adapter.restoreRemovedStyle(record, { kind: "vector", definition: copiedStyle });
+  assert.deepEqual(record.state.style.graduated.rules, copiedStyle.graduated.rules, "Undo preserves the original boundaries");
+  assert.deepEqual(fixture.numericCalls, [], "Undo must not reclassify like a cross-layer style paste");
 });
 
 test("adding a crossing vector shows both map edges and preserves its catalog bounds", () => {

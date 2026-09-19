@@ -385,6 +385,35 @@ h5 {
   display: none;
 }
 
+.map-layer-removal {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 4px;
+  padding: 6px;
+  border: 1px dashed var(--border-2);
+  border-radius: var(--radius);
+  color: var(--text-3);
+}
+
+.map-layer-removal[hidden] {
+  display: none;
+}
+
+.map-layer-removal .secondary-button {
+  margin: 0;
+  padding: 4px 6px;
+  font-size: 0.78rem;
+}
+
+.map-layer-removal p {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--status-danger);
+  overflow-wrap: anywhere;
+}
+
 .map-layer-visibility-actions {
   display: flex;
   flex-wrap: wrap;

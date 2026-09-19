@@ -32,6 +32,8 @@ export class AnnotationController {
         this.orderRestored = false;
         this.dirty = false;
         this.saving = false;
+        this.savePromise = null;
+        this.restoredLayers = new WeakMap();
         this.pendingSave = false;
         this.toolsDisclosure = document.querySelector("#annotation-tools");
         this.createButton = document.querySelector("#create-annotation-layer");
@@ -241,6 +243,10 @@ export class AnnotationController {
                 this.save();
             },
             opacityChanged: (_record, opacity) => { layer.opacity = opacity; controls.opacity.value = opacity; this.save(); },
+            copyLayerForUndo: () => {
+                if (this.model.draft?.layerId === layer.id) throw new Error("Save or cancel the current polygon before removing this layer.");
+                return structuredClone(layer);
+            },
             removed: () => {
                 if (this.model.draft?.layerId === layer.id) { this.model.cancelPolygon(); this.updateEditor(); }
                 if (this.model.deleted?.layerId === layer.id) this.model.deleted = null;
@@ -253,6 +259,37 @@ export class AnnotationController {
             },
         };
         this.mapLayers.addLocal({ key, label: layer.name, visible: layer.visible, opacity: layer.opacity }, adapter);
+    }
+
+    /**
+     * Restore annotation contents and drawing position, then wait for device storage.
+     * After a storage failure, retry saving the same restored object without overwriting edits or a separately re-added layer.
+     * @param {import("../map-layers/controller.js").RemovedMapLayer} snapshot Neutral removal record containing committed annotation data.
+     * @param {()=>boolean} isCurrent Whether the user still wants this Undo attempt.
+     * @return {Promise<void>} Completion after all pending annotation writes settle.
+     * @throws {Error} If Undo is obsolete, capacity/identity conflicts prevent restoration, or saving fails.
+     */
+    async restoreRemovedLayer(snapshot, isCurrent) {
+        if (!isCurrent()) throw new Error("Layer restoration was superseded.");
+        const existing = this.model.layers.find(layer => layer.id === snapshot.local.id);
+        if (existing) {
+            if (existing !== this.restoredLayers.get(snapshot)) throw new Error("This annotation layer is already on the map.");
+        } else {
+            const layer = this.model.restoreRemovedLayer(snapshot.local);
+            try {
+                this.attachLayer(layer);
+            } catch (error) {
+                this.model.layers = this.model.layers.filter(candidate => candidate !== layer);
+                this.layers.get(layer.id)?.release();
+                this.layers.delete(layer.id);
+                this.controls.delete(layer.id);
+                throw error;
+            }
+            this.restoredLayers.set(snapshot, layer);
+            this.mapLayers.reorder(snapshot.key, Math.min(snapshot.index, this.mapLayers.snapshots().length - 1));
+        }
+        await this.save();
+        if (this.dirty) throw new Error(this.status.textContent);
     }
 
     /**
@@ -389,7 +426,17 @@ export class AnnotationController {
         if (!this.loaded) return;
         this.dirty = true;
         this.pendingSave = true;
-        if (this.saving) return;
+        if (this.savePromise) return this.savePromise;
+        this.savePromise = this.writePendingSaves();
+        try { await this.savePromise; }
+        finally { this.savePromise = null; }
+    }
+
+    /**
+     * Write the latest annotation document until no edits remain pending; keep failures visible and retryable.
+     * @return {Promise<void>} Completion after writes finish or a storage error is displayed.
+     */
+    async writePendingSaves() {
         this.saving = true;
         this.status.textContent = "Saving on this device…";
         this.retryButton.hidden = true;

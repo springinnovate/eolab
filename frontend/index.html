@@ -472,7 +472,14 @@
                       data-eomap-region="map-layers"
                       hidden
                     >
-                      <ol class="raster-layer-list" id="raster-layer-list" aria-label="Map layers"></ol>
+                      <ol class="raster-layer-list" id="raster-layer-list" aria-label="Map layers">
+                        <li id="map-layer-removal" class="map-layer-removal" hidden>
+                          <span id="map-layer-removal-message" class="raster-layer-name" role="status" aria-live="polite"></span>
+                          <button id="undo-layer-removal" class="secondary-button" type="button" aria-label="Undo remove layer">Undo</button>
+                          <button id="dismiss-layer-removal" class="secondary-button" type="button" aria-label="Dismiss undo" title="Dismiss undo">×</button>
+                          <p id="map-layer-removal-error" role="alert" hidden></p>
+                        </li>
+                      </ol>
                       <p
                         class="raster-layer-stack-status"
                         id="raster-layer-stack-status"

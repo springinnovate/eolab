@@ -88,3 +88,46 @@ test("polygon deletion expands tools so its existing Undo action remains discove
     assert.equal(annotations.toolsDisclosure.open, true);
     assert.equal(annotations.model.deleted.polygon.id, polygon.id);
 });
+
+test("callers awaiting a coalesced save wait for the final document, including the restored layer", async () => {
+    const annotations = controller();
+    let release;
+    const documents = [];
+    annotations.storage.save = async document => {
+        documents.push(document);
+        if (documents.length === 1) await new Promise(resolve => { release = resolve; });
+    };
+    const first = annotations.save();
+    const layer = annotations.model.createLayer();
+    let finished = false;
+    const second = annotations.save().then(() => { finished = true; });
+    await Promise.resolve();
+    assert.equal(finished, false);
+    release();
+    await Promise.all([first, second]);
+    assert.equal(documents.length, 2);
+    assert.equal(documents[1].layers[0].id, layer.id);
+    assert.equal(annotations.dirty, false);
+});
+
+test("failed Undo persistence can retry without overwriting the restored annotation's edits", async () => {
+    const annotations = controller();
+    annotations.restoredLayers = new WeakMap();
+    annotations.layers = new Map(); annotations.controls = new Map();
+    annotations.attachLayer = () => {};
+    annotations.mapLayers = { reorder() {}, snapshots: () => annotations.model.layers };
+    const layer = annotations.model.createLayer();
+    const snapshot = { local: structuredClone(layer), key: `local:annotation:${layer.id}`, index: 0 };
+    annotations.model.layers = [];
+    annotations.storage.save = async () => { throw new Error("Device storage is full"); };
+    await assert.rejects(annotations.restoreRemovedLayer(snapshot, () => true), /Device storage is full/);
+    const restored = annotations.model.layer(layer.id);
+    restored.name = "Edited after restoring";
+    annotations.storage.save = async () => {};
+    await annotations.restoreRemovedLayer(snapshot, () => true);
+    assert.equal(annotations.model.layer(layer.id), restored);
+    assert.equal(restored.name, "Edited after restoring");
+    annotations.model.layers = [structuredClone(restored)];
+    await assert.rejects(annotations.restoreRemovedLayer(snapshot, () => true), /already on the map/);
+    await assert.rejects(annotations.restoreRemovedLayer(snapshot, () => false), /superseded/);
+});

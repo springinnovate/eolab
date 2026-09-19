@@ -558,3 +558,171 @@ test("saved ordering applies atomically without user-reorder callbacks or focus 
     controller.reorder(original[0], 0);
     assert.deepEqual(reorders, [original]);
 });
+
+/**
+ * Wire the real removal lifecycle to a detached, controllable Catalog adapter.
+ * @return {Object} Controller, presentation, source owner and delayed-restore hooks.
+ */
+function undoFixture() {
+    const view = createView();
+    view.showRemoval = (removal, busy, error) => { view.removal = { label: removal?.label ?? null, index: removal?.index, busy, error }; };
+    const adapter = createAdapter("undo");
+    adapter.exportSavedState = record => ({ color: record.state.color ?? "red" });
+    const fixture = { beforeRestore: async () => {} };
+    const controller = new MapLayerController({ leafletMap: createMap(), view,
+        restoreRemovedLayer: async (snapshot, isCurrent) => {
+            await fixture.beforeRestore();
+            if (!isCurrent()) throw new Error("Superseded");
+            const staged = await controller.stage(snapshot.item, adapter, snapshot);
+            if (!isCurrent()) throw new Error("Superseded");
+            staged.record.state.color = snapshot.style.color;
+            controller.restoreStagedLayer(staged, snapshot.index);
+        },
+    });
+    return Object.assign(fixture, { controller, view, adapter });
+}
+
+test("Undo restores the last removed layer's order, visibility, opacity and appearance without activating it", async () => {
+    const { controller, view, adapter } = undoFixture();
+    for (const id of ["a", "b", "c"]) await controller.show(catalogItem(id), adapter);
+    const key = getCatalogItemKey(catalogItem("b"));
+    controller.setVisible(key, false);
+    controller.setOpacity(key, 0.25);
+    controller.getRecord(key).state.color = "blue";
+    const active = controller.activeKey;
+    const priorLayer = controller.getLeafletLayer(key);
+    view.handlers.onRemove(key);
+    assert.equal(controller.getLeafletLayer(key), null);
+    assert.equal(view.removal.label, "undo b");
+    await controller.undoLayerRemoval();
+    assert.deepEqual(controller.snapshots().map(layer => layer.item.id), ["c", "b", "a"]);
+    assert.equal(controller.activeKey, active);
+    assert.equal(controller.getRecord(key).state.color, "blue");
+    assert.equal(controller.getRecord(key).entry.opacity, 0.25);
+    assert.equal(controller.getRecord(key).entry.visible, false);
+    assert.notEqual(controller.getLeafletLayer(key), priorLayer);
+    assert.equal(view.removal.label, null);
+});
+
+test("only the latest explicit removal is undoable, including the final layer; internal removals do not replace it", async () => {
+    const { controller, view, adapter } = undoFixture();
+    for (const id of ["a", "b", "c"]) await controller.show(catalogItem(id), adapter);
+    controller.removeWithUndo(getCatalogItemKey(catalogItem("b")));
+    controller.removeWithUndo(getCatalogItemKey(catalogItem("a")));
+    controller.clear();
+    assert.equal(controller.snapshots().length, 0);
+    assert.equal(view.removal.label, "undo a");
+    await controller.undoLayerRemoval();
+    assert.deepEqual(controller.snapshots().map(layer => layer.item.id), ["a"]);
+    controller.removeWithUndo(getCatalogItemKey(catalogItem("a")));
+    assert.equal(controller.snapshots().length, 0);
+    assert.equal(view.removal.label, "undo a");
+    await controller.undoLayerRemoval();
+    await controller.undoLayerRemoval();
+    assert.equal(controller.snapshots().length, 1);
+});
+
+test("failed restoration keeps Undo for retry and never overwrites a re-added layer", async () => {
+    const fixture = undoFixture();
+    const { controller, view, adapter } = fixture;
+    const item = catalogItem("a");
+    const key = getCatalogItemKey(item);
+    await controller.show(item, adapter);
+    controller.removeWithUndo(key);
+    fixture.beforeRestore = async () => { throw new Error("Source unavailable"); };
+    await controller.undoLayerRemoval();
+    assert.match(view.removal.error, /Source unavailable/);
+    assert.equal(view.removal.busy, false);
+    fixture.beforeRestore = async () => {};
+    await controller.show(item, adapter);
+    const readded = controller.getRecord(key);
+    await controller.undoLayerRemoval();
+    assert.equal(controller.getRecord(key), readded);
+    assert.ok(view.removal.error);
+    controller.remove(item);
+    await controller.undoLayerRemoval();
+    assert.equal(controller.snapshots().length, 1);
+    assert.equal(view.removal.label, null);
+});
+
+test("a delayed Undo cannot resurrect a layer after reset or replace a newer removal", async () => {
+    for (const reset of [true, false]) {
+        const fixture = undoFixture();
+        const { controller, view, adapter } = fixture;
+        for (const id of ["a", "b"]) await controller.show(catalogItem(id), adapter);
+        controller.removeWithUndo(getCatalogItemKey(catalogItem("a")));
+        let release;
+        fixture.beforeRestore = () => new Promise(resolve => { release = resolve; });
+        const undo = controller.undoLayerRemoval();
+        if (reset) controller.clear();
+        else controller.removeWithUndo(getCatalogItemKey(catalogItem("b")));
+        release();
+        await undo;
+        assert.equal(controller.snapshots().length, 0);
+        assert.equal(view.removal.label, reset ? "undo a" : "undo b");
+        fixture.beforeRestore = async () => {};
+        await controller.undoLayerRemoval();
+        assert.deepEqual(controller.snapshots().map(layer => layer.item.id), [reset ? "a" : "b"]);
+    }
+});
+
+test("a source re-added while Undo is preparing is never overwritten at attachment", async () => {
+    const { controller, adapter } = undoFixture();
+    const item = catalogItem("race");
+    const staged = await controller.stage(item, adapter);
+    await controller.show(item, adapter);
+    const existing = controller.getRecord(staged.key);
+    assert.throws(() => controller.restoreStagedLayer(staged, 0), /already on the map/);
+    assert.equal(controller.getRecord(staged.key), existing);
+    assert.equal(controller.snapshots().length, 1);
+});
+
+test("owner cleanup invalidates in-flight Undo without replacing its saved data", async () => {
+    const fixture = undoFixture();
+    const { controller, adapter, view } = fixture;
+    const item = catalogItem("a");
+    await controller.show(item, adapter);
+    controller.removeWithUndo(getCatalogItemKey(item));
+    let release;
+    fixture.beforeRestore = () => new Promise(resolve => { release = resolve; });
+    const undo = controller.undoLayerRemoval();
+    controller.removeOwned(adapter);
+    release();
+    await undo;
+    assert.equal(controller.snapshots().length, 0);
+    assert.equal(view.removal.label, "undo a");
+});
+
+test("dismissal forgets Undo and a newer removal supplies its own row position", async () => {
+    const { controller, view, adapter } = undoFixture();
+    for (const id of ["a", "b", "c"]) await controller.show(catalogItem(id), adapter);
+    controller.removeWithUndo(getCatalogItemKey(catalogItem("b")));
+    assert.equal(view.removal.index, 1);
+    controller.removeWithUndo(getCatalogItemKey(catalogItem("a")));
+    assert.equal(view.removal.label, "undo a");
+    assert.equal(view.removal.index, 1);
+    view.handlers.onDismissRemoval();
+    assert.equal(view.removal.label, null);
+    await controller.undoLayerRemoval();
+    assert.deepEqual(controller.snapshots().map(layer => layer.item.id), ["c"]);
+    controller.removeWithUndo(getCatalogItemKey(catalogItem("c")));
+    assert.equal(view.removal.index, 0);
+    await controller.undoLayerRemoval();
+    assert.deepEqual(controller.snapshots().map(layer => layer.item.id), ["c"]);
+});
+
+test("dismissing an in-flight Undo prevents its delayed response from restoring the layer", async () => {
+    const fixture = undoFixture();
+    const { controller, view, adapter } = fixture;
+    await controller.show(catalogItem("a"), adapter);
+    controller.removeWithUndo(getCatalogItemKey(catalogItem("a")));
+    let release;
+    fixture.beforeRestore = () => new Promise(resolve => { release = resolve; });
+    const undo = controller.undoLayerRemoval();
+    controller.dismissLayerRemoval();
+    assert.equal(view.removal.label, null);
+    release();
+    await undo;
+    assert.equal(controller.snapshots().length, 0);
+    assert.equal(view.removal.label, null);
+});
