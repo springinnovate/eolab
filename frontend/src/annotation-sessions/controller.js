@@ -4,7 +4,13 @@ import { AnnotationSessionsView } from "./view.js";
 
 const STORAGE_KEY = "eolab-annotation-session";
 
-/** Coordinate this feature through supplied annotation and presentation contracts. */
+/**
+ * Manage the annotation session open in this browser tab.
+ * Creates, joins and reopens sessions; uploads saved changes to shared layers;
+ * and refreshes other contributors' layers on the map. Reports connection,
+ * revision-conflict and expiration errors through the session panel.
+ * Local polygon editing and device storage remain owned by Annotations.
+ */
 export class AnnotationSessionsController {
     /**
      * Connect session controls without importing the annotation editor or layer stack.
