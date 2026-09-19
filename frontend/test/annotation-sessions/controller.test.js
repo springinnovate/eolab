@@ -171,7 +171,7 @@ test("contributors cannot use the owner switch and late saves do not change a di
     await controller.setAllowNewContributors(false); assert.equal(calls, 0);
     controller.snapshot.isOwner = true;
     const saving = controller.setAllowNewContributors(false);
-    await controller.stopUploads(); controller.snapshot = { ...snapshot(), id: "other-session" };
+    await controller.stopSessionSync(); controller.snapshot = { ...snapshot(), id: "other-session" };
     finish(); await saving;
     assert.equal(controller.snapshot.joinsOpen, true);
     controller.destroy();

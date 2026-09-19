@@ -1,4 +1,4 @@
-/** Own session membership, contribution synchronization and refresh scheduling. */
+/** Connect the Shared annotations panel to session membership, saved-layer uploads and map updates. */
 import { AnnotationSessionsApi } from "./api.js";
 import { AnnotationSessionsView } from "./view.js";
 
@@ -13,17 +13,18 @@ const STORAGE_KEY = "eolab-annotation-session";
  */
 export class AnnotationSessionsController {
     /**
-     * Connect session controls without importing the annotation editor or layer stack.
-     * @param {Object} options Feature dependencies.
-     * @param {HTMLElement} options.root Shared annotations disclosure.
+     * Create the session panel and connect its actions to the API and annotation callbacks.
+     * Call start() after local annotations have loaded to restore a previous session.
+     * @param {Object} options API, storage and callbacks supplied by browser composition.
+     * @param {HTMLElement} options.root Container for the Shared annotations disclosure.
      * @param {()=>string} options.createLayer Add an empty local annotation layer and return its identifier.
      * @param {()=>{id:string,collection:Object}[]} options.getLayers Committed, device-saved layers.
      * @param {(id:string,label:string)=>void} options.setShareLabel Local layer status callback.
-     * @param {(key:string,label:string,collection:Object)=>void} options.showLayer Read-only contribution presentation.
-     * @param {(keys:Set<string>)=>void} options.retainLayers Remove displayed contributions outside this set.
+     * @param {(key:string,label:string,collection:Object)=>void} options.showLayer Add or update a read-only shared layer on the map.
+     * @param {(keys:Set<string>)=>void} options.retainLayers Keep only these shared layer IDs on the map; remove the other received layers.
      * @param {AnnotationSessionsApi} [options.api] Same-origin API.
-     * @param {Storage} [options.storage] Small local synchronization bookmarks; never credentials.
-     * @param {function(HTMLElement,Object):Object} [options.createView] Testable view factory.
+     * @param {Storage} [options.storage] Store the active session ID and layer revisions for reload; never credentials or polygons.
+     * @param {function(HTMLElement,Object):AnnotationSessionsView} [options.createView] Create the panel with its user-action callbacks.
      */
     constructor({ root, createLayer, getLayers, setShareLabel, showLayer, retainLayers,
         api = new AnnotationSessionsApi(), storage = globalThis.localStorage,
@@ -37,7 +38,7 @@ export class AnnotationSessionsController {
             join: (joinCode, contributorName) => void this.openSession("/join", { joinCode, contributorName }),
             open: id => void this.openSession(`/${id}`),
             copy: () => void this.copyInvitation(),
-            extend: () => void this.applySessionAction("extend"),
+            extend: () => void this.extendSessionExpiration(),
             allowNewContributors: allowed => void this.setAllowNewContributors(allowed),
             show: () => { this.showContributions = true; this.visibleContributions.clear(); void this.refreshSession(); },
             refresh: () => { for (const state of this.sharing.values()) if (!state.conflict) state.paused = false; void this.sendChangedLayers(); void this.refreshSession(); },
@@ -49,8 +50,10 @@ export class AnnotationSessionsController {
     }
 
     /**
-     * Restore an existing membership or prefill an invitation without joining automatically.
-     * @return {Promise<void>} Completion with any connection failure shown in the panel.
+     * Load this browser's memberships and reopen its saved session when available.
+     * An invitation reopens an existing membership or prefills the join-code field;
+     * a new contributor must still enter a name and choose Join session.
+     * @return {Promise<void>} Completion after setup, with connection errors displayed in the panel.
      */
     async start() {
         try {
@@ -64,14 +67,19 @@ export class AnnotationSessionsController {
                 this.view.code.value = code.toUpperCase(); this.root.open = true;
                 this.view.message("Enter your name, then join the annotation session."); return;
             }
-            const saved = this.readBookmark();
+            const saved = this.readSavedSession();
             if (saved?.sessionId && sessions.some(session => session.id === saved.sessionId)) await this.openSession(`/${saved.sessionId}`);
             else this.view.message("Create or join a session to share annotation layers on this EOLab site.");
         } catch (error) { this.view.message(error.message, true); }
     }
 
-    /** @return {Object|null} Validated synchronization bookmark, or null if unavailable. */
-    readBookmark() {
+    /**
+     * Read the session and layer revisions saved on this device for reconnecting.
+     * Ignore missing, malformed or inaccessible storage rather than preventing use.
+     * @return {{sessionId:string,layers:{id:string,revision:number}[]}|null} Saved identifiers
+     *     and acknowledged revisions, or null when no usable record exists.
+     */
+    readSavedSession() {
         try {
             const value = JSON.parse(this.storage.getItem(STORAGE_KEY));
             if (!value || typeof value.sessionId !== "string" || !Array.isArray(value.layers)) return null;
@@ -80,8 +88,13 @@ export class AnnotationSessionsController {
         } catch { return null; }
     }
 
-    /** Save only identifiers and acknowledged revisions; polygon data remains in Annotations. @return {void} */
-    rememberSharingRevisions() {
+    /**
+     * Save the active session ID and shared-layer revisions for the next page load.
+     * Remove the saved record when no session is active. Store neither polygon data
+     * nor credentials, and display a warning if device storage is unavailable.
+     * @return {void}
+     */
+    saveSessionForReload() {
         try {
             if (!this.snapshot) this.storage.removeItem(STORAGE_KEY);
             else this.storage.setItem(STORAGE_KEY, JSON.stringify({ sessionId: this.snapshot.id,
@@ -90,12 +103,16 @@ export class AnnotationSessionsController {
     }
 
     /**
-     * Create, join, or reopen a session after existing uploads finish.
-     * Explicit create/join actions add a local layer when none belongs to this session;
+     * Create, join or reopen a session and make it the active session in this tab.
+     * After the server accepts the request, finish uploads to the previous session,
+     * restore this session's sharing settings and refresh its layers on the map.
+     * Explicit create/join actions add a local layer if none is already shared here;
      * reopening after reload never creates another layer.
-     * @param {string} path API command path or existing session identifier path.
-     * @param {Object} [body] Create/join form values; absent when reopening.
-     * @return {Promise<void>} Completion with errors shown beside the controls.
+     * @param {string} path Empty to create, /join to join, or /<session ID> to reopen.
+     * @param {{contributorName:string,name?:string,joinCode?:string}} [body] Create/join
+     *     form values; omit when reopening an existing session.
+     * @return {Promise<void>} Completion after setup or a displayed error; repeated clicks
+     *     during a session transition do not start another request.
      */
     async openSession(path, body) {
         if (this.transitioning || this.closed) return;
@@ -103,10 +120,10 @@ export class AnnotationSessionsController {
         try {
             const snapshot = await this.api.request(path, body ? "POST" : "GET", body);
             if (this.closed) return;
-            await this.stopUploads();
+            await this.stopSessionSync();
             this.snapshot = snapshot; this.sharing.clear(); this.visibleContributions.clear(); this.retainLayers(new Set());
             this.showContributions = snapshot.isOwner;
-            const bookmark = this.readBookmark();
+            const bookmark = this.readSavedSession();
             if (bookmark?.sessionId === snapshot.id) for (const layer of bookmark.layers) {
                 this.sharing.set(layer.id, { revision: layer.revision, sent: null, sending: null, message: "Checking shared copy…" });
             }
@@ -118,7 +135,7 @@ export class AnnotationSessionsController {
                     this.trackSharedLayer(layer.layerId, 0);
                 }
             }
-            this.rememberSharingRevisions(); this.root.open = true;
+            this.saveSessionForReload(); this.root.open = true;
             this.view.render(snapshot, this.sharing);
             this.view.message("New annotation layers are shared with this session automatically. Add a polygon to get started.");
             await this.refreshSession();
@@ -130,9 +147,12 @@ export class AnnotationSessionsController {
     }
 
     /**
-     * Begin sharing one local layer, using its saved revision on reconnect.
+     * Share this local layer's saved polygons and keep uploading later saved edits.
+     * This explicit action can replace a conflicting server copy using its last
+     * observed revision. Automatic reconnects instead use the saved acknowledged revision.
+     * If no session is active, ask the user to create or join one first.
      * @param {string} id Local annotation layer identifier.
-     * @return {void}
+     * @return {void} Starts the upload without waiting; progress and errors appear in the panel.
      */
     shareLayer(id) {
         this.root.open = true;
@@ -148,14 +168,15 @@ export class AnnotationSessionsController {
     }
 
     /**
-     * Remember a layer's sharing intent without uploading its unsaved contents.
+     * Include a local layer in automatic sharing and remember its server revision.
+     * Reset its upload status, but leave sending to the next saved-data upload.
      * @param {string} id Local annotation layer identifier.
      * @param {number} revision Last acknowledged revision, or zero for a new contribution.
      * @return {void}
      */
     trackSharedLayer(id, revision) {
         this.sharing.set(id, { revision, sent: null, sending: null, message: "Waiting for saved changes…" });
-        this.setShareLabel(id, "Sharing…"); this.rememberSharingRevisions();
+        this.setShareLabel(id, "Sharing…"); this.saveSessionForReload();
     }
 
     /**
@@ -169,7 +190,12 @@ export class AnnotationSessionsController {
         this.trackSharedLayer(id, 0);
     }
 
-    /** Debounce uploads after successful local saves; editor drafts never enter this callback. @return {void} */
+    /**
+     * Schedule shared-layer uploads 600 ms after the latest successful device save.
+     * Further saves restart the delay. Unshared layers and unfinished polygon drafts
+     * are not uploaded; no upload is scheduled while the session is changing or closed.
+     * @return {void}
+     */
     committedLayersChanged() {
         clearTimeout(this.debounce);
         if (!this.snapshot || this.closed || this.transitioning) return;
@@ -177,8 +203,11 @@ export class AnnotationSessionsController {
     }
 
     /**
-     * Send each changed layer serially, coalescing further edits while a request is in flight.
-     * @return {Promise<void>} Completion after current changed layers are acknowledged or fail.
+     * Upload changed saved layers that are neither paused nor already uploading.
+     * This call waits for each upload it starts. Each layer's upload includes any
+     * newer saves that arrive while it is waiting for the server.
+     * @return {Promise<void>} Completion after this call's uploads and panel refresh;
+     *     uploads already started by another call are left running.
      */
     async sendChangedLayers() {
         if (!this.snapshot || this.closed || this.transitioning) return;
@@ -194,11 +223,15 @@ export class AnnotationSessionsController {
     }
 
     /**
-     * Upload the newest saved content until this layer has caught up.
-     * @param {string} id Local layer identifier.
-     * @param {Object} state Acknowledged revision and synchronization state.
-     * @param {number} generation Session transition guard.
-     * @return {Promise<void>} Completion; network errors leave the latest local version available for retry.
+     * Upload a layer's saved GeoJSON until no newer saved changes remain.
+     * Keep the acknowledged revision for retries. Network failures remain retryable;
+     * conflicts pause uploads until the user chooses whether to replace the server copy.
+     * @param {string} id Local annotation layer identifier.
+     * @param {{revision:number,sent:string|null,sending:Promise<void>|null,message:string,
+     *     paused?:boolean,conflict?:boolean}} state This layer's revision and upload status.
+     * @param {number} generation Session-change counter captured when the upload started.
+     * @return {Promise<void>} Completion after the saved changes are sent, an error is
+     *     displayed, or the request belongs to a session that is no longer active.
      */
     async uploadLayer(id, state, generation) {
         while (generation === this.generation && !this.closed && this.snapshot && !state.paused) {
@@ -211,7 +244,7 @@ export class AnnotationSessionsController {
                 const accepted = await this.api.request(`/${this.snapshot.id}/layers/${id}`, "PUT", { revision: state.revision, collection: layer.collection });
                 state.revision = accepted.revision; state.sent = text; state.message = "Saved";
                 if (generation !== this.generation || this.closed) return;
-                this.rememberSharingRevisions(); this.setShareLabel(id, "Shared · Saved");
+                this.saveSessionForReload(); this.setShareLabel(id, "Shared · Saved");
                 this.view.message("All sent changes are saved in the session.");
             } catch (error) {
                 if (generation !== this.generation || this.closed) return;
@@ -227,9 +260,11 @@ export class AnnotationSessionsController {
     }
 
     /**
-     * Refresh authoritative metadata and only fetch changed displayed contributions.
-     * A failed poll backs off and retries; a missing membership clears remote presentation.
-     * @return {Promise<void>} Completion of one refresh, with a later refresh scheduled.
+     * Refresh session members, layer revisions and received layers shown on the map.
+     * Fetch GeoJSON only for displayed layers with a new revision, and retry eligible
+     * saved-layer uploads. An expired or inaccessible session clears its map layers.
+     * @return {Promise<void>} Completion of this refresh. While the session remains active,
+     *     schedule the next refresh in 5 seconds, backing off to 30 seconds after failures.
      */
     async refreshSession() {
         if (!this.snapshot || this.refreshing || this.closed) return;
@@ -264,7 +299,7 @@ export class AnnotationSessionsController {
         } catch (error) {
             if (generation !== this.generation || this.closed) return;
             this.view.message(error.message, true); this.delay = Math.min(this.delay * 2, 30000);
-            if (error.status === 404) { await this.stopUploads(); this.snapshot = null; this.retainLayers(new Set()); this.view.render(null, this.sharing); }
+            if (error.status === 404) { await this.stopSessionSync(); this.snapshot = null; this.retainLayers(new Set()); this.view.render(null, this.sharing); }
         } finally {
             this.refreshing = false;
             if (this.snapshot && !this.closed) this.timer = setTimeout(() => void this.refreshSession(), this.delay);
@@ -272,9 +307,11 @@ export class AnnotationSessionsController {
     }
 
     /**
-     * Save the owner's joining switch; restore its previous setting if saving fails.
-     * @param {boolean} allowed Whether new contributors may redeem the join code.
-     * @return {Promise<void>} Completion with the saved setting or a visible error.
+     * Save whether the owner allows new contributors to join this session.
+     * Disable the switch while saving and restore the server's last known setting
+     * on failure. Existing contributors can keep working either way.
+     * @param {boolean} allowed Whether new contributors may join using the session code.
+     * @return {Promise<void>} Completion with the saved setting or a displayed error.
      */
     async setAllowNewContributors(allowed) {
         if (!this.snapshot?.isOwner || this.transitioning || this.joiningBusy || this.closed) return;
@@ -294,10 +331,13 @@ export class AnnotationSessionsController {
         }
     }
 
-    /** @param {string} action Authorized session management command. @return {Promise<void>} Completion with visible errors. */
-    async applySessionAction(action) {
+    /**
+     * Ask the server to keep the active session for another day, then refresh its expiry.
+     * @return {Promise<void>} Completion after the request and refresh, or a displayed error.
+     */
+    async extendSessionExpiration() {
         if (!this.snapshot) return;
-        try { await this.api.request(`/${this.snapshot.id}/actions/${action}`, "POST"); await this.refreshSession(); }
+        try { await this.api.request(`/${this.snapshot.id}/actions/extend`, "POST"); await this.refreshSession(); }
         catch (error) { this.view.message(error.message, true); }
     }
 
@@ -318,7 +358,7 @@ export class AnnotationSessionsController {
         const layer = this.snapshot.layers.find(layer => layer.layerId === id && layer.contributorId === this.snapshot.contributorId);
         try {
             await this.api.request(`/${this.snapshot.id}/layers/${id}?revision=${Math.max(state?.revision ?? 0, layer?.revision ?? 0)}`, "DELETE");
-            this.sharing.delete(id); this.setShareLabel(id, "Share"); this.rememberSharingRevisions();
+            this.sharing.delete(id); this.setShareLabel(id, "Share"); this.saveSessionForReload();
             this.view.message("Shared copy withdrawn. Your local layer is unchanged."); await this.refreshSession();
         } catch (error) { this.view.message(error.message, true); }
     }
@@ -344,24 +384,39 @@ export class AnnotationSessionsController {
         this.visibleContributions.set(key, data.revision);
     }
 
-    /** Stop scheduling uploads and wait for the one already sent before changing sessions. @return {Promise<void>} */
-    async stopUploads() {
+    /**
+     * Stop scheduled session refreshes/uploads and wait for uploads already sent.
+     * Mark pending replies as belonging to the old session so they cannot update
+     * its replacement. Do not abort sent HTTP requests or delete saved layers.
+     * Callers prevent new scheduling while switching, leaving or clearing a session.
+     * @return {Promise<void>} Completion after outstanding uploads settle and Share labels reset.
+     */
+    async stopSessionSync() {
         this.generation++; clearTimeout(this.timer); clearTimeout(this.debounce);
         await Promise.all([...this.sharing.values()].map(state => state.sending));
         for (const id of this.sharing.keys()) this.setShareLabel(id, "Share");
     }
 
-    /** Leave the current view without deleting any local or contributed polygons. @return {Promise<void>} */
+    /**
+     * Stop sharing in this tab and remove received layers from its map.
+     * Keep local annotations, server copies and server membership so the session can
+     * be reopened. Forget the active-session record and refresh the session chooser.
+     * @return {Promise<void>} Completion after leaving, with any chooser refresh error displayed.
+     */
     async leave() {
         if (this.transitioning) return;
         this.transitioning = true; this.view.busy(true);
-        await this.stopUploads(); this.snapshot = null; this.sharing.clear(); this.retainLayers(new Set()); this.rememberSharingRevisions();
+        await this.stopSessionSync(); this.snapshot = null; this.sharing.clear(); this.retainLayers(new Set()); this.saveSessionForReload();
         this.view.render(null, this.sharing); this.view.message("Left the session. Shared copies remain available until expiration.");
         try { this.view.memberships(await this.api.request()); } catch (error) { this.view.message(error.message, true); }
         this.transitioning = false; this.view.busy(false);
     }
 
-    /** Copy an invitation containing only the site URL and public join code. @return {Promise<void>} */
+    /**
+     * Copy a session invitation link, or display the join code if clipboard access fails.
+     * The link contains the site URL and join code, without private credentials or polygons.
+     * @return {Promise<void>} Completion after copying or displaying the fallback code.
+     */
     async copyInvitation() {
         if (!this.snapshot) return;
         const url = new URL(globalThis.location.origin); url.searchParams.set("annotationSession", this.snapshot.joinCode);
@@ -369,7 +424,11 @@ export class AnnotationSessionsController {
         catch { this.view.message(`Copy this join code: ${this.snapshot.joinCode}`); }
     }
 
-    /** Stop background work when this application page leaves. @return {void} */
+    /**
+     * Stop timers and ignore late session replies when this page closes.
+     * Remove the pagehide listener; HTTP requests already sent are not aborted.
+     * @return {void}
+     */
     destroy() {
         this.closed = true; this.generation++; clearTimeout(this.timer); clearTimeout(this.debounce);
         globalThis.removeEventListener?.("pagehide", this.onPageHide);
