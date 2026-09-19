@@ -231,7 +231,6 @@
           id="eomap-tools-workbench"
           aria-label="EOMap workspaces"
         >
-          <section id="annotation-sessions" class="annotation-sessions" aria-label="Annotation session"></section>
           <button
             class="workspace-disclosure"
             id="toggle-catalog-workspace"
@@ -436,6 +435,7 @@
                     <details id="annotation-tools" class="annotation-tools">
                       <summary>Annotation tools</summary>
                       <div class="annotation-layer-actions">
+                        <button class="secondary-button" id="open-annotation-session" type="button" aria-controls="annotation-sessions" aria-expanded="false">Annotation session…</button>
                         <button class="secondary-button" id="create-annotation-layer" type="button" disabled>Create annotation layer</button>
                         <button class="secondary-button" id="import-annotation-geojson" type="button" disabled>Import GeoJSON</button>
                         <input id="annotation-geojson-file" type="file" accept=".geojson,.json,application/geo+json,application/json" aria-label="Import annotation GeoJSON file" hidden>
@@ -447,6 +447,7 @@
                         <p id="annotation-file-status" role="status" aria-live="polite"></p>
                       </div>
                     </details>
+                    <section id="annotation-sessions" class="annotation-sessions" aria-label="Annotation session" hidden></section>
                     <div class="map-layer-visibility-actions" role="group" aria-label="Map layer visibility">
                       <button class="secondary-button" id="map-layers-show-all" type="button" aria-label="Show all map layers" disabled>Show all</button>
                       <button class="secondary-button" id="map-layers-hide-all" type="button" aria-label="Hide all map layers" disabled>Hide all</button>

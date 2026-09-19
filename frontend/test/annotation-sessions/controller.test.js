@@ -17,7 +17,7 @@ function snapshot() {
 function setup(request = async () => snapshot()) {
     const local = [{ id: "local", collection: { name: "Priority areas", features: [] } }];
     const events = []; const storage = new Map();
-    const view = { showDetails() {}, showInvitation: code => events.push(["invitation", code]), setNameBusy() {}, nameSaved() {}, memberships() {}, busy() {}, render() {}, setJoiningBusy: busy => events.push(["joiningBusy", busy]), code: {}, message: (...args) => events.push(["message", ...args]) };
+    const view = { showSetupPanel() {}, clearError: text => events.push(["clearError", text]), showDetails() {}, showInvitation: code => events.push(["invitation", code]), setNameBusy() {}, nameSaved() {}, memberships() {}, busy() {}, render: (snapshot, sharing) => events.push(["uploading", [...sharing.values()].some(state => state.uploading)]), setJoiningBusy: busy => events.push(["joiningBusy", busy]), code: {}, message: (...args) => events.push(["message", ...args]) };
     const controller = new AnnotationSessionsController({ root: {}, getLayers: () => local,
         revealLayer: id => events.push(["reveal", id]),
         createLayer: name => {
@@ -352,4 +352,29 @@ test("a new invitation prefills the join form without joining or creating a laye
         controller.destroy();
         if (location === undefined) delete globalThis.location; else globalThis.location = location;
     }
+});
+
+
+test("only a real upload shows syncing; unchanged refreshes keep the saved indicator", async () => {
+    let finish;
+    const { controller, events } = setup(() => new Promise(resolve => { finish = resolve; }));
+    controller.shareLayer("local");
+    assert.ok(events.some(event => event[0] === "uploading" && event[1]));
+    finish({ revision: 1 }); await controller.sharing.get("local").sending;
+    const uploading = events.filter(event => event[0] === "uploading" && event[1]).length;
+    await controller.sendChangedLayers();
+    assert.equal(events.filter(event => event[0] === "uploading" && event[1]).length, uploading);
+    assert.equal(controller.sharing.get("local").uploading, false);
+    controller.destroy();
+});
+
+test("a recovered status request clears its error after a successful refresh", async () => {
+    let failed = true;
+    const { controller, events } = setup(async () => {
+        if (failed) throw new Error("Temporary outage");
+        return snapshot();
+    });
+    await controller.refreshSession(); failed = false; await controller.refreshSession();
+    assert.ok(events.some(event => event[0] === "clearError" && event[1] === "Temporary outage"));
+    controller.destroy();
 });

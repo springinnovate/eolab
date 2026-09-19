@@ -1,14 +1,21 @@
 /** Session setup and management; polygon editing stays in Map layers. */
 export class AnnotationSessionsView {
     /**
-     * Build stable forms, a compact connected bar and optional session details.
+     * Build hidden setup forms and a single-row disclosure for connected sessions.
      * @param {HTMLElement} root Annotation session section.
-     * @param {Object} actions Session commands supplied by the controller.
+     * @param {Object} actions Session commands and workspace reveal callback supplied by the controller.
+     * @param {HTMLButtonElement} entryButton Setup action mounted in Annotation tools.
      */
-    constructor(root, actions) {
+    constructor(root, actions, entryButton) {
         this.root = root; this.document = root.ownerDocument; this.actions = actions;
-        this.title = this.element("strong", "Annotation session");
+        this.entryButton = entryButton; this.sharing = new Map(); this.setupVisible = false;
+        this.messageText = ""; this.messageIsError = false;
+        entryButton.addEventListener("click", () => this.showSetupPanel());
         this.setup = this.element("div");
+        const setupHeading = this.element("div"); setupHeading.className = "annotation-session-setup-heading";
+        this.closeSetup = this.button("×", () => this.hideSetupPanel());
+        this.closeSetup.setAttribute("aria-label", "Close annotation session setup");
+        setupHeading.append(this.element("strong", "Annotation session"), this.closeSetup);
         this.choices = this.element("div"); this.choices.className = "annotation-session-actions";
         this.enterCode = this.button("Enter a code", () => this.showSetup("join"));
         this.startSession = this.button("Start a session", () => this.showSetup("create"));
@@ -30,16 +37,20 @@ export class AnnotationSessionsView {
         this.existing = this.element("select"); this.existing.setAttribute("aria-label", "Previously joined sessions");
         this.existing.addEventListener("change", () => { if (this.existing.value) actions.open(this.existing.value); });
         this.recent.append(this.element("summary", "Recent sessions"), this.existing); this.recent.hidden = true;
-        this.setup.append(this.choices, this.createForm, this.joinForm, this.recent);
+        this.setup.append(setupHeading, this.choices, this.createForm, this.joinForm, this.recent);
 
-        this.session = this.element("div"); this.session.hidden = true;
-        this.bar = this.element("div"); this.bar.className = "annotation-session-bar";
+        this.session = this.element("details"); this.session.hidden = true;
+        this.bar = this.element("summary"); this.bar.className = "annotation-session-bar";
+        this.bar.title = "Session details";
+        this.indicator = this.element("span"); this.indicator.className = "annotation-session-indicator";
+        this.indicator.setAttribute("role", "img");
         this.heading = this.element("strong"); this.membership = this.element("span");
         this.copy = this.button("Copy invitation", actions.copy);
-        this.bar.append(this.heading, this.membership);
-        this.details = this.element("details"); this.details.append(this.element("summary", "Session details"));
+        this.bar.append(this.heading, this.indicator);
+        this.details = this.element("div"); this.details.className = "annotation-session-details";
+        this.details.append(this.membership);
         this.invitation = this.element("p"); this.expiry = this.element("p"); this.people = this.element("p");
-        this.inviteActions = this.element("div");
+        this.inviteActions = this.element("div"); this.inviteActions.append(this.copy);
         this.download = this.element("a", "Download annotations"); this.download.className = "secondary-button";
         this.extend = this.button("Keep for another day", actions.extend);
         this.show = this.button("Show contributions on map", actions.show);
@@ -62,8 +73,9 @@ export class AnnotationSessionsView {
             this.show, this.download, this.refresh, this.expiry, this.extend, this.joiningControl, this.leave, this.help);
         this.session.append(this.bar, this.details);
         this.status = this.element("p"); this.status.setAttribute("role", "status"); this.status.className = "annotation-session-status";
-        root.append(this.title, this.setup, this.session, this.status);
+        root.append(this.setup, this.session, this.status);
         this.showSetup("choose", false);
+        this.updateStatus();
     }
 
     /** @param {string} tag HTML tag. @param {string} [text=""] Plain text. @return {HTMLElement} New element. */
@@ -111,13 +123,24 @@ export class AnnotationSessionsView {
         if (focus) (mode === "create" ? this.sessionName : mode === "join" ? this.code : this.enterCode).focus();
     }
 
+    /** Reveal connection choices after an explicit setup or sharing action. @return {void} */
+    showSetupPanel() {
+        this.actions.reveal(); this.setupVisible = true; this.updateStatus();
+        this.showSetup("choose");
+    }
+
+    /** Close setup while retaining typed values; errors remain visible. @return {void} */
+    hideSetupPanel() {
+        this.setupVisible = false; this.updateStatus(); this.actions.revealEntry(); this.entryButton.focus();
+    }
+
     /** Open an invitation's join form without requiring the user to copy its code.
      * @param {string} code Validated invitation code. @return {void}
      */
-    showInvitation(code) { this.code.value = code; this.showSetup("join", false); this.displayName.focus(); }
+    showInvitation(code) { this.showSetupPanel(); this.code.value = code; this.showSetup("join", false); this.displayName.focus(); }
 
     /** Reveal session management following an explicit sharing action. @return {void} */
-    showDetails() { this.details.open = true; }
+    showDetails() { this.actions.reveal(); this.session.open = true; this.bar.focus(); }
 
     /** @param {Object[]} sessions Browser's unexpired memberships. @return {void} */
     memberships(sessions) {
@@ -126,16 +149,51 @@ export class AnnotationSessionsView {
         this.recent.hidden = sessions.length === 0;
     }
 
-    /** Show status outside the disclosure so errors remain visible.
+    /** Show routine messages inside details and errors outside the disclosure.
      * @param {string} text Visible status. @param {boolean} [error=false] Whether action is needed. @return {void}
      */
-    message(text, error = false) { this.status.textContent = text; this.status.hidden = !text; this.status.classList.toggle("is-error", error); }
+    message(text, error = false) {
+        this.messageText = text; this.messageIsError = error; this.updateStatus();
+    }
+
+    /** Clear a recovered status-read error without dismissing a newer action error.
+     * @param {string} text The status error whose request has recovered. @return {void}
+     */
+    clearError(text) {
+        if (this.messageIsError && this.messageText === text) this.message("");
+    }
+
+    /** Keep routine status within the row and leave unresolved sharing errors visible.
+     * Uses session/upload state already supplied by the controller; never requests data.
+     * @return {void}
+     */
+    updateStatus() {
+        const states = [...this.sharing.values()];
+        const problem = this.messageIsError ? this.messageText : states.find(state => state.error)?.message;
+        const syncing = states.some(state => state.uploading);
+        const label = problem ? "Sharing needs attention" : syncing ? "Sharing saved changes" : "Saved changes are shared";
+        if (this.indicator.title !== label) {
+            this.indicator.textContent = problem ? "!" : syncing ? "↻" : "✓";
+            this.indicator.title = label; this.indicator.setAttribute("aria-label", label);
+        }
+        this.indicator.classList.toggle("is-error", !!problem);
+        if (this.sessionId) this.bar.setAttribute("aria-label", `Session details: ${this.heading.textContent}. ${label}`);
+        const statusParent = this.sessionId && !problem ? this.details : this.root;
+        if (this.status.parentElement !== statusParent) statusParent.append(this.status);
+        this.status.textContent = problem || this.messageText;
+        this.status.hidden = !this.status.textContent;
+        this.status.classList.toggle("is-error", !!problem);
+        this.setup.hidden = !!this.sessionId || !this.setupVisible;
+        this.root.hidden = !this.sessionId && !this.setupVisible && !problem;
+        this.entryButton.hidden = !!this.sessionId;
+        this.entryButton.setAttribute("aria-expanded", String(this.setupVisible && !this.sessionId));
+    }
 
     /** @param {boolean} busy Whether membership is changing. @return {void} */
     busy(busy) {
         this.membershipBusy = busy;
         for (const control of [this.create, this.join, this.leave, this.existing, this.enterCode, this.startSession,
-            this.createBack, this.joinBack, this.sessionName, this.code, this.displayName]) control.disabled = busy;
+            this.createBack, this.joinBack, this.closeSetup, this.sessionName, this.code, this.displayName]) control.disabled = busy;
         this.allowContributors.disabled = busy || !!this.joiningBusy;
         this.setNameBusy(!!this.nameBusy);
     }
@@ -156,19 +214,18 @@ export class AnnotationSessionsView {
      * @param {Map<string,Object>} sharing Local upload state by layer identifier. @return {void}
      */
     render(snapshot, sharing) {
-        this.setup.hidden = !!snapshot; this.session.hidden = !snapshot;
+        this.sharing = sharing; this.session.hidden = !snapshot;
         if (this.sessionId !== snapshot?.id) {
-            this.details.open = false; this.profileDirty = false;
+            this.session.open = false; this.profileDirty = false; this.setupVisible = false;
             if (!snapshot) this.showSetup("choose", false);
         }
         this.sessionId = snapshot?.id;
+        if (snapshot) { this.heading.textContent = snapshot.name; this.heading.title = snapshot.name; }
+        this.updateStatus();
         if (!snapshot) { this.layers.replaceChildren(); this.layerRows.clear(); return; }
         const member = snapshot.contributors.find(person => person.id === snapshot.contributorId);
-        this.heading.textContent = snapshot.name;
         this.membership.textContent = snapshot.isOwner ? `${snapshot.contributors.length} ${snapshot.contributors.length === 1 ? "contributor" : "contributors"}` : `Joined as ${member?.name ?? "Contributor"}`;
         if (!this.profileDirty && !this.nameBusy) this.profileName.value = member?.name ?? "";
-        const copyParent = snapshot.isOwner ? this.bar : this.inviteActions;
-        if (this.copy.parentElement !== copyParent) copyParent.append(this.copy);
         this.invitation.textContent = `Session code: ${snapshot.joinCode} · ${snapshot.joinsOpen ? "Joining open" : "Joining closed"}`;
         this.expiry.textContent = `Available until ${new Date(snapshot.expiresAt).toLocaleString()}. Download a permanent copy before it expires.`;
         this.people.textContent = `Contributors: ${snapshot.contributors.map(person => person.name + (person.isOwner ? " (owner)" : "")).join(", ")}`;

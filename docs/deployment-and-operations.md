@@ -341,7 +341,8 @@ source checks, job ownership, cancellation and output checksum checks are unchan
 
 ## Shared annotations
 
-The **Annotation session** section offers **Enter a code** or **Start a session**.
+In Map layers, **Annotation tools → Annotation session…** opens **Enter a code**
+or **Start a session**.
 Starting asks for a session name and initially identifies the creator as **Session
 owner**. Joining asks for the session code and the name others will see. Members
 can change their own display name under **Session details**; this does not change
@@ -350,8 +351,11 @@ ownership or rename existing layers. **Recent sessions** reopens a previous memb
 Creating or joining reveals Map layers and focuses **Draw polygon** on the user's
 annotation layer, creating a named empty layer only when necessary. Saved polygons
 have name/note controls and **Draw another polygon** stays in the layer's primary
-actions. The session bar stays compact; invitations, contributors, downloads and
-settings are under **Session details**, while sharing errors remain visible.
+actions. A single row above the layer list shows the active session name and a
+saving/saved/attention indicator. Expand this row for session details, invitations,
+contributors, downloads and settings. Routine messages stay inside the disclosure;
+sharing errors remain visible when it is collapsed. Session setup takes no space
+until requested, and invitations open it automatically.
 New layers (including GeoJSON imports) are shared automatically with the active
 session once saved on the device; later saved edits are sent automatically too.
 Older local layers remain private until their **Share** button is used. Reloading

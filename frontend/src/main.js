@@ -1147,9 +1147,13 @@ async function initializeCatalog(
     });
     annotationSessions = new AnnotationSessionsController({
         root: document.querySelector("#annotation-sessions"),
+        entryButton: document.querySelector("#open-annotation-session"),
+        revealPanel: onRenderingWorkspaceRequested,
+        revealSetupEntry: () => { document.querySelector("#annotation-tools").open = true; },
         createLayer: name => annotations.createLayer(name),
         revealLayer: id => {
             onRenderingWorkspaceRequested();
+            document.querySelector("#annotation-tools").open = false;
             annotations.revealDrawing(id);
         },
         getLayers: () => annotations.sharableLayers(),
