@@ -200,7 +200,10 @@ test("one invalid feature rejects the entire file and errors survive until anoth
     assert.equal(controller.saved.length, 0);
     assert.equal(controller.importButton.disabled, false);
     controller.toolsDisclosure.open = false;
+    const created = [];
+    controller.onLayerCreated = id => created.push(id);
     await controller.importGeoJSONFile(new File([JSON.stringify(collection())], "good.geojson"));
+    assert.deepEqual(created, [controller.model.layers[0].id]);
     assert.equal(controller.toolsDisclosure.open, false, "successful import respects a collapsed disclosure");
     assert.equal(controller.model.layers.length, 2);
     assert.equal(controller.attached.length, 1);

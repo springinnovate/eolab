@@ -10,6 +10,7 @@ export class AnnotationSessionsController {
      * Connect session controls without importing the annotation editor or layer stack.
      * @param {Object} options Feature dependencies.
      * @param {HTMLElement} options.root Shared annotations disclosure.
+     * @param {()=>string} options.createLayer Add an empty local annotation layer and return its identifier.
      * @param {()=>{id:string,collection:Object}[]} options.getLayers Committed, device-saved layers.
      * @param {(id:string,label:string)=>void} options.setShareLabel Local layer status callback.
      * @param {(key:string,label:string,collection:Object)=>void} options.showLayer Read-only contribution presentation.
@@ -18,10 +19,10 @@ export class AnnotationSessionsController {
      * @param {Storage} [options.storage] Small local synchronization bookmarks; never credentials.
      * @param {function(HTMLElement,Object):Object} [options.createView] Testable view factory.
      */
-    constructor({ root, getLayers, setShareLabel, showLayer, retainLayers,
+    constructor({ root, createLayer, getLayers, setShareLabel, showLayer, retainLayers,
         api = new AnnotationSessionsApi(), storage = globalThis.localStorage,
         createView = (element, actions) => new AnnotationSessionsView(element, actions) }) {
-        Object.assign(this, { root, getLayers, setShareLabel, showLayer, retainLayers, api, storage });
+        Object.assign(this, { root, createLayer, getLayers, setShareLabel, showLayer, retainLayers, api, storage });
         this.snapshot = null; this.sharing = new Map(); this.generation = 0; this.refreshing = false;
         this.visibleContributions = new Map(); this.showContributions = false; this.closed = false;
         this.delay = 5000; this.timer = null; this.debounce = null; this.transitioning = false;
@@ -84,6 +85,8 @@ export class AnnotationSessionsController {
 
     /**
      * Create, join, or reopen a session after existing uploads finish.
+     * Explicit create/join actions add a local layer when none belongs to this session;
+     * reopening after reload never creates another layer.
      * @param {string} path API command path or existing session identifier path.
      * @param {Object} [body] Create/join form values; absent when reopening.
      * @return {Promise<void>} Completion with errors shown beside the controls.
@@ -101,9 +104,21 @@ export class AnnotationSessionsController {
             if (bookmark?.sessionId === snapshot.id) for (const layer of bookmark.layers) {
                 this.sharing.set(layer.id, { revision: layer.revision, sent: null, sending: null, message: "Checking shared copy…" });
             }
+            const localIds = new Set(this.getLayers().map(layer => layer.id));
+            for (const layer of snapshot.layers) {
+                if (layer.contributorId === snapshot.contributorId && localIds.has(layer.layerId) && !this.sharing.has(layer.layerId)) {
+                    // Without an acknowledged revision, accept only identical content;
+                    // the server rejects a changed local copy instead of overwriting edits.
+                    this.trackSharedLayer(layer.layerId, 0);
+                }
+            }
             this.rememberSharingRevisions(); this.root.open = true;
-            this.view.render(snapshot, this.sharing); this.view.message("Use Share on an annotation layer below.");
+            this.view.render(snapshot, this.sharing);
+            this.view.message("New annotation layers are shared with this session automatically. Add a polygon to get started.");
             await this.refreshSession();
+            if (body && this.snapshot?.id === snapshot.id && ![...this.sharing.keys()].some(id => localIds.has(id))) {
+                this.trackSharedLayer(this.createLayer(), 0);
+            }
         } catch (error) { this.view.message(error.message, true); }
         finally { this.transitioning = false; this.view.busy(false); if (this.snapshot) this.committedLayersChanged(); }
     }
@@ -122,8 +137,30 @@ export class AnnotationSessionsController {
         const existing = this.snapshot.layers.find(layer => layer.contributorId === this.snapshot.contributorId && layer.layerId === id);
         // This explicit Share action may replace the last observed shared copy.
         // Automatic reconnects instead retain their acknowledged revision above.
-        this.sharing.set(id, { revision: existing?.revision ?? 0, sent: null, sending: null, message: "Sending…" });
-        this.rememberSharingRevisions(); void this.sendChangedLayers();
+        this.trackSharedLayer(id, existing?.revision ?? 0);
+        void this.sendChangedLayers();
+    }
+
+    /**
+     * Remember a layer's sharing intent without uploading its unsaved contents.
+     * @param {string} id Local annotation layer identifier.
+     * @param {number} revision Last acknowledged revision, or zero for a new contribution.
+     * @return {void}
+     */
+    trackSharedLayer(id, revision) {
+        this.sharing.set(id, { revision, sent: null, sending: null, message: "Waiting for saved changes…" });
+        this.setShareLabel(id, "Sharing…"); this.rememberSharingRevisions();
+    }
+
+    /**
+     * Automatically share a newly created or imported layer with the active session.
+     * Existing layers, restored layers and unfinished polygon drafts do not trigger this callback.
+     * @param {string} id New local annotation layer identifier.
+     * @return {void} The next successful local save schedules its first upload.
+     */
+    annotationLayerCreated(id) {
+        if (!this.snapshot || this.closed || this.transitioning) return;
+        this.trackSharedLayer(id, 0);
     }
 
     /** Debounce uploads after successful local saves; editor drafts never enter this callback. @return {void} */
@@ -160,7 +197,7 @@ export class AnnotationSessionsController {
     async uploadLayer(id, state, generation) {
         while (generation === this.generation && !this.closed && this.snapshot && !state.paused) {
             const layer = this.getLayers().find(layer => layer.id === id);
-            if (!layer) { state.message = "Local layer removed; last shared copy kept"; return; }
+            if (!layer) { state.message = state.revision === 0 ? "Waiting for this layer to be saved on the device" : "Local layer removed; last shared copy kept"; return; }
             const text = JSON.stringify(layer.collection);
             if (text === state.sent) return;
             this.setShareLabel(id, "Sharing…"); state.message = "Sending…";

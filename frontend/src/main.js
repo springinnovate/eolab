@@ -1084,6 +1084,7 @@ async function initializeCatalog(
         map: leafletMap,
         mapLayers: mapLayerController,
         onShare: id => annotationSessions.shareLayer(id),
+        onLayerCreated: id => annotationSessions?.annotationLayerCreated(id),
         onCommittedChange: () => annotationSessions?.committedLayersChanged(),
         onEditingChange: editing => {
             mapInteractionMode = editing ? "layer-editing" : "inspection";
@@ -1094,6 +1095,11 @@ async function initializeCatalog(
     });
     annotationSessions = new AnnotationSessionsController({
         root: document.querySelector("#annotation-sessions"),
+        createLayer: () => {
+            const id = annotations.createLayer();
+            onRenderingWorkspaceRequested();
+            return id;
+        },
         getLayers: () => annotations.sharableLayers(),
         setShareLabel: (id, label) => annotations.setShareLabel(id, label),
         showLayer: (id, label, collection) => sharedAnnotations.show(id, label, collection),

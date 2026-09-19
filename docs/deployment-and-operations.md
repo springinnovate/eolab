@@ -343,8 +343,13 @@ source checks, job ownership, cancellation and output checksum checks are unchan
 
 The **Shared annotations** section above Map layers creates or joins an annotation
 session on this EOLab site. The session owner shares a join code; contributors
-enter that code and a display name. **Share** on a local annotation layer sends
-its saved polygons, names and notes. Later saved edits are sent automatically.
+enter that code and a display name. Creating or joining a session adds an empty
+annotation layer when this device has no local layer already shared with it.
+New layers (including GeoJSON imports) are shared automatically with the active
+session once saved on the device; later saved edits are sent automatically too.
+Older local layers remain private until their **Share** button is used. Reloading
+resumes sharing without adding a duplicate layer. Withdrawn layers stay withdrawn;
+use **Share** to send them again.
 Unfinished polygon edits stay local. Map links do not carry annotations or private
 credentials; use **Copy invitation** or **Download annotations** in the session.
 

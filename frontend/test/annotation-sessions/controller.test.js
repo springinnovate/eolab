@@ -19,6 +19,11 @@ function setup(request = async () => snapshot()) {
     const events = []; const storage = new Map();
     const view = { memberships() {}, busy() {}, render() {}, setJoiningBusy: busy => events.push(["joiningBusy", busy]), code: {}, message: (...args) => events.push(["message", ...args]) };
     const controller = new AnnotationSessionsController({ root: {}, getLayers: () => local,
+        createLayer: () => {
+            const id = `created-${local.length}`;
+            local.push({ id, collection: { name: "New annotations", features: [] } });
+            events.push(["created", id]); return id;
+        },
         setShareLabel: (...args) => events.push(["label", ...args]),
         showLayer: (...args) => events.push(["show", ...args]), retainLayers: ids => events.push(["retain", [...ids]]),
         storage: { getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
@@ -169,5 +174,83 @@ test("contributors cannot use the owner switch and late saves do not change a di
     await controller.stopUploads(); controller.snapshot = { ...snapshot(), id: "other-session" };
     finish(); await saving;
     assert.equal(controller.snapshot.joinsOpen, true);
+    controller.destroy();
+});
+
+for (const command of ["", "/join"]) test(`${command || "create"} starts a shared layer and reopening reuses it without sharing older layers`, async () => {
+    const writes = [];
+    const { controller, events } = setup(async (path, method, body) => {
+        if (method === "PUT") { writes.push([path, body]); return { revision: 1 }; }
+        return snapshot();
+    });
+    await controller.openSession(command, { contributorName: "Maria" });
+    assert.equal(events.filter(event => event[0] === "created").length, 1);
+    assert.equal(controller.sharing.has("local"), false, "older local layers require Share");
+    assert.ok(controller.sharing.has("created-1"));
+    await controller.sendChangedLayers();
+    assert.equal(writes[0][0], "/session/layers/created-1");
+    assert.equal(writes.length, 1);
+    await controller.openSession("/session");
+    assert.equal(events.filter(event => event[0] === "created").length, 1);
+    assert.equal(controller.sharing.get("created-1").revision, 1);
+    await controller.openSession(command, { contributorName: "Maria" });
+    assert.equal(events.filter(event => event[0] === "created").length, 1, "repeated join does not add another layer");
+    controller.destroy();
+});
+
+test("new layers wait for device persistence; withdrawn layers and layers created after leaving stay private", async () => {
+    const writes = [];
+    const { controller, local } = setup(async (path, method, body) => {
+        if (method === "PUT") { writes.push(path); return { revision: 1 }; }
+        return path === "" ? [] : snapshot();
+    });
+    controller.annotationLayerCreated("new");
+    await controller.sendChangedLayers(); assert.equal(writes.length, 0);
+    local.push({ id: "new", collection: { name: "Saved", features: [] } });
+    controller.committedLayersChanged(); await controller.sendChangedLayers();
+    assert.deepEqual(writes, ["/session/layers/new"]);
+    await controller.withdrawLayer("new");
+    local[1].collection.name = "Still private";
+    controller.committedLayersChanged(); await controller.sendChangedLayers();
+    assert.equal(writes.length, 1, "withdrawal is not undone by the next save");
+    controller.annotationLayerCreated("another");
+    assert.ok(controller.sharing.has("another"));
+    await controller.leave();
+    controller.annotationLayerCreated("after-leaving");
+    assert.equal(controller.sharing.size, 0);
+    controller.destroy();
+});
+
+test("failed joins do not create layers and local capacity errors leave the joined session usable", async () => {
+    const { controller, events } = setup(async () => { throw new Error("Joining is closed"); });
+    controller.snapshot = null;
+    await controller.openSession("/join", { contributorName: "Maria" });
+    assert.equal(events.some(event => event[0] === "created"), false);
+    assert.equal(controller.snapshot, null);
+    controller.api.request = async () => snapshot();
+    controller.createLayer = () => { throw new Error("Layer limit reached"); };
+    await controller.openSession("/join", { contributorName: "Maria" });
+    assert.equal(controller.snapshot.id, "session");
+    assert.equal(controller.transitioning, false);
+    assert.ok(controller.timer, "membership observation survives a local layer error");
+    assert.ok(events.some(event => event[0] === "message" && event[1] === "Layer limit reached"));
+    controller.destroy();
+});
+
+test("rejoining with no revision bookmark never silently replaces an existing changed contribution", async () => {
+    const metadata = { ...snapshot(), layers: [{ contributorId: "me", layerId: "local", revision: 5 }] };
+    let requestedRevision;
+    const { controller, events } = setup(async (path, method, body) => {
+        if (method === "PUT") {
+            requestedRevision = body.revision;
+            throw Object.assign(new Error("Changed in another tab"), { status: 409 });
+        }
+        return metadata;
+    });
+    await controller.openSession("/join", { contributorName: "Owner" });
+    await controller.sendChangedLayers();
+    assert.equal(requestedRevision, 0);
+    assert.equal(controller.sharing.get("local").conflict, true);
+    assert.equal(events.some(event => event[0] === "created"), false);
     controller.destroy();
 });

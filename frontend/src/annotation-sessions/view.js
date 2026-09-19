@@ -42,7 +42,7 @@ export class AnnotationSessionsView {
         this.joiningControl.append(this.allowContributors, this.element("span", "Allow new contributors"), this.joiningState);
         this.layers = this.element("ul"); this.layers.className = "annotation-session-contributions";
         this.layerRows = new Map();
-        this.help = this.element("p", "Use Share on an annotation layer below. Saved edits are shared automatically; unfinished polygons stay on this device. Leaving or removing a local layer keeps its last shared copy. Use Withdraw to remove that copy.");
+        this.help = this.element("p", "Joining creates an annotation layer for you. New layers and saved edits are shared automatically. Use Share for older local layers; unfinished polygons stay on this device. Leaving or removing a local layer keeps its last shared copy. Use Withdraw to remove that copy.");
         const options = this.element("details");
         options.append(this.element("summary", "Session options and saving"), this.extend, this.joiningControl, this.leave, this.help);
         this.session.append(this.heading, this.invitation, this.copy, this.people, this.layers,

@@ -18,15 +18,17 @@ export class AnnotationController {
      * @param {Document} [options.document=globalThis.document] Application document.
      * @param {AnnotationStorage} [options.storage] Device persistence provider.
      * @param {(id:string)=>void} [options.onShare] Composition-owned sharing request.
+     * @param {(id:string)=>void} [options.onLayerCreated] Notifies composition of new or imported layers before saving.
      * @param {()=>void} [options.onCommittedChange] Notifies composition after successful device persistence.
      */
-    constructor({ leaflet, map, mapLayers, onEditingChange, document = globalThis.document, storage = new AnnotationStorage(), onShare = () => {}, onCommittedChange = () => {} }) {
+    constructor({ leaflet, map, mapLayers, onEditingChange, document = globalThis.document, storage = new AnnotationStorage(), onShare = () => {}, onLayerCreated = () => {}, onCommittedChange = () => {} }) {
         this.leaflet = leaflet;
         this.map = map;
         this.mapLayers = mapLayers;
         this.document = document;
         this.storage = storage;
         this.onShare = onShare;
+        this.onLayerCreated = onLayerCreated;
         this.onCommittedChange = onCommittedChange;
         this.onEditingChange = onEditingChange;
         this.model = new AnnotationModel();
@@ -59,10 +61,8 @@ export class AnnotationController {
         });
         this.createButton.disabled = true;
         this.createButton.addEventListener("click", () => this.perform(() => {
-            const layer = this.model.createLayer();
-            this.attachLayer(layer);
-            this.save();
-            this.controls.get(layer.id).name.querySelector("input").select();
+            const id = this.createLayer();
+            this.controls.get(id).name.querySelector("input").select();
         }));
         this.undoButton.addEventListener("click", () => this.perform(() => {
             const layerId = this.model.deleted?.layerId;
@@ -121,6 +121,20 @@ export class AnnotationController {
     }
 
     /**
+     * Add an empty annotation layer to the map and start saving it on this device.
+     * @return {string} New local layer identifier; sharing reads it only after a successful save.
+     * @throws {Error} If local annotations are unavailable or the layer limit is reached.
+     */
+    createLayer() {
+        if (!this.loaded) throw new Error("Local annotations are not available yet.");
+        const layer = this.model.createLayer();
+        this.attachLayer(layer);
+        this.onLayerCreated?.(layer.id);
+        void this.save();
+        return layer.id;
+    }
+
+    /**
      * Import a local GeoJSON file as one new layer after validating the whole file.
      * File errors expand the tools without changing the map. Persistence errors use the existing save/retry controls.
      * @param {File} file File chosen in Map layers.
@@ -136,6 +150,7 @@ export class AnnotationController {
             const imported = await readAnnotationGeoJSONFile(file);
             const layer = this.model.importLayer(imported);
             this.attachLayer(layer);
+            this.onLayerCreated?.(layer.id);
             await this.save();
             this.fileStatus.textContent = `Imported ${layer.polygons.length} ${layer.polygons.length === 1 ? "polygon" : "polygons"} into “${layer.name}”.`;
         } catch (error) {
