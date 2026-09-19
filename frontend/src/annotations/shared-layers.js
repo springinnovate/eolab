@@ -36,6 +36,7 @@ export class SharedAnnotationLayers {
         const annotation = { id: key, name: label, polygons, filter: "", style: { ...DEFAULT_ANNOTATION_STYLE, notes: true } };
         const rendering = createAnnotationLeafletLayer(this.leaflet, this.map, annotation);
         const controls = this.document.createElement("details");
+        controls.className = "annotation-layer-controls";
         const summary = this.document.createElement("summary"); summary.textContent = "Shared annotation details";
         const description = this.document.createElement("p"); description.textContent = "Read-only contribution. Its contributor edits the original layer. Visibility and labels here affect only your map.";
         controls.append(summary, description);
