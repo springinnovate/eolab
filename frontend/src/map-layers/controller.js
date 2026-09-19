@@ -149,6 +149,7 @@ export class MapLayerController {
             onReorder: (key, targetIndex) => this.reorder(key, targetIndex),
             onRemove: (key) => this.removeWithUndo(key),
             onUndoRemove: () => void this.undoLayerRemoval(),
+            onDismissRemoval: () => this.dismissLayerRemoval(),
         });
         this.render();
     }
@@ -723,12 +724,29 @@ export class MapLayerController {
             this.removeKey(key);
             this.removalGeneration += 1;
             this.removedLayer = snapshot;
-            this.view.showRemoval?.(snapshot.label, this.restoringLayer !== null, null);
+            this.view.showRemoval?.(snapshot, this.restoringLayer !== null, null);
+            this.view.announceStatus?.("");
             return true;
         } catch (error) {
             this.view.setStatus(error.message);
             return false;
         }
+    }
+
+    /**
+     * Forget the current Undo offer and prevent a pending restore from attaching later.
+     * Keep keyboard focus near the dismissed row; existing map layers are unchanged.
+     * @return {void}
+     */
+    dismissLayerRemoval() {
+        const snapshot = this.removedLayer;
+        if (!snapshot) return;
+        this.removalGeneration += 1;
+        this.removedLayer = null;
+        this.view.showRemoval?.(null, false, null);
+        const next = this.stack.entries[Math.min(snapshot.index, this.stack.entries.length - 1)];
+        this.render({ key: next?.key ?? snapshot.key, action: "style" });
+        this.view.announceStatus?.("Layer removal undo dismissed.");
     }
 
     /**
@@ -742,7 +760,7 @@ export class MapLayerController {
         const generation = this.removalGeneration;
         const isCurrent = () => !this.destroyed && this.removedLayer === snapshot && this.removalGeneration === generation;
         this.restoringLayer = snapshot;
-        this.view.showRemoval?.(snapshot.label, true, null);
+        this.view.showRemoval?.(snapshot, true, null);
         try {
             await this.restoreRemovedLayer(snapshot, isCurrent);
             if (isCurrent()) {
@@ -752,10 +770,10 @@ export class MapLayerController {
                 this.render({ key: snapshot.key, action: "style" });
             }
         } catch (error) {
-            if (isCurrent()) this.view.showRemoval?.(snapshot.label, false, error.message);
+            if (isCurrent()) this.view.showRemoval?.(snapshot, false, error.message);
         } finally {
             this.restoringLayer = null;
-            if (this.removedLayer && !isCurrent()) this.view.showRemoval?.(this.removedLayer.label, false, null);
+            if (this.removedLayer && !isCurrent()) this.view.showRemoval?.(this.removedLayer, false, null);
         }
     }
 

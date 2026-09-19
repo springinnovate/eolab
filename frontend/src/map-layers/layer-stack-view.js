@@ -40,6 +40,7 @@ function requireLayerStackElement(documentContext, selector) {
  * layer to a zero-based top-first position.
  * @property {(key: string) => void} onRemove Remove one retained layer.
  * @property {()=>void} onUndoRemove Restore the most recently removed layer.
+ * @property {()=>void} onDismissRemoval Forget the layer-removal Undo offer.
  */
 
 /** Own the map layer-list elements and their direct event listeners. */
@@ -79,6 +80,10 @@ export class MapLayerStackView {
         this.removalMessage = requireLayerStackElement(documentContext, "#map-layer-removal-message");
         this.undoRemove = requireLayerStackElement(documentContext, "#undo-layer-removal");
         this.undoRemove.addEventListener("click", () => this.handlers?.onUndoRemove());
+        this.removalError = requireLayerStackElement(documentContext, "#map-layer-removal-error");
+        this.dismissRemoval = requireLayerStackElement(documentContext, "#dismiss-layer-removal");
+        this.dismissRemoval.addEventListener("click", () => this.handlers?.onDismissRemoval());
+        this.removalIndex = 0;
         this.scrollContainer = this.root.parentElement ?? this.list;
         /** @type {MapLayerStackViewHandlers|null} */
         this.handlers = null;
@@ -89,18 +94,33 @@ export class MapLayerStackView {
     }
 
     /**
-     * Keep Undo visible even after the final layer is removed, independently of row rendering.
-     * @param {string|null} label Removed layer name, or null to hide the notice.
+     * Show a compact Undo row in the removed layer's drawing position, including when it was the last layer.
+     * @param {{label:string,index:number}|null} removal Removed name and top-first position, or null to dismiss.
      * @param {boolean} busy Whether restoration is in progress.
      * @param {string|null} error Failure explanation; Undo remains available to retry.
      * @return {void}
      */
-    showRemoval(label, busy, error) {
-        this.removalNotice.hidden = label === null;
+    showRemoval(removal, busy, error) {
+        this.removalNotice.hidden = removal === null;
+        this.removalIndex = removal?.index ?? 0;
         this.undoRemove.disabled = busy;
-        this.undoRemove.textContent = busy ? "Restoring layer…" : "Undo remove layer";
-        this.removalMessage.textContent = label === null ? "" : error
-            ? `Could not restore ${label}: ${error}` : `Removed ${label}.`;
+        this.undoRemove.textContent = busy ? "Restoring…" : "Undo";
+        this.removalMessage.textContent = removal === null ? "" : `Removed ${removal.label}`;
+        this.removalMessage.title = this.removalMessage.textContent;
+        this.removalError.textContent = error === null ? "" : `Could not restore: ${error}`;
+        this.removalError.hidden = error === null;
+        this.#placeRemovalRow();
+    }
+
+    /**
+     * Place the Undo row among real layer rows without counting it as a layer or rebuilding their controls.
+     * @return {void}
+     */
+    #placeRemovalRow() {
+        const layers = [...this.list.children].filter(row => row !== this.removalNotice);
+        if (this.removalNotice.hidden) this.removalNotice.remove();
+        else this.list.insertBefore(this.removalNotice, layers[Math.min(this.removalIndex, layers.length)] ?? null);
+        this.root.hidden = layers.length === 0 && this.removalNotice.hidden;
     }
 
     /**
@@ -148,6 +168,7 @@ export class MapLayerStackView {
             this.keyboardDrag = null;
         }
         const focusedControl = this.documentContext.activeElement;
+        const retainRemovalFocus = !this.removalNotice.hidden && [this.undoRemove, this.dismissRemoval].includes(focusedControl);
         const retainLocalFocus = !requestedFocus && layers.some(layer => layer.controls?.contains(focusedControl));
         const retainedFocus = requestedFocus ?? this.#readFocusedAction();
         const focusTargets = new Map();
@@ -159,8 +180,9 @@ export class MapLayerStackView {
             focusTargets
         ));
         this.list.replaceChildren(...rows);
-        this.root.hidden = layers.length === 0;
-        if (retainLocalFocus) focusedControl.focus({ preventScroll: true });
+        this.#placeRemovalRow();
+        if (retainRemovalFocus && !requestedFocus) focusedControl.focus({ preventScroll: true });
+        else if (retainLocalFocus) focusedControl.focus({ preventScroll: true });
         else if (retainedFocus !== null) {
             let focusTarget = focusTargets.get(
                 `${retainedFocus.key}\u0000${retainedFocus.action}`
@@ -526,7 +548,7 @@ export class MapLayerStackView {
         }
         event.preventDefault();
         this.#autoScroll(event.clientY);
-        const rows = [...this.list.children];
+        const rows = [...this.list.children].filter(row => row !== this.removalNotice);
         let targetIndex = rows.length - 1;
         for (let index = 0; index < rows.length; index += 1) {
             const bounds = rows[index].getBoundingClientRect();
