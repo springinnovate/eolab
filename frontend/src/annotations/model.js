@@ -1,11 +1,12 @@
 /** Browser-owned annotation data and isolated polygon editing drafts. */
+import { annotationFilterRules, filterAnnotationPolygons } from "./summary-area.js";
 import { polygonValidationMessage } from "./geometry.js";
 
 /**
  * @typedef {{color:string,outline:string,weight:number,fillOpacity:number,labels:boolean,notes:boolean}} AnnotationStyle
  * @typedef {{id:string,name:string,note:string,vertices:number[][]}} AnnotationPolygon
  * Annotation positions are zero-based indices in the complete top-first map-layer stack.
- * @typedef {{id:string,name:string,position:number,visible:boolean,opacity:number,style:AnnotationStyle,filter:string,polygons:AnnotationPolygon[]}} AnnotationLayer
+ * @typedef {{id:string,name:string,position:number,visible:boolean,opacity:number,style:AnnotationStyle,filter:string|Object,polygons:AnnotationPolygon[]}} AnnotationLayer
  * @typedef {{version:1,layers:AnnotationLayer[]}} AnnotationDocument
  * @typedef {{layerId:string,polygon:AnnotationPolygon,isNew:boolean}} PolygonDraft
  */
@@ -54,7 +55,8 @@ export function readAnnotationLayers(document) {
         if (!Number.isSafeInteger(layer.position) || layer.position < 0) throw new Error("Saved annotation layer position is invalid.");
         requireIdentifier(layer.id, identifiers);
         requireText(layer.name, MAX_ANNOTATION_NAME_LENGTH, false);
-        requireText(layer.filter, 300, true);
+        if (typeof layer.filter === "string") requireText(layer.filter, 300, true);
+        else layer.filter = annotationFilterRules(layer.filter);
         if (typeof layer.visible !== "boolean" || !Number.isFinite(layer.opacity) || layer.opacity < 0 || layer.opacity > 1 ||
             !Array.isArray(layer.polygons) || layer.polygons.length > MAX_POLYGONS_PER_LAYER) throw new Error("Saved annotation layer is invalid.");
         layer.style = validateAnnotationStyle(layer.style);
@@ -95,13 +97,12 @@ function requireText(text, maximum, allowEmpty) {
 }
 
 /**
- * Match polygon names and notes against a layer's case-insensitive text filter.
+ * Match field conditions; older saved text searches remain case-insensitive until edited.
  * @param {AnnotationLayer} layer Annotation layer.
  * @return {Object[]} Matching polygons in their original order.
  */
 export function matchingAnnotationPolygons(layer) {
-    const text = layer.filter.trim().toLocaleLowerCase();
-    return layer.polygons.filter(polygon => `${polygon.name}\n${polygon.note}`.toLocaleLowerCase().includes(text));
+    return filterAnnotationPolygons(layer.polygons, layer.filter);
 }
 
 /** Own committed annotations, an isolated editing draft and one deletion undo. */

@@ -1,3 +1,4 @@
+import { annotationSummaryPolygons } from "./annotations/summary-area.js";
 import { VectorSelectionOverlay } from "./vector/selection-overlay.js";
 /**
  * Browser entry point and application composition root for EOLab.
@@ -720,6 +721,7 @@ async function initializeCatalog(
     let vectorFeatureInspector = null;
     let vectorFilterControls = null;
     let vectorSampling = null;
+    let summarySampling = null;
     let selectingMapClick = false;
     let rasterClickSelected = false;
     let latestHistogramPresentation = null;
@@ -745,6 +747,7 @@ async function initializeCatalog(
             vectorFeatureInspector?.syncVisibleLayers();
             vectorFilterControls?.refresh();
             vectorSampling?.refresh();
+            summarySampling?.refresh();
             if (!layers.some((layer) =>
                 layer.visible && layer.datasetKind === "raster"
             )) {
@@ -783,7 +786,7 @@ async function initializeCatalog(
         storage: new CalculationSessionStorage(browserSessionStorage()), getContext: processingContext,
         onOpen: () => mapInspection.showCalculations(), onClose: () => mapInspection.hideCalculations(),
         onEditArea: editProcessingArea,
-        onCancelSelection: () => vectorSampling.invalidate("Selection cancelled"),
+        onCancelSelection: () => summarySampling.invalidate("Selection cancelled"),
         onActivity: area => rasterVisualization?.setSamplingActivity(area),
     });
     mapInspection.subscribeActiveTool(tool => calculations.setActive(tool === "calculations"));
@@ -841,6 +844,8 @@ async function initializeCatalog(
     vectorFilterControls = new VectorFilterControls({
         inspection: mapInspection,
         getTarget: (key) => {
+            const annotation = annotations?.filterTarget(key) ?? sharedAnnotations?.filterTarget(key);
+            if (annotation) return annotation;
             const record = mapLayerController.getRecord(key);
             if (record === null || record.adapter !== vectorMapLayerAdapter) return null;
             return {
@@ -851,18 +856,18 @@ async function initializeCatalog(
             };
         },
     });
-    mapLayerController.onFilter = key => {
-        if (!annotations?.openControls(key, "filter")) vectorFilterControls.open(key);
-    };
+    mapLayerController.onFilter = key => vectorFilterControls.open(key);
     const vectorSamplingOverlay = new VectorSelectionOverlay(leafletMap, L);
+    /** Read catalog polygon targets for histogram and summary controls.
+     * @return {Object[]} Retained catalog identities and applied filter snapshots.
+     */
+    const catalogPolygonTargets = () => mapLayerController.retainedRecords
+        .filter(record => record.adapter === vectorMapLayerAdapter && record.state.style?.geometryKind === "polygon")
+        .map(record => ({ key: record.entry.key, label: record.entry.label, item: record.entry.item,
+            filter: record.adapter.exportFilterState(record) }));
     vectorSampling = new VectorSamplingController({
-        view: [new VectorSamplingView(), new VectorSamplingView(document, {
-            root: "#calculations-vector-area", choice: null, disclosure: null,
-        })],
-        getTargets: () => mapLayerController.retainedRecords
-            .filter(record => record.adapter === vectorMapLayerAdapter && record.state.style?.geometryKind === "polygon")
-            .map(record => ({ key: record.entry.key, label: record.entry.label, item: record.entry.item,
-                filter: record.adapter.exportFilterState(record) })),
+        view: new VectorSamplingView(),
+        getTargets: catalogPolygonTargets,
         createArea: createVectorSamplingArea,
         onEditFilter: key => vectorFilterControls.open(key, calculations.isActive ? {
             filter: vectorSampling.selectedFilter(key),
@@ -888,6 +893,51 @@ async function initializeCatalog(
             vectorSamplingOverlay.clear();
             rasterVisualization.setVectorSelection(null);
             calculations.invalidateSamplingArea(id);
+        },
+    });
+    summarySampling = new VectorSamplingController({
+        view: new VectorSamplingView(document, { root: "#calculations-vector-area", choice: null, disclosure: null }),
+        getTargets: () => [...catalogPolygonTargets(), ...(annotations?.summaryTargets() ?? []), ...(sharedAnnotations?.summaryTargets() ?? [])],
+        /** Select catalog features or upload the exact matched annotation polygons.
+         * @param {Object|null} item Catalog item, absent for browser-owned annotations.
+         * @param {Object} filter Applied field conditions.
+         * @param {AbortSignal} signal Superseded catalog selection.
+         * @param {Object} target Committed layer snapshot supplied above.
+         * @return {Promise<Object>} Area reference, bounds and feature counts.
+         * @throws {Error} If no polygons match, upload fails or catalog selection fails.
+         */
+        createArea: async (item, filter, signal, target) => {
+            if (item) return createVectorSamplingArea(item, filter, signal);
+            const polygons = annotationSummaryPolygons(target.polygons, filter, target.savedFilter);
+            if (!polygons.length) throw new Error("No polygons match this filter. Add a polygon or change the conditions.");
+            // Let an accepted upload reply settle so an obsolete input can be released.
+            const area = await processingApi.uploadPolygonArea(polygons);
+            return { ...area, label: target.label, total: target.polygons.length, filter };
+        },
+        onSourceChange: (target, filter, wasActive) => {
+            if (target?.polygons && wasActive && calculations.followsVectorChanges) {
+                // The selection controller applies its normal large-area review policy again.
+                void summarySampling.use({ key: target.key, filter });
+            }
+        },
+        releaseArea: area => { if (area.polygonArea) void processingApi.discardPolygonArea(area.polygonArea.id).catch(() => {}); },
+        onEditFilter: key => vectorFilterControls.open(key, {
+            filter: summarySampling.selectedFilter(key),
+            apply: filter => summarySampling.use({ key, filter, analysis: true }),
+            complete: area => summarySampling.activate(area.polygonArea ?? area.selection, true),
+            cancel: () => summarySampling.invalidate("Selection cancelled"),
+        }),
+        onSelectionState: selection => calculations.setVectorSelectionState({ ...selection, analysis: true }),
+        onActivate: area => {
+            const label = `${area.label} · ${area.matched} of ${area.total} features`;
+            if (area.selection) void vectorSamplingOverlay.load(area);
+            else vectorSamplingOverlay.clear();
+            calculations.setVectorSamplingArea({ selection: area.selection, polygonArea: area.polygonArea, label }, true);
+            mapInspection.showCalculations();
+        },
+        onInvalidate: (selection, area) => {
+            if (area.polygonArea) calculations.invalidatePolygonArea(area.polygonArea.id);
+            else calculations.invalidateSamplingArea(selection);
         },
     });
     const vectorStyleControls = new VectorStyleControls();
@@ -1078,14 +1128,16 @@ async function initializeCatalog(
             containerPoint: leafletMap.latLngToContainerPoint(latlng),
         });
     }
-    sharedAnnotations = new SharedAnnotationLayers({ leaflet: L, map: leafletMap, mapLayers: mapLayerController });
+    sharedAnnotations = new SharedAnnotationLayers({ leaflet: L, map: leafletMap, mapLayers: mapLayerController,
+        onChange: () => { summarySampling.refresh(); vectorFilterControls.refresh(); } });
     annotations = new AnnotationController({
         leaflet: L,
         map: leafletMap,
         mapLayers: mapLayerController,
         onShare: id => annotationSessions.shareLayer(id),
         onLayerCreated: id => annotationSessions?.annotationLayerCreated(id),
-        onCommittedChange: () => annotationSessions?.committedLayersChanged(),
+        onCommittedChange: () => { annotationSessions?.committedLayersChanged(); summarySampling.refresh(); vectorFilterControls.refresh(); },
+        onFilter: key => vectorFilterControls.open(key),
         onEditingChange: editing => {
             mapInteractionMode = editing ? "layer-editing" : "inspection";
             document.querySelector("main").classList.toggle("is-editing-map-layer", editing);
@@ -1106,7 +1158,7 @@ async function initializeCatalog(
         retainLayers: ids => sharedAnnotations.removeLayersExcept(ids),
     });
     const startupAnnotations = annotations.load();
-    void startupAnnotations.then(() => annotationSessions.start());
+    void startupAnnotations.then(() => { summarySampling.refresh(); return annotationSessions.start(); });
     // Local editing remains available independently of Catalog loading; only order restoration waits.
     void Promise.allSettled([startupMapRestore, startupAnnotations]).then(() => annotations.restoreLayerOrder());
     leafletMap.getContainer().classList.add("leaflet-crosshair");

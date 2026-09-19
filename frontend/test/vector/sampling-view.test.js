@@ -49,7 +49,7 @@ test("summary vector controls explain missing polygon layers without offering an
     const document=new FakeRasterControlDocument();
     const view=new VectorSamplingView(document,{root:"#calculations-vector-area",choice:null,disclosure:null});
     const controller=new VectorSamplingController({view,getTargets:()=>[]});
-    assert.match(view.elements.status.textContent,/Add a Shapefile or GeoPackage polygon layer/);
+    assert.match(view.elements.status.textContent,/Add a polygon layer/);
     assert.equal(view.elements.use.disabled,true);
     assert.equal(view.elements.filter.disabled,true);
     controller.destroy();

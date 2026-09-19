@@ -65,6 +65,50 @@ class JobWakeup(Protocol):
 class JobStore(Protocol):
     """Storage capability; implementations do not invoke application services."""
 
+    def save_input(self, owner: str, checksum: str, payload: dict[str, Any]) -> str:
+        """Store an owner-private JSON input and return its expiring opaque ID.
+
+        Args:
+            owner: Browser-session hash.
+            checksum: Operation-owned content identity.
+            payload: Validated JSON to retain.
+
+        Returns:
+            Owned input identifier.
+
+        Raises:
+            ProcessingError: If storage capacity or input size is exceeded.
+        """
+        ...
+
+    def get_input(self, owner: str, identifier: str, checksum: str) -> dict[str, Any]:
+        """Read an owned, unexpired input with the expected identity.
+
+        Args:
+            owner: Browser-session hash.
+            identifier: Opaque retained input identifier.
+            checksum: Expected content identity.
+
+        Returns:
+            JSON input for operation validation.
+
+        Raises:
+            ProcessingError: If the input is unavailable to this owner.
+        """
+        ...
+
+    def discard_input(self, owner: str, identifier: str) -> None:
+        """Delete an owned input without changing accepted job snapshots.
+
+        Args:
+            owner: Current browser-session hash.
+            identifier: Input to release.
+
+        Raises:
+            ProcessingError: If storage is unavailable.
+        """
+        ...
+
     def reserve_plan(self, owner: str, request: dict[str, Any]) -> str:
         """Reserve the one global metadata child and bounded plan-record capacity.
 

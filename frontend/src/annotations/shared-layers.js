@@ -1,4 +1,6 @@
 /** Present received annotation GeoJSON as read-only layers in the normal map stack. */
+import { ANNOTATION_FIELDS, annotationFilterRules, annotationSummaryTarget } from "./summary-area.js";
+import { matchingAnnotationPolygons } from "./model.js";
 import { parseAnnotationGeoJSON } from "./geojson.js";
 import { DEFAULT_ANNOTATION_STYLE } from "./model.js";
 import { createAnnotationLeafletLayer } from "./leaflet-layer.js";
@@ -10,10 +12,11 @@ export class SharedAnnotationLayers {
      * @param {Object} options.leaflet Leaflet namespace.
      * @param {Object} options.map Leaflet map.
      * @param {Object} options.mapLayers Neutral map-layer owner.
+     * @param {()=>void} [options.onChange] Notify composition when available polygons change.
      * @param {Document} [options.document=globalThis.document] Browser document.
      */
-    constructor({ leaflet, map, mapLayers, document = globalThis.document }) {
-        Object.assign(this, { leaflet, map, mapLayers, document }); this.layers = new Map();
+    constructor({ leaflet, map, mapLayers, document = globalThis.document, onChange = () => {} }) {
+        Object.assign(this, { leaflet, map, mapLayers, document, onChange }); this.layers = new Map();
     }
 
     /**
@@ -31,8 +34,8 @@ export class SharedAnnotationLayers {
         const polygons = imported.polygons.map((polygon, index) => ({ ...polygon, id: String(index) }));
         const retained = this.layers.get(id);
         if (retained) {
-            retained.annotation.polygons = polygons; retained.rendering.refresh();
-            this.mapLayers.getRecord(retained.key).entry.label = label; this.mapLayers.render(); return;
+            retained.annotation.polygons = polygons; retained.annotation.name = label; retained.rendering.refresh();
+            this.mapLayers.getRecord(retained.key).entry.label = label; this.mapLayers.render(); this.onChange(); return;
         }
         const key = `local:shared-annotation:${id}`;
         const annotation = { id: key, name: label, polygons, filter: "", style: { ...DEFAULT_ANNOTATION_STYLE, notes: true } };
@@ -40,7 +43,7 @@ export class SharedAnnotationLayers {
         const controls = this.document.createElement("details");
         controls.className = "annotation-layer-controls";
         const summary = this.document.createElement("summary"); summary.textContent = "Shared annotation details";
-        const description = this.document.createElement("p"); description.textContent = "Read-only contribution. Its contributor edits the original layer. Visibility and labels here affect only your map.";
+        const description = this.document.createElement("p"); description.textContent = "Read-only contribution. Its contributor edits the original layer. Filters, visibility and labels here affect only your map and calculations.";
         controls.append(summary, description);
         for (const [property, text] of [["labels", "Show names"], ["notes", "Show notes"]]) {
             const wrapper = this.document.createElement("label"); wrapper.className = "annotation-field";
@@ -51,7 +54,9 @@ export class SharedAnnotationLayers {
         const adapter = {
             createState: () => annotation,
             createLayer: () => rendering,
-            snapshot: () => ({ datasetKind: "annotation", controls, canFilter: false, legend: null }),
+            snapshot: () => ({ datasetKind: "annotation", controls, canFilter: true, legend: null,
+                filterActive: annotationFilterRules(annotation.filter).enabled && !!annotationFilterRules(annotation.filter).rules.length,
+                filterStatus: `${matchingAnnotationPolygons(annotation).length} of ${annotation.polygons.length} polygons match` }),
             zoom: () => { const bounds = rendering.getBounds(); if (bounds.isValid()) this.map.fitBounds(bounds, { padding: [40, 40], maxZoom: 12 }); },
             info: () => { controls.open = true; },
             copyLayerForUndo: () => ({ sharedContribution: id }),
@@ -60,6 +65,7 @@ export class SharedAnnotationLayers {
         try {
             this.mapLayers.addLocal({ key, label, visible: true, opacity: 1 }, adapter);
             this.layers.set(id, { key, annotation, rendering, controls, adapter });
+            this.onChange();
         } catch (error) {
             rendering.release();
             throw error;
@@ -67,11 +73,29 @@ export class SharedAnnotationLayers {
     }
 
     /**
-     * Remove shared annotation layers from this map unless their IDs are in the set.
-     * An empty set removes all received layers, for example when leaving a session.
-     * Server copies and local editable annotation layers are unchanged.
-     * @param {Set<string>} ids Session/contributor/layer identifiers to keep on the map.
-     * @return {void}
+     * Read independent, committed shared polygons for raster summarization.
+     * @return {Object[]} Summary targets without access to editing or session credentials.
+     */
+    summaryTargets() {
+        return [...this.layers.values()].map(layer => annotationSummaryTarget(layer.key, layer.annotation));
+    }
+
+    /** Supply field filtering for a received layer without changing its contributor's copy.
+     * @param {string} key Retained map-layer identity.
+     * @return {Object|null} Filter editor target, or null when this owner has no such layer.
+     */
+    filterTarget(key) {
+        const layer = [...this.layers.values()].find(layer => layer.key === key);
+        if (!layer) return null;
+        return { key, label: layer.annotation.name, fields: ANNOTATION_FIELDS,
+            filter: annotationFilterRules(layer.annotation.filter),
+            status: `${matchingAnnotationPolygons(layer.annotation).length} of ${layer.annotation.polygons.length} polygons match`,
+            apply: candidate => { layer.annotation.filter = annotationFilterRules(candidate); layer.rendering.refresh(); this.mapLayers.render(); this.onChange(); },
+            cancelPending: () => {} };
+    }
+
+    /** Remove unavailable shared layers, including their active summary selections.
+     * @param {Set<string>} ids Shared-layer identifiers to retain. @return {void}
      */
     removeLayersExcept(ids) {
         for (const [id, layer] of this.layers) if (!ids.has(id)) this.mapLayers.removeOwned(layer.adapter);

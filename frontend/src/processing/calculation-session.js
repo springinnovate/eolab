@@ -1,5 +1,5 @@
 /** Bounded per-tab recovery for a calculation, including superseded submissions. */
-import { normalizeRasterSamplingArea } from "../selected-area.js";
+import { normalizeCalculationArea } from "./calculation-area.js";
 const KEY = "eolab.processing.calculation.v1";
 const ID = /^[A-Za-z0-9_-]{32}$/;
 
@@ -28,7 +28,7 @@ export function calculationIntent(value) {
     });
     return Object.freeze({ source: Object.freeze({ collectionId, itemId, label }),
         ...(chunkPixels(value.targetChunkPixels) === null ? {} : { targetChunkPixels: value.targetChunkPixels }),
-        area: normalizeRasterSamplingArea(value.area), calculations: Object.freeze(calculations) });
+        area: normalizeCalculationArea(value.area), calculations: Object.freeze(calculations) });
 }
 
 /** Keep idempotency and cancellation intent across reloads, without persisting cookies. */

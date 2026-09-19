@@ -1,7 +1,8 @@
 /** Editable statistic cards over the existing durable calculation workflow. */
 import { calculationIntent, chunkPixels } from "./calculation-session.js";
+import { normalizeCalculationArea } from "./calculation-area.js";
 import { CalculationExecutor } from "./calculation-executor.js";
-import { catalogSelectionsEqual, normalizeRasterSamplingArea } from "../selected-area.js";
+import { catalogSelectionsEqual } from "../selected-area.js";
 
 /** Execution status received from CalculationExecutor's onChange callback.
  * The JSDoc import refers to the field definitions in calculation-executor.js
@@ -80,6 +81,10 @@ export class SummaryStatisticsController {
     }
     label(card) { return card.label.trim() || `Summary statistic ${card.id}`; }
     key(card) { return JSON.stringify([sourceKey(card.source), card.expression.trim(), this.state.area, this.state.targetChunkPixels]); }
+    /** Whether committed vector changes may automatically update the visible summary.
+     * @return {boolean} True when the vector summary is active and automatic updates are enabled.
+     */
+    get followsVectorChanges() { return this.isActive && this.state.automatic && this.state.areaChoice === "vector"; }
     get isActive() { return this.state.active && !this.destroyed; }
 
     /** Restore cards for a submission saved before reload, then resume tracking that job.
@@ -91,7 +96,7 @@ export class SummaryStatisticsController {
         if (unfinished) {
             this.state.targetChunkPixels = unfinished.calculation.targetChunkPixels ?? null;
             this.state.area = this.state.selectedArea = unfinished.calculation.area;
-            this.state.areaChoice = unfinished.calculation.area.kind === "wholeRaster" ? "whole" : unfinished.calculation.area.kind === "catalogSelection" ? "vector" : "selection";
+            this.state.areaChoice = unfinished.calculation.area.kind === "wholeRaster" ? "whole" : ["catalogSelection", "polygonArea"].includes(unfinished.calculation.area.kind) ? "vector" : "selection";
             this.state.sources = [unfinished.calculation.source];
             this.state.statistics = unfinished.calculation.calculations.map(value => {
                 const card = this.makeStatistic(value, unfinished.calculation.source); card.valid = true; return card;
@@ -151,10 +156,10 @@ export class SummaryStatisticsController {
         this.render();
     }
 
-    /** Select an authoritative Catalog descriptor and optionally execute the explicit action.
+    /** Select a catalog descriptor or owned polygon upload and optionally calculate.
      * When selection progress was observed here, include that wait in the new cards'
      * request-to-display timings. Optional outline generation remains independent.
-     * @param {Object} info Catalog selection and presentation label.
+     * @param {Object} info Catalog selection or polygonArea reference, plus a presentation label.
      * @param {boolean} [calculate=false] User explicitly requested filter and calculation.
      * @return {void}
      */
@@ -167,7 +172,8 @@ export class SummaryStatisticsController {
         this.state.selectionMessage = "";
         this.state.vectorArea = info;
         this.state.areaChoice = "vector";
-        this.state.selectedArea = normalizeRasterSamplingArea({ kind: "catalogSelection", catalogSelection: info.selection });
+        this.state.selectedArea = normalizeCalculationArea(info.polygonArea ? { kind: "polygonArea", polygonArea: info.polygonArea }
+            : { kind: "catalogSelection", catalogSelection: info.selection });
         this.changeArea(this.state.selectedArea, false);
         if (calculate) {
             this.open();
@@ -202,7 +208,21 @@ export class SummaryStatisticsController {
         this.state.selectionMessage = selection.phase === "active" ? "" : selection.message;
         this.render();
     }
-    /** Cancel obsolete work even when its panel is no longer active. */
+    /** Cancel work for a removed or changed polygon upload, including hidden cards.
+     * @param {string} id Private Processing input identity to invalidate.
+     * @return {void}
+     */
+    invalidatePolygonArea(id) {
+        if (this.batch?.intent.area?.polygonArea?.id === id) this.invalidateBatch();
+        if (this.state.area?.polygonArea?.id === id) { this.invalidateBatch(); this.changeArea(null, false); }
+        if (this.state.selectedArea?.polygonArea?.id === id) this.state.selectedArea = null;
+        if (this.state.vectorArea?.polygonArea?.id === id) this.state.vectorArea = null;
+        this.render();
+    }
+
+    /** Cancel obsolete catalog-selection work even when its panel is no longer active.
+     * @param {Object} id Catalog selection to invalidate. @return {void}
+     */
     invalidateSamplingArea(id) {
         if (catalogSelectionsEqual(this.batch?.intent.area?.catalogSelection, id)) this.invalidateBatch();
         if (catalogSelectionsEqual(this.state.area?.catalogSelection, id)) { this.invalidateBatch(); this.changeArea(null, false); }
@@ -224,11 +244,23 @@ export class SummaryStatisticsController {
         }
         this.render();
     }
+    /** Receive the current map selection and supersede an active vector area when it changes.
+     * @param {Object|null} area Current box, AOI, catalog selection or polygon reference.
+     * @param {boolean} [automatic=true] Whether the normal automatic-calculation policy applies.
+     * @return {void}
+     */
     setSelection(area, automatic = true) {
-        const next = area ? normalizeRasterSamplingArea(area) : null;
+        const next = area ? normalizeCalculationArea(area) : null;
         if (same(next, this.state.selectedArea)) return;
         this.state.selectedArea = next;
-        if (next && this.state.areaChoice === "vector" && this.state.vectorArea && catalogSelectionsEqual(this.state.area?.catalogSelection, this.state.vectorArea.selection) && !catalogSelectionsEqual(next.catalogSelection, this.state.vectorArea.selection)) {
+        const vectorArea = this.state.vectorArea;
+        const currentUsesVector = this.state.area?.kind === "polygonArea"
+            ? this.state.area.polygonArea.id === vectorArea?.polygonArea?.id
+            : catalogSelectionsEqual(this.state.area?.catalogSelection, vectorArea?.selection);
+        const nextUsesVector = next?.kind === "polygonArea"
+            ? next.polygonArea.id === vectorArea?.polygonArea?.id
+            : catalogSelectionsEqual(next?.catalogSelection, vectorArea?.selection);
+        if (next && this.state.areaChoice === "vector" && currentUsesVector && !nextUsesVector) {
             this.state.areaChoice = "selection";
         }
         if (this.state.areaChoice === "selection") this.changeArea(next, automatic);

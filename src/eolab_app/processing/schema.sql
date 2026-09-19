@@ -94,3 +94,15 @@ CREATE TABLE IF NOT EXISTS processing.calculation_results (
 CREATE INDEX IF NOT EXISTS calculation_results_expiry
     ON processing.calculation_results(expires_at);
 INSERT INTO processing.schema_version VALUES (4) ON CONFLICT DO NOTHING;
+
+-- Bounded owner-private calculation inputs. Accepted jobs retain their own copy.
+CREATE TABLE IF NOT EXISTS processing.inputs (
+    id text PRIMARY KEY,
+    owner text NOT NULL,
+    sha256 text NOT NULL,
+    payload jsonb NOT NULL,
+    bytes integer NOT NULL CHECK (bytes > 0 AND bytes <= 8388608),
+    expires_at timestamptz NOT NULL
+);
+CREATE INDEX IF NOT EXISTS inputs_expiry ON processing.inputs(expires_at);
+INSERT INTO processing.schema_version VALUES (5) ON CONFLICT DO NOTHING;

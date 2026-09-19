@@ -26,6 +26,8 @@ from eolab_app.processing.models import (
 from eolab_app.processing.raster_expression import FUNCTIONS, compile_expression, walk
 from eolab_app.raster.models import CatalogRasterRequest, Wgs84Bounds
 
+from eolab_app.processing.polygon_areas import PolygonAreaReference, PolygonSummaryInput
+
 OPERATION_VERSION = "raster.aggregate.v1"
 Alias = Annotated[str, Field(pattern=r"^[A-Za-z][A-Za-z0-9_]{0,31}$")]
 ChunkPixels = Annotated[int, Field(strict=True, ge=1, le=4_194_304)]
@@ -93,6 +95,7 @@ class AggregatePlanRequest(BaseModel):
     ]
     selectedBounds: Wgs84Bounds | None = None
     catalogSelection: CatalogSelection | None = None
+    polygonArea: PolygonAreaReference | None = None
     wholeRaster: Literal[True] | None = None
     targetChunkPixels: ChunkPixels | None = None
 
@@ -113,12 +116,13 @@ class AggregatePlanRequest(BaseModel):
                     self.selectedBounds,
                     self.catalogSelection,
                     self.wholeRaster,
+                    self.polygonArea,
                 )
             )
             != 1
         ):
             raise ValueError(
-                "Choose one box, catalog selection, or explicit whole raster"
+                "Choose one box, vector selection, polygon area, or whole raster"
             )
         AggregateValidationRequest(
             alias=next(iter(self.sources)), calculations=self.calculations
@@ -127,13 +131,13 @@ class AggregatePlanRequest(BaseModel):
 
 
 class AggregateArea(BaseModel):
-    """Durable catalog, box, whole-raster intent or historical polygon job input."""
+    """Exact calculation area: a box, catalog selection, uploaded polygons or whole raster."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-    kind: Literal["bounds", "catalogSelection", "aoi", "wholeRaster"]
+    kind: Literal["bounds", "catalogSelection", "aoi", "polygons", "wholeRaster"]
     bounds: tuple[float, float, float, float] | None = None
-    # Historical completed/pending jobs may contain v1 polygon snapshots.
-    # New requests cannot submit them; no live AOI service is retained.
+    # Historical aoi jobs and new owned polygon inputs retain exact geometry.
+    geometryHash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     geometries: tuple[dict[str, object], ...] = ()
     catalogSelection: CatalogSelection | None = None
     resolved: ResolvedCatalogSelection | None = Field(default=None, exclude=True)
@@ -148,6 +152,17 @@ class AggregateArea(BaseModel):
         Raises:
             ValueError: If fields disagree with the selection discriminator.
         """
+        if self.kind == "polygons":
+            polygons = PolygonSummaryInput(polygons=self.geometries)
+            if (
+                self.geometryHash != polygons.geometry_hash()
+                or self.bounds != polygons.bounds()
+            ):
+                raise ValueError(
+                    "Polygon geometry does not match its calculation area identity"
+                )
+        elif self.geometryHash is not None:
+            raise ValueError("Only polygon inputs carry a geometry hash")
         if self.kind == "wholeRaster":
             if (
                 self.bounds is not None
@@ -179,15 +194,15 @@ class AggregateArea(BaseModel):
                 raise ValueError("Resolved source does not match the catalog selection")
         elif self.catalogSelection is not None or self.resolved is not None:
             raise ValueError("Only catalog areas may carry a catalog source")
-        elif (self.kind == "aoi") != bool(self.geometries):
-            raise ValueError("Only historical polygon areas contain geometry")
+        elif (self.kind in {"aoi", "polygons"}) != bool(self.geometries):
+            raise ValueError("Only polygon areas contain geometry")
         return self
 
     @model_serializer(mode="wrap")
     def serialize_area(
         self, handler: SerializerFunctionWrapHandler
     ) -> dict[str, object]:
-        """Preserve old area fields and serialize new selections without geometry.
+        """Serialize catalog descriptors or exact uploaded polygons for durable jobs.
 
         Args:
             handler: Pydantic's serialization handler.
@@ -196,6 +211,8 @@ class AggregateArea(BaseModel):
             The discriminator's path-free durable area representation.
         """
         data = handler(self)
+        if self.kind != "polygons":
+            data.pop("geometryHash", None)
         data.pop(
             "geometries" if self.kind == "catalogSelection" else "catalogSelection",
             None,

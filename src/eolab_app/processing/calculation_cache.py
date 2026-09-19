@@ -45,6 +45,8 @@ def calculation_result_cache_keys(
         source_signature = calculation.sourceSignature
         area = calculation.area.model_dump(mode="json", by_alias=True)
         area.pop("resolved", None)
+        if calculation.area.kind == "polygons":
+            area = {"kind": "polygons", "geometryHash": calculation.area.geometryHash}
         if calculation.area.kind == "catalogSelection":
             area.pop("bounds", None)
         target_chunk_pixels = (
@@ -55,7 +57,9 @@ def calculation_result_cache_keys(
     else:
         if source_signature is None:
             raise ValueError("Authorized raster metadata is required")
-        if calculation.catalogSelection is not None:
+        if calculation.polygonArea is not None:
+            area = {"kind": "polygons", "geometryHash": calculation.polygonArea.sha256}
+        elif calculation.catalogSelection is not None:
             area = {
                 "kind": "catalogSelection",
                 "catalogSelection": calculation.catalogSelection.model_dump(
@@ -161,7 +165,13 @@ def prepare_calculation_values_for_cache(
             "row": AggregateValue.model_validate(row).model_dump(
                 mode="json", exclude={"label", "expression"}
             ),
-            "area": calculation_plan.area.model_dump(mode="json", by_alias=True),
+            "area": (
+                calculation_plan.area.model_dump(
+                    mode="json", by_alias=True, exclude={"geometries"}
+                )
+                if calculation_plan.area.kind == "polygons"
+                else calculation_plan.area.model_dump(mode="json", by_alias=True)
+            ),
             "grid": calculation_plan.grid.model_dump(mode="json"),
         }
         for key, row in zip(
@@ -174,6 +184,7 @@ def restore_cached_calculation_plan(
     request: AggregatePlanRequest,
     source_signature: tuple[int, int, int, int],
     cached_results: dict[str, dict[str, object]],
+    polygon_area: AggregateArea | None = None,
 ) -> AggregateSpec | None:
     """Build a result-only job from cached values, without estimating raster work.
 
@@ -181,6 +192,7 @@ def restore_cached_calculation_plan(
         request: Validated formulas and area whose sources are authorized.
         source_signature: Current authorized raster metadata.
         cached_results: Unexpired cache entries indexed by requested input hash.
+        polygon_area: Authorized polygon input, kept out of shared result-cache records.
 
     Returns:
         A plan retaining all requested values, or None for a missing, malformed
@@ -192,7 +204,11 @@ def restore_cached_calculation_plan(
     if any(entry is None for entry in entries):
         return None
     try:
-        area = AggregateArea.model_validate(entries[0]["area"])
+        area = (
+            polygon_area
+            if request.polygonArea
+            else AggregateArea.model_validate(entries[0]["area"])
+        )
         grid = AggregateGrid.model_validate(entries[0]["grid"])
         if any(
             entry["area"] != entries[0]["area"] or entry["grid"] != entries[0]["grid"]

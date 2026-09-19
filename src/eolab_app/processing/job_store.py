@@ -96,6 +96,95 @@ class PostgresJobStore:
         with self._transaction(locked=True) as cursor:
             cursor.execute(sql)
 
+    def save_input(self, owner: str, checksum: str, payload: dict[str, Any]) -> str:
+        """Retain a bounded private input for one day or until its owner releases it.
+
+        Args:
+            owner: Current Processing browser-session hash.
+            checksum: Operation-owned content identity.
+            payload: Validated JSON input without filesystem paths or credentials.
+
+        Returns:
+            Opaque identifier usable only by the same owner.
+
+        Raises:
+            ProcessingError: If the input or shared storage capacity is exceeded.
+        """
+        size = len(json.dumps(payload, allow_nan=False).encode("utf-8"))
+        if size > 8 * 1024**2:
+            raise ProcessingError(
+                "input_size",
+                "This processing input exceeds the 8 MiB storage limit.",
+                413,
+            )
+        with self._transaction(locked=True) as cursor:
+            cursor.execute("DELETE FROM processing.inputs WHERE expires_at <= now()")
+            cursor.execute(
+                "SELECT count(*) AS total, count(*) FILTER (WHERE owner=%s) AS owned, coalesce(sum(bytes),0) AS bytes FROM processing.inputs",
+                (owner,),
+            )
+            count = cursor.fetchone()
+            if (
+                count["total"] >= 128
+                or count["owned"] >= 32
+                or count["bytes"] + size > 64 * 1024**2
+            ):
+                raise ProcessingError(
+                    "input_capacity",
+                    "Temporary processing input storage is full. Release an unused input or try again later.",
+                    429,
+                )
+            identifier = uuid4().hex
+            cursor.execute(
+                "INSERT INTO processing.inputs VALUES (%s,%s,%s,%s,%s,now()+interval '1 day')",
+                (identifier, owner, checksum, Jsonb(payload), size),
+            )
+            return identifier
+
+    def get_input(self, owner: str, identifier: str, checksum: str) -> dict[str, Any]:
+        """Read an unexpired input belonging to the current Processing session.
+
+        Args:
+            owner: Current browser-session hash.
+            identifier: Opaque input ID returned by save_input.
+            checksum: Expected immutable content identity.
+
+        Returns:
+            Stored JSON to validate at the operation boundary.
+
+        Raises:
+            ProcessingError: If the reference is expired, changed or belongs to someone else.
+        """
+        with self._transaction() as cursor:
+            cursor.execute(
+                "SELECT payload FROM processing.inputs WHERE id=%s AND owner=%s AND sha256=%s AND expires_at>now()",
+                (identifier, owner, checksum),
+            )
+            row = cursor.fetchone()
+        if row is None:
+            raise ProcessingError(
+                "input_unavailable",
+                "This calculation area expired or is unavailable. Select the layer again.",
+                409,
+            )
+        return row["payload"]
+
+    def discard_input(self, owner: str, identifier: str) -> None:
+        """Release an input after deselection; accepted jobs keep their own copy.
+
+        Args:
+            owner: Current browser-session hash.
+            identifier: Input to delete, including an already deleted input.
+
+        Raises:
+            ProcessingError: If storage is unavailable.
+        """
+        with self._transaction(locked=True) as cursor:
+            cursor.execute(
+                "DELETE FROM processing.inputs WHERE id=%s AND owner=%s",
+                (identifier, owner),
+            )
+
     def reserve_plan(self, owner: str, request: dict[str, Any]) -> str:
         """Reserve the one global metadata child and bounded plan-record capacity.
 
@@ -410,7 +499,7 @@ class PostgresJobStore:
         """
 
         with self._transaction(locked=True) as cursor:
-            cursor.execute("SET LOCAL eolab.processing_claim_version = '7'")
+            cursor.execute("SET LOCAL eolab.processing_claim_version = '8'")
             cursor.execute(
                 "UPDATE processing.jobs SET status='interrupted',error=%s,updated_at=now() WHERE status IN ('running','cancelling') AND deadline_at<now()",
                 (
@@ -428,7 +517,7 @@ class PostgresJobStore:
             if cursor.fetchone():
                 return None
             cursor.execute(
-                "SELECT id FROM processing.jobs WHERE status='queued' AND minimum_claim_version<=7 ORDER BY created_at LIMIT 1 FOR UPDATE"
+                "SELECT id FROM processing.jobs WHERE status='queued' AND minimum_claim_version<=8 ORDER BY created_at LIMIT 1 FOR UPDATE"
             )
             row = cursor.fetchone()
             if not row:
@@ -669,6 +758,7 @@ class PostgresJobStore:
             cursor.execute(
                 "DELETE FROM processing.plans WHERE expires_at<=now() AND (planning_until IS NULL OR planning_until<=now())"
             )
+            cursor.execute("DELETE FROM processing.inputs WHERE expires_at<=now()")
             cursor.execute("DELETE FROM processing.transfers WHERE expires_at<=now()")
             cursor.execute(
                 "UPDATE processing.jobs SET status='expired',updated_at=now() WHERE status='ready' AND expires_at<=now()"

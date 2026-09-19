@@ -36,6 +36,11 @@ from eolab_app.processing.aggregate_models import (
     AggregatePlanResponse,
     AggregateValidationRequest,
 )
+from eolab_app.processing.polygon_areas import (
+    MAX_POLYGON_AREA_BYTES,
+    PolygonSummaryInput,
+    PolygonAreaUploadResponse,
+)
 from eolab_app.processing.service import ProcessingService
 from eolab_app.routes.processing_events import JobEventResponse
 from eolab_app.raster.errors import RasterFeatureError
@@ -65,10 +70,10 @@ MUTATION_SCHEMA = {
 
 
 class BoundedProcessingRoute(APIRoute):
-    """Bound tiny catalog/area requests before FastAPI parses their JSON."""
+    """Bound calculation requests and polygon uploads before parsing their JSON."""
 
     def get_route_handler(self) -> Callable[[Request], Awaitable[Response]]:
-        """Wrap request parsing with an explicit 16 KiB body ceiling.
+        """Limit polygon uploads to 8 MiB and other POST bodies to 16 KiB.
 
         Returns:
             Handler retaining normal validation and disconnect semantics.
@@ -85,15 +90,21 @@ class BoundedProcessingRoute(APIRoute):
                 The normal route response after bounded input validation.
 
             Raises:
-                HTTPException: If the processing request body exceeds 16 KiB.
+                HTTPException: If the endpoint-specific body limit is exceeded.
             """
             if request.method != "POST":
                 return await handler(request)
+            limit = (
+                MAX_POLYGON_AREA_BYTES
+                if request.url.path == "/api/processing/polygon-areas"
+                else 16 * 1024
+            )
             body = bytearray()
             async for chunk in request.stream():
-                if len(body) + len(chunk) > 16 * 1024:
+                if len(body) + len(chunk) > limit:
                     raise HTTPException(
-                        413, "Processing requests must be smaller than 16 KiB."
+                        413,
+                        f"Processing requests on this endpoint must be smaller than {limit:,} bytes.",
                     )
                 body.extend(chunk)
             delivered = False
@@ -269,6 +280,51 @@ def create_processing_router(service: ProcessingService) -> APIRouter:
         tags=["processing"],
         route_class=BoundedProcessingRoute,
     )
+
+    @router.delete("/polygon-areas/{area_id}", openapi_extra=MUTATION_SCHEMA)
+    async def discard_polygon_area(
+        area_id: JobId, request: Request, response: Response
+    ) -> dict[str, bool]:
+        """Release an uploaded area without changing already accepted calculations.
+
+        Args:
+            area_id: Opaque input identifier.
+            request: Request carrying the Processing session cookie.
+            response: Response receiving private cache headers.
+
+        Returns:
+            Idempotent deletion acknowledgement, including unknown IDs.
+
+        Raises:
+            HTTPException: If origin checks or storage access fail.
+        """
+        await _result(service.discard_polygon_area(_owner(request, response), area_id))
+        return {"deleted": True}
+
+    @router.post(
+        "/polygon-areas",
+        response_model=PolygonAreaUploadResponse,
+        openapi_extra=MUTATION_SCHEMA,
+    )
+    async def upload_polygon_area(
+        body: PolygonSummaryInput, request: Request, response: Response
+    ) -> dict[str, Any]:
+        """Upload exact polygons and return a private reference for raster summaries.
+
+        Args:
+            body: Bounded WGS84 polygons, without labels or renderer state.
+            request: Same-origin request and browser ownership context.
+            response: Private cookie and cache headers.
+
+        Returns:
+            Expiring area reference, envelope and polygon count.
+
+        Raises:
+            HTTPException: If origin checks, input limits or storage access fail.
+        """
+        return await _result(
+            service.upload_polygon_area(_owner(request, response), body)
+        )
 
     @router.post(
         "/raster-clips/plan",
