@@ -67,11 +67,13 @@ export class SharedAnnotationLayers {
     }
 
     /**
-     * Remove received layers no longer present in the current session.
-     * @param {Set<string>} ids Authoritative contribution identities to retain.
+     * Remove shared annotation layers from this map unless their IDs are in the set.
+     * An empty set removes all received layers, for example when leaving a session.
+     * Server copies and local editable annotation layers are unchanged.
+     * @param {Set<string>} ids Session/contributor/layer identifiers to keep on the map.
      * @return {void}
      */
-    retain(ids) {
+    removeLayersExcept(ids) {
         for (const [id, layer] of this.layers) if (!ids.has(id)) this.mapLayers.removeOwned(layer.adapter);
     }
 

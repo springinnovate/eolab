@@ -1103,7 +1103,7 @@ async function initializeCatalog(
         getLayers: () => annotations.sharableLayers(),
         setShareLabel: (id, label) => annotations.setShareLabel(id, label),
         showLayer: (id, label, collection) => sharedAnnotations.addOrUpdateLayer(id, label, collection),
-        retainLayers: ids => sharedAnnotations.retain(ids),
+        retainLayers: ids => sharedAnnotations.removeLayersExcept(ids),
     });
     const startupAnnotations = annotations.load();
     void startupAnnotations.then(() => annotationSessions.start());
