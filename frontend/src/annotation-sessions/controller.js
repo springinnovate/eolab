@@ -42,7 +42,7 @@ export class AnnotationSessionsController {
             show: () => { this.showContributions = true; this.visibleContributions.clear(); void this.refreshSession(); },
             refresh: () => { for (const state of this.sharing.values()) if (!state.conflict) state.paused = false; void this.sendChangedLayers(); void this.refreshSession(); },
             leave: () => void this.leave(),
-            withdraw: id => void this.withdrawLayer(id),
+            withdraw: id => void this.stopSharingLayer(id),
         });
         this.onPageHide = () => this.destroy();
         globalThis.addEventListener?.("pagehide", this.onPageHide);
@@ -301,8 +301,15 @@ export class AnnotationSessionsController {
         catch (error) { this.view.message(error.message, true); }
     }
 
-    /** @param {string} id Own contribution identifier. @return {Promise<void>} Withdrawal after any current upload finishes. */
-    async withdrawLayer(id) {
+    /**
+     * Stop sharing a layer and delete its shared copy from the session.
+     * Keep the local annotation layer, including its polygons and notes.
+     * Wait for this layer's current upload before requesting deletion. On success,
+     * later local edits stay private until the user explicitly shares it again.
+     * @param {string} id Identifier of this contributor's local annotation layer.
+     * @return {Promise<void>} Completion after removal and refresh, or a displayed API error.
+     */
+    async stopSharingLayer(id) {
         if (!this.snapshot) return;
         const generation = this.generation;
         const state = this.sharing.get(id); if (state) state.paused = true;

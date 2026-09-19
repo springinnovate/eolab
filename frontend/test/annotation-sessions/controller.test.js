@@ -209,7 +209,7 @@ test("new layers wait for device persistence; withdrawn layers and layers create
     local.push({ id: "new", collection: { name: "Saved", features: [] } });
     controller.committedLayersChanged(); await controller.sendChangedLayers();
     assert.deepEqual(writes, ["/session/layers/new"]);
-    await controller.withdrawLayer("new");
+    await controller.stopSharingLayer("new");
     local[1].collection.name = "Still private";
     controller.committedLayersChanged(); await controller.sendChangedLayers();
     assert.equal(writes.length, 1, "withdrawal is not undone by the next save");
