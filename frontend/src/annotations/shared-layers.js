@@ -17,14 +17,16 @@ export class SharedAnnotationLayers {
     }
 
     /**
-     * Add or refresh a received layer, retaining its local visibility and drawing order.
-     * @param {string} id Opaque contribution identity supplied by composition.
-     * @param {string} label Contributor and layer name for the map list.
-     * @param {Object} collection Polygon GeoJSON; validated at this presentation boundary.
+     * Add a shared annotation layer to the map, or update its polygons and label.
+     * Existing layers keep their visibility, drawing order and local label settings.
+     * New layers start visible with read-only polygon data and collapsed controls.
+     * @param {string} id Session/contributor/layer identifier supplied by composition.
+     * @param {string} label Contributor and layer name to display in Map layers.
+     * @param {Object} collection Received polygon GeoJSON, validated before display.
      * @return {void}
-     * @throws {Error} If received polygons are unsupported by the annotation renderer.
+     * @throws {Error} If the GeoJSON is unsupported or the map layer cannot be created.
      */
-    show(id, label, collection) {
+    addOrUpdateLayer(id, label, collection) {
         const imported = parseAnnotationGeoJSON(JSON.stringify(collection));
         const polygons = imported.polygons.map((polygon, index) => ({ ...polygon, id: String(index) }));
         const retained = this.layers.get(id);
