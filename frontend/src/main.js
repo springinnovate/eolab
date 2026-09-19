@@ -29,6 +29,9 @@ import {
 import { CatalogSearchSuggestions } from "./catalog-search-suggestions.js";
 import { AnnotationController } from "./annotations/controller.js";
 import "./annotations/style.css";
+import { SharedAnnotationLayers } from "./annotations/shared-layers.js";
+import { AnnotationSessionsController } from "./annotation-sessions/controller.js";
+import "./annotation-sessions/style.css";
 import { CatalogVisualizationCoordinator } from "./catalog-visualization.js";
 import { initializeCatalogPaneControls } from "./catalog-pane-controller.js";
 import { CatalogScanControls } from "./catalog-scan-controls.js";
@@ -708,6 +711,8 @@ async function initializeCatalog(
     }
 
     let annotations = null;
+    let annotationSessions = null;
+    let sharedAnnotations = null;
     let mapInteractionMode = "inspection";
     let rasterVisualization = null;
     let layerStyleEditor = null;
@@ -753,7 +758,9 @@ async function initializeCatalog(
         onItemZoom: zoomRetainedMapLayer,
         onItemInfo: inspectRetainedMapLayer,
         restoreRemovedLayer: (snapshot, isCurrent) => snapshot.item === null
-            ? annotations.restoreRemovedLayer(snapshot, isCurrent)
+            ? snapshot.local.sharedContribution
+                ? annotationSessions.restoreContribution(snapshot.local.sharedContribution, isCurrent)
+                : annotations.restoreRemovedLayer(snapshot, isCurrent)
             : catalogVisualization.restoreRemovedLayer(snapshot, identity => catalogItemClient.get(identity), isCurrent),
     });
     const processingApi = new ProcessingApiClient();
@@ -912,7 +919,7 @@ async function initializeCatalog(
         },
     });
     mapLayerController.onStyle = key => {
-        if (!annotations?.openControls(key, "style")) layerStyleEditor.open(key);
+        if (!annotations?.openControls(key, "style") && !sharedAnnotations.openControls(key)) layerStyleEditor.open(key);
     };
     rasterVisualization.syncVisibleLayers();
     const catalogVisualization = new CatalogVisualizationCoordinator(
@@ -1071,10 +1078,14 @@ async function initializeCatalog(
             containerPoint: leafletMap.latLngToContainerPoint(latlng),
         });
     }
+    sharedAnnotations = new SharedAnnotationLayers({ leaflet: L, map: leafletMap, mapLayers: mapLayerController });
     annotations = new AnnotationController({
         leaflet: L,
         map: leafletMap,
         mapLayers: mapLayerController,
+        onShare: id => annotationSessions.shareLayer(id),
+        onLayerCreated: id => annotationSessions?.annotationLayerCreated(id),
+        onCommittedChange: () => annotationSessions?.committedLayersChanged(),
         onEditingChange: editing => {
             mapInteractionMode = editing ? "layer-editing" : "inspection";
             document.querySelector("main").classList.toggle("is-editing-map-layer", editing);
@@ -1082,7 +1093,20 @@ async function initializeCatalog(
             onLayoutChange();
         },
     });
+    annotationSessions = new AnnotationSessionsController({
+        root: document.querySelector("#annotation-sessions"),
+        createLayer: () => {
+            const id = annotations.createLayer();
+            onRenderingWorkspaceRequested();
+            return id;
+        },
+        getLayers: () => annotations.sharableLayers(),
+        setShareLabel: (id, label) => annotations.setShareLabel(id, label),
+        showLayer: (id, label, collection) => sharedAnnotations.show(id, label, collection),
+        retainLayers: ids => sharedAnnotations.retain(ids),
+    });
     const startupAnnotations = annotations.load();
+    void startupAnnotations.then(() => annotationSessions.start());
     // Local editing remains available independently of Catalog loading; only order restoration waits.
     void Promise.allSettled([startupMapRestore, startupAnnotations]).then(() => annotations.restoreLayerOrder());
     leafletMap.getContainer().classList.add("leaflet-crosshair");

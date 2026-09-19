@@ -337,3 +337,50 @@ to detect edits. Missing or unreadable sources still fail during resolution or
 opening. Stored source identities remain in plans, provenance and cache keys;
 changing those records is not a substitute for publishing a new asset. Vector
 source checks, job ownership, cancellation and output checksum checks are unchanged.
+
+
+## Shared annotations
+
+The **Shared annotations** section above Map layers creates or joins an annotation
+session on this EOLab site. The session owner shares a join code; contributors
+enter that code and a display name. Creating or joining a session adds an empty
+annotation layer when this device has no local layer already shared with it.
+New layers (including GeoJSON imports) are shared automatically with the active
+session once saved on the device; later saved edits are sent automatically too.
+Older local layers remain private until their **Share** button is used. Reloading
+resumes sharing without adding a duplicate layer. Withdrawn layers stay withdrawn;
+use **Share** to send them again.
+Unfinished polygon edits stay local. Map links do not carry annotations or private
+credentials; use **Copy invitation** or **Download annotations** in the session.
+
+Contributors can update or withdraw only their own layers. Everyone in the session
+can view contributions and download a combined GeoJSON with contributor and layer
+names/IDs. The owner controls the **Allow new contributors** switch. Turning it off prevents
+new people from joining; existing contributors can keep working. Removing a layer from a map or leaving a
+session keeps the last shared copy; **Withdraw** removes that server copy.
+
+Session data is stored in the existing PostgreSQL database, in the
+`annotation_sessions` schema. No new container or environment variables are needed.
+The application initializes these tables and removes expired sessions every five
+minutes. Access ends at expiration even before cleanup runs. New contributions,
+changed contributions, new contributors and **Keep for another day** extend the
+session for 24 hours. Background refresh and unchanged upload retries do not extend
+it. Download a permanent copy before expiry. Local annotation copies remain on
+their originating device.
+
+The first version supports one active session per browser tab, up to 10 memberships
+per browser, 100 sessions per site, 64 contributors per session and 32 shared layers
+per contributor. Each layer is limited to 8 MiB, each session to 32 MiB, and the site
+to 256 MiB of shared annotation JSON. Polygon limits match the local editor (500
+polygons per layer, 2,000 vertices per polygon, no holes). Five-second metadata
+refreshes back off to 30 seconds after failures; only changed displayed layers
+transfer polygon data. The browser remembers acknowledged revisions and retries
+interrupted uploads without duplicating contributions.
+
+Membership uses an automatically generated Secure, HttpOnly, same-site cookie;
+only its hash is stored in the database. Serve this feature over HTTPS. Clearing
+site cookies loses that browser's membership/owner permissions. A join code admits
+contributors; it does not grant owner permissions or let someone overwrite another
+contributor's work. Different EOLab deployments have separate sessions. No user
+accounts, cross-site coordinator, or recovery of cleared owner credentials is
+provided by this first version.
