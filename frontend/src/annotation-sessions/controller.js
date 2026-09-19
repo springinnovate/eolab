@@ -31,7 +31,7 @@ export class AnnotationSessionsController {
             open: id => void this.openSession(`/${id}`),
             copy: () => void this.copyInvitation(),
             extend: () => void this.applySessionAction("extend"),
-            toggleJoining: () => void this.applySessionAction(this.snapshot?.joinsOpen ? "close-joining" : "open-joining"),
+            allowNewContributors: allowed => void this.setAllowNewContributors(allowed),
             show: () => { this.showContributions = true; this.visibleContributions.clear(); void this.refreshSession(); },
             refresh: () => { for (const state of this.sharing.values()) if (!state.conflict) state.paused = false; void this.sendChangedLayers(); void this.refreshSession(); },
             leave: () => void this.leave(),
@@ -225,6 +225,29 @@ export class AnnotationSessionsController {
         } finally {
             this.refreshing = false;
             if (this.snapshot && !this.closed) this.timer = setTimeout(() => void this.refreshSession(), this.delay);
+        }
+    }
+
+    /**
+     * Save the owner's joining switch; restore its previous setting if saving fails.
+     * @param {boolean} allowed Whether new contributors may redeem the join code.
+     * @return {Promise<void>} Completion with the saved setting or a visible error.
+     */
+    async setAllowNewContributors(allowed) {
+        if (!this.snapshot?.isOwner || this.transitioning || this.joiningBusy || this.closed) return;
+        const generation = this.generation;
+        const sessionId = this.snapshot.id;
+        this.joiningBusy = true; this.view.setJoiningBusy(true);
+        try {
+            await this.api.request(`/${sessionId}/actions/${allowed ? "open-joining" : "close-joining"}`, "POST");
+            if (generation !== this.generation || this.closed) return;
+            this.snapshot.joinsOpen = allowed;
+            this.view.message(allowed ? "New contributors can join with the session code." : "New contributors cannot join. Existing contributors can keep working.");
+        } catch (error) {
+            if (generation === this.generation && !this.closed) this.view.message(error.message, true);
+        } finally {
+            this.joiningBusy = false; this.view.setJoiningBusy(false);
+            this.view.render(this.snapshot, this.sharing);
         }
     }
 

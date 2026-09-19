@@ -33,12 +33,18 @@ export class AnnotationSessionsView {
         this.show = this.button("Show contributions on map", actions.show);
         this.refresh = this.button("Refresh", actions.refresh);
         this.leave = this.button("Leave session", actions.leave);
-        this.closeJoining = this.button("Close joining", actions.toggleJoining);
+        this.joiningControl = this.element("label"); this.joiningControl.className = "annotation-session-joining";
+        this.allowContributors = this.element("input"); this.allowContributors.type = "checkbox";
+        this.allowContributors.setAttribute("role", "switch");
+        this.allowContributors.setAttribute("aria-label", "Allow new contributors");
+        this.allowContributors.addEventListener("change", () => actions.allowNewContributors(this.allowContributors.checked));
+        this.joiningState = this.element("small"); this.joiningState.setAttribute("aria-hidden", "true");
+        this.joiningControl.append(this.allowContributors, this.element("span", "Allow new contributors"), this.joiningState);
         this.layers = this.element("ul"); this.layers.className = "annotation-session-contributions";
         this.layerRows = new Map();
         this.help = this.element("p", "Use Share on an annotation layer below. Saved edits are shared automatically; unfinished polygons stay on this device. Leaving or removing a local layer keeps its last shared copy. Use Withdraw to remove that copy.");
         const options = this.element("details");
-        options.append(this.element("summary", "Session options and saving"), this.extend, this.closeJoining, this.leave, this.help);
+        options.append(this.element("summary", "Session options and saving"), this.extend, this.joiningControl, this.leave, this.help);
         this.session.append(this.heading, this.invitation, this.copy, this.people, this.layers,
             this.show, this.download, this.refresh, this.expiry, options);
         root.append(this.summary, this.setup, this.session, this.status);
@@ -71,7 +77,18 @@ export class AnnotationSessionsView {
     message(text, error = false) { this.status.textContent = text; this.status.classList.toggle("is-error", error); }
 
     /** @param {boolean} busy Whether membership is changing. @return {void} */
-    busy(busy) { for (const button of [this.create, this.join, this.leave]) button.disabled = busy; this.existing.disabled = busy; }
+    busy(busy) {
+        this.membershipBusy = busy;
+        for (const button of [this.create, this.join, this.leave]) button.disabled = busy;
+        this.existing.disabled = busy;
+        this.allowContributors.disabled = busy || !!this.joiningBusy;
+    }
+
+    /** @param {boolean} busy Whether the joining policy is being saved. @return {void} */
+    setJoiningBusy(busy) {
+        this.joiningBusy = busy;
+        this.allowContributors.disabled = busy || !!this.membershipBusy;
+    }
 
     /**
      * Update session text and retain contribution row nodes between polls.
@@ -87,8 +104,9 @@ export class AnnotationSessionsView {
         this.invitation.textContent = `Join code: ${snapshot.joinCode} · ${snapshot.joinsOpen ? "Joining open" : "Joining closed"}`;
         this.expiry.textContent = `Available until ${new Date(snapshot.expiresAt).toLocaleString()}. Download a permanent copy before it expires.`;
         this.people.textContent = `${snapshot.contributors.length} contributors: ${snapshot.contributors.map(person => person.name + (person.isOwner ? " (owner)" : "")).join(", ")}`;
-        this.closeJoining.hidden = !snapshot.isOwner;
-        this.closeJoining.textContent = snapshot.joinsOpen ? "Close joining" : "Open joining";
+        this.joiningControl.hidden = !snapshot.isOwner;
+        if (!this.joiningBusy) this.allowContributors.checked = snapshot.joinsOpen;
+        this.joiningState.textContent = snapshot.joinsOpen ? "On" : "Off";
         this.download.href = `/api/annotation-sessions/${snapshot.id}/export`;
         const keys = new Set();
         for (const layer of snapshot.layers) {

@@ -350,7 +350,8 @@ credentials; use **Copy invitation** or **Download annotations** in the session.
 
 Contributors can update or withdraw only their own layers. Everyone in the session
 can view contributions and download a combined GeoJSON with contributor and layer
-names/IDs. The owner can close joining. Removing a layer from a map or leaving a
+names/IDs. The owner controls the **Allow new contributors** switch. Turning it off prevents
+new people from joining; existing contributors can keep working. Removing a layer from a map or leaving a
 session keeps the last shared copy; **Withdraw** removes that server copy.
 
 Session data is stored in the existing PostgreSQL database, in the

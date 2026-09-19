@@ -5,7 +5,7 @@ import { AnnotationSessionsApi } from "../../src/annotation-sessions/api.js";
 
 /** @return {Object} Independent session metadata for lifecycle tests. */
 function snapshot() {
-    return { id: "session", contributorId: "me", isOwner: true, name: "Session", joinCode: "ABCDEFGH",
+    return { id: "session", contributorId: "me", isOwner: true, joinsOpen: true, name: "Session", joinCode: "ABCDEFGH",
         contributors: [{ id: "me", name: "Owner" }, { id: "other", name: "Maria" }], layers: [] };
 }
 
@@ -17,7 +17,7 @@ function snapshot() {
 function setup(request = async () => snapshot()) {
     const local = [{ id: "local", collection: { name: "Priority areas", features: [] } }];
     const events = []; const storage = new Map();
-    const view = { memberships() {}, busy() {}, render() {}, code: {}, message: (...args) => events.push(["message", ...args]) };
+    const view = { memberships() {}, busy() {}, render() {}, setJoiningBusy: busy => events.push(["joiningBusy", busy]), code: {}, message: (...args) => events.push(["message", ...args]) };
     const controller = new AnnotationSessionsController({ root: {}, getLayers: () => local,
         setShareLabel: (...args) => events.push(["label", ...args]),
         showLayer: (...args) => events.push(["show", ...args]), retainLayers: ids => events.push(["retain", [...ids]]),
@@ -135,5 +135,39 @@ test("explicit re-sharing uses the observed revision while automatic reconnect r
     controller.snapshot.layers = [{ contributorId: "me", layerId: "local", revision: 3 }];
     controller.shareLayer("local"); await controller.sharing.get("local").sending;
     assert.equal(writes[0].revision, 3);
+    controller.destroy();
+});
+
+test("joining switch uses the requested setting and recovers after a failed save", async () => {
+    let reject; const calls = [];
+    const { controller, events } = setup((path, method) => {
+        calls.push([path, method]); return new Promise((resolve, fail) => { reject = fail; });
+    });
+    const saving = controller.setAllowNewContributors(false);
+    await controller.setAllowNewContributors(true);
+    assert.deepEqual(calls, [["/session/actions/close-joining", "POST"]]);
+    reject(new Error("Offline")); await saving;
+    assert.equal(controller.snapshot.joinsOpen, true);
+    assert.equal(controller.joiningBusy, false);
+    assert.ok(events.some(event => event[0] === "message" && event[1] === "Offline"));
+    controller.api.request = async path => { calls.push([path, "POST"]); };
+    await controller.setAllowNewContributors(false);
+    assert.equal(controller.snapshot.joinsOpen, false);
+    await controller.setAllowNewContributors(true);
+    assert.equal(controller.snapshot.joinsOpen, true);
+    assert.deepEqual(calls.at(-1), ["/session/actions/open-joining", "POST"]);
+    controller.destroy();
+});
+
+test("contributors cannot use the owner switch and late saves do not change a different session", async () => {
+    let finish; let calls = 0;
+    const { controller } = setup(() => { calls++; return new Promise(resolve => { finish = resolve; }); });
+    controller.snapshot.isOwner = false;
+    await controller.setAllowNewContributors(false); assert.equal(calls, 0);
+    controller.snapshot.isOwner = true;
+    const saving = controller.setAllowNewContributors(false);
+    await controller.stopUploads(); controller.snapshot = { ...snapshot(), id: "other-session" };
+    finish(); await saving;
+    assert.equal(controller.snapshot.joinsOpen, true);
     controller.destroy();
 });
