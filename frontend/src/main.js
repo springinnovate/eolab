@@ -759,7 +759,7 @@ async function initializeCatalog(
         onItemInfo: inspectRetainedMapLayer,
         restoreRemovedLayer: (snapshot, isCurrent) => snapshot.item === null
             ? snapshot.local.sharedContribution
-                ? annotationSessions.restoreContribution(snapshot.local.sharedContribution, isCurrent)
+                ? annotationSessions.restoreSharedLayer(snapshot.local.sharedContribution, isCurrent)
                 : annotations.restoreRemovedLayer(snapshot, isCurrent)
             : catalogVisualization.restoreRemovedLayer(snapshot, identity => catalogItemClient.get(identity), isCurrent),
     });

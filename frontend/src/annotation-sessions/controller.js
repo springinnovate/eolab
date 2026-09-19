@@ -324,13 +324,16 @@ export class AnnotationSessionsController {
     }
 
     /**
-     * Restore a removed shared layer by fetching its current authorized contribution.
-     * @param {string} key Opaque session/contributor/layer identity retained by Undo.
-     * @param {()=>boolean} isCurrent Whether Undo still owns the user's intent.
-     * @return {Promise<void>} Completion after the current contribution is shown.
-     * @throws {Error} If membership changed, the contribution was withdrawn, or Undo is obsolete.
+     * Put a removed shared annotation layer back on this map for Undo.
+     * Fetch the latest server copy using this browser's current session membership;
+     * restoring the map layer does not recreate or modify anything on the server.
+     * @param {string} key Session/contributor/layer identifier saved by the removal's Undo record.
+     * @param {()=>boolean} isCurrent Whether this is still the most recent removal to undo.
+     * @return {Promise<void>} Completion after the fetched layer is displayed.
+     * @throws {Error} If the layer cannot be fetched, session access changed, the page
+     *     closed, or a newer removal replaced this Undo request.
      */
-    async restoreContribution(key, isCurrent) {
+    async restoreSharedLayer(key, isCurrent) {
         const [sessionId, contributorId, layerId] = key.split("/");
         const generation = this.generation;
         if (!this.snapshot || this.snapshot.id !== sessionId) throw new Error("Rejoin the annotation session to show this contribution.");
