@@ -43,6 +43,7 @@ from eolab_app.processing.calculation_cache import (
     restore_cached_calculation_plan,
 )
 from eolab_app.processing.raster_aggregate import aggregate_process_target
+from eolab_app.processing.polygon_areas import PolygonAreaReference, PolygonSummaryInput
 from eolab_app.processing.raster_mask import estimate_calculation_disk_bytes
 from eolab_app.processing.ports import (
     JobArtifactStore,
@@ -94,6 +95,18 @@ def prepare_aggregate_job(
         ProcessingError: If mask and result reservations exceed the storage limit.
     """
     data = spec.model_dump(mode="json", by_alias=True)
+    if spec.area.kind == "polygons":
+        minimum_claim_version = 8
+    elif spec.cachedRows is not None:
+        minimum_claim_version = 7
+    elif spec.area.kind != "wholeRaster":
+        minimum_claim_version = 6
+    elif spec.grid.execution:
+        minimum_claim_version = 4
+    elif spec.grid.groundArea:
+        minimum_claim_version = 3
+    else:
+        minimum_claim_version = 2
     return PreparedJobPlan(
         specification=data,
         summary={
@@ -102,15 +115,7 @@ def prepare_aggregate_job(
         },
         reserved_bytes=estimate_calculation_disk_bytes(spec, limits),
         operation=spec.operation,
-        minimum_claim_version=(
-            7
-            if spec.cachedRows is not None
-            else (
-                6
-                if spec.area.kind != "wholeRaster"
-                else 4 if spec.grid.execution else 3 if spec.grid.groundArea else 2
-            )
-        ),
+        minimum_claim_version=minimum_claim_version,
     )
 
 
@@ -455,6 +460,58 @@ class ProcessingService:
         )
         return public_job(row)
 
+    async def upload_polygon_area(
+        self, owner: str, polygons: PolygonSummaryInput
+    ) -> dict[str, Any]:
+        """Retain submitted polygon geometry for this browser's summary calculations.
+
+        Args:
+            owner: Current Processing browser-session hash.
+            polygons: Validated committed polygons after the user's filter.
+
+        Returns:
+            Small area reference, geographic envelope and polygon count.
+
+        Raises:
+            ProcessingError: If temporary input storage is full or unavailable.
+        """
+        checksum = polygons.geometry_hash()
+        identifier = await asyncio.to_thread(
+            self.jobs.save_input, owner, checksum, polygons.model_dump(mode="json")
+        )
+        return {
+            "polygonArea": {"id": identifier, "sha256": checksum},
+            "bbox": polygons.bounds(),
+            "matched": len(polygons.polygons),
+        }
+
+    async def read_polygon_area(
+        self, owner: str, reference: PolygonAreaReference
+    ) -> AggregateArea:
+        """Load exact polygons from an input owned by the requesting browser.
+
+        Args:
+            owner: Current Processing browser-session hash.
+            reference: Expiring input ID and expected geometry hash.
+
+        Returns:
+            Validated geometry copied into this calculation's plan.
+
+        Raises:
+            ProcessingError: If the input expired or is not owned by the caller.
+            ValueError: If persisted geometry violates its input contract.
+        """
+        payload = await asyncio.to_thread(
+            self.jobs.get_input, owner, reference.id, reference.sha256
+        )
+        polygons = PolygonSummaryInput.model_validate(payload)
+        return AggregateArea(
+            kind="polygons",
+            bounds=polygons.bounds(),
+            geometryHash=reference.sha256,
+            geometries=tuple(p.model_dump(mode="json") for p in polygons.polygons),
+        )
+
     async def _aggregate_area(self, request: AggregatePlanRequest) -> AggregateArea:
         """Resolve a Catalog descriptor, box, or explicit whole-source intent.
 
@@ -471,6 +528,18 @@ class ProcessingService:
                 request.selectedBounds, request.catalogSelection
             )
         )
+
+    async def discard_polygon_area(self, owner: str, identifier: str) -> None:
+        """Release polygons that this browser no longer uses for new calculations.
+
+        Args:
+            owner: Current Processing session hash.
+            identifier: Uploaded polygon-area ID.
+
+        Raises:
+            ProcessingError: If the storage operation fails.
+        """
+        await asyncio.to_thread(self.jobs.discard_input, owner, identifier)
 
     async def discard_plan(self, owner: str, identifier: str) -> None:
         """Release obsolete review state without cancelling accepted job work.
@@ -518,15 +587,22 @@ class ProcessingService:
                         raise ProcessingError(
                             "selection_unavailable", error.detail, 409
                         ) from error
+                polygon_area = (
+                    await self.read_polygon_area(owner, request.polygonArea)
+                    if request.polygonArea
+                    else None
+                )
                 cached = await asyncio.to_thread(
                     self.jobs.get_cached_calculation_results,
                     calculation_result_cache_keys(request, signature),
                 )
-                spec = restore_cached_calculation_plan(request, signature, cached)
+                spec = restore_cached_calculation_plan(
+                    request, signature, cached, polygon_area
+                )
                 outcome = None
                 prepared = calculated = time.perf_counter()
                 if spec is None:
-                    area = await self._aggregate_area(request)
+                    area = polygon_area or await self._aggregate_area(request)
                     prepared = time.perf_counter()
                     outcome = await run_process(
                         aggregate_process_target,
@@ -651,6 +727,12 @@ class ProcessingService:
                 409,
             )
         spec = AggregateSpec.model_validate(plan["spec"])
+        polygon_area = None
+        if plan["request"].get("polygonArea"):
+            polygon_area = await self.read_polygon_area(
+                owner,
+                PolygonAreaReference.model_validate(plan["request"]["polygonArea"]),
+            )
         await self.authorizer.authorize(next(iter(spec.sources.values())))
         if spec.cachedRows is not None:
             if spec.area.catalogSelection is not None:
@@ -661,7 +743,7 @@ class ProcessingService:
                         "selection_unavailable", error.detail, 409
                     ) from error
         else:
-            area = await self._aggregate_area(
+            area = polygon_area or await self._aggregate_area(
                 AggregatePlanRequest.model_validate(
                     {
                         key: value

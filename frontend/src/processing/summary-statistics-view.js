@@ -206,7 +206,7 @@ export class SummaryStatisticsView {
         e.area.value = state.areaChoice;
         this.vectorAreaControls.hidden = state.areaChoice !== "vector";
         e["edit-area"].hidden = state.areaChoice === "vector" || state.areaChoice === "whole";
-        e["area-description"].textContent = state.area?.catalogSelection && state.area.catalogSelection === state.vectorArea?.id
+        e["area-description"].textContent = state.areaChoice === "vector" && state.area && state.vectorArea
             ? `Vector selection · ${state.vectorArea.label}` : state.areaChoice === "vector"
                 ? "Choose a polygon layer below. Edit its filter, then use the matching features."
                 : describeClipArea(state.area);

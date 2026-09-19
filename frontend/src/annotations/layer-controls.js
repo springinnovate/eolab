@@ -7,7 +7,7 @@ export class AnnotationLayerControls {
      * Build stable layer controls; notes and names are always plain text.
      * @param {Document} document Browser document.
      * @param {import("./model.js").AnnotationLayer} layer Annotation data.
-     * @param {Object} actions Named callbacks: add, edit, removePolygon, change, opacity, exportGeoJSON, share.
+     * @param {Object} actions Named callbacks: add, edit, filter, removePolygon, change, opacity, exportGeoJSON, share.
      */
     constructor(document, layer, actions) {
         this.document = document;
@@ -49,10 +49,15 @@ export class AnnotationLayerControls {
         this.opacity.min = "0"; this.opacity.max = "1"; this.opacity.step = "0.05";
         this.appearance.append(opacity);
         this.filter = this.details("Filter polygons");
-        this.filter.append(this.createLabeledInput("Name or note contains", "search", layer.filter, value => {
-            layer.filter = value;
-            actions.change();
-        }, 300));
+        this.filter.append(this.button("Edit filter", actions.filter));
+        if (typeof layer.filter === "string" && layer.filter) {
+            const legacy = this.createLabeledInput("Saved text search (clear before using field conditions)", "search", layer.filter, value => {
+                layer.filter = value;
+                actions.change();
+            }, 300);
+            this.legacySearch = legacy;
+            this.filter.append(legacy);
+        }
         this.polygons = this.details("Polygons");
         this.polygons.open = true;
         this.polygonList = document.createElement("ul");
@@ -130,13 +135,15 @@ export class AnnotationLayerControls {
             else input.value = this.layer.style[key];
         }
         this.opacity.value = this.layer.opacity;
+        if (this.legacySearch) this.legacySearch.hidden = typeof this.layer.filter !== "string";
         const polygons = matchingAnnotationPolygons(this.layer);
-        this.polygons.querySelector("summary").textContent = this.layer.filter
+        const filtered = typeof this.layer.filter === "string" ? !!this.layer.filter : this.layer.filter.enabled && !!this.layer.filter.rules.length;
+        this.polygons.querySelector("summary").textContent = filtered
             ? `${polygons.length} of ${this.layer.polygons.length} polygons` : `${polygons.length} ${polygons.length === 1 ? "polygon" : "polygons"}`;
         this.polygonList.replaceChildren(...polygons.map(polygon => this.polygonRow(polygon)));
         if (!polygons.length) {
             const empty = this.document.createElement("li");
-            empty.textContent = this.layer.filter ? "No polygons match the filter." : "Choose Add polygon to start drawing.";
+            empty.textContent = filtered ? "No polygons match the filter." : "Choose Add polygon to start drawing.";
             this.polygonList.append(empty);
         }
         if (focusPolygon) {

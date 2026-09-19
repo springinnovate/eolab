@@ -1076,3 +1076,30 @@ test("cached whole-raster results submit without the large-calculation prompt", 
     await h.finish();
     assert.equal(card.current, true);
 });
+
+
+test("polygon areas use normal summary execution and cancel when their source disappears", async () => {
+    const h = fixture(); await h.open();
+    const polygonArea = { id: "a".repeat(32), sha256: "b".repeat(64) };
+    h.controller.setVectorSamplingArea({ polygonArea, label: "Study areas · 1 of 2 features" }, true);
+    await h.tick();
+    assert.equal(h.submits(), 1);
+    assert.deepEqual(h.requests.find(([kind]) => kind === "plan")[1].area, {kind:"polygonArea",polygonArea});
+    assert.equal(h.controller.state.areaChoice, "vector");
+    h.controller.invalidatePolygonArea(polygonArea.id); await flush();
+    assert.equal(h.requests.filter(([kind]) => kind === "cancel").length, 1);
+    assert.equal(h.controller.state.area, null);
+    assert.equal(h.controller.state.vectorArea, null);
+    h.controller.calculateSelection(true); await h.tick();
+    assert.equal(h.submits(), 1);
+});
+
+test("a new map box replaces an annotation summary without reusing its polygon input", async () => {
+    const h = fixture(); await h.open();
+    const polygonArea = { id: "a".repeat(32), sha256: "b".repeat(64) };
+    h.controller.setVectorSamplingArea({ polygonArea, label: "Study areas" }, true);
+    await h.tick(); await h.finish();
+    h.controller.setSelection(box(80)); h.controller.calculateSelection(); await h.tick();
+    assert.equal(h.controller.state.areaChoice, "selection");
+    assert.deepEqual(h.requests.filter(([kind]) => kind === "plan").at(-1)[1].area, box(80));
+});

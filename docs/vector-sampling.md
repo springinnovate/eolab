@@ -14,6 +14,42 @@ The analysis filter is independent of the map display filter. All matching sourc
 features contribute regardless of viewport or visibility. No matches produces an
 error, not an unfiltered fallback. See [filter rules](vector-filters.md).
 
+## Annotation layers
+
+Local annotation layers, imported GeoJSON annotations and shared contributions
+also appear in **Summarize → Area → Vector layer**. Filter by `name` or `note`,
+then choose **Use filtered features & calculate**. The same field comparisons
+are available from the layer's **Filter** control. Shared contributions remain
+read-only; your filter changes only your own map and calculation.
+
+Without a filter, all committed polygons are included. An empty layer or filter
+with no matches produces a message and does not calculate the whole raster.
+Overlaps count once, and the numeric and ground-area rules below still apply.
+Annotation areas currently support summary statistics; histogram and clip
+area controls continue to use catalog vectors or uploaded AOIs.
+
+Saving a polygon edit, changing the applied filter, or receiving an updated
+shared contribution invalidates an active summary. With automatic updates on,
+the open summary runs again, subject to the existing large-area review policy.
+Unfinished drawing edits, visibility, labels and styles do not change the area.
+Names and notes affect a result only when they change which polygons match.
+Removing a layer or losing its shared session cancels its pending summary.
+Older saved text searches retain case-insensitive matching until replaced with
+field conditions; new field comparisons follow the regular vector rules.
+
+For calculations, the browser uploads only matching polygon geometry to this
+EOLab site's Processing service. The private input expires after one day and is
+released when the area is replaced or removed. Accepted jobs keep their own
+copy so their completion does not depend on an open browser tab. This does not
+publish annotations in the catalog, send them to GeoServer, or share them with
+another EOLab site. Cached numbers use the exact geometry and formula; labels,
+notes and polygon geometry are not stored in the shared result cache.
+
+Uploads accept at most 500 polygons, 2,000 vertices per polygon, 100,000 closed-ring
+coordinates in total and 8 MiB of JSON. Temporary input storage allows 32 uploads
+per browser session, 128 per deployment and 64 MiB in total. These input limits
+are separate from the existing limits on raster work and result storage.
+
 ## Which geometry is used
 
 Analysis reads the original source polygons. The map displays a simplified

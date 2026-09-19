@@ -1,8 +1,14 @@
-import { validateCatalogSelection, catalogSelectionsEqual } from "../selected-area.js";
 /** Vector-owned selection intent; source transport and map presentation are injected. */
+import { validateCatalogSelection, catalogSelectionsEqual } from "../selected-area.js";
 import { EMPTY_VECTOR_FILTER, vectorFilterSummary } from "./filter.js";
 
-const identity = target => target ? JSON.stringify([target.key, target.item, target.filter]) : "";
+/** Identify calculation inputs, excluding presentation-only annotation edits.
+ * @param {Object|undefined} target Layer snapshot supplied by composition.
+ * @param {Object|null} filter Active analysis predicate, if any.
+ * @return {string} Stable identity for detecting a changed or removed selection.
+ */
+const samplingTargetIdentity = (target, filter = null) => target ? JSON.stringify([target.key, target.filter,
+    target.selectionIdentity ? target.selectionIdentity(filter ?? target.filter) : target.item]) : "";
 
 /**
  * Conservatively classify the selection envelope before raster processing.
@@ -18,15 +24,26 @@ export function vectorSelectionReview(area) {
     nearGlobal: envelopeKm2 > 100_000_000 };
 }
 
-/** Create catalog polygon selections and invalidate them when their source/filter changes. */
+/** Select polygon layers and invalidate areas when committed geometry or filters change. */
 export class VectorSamplingController {
     /**
      * @param {Object} dependencies Views, targets, selection transport and composed callbacks.
+     * @param {(target:Object|null,filter:Object|null,wasActive:boolean)=>void} [dependencies.onSourceChange] Composed response to changed committed inputs.
+     * @param {(area:Object)=>void} [dependencies.releaseArea] Release obsolete uploaded inputs.
      * @param {Object|Object[]} dependencies.view One or more synchronized selection views.
+     * @param {()=>Object[]} dependencies.getTargets Committed, independent layer snapshots.
+     * @param {(item:Object|null,filter:Object,signal:AbortSignal,target:Object)=>Promise<Object>} dependencies.createArea Resolve one filtered area.
+     * @param {(area:Object,calculate:boolean)=>void} dependencies.onActivate Present an accepted area.
+     * @param {(selection:Object|undefined,area:Object)=>void} dependencies.onInvalidate Cancel work using an obsolete area.
+     * @param {(key:string)=>void} dependencies.onEditFilter Open the selected layer's filter controls.
+     * @param {(state:Object)=>void} [dependencies.onSelectionState] Report selection progress.
+     * @param {Object} [dependencies.clock=globalThis] Existing controller clock dependency.
      */
-    constructor({ view, getTargets, createArea, onActivate, onInvalidate, onEditFilter, onSelectionState = () => {}, clock = globalThis }) {
+    constructor({ view, getTargets, createArea, onActivate, onInvalidate, onEditFilter, onSelectionState = () => {}, releaseArea = () => {}, onSourceChange = () => {}, clock = globalThis }) {
         Object.assign(this, { view, getTargets, createArea, onActivate, onInvalidate, onEditFilter, clock });
         this.onSelectionState = onSelectionState;
+        this.releaseArea = releaseArea;
+        this.onSourceChange = onSourceChange;
         this.views = Array.isArray(view) ? view : [view];
         this.sequence = 0;
         this.state = { targets: [], key: "", phase: "idle", area: null, message: "Choose a polygon layer, then use its filtered features." };
@@ -35,16 +52,21 @@ export class VectorSamplingController {
             onFilter: () => this.onEditFilter(this.state.key) }));
         this.refresh();
     }
-    /** Refresh composition-supplied layer snapshots without interpreting renderer internals. */
+    /** Refresh committed layer snapshots and report changed calculation inputs.
+     * @return {void}
+     */
     refresh() {
         const targets = this.getTargets();
         const next = targets.find(target => target.key === this.state.key);
-        if (this.sourceIdentity && this.sourceIdentity !== identity(next)) {
-            this.invalidate("Layer or filter changed. Use these features again to update the sampling area.");
-        }
+        const changed = this.sourceIdentity && this.sourceIdentity !== samplingTargetIdentity(next, this.state.selectionFilter);
+        const wasActive = this.state.phase === "active";
+        const previous = this.state.targets.find(target => target.key === this.state.key);
+        const filter = JSON.stringify(previous?.filter) === JSON.stringify(next?.filter) ? this.state.selectionFilter : next?.filter;
+        if (changed) this.invalidate("Layer or filter changed. Use these features again to update the sampling area.");
         this.state.targets = targets;
         if (!next) this.state.key = targets[0]?.key ?? "";
         this.render();
+        if (changed) this.onSourceChange(next ?? null, filter, wasActive);
     }
     /** @param {string} key User-selected retained polygon layer. */
     choose(key) {
@@ -65,7 +87,7 @@ export class VectorSamplingController {
      * @param {Object|null} [options.filter=null] Committed analysis filter, independent of rendering.
      * @param {string} [options.key] Captured layer identity from the filter editor.
      * @param {boolean} [options.analysis=false] Defer activation to the composed primary action.
-     * @return {Promise<Object|null>} Current catalog selection, or null if superseded.
+     * @return {Promise<Object|null>} Current polygon area, or null if superseded.
      * @throws {Error} If an explicit analysis selection fails.
      */
     async use({ filter = null, analysis = false, key = this.state.key } = {}) {
@@ -74,22 +96,22 @@ export class VectorSamplingController {
         this.invalidate("");
         this.state.key = key;
         const sequence = ++this.sequence;
-        this.sourceIdentity = identity(target);
         this.abort = new AbortController();
         const signal = this.abort.signal;
         const candidate = structuredClone(filter ?? target.filter ?? EMPTY_VECTOR_FILTER);
+        this.sourceIdentity = samplingTargetIdentity(target, candidate);
         this.state.selectionFilter = candidate;
         this.state.analysis = analysis;
         this.state.phase = "reading"; this.state.message = "Reading filtered polygons…"; this.render();
         try {
             // Abort obsolete transport, then let its bounded read settle before
-            // starting the next request. No retained identity needs cleanup.
+            // starting the next request. Release uploaded inputs from obsolete replies.
             await this.reading;
             if (sequence !== this.sequence) return null;
-            const read = this.createArea(target.item, candidate, signal);
+            const read = this.createArea(target.item, candidate, signal, target);
             this.reading = read.catch(() => {});
             const area = await read;
-            if (sequence !== this.sequence) return null;
+            if (sequence !== this.sequence) { this.releaseArea(area); return null; }
             this.state.area = area;
             this.state.review = vectorSelectionReview(area);
             if (analysis) {
@@ -118,27 +140,33 @@ export class VectorSamplingController {
             this.render();
         } else if (["review", "confirm"].includes(this.state.phase)) this.activate();
     }
-    /** Activate the current catalog descriptor, without exporting geometry to analysis.
+    /** Activate a catalog selection or private polygon reference returned by composition.
      * @param {Object|null} [selection=null] Expected descriptor for a completed primary action.
      * @param {boolean} [calculate=false] Explicit intent to run configured statistics.
      * @return {void}
      */
     activate(selection = null, calculate = false) {
-        if (!this.state.area || (selection !== null && !catalogSelectionsEqual(this.state.area.selection, selection))) return;
+        if (!this.state.area) return;
+        if (selection !== null && (this.state.area.polygonArea
+            ? this.state.area.polygonArea.id !== selection.id
+            : !catalogSelectionsEqual(this.state.area.selection, selection))) return;
         this.state.phase = "active";
         const area = this.state.area;
-        this.state.message = `Sampling ${area.matched.toLocaleString()} of ${area.total.toLocaleString()} features · polygon boundaries and holes respected. Map outline simplified; calculations use exact geometry.`;
+        this.state.message = `Sampling ${area.matched.toLocaleString()} of ${area.total.toLocaleString()} features · calculations use the exact polygon geometry.`;
         this.onActivate(area, calculate);
         this.render();
     }
-    /** @param {string} message Visible explanation for invalidating the retained selection. */
+    /** Cancel selection and release the previous area through its owning callback.
+     * @param {string} message Visible explanation for invalidating the retained selection.
+     * @return {void}
+     */
     invalidate(message) {
         ++this.sequence;
         this.abort?.abort();
         const area = this.state.area;
         this.state.area = null; this.state.phase = "idle"; this.state.message = message; this.sourceIdentity = null;
         this.state.selectionFilter = null;
-        if (area) this.onInvalidate(area.selection);
+        if (area) { this.onInvalidate(area.selection, area); this.releaseArea(area); }
         this.render();
     }
     /** Render the applied predicate, never an uncommitted filter draft. */

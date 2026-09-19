@@ -1,4 +1,5 @@
 /** Local annotation workflow, composed with neutral map-layer services. */
+import { ANNOTATION_FIELDS, annotationFilterRules, annotationSummaryTarget } from "./summary-area.js";
 import { readAnnotationGeoJSONFile, exportAnnotationGeoJSON } from "./geojson.js";
 import { AnnotationModel, matchingAnnotationPolygons, validateAnnotationStyle } from "./model.js";
 import { AnnotationStorage } from "./storage.js";
@@ -19,9 +20,10 @@ export class AnnotationController {
      * @param {AnnotationStorage} [options.storage] Device persistence provider.
      * @param {(id:string)=>void} [options.onShare] Composition-owned sharing request.
      * @param {(id:string)=>void} [options.onLayerCreated] Notifies composition of new or imported layers before saving.
+     * @param {(key:string)=>void} [options.onFilter] Open the composed field/condition editor.
      * @param {()=>void} [options.onCommittedChange] Notifies composition after successful device persistence.
      */
-    constructor({ leaflet, map, mapLayers, onEditingChange, document = globalThis.document, storage = new AnnotationStorage(), onShare = () => {}, onLayerCreated = () => {}, onCommittedChange = () => {} }) {
+    constructor({ leaflet, map, mapLayers, onEditingChange, document = globalThis.document, storage = new AnnotationStorage(), onShare = () => {}, onLayerCreated = () => {}, onCommittedChange = () => {}, onFilter = () => {} }) {
         this.leaflet = leaflet;
         this.map = map;
         this.mapLayers = mapLayers;
@@ -30,6 +32,7 @@ export class AnnotationController {
         this.onShare = onShare;
         this.onLayerCreated = onLayerCreated;
         this.onCommittedChange = onCommittedChange;
+        this.onFilter = onFilter;
         this.onEditingChange = onEditingChange;
         this.model = new AnnotationModel();
         this.controls = new Map();
@@ -217,6 +220,7 @@ export class AnnotationController {
     attachLayer(layer) {
         const key = `local:annotation:${layer.id}`;
         const controls = new AnnotationLayerControls(this.document, layer, {
+            filter: () => this.onFilter(key),
             add: () => this.beginPolygon(layer.id),
             share: () => this.onShare(layer.id),
             exportGeoJSON: () => this.exportGeoJSONFile(layer.id),
@@ -236,7 +240,8 @@ export class AnnotationController {
             createState: () => layer,
             createLayer: () => rendering,
             snapshot: () => ({ datasetKind: "annotation", legend: null, canFilter: true, controls: controls.root,
-                filterActive: !!layer.filter.trim(), filterStatus: layer.filter.trim()
+                filterActive: typeof layer.filter === "string" ? !!layer.filter.trim() : layer.filter.enabled && !!layer.filter.rules.length,
+                filterStatus: (typeof layer.filter === "string" ? layer.filter.trim() : layer.filter.rules.length)
                     ? `${matchingAnnotationPolygons(layer).length} of ${layer.polygons.length} polygons match` : null }),
             zoom: () => {
                 const bounds = rendering.getBounds();
@@ -315,8 +320,28 @@ export class AnnotationController {
     }
 
     /**
-     * Export device-saved layer contents for composition to share; exclude unfinished edits.
-     * @return {{id:string,collection:Object}[]} GeoJSON snapshots from the last successful device save.
+     * Read committed polygons for raster summaries; unfinished editing drafts are excluded.
+     * @return {Object[]} Layer identities, fields and polygon snapshots.
+     */
+    summaryTargets() {
+        return this.model.layers.map(layer => annotationSummaryTarget(`local:annotation:${layer.id}`, layer));
+    }
+
+    /** Return annotation fields and callbacks for the existing filter dialog.
+     * @param {string} key Map-layer identity.
+     * @return {Object|null} Field editor target, or null for a different owner.
+     */
+    filterTarget(key) {
+        const layer = this.model.layers.find(layer => `local:annotation:${layer.id}` === key);
+        if (!layer) return null;
+        return { key, label: layer.name, fields: ANNOTATION_FIELDS, filter: annotationFilterRules(layer.filter),
+            status: `${matchingAnnotationPolygons(layer).length} of ${layer.polygons.length} polygons match`,
+            apply: candidate => { layer.filter = annotationFilterRules(candidate); this.refreshLayer(layer.id); this.save(); },
+            cancelPending: () => {} };
+    }
+
+    /** Export the most recently device-saved GeoJSON for sharing.
+     * @return {{id:string,collection:Object}[]} Independent saved layer snapshots.
      */
     sharableLayers() {
         return this.savedSharingLayers;
@@ -397,7 +422,7 @@ export class AnnotationController {
         this.layers.get(id).refresh();
         if (rebuild) this.controls.get(id).refresh(focusPolygon);
         // Polygon text changes do not alter stack controls unless a filter is active.
-        if (rebuild || labelChanged || layer.filter) this.mapLayers.render();
+        if (rebuild || labelChanged || (typeof layer.filter === "string" ? layer.filter : layer.filter.enabled && layer.filter.rules.length)) this.mapLayers.render();
     }
 
     /**

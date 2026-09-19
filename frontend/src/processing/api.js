@@ -1,5 +1,6 @@
-/** Same-origin Processing API. Only catalog identities and opaque job/area IDs cross this boundary. */
+/** Same-origin Processing API for catalog rasters, owned polygon inputs and job results. */
 import { normalizeRasterSamplingArea } from "../selected-area.js";
+import { normalizeCalculationArea, validatePolygonAreaReference } from "./calculation-area.js";
 import { chunkPixels } from "./calculation-session.js";
 
 /** Browser-safe HTTP failure; transport failures remain ordinary errors. */
@@ -211,7 +212,7 @@ export class ProcessingApiClient {
      * @throws {Error} If the request fails or returned plan metadata is invalid.
      */
     async planCalculation(intent, signal) {
-        const area = normalizeRasterSamplingArea(intent.area);
+        const area = normalizeCalculationArea(intent.area);
         const targetChunkPixels = chunkPixels(intent.targetChunkPixels);
         await this.ensureSession();
         const plan = await this.request("/raster-calculations/plan", "POST", {
@@ -219,7 +220,8 @@ export class ProcessingApiClient {
             calculations: intent.calculations,
             ...(targetChunkPixels === null ? {} : { targetChunkPixels }),
             ...(area.kind === "selectedArea" ? { selectedBounds: area.selectedBounds }
-                : area.kind === "catalogSelection" ? { catalogSelection: area.catalogSelection } : { wholeRaster: true }),
+                : area.kind === "catalogSelection" ? { catalogSelection: area.catalogSelection }
+                : area.kind === "polygonArea" ? { polygonArea: area.polygonArea } : { wholeRaster: true }),
         }, signal);
         opaqueId(plan.planId);
         validateGrid(plan.grid);
@@ -234,6 +236,31 @@ export class ProcessingApiClient {
         validateStages(plan.timing, ["reservationSeconds", "preparationSeconds", "nativeProcessSeconds", "finalizationSeconds"]);
         validateProcessTiming(plan.timing?.process);
         return plan;
+    }
+
+    /** Upload exact polygons once and receive a private, expiring calculation reference.
+     * @param {Object[]} polygons GeoJSON Polygon geometries, excluding feature properties.
+     * @param {AbortSignal} [signal] Optional cancellation of the upload request.
+     * @return {Promise<Object>} Reference, geographic bounds and polygon count.
+     * @throws {Error} If upload fails or the returned area is malformed.
+     */
+    async uploadPolygonArea(polygons, signal) {
+        await this.ensureSession();
+        const area = await this.request("/polygon-areas", "POST", { polygons }, signal);
+        validatePolygonAreaReference(area.polygonArea);
+        if (!Array.isArray(area.bbox) || area.bbox.length !== 4 || !area.bbox.every(Number.isFinite) ||
+            !Number.isSafeInteger(area.matched) || area.matched < 1) throw new Error("Invalid polygon area response.");
+        return area;
+    }
+
+    /** Release an obsolete polygon upload; submitted jobs retain their exact area.
+     * @param {string} id Private Processing input ID.
+     * @return {Promise<Object>} Idempotent deletion acknowledgement.
+     * @throws {Error} If the request fails.
+     */
+    async discardPolygonArea(id) {
+        await this.ensureSession();
+        return this.request(`/polygon-areas/${opaqueId(id)}`, "DELETE");
     }
 
     /** Submit or recover the same calculation. @param {Object} submission Stable IDs. @return {Promise<Object>} Owned job. */

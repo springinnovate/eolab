@@ -42,7 +42,7 @@ export class VectorSamplingView {
         }
         this.elements.layer.value = state.key;
         this.elements.predicate.textContent = state.filterSummary;
-        this.elements.status.textContent = state.targets.length ? state.message : "Add a Shapefile or GeoPackage polygon layer to the map first.";
+        this.elements.status.textContent = state.targets.length ? state.message : "Add a polygon layer to the map first.";
         const reviewing = ["review", "confirm"].includes(state.phase);
         this.elements.status.setAttribute("role", reviewing ? "alert" : "status");
         this.elements.status.classList.toggle("vector-selection-warning", reviewing);
