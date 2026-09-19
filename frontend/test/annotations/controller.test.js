@@ -131,3 +131,21 @@ test("failed Undo persistence can retry without overwriting the restored annotat
     await assert.rejects(annotations.restoreRemovedLayer(snapshot, () => true), /already on the map/);
     await assert.rejects(annotations.restoreRemovedLayer(snapshot, () => false), /superseded/);
 });
+
+test("sharing reads the last device-saved polygons while a new save is pending or fails", async () => {
+    const annotations = controller();
+    const layer = annotations.model.createLayer();
+    await annotations.save();
+    const saved = annotations.sharableLayers();
+    let release;
+    annotations.storage.save = () => new Promise(resolve => { release = resolve; });
+    layer.name = "Changed layer";
+    const saving = annotations.save();
+    assert.deepEqual(annotations.sharableLayers(), saved);
+    release(); await saving;
+    assert.equal(annotations.sharableLayers()[0].collection.name, "Changed layer");
+    annotations.storage.save = async () => { throw new Error("Storage full"); };
+    layer.name = "Unsaved layer";
+    await annotations.save();
+    assert.equal(annotations.sharableLayers()[0].collection.name, "Changed layer");
+});

@@ -7,7 +7,7 @@ export class AnnotationLayerControls {
      * Build stable layer controls; notes and names are always plain text.
      * @param {Document} document Browser document.
      * @param {import("./model.js").AnnotationLayer} layer Annotation data.
-     * @param {Object} actions Named callbacks: add, edit, removePolygon, change, opacity, exportGeoJSON.
+     * @param {Object} actions Named callbacks: add, edit, removePolygon, change, opacity, exportGeoJSON, share.
      */
     constructor(document, layer, actions) {
         this.document = document;
@@ -23,10 +23,9 @@ export class AnnotationLayerControls {
         const buttons = document.createElement("div");
         buttons.className = "annotation-actions";
         buttons.append(this.button("Add polygon", actions.add));
-        const share = this.button("Share", () => {});
-        share.disabled = true;
-        share.title = "Workshop sharing is coming later. These annotations stay on this device.";
-        buttons.append(share);
+        this.share = this.button("Share", actions.share);
+        this.share.title = "Share this layer's saved polygons, names and notes in an annotation session.";
+        buttons.append(this.share);
         const exportButton = this.button("Export GeoJSON", actions.exportGeoJSON);
         exportButton.title = "Download all saved polygons, names and notes in this layer, including filtered-out polygons. Save unfinished edits first to include them.";
         buttons.append(exportButton);
