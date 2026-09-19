@@ -1,4 +1,4 @@
-/** Connect the Shared annotations panel to session membership, saved-layer uploads and map updates. */
+/** Connect the annotation session panel to session membership, saved-layer uploads and map updates. */
 import { AnnotationSessionsApi } from "./api.js";
 import { AnnotationSessionsView } from "./view.js";
 
@@ -16,27 +16,30 @@ export class AnnotationSessionsController {
      * Create the session panel and connect its actions to the API and annotation callbacks.
      * Call start() after local annotations have loaded to restore a previous session.
      * @param {Object} options API, storage and callbacks supplied by browser composition.
-     * @param {HTMLElement} options.root Container for the Shared annotations disclosure.
-     * @param {()=>string} options.createLayer Add an empty local annotation layer and return its identifier.
+     * @param {HTMLElement} options.root Container for session setup, status and management.
+     * @param {(name:string)=>string} options.createLayer Add a named local annotation layer and return its identifier.
+     * @param {(id:string)=>void} options.revealLayer Open Map layers and focus this layer's drawing action after explicit navigation.
      * @param {()=>{id:string,collection:Object}[]} options.getLayers Committed, device-saved layers.
-     * @param {(id:string,label:string)=>void} options.setShareLabel Local layer status callback.
+     * @param {(id:string,label:string,sessionName?:string)=>void} options.setShareLabel Local sharing status and optional session context.
      * @param {(key:string,label:string,collection:Object)=>void} options.showLayer Add or update a read-only shared layer on the map.
      * @param {(keys:Set<string>)=>void} options.retainLayers Keep only these shared layer IDs on the map; remove the other received layers.
      * @param {AnnotationSessionsApi} [options.api] Same-origin API.
      * @param {Storage} [options.storage] Store the active session ID and layer revisions for reload; never credentials or polygons.
      * @param {function(HTMLElement,Object):AnnotationSessionsView} [options.createView] Create the panel with its user-action callbacks.
      */
-    constructor({ root, createLayer, getLayers, setShareLabel, showLayer, retainLayers,
+    constructor({ root, createLayer, revealLayer, getLayers, setShareLabel, showLayer, retainLayers,
         api = new AnnotationSessionsApi(), storage = globalThis.localStorage,
         createView = (element, actions) => new AnnotationSessionsView(element, actions) }) {
-        Object.assign(this, { root, createLayer, getLayers, setShareLabel, showLayer, retainLayers, api, storage });
+        Object.assign(this, { root, createLayer, revealLayer, getLayers, setShareLabel, showLayer, retainLayers, api, storage });
         this.snapshot = null; this.sharing = new Map(); this.generation = 0; this.refreshing = false;
         this.visibleContributions = new Map(); this.showContributions = false; this.closed = false;
+        this.profileChangeVersion = 0;
         this.delay = 5000; this.timer = null; this.debounce = null; this.transitioning = false;
         this.view = createView(root, {
             create: (name, contributorName) => void this.openSession("", { name, contributorName }),
             join: (joinCode, contributorName) => void this.openSession("/join", { joinCode, contributorName }),
-            open: id => void this.openSession(`/${id}`),
+            open: id => void this.openSession(`/${id}`, undefined, true),
+            rename: name => void this.updateDisplayName(name),
             copy: () => void this.copyInvitation(),
             extend: () => void this.extendSessionExpiration(),
             allowNewContributors: allowed => void this.setAllowNewContributors(allowed),
@@ -63,13 +66,13 @@ export class AnnotationSessionsController {
             const code = new URL(globalThis.location?.href ?? "https://localhost").searchParams.get("annotationSession");
             if (code && /^[A-Z2-9]{8}$/i.test(code)) {
                 const joined = sessions.find(session => session.joinCode === code.toUpperCase());
-                if (joined) { await this.openSession(`/${joined.id}`); return; }
-                this.view.code.value = code.toUpperCase(); this.root.open = true;
+                if (joined) { await this.openSession(`/${joined.id}`, undefined, this.readSavedSession()?.sessionId !== joined.id); return; }
+                this.view.showInvitation(code.toUpperCase());
                 this.view.message("Enter your name, then join the annotation session."); return;
             }
             const saved = this.readSavedSession();
             if (saved?.sessionId && sessions.some(session => session.id === saved.sessionId)) await this.openSession(`/${saved.sessionId}`);
-            else this.view.message("Create or join a session to share annotation layers on this EOLab site.");
+            else this.view.message("");
         } catch (error) { this.view.message(error.message, true); }
     }
 
@@ -111,10 +114,11 @@ export class AnnotationSessionsController {
      * @param {string} path Empty to create, /join to join, or /<session ID> to reopen.
      * @param {{contributorName:string,name?:string,joinCode?:string}} [body] Create/join
      *     form values; omit when reopening an existing session.
+     * @param {boolean} [reveal=!!body] Reveal the contribution after explicit navigation, never a background reload.
      * @return {Promise<void>} Completion after setup or a displayed error; repeated clicks
      *     during a session transition do not start another request.
      */
-    async openSession(path, body) {
+    async openSession(path, body, reveal = !!body) {
         if (this.transitioning || this.closed) return;
         this.transitioning = true; this.view.busy(true); this.view.message("Connecting…");
         try {
@@ -135,12 +139,19 @@ export class AnnotationSessionsController {
                     this.trackSharedLayer(layer.layerId, 0);
                 }
             }
-            this.saveSessionForReload(); this.root.open = true;
+            this.saveSessionForReload();
             this.view.render(snapshot, this.sharing);
-            this.view.message("New annotation layers are shared with this session automatically. Add a polygon to get started.");
+            this.view.message("Connected. Saved polygons are shared automatically.");
             await this.refreshSession();
-            if (body && this.snapshot?.id === snapshot.id && ![...this.sharing.keys()].some(id => localIds.has(id))) {
-                this.trackSharedLayer(this.createLayer(), 0);
+            if (this.snapshot?.id === snapshot.id && !this.closed) {
+                let layerId = [...this.sharing.keys()].find(id => localIds.has(id));
+                if (body && !layerId) {
+                    const member = snapshot.contributors.find(person => person.id === snapshot.contributorId);
+                    layerId = this.createLayer(`${member?.name ?? "My"}’s annotations`.slice(0, 160));
+                    this.trackSharedLayer(layerId, 0);
+                }
+                for (const id of this.sharing.keys()) this.setShareLabel(id, "Shared", snapshot.name);
+                if (reveal && layerId) this.revealLayer(layerId);
             }
         } catch (error) { this.view.message(error.message, true); }
         finally { this.transitioning = false; this.view.busy(false); if (this.snapshot) this.committedLayersChanged(); }
@@ -155,7 +166,7 @@ export class AnnotationSessionsController {
      * @return {void} Starts the upload without waiting; progress and errors appear in the panel.
      */
     shareLayer(id) {
-        this.root.open = true;
+        if (this.snapshot) this.view.showDetails();
         if (this.transitioning) return;
         if (!this.snapshot) { this.view.message("Create or join a session, then click Share on this layer."); return; }
         const previous = this.sharing.get(id);
@@ -176,7 +187,7 @@ export class AnnotationSessionsController {
      */
     trackSharedLayer(id, revision) {
         this.sharing.set(id, { revision, sent: null, sending: null, message: "Waiting for saved changes…" });
-        this.setShareLabel(id, "Sharing…"); this.saveSessionForReload();
+        this.setShareLabel(id, "Sharing…", this.snapshot.name); this.saveSessionForReload();
     }
 
     /**
@@ -239,12 +250,12 @@ export class AnnotationSessionsController {
             if (!layer) { state.message = state.revision === 0 ? "Waiting for this layer to be saved on the device" : "Local layer removed; last shared copy kept"; return; }
             const text = JSON.stringify(layer.collection);
             if (text === state.sent) return;
-            this.setShareLabel(id, "Sharing…"); state.message = "Sending…";
+            this.setShareLabel(id, "Sharing…", this.snapshot.name); state.message = "Sending…";
             try {
                 const accepted = await this.api.request(`/${this.snapshot.id}/layers/${id}`, "PUT", { revision: state.revision, collection: layer.collection });
                 state.revision = accepted.revision; state.sent = text; state.message = "Saved";
                 if (generation !== this.generation || this.closed) return;
-                this.saveSessionForReload(); this.setShareLabel(id, "Shared · Saved");
+                this.saveSessionForReload(); this.setShareLabel(id, "Shared · Saved", this.snapshot.name);
                 this.view.message("All sent changes are saved in the session.");
             } catch (error) {
                 if (generation !== this.generation || this.closed) return;
@@ -253,7 +264,7 @@ export class AnnotationSessionsController {
                 state.message = state.conflict
                     ? "This shared layer changed in another tab. Refresh, then use Share local version to replace it with this device's copy."
                     : state.paused ? error.message : "Connection interrupted — changes saved on this device";
-                this.setShareLabel(id, state.conflict ? "Share local version" : state.paused ? "Sharing needs attention" : "Shared · Offline");
+                this.setShareLabel(id, state.conflict ? "Share local version" : state.paused ? "Sharing needs attention" : "Shared · Offline", this.snapshot.name);
                 this.view.message(state.message, true); return;
             }
         }
@@ -261,7 +272,7 @@ export class AnnotationSessionsController {
 
     /**
      * Refresh session members, layer revisions and received layers shown on the map.
-     * Fetch GeoJSON only for displayed layers with a new revision, and retry eligible
+     * Fetch GeoJSON when geometry revisions or contributor labels change, and retry eligible
      * saved-layer uploads. An expired or inaccessible session clears its map layers.
      * @return {Promise<void>} Completion of this refresh. While the session remains active,
      *     schedule the next refresh in 5 seconds, backing off to 30 seconds after failures.
@@ -270,16 +281,25 @@ export class AnnotationSessionsController {
         if (!this.snapshot || this.refreshing || this.closed) return;
         clearTimeout(this.timer); this.refreshing = true;
         const generation = this.generation; const id = this.snapshot.id;
+        const profileVersion = this.profileChangeVersion;
         try {
             const snapshot = await this.api.request(`/${id}`);
             if (generation !== this.generation || this.closed) return;
+            // A status read started before Save name must not restore the previous name.
+            if (profileVersion !== this.profileChangeVersion) {
+                snapshot.contributors.find(person => person.id === snapshot.contributorId).name =
+                    this.snapshot.contributors.find(person => person.id === this.snapshot.contributorId).name;
+            }
             this.snapshot = snapshot; this.delay = 5000;
             this.view.render(snapshot, this.sharing);
             const displayed = new Set();
             if (this.showContributions) for (const layer of snapshot.layers) {
                 if (layer.contributorId === snapshot.contributorId && this.getLayers().some(local => local.id === layer.layerId)) continue;
                 const key = `${id}/${layer.contributorId}/${layer.layerId}`; displayed.add(key);
-                if (this.visibleContributions.get(key) === layer.revision) continue;
+                const author = snapshot.contributors.find(person => person.id === layer.contributorId);
+                const label = `${author.name} · ${layer.name}`;
+                const presentation = JSON.stringify([layer.revision, label]);
+                if (this.visibleContributions.get(key) === presentation) continue;
                 let data;
                 try { data = await this.api.request(`/${id}/contributors/${layer.contributorId}/layers/${layer.layerId}`); }
                 catch (error) {
@@ -289,9 +309,8 @@ export class AnnotationSessionsController {
                     displayed.delete(key); this.visibleContributions.delete(key); continue;
                 }
                 if (generation !== this.generation || this.closed) return;
-                const author = snapshot.contributors.find(person => person.id === layer.contributorId);
-                this.showLayer(key, `${author.name} · ${layer.name}`, data.collection);
-                this.visibleContributions.set(key, data.revision);
+                this.showLayer(key, label, data.collection);
+                this.visibleContributions.set(key, JSON.stringify([data.revision, label]));
             }
             this.retainLayers(displayed);
             for (const key of this.visibleContributions.keys()) if (!displayed.has(key)) this.visibleContributions.delete(key);
@@ -303,6 +322,29 @@ export class AnnotationSessionsController {
         } finally {
             this.refreshing = false;
             if (this.snapshot && !this.closed) this.timer = setTimeout(() => void this.refreshSession(), this.delay);
+        }
+    }
+
+    /** Save this member's display name without changing identity, layers or sharing revisions.
+     * @param {string} name Requested name, validated by the session API.
+     * @return {Promise<void>} Completion with a saved name or a visible error; late replies are ignored.
+     */
+    async updateDisplayName(name) {
+        if (!this.snapshot || this.transitioning || this.nameBusy || this.closed) return;
+        const generation = this.generation;
+        this.nameBusy = true; this.view.setNameBusy(true);
+        try {
+            const saved = await this.api.request(`/${this.snapshot.id}/profile`, "PATCH", { name });
+            if (generation !== this.generation || this.closed) return;
+            this.snapshot.contributors.find(person => person.id === this.snapshot.contributorId).name = saved.name;
+            this.profileChangeVersion++;
+            this.view.nameSaved(saved.name);
+            this.view.message("Display name saved.");
+        } catch (error) {
+            if (generation === this.generation && !this.closed) this.view.message(error.message, true);
+        } finally {
+            this.nameBusy = false; this.view.setNameBusy(false);
+            this.view.render(this.snapshot, this.sharing);
         }
     }
 
@@ -380,8 +422,9 @@ export class AnnotationSessionsController {
         const data = await this.api.request(`/${sessionId}/contributors/${contributorId}/layers/${layerId}`);
         if (!isCurrent() || generation !== this.generation || this.closed) throw new Error("Layer restoration was superseded.");
         const author = this.snapshot.contributors.find(person => person.id === contributorId);
-        this.showLayer(key, `${author?.name ?? "Contributor"} · ${data.collection.name}`, data.collection);
-        this.visibleContributions.set(key, data.revision);
+        const label = `${author?.name ?? "Contributor"} · ${data.collection.name}`;
+        this.showLayer(key, label, data.collection);
+        this.visibleContributions.set(key, JSON.stringify([data.revision, label]));
     }
 
     /**

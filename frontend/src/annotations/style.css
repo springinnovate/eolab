@@ -110,3 +110,6 @@
 .is-inserting-annotation-vertex,
 .is-inserting-annotation-vertex .annotation-draft-polygon { cursor: crosshair; }
 .is-dragging-annotation, .is-dragging-annotation .annotation-draft-polygon { cursor: grabbing; }
+
+.annotation-sharing-context { margin: 0 0 0.5rem; color: var(--text-3); font-size: 0.85rem; overflow-wrap: anywhere; }
+.map-layer-row-actions .annotation-draw-button { border-color: var(--brand); color: var(--brand); font-weight: 600; }

@@ -1147,13 +1147,13 @@ async function initializeCatalog(
     });
     annotationSessions = new AnnotationSessionsController({
         root: document.querySelector("#annotation-sessions"),
-        createLayer: () => {
-            const id = annotations.createLayer();
+        createLayer: name => annotations.createLayer(name),
+        revealLayer: id => {
             onRenderingWorkspaceRequested();
-            return id;
+            annotations.revealDrawing(id);
         },
         getLayers: () => annotations.sharableLayers(),
-        setShareLabel: (id, label) => annotations.setShareLabel(id, label),
+        setShareLabel: (id, label, sessionName) => annotations.setShareLabel(id, label, sessionName),
         showLayer: (id, label, collection) => sharedAnnotations.addOrUpdateLayer(id, label, collection),
         retainLayers: ids => sharedAnnotations.removeLayersExcept(ids),
     });

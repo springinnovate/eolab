@@ -341,10 +341,17 @@ source checks, job ownership, cancellation and output checksum checks are unchan
 
 ## Shared annotations
 
-The **Shared annotations** section above Map layers creates or joins an annotation
-session on this EOLab site. The session owner shares a join code; contributors
-enter that code and a display name. Creating or joining a session adds an empty
-annotation layer when this device has no local layer already shared with it.
+The **Annotation session** section offers **Enter a code** or **Start a session**.
+Starting asks for a session name and initially identifies the creator as **Session
+owner**. Joining asks for the session code and the name others will see. Members
+can change their own display name under **Session details**; this does not change
+ownership or rename existing layers. **Recent sessions** reopens a previous membership.
+
+Creating or joining reveals Map layers and focuses **Draw polygon** on the user's
+annotation layer, creating a named empty layer only when necessary. Saved polygons
+have name/note controls and **Draw another polygon** stays in the layer's primary
+actions. The session bar stays compact; invitations, contributors, downloads and
+settings are under **Session details**, while sharing errors remain visible.
 New layers (including GeoJSON imports) are shared automatically with the active
 session once saved on the device; later saved edits are sent automatically too.
 Older local layers remain private until their **Share** button is used. Reloading

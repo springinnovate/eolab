@@ -239,3 +239,77 @@ def test_storage_capacity_rejects_growth_without_losing_previous_copy(
         )
     assert failed.value.status == 413
     assert store.read_shared_layer(session, "owner", author, layer) == original
+
+
+def test_members_change_only_their_own_display_names(
+    store: AnnotationSessionStore,
+) -> None:
+    """Rename through HTTP without changing contributor identity or layer revisions.
+
+    Args:
+        store: Empty disposable PostgreSQL annotation store.
+    """
+    app = FastAPI()
+    app.include_router(create_annotation_sessions_router(store))
+    owner = TestClient(app, base_url="https://testserver", headers=HEADERS)
+    member = TestClient(app, base_url="https://testserver", headers=HEADERS)
+    outsider = TestClient(app, base_url="https://testserver", headers=HEADERS)
+    session = owner.post(
+        BASE, json={"name": "Workshop", "contributorName": "Session owner"}
+    ).json()
+    path = f"{BASE}/{session['id']}"
+    joined = member.post(
+        BASE + "/join",
+        json={"joinCode": session["joinCode"], "contributorName": "Maria"},
+    ).json()
+    layer_id = str(uuid4())
+    member.put(
+        f"{path}/layers/{layer_id}", json={"revision": 0, "collection": collection()}
+    )
+    assert (
+        outsider.patch(path + "/profile", json={"name": "Impostor"}).status_code == 404
+    )
+    assert (
+        owner.patch(
+            path + "/profile",
+            json={"name": "Rich", "contributorId": joined["contributorId"]},
+        ).status_code
+        == 422
+    )
+    assert owner.patch(path + "/profile", json={"name": "  "}).status_code == 422
+    assert (
+        owner.patch(
+            path + "/profile",
+            json={"name": "Rich"},
+            headers={"Origin": "https://another.example"},
+        ).status_code
+        == 403
+    )
+    assert owner.patch(path + "/profile", json={"name": " Rich "}).json() == {
+        "name": "Rich"
+    }
+    assert member.patch(path + "/profile", json={"name": "Rosa"}).status_code == 200
+    current = owner.get(path).json()
+    assert {p["id"]: p["name"] for p in current["contributors"]} == {
+        session["contributorId"]: "Rich",
+        joined["contributorId"]: "Rosa",
+    }
+    assert current["layers"][0]["revision"] == 1
+    assert current["contributorId"] == session["contributorId"]
+    assert (
+        owner.get(path + "/export").json()["features"][0]["properties"]["contributor"]
+        == "Rosa"
+    )
+    from eolab_app.annotation_sessions.models import MAX_LAYER_BYTES
+
+    assert (
+        member.patch(
+            path + "/profile", content=b" " * (MAX_LAYER_BYTES + 1)
+        ).status_code
+        == 413
+    )
+    with store.transaction(write=True) as cursor:
+        cursor.execute(
+            "UPDATE annotation_sessions.sessions SET expires_at=now()-interval '1 second'"
+        )
+    assert owner.patch(path + "/profile", json={"name": "Gone"}).status_code == 404

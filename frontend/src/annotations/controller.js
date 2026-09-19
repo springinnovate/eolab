@@ -125,12 +125,14 @@ export class AnnotationController {
 
     /**
      * Add an empty annotation layer to the map and start saving it on this device.
+     * @param {string|null} [name=null] Optional initial layer name supplied by composition, at most 160 characters.
      * @return {string} New local layer identifier; sharing reads it only after a successful save.
      * @throws {Error} If local annotations are unavailable or the layer limit is reached.
      */
-    createLayer() {
+    createLayer(name = null) {
         if (!this.loaded) throw new Error("Local annotations are not available yet.");
         const layer = this.model.createLayer();
+        if (name !== null) layer.name = name;
         this.attachLayer(layer);
         this.onLayerCreated?.(layer.id);
         void this.save();
@@ -239,7 +241,7 @@ export class AnnotationController {
         const adapter = {
             createState: () => layer,
             createLayer: () => rendering,
-            snapshot: () => ({ datasetKind: "annotation", legend: null, canFilter: true, controls: controls.root,
+            snapshot: () => ({ datasetKind: "annotation", legend: null, canFilter: true, controls: controls.root, primaryControl: controls.draw,
                 filterActive: typeof layer.filter === "string" ? !!layer.filter.trim() : layer.filter.enabled && !!layer.filter.rules.length,
                 filterStatus: (typeof layer.filter === "string" ? layer.filter.trim() : layer.filter.rules.length)
                     ? `${matchingAnnotationPolygons(layer).length} of ${layer.polygons.length} polygons match` : null }),
@@ -351,12 +353,21 @@ export class AnnotationController {
      * Show sharing status without rebuilding annotation controls or moving focus.
      * @param {string} id Local layer identifier.
      * @param {string} label Share button label supplied by composition.
+     * @param {string|null} [sessionName=null] Current sharing context; null clears the association.
      * @return {void}
      */
-    setShareLabel(id, label) {
-        const control = this.controls.get(id)?.share;
-        if (control) control.textContent = label;
+    setShareLabel(id, label, sessionName = null) {
+        const control = this.controls.get(id);
+        if (!control) return;
+        control.share.textContent = label;
+        control.sharing.textContent = sessionName ? `Shared with ${sessionName}` : "";
+        control.sharing.hidden = !sessionName;
     }
+
+    /** Reveal a local layer's drawing controls without entering editing mode.
+     * @param {string} id Local annotation layer identifier. @return {void}
+     */
+    revealDrawing(id) { this.controls.get(id)?.revealDrawing(); }
 
     /**
      * Enter drawing or geometry editing; saved polygons remain unchanged until Save.

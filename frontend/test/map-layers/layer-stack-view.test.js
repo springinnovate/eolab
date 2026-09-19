@@ -878,3 +878,19 @@ test("pointer reorder ignores the Undo row when finding a real layer destination
   handle.dispatchEvent(interactionEvent("pointerup", { pointerId: 9 }));
   assert.deepEqual(moves, [[LAYERS[0].key, 2]], "placeholder must not produce an out-of-range layer index");
 });
+
+
+test("an owner-supplied primary control stays in the action row and retains focus", () => {
+  const documentContext = new FakeLayerStackDocument();
+  const view = new MapLayerStackView(documentContext);
+  const draw = documentContext.createElement("button");
+  draw.textContent = "Draw polygon";
+  const layer = { ...LAYERS[0], primaryControl: draw };
+  view.render([layer], null);
+  const list = documentContext.querySelector("#raster-layer-list");
+  assert.equal(elementsByClass(list, "map-layer-row-actions")[0].children[0], draw);
+  draw.focus();
+  view.render([LAYERS[1], layer], null);
+  assert.equal(documentContext.activeElement, draw);
+  assert.equal(elementsByClass(list, "map-layer-row-actions")[1].children[0], draw);
+});

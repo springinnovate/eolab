@@ -45,6 +45,12 @@ class JoinSession(SessionInput):
     contributorName: Name
 
 
+class ContributorProfile(SessionInput):
+    """The current member's display name; identity and ownership are unchanged."""
+
+    name: Name
+
+
 class PolygonGeometry(SessionInput):
     """One valid, closed polygon without holes, in editable longitude/latitude."""
 

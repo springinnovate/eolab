@@ -308,6 +308,27 @@ class AnnotationSessionStore:
             result["layers"] = cursor.fetchall()
             return result
 
+    def update_contributor_name(
+        self, session_id: UUID, browser: str, name: str
+    ) -> None:
+        """Change only the requesting member's display name in an active session.
+
+        Args:
+            session_id: Session the browser has joined.
+            browser: Private browser-cookie hash identifying the member.
+            name: Display name validated by the session input model.
+
+        Raises:
+            SessionError: If membership expired, access is absent or storage is unavailable.
+        """
+        with self.transaction(write=True) as cursor:
+            member = self.require_contributor(cursor, session_id, browser)
+            cursor.execute(
+                "UPDATE annotation_sessions.contributors SET name=%s WHERE id=%s",
+                (name, member["id"]),
+            )
+            self.extend_session_expiration(cursor, session_id)
+
     def read_shared_layer(
         self, session_id: UUID, browser: str, contributor_id: UUID, layer_id: UUID
     ) -> dict[str, Any]:

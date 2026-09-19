@@ -22,7 +22,10 @@ export class AnnotationLayerControls {
         this.root.append(this.name);
         const buttons = document.createElement("div");
         buttons.className = "annotation-actions";
-        buttons.append(this.button("Add polygon", actions.add));
+        this.draw = this.button("Draw polygon", actions.add);
+        this.draw.className = "annotation-draw-button";
+        this.sharing = document.createElement("p"); this.sharing.className = "annotation-sharing-context"; this.sharing.hidden = true;
+        this.root.prepend(this.sharing);
         this.share = this.button("Share", actions.share);
         this.share.title = "Share this layer's saved polygons, names and notes in an annotation session.";
         buttons.append(this.share);
@@ -135,6 +138,7 @@ export class AnnotationLayerControls {
             else input.value = this.layer.style[key];
         }
         this.opacity.value = this.layer.opacity;
+        this.draw.textContent = this.layer.polygons.length ? "Draw another polygon" : "Draw polygon";
         if (this.legacySearch) this.legacySearch.hidden = typeof this.layer.filter !== "string";
         const polygons = matchingAnnotationPolygons(this.layer);
         const filtered = typeof this.layer.filter === "string" ? !!this.layer.filter : this.layer.filter.enabled && !!this.layer.filter.rules.length;
@@ -143,13 +147,22 @@ export class AnnotationLayerControls {
         this.polygonList.replaceChildren(...polygons.map(polygon => this.polygonRow(polygon)));
         if (!polygons.length) {
             const empty = this.document.createElement("li");
-            empty.textContent = filtered ? "No polygons match the filter." : "Choose Add polygon to start drawing.";
+            empty.textContent = filtered ? "No polygons match the filter." : "Draw a polygon on the map, then give it a name or note. Saved changes are shared automatically when this layer is in a session.";
             this.polygonList.append(empty);
         }
         if (focusPolygon) {
             this.polygons.open = true;
             this.polygonList.querySelector(`[data-polygon-id="${focusPolygon}"] input`)?.focus();
         }
+    }
+
+    /** Bring the drawing action into view after the user connects to a session.
+     * @return {void}
+     */
+    revealDrawing() {
+        this.polygons.open = true;
+        this.draw.scrollIntoView({ block: "nearest" });
+        this.draw.focus({ preventScroll: true });
     }
 
     /**

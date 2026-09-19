@@ -17,12 +17,13 @@ function snapshot() {
 function setup(request = async () => snapshot()) {
     const local = [{ id: "local", collection: { name: "Priority areas", features: [] } }];
     const events = []; const storage = new Map();
-    const view = { memberships() {}, busy() {}, render() {}, setJoiningBusy: busy => events.push(["joiningBusy", busy]), code: {}, message: (...args) => events.push(["message", ...args]) };
+    const view = { showDetails() {}, showInvitation: code => events.push(["invitation", code]), setNameBusy() {}, nameSaved() {}, memberships() {}, busy() {}, render() {}, setJoiningBusy: busy => events.push(["joiningBusy", busy]), code: {}, message: (...args) => events.push(["message", ...args]) };
     const controller = new AnnotationSessionsController({ root: {}, getLayers: () => local,
-        createLayer: () => {
+        revealLayer: id => events.push(["reveal", id]),
+        createLayer: name => {
             const id = `created-${local.length}`;
             local.push({ id, collection: { name: "New annotations", features: [] } });
-            events.push(["created", id]); return id;
+            events.push(["created", id, name]); return id;
         },
         setShareLabel: (...args) => events.push(["label", ...args]),
         showLayer: (...args) => events.push(["show", ...args]), retainLayers: ids => events.push(["retain", [...ids]]),
@@ -187,12 +188,17 @@ for (const command of ["", "/join"]) test(`${command || "create"} starts a share
     assert.equal(events.filter(event => event[0] === "created").length, 1);
     assert.equal(controller.sharing.has("local"), false, "older local layers require Share");
     assert.ok(controller.sharing.has("created-1"));
+    assert.deepEqual(events.find(event => event[0] === "reveal"), ["reveal", "created-1"]);
+    assert.equal(events.find(event => event[0] === "created")[2], "Owner’s annotations");
     await controller.sendChangedLayers();
     assert.equal(writes[0][0], "/session/layers/created-1");
     assert.equal(writes.length, 1);
     await controller.openSession("/session");
     assert.equal(events.filter(event => event[0] === "created").length, 1);
     assert.equal(controller.sharing.get("created-1").revision, 1);
+    assert.equal(events.filter(event => event[0] === "reveal").length, 1, "reload does not steal focus");
+    await controller.openSession("/session", undefined, true);
+    assert.equal(events.filter(event => event[0] === "reveal").length, 2, "explicit recent-session navigation reveals the layer");
     await controller.openSession(command, { contributorName: "Maria" });
     assert.equal(events.filter(event => event[0] === "created").length, 1, "repeated join does not add another layer");
     controller.destroy();
@@ -253,4 +259,97 @@ test("rejoining with no revision bookmark never silently replaces an existing ch
     assert.equal(controller.sharing.get("local").conflict, true);
     assert.equal(events.some(event => event[0] === "created"), false);
     controller.destroy();
+});
+
+test("saving a display name preserves identity and ignores a stale status read", async () => {
+    let completeRead; const calls = [];
+    const { controller } = setup(async (path, method, body) => {
+        calls.push([path, method, body]);
+        if (method === "PATCH") return { name: body.name };
+        return new Promise(resolve => { completeRead = resolve; });
+    });
+    const reading = controller.refreshSession();
+    await controller.updateDisplayName("Rosa");
+    completeRead(snapshot()); await reading;
+    assert.equal(controller.snapshot.contributors[0].name, "Rosa");
+    assert.equal(controller.snapshot.contributorId, "me");
+    assert.deepEqual(calls[1], ["/session/profile", "PATCH", { name: "Rosa" }]);
+    controller.destroy();
+});
+
+test("a failed or obsolete name save keeps the current membership intact", async () => {
+    const { controller, events } = setup(async () => { throw new Error("Offline"); });
+    await controller.updateDisplayName("Rosa");
+    assert.equal(controller.snapshot.contributors[0].name, "Owner");
+    assert.ok(events.some(event => event[0] === "message" && event[1] === "Offline"));
+    let finish;
+    controller.api.request = () => new Promise(resolve => { finish = resolve; });
+    const saving = controller.updateDisplayName("Rosa");
+    await controller.stopSessionSync(); controller.snapshot = { ...snapshot(), id: "different" };
+    finish({ name: "Rosa" }); await saving;
+    assert.equal(controller.snapshot.contributors[0].name, "Owner");
+    controller.destroy();
+});
+
+test("a contributor name change updates an already displayed shared layer", async () => {
+    const metadata = { ...snapshot(), layers: [{ contributorId: "other", layerId: "remote", revision: 1, name: "Areas" }] };
+    const { controller, events } = setup(async path => path.includes("/contributors/") ? { revision: 1, collection: {} } : metadata);
+    controller.showContributions = true;
+    await controller.refreshSession();
+    metadata.contributors[1].name = "Rosa";
+    await controller.refreshSession();
+    assert.equal(events.filter(event => event[0] === "show").at(-1)[2], "Rosa · Areas");
+    controller.destroy();
+});
+
+test("sharing context clears on leave and on session expiration", async () => {
+    for (const expire of [false, true]) {
+        const { controller, events } = setup(async path => {
+            if (expire) throw Object.assign(new Error("Expired"), { status: 404 });
+            return path === "" ? [] : { revision: 1 };
+        });
+        controller.trackSharedLayer("local", 1);
+        assert.ok(events.some(event => event[0] === "label" && event[3] === "Session"));
+        if (expire) await controller.refreshSession(); else await controller.leave();
+        assert.deepEqual(events.filter(event => event[0] === "label").at(-1), ["label", "local", "Share"]);
+        controller.destroy();
+    }
+});
+
+
+test("reloading an invitation for the saved session does not steal focus", async () => {
+    const location = globalThis.location;
+    const { controller, events } = setup(async (path, method) => {
+        if (method === "PUT") return { revision: 1 };
+        return path === undefined ? [snapshot()] : snapshot();
+    });
+    try {
+        await controller.openSession("/join", { contributorName: "Owner" });
+        await controller.sendChangedLayers();
+        globalThis.location = { href: "https://example.test/?annotationSession=ABCDEFGH" };
+        await controller.start();
+        assert.equal(events.filter(event => event[0] === "reveal").length, 1);
+        assert.equal(events.filter(event => event[0] === "created").length, 1);
+        assert.equal(events.some(event => event[0] === "invitation"), false);
+    } finally {
+        controller.destroy();
+        if (location === undefined) delete globalThis.location; else globalThis.location = location;
+    }
+});
+
+test("a new invitation prefills the join form without joining or creating a layer", async () => {
+    const location = globalThis.location;
+    const calls = [];
+    const { controller, events } = setup(async path => { calls.push(path); return []; });
+    controller.snapshot = null;
+    try {
+        globalThis.location = { href: "https://example.test/?annotationSession=abcdefgh" };
+        await controller.start();
+        assert.deepEqual(calls, [undefined]);
+        assert.ok(events.some(event => event[0] === "invitation" && event[1] === "ABCDEFGH"));
+        assert.equal(events.some(event => event[0] === "created" || event[0] === "reveal"), false);
+    } finally {
+        controller.destroy();
+        if (location === undefined) delete globalThis.location; else globalThis.location = location;
+    }
 });

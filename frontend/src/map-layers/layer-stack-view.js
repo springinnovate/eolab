@@ -151,7 +151,7 @@ export class MapLayerStackView {
     /**
      * Render all retained rows from topmost to bottommost.
      *
-     * @param {Array<Object>} layers Layer presentation snapshots.
+     * @param {Array<Object>} layers Layer snapshots; optional primaryControl is an owner-supplied HTMLElement retained across renders.
      * @param {string|null} activeKey Active layer key.
      * @param {{key:string,action:string}|null} [requestedFocus=null] Optional
      * focus target after a reorder or removal.
@@ -169,7 +169,7 @@ export class MapLayerStackView {
         }
         const focusedControl = this.documentContext.activeElement;
         const retainRemovalFocus = !this.removalNotice.hidden && [this.undoRemove, this.dismissRemoval].includes(focusedControl);
-        const retainLocalFocus = !requestedFocus && layers.some(layer => layer.controls?.contains(focusedControl));
+        const retainLocalFocus = !requestedFocus && layers.some(layer => layer.controls?.contains(focusedControl) || layer.primaryControl === focusedControl);
         const retainedFocus = requestedFocus ?? this.#readFocusedAction();
         const focusTargets = new Map();
         const rows = layers.map((layer, index) => this.#buildRow(
@@ -405,7 +405,9 @@ export class MapLayerStackView {
             layer.filterActive ? "Filter ●" : "Filter", `Filter ${accessibleName}`,
             layer.key, "filter", () => this.handlers?.onFilter?.(layer.key), focusTargets,
         )] : [];
+        // Optional owner-supplied control remains visible outside detailed layer controls.
         rowActions.append(
+            ...(layer.primaryControl ? [layer.primaryControl] : []),
             style,
             ...filterActions,
             ...(layer.datasetKind === "raster" ? [this.#button(
