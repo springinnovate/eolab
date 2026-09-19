@@ -14,9 +14,13 @@ from psycopg.types.json import Jsonb
 
 from .models import AnnotationCollection, SessionError, ShareLayer
 
-# This component owns this advisory-lock identifier. It serializes short writes
-# and capacity checks across app processes; it never covers geometry rendering.
-SESSION_WRITE_LOCK = 7_610_457
+# Stable, application-chosen identifier for a PostgreSQL advisory transaction lock.
+# The number is a lock name, not a limit, session ID or credential. All annotation
+# session writes in this database use it so capacity checks and their writes cannot
+# race across app processes. PostgreSQL releases it on commit or rollback.
+# Keep this value distinct from locks used for unrelated work (Processing uses
+# 7_610_329), and keep it unchanged across app processes and deployments.
+ANNOTATION_SESSION_WRITE_LOCK_ID: int = 7_610_457
 SESSION_BYTES = 32 * 1024 * 1024
 TOTAL_BYTES = 256 * 1024 * 1024
 
@@ -55,7 +59,8 @@ class AnnotationSessionStore:
                 with connection.cursor() as cursor:
                     if write:
                         cursor.execute(
-                            "SELECT pg_advisory_xact_lock(%s)", (SESSION_WRITE_LOCK,)
+                            "SELECT pg_advisory_xact_lock(%s)",
+                            (ANNOTATION_SESSION_WRITE_LOCK_ID,),
                         )
                     else:
                         # Membership, authors and layers must describe one snapshot,
