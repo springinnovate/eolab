@@ -12,6 +12,8 @@ import httpx2
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
+from eolab_app.annotation_sessions.store import AnnotationSessionStore
+from eolab_app.routes.annotation_sessions import create_annotation_sessions_router
 from eolab_app.catalog.pgstac import PgStacCatalogDatabase
 from eolab_app.catalog.finalization import CompositeDatasetItemFinalizer
 from eolab_app.catalog.reconciliation import MissingItemReconciler
@@ -276,6 +278,9 @@ def create_app(
         description=app_global_configuration.app_subtitle,
         version=app_global_configuration.app_version,
         lifespan=lifespan,
+    )
+    application.include_router(
+        create_annotation_sessions_router(AnnotationSessionStore())
     )
     catalog_database = PgStacCatalogDatabase()
     application.include_router(

@@ -17,18 +17,25 @@ export class AnnotationController {
      * @param {(editing:boolean)=>void} options.onEditingChange Composition-owned mode change.
      * @param {Document} [options.document=globalThis.document] Application document.
      * @param {AnnotationStorage} [options.storage] Device persistence provider.
+     * @param {(id:string)=>void} [options.onShare] Composition-owned sharing request.
+     * @param {(id:string)=>void} [options.onLayerCreated] Notifies composition of new or imported layers before saving.
+     * @param {()=>void} [options.onCommittedChange] Notifies composition after successful device persistence.
      */
-    constructor({ leaflet, map, mapLayers, onEditingChange, document = globalThis.document, storage = new AnnotationStorage() }) {
+    constructor({ leaflet, map, mapLayers, onEditingChange, document = globalThis.document, storage = new AnnotationStorage(), onShare = () => {}, onLayerCreated = () => {}, onCommittedChange = () => {} }) {
         this.leaflet = leaflet;
         this.map = map;
         this.mapLayers = mapLayers;
         this.document = document;
         this.storage = storage;
+        this.onShare = onShare;
+        this.onLayerCreated = onLayerCreated;
+        this.onCommittedChange = onCommittedChange;
         this.onEditingChange = onEditingChange;
         this.model = new AnnotationModel();
         this.controls = new Map();
         this.layers = new Map();
         this.loaded = false;
+        this.savedSharingLayers = [];
         this.orderRestored = false;
         this.dirty = false;
         this.saving = false;
@@ -54,10 +61,8 @@ export class AnnotationController {
         });
         this.createButton.disabled = true;
         this.createButton.addEventListener("click", () => this.perform(() => {
-            const layer = this.model.createLayer();
-            this.attachLayer(layer);
-            this.save();
-            this.controls.get(layer.id).name.querySelector("input").select();
+            const id = this.createLayer();
+            this.controls.get(id).name.querySelector("input").select();
         }));
         this.undoButton.addEventListener("click", () => this.perform(() => {
             const layerId = this.model.deleted?.layerId;
@@ -103,6 +108,7 @@ export class AnnotationController {
     async load() {
         try {
             this.model.layers = await this.storage.load();
+            this.savedSharingLayers = this.model.layers.map(layer => ({ id: layer.id, collection: exportAnnotationGeoJSON(layer) }));
             for (const layer of [...this.model.layers].reverse()) this.attachLayer(layer);
             this.loaded = true;
             this.createButton.disabled = false;
@@ -112,6 +118,20 @@ export class AnnotationController {
             this.status.textContent = `Cannot open saved annotations: ${error.message}`;
             this.toolsDisclosure.open = true;
         }
+    }
+
+    /**
+     * Add an empty annotation layer to the map and start saving it on this device.
+     * @return {string} New local layer identifier; sharing reads it only after a successful save.
+     * @throws {Error} If local annotations are unavailable or the layer limit is reached.
+     */
+    createLayer() {
+        if (!this.loaded) throw new Error("Local annotations are not available yet.");
+        const layer = this.model.createLayer();
+        this.attachLayer(layer);
+        this.onLayerCreated?.(layer.id);
+        void this.save();
+        return layer.id;
     }
 
     /**
@@ -130,6 +150,7 @@ export class AnnotationController {
             const imported = await readAnnotationGeoJSONFile(file);
             const layer = this.model.importLayer(imported);
             this.attachLayer(layer);
+            this.onLayerCreated?.(layer.id);
             await this.save();
             this.fileStatus.textContent = `Imported ${layer.polygons.length} ${layer.polygons.length === 1 ? "polygon" : "polygons"} into “${layer.name}”.`;
         } catch (error) {
@@ -197,6 +218,7 @@ export class AnnotationController {
         const key = `local:annotation:${layer.id}`;
         const controls = new AnnotationLayerControls(this.document, layer, {
             add: () => this.beginPolygon(layer.id),
+            share: () => this.onShare(layer.id),
             exportGeoJSON: () => this.exportGeoJSONFile(layer.id),
             edit: id => this.beginPolygon(layer.id, id),
             removePolygon: id => this.perform(() => this.deletePolygon(layer.id, id)),
@@ -290,6 +312,25 @@ export class AnnotationController {
         }
         await this.save();
         if (this.dirty) throw new Error(this.status.textContent);
+    }
+
+    /**
+     * Export device-saved layer contents for composition to share; exclude unfinished edits.
+     * @return {{id:string,collection:Object}[]} GeoJSON snapshots from the last successful device save.
+     */
+    sharableLayers() {
+        return this.savedSharingLayers;
+    }
+
+    /**
+     * Show sharing status without rebuilding annotation controls or moving focus.
+     * @param {string} id Local layer identifier.
+     * @param {string} label Share button label supplied by composition.
+     * @return {void}
+     */
+    setShareLabel(id, label) {
+        const control = this.controls.get(id)?.share;
+        if (control) control.textContent = label;
     }
 
     /**
@@ -445,9 +486,11 @@ export class AnnotationController {
                 this.pendingSave = false;
                 const document = this.model.document();
                 await this.storage.save(document);
+                this.savedSharingLayers = document.layers.map(layer => ({ id: layer.id, collection: exportAnnotationGeoJSON(layer) }));
             }
             this.dirty = false;
             this.status.textContent = "Saved on this device.";
+            this.onCommittedChange?.();
         } catch (error) {
             this.status.textContent = `Not saved: ${error.message} Keep this tab open.`;
             this.retryButton.hidden = false;

@@ -166,7 +166,7 @@ def test_direct_selection_mechanisms_have_no_feature_or_rendering_imports() -> N
 
 
 def test_retired_upload_runtime_is_absent() -> None:
-    """Keep removed upload/storage contracts from returning through active code."""
+    """Keep retired AOI uploads absent while allowing local annotation file imports."""
     assert not list(Path("src/eolab_app/temporary_aoi").glob("*.py"))
     assert not Path("src/eolab_app/routes/temporary_aois.py").exists()
     assert not list(Path("frontend/src/temporary-aoi").glob("*.js"))
@@ -176,6 +176,7 @@ def test_retired_upload_runtime_is_absent() -> None:
         if path != Path("src/eolab_app/processing/service.py"):
             assert "temporaryAoiId" not in source, path
     markup = Path("frontend/index.html").read_text(encoding="utf8")
-    assert "Upload AOI" not in markup and 'type="file"' not in markup
+    for retired_control in ("Upload AOI", "temporary-aoi", "temporaryAoi"):
+        assert retired_control not in markup
     compose = Path("docker-compose.yml").read_text()
     assert "TEMPORARY_AOI" not in compose

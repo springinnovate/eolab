@@ -131,3 +131,41 @@ test("failed Undo persistence can retry without overwriting the restored annotat
     await assert.rejects(annotations.restoreRemovedLayer(snapshot, () => true), /already on the map/);
     await assert.rejects(annotations.restoreRemovedLayer(snapshot, () => false), /superseded/);
 });
+
+test("sharing reads the last device-saved polygons while a new save is pending or fails", async () => {
+    const annotations = controller();
+    const layer = annotations.model.createLayer();
+    await annotations.save();
+    const saved = annotations.sharableLayers();
+    let release;
+    annotations.storage.save = () => new Promise(resolve => { release = resolve; });
+    layer.name = "Changed layer";
+    const saving = annotations.save();
+    assert.deepEqual(annotations.sharableLayers(), saved);
+    release(); await saving;
+    assert.equal(annotations.sharableLayers()[0].collection.name, "Changed layer");
+    annotations.storage.save = async () => { throw new Error("Storage full"); };
+    layer.name = "Unsaved layer";
+    await annotations.save();
+    assert.equal(annotations.sharableLayers()[0].collection.name, "Changed layer");
+});
+
+test("creating a layer announces its identity before saving, while sharing sees only committed data", async () => {
+    const annotations = controller();
+    annotations.savedSharingLayers = [];
+    annotations.attachLayer = () => {};
+    const events = []; let release;
+    annotations.onLayerCreated = id => events.push(["created", id]);
+    annotations.onCommittedChange = () => events.push(["saved", annotations.sharableLayers().map(layer => layer.id)]);
+    annotations.storage.save = () => new Promise(resolve => { release = resolve; });
+    const id = annotations.createLayer();
+    assert.deepEqual(events, [["created", id]]);
+    assert.deepEqual(annotations.sharableLayers(), []);
+    release(); await annotations.savePromise;
+    assert.deepEqual(events, [["created", id], ["saved", [id]]]);
+    annotations.storage.save = async () => { throw new Error("Storage full"); };
+    const unsavedId = annotations.createLayer(); await annotations.savePromise;
+    assert.equal(annotations.sharableLayers().some(layer => layer.id === unsavedId), false);
+    annotations.loaded = false;
+    assert.throws(() => annotations.createLayer(), /not available/);
+});
