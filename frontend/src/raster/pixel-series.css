@@ -1,0 +1,23 @@
+#raster-series h2 { margin: 0; font-size: 1.05rem; }
+#raster-series-context, #raster-series-status, #raster-series-chart-note {
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+.raster-series-controls { display: flex; flex-wrap: wrap; gap: 0.65rem; margin: 0.8rem 0; }
+.raster-series-controls label { display: grid; gap: 0.25rem; font-size: 0.75rem; }
+#raster-series-sources { max-height: 12rem; overflow: auto; margin-top: 0.5rem; }
+#raster-series-sources label { display: flex; align-items: start; gap: 0.5rem; padding: 0.3rem 0; }
+#raster-series-sources span { overflow-wrap: anywhere; min-width: 0; }
+#raster-series-chart { width: 100%; height: auto; }
+#raster-series-chart[hidden] { display: none; }
+#raster-series-chart.is-previous { opacity: 0.25; }
+.raster-series-table-scroll { overflow-x: auto; }
+#raster-series table { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
+#raster-series th, #raster-series td { padding: 0.4rem; border-bottom: 1px solid var(--border-1); text-align: left; overflow-wrap: anywhere; }
+#raster-series td:nth-child(2) { font-variant-numeric: tabular-nums; }
+.raster-series-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.65rem; }
+
+
+#raster-series summary { cursor: pointer; font-size: 0.78rem; }
+.raster-series-controls select { max-width: 100%; min-width: 0; }
+#raster-series-sources { font-size: 0.78rem; }

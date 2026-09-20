@@ -9,7 +9,8 @@
  */
 import { isCanonicalWgs84Position } from "./geometry.js";
 
-const MAXIMUM_POINT_SAMPLE_PARTICIPANTS = 2;
+export const MAXIMUM_POINT_SAMPLE_PARTICIPANTS = 50;
+const POINT_SAMPLE_CONCURRENCY = 2;
 
 /**
  * @typedef {Object} RasterPointSampleParticipant
@@ -61,7 +62,7 @@ function normalizeParticipants(participants) {
         !Array.isArray(participants) ||
         participants.length > MAXIMUM_POINT_SAMPLE_PARTICIPANTS
     ) {
-        throw new TypeError("Raster point sampling accepts at most two participants");
+        throw new TypeError(`Raster point sampling accepts at most ${MAXIMUM_POINT_SAMPLE_PARTICIPANTS} participants`);
     }
     const keys = new Set();
     return participants.map((participant) => {
@@ -136,7 +137,7 @@ export class RasterPointSamplesController {
     }
 
     /**
-     * Start concurrent bounded reads for one authoritative map click.
+     * Read the clicked pixel across the raster stack, with at most two requests in flight.
      *
      * A new click aborts and supersedes all older work. Empty participants
      * explicitly clear the retained result instead of emitting an empty panel.
@@ -172,12 +173,24 @@ export class RasterPointSamplesController {
         const abortController = new AbortController();
         this.abortController = abortController;
         this.#emit();
-        for (const participant of normalized) {
-            void this.#readParticipant(
-                participant,
-                generation,
-                abortController
-            );
+        const pending = normalized.values();
+        for (let worker = 0; worker < Math.min(POINT_SAMPLE_CONCURRENCY, normalized.length); worker++) {
+            void this.#readPendingParticipants(pending, generation, abortController);
+        }
+    }
+
+    /**
+     * Read queued rasters sequentially until this click is cancelled or finished.
+     * @param {Iterator<RasterPointSampleParticipant>} pending Shared unread participants.
+     * @param {number} generation Click that owns this queue.
+     * @param {AbortController} abortController Cancellation for this click.
+     * @return {Promise<void>}
+     */
+    async #readPendingParticipants(pending, generation, abortController) {
+        while (generation === this.generation && !abortController.signal.aborted) {
+            const next = pending.next();
+            if (next.done) return;
+            await this.#readParticipant(next.value, generation, abortController);
         }
     }
 

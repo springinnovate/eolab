@@ -23,7 +23,7 @@ const FEATURE_PROFILE_SOURCE = readFileSync(
   "utf8",
 );
 const SERIES_CHART_SOURCE = readFileSync(
-  new URL("../../src/vector/series-chart.js", import.meta.url),
+  new URL("../../src/charts/series-chart.js", import.meta.url),
   "utf8",
 );
 const COMPOSITION_SOURCE = readFileSync(
@@ -155,8 +155,8 @@ test("feature-field analysis is a sibling behind neutral observation and chart c
     /from "\.\/inspection-observation\.js"/,
   );
   assert.match(TIME_SERIES_SOURCE, /from "\.\/inspection-observation\.js"/);
-  assert.match(FEATURE_PROFILE_SOURCE, /from "\.\/series-chart\.js"/);
-  assert.match(TIME_SERIES_SOURCE, /from "\.\/series-chart\.js"/);
+  assert.match(FEATURE_PROFILE_SOURCE, /from "\.\.\/charts\/series-chart\.js"/);
+  assert.match(TIME_SERIES_SOURCE, /from "\.\.\/charts\/series-chart\.js"/);
   for (const forbiddenOwner of [
     "feature-inspector",
     "time-series",

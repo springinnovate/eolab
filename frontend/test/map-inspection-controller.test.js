@@ -24,6 +24,7 @@ function fixture() {
     doc.querySelector("#downloads-panel").hidden = true;
     doc.querySelector("#calculations-panel").hidden = true;
     doc.querySelector("#annotations-panel").hidden = true;
+    doc.querySelector("#raster-series").hidden = true;
     histogram.hidden = style.hidden = feature.hidden =
         vectorTimeSeries.hidden = vectorFeatureProfile.hidden = true;
     const close = doc.querySelector("#close-map-histogram");
@@ -592,4 +593,21 @@ test("annotation panel closes independently and cannot leave a hidden input-bloc
     h.controller.hideAnnotations();
     assert.equal(h.panels.hidden, true);
     assert.equal(h.controller.isOpen, false);
+});
+
+test("raster series remains active during map inspection and closes without hiding peer results", () => {
+    const h = fixture();
+    const activity = [];
+    h.controller.subscribeActiveTool(tool => activity.push(tool));
+    h.controller.showRasterSeries();
+    assert.equal(h.controller.activeTool, "raster-series");
+    h.controller.beginMapClick({ lat: 22, lng: 78 });
+    h.controller.showHistogram(2, { activate: false });
+    h.controller.showFeatureInspector({ activate: false });
+    assert.equal(h.controller.activeTool, "raster-series");
+    h.controller.hideRasterSeries();
+    assert.notEqual(activity.at(-1), "raster-series");
+    assert.equal(h.doc.querySelector("#raster-series").hidden, true);
+    assert.equal(h.histogram.hidden, false);
+    h.controller.destroy();
 });

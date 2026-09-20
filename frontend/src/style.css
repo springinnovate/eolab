@@ -3630,6 +3630,7 @@ article.raster-histogram-summary {
 }
 
 #map-histogram-panel,
+#raster-series,
 #annotations-panel,
 #calculations-panel,
 #downloads-panel,
@@ -3655,6 +3656,7 @@ article.raster-histogram-summary {
 #map-inspection:not(:popover-open),
 #open-analysis-tools[hidden],
 #map-histogram-panel[hidden],
+#raster-series[hidden],
 #annotations-panel[hidden],
 #calculations-panel[hidden],
 #downloads-panel[hidden],
@@ -3667,6 +3669,7 @@ article.raster-histogram-summary {
 .layer-style-opacity[hidden] { display: none; }
 
 #map-histogram-panel:not([data-map-inspection-active="true"]),
+#raster-series:not([data-map-inspection-active="true"]),
 #annotations-panel:not([data-map-inspection-active="true"]),
 #calculations-panel:not([data-map-inspection-active="true"]),
 #downloads-panel:not([data-map-inspection-active="true"]),

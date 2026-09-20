@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { FakeRasterControlDocument } from "../../test-support/raster/fake-controls-document.js";
-import { renderOrdinalSeriesChart } from "../../src/vector/series-chart.js";
+import { renderOrdinalSeriesChart } from "../../src/charts/series-chart.js";
 
 /**
  * Render points through the production SVG chart contract.
