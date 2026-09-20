@@ -133,7 +133,7 @@ class ProcessingLimits:
     plan_queue_seconds: float = 60
     plan_queue_capacity: int = 32
     plan_record_capacity: int = 128
-    max_owner_plans: int = 5
+    max_owner_plans: int = 32
     runtime_seconds: float = 600
     plan_ttl_seconds: int = 300
     result_ttl_seconds: int = 86_400

@@ -267,7 +267,11 @@ recovers updates if streaming is unavailable.
 
 Raster calculation and clip planning share a FIFO queue with one native planner.
 The current limits admit 32 unfinished requests, retain 128 plan records, and
-allow each browser session five unfinished or ready plans. A cache hit still
+allow each browser session 32 unfinished or ready plans. This admits a burst of
+independent raster plans from one session within the existing global queue;
+it does not add native workers. Released plans no longer count against the
+session allowance, but remain in the 128-record budget until expiry so that
+late retries cannot recreate cancelled work. A cache hit still
 checks source access but does not wait for the native planner. Queue waiting has
 its own 60-second limit; active planning retains its 15-second limit. A completed
 estimate is usable for five minutes starting when preparation finishes.
