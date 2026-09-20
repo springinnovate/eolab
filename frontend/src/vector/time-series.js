@@ -3,7 +3,7 @@
 import {
     formatSeriesNumber,
     renderOrdinalSeriesChart,
-} from "./series-chart.js";
+} from "../charts/series-chart.js";
 import { validateVectorInspectionObservations } from "./inspection-observation.js";
 
 export const VECTOR_TIME_SERIES_LAYER_LABEL = "__eolab_layer_label__";

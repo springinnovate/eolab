@@ -1,4 +1,4 @@
-/** Neutral ordinal chart rendering for vector-analysis components. */
+/** Draw ordered numeric observations for vector and raster series. */
 
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 const CHART_WIDTH = 680;

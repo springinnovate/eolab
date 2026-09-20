@@ -172,10 +172,10 @@ test("point sample input and response contracts are closed and bounded", async (
   );
   assert.throws(
     () => controller.sample(
-      [participant("one"), participant("two"), participant("three")],
+      Array.from({ length: 51 }, (_, index) => participant(String(index))),
       { longitude: 1, latitude: 2 },
     ),
-    /at most two participants/,
+    /at most 50 participants/,
   );
   assert.throws(
     () => controller.sample([participant("one")], { longitude: 181, latitude: 2 }),

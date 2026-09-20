@@ -69,6 +69,10 @@ import {
     CatalogVectorAssessmentCache,
 } from "./catalog-map-actions.js";
 import { initializeRasterViewer } from "./raster/raster-viewer.js";
+import { RasterPixelSeriesController } from "./raster/pixel-series.js";
+import { RasterPixelSeriesView } from "./raster/pixel-series-view.js";
+import { sampleCatalogRasterPixel } from "./raster/analysis-api.js";
+import "./raster/pixel-series.css";
 import { RasterCursorValuesView } from "./raster/cursor-values-view.js";
 import { SavedMapViewCatalogClient } from "./saved-map-view/catalog-client.js";
 import { SavedMapViewController } from "./saved-map-view/controller.js";
@@ -717,6 +721,7 @@ async function initializeCatalog(
     let sharedAnnotations = null;
     let mapInteractionMode = "inspection";
     let rasterVisualization = null;
+    let rasterSeries = null;
     let layerStyleEditor = null;
     let savedMapViewController = null;
     let vectorFeatureInspector = null;
@@ -743,6 +748,7 @@ async function initializeCatalog(
         onLayersChange: (layers) => {
             refreshCatalogMapAction();
             annotations?.observeLayerOrder(layers);
+            rasterSeries?.setSources(layers.filter(layer => layer.datasetKind === "raster"));
             rasterVisualization?.syncVisibleLayers();
             layerStyleEditor?.refresh();
             vectorFeatureInspector?.syncVisibleLayers();
@@ -1001,6 +1007,16 @@ async function initializeCatalog(
         savedMapViewController?.scheduleRemember()
     );
     const startupMapRestore = savedMapViewController.restoreStartupView(globalThis.location.hash);
+    rasterSeries = new RasterPixelSeriesController({
+        samplePoint: sampleCatalogRasterPixel,
+        view: new RasterPixelSeriesView(),
+        onClose: () => { mapInspection.hideRasterSeries(); leafletMap.getContainer().focus(); },
+    });
+    rasterSeries.setSources(mapLayerController.snapshots().filter(layer => layer.datasetKind === "raster"));
+    mapInspection.subscribeActiveTool(tool => rasterSeries.setActive(tool === "raster-series"));
+    for (const id of ["open-raster-series", "open-raster-series-dock", "open-raster-series-histogram"]) {
+        document.querySelector(`#${id}`).addEventListener("click", () => mapInspection.showRasterSeries());
+    }
     const vectorTimeSeries = new VectorTimeSeriesController({
         onVisibilityChange: (visible, moveFocus) => {
             if (visible) mapInspection.showVectorTimeSeries();
@@ -1098,6 +1114,7 @@ async function initializeCatalog(
     function exploreMap(event) {
         if (mapInteractionMode !== "inspection") return;
         mapInspection.beginMapClick(event.latlng);
+        rasterSeries.setPosition({ longitude: event.latlng.lng, latitude: event.latlng.lat });
         rasterClickSelected = false;
         selectingMapClick = true;
         try {

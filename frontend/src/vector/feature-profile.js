@@ -4,7 +4,7 @@ import { validateVectorInspectionObservations } from "./inspection-observation.j
 import {
     formatSeriesNumber,
     renderOrdinalSeriesChart,
-} from "./series-chart.js";
+} from "../charts/series-chart.js";
 
 export const FEATURE_PROFILE_TITLE_NONE = "__eolab_no_title__";
 export const FEATURE_PROFILE_TITLE_LAYER = "__eolab_layer_title__";
