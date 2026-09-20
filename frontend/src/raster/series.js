@@ -304,7 +304,7 @@ export class RasterSeriesController {
             const sameFormula = result?.intent.calculations.some(item => item.label === "stat-" + formula.id && item.expression === formula.expression.trim());
             return { ...source, state: row?.state === "ok" && sameFormula ? "value" : result?.error ? "error" : row?.state ?? "waiting",
                 value: row?.value == null ? null : Number(row.value), rawValue: row?.value, unit: row?.unit ?? "",
-                errorMessage: result?.error ?? (source.key === area.current?.key ? area.message : (!result ? "Waiting" : "")), cached: !!result?.job?.result?.cacheHit };
+                errorMessage: result?.error ?? area.progress.get(source.key)?.message ?? (!result ? "Waiting" : ""), cached: !!result?.job?.result?.cacheHit };
         });
         const rows = rowsFor(area.results);
         const previousRows = area.busy && !rows.some(row => row.state === "value") && area.previousResults ? rowsFor(area.previousResults) : null;
@@ -313,7 +313,8 @@ export class RasterSeriesController {
         this.view.render({
             mode: "area", area: { formulas: this.formulas, sources: area.sources, areaChoice: this.areaChoice,
                 area: area.area, areaLabel: area.areaLabel, results: area.results, complete: area.complete,
-                confirmation: area.confirmation, recoverable: area.needsRecovery }, selectedStatistic: formula.id, axisLabel,
+                confirmation: area.confirmation, recoverable: area.needsRecovery, hasErrors: area.hasErrors,
+                elapsedSeconds: area.elapsedSeconds }, selectedStatistic: formula.id, axisLabel,
             sources: this.sources.map(source => ({ ...source, selected: this.selectedKeys.has(source.key) })),
             rows, previousRows, busy: area.busy, chartType: this.chartType,
             message: area.results.size + " of " + sources.length + " rasters complete. " + area.message,

@@ -7,7 +7,7 @@ import { describeJobProgress } from "./presentation.js";
 
 /**
  * Calculate up to five formulas over one shared area for each selected raster.
- * Requests run one raster at a time through the shared Processing queue. This
+ * Requests run independently through Processing's server queue. This
  * controller keeps per-raster results, pauses for confirmation or recovery, and
  * cancels obsolete work when the inputs change or area statistics is hidden.
  */
@@ -18,12 +18,12 @@ export class RasterSeriesCalculations {
      * rasters, formulas and visibility before work can begin.
      * @param {Object} options Providers.
      * @param {import("./api.js").ProcessingApiClient} options.api Formula validator.
-     * @param {import("./calculation-queue.js").CalculationQueue} options.queue Queue shared with summary cards.
+     * @param {import("./calculation-requests.js").CalculationRequests} options.requests Independent recoverable requests.
      * @param {Object} [options.clock=globalThis] Debounce timer provider.
      * @param {()=>number} [options.now] Monotonic browser clock in milliseconds.
      */
-    constructor({ api, queue, clock = globalThis, now = () => performance.now() }) {
-        Object.assign(this, { api, clock, now });
+    constructor({ api, requests, clock = globalThis, now = () => performance.now() }) {
+        Object.assign(this, { api, requests, clock, now });
         this.onChange = () => {};
         this.formulas = [];
         this.sources = [];
@@ -33,12 +33,13 @@ export class RasterSeriesCalculations {
         this.version = 0;
         this.results = new Map();
         this.previousResults = null;
-        this.current = null;
+        this.pending = new Map();
         this.message = "";
         this.busy = false;
         this.confirmation = false;
         this.validated = false;
-        this.client = queue.createClient("raster-series", state => this.handleCalculationProgress(state));
+        this.clients = new Map();
+        this.progress = new Map();
     }
 
     /** Replace the callback that refreshes the plot when calculation state changes.
@@ -49,17 +50,34 @@ export class RasterSeriesCalculations {
      */
     setProgressListener(onChange) { this.onChange = onChange; }
 
-    /** Recover a series calculation saved before reload and request its cancellation.
+    /** Recover every series calculation saved before reload and request cancellation.
      * Call once during browser startup. The remaining raster list is not saved, so
      * that old series must not resume automatically. If its submission response was
      * lost, the executor recovers the job with the original request key before cancelling.
-     * Also starts shared job observation when there is no saved series calculation.
      * @return {Promise<void>} Initial recovery attempt; cancellation may finish later
      * through the shared job observer.
      */
     async recoverAndCancelPreviousCalculation() {
-        if (this.client.snapshot.unfinishedCalculation) this.client.stop();
-        await this.client.start();
+        const clients = this.requests.savedClientNames().filter(name => name.startsWith("raster-series:"))
+            .map(name => this.clientFor(Number(name.split(":")[1])));
+        for (const client of clients) client.stop();
+        await Promise.all(clients.map(client => client.start()));
+    }
+
+    /** Get an independent executor for one of the product's 50 raster positions.
+     * Each position retains its own recovery record and waits only for its own
+     * previous cancellation. The server decides when calculations execute.
+     * @param {number} index Position from zero through 49.
+     * @return {import("./calculation-executor.js").CalculationExecutor} Reusable executor.
+     * @throws {TypeError} If the position is outside the product limit.
+     */
+    clientFor(index) {
+        if (!this.clients.has(index)) {
+            const client = this.requests.createClient("raster-series:" + index,
+                state => this.handleCalculationProgress(index, state));
+            this.clients.set(index, client);
+        }
+        return this.clients.get(index);
     }
 
     /** Replace the selected rasters, area and formulas after a user edit.
@@ -95,7 +113,7 @@ export class RasterSeriesCalculations {
     updateCalculationForPanelVisibility(visible) {
         if (this.active === visible) return;
         this.active = visible;
-        if (!visible && (this.busy || this.current)) this.cancelRemainingRasters();
+        if (!visible && (this.busy || this.pending.size)) this.cancelRemainingRasters();
         else if (visible && !this.complete) this.scheduleRemainingCalculations();
     }
 
@@ -113,6 +131,8 @@ export class RasterSeriesCalculations {
         this.confirmation = false;
         this.validated = false;
         this.authorized = false;
+        this.startedAt = null;
+        this.elapsedSeconds = null;
         this.budget = { nativeBlocks: 0, decodedBytes: 0, geometryCells: 0 };
         if (this.active) this.scheduleRemainingCalculations();
         else this.onChange();
@@ -120,17 +140,20 @@ export class RasterSeriesCalculations {
 
     /** Stop the unfinished series after cancellation, input replacement or hiding the plot.
      * Cancel the debounce timer and formula check, ignore late responses, and ask
-     * Processing to cancel this series' submitted job. Completed results remain
-     * available; the executor retains any job that still needs cancellation recovery.
+     * Processing to cancel all of this series' submitted jobs. Completed results
+     * remain available; executors retain jobs still needing cancellation recovery.
      * @return {void} Cancellation is requested here and acknowledged asynchronously.
      */
     cancelRemainingRasters() {
         this.version++;
         this.clock.clearTimeout(this.timer);
         this.validation?.abort();
-        this.current = null;
+        this.validating = false;
+        this.pending.clear();
+        this.progress.clear();
         this.busy = false;
-        this.client.stop();
+        this.confirmation = false;
+        for (const client of this.clients.values()) client.stop();
         this.message = "Calculation stopped. Calculate to continue.";
         this.onChange();
     }
@@ -143,49 +166,59 @@ export class RasterSeriesCalculations {
      */
     scheduleRemainingCalculations() {
         this.clock.clearTimeout(this.timer);
+        this.startedAt ??= this.now();
         this.message = "Checking formulas…";
         this.busy = true;
         this.timer = this.clock.setTimeout(() => void this.calculateRemainingRasters(false), 700);
         this.onChange();
     }
 
-    /** Begin or continue the unfinished raster series using the current area and formulas.
-     * Called by Calculate or the debounce timer. Check the inputs and validate the
-     * formulas once, then queue the next raster. Completion callbacks advance the
-     * rest of the series; validation errors are shown in the plot without submission.
-     * @param {boolean} [authorize=true] True for an explicit Calculate click approving
-     * the remaining stack; false for automatic work that may need confirmation.
-     * @return {Promise<void>} Completion of input checking and the first queue request,
-     * not completion of the raster calculations.
+    /** Validate formulas once and request all unfinished rasters independently.
+     * Calculate approves pending large work and retries failed rows. Active requests
+     * continue unchanged; uncertain submissions require Recover first.
+     * @param {boolean} [authorize=true] Explicit approval of the remaining stack.
+     * @return {Promise<void>} Validation and request dispatch, not calculation completion.
      */
     async calculateRemainingRasters(authorize = true) {
         this.clock.clearTimeout(this.timer);
-        if (!this.active || this.current) return;
-        const area = this.area;
-        if (!this.sources.length || this.sources.length > 50 || !area) {
-            this.busy = false; this.message = !area ? "Choose an area or click the map to calculate." : "Select between 1 and 50 rasters.";
+        if (!this.active || this.validating) return;
+        if (!this.sources.length || this.sources.length > 50 || !this.area) {
+            this.busy = false;
+            this.message = !this.area ? "Choose an area or click the map to calculate." : "Select between 1 and 50 rasters.";
             this.onChange(); return;
         }
-        if (this.client.snapshot.recoverable) {
-            this.message = "Recover the previous calculation before starting another.";
-            this.busy = false; this.onChange(); return;
-        }
         const version = this.version;
+        this.startedAt ??= this.now();
         this.authorized ||= authorize;
-        this.confirmation = false;
-        this.busy = true;
-        this.validation?.abort();
+        if (authorize) {
+            for (const [key, result] of this.results) if (result.error) this.results.delete(key);
+            for (const [index, request] of this.pending) if (request.phase === "confirmation") this.pending.delete(index);
+        }
+        this.busy = this.validating = true;
         const validation = this.validation = new AbortController();
         try {
             const formulas = this.formulas.map(formula => ({ label: "stat-" + formula.id, expression: formula.expression.trim() }));
-            const first = calculationIntent({ source: this.getRasterReference(this.sources[0]), area, calculations: formulas });
+            const first = calculationIntent({ source: this.getRasterReference(this.sources[0]), area: this.area, calculations: formulas });
             if (!this.validated) await this.api.validateCalculation(first.calculations, validation.signal);
             if (version !== this.version || !this.active) return;
             this.validated = true;
-            this.queueNextRasterCalculation();
+            // Record all identities before prepare() can synchronously notify listeners.
+            const additions = [];
+            for (const source of this.sources) {
+                if (this.results.has(source.key) || [...this.pending.values()].some(request => request.key === source.key)) continue;
+                const index = Array.from({ length: 50 }, (_, index) => index).find(index => !this.pending.has(index));
+                const client = this.clientFor(index);
+                const request = { key: source.key, intent: calculationIntent({ ...first, source: this.getRasterReference(source) }),
+                    startedAt: this.now(), submitted: false, phase: "waiting", message: "Waiting for planning…" };
+                this.pending.set(index, request);
+                additions.push([client, request]);
+            }
+            for (const [client, request] of additions) client.prepare(request.intent);
+            this.validating = false;
+            this.refreshProgress();
         } catch (error) {
             if (version !== this.version || error.name === "AbortError") return;
-            this.message = error.message; this.busy = false; this.onChange();
+            this.message = error.message; this.busy = this.validating = false; this.onChange();
         }
     }
 
@@ -198,134 +231,111 @@ export class RasterSeriesCalculations {
         return { collectionId: source.item.collection, itemId: source.item.id, label: source.label };
     }
 
-    /** Ask Processing to prepare the next raster that has no recorded result or error.
-     * Called after formula validation or the preceding raster finishes. Include all
-     * selected formulas in one request so they share its reads and polygon mask.
-     * Mark the series complete when every source has an outcome. Do nothing while
-     * paused, hidden, unvalidated or already waiting for a raster.
-     * @return {void}
-     */
-    queueNextRasterCalculation() {
-        if (!this.active || !this.busy || !this.validated || this.current) return;
-        const source = this.sources.find(item => !this.results.has(item.key));
-        if (!source) {
-            this.complete = true; this.busy = false; this.message = "Raster series complete."; this.onChange(); return;
-        }
-        const intent = calculationIntent({ source: this.getRasterReference(source),
-            area: this.area,
-            calculations: this.formulas.map(formula => ({ label: "stat-" + formula.id, expression: formula.expression.trim() })) });
-        this.current = { key: source.key, intent, startedAt: this.now(), submitted: false };
-        this.message = "Preparing " + source.label;
-        this.client.prepare(intent);
-        this.onChange();
-    }
-
     /** Check whether the current raster plan can be submitted without another Calculate click.
      * An earlier explicit Calculate click approves the remaining stack. Cached results
      * also need no confirmation. Otherwise, require a small rectangular selection and
      * check this plan plus work already submitted against the automatic stack budget.
      * This check does not charge the budget; submission does.
      * @param {Object} plan Current raster's server plan with cache status and grid estimates.
+     * @param {Object} intent Immutable raster, area and formulas.
      * @return {boolean} True if no additional user confirmation is needed.
      */
-    canSubmitWithoutConfirmation(plan) {
+    canSubmitWithoutConfirmation(plan, intent) {
         if (this.authorized || plan.cacheHit) return true;
-        if (!canAutomaticallyCalculate(plan, this.current.intent)) return false;
+        if (!canAutomaticallyCalculate(plan, intent)) return false;
         const estimates = { nativeBlocks: plan.grid.nativeBlocks, decodedBytes: plan.grid.decodedBytes,
             geometryCells: plan.grid.groundArea?.estimatedGeometryCells ?? 0 };
         return Object.entries(estimates).every(([key, value]) => (this.budget?.[key] ?? 0) + value <= AUTOMATIC_CALCULATION_LIMITS[key]);
     }
 
-    /** Respond to Processing updates for the current raster and advance the series.
-     * The queue calls this when planning, submission or job status changes. Submit
-     * matching plans when approved, or pause for confirmation. Record completed values
-     * or job failures and queue the next raster. API failures pause the series; offer
-     * recovery when a saved submission remains unresolved. Ignore obsolete results.
-     * The queue/executor continues to own cancellation and saved submission recovery.
-     * @param {import("./calculation-executor.js").CalculationExecutionSnapshot} state This series' execution progress.
+    /** Apply progress only to this executor's current immutable raster request.
+     * Failures leave gaps while peers continue. Plans needing confirmation are
+     * released immediately so they do not occupy server plan capacity.
+     * @param {number} index Executor position.
+     * @param {import("./calculation-executor.js").CalculationExecutionSnapshot} state Execution progress.
      * @return {void}
      */
-    handleCalculationProgress(state) {
-        const current = this.current;
-        if (!current) { this.onChange(); return; }
-        /** Check whether a plan or result belongs to the raster request being tracked.
-         * @param {Readonly<Object>|null} value Calculation settings from Processing.
-         * @return {boolean} True when source, area, formulas and execution settings match.
+    handleCalculationProgress(index, state) {
+        const request = this.pending.get(index);
+        if (!request || request.phase === "confirmation") { this.onChange(); return; }
+        const client = this.clients.get(index);
+        /** Match settings rather than a position's previously completed result.
+         * @param {Object|null} value Settings accompanying a plan or result.
+         * @return {boolean} Exact request match.
          */
-        const matchesCurrentCalculation = value => JSON.stringify(value) === JSON.stringify(current.intent);
-        if (state.completedJob && matchesCurrentCalculation(state.completedCalculation) && current.submitted &&
-            state.completedJob.jobId !== current.previousJobId && !state.unfinishedCalculation && state.isIdle) {
-            this.results.set(current.key, { job: state.completedJob, intent: current.intent,
-                elapsedSeconds: (this.now() - current.startedAt) / 1000,
-                performanceLines: performanceDescription(state.completedJob) });
-            this.current = null;
-            this.onChange();
-            queueMicrotask(() => this.queueNextRasterCalculation());
-            return;
-        }
-        if (state.recoverable || state.admission === "retry") {
-            this.message = state.message;
-            this.busy = false;
-            if (!state.recoverable) this.current = null;
-            this.onChange(); return;
-        }
-        if (state.plan && state.isIdle && matchesCurrentCalculation(state.plannedCalculation)) {
-            if (!this.canSubmitWithoutConfirmation(state.plan)) {
-                this.confirmation = true; this.busy = false; this.current = null;
-                this.message = "This area or stack needs a larger calculation. Calculate the remaining rasters, or choose a smaller area.";
-                this.client.discardPendingCalculation(); this.onChange(); return;
+        const matches = value => JSON.stringify(value) === JSON.stringify(request.intent);
+        if (state.completedJob && matches(state.completedCalculation) && request.submitted &&
+            state.completedJob.jobId !== request.previousJobId && !state.unfinishedCalculation && state.isIdle) {
+            const elapsedSeconds = (this.now() - request.startedAt) / 1000;
+            this.results.set(request.key, { job: state.completedJob, intent: request.intent, elapsedSeconds,
+                performanceLines: performanceDescription(state.completedJob, elapsedSeconds) });
+            this.pending.delete(index);
+        } else if (state.recoverable) {
+            request.phase = "recovery"; request.message = state.message;
+        } else if (state.admission === "retry" || (request.submitted && state.isIdle && !state.plan && !state.unfinishedCalculation)) {
+            this.results.set(request.key, { intent: request.intent, error: state.message || "No result returned." });
+            this.pending.delete(index);
+        } else if (state.plan && state.isIdle && matches(state.plannedCalculation)) {
+            if (!this.canSubmitWithoutConfirmation(state.plan, request.intent)) {
+                request.phase = "confirmation"; request.message = "Waiting for your confirmation.";
+                client.discardPendingCalculation();
+            } else {
+                request.previousJobId = state.completedJob?.jobId;
+                request.submitted = true;
+                if (!state.plan.cacheHit) {
+                    this.budget.nativeBlocks += state.plan.grid.nativeBlocks;
+                    this.budget.decodedBytes += state.plan.grid.decodedBytes;
+                    this.budget.geometryCells += state.plan.grid.groundArea?.estimatedGeometryCells ?? 0;
+                }
+                client.submit(state.plan.planId, { automatic: !this.authorized, client: "raster-series" });
             }
-            current.previousJobId = state.completedJob?.jobId;
-            current.submitted = true;
-            if (!state.plan.cacheHit) {
-                this.budget ??= { nativeBlocks: 0, decodedBytes: 0, geometryCells: 0 };
-                this.budget.nativeBlocks += state.plan.grid.nativeBlocks;
-                this.budget.decodedBytes += state.plan.grid.decodedBytes;
-                this.budget.geometryCells += state.plan.grid.groundArea?.estimatedGeometryCells ?? 0;
-            }
-            this.client.submit(state.plan.planId, { automatic: !this.authorized });
-            return;
+        } else {
+            request.phase = state.phase;
+            request.message = state.currentJob ? describeJobProgress(state.currentJob) : state.message;
         }
-        if (current.submitted && state.isIdle && !state.plan && !state.unfinishedCalculation) {
-            this.results.set(current.key, { intent: current.intent, error: state.message || "No result returned." });
-            this.current = null; this.onChange(); queueMicrotask(() => this.queueNextRasterCalculation()); return;
-        }
-        this.message = state.currentJob ? describeJobProgress(state.currentJob) : state.message;
+        this.refreshProgress();
+    }
+
+    /** Combine progress without hiding active peers behind a failed request.
+     * Whole-series time includes debounce, validation and any confirmation/recovery pauses.
+     * @return {void}
+     */
+    refreshProgress() {
+        this.progress = new Map([...this.pending.values()].map(request => [request.key, { phase: request.phase, message: request.message }]));
+        this.confirmation = [...this.pending.values()].some(request => request.phase === "confirmation");
+        this.busy = this.validating || [...this.pending.values()].some(request => !["confirmation", "recovery"].includes(request.phase));
+        this.complete = !!this.sources.length && this.results.size === this.sources.length;
+        if (this.complete) {
+            this.elapsedSeconds = (this.now() - this.startedAt) / 1000;
+            this.message = this.hasErrors ? "Some rasters failed. Calculate to retry failed rasters." : "Raster series complete.";
+        } else if (this.confirmation) {
+            this.message = "This area or stack needs a larger calculation. Calculate the remaining rasters, or choose a smaller area.";
+        } else if (this.needsRecovery) {
+            this.message = "Recover interrupted requests to confirm or cancel the same jobs safely. Other rasters can continue.";
+        } else this.message = this.busy ? "Calculating rasters; results appear as each finishes." : "Calculate to continue.";
         this.onChange();
     }
 
-    /** Tell the plot whether to offer recovery for a saved submission after a failure.
-     * @return {boolean} True when an API/storage error left a submitted job unresolved.
-     */
-    get needsRecovery() { return this.client.snapshot.recoverable; }
+    /** Whether failed rows can be explicitly retried. @return {boolean} */
+    get hasErrors() { return [...this.results.values()].some(result => result.error); }
 
-    /** Retry the failed Processing step when the user clicks Recover.
-     * Reuse the original request key for an uncertain submission. If this controller
-     * still tracks that raster, its progress callbacks can continue the series.
-     * Otherwise, report recovery and wait for Calculate to start the remaining work.
-     * @return {Promise<void>} Completion of the retry attempt; a recovered job may
-     * still be running or cancelling afterward.
+    /** Whether a current or cancelled submission needs safe recovery. @return {boolean} */
+    get needsRecovery() { return [...this.clients.values()].some(client => client.snapshot.recoverable); }
+
+    /** Retry unresolved submissions with their original request keys.
+     * @return {Promise<void>} Retry attempts; recovered jobs may still be running.
      */
     async retryInterruptedCalculation() {
-        this.busy = !!this.current;
-        await this.client.retry();
-        if (!this.current && !this.complete && !this.needsRecovery) {
-            this.busy = false;
-            this.message = "Previous calculation recovered. Calculate to continue.";
-        }
-        this.onChange();
+        await Promise.all([...this.clients.values()].filter(client => client.snapshot.recoverable).map(client => client.retry()));
+        this.refreshProgress();
     }
 
-    /** Detach the series controller when the page is torn down.
-     * Clear its timer and formula-validation request, then release its queue client.
-     * The queue owns cancellation and preserves unfinished submission records for
-     * recovery when the entire page closes. Use cancelRemainingRasters to stop work
-     * while keeping this controller available.
+    /** Detach observers, preserving unfinished submissions for recovery after reload.
      * @return {void}
      */
     destroy() {
         this.clock.clearTimeout(this.timer);
         this.validation?.abort();
-        this.client.destroy();
+        for (const client of this.clients.values()) client.destroy();
     }
 }

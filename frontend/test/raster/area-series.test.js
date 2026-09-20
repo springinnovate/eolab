@@ -2,10 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { RasterSeriesCalculations } from "../../src/processing/raster-series-calculations.js";
 import { RasterSeriesController } from "../../src/raster/series.js";
-import { CalculationQueue } from "../../src/processing/calculation-queue.js";
+import { CalculationRequests } from "../../src/processing/calculation-requests.js";
 import { CalculationSessionStorage } from "../../src/processing/calculation-session.js";
 import { CATALOG_SELECTION } from "../../test-support/raster/fixtures.js";
 import { ProcessingJobs } from "../../src/processing/jobs.js";
+import { ProcessingRequestError } from "../../src/processing/api.js";
 
 /** @param {number} west Longitude. @return {Object} Valid sampling box. */
 const box = west => ({kind:"selectedArea",selectedBounds:{west,south:0,east:west+1,north:1}});
@@ -43,27 +44,27 @@ function fixture(overrides = {}, data = new Map()) {
     };
     const storage=new CalculationSessionStorage({getItem:key=>data.get(key),setItem:(key,value)=>data.set(key,value),removeItem:key=>data.delete(key)});
     const jobs=new ProcessingJobs(api,clock);
-    const queue=new CalculationQueue({api,jobs,storage,now:()=>time,requestId:()=>"request-"+String(++serial).padStart(16,"0")});
-    const area=new RasterSeriesCalculations({api,queue,clock,now:()=>time});
+    const queue=new CalculationRequests({api,jobs,storage,now:()=>time,requestId:()=>"request-"+String(++serial).padStart(16,"0")});
+    const area=new RasterSeriesCalculations({api,requests:queue,clock,now:()=>time});
     const view={bind(actions){this.actions=actions;},render(state){this.state=state;},downloadCsv(csv){this.csv=csv;}};
     const controller=new RasterSeriesController({view,areaStatistics:area,samplePoint:async()=>({inBounds:true,value:1}),onClose(){},onEditArea(){}});
     controller.updateAvailableRasters([source("1"),source("2")]); controller.setArea(box(0),"First box");
     const tick=async()=>{for(const[id,t]of [...timers])if(t.delay===700){timers.delete(id);t.fn();}await flush();};
-    const finish=async(status="ready",cacheHit=false)=>{
-        const old=[...server.values()].find(job=>["running","cancelling"].includes(job.status));
+    const finish=async(status="ready",cacheHit=false,itemId=null)=>{
+        const old=[...server.values()].find(job=>["running","cancelling","queued"].includes(job.status) && (!itemId || job.sources.a.itemId===itemId));
         assert.ok(old,"an active job exists");
         time+=100;
         server.set(old.jobId,{...old,status,result:status==="ready"?{cacheHit,rows:old.calculations.map((row,i)=>({...row,value:i?"22":"-123.4567890123456789",unit:row.expression.startsWith("areaha")?"ha":null,state:"ok",valueType:"float",aggregates:[]}))}:null,error:status==="failed"?{detail:"Raster unavailable"}:null});
         await jobs.refresh();await flush();return old.jobId;
     };
     const open=async()=>{controller.setMode("area");controller.updateSamplingForPanelVisibility(true);await tick();};
-    const close=()=>{area.destroy();queue.executor.destroy();jobs.destroy();};
+    const close=()=>{area.destroy();queue.destroy();jobs.destroy();};
     return {api,queue,jobs,storage,data,area,controller,view,requests,plans,server,grid,tick,finish,open,close};
 }
 
 test("formulas share one job per source, retain exact scalar/unit CSV, and presentation edits do not recalculate",async()=>{
     const h=fixture();h.controller.addFormula("area");await h.open();
-    assert.equal(h.requests.filter(([k])=>k==="submit").length,1);
+    assert.equal(h.requests.filter(([k])=>k==="submit").length,2);
     assert.equal(h.requests.find(([k])=>k==="plan")[1].calculations.length,2);
     await h.finish();await h.finish("ready",true);
     assert.equal(h.area.complete,true);
@@ -111,8 +112,8 @@ test("rapid area changes cancel submitted work and never mix old-area rows",asyn
     h.controller.setArea(box(10),"Second");await h.tick();
     assert.ok(h.view.state.previousRows);assert.equal(h.view.state.rows.some(row=>row.state==="value"),false);
     h.controller.setArea(box(20),"Third");await h.tick();
-    assert.equal(h.requests.filter(([kind])=>kind==="cancel").length,1);
-    await h.finish("cancelled");await flush();
+    assert.equal(h.requests.filter(([kind])=>kind==="cancel").length,2);
+    await h.finish("cancelled");await h.finish("cancelled");await flush();
     const planned=h.requests.filter(([kind])=>kind==="plan").at(-1)[1];
     assert.equal(planned.area.selectedBounds.west,20);
     await h.finish();await h.finish();
@@ -123,9 +124,9 @@ test("rapid area changes cancel submitted work and never mix old-area rows",asyn
 
 test("leaving area mode drops the pending stack and waits for acknowledged cancellation",async()=>{
     const h=fixture();await h.open();h.controller.setMode("pixel");await flush();
-    assert.equal(h.requests.filter(([kind])=>kind==="cancel").length,1);
-    await h.finish("cancelled");
-    assert.equal(h.requests.filter(([kind])=>kind==="submit").length,1);
+    assert.equal(h.requests.filter(([kind])=>kind==="cancel").length,2);
+    await h.finish("cancelled");await h.finish("cancelled");
+    assert.equal(h.requests.filter(([kind])=>kind==="submit").length,2);
     assert.equal(h.area.results.size,0);h.close();
 });
 
@@ -137,60 +138,62 @@ test("per-raster failure leaves a gap and proceeds to the next raster",async()=>
     assert.match(h.controller.exportCsv(),/Raster unavailable/);h.close();
 });
 
-test("summary and series take turns without receiving each other's results",async()=>{
+test("summary and series submit independently without receiving each other's results",async()=>{
     const h=fixture();const snapshots=[];
     const summary=h.queue.createClient("summary",state=>{snapshots.push(state);if(state.isIdle&&state.plan)summary.submit(state.plan.planId);});
     await h.open();
     summary.prepare({source:{collectionId:"catalog",itemId:"summary",label:"Summary"},area:box(0),calculations:[{label:"Mean",expression:"mean(a)"}]});
-    await h.finish(); // first series raster finishes
-    assert.equal([...h.server.values()].find(job=>job.status==="running").sources.a.itemId,"summary");
+    await flush();
+    assert.equal(h.server.size,3,"all three submissions precede any result");
+    await h.finish("ready",false,"summary");
     assert.ok(snapshots.every(state=>!state.completedJob||state.completedJob.sources.a.itemId==="summary"));
-    await h.finish(); // summary then second series
-    assert.equal([...h.server.values()].find(job=>job.status==="running").sources.a.itemId,"2");
+    assert.equal(h.area.results.size,0);
+    await h.finish("ready",false,"2");
+    assert.deepEqual(h.view.state.rows.map(row=>row.state),["waiting","value"]);
     await h.finish();assert.equal(h.area.complete,true);h.close();
 });
 
-test("obsolete plan responses are released before new work is submitted",async()=>{
+test("obsolete plan responses are released and never submitted",async()=>{
     const h=fixture();const gate=deferred(),original=h.api.planCalculation;
-    let first=true;h.api.planCalculation=async intent=>{const plan=await original(intent);if(first){first=false;await gate.promise;}return plan;};
+    h.api.planCalculation=async intent=>{const plan=await original(intent);if(intent.area.selectedBounds.west===0)await gate.promise;return plan;};
     await h.open();h.controller.setArea(box(30),"New");await h.tick();gate.resolve();await flush();
-    assert.equal(h.requests.filter(([kind])=>kind==="discard").length,2); // old plan and submitted new plan
-    assert.equal(h.requests.filter(([kind])=>kind==="submit").length,1);
-    assert.equal([...h.server.values()][0].sources.a.itemId,"1");h.close();
+    assert.equal(h.requests.filter(([kind])=>kind==="discard").length,4);
+    assert.equal(h.requests.filter(([kind])=>kind==="submit").length,2);
+    for(const [id] of h.server) assert.equal(h.plans.get(id).area.selectedBounds.west,30);
+    h.close();
 });
 
 test("uncertain submissions keep the original key and cannot leak into summary recovery",async()=>{
     const h=fixture();const submit=h.api.submitCalculation;let lost=true;
     h.api.submitCalculation=async input=>{const job=await submit(input);if(lost){lost=false;throw Error("Connection lost");}return job;};
     await h.open();
-    assert.equal(h.area.client.snapshot.recoverable,true);
-    const saved=h.storage.read();
+    assert.equal(h.area.needsRecovery,true);
+    const saved=h.storage.forClient("raster-series:0").read();
     assert.equal(saved.context.client,"raster-series");
     const observed=[];
     h.queue.createClient("summary",state=>observed.push(state));
     await h.area.retryInterruptedCalculation();await flush();
     const submissions=h.requests.filter(([kind])=>kind==="submit");
-    assert.equal(submissions.length,2);assert.deepEqual(submissions[0][1],submissions[1][1]);
+    assert.equal(submissions.length,3);assert.deepEqual(submissions[0][1],submissions[2][1]);
     assert.ok(observed.every(state=>!state.unfinishedCalculation));
     await h.finish();await h.finish();
     assert.equal(h.area.complete,true);
     assert.equal(h.area.results.size,2);h.close();
 });
 
-test("recovery routes a stored series job to its caller, and cancels it without restarting the stack",async()=>{
-    const h=fixture();await h.open();const record=h.storage.read(), old=[...h.server.values()][0];h.close();
+test("reload cancels every saved series job without restarting the stack or summary",async()=>{
+    const h=fixture();await h.open();
+    const originals=[...h.server.values()];h.close();
     const recovered=fixture({},h.data);
-    recovered.server.set(old.jobId,old);
+    for(const job of originals)recovered.server.set(job.jobId,job);
     const summary=recovered.queue.createClient("summary",()=>{});
     assert.equal(summary.snapshot.unfinishedCalculation,null);
-    assert.deepEqual(recovered.area.client.snapshot.unfinishedCalculation.calculation,record.intent);
     await recovered.area.recoverAndCancelPreviousCalculation();await flush();
-    assert.equal(recovered.requests.filter(([kind])=>kind==="cancel").length,1);
-    await recovered.finish("cancelled");
+    assert.equal(recovered.requests.filter(([kind])=>kind==="cancel").length,2);
+    await recovered.finish("cancelled");await recovered.finish("cancelled");
     assert.equal(recovered.requests.filter(([kind])=>kind==="submit").length,0);
-    assert.equal(recovered.storage.read(),null);recovered.close();
+    assert.deepEqual(recovered.storage.savedClientNames(),[]);recovered.close();
 });
-
 
 test("catalog predicates and annotation uploads remain exact per-raster inputs",async()=>{
     for (const area of [{kind:"catalogSelection",catalogSelection:CATALOG_SELECTION},
@@ -242,6 +245,131 @@ test("one queued caller can replace and cancel its request without cancelling it
     summary.prepare(intent);summary.prepare({...intent,area:box(10)});summary.stop();
     assert.equal(h.requests.filter(([kind])=>kind==="cancel").length,0);
     await h.finish();await h.finish();
-    assert.ok(h.requests.filter(([kind])=>kind==="plan").every(([,intent])=>intent.source.itemId!=="summary"));
+    assert.ok([...h.server.values()].every(job=>job.sources.a.itemId!=="summary"));
     assert.equal(h.area.complete,true);h.close();
+});
+
+test("later raster can plan and finish while the first raster's plan is still in flight",async()=>{
+    const h=fixture(), gate=deferred(), plan=h.api.planCalculation;
+    h.api.planCalculation=async intent=>{
+        const result=await plan(intent);
+        if(intent.source.itemId==="1")await gate.promise;
+        return result;
+    };
+    await h.open();
+    assert.equal(h.requests.filter(([kind])=>kind==="plan").length,2);
+    await h.finish("ready",false,"2");
+    assert.deepEqual(h.view.state.rows.map(row=>row.state),["waiting","value"]);
+    assert.equal(h.area.busy,true);
+    gate.resolve();await flush();await h.finish("ready",false,"1");
+    assert.equal(h.area.complete,true);h.close();
+});
+
+test("planning overload and execution failure leave actionable gaps, and retry only failed rows",async()=>{
+    const h=fixture(), plan=h.api.planCalculation;let full=true;
+    h.api.planCalculation=async intent=>{
+        if(full&&intent.source.itemId==="1")throw new ProcessingRequestError("Planning queue is full. Try again.",429);
+        return plan(intent);
+    };
+    await h.open();await h.finish("ready",false,"2");
+    assert.match(h.view.state.rows[0].errorMessage,/Planning queue is full/);
+    assert.equal(h.area.hasErrors,true);assert.equal(h.area.busy,false);
+    full=false;await h.area.calculateRemainingRasters();await flush();await h.finish("ready",false,"1");
+    assert.equal(h.area.hasErrors,false);
+    assert.equal(h.requests.filter(([kind])=>kind==="submit").length,2);h.close();
+});
+
+test("50 rasters dispatch without a browser worker limit and one cancel stops all",async()=>{
+    const h=fixture();
+    h.controller.updateAvailableRasters(Array.from({length:50},(_,i)=>source(String(i+1))));
+    h.area.updateCalculationInputs(Array.from({length:50},(_,i)=>source(String(i+1))),box(0),"Box",[{id:1,label:"Mean",expression:"mean(a)"}]);
+    h.area.updateCalculationForPanelVisibility(true);await h.tick();
+    assert.equal(h.server.size,50);assert.equal(h.storage.savedClientNames().length,50);
+    assert.equal(h.jobs.listeners.size,50,"all executors share the same observer");
+    h.area.cancelRemainingRasters();await flush();
+    assert.equal(h.requests.filter(([kind])=>kind==="cancel").length,50);
+    h.close();
+});
+
+test("reordering sources before confirming the rest cannot overwrite a running raster",async()=>{
+    const h=fixture();h.grid.nativeBlocks=80;await h.open();
+    assert.equal(h.area.confirmation,true);
+    h.area.updateCalculationInputs([source("2"),source("1")],box(0),"Renamed",h.area.formulas);
+    await h.area.calculateRemainingRasters();await flush();
+    assert.equal(h.server.size,2);
+    await h.finish("ready",false,"2");await h.finish("ready",false,"1");
+    assert.equal(h.area.results.get("1").job.sources.a.itemId,"1");
+    assert.equal(h.area.results.get("2").job.sources.a.itemId,"2");h.close();
+});
+
+test("cancelling a series leaves concurrent summary and clip jobs running",async()=>{
+    const h=fixture();
+    const summary=h.queue.createClient("summary",state=>{if(state.isIdle&&state.plan)summary.submit(state.plan.planId);});
+    summary.prepare({source:{collectionId:"catalog",itemId:"summary",label:"Summary"},area:box(0),calculations:[{label:"Mean",expression:"mean(a)"}]});
+    const clip={jobId:"c".repeat(32),operation:"raster.clip.v1",status:"running",sources:{a:{itemId:"clip"}}};
+    h.server.set(clip.jobId,clip);h.jobs.accept(clip);
+    await h.open();h.area.cancelRemainingRasters();await flush();
+    const cancelled=h.requests.filter(([kind])=>kind==="cancel").map(([,id])=>h.server.get(id).sources.a.itemId);
+    assert.deepEqual(cancelled.sort(),["1","2"]);
+    assert.equal([...h.server.values()].find(job=>job.sources.a.itemId==="summary").status,"running");
+    assert.equal(h.server.get(clip.jobId).status,"running");h.close();
+});
+
+test("cancellation during uncertain concurrent submissions recovers all original keys",async()=>{
+    const h=fixture(), submit=h.api.submitCalculation;
+    h.api.submitCalculation=async input=>{await submit(input);throw Error("Lost reply");};
+    await h.open();assert.equal(h.area.needsRecovery,true);
+    const originals=h.requests.filter(([kind])=>kind==="submit").map(([,input])=>input);
+    h.area.cancelRemainingRasters();h.api.submitCalculation=submit;
+    await h.area.retryInterruptedCalculation();await flush();
+    for(const input of originals)assert.equal(h.requests.filter(([kind,value])=>kind==="submit"&&value.requestId===input.requestId).length,2);
+    assert.equal(h.server.size,2);assert.equal(h.requests.filter(([kind])=>kind==="cancel").length,2);
+    await h.finish("cancelled");await h.finish("cancelled");
+    assert.equal(h.area.results.size,0);assert.deepEqual(h.storage.savedClientNames(),[]);h.close();
+});
+
+test("each raster's wait starts at dispatch, while whole-series time ends at the last result",async()=>{
+    const h=fixture();await h.open();
+    await h.finish("ready",false,"2");await h.finish("ready",false,"1");
+    assert.equal(h.area.results.get("2").elapsedSeconds,0.1);
+    assert.equal(h.area.results.get("1").elapsedSeconds,0.2);
+    assert.equal(h.area.elapsedSeconds,0.2,"overlapping request durations are not added");
+    h.close();
+});
+
+test("reload recovers multiple lost submissions with original keys before cancellation",async()=>{
+    const h=fixture(), submit=h.api.submitCalculation;
+    h.api.submitCalculation=async input=>{await submit(input);throw Error("Lost reply");};
+    await h.open();
+    const originals=h.requests.filter(([kind])=>kind==="submit").map(([,input])=>input);
+    const oldJobs=[...h.server];h.close();
+    const restored=fixture({},h.data);
+    for(const [id,job]of oldJobs)restored.server.set(id,job);
+    await restored.area.recoverAndCancelPreviousCalculation();await flush();
+    assert.deepEqual(restored.requests.filter(([kind])=>kind==="submit").map(([,input])=>input),originals);
+    assert.equal(restored.server.size,2);
+    assert.equal(restored.requests.filter(([kind])=>kind==="cancel").length,2);
+    await restored.finish("cancelled");await restored.finish("cancelled");
+    assert.deepEqual(restored.storage.savedClientNames(),[]);restored.close();
+});
+
+test("a full recovery store prevents submission of that raster without losing a peer record",async()=>{
+    const h=fixture(), write=h.storage.storage.setItem;
+    h.storage.storage.setItem=(key,value)=>{
+        if(key.endsWith("raster-series:1"))throw Error("Storage full");
+        write(key,value);
+    };
+    await h.open();
+    assert.equal(h.server.size,1);
+    assert.match(h.area.results.get("2").error,/Storage full/);
+    assert.deepEqual(h.storage.savedClientNames(),["raster-series:0"]);
+    await h.finish();h.close();
+});
+
+test("the shared activity indicator stays active until every submitted calculation settles",async()=>{
+    const h=fixture(), activity=[];
+    h.queue.dependencies.onActivity=area=>activity.push(area);
+    await h.open();await h.finish();
+    assert.deepEqual(activity.at(-1),box(0));
+    await h.finish();assert.equal(activity.at(-1),null);h.close();
 });

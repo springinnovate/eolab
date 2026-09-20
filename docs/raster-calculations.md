@@ -65,18 +65,23 @@ without recalculating.
 
 Small boxes calculate after a 700 ms pause. The automatic work budget applies
 to the entire stack. Large areas or stacks pause once for **Calculate remaining
-rasters**; cached results do not need this confirmation. Series and summary
-cards share one recoverable executor and take turns between raster jobs.
+rasters**; cached results do not need this confirmation. Each selected raster
+requests its calculation independently, without waiting for the previous result.
+The server queues planning and execution. Results appear as they finish; the
+table shows each raster's progress or error. Summary cards can run alongside a
+series. A failed raster leaves a gap; **Calculate** retries failed rows.
 Changing inputs, leaving area series, or **Cancel remaining** cancels outstanding
-series work. After a page reload, an unfinished series job is recovered only
-to cancel it safely; the unsaved stack is not restarted.
+series work without cancelling summary cards or downloads. After a page reload,
+each unfinished series job is recovered only to cancel it safely; the unsaved
+stack is not restarted. Lost submission responses retain their original request
+keys. **Recover** retries those requests without creating duplicate jobs.
 
 **Values & download** shows the selected statistic and exports all formulas,
 exact scalar values, units, source IDs, area descriptors, job IDs and cache
-status as CSV. **Calculation timings** reports each raster's queue-request to
-received-result time and the existing server timings. This interval excludes
-formula debounce/validation and earlier rasters; it is not a whole-stack
-performance measurement. Formula choices and series results are not saved in
+status as CSV. **Calculation timings** reports each raster's request-to-result
+time and server timings. Raster requests overlap, so their durations must not be
+added. A separate whole-series time includes debounce, formula validation and any
+confirmation or recovery pauses. Formula choices and series results are not saved in
 shared map links.
 
 ## Language and numerical meaning

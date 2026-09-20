@@ -325,6 +325,7 @@ export class CalculationExecutor {
             const planReused = !!target.plan;
             try { plan = target.plan ?? await this.api.planCalculation(target.intent, target.abort.signal, status => {
                 if (target !== this.#pendingCalculation || this.destroyed) return;
+                this.#executionStatus.phase = status === "queued" ? "waiting" : "planning";
                 this.#executionStatus.message = status === "queued" ? "Waiting to check calculation size…" : "Checking calculation size…";
                 this.#notifyListeners();
             }); }
