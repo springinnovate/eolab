@@ -121,7 +121,7 @@ export class RasterSeriesController {
     updateSamplingForPanelVisibility(panelVisible) {
         if (this.active === panelVisible) return;
         this.active = panelVisible;
-        this.areaStatistics.setActive(panelVisible && this.mode === "area");
+        this.areaStatistics.updateCalculationForPanelVisibility(panelVisible && this.mode === "area");
         if (!panelVisible) {
             if (this.snapshot?.samples.some(sample => sample.state === "loading")) this.snapshot = null;
             this.sampler.clear();
@@ -228,7 +228,7 @@ export class RasterSeriesController {
     setMode(mode) {
         if (this.mode === mode) return;
         this.mode = mode;
-        this.areaStatistics.setActive(this.active && mode === "area");
+        this.areaStatistics.updateCalculationForPanelVisibility(this.active && mode === "area");
         if (mode === "area") this.sampler.clear();
         else if (!this.snapshot || this.snapshot.samples.some(row => row.state === "loading")) this.sampleSelectedRasters();
         this.render();

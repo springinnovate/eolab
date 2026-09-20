@@ -72,15 +72,17 @@ export class RasterSeriesCalculations {
         else this.onChange();
     }
 
-    /** Start missing results only while area statistics is the visible series mode.
-     * Leaving the mode cancels remaining and in-flight calculations.
-     * @param {boolean} active Whether to calculate on input changes. @return {void}
+    /** Schedule missing results when area statistics becomes visible; cancel unfinished work when hidden.
+     * Call when the Raster series panel opens/closes or switches pixel/area mode.
+     * Completed results remain available when the user returns to this mode.
+     * @param {boolean} visible True only when both the panel and its area-statistics mode are active.
+     * @return {void}
      */
-    setActive(active) {
-        if (this.active === active) return;
-        this.active = active;
-        if (!active && (this.busy || this.current)) this.cancelRemainingRasters();
-        else if (active && !this.complete) this.scheduleCalculation();
+    updateCalculationForPanelVisibility(visible) {
+        if (this.active === visible) return;
+        this.active = visible;
+        if (!visible && (this.busy || this.current)) this.cancelRemainingRasters();
+        else if (visible && !this.complete) this.scheduleCalculation();
     }
 
     /** Mark all existing values as previous before replacing the area or formulas. @return {void} */
