@@ -128,3 +128,31 @@ DROP TRIGGER IF EXISTS processing_plan_change ON processing.plans;
 CREATE TRIGGER processing_plan_change AFTER UPDATE OF state ON processing.plans
 FOR EACH ROW EXECUTE FUNCTION processing.notify_plan_change();
 INSERT INTO processing.schema_version VALUES (6) ON CONFLICT DO NOTHING;
+
+-- Job input storage and session turns are separate from native execution limits.
+ALTER TABLE processing.jobs ADD COLUMN IF NOT EXISTS input_bytes bigint;
+UPDATE processing.jobs SET input_bytes = CASE WHEN spec IS NULL THEN 0 ELSE
+    octet_length(spec::text)::bigint + octet_length(summary::text) END
+    WHERE input_bytes IS NULL;
+ALTER TABLE processing.jobs ALTER COLUMN input_bytes SET DEFAULT 0;
+ALTER TABLE processing.jobs ALTER COLUMN input_bytes SET NOT NULL;
+-- Keep accounting correct while an older app/worker overlaps this migration.
+-- Old writers do not know input_bytes, but still insert/clear these JSON columns.
+CREATE OR REPLACE FUNCTION processing.measure_job_input_bytes() RETURNS trigger AS $$
+BEGIN
+    NEW.input_bytes := CASE WHEN NEW.spec IS NULL THEN 0 ELSE
+        octet_length(NEW.spec::text)::bigint + octet_length(NEW.summary::text) END;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS processing_job_input_bytes ON processing.jobs;
+CREATE TRIGGER processing_job_input_bytes BEFORE INSERT OR UPDATE OF spec,summary
+    ON processing.jobs FOR EACH ROW EXECUTE FUNCTION processing.measure_job_input_bytes();
+ALTER TABLE processing.jobs ADD COLUMN IF NOT EXISTS started_at timestamptz;
+-- Earlier jobs have no recorded start time. Their last update supplies a
+-- one-time approximation for scheduling history, never calculation timing.
+UPDATE processing.jobs SET started_at=updated_at
+    WHERE started_at IS NULL AND attempt_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS jobs_owner_started ON processing.jobs(owner, started_at DESC)
+    WHERE started_at IS NOT NULL;
+INSERT INTO processing.schema_version VALUES (7) ON CONFLICT DO NOTHING;

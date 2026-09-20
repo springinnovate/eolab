@@ -291,6 +291,62 @@ with a new ID. `plan_queue_full` means the pending queue filled, while
 `plan_record_capacity` means retained records or the session limit filled.
 These limits apply to planning; execution-job admission has separate limits.
 
+### Durable calculation and clip queues
+
+Execution uses one global worker lane. Waiting jobs do not occupy that lane, and
+the running job does not count against its session's waiting allowance. The
+worker selects the least recently served session, then that session's oldest
+queued job. A session without an earlier execution start goes first; ties use
+the oldest queued job. Each start counts as a turn even if execution fails or is
+cancelled. Running work is never preempted, so another session can still wait
+up to the current job's execution deadline. This shares turns, not CPU seconds.
+Queued inputs and scheduling history survive restarts. Deploy the app and worker
+together: an older worker still uses the former FIFO policy. The migration counts
+existing inputs; a database trigger also accounts for inserts and cleanup by older
+versions during rollout.
+
+The defaults admit a burst of 32 jobs from one session plus four jobs each from
+twelve other sessions (80 waiting jobs), provided storage budgets also fit.
+`tests/test_processing_admission_postgres.py` exercises that workload with a held
+execution lane, then checks session turns and FIFO order within each session.
+Raising the backlog limits does not add workers or make individual jobs faster.
+
+Set these deployment variables in Coolify or `.env`; Compose supplies the same
+values without the `EOLAB_` prefix to the app and worker. Blank or invalid values
+fail startup. Omitted values use the defaults below.
+
+| Variable | Default | Meaning |
+| --- | ---: | --- |
+| `EOLAB_PROCESSING_MAX_WAITING_JOBS` | 128 | Global queued jobs, excluding running/cancelling work |
+| `EOLAB_PROCESSING_MAX_OWNER_WAITING_JOBS` | 32 | Queued jobs per browser session |
+| `EOLAB_PROCESSING_MAX_JOB_RECORDS` | 4096 | All job records, including retained results and idempotency records |
+| `EOLAB_PROCESSING_MAX_JOB_INPUT_BYTES` | 134217728 | JSON bytes reserved for job specifications and summaries until cleanup |
+| `EOLAB_PROCESSING_MAX_STORED_BYTES` | 21474836480 | Artifact/scratch disk reservations, unchanged 20 GiB default |
+| `EOLAB_PROCESSING_FREE_SPACE_FLOOR_BYTES` | 2147483648 | Physical free space to leave unused; zero disables the floor |
+| `EOLAB_PROCESSING_EXECUTION_TIMEOUT_SECONDS` | 600 | Maximum duration of an executing job, excluding queue wait |
+| `EOLAB_PROCESSING_RESULT_TTL_SECONDS` | 86400 | Result lifetime starting at completion |
+
+Counts, durations and byte limits must be positive integers (the free-space
+floor may be zero; durations cannot exceed one year). Pending input reservations
+remain held after cancellation until cleanup succeeds. Small summaries and idempotency records remain bounded
+by the record limit after input payloads are removed. Cleaned terminal records
+expire after seven days; recent request keys remain recoverable even when new
+admission is full. Deleting a result releases its input/artifact reservations
+after cleanup, but does not immediately discard its idempotency record.
+
+Submission returns distinct 429 error codes: `owner_queue_full` for the session's
+waiting allowance, `queue_full` for the global backlog, `job_record_capacity` for
+retained records, `job_input_capacity` for retained input bytes, and `storage_full`
+for artifact reservations. These are finite overload limits, not an indication
+that the one worker is merely busy. Existing accepted IDs/status/results and
+cancellation routes are unchanged. A cached calculation still needs its own
+bounded job record and download reservation.
+
+At INFO level, app admission logs report waiting jobs/sessions, session allowance,
+record/input usage and artifact reservations. Worker claim logs report remaining
+backlog and that job's queue wait. They include no session identities or source
+inputs. Existing calculation timing continues to separate queue and execution.
+
 ## Troubleshooting
 
 | Symptom | What to check |

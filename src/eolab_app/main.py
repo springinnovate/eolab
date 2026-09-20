@@ -28,7 +28,6 @@ from eolab_app.processing.job_notifications import PostgresJobWakeup
 from eolab_app.processing.models import ProcessingError
 from eolab_app.processing.native_processes import create_native_process
 from eolab_app.processing.job_events import PostgresJobEvents
-from eolab_app.processing.clip_models import RasterClipLimits
 from eolab_app.processing.service import ProcessingService
 from eolab_app.processing.worker import ProcessingWorker, serve as serve_processing
 from eolab_app.raster.catalog import StacRasterCatalog
@@ -59,7 +58,12 @@ from eolab_app.routes.stac_proxy import (
 from eolab_app.routes.system import create_system_router
 from eolab_app.routes.vectors import create_vector_feature
 from eolab_app.routes.wms_proxy import create_wms_proxy_router
-from eolab_app.settings import APPLICATION_VERSION_PATH, load_settings, load_processing_worker_settings
+from eolab_app.settings import (
+    APPLICATION_VERSION_PATH,
+    load_settings,
+    load_processing_worker_settings,
+    load_processing_limits,
+)
 from eolab_app.vector.assessment import (
     VectorAssessmentFinalizer,
     VectorAssessmentService,
@@ -296,7 +300,7 @@ def create_app(
     application.include_router(raster_feature.router)
     application.include_router(vector_feature.router)
     application.include_router(create_vector_sampling_router(vector_selection_reader))
-    processing_limits = RasterClipLimits()
+    processing_limits = load_processing_limits()
     planning_native = create_native_process(processing_limits)
     processing_events = PostgresJobEvents()
     processing_service = ProcessingService(
@@ -406,7 +410,7 @@ async def run_processing_worker() -> None:
         asyncio.CancelledError: After orderly native-child shutdown.
     """
     settings = load_processing_worker_settings()
-    limits = RasterClipLimits()
+    limits = load_processing_limits()
     artifacts = LocalJobArtifacts(settings.processing_data_path, (Path.cwd(), settings.scan_mount_path))
     artifacts.initialize()
     jobs = PostgresJobStore(limits)

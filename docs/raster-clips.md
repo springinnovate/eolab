@@ -75,9 +75,11 @@ recover it through History & exports. A failed job does not expose a partial TIF
 | Resource | Limit |
 | --- | --- |
 | Active native clip jobs | 1 globally, including overlapping worker deployments |
-| Waiting jobs | 10 globally; 2 unfinished per browser session |
+| Waiting jobs | 128 globally; 32 queued per browser session; running work is counted separately |
+| Retained job records | 4,096, including finished jobs and seven-day idempotency records |
+| Retained job inputs | 128 MiB of specifications and summaries awaiting cleanup |
 | Metadata planning | 1 child globally; 15-second inclusive deadline |
-| Retained plans | 5 per session, 50 globally, 5-minute lifetime |
+| Retained plans | 5 unfinished/ready per session, 128 records globally, 5-minute completed-plan lifetime |
 | Native output estimate, including validity | 1 GiB |
 | Decoded native source work | 4 GiB; at most 65,536 blocks; existing 64 MiB per-block ceiling |
 | Retained feature / projected-coordinate buffer | 500,000 positions |

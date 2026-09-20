@@ -118,6 +118,11 @@ class JobListResponse(BaseModel, Generic[JobResponseType]):
 class ProcessingLimits:
     """Deployment-wide scheduling, execution and retention limits.
 
+    Waiting-job limits count only queued work, not the single running attempt.
+    max_job_records includes finished jobs and seven-day idempotency records.
+    max_job_input_bytes bounds retained job specifications and summaries until
+    cleanup releases them, independently of artifact disk reservations.
+
     calculation_cache_capacity bounds the number of shared numerical results;
     zero disables cache reads and writes. calculation_cache_ttl_seconds limits
     reuse to 24 hours by default, independently of job/download expiry. Each
@@ -132,8 +137,10 @@ class ProcessingLimits:
     runtime_seconds: float = 600
     plan_ttl_seconds: int = 300
     result_ttl_seconds: int = 86_400
-    max_waiting: int = 10
-    max_owner_unfinished: int = 2
+    max_waiting_jobs: int = 128
+    max_owner_waiting_jobs: int = 32
+    max_job_records: int = 4096
+    max_job_input_bytes: int = 128 * 1024**2
     max_stored_bytes: int = 20 * 1024**3
     free_space_floor: int = 2 * 1024**3
     result_metadata_reservation_bytes: int = 9 * 1024**2

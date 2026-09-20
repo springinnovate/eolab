@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from dataclasses import asdict
 from importlib.resources import files
 import json
+import logging
 from typing import Any, Iterator
 from uuid import uuid4
 
@@ -31,6 +32,7 @@ from eolab_app.processing.models import (
 # Keep it stable across releases so overlapping workers acquire the same lock.
 # Other components using this database must allocate a different advisory key.
 PROCESSING_ADVISORY_LOCK_ID = 7_610_329
+LOGGER = logging.getLogger(__name__)
 UNFINISHED = ("queued", "running", "cancelling")
 PUBLIC_COLUMNS = (
     "id,owner,request_key,plan_id,created_at,updated_at,expires_at,status,operation,"
@@ -534,7 +536,11 @@ class PostgresJobStore:
     def submit(
         self, owner: str, plan_id: str, request_key: str, expected: PreparedJobPlan
     ) -> dict[str, Any]:
-        """Atomically enqueue a validated snapshot and reserve disk/queue budgets.
+        """Queue a job within separate session, backlog, record and storage budgets.
+
+        Running work does not consume waiting-job capacity. Finished jobs retain
+        their input and disk reservations until cleanup has removed their files.
+        Retrying an accepted request succeeds even when new admission is full.
 
         Args:
             owner: Current session hash.
@@ -546,7 +552,8 @@ class PostgresJobStore:
             Existing idempotent or newly queued owned job.
 
         Raises:
-            ProcessingError: If the plan expired or global/owner limits are full.
+            ProcessingError: If the plan expired or a waiting-job, retained-record,
+                input-storage or artifact-storage budget is exhausted.
         """
         with self._transaction(locked=True) as cursor:
             cursor.execute(
@@ -573,18 +580,46 @@ class PostgresJobStore:
                     "This job plan is no longer available. Create a new plan.",
                     409,
                 )
+            self._delete_old_job_records(cursor)
             cursor.execute(
-                "SELECT count(*) FILTER (WHERE status='queued') AS waiting, count(*) FILTER (WHERE owner=%s AND status=ANY(%s)) AS owned, COALESCE(sum(reserved_bytes),0) AS bytes FROM processing.jobs",
-                (owner, list(UNFINISHED)),
+                "SELECT count(*) FILTER (WHERE status='queued') AS waiting, "
+                "count(*) FILTER (WHERE owner=%s AND status='queued') AS owned, "
+                "count(DISTINCT owner) FILTER (WHERE status='queued') AS owners, "
+                "count(*) AS records, COALESCE(sum(input_bytes),0) AS inputs, "
+                "COALESCE(sum(reserved_bytes),0) AS bytes, "
+                "octet_length(%s::jsonb::text)::bigint + "
+                "octet_length(%s::jsonb::text) AS new_input_bytes FROM processing.jobs",
+                (owner, Jsonb(expected.specification), Jsonb(expected.summary)),
             )
             count = cursor.fetchone()
-            if (
-                count["waiting"] >= self.limits.max_waiting
-                or count["owned"] >= self.limits.max_owner_unfinished
-            ):
+            if count["owned"] >= self.limits.max_owner_waiting_jobs:
+                raise ProcessingError(
+                    "owner_queue_full",
+                    "This browser session has reached its waiting-job limit. "
+                    "Cancel a queued job or wait for one to start.",
+                    429,
+                )
+            if count["waiting"] >= self.limits.max_waiting_jobs:
                 raise ProcessingError(
                     "queue_full",
-                    "The processing queue is full. Wait for an existing job to finish.",
+                    "The processing waiting queue is full. Wait for a job to start.",
+                    429,
+                )
+            if count["records"] >= self.limits.max_job_records:
+                raise ProcessingError(
+                    "job_record_capacity",
+                    "Processing job history is full. Try later or ask the administrator "
+                    "to increase its record limit.",
+                    429,
+                )
+            if (
+                count["inputs"] + count["new_input_bytes"]
+                > self.limits.max_job_input_bytes
+            ):
+                raise ProcessingError(
+                    "job_input_capacity",
+                    "Processing input storage is full. Delete an earlier result "
+                    "or wait for cleanup before trying again.",
                     429,
                 )
             if count["bytes"] + expected.reserved_bytes > self.limits.max_stored_bytes:
@@ -594,7 +629,7 @@ class PostgresJobStore:
                     429,
                 )
             cursor.execute(
-                "INSERT INTO processing.jobs(id,owner,request_key,plan_id,expires_at,status,spec,reserved_bytes,summary,operation,minimum_claim_version) VALUES (%s,%s,%s,%s,now()+%s*interval '1 second','queued',%s,%s,%s,%s,%s) RETURNING *",
+                "INSERT INTO processing.jobs(id,owner,request_key,plan_id,expires_at,status,spec,reserved_bytes,summary,operation,minimum_claim_version,input_bytes) VALUES (%s,%s,%s,%s,now()+%s*interval '1 second','queued',%s,%s,%s,%s,%s,%s) RETURNING *",
                 (
                     uuid4().hex,
                     owner,
@@ -606,12 +641,28 @@ class PostgresJobStore:
                     Jsonb(expected.summary),
                     expected.operation,
                     expected.minimum_claim_version,
+                    count["new_input_bytes"],
                 ),
             )
             row = cursor.fetchone()
             # PostgreSQL delivers this empty hint only if admission commits.
             # No job IDs, owner capabilities, or operation inputs are broadcast.
             cursor.execute("SELECT pg_notify(%s, '')", (JOB_QUEUE_CHANNEL,))
+            LOGGER.info(
+                "Processing admission: waiting=%s/%s session_waiting=%s/%s "
+                "waiting_sessions=%s records=%s/%s input_bytes=%s/%s reserved_bytes=%s/%s",
+                count["waiting"] + 1,
+                self.limits.max_waiting_jobs,
+                count["owned"] + 1,
+                self.limits.max_owner_waiting_jobs,
+                count["owners"] + (count["owned"] == 0),
+                count["records"] + 1,
+                self.limits.max_job_records,
+                count["inputs"] + count["new_input_bytes"],
+                self.limits.max_job_input_bytes,
+                count["bytes"] + expected.reserved_bytes,
+                self.limits.max_stored_bytes,
+            )
             return row
 
     def get(self, identifier: str, owner: str) -> dict[str, Any]:
@@ -705,7 +756,13 @@ class PostgresJobStore:
             return cursor.fetchone()
 
     def claim(self) -> dict[str, Any] | None:
-        """Claim one global execution slot and fence it with an attempt token.
+        """Give the least recently served session one job in the single execution lane.
+
+        Sessions with no previous start go first. Ties use their oldest waiting
+        job, and each session's jobs remain FIFO. A large stack therefore cannot
+        take another turn ahead of a session that has been waiting since its
+        previous turn. Running jobs are never preempted. Cancellation and failure
+        still count as a turn once execution starts.
 
         Crash recovery waits through the previous hard deadline plus exit grace.
         A lost DB connection cannot cause a second native child to start while
@@ -717,7 +774,10 @@ class PostgresJobStore:
         older workers must not execute those jobs as fresh raster calculations.
 
         Returns:
-            Claimed job or None while another attempt reserves the slot.
+            Claimed job, or None when execution is busy or no supported job waits.
+
+        Raises:
+            ProcessingError: If the database cannot complete the claim.
         """
 
         with self._transaction(locked=True) as cursor:
@@ -739,13 +799,20 @@ class PostgresJobStore:
             if cursor.fetchone():
                 return None
             cursor.execute(
-                "SELECT id FROM processing.jobs WHERE status='queued' AND minimum_claim_version<=8 ORDER BY created_at LIMIT 1 FOR UPDATE"
+                "SELECT waiting.id FROM ("
+                "SELECT DISTINCT ON (owner) id,owner,created_at FROM processing.jobs "
+                "WHERE status='queued' AND minimum_claim_version<=8 "
+                "ORDER BY owner,created_at,id) waiting "
+                "LEFT JOIN LATERAL (SELECT started_at FROM processing.jobs history "
+                "WHERE history.owner=waiting.owner AND started_at IS NOT NULL "
+                "ORDER BY started_at DESC LIMIT 1) served ON true "
+                "ORDER BY served.started_at NULLS FIRST,waiting.created_at,waiting.id LIMIT 1"
             )
             row = cursor.fetchone()
             if not row:
                 return None
             cursor.execute(
-                "UPDATE processing.jobs SET status='running',attempt_id=%s,lease_until=now()+%s*interval '1 second',deadline_at=now()+%s*interval '1 second',updated_at=now() WHERE id=%s RETURNING *",
+                "UPDATE processing.jobs SET status='running',attempt_id=%s,lease_until=now()+%s*interval '1 second',deadline_at=now()+%s*interval '1 second',started_at=clock_timestamp(),updated_at=now() WHERE id=%s RETURNING *",
                 (
                     uuid4().hex,
                     self.limits.lease_seconds,
@@ -753,7 +820,19 @@ class PostgresJobStore:
                     row["id"],
                 ),
             )
-            return cursor.fetchone()
+            claimed = cursor.fetchone()
+            cursor.execute(
+                "SELECT count(*) AS waiting,count(DISTINCT owner) AS owners "
+                "FROM processing.jobs WHERE status='queued'"
+            )
+            backlog = cursor.fetchone()
+            LOGGER.info(
+                "Processing execution started: waiting=%s waiting_sessions=%s queue_seconds=%.3f",
+                backlog["waiting"],
+                backlog["owners"],
+                (claimed["started_at"] - claimed["created_at"]).total_seconds(),
+            )
+            return claimed
 
     def heartbeat(
         self, identifier: str, attempt: str, progress: dict[str, Any]
@@ -998,13 +1077,23 @@ class PostgresJobStore:
         """
         with self._transaction(locked=True) as cursor:
             cursor.execute(
-                "UPDATE processing.jobs SET reserved_bytes=0,spec=NULL,artifact=NULL WHERE id=%s AND status NOT IN ('queued','running','cancelling','ready') AND NOT EXISTS (SELECT 1 FROM processing.transfers WHERE job_id=%s)",
+                "UPDATE processing.jobs SET reserved_bytes=0,input_bytes=0,spec=NULL,artifact=NULL WHERE id=%s AND status NOT IN ('queued','running','cancelling','ready') AND NOT EXISTS (SELECT 1 FROM processing.transfers WHERE job_id=%s)",
                 (identifier, identifier),
             )
-            # Retain bounded-time idempotency tombstones, without input payloads.
-            cursor.execute(
-                "DELETE FROM processing.jobs WHERE reserved_bytes=0 AND spec IS NULL AND updated_at<now()-interval '7 days'"
-            )
+            self._delete_old_job_records(cursor)
+
+    def _delete_old_job_records(self, cursor: Any) -> None:
+        """Forget cleaned terminal jobs after their seven-day idempotency lifetime.
+
+        Args:
+            cursor: Cursor inside the existing locked admission/cleanup transaction.
+        """
+        cursor.execute(
+            "DELETE FROM processing.jobs WHERE reserved_bytes=0 AND spec IS NULL "
+            "AND status NOT IN ('queued','running','cancelling','ready') "
+            "AND updated_at<now()-interval '7 days' "
+            "AND NOT EXISTS (SELECT 1 FROM processing.transfers WHERE job_id=jobs.id)"
+        )
 
     def active_attempts(self) -> set[str]:
         """Read attempt IDs that still own files, including ready results.

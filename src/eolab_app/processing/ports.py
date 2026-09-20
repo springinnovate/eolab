@@ -265,7 +265,10 @@ class JobStore(Protocol):
     def submit(
         self, owner: str, plan_id: str, request_key: str, expected: PreparedJobPlan
     ) -> dict[str, Any]:
-        """Atomically enqueue a validated snapshot and reserve disk/queue budgets.
+        """Queue validated work within waiting-job, record, input and disk budgets.
+
+        The running attempt is separate from the owner's pending-job allowance.
+        An idempotent retry returns its existing job even when admission is full.
 
         Args:
             owner: Current session hash.
@@ -326,7 +329,10 @@ class JobStore(Protocol):
         ...
 
     def claim(self) -> dict[str, Any] | None:
-        """Claim one global execution slot and fence it with an attempt token.
+        """Start the oldest job of the least recently served waiting session.
+
+        New sessions go first; ties use job admission order. Execution remains
+        one global attempt, without preemption of a running job.
 
         Crash recovery waits through the previous hard deadline plus exit grace.
         A lost DB connection cannot cause a second native child to start while
