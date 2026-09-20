@@ -16,6 +16,7 @@ const PUBLICATION = Object.freeze({
 const PROPERTY_NAMES = Object.freeze(["name", "R2000", "R2024"]);
 
 const VIEWPORT = Object.freeze({
+  crs: "EPSG:4326",
   bbox: Object.freeze([20, 10, 40, 30]),
   width: 4096,
   height: 2048,

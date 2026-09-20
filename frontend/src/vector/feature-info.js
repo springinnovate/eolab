@@ -6,7 +6,8 @@ const MAX_WMS_VIEWPORT_EDGE = 2048;
 
 /**
  * @typedef {Object} VectorFeatureInfoViewport
- * @property {number[]} bbox WGS 84 west, south, east, north bounds.
+ * @property {string} crs WMS coordinate reference system used by the map.
+ * @property {number[]} bbox Minimum x/y and maximum x/y in that CRS.
  * @property {number} width Browser viewport width in pixels.
  * @property {number} height Browser viewport height in pixels.
  * @property {number} x Horizontal click coordinate in viewport pixels.
@@ -25,9 +26,9 @@ export class VectorFeatureInfoError extends Error {
 /**
  * Build a bounded GetFeatureInfo URL for one map click and vector publication.
  *
- * The request describes a neutral EPSG:4326 viewport, reducing dimensions and
+ * The bounds and click use the map's projection, reducing dimensions and
  * the click coordinate together when a large display exceeds the public WMS
- * edge limit. WMS 1.1.1 keeps longitude/latitude axis order.
+ * edge limit. WMS 1.1.1 keeps x/y axis order.
  *
  * @param {Object} configuration Request configuration.
  * @param {string} configuration.wmsUrl Restricted browser WMS endpoint.
@@ -36,6 +37,7 @@ export class VectorFeatureInfoError extends Error {
  * properties to return without materializing full feature geometry.
  * @param {VectorFeatureInfoViewport} configuration.viewport Neutral map view.
  * @return {string} Relative or absolute bounded WMS URL.
+ * @throws {VectorFeatureInfoError} If the viewport or attribute list is invalid.
  */
 export function buildVectorFeatureInfoUrl({
     wmsUrl,
@@ -44,6 +46,7 @@ export function buildVectorFeatureInfoUrl({
     viewport,
 }) {
     if (
+        typeof viewport?.crs !== "string" || viewport.crs.length === 0 ||
         !Number.isFinite(viewport?.width) ||
         !Number.isFinite(viewport?.height) ||
         viewport.width <= 0 || viewport.height <= 0 ||
@@ -82,7 +85,7 @@ export function buildVectorFeatureInfoUrl({
         layers: publication.layerName,
         query_layers: publication.layerName,
         styles: publication.styleName,
-        srs: "EPSG:4326",
+        srs: viewport.crs,
         bbox: viewport.bbox.join(","),
         width: String(width),
         height: String(height),
