@@ -38,11 +38,15 @@ export class RasterSeriesCalculations {
      */
     bind(onChange) { this.onChange = onChange; }
 
-    /** Cancel a recovered stack job: the unsaved remainder must never restart on reload.
-     * The executor still recovers an uncertain submission's original request key before cancellation.
-     * @return {Promise<void>} Shared observer startup and cancellation recovery.
+    /** Recover a series calculation saved before reload and request its cancellation.
+     * Call once during browser startup. The remaining raster list is not saved, so
+     * that old series must not resume automatically. If its submission response was
+     * lost, the executor recovers the job with the original request key before cancelling.
+     * Also starts shared job observation when there is no saved series calculation.
+     * @return {Promise<void>} Initial recovery attempt; cancellation may finish later
+     * through the shared job observer.
      */
-    async start() {
+    async recoverAndCancelPreviousCalculation() {
         if (this.client.snapshot.unfinishedCalculation) this.client.stop();
         await this.client.start();
     }

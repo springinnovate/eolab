@@ -184,7 +184,7 @@ test("recovery routes a stored series job to its caller, and cancels it without 
     const summary=recovered.queue.createClient("summary",()=>{});
     assert.equal(summary.snapshot.unfinishedCalculation,null);
     assert.deepEqual(recovered.area.client.snapshot.unfinishedCalculation.calculation,record.intent);
-    await recovered.area.start();await flush();
+    await recovered.area.recoverAndCancelPreviousCalculation();await flush();
     assert.equal(recovered.requests.filter(([kind])=>kind==="cancel").length,1);
     await recovered.finish("cancelled");
     assert.equal(recovered.requests.filter(([kind])=>kind==="submit").length,0);
