@@ -3,8 +3,12 @@ import test from "node:test";
 import { MapInspectionController } from "../src/map-inspection-controller.js";
 import { FakeRasterControlDocument } from "../test-support/raster/fake-controls-document.js";
 
-/** Build a retained, non-modal map surface with focus and lifecycle spies. */
-function fixture() {
+/**
+ * Build a retained map surface with focus and lifecycle spies.
+ * @param {(doc: FakeRasterControlDocument) => void} [configureDocument] Optional layout setup.
+ * @return {Object} Controller and its document elements.
+ */
+function fixture(configureDocument = () => {}) {
     const doc = new FakeRasterControlDocument();
     const events = new EventTarget();
     doc.addEventListener = events.addEventListener.bind(events);
@@ -32,6 +36,7 @@ function fixture() {
     const calls = [];
     root.showPopover = () => calls.push("show");
     root.hidePopover = () => calls.push("hide");
+    configureDocument(doc);
     const controller = new MapInspectionController({ documentContext: doc });
     return {
         doc,
@@ -610,4 +615,73 @@ test("raster series remains active during map inspection and closes without hidi
     assert.equal(h.doc.querySelector("#raster-series").hidden, true);
     assert.equal(h.histogram.hidden, false);
     h.controller.destroy();
+});
+
+test("basemap follows panel widths, narrow map space, visibility and layout cleanup", () => {
+    let resize, disconnected = false, open = false;
+    const observed = [];
+    const mapBounds = { left: 360, right: 1424, width: 1064 };
+    const panelBounds = { left: 1000, top: 16 };
+    const controlBounds = { width: 200, top: 880 };
+    const h = fixture(doc => {
+        doc.defaultView = new EventTarget();
+        doc.defaultView.ResizeObserver = class {
+            /** @param {Function} callback Layout notification. */
+            constructor(callback) { resize = callback; }
+            /** @param {Object} element Observed layout box. @return {void} */
+            observe(element) { observed.push(element); }
+            /** Stop layout notifications. @return {void} */
+            disconnect() { disconnected = true; }
+        };
+        const map = doc.querySelector("#map");
+        const root = doc.querySelector("#map-inspection");
+        const control = doc.querySelector(".eolab-basemap-control");
+        control.parentElement = doc.createElement();
+        map.getBoundingClientRect = () => mapBounds;
+        root.getBoundingClientRect = () => panelBounds;
+        control.getBoundingClientRect = () => controlBounds;
+        root.matches = () => open;
+        root.showPopover = () => { open = true; };
+        root.hidePopover = () => { open = false; };
+        for (const element of [map, root]) {
+            element.style = new Map();
+            element.style.setProperty = element.style.set.bind(element.style);
+            element.style.removeProperty = element.style.delete.bind(element.style);
+        }
+    });
+    const root = h.doc.querySelector("#map-inspection");
+    assert.equal(observed.length, 4);
+    assert.equal(h.map.style.get("--basemap-right-gap"), "10px");
+    h.controller.showHistogram();
+    root.dispatchEvent(new Event("toggle"));
+    assert.equal(h.map.style.get("--basemap-right-gap"), "434px");
+    assert.equal(root.style.has("--map-inspection-available-height"), false);
+
+    panelBounds.left = 840; // A wider series panel.
+    resize();
+    assert.equal(h.map.style.get("--basemap-right-gap"), "594px");
+    mapBounds.left = 700; // Expanded catalog leaves too little map beside it.
+    mapBounds.width = 724;
+    resize();
+    assert.equal(h.map.style.get("--basemap-right-gap"), "10px");
+    assert.equal(root.style.get("--map-inspection-available-height"), "854px");
+
+    controlBounds.top = 820; // Wrapped attribution or a basemap error message.
+    resize();
+    assert.equal(root.style.get("--map-inspection-available-height"), "794px");
+    h.minimizeButton.dispatchEvent(new Event("click"));
+    assert.equal(root.style.has("--map-inspection-available-height"), false);
+    h.minimizeButton.dispatchEvent(new Event("click"));
+    assert.equal(root.style.get("--map-inspection-available-height"), "794px");
+
+    h.controller.closeHistogram();
+    root.dispatchEvent(new Event("toggle"));
+    assert.equal(h.map.style.get("--basemap-right-gap"), "10px");
+    assert.equal(root.style.has("--map-inspection-available-height"), false);
+    h.controller.destroy();
+    assert.equal(disconnected, true);
+    assert.equal(h.map.style.size, 0);
+    h.doc.defaultView.dispatchEvent(new Event("resize"));
+    root.dispatchEvent(new Event("toggle"));
+    assert.equal(h.map.style.size, 0, "layout listeners are removed");
 });

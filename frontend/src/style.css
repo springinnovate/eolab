@@ -3467,7 +3467,7 @@ article.raster-histogram-summary {
   inset: 16px 20px 16px auto;
   display: flex;
   height: calc(100dvh - 32px);
-  max-height: calc(100dvh - 32px);
+  max-height: min(calc(100dvh - 32px), var(--map-inspection-available-height, 100dvh));
   flex-direction: column;
   gap: 8px;
   margin: 0;
@@ -4467,7 +4467,7 @@ summary:hover > .raster-disclosure-chevron {
     inset: 8px;
     width: auto;
     height: calc(100dvh - 16px);
-    max-height: calc(100dvh - 16px);
+    max-height: min(calc(100dvh - 16px), var(--map-inspection-available-height, 100dvh));
   }
 
   #map-inspection[data-minimized="true"] {
@@ -4605,7 +4605,7 @@ summary:hover > .raster-disclosure-chevron {
 }
 
 .eolab-basemap-control {
-  max-width: min(230px, calc(100vw - 40px));
+  max-width: min(230px, calc(100vw - 40px), var(--basemap-max-width, 230px));
   padding: 8px 10px;
   border: 1px solid var(--border-1);
   border-radius: var(--radius);
@@ -4613,6 +4613,7 @@ summary:hover > .raster-disclosure-chevron {
   color: var(--text-1);
   box-shadow: var(--elevation-control);
 }
+.leaflet-right .eolab-basemap-control { margin-right: var(--basemap-right-gap, 10px); }
 .eolab-basemap-control label { display: grid; gap: 4px; margin: 0; }
 .eolab-basemap-control label > span { font-size: 0.7rem; font-weight: 600; }
 .eolab-basemap-control select { width: 100%; min-width: 0; font-size: 0.8rem; padding: 4px; }
