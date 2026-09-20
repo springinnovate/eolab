@@ -69,10 +69,11 @@ import {
     CatalogVectorAssessmentCache,
 } from "./catalog-map-actions.js";
 import { initializeRasterViewer } from "./raster/raster-viewer.js";
-import { RasterPixelSeriesController } from "./raster/pixel-series.js";
-import { RasterPixelSeriesView } from "./raster/pixel-series-view.js";
+import { RasterSeriesCalculations } from "./processing/raster-series-calculations.js";
+import { RasterSeriesController } from "./raster/series.js";
+import { RasterSeriesView } from "./raster/series-view.js";
 import { sampleCatalogRasterPixel } from "./raster/analysis-api.js";
-import "./raster/pixel-series.css";
+import "./raster/series.css";
 import { RasterCursorValuesView } from "./raster/cursor-values-view.js";
 import { SavedMapViewCatalogClient } from "./saved-map-view/catalog-client.js";
 import { SavedMapViewController } from "./saved-map-view/controller.js";
@@ -95,6 +96,7 @@ import { VectorSamplingView } from "./vector/sampling-view.js";
 import { ProcessingApiClient } from "./processing/api.js";
 import { SummaryStatisticsController } from "./processing/summary-statistics-controller.js";
 import { SummaryStatisticsView } from "./processing/summary-statistics-view.js";
+import { CalculationQueue } from "./processing/calculation-queue.js";
 import { CalculationSessionStorage } from "./processing/calculation-session.js";
 import { ProcessingJobs } from "./processing/jobs.js";
 import { DownloadsController } from "./processing/downloads-controller.js";
@@ -722,6 +724,16 @@ async function initializeCatalog(
     let mapInteractionMode = "inspection";
     let rasterVisualization = null;
     let rasterSeries = null;
+    let rasterSeriesArea = null;
+    let rasterSeriesAreaLabel = "";
+    /** Send committed sampling-area changes to the raster-series component.
+     * @param {Object|null} area Path-free Processing area.
+     * @param {string} label Selection description. @return {void}
+     */
+    const updateRasterSeriesArea = (area, label) => {
+        rasterSeriesArea = area; rasterSeriesAreaLabel = label;
+        rasterSeries?.setArea(area, label);
+    };
     let layerStyleEditor = null;
     let savedMapViewController = null;
     let vectorFeatureInspector = null;
@@ -788,13 +800,17 @@ async function initializeCatalog(
         document.querySelector("#raster-sampling-vector-disclosure").open = true;
         document.querySelector("#raster-sampling-disclosure summary").focus();
     };
+    const calculationQueue = new CalculationQueue({
+        api: processingApi, jobs: processingJobs, storage: new CalculationSessionStorage(browserSessionStorage()),
+        onActivity: area => rasterVisualization?.setSamplingActivity(area),
+    });
     const calculations = new SummaryStatisticsController({
         api: processingApi, jobs: processingJobs, view: new SummaryStatisticsView(),
-        storage: new CalculationSessionStorage(browserSessionStorage()), getContext: processingContext,
+        executionQueue: calculationQueue,
+        onAreaChange: updateRasterSeriesArea, getContext: processingContext,
         onOpen: () => mapInspection.showCalculations(), onClose: () => mapInspection.hideCalculations(),
         onEditArea: editProcessingArea,
         onCancelSelection: () => summarySampling.invalidate("Selection cancelled"),
-        onActivity: area => rasterVisualization?.setSamplingActivity(area),
     });
     mapInspection.subscribeActiveTool(tool => calculations.setActive(tool === "calculations"));
     const downloads = new DownloadsController({
@@ -815,7 +831,7 @@ async function initializeCatalog(
         if (record) calculations.open(clipSource(record.entry.item));
     };
     void downloads.start();
-    void calculations.start();
+
     rasterVisualization = initializeRasterViewer({
         wmsUrl: appGlobalConfiguration.wmsUrl,
         leafletMap,
@@ -826,7 +842,10 @@ async function initializeCatalog(
             calculations.open(clipSource(item), area);
             calculations.calculateSelection(true);
         },
-        onSamplingAreaChange: area => calculations.setSelection(area),
+        onSamplingAreaChange: area => {
+            calculations.setSelection(area);
+            updateRasterSeriesArea(area, area?.kind === "catalogSelection" ? "Selected vector features" : "Current map sampling box");
+        },
         onHistogramRequested: () => mapInspection.showHistogram(null, {
             activate: !selectingMapClick && !calculations.isActive,
         }),
@@ -1007,10 +1026,20 @@ async function initializeCatalog(
         savedMapViewController?.scheduleRemember()
     );
     const startupMapRestore = savedMapViewController.restoreStartupView(globalThis.location.hash);
-    rasterSeries = new RasterPixelSeriesController({
+    const rasterAreaSeries = new RasterSeriesCalculations({ api: processingApi, queue: calculationQueue });
+    rasterSeries = new RasterSeriesController({
+        areaStatistics: rasterAreaSeries,
+        onEditArea: () => calculations.open(),
         samplePoint: sampleCatalogRasterPixel,
-        view: new RasterPixelSeriesView(),
+        view: new RasterSeriesView(),
         onClose: () => { mapInspection.hideRasterSeries(); leafletMap.getContainer().focus(); },
+    });
+    rasterSeries.setArea(rasterSeriesArea, rasterSeriesAreaLabel);
+    void rasterAreaSeries.recoverAndCancelPreviousCalculation();
+    void calculations.start();
+    document.querySelector("#open-raster-series-summary").addEventListener("click", () => {
+        rasterSeries.setMode("area");
+        mapInspection.showRasterSeries();
     });
     rasterSeries.updateAvailableRasters(mapLayerController.snapshots().filter(layer => layer.datasetKind === "raster"));
     mapInspection.subscribeActiveTool(tool => rasterSeries.updateSamplingForPanelVisibility(tool === "raster-series"));
@@ -1121,12 +1150,14 @@ async function initializeCatalog(
             rasterClickSelected = rasterVisualization.exploreAt(event.latlng, {
                 onSelected: area => {
                     calculations.setSelection(area);
+                    updateRasterSeriesArea(area, area?.kind === "catalogSelection" ? "Selected vector features" : "Current map sampling box");
                     calculations.calculateSelection();
                 },
             });
             if (!rasterClickSelected) {
                 mapInspection.closeHistogram(false);
                 calculations.setSelection(null);
+                updateRasterSeriesArea(null, "");
             }
             mapInspection.setClickResult("histogram", rasterClickSelected ? latestHistogramPresentation : null);
             void vectorFeatureInspector.inspect(event);

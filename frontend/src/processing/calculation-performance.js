@@ -34,7 +34,7 @@ export function performanceDescription(job, totalWaitSeconds, stages) {
     const lines = [...(Number.isFinite(totalWaitSeconds) && totalWaitSeconds >= 0
         ? [`Total wait → result displayed: ${totalWaitSeconds.toFixed(3)} s.`,
             "Measured in this tab from the calculation request through the result UI update, including vector selection when requested here, debounce, planning, queueing and result delivery (notifications or polling); excludes earlier confirmation time and the browser's subsequent paint."]
-        : ["Total wait unavailable for this result. Request-to-display timing is recorded only for statistic cards completed in this tab, without a page reload."]),
+        : ["Total wait unavailable for this result. A complete request-to-display interval was not recorded in this tab."]),
     ...(job.result?.cacheHit ? ["Reused cached result; no raster pixels were read or calculated for this job."] : executionDescription(job.grid))];
     const seconds = n => `${n.toFixed(3)} s`;
     if (stages) {

@@ -1,7 +1,7 @@
 /** Editable statistic cards over the existing durable calculation workflow. */
+import { canAutomaticallyCalculate } from "./calculation-policy.js";
 import { calculationIntent, chunkPixels } from "./calculation-session.js";
 import { normalizeCalculationArea } from "./calculation-area.js";
-import { CalculationExecutor } from "./calculation-executor.js";
 import { catalogSelectionsEqual } from "../selected-area.js";
 
 /** Execution status received from CalculationExecutor's onChange callback.
@@ -10,7 +10,6 @@ import { catalogSelectionsEqual } from "../selected-area.js";
  * @typedef {import("./calculation-executor.js").CalculationExecutionSnapshot} CalculationExecutionSnapshot
  */
 
-export const AUTOMATIC_CALCULATION_LIMITS = Object.freeze({ nativeBlocks: 128, decodedBytes: 64 * 1024 * 1024, geometryCells: 25000 });
 export const STATISTIC_PRESETS = Object.freeze({
     mean: { label: "Mean", expression: "mean(a)" }, sum: { label: "Sum", expression: "sum(a)" },
     count: { label: "Count above 10", expression: "count(a > 10)" },
@@ -22,44 +21,33 @@ export const STATISTIC_PRESETS = Object.freeze({
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const sourceKey = source => source ? `${source.collectionId}\n${source.itemId}` : "";
 
-/** Decide whether an edit or map click may run without another Calculate click.
- * Cached values can be reused for any area without confirming raster work.
- * Uncached requests qualify only for rectangular map selections within the
- * block, memory and geometry limits below.
- * This UI policy does not replace the server's resource limits.
- * @param {Object} plan Server plan with estimated grid work.
- * @param {Object} intent Calculation settings including the sampling area.
- * @return {boolean} Whether automatic submission is allowed.
- */
-export function canAutomaticallyCalculate(plan, intent) {
-    if (plan?.cacheHit === true) return true;
-    const grid = plan?.grid;
-    return intent.area.kind === "selectedArea" && !!grid &&
-        Number.isFinite(grid.nativeBlocks) && grid.nativeBlocks <= AUTOMATIC_CALCULATION_LIMITS.nativeBlocks &&
-        Number.isFinite(grid.decodedBytes) && grid.decodedBytes <= AUTOMATIC_CALCULATION_LIMITS.decodedBytes &&
-        (!grid.groundArea || (Number.isFinite(grid.groundArea.estimatedGeometryCells) &&
-            grid.groundArea.estimatedGeometryCells <= AUTOMATIC_CALCULATION_LIMITS.geometryCells));
-}
-
 /** Own card identities and local validation; serialize native work through one executor. */
 export class SummaryStatisticsController {
     /** Wire statistic cards to the existing Processing executor and composed actions.
-     * @param {Object} dependencies API, jobs, storage, view, clock and semantic callbacks.
+     * @param {Object} dependencies Processing providers and composed UI actions.
+     * @param {import("./api.js").ProcessingApiClient} dependencies.api Formula validation.
+     * @param {import("./jobs.js").ProcessingJobs} dependencies.jobs Shared history observer.
+     * @param {import("./summary-statistics-view.js").SummaryStatisticsView} dependencies.view Statistic controls.
+     * @param {()=>Object} dependencies.getContext Available rasters and selected area.
+     * @param {()=>void} dependencies.onOpen Show this panel.
+     * @param {()=>void} dependencies.onClose Close this panel.
+     * @param {()=>void} dependencies.onEditArea Show sampling controls.
+     * @param {(area:Object|null,label:string)=>void} [dependencies.onAreaChange] Publish the committed calculation area.
+     * @param {Object} [dependencies.clock=globalThis] Debounce timers.
+     * @param {()=>number} [dependencies.now] Monotonic milliseconds.
+     * @param {import("./calculation-queue.js").CalculationQueue} dependencies.executionQueue Shared recoverable executor queue.
      * @param {Function} [dependencies.onCancelSelection] Cancel an in-progress area selection.
      */
     constructor(dependencies) {
-        const { api, jobs, view, getContext, onOpen, onClose, onEditArea, onCancelSelection = () => {}, clock = globalThis, now = () => performance.now() } = dependencies;
+        const { api, jobs, view, getContext, onOpen, onClose, onEditArea, onCancelSelection = () => {}, onAreaChange = () => {}, clock = globalThis, now = () => performance.now() } = dependencies;
         this.now = now;
-        Object.assign(this, { api, jobs, view, getContext, onOpen, onClose, onCancelSelection, clock });
+        Object.assign(this, { api, jobs, view, getContext, onOpen, onClose, onCancelSelection, onAreaChange, clock });
         this.serial = 0;
         this.vectorRequestStarted = null;
         this.state = { sources: [], statistics: [], area: null, selectedArea: null, areaChoice: "selection",
             active: false, automatic: true, jobs: [], historyError: "", saved: null, undo: false, targetChunkPixels: null };
         this.state.statistics.push(this.makeStatistic(STATISTIC_PRESETS.mean));
-        this.executor = new CalculationExecutor({ api, jobs, storage: dependencies.storage,
-            onActivity: dependencies.onActivity, requestId: dependencies.requestId, now,
-            onChange: snapshot => this.receive(snapshot),
-        });
+        this.executor = dependencies.executionQueue.createClient("summary", snapshot => this.receive(snapshot));
         view.bind({ onOpen: () => this.open(), onClose: () => this.close(), onEditArea,
             onArea: choice => this.chooseArea(choice), onAutomatic: value => this.setAutomatic(value),
             onChunkPixels: value => this.setChunkPixels(value),
@@ -281,6 +269,9 @@ export class SummaryStatisticsController {
         if (this.batch?.automatic || this.isActive) this.invalidateBatch();
         this.executor.discardPendingCalculation();
         this.state.area = area;
+        this.onAreaChange(area, ["catalogSelection", "polygonArea"].includes(area?.kind)
+            ? this.state.vectorArea?.label ?? "Selected polygons"
+            : area?.kind === "wholeRaster" ? "Whole raster" : area ? "Current map sampling box" : "");
         for (const card of this.state.statistics) {
             card.plan = null; card.manualRequired = false; card.error = false;
             card.requested = automatic && this.isActive && this.state.automatic && area ? "automatic" : null;

@@ -619,6 +619,35 @@
               <h2>Raster series</h2>
               <button id="close-raster-series" class="secondary-button" type="button" aria-label="Close raster series">&times;</button>
             </header>
+            <label class="raster-series-mode">Plot <select id="raster-series-mode"><option value="pixel">Pixel values</option><option value="area">Area statistics</option></select></label>
+            <div id="raster-series-area-controls" hidden>
+              <div class="raster-series-controls">
+                <label>Area <select id="raster-series-area"><option value="selection">Current sampling area</option><option value="whole">Whole raster</option></select></label>
+                <button id="raster-series-edit-area" class="summary-text-button" type="button">Change area</button>
+              </div>
+              <p class="raster-series-help">Use the same box, imported annotation polygons or filtered vector layer as Summary statistics. Each formula uses <code>a</code> for each selected raster in turn, on its own pixel grid.</p>
+              <div id="raster-series-formulas"></div>
+              <div class="raster-series-controls">
+                <label>Add statistic <select id="raster-series-add-formula"><option value="">Choose…</option><option value="mean">Mean</option><option value="min">Minimum</option><option value="max">Maximum</option><option value="sum">Sum</option><option value="area">Area above zero (ha)</option><option value="custom">Custom formula</option></select></label>
+                <label>Plot statistic <select id="raster-series-statistic"></select></label>
+              </div>
+              <details class="raster-series-help"><summary>Formula reference</summary>
+                <ul>
+                  <li><code>mean(a)</code> — Average of valid pixel values.</li>
+                  <li><code>min(a)</code> / <code>max(a)</code> — Smallest / largest valid value.</li>
+                  <li><code>sum(a)</code> — Sum of valid pixel values.</li>
+                  <li><code>count(a &gt; 10)</code> — Count matching pixels.</li>
+                  <li><code>areaha(a &gt; 0)</code> — Matching ground area in hectares.</li>
+                </ul>
+                <p>Use arithmetic to combine functions: <code>(mean(a)-min(a))/(max(a)-min(a))</code>. Use <code>where=</code> to filter: <code>sum(a, where=a &gt; 10)</code>. No-data pixels are excluded. Up to five formulas share one pass through each raster. Unlike units are shown as separate plots.</p>
+              </details>
+              <div class="raster-series-actions">
+                <button id="raster-series-calculate" type="button">Calculate</button>
+                <button id="raster-series-cancel" class="secondary-button" type="button" hidden>Cancel remaining</button>
+                <button id="raster-series-recover" class="secondary-button" type="button" hidden>Recover / retry</button>
+              </div>
+              <details class="raster-series-help"><summary>Calculation timings</summary><div id="raster-series-performance"></div></details>
+            </div>
             <p id="raster-series-context">Pixel values across raster layers</p>
             <details>
               <summary id="raster-series-source-summary">Rasters</summary>
@@ -635,7 +664,7 @@
             <details>
               <summary>Values &amp; download</summary>
               <div class="raster-series-table-scroll">
-                <table><thead><tr><th scope="col">Raster</th><th scope="col">Pixel value</th><th scope="col">Status</th></tr></thead><tbody id="raster-series-table-body"></tbody></table>
+                <table><thead><tr><th scope="col">Raster</th><th id="raster-series-value-heading" scope="col">Pixel value</th><th scope="col">Status</th></tr></thead><tbody id="raster-series-table-body"></tbody></table>
               </div>
               <div class="raster-series-actions">
                 <button id="raster-series-download" class="secondary-button" type="button" disabled>Download CSV</button>
@@ -662,6 +691,7 @@
           <section id="calculations-panel" role="tabpanel" aria-labelledby="map-inspection-tab-calculations" hidden>
             <div class="downloads-actions summary-panel-heading"><h2>Summary statistics</h2><button id="calculations-close" class="secondary-button" type="button" aria-label="Close summary statistics">&times;</button></div>
             <div class="summary-area-row"><label for="calculations-area">Area</label><select id="calculations-area"></select><button id="calculations-edit-area" class="summary-text-button" type="button">Change</button></div>
+            <button id="open-raster-series-summary" class="summary-text-button" type="button">Plot this area across rasters</button>
             <p id="calculations-area-description" class="summary-area-details"></p>
             <section id="calculations-vector-area" class="vector-selection-card summary-vector-area" aria-label="Vector sampling area for summary statistics" hidden>
               <label>Polygon layer <select data-vector-sampling="layer" aria-label="Sampling polygon layer"></select></label>

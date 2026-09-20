@@ -43,6 +43,42 @@ If submission is uncertain, use **Recover / retry** instead of creating a second
 request. Exported names and formulas describe the submitted calculation even if
 you later edit its card.
 
+## Plotting statistics across rasters
+
+Open **Raster series** from **More** or a raster histogram, then choose
+**Area statistics**. Use the raster checklist to choose up to 50 rasters.
+The same formulas run independently on each raster's native grid, over the
+current sampling area or each raster's whole extent. This does not align rasters
+or perform pixel-by-pixel arithmetic between different rasters.
+
+Choose **Change area** to use the existing Summary statistics controls for a
+map box, filtered vector layer, or annotation polygons (including imported
+GeoJSON). **Plot this area across rasters** returns to the series panel.
+Drawing a new map box while area series is active replaces its calculations.
+
+Add up to five formulas. Within each formula, `a` means the current raster in
+the stack. Those formulas share one job and one read/mask pass per raster.
+**Plot statistic** chooses one formula at a time, so hectares and raster-value
+statistics do not share an axis. Missing values and failed rasters leave gaps;
+the table explains their status. Names, chart type and display order can change
+without recalculating.
+
+Small boxes calculate after a 700 ms pause. The automatic work budget applies
+to the entire stack. Large areas or stacks pause once for **Calculate remaining
+rasters**; cached results do not need this confirmation. Series and summary
+cards share one recoverable executor and take turns between raster jobs.
+Changing inputs, leaving area series, or **Cancel remaining** cancels outstanding
+series work. After a page reload, an unfinished series job is recovered only
+to cancel it safely; the unsaved stack is not restarted.
+
+**Values & download** shows the selected statistic and exports all formulas,
+exact scalar values, units, source IDs, area descriptors, job IDs and cache
+status as CSV. **Calculation timings** reports each raster's queue-request to
+received-result time and the existing server timings. This interval excludes
+formula debounce/validation and earlier rasters; it is not a whole-stack
+performance measurement. Formula choices and series results are not saved in
+shared map links.
+
 ## Language and numerical meaning
 
 Aliases start with a letter, contain letters/digits/underscores, and have at most

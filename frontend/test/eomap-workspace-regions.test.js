@@ -317,7 +317,7 @@ test("inspector publication can reveal Map layers through composition", () => {
 test("composition calculates committed boxes and closes inspection when no raster accepts a click", () => {
     assert.match(
         COMPOSITION_SOURCE,
-        /rasterClickSelected = rasterVisualization\.exploreAt\(event\.latlng, \{\s*onSelected: area => \{\s*calculations\.setSelection\(area\);\s*calculations\.calculateSelection\(\);\s*\},\s*\}\);\s*if \(!rasterClickSelected\) \{\s*mapInspection\.closeHistogram\(false\);\s*calculations\.setSelection\(null\);/
+        /rasterClickSelected = rasterVisualization\.exploreAt\(event\.latlng, \{\s*onSelected: area => \{\s*calculations\.setSelection\(area\);\s*updateRasterSeriesArea\(area, [^;]+\);\s*calculations\.calculateSelection\(\);\s*\},\s*\}\);\s*if \(!rasterClickSelected\) \{\s*mapInspection\.closeHistogram\(false\);\s*calculations\.setSelection\(null\);\s*updateRasterSeriesArea\(null, ""\);/
     );
     assert.match(COMPOSITION_SOURCE, /vectorFeatureInspector\.inspect\(event\)/);
 });
