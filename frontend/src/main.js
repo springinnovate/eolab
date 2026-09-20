@@ -1013,7 +1013,7 @@ async function initializeCatalog(
         onClose: () => { mapInspection.hideRasterSeries(); leafletMap.getContainer().focus(); },
     });
     rasterSeries.updateAvailableRasters(mapLayerController.snapshots().filter(layer => layer.datasetKind === "raster"));
-    mapInspection.subscribeActiveTool(tool => rasterSeries.setActive(tool === "raster-series"));
+    mapInspection.subscribeActiveTool(tool => rasterSeries.updateSamplingForPanelVisibility(tool === "raster-series"));
     for (const id of ["open-raster-series", "open-raster-series-dock", "open-raster-series-histogram"]) {
         document.querySelector(`#${id}`).addEventListener("click", () => mapInspection.showRasterSeries());
     }

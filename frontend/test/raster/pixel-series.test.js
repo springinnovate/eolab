@@ -14,7 +14,7 @@ function fixture() {
     const requests = [];
     const view = { bind(actions) { this.actions = actions; }, render(state) { this.state = state; }, downloadCsv(csv) { this.csv = csv; } };
     const controller = new RasterPixelSeriesController({
-        view, onClose: () => controller.setActive(false),
+        view, onClose: () => controller.updateSamplingForPanelVisibility(false),
         samplePoint: (item, position, signal) => new Promise((resolve, reject) => requests.push({ item, position, signal, resolve, reject })),
     });
     return { controller, view, requests };
@@ -23,13 +23,13 @@ function fixture() {
 test("opening uses the retained click, preserves raster order and reports progressive results", async () => {
     const { controller, view, requests } = fixture();
     controller.updateAvailableRasters([source("2000"), source("2010"), source("2020")]);
-    controller.setActive(true);
+    controller.updateSamplingForPanelVisibility(true);
     assert.match(view.state.message, /Click the map/);
     assert.equal(requests.length, 0);
-    controller.setActive(false);
+    controller.updateSamplingForPanelVisibility(false);
     controller.setPosition({ longitude: 78, latitude: 22 });
     assert.equal(requests.length, 0);
-    controller.setActive(true);
+    controller.updateSamplingForPanelVisibility(true);
     assert.equal(requests.length, 2);
     requests[1].resolve({ inBounds: true, value: 2 });
     await settle();
@@ -47,7 +47,7 @@ test("ordering, labels, chart style and reopening a completed plot do not reread
     const { controller, view, requests } = fixture();
     controller.updateAvailableRasters([source("10"), source("2"), source("hidden", false)]);
     controller.setPosition({ longitude: 1, latitude: 2 });
-    controller.setActive(true);
+    controller.updateSamplingForPanelVisibility(true);
     requests[0].resolve({ inBounds: true, value: 10 });
     requests[1].resolve({ inBounds: true, value: 2 });
     await settle();
@@ -55,8 +55,8 @@ test("ordering, labels, chart style and reopening a completed plot do not reread
     assert.deepEqual(view.state.rows.map(row => row.value), [2, 10]);
     view.actions.onChartType("scatter");
     controller.updateAvailableRasters([source("2"), { ...source("10"), label: "Ten" }, source("hidden", false)]);
-    controller.setActive(false);
-    controller.setActive(true);
+    controller.updateSamplingForPanelVisibility(false);
+    controller.updateSamplingForPanelVisibility(true);
     assert.equal(requests.length, 2);
     assert.equal(view.state.chartType, "scatter");
     assert.equal(view.state.sources.find(row => row.key === "hidden").selected, false);
@@ -66,7 +66,7 @@ test("new clicks cancel queued work, retain a visibly separate old plot, and rej
     const { controller, view, requests } = fixture();
     controller.updateAvailableRasters([source("a"), source("b"), source("c")]);
     controller.setPosition({ longitude: 1, latitude: 2 });
-    controller.setActive(true);
+    controller.updateSamplingForPanelVisibility(true);
     requests[0].resolve({ inBounds: true, value: 1 });
     requests[1].resolve({ inBounds: true, value: 2 });
     await settle();
@@ -87,7 +87,7 @@ test("new clicks cancel queued work, retain a visibly separate old plot, and rej
     assert.equal(view.state.previousRows, null);
     assert.equal(view.state.rows[0].value, 5);
     assert.equal(requests[7].position.longitude, 5);
-    controller.setActive(false);
+    controller.updateSamplingForPanelVisibility(false);
     assert.equal(requests[7].signal.aborted, true);
     requests[6].resolve({ inBounds: true, value: 999 });
     requests[7].resolve({ inBounds: true, value: 999 });
@@ -99,7 +99,7 @@ test("source removal cancels older work and hidden rasters may be explicitly sel
     const { controller, view, requests } = fixture();
     controller.updateAvailableRasters([source("a"), source("b", false)]);
     controller.setPosition({ longitude: 1, latitude: 2 });
-    controller.setActive(true);
+    controller.updateSamplingForPanelVisibility(true);
     controller.updateAvailableRasters([source("b", false)]);
     assert.equal(requests[0].signal.aborted, true);
     assert.match(view.state.message, /Select rasters/);
@@ -115,12 +115,12 @@ test("oversized stacks are explained and never silently truncated or submitted",
     const { controller, view, requests } = fixture();
     controller.updateAvailableRasters(Array.from({ length: 51 }, (_, i) => source(String(i))));
     controller.setPosition({ longitude: 1, latitude: 2 });
-    controller.setActive(true);
+    controller.updateSamplingForPanelVisibility(true);
     assert.match(view.state.message, /up to 50.*51 are selected/);
     assert.equal(requests.length, 0);
     view.actions.onSelect("50", false);
     assert.equal(requests.length, 2);
-    controller.setActive(false);
+    controller.updateSamplingForPanelVisibility(false);
 });
 
 test("the pixel API decides coverage; nodata, failures and outside keep distinct positions", async () => {
@@ -136,7 +136,7 @@ test("the pixel API decides coverage; nodata, failures and outside keep distinct
     });
     controller.updateAvailableRasters(["value", "nodata", "outside", "error"].map(key => source(key)));
     controller.setPosition({ longitude: 78, latitude: 22 });
-    controller.setActive(true);
+    controller.updateSamplingForPanelVisibility(true);
     await settle();
     assert.equal(bodies.length, 4, "incorrect catalog bbox must not block backend requests");
     assert.ok(bodies.every(body => body.longitude === 78 && body.collectionId === "catalog"));
@@ -151,7 +151,7 @@ test("CSV preserves labels, source identity and full precision while escaping sp
     const { controller, requests } = fixture();
     controller.updateAvailableRasters([{ ...source("a"), label: '=SUM(1,2) "test"' }]);
     controller.setPosition({ longitude: -122.25, latitude: 37.75 });
-    controller.setActive(true);
+    controller.updateSamplingForPanelVisibility(true);
     requests[0].resolve({ inBounds: true, value: -1.234567890123 });
     await settle();
     const csv = controller.exportCsv();
@@ -164,7 +164,7 @@ test("clicks outside the canonical world clear pending pixels without throwing t
     const { controller, view, requests } = fixture();
     controller.updateAvailableRasters([source("a")]);
     controller.setPosition({ longitude: 1, latitude: 2 });
-    controller.setActive(true);
+    controller.updateSamplingForPanelVisibility(true);
     controller.setPosition({ longitude: 200, latitude: 2 });
     assert.equal(requests[0].signal.aborted, true);
     requests[0].resolve({ inBounds: true, value: 99 });
@@ -181,7 +181,7 @@ test("Retry replaces a completed plot with a muted previous plot", async () => {
     const { controller, view, requests } = fixture();
     controller.updateAvailableRasters([source("a")]);
     controller.setPosition({ longitude: 1, latitude: 2 });
-    controller.setActive(true);
+    controller.updateSamplingForPanelVisibility(true);
     requests[0].resolve({ inBounds: true, value: 42 });
     await settle();
     view.actions.onRetry();

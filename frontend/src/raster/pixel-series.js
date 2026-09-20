@@ -83,15 +83,15 @@ export class RasterPixelSeriesController {
     }
 
     /**
-     * Start work when this panel becomes active; cancel unfinished work when it leaves.
+     * Start missing pixel reads when the panel is shown; cancel unfinished reads when hidden.
      * Completed values and settings remain available when the panel is reopened.
-     * @param {boolean} active Whether the tool is visible and active.
+     * @param {boolean} panelVisible Whether Raster series is the visible, active tool.
      * @return {void}
      */
-    setActive(active) {
-        if (this.active === active) return;
-        this.active = active;
-        if (!active) {
+    updateSamplingForPanelVisibility(panelVisible) {
+        if (this.active === panelVisible) return;
+        this.active = panelVisible;
+        if (!panelVisible) {
             if (this.snapshot?.samples.some(sample => sample.state === "loading")) this.snapshot = null;
             this.sampler.clear();
         } else if (!this.snapshot) this.sampleSelectedRasters();
