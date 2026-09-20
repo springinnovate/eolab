@@ -164,7 +164,12 @@ class AnnotationSessionStore:
             return identifier
 
     def join_session(self, browser: str, code: str, name: str) -> UUID:
-        """Redeem a join code and retain this browser's existing contributor identity.
+        """Join a session using the supplied display name, including when returning.
+
+        Returning browsers keep their contributor ID, role and shared layers, but
+        their display name becomes the name entered on the join form. Existing
+        members can return when joining is closed to new contributors. A successful
+        join renews the session for another day.
 
         Args:
             browser: Private browser-cookie hash.
@@ -210,7 +215,13 @@ class AnnotationSessionStore:
                 "SELECT id FROM annotation_sessions.contributors WHERE session_id=%s AND browser_hash=%s",
                 (session["id"], browser),
             )
-            if cursor.fetchone():
+            contributor = cursor.fetchone()
+            if contributor:
+                cursor.execute(
+                    "UPDATE annotation_sessions.contributors SET name=%s WHERE id=%s",
+                    (name, contributor["id"]),
+                )
+                self.extend_session_expiration(cursor, session["id"])
                 return session["id"]
             if not session["joins_open"]:
                 raise SessionError(403, "The session owner has closed joining.")

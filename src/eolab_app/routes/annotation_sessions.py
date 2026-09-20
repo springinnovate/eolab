@@ -219,14 +219,18 @@ def create_annotation_sessions_router(store: AnnotationSessionStore) -> APIRoute
 
     @router.post("/join", response_model=SessionSnapshot)
     def join(payload: JoinSession, browser: Browser) -> dict[str, Any]:
-        """Join a session with a code, retaining existing membership on retry.
+        """Join with the supplied display name while retaining any existing membership.
 
         Args:
             payload: Join code and contributor display name.
             browser: Authenticated cookie hash.
 
         Returns:
-            The joined session snapshot.
+            The session snapshot with the caller's supplied display name.
+
+        Raises:
+            SessionError: If the code is unavailable, new membership is disallowed,
+                join limits are reached or storage is unavailable.
         """
         return store.get_session_snapshot(
             store.join_session(browser, payload.joinCode, payload.contributorName),

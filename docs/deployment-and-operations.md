@@ -346,7 +346,9 @@ setup below the main toolbar. Choose **Enter a code** or **Start a session**.
 Starting asks for a session name and initially identifies the creator as **Session
 owner**. Joining asks for the session code and the name others will see. Members
 can change their own display name under **Session details** without changing
-ownership or renaming layers. **Recent sessions** reopens a previous membership.
+ownership or renaming layers. Rejoining with a code uses the newly entered
+display name while keeping the existing contributor identity, role and shared
+layers. **Recent sessions** reopens a previous membership without changing its name.
 
 After joining, contributors see a compact **You’re contributing to [session]**
 row. Session leads initially see management controls and **Collapse session details**.

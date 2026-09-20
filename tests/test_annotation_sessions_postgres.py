@@ -113,7 +113,7 @@ def test_two_browsers_share_and_owner_permissions(
     exported = owner.get(path + "/export")
     assert exported.status_code == 200
     feature = exported.json()["features"][0]
-    assert feature["properties"]["contributor"] == "Maria"
+    assert feature["properties"]["contributor"] == "Changed name"
     assert feature["properties"]["note"] == "New note"
     # Owner cannot delete another contributor's copy, even when the local ID is known.
     assert owner.delete(write + "?revision=2").status_code == 204
@@ -313,3 +313,66 @@ def test_members_change_only_their_own_display_names(
             "UPDATE annotation_sessions.sessions SET expires_at=now()-interval '1 second'"
         )
     assert owner.patch(path + "/profile", json={"name": "Gone"}).status_code == 404
+
+
+@pytest.mark.parametrize("rejoin_as_owner", [False, True])
+@pytest.mark.parametrize("joining_open", [False, True])
+def test_rejoining_uses_entered_name_without_replacing_membership(
+    store: AnnotationSessionStore, rejoin_as_owner: bool, joining_open: bool
+) -> None:
+    """Rejoin with a new name while preserving identity, permissions and shared polygons.
+
+    Args:
+        store: Empty disposable PostgreSQL annotation store.
+        rejoin_as_owner: Whether the returning browser owns the session.
+        joining_open: Whether new browsers may join the session.
+    """
+    app = FastAPI()
+    app.include_router(create_annotation_sessions_router(store))
+    owner = TestClient(app, base_url="https://testserver", headers=HEADERS)
+    member = TestClient(app, base_url="https://testserver", headers=HEADERS)
+    session = owner.post(
+        BASE, json={"name": "Workshop", "contributorName": "Session lead"}
+    ).json()
+    path = f"{BASE}/{session['id']}"
+    joined = member.post(
+        BASE + "/join",
+        json={"joinCode": session["joinCode"], "contributorName": "Rich Sharp"},
+    ).json()
+    returning = owner if rejoin_as_owner else member
+    contributor_id = (session if rejoin_as_owner else joined)["contributorId"]
+    layer_id = str(uuid4())
+    shared_path = f"{path}/contributors/{contributor_id}/layers/{layer_id}"
+    assert (
+        returning.put(
+            f"{path}/layers/{layer_id}",
+            json={"revision": 0, "collection": collection()},
+        ).status_code
+        == 200
+    )
+    original_layer = owner.get(shared_path).json()
+    if not joining_open:
+        assert owner.post(path + "/actions/close-joining").status_code == 204
+    # Leaving only stops this tab's sharing; its cookie and server membership remain.
+    for _ in range(2):
+        response = returning.post(
+            BASE + "/join",
+            json={"joinCode": session["joinCode"], "contributorName": "  New name  "},
+        )
+        assert response.status_code == 200, response.text
+        current = response.json()
+        assert current["contributorId"] == contributor_id
+        assert current["isOwner"] is rejoin_as_owner
+        assert current["joinsOpen"] is joining_open
+        names = {person["id"]: person["name"] for person in current["contributors"]}
+        assert names == {
+            session["contributorId"]: "New name" if rejoin_as_owner else "Session lead",
+            joined["contributorId"]: "Rich Sharp" if rejoin_as_owner else "New name",
+        }
+    assert owner.get(shared_path).json() == original_layer
+    assert (
+        owner.get(path + "/export").json()["features"][0]["properties"]["contributor"]
+        == "New name"
+    )
+    # Reopening a recent session is a read and must not restore an older name.
+    assert returning.get(path).json()["contributors"] == current["contributors"]
