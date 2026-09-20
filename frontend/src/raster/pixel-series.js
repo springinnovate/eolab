@@ -57,7 +57,7 @@ export class RasterPixelSeriesController {
      * @param {{key:string,label:string,item:Object,visible:boolean}[]} sources Ordered catalog sources.
      * @return {void}
      */
-    setSources(sources) {
+    updateAvailableRasters(sources) {
         const oldKeys = new Set(this.sources.map(source => source.key));
         const oldSelection = [...this.selectedKeys].sort().join("\n");
         const newKeys = new Set(sources.map(source => source.key));

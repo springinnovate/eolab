@@ -748,7 +748,7 @@ async function initializeCatalog(
         onLayersChange: (layers) => {
             refreshCatalogMapAction();
             annotations?.observeLayerOrder(layers);
-            rasterSeries?.setSources(layers.filter(layer => layer.datasetKind === "raster"));
+            rasterSeries?.updateAvailableRasters(layers.filter(layer => layer.datasetKind === "raster"));
             rasterVisualization?.syncVisibleLayers();
             layerStyleEditor?.refresh();
             vectorFeatureInspector?.syncVisibleLayers();
@@ -1012,7 +1012,7 @@ async function initializeCatalog(
         view: new RasterPixelSeriesView(),
         onClose: () => { mapInspection.hideRasterSeries(); leafletMap.getContainer().focus(); },
     });
-    rasterSeries.setSources(mapLayerController.snapshots().filter(layer => layer.datasetKind === "raster"));
+    rasterSeries.updateAvailableRasters(mapLayerController.snapshots().filter(layer => layer.datasetKind === "raster"));
     mapInspection.subscribeActiveTool(tool => rasterSeries.setActive(tool === "raster-series"));
     for (const id of ["open-raster-series", "open-raster-series-dock", "open-raster-series-histogram"]) {
         document.querySelector(`#${id}`).addEventListener("click", () => mapInspection.showRasterSeries());
