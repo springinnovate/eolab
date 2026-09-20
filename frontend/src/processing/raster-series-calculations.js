@@ -1,16 +1,24 @@
-/** Group area formulas per raster and retain a separate result for each source. */
+/** Calculate the same area statistics for each raster selected in Raster series. */
 import { calculationIntent } from "./calculation-session.js";
 import { normalizeCalculationArea } from "./calculation-area.js";
 import { AUTOMATIC_CALCULATION_LIMITS, canAutomaticallyCalculate } from "./calculation-policy.js";
 import { performanceDescription } from "./calculation-performance.js";
 import { describeJobProgress } from "./presentation.js";
 
-/** Run a raster stack through Processing, with at most one pending request and five formulas. */
+/**
+ * Calculate up to five formulas over one shared area for each selected raster.
+ * Requests run one raster at a time through the shared Processing queue. This
+ * controller keeps per-raster results, pauses for confirmation or recovery, and
+ * cancels obsolete work when the inputs change or area statistics is hidden.
+ */
 export class RasterSeriesCalculations {
-    /** Connect formula validation and the shared Processing queue.
+    /** Register Raster series with Processing and initialize an empty calculation list.
+     * Creating the controller does not validate formulas or submit calculations.
+     * Composition supplies the area; the Raster series controller supplies selected
+     * rasters, formulas and visibility before work can begin.
      * @param {Object} options Providers.
      * @param {import("./api.js").ProcessingApiClient} options.api Formula validator.
-     * @param {import("./calculation-queue.js").CalculationQueue} options.queue Shared executor.
+     * @param {import("./calculation-queue.js").CalculationQueue} options.queue Queue shared with summary cards.
      * @param {Object} [options.clock=globalThis] Debounce timer provider.
      * @param {()=>number} [options.now] Monotonic browser clock in milliseconds.
      */
@@ -30,13 +38,16 @@ export class RasterSeriesCalculations {
         this.busy = false;
         this.confirmation = false;
         this.validated = false;
-        this.client = queue.createClient("raster-series", state => this.receiveCalculationProgress(state));
+        this.client = queue.createClient("raster-series", state => this.handleCalculationProgress(state));
     }
 
-    /** Connect presentation without exposing the executor to the view.
-     * @param {()=>void} onChange Refresh the owning series view. @return {void}
+    /** Replace the callback that refreshes the plot when calculation state changes.
+     * The callback reads this controller's results, progress and confirmation state.
+     * Register it when connecting Raster series to this calculation controller.
+     * @param {()=>void} onChange Plot refresh callback; no initial notification is sent.
+     * @return {void}
      */
-    bind(onChange) { this.onChange = onChange; }
+    setProgressListener(onChange) { this.onChange = onChange; }
 
     /** Recover a series calculation saved before reload and request its cancellation.
      * Call once during browser startup. The remaining raster list is not saved, so
@@ -51,16 +62,19 @@ export class RasterSeriesCalculations {
         await this.client.start();
     }
 
-    /** Set selected sources and the exact committed area supplied by composition.
-     * Presentation-only ordering, names and area labels do not restart work.
-     * @param {Object[]} sources Selected catalog rasters.
-     * @param {Object|null} area Processing sampling-area descriptor.
-     * @param {string} label Human-readable selection description.
-     * @param {{id:number,label:string,expression:string}[]} formulas Caller-owned formula snapshots.
+    /** Replace the selected rasters, area and formulas after a user edit.
+     * Changed calculation inputs cancel old work and clear current results; new
+     * calculations are scheduled only while area statistics is visible. Changes to
+     * names, raster order or the area label refresh the display without recalculating.
+     * @param {{key:string,label:string,item:{collection:string,id:string}}[]} sources Selected catalog rasters.
+     * @param {Object|null} area Map box, filtered catalog selection, uploaded polygon reference,
+     * whole-raster descriptor, or null when no area has been chosen.
+     * @param {string} label Area description displayed beside the plot.
+     * @param {{id:number,label:string,expression:string}[]} formulas Selected formulas and display names.
      * @return {void}
-     * @throws {TypeError} If the area violates the Processing input contract.
+     * @throws {TypeError|Error} If the area is not a supported Processing descriptor.
      */
-    setInputs(sources, area, label, formulas) {
+    updateCalculationInputs(sources, area, label, formulas) {
         const normalized = area ? normalizeCalculationArea(area) : null;
         const key = JSON.stringify([sources.map(source => [source.key, source.item.collection, source.item.id]).sort(),
             normalized, formulas.map(({id,expression}) => [id,expression.trim()])]);
@@ -68,7 +82,7 @@ export class RasterSeriesCalculations {
         this.sources = sources.map(source => ({ ...source }));
         this.area = normalized;
         this.areaLabel = label;
-        if (this.inputKey !== key) { this.inputKey = key; this.invalidateResults(); }
+        if (this.inputKey !== key) { this.inputKey = key; this.resetResultsForChangedInputs(); }
         else this.onChange();
     }
 
@@ -82,11 +96,16 @@ export class RasterSeriesCalculations {
         if (this.active === visible) return;
         this.active = visible;
         if (!visible && (this.busy || this.current)) this.cancelRemainingRasters();
-        else if (visible && !this.complete) this.scheduleCalculation();
+        else if (visible && !this.complete) this.scheduleRemainingCalculations();
     }
 
-    /** Mark all existing values as previous before replacing the area or formulas. @return {void} */
-    invalidateResults() {
+    /** Clear results after a calculation input changes and schedule replacements when visible.
+     * Keep completed values separately for the faded previous plot. Cancel pending
+     * work, clear formula validation and confirmation, and reset the stack's automatic
+     * work budget so the new inputs are checked before submission.
+     * @return {void}
+     */
+    resetResultsForChangedInputs() {
         if (this.results.size) this.previousResults = new Map(this.results);
         this.cancelRemainingRasters();
         this.results = new Map();
@@ -95,11 +114,16 @@ export class RasterSeriesCalculations {
         this.validated = false;
         this.authorized = false;
         this.budget = { nativeBlocks: 0, decodedBytes: 0, geometryCells: 0 };
-        if (this.active) this.scheduleCalculation();
+        if (this.active) this.scheduleRemainingCalculations();
         else this.onChange();
     }
 
-    /** Cancel obsolete input, retaining only completed values for optional display. @return {void} */
+    /** Stop the unfinished series after cancellation, input replacement or hiding the plot.
+     * Cancel the debounce timer and formula check, ignore late responses, and ask
+     * Processing to cancel this series' submitted job. Completed results remain
+     * available; the executor retains any job that still needs cancellation recovery.
+     * @return {void} Cancellation is requested here and acknowledged asynchronously.
+     */
     cancelRemainingRasters() {
         this.version++;
         this.clock.clearTimeout(this.timer);
@@ -111,8 +135,13 @@ export class RasterSeriesCalculations {
         this.onChange();
     }
 
-    /** Debounce formula edits and area replacements before validation and planning. @return {void} */
-    scheduleCalculation() {
+    /** Schedule remaining calculations after 700 ms without another edit.
+     * Used after input changes or reopening an unfinished area plot. Replace the
+     * previous timer and show checking feedback; the delayed request validates the
+     * formulas and applies confirmation rules before submitting any raster work.
+     * @return {void}
+     */
+    scheduleRemainingCalculations() {
         this.clock.clearTimeout(this.timer);
         this.message = "Checking formulas…";
         this.busy = true;
@@ -120,10 +149,14 @@ export class RasterSeriesCalculations {
         this.onChange();
     }
 
-    /** Validate the formulas once, then calculate each selected source in sequence.
-     * An explicit button authorizes the remaining stack, including large areas.
-     * @param {boolean} [authorize=true] Whether the user explicitly requested this stack.
-     * @return {Promise<void>} Formula validation and first queued calculation.
+    /** Begin or continue the unfinished raster series using the current area and formulas.
+     * Called by Calculate or the debounce timer. Check the inputs and validate the
+     * formulas once, then queue the next raster. Completion callbacks advance the
+     * rest of the series; validation errors are shown in the plot without submission.
+     * @param {boolean} [authorize=true] True for an explicit Calculate click approving
+     * the remaining stack; false for automatic work that may need confirmation.
+     * @return {Promise<void>} Completion of input checking and the first queue request,
+     * not completion of the raster calculations.
      */
     async calculateRemainingRasters(authorize = true) {
         this.clock.clearTimeout(this.timer);
@@ -145,32 +178,40 @@ export class RasterSeriesCalculations {
         const validation = this.validation = new AbortController();
         try {
             const formulas = this.formulas.map(formula => ({ label: "stat-" + formula.id, expression: formula.expression.trim() }));
-            const first = calculationIntent({ source: this.calculationSource(this.sources[0]), area, calculations: formulas });
+            const first = calculationIntent({ source: this.getRasterReference(this.sources[0]), area, calculations: formulas });
             if (!this.validated) await this.api.validateCalculation(first.calculations, validation.signal);
             if (version !== this.version || !this.active) return;
             this.validated = true;
-            this.queueNextRaster();
+            this.queueNextRasterCalculation();
         } catch (error) {
             if (version !== this.version || error.name === "AbortError") return;
             this.message = error.message; this.busy = false; this.onChange();
         }
     }
 
-    /** Translate a catalog snapshot into the path-free Processing identity.
-     * @param {Object} source Catalog raster. @return {Object} Calculation source.
+    /** Read the catalog IDs and display name used to request one raster calculation.
+     * Called while building formula-validation and calculation requests.
+     * @param {{label:string,item:{collection:string,id:string}}} source Selected catalog raster.
+     * @return {{collectionId:string,itemId:string,label:string}} Raster reference accepted by Processing.
      */
-    calculationSource(source) {
+    getRasterReference(source) {
         return { collectionId: source.item.collection, itemId: source.item.id, label: source.label };
     }
 
-    /** Queue the next unfinished source; all formulas share its one raster pass. @return {void} */
-    queueNextRaster() {
+    /** Ask Processing to prepare the next raster that has no recorded result or error.
+     * Called after formula validation or the preceding raster finishes. Include all
+     * selected formulas in one request so they share its reads and polygon mask.
+     * Mark the series complete when every source has an outcome. Do nothing while
+     * paused, hidden, unvalidated or already waiting for a raster.
+     * @return {void}
+     */
+    queueNextRasterCalculation() {
         if (!this.active || !this.busy || !this.validated || this.current) return;
         const source = this.sources.find(item => !this.results.has(item.key));
         if (!source) {
             this.complete = true; this.busy = false; this.message = "Raster series complete."; this.onChange(); return;
         }
-        const intent = calculationIntent({ source: this.calculationSource(source),
+        const intent = calculationIntent({ source: this.getRasterReference(source),
             area: this.area,
             calculations: this.formulas.map(formula => ({ label: "stat-" + formula.id, expression: formula.expression.trim() })) });
         this.current = { key: source.key, intent, startedAt: this.now(), submitted: false };
@@ -179,11 +220,15 @@ export class RasterSeriesCalculations {
         this.onChange();
     }
 
-    /** Decide whether the remaining automatic stack stays within the shared small-box budget.
-     * Cached plans consume no raster-work budget.
-     * @param {Object} plan Server plan. @return {boolean} Safe to submit without confirmation.
+    /** Check whether the current raster plan can be submitted without another Calculate click.
+     * An earlier explicit Calculate click approves the remaining stack. Cached results
+     * also need no confirmation. Otherwise, require a small rectangular selection and
+     * check this plan plus work already submitted against the automatic stack budget.
+     * This check does not charge the budget; submission does.
+     * @param {Object} plan Current raster's server plan with cache status and grid estimates.
+     * @return {boolean} True if no additional user confirmation is needed.
      */
-    canCalculatePlanAutomatically(plan) {
+    canSubmitWithoutConfirmation(plan) {
         if (this.authorized || plan.cacheHit) return true;
         if (!canAutomaticallyCalculate(plan, this.current.intent)) return false;
         const estimates = { nativeBlocks: plan.grid.nativeBlocks, decodedBytes: plan.grid.decodedBytes,
@@ -191,26 +236,31 @@ export class RasterSeriesCalculations {
         return Object.entries(estimates).every(([key, value]) => (this.budget?.[key] ?? 0) + value <= AUTOMATIC_CALCULATION_LIMITS[key]);
     }
 
-    /** Record only the current area's result and advance after acknowledged completion.
-     * Lifecycle retries, cancellation and durable recovery remain in Processing.
-     * @param {Object} state This caller's execution snapshot. @return {void}
+    /** Respond to Processing updates for the current raster and advance the series.
+     * The queue calls this when planning, submission or job status changes. Submit
+     * matching plans when approved, or pause for confirmation. Record completed values
+     * or job failures and queue the next raster. API failures pause the series; offer
+     * recovery when a saved submission remains unresolved. Ignore obsolete results.
+     * The queue/executor continues to own cancellation and saved submission recovery.
+     * @param {import("./calculation-executor.js").CalculationExecutionSnapshot} state This series' execution progress.
+     * @return {void}
      */
-    receiveCalculationProgress(state) {
+    handleCalculationProgress(state) {
         const current = this.current;
         if (!current) { this.onChange(); return; }
-        /** Compare executor settings with the one current per-raster request.
-         * @param {Object|null} value Executor calculation.
-         * @return {boolean} True for this exact source, area and grouped formulas.
+        /** Check whether a plan or result belongs to the raster request being tracked.
+         * @param {Readonly<Object>|null} value Calculation settings from Processing.
+         * @return {boolean} True when source, area, formulas and execution settings match.
          */
-        const matches = value => JSON.stringify(value) === JSON.stringify(current.intent);
-        if (state.completedJob && matches(state.completedCalculation) && current.submitted &&
+        const matchesCurrentCalculation = value => JSON.stringify(value) === JSON.stringify(current.intent);
+        if (state.completedJob && matchesCurrentCalculation(state.completedCalculation) && current.submitted &&
             state.completedJob.jobId !== current.previousJobId && !state.unfinishedCalculation && state.isIdle) {
             this.results.set(current.key, { job: state.completedJob, intent: current.intent,
                 elapsedSeconds: (this.now() - current.startedAt) / 1000,
                 performanceLines: performanceDescription(state.completedJob) });
             this.current = null;
             this.onChange();
-            queueMicrotask(() => this.queueNextRaster());
+            queueMicrotask(() => this.queueNextRasterCalculation());
             return;
         }
         if (state.recoverable || state.admission === "retry") {
@@ -219,8 +269,8 @@ export class RasterSeriesCalculations {
             if (!state.recoverable) this.current = null;
             this.onChange(); return;
         }
-        if (state.plan && state.isIdle && matches(state.plannedCalculation)) {
-            if (!this.canCalculatePlanAutomatically(state.plan)) {
+        if (state.plan && state.isIdle && matchesCurrentCalculation(state.plannedCalculation)) {
+            if (!this.canSubmitWithoutConfirmation(state.plan)) {
                 this.confirmation = true; this.busy = false; this.current = null;
                 this.message = "This area or stack needs a larger calculation. Calculate the remaining rasters, or choose a smaller area.";
                 this.client.discardPendingCalculation(); this.onChange(); return;
@@ -238,21 +288,25 @@ export class RasterSeriesCalculations {
         }
         if (current.submitted && state.isIdle && !state.plan && !state.unfinishedCalculation) {
             this.results.set(current.key, { intent: current.intent, error: state.message || "No result returned." });
-            this.current = null; this.onChange(); queueMicrotask(() => this.queueNextRaster()); return;
+            this.current = null; this.onChange(); queueMicrotask(() => this.queueNextRasterCalculation()); return;
         }
         this.message = state.currentJob ? describeJobProgress(state.currentJob) : state.message;
         this.onChange();
     }
 
-    /** Read whether the previous submission needs explicit recovery.
-     * @return {boolean} True while its result or cancellation remains uncertain.
+    /** Tell the plot whether to offer recovery for a saved submission after a failure.
+     * @return {boolean} True when an API/storage error left a submitted job unresolved.
      */
     get needsRecovery() { return this.client.snapshot.recoverable; }
 
-    /** Retry uncertain submission/cleanup without creating a new request key.
-     * @return {Promise<void>} Recovery step; the user can then continue the remaining stack.
+    /** Retry the failed Processing step when the user clicks Recover.
+     * Reuse the original request key for an uncertain submission. If this controller
+     * still tracks that raster, its progress callbacks can continue the series.
+     * Otherwise, report recovery and wait for Calculate to start the remaining work.
+     * @return {Promise<void>} Completion of the retry attempt; a recovered job may
+     * still be running or cancelling afterward.
      */
-    async recover() {
+    async retryInterruptedCalculation() {
         this.busy = !!this.current;
         await this.client.retry();
         if (!this.current && !this.complete && !this.needsRecovery) {
@@ -262,7 +316,13 @@ export class RasterSeriesCalculations {
         this.onChange();
     }
 
-    /** Release timers and observation; submitted recovery remains owned by Processing. @return {void} */
+    /** Detach the series controller when the page is torn down.
+     * Clear its timer and formula-validation request, then release its queue client.
+     * The queue owns cancellation and preserves unfinished submission records for
+     * recovery when the entire page closes. Use cancelRemainingRasters to stop work
+     * while keeping this controller available.
+     * @return {void}
+     */
     destroy() {
         this.clock.clearTimeout(this.timer);
         this.validation?.abort();

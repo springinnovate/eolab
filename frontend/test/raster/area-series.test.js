@@ -168,7 +168,7 @@ test("uncertain submissions keep the original key and cannot leak into summary r
     assert.equal(saved.context.client,"raster-series");
     const observed=[];
     h.queue.createClient("summary",state=>observed.push(state));
-    await h.area.recover();await flush();
+    await h.area.retryInterruptedCalculation();await flush();
     const submissions=h.requests.filter(([kind])=>kind==="submit");
     assert.equal(submissions.length,2);assert.deepEqual(submissions[0][1],submissions[1][1]);
     assert.ok(observed.every(state=>!state.unfinishedCalculation));

@@ -14,7 +14,7 @@ function fixture() {
     const requests = [];
     const view = { bind(actions) { this.actions = actions; }, render(state) { this.state = state; }, downloadCsv(csv) { this.csv = csv; } };
     const controller = new RasterSeriesController({
-        areaStatistics: { bind() {}, setInputs() {}, updateCalculationForPanelVisibility() {} },
+        areaStatistics: { setProgressListener() {}, updateCalculationInputs() {}, updateCalculationForPanelVisibility() {} },
         view, onClose: () => controller.updateSamplingForPanelVisibility(false),
         samplePoint: (item, position, signal) => new Promise((resolve, reject) => requests.push({ item, position, signal, resolve, reject })),
     });
@@ -128,7 +128,7 @@ test("the pixel API decides coverage; nodata, failures and outside keep distinct
     const view = { bind() {}, render(state) { this.state = state; } };
     const bodies = [];
     const controller = new RasterSeriesController({
-        areaStatistics: { bind() {}, setInputs() {}, updateCalculationForPanelVisibility() {} }, view, onClose() {},
+        areaStatistics: { setProgressListener() {}, updateCalculationInputs() {}, updateCalculationForPanelVisibility() {} }, view, onClose() {},
         samplePoint: (item, position, signal) => sampleCatalogRasterPixel(item, position, signal, async (_url, request) => {
             const body = JSON.parse(request.body); bodies.push(body);
             if (body.itemId === "error") return new Response("unavailable", { status: 503 });

@@ -36,7 +36,7 @@ export class RasterSeriesController {
     constructor({ samplePoint, view, onClose, areaStatistics, onEditArea }) {
         this.view = view;
         this.areaStatistics = areaStatistics;
-        this.areaStatistics.bind(() => this.render());
+        this.areaStatistics.setProgressListener(() => this.render());
         this.mode = "pixel";
         this.formulas = [{ id: 1, ...SERIES_STATISTICS.mean }];
         this.formulaSerial = 1;
@@ -68,7 +68,7 @@ export class RasterSeriesController {
             onStatistic: id => { this.selectedStatistic = id; this.render(); },
             onCalculate: () => void this.areaStatistics.calculateRemainingRasters(),
             onCancel: () => this.areaStatistics.cancelRemainingRasters(),
-            onRecover: () => void this.areaStatistics.recover(),
+            onRecover: () => void this.areaStatistics.retryInterruptedCalculation(),
             onSelect: (key, selected) => this.selectRaster(key, selected),
             onOrder: (order, direction) => {
                 this.order = order; this.direction = direction; this.render();
@@ -244,7 +244,7 @@ export class RasterSeriesController {
 
     /** Supply the area calculator with chosen catalog sources, independent of chart order. @return {void} */
     updateAreaInputs() {
-        this.areaStatistics.setInputs(this.sources.filter(source => this.selectedKeys.has(source.key)),
+        this.areaStatistics.updateCalculationInputs(this.sources.filter(source => this.selectedKeys.has(source.key)),
             this.areaChoice === "whole" ? {kind:"wholeRaster"} : this.selectedArea, this.selectedAreaLabel, this.formulas);
     }
 
