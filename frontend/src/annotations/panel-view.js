@@ -39,7 +39,7 @@ export class AnnotationPanelView {
         option.textContent = label;
         this.layers.set(key, { controls, option });
         this.selector.append(option);
-        if (this.selectedKey === null) this.selectLayer(key);
+        if (this.selectedKey === null) this.displayLayerControls(key);
     }
 
     /**
@@ -61,15 +61,15 @@ export class AnnotationPanelView {
     removeLayer(key) {
         this.layers.get(key)?.option.remove();
         this.layers.delete(key);
-        if (this.selectedKey === key) this.selectLayer(this.layers.keys().next().value ?? null);
+        if (this.selectedKey === key) this.displayLayerControls(this.layers.keys().next().value ?? null);
     }
 
     /**
-     * Display retained controls without changing panel visibility or keyboard focus.
+     * Display a layer's existing controls without opening the panel or moving focus.
      * @param {string|null} key Registered layer identity, or null for the empty state.
      * @return {void}
      */
-    selectLayer(key) {
+    displayLayerControls(key) {
         const layer = this.layers.get(key);
         this.selectedKey = layer ? key : null;
         this.selector.value = this.selectedKey ?? "";
@@ -85,7 +85,7 @@ export class AnnotationPanelView {
      */
     showLayer(key) {
         if (!this.layers.has(key)) return;
-        if (this.selectedKey !== key) this.selectLayer(key);
+        if (this.selectedKey !== key) this.displayLayerControls(key);
         this.onOpen();
         this.selector.focus({ preventScroll: true });
     }
