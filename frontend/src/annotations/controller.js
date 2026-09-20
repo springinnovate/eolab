@@ -15,6 +15,7 @@ export class AnnotationController {
      * @param {Object} options.leaflet Leaflet namespace.
      * @param {Object} options.map Leaflet map.
      * @param {Object} options.mapLayers Neutral layer controller.
+     * @param {import("./panel-view.js").AnnotationPanelView} options.panel Annotation editor presentation.
      * @param {(editing:boolean)=>void} options.onEditingChange Composition-owned mode change.
      * @param {Document} [options.document=globalThis.document] Application document.
      * @param {AnnotationStorage} [options.storage] Device persistence provider.
@@ -23,7 +24,7 @@ export class AnnotationController {
      * @param {(key:string)=>void} [options.onFilter] Open the composed field/condition editor.
      * @param {()=>void} [options.onCommittedChange] Notifies composition after successful device persistence.
      */
-    constructor({ leaflet, map, mapLayers, onEditingChange, document = globalThis.document, storage = new AnnotationStorage(), onShare = () => {}, onLayerCreated = () => {}, onCommittedChange = () => {}, onFilter = () => {} }) {
+    constructor({ leaflet, map, mapLayers, panel, onEditingChange, document = globalThis.document, storage = new AnnotationStorage(), onShare = () => {}, onLayerCreated = () => {}, onCommittedChange = () => {}, onFilter = () => {} }) {
         this.leaflet = leaflet;
         this.map = map;
         this.mapLayers = mapLayers;
@@ -45,7 +46,7 @@ export class AnnotationController {
         this.savePromise = null;
         this.restoredLayers = new WeakMap();
         this.pendingSave = false;
-        this.toolsDisclosure = document.querySelector("#annotation-tools");
+        this.panel = panel;
         this.createButton = document.querySelector("#create-annotation-layer");
         this.status = document.querySelector("#annotation-save-status");
         this.undoButton = document.querySelector("#undo-annotation-delete");
@@ -65,6 +66,7 @@ export class AnnotationController {
         this.createButton.disabled = true;
         this.createButton.addEventListener("click", () => this.perform(() => {
             const id = this.createLayer();
+            this.panel.showLayer(`local:annotation:${id}`);
             this.controls.get(id).name.querySelector("input").select();
         }));
         this.undoButton.addEventListener("click", () => this.perform(() => {
@@ -105,7 +107,7 @@ export class AnnotationController {
     }
 
     /**
-     * Restore local layers once storage validation completes; expand tools if loading fails.
+     * Restore local layers without opening their editor; reveal the panel if loading fails.
      * @return {Promise<void>} Completion, including a visible storage error if needed.
      */
     async load() {
@@ -116,21 +118,23 @@ export class AnnotationController {
             this.loaded = true;
             this.createButton.disabled = false;
             this.importButton.disabled = false;
-            this.status.textContent = "Saved on this device.";
+            this.status.textContent = "";
         } catch (error) {
             this.status.textContent = `Cannot open saved annotations: ${error.message}`;
-            this.toolsDisclosure.open = true;
+            this.panel.show();
         }
     }
 
     /**
      * Add an empty annotation layer to the map and start saving it on this device.
+     * @param {string|null} [name=null] Optional initial layer name supplied by composition, at most 160 characters.
      * @return {string} New local layer identifier; sharing reads it only after a successful save.
      * @throws {Error} If local annotations are unavailable or the layer limit is reached.
      */
-    createLayer() {
+    createLayer(name = null) {
         if (!this.loaded) throw new Error("Local annotations are not available yet.");
         const layer = this.model.createLayer();
+        if (name !== null) layer.name = name;
         this.attachLayer(layer);
         this.onLayerCreated?.(layer.id);
         void this.save();
@@ -139,8 +143,8 @@ export class AnnotationController {
 
     /**
      * Import a local GeoJSON file as one new layer after validating the whole file.
-     * File errors expand the tools without changing the map. Persistence errors use the existing save/retry controls.
-     * @param {File} file File chosen in Map layers.
+     * File errors appear in the annotation panel without changing the map. Persistence errors use the existing save/retry controls.
+     * @param {File} file File chosen in the annotation panel.
      * @return {Promise<void>} Completion with a visible success or error message.
      */
     async importGeoJSONFile(file) {
@@ -153,13 +157,14 @@ export class AnnotationController {
             const imported = await readAnnotationGeoJSONFile(file);
             const layer = this.model.importLayer(imported);
             this.attachLayer(layer);
+            this.panel.showLayer(`local:annotation:${layer.id}`);
             this.onLayerCreated?.(layer.id);
             await this.save();
             this.fileStatus.textContent = `Imported ${layer.polygons.length} ${layer.polygons.length === 1 ? "polygon" : "polygons"} into “${layer.name}”.`;
         } catch (error) {
             this.fileStatus.textContent = `Cannot import GeoJSON: ${error.message}`;
             this.fileStatus.classList.add("is-error");
-            this.toolsDisclosure.open = true;
+            this.panel.show();
         } finally {
             this.importing = false;
             this.importButton.disabled = false;
@@ -170,7 +175,7 @@ export class AnnotationController {
     /**
      * Download a layer's committed polygons as GeoJSON without sending data to a server.
      * @param {string} layerId Annotation layer to export, including filtered-out polygons.
-     * @return {void} Starts a browser download or expands the tools to display an error.
+     * @return {void} Starts a browser download or reveals the annotation panel to display an error.
      */
     exportGeoJSONFile(layerId) {
         let url;
@@ -188,7 +193,7 @@ export class AnnotationController {
         } catch (error) {
             this.fileStatus.textContent = `Cannot export GeoJSON: ${error.message}`;
             this.fileStatus.classList.add("is-error");
-            this.toolsDisclosure.open = true;
+            this.panel.show();
         } finally {
             link.remove();
             // Allow the browser to consume the download URL before releasing it.
@@ -197,7 +202,7 @@ export class AnnotationController {
     }
 
     /**
-     * Run an editing action, showing errors in the draft editor or expanded tools without losing data.
+     * Run an editing action, showing errors in the map editor or annotation panel without losing data.
      * @param {()=>void} action User-requested action.
      * @return {void}
      */
@@ -207,7 +212,7 @@ export class AnnotationController {
             if (this.model.draft) this.renderEditor(error.message);
             else {
                 this.status.textContent = error.message;
-                this.toolsDisclosure.open = true;
+                this.panel.show();
             }
         }
     }
@@ -220,6 +225,7 @@ export class AnnotationController {
     attachLayer(layer) {
         const key = `local:annotation:${layer.id}`;
         const controls = new AnnotationLayerControls(this.document, layer, {
+            open: () => this.openControls(key, "info"),
             filter: () => this.onFilter(key),
             add: () => this.beginPolygon(layer.id),
             share: () => this.onShare(layer.id),
@@ -239,19 +245,19 @@ export class AnnotationController {
         const adapter = {
             createState: () => layer,
             createLayer: () => rendering,
-            snapshot: () => ({ datasetKind: "annotation", legend: null, canFilter: true, controls: controls.root,
+            snapshot: () => ({ datasetKind: "annotation", legend: null, canFilter: true, detailsControl: controls.edit, primaryControl: controls.drawing, stylePanelId: "annotations-panel",
                 filterActive: typeof layer.filter === "string" ? !!layer.filter.trim() : layer.filter.enabled && !!layer.filter.rules.length,
-                filterStatus: (typeof layer.filter === "string" ? layer.filter.trim() : layer.filter.rules.length)
+                filterStatus: (typeof layer.filter === "string" ? layer.filter.trim() : layer.filter.enabled && layer.filter.rules.length)
                     ? `${matchingAnnotationPolygons(layer).length} of ${layer.polygons.length} polygons match` : null }),
             zoom: () => {
                 const bounds = rendering.getBounds();
                 if (bounds.isValid()) this.map.fitBounds(bounds, { padding: [40, 40], maxZoom: 12 });
                 else {
                     this.status.textContent = "Add a polygon, or clear the filter, before zooming to this layer.";
-                    this.toolsDisclosure.open = true;
+                    this.panel.show();
                 }
             },
-            info: () => controls.open("info"),
+            info: () => this.openControls(key, "info"),
             exportSavedState: () => ({ kind: "annotation", style: { ...layer.style } }),
             checkSavedStateCompatibility: (_record, saved) => {
                 if (saved?.kind !== "annotation") return "Copy a style from an annotation layer first.";
@@ -281,11 +287,13 @@ export class AnnotationController {
                 rendering.release();
                 this.layers.delete(layer.id);
                 this.controls.delete(layer.id);
+                this.panel.removeLayer(key);
                 this.undoButton.hidden = !this.model.deleted;
                 this.save();
             },
         };
         this.mapLayers.addLocal({ key, label: layer.name, visible: layer.visible, opacity: layer.opacity }, adapter);
+        this.panel.registerLayerControls(key, layer.name, controls.root);
     }
 
     /**
@@ -351,11 +359,22 @@ export class AnnotationController {
      * Show sharing status without rebuilding annotation controls or moving focus.
      * @param {string} id Local layer identifier.
      * @param {string} label Share button label supplied by composition.
+     * @param {string|null} [sessionName=null] Current sharing context; null clears the association.
      * @return {void}
      */
-    setShareLabel(id, label) {
-        const control = this.controls.get(id)?.share;
-        if (control) control.textContent = label;
+    setShareLabel(id, label, sessionName = null) {
+        const control = this.controls.get(id);
+        if (!control) return;
+        control.share.textContent = label;
+        control.setSessionName(sessionName);
+    }
+
+    /** Focus a local layer's drawing action in Map layers without entering editing mode.
+     * Composition reveals Map layers before calling this method.
+     * @param {string} id Local annotation layer identifier. @return {void}
+     */
+    revealDrawing(id) {
+        this.controls.get(id)?.revealDrawing();
     }
 
     /**
@@ -373,7 +392,7 @@ export class AnnotationController {
     }
 
     /**
-     * Delete one polygon, leave editing mode and expand tools to expose the single Undo action.
+     * Delete one polygon, leave editing mode and show the panel with its single Undo action.
      * @param {string} layerId Owning layer.
      * @param {string} polygonId Polygon identifier.
      * @return {void}
@@ -381,7 +400,7 @@ export class AnnotationController {
     deletePolygon(layerId, polygonId) {
         this.model.deletePolygon(layerId, polygonId);
         this.updateEditor();
-        this.toolsDisclosure.open = true;
+        this.panel.show();
         this.refreshLayer(layerId);
         this.save();
     }
@@ -419,6 +438,7 @@ export class AnnotationController {
         const record = this.mapLayers.getRecord(`local:annotation:${id}`);
         const labelChanged = record.entry.label !== layer.name;
         record.entry.label = layer.name;
+        this.panel.renameLayer(`local:annotation:${id}`, layer.name);
         this.layers.get(id).refresh();
         if (rebuild) this.controls.get(id).refresh(focusPolygon);
         // Polygon text changes do not alter stack controls unless a filter is active.
@@ -426,7 +446,7 @@ export class AnnotationController {
     }
 
     /**
-     * Open an annotation's inline Style, Filter or Info controls if it owns the key.
+     * Open an annotation's panel at its Style, Filter or Info controls if it owns the key.
      * @param {string} key Retained map-layer key.
      * @param {"style"|"filter"|"info"} action Requested control.
      * @return {boolean} Whether annotations handled this intent.
@@ -436,6 +456,7 @@ export class AnnotationController {
         if (record?.entry.item !== null) return false;
         const controls = this.controls.get(record?.state?.id);
         if (!controls) return false;
+        this.panel.showLayer(key);
         controls.open(action);
         return true;
     }
@@ -485,7 +506,7 @@ export class AnnotationController {
 
     /**
      * Serialize writes and coalesce pending changes into the latest committed document.
-     * A failed save leaves annotations in memory and expands tools to show the error and retry action.
+     * A failed save leaves annotations in memory and opens the panel with the error and retry action.
      * @return {Promise<void>} Completion after pending writes settle.
      */
     async save() {
@@ -514,12 +535,12 @@ export class AnnotationController {
                 this.savedSharingLayers = document.layers.map(layer => ({ id: layer.id, collection: exportAnnotationGeoJSON(layer) }));
             }
             this.dirty = false;
-            this.status.textContent = "Saved on this device.";
+            this.status.textContent = "";
             this.onCommittedChange?.();
         } catch (error) {
             this.status.textContent = `Not saved: ${error.message} Keep this tab open.`;
             this.retryButton.hidden = false;
-            this.toolsDisclosure.open = true;
+            this.panel.show();
         } finally { this.saving = false; }
     }
 }

@@ -6,20 +6,20 @@
     align-items: center;
 }
 
-.annotation-tools { margin-bottom: 0.75rem; }
-.annotation-tools > summary { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-weight: 600; font-size: 0.85rem; list-style: none; }
-.annotation-tools > summary::-webkit-details-marker { display: none; }
-.annotation-tools > summary::before { content: ""; width: 0.4rem; height: 0.4rem; flex: none; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: rotate(-45deg); }
-.annotation-tools[open] > summary::before { transform: rotate(45deg); }
-.annotation-layer-actions { margin-top: 0.6rem; }
-#annotation-save-status,
-#annotation-file-status,
-.annotation-storage-note { flex-basis: 100%; margin: 0; font-size: 0.8rem; line-height: 1.4; color: #555; }
-#annotation-save-status { min-height: 2.8em; }
-#annotation-file-status { overflow-wrap: anywhere; }
+#annotations-panel { font-size: 0.85rem; }
+#annotations-panel [hidden] { display: none; }
+.annotation-layer-actions { margin: 0.5rem 0; font-size: 0.8rem; }
+.annotation-layer-actions button { font-size: inherit; padding: 0.3rem 0.6rem; }
+#annotation-save-status, #annotation-file-status { margin: 0.35rem 0; font-size: 0.8rem; line-height: 1.4; overflow-wrap: anywhere; }
+/* Reserve one compact line while saving, so rapid autosaves do not shift the editor. */
+#annotation-save-status { min-height: 1.4em; }
 #annotation-file-status:empty { display: none; }
 #annotation-file-status.is-error { color: #a51e19; font-weight: 600; }
-.annotation-layer-controls { grid-column: 1 / -1; min-width: 0; border-top: 1px solid #d5d5d5; padding-top: 0.6rem; }
+.annotation-layer-controls { min-width: 0; border-top: 1px solid var(--border-1); padding-top: 0.6rem; }
+#annotation-panel-layer { min-width: 0; width: 100%; font: inherit; padding: 0.3rem; }
+.annotation-help { margin-top: 0.75rem; color: var(--text-3); }
+.annotation-help summary { cursor: pointer; }
+.annotation-help p { font-size: 0.8rem; line-height: 1.4; }
 .annotation-layer-controls details { margin-top: 0.5rem; }
 .annotation-layer-controls summary { cursor: pointer; }
 .annotation-layer-controls ul { list-style: none; margin: 0.5rem 0 0; padding: 0; }
@@ -110,3 +110,8 @@
 .is-inserting-annotation-vertex,
 .is-inserting-annotation-vertex .annotation-draft-polygon { cursor: crosshair; }
 .is-dragging-annotation, .is-dragging-annotation .annotation-draft-polygon { cursor: grabbing; }
+
+.annotation-sharing-context { margin: 0.2rem 0 0; color: var(--text-3); font-size: 0.85rem; overflow-wrap: anywhere; }
+.annotation-drawing-action { grid-column: 2; min-width: 0; }
+.annotation-drawing-action [hidden] { display: none; }
+.annotation-draw-button { font: inherit; font-size: 0.8rem; padding: 0.3rem 0.5rem; border-color: var(--brand); color: var(--brand); font-weight: 600; }

@@ -341,10 +341,30 @@ source checks, job ownership, cancellation and output checksum checks are unchan
 
 ## Shared annotations
 
-The **Shared annotations** section above Map layers creates or joins an annotation
-session on this EOLab site. The session owner shares a join code; contributors
-enter that code and a display name. Creating or joining a session adds an empty
-annotation layer when this device has no local layer already shared with it.
+The **Annotations** button beside Reset, Copy map link and Status opens session
+setup below the main toolbar. Choose **Enter a code** or **Start a session**.
+Starting asks for a session name and initially identifies the creator as **Session
+owner**. Joining asks for the session code and the name others will see. Members
+can change their own display name under **Session details** without changing
+ownership or renaming layers. Rejoining with a code uses the newly entered
+display name while keeping the existing contributor identity, role and shared
+layers. **Recent sessions** reopens a previous membership without changing its name.
+
+After joining, contributors see a compact **You’re contributing to [session]**
+row. Session leads initially see management controls and **Collapse session details**.
+Later refreshes preserve the disclosure choice. Expand **Session details** or use
+the toolbar button to manage invitations, contributors, downloads and settings.
+Routine messages stay inside details; sharing errors remain visible when collapsed.
+Disconnected setup takes no space until requested; invitations open it automatically.
+
+Creating or joining reveals Map layers and focuses **Draw a custom polygon** on
+the user's layer, creating a named empty layer only when necessary. Drawing starts
+only when requested. Shared drawing actions name the destination layer and session.
+Map layers also offers **Create annotation layer** and **Import GeoJSON**. **Edit**
+opens the detailed layer panel for polygons, names, notes, style, sharing and export;
+**Details** opens a read-only received contribution. Received layers show
+**Shared by [contributor] · [session]** above their title. Storage and file-format
+guidance is under **Help** in the layer editor.
 New layers (including GeoJSON imports) are shared automatically with the active
 session once saved on the device; later saved edits are sent automatically too.
 Older local layers remain private until their **Share** button is used. Reloading

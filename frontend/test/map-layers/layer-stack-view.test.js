@@ -50,6 +50,9 @@ class FakeLayerStackElement extends EventTarget {
     };
   }
 
+  /** @param {FakeLayerStackElement|null} node Possible descendant. @return {boolean} Whether this subtree contains it. */
+  contains(node) { return node === this || this.children.some(child => child.contains(node)); }
+
   /** Space-separated CSS classes, kept in sync with classList. */
   get className() {
     return [...this._classNames].join(" ");
@@ -877,4 +880,50 @@ test("pointer reorder ignores the Undo row when finding a real layer destination
   handle.dispatchEvent(interactionEvent("pointermove", { pointerId: 9, clientY: 300 }));
   handle.dispatchEvent(interactionEvent("pointerup", { pointerId: 9 }));
   assert.deepEqual(moves, [[LAYERS[0].key, 2]], "placeholder must not produce an out-of-range layer index");
+});
+
+
+test("an owner-supplied details control replaces Info and retains focus", () => {
+  const documentContext = new FakeLayerStackDocument();
+  const view = new MapLayerStackView(documentContext);
+  const editButton = documentContext.createElement("button");
+  editButton.textContent = "Edit";
+  const layer = { ...LAYERS[0], detailsControl: editButton };
+  view.render([layer], null);
+  const list = documentContext.querySelector("#raster-layer-list");
+  assert.equal(elementsByClass(list, "map-layer-row-actions")[0].children[0], editButton);
+  assert.throws(() => actionControl(list.children[0], "info"), "Info must not duplicate Edit");
+  assert.ok(elementsByClass(list, "map-layer-primary-row")[0].children.includes(actionControl(list.children[0], "remove")));
+  editButton.focus();
+  view.render([LAYERS[1], layer], null);
+  assert.equal(documentContext.activeElement, editButton);
+  assert.equal(elementsByClass(list, "map-layer-row-actions")[1].children[0], editButton);
+});
+
+test("layer types and owner style targets distinguish annotations without embedding their editor", () => {
+    const doc = new FakeLayerStackDocument();
+    const view = new MapLayerStackView(doc);
+    const shared = { ...LAYERS[0], key: "shared", item: null, datasetKind: "annotation", typeLabel: "Shared annotation", stylePanelId: "annotations-panel" };
+    view.render([shared], null);
+    const row = doc.querySelector("#raster-layer-list").children[0];
+    assert.equal(elementsByClass(row, "map-layer-type")[0].textContent, "Shared annotation");
+    assert.match(row.getAttribute("aria-label"), /shared annotation layer/);
+    assert.equal(actionControl(row, "style").getAttribute("aria-controls"), "annotations-panel");
+});
+
+test("layer provenance precedes its title and its primary action retains focus", () => {
+  const documentContext = new FakeLayerStackDocument();
+  const view = new MapLayerStackView(documentContext);
+  const primaryControl = documentContext.createElement("div");
+  const draw = documentContext.createElement("button"); primaryControl.append(draw);
+  const layer = { ...LAYERS[0], attribution: "Shared by Maria · Watersheds", primaryControl };
+  view.render([layer], null);
+  const row = documentContext.querySelector("#raster-layer-list").children[0];
+  const attribution = elementsByClass(row, "map-layer-attribution")[0];
+  const primary = elementsByClass(row, "map-layer-primary-row")[0];
+  assert.equal(attribution.textContent, layer.attribution);
+  assert.ok(row.children.indexOf(attribution) < row.children.indexOf(primary));
+  assert.ok(row.children.includes(primaryControl));
+  draw.focus(); view.render([layer], null);
+  assert.equal(documentContext.activeElement, draw);
 });

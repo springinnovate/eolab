@@ -20,6 +20,7 @@ from eolab_app.annotation_sessions.models import (
     SessionSnapshot,
     SharedLayerContents,
     CreateSession,
+    ContributorProfile,
     JoinSession,
     SessionError,
     ShareLayer,
@@ -53,7 +54,7 @@ class AnnotationSessionRoute(APIRoute):
             Raises:
                 HTTPException: If the request body exceeds the upload limit.
             """
-            if request.method in {"POST", "PUT"}:
+            if request.method in {"POST", "PUT", "PATCH"}:
                 body = bytearray()
                 async for chunk in request.stream():
                     if len(body) + len(chunk) > MAX_LAYER_BYTES:
@@ -218,19 +219,43 @@ def create_annotation_sessions_router(store: AnnotationSessionStore) -> APIRoute
 
     @router.post("/join", response_model=SessionSnapshot)
     def join(payload: JoinSession, browser: Browser) -> dict[str, Any]:
-        """Join a session with a code, retaining existing membership on retry.
+        """Join with the supplied display name while retaining any existing membership.
 
         Args:
             payload: Join code and contributor display name.
             browser: Authenticated cookie hash.
 
         Returns:
-            The joined session snapshot.
+            The session snapshot with the caller's supplied display name.
+
+        Raises:
+            SessionError: If the code is unavailable, new membership is disallowed,
+                join limits are reached or storage is unavailable.
         """
         return store.get_session_snapshot(
             store.join_session(browser, payload.joinCode, payload.contributorName),
             browser,
         )
+
+    @router.patch("/{session_id}/profile", response_model=ContributorProfile)
+    def update_profile(
+        session_id: UUID, payload: ContributorProfile, browser: Browser
+    ) -> ContributorProfile:
+        """Change this browser's contributor name without editing another member.
+
+        Args:
+            session_id: Active session the browser has joined.
+            payload: Validated display name.
+            browser: Authenticated browser-cookie hash.
+
+        Returns:
+            The name saved for this contributor.
+
+        Raises:
+            SessionError: If membership is absent, expired or storage is unavailable.
+        """
+        store.update_contributor_name(session_id, browser, payload.name)
+        return payload
 
     @router.get("/{session_id}", response_model=SessionSnapshot)
     def snapshot(session_id: UUID, browser: Browser) -> dict[str, Any]:

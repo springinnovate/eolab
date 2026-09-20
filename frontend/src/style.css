@@ -713,10 +713,18 @@ h5 {
 .raster-layer-row.is-drop-after::after { bottom: -6px; }
 
 .raster-layer-row.is-hidden .raster-layer-name { color: var(--text-3); }
+.map-layer-attribution { grid-column: 2; margin: 0; font-size: 0.75rem; font-weight: 600; color: var(--text-3); overflow-wrap: anywhere; }
+
 .map-layer-primary-row {
+  grid-column: 2;
   min-width: 0;
+  display: flex;
+  align-items: start;
+  gap: 6px;
 }
+.map-layer-type { max-width: 5rem; color: var(--text-3); font-size: 0.65rem; line-height: 1.3; }
 .raster-layer-visibility {
+  flex: 1;
   display: flex;
   gap: 8px;
   min-width: 0;
@@ -753,6 +761,7 @@ h5 {
   margin: 0;
 }
 .map-layer-row-actions {
+  grid-column: 2;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -2215,6 +2224,8 @@ h5 {
     opacity 180ms ease;
 }
 
+.panel-heading { min-width: 0; }
+
 .control-panel.is-collapsed {
   pointer-events: none;
   transform: translateX(calc(-100% - var(--workspace-edge)));
@@ -2435,7 +2446,7 @@ h5 {
   grid-template-columns:
     minmax(var(--workspace-column-rail-width), var(--workspace-catalog-track))
     minmax(var(--workspace-column-rail-width), var(--workspace-map-layers-track));
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
   background: var(--surface-3);
 }
@@ -2506,17 +2517,17 @@ h5 {
 
 #toggle-catalog-workspace {
   grid-column: 1;
-  grid-row: 2 / -1;
+  grid-row: 1 / -1;
 }
 
 #eomap-catalog-region {
   grid-column: 1;
-  grid-row: 3;
+  grid-row: 2;
 }
 
 #toggle-map-layers {
   grid-column: 2;
-  grid-row: 2 / -1;
+  grid-row: 1 / -1;
 }
 
 .map-layers-heading {
@@ -2531,12 +2542,12 @@ h5 {
 
 #eomap-map-layers-region {
   grid-column: 2;
-  grid-row: 3;
+  grid-row: 2;
 }
 
 #toggle-catalog-workspace[aria-expanded="true"],
 #toggle-map-layers[aria-expanded="true"] {
-  grid-row: 2;
+  grid-row: 1;
 }
 
 .catalog-panel,
@@ -3619,6 +3630,7 @@ article.raster-histogram-summary {
 }
 
 #map-histogram-panel,
+#annotations-panel,
 #calculations-panel,
 #downloads-panel,
 #layer-style-editor,
@@ -3643,6 +3655,7 @@ article.raster-histogram-summary {
 #map-inspection:not(:popover-open),
 #open-analysis-tools[hidden],
 #map-histogram-panel[hidden],
+#annotations-panel[hidden],
 #calculations-panel[hidden],
 #downloads-panel[hidden],
 #layer-style-editor[hidden],
@@ -3654,6 +3667,7 @@ article.raster-histogram-summary {
 .layer-style-opacity[hidden] { display: none; }
 
 #map-histogram-panel:not([data-map-inspection-active="true"]),
+#annotations-panel:not([data-map-inspection-active="true"]),
 #calculations-panel:not([data-map-inspection-active="true"]),
 #downloads-panel:not([data-map-inspection-active="true"]),
 #layer-style-editor:not([data-map-inspection-active="true"]),

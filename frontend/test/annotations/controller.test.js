@@ -5,13 +5,13 @@ import { AnnotationModel } from "../../src/annotations/model.js";
 
 /**
  * Connect controller status behavior to a model and minimal browser/storage substitutes.
- * @return {AnnotationController} Controller with collapsed tools and successful empty storage.
+ * @return {AnnotationController} Controller with closed panel and successful empty storage.
  */
 function controller() {
     const annotations = Object.create(AnnotationController.prototype);
     Object.assign(annotations, {
         model: new AnnotationModel(), loaded: true, dirty: false, saving: false, pendingSave: false,
-        toolsDisclosure: { open: false }, status: { textContent: "" },
+        panel: { open: false, show() { this.open = true; }, showLayer(key) { this.open = true; this.selectedKey = key; } }, status: { textContent: "" },
         fileStatus: { textContent: "", classList: { add() {}, remove() {} } },
         retryButton: { hidden: true }, createButton: { disabled: true }, importButton: { disabled: true },
         storage: { async load() { return []; }, async save() {} },
@@ -26,56 +26,56 @@ test("storage failure reveals Retry saving without discarding unsaved annotation
     const before = annotations.model.document();
     annotations.storage.save = async () => { throw new Error("Device storage is full"); };
     await annotations.save();
-    assert.equal(annotations.toolsDisclosure.open, true);
+    assert.equal(annotations.panel.open, true);
     assert.equal(annotations.retryButton.hidden, false);
     assert.equal(annotations.dirty, true);
     assert.match(annotations.status.textContent, /Not saved: Device storage is full/);
     assert.deepEqual(annotations.model.document(), before);
-    annotations.toolsDisclosure.open = false;
+    annotations.panel.open = false;
     annotations.storage.save = async () => {};
     await annotations.save();
-    assert.equal(annotations.toolsDisclosure.open, false, "successful autosave does not force tools open");
+    assert.equal(annotations.panel.open, false, "successful autosave does not force tools open");
     assert.equal(annotations.dirty, false);
     assert.equal(annotations.retryButton.hidden, true);
 });
 
-test("successful startup leaves tools closed but a storage load failure expands them", async () => {
+test("successful startup leaves panel closed but a storage load failure reveals the panel", async () => {
     const annotations = controller();
     annotations.loaded = false;
     await annotations.load();
-    assert.equal(annotations.toolsDisclosure.open, false);
+    assert.equal(annotations.panel.open, false);
     assert.equal(annotations.createButton.disabled, false);
     const failed = controller();
     failed.loaded = false;
     failed.storage.load = async () => { throw new Error("Cannot open database"); };
     await failed.load();
-    assert.equal(failed.toolsDisclosure.open, true);
+    assert.equal(failed.panel.open, true);
     assert.equal(failed.loaded, false);
     assert.equal(failed.createButton.disabled, true);
     assert.match(failed.status.textContent, /Cannot open saved annotations/);
 });
 
-test("action and export errors expand tools while draft errors stay in the map editor", () => {
+test("action and export errors open the panel while draft errors stay in the map editor", () => {
     const annotations = controller();
     annotations.perform(() => { throw new Error("Layer limit reached"); });
-    assert.equal(annotations.toolsDisclosure.open, true);
+    assert.equal(annotations.panel.open, true);
     assert.equal(annotations.status.textContent, "Layer limit reached");
-    annotations.toolsDisclosure.open = false;
+    annotations.panel.open = false;
     annotations.exportGeoJSONFile("missing-layer");
-    assert.equal(annotations.toolsDisclosure.open, true);
+    assert.equal(annotations.panel.open, true);
     assert.match(annotations.fileStatus.textContent, /Cannot export GeoJSON/);
-    annotations.toolsDisclosure.open = false;
+    annotations.panel.open = false;
     const layer = annotations.model.createLayer();
     annotations.model.beginPolygon(layer.id);
     let editorMessage;
     annotations.renderEditor = message => { editorMessage = message; };
     annotations.perform(() => annotations.model.savePolygon());
     assert.match(editorMessage, /at least 3 vertices/);
-    assert.equal(annotations.toolsDisclosure.open, false);
+    assert.equal(annotations.panel.open, false);
     assert.ok(annotations.model.draft);
 });
 
-test("polygon deletion expands tools so its existing Undo action remains discoverable", () => {
+test("polygon deletion opens the panel so its existing Undo action remains discoverable", () => {
     const annotations = controller();
     const layer = annotations.model.createLayer();
     annotations.model.beginPolygon(layer.id);
@@ -85,7 +85,7 @@ test("polygon deletion expands tools so its existing Undo action remains discove
     annotations.refreshLayer = () => {};
     annotations.save = async () => {};
     annotations.deletePolygon(layer.id, polygon.id);
-    assert.equal(annotations.toolsDisclosure.open, true);
+    assert.equal(annotations.panel.open, true);
     assert.equal(annotations.model.deleted.polygon.id, polygon.id);
 });
 
@@ -168,4 +168,29 @@ test("creating a layer announces its identity before saving, while sharing sees 
     assert.equal(annotations.sharableLayers().some(layer => layer.id === unsavedId), false);
     annotations.loaded = false;
     assert.throws(() => annotations.createLayer(), /not available/);
+});
+
+
+test("session guidance updates independently of polygon contents and clears on leave", () => {
+    const annotations = controller();
+    const label = { share: {}, setSessionName(name) { this.sessionName = name; }, revealDrawing() { this.revealed = true; } };
+    annotations.controls = new Map([["layer", label]]);
+    annotations.setShareLabel("layer", "Shared · Saved", "Watershed planning");
+    assert.equal(label.sessionName, "Watershed planning");
+    annotations.revealDrawing("layer");
+    assert.equal(label.revealed, true);
+    assert.equal(annotations.model.draft, null);
+    annotations.setShareLabel("layer", "Share");
+    assert.equal(label.sessionName, null);
+});
+
+test("successful local saves clear the transient status instead of retaining a success paragraph", async () => {
+    const annotations = controller();
+    let finish;
+    annotations.storage.save = () => new Promise(resolve => { finish = resolve; });
+    const saving = annotations.save();
+    assert.match(annotations.status.textContent, /Saving/);
+    finish(); await saving;
+    assert.equal(annotations.status.textContent, "");
+    assert.equal(annotations.panel.open, false);
 });

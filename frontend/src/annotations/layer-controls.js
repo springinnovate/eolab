@@ -1,4 +1,4 @@
-/** Inline annotation controls hosted by the existing map-layer list. */
+/** Retained editing controls displayed in the annotation panel. */
 import { matchingAnnotationPolygons } from "./model.js";
 
 /** Present one local annotation layer and forward edits to its owner. */
@@ -7,7 +7,16 @@ export class AnnotationLayerControls {
      * Build stable layer controls; notes and names are always plain text.
      * @param {Document} document Browser document.
      * @param {import("./model.js").AnnotationLayer} layer Annotation data.
-     * @param {Object} actions Named callbacks: add, edit, filter, removePolygon, change, opacity, exportGeoJSON, share.
+     * @param {Object} actions Editing intents handled by the layer owner.
+     * @param {()=>void} actions.open Reveal this layer in the annotation panel.
+     * @param {()=>void} actions.add Start drawing a polygon.
+     * @param {(id:string)=>void} actions.edit Edit a saved polygon.
+     * @param {()=>void} actions.filter Open the layer filter.
+     * @param {(id:string)=>void} actions.removePolygon Delete a polygon with Undo.
+     * @param {(rebuild?:boolean)=>void} actions.change Save changed fields and update the map.
+     * @param {(opacity:number)=>void} actions.opacity Set the whole layer's opacity.
+     * @param {()=>void} actions.exportGeoJSON Download the saved polygons.
+     * @param {()=>void} actions.share Share this layer in a session.
      */
     constructor(document, layer, actions) {
         this.document = document;
@@ -17,12 +26,19 @@ export class AnnotationLayerControls {
         this.root.className = "annotation-layer-controls";
         this.name = this.createLabeledInput("Layer name", "text", layer.name, value => {
             layer.name = value.trim() || "Annotations";
+            this.setSessionName(this.sessionName ?? null);
             actions.change(false);
         }, 160);
         this.root.append(this.name);
         const buttons = document.createElement("div");
         buttons.className = "annotation-actions";
-        buttons.append(this.button("Add polygon", actions.add));
+        this.edit = this.button("Edit", actions.open);
+        this.edit.setAttribute("aria-controls", "annotations-panel");
+        this.draw = this.button("Draw a custom polygon", actions.add);
+        this.draw.className = "annotation-draw-button";
+        this.sharing = document.createElement("p"); this.sharing.className = "annotation-sharing-context"; this.sharing.hidden = true;
+        this.drawing = document.createElement("div"); this.drawing.className = "annotation-drawing-action";
+        this.drawing.append(this.draw, this.sharing);
         this.share = this.button("Share", actions.share);
         this.share.title = "Share this layer's saved polygons, names and notes in an annotation session.";
         buttons.append(this.share);
@@ -135,6 +151,7 @@ export class AnnotationLayerControls {
             else input.value = this.layer.style[key];
         }
         this.opacity.value = this.layer.opacity;
+        this.setSessionName(this.sessionName ?? null);
         if (this.legacySearch) this.legacySearch.hidden = typeof this.layer.filter !== "string";
         const polygons = matchingAnnotationPolygons(this.layer);
         const filtered = typeof this.layer.filter === "string" ? !!this.layer.filter : this.layer.filter.enabled && !!this.layer.filter.rules.length;
@@ -143,13 +160,31 @@ export class AnnotationLayerControls {
         this.polygonList.replaceChildren(...polygons.map(polygon => this.polygonRow(polygon)));
         if (!polygons.length) {
             const empty = this.document.createElement("li");
-            empty.textContent = filtered ? "No polygons match the filter." : "Choose Add polygon to start drawing.";
+            empty.textContent = filtered ? "No polygons match the filter." : "Draw a polygon on the map, then give it a name or note. Saved changes are shared automatically when this layer is in a session.";
             this.polygonList.append(empty);
         }
         if (focusPolygon) {
             this.polygons.open = true;
             this.polygonList.querySelector(`[data-polygon-id="${focusPolygon}"] input`)?.focus();
         }
+    }
+
+    /** Describe where a new polygon will be saved and shared without rebuilding controls.
+     * @param {string|null} sessionName Current session name, or null for a local layer.
+     * @return {void}
+     */
+    setSessionName(sessionName) {
+        this.sessionName = sessionName;
+        this.sharing.textContent = sessionName ? `Added to ${this.layer.name} · Shared with ${sessionName}` : "";
+        this.sharing.hidden = !sessionName;
+    }
+
+    /** Bring the drawing action into view after the user connects to a session.
+     * @return {void}
+     */
+    revealDrawing() {
+        this.draw.scrollIntoView({ block: "nearest" });
+        this.draw.focus({ preventScroll: true });
     }
 
     /**
@@ -185,7 +220,7 @@ export class AnnotationLayerControls {
     }
 
     /**
-     * Reveal a requested layer control in place, without opening another panel.
+     * Expand and focus a requested control after the owner reveals this layer in the annotation panel.
      * @param {"style"|"filter"|"info"} control Requested control.
      * @return {void}
      */

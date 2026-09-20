@@ -28,6 +28,7 @@ import {
     MOUNTED_DATASET_TYPES,
 } from "./catalog.js";
 import { CatalogSearchSuggestions } from "./catalog-search-suggestions.js";
+import { AnnotationPanelView } from "./annotations/panel-view.js";
 import { AnnotationController } from "./annotations/controller.js";
 import "./annotations/style.css";
 import { SharedAnnotationLayers } from "./annotations/shared-layers.js";
@@ -1128,9 +1129,13 @@ async function initializeCatalog(
             containerPoint: leafletMap.latLngToContainerPoint(latlng),
         });
     }
-    sharedAnnotations = new SharedAnnotationLayers({ leaflet: L, map: leafletMap, mapLayers: mapLayerController,
+    const annotationPanel = new AnnotationPanelView({ document,
+        onOpen: () => mapInspection.showAnnotations(),
+        onClose: () => mapInspection.hideAnnotations() });
+    sharedAnnotations = new SharedAnnotationLayers({ leaflet: L, map: leafletMap, mapLayers: mapLayerController, panel: annotationPanel,
         onChange: () => { summarySampling.refresh(); vectorFilterControls.refresh(); } });
     annotations = new AnnotationController({
+        panel: annotationPanel,
         leaflet: L,
         map: leafletMap,
         mapLayers: mapLayerController,
@@ -1147,14 +1152,14 @@ async function initializeCatalog(
     });
     annotationSessions = new AnnotationSessionsController({
         root: document.querySelector("#annotation-sessions"),
-        createLayer: () => {
-            const id = annotations.createLayer();
-            onRenderingWorkspaceRequested();
-            return id;
-        },
+        entryButton: document.querySelector("#open-annotations"),
+        revealPanel: onRenderingWorkspaceRequested,
+        revealSetupEntry: onRenderingWorkspaceRequested,
+        createLayer: name => annotations.createLayer(name),
+        revealLayer: id => { onRenderingWorkspaceRequested(); annotations.revealDrawing(id); },
         getLayers: () => annotations.sharableLayers(),
-        setShareLabel: (id, label) => annotations.setShareLabel(id, label),
-        showLayer: (id, label, collection) => sharedAnnotations.addOrUpdateLayer(id, label, collection),
+        setShareLabel: (id, label, sessionName) => annotations.setShareLabel(id, label, sessionName),
+        showLayer: (id, label, collection, attribution) => sharedAnnotations.addOrUpdateLayer(id, label, collection, attribution),
         retainLayers: ids => sharedAnnotations.removeLayersExcept(ids),
     });
     const startupAnnotations = annotations.load();
