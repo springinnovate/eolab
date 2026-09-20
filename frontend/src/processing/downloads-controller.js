@@ -41,6 +41,7 @@ export class DownloadsController {
             submitting: false, jobActions: new Set() };
         this.planSequence = 0;
         this.planAbort = null;
+        this.plansToRelease = new Set();
         this.destroyed = false;
         this.ownsJobs = !jobs;
         this.jobs = jobs ?? new ProcessingJobs(api, clock);
@@ -97,9 +98,21 @@ export class DownloadsController {
     invalidatePlan() {
         this.planSequence += 1;
         this.planAbort?.abort();
+        if (this.state.plan) this.plansToRelease.add(this.state.plan.planId);
         this.state.plan = null;
         this.state.busy = false;
         this.state.message = "";
+    }
+
+    /** Release replaced reviews before reserving another plan record.
+     * @return {Promise<void>} Acknowledged releases; failed IDs remain for retry.
+     * @throws {Error} If Processing cannot confirm a release.
+     */
+    async releasePlans() {
+        for (const id of this.plansToRelease) {
+            await this.api.discardPlan(id);
+            this.plansToRelease.delete(id);
+        }
     }
 
     /** Select one offered catalog source. @param {number} index Source option index. @return {void} */
@@ -129,8 +142,20 @@ export class DownloadsController {
         this.state.busy = true;
         this.render();
         try {
-            const plan = await this.api.planClip(this.state.source, this.state.area, this.planAbort.signal);
-            if (sequence === this.planSequence && !this.destroyed) this.state.plan = plan;
+            if (this.plansToRelease.size) await this.releasePlans();
+            if (sequence !== this.planSequence || this.destroyed) return;
+            const plan = await this.api.planClip(this.state.source, this.state.area, this.planAbort.signal, status => {
+                if (sequence !== this.planSequence || this.destroyed) return;
+                this.state.message = status === "queued" ? "Waiting to check clip size…" : "Checking clip size…";
+                this.render();
+            });
+            if (sequence === this.planSequence && !this.destroyed) {
+                this.state.plan = plan;
+                this.state.message = "";
+            } else {
+                this.plansToRelease.add(plan.planId);
+                await this.releasePlans();
+            }
         } catch (error) {
             if (sequence === this.planSequence && !this.destroyed && error.name !== "AbortError") this.state.message = error.message;
         } finally {
@@ -167,10 +192,14 @@ export class DownloadsController {
         try {
             const job = await this.api.submitClip({ planId, requestId });
             this.jobs.accept(job);
+            this.plansToRelease.add(planId);
             this.state.plan = null;
             this.storage.clear();
             this.state.pending = null;
             this.state.message = "Clip accepted. Its raster and area are fixed; you can keep exploring the map.";
+            await this.releasePlans().catch(error => {
+                this.state.message += ` Unused plan cleanup needs retry: ${error.message}`;
+            });
         } catch (error) {
             // A definitive rejection creates no job. Server/transport failures can
             // occur after commit and must keep their original idempotency identity.
@@ -216,7 +245,8 @@ export class DownloadsController {
     /** Release browser work without cancelling accepted server jobs. @return {void} */
     destroy() {
         this.destroyed = true;
-        this.planAbort?.abort();
+        this.invalidatePlan();
+        void this.releasePlans().catch(() => {});
         this.unsubscribe();
         if (this.ownsJobs) this.jobs.destroy();
         this.view.unbind();

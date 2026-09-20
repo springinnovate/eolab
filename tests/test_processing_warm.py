@@ -24,6 +24,7 @@ from eolab_app.processing.service import ProcessingService, public_job
 from eolab_app.processing.worker import ProcessingWorker
 from eolab_app.raster.source_identity import RasterSourceIdentity
 from test_raster_clips import SOURCE, write_source
+from test_processing_timings import configure_planning_store
 
 
 def test_warm_service_and_worker_reopen_sources_and_preserve_timing(tmp_path: Path):
@@ -41,6 +42,7 @@ def test_warm_service_and_worker_reopen_sources_and_preserve_timing(tmp_path: Pa
         executor.warm()
         authorizer = SimpleNamespace(authorize=AsyncMock())
         store = Mock()
+        configure_planning_store(store)
         store.finish_plan.return_value = {
             "expires_at": datetime.now(timezone.utc) + timedelta(minutes=5)
         }
@@ -135,7 +137,9 @@ def test_warm_service_and_worker_reopen_sources_and_preserve_timing(tmp_path: Pa
                     < 0.1
                 )
                 assert str(tmp_path) not in response.model_dump_json()
-            assert authorizer.authorize.await_count == 4
+            # Each calculation authorizes before waiting, after claiming the
+            # planner, and once more when the execution worker reads its source.
+            assert authorizer.authorize.await_count == 6
         finally:
             await planner.close()
             await executor.close()

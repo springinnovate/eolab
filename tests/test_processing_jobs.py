@@ -64,8 +64,10 @@ def store(request: pytest.FixtureRequest) -> PostgresJobStore:
     dsn = request.config.getoption("--processing-dsn")
     if dsn is None:
         pytest.skip("Pass --processing-dsn for real PostgreSQL integration tests")
-    if not psycopg.conninfo.conninfo_to_dict(dsn).get("dbname", "").startswith(
-        "eolab_processing_test"
+    if (
+        not psycopg.conninfo.conninfo_to_dict(dsn)
+        .get("dbname", "")
+        .startswith("eolab_processing_test")
     ):
         pytest.fail(
             "Processing tests require an explicit disposable eolab_processing_test* database"
@@ -349,10 +351,15 @@ def test_global_admission_concurrency_fencing_and_restart_recovery(
         make_spec(path, ClipArea(kind="bounds", bounds=(0.1, 9.1, 0.9, 9.9)))
     )
     plan_id = store.reserve_plan("owner", SOURCE)
-    with pytest.raises(ProcessingError) as capacity:
-        store.reserve_plan("another", SOURCE)
-    assert capacity.value.code == "plan_capacity"
+    store.queue_native_plan(plan_id, "owner")
+    assert store.claim_native_plan(plan_id, "owner")
+    next_plan = store.reserve_plan("another", SOURCE)
+    store.queue_native_plan(next_plan, "another")
+    assert not store.claim_native_plan(next_plan, "another")
     store.finish_plan(plan_id, "owner", spec)
+    assert store.claim_native_plan(next_plan, "another")
+    store.discard_plan(next_plan, "another")
+    store.settle_planning(next_plan, "another", None)
     with ThreadPoolExecutor(max_workers=6) as pool:
         jobs = list(
             pool.map(

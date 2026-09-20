@@ -21,6 +21,7 @@ function fixture(overrides = {}) {
     const storage = new PendingSubmissionStorage({ getItem: key => data.get(key), setItem: (key,value) => data.set(key,value), removeItem: key => data.delete(key) });
     const requests = [];
     const api = { listJobs: async () => [], planClip: async (s,a) => { requests.push([s,a]); return structuredClone(plan); },
+        discardPlan: async () => ({discarded:true}),
         submitClip: async value => { requests.push(value); return structuredClone(job); },
         cancelJob: async value => requests.push(["cancel",value]), deleteJob: async value => requests.push(["delete",value]), ...overrides };
     let context = { sources: [structuredClone(source)], area: structuredClone(box) };
@@ -72,6 +73,19 @@ test("late planning results cannot replace a newer selection", async () => {
     h.controller.open(); const pending = h.controller.review();
     h.controller.selectSource(0); assert.ok(signal.aborted);
     resolve(plan); await pending; assert.equal(h.view.state.plan, null);
+});
+
+test("repeated reviews release the replaced estimate before reserving another", async () => {
+    const events = [];
+    const h = fixture({
+        planClip: async () => { events.push("plan"); return structuredClone(plan); },
+        discardPlan: async value => { events.push(`discard:${value}`); },
+    });
+    h.controller.open(); await h.controller.review(); await h.controller.review();
+    assert.deepEqual(events, ["plan", `discard:${id}`, "plan"]);
+    await h.controller.submit();
+    assert.equal(events.at(-1), `discard:${id}`);
+    assert.equal(h.view.state.plan, null);
 });
 
 test("uncertain submission survives reload and retries the original plan/key", async () => {
@@ -134,11 +148,14 @@ test("an older job listing cannot erase a newly accepted clip", async () => {
 test("session cookie is established before planning and only catalog identity/explicit area is sent", async () => {
     const requests=[];
     const api = new ProcessingApiClient(async (url,options) => {
-        requests.push([url,options]); return new Response(JSON.stringify(url.endsWith("/jobs") ? { jobs: [] } : plan));
+        requests.push([url,options]);
+        const planId = url.split("/").at(-1);
+        return new Response(JSON.stringify(url.endsWith("/jobs") ? { jobs: [] }
+            : {planId, status:"ready", result:{...plan,planId}, error:null}));
     });
     await Promise.all([api.planClip({ ...source, path: "private" }, box), api.listJobs()]);
     assert.equal(requests[0][0], "/api/processing/jobs");
-    const sent = requests.find(([url]) => url.endsWith("/plan"))[1];
+    const sent = requests.find(([url]) => url.includes("/raster-clips/plans/"))[1];
     assert.deepEqual(JSON.parse(sent.body), { collectionId: source.collectionId, itemId: source.itemId, selectedBounds: box.selectedBounds });
     assert.equal(sent.headers["X-EOLab-Processing"], "1"); assert.equal(sent.credentials, "same-origin");
     await assert.rejects(api.planClip(source,{ kind:"wholeRaster" }), /Select a box/);

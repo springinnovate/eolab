@@ -13,6 +13,15 @@ const grid = { width: 100, height: 100, crs: "EPSG:3857", dtype: "float32", tran
 const deferred = () => { let resolve, reject; const promise = new Promise((a,b) => { resolve=a; reject=b; }); return { promise, resolve, reject }; };
 const flush = async () => { for (let i=0;i<30;i++) await Promise.resolve(); };
 
+/** Wrap a completed plan in the asynchronous API snapshot.
+ * @param {string} url Client-ID planning URL. @param {Object} result Completed plan fields.
+ * @return {Object} Ready planning snapshot.
+ */
+function readyPlanResponse(url, result) {
+    const planId = url.split("/").at(-1);
+    return { planId, status: "ready", result: { ...result, planId }, error: null };
+}
+
 test("the executor does not import the statistics controller or its view", () => {
     const source = readFileSync(new URL("../../src/processing/calculation-executor.js", import.meta.url), "utf8");
     assert.doesNotMatch(source, /(?:from\s*|import\s*\()\s*["'][^"']*summary-statistics-(?:controller|view)/);
@@ -209,12 +218,12 @@ test("a stale plan resolving after a newer box never submits and does not strand
     h.api.planCalculation=(intent,s)=>{signal=s;return old.promise;};
     h.click(78);await h.tick(650);
     h.api.planCalculation=original;h.click(79);await h.tick(650);
-    assert.equal(signal?.aborted ?? false, false);old.resolve({planId:"z".repeat(32)});await flush();
+    assert.equal(signal?.aborted, true);old.resolve({planId:"z".repeat(32)});await flush();
     assert.equal(h.requests.filter(r=>r[0]==="submit").length,2);
     assert.deepEqual(h.controller.snapshot.unfinishedCalculation.calculation.area,box(79));
 });
 
-test("superseded HTTP planning drains before replacement and releases its returned identity", async () => {
+test("superseded planning admission recovers its client identity and cancels before replacement", async () => {
     const h = fixture(); const response = deferred(); const calls = []; let busy = false;
     const client = new ProcessingApiClient(async (url, options) => {
         if (url.endsWith('/jobs')) return {ok:true,json:async()=>({jobs:[]})};
@@ -231,11 +240,11 @@ test("superseded HTTP planning drains before replacement and releases its return
     h.api.discardPlan = client.discardPlan.bind(client);
     h.execute(h.intent(),true); await flush();
     for (const west of [78,79,80]) { h.click(west); await h.tick(650); }
-    assert.equal(calls.filter(([url])=>url.endsWith('/plan')).length, 1,
+    assert.equal(calls.filter(([url,options])=>url.includes('/plans/') && options.method === 'POST').length, 1,
         'a browser abort must not free the server planning lane');
     assert.equal(h.controller.snapshot.admission !== "retry", true);
-    const oldId = 'e'.repeat(32); busy = false;
-    response.resolve({ok:true,json:async()=>({planId:oldId,grid,operation:'raster.aggregate.v1',expiresAt:'2099-01-01T00:00:00Z'})});
+    const oldUrl = calls[0][0]; const oldId = oldUrl.split('/').at(-1); busy = false;
+    response.resolve({ok:true,json:async()=>readyPlanResponse(oldUrl,{grid,operation:'raster.aggregate.v1',expiresAt:'2099-01-01T00:00:00Z'})});
     // Subsequent planning uses the normal fixture once the old HTTP response drains.
     h.api.planCalculation = async intent => {
         assert.ok(calls.some(([url,options])=>url.endsWith(oldId)&&options.method==='DELETE'));
@@ -257,7 +266,7 @@ test("completed plan release is acknowledged before a replacement uses the last 
         }
         planCalls++;
         if (occupied) return {ok:false,status:429,json:async()=>({detail:{code:'plan_capacity',message:'Too many plans'}})};
-        return {ok:true,json:async()=>({planId:'f'.repeat(32),grid,operation:'raster.aggregate.v1',expiresAt:'2099-01-01T00:00:00Z'})};
+        return {ok:true,json:async()=>readyPlanResponse(url,{grid,operation:'raster.aggregate.v1',expiresAt:'2099-01-01T00:00:00Z'})};
     });
     await h.review();
     h.api.planCalculation = client.planCalculation.bind(client);
@@ -510,8 +519,8 @@ test("polygon uploads use owned transport and recovery stores only their small r
     const api = new ProcessingApiClient(async (url, options) => {
         requests.push({url, ...options});
         const response = url.endsWith("/jobs") ? {jobs:[]} : url.endsWith("/polygon-areas") && options.method === "POST"
-            ? {polygonArea,bbox:[0,0,1,1],matched:1} : url.endsWith("/plan")
-                ? {planId:"c".repeat(32),operation:"raster.aggregate.v1",grid,expiresAt:"2099-01-01T00:00:00Z"} : {deleted:true};
+            ? {polygonArea,bbox:[0,0,1,1],matched:1} : url.includes("/plans/")
+                ? readyPlanResponse(url,{operation:"raster.aggregate.v1",grid,expiresAt:"2099-01-01T00:00:00Z"}) : {deleted:true};
         return new Response(JSON.stringify(response), {status:200,headers:{"Content-Type":"application/json"}});
     });
     const polygons = [{type:"Polygon",coordinates:[[[0,0],[1,0],[1,1],[0,0]]]}];

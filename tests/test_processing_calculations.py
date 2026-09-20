@@ -60,6 +60,8 @@ def test_repeated_calculations_release_reviews_but_preserve_owned_job_recovery(
         )
     owner = hashlib.sha256(client.cookies[COOKIE].encode()).hexdigest()
     active = store.reserve_plan(owner, request_body())
+    store.queue_native_plan(active, owner)
+    assert store.claim_native_plan(active, owner)
     assert (
         client.delete(f"/api/processing/plans/{active}", headers=HEADERS).status_code
         == 200
@@ -380,7 +382,7 @@ def test_legacy_claim_protocol_cannot_consume_calculations(
     with psycopg.connect(store.conninfo) as conn:
         assert conn.execute(
             "SELECT version FROM processing.schema_version ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,), (4,), (5,)]
+        ).fetchall() == [(1,), (2,), (3,), (4,), (5,), (6,)]
 
 
 def paused_calculation(queue: Any, operation: str, arguments: tuple) -> None:

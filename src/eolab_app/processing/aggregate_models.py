@@ -438,6 +438,7 @@ class AggregatePlanTiming(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     reservationSeconds: StageSeconds
+    queueSeconds: StageSeconds = 0
     preparationSeconds: StageSeconds
     nativeProcessSeconds: StageSeconds
     finalizationSeconds: StageSeconds

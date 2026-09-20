@@ -129,19 +129,38 @@ export class ProcessingApiClient {
         this.fetch = fetchImplementation;
         this.EventSource = eventSource;
         this.session = null;
+        this.eventListeners = new Set();
+        this.eventStream = null;
     }
 
-    /** Watch hints after ordinary requests establish the owned session cookie.
+    /** Share one event stream for planning and job observers after cookie setup.
      * @param {Function} changed Request an authoritative job refresh.
      * @return {Function|null} Close the connection, or null when SSE is unavailable. */
     watchJobs(changed) {
         if (typeof this.EventSource !== "function") return null;
         try {
-            const source = new this.EventSource("/api/processing/events");
             let closed = false;
-            const receive = event => { if (!closed && event.data === "{}") changed(); };
-            source.addEventListener("changed", receive);
-            return () => { if (!closed) { closed = true; source.removeEventListener("changed", receive); source.close(); } };
+            if (!this.eventStream) {
+                const source = new this.EventSource("/api/processing/events");
+                const receive = event => {
+                    if (event.data === "{}") for (const listener of this.eventListeners) listener();
+                };
+                source.addEventListener("changed", receive);
+                this.eventStream = {source, receive};
+            }
+            // Give each subscription its own identity even if a callback is reused.
+            const listener = () => { if (!closed) changed(); };
+            this.eventListeners.add(listener);
+            return () => {
+                if (closed) return;
+                closed = true;
+                this.eventListeners.delete(listener);
+                if (this.eventListeners.size === 0) {
+                    const {source, receive} = this.eventStream;
+                    source.removeEventListener("changed", receive); source.close();
+                    this.eventStream = null;
+                }
+            };
         } catch { return null; } // The existing two-second poll remains authoritative.
     }
 
@@ -168,21 +187,22 @@ export class ProcessingApiClient {
      * @param {{collectionId:string,itemId:string}} source Catalog identity.
      * @param {Object} area Selected rectangle or immutable catalog descriptor.
      * @param {AbortSignal} signal Cancels superseded planning.
+     * @param {function(string):void} [onProgress] Receives checking/queued/planning status.
      * @return {Promise<Object>} Native-grid estimate and expiring plan.
      */
-    async planClip(source, area, signal) {
+    async planClip(source, area, signal, onProgress) {
         const selected = normalizeRasterSamplingArea(area);
         if (selected.kind === "wholeRaster") throw new Error("Select a box or catalog vector first.");
         if (![source.collectionId, source.itemId].every(value => typeof value === "string" && value.length > 0)) {
             throw new TypeError("A Catalog raster is required.");
         }
         await this.ensureSession();
-        const plan = await this.request("/raster-clips/plan", "POST", {
+        const plan = await this.preparePlan("raster-clips", {
             collectionId: source.collectionId, itemId: source.itemId,
             ...(selected.kind === "selectedArea"
                 ? { selectedBounds: selected.selectedBounds }
                 : { catalogSelection: selected.catalogSelection }),
-        }, signal);
+        }, signal, onProgress);
         opaqueId(plan.planId);
         validateGrid(plan.grid);
         if (!Number.isFinite(Date.parse(plan.expiresAt)) || !Number.isSafeInteger(plan.grid.estimatedRawBytes) ||
@@ -208,21 +228,22 @@ export class ProcessingApiClient {
     /** Prepare cached results or estimate a new calculation.
      * @param {Object} intent Source, expressions and area.
      * @param {AbortSignal} signal Superseded request.
+     * @param {function(string):void} [onProgress] Receives checking/queued/planning status.
      * @return {Promise<Object>} Validated plan with an optional cache-hit flag.
      * @throws {Error} If the request fails or returned plan metadata is invalid.
      */
-    async planCalculation(intent, signal) {
+    async planCalculation(intent, signal, onProgress) {
         const area = normalizeCalculationArea(intent.area);
         const targetChunkPixels = chunkPixels(intent.targetChunkPixels);
         await this.ensureSession();
-        const plan = await this.request("/raster-calculations/plan", "POST", {
+        const plan = await this.preparePlan("raster-calculations", {
             sources: { a: { collectionId: intent.source.collectionId, itemId: intent.source.itemId } },
             calculations: intent.calculations,
             ...(targetChunkPixels === null ? {} : { targetChunkPixels }),
             ...(area.kind === "selectedArea" ? { selectedBounds: area.selectedBounds }
                 : area.kind === "catalogSelection" ? { catalogSelection: area.catalogSelection }
                 : area.kind === "polygonArea" ? { polygonArea: area.polygonArea } : { wholeRaster: true }),
-        }, signal);
+        }, signal, onProgress);
         opaqueId(plan.planId);
         validateGrid(plan.grid);
         if (plan.cacheHit != null && typeof plan.cacheHit !== "boolean") {
@@ -235,7 +256,70 @@ export class ProcessingApiClient {
         }
         validateStages(plan.timing, ["reservationSeconds", "preparationSeconds", "nativeProcessSeconds", "finalizationSeconds"]);
         validateProcessTiming(plan.timing?.process);
+        if (plan.timing?.queueSeconds != null) validateStages(plan.timing, ["queueSeconds"]);
         return plan;
+    }
+
+    /** Submit and observe one queued plan using a stable ID and existing SSE hints.
+     * A cancelled or uncertain admission is deleted by ID, including when DELETE
+     * reaches the server before POST. Server deadlines bound work after tab closure.
+     * @param {"raster-clips"|"raster-calculations"} operation Planning endpoint.
+     * @param {Object} body Validated source, area and expressions.
+     * @param {AbortSignal|undefined} signal Superseded request.
+     * @param {function(string):void|undefined} onProgress Current planning stage.
+     * @return {Promise<Object>} Completed operation plan, ready for explicit submission.
+     * @throws {Error} If admission, observation or planning fails, or the caller cancels.
+     */
+    async preparePlan(operation, body, signal, onProgress) {
+        signal?.throwIfAborted();
+        const id = crypto.randomUUID().replaceAll("-", "");
+        let notified = false;
+        let wake = null;
+        const changed = () => { notified = true; wake?.(); };
+        const close = this.watchJobs(changed);
+        signal?.addEventListener("abort", changed);
+        let discardOnExit = true;
+        try {
+            let snapshot;
+            try {
+                // Do not abandon admission when the UI changes: recover or delete
+                // its stable ID even if its response is lost behind a proxy.
+                snapshot = await this.request(`/${operation}/plans/${id}`, "POST", body, AbortSignal.timeout(10000));
+            } catch (error) {
+                if (error instanceof ProcessingRequestError && error.status < 500 && error.status !== 408) {
+                    discardOnExit = false; // Definitive admission rejection created no work.
+                    throw error;
+                }
+                snapshot = await this.request(`/plans/${id}`, "GET", undefined, AbortSignal.timeout(10000));
+            }
+            while (true) {
+                signal?.throwIfAborted();
+                if (snapshot?.planId !== id || !["checking", "queued", "planning", "cancelling", "ready", "failed", "cancelled"].includes(snapshot.status)) {
+                    throw new Error("Processing returned invalid planning progress.");
+                }
+                if (snapshot.status === "ready") {
+                    if (snapshot.result?.planId !== id) throw new Error("Processing returned an invalid completed plan.");
+                    discardOnExit = false;
+                    return snapshot.result;
+                }
+                if (["failed", "cancelled", "cancelling"].includes(snapshot.status)) {
+                    throw new ProcessingRequestError(snapshot.error?.detail ?? "Planning was cancelled.", 422,
+                        snapshot.error?.code ?? "plan_cancelled");
+                }
+                onProgress?.(snapshot.status);
+                if (!notified) await new Promise(resolve => {
+                    const timer = setTimeout(() => { wake = null; resolve(); }, 2000);
+                    wake = () => { clearTimeout(timer); wake = null; resolve(); };
+                });
+                notified = false;
+                signal?.throwIfAborted();
+                snapshot = await this.request(`/plans/${id}`, "GET", undefined, signal);
+            }
+        } finally {
+            close?.();
+            signal?.removeEventListener("abort", changed);
+            if (discardOnExit) await this.request(`/plans/${id}`, "DELETE", undefined, AbortSignal.timeout(10000));
+        }
     }
 
     /** Upload exact polygons once and receive a private, expiring calculation reference.

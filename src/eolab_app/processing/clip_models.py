@@ -153,6 +153,7 @@ class ClipPlanResponse(BaseModel):
     """Versioned, reviewable native-grid plan returned before job admission."""
 
     planId: OpaqueId
+    queueSeconds: float = Field(default=0, ge=0)
     operation: Literal["raster.clip.v1"]
     source: CatalogRasterRequest
     area: ClipAreaSummary

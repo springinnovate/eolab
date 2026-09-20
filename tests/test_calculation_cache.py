@@ -385,6 +385,9 @@ def test_cache_hit_skips_planning_and_pins_values(
     )
     areas = SimpleNamespace(resolve_for_sampling=AsyncMock())
     store = Mock()
+    from test_processing_timings import configure_planning_store
+
+    configure_planning_store(store)
     store.get_cached_calculation_results.return_value = saved
     store.reserve_plan.return_value = "a" * 32
     store.finish_plan.return_value = {

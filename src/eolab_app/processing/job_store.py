@@ -186,7 +186,7 @@ class PostgresJobStore:
             )
 
     def reserve_plan(self, owner: str, request: dict[str, Any]) -> str:
-        """Reserve the one global metadata child and bounded plan-record capacity.
+        """Reserve a plan record; native work must separately claim the planner.
 
         Args:
             owner: Hash of the opaque browser-session capability.
@@ -196,59 +196,250 @@ class PostgresJobStore:
             New opaque plan ID.
 
         Raises:
-            ProcessingError: If a plan is already running or capacity is full.
+            ProcessingError: If retained plan records or pending requests are full.
         """
         identifier = uuid4().hex
+        self.enqueue_plan(identifier, owner, request)
+        return identifier
+
+    def enqueue_plan(
+        self, identifier: str, owner: str, request: dict[str, Any]
+    ) -> bool:
+        """Retain one planning request, or recognize an identical retry.
+
+        Args:
+            identifier: Client-generated opaque plan ID, reused for retries.
+            owner: Browser-session hash.
+            request: Validated operation and inputs, without filesystem paths.
+
+        Returns:
+            True for a new request that the caller must prepare; False for a retry.
+
+        Raises:
+            ProcessingError: For conflicting IDs, unavailable storage or full capacity.
+        """
         with self._transaction(locked=True) as cursor:
+            self._expire_planning(cursor)
             cursor.execute(
                 "DELETE FROM processing.plans WHERE expires_at <= now() AND (planning_until IS NULL OR planning_until <= now())"
             )
             cursor.execute(
-                "SELECT count(*) AS total, count(*) FILTER (WHERE owner=%s) AS owned, count(*) FILTER (WHERE planning_until > now()) AS running FROM processing.plans",
+                "SELECT owner,request FROM processing.plans WHERE id=%s", (identifier,)
+            )
+            existing = cursor.fetchone()
+            if existing:
+                if existing["owner"] != owner or (
+                    existing["request"] and existing["request"] != request
+                ):
+                    raise ProcessingError(
+                        "plan_conflict",
+                        "This planning ID is already in use. Start a new request.",
+                        409,
+                    )
+                return False
+            cursor.execute(
+                "SELECT count(*) AS total, count(*) FILTER (WHERE owner=%s AND state NOT IN ('failed','cancelled')) AS owned, count(*) FILTER (WHERE state IN ('checking','queued','planning','cancelling')) AS pending FROM processing.plans",
                 (owner,),
             )
             count = cursor.fetchone()
-            if count["running"] or count["total"] >= 50 or count["owned"] >= 5:
+            if (
+                count["total"] >= self.limits.plan_record_capacity
+                or count["owned"] >= self.limits.max_owner_plans
+            ):
                 raise ProcessingError(
-                    "plan_capacity",
-                    "Job planning is busy or too many plans are open. Wait briefly and try again.",
+                    "plan_record_capacity",
+                    "Too many plans are retained. Close an unused review or try again later.",
+                    429,
+                )
+            if count["pending"] >= self.limits.plan_queue_capacity:
+                raise ProcessingError(
+                    "plan_queue_full",
+                    "The planning queue is full. Try again after existing requests finish.",
                     429,
                 )
             cursor.execute(
-                "INSERT INTO processing.plans(id,owner,expires_at,planning_until,request) VALUES (%s,%s,now()+%s*interval '1 second',now()+%s*interval '1 second',%s)",
+                "INSERT INTO processing.plans(id,owner,expires_at,request_deadline,state,request) VALUES (%s,%s,now()+%s*interval '1 second',now()+%s*interval '1 second','checking',%s)",
                 (
                     identifier,
                     owner,
-                    self.limits.plan_ttl_seconds,
-                    self.limits.plan_timeout_seconds + 10,
+                    self.limits.plan_ttl_seconds
+                    + self.limits.plan_queue_seconds
+                    + 2 * self.limits.plan_timeout_seconds
+                    + 10,
+                    self.limits.plan_queue_seconds
+                    + 2 * self.limits.plan_timeout_seconds
+                    + 10,
                     Jsonb(request),
                 ),
             )
-        return identifier
+        return True
+
+    def _expire_planning(self, cursor: Any) -> None:
+        """Mark abandoned or overlong requests failed without replaying native work.
+
+        Args:
+            cursor: Cursor inside the caller's locked transaction.
+        """
+        cursor.execute(
+            "UPDATE processing.plans SET state='failed',planning_until=NULL,error=%s "
+            "WHERE state IN ('checking','queued','planning','cancelling') "
+            "AND (request_deadline<=now() OR planning_until<=now())",
+            (
+                Jsonb(
+                    {
+                        "code": "planning_interrupted",
+                        "detail": "Planning stopped or the server restarted. Start a new request.",
+                    }
+                ),
+            ),
+        )
+
+    def get_planning(self, identifier: str, owner: str) -> dict[str, Any]:
+        """Read current planning state for its owner, including terminal errors.
+
+        Args:
+            identifier: Opaque plan ID.
+            owner: Browser-session hash.
+
+        Returns:
+            Owned row; callers publish only its status, result and sanitized error.
+
+        Raises:
+            ProcessingError: If the plan is unavailable or the database fails.
+        """
+        with self._transaction(locked=True) as cursor:
+            self._expire_planning(cursor)
+            cursor.execute(
+                "SELECT * FROM processing.plans WHERE id=%s AND owner=%s AND expires_at>now()",
+                (identifier, owner),
+            )
+            row = cursor.fetchone()
+        if row is None:
+            raise ProcessingError(
+                "plan_unavailable",
+                "This planning request expired or is unavailable. Start a new request.",
+                404,
+            )
+        return row
+
+    def queue_native_plan(self, identifier: str, owner: str) -> None:
+        """Place an authorized cache miss in FIFO order for native planning.
+
+        Args:
+            identifier: Admitted planning request.
+            owner: Browser-session hash.
+
+        Raises:
+            ProcessingError: If storage is unavailable.
+        """
+        with self._transaction(locked=True) as cursor:
+            cursor.execute(
+                "UPDATE processing.plans SET state='queued',queued_at=clock_timestamp() WHERE id=%s AND owner=%s AND state='checking'",
+                (identifier, owner),
+            )
+
+    def claim_native_plan(self, identifier: str, owner: str) -> bool:
+        """Claim the one native planner only for the oldest waiting request.
+
+        Args:
+            identifier: Queued planning request.
+            owner: Browser-session hash.
+
+        Returns:
+            True when the caller may start native work; False while waiting/cancelled.
+
+        Raises:
+            ProcessingError: If storage is unavailable.
+        """
+        with self._transaction(locked=True) as cursor:
+            self._expire_planning(cursor)
+            cursor.execute(
+                "UPDATE processing.plans SET state='failed',error=%s WHERE state='queued' AND queued_at+%s*interval '1 second'<=now()",
+                (
+                    Jsonb(
+                        {
+                            "code": "plan_queue_timeout",
+                            "detail": "Planning waited too long for a free worker. Try again.",
+                        }
+                    ),
+                    self.limits.plan_queue_seconds,
+                ),
+            )
+            cursor.execute(
+                "UPDATE processing.plans SET state='planning',planning_until=clock_timestamp()+%s*interval '1 second' "
+                "WHERE id=%s AND owner=%s AND state='queued' "
+                "AND id=(SELECT id FROM processing.plans WHERE state='queued' ORDER BY queued_at,id LIMIT 1) "
+                "AND NOT EXISTS(SELECT 1 FROM processing.plans WHERE planning_until>now()) RETURNING id",
+                (self.limits.plan_timeout_seconds + 10, identifier, owner),
+            )
+            return cursor.fetchone() is not None
+
+    def settle_planning(
+        self,
+        identifier: str,
+        owner: str,
+        result: dict[str, Any] | None,
+        error: dict[str, Any] | None = None,
+    ) -> None:
+        """Publish a result or failure after native work and cancellation cleanup finish.
+
+        Args:
+            identifier: Admitted request ID.
+            owner: Browser-session hash.
+            result: Public completed plan, or None after cancellation/failure.
+            error: Sanitized error, or None on success/cancellation.
+
+        Raises:
+            ProcessingError: If storage is unavailable; the request then expires.
+        """
+        with self._transaction(locked=True) as cursor:
+            cursor.execute(
+                "UPDATE processing.plans SET state=CASE WHEN state IN ('cancelled','cancelling') THEN 'cancelled' WHEN %s::jsonb IS NOT NULL THEN 'failed' WHEN %s::jsonb IS NOT NULL THEN 'ready' ELSE 'cancelled' END, "
+                "planning_until=NULL,result=CASE WHEN state IN ('cancelled','cancelling') THEN NULL ELSE %s::jsonb END,error=CASE WHEN state IN ('cancelled','cancelling') THEN NULL ELSE %s::jsonb END, "
+                "expires_at=clock_timestamp()+%s*interval '1 second' WHERE id=%s AND owner=%s AND state NOT IN ('failed','ready')",
+                (
+                    Jsonb(error) if error else None,
+                    Jsonb(result) if result else None,
+                    Jsonb(result) if result else None,
+                    Jsonb(error) if error else None,
+                    self.limits.plan_ttl_seconds,
+                    identifier,
+                    owner,
+                ),
+            )
 
     def finish_plan(
         self, identifier: str, owner: str, plan: PreparedJobPlan | None
     ) -> dict[str, Any] | None:
-        """Release metadata capacity after native operation completion or child exit.
+        """Save prepared operation inputs and release the native planner after cleanup.
 
         Args:
             identifier: Reserved plan ID.
             owner: Original session owner hash.
-            plan: Prepared operation data, or None to discard a failed plan.
+            plan: Prepared operation data, or None after failed or cancelled work.
 
         Returns:
-            Completed plan row or None after removal.
+            Updated row, or None when no inputs were saved. The planning queue
+            separately publishes the public result or error with settle_planning.
+
+        Raises:
+            ProcessingError: If storage is unavailable.
         """
         with self._transaction(locked=True) as cursor:
             if plan is None:
                 cursor.execute(
-                    "DELETE FROM processing.plans WHERE id=%s AND owner=%s",
+                    "UPDATE processing.plans SET planning_until=NULL WHERE id=%s AND owner=%s",
                     (identifier, owner),
                 )
                 return None
             cursor.execute(
-                "UPDATE processing.plans SET planning_until=NULL,spec=%s WHERE id=%s AND owner=%s AND expires_at>now() RETURNING *",
-                (Jsonb(plan.specification), identifier, owner),
+                "UPDATE processing.plans SET planning_until=NULL,spec=%s,expires_at=clock_timestamp()+%s*interval '1 second' WHERE id=%s AND owner=%s AND expires_at>now() AND state NOT IN ('cancelled','cancelling','failed') RETURNING *",
+                (
+                    Jsonb(plan.specification),
+                    self.limits.plan_ttl_seconds,
+                    identifier,
+                    owner,
+                ),
             )
             return cursor.fetchone()
 
@@ -297,17 +488,48 @@ class PostgresJobStore:
             return cursor.fetchone()
 
     def discard_plan(self, identifier: str, owner: str) -> None:
-        """Delete only completed owned review state; accepted jobs are independent.
+        """Cancel planning or discard a review; active capacity stays held until cleanup.
 
         Args:
             identifier: Opaque plan ID, including an already removed plan.
             owner: Current session hash.
+
+        Raises:
+            ProcessingError: If storage or cancellation-record capacity is unavailable.
         """
         with self._transaction(locked=True) as cursor:
             cursor.execute(
-                "DELETE FROM processing.plans WHERE id=%s AND owner=%s AND planning_until IS NULL",
+                "UPDATE processing.plans SET state=CASE WHEN planning_until IS NOT NULL THEN 'cancelling' ELSE 'cancelled' END,spec=NULL,result=NULL,error=NULL WHERE id=%s AND owner=%s",
                 (identifier, owner),
             )
+            if cursor.rowcount == 0:
+                # A cancellation can beat a delayed admission. Retain a bounded
+                # tombstone so that the late POST cannot resurrect native work.
+                cursor.execute(
+                    "SELECT 1 FROM processing.plans WHERE id=%s", (identifier,)
+                )
+                if cursor.fetchone():
+                    return  # Another owner's request remains untouched.
+                cursor.execute(
+                    "DELETE FROM processing.plans WHERE expires_at <= now() AND (planning_until IS NULL OR planning_until <= now())"
+                )
+                cursor.execute(
+                    "INSERT INTO processing.plans(id,owner,expires_at,state,request) "
+                    "SELECT %s,%s,now()+%s*interval '1 second','cancelled','{}'::jsonb "
+                    "WHERE (SELECT count(*) FROM processing.plans WHERE expires_at>now())<%s ON CONFLICT DO NOTHING",
+                    (
+                        identifier,
+                        owner,
+                        self.limits.plan_ttl_seconds,
+                        self.limits.plan_record_capacity,
+                    ),
+                )
+                if cursor.rowcount == 0:
+                    raise ProcessingError(
+                        "plan_record_capacity",
+                        "Cancellation could not be recorded because plan storage is full. Retry shortly.",
+                        429,
+                    )
 
     def submit(
         self, owner: str, plan_id: str, request_key: str, expected: PreparedJobPlan

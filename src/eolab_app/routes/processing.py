@@ -24,6 +24,7 @@ from eolab_app.processing.models import (
     JobSubmitRequest,
     JobListResponse,
     ProcessingError,
+    PlanningResponse,
 )
 from eolab_app.processing.clip_models import (
     ClipPlanRequest,
@@ -351,6 +352,81 @@ def create_processing_router(service: ProcessingService) -> APIRouter:
         )
 
     @router.post(
+        "/raster-clips/plans/{plan_id}",
+        status_code=202,
+        response_model=PlanningResponse,
+        openapi_extra=MUTATION_SCHEMA,
+    )
+    async def start_clip_plan(
+        body: ClipPlanRequest, plan_id: JobId, request: Request, response: Response
+    ) -> dict[str, Any]:
+        """Admit clip planning under a client ID; repeating identical input is safe.
+
+        Args:
+            body: Validated catalog raster and explicit area.
+            plan_id: Client-generated ID retained across uncertain admission retries.
+            request: Same-origin session context.
+            response: Private headers and session cookie.
+
+        Returns:
+            Current planning state; no clip job has been submitted.
+
+        Raises:
+            HTTPException: On ownership, capacity, input or storage failure.
+        """
+        response.headers["Location"] = f"/api/processing/plans/{plan_id}"
+        return await _result(
+            service.start_clip_plan(_owner(request, response), plan_id, body)
+        )
+
+    @router.post(
+        "/raster-calculations/plans/{plan_id}",
+        status_code=202,
+        response_model=PlanningResponse,
+        openapi_extra=MUTATION_SCHEMA,
+    )
+    async def start_calculation_plan(
+        body: AggregatePlanRequest, plan_id: JobId, request: Request, response: Response
+    ) -> dict[str, Any]:
+        """Admit calculation planning without holding HTTP open for a planner.
+
+        Args:
+            body: Validated catalog source, area and expressions.
+            plan_id: Client-generated ID reused on retries with identical input.
+            request: Same-origin session context.
+            response: Private headers and session cookie.
+
+        Returns:
+            Current planning state; callers still explicitly submit the ready plan.
+
+        Raises:
+            HTTPException: On ownership, capacity, input or storage failure.
+        """
+        response.headers["Location"] = f"/api/processing/plans/{plan_id}"
+        return await _result(
+            service.start_calculation_plan(_owner(request, response), plan_id, body)
+        )
+
+    @router.get("/plans/{plan_id}", response_model=PlanningResponse)
+    async def get_planning(
+        plan_id: JobId, request: Request, response: Response
+    ) -> dict[str, Any]:
+        """Read the authoritative planning state, including queued and cancelled work.
+
+        Args:
+            plan_id: Owned plan ID.
+            request: Current browser session.
+            response: Private cache headers.
+
+        Returns:
+            Status, completed operation plan and sanitized error.
+
+        Raises:
+            HTTPException: If the request expired or is not available to this owner.
+        """
+        return await _result(service.get_planning(_owner(request, response), plan_id))
+
+    @router.post(
         "/raster-clips",
         status_code=202,
         response_model=ClipJobResponse,
@@ -444,7 +520,7 @@ def create_processing_router(service: ProcessingService) -> APIRouter:
     async def discard_plan(
         plan_id: JobId, request: Request, response: Response
     ) -> dict[str, bool]:
-        """Discard a completed review after use or replacement, idempotently.
+        """Cancel planning or discard a completed review after replacement, idempotently.
 
         Args:
             plan_id: Opaque review ID.

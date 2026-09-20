@@ -265,6 +265,32 @@ Allow streaming through the reverse proxy without buffering. Losing that stream
 does not cancel accepted jobs. The stream reconnects periodically; polling still
 recovers updates if streaming is unavailable.
 
+Raster calculation and clip planning share a FIFO queue with one native planner.
+The current limits admit 32 unfinished requests, retain 128 plan records, and
+allow each browser session five unfinished or ready plans. A cache hit still
+checks source access but does not wait for the native planner. Queue waiting has
+its own 60-second limit; active planning retains its 15-second limit. A completed
+estimate is usable for five minutes starting when preparation finishes.
+
+New browser clients submit to `POST /api/processing/raster-calculations/plans/{id}`
+or `/api/processing/raster-clips/plans/{id}`, using a random 32-character lowercase
+hex ID. A 202 response contains the current state; `GET /api/processing/plans/{id}`
+returns progress and the completed estimate. Reusing an ID with the same inputs
+recovers an uncertain submission. Changing its inputs returns `plan_conflict`.
+`DELETE /api/processing/plans/{id}` cancels queued/active planning or releases a
+ready estimate. Cancellation remains visible until native cleanup finishes;
+another request cannot take its active slot early. Status is owner-scoped, with
+the existing SSE change hints and two-second polling fallback.
+
+The older singular `/plan` endpoints still return completed estimates, waiting
+on this same queue. Deploy the API before serving the new frontend bundle, or
+deploy them together. A graceful app shutdown cancels preparation; after an
+abrupt stop an abandoned request reports `planning_interrupted` within its stored
+deadline (at most 100 seconds under current limits). It is not replayed: retry
+with a new ID. `plan_queue_full` means the pending queue filled, while
+`plan_record_capacity` means retained records or the session limit filled.
+These limits apply to planning; execution-job admission has separate limits.
+
 ## Troubleshooting
 
 | Symptom | What to check |

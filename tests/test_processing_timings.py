@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, Mock
 
 import numpy as np
@@ -27,6 +28,54 @@ from eolab_app.raster.source_identity import RasterSourceIdentity
 from test_raster_clips import SOURCE, write_source
 
 
+def configure_planning_store(store: Mock) -> None:
+    """Provide in-memory plan progress for tests measuring real native processes.
+
+    Args:
+        store: Mock storage; PostgreSQL queue semantics are tested separately.
+    """
+    records = {}
+
+    def enqueue(identifier: str, owner: str, request: dict[str, Any]) -> bool:
+        """Accept a fresh timing-fixture request and initialize its progress.
+
+        Args:
+            identifier: Opaque plan ID.
+            owner: Session hash.
+            request: Validated inputs.
+
+        Returns:
+            True for this new request.
+        """
+        records[identifier] = {"state": "checking", "result": None, "error": None}
+        return True
+
+    def settle(
+        identifier: str,
+        owner: str,
+        result: dict[str, Any] | None,
+        error: dict[str, Any] | None,
+    ) -> None:
+        """Publish the timing test's completed result or failure.
+
+        Args:
+            identifier: Opaque plan ID.
+            owner: Session hash.
+            result: Completed public plan.
+            error: Optional sanitized failure.
+        """
+        records[identifier] = {
+            "state": "failed" if error else "ready",
+            "result": result,
+            "error": error,
+        }
+
+    store.enqueue_plan.side_effect = enqueue
+    store.get_planning.side_effect = lambda identifier, owner: records[identifier]
+    store.claim_native_plan.return_value = True
+    store.settle_planning.side_effect = settle
+
+
 def test_real_plan_worker_and_public_result_timing(tmp_path: Path) -> None:
     """Timing crosses native execution and public serialization without private paths.
 
@@ -39,6 +88,7 @@ def test_real_plan_worker_and_public_result_timing(tmp_path: Path) -> None:
     )
     authorizer = SimpleNamespace(authorize=AsyncMock(return_value=authorized))
     store = Mock()
+    configure_planning_store(store)
     store.get_cached_calculation_results.return_value = {}
     identifier = "a" * 32
     store.reserve_plan.return_value = identifier
