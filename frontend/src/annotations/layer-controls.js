@@ -26,6 +26,7 @@ export class AnnotationLayerControls {
         this.root.className = "annotation-layer-controls";
         this.name = this.createLabeledInput("Layer name", "text", layer.name, value => {
             layer.name = value.trim() || "Annotations";
+            this.setSessionName(this.sessionName ?? null);
             actions.change(false);
         }, 160);
         this.root.append(this.name);
@@ -33,13 +34,14 @@ export class AnnotationLayerControls {
         buttons.className = "annotation-actions";
         this.edit = this.button("Edit", actions.open);
         this.edit.setAttribute("aria-controls", "annotations-panel");
-        this.draw = this.button("Draw polygon", actions.add);
+        this.draw = this.button("Draw a custom polygon", actions.add);
         this.draw.className = "annotation-draw-button";
         this.sharing = document.createElement("p"); this.sharing.className = "annotation-sharing-context"; this.sharing.hidden = true;
-        this.root.prepend(this.sharing);
+        this.drawing = document.createElement("div"); this.drawing.className = "annotation-drawing-action";
+        this.drawing.append(this.draw, this.sharing);
         this.share = this.button("Share", actions.share);
         this.share.title = "Share this layer's saved polygons, names and notes in an annotation session.";
-        buttons.append(this.draw, this.share);
+        buttons.append(this.share);
         const exportButton = this.button("Export GeoJSON", actions.exportGeoJSON);
         exportButton.title = "Download all saved polygons, names and notes in this layer, including filtered-out polygons. Save unfinished edits first to include them.";
         buttons.append(exportButton);
@@ -149,7 +151,7 @@ export class AnnotationLayerControls {
             else input.value = this.layer.style[key];
         }
         this.opacity.value = this.layer.opacity;
-        this.draw.textContent = this.layer.polygons.length ? "Draw another polygon" : "Draw polygon";
+        this.setSessionName(this.sessionName ?? null);
         if (this.legacySearch) this.legacySearch.hidden = typeof this.layer.filter !== "string";
         const polygons = matchingAnnotationPolygons(this.layer);
         const filtered = typeof this.layer.filter === "string" ? !!this.layer.filter : this.layer.filter.enabled && !!this.layer.filter.rules.length;
@@ -167,11 +169,20 @@ export class AnnotationLayerControls {
         }
     }
 
+    /** Describe where a new polygon will be saved and shared without rebuilding controls.
+     * @param {string|null} sessionName Current session name, or null for a local layer.
+     * @return {void}
+     */
+    setSessionName(sessionName) {
+        this.sessionName = sessionName;
+        this.sharing.textContent = sessionName ? `Added to ${this.layer.name} · Shared with ${sessionName}` : "";
+        this.sharing.hidden = !sessionName;
+    }
+
     /** Bring the drawing action into view after the user connects to a session.
      * @return {void}
      */
     revealDrawing() {
-        this.polygons.open = true;
         this.draw.scrollIntoView({ block: "nearest" });
         this.draw.focus({ preventScroll: true });
     }

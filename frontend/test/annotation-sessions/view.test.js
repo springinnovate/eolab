@@ -51,11 +51,12 @@ test("disconnected setup occupies no space until requested and closing retains i
     assert.equal(view.displayName.value, "Maria");
 });
 
-test("connected row hides management and normal messages without hiding errors", () => {
+test("contributors start with collapsed details while errors remain visible", () => {
     const { view, root, entry, snapshot } = setup();
+    snapshot.isOwner = false;
     view.render(snapshot, new Map()); view.message("All sent changes are saved in the session.");
-    assert.equal(root.hidden, false); assert.equal(entry.hidden, true);
-    assert.equal(view.session.open, false); assert.equal(view.heading.textContent, snapshot.name);
+    assert.equal(root.hidden, false); assert.equal(entry.hidden, false);
+    assert.equal(view.session.open, false); assert.equal(view.heading.textContent, `You’re contributing to ${snapshot.name}`);
     assert.equal(view.copy.parentElement, view.inviteActions);
     assert.equal(view.status.parentElement, view.details);
     view.message("Connection interrupted", true);
@@ -95,4 +96,24 @@ test("invitations reveal the workspace and focus the contributor name", () => {
     assert.equal(root.hidden, false); assert.equal(reveals(), 1);
     assert.equal(view.code.value, "ABCDEFGH"); assert.equal(view.joinForm.hidden, false);
     assert.equal(document.activeElement, view.displayName);
+});
+
+test("lead details open initially, but refresh and toolbar respect manual collapse", () => {
+    const { view, entry, snapshot } = setup();
+    view.render(snapshot, new Map());
+    assert.equal(view.session.open, true);
+    assert.equal(view.heading.textContent, `You’re leading ${snapshot.name}`);
+    assert.equal(view.disclosureLabel.textContent, "Collapse session details");
+    view.session.open = false;
+    view.session.dispatchEvent(new Event("toggle"));
+    view.render(snapshot, new Map());
+    assert.equal(view.session.open, false);
+    assert.equal(view.disclosureLabel.textContent, "Session details");
+    assert.equal(entry.attributes.get("aria-expanded"), "false");
+    entry.dispatchEvent(new Event("click"));
+    assert.equal(view.session.open, true);
+    assert.equal(entry.attributes.get("aria-expanded"), "true");
+    entry.dispatchEvent(new Event("click"));
+    assert.equal(view.session.open, false);
+    assert.equal(view.root.hidden, false, "membership stays visible in its compact row");
 });

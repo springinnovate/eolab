@@ -25,18 +25,19 @@ export class SharedAnnotationLayers {
      * Existing layers keep their visibility, drawing order and local label settings.
      * New layers start visible; their read-only details are available from the annotation panel.
      * @param {string} id Session/contributor/layer identifier supplied by composition.
-     * @param {string} label Contributor and layer name to display in Map layers.
+     * @param {string} label Layer name to display in Map layers.
      * @param {Object} collection Received polygon GeoJSON, validated before display.
+     * @param {string} attribution Plain-text contributor and session label supplied by composition.
      * @return {void}
      * @throws {Error} If the GeoJSON is unsupported or the map layer cannot be created.
      */
-    addOrUpdateLayer(id, label, collection) {
+    addOrUpdateLayer(id, label, collection, attribution) {
         const imported = parseAnnotationGeoJSON(JSON.stringify(collection));
         const polygons = imported.polygons.map((polygon, index) => ({ ...polygon, id: String(index) }));
         const retained = this.layers.get(id);
         if (retained) {
-            retained.annotation.polygons = polygons; retained.annotation.name = label; retained.rendering.refresh();
-            this.panel.renameLayer(retained.key, label);
+            retained.presentation.attribution = attribution; retained.annotation.polygons = polygons; retained.annotation.name = label; retained.rendering.refresh();
+            this.panel.renameLayer(retained.key, `${label} — ${attribution}`);
             this.mapLayers.getRecord(retained.key).entry.label = label; this.mapLayers.render(); this.onChange(); return;
         }
         const key = `local:shared-annotation:${id}`;
@@ -59,10 +60,11 @@ export class SharedAnnotationLayers {
             input.addEventListener("change", () => { annotation.style[property] = input.checked; rendering.refresh(); });
             wrapper.append(input, this.document.createTextNode(text)); controls.append(wrapper);
         }
+        const presentation = { attribution };
         const adapter = {
             createState: () => annotation,
             createLayer: () => rendering,
-            snapshot: () => ({ datasetKind: "annotation", typeLabel: "Shared annotation", detailsControl: detailsButton, stylePanelId: "annotations-panel", canFilter: true, legend: null,
+            snapshot: () => ({ datasetKind: "annotation", typeLabel: "Shared annotation", attribution: presentation.attribution, detailsControl: detailsButton, stylePanelId: "annotations-panel", canFilter: true, legend: null,
                 filterActive: annotationFilterRules(annotation.filter).enabled && !!annotationFilterRules(annotation.filter).rules.length,
                 filterStatus: annotationFilterRules(annotation.filter).enabled && annotationFilterRules(annotation.filter).rules.length
                     ? `${matchingAnnotationPolygons(annotation).length} of ${annotation.polygons.length} polygons match` : null }),
@@ -73,8 +75,8 @@ export class SharedAnnotationLayers {
         };
         try {
             this.mapLayers.addLocal({ key, label, visible: true, opacity: 1 }, adapter);
-            this.layers.set(id, { key, annotation, rendering, controls, adapter });
-            this.panel.addLayer(key, label, controls);
+            this.layers.set(id, { key, annotation, rendering, controls, adapter, presentation });
+            this.panel.addLayer(key, `${label} — ${attribution}`, controls);
             this.onChange();
         } catch (error) {
             rendering.release();

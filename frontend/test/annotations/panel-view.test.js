@@ -49,7 +49,7 @@ test("loading and renaming layers never open the panel or replace the editor's f
     document.querySelector("#close-annotations").dispatchEvent(new Event("click"));
     assert.equal(events.at(-1), "close");
     assert.equal(document.activeElement, view.entry);
-    view.entry.dispatchEvent(new Event("click"));
+    view.showLayer("local");
     assert.equal(view.content.children[0], local);
 });
 
@@ -70,7 +70,7 @@ test("removal selects another editor or the empty state without retaining remove
     assert.equal(document.activeElement, document.querySelector("#create-annotation-layer"));
 });
 
-test("closing a panel opened from an invitation focuses the map when Map layers is collapsed", () => {
+test("closing the layer editor focuses the map when Map layers is collapsed", () => {
     const { document, view } = setup();
     view.entry.hidden = true;
     view.show();

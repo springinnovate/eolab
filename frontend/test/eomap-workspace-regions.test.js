@@ -276,7 +276,7 @@ test("Map layers has one heading and collapse control with no nested list widget
     const stack = requireElementRange("raster-layer-stack");
     assert.doesNotMatch(rendering.source, /<h[1-6]\b|workspace-region-heading/);
     assert.match(rendering.source, /aria-labelledby="toggle-map-layers"/);
-    assert.match(rendering.source, /No map layers yet\. Add an item from Catalog or use Annotations to draw on the map\./);
+    assert.match(rendering.source, /No map layers yet\. Add an item from Catalog or create an annotation layer to draw on the map\./);
     assert.match(stack.source, /id="raster-layer-list" aria-label="Map layers"/);
     assert.match(stack.source, /id="raster-layer-stack-status"[^>]*role="status"/s);
     assert.doesNotMatch(stack.source, /aria-expanded|aria-controls/);
@@ -649,13 +649,19 @@ test("compact bulk visibility buttons sit above the map layer list", () => {
     assert.match(STYLESHEET, /\.map-layer-visibility-actions\s*\{[^}]*flex-wrap: wrap/s);
 });
 
-test("annotation tools and help live in their panel, leaving only an entry in Map layers", () => {
+test("session setup is below the toolbar, with layer creation in Map layers and detailed editing on demand", () => {
     const layers = requireElementRange("eomap-map-layers-region");
     const annotations = requireElementRange("annotations-panel");
     const inspection = requireElementRange("map-inspection-panels");
-    assert.match(layers.source, /id="open-annotations"/);
+    const header = requireElementRange("app-header");
+    const sessions = requireElementRange("annotation-sessions");
+    assert.match(header.source, /id="open-annotations"/);
+    assert.ok(sessions.start > header.end && sessions.end < layers.start);
+    assert.doesNotMatch(layers.source, /id="open-annotations"/);
+    assert.match(layers.source, /id="create-annotation-layer"/);
+    assert.match(layers.source, /id="import-annotation-geojson"/);
     assert.ok(annotations.start > inspection.start && annotations.end < inspection.end);
-    for (const id of ["annotation-sessions", "create-annotation-layer", "annotation-save-status", "annotation-panel-content"]) {
+    for (const id of ["annotation-save-status", "annotation-panel-content"]) {
         assert.match(annotations.source, new RegExp(`id="${id}"`));
         assert.doesNotMatch(layers.source, new RegExp(`id="${id}"`));
     }

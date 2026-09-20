@@ -21,10 +21,10 @@ export class AnnotationSessionsController {
      * @param {()=>void} [options.revealSetupEntry] Reveal the setup button when returning from an invitation.
      * @param {()=>void} [options.revealPanel] Reveal the containing workspace after an explicit action or invitation.
      * @param {(name:string)=>string} options.createLayer Add a named local annotation layer and return its identifier.
-     * @param {(id:string)=>void} options.revealLayer Reveal this layer's editor and focus its drawing action after explicit navigation.
+     * @param {(id:string)=>void} options.revealLayer Reveal Map layers and focus this layer's drawing action after explicit navigation.
      * @param {()=>{id:string,collection:Object}[]} options.getLayers Committed, device-saved layers.
      * @param {(id:string,label:string,sessionName?:string)=>void} options.setShareLabel Local sharing status and optional session context.
-     * @param {(key:string,label:string,collection:Object)=>void} options.showLayer Add or update a read-only shared layer on the map.
+     * @param {(key:string,label:string,collection:Object,attribution:string)=>void} options.showLayer Add or update a read-only shared layer with its contributor/session attribution.
      * @param {(keys:Set<string>)=>void} options.retainLayers Keep only these shared layer IDs on the map; remove the other received layers.
      * @param {AnnotationSessionsApi} [options.api] Same-origin API.
      * @param {Storage} [options.storage] Store the active session ID and layer revisions for reload; never credentials or polygons.
@@ -307,8 +307,9 @@ export class AnnotationSessionsController {
                 if (layer.contributorId === snapshot.contributorId && this.getLayers().some(local => local.id === layer.layerId)) continue;
                 const key = `${id}/${layer.contributorId}/${layer.layerId}`; displayed.add(key);
                 const author = snapshot.contributors.find(person => person.id === layer.contributorId);
-                const label = `${author.name} · ${layer.name}`;
-                const presentation = JSON.stringify([layer.revision, label]);
+                const label = layer.name;
+                const attribution = `Shared by ${author.name} · ${snapshot.name}`;
+                const presentation = JSON.stringify([layer.revision, label, attribution]);
                 if (this.visibleContributions.get(key) === presentation) continue;
                 let data;
                 try { data = await this.api.request(`/${id}/contributors/${layer.contributorId}/layers/${layer.layerId}`); }
@@ -319,8 +320,8 @@ export class AnnotationSessionsController {
                     displayed.delete(key); this.visibleContributions.delete(key); continue;
                 }
                 if (generation !== this.generation || this.closed) return;
-                this.showLayer(key, label, data.collection);
-                this.visibleContributions.set(key, JSON.stringify([data.revision, label]));
+                this.showLayer(key, label, data.collection, attribution);
+                this.visibleContributions.set(key, JSON.stringify([data.revision, label, attribution]));
             }
             if (this.refreshError) { this.view.clearError(this.refreshError); this.refreshError = null; }
             this.retainLayers(displayed);
@@ -433,9 +434,10 @@ export class AnnotationSessionsController {
         const data = await this.api.request(`/${sessionId}/contributors/${contributorId}/layers/${layerId}`);
         if (!isCurrent() || generation !== this.generation || this.closed) throw new Error("Layer restoration was superseded.");
         const author = this.snapshot.contributors.find(person => person.id === contributorId);
-        const label = `${author?.name ?? "Contributor"} · ${data.collection.name}`;
-        this.showLayer(key, label, data.collection);
-        this.visibleContributions.set(key, JSON.stringify([data.revision, label]));
+        const label = data.collection.name;
+        const attribution = `Shared by ${author?.name ?? "Contributor"} · ${this.snapshot.name}`;
+        this.showLayer(key, label, data.collection, attribution);
+        this.visibleContributions.set(key, JSON.stringify([data.revision, label, attribution]));
     }
 
     /**

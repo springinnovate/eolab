@@ -173,16 +173,15 @@ test("creating a layer announces its identity before saving, while sharing sees 
 
 test("session guidance updates independently of polygon contents and clears on leave", () => {
     const annotations = controller();
-    const label = { share: {}, sharing: {}, revealDrawing() { this.revealed = true; } };
+    const label = { share: {}, setSessionName(name) { this.sessionName = name; }, revealDrawing() { this.revealed = true; } };
     annotations.controls = new Map([["layer", label]]);
     annotations.setShareLabel("layer", "Shared · Saved", "Watershed planning");
-    assert.equal(label.sharing.textContent, "Shared with Watershed planning");
-    assert.equal(label.sharing.hidden, false);
+    assert.equal(label.sessionName, "Watershed planning");
     annotations.revealDrawing("layer");
     assert.equal(label.revealed, true);
     assert.equal(annotations.model.draft, null);
     annotations.setShareLabel("layer", "Share");
-    assert.equal(label.sharing.hidden, true);
+    assert.equal(label.sessionName, null);
 });
 
 test("successful local saves clear the transient status instead of retaining a success paragraph", async () => {

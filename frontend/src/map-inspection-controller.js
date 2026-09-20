@@ -53,7 +53,7 @@ export class MapInspectionController {
         this.map = documentContext.querySelector("#map");
         this.closeButton = documentContext.querySelector("#close-map-histogram");
         this.tools = [
-            { name: "annotations", label: "Annotations", panel: this.annotations,
+            { name: "annotations", label: "Annotation layer", panel: this.annotations,
                 tab: documentContext.querySelector("#map-inspection-tab-annotations") },
             { name: "calculations", label: "Summarize", panel: this.calculations,
                 tab: documentContext.querySelector("#map-inspection-tab-calculations") },

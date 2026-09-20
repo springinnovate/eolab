@@ -6,10 +6,9 @@
     align-items: center;
 }
 
-#open-annotations { margin-bottom: 0.5rem; font-size: 0.8rem; }
 #annotations-panel { font-size: 0.85rem; }
 #annotations-panel [hidden] { display: none; }
-.annotation-layer-actions { margin: 0.5rem 0; }
+.annotation-layer-actions { margin: 0.5rem 0; font-size: 0.8rem; }
 .annotation-layer-actions button { font-size: inherit; padding: 0.3rem 0.6rem; }
 #annotation-save-status, #annotation-file-status { margin: 0.35rem 0; font-size: 0.8rem; line-height: 1.4; overflow-wrap: anywhere; }
 /* Reserve one compact line while saving, so rapid autosaves do not shift the editor. */
@@ -112,5 +111,7 @@
 .is-inserting-annotation-vertex .annotation-draft-polygon { cursor: crosshair; }
 .is-dragging-annotation, .is-dragging-annotation .annotation-draft-polygon { cursor: grabbing; }
 
-.annotation-sharing-context { margin: 0 0 0.5rem; color: var(--text-3); font-size: 0.85rem; overflow-wrap: anywhere; }
-.annotation-actions .annotation-draw-button { border-color: var(--brand); color: var(--brand); font-weight: 600; }
+.annotation-sharing-context { margin: 0.2rem 0 0; color: var(--text-3); font-size: 0.85rem; overflow-wrap: anywhere; }
+.annotation-drawing-action { grid-column: 2; min-width: 0; }
+.annotation-drawing-action [hidden] { display: none; }
+.annotation-draw-button { font: inherit; font-size: 0.8rem; padding: 0.3rem 0.5rem; border-color: var(--brand); color: var(--brand); font-weight: 600; }

@@ -713,7 +713,10 @@ h5 {
 .raster-layer-row.is-drop-after::after { bottom: -6px; }
 
 .raster-layer-row.is-hidden .raster-layer-name { color: var(--text-3); }
+.map-layer-attribution { grid-column: 2; margin: 0; font-size: 0.75rem; font-weight: 600; color: var(--text-3); overflow-wrap: anywhere; }
+
 .map-layer-primary-row {
+  grid-column: 2;
   min-width: 0;
   display: flex;
   align-items: start;
@@ -758,6 +761,7 @@ h5 {
   margin: 0;
 }
 .map-layer-row-actions {
+  grid-column: 2;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -2219,6 +2223,8 @@ h5 {
     transform 220ms ease,
     opacity 180ms ease;
 }
+
+.panel-heading { min-width: 0; }
 
 .control-panel.is-collapsed {
   pointer-events: none;

@@ -225,7 +225,7 @@ export class AnnotationController {
     attachLayer(layer) {
         const key = `local:annotation:${layer.id}`;
         const controls = new AnnotationLayerControls(this.document, layer, {
-            open: () => this.revealDrawing(layer.id),
+            open: () => this.openControls(key, "info"),
             filter: () => this.onFilter(key),
             add: () => this.beginPolygon(layer.id),
             share: () => this.onShare(layer.id),
@@ -245,7 +245,7 @@ export class AnnotationController {
         const adapter = {
             createState: () => layer,
             createLayer: () => rendering,
-            snapshot: () => ({ datasetKind: "annotation", legend: null, canFilter: true, detailsControl: controls.edit, stylePanelId: "annotations-panel",
+            snapshot: () => ({ datasetKind: "annotation", legend: null, canFilter: true, detailsControl: controls.edit, primaryControl: controls.drawing, stylePanelId: "annotations-panel",
                 filterActive: typeof layer.filter === "string" ? !!layer.filter.trim() : layer.filter.enabled && !!layer.filter.rules.length,
                 filterStatus: (typeof layer.filter === "string" ? layer.filter.trim() : layer.filter.enabled && layer.filter.rules.length)
                     ? `${matchingAnnotationPolygons(layer).length} of ${layer.polygons.length} polygons match` : null }),
@@ -366,15 +366,14 @@ export class AnnotationController {
         const control = this.controls.get(id);
         if (!control) return;
         control.share.textContent = label;
-        control.sharing.textContent = sessionName ? `Shared with ${sessionName}` : "";
-        control.sharing.hidden = !sessionName;
+        control.setSessionName(sessionName);
     }
 
-    /** Reveal a local layer's drawing controls without entering editing mode.
+    /** Focus a local layer's drawing action in Map layers without entering editing mode.
+     * Composition reveals Map layers before calling this method.
      * @param {string} id Local annotation layer identifier. @return {void}
      */
     revealDrawing(id) {
-        this.panel.showLayer(`local:annotation:${id}`);
         this.controls.get(id)?.revealDrawing();
     }
 

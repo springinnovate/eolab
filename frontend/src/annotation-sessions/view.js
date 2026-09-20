@@ -4,13 +4,13 @@ export class AnnotationSessionsView {
      * Build hidden setup forms and a single-row disclosure for connected sessions.
      * @param {HTMLElement} root Annotation session section.
      * @param {Object} actions Session commands and workspace reveal callback supplied by the controller.
-     * @param {HTMLButtonElement} entryButton Setup action mounted in the annotation panel.
+     * @param {HTMLButtonElement} entryButton Permanent Annotations action in the main toolbar.
      */
     constructor(root, actions, entryButton) {
         this.root = root; this.document = root.ownerDocument; this.actions = actions;
         this.entryButton = entryButton; this.sharing = new Map(); this.setupVisible = false;
         this.messageText = ""; this.messageIsError = false;
-        entryButton.addEventListener("click", () => this.showSetupPanel());
+        entryButton.addEventListener("click", () => this.togglePanel());
         this.setup = this.element("div");
         const setupHeading = this.element("div"); setupHeading.className = "annotation-session-setup-heading";
         this.closeSetup = this.button("×", () => this.hideSetupPanel());
@@ -46,7 +46,9 @@ export class AnnotationSessionsView {
         this.indicator.setAttribute("role", "img");
         this.heading = this.element("strong"); this.membership = this.element("span");
         this.copy = this.button("Copy invitation", actions.copy);
-        this.bar.append(this.heading, this.indicator);
+        this.disclosureLabel = this.element("span"); this.disclosureLabel.className = "annotation-session-disclosure-label";
+        this.bar.append(this.heading, this.indicator, this.disclosureLabel);
+        this.session.addEventListener("toggle", () => this.updateDisclosure());
         this.details = this.element("div"); this.details.className = "annotation-session-details";
         this.details.append(this.membership);
         this.invitation = this.element("p"); this.expiry = this.element("p"); this.people = this.element("p");
@@ -68,7 +70,7 @@ export class AnnotationSessionsView {
         this.joiningState = this.element("small"); this.joiningState.setAttribute("aria-hidden", "true");
         this.joiningControl.append(this.allowContributors, this.element("span", "Allow new contributors"), this.joiningState);
         this.layers = this.element("ul"); this.layers.className = "annotation-session-contributions"; this.layerRows = new Map();
-        this.help = this.element("p", "Choose your layer in the annotation panel to draw and edit polygons. New layers and saved edits are shared automatically. Use Share for older local layers; unfinished polygons stay on this device. Leaving or removing a local layer keeps its last shared copy. Use Withdraw to remove that copy.");
+        this.help = this.element("p", "In Map layers, choose Draw a custom polygon on your annotation layer. Use Edit for names, notes and existing polygons. New layers and saved edits are shared automatically. Use Share for older local layers; unfinished polygons stay on this device. Leaving or removing a local layer keeps its last shared copy. Use Withdraw to remove that copy.");
         this.details.append(this.invitation, this.inviteActions, this.profileForm, this.people, this.layers,
             this.show, this.download, this.refresh, this.expiry, this.extend, this.joiningControl, this.leave, this.help);
         this.session.append(this.bar, this.details);
@@ -123,6 +125,21 @@ export class AnnotationSessionsView {
         if (focus) (mode === "create" ? this.sessionName : mode === "join" ? this.code : this.enterCode).focus();
     }
 
+    /** Toggle session setup or details from the permanent toolbar action. @return {void} */
+    togglePanel() {
+        if (this.sessionId) {
+            this.actions.reveal(); this.session.open = !this.session.open; this.updateDisclosure();
+            if (this.session.open) this.bar.focus();
+        } else if (this.setupVisible) this.hideSetupPanel();
+        else this.showSetupPanel();
+    }
+
+    /** Match the visible disclosure prompt and toolbar state to the open panel. @return {void} */
+    updateDisclosure() {
+        this.disclosureLabel.textContent = this.session.open ? "Collapse session details" : "Session details";
+        this.entryButton.setAttribute("aria-expanded", String(this.sessionId ? this.session.open : this.setupVisible));
+    }
+
     /** Reveal connection choices after an explicit setup or sharing action. @return {void} */
     showSetupPanel() {
         this.actions.reveal(); this.setupVisible = true; this.updateStatus();
@@ -140,7 +157,7 @@ export class AnnotationSessionsView {
     showInvitation(code) { this.showSetupPanel(); this.code.value = code; this.showSetup("join", false); this.displayName.focus(); }
 
     /** Reveal session management following an explicit sharing action. @return {void} */
-    showDetails() { this.actions.reveal(); this.session.open = true; this.bar.focus(); }
+    showDetails() { this.actions.reveal(); this.session.open = true; this.updateDisclosure(); this.bar.focus(); }
 
     /** @param {Object[]} sessions Browser's unexpired memberships. @return {void} */
     memberships(sessions) {
@@ -185,8 +202,8 @@ export class AnnotationSessionsView {
         this.status.classList.toggle("is-error", !!problem);
         this.setup.hidden = !!this.sessionId || !this.setupVisible;
         this.root.hidden = !this.sessionId && !this.setupVisible && !problem;
-        this.entryButton.hidden = !!this.sessionId;
-        this.entryButton.setAttribute("aria-expanded", String(this.setupVisible && !this.sessionId));
+        this.entryButton.hidden = false;
+        this.updateDisclosure();
     }
 
     /** @param {boolean} busy Whether membership is changing. @return {void} */
@@ -209,18 +226,22 @@ export class AnnotationSessionsView {
      */
     nameSaved(name) { this.profileDirty = false; this.profileName.value = name; }
 
-    /** Update membership and contribution rows without expanding details or replacing forms.
+    /** Update membership and contribution rows, initially expanding details for the session lead.
+     * Later refreshes preserve the user's disclosure choice and unfinished form inputs.
      * @param {Object|null} snapshot Authoritative metadata snapshot.
      * @param {Map<string,Object>} sharing Local upload state by layer identifier. @return {void}
      */
     render(snapshot, sharing) {
         this.sharing = sharing; this.session.hidden = !snapshot;
         if (this.sessionId !== snapshot?.id) {
-            this.session.open = false; this.profileDirty = false; this.setupVisible = false;
+            this.session.open = !!snapshot?.isOwner; this.profileDirty = false; this.setupVisible = false;
             if (!snapshot) this.showSetup("choose", false);
         }
         this.sessionId = snapshot?.id;
-        if (snapshot) { this.heading.textContent = snapshot.name; this.heading.title = snapshot.name; }
+        if (snapshot) {
+            this.heading.textContent = `${snapshot.isOwner ? "You’re leading" : "You’re contributing to"} ${snapshot.name}`;
+            this.heading.title = this.heading.textContent;
+        }
         this.updateStatus();
         if (!snapshot) { this.layers.replaceChildren(); this.layerRows.clear(); return; }
         const member = snapshot.contributors.find(person => person.id === snapshot.contributorId);

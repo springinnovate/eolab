@@ -1,7 +1,7 @@
 /** Present annotation tools in one map-side panel instead of inside layer rows. */
 export class AnnotationPanelView {
     /**
-     * Connect the panel's layer selector, entry button and close action.
+     * Connect the layer editor's selector and close action.
      * Layer owners supply their retained controls; this view never edits polygon data.
      * @param {Object} options Presentation dependencies.
      * @param {Document} options.document Browser document.
@@ -13,12 +13,11 @@ export class AnnotationPanelView {
         this.onOpen = onOpen;
         this.layers = new Map();
         this.selectedKey = null;
-        this.entry = document.querySelector("#open-annotations");
+        this.entry = document.querySelector("#create-annotation-layer");
         this.selector = document.querySelector("#annotation-panel-layer");
         this.layerField = document.querySelector("#annotation-panel-layer-field");
         this.content = document.querySelector("#annotation-panel-content");
         this.empty = document.querySelector("#annotation-panel-empty");
-        this.entry.addEventListener("click", () => this.show());
         this.selector.addEventListener("change", () => this.showLayer(this.selector.value));
         document.querySelector("#close-annotations").addEventListener("click", () => {
             onClose();

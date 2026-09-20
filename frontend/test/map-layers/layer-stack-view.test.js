@@ -50,6 +50,9 @@ class FakeLayerStackElement extends EventTarget {
     };
   }
 
+  /** @param {FakeLayerStackElement|null} node Possible descendant. @return {boolean} Whether this subtree contains it. */
+  contains(node) { return node === this || this.children.some(child => child.contains(node)); }
+
   /** Space-separated CSS classes, kept in sync with classList. */
   get className() {
     return [...this._classNames].join(" ");
@@ -906,4 +909,21 @@ test("layer types and owner style targets distinguish annotations without embedd
     assert.equal(elementsByClass(row, "map-layer-type")[0].textContent, "Shared annotation");
     assert.match(row.getAttribute("aria-label"), /shared annotation layer/);
     assert.equal(actionControl(row, "style").getAttribute("aria-controls"), "annotations-panel");
+});
+
+test("layer provenance precedes its title and its primary action retains focus", () => {
+  const documentContext = new FakeLayerStackDocument();
+  const view = new MapLayerStackView(documentContext);
+  const primaryControl = documentContext.createElement("div");
+  const draw = documentContext.createElement("button"); primaryControl.append(draw);
+  const layer = { ...LAYERS[0], attribution: "Shared by Maria · Watersheds", primaryControl };
+  view.render([layer], null);
+  const row = documentContext.querySelector("#raster-layer-list").children[0];
+  const attribution = elementsByClass(row, "map-layer-attribution")[0];
+  const primary = elementsByClass(row, "map-layer-primary-row")[0];
+  assert.equal(attribution.textContent, layer.attribution);
+  assert.ok(row.children.indexOf(attribution) < row.children.indexOf(primary));
+  assert.ok(row.children.includes(primaryControl));
+  draw.focus(); view.render([layer], null);
+  assert.equal(documentContext.activeElement, draw);
 });

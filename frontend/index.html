@@ -22,6 +22,7 @@
         id="control-panel"
         aria-label="CONTROL LABEL TO BE SET BY CONFIGURATION"
       >
+        <div class="panel-heading">
         <header class="panel-header" id="app-header">
           <div class="panel-identity">
             <h1 id="app-title">TITLE TO BE SET BY CONFIGURATION</h1>
@@ -73,6 +74,11 @@
               </svg>
               <span class="panel-header-action-label" id="copy-map-link-label">Copy map link</span>
             </button>
+            <button class="secondary-button" id="open-annotations" type="button"
+              aria-controls="annotation-sessions" aria-expanded="false" title="Annotation sessions">
+              <svg class="panel-header-action-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m4 16 12-12 4 4-12 12H4zM13 7l4 4"></path></svg>
+              <span class="panel-header-action-label">Annotations</span>
+            </button>
             <button
               class="secondary-button"
               id="toggle-operational-status"
@@ -100,6 +106,8 @@
             </button>
           </div>
         </header>
+        <section id="annotation-sessions" class="annotation-sessions" aria-label="Annotation session" hidden></section>
+        </div>
 
         <section
           class="eomap-workspace-region operational-status-region"
@@ -432,7 +440,11 @@
                       id="eomap-map-layers-body"
                       aria-hidden="false"
                     >
-                    <button id="open-annotations" class="secondary-button" type="button" aria-controls="annotations-panel">Annotations…</button>
+                    <div class="annotation-layer-actions">
+                      <button class="secondary-button" id="create-annotation-layer" type="button" disabled>Create annotation layer</button>
+                      <button class="secondary-button" id="import-annotation-geojson" type="button" disabled>Import GeoJSON</button>
+                      <input id="annotation-geojson-file" type="file" accept=".geojson,.json,application/geo+json,application/json" aria-label="Import annotation GeoJSON file" hidden>
+                    </div>
                     <div class="map-layer-visibility-actions" role="group" aria-label="Map layer visibility">
                       <button class="secondary-button" id="map-layers-show-all" type="button" aria-label="Show all map layers" disabled>Show all</button>
                       <button class="secondary-button" id="map-layers-hide-all" type="button" aria-label="Hide all map layers" disabled>Hide all</button>
@@ -451,7 +463,7 @@
                     ></p>
                     </section>
                     <p class="map-layers-empty-state">
-                      No map layers yet. Add an item from Catalog or use Annotations to draw on the map.
+                      No map layers yet. Add an item from Catalog or create an annotation layer to draw on the map.
                     </p>
                     <div
                       class="raster-layer-stack"
@@ -570,7 +582,7 @@
           </section>
           <div id="map-inspection-tabs" class="map-inspection-tabs" role="tablist" hidden
             aria-label="Open map tools">
-            <button id="map-inspection-tab-annotations" class="map-inspection-tab" type="button" role="tab" aria-controls="annotations-panel" aria-selected="false" tabindex="-1" hidden>Annotations</button>
+            <button id="map-inspection-tab-annotations" class="map-inspection-tab" type="button" role="tab" aria-controls="annotations-panel" aria-selected="false" tabindex="-1" hidden>Annotation layer</button>
             <button id="map-inspection-tab-calculations" class="map-inspection-tab" type="button" role="tab" aria-controls="calculations-panel" aria-selected="false" tabindex="-1" hidden>Summarize</button>
             <button id="map-inspection-tab-downloads" class="map-inspection-tab"
               type="button" role="tab" aria-controls="downloads-panel"
@@ -597,19 +609,14 @@
         </header>
         <div id="map-inspection-panels" class="map-inspection-panels">
           <section id="annotations-panel" role="tabpanel" aria-labelledby="map-inspection-tab-annotations" hidden>
-            <header class="map-histogram-toolbar"><h2>Annotations</h2><button id="close-annotations" class="secondary-button" type="button" aria-label="Close annotations">&times;</button></header>
-            <section id="annotation-sessions" class="annotation-sessions" aria-label="Annotation session" hidden></section>
+            <header class="map-histogram-toolbar"><h2>Annotation layer</h2><button id="close-annotations" class="secondary-button" type="button" aria-label="Close annotations">&times;</button></header>
             <div class="annotation-layer-actions">
-              <button class="secondary-button" id="create-annotation-layer" type="button" disabled>Create layer</button>
-              <button class="secondary-button" id="import-annotation-geojson" type="button" disabled>Import GeoJSON</button>
-              <button class="secondary-button" id="open-annotation-session" type="button" aria-controls="annotation-sessions" aria-expanded="false">Annotation session…</button>
-              <input id="annotation-geojson-file" type="file" accept=".geojson,.json,application/geo+json,application/json" aria-label="Import annotation GeoJSON file" hidden>
               <button class="secondary-button" id="undo-annotation-delete" type="button" hidden>Undo deletion</button>
               <button class="secondary-button" id="retry-annotation-save" type="button" hidden>Retry saving</button>
             </div>
             <p id="annotation-save-status" role="status" aria-live="polite">Opening local annotations…</p>
             <p id="annotation-file-status" role="status" aria-live="polite"></p>
-            <p id="annotation-panel-empty">Create a layer to draw polygons, import a GeoJSON file, or join an annotation session.</p>
+            <p id="annotation-panel-empty">Choose an annotation layer in Map layers to edit its polygons, names and notes.</p>
             <label id="annotation-panel-layer-field" class="annotation-field" hidden><span>Layer</span><select id="annotation-panel-layer"></select></label>
             <div id="annotation-panel-content"></div>
             <details class="annotation-help"><summary>Help</summary>

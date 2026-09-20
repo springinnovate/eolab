@@ -1,11 +1,12 @@
-.annotation-sessions { min-width: 0; margin: 0 0 0.65rem; padding: 0.4rem 0.5rem; border: 1px solid var(--border-2); border-radius: 0.35rem; background: var(--surface-2); font-size: 0.85rem; }
+.annotation-sessions { min-width: 0; margin: 0 0.65rem 0.5rem; padding: 0.4rem 0.5rem; border: 1px solid var(--border-2); border-radius: 0.35rem; background: var(--surface-2); font-size: 0.85rem; }
 .annotation-sessions[hidden] { display: none; }
 .annotation-sessions summary { cursor: pointer; font-weight: 600; }
-.annotation-session-bar { display: flex; align-items: center; gap: 0.5rem; min-width: 0; list-style: none; }
+.annotation-session-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; min-width: 0; list-style: none; }
 .annotation-session-bar::-webkit-details-marker { display: none; }
 .annotation-session-bar::before { content: ""; width: 0.4rem; height: 0.4rem; flex: none; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: rotate(-45deg); }
 .annotation-sessions > details[open] > .annotation-session-bar::before { transform: rotate(45deg); }
-.annotation-session-bar > strong { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.annotation-session-bar > strong { flex: 1 1 75%; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.annotation-session-disclosure-label { margin-left: 0.9rem; font-size: 0.75rem; color: var(--brand); }
 .annotation-session-indicator { flex: none; color: var(--text-3); }
 .annotation-session-indicator.is-error { color: #a51e19; }
 .annotation-session-details { margin-top: 0.65rem; max-height: min(45dvh, 27rem); overflow: auto; }

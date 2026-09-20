@@ -151,7 +151,7 @@ export class MapLayerStackView {
     /**
      * Render all retained rows from topmost to bottommost.
      *
-     * @param {Array<Object>} layers Layer snapshots. Optional detailsControl replaces Info with a retained owner-supplied HTMLElement; typeLabel describes origin and stylePanelId identifies the owning style panel.
+     * @param {Array<Object>} layers Layer snapshots. Optional detailsControl replaces Info with a retained owner-supplied HTMLElement; primaryControl supplies a retained main action, attribution describes provenance above the title, typeLabel describes origin and stylePanelId identifies the owning style panel.
      * @param {string|null} activeKey Active layer key.
      * @param {{key:string,action:string}|null} [requestedFocus=null] Optional
      * focus target after a reorder or removal.
@@ -169,7 +169,7 @@ export class MapLayerStackView {
         }
         const focusedControl = this.documentContext.activeElement;
         const retainRemovalFocus = !this.removalNotice.hidden && [this.undoRemove, this.dismissRemoval].includes(focusedControl);
-        const retainLocalFocus = !requestedFocus && layers.some(layer => layer.controls?.contains(focusedControl) || layer.detailsControl === focusedControl);
+        const retainLocalFocus = !requestedFocus && layers.some(layer => layer.controls?.contains(focusedControl) || layer.primaryControl?.contains(focusedControl) || layer.detailsControl === focusedControl);
         const retainedFocus = requestedFocus ?? this.#readFocusedAction();
         const focusTargets = new Map();
         const rows = layers.map((layer, index) => this.#buildRow(
@@ -428,7 +428,16 @@ export class MapLayerStackView {
             copyStyle,
             pasteStyle
         );
-        row.append(reorder, primary, rowActions);
+        row.append(reorder);
+        if (layer.attribution) {
+            const attribution = this.documentContext.createElement("p");
+            attribution.className = "map-layer-attribution";
+            attribution.textContent = layer.attribution;
+            row.append(attribution);
+        }
+        row.append(primary);
+        if (layer.primaryControl) row.append(layer.primaryControl);
+        row.append(rowActions);
         if (layer.filterStatus) {
             const filterStatus = this.#button(
                 layer.filterStatus, `Edit filter for ${accessibleName}: ${layer.filterStatus}`,

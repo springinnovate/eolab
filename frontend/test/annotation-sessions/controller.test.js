@@ -298,7 +298,8 @@ test("a contributor name change updates an already displayed shared layer", asyn
     await controller.refreshSession();
     metadata.contributors[1].name = "Rosa";
     await controller.refreshSession();
-    assert.equal(events.filter(event => event[0] === "show").at(-1)[2], "Rosa · Areas");
+    assert.equal(events.filter(event => event[0] === "show").at(-1)[2], "Areas");
+    assert.equal(events.filter(event => event[0] === "show").at(-1)[4], "Shared by Rosa · Session");
     controller.destroy();
 });
 
