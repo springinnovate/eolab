@@ -529,29 +529,74 @@ export class VectorFeatureInspectorController {
     }
 
     /**
-     * Project the Leaflet map click into the neutral WMS viewport contract.
+     * Describe the map bounds and click in the same projection for WMS picking.
+     *
+     * Convert world pixels directly to CRS coordinates so a zoomed-out viewport
+     * extending beyond the projection's latitude limits is not clamped.
      *
      * @param {{x:number,y:number}} containerPoint Click position in map pixels.
-     * @return {{bbox:number[],width:number,height:number,x:number,y:number}}
-     * Current WGS 84 viewport and click position.
+     * @return {import("./feature-info.js").VectorFeatureInfoViewport}
+     * Projected viewport bounds, CRS code, and click position in viewport pixels.
      */
     mapViewport(containerPoint) {
         const size = this.map.getSize();
-        const bounds = this.map.getBounds();
-        const southwest = bounds.getSouthWest();
-        const northeast = bounds.getNorthEast();
+        const pixelBounds = this.map.getPixelBounds();
+        const crs = this.map.options.crs;
+        const scale = crs.scale(this.map.getZoom());
+        const northwest = crs.transformation.untransform(pixelBounds.min, scale);
+        const southeast = crs.transformation.untransform(pixelBounds.max, scale);
         return {
+            crs: crs.code,
             bbox: [
-                southwest.lng,
-                southwest.lat,
-                northeast.lng,
-                northeast.lat,
+                northwest.x,
+                southeast.y,
+                southeast.x,
+                northwest.y,
             ],
             width: size.x,
             height: size.y,
             x: containerPoint.x,
             y: containerPoint.y,
         };
+    }
+
+    /**
+     * Convert optional WMS result geometry from the map CRS to longitude/latitude.
+     *
+     * Attribute-only requests normally return null geometry. Layers without
+     * attributes can return geometry in the requested CRS; focus and GeoJSON
+     * highlighting still need geographic coordinates. Preserve nesting and altitude.
+     *
+     * @param {Object} feature Feature returned by GetFeatureInfo in the map CRS.
+     * @return {Object} Feature with geographic geometry, or the unchanged
+     * attribute-only feature.
+     */
+    featureWithGeographicGeometry(feature) {
+        if (!feature.geometry) return feature;
+        const geometry = structuredClone(feature.geometry);
+        const geometries = [geometry];
+        const coordinates = [];
+        while (geometries.length > 0) {
+            const current = geometries.pop();
+            if (Array.isArray(current?.geometries)) {
+                for (const child of current.geometries) geometries.push(child);
+            } else if (Array.isArray(current?.coordinates)) {
+                coordinates.push(current.coordinates);
+            }
+        }
+        while (coordinates.length > 0) {
+            const current = coordinates.pop();
+            if (Number.isFinite(current[0]) && Number.isFinite(current[1])) {
+                const geographic = this.map.options.crs.unproject({ x: current[0], y: current[1] });
+                current[0] = geographic.lng;
+                current[1] = geographic.lat;
+            } else {
+                for (const child of current) {
+                    if (Array.isArray(child)) coordinates.push(child);
+                }
+            }
+        }
+        return { ...feature, geometry };
     }
 
     /**
@@ -631,7 +676,7 @@ export class VectorFeatureInspectorController {
                     signal: abortController.signal,
                 }, this.fetchImplementation);
                 results = features.map((feature) => ({
-                    feature,
+                    feature: this.featureWithGeographicGeometry(feature),
                     target,
                     inspectionPosition: Object.freeze({
                         lng: event.latlng.lng,

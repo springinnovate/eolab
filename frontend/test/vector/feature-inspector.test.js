@@ -9,6 +9,14 @@ import {
 } from "../../src/vector/feature-inspector.js";
 import { FakeRasterControlDocument } from "../../test-support/raster/fake-controls-document.js";
 
+/**
+ * Create an inspector with a controllable map and recorded UI callbacks.
+ *
+ * @param {typeof fetch} fetchImplementation Stub for feature-info responses.
+ * @param {Object} [options] Test clock options.
+ * @param {function():number} [options.now] Monotonic test clock.
+ * @return {Object} Inspector, map, targets, and recorded UI changes.
+ */
 function createFixture(fetchImplementation, { now = () => 0 } = {}) {
   const documentContext = new FakeRasterControlDocument();
   const documentEvents = new EventTarget();
@@ -34,7 +42,15 @@ function createFixture(fetchImplementation, { now = () => 0 } = {}) {
   const removedLayers = [];
   const mapContainer = documentContext.createElement();
   const leafletMap = {
-    options: { crs: { project: ({ lat, lng }) => ({ x: lng, y: lat }) } },
+    options: { crs: {
+      code: "EPSG:4326",
+      project: ({ lat, lng }) => ({ x: lng, y: lat }),
+      unproject: ({ x, y }) => ({ lng: x, lat: y }),
+      scale: () => 1,
+      transformation: { untransform: ({ x, y }) => ({ x: x / 80, y: 10 - y / 60 }) },
+    } },
+    getZoom: () => 0,
+    getPixelBounds: () => ({ min: { x: 0, y: 0 }, max: { x: 800, y: 600 } }),
     getSize: () => ({ x: 800, y: 600 }),
     getBounds: () => ({
       getSouthWest: () => ({ lat: 0, lng: 0 }),
@@ -112,6 +128,7 @@ function createFixture(fetchImplementation, { now = () => 0 } = {}) {
   });
   return {
     controller,
+    leafletMap,
     documentContext,
     targets,
     handlers,
@@ -136,6 +153,89 @@ function inspectionEvent(x, y, longitude = 5, latitude = 5) {
     containerPoint: { x, y },
   };
 }
+
+test("feature queries keep the clicked location across Mercator zooms and map sizes", async () => {
+  const circumference = 2 * Math.PI * 6378137;
+  const h = createFixture(async (request) => {
+    requests.push(new URL(request, "https://viewer.test"));
+    return { ok: true, json: async () => ({ type: "FeatureCollection", features: [] }) };
+  });
+  const requests = [];
+  h.targets[0].bbox = [-180, -85, 180, 85];
+  h.leafletMap.options.crs = {
+    code: "EPSG:3857",
+    scale: (zoom) => 256 * 2 ** zoom,
+    transformation: {
+      untransform: ({ x, y }, scale) => ({
+        x: (x / scale - 0.5) * circumference,
+        y: (0.5 - y / scale) * circumference,
+      }),
+    },
+  };
+  for (const zoom of [0, 3, 8]) {
+    for (const [width, height] of [[842, 688], [1256, 688], [4096, 2160]]) {
+      for (const latitude of [53.01478324585926, 0, -55]) {
+        const longitude = -107.872;
+        const scale = 256 * 2 ** zoom;
+        const expectedX = longitude / 360 * circumference;
+        const expectedY = 6378137 * Math.log(Math.tan(Math.PI / 4 + latitude * Math.PI / 360));
+        const click = { x: width * 0.2, y: height * 0.25 };
+        const min = {
+          x: (expectedX / circumference + 0.5) * scale - click.x,
+          y: (0.5 - expectedY / circumference) * scale - click.y,
+        };
+        h.leafletMap.getZoom = () => zoom;
+        h.leafletMap.getSize = () => ({ x: width, y: height });
+        h.leafletMap.getPixelBounds = () => ({
+          min, max: { x: min.x + width, y: min.y + height },
+        });
+        await h.controller.inspect(inspectionEvent(click.x, click.y, longitude, latitude));
+        const parameters = requests.at(-1).searchParams;
+        assert.equal(parameters.get("srs"), "EPSG:3857");
+        const [west, south, east, north] = parameters.get("bbox").split(",").map(Number);
+        const pixelWidth = (east - west) / Number(parameters.get("width"));
+        const pixelHeight = (north - south) / Number(parameters.get("height"));
+        const queryX = west + Number(parameters.get("x")) * pixelWidth;
+        const queryY = north - Number(parameters.get("y")) * pixelHeight;
+        // Integer WMS pixels and the existing large-display cap can round the click.
+        assert.ok(Math.abs(queryX - expectedX) <= pixelWidth, `x at zoom ${zoom}`);
+        assert.ok(Math.abs(queryY - expectedY) <= pixelHeight, `y at zoom ${zoom}, latitude ${latitude}`);
+        assert.equal(h.controller.results.length, 0);
+      }
+    }
+  }
+  assert.equal(requests.length, 27);
+});
+
+test("projected WMS geometry retains geographic feature focus and fallback highlighting", async () => {
+  const feature = {
+    type: "Feature", properties: {},
+    geometry: { type: "GeometryCollection", geometries: [
+      { type: "Point", coordinates: [-12022505, 7170156, 12] },
+      { type: "Polygon", coordinates: [[[-12022505, 7170156], [-11911185, 7170156],
+        [-11911185, 7361866], [-12022505, 7170156]]] },
+    ] },
+  };
+  const original = structuredClone(feature);
+  const h = createFixture(async () => ({
+    ok: true, json: async () => ({ type: "FeatureCollection", features: [feature] }),
+  }));
+  h.targets[0].propertyNames = [];
+  h.leafletMap.options.crs.unproject = ({ x, y }) => ({
+    lng: x / 6378137 * 180 / Math.PI,
+    lat: (2 * Math.atan(Math.exp(y / 6378137)) - Math.PI / 2) * 180 / Math.PI,
+  });
+  await h.controller.inspect(inspectionEvent(10, 20));
+  const highlighted = h.highlights[0].feature;
+  const [longitude, latitude, altitude] = highlighted.geometry.geometries[0].coordinates;
+  assert.ok(Math.abs(longitude + 108) < 0.001);
+  assert.ok(Math.abs(latitude - 54) < 0.001);
+  assert.equal(altitude, 12);
+  assert.deepEqual(feature, original);
+  const bounds = h.currentObservationChanges.at(-1).focus.bounds;
+  assert.ok(Math.abs(bounds[0] + 108) < 0.001);
+  assert.ok(Math.abs(bounds[3] - 55) < 0.001);
+});
 
 test("attribute formatting is bounded and excludes the geometry field", () => {
   assert.equal(formatVectorFeatureAttribute(null), "No value");
