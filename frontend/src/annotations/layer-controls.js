@@ -1,4 +1,4 @@
-/** Inline annotation controls hosted by the existing map-layer list. */
+/** Retained editing controls displayed in the annotation panel. */
 import { matchingAnnotationPolygons } from "./model.js";
 
 /** Present one local annotation layer and forward edits to its owner. */
@@ -7,7 +7,16 @@ export class AnnotationLayerControls {
      * Build stable layer controls; notes and names are always plain text.
      * @param {Document} document Browser document.
      * @param {import("./model.js").AnnotationLayer} layer Annotation data.
-     * @param {Object} actions Named callbacks: add, edit, filter, removePolygon, change, opacity, exportGeoJSON, share.
+     * @param {Object} actions Editing intents handled by the layer owner.
+     * @param {()=>void} actions.open Reveal this layer in the annotation panel.
+     * @param {()=>void} actions.add Start drawing a polygon.
+     * @param {(id:string)=>void} actions.edit Edit a saved polygon.
+     * @param {()=>void} actions.filter Open the layer filter.
+     * @param {(id:string)=>void} actions.removePolygon Delete a polygon with Undo.
+     * @param {(rebuild?:boolean)=>void} actions.change Save changed fields and update the map.
+     * @param {(opacity:number)=>void} actions.opacity Set the whole layer's opacity.
+     * @param {()=>void} actions.exportGeoJSON Download the saved polygons.
+     * @param {()=>void} actions.share Share this layer in a session.
      */
     constructor(document, layer, actions) {
         this.document = document;
@@ -22,13 +31,15 @@ export class AnnotationLayerControls {
         this.root.append(this.name);
         const buttons = document.createElement("div");
         buttons.className = "annotation-actions";
+        this.edit = this.button("Edit", actions.open);
+        this.edit.setAttribute("aria-controls", "annotations-panel");
         this.draw = this.button("Draw polygon", actions.add);
         this.draw.className = "annotation-draw-button";
         this.sharing = document.createElement("p"); this.sharing.className = "annotation-sharing-context"; this.sharing.hidden = true;
         this.root.prepend(this.sharing);
         this.share = this.button("Share", actions.share);
         this.share.title = "Share this layer's saved polygons, names and notes in an annotation session.";
-        buttons.append(this.share);
+        buttons.append(this.draw, this.share);
         const exportButton = this.button("Export GeoJSON", actions.exportGeoJSON);
         exportButton.title = "Download all saved polygons, names and notes in this layer, including filtered-out polygons. Save unfinished edits first to include them.";
         buttons.append(exportButton);
@@ -198,7 +209,7 @@ export class AnnotationLayerControls {
     }
 
     /**
-     * Reveal a requested layer control in place, without opening another panel.
+     * Expand and focus a requested control after the owner reveals this layer in the annotation panel.
      * @param {"style"|"filter"|"info"} control Requested control.
      * @return {void}
      */

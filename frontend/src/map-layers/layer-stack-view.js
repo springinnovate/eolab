@@ -151,7 +151,7 @@ export class MapLayerStackView {
     /**
      * Render all retained rows from topmost to bottommost.
      *
-     * @param {Array<Object>} layers Layer snapshots; optional primaryControl is an owner-supplied HTMLElement retained across renders.
+     * @param {Array<Object>} layers Layer snapshots. Optional detailsControl replaces Info with a retained owner-supplied HTMLElement; typeLabel describes origin and stylePanelId identifies the owning style panel.
      * @param {string|null} activeKey Active layer key.
      * @param {{key:string,action:string}|null} [requestedFocus=null] Optional
      * focus target after a reorder or removal.
@@ -169,7 +169,7 @@ export class MapLayerStackView {
         }
         const focusedControl = this.documentContext.activeElement;
         const retainRemovalFocus = !this.removalNotice.hidden && [this.undoRemove, this.dismissRemoval].includes(focusedControl);
-        const retainLocalFocus = !requestedFocus && layers.some(layer => layer.controls?.contains(focusedControl) || layer.primaryControl === focusedControl);
+        const retainLocalFocus = !requestedFocus && layers.some(layer => layer.controls?.contains(focusedControl) || layer.detailsControl === focusedControl);
         const retainedFocus = requestedFocus ?? this.#readFocusedAction();
         const focusTargets = new Map();
         const rows = layers.map((layer, index) => this.#buildRow(
@@ -292,8 +292,9 @@ export class MapLayerStackView {
         activeKey,
         focusTargets
     ) {
+        const typeLabel = layer.typeLabel ?? ({ raster: "Raster", vector: "Vector", annotation: "Annotation" }[layer.datasetKind] ?? "Layer");
         const accessibleName = layer.item === null
-            ? `${layer.label}; local annotation layer`
+            ? `${layer.label}; ${typeLabel.toLowerCase()} layer`
             : `${layer.label}; Catalog Item ${layer.item.collection} / ${layer.item.id}`;
         const row = this.documentContext.createElement("li");
         row.className = "raster-layer-row";
@@ -340,12 +341,16 @@ export class MapLayerStackView {
         }
         const primary = this.documentContext.createElement("div");
         primary.className = "map-layer-primary-row";
-        primary.append(label);
+        const type = this.documentContext.createElement("span");
+        type.className = "map-layer-type";
+        type.textContent = typeLabel;
+        primary.append(label, type);
         const style = this.#button(
             "Style", `Style ${accessibleName}`, layer.key, "style",
             () => this.handlers?.onStyle(layer.key), focusTargets
         );
-        if (!layer.controls) {
+        if (layer.stylePanelId) style.setAttribute("aria-controls", layer.stylePanelId);
+        else if (!layer.controls) {
             style.setAttribute("aria-haspopup", "dialog");
             style.setAttribute("aria-controls", "layer-style-editor");
         }
@@ -354,11 +359,11 @@ export class MapLayerStackView {
             () => this.handlers?.onZoom(layer.key), focusTargets
         );
         zoom.title = `Zoom to ${layer.label}`;
-        const info = this.#button(
+        const info = layer.detailsControl ? null : this.#button(
             "Info", `View details for ${accessibleName}`, layer.key, "info",
             () => this.handlers?.onInfo(layer.key), focusTargets
         );
-        info.title = `View details for ${layer.label}`;
+        if (info) info.title = `View details for ${layer.label}`;
         const clipboard = layer.styleClipboard ?? {
             canCopy: false,
             canPaste: false,
@@ -399,15 +404,16 @@ export class MapLayerStackView {
         );
         remove.classList.add("map-layer-remove-button");
         remove.title = `Remove from map: ${layer.label}`;
+        primary.append(remove);
         const rowActions = this.documentContext.createElement("div");
         rowActions.className = "map-layer-row-actions";
         const filterActions = layer.canFilter ? [this.#button(
             layer.filterActive ? "Filter ●" : "Filter", `Filter ${accessibleName}`,
             layer.key, "filter", () => this.handlers?.onFilter?.(layer.key), focusTargets,
         )] : [];
-        // Optional owner-supplied control remains visible outside detailed layer controls.
+        // Local editors supply their own Edit/Details action instead of the catalog Info action.
         rowActions.append(
-            ...(layer.primaryControl ? [layer.primaryControl] : []),
+            ...(layer.detailsControl ? [layer.detailsControl] : []),
             style,
             ...filterActions,
             ...(layer.datasetKind === "raster" ? [this.#button(
@@ -418,10 +424,9 @@ export class MapLayerStackView {
                 "calculate", () => this.handlers?.onCalculate?.(layer.key), focusTargets,
             )] : []),
             zoom,
-            info,
+            ...(!layer.detailsControl ? [info] : []),
             copyStyle,
-            pasteStyle,
-            remove
+            pasteStyle
         );
         row.append(reorder, primary, rowActions);
         if (layer.filterStatus) {

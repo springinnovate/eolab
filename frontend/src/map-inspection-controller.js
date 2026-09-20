@@ -33,6 +33,7 @@ export class MapInspectionController {
         this.filter = documentContext.querySelector("#vector-filter-panel");
         this.downloads = documentContext.querySelector("#downloads-panel");
         this.calculations = documentContext.querySelector("#calculations-panel");
+        this.annotations = documentContext.querySelector("#annotations-panel");
         this.feature = documentContext.querySelector("#vector-feature-inspector");
         this.featureDetails = documentContext.querySelector(
             "#vector-feature-inspector-details"
@@ -52,6 +53,8 @@ export class MapInspectionController {
         this.map = documentContext.querySelector("#map");
         this.closeButton = documentContext.querySelector("#close-map-histogram");
         this.tools = [
+            { name: "annotations", label: "Annotations", panel: this.annotations,
+                tab: documentContext.querySelector("#map-inspection-tab-annotations") },
             { name: "calculations", label: "Summarize", panel: this.calculations,
                 tab: documentContext.querySelector("#map-inspection-tab-calculations") },
             {
@@ -194,6 +197,12 @@ export class MapInspectionController {
         this.#setToolLabel("filter", `Filter · ${layerLabel}`, `Filter ${layerLabel}`);
         this.#showTool("filter");
     }
+
+    /** Reveal annotation tools without changing other tools or their data. @return {void} */
+    showAnnotations() { this.#showTool("annotations"); }
+
+    /** Close annotation tools while retaining their controls. @return {void} */
+    hideAnnotations() { this.#hideTool("annotations"); }
 
     /** Reveal calculations independently of peer tools. @return {void} */
     showCalculations() { this.#showTool("calculations"); }
@@ -705,6 +714,7 @@ export class MapInspectionController {
         this.filter.hidden = true;
         this.downloads.hidden = true;
         this.calculations.hidden = true;
+        this.annotations.hidden = true;
         this.feature.hidden = true;
         this.vectorTimeSeries.hidden = true;
         this.vectorFeatureProfile.hidden = true;

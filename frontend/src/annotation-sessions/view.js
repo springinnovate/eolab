@@ -1,10 +1,10 @@
-/** Session setup and management; polygon editing stays in Map layers. */
+/** Session setup and management; polygon editing remains owned by Annotations. */
 export class AnnotationSessionsView {
     /**
      * Build hidden setup forms and a single-row disclosure for connected sessions.
      * @param {HTMLElement} root Annotation session section.
      * @param {Object} actions Session commands and workspace reveal callback supplied by the controller.
-     * @param {HTMLButtonElement} entryButton Setup action mounted in Annotation tools.
+     * @param {HTMLButtonElement} entryButton Setup action mounted in the annotation panel.
      */
     constructor(root, actions, entryButton) {
         this.root = root; this.document = root.ownerDocument; this.actions = actions;
@@ -68,7 +68,7 @@ export class AnnotationSessionsView {
         this.joiningState = this.element("small"); this.joiningState.setAttribute("aria-hidden", "true");
         this.joiningControl.append(this.allowContributors, this.element("span", "Allow new contributors"), this.joiningState);
         this.layers = this.element("ul"); this.layers.className = "annotation-session-contributions"; this.layerRows = new Map();
-        this.help = this.element("p", "Draw and edit polygons in Map layers. New layers and saved edits are shared automatically. Use Share for older local layers; unfinished polygons stay on this device. Leaving or removing a local layer keeps its last shared copy. Use Withdraw to remove that copy.");
+        this.help = this.element("p", "Choose your layer in the annotation panel to draw and edit polygons. New layers and saved edits are shared automatically. Use Share for older local layers; unfinished polygons stay on this device. Leaving or removing a local layer keeps its last shared copy. Use Withdraw to remove that copy.");
         this.details.append(this.invitation, this.inviteActions, this.profileForm, this.people, this.layers,
             this.show, this.download, this.refresh, this.expiry, this.extend, this.joiningControl, this.leave, this.help);
         this.session.append(this.bar, this.details);

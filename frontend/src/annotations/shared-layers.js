@@ -12,17 +12,18 @@ export class SharedAnnotationLayers {
      * @param {Object} options.leaflet Leaflet namespace.
      * @param {Object} options.map Leaflet map.
      * @param {Object} options.mapLayers Neutral map-layer owner.
+     * @param {import("./panel-view.js").AnnotationPanelView} options.panel Shared annotation details presentation.
      * @param {()=>void} [options.onChange] Notify composition when available polygons change.
      * @param {Document} [options.document=globalThis.document] Browser document.
      */
-    constructor({ leaflet, map, mapLayers, document = globalThis.document, onChange = () => {} }) {
-        Object.assign(this, { leaflet, map, mapLayers, document, onChange }); this.layers = new Map();
+    constructor({ leaflet, map, mapLayers, panel, document = globalThis.document, onChange = () => {} }) {
+        Object.assign(this, { leaflet, map, mapLayers, panel, document, onChange }); this.layers = new Map();
     }
 
     /**
      * Add a shared annotation layer to the map, or update its polygons and label.
      * Existing layers keep their visibility, drawing order and local label settings.
-     * New layers start visible with read-only polygon data and collapsed controls.
+     * New layers start visible; their read-only details are available from the annotation panel.
      * @param {string} id Session/contributor/layer identifier supplied by composition.
      * @param {string} label Contributor and layer name to display in Map layers.
      * @param {Object} collection Received polygon GeoJSON, validated before display.
@@ -35,6 +36,7 @@ export class SharedAnnotationLayers {
         const retained = this.layers.get(id);
         if (retained) {
             retained.annotation.polygons = polygons; retained.annotation.name = label; retained.rendering.refresh();
+            this.panel.renameLayer(retained.key, label);
             this.mapLayers.getRecord(retained.key).entry.label = label; this.mapLayers.render(); this.onChange(); return;
         }
         const key = `local:shared-annotation:${id}`;
@@ -45,6 +47,12 @@ export class SharedAnnotationLayers {
         const summary = this.document.createElement("summary"); summary.textContent = "Shared annotation details";
         const description = this.document.createElement("p"); description.textContent = "Read-only contribution. Its contributor edits the original layer. Filters, visibility and labels here affect only your map and calculations.";
         controls.append(summary, description);
+        const detailsButton = this.document.createElement("button");
+        detailsButton.type = "button";
+        detailsButton.className = "secondary-button";
+        detailsButton.textContent = "Details";
+        detailsButton.setAttribute("aria-controls", "annotations-panel");
+        detailsButton.addEventListener("click", () => this.openControls(key));
         for (const [property, text] of [["labels", "Show names"], ["notes", "Show notes"]]) {
             const wrapper = this.document.createElement("label"); wrapper.className = "annotation-field";
             const input = this.document.createElement("input"); input.type = "checkbox"; input.checked = annotation.style[property];
@@ -54,17 +62,19 @@ export class SharedAnnotationLayers {
         const adapter = {
             createState: () => annotation,
             createLayer: () => rendering,
-            snapshot: () => ({ datasetKind: "annotation", controls, canFilter: true, legend: null,
+            snapshot: () => ({ datasetKind: "annotation", typeLabel: "Shared annotation", detailsControl: detailsButton, stylePanelId: "annotations-panel", canFilter: true, legend: null,
                 filterActive: annotationFilterRules(annotation.filter).enabled && !!annotationFilterRules(annotation.filter).rules.length,
-                filterStatus: `${matchingAnnotationPolygons(annotation).length} of ${annotation.polygons.length} polygons match` }),
+                filterStatus: annotationFilterRules(annotation.filter).enabled && annotationFilterRules(annotation.filter).rules.length
+                    ? `${matchingAnnotationPolygons(annotation).length} of ${annotation.polygons.length} polygons match` : null }),
             zoom: () => { const bounds = rendering.getBounds(); if (bounds.isValid()) this.map.fitBounds(bounds, { padding: [40, 40], maxZoom: 12 }); },
-            info: () => { controls.open = true; },
+            info: () => this.openControls(key),
             copyLayerForUndo: () => ({ sharedContribution: id }),
-            removed: () => { rendering.release(); this.layers.delete(id); },
+            removed: () => { rendering.release(); this.layers.delete(id); this.panel.removeLayer(key); },
         };
         try {
             this.mapLayers.addLocal({ key, label, visible: true, opacity: 1 }, adapter);
             this.layers.set(id, { key, annotation, rendering, controls, adapter });
+            this.panel.addLayer(key, label, controls);
             this.onChange();
         } catch (error) {
             rendering.release();
@@ -102,13 +112,14 @@ export class SharedAnnotationLayers {
     }
 
     /**
-     * Open this component's local label controls for a shared layer.
+     * Show a contribution's read-only details and local label controls in the annotation panel.
      * @param {string} key Map-layer identity.
      * @return {boolean} Whether this component handled the requested controls.
      */
     openControls(key) {
         const layer = [...this.layers.values()].find(layer => layer.key === key);
         if (!layer) return false;
+        this.panel.showLayer(key);
         layer.controls.open = true; return true;
     }
 }

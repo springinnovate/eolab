@@ -230,6 +230,7 @@ test("Map layers owns compact rows; the bounded map-tool dock owns styling", () 
         ["histogram", "map-histogram-panel"],
         ["downloads", "downloads-panel"],
         ["calculations", "calculations-panel"],
+        ["annotations", "annotations-panel"],
         ["style", "layer-style-editor"],
     ]) {
         assert.match(
@@ -266,7 +267,7 @@ test("Map layers owns compact rows; the bounded map-tool dock owns styling", () 
         STYLESHEET,
         /#map-inspection-tab-style\s*\{[^}]*text-overflow:\s*ellipsis/s
     );
-    assert.match(STYLESHEET, /#map-histogram-panel,\s*#calculations-panel,\s*#downloads-panel,\s*#layer-style-editor,\s*#vector-filter-panel,\s*#vector-feature-inspector,\s*#vector-time-series,\s*#vector-feature-profile\s*\{[^}]*height:\s*100%[^}]*overflow-y:\s*auto/s);
+    assert.match(STYLESHEET, /#map-histogram-panel,\s*#annotations-panel,\s*#calculations-panel,\s*#downloads-panel,\s*#layer-style-editor,\s*#vector-filter-panel,\s*#vector-feature-inspector,\s*#vector-time-series,\s*#vector-feature-profile\s*\{[^}]*height:\s*100%[^}]*overflow-y:\s*auto/s);
     assert.doesNotMatch(STYLESHEET, /\.map-inspection-panels:has\(/);
 });
 
@@ -275,7 +276,7 @@ test("Map layers has one heading and collapse control with no nested list widget
     const stack = requireElementRange("raster-layer-stack");
     assert.doesNotMatch(rendering.source, /<h[1-6]\b|workspace-region-heading/);
     assert.match(rendering.source, /aria-labelledby="toggle-map-layers"/);
-    assert.match(rendering.source, /No map layers yet\. Add an item from Catalog or create an annotation layer\./);
+    assert.match(rendering.source, /No map layers yet\. Add an item from Catalog or use Annotations to draw on the map\./);
     assert.match(stack.source, /id="raster-layer-list" aria-label="Map layers"/);
     assert.match(stack.source, /id="raster-layer-stack-status"[^>]*role="status"/s);
     assert.doesNotMatch(stack.source, /aria-expanded|aria-controls/);
@@ -646,4 +647,18 @@ test("compact bulk visibility buttons sit above the map layer list", () => {
         assert.ok(button.source.includes(`disabled>${text}</button>`));
     }
     assert.match(STYLESHEET, /\.map-layer-visibility-actions\s*\{[^}]*flex-wrap: wrap/s);
+});
+
+test("annotation tools and help live in their panel, leaving only an entry in Map layers", () => {
+    const layers = requireElementRange("eomap-map-layers-region");
+    const annotations = requireElementRange("annotations-panel");
+    const inspection = requireElementRange("map-inspection-panels");
+    assert.match(layers.source, /id="open-annotations"/);
+    assert.ok(annotations.start > inspection.start && annotations.end < inspection.end);
+    for (const id of ["annotation-sessions", "create-annotation-layer", "annotation-save-status", "annotation-panel-content"]) {
+        assert.match(annotations.source, new RegExp(`id="${id}"`));
+        assert.doesNotMatch(layers.source, new RegExp(`id="${id}"`));
+    }
+    assert.match(annotations.source, /<details class="annotation-help"><summary>Help<\/summary>/);
+    assert.doesNotMatch(MARKUP, /id="annotation-tools"/);
 });

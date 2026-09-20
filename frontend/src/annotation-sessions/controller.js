@@ -17,11 +17,11 @@ export class AnnotationSessionsController {
      * Call start() after local annotations have loaded to restore a previous session.
      * @param {Object} options API, storage and callbacks supplied by browser composition.
      * @param {HTMLElement} options.root Container for session setup, status and management.
-     * @param {HTMLButtonElement} options.entryButton Setup action placed in Annotation tools by composition.
+     * @param {HTMLButtonElement} options.entryButton Setup action placed in the annotation panel by composition.
      * @param {()=>void} [options.revealSetupEntry] Reveal the setup button when returning from an invitation.
      * @param {()=>void} [options.revealPanel] Reveal the containing workspace after an explicit action or invitation.
      * @param {(name:string)=>string} options.createLayer Add a named local annotation layer and return its identifier.
-     * @param {(id:string)=>void} options.revealLayer Open Map layers and focus this layer's drawing action after explicit navigation.
+     * @param {(id:string)=>void} options.revealLayer Reveal this layer's editor and focus its drawing action after explicit navigation.
      * @param {()=>{id:string,collection:Object}[]} options.getLayers Committed, device-saved layers.
      * @param {(id:string,label:string,sessionName?:string)=>void} options.setShareLabel Local sharing status and optional session context.
      * @param {(key:string,label:string,collection:Object)=>void} options.showLayer Add or update a read-only shared layer on the map.

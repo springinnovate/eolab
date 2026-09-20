@@ -341,17 +341,21 @@ source checks, job ownership, cancellation and output checksum checks are unchan
 
 ## Shared annotations
 
-In Map layers, **Annotation tools → Annotation session…** opens **Enter a code**
-or **Start a session**.
+In Map layers, **Annotations…** opens the annotation panel. Its **Annotation
+session…** button offers **Enter a code** or **Start a session**.
 Starting asks for a session name and initially identifies the creator as **Session
 owner**. Joining asks for the session code and the name others will see. Members
 can change their own display name under **Session details**; this does not change
 ownership or rename existing layers. **Recent sessions** reopens a previous membership.
 
-Creating or joining reveals Map layers and focuses **Draw polygon** on the user's
-annotation layer, creating a named empty layer only when necessary. Saved polygons
-have name/note controls and **Draw another polygon** stays in the layer's primary
-actions. A single row above the layer list shows the active session name and a
+Creating or joining opens the annotation panel and focuses **Draw polygon** for the
+user's layer, creating a named empty layer only when necessary. Drawing starts only
+when requested. Select a layer in the panel to edit its polygons, names and notes,
+change its style, share it or export GeoJSON. Map layers stays compact: **Edit**
+opens a local annotation editor, and **Details** opens a read-only shared
+contribution. Layer type labels distinguish rasters, vectors, annotations and
+shared annotations. Storage and file-format guidance is under **Help**.
+A compact row in the annotation panel shows the active session name and a
 saving/saved/attention indicator. Expand this row for session details, invitations,
 contributors, downloads and settings. Routine messages stay inside the disclosure;
 sharing errors remain visible when it is collapsed. Session setup takes no space

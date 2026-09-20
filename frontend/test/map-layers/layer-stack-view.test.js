@@ -880,17 +880,30 @@ test("pointer reorder ignores the Undo row when finding a real layer destination
 });
 
 
-test("an owner-supplied primary control stays in the action row and retains focus", () => {
+test("an owner-supplied details control replaces Info and retains focus", () => {
   const documentContext = new FakeLayerStackDocument();
   const view = new MapLayerStackView(documentContext);
-  const draw = documentContext.createElement("button");
-  draw.textContent = "Draw polygon";
-  const layer = { ...LAYERS[0], primaryControl: draw };
+  const editButton = documentContext.createElement("button");
+  editButton.textContent = "Edit";
+  const layer = { ...LAYERS[0], detailsControl: editButton };
   view.render([layer], null);
   const list = documentContext.querySelector("#raster-layer-list");
-  assert.equal(elementsByClass(list, "map-layer-row-actions")[0].children[0], draw);
-  draw.focus();
+  assert.equal(elementsByClass(list, "map-layer-row-actions")[0].children[0], editButton);
+  assert.throws(() => actionControl(list.children[0], "info"), "Info must not duplicate Edit");
+  assert.ok(elementsByClass(list, "map-layer-primary-row")[0].children.includes(actionControl(list.children[0], "remove")));
+  editButton.focus();
   view.render([LAYERS[1], layer], null);
-  assert.equal(documentContext.activeElement, draw);
-  assert.equal(elementsByClass(list, "map-layer-row-actions")[1].children[0], draw);
+  assert.equal(documentContext.activeElement, editButton);
+  assert.equal(elementsByClass(list, "map-layer-row-actions")[1].children[0], editButton);
+});
+
+test("layer types and owner style targets distinguish annotations without embedding their editor", () => {
+    const doc = new FakeLayerStackDocument();
+    const view = new MapLayerStackView(doc);
+    const shared = { ...LAYERS[0], key: "shared", item: null, datasetKind: "annotation", typeLabel: "Shared annotation", stylePanelId: "annotations-panel" };
+    view.render([shared], null);
+    const row = doc.querySelector("#raster-layer-list").children[0];
+    assert.equal(elementsByClass(row, "map-layer-type")[0].textContent, "Shared annotation");
+    assert.match(row.getAttribute("aria-label"), /shared annotation layer/);
+    assert.equal(actionControl(row, "style").getAttribute("aria-controls"), "annotations-panel");
 });

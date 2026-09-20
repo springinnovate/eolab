@@ -23,6 +23,7 @@ function fixture() {
     doc.querySelector("#vector-filter-panel").hidden = true;
     doc.querySelector("#downloads-panel").hidden = true;
     doc.querySelector("#calculations-panel").hidden = true;
+    doc.querySelector("#annotations-panel").hidden = true;
     histogram.hidden = style.hidden = feature.hidden =
         vectorTimeSeries.hidden = vectorFeatureProfile.hidden = true;
     const close = doc.querySelector("#close-map-histogram");
@@ -572,4 +573,23 @@ test("mixed raster and vector clicks never restore an empty inspection surface",
     assert.equal(h.panels.hidden, true);
     assert.deepEqual(h.calls, ["show", "hide"]);
     h.controller.destroy();
+});
+
+test("annotation panel closes independently and cannot leave a hidden input-blocking surface", () => {
+    const h = fixture();
+    const annotations = h.doc.querySelector("#annotations-panel");
+    h.controller.showHistogram();
+    h.controller.showAnnotations();
+    assert.equal(h.controller.activeTool, "annotations");
+    assert.equal(annotations.getAttribute("data-map-inspection-active"), "true");
+    assert.equal(h.histogram.getAttribute("data-map-inspection-active"), "false");
+    h.controller.hideAnnotations();
+    assert.equal(h.controller.activeTool, "histogram");
+    assert.equal(annotations.hidden, true);
+    h.controller.closeHistogram();
+    assert.equal(h.panels.hidden, true);
+    h.controller.showAnnotations();
+    h.controller.hideAnnotations();
+    assert.equal(h.panels.hidden, true);
+    assert.equal(h.controller.isOpen, false);
 });
