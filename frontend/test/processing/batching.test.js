@@ -9,11 +9,19 @@ const execution={targetChunkPixels:65536,readWidth:512,readHeight:128,evaluation
 const grid={width:512,height:128,crs:"EPSG:4326",dtype:"float32",transform:[1,0,0,0,-1,90],nativeBlocks:4,decodedBytes:262144,execution};
 const plan={planId:"P".repeat(32),operation:"raster.aggregate.v1",expiresAt:"2099-01-01T00:00:00Z",grid};
 
+/** Wrap a test estimate in the planning resource returned by its admission URL.
+ * @param {string} path Request URL. @param {Object} result Completed estimate.
+ * @return {Object} Ready planning snapshot. */
+function readyPlan(path, result) {
+    const planId = path.split("/").at(-1);
+    return {planId, status:"ready", result:{...result, planId}};
+}
+
 test("warm-process metadata is validated and distinguishes readiness from repeated operation work", async()=>{
     const process={readyWaitSeconds:0,operationSeconds:.2,overheadSeconds:.01,reusedProcess:true};
     const timing={reservationSeconds:.01,preparationSeconds:.01,nativeProcessSeconds:.21,finalizationSeconds:.01,process};
     for(const value of [process,{...process,readyWaitSeconds:-1},{...process,operationSeconds:".2"},{...process,reusedProcess:"yes"}]){
-        const client=new ProcessingApiClient(async path=>Response.json(path.endsWith("/jobs")?{jobs:[]}:{...plan,timing:{...timing,process:value}}));
+        const client=new ProcessingApiClient(async path=>Response.json(path.endsWith("/jobs")?{jobs:[]}:readyPlan(path,{...plan,timing:{...timing,process:value}})));
         if(value===process)await client.planCalculation(intent);
         else await assert.rejects(()=>client.planCalculation(intent),/invalid/);
     }
@@ -29,7 +37,7 @@ test("warm-process metadata is validated and distinguishes readiness from repeat
 
 test("stage metrics accept legacy absence and reject malformed durations at the API boundary",async()=>{
     for(const timing of [undefined,null,{reservationSeconds:0,preparationSeconds:.1,nativeProcessSeconds:1,finalizationSeconds:.2},{reservationSeconds:-1},{nativeProcessSeconds:"1"}]){
-        const client=new ProcessingApiClient(async path=>Response.json(path.endsWith("/jobs")?{jobs:[]}:{...plan,timing}));
+        const client=new ProcessingApiClient(async path=>Response.json(path.endsWith("/jobs")?{jobs:[]}:readyPlan(path,{...plan,timing})));
         if(timing==null||timing.reservationSeconds===0)await client.planCalculation(intent);
         else await assert.rejects(()=>client.planCalculation(intent),/stage timings/);
     }
@@ -58,7 +66,7 @@ test("API transmits opt-in batch tuning and keeps omitted legacy requests compat
     const bodies=[];
     const api=new ProcessingApiClient(async(path,options)=>{
         if(path.endsWith("/jobs"))return Response.json({jobs:[]});
-        bodies.push(JSON.parse(options.body));return Response.json(plan);
+        bodies.push(JSON.parse(options.body));return Response.json(readyPlan(path,plan));
     });
     await api.planCalculation(calculationIntent({...intent,targetChunkPixels:65536}));
     await api.planCalculation(calculationIntent(intent));
@@ -71,7 +79,7 @@ test("API transmits opt-in batch tuning and keeps omitted legacy requests compat
 
 test("API rejects corrupt execution metadata and durable timing results",async()=>{
     const api=new ProcessingApiClient(async path=>Response.json(path.endsWith("/jobs")?{jobs:[]}:
-        {...plan,grid:{...grid,execution:{...execution,evaluationWidth:513}}}));
+        readyPlan(path,{...plan,grid:{...grid,execution:{...execution,evaluationWidth:513}}})));
     await assert.rejects(()=>api.planCalculation(intent),/batch dimensions/);
     const result={url:`/api/processing/jobs/${"J".repeat(32)}/result`,provenanceUrl:`/api/processing/jobs/${"J".repeat(32)}/provenance`,rows:[{label:"Mean",expression:"mean(a)",state:"ok",value:"1",valueType:"float",aggregates:[]}]};
     const metrics={execution,readWindows:1,evaluationTiles:1,reducerUpdates:1,readSeconds:1,calculationSeconds:2,resultWriteSeconds:.1,kernelSeconds:4};

@@ -120,6 +120,7 @@ export class CalculationExecutor {
      */
     discardPendingCalculation() {
         const target = this.#pendingCalculation;
+        target?.abort?.abort();
         this.#pendingCalculation = null;
         this.#queuePlanRelease();
         if (target?.plan) this.plansToRelease.add(target.plan.planId);
@@ -187,7 +188,7 @@ export class CalculationExecutor {
         if (plan) this.#executionStatus.plan = null;
         this.discardPendingCalculation();
         this.#retryRequired = false;
-        this.#pendingCalculation = { intent: snapshot, plan };
+        this.#pendingCalculation = { intent: snapshot, plan, abort: new AbortController() };
         this.#requestCancellation();
         this.#executionStatus.phase = "waiting";
         this.#executionStatus.message = "Preparing calculation…";
@@ -319,13 +320,14 @@ export class CalculationExecutor {
             }
             if (target !== this.#pendingCalculation || this.destroyed) return;
             let plan;
-            // Aborting fetch cannot acknowledge native cleanup, and can lose the
-            // ID of a plan already committed behind a proxy. Keep this bounded
-            // request connected, then release a superseded result before reuse.
             // Monotonic browser timestamps in milliseconds, not dates or durations.
             const planningStartedAtMs = this.now();
             const planReused = !!target.plan;
-            try { plan = target.plan ?? await this.api.planCalculation(target.intent); }
+            try { plan = target.plan ?? await this.api.planCalculation(target.intent, target.abort.signal, status => {
+                if (target !== this.#pendingCalculation || this.destroyed) return;
+                this.#executionStatus.message = status === "queued" ? "Waiting to check calculation size…" : "Checking calculation size…";
+                this.#notifyListeners();
+            }); }
             catch (error) { if (target !== this.#pendingCalculation || error.name === "AbortError") return; throw error; }
             const planningFinishedAtMs = this.now();
             if (target !== this.#pendingCalculation || this.destroyed) {
@@ -408,6 +410,7 @@ export class CalculationExecutor {
      */
     destroy() {
         this.destroyed = true;
+        this.#pendingCalculation?.abort?.abort();
         this.#queuePlanRelease();
         if (this.#pendingCalculation?.plan) this.plansToRelease.add(this.#pendingCalculation.plan.planId);
         this.#pendingCalculation = null;

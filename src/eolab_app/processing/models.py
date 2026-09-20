@@ -64,6 +64,17 @@ class JobFailureResponse(BaseModel):
     detail: str
 
 
+class PlanningResponse(BaseModel):
+    """Owned planning progress; result is present only when ready for submission."""
+
+    planId: OpaqueId
+    status: Literal[
+        "checking", "queued", "planning", "cancelling", "ready", "failed", "cancelled"
+    ]
+    result: dict[str, object] | None
+    error: JobFailureResponse | None
+
+
 class JobProgressResponse(BaseModel):
     """Named operation progress, extended with operation-specific work counts."""
 
@@ -114,6 +125,10 @@ class ProcessingLimits:
     """
 
     plan_timeout_seconds: float = 15
+    plan_queue_seconds: float = 60
+    plan_queue_capacity: int = 32
+    plan_record_capacity: int = 128
+    max_owner_plans: int = 5
     runtime_seconds: float = 600
     plan_ttl_seconds: int = 300
     result_ttl_seconds: int = 86_400

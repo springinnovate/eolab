@@ -16,6 +16,12 @@ CREATE TABLE IF NOT EXISTS processing.plans (
     spec jsonb
 );
 CREATE INDEX IF NOT EXISTS plans_owner ON processing.plans(owner, expires_at);
+ALTER TABLE processing.plans ADD COLUMN IF NOT EXISTS state text NOT NULL DEFAULT 'ready';
+ALTER TABLE processing.plans ADD COLUMN IF NOT EXISTS result jsonb;
+ALTER TABLE processing.plans ADD COLUMN IF NOT EXISTS error jsonb;
+ALTER TABLE processing.plans ADD COLUMN IF NOT EXISTS queued_at timestamptz;
+ALTER TABLE processing.plans ADD COLUMN IF NOT EXISTS request_deadline timestamptz;
+CREATE INDEX IF NOT EXISTS plans_waiting ON processing.plans(state, queued_at);
 CREATE TABLE IF NOT EXISTS processing.jobs (
     id text PRIMARY KEY,
     owner text NOT NULL,
@@ -106,3 +112,19 @@ CREATE TABLE IF NOT EXISTS processing.inputs (
 );
 CREATE INDEX IF NOT EXISTS inputs_expiry ON processing.inputs(expires_at);
 INSERT INTO processing.schema_version VALUES (5) ON CONFLICT DO NOTHING;
+
+-- The existing owner-scoped SSE connection also hints at plan state changes.
+-- Results stay in the database and are fetched through authorized HTTP reads.
+CREATE OR REPLACE FUNCTION processing.notify_plan_change() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.state IS DISTINCT FROM OLD.state THEN
+        PERFORM pg_notify('eolab_processing_job_changes', NEW.owner);
+    END IF;
+    RETURN NEW;
+END;
+$$;
+DROP TRIGGER IF EXISTS processing_plan_change ON processing.plans;
+CREATE TRIGGER processing_plan_change AFTER UPDATE OF state ON processing.plans
+FOR EACH ROW EXECUTE FUNCTION processing.notify_plan_change();
+INSERT INTO processing.schema_version VALUES (6) ON CONFLICT DO NOTHING;

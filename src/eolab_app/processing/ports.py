@@ -65,6 +65,86 @@ class JobWakeup(Protocol):
 class JobStore(Protocol):
     """Storage capability; implementations do not invoke application services."""
 
+    def enqueue_plan(
+        self, identifier: str, owner: str, request: dict[str, Any]
+    ) -> bool:
+        """Admit a plan once within record/queue limits.
+
+        Args:
+            identifier: Client ID reused for retries.
+            owner: Session hash.
+            request: Validated path-free inputs.
+
+        Returns:
+            True for a new request; False for an identical retry.
+
+        Raises:
+            ProcessingError: On capacity exhaustion, conflict or storage failure.
+        """
+        ...
+
+    def get_planning(self, identifier: str, owner: str) -> dict[str, Any]:
+        """Read owned planning state and mark expired work failed.
+
+        Args:
+            identifier: Plan ID.
+            owner: Session hash.
+
+        Returns:
+            Private record containing state, completed result and error.
+
+        Raises:
+            ProcessingError: If unavailable to this owner or storage fails.
+        """
+        ...
+
+    def queue_native_plan(self, identifier: str, owner: str) -> None:
+        """Queue an authorized cache miss in FIFO order.
+
+        Args:
+            identifier: Admitted plan ID.
+            owner: Session hash.
+
+        Raises:
+            ProcessingError: On storage failure.
+        """
+        ...
+
+    def claim_native_plan(self, identifier: str, owner: str) -> bool:
+        """Claim the single native planner for the oldest waiting request.
+
+        Args:
+            identifier: Queued plan ID.
+            owner: Session hash.
+
+        Returns:
+            Whether native preparation may begin.
+
+        Raises:
+            ProcessingError: On storage failure.
+        """
+        ...
+
+    def settle_planning(
+        self,
+        identifier: str,
+        owner: str,
+        result: dict[str, Any] | None,
+        error: dict[str, Any] | None = None,
+    ) -> None:
+        """Retain a terminal outcome after native cleanup and release its capacity.
+
+        Args:
+            identifier: Admitted plan ID.
+            owner: Session hash.
+            result: Public completed plan, or None.
+            error: Sanitized failure, or None on success/cancellation.
+
+        Raises:
+            ProcessingError: On storage failure.
+        """
+        ...
+
     def save_input(self, owner: str, checksum: str, payload: dict[str, Any]) -> str:
         """Store an owner-private JSON input and return its expiring opaque ID.
 
@@ -110,7 +190,7 @@ class JobStore(Protocol):
         ...
 
     def reserve_plan(self, owner: str, request: dict[str, Any]) -> str:
-        """Reserve the one global metadata child and bounded plan-record capacity.
+        """Reserve a plan record; native work must separately claim the planner.
 
         Args:
             owner: Hash of the opaque browser-session capability.
@@ -120,22 +200,26 @@ class JobStore(Protocol):
             New opaque plan ID.
 
         Raises:
-            ProcessingError: If a plan is already running or capacity is full.
+            ProcessingError: If retained records or pending-request capacity is full.
         """
         ...
 
     def finish_plan(
         self, identifier: str, owner: str, plan: PreparedJobPlan | None
     ) -> dict[str, Any] | None:
-        """Release metadata capacity after native operation completion or child exit.
+        """Save prepared inputs and release native capacity after cleanup.
 
         Args:
             identifier: Reserved plan ID.
             owner: Original session owner hash.
-            plan: Prepared operation data, or None to discard a failed plan.
+            plan: Prepared operation data, or None after failed or cancelled work.
 
         Returns:
-            Completed plan row or None after removal.
+            Updated row, or None when no inputs were saved. The queue separately
+            publishes the public outcome with settle_planning.
+
+        Raises:
+            ProcessingError: If storage is unavailable.
         """
         ...
 
@@ -167,11 +251,14 @@ class JobStore(Protocol):
         ...
 
     def discard_plan(self, identifier: str, owner: str) -> None:
-        """Release an owned completed plan without touching native-work fencing.
+        """Cancel owned planning or discard a review, retaining active-work fencing.
 
         Args:
-            identifier: Opaque completed plan ID.
+            identifier: Opaque planning ID, including a not-yet-admitted request.
             owner: Current session hash.
+
+        Raises:
+            ProcessingError: If storage or cancellation-record capacity is unavailable.
         """
         ...
 

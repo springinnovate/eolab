@@ -271,6 +271,7 @@ def create_app(
                 jobs_client,
             ):
                 client_stack.push_async_callback(client.aclose)
+            client_stack.push_async_callback(processing_service.close)
             yield
 
     application = FastAPI(
@@ -298,22 +299,19 @@ def create_app(
     processing_limits = RasterClipLimits()
     planning_native = create_native_process(processing_limits)
     processing_events = PostgresJobEvents()
-    application.include_router(
-        create_processing_router(
-            ProcessingService(
-                raster_source_authorizer,
-                vector_selection_reader,
-                PostgresJobStore(processing_limits),
-                LocalJobArtifacts(
-                    app_global_configuration.processing_data_path,
-                    (Path.cwd(), app_global_configuration.scan_mount_path),
-                ),
-                processing_limits,
-                native=planning_native,
-                changes=processing_events,
-            )
-        )
+    processing_service = ProcessingService(
+        raster_source_authorizer,
+        vector_selection_reader,
+        PostgresJobStore(processing_limits),
+        LocalJobArtifacts(
+            app_global_configuration.processing_data_path,
+            (Path.cwd(), app_global_configuration.scan_mount_path),
+        ),
+        processing_limits,
+        native=planning_native,
+        changes=processing_events,
     )
+    application.include_router(create_processing_router(processing_service))
     scan_manager = ScanManager(
         app_global_configuration.scan_mount_path,
         tuple(
