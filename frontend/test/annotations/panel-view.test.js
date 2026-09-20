@@ -34,8 +34,8 @@ test("loading and renaming layers never open the panel or replace the editor's f
     const { document, events, view } = setup();
     const local = document.createElement(); local.value = "Unfinished note";
     const shared = document.createElement();
-    view.addLayer("local", "My annotations", local);
-    view.addLayer("shared", "Maria · Wetlands", shared);
+    view.registerLayerControls("local", "My annotations", local);
+    view.registerLayerControls("shared", "Maria · Wetlands", shared);
     assert.deepEqual(events, []);
     view.showLayer("local");
     view.renameLayer("local", "New name");
@@ -55,8 +55,8 @@ test("loading and renaming layers never open the panel or replace the editor's f
 
 test("removal selects another editor or the empty state without retaining removed controls", () => {
     const { document, view, events } = setup();
-    view.addLayer("a", "A", document.createElement());
-    view.addLayer("b", "B", document.createElement());
+    view.registerLayerControls("a", "A", document.createElement());
+    view.registerLayerControls("b", "B", document.createElement());
     view.removeLayer("a");
     assert.equal(view.selectedKey, "b");
     assert.equal(view.selector.children.length, 1);

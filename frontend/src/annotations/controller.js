@@ -293,7 +293,7 @@ export class AnnotationController {
             },
         };
         this.mapLayers.addLocal({ key, label: layer.name, visible: layer.visible, opacity: layer.opacity }, adapter);
-        this.panel.addLayer(key, layer.name, controls.root);
+        this.panel.registerLayerControls(key, layer.name, controls.root);
     }
 
     /**

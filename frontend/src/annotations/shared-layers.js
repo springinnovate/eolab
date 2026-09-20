@@ -76,7 +76,7 @@ export class SharedAnnotationLayers {
         try {
             this.mapLayers.addLocal({ key, label, visible: true, opacity: 1 }, adapter);
             this.layers.set(id, { key, annotation, rendering, controls, adapter, presentation });
-            this.panel.addLayer(key, `${label} — ${attribution}`, controls);
+            this.panel.registerLayerControls(key, `${label} — ${attribution}`, controls);
             this.onChange();
         } catch (error) {
             rendering.release();

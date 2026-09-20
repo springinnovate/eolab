@@ -27,13 +27,14 @@ export class AnnotationPanelView {
     }
 
     /**
-     * Retain one editable layer or read-only contribution without opening the panel.
+     * Register a layer's existing controls and add its name to the panel selector.
+     * Display the first registered layer's controls without opening the panel.
      * @param {string} key Map-layer identity.
      * @param {string} label Layer name, including contributor attribution when shared.
      * @param {HTMLElement} controls Controls provided by the annotation layer owner.
      * @return {void}
      */
-    addLayer(key, label, controls) {
+    registerLayerControls(key, label, controls) {
         const option = this.document.createElement("option");
         option.value = key;
         option.textContent = label;
