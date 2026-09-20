@@ -136,7 +136,44 @@ export class MapInspectionController {
             "click", this.onToggleFeatureDetails
         );
         this.document.addEventListener("keydown", this.onKeydown);
+        this.basemapControl = documentContext.querySelector(".eolab-basemap-control");
+        this.layoutObserver = null;
+        if (this.basemapControl && documentContext.defaultView?.ResizeObserver) {
+            this.onLayoutChange = () => this.#positionBasemapBesidePanel();
+            this.layoutObserver = new documentContext.defaultView.ResizeObserver(this.onLayoutChange);
+            for (const element of [this.map, this.root, this.basemapControl,
+                this.basemapControl.parentElement]) {
+                this.layoutObserver.observe(element);
+            }
+            documentContext.defaultView.addEventListener("resize", this.onLayoutChange);
+            this.root.addEventListener("toggle", this.onLayoutChange);
+        }
         this.#renderDock();
+    }
+
+    /**
+     * Keep the basemap beside an expanded panel when the map has enough width.
+     * Otherwise shorten the panel to leave the control visible below it. Measure
+     * the actual map/control sizes so catalog resizing and wrapped attribution
+     * also update the available space. Closed and minimized panels need no gap.
+     * @return {void}
+     */
+    #positionBasemapBesidePanel() {
+        const gap = 10;
+        const map = this.map.getBoundingClientRect();
+        this.map.style.setProperty("--basemap-max-width", Math.max(0, map.width - 2 * gap) + "px");
+        const control = this.basemapControl.getBoundingClientRect();
+        const panel = this.root.getBoundingClientRect();
+        const expanded = this.root.matches(":popover-open") && !this.panels.hidden;
+        const rightGap = Math.max(gap, map.right - panel.left + gap);
+        const fitsBeside = map.right - rightGap - control.width >= map.left + gap;
+        this.map.style.setProperty("--basemap-right-gap", (expanded && fitsBeside ? rightGap : gap) + "px");
+        if (expanded && !fitsBeside) {
+            this.root.style.setProperty("--map-inspection-available-height",
+                Math.max(0, control.top - panel.top - gap) + "px");
+        } else {
+            this.root.style.removeProperty("--map-inspection-available-height");
+        }
     }
 
     /**
@@ -698,6 +735,7 @@ export class MapInspectionController {
         }
         const active = this.minimized ? null : this.activeTool;
         this.#renderClickSummary();
+        if (this.layoutObserver) this.#positionBasemapBesidePanel();
         if (active !== this.reportedActiveTool) {
             this.reportedActiveTool = active;
             for (const listener of this.activityListeners) listener(active);
@@ -706,6 +744,15 @@ export class MapInspectionController {
 
     /** Release presentation listeners without changing retained analysis state. @return {void} */
     destroy() {
+        this.layoutObserver?.disconnect();
+        this.layoutObserver = null;
+        if (this.onLayoutChange) {
+            this.document.defaultView.removeEventListener("resize", this.onLayoutChange);
+            this.root.removeEventListener("toggle", this.onLayoutChange);
+            this.map.style.removeProperty("--basemap-right-gap");
+            this.map.style.removeProperty("--basemap-max-width");
+            this.root.style.removeProperty("--map-inspection-available-height");
+        }
         for (const {button} of this.clickResults) button.removeEventListener("click", this.onSummaryClick);
         this.hasClick = false;
         this.closeButton.removeEventListener("click", this.onClose);
