@@ -1,9 +1,11 @@
+import { canAutomaticallyCalculate } from "../../src/processing/calculation-policy.js";
+import { CalculationQueue } from "../../src/processing/calculation-queue.js";
 import { CATALOG_SELECTION } from "../../test-support/raster/fixtures.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import { VectorSamplingController } from "../../src/vector/sampling.js";
-import { SummaryStatisticsController, canAutomaticallyCalculate } from "../../src/processing/summary-statistics-controller.js";
+import { SummaryStatisticsController } from "../../src/processing/summary-statistics-controller.js";
 import { SummaryStatisticsView } from "../../src/processing/summary-statistics-view.js";
 import { CalculationSessionStorage } from "../../src/processing/calculation-session.js";
 import { describeJobProgress } from "../../src/processing/presentation.js";
@@ -86,7 +88,8 @@ function fixture(overrides = {}, data = new Map(), browserContext = {}, context 
     const document = new SummaryControlDocument();
     const view = new SummaryStatisticsView(document, browserContext);
     let controller;
-    controller = new SummaryStatisticsController({api,jobs,storage,view,clock,now:()=>elapsed,getContext:()=>context,
+    const executionQueue = new CalculationQueue({ api, jobs, storage, now:()=>elapsed, requestId:()=>`request-${String(jobSerial).padStart(16,"0")}` });
+    controller = new SummaryStatisticsController({api,jobs,executionQueue,view,clock,now:()=>elapsed,getContext:()=>context,
         onOpen:()=>controller.setActive(true),onClose(){},onEditArea(){},requestId:()=>`request-${String(jobSerial).padStart(16,"0")}`});
     const tick = async (delay = 700) => { const due=[...timers.entries()].filter(([,t])=>t.delay===delay);for(const[id,t]of due){timers.delete(id);t.fn();}await flush(); };
     const finish = async (status="ready", values=["12.5"]) => {

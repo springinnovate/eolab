@@ -46,13 +46,14 @@ export class CalculationSessionStorage {
                 !(value.pending === null || (ID.test(value.pending?.planId) && /^[A-Za-z0-9_-]{16,80}$/.test(value.pending?.requestId))) ||
                 (!value.jobId && !value.pending)) return null;
             if (!(value.releasePlanId === undefined || value.releasePlanId === null || ID.test(value.releasePlanId))) return null;
+            if (value.client !== undefined && !["summary", "raster-series"].includes(value.client)) return null;
             return { intent: calculationIntent(value.intent), jobId: value.jobId, pending: value.pending,
                 releasePlanId: value.releasePlanId ?? null,
-                context: Object.freeze({ automatic: value.automatic }), cancelRequested: value.cancelRequested };
+                context: Object.freeze({ automatic: value.automatic, ...(value.client ? { client: value.client } : {}) }), cancelRequested: value.cancelRequested };
         } catch { return null; }
     }
     /** Persist execution data using the existing v1 record format.
-     * The statistics owner supplies automatic/manual recovery metadata as context.
+     * The caller supplies automatic/manual recovery metadata and its optional client identity.
      * This adapter maps it to the legacy automatic field without applying policy.
      * @param {Object} record Execution data and optional caller context.
      * @return {void}
@@ -61,7 +62,7 @@ export class CalculationSessionStorage {
     write(record) {
         if (!this.storage) throw new Error("Browser session storage is needed for recoverable calculations.");
         const { context, ...execution } = record;
-        const text = JSON.stringify({ ...execution, automatic: context?.automatic ?? false });
+        const text = JSON.stringify({ ...execution, automatic: context?.automatic ?? false, ...(context?.client ? { client: context.client } : {}) });
         if (text.length > 16384) throw new Error("Calculation recovery information is too large.");
         this.storage.setItem(KEY, text);
     }

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { RasterPixelSeriesController } from "../../src/raster/pixel-series.js";
+import { RasterSeriesController } from "../../src/raster/series.js";
 import { sampleCatalogRasterPixel } from "../../src/raster/analysis-api.js";
 
 /** @param {string} key Raster identity. @param {boolean} [visible=true] Default selection. @return {Object} Catalog source. */
@@ -13,7 +13,8 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
 function fixture() {
     const requests = [];
     const view = { bind(actions) { this.actions = actions; }, render(state) { this.state = state; }, downloadCsv(csv) { this.csv = csv; } };
-    const controller = new RasterPixelSeriesController({
+    const controller = new RasterSeriesController({
+        areaStatistics: { bind() {}, setInputs() {}, setActive() {} },
         view, onClose: () => controller.updateSamplingForPanelVisibility(false),
         samplePoint: (item, position, signal) => new Promise((resolve, reject) => requests.push({ item, position, signal, resolve, reject })),
     });
@@ -126,8 +127,8 @@ test("oversized stacks are explained and never silently truncated or submitted",
 test("the pixel API decides coverage; nodata, failures and outside keep distinct positions", async () => {
     const view = { bind() {}, render(state) { this.state = state; } };
     const bodies = [];
-    const controller = new RasterPixelSeriesController({
-        view, onClose() {},
+    const controller = new RasterSeriesController({
+        areaStatistics: { bind() {}, setInputs() {}, setActive() {} }, view, onClose() {},
         samplePoint: (item, position, signal) => sampleCatalogRasterPixel(item, position, signal, async (_url, request) => {
             const body = JSON.parse(request.body); bodies.push(body);
             if (body.itemId === "error") return new Response("unavailable", { status: 503 });
