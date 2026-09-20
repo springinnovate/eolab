@@ -8,8 +8,48 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import quote
 
+from eolab_app.processing.clip_models import RasterClipLimits
 
 APPLICATION_VERSION_PATH = Path("/app/version")
+
+
+def load_processing_limits() -> RasterClipLimits:
+    """Load the same queue, execution and storage budgets for the app and worker.
+
+    Returns:
+        Processing limits with validated environment overrides. Native execution
+        remains limited to one running job across the deployment.
+
+    Raises:
+        ValueError: If an override is blank, is not an integer, or is outside
+            its supported range. The error names the environment variable.
+    """
+    defaults = RasterClipLimits()
+    settings = {
+        "PROCESSING_MAX_WAITING_JOBS": ("max_waiting_jobs", 1),
+        "PROCESSING_MAX_OWNER_WAITING_JOBS": ("max_owner_waiting_jobs", 1),
+        "PROCESSING_MAX_JOB_RECORDS": ("max_job_records", 1),
+        "PROCESSING_MAX_JOB_INPUT_BYTES": ("max_job_input_bytes", 1),
+        "PROCESSING_MAX_STORED_BYTES": ("max_stored_bytes", 1),
+        "PROCESSING_FREE_SPACE_FLOOR_BYTES": ("free_space_floor", 0),
+        "PROCESSING_EXECUTION_TIMEOUT_SECONDS": ("runtime_seconds", 1),
+        "PROCESSING_RESULT_TTL_SECONDS": ("result_ttl_seconds", 1),
+    }
+    values: dict[str, int] = {}
+    for environment_name, (attribute, minimum) in settings.items():
+        raw = os.environ.get(environment_name, str(getattr(defaults, attribute)))
+        try:
+            value = int(raw)
+        except ValueError as error:
+            raise ValueError(f"{environment_name} must be an integer") from error
+        if not minimum <= value <= 2**63 - 1:
+            raise ValueError(
+                f"{environment_name} must be between {minimum} and {2**63 - 1}"
+            )
+        if attribute in {"runtime_seconds", "result_ttl_seconds"} and value > 31_536_000:
+            raise ValueError(f"{environment_name} must not exceed one year")
+        values[attribute] = value
+    return RasterClipLimits(**values)
 
 
 @dataclass(frozen=True)

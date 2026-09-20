@@ -435,6 +435,9 @@ def test_job_store_admits_operation_data_without_raster_fields(
     assert store.get(claimed["id"], "owner")["status"] == "cancelled"
 
 
+@pytest.mark.parametrize(
+    "store", [RasterClipLimits(max_owner_waiting_jobs=2)], indirect=True
+)
 def test_owner_disk_limits_and_transfer_lease_cleanup(
     boundary: Any, store: PostgresJobStore
 ) -> None:
@@ -454,7 +457,7 @@ def test_owner_disk_limits_and_transfer_lease_cleanup(
         headers=HEADERS,
     )
     assert full.status_code == 429
-    assert full.json()["detail"]["code"] == "queue_full"
+    assert full.json()["detail"]["code"] == "owner_queue_full"
     assert asyncio.run(worker.run_once())
     owner = hashlib.sha256(client.cookies.get(COOKIE).encode()).hexdigest()
     row, lease = store.acquire_transfer(first["jobId"], owner)
@@ -639,6 +642,8 @@ def test_worker_composition_requires_only_catalog_and_processing_configuration(
     monkeypatch.setenv("CATALOG_INTERNAL_URL", "http://catalog")
     monkeypatch.setenv("SCAN_MOUNT_PATH", str(mount))
     monkeypatch.setenv("PROCESSING_DATA_PATH", str(tmp_path / "outputs"))
+    monkeypatch.setenv("PROCESSING_MAX_WAITING_JOBS", "61")
+    monkeypatch.setenv("PROCESSING_MAX_OWNER_WAITING_JOBS", "17")
     monkeypatch.delenv("GEOSERVER_ADMIN_PASSWORD", raising=False)
     monkeypatch.delenv("GEOSERVER_INTERNAL_URL", raising=False)
     monkeypatch.setattr(composition, "PostgresJobStore", lambda limits: store)
@@ -660,6 +665,8 @@ def test_worker_composition_requires_only_catalog_and_processing_configuration(
             wakeup: Processing-owned notification adapter, constructed without I/O.
         """
         assert isinstance(worker, ProcessingWorker)
+        assert worker.limits.max_waiting_jobs == 61
+        assert worker.limits.max_owner_waiting_jobs == 17
         assert isinstance(wakeup, composition.PostgresJobWakeup)
         assert not await worker.run_once()
 
