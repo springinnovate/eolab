@@ -28,6 +28,7 @@ from eolab_app.main import create_app
 from eolab_app.vector.outline_operation import OutlineInput
 from eolab_app.vector.sampling import VectorSamplingService
 from eolab_app.vector.sources import MountedVectorResolver
+from eolab_app.vector.selection_source import resolve_selection
 from eolab_app.vector.errors import VectorConflictError
 
 
@@ -99,10 +100,8 @@ def outline_case(tmp_path: Path) -> tuple[CatalogSelection, dict[str, Any], str]
     async def select() -> tuple[CatalogSelection, dict[str, Any]]:
         """Authorize using the real source resolver and HTTP Catalog adapter."""
         async with httpx2.AsyncClient() as client:
-            service = VectorSamplingService(
-                StacVectorCatalog(client, url), MountedVectorResolver(tmp_path)
-            )
-            result = await service.select(
+            resolved = await resolve_selection(
+                StacVectorCatalog(client, url), MountedVectorResolver(tmp_path),
                 CatalogVectorFilterRequest(
                     collectionId=item["collection"],
                     itemId=item["id"],
@@ -111,9 +110,7 @@ def outline_case(tmp_path: Path) -> tuple[CatalogSelection, dict[str, Any], str]
                     ),
                 )
             )
-            selection = CatalogSelection.model_validate(result["selection"])
-            resolved = await service.resolve_for_sampling(selection)
-            return selection, build_outline(resolved)
+            return resolved.selection, build_outline(resolved)
 
     selection, expected = asyncio.run(select())
     try:
@@ -307,7 +304,7 @@ def test_application_routes_outlines_only_through_jobs(
     version_file_path: Path,
     outcome: str,
 ) -> None:
-    """Keep default composition on Jobs and local selection independent.
+    """Keep default outline composition on Jobs without local execution.
 
     Args:
         outline_case: Real source, authorized selection and expected outline.
@@ -363,7 +360,7 @@ def test_application_routes_outlines_only_through_jobs(
     with TestClient(app) as client:
         with monkeypatch.context() as guard:
             guard.setattr(
-                "eolab_app.vector.sampling.run_bounded_process", forbidden_local
+                "eolab_app.execution.bounded_process.run_bounded_process", forbidden_local
             )
             response = client.post(
                 "/api/vector-sampling/outline",
@@ -380,25 +377,12 @@ def test_application_routes_outlines_only_through_jobs(
             assert response.json() == json.loads(json.dumps(expected))
         else:
             assert response.status_code == 409, response.text
-        if outcome != "stale":
-            previous_calls = len(calls)
-            selected = client.post(
-                "/api/vector-sampling/areas",
-                json={
-                    "collectionId": selection.collection_id,
-                    "itemId": selection.item_id,
-                    "filter": selection.filter.model_dump(mode="json"),
-                },
-            )
-            assert selected.status_code == 200, selected.text
-            assert selected.json()["matched"] == 1
-            assert len(calls) == previous_calls
 
 
 def test_remote_outlines_do_not_gate_selection(
     outline_case: tuple, tmp_path: Path
 ) -> None:
-    """Concurrent remote display work cannot occupy the local selection lane."""
+    """Outline completion is not a prerequisite for selecting an analysis area."""
     selection, expected, url = outline_case
 
     async def scenario() -> None:
@@ -416,8 +400,21 @@ def test_remote_outlines_do_not_gate_selection(
             raise VectorConflictError("Jobs offline")
 
         async with httpx2.AsyncClient() as client:
+            async def measure(candidate: CatalogSelection) -> dict[str, Any]:
+                """Return measurements independently of pending outline results.
+
+                Args:
+                    candidate: Authorized descriptor to measure.
+
+                Returns:
+                    Fixture feature count and bounds.
+                """
+                assert candidate == selection
+                return {"matched": 1, "bbox": tuple(expected["bbox"])}
+
             service = VectorSamplingService(
-                StacVectorCatalog(client, url), MountedVectorResolver(tmp_path), remote
+                StacVectorCatalog(client, url), MountedVectorResolver(tmp_path), remote,
+                selection_executor=measure,
             )
             requests = [
                 asyncio.create_task(service.outline(selection)) for _ in range(3)

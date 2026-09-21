@@ -1,12 +1,11 @@
 """Coordinate vector selection checks, summaries, and map display outlines.
 
-Source/filter preparation lives in selection_source so local work and the Jobs
-operation use the same rules without the operation constructing this service.
-This service retains selection admission, reauthorization, and execution routing;
+Source/filter preparation lives in selection_source so readers and installed Jobs
+operations use the same rules without constructing this service.
+This service retains selection authorization and execution routing;
 an unavailable outline does not prevent numeric analysis of the selection.
 """
 
-import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -15,16 +14,10 @@ from eolab_app.catalog_selection import (
     ResolvedCatalogSelection,
     SelectionUnavailableError,
 )
-from eolab_app.execution.bounded_process import (
-    ProcessDeadlineError,
-    ProcessResultWriter,
-    run_bounded_process,
-)
 from eolab_app.vector.errors import VectorConflictError, VectorFeatureError
 from eolab_app.vector.filters import (
     CatalogVectorFilterRequest,
 )
-from eolab_app.bounded_vector import READ_SECONDS, summary_process
 from eolab_app.vector.ports import VectorCatalog
 from eolab_app.vector.selection_source import resolve_selection
 from eolab_app.vector.sources import MountedVectorResolver
@@ -40,6 +33,10 @@ class VectorSamplingService:
         outline_executor: (
             Callable[[CatalogSelection], Awaitable[dict[str, Any]]] | None
         ) = None,
+        *,
+        selection_executor: (
+            Callable[[CatalogSelection], Awaitable[dict[str, Any]]] | None
+        ) = None,
     ) -> None:
         """Connect source authority and bounded execution.
 
@@ -49,11 +46,14 @@ class VectorSamplingService:
             outline_executor: Jobs adapter supplied by application composition.
                 Omit for selection-only consumers; outline() then reports
                 unavailable without starting local display work.
+            selection_executor: Jobs adapter for measuring filtered features.
+                Consumers that only reauthorize descriptors may omit it; select()
+                then reports unavailable without launching a local process.
         """
         self.catalog = catalog
         self.resolver = resolver
-        self._slots = asyncio.Semaphore(2)
         self._outline_executor = outline_executor
+        self._selection_executor = selection_executor
 
     async def resolve_for_sampling(
         self, selection: CatalogSelection
@@ -81,41 +81,8 @@ class VectorSamplingService:
             )
         return resolved
 
-    async def _run(
-        self,
-        target: Callable[[ProcessResultWriter, ResolvedCatalogSelection], None],
-        resolved: ResolvedCatalogSelection,
-    ) -> dict[str, Any]:
-        """Run one bounded native selection command without an unbounded queue.
-
-        Args:
-            target: Fixed selection-summary process command.
-            resolved: Authorized source capability.
-
-        Returns:
-            Native result after source reauthorization.
-
-        Raises:
-            VectorConflictError: If busy, stale, empty or over actual work budget.
-        """
-        if self._slots.locked():
-            raise VectorConflictError("Vector sampling is busy; retry later")
-        async with self._slots:
-            try:
-                success, result = await run_bounded_process(
-                    target, (resolved,), READ_SECONDS
-                )
-            except ProcessDeadlineError as error:
-                raise VectorConflictError(
-                    "Vector reading exceeded its time budget"
-                ) from error
-            if not success:
-                raise VectorConflictError(result)
-            await self.resolve_for_sampling(resolved.selection)
-            return result
-
     async def select(self, request: CatalogVectorFilterRequest) -> dict[str, Any]:
-        """Measure a selection without returning or retaining exact coordinates.
+        """Queue a filtered-feature measurement without retaining coordinates.
 
         Args:
             request: Catalog identity and typed predicate.
@@ -124,10 +91,15 @@ class VectorSamplingService:
             Exact counts/bounds and path-free selection descriptor.
 
         Raises:
-            VectorConflictError: If empty, stale, busy or over actual read budget.
+            VectorConflictError: If unavailable, empty, over budget or queue-full.
+            SelectionUnavailableError: If the source changes while work waits/runs.
+            asyncio.CancelledError: After the Jobs client cancels abandoned work.
         """
         resolved = await resolve_selection(self.catalog, self.resolver, request)
-        result = await self._run(summary_process, resolved)
+        if self._selection_executor is None:
+            raise VectorConflictError("The vector selection executor is unavailable")
+        result = await self._selection_executor(resolved.selection)
+        await self.resolve_for_sampling(resolved.selection)
         return {
             **result,
             "selection": resolved.selection.model_dump(mode="json", by_alias=True),

@@ -39,6 +39,8 @@ from eolab_app.routes.vector_sampling import create_vector_sampling_router
 from eolab_app.vector.catalog import StacVectorCatalog
 from eolab_app.vector.sources import MountedVectorResolver
 from eolab_app.vector.sampling import VectorSamplingService
+from eolab_app.catalog_selection import CatalogSelection
+from eolab_app.bounded_vector import selection_summary
 from app_support import mounted_geotiff_item
 from test_raster_clips import SOURCE, make_spec, write_source
 from catalog_selection_support import write_geopackage_layer, register_selection
@@ -128,9 +130,21 @@ def boundary(tmp_path: Path, store: PostgresJobStore) -> Any:
         StacRasterCatalog(catalog_client, "http://catalog"),
         MountedRasterResolver(tmp_path),
     )
+    async def measure_selection(selection: CatalogSelection) -> dict[str, Any]:
+        """Measure fixture polygons at Processing's injected Vector boundary.
+
+        Args:
+            selection: Descriptor to reauthorize against the fixture Catalog.
+
+        Returns:
+            Native feature measurements; Jobs transport is tested separately.
+        """
+        return selection_summary(await areas.resolve_for_sampling(selection))
+
     areas = VectorSamplingService(
         StacVectorCatalog(catalog_client, "http://catalog"),
         MountedVectorResolver(tmp_path),
+        selection_executor=measure_selection,
     )
     artifacts = LocalJobArtifacts(tmp_path / "outputs", (path,))
     artifacts.initialize()

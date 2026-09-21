@@ -12,7 +12,7 @@ The supplied Docker Compose stack runs:
 - the STAC API for Catalog queries;
 - GeoServer for raster and vector rendering;
 - a Processing worker for raster calculations and clip downloads;
-- a Job service for optional vector map outlines; and
+- a Job service for vector-area measurements and optional map outlines; and
 - one-time database migration and GeoServer initialization services.
 
 Source datasets are supplied through a read-only host bind mount. EOLab does

@@ -208,7 +208,7 @@ services:
         max-size: 10m
         max-file: "3"
 
-  # Independent executor; installed outline work reads Catalog and the scan mount.
+  # Vector measurements/outlines read Catalog and the scan mount in this executor.
   jobs:
     build:
       context: .

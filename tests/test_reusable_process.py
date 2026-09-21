@@ -188,6 +188,27 @@ def test_startup_deadline_reaps_unready_child():
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux RSS recycling policy")
+def test_parent_memory_does_not_recycle_small_child() -> None:
+    """Reuse a small worker even when its parent exceeds the recycling threshold."""
+
+    async def scenario() -> None:
+        """Keep parent pages resident while two calls use the same small worker."""
+        parent_memory = bytearray(256 * 1024**2)
+        parent_memory[::4096] = b"x" * (len(parent_memory) // 4096)
+        lane = ReusableProcess((echo,), recycle_bytes=128 * 1024**2)
+        try:
+            first = await lane.run(echo, ("first",), 10)
+            second = await lane.run(echo, ("second",), 10)
+            assert first.value[0] == second.value[0]
+            assert second.timing.reusedProcess
+            assert parent_memory[0] == ord("x")
+        finally:
+            await lane.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux RSS recycling policy")
 def test_peak_memory_recycles_process():
     """Crossing the RSS threshold retires the process before the next request."""
 

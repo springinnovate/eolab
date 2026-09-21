@@ -6,10 +6,11 @@ from typing import Any
 
 import fiona
 
-from eolab_app.catalog_selection import CatalogSelection, ResolvedCatalogSelection
+from eolab_app.catalog_selection import ResolvedCatalogSelection
 from eolab_app.vector.filters import CatalogVectorFilterRequest, VectorFilter
 from eolab_app.vector.models import ResolvedVectorSource
 from eolab_app.vector.sampling import VectorSamplingService
+from eolab_app.vector.selection_source import resolve_selection
 
 
 class FixtureCatalog:
@@ -78,20 +79,17 @@ def write_selection(
             )
     source = ResolvedVectorSource("mounted", "geopackage", path, "data", "polygons")
     catalog = FixtureCatalog(source)
-    selector = VectorSamplingService(catalog, catalog)
-
     async def authorize() -> ResolvedCatalogSelection:
         """Issue and independently reauthorize the public selection descriptor."""
-        response = await selector.select(
+        resolved = await resolve_selection(
+            catalog, catalog,
             CatalogVectorFilterRequest(
                 collectionId="eolab-mounted-vectors",
                 itemId=path.stem,
                 filter=candidate or VectorFilter(),
             )
         )
-        return await selector.resolve_for_sampling(
-            CatalogSelection.model_validate(response["selection"])
-        )
+        return await VectorSamplingService(catalog, catalog).resolve_for_sampling(resolved.selection)
 
     return asyncio.run(authorize())
 

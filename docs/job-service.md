@@ -1,7 +1,7 @@
 # Job service operation
 
-The `jobs` Compose service executes diagnostic and vector-outline operations.
-Map sampling outlines use this service; raster calculations and clips use the
+The `jobs` Compose service executes diagnostic operations, vector-area
+measurements, and map outlines. Raster calculations and clips use the
 separate Processing worker. Open `/api/jobs/docs` to try it.
 
 ## Configure a caller
@@ -151,6 +151,32 @@ The Compose service runs one worker with one CPU and 2 GiB of memory. Do not
 increase replicas or Uvicorn workers: job state is currently in memory. Restarts
 lose these jobs and results. This differs from raster calculations and clips,
 which still use the durable Processing worker and its artifact volume.
+
+## Selecting a vector analysis area
+
+Choosing filtered catalog features submits `vector.selection-measurement.v1`.
+The operation reads the original polygons and returns counts and bounds, not
+polygon coordinates. The app keeps the existing `/api/vector-sampling/areas`
+response and does not send the Jobs token or job ID to the browser.
+
+Selections share the existing Jobs queue with outlines. They use priority 0;
+optional outlines use -10. A selection starts before waiting outlines, but cannot
+interrupt an outline already running. The queue is shared across users, with the
+configured capacity above; there is no separate two-reader selection gate.
+Selections allow 30 seconds waiting and 15 seconds executing (including process
+startup and transfer). The app allows 60 seconds for the full exchange, plus up
+to 5 seconds for cleanup. Configure proxy timeouts accordingly. Changing the
+filter or disconnecting cancels that request's queued/running job through the
+Jobs client. Completed records are deleted after retrieval.
+
+Deploy the app and Jobs service together: the new app requires the registered
+measurement operation. No extra credential or environment variable is needed.
+Jobs unavailability, restart, full capacity, queue expiry, or execution timeout
+produces a selection error; retry by choosing the features again. There is no
+local execution fallback. Invalid geometry and empty-filter errors retain their
+specific explanations. Once selected, the descriptor is independent of the
+temporary job record; histogram and Processing readers still authorize it
+against Catalog without depending on a display outline or retained Jobs result.
 
 ## Map outlines
 

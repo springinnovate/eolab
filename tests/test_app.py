@@ -671,11 +671,32 @@ def test_raster_statistics_sample_a_projected_catalog_raster(
         "collectionId": "eolab-mounted-geotiffs",
         "itemId": TEST_GEOTIFF_ITEM_ID,
     }
+    def selected_area_jobs(request: httpx2.Request) -> httpx2.Response:
+        """Return measurement metadata from the independent Jobs boundary.
+
+        Args:
+            request: Application-owned measurement lifecycle request.
+
+        Returns:
+            Completed metadata for the left-half polygon fixture.
+        """
+        job_id = "00000000-0000-0000-0000-000000000472"
+        if request.method == "DELETE":
+            return httpx2.Response(204)
+        if request.url.path.endswith("/result"):
+            return httpx2.Response(200, json={"jobId": job_id, "value": {
+                "measurements": {"bbox": [-2, -2, 0, 2], "matched": 1,
+                    "total": 1, "coordinates": 5, "rings": 1, "exactGeometryBytes": 180},
+                "error": None,
+            }})
+        return httpx2.Response(202, json={"jobId": job_id, "status": "succeeded"})
+
     with TestClient(
         create_app(
             version_file_path,
             catalog_transport=httpx2.MockTransport(upstream_response),
             geoserver_transport=httpx2.MockTransport(upstream_response),
+            jobs_transport=httpx2.MockTransport(selected_area_jobs),
         )
     ) as client:
         response = client.post(
