@@ -73,19 +73,33 @@ def _invoke(target: Callable, arguments: tuple) -> tuple[Any, float]:
 
 
 def _memory_exceeded(limit: int) -> bool:
-    """Use Linux peak RSS for between-job recycling; count limits work everywhere.
+    """Check this Linux worker's peak resident memory, excluding its parent.
+
+    Linux getrusage() can carry the parent's peak RSS through fork/exec into a
+    fresh interpreter. /proc/self/status reports the current program's VmHWM,
+    so a large supervisor does not force a small worker to recycle every job.
 
     Args:
         limit: Peak resident bytes after which this process should be replaced.
 
     Returns:
-        Whether the Linux high-water RSS exceeds the recycling threshold.
+        Whether this worker's peak RSS exceeds the recycling threshold. False
+        on other platforms, where operation-count recycling still applies.
+
+    Raises:
+        OSError: If Linux process-memory information cannot be read.
+        ValueError: If the expected peak-memory field is absent or malformed.
     """
     if sys.platform != "linux":
         return False
-    import resource
-
-    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024 > limit
+    with open("/proc/self/status", encoding="ascii") as status:
+        for line in status:
+            if line.startswith("VmHWM:"):
+                _, peak_kib, unit = line.split()
+                if unit != "kB":
+                    raise ValueError("Unexpected Linux peak-memory unit")
+                return int(peak_kib) * 1024 > limit
+    raise ValueError("Linux process status has no peak-memory field")
 
 
 def _worker(
