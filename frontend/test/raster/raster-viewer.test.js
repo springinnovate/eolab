@@ -991,11 +991,11 @@ test("automatic raster range refreshes the composite rendering plan", async () =
     mapLayers.destroy();
 });
 
-test('two uncached 1D histograms share one read slot and both complete', async () => {
+test('two uncached 1D histograms are submitted independently and both complete', async () => {
     const reads = [];
     let inflight = 0;
     const h = visibleLayerFixture((item, area, signal) => {
-        assert.equal(inflight++, 0, 'the actual viewer must not overlap statistics reads');
+        inflight++;
         const result = createDeferred();
         reads.push({ item, area, signal, result });
         return result.promise.finally(() => { inflight--; });
@@ -1008,7 +1008,8 @@ test('two uncached 1D histograms share one read slot and both complete', async (
     reads[1].result.resolve(createLayerStatistics(second));
     await flushPromises();
     h.viewer.exploreAt({ lng: -74, lat: 41 });
-    assert.equal(reads.length, 3);
+    assert.equal(reads.length, 4);
+    assert.equal(inflight, 2);
     assert.deepEqual(h.controlsView.layerHistograms.map(s => s.state), ['loading', 'loading']);
     reads[2].result.resolve(createLayerStatistics(reads[2].item, reads[2].area.selectedBounds));
     await flushPromises();
@@ -1020,7 +1021,7 @@ test('two uncached 1D histograms share one read slot and both complete', async (
     h.destroy();
 });
 
-test('rapid samples drop obsolete queued work and hidden-layer requests', async () => {
+test('rapid samples abort obsolete and hidden-layer requests and ignore late results', async () => {
     const reads = [];
     const h = visibleLayerFixture((item, area, signal) => {
         if (area.kind === 'wholeRaster') return Promise.resolve(createLayerStatistics(item));
@@ -1033,27 +1034,24 @@ test('rapid samples drop obsolete queued work and hidden-layer requests', async 
     await flushPromises();
     h.viewer.exploreAt({ lng: -74, lat: 41 });
     h.viewer.exploreAt({ lng: -72, lat: 43 });
-    assert.equal(reads.length, 1);
-    assert.equal(reads[0].signal.aborted, true);
+    assert.equal(reads.length, 4);
+    assert.ok(reads.slice(0, 2).every(read => read.signal.aborted));
     const [, bottom] = h.mapLayers.snapshots();
     h.mapLayers.setVisible(bottom.key, false);
-    reads[0].result.resolve(createLayerStatistics(reads[0].item, reads[0].area.selectedBounds));
-    await flushPromises();
-    assert.equal(reads.length, 2);
-    assert.notEqual(reads[1].item.id, reads[0].item.id);
-    assert.ok(reads[1].area.selectedBounds.west > -74);
-    reads[1].result.resolve(createLayerStatistics(reads[1].item, reads[1].area.selectedBounds));
+    assert.equal(reads.filter(read => !read.signal.aborted).length, 1);
+    for (const read of reads) read.result.resolve(createLayerStatistics(read.item, read.area.selectedBounds));
     await flushPromises();
     assert.deepEqual(h.controlsView.layerHistograms.map(s => s.state), ['ready']);
+    assert.ok(h.controlsView.layerHistograms[0].statistics.selectedBounds.west > -74);
     h.viewer.exploreAt({ lng: -70, lat: 45 });
     h.destroy();
-    assert.equal(reads[2].signal.aborted, true);
-    reads[2].result.resolve(createLayerStatistics(reads[2].item, reads[2].area.selectedBounds));
+    assert.equal(reads[4].signal.aborted, true);
+    reads[4].result.resolve(createLayerStatistics(reads[4].item, reads[4].area.selectedBounds));
     await flushPromises();
-    assert.equal(reads.length, 3);
+    assert.equal(reads.length, 5);
 });
 
-test('mode changes cancel queued 1D reads and share the slot with 2D', async () => {
+test('mode changes cancel 1D requests and submit 2D without a browser queue', async () => {
     const reads = [];
     let pairedCalls = 0;
     const h = visibleLayerFixture((item, area, signal) => {
@@ -1067,19 +1065,15 @@ test('mode changes cancel queued 1D reads and share the slot with 2D', async () 
     await flushPromises();
     h.viewer.exploreAt({ lng: -74, lat: 41 });
     h.controlsView.handlers.onBivariateModeChange('bivariate');
-    assert.equal(reads.length, 1);
-    assert.equal(reads[0].signal.aborted, true);
-    assert.equal(pairedCalls, 0);
-    reads[0].result.resolve(createLayerStatistics(reads[0].item, reads[0].area.selectedBounds));
-    await flushPromises();
+    assert.equal(reads.length, 2);
+    assert.ok(reads.every(read => read.signal.aborted));
     assert.equal(pairedCalls, 1);
-    assert.equal(reads.length, 1, 'the canceled second 1D request must never start');
+    for (const read of reads) read.result.resolve(createLayerStatistics(read.item, read.area.selectedBounds));
+    await flushPromises();
     h.controlsView.handlers.onBivariateModeChange('overlay');
-    for (let i = 1; i <= 2; i++) {
-        assert.equal(reads.length, i + 1);
-        reads[i].result.resolve(createLayerStatistics(reads[i].item, reads[i].area.selectedBounds));
-        await flushPromises();
-    }
+    assert.equal(reads.length, 4);
+    for (const read of reads.slice(2)) read.result.resolve(createLayerStatistics(read.item, read.area.selectedBounds));
+    await flushPromises();
     assert.deepEqual(h.controlsView.layerHistograms.map(s => s.state), ['ready', 'ready']);
     h.destroy();
 });
@@ -3787,19 +3781,19 @@ test("hide all cancels pending histograms and drops late results; show all resto
     await h.viewer.show(createRasterItem("bulk-second"));
     await flushPromises();
     h.viewer.exploreAt({ lng: -74, lat: 41 });
-    assert.equal(reads.length, 1);
+    assert.equal(reads.length, 2);
     h.layerStackView.handlers.onAllVisibility(false);
-    assert.equal(reads[0].signal.aborted, true);
+    assert.ok(reads.every(read => read.signal.aborted));
     assert.deepEqual(h.controlsView.layerHistograms, []);
     assert.equal(h.controlsView.controlsVisible, false);
-    reads[0].result.resolve(createLayerStatistics(reads[0].item, reads[0].area.selectedBounds));
+    for (const read of reads) read.result.resolve(createLayerStatistics(read.item, read.area.selectedBounds));
     await flushPromises();
-    assert.equal(reads.length, 1, "Queued hidden layers must not start reading");
+    assert.equal(reads.length, 2, "No additional requests for hidden layers");
     assert.deepEqual(h.controlsView.layerHistograms, [], "Late results cannot reopen hidden histograms");
     h.layerStackView.handlers.onAllVisibility(true);
     await flushPromises();
-    for (let i = 1; i <= 2; i++) {
-        assert.equal(reads.length, i + 1);
+    for (let i = 2; i <= 3; i++) {
+        assert.equal(reads.length, 4);
         reads[i].result.resolve(createLayerStatistics(reads[i].item, reads[i].area.selectedBounds));
         await flushPromises();
     }

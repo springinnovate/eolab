@@ -2137,7 +2137,7 @@ def test_cancelled_statistics_request_keeps_admission_until_worker_finishes(
         "eolab_app.raster.statistics_service.asyncio.to_thread",
         to_thread,
     )
-    service = RasterStatisticsService(_SourceAuthorizer(authorizations), 1, 32)
+    service = RasterStatisticsService(_SourceAuthorizer(authorizations), 1, 32, queue_capacity=0)
 
     async def cancel_during_read() -> None:
         """Cancel the first waiter while its fake worker remains active.
@@ -2151,13 +2151,13 @@ def test_cancelled_statistics_request_keeps_admission_until_worker_finishes(
         with pytest.raises(asyncio.CancelledError):
             await first_request
 
-        with pytest.raises(RasterStatisticsCapacityError, match="capacity is busy"):
+        with pytest.raises(RasterStatisticsCapacityError, match="queue is full"):
             await service.get(requests[1])
-        with pytest.raises(RasterStatisticsCapacityError, match="finishing canceled work"):
+        with pytest.raises(RasterStatisticsCapacityError, match="queue is full"):
             await service.get(requests[0])
         assert started_reads == 1
         release_reads.set()
-        while service._inflight:
+        while service._tasks:
             await asyncio.sleep(0)
         await service.get(requests[1])
 
@@ -2222,7 +2222,7 @@ def test_statistics_service_caps_distinct_work_and_coalesces_at_capacity(
         "eolab_app.raster.statistics_service.asyncio.to_thread",
         to_thread,
     )
-    service = RasterStatisticsService(_SourceAuthorizer(authorizations), 2, 32)
+    service = RasterStatisticsService(_SourceAuthorizer(authorizations), 2, 32, queue_capacity=0)
 
     async def exercise_admission() -> None:
         """Fill admission, join existing work, and recover after completion.
@@ -2235,7 +2235,7 @@ def test_statistics_service_caps_distinct_work_and_coalesces_at_capacity(
         await two_reads_started.wait()
         coalesced_request = asyncio.create_task(service.get(requests[0]))
 
-        with pytest.raises(RasterStatisticsCapacityError, match="capacity is busy"):
+        with pytest.raises(RasterStatisticsCapacityError, match="queue is full"):
             await service.get(requests[2])
         assert len(service._inflight) == 2
         assert len(read_order) == 2

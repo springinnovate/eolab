@@ -5,16 +5,24 @@ from eolab_app.catalog_selection import (
     SelectionUnavailableError,
 )
 import asyncio
+import logging
+import math
 import threading
+import time
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable, Coroutine
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import rasterio
 
-from eolab_app.raster.errors import RasterConflictError, RasterStatisticsCapacityError
+from eolab_app.raster.errors import (
+    RasterConflictError,
+    RasterStatisticsCapacityError,
+    RasterStatisticsQueueTimeoutError,
+)
 from eolab_app.raster.models import (
     AuthorizedRaster,
     CatalogRasterPairRequest,
@@ -50,6 +58,7 @@ from eolab_app.sampling_area import (
 )
 
 _StatisticsResult = RasterStatistics | RasterPairedStatistics
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -57,7 +66,7 @@ class _InflightStatistics:
     """Track one shared worker and the request waiters that still own it.
 
     Attributes:
-        task: Shared asynchronous computation around one Rasterio worker.
+        task: Shared queued or running computation around one Rasterio worker.
         cancellation_requested: Thread-safe last-waiter cancellation signal.
         waiter_count: Active callers awaiting this exact cache identity.
         started: Whether the task acquired bounded read capacity.
@@ -74,8 +83,8 @@ class _InflightStatistics:
 class RasterStatisticsService:
     """Authorize, admit, coalesce, cache, and cancel statistics reads.
 
-    Distinct in-flight computations are limited to configured read capacity;
-    callers requesting an identical cache identity share one admitted worker.
+    Distinct computations wait in FIFO order for configured read capacity.
+    Callers requesting an identical cache identity share one queued or active read.
     Ordinary and paired completed results share one configured cache budget.
     """
 
@@ -98,30 +107,47 @@ class RasterStatisticsService:
             ],
             RasterPairedStatistics,
         ] = read_raster_paired_statistics,
+        *,
+        queue_capacity: int = 32,
+        queue_wait_seconds: float = 30,
+        max_waiters: int = 256,
     ) -> None:
         """Create a bounded analysis workflow over current catalog sources.
 
         Args:
             source_authorizer: Catalog-owned mounted-source authorization.
-            read_concurrency: Maximum simultaneous Rasterio reads and admitted
-                distinct statistics computations.
+            read_concurrency: Maximum simultaneous Rasterio reads.
             cache_entries: Maximum completed ordinary and paired statistics
                 documents retained in one combined cache.
             catalog_selection_reader: Narrow resolver for opaque ready catalog selections. It is
                 optional only for compositions that reject catalog selection requests.
             statistics_reader: Synchronous bounded Rasterio reader boundary.
             paired_statistics_reader: Synchronous ordered-pair reader boundary.
+            queue_capacity: Additional distinct reads allowed to wait for a reader.
+            queue_wait_seconds: Maximum wait for read capacity, excluding reading.
+            max_waiters: Maximum callers awaiting queued or active results,
+                including callers sharing the same computation. Cache hits bypass it.
 
         Raises:
-            ValueError: If concurrency or cache limits are not positive.
+            ValueError: If capacity limits are invalid or the wait is not finite and positive.
         """
         if read_concurrency < 1:
             raise ValueError("Raster statistics concurrency must be positive")
         if cache_entries < 1:
             raise ValueError("Raster statistics cache size must be positive")
+        if queue_capacity < 0 or max_waiters < 1:
+            raise ValueError(
+                "Statistics queue capacity must be nonnegative and max waiters positive"
+            )
+        if not math.isfinite(queue_wait_seconds) or queue_wait_seconds <= 0:
+            raise ValueError("Statistics queue wait must be finite and positive")
         self._source_authorizer = source_authorizer
         self._read_semaphore = asyncio.Semaphore(read_concurrency)
-        self._maximum_inflight = read_concurrency
+        self._maximum_inflight = read_concurrency + queue_capacity
+        self._queue_wait_seconds = queue_wait_seconds
+        self._max_waiters = max_waiters
+        self._waiter_count = 0
+        self._tasks: set[asyncio.Task[_StatisticsResult]] = set()
         self._cache_entries = cache_entries
         self._catalog_selection_reader = catalog_selection_reader
         self._statistics_reader = statistics_reader
@@ -148,6 +174,8 @@ class RasterStatisticsService:
         Raises:
             RasterFeatureError: If catalog/source authorization fails.
             RasterConflictError: If raster, catalog selection, or bounded reading fails.
+            RasterStatisticsCapacityError: If the pending-read or caller limit is full.
+            RasterStatisticsQueueTimeoutError: If read capacity does not become available in time.
         """
         authorized_raster = await self._source_authorizer.authorize(request)
         try:
@@ -168,31 +196,15 @@ class RasterStatisticsService:
                 self._cache.move_to_end(cache_key)
                 work = None
             else:
-                work = self._inflight.get(cache_key)
-                if work is None:
-                    if len(self._inflight) >= self._maximum_inflight:
-                        raise RasterStatisticsCapacityError(
-                            "Raster statistics capacity is busy; retry after "
-                            "the current bounded read finishes."
-                        )
-                    cancellation_requested = threading.Event()
-                    task: asyncio.Task[_StatisticsResult] = asyncio.create_task(
-                        self._compute(
-                            authorized_raster,
-                            cache_key,
-                            sampling_area,
-                            cancellation_requested,
-                        )
-                    )
-                    task.add_done_callback(self._retrieve_task_exception)
-                    work = _InflightStatistics(task, cancellation_requested)
-                    self._inflight[cache_key] = work
-                elif work.cancellation_requested.is_set():
-                    raise RasterStatisticsCapacityError(
-                        "Raster statistics capacity is finishing canceled work; "
-                        "retry shortly."
-                    )
-                work.waiter_count += 1
+                work = self._join_or_queue_read(
+                    cache_key,
+                    lambda cancellation: self._compute(
+                        authorized_raster,
+                        cache_key,
+                        sampling_area,
+                        cancellation,
+                    ),
+                )
 
         if cached is not None:
             try:
@@ -255,8 +267,10 @@ class RasterStatisticsService:
 
         Raises:
             RasterFeatureError: If either catalog/source authorization fails.
-            RasterConflictError: If overlap, validity, capacity, source, or
+            RasterConflictError: If overlap, validity, source, or
                 bounded-reading contracts fail.
+            RasterStatisticsCapacityError: If the pending-read or caller limit is full.
+            RasterStatisticsQueueTimeoutError: If read capacity does not become available in time.
         """
         authorized_x, authorized_y = await asyncio.gather(
             self._source_authorizer.authorize(request.x_raster),
@@ -289,36 +303,17 @@ class RasterStatisticsService:
                 self._cache.move_to_end(cache_key)
                 work = None
             else:
-                work = self._inflight.get(cache_key)
-                if work is None:
-                    if len(self._inflight) >= self._maximum_inflight:
-                        raise RasterStatisticsCapacityError(
-                            "Raster statistics capacity is busy; retry after "
-                            "the current bounded read finishes."
-                        )
-                    cancellation_requested = threading.Event()
-                    task: asyncio.Task[_StatisticsResult] = asyncio.create_task(
-                        self._compute_paired(
-                            authorized_x,
-                            authorized_y,
-                            selected_bounds,
-                            cache_key,
-                            cancellation_requested,
-                            sampling_area,
-                        )
-                    )
-                    task.add_done_callback(self._retrieve_task_exception)
-                    work = _InflightStatistics(
-                        task,
-                        cancellation_requested,
-                    )
-                    self._inflight[cache_key] = work
-                elif work.cancellation_requested.is_set():
-                    raise RasterStatisticsCapacityError(
-                        "Raster statistics capacity is finishing canceled work; "
-                        "retry shortly."
-                    )
-                work.waiter_count += 1
+                work = self._join_or_queue_read(
+                    cache_key,
+                    lambda cancellation: self._compute_paired(
+                        authorized_x,
+                        authorized_y,
+                        selected_bounds,
+                        cache_key,
+                        cancellation,
+                        sampling_area,
+                    ),
+                )
 
         if cached is not None:
             try:
@@ -355,6 +350,90 @@ class RasterStatisticsService:
         finally:
             await self._release_waiter(cache_key, work)
 
+    def _join_or_queue_read(
+        self,
+        cache_key: tuple[object, ...],
+        compute: Callable[[threading.Event], Coroutine[Any, Any, _StatisticsResult]],
+    ) -> _InflightStatistics:
+        """Join identical work or queue a new read while the state lock is held.
+
+        Args:
+            cache_key: Authorized source, area, algorithm and sampling policy.
+            compute: Create the ordinary or paired calculation with its cancellation signal.
+
+        Returns:
+            Shared work with this caller counted as a waiter.
+
+        Raises:
+            RasterStatisticsCapacityError: If the backlog or caller limit is full.
+        """
+        if self._waiter_count >= self._max_waiters:
+            raise RasterStatisticsCapacityError(
+                "Too many histogram requests are waiting. Try again shortly."
+            )
+        work = self._inflight.get(cache_key)
+        if work is None:
+            if sum(not task.done() for task in self._tasks) >= self._maximum_inflight:
+                raise RasterStatisticsCapacityError(
+                    "The histogram request queue is full. Try again shortly."
+                )
+            cancellation = threading.Event()
+            task = asyncio.create_task(compute(cancellation))
+            task.add_done_callback(self._retrieve_task_exception)
+            self._tasks.add(task)
+            work = _InflightStatistics(task, cancellation)
+            self._inflight[cache_key] = work
+        work.waiter_count += 1
+        self._waiter_count += 1
+        return work
+
+    @asynccontextmanager
+    async def _wait_for_read_capacity(
+        self,
+        cache_key: tuple[object, ...],
+    ) -> AsyncIterator[None]:
+        """Wait in arrival order, then retain capacity until the reader returns.
+
+        Args:
+            cache_key: Identity of the queued ordinary or paired calculation.
+
+        Yields:
+            None when this calculation may start its bounded raster read.
+
+        Raises:
+            RasterStatisticsQueueTimeoutError: If capacity is not available in time.
+            RasterReadCancelled: If all callers have left before reading starts.
+            asyncio.CancelledError: If the queued calculation is canceled.
+        """
+        queued_at = time.perf_counter()
+        try:
+            async with asyncio.timeout(self._queue_wait_seconds):
+                await self._read_semaphore.acquire()
+        except TimeoutError as error:
+            _LOGGER.info(
+                "Histogram queue wait expired after %.3f seconds",
+                time.perf_counter() - queued_at,
+            )
+            raise RasterStatisticsQueueTimeoutError(
+                "The histogram request waited too long for a reader. Try again shortly."
+            ) from error
+        read_started = time.perf_counter()
+        try:
+            async with self._state_lock:
+                work = self._inflight.get(cache_key)
+                if work is None or work.task is not asyncio.current_task():
+                    raise RasterReadCancelled
+                work.started = True
+            yield
+        finally:
+            self._read_semaphore.release()
+            _LOGGER.info(
+                "Histogram read finished: kind=%s queue_wait_seconds=%.3f read_seconds=%.3f",
+                "paired" if cache_key[0] == "paired" else "ordinary",
+                read_started - queued_at,
+                time.perf_counter() - read_started,
+            )
+
     async def _compute_paired(
         self,
         authorized_x: AuthorizedRaster,
@@ -387,12 +466,7 @@ class RasterStatisticsService:
             ValueError: If source or bounded-read contracts are invalid.
         """
         try:
-            async with self._read_semaphore:
-                async with self._state_lock:
-                    work = self._inflight.get(cache_key)
-                    if work is None or work.task is not asyncio.current_task():
-                        raise RasterReadCancelled
-                    work.started = True
+            async with self._wait_for_read_capacity(cache_key):
                 require_active_raster_read(cancellation_requested.is_set)
                 await self._require_current_sampling_area(sampling_area)
                 options = (
@@ -445,6 +519,7 @@ class RasterStatisticsService:
         """
         async with self._state_lock:
             work.waiter_count -= 1
+            self._waiter_count -= 1
             if work.waiter_count != 0:
                 return
             if work.finished:
@@ -452,10 +527,11 @@ class RasterStatisticsService:
                     self._inflight.pop(cache_key)
                 return
             work.cancellation_requested.set()
+            if self._inflight.get(cache_key) is work:
+                self._inflight.pop(cache_key)
             if not work.started:
-                if self._inflight.get(cache_key) is work:
-                    self._inflight.pop(cache_key)
                 work.task.cancel()
+                self._tasks.discard(work.task)
 
     async def _compute(
         self,
@@ -486,12 +562,7 @@ class RasterStatisticsService:
             ValueError: If source or sampling contracts are invalid.
         """
         try:
-            async with self._read_semaphore:
-                async with self._state_lock:
-                    work = self._inflight.get(cache_key)
-                    if work is None or work.task is not asyncio.current_task():
-                        raise RasterReadCancelled
-                    work.started = True
+            async with self._wait_for_read_capacity(cache_key):
                 require_active_raster_read(cancellation_requested.is_set)
                 await self._require_current_sampling_area(sampling_area)
                 statistics = await asyncio.to_thread(
@@ -560,9 +631,7 @@ class RasterStatisticsService:
                 the opaque lifecycle cannot be resolved.
         """
         if request.selected_bounds is not None:
-            return SelectedBoundsSamplingArea(
-                request.selected_bounds.canonical_tuple()
-            )
+            return SelectedBoundsSamplingArea(request.selected_bounds.canonical_tuple())
         if request.catalog_selection is None:
             return WholeRasterSamplingArea()
         if self._catalog_selection_reader is None:
@@ -603,8 +672,8 @@ class RasterStatisticsService:
                 "The catalog vector changed while it was being sampled. Try again."
             )
 
-    @staticmethod
     def _retrieve_task_exception(
+        self,
         completed_task: asyncio.Task[_StatisticsResult],
     ) -> None:
         """Retrieve failures from shared work even when its waiters have left.
@@ -615,5 +684,6 @@ class RasterStatisticsService:
         Returns:
             None after consuming any worker exception.
         """
+        self._tasks.discard(completed_task)
         if not completed_task.cancelled():
             completed_task.exception()

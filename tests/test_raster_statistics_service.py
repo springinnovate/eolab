@@ -427,6 +427,7 @@ def test_paired_last_waiter_cancellation_retains_shared_capacity(
         source_authorizer,
         read_concurrency=1,
         cache_entries=4,
+        queue_capacity=0,
         statistics_reader=ordinary_reader,
         paired_statistics_reader=paired_reader,
     )
@@ -457,14 +458,14 @@ def test_paired_last_waiter_cancellation_retains_shared_capacity(
         with pytest.raises(asyncio.CancelledError):
             await paired_task
         assert await asyncio.to_thread(cancellation_observed.wait, 2)
-        with pytest.raises(RasterStatisticsCapacityError, match="capacity is busy"):
+        with pytest.raises(RasterStatisticsCapacityError, match="queue is full"):
             await service.get(ordinary_request)
-        with pytest.raises(RasterStatisticsCapacityError, match="finishing canceled work"):
+        with pytest.raises(RasterStatisticsCapacityError, match="queue is full"):
             await service.get_paired(pair_request)
         release_read.set()
         assert await asyncio.to_thread(reader_finished.wait, 2)
         async with asyncio.timeout(2):
-            while service._inflight:
+            while service._tasks:
                 await asyncio.sleep(0)
         assert (await service.get(ordinary_request)).sample_minimum == 1
 

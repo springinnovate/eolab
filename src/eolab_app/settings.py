@@ -113,6 +113,9 @@ class Settings:
         raster_pixel_read_concurrency: Maximum concurrent raster pixel reads.
         raster_statistics_read_concurrency: Maximum concurrent statistics reads.
         raster_statistics_cache_entries: Completed statistics cache capacity.
+        raster_statistics_queue_capacity: Additional distinct histogram reads allowed to wait.
+        raster_statistics_queue_wait_seconds: Maximum histogram wait before reading starts.
+        raster_statistics_max_waiters: Maximum callers awaiting histogram results, including duplicates.
         geoserver_admin_user: GeoServer administrator username.
         geoserver_admin_password: GeoServer administrator password.
         scan_mount_path: Read-only mounted dataset root.
@@ -176,6 +179,9 @@ class Settings:
     processing_data_path: Path = Path("/processing-data").absolute()
     jobs_token: str = field(default="", repr=False)
     carto_basemap_api_key: str = field(default="", repr=False)
+    raster_statistics_queue_capacity: int = 32
+    raster_statistics_queue_wait_seconds: float = 30
+    raster_statistics_max_waiters: int = 256
 
     def __post_init__(self) -> None:
         """Validate the application settings contract.
@@ -234,6 +240,17 @@ class Settings:
         if self.raster_statistics_cache_entries < 1:
             raise ValueError(
                 "RASTER_STATISTICS_CACHE_ENTRIES must be greater than zero"
+            )
+        if self.raster_statistics_queue_capacity < 0:
+            raise ValueError("RASTER_STATISTICS_QUEUE_CAPACITY must be nonnegative")
+        if self.raster_statistics_max_waiters < 1:
+            raise ValueError("RASTER_STATISTICS_MAX_WAITERS must be greater than zero")
+        if (
+            not math.isfinite(self.raster_statistics_queue_wait_seconds)
+            or self.raster_statistics_queue_wait_seconds <= 0
+        ):
+            raise ValueError(
+                "RASTER_STATISTICS_QUEUE_WAIT_SECONDS must be finite and greater than zero"
             )
         if self.scan_writer_count < 1:
             raise ValueError("SCAN_WRITER_COUNT must be greater than zero")
@@ -415,6 +432,15 @@ def load_settings(
         ),
         raster_statistics_cache_entries=int(
             os.environ["RASTER_STATISTICS_CACHE_ENTRIES"]
+        ),
+        raster_statistics_queue_capacity=int(
+            os.environ.get("RASTER_STATISTICS_QUEUE_CAPACITY", "32")
+        ),
+        raster_statistics_queue_wait_seconds=float(
+            os.environ.get("RASTER_STATISTICS_QUEUE_WAIT_SECONDS", "30")
+        ),
+        raster_statistics_max_waiters=int(
+            os.environ.get("RASTER_STATISTICS_MAX_WAITERS", "256")
         ),
         geoserver_admin_user=os.environ["GEOSERVER_ADMIN_USER"].strip(),
         geoserver_admin_password=os.environ["GEOSERVER_ADMIN_PASSWORD"],

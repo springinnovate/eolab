@@ -2,7 +2,6 @@
 
 from typing import Literal
 
-
 RasterPublicationFailureCategory = Literal[
     "reader_rejection",
     "connectivity",
@@ -53,7 +52,11 @@ class RasterConflictError(RasterFeatureError):
 
 
 class RasterStatisticsCapacityError(RasterConflictError):
-    """A temporary statistics admission conflict, safe to retry later."""
+    """The statistics backlog or waiting-caller limit is full; retry later."""
+
+
+class RasterStatisticsQueueTimeoutError(RasterConflictError):
+    """A queued histogram request reached its wait deadline before reading."""
 
 
 class RasterUpstreamError(RasterFeatureError):

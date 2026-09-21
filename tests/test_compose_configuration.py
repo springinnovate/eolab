@@ -97,6 +97,15 @@ def test_scan_paths_share_one_read_only_deployment_mount() -> None:
 def test_raster_capacity_is_deployer_configurable() -> None:
     """Expose safe defaults while allowing explicit deployment overrides."""
     compose = COMPOSE_PATH.read_text(encoding="utf-8")
+    for setting, default in (
+        ("QUEUE_CAPACITY", "32"),
+        ("QUEUE_WAIT_SECONDS", "30"),
+        ("MAX_WAITERS", "256"),
+    ):
+        assert (
+            f'"RASTER_STATISTICS_{setting}=${{EOLAB_RASTER_STATISTICS_{setting}:-{default}}}"'
+            in compose
+        )
 
     assert (
         '"RASTER_PIXEL_READ_CONCURRENCY='

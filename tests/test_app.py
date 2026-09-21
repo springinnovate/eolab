@@ -1177,6 +1177,9 @@ def test_load_settings_rejects_blank_version(
         ("RASTER_PIXEL_READ_CONCURRENCY", "1.5"),
         ("RASTER_STATISTICS_READ_CONCURRENCY", "1.5"),
         ("RASTER_STATISTICS_CACHE_ENTRIES", "1.5"),
+        ("RASTER_STATISTICS_QUEUE_CAPACITY", "1.5"),
+        ("RASTER_STATISTICS_MAX_WAITERS", "1.5"),
+        ("RASTER_STATISTICS_QUEUE_WAIT_SECONDS", "invalid"),
     ),
 )
 def test_load_settings_rejects_malformed_number(
@@ -1261,6 +1264,11 @@ def test_load_settings_rejects_invalid_scan_path_lists(
         ("RASTER_PIXEL_READ_CONCURRENCY", "0"),
         ("RASTER_STATISTICS_READ_CONCURRENCY", "0"),
         ("RASTER_STATISTICS_CACHE_ENTRIES", "0"),
+        ("RASTER_STATISTICS_QUEUE_CAPACITY", "-1"),
+        ("RASTER_STATISTICS_MAX_WAITERS", "0"),
+        ("RASTER_STATISTICS_QUEUE_WAIT_SECONDS", "0"),
+        ("RASTER_STATISTICS_QUEUE_WAIT_SECONDS", "nan"),
+        ("RASTER_STATISTICS_QUEUE_WAIT_SECONDS", "inf"),
     ),
 )
 def test_load_settings_rejects_out_of_range_number(

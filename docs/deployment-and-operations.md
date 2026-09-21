@@ -217,9 +217,27 @@ the deployed workload. The main controls are:
 | `EOLAB_COMPOSITE_TILE_CACHE_BYTES` | `134217728` | Process-local successful composite PNG response bytes |
 | `EOLAB_RASTER_PIXEL_READ_CONCURRENCY` | `2` | Concurrent interactive pixel reads |
 | `EOLAB_RASTER_STATISTICS_READ_CONCURRENCY` | `1` | Concurrent bounded statistics reads |
+| `EOLAB_RASTER_STATISTICS_QUEUE_CAPACITY` | `32` | Additional distinct 1D/2D histogram reads waiting per app process |
+| `EOLAB_RASTER_STATISTICS_QUEUE_WAIT_SECONDS` | `30` | Maximum wait before a histogram read starts, excluding read time |
+| `EOLAB_RASTER_STATISTICS_MAX_WAITERS` | `256` | Callers awaiting histogram results per app process, including duplicate requests |
 | `EOLAB_SCAN_WORKER_COUNT` | `8` | Concurrent metadata workers |
 | `EOLAB_SCAN_WRITER_COUNT` | `4` | Concurrent Catalog bulk writes |
 | `EOLAB_SCAN_BATCH_SIZE` | `100` | Items in each bulk write |
+
+Ordinary and paired histograms share a FIFO queue in each app process. Identical
+requests share one read; cached results bypass the queue. The defaults permit one
+active read, 32 additional distinct reads, and 256 waiting callers (including
+duplicates). Canceling the last caller drops queued work; an active reader holds
+its capacity until it actually exits. Hover pixel picking uses separate capacity.
+
+A full backlog or waiter limit returns 409 `statistics_capacity_busy`; the browser
+retries that response up to five times, then offers Retry. A request waiting more
+than 30 seconds returns 503 `statistics_queue_timeout` and offers manual Retry.
+Both responses include `Retry-After`. The wait limit excludes raster reading;
+configure the reverse proxy's response timeout to allow queue wait plus the read.
+Info logs separate `queue_wait_seconds` from `read_seconds` (the latter includes
+selection rechecks and result caching). These limits are per process, not per user,
+and increasing the queue does not increase native execution concurrency.
 
 EOLab abandons queued upstream `GetMap` work when the requesting browser
 disconnects, but an already-running GeoServer render may not stop immediately.
