@@ -239,6 +239,21 @@ Info logs separate `queue_wait_seconds` from `read_seconds` (the latter includes
 selection rechecks and result caching). These limits are per process, not per user,
 and increasing the queue does not increase native execution concurrency.
 
+Vector filter counts use two readers per app process, with up to 32 requests
+waiting in FIFO order for at most 30 seconds. The wait is separate from the
+existing 21-second read deadline and one-million-feature scan limit. These are
+the Vector publication service's constructor defaults. Cached counts and filter
+application bypass the count queue. Disconnecting removes a waiting request;
+an active read keeps its slot until the reader exits after cancellation.
+
+The `/api/vector-rendering/filter-counts` endpoint returns 429
+`filter_count_queue_full` or 503 `filter_count_queue_timeout` in `detail.category`,
+with `Retry-After: 2`. The layer stays filtered and displays a message to apply
+the filter again to retry counting; the browser does not retry indefinitely.
+A successful response with `complete: false` still means the reader could not
+provide an exact count, rather than ordinary queue contention. Allow at least
+the combined queue and read deadlines in proxy response timeouts.
+
 EOLab abandons queued upstream `GetMap` work when the requesting browser
 disconnects, but an already-running GeoServer render may not stop immediately.
 Increasing concurrency beyond the storage and CPU available can make latency

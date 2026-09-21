@@ -5,13 +5,15 @@ import {
     normalizeVectorNumericClassification,
 } from "./style.js";
 
-const PUBLICATION_FAILURE_CATEGORIES = new Set([
+const VECTOR_FAILURE_CATEGORIES = new Set([
     "reader_rejection",
     "connectivity",
     "authentication",
     "timeout",
     "configuration",
     "upstream_failure",
+    "filter_count_queue_full",
+    "filter_count_queue_timeout",
 ]);
 
 /** Error returned by a vector assessment or publication boundary. */
@@ -20,7 +22,7 @@ export class VectorRenderingRequestError extends Error {
      * Create a rendering request failure.
      *
      * @param {string} message Browser-safe actionable detail.
-     * @param {string|null} category Stable publication category.
+     * @param {string|null} category Stable vector request failure category.
      */
     constructor(message, category = null) {
         super(message);
@@ -46,7 +48,7 @@ async function vectorRenderingError(response, action) {
     if (
         detail !== null &&
         typeof detail === "object" &&
-        PUBLICATION_FAILURE_CATEGORIES.has(detail.category) &&
+        VECTOR_FAILURE_CATEGORIES.has(detail.category) &&
         typeof detail.message === "string"
     ) {
         return new VectorRenderingRequestError(
@@ -309,6 +311,9 @@ export async function filterCatalogVector(item, filter, signal, fetchImplementat
  * @param {AbortSignal} [signal] Count cancellation.
  * @param {typeof fetch} [fetchImplementation=globalThis.fetch] HTTP implementation.
  * @return {Promise<Object>} Exact counts or explicit unavailable counts.
+ * @throws {VectorRenderingRequestError} If the queue is full, waiting expires,
+ * or the request/response is invalid. Queue errors include their category.
+ * @throws {DOMException} If the requesting layer cancels the count.
  */
 export async function countCatalogVectorFilter(item, filter, signal, fetchImplementation = globalThis.fetch) {
     const result = await postVectorAction(item, "filter-counts", "filter count", fetchImplementation, { filter }, signal);

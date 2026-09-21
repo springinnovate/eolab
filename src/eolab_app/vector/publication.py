@@ -1,6 +1,7 @@
 """Application workflow coordinating authoritative vector publication."""
 
 import asyncio
+import math
 from collections.abc import Callable
 from collections import OrderedDict
 from threading import Event
@@ -12,7 +13,11 @@ from eolab_app.rendering.errors import PublishedLayerNotAuthorizedError
 
 from eolab_app.rendering.geoserver import GEOSERVER_WORKSPACE_NAME
 from eolab_app.rendering.errors import PublishedLayerChangedError
-from eolab_app.vector.errors import VectorConflictError
+from eolab_app.vector.errors import (
+    VectorConflictError,
+    VectorFilterCountCapacityError,
+    VectorFilterCountQueueTimeoutError,
+)
 from eolab_app.vector.models import (
     CatalogVectorRequest,
     ResolvedVectorSource,
@@ -44,6 +49,9 @@ class VectorPublicationService:
             [ResolvedVectorSource], VectorSourceSignature
         ] = vector_source_signature,
         field_reader: VectorFieldReader | None = None,
+        *,
+        filter_count_queue_capacity: int = 32,
+        filter_count_queue_wait_seconds: float = 30,
     ) -> None:
         """Create a serialized vector publication use case.
 
@@ -54,7 +62,22 @@ class VectorPublicationService:
             vector_registry: Process-local public-WMS authorization registry.
             signature_reader: Complete mounted source identity boundary.
             field_reader: Existing bounded geometry-free scalar reader for counts.
+            filter_count_queue_capacity: Maximum count requests waiting behind
+                the two active readers. Cached counts do not wait.
+            filter_count_queue_wait_seconds: Maximum wait for a reader, separate
+                from the existing 21-second counting deadline.
+
+        Raises:
+            ValueError: If the queue capacity is negative or its wait is not
+                finite and positive.
         """
+        if filter_count_queue_capacity < 0:
+            raise ValueError("Filter count queue capacity must be nonnegative")
+        if (
+            not math.isfinite(filter_count_queue_wait_seconds)
+            or filter_count_queue_wait_seconds <= 0
+        ):
+            raise ValueError("Filter count queue wait must be finite and positive")
         self._catalog = catalog
         self._source_resolver = source_resolver
         self._publisher = publisher
@@ -63,6 +86,9 @@ class VectorPublicationService:
         self._publish_lock = asyncio.Lock()
         self._field_reader = field_reader
         self._filter_slots = asyncio.Semaphore(2)
+        self._filter_count_queue_capacity = filter_count_queue_capacity
+        self._filter_count_queue_wait_seconds = filter_count_queue_wait_seconds
+        self._waiting_filter_counts = 0
         self._filter_counts: OrderedDict[str, VectorFilterCount] = OrderedDict()
 
     async def publish(self, request: CatalogVectorRequest) -> PublishedVector:
@@ -208,17 +234,24 @@ class VectorPublicationService:
             raise VectorConflictError(str(error)) from error
         return AppliedVectorFilter(layerName=layer_name, filter=candidate)
 
-    async def count_filter(self, request: CatalogVectorFilterRequest) -> VectorFilterCount:
-        """Count a current whole-layer filter within row/time/concurrency bounds.
+    async def count_filter(
+        self, request: CatalogVectorFilterRequest
+    ) -> VectorFilterCount:
+        """Wait for a reader and count the features matching an applied filter.
 
         Args:
             request: Same Catalog identity and rules used for rendering.
 
         Returns:
-            Exact counts when complete; otherwise unavailable counts.
+            Cached or newly calculated exact counts. Unavailable counts mean
+            reading could not finish within its row/time budget or no reader
+            is configured; a busy queue raises a separate error.
 
         Raises:
             VectorConflictError: If authoritative metadata or source changes.
+            VectorFilterCountCapacityError: If the waiting queue is full.
+            VectorFilterCountQueueTimeoutError: If no reader becomes available
+                within the queue wait deadline.
             asyncio.CancelledError: If the requesting browser disconnects.
         """
         item, source, signature, candidate, base = await self._filter_context(request)
@@ -229,15 +262,21 @@ class VectorPublicationService:
         if key in self._filter_counts:
             self._filter_counts.move_to_end(key)
             return self._filter_counts[key]
-        if self._field_reader is None or self._filter_slots.locked():
+        if self._field_reader is None:
             return VectorFilterCount()
-        await self._filter_slots.acquire()
+        await self._wait_for_filter_count_reader()
         cancel_event = Event()
-        task = asyncio.create_task(asyncio.to_thread(
-            self._field_reader.count_filter, source, candidate, 1_000_000, cancel_event,
-        ))
+        task = asyncio.create_task(
+            asyncio.to_thread(
+                self._field_reader.count_filter,
+                source,
+                candidate,
+                1_000_000,
+                cancel_event,
+            )
+        )
 
-        def finished(completed: asyncio.Task) -> None:
+        def finished(completed: asyncio.Task[VectorFilterCount]) -> None:
             """Release capacity only after the actual bounded worker exits.
 
             Args:
@@ -260,11 +299,48 @@ class VectorPublicationService:
         try:
             after = await asyncio.to_thread(self._signature_reader, source)
         except OSError as error:
-            raise VectorConflictError("The counted vector source disappeared") from error
+            raise VectorConflictError(
+                "The counted vector source disappeared"
+            ) from error
         if after != signature or (result.complete and result.total != total):
-            raise VectorConflictError("The vector source changed; reassess it before counting")
+            raise VectorConflictError(
+                "The vector source changed; reassess it before counting"
+            )
         if result.complete:
             self._filter_counts[key] = result
             while len(self._filter_counts) > 256:
                 self._filter_counts.popitem(last=False)
         return result
+
+    async def _wait_for_filter_count_reader(self) -> None:
+        """Reserve one count reader, waiting in FIFO order when both are busy.
+
+        Returns:
+            None after acquiring a reader. The caller must keep that slot until
+            its native read actually exits, even if the HTTP request is canceled.
+
+        Raises:
+            VectorFilterCountCapacityError: If the bounded waiting queue is full.
+            VectorFilterCountQueueTimeoutError: If the wait deadline expires.
+            asyncio.CancelledError: If the caller cancels while waiting. Its
+                queue entry is removed without starting a read.
+        """
+        if not self._filter_slots.locked():
+            await self._filter_slots.acquire()
+            return
+        if self._waiting_filter_counts >= self._filter_count_queue_capacity:
+            raise VectorFilterCountCapacityError(
+                "The filter count queue is full. The filter is still applied; "
+                "apply it again to retry counting."
+            )
+        self._waiting_filter_counts += 1
+        try:
+            async with asyncio.timeout(self._filter_count_queue_wait_seconds):
+                await self._filter_slots.acquire()
+        except TimeoutError as error:
+            raise VectorFilterCountQueueTimeoutError(
+                "The filter count waited too long for a reader. The filter is "
+                "still applied; apply it again to retry counting."
+            ) from error
+        finally:
+            self._waiting_filter_counts -= 1

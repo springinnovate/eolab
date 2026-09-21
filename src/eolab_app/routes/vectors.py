@@ -186,7 +186,7 @@ def create_vector_feature(
 
     @router.post("/filter-counts", response_model=VectorFilterCount)
     async def count_vector_filter(request: CatalogVectorFilterRequest, http_request: Request) -> VectorFilterCount:
-        """Count a filtered layer independently of viewport rendering.
+        """Wait for capacity and count a filtered layer independently of rendering.
 
         Args:
             request: Authoritative Catalog identity and bounded rules.
@@ -196,7 +196,8 @@ def create_vector_feature(
             Exact matched/total counts or explicit unavailable counts.
 
         Raises:
-            HTTPException: If validation fails or the browser disconnects.
+            HTTPException: If validation fails, the browser disconnects, the
+                count queue is full (429), or its waiting deadline expires (503).
         """
         try:
             return await run_until_http_disconnect(http_request, publication_service.count_filter(request))

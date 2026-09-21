@@ -163,3 +163,46 @@ test("analysis filters submit only the explicitly applied complete draft and exp
     await flush();
     assert.equal(cancellations, 2); assert.equal(completed.length, 1);
 });
+
+test("queued count replies and errors cannot replace a newer filter; busy counts leave filtering applied", async () => {
+    const counts = [];
+    const item = { collection: "vectors", id: "quakes", properties: { "table:columns": fields } };
+    const publication = { layerName: "eolab:quakes", styleName: "vector-point", style: {
+        geometryKind: "point", fillColor: "#112233", fillOpacity: 1, strokeColor: "#000000",
+        strokeOpacity: 1, strokeWidth: 1, pointSize: 9, categorical: null, graduated: null, label: null,
+    } };
+    const adapter = createVectorMapLayerAdapter({ leaflet: {}, leafletMap: {}, wmsUrl: "/wms", onTileError() {},
+        filter: async (_item, candidate) => ({ layerName: `eolab:filtered-${candidate.rules[0].value}`, filter: candidate }),
+        countFilter: (_item, candidate, signal) => new Promise((resolve, reject) => counts.push({ candidate, signal, resolve, reject })),
+    });
+    const record = { publication, entry: { item }, state: adapter.createState({ item, publication }) };
+    await adapter.applyFilterState(record, filter(2020));
+    assert.equal(vectorFilterStatus(record.state), "Filter active · Counting…");
+    await adapter.applyFilterState(record, filter(2021));
+    assert.ok(counts[0].signal.aborted);
+    counts[0].resolve({ matched: 50, total: 100, complete: true }); await flush();
+    assert.equal(record.state.filterCount, null);
+    assert.equal(record.state.filterCounting, true);
+    counts[1].reject(Object.assign(Error("Full"), { category: "filter_count_queue_full" })); await flush();
+    assert.equal(record.publication.layerName, "eolab:filtered-2021");
+    assert.deepEqual(record.state.filter, filter(2021));
+    assert.equal(vectorFilterStatus(record.state), "Filter active · Count queue full; apply filter again to retry");
+
+    await adapter.applyFilterState(record, filter(2022));
+    await adapter.applyFilterState(record, filter(2023));
+    counts[2].reject(Object.assign(Error("Late timeout"), { category: "filter_count_queue_timeout" })); await flush();
+    assert.equal(record.state.filterCountError, null);
+    assert.equal(record.state.filterCounting, true);
+    counts[3].reject(Object.assign(Error("Timeout"), { category: "filter_count_queue_timeout" })); await flush();
+    assert.equal(vectorFilterStatus(record.state), "Filter active · Count wait expired; apply filter again to retry");
+
+    await adapter.applyFilterState(record, filter(2023));
+    assert.equal(record.state.filterCountError, null);
+    counts[4].resolve({ matched: 5, total: 100, complete: true }); await flush();
+    assert.equal(vectorFilterStatus(record.state), "5 of 100 features match");
+    await adapter.applyFilterState(record, filter(2024));
+    adapter.removed(record);
+    assert.ok(counts[5].signal.aborted);
+    counts[5].reject(Object.assign(Error("Late full"), { category: "filter_count_queue_full" })); await flush();
+    assert.equal(record.state.filterCountError, null);
+});

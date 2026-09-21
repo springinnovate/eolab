@@ -36,6 +36,14 @@ class VectorUpstreamError(VectorFeatureError):
     """Raised when a required catalog or rendering adapter fails."""
 
 
+class VectorFilterCountCapacityError(VectorFeatureError):
+    """Raised when no more filter counts can wait for a reader."""
+
+
+class VectorFilterCountQueueTimeoutError(VectorFeatureError):
+    """Raised when a filter count waits too long to start reading features."""
+
+
 class VectorPublicationError(VectorUpstreamError):
     """Describe a categorized GeoServer vector publication failure."""
 

@@ -6,6 +6,8 @@ from eolab_app.vector.errors import (
     VectorAssetError,
     VectorConflictError,
     VectorFeatureError,
+    VectorFilterCountCapacityError,
+    VectorFilterCountQueueTimeoutError,
     VectorNotFoundError,
     VectorPublicationError,
     VectorRequestError,
@@ -25,6 +27,20 @@ def vector_http_exception(error: VectorFeatureError) -> HTTPException:
     Raises:
         TypeError: If a new vector failure lacks an explicit mapping.
     """
+    if isinstance(
+        error, (VectorFilterCountCapacityError, VectorFilterCountQueueTimeoutError)
+    ):
+        full = isinstance(error, VectorFilterCountCapacityError)
+        return HTTPException(
+            status_code=429 if full else 503,
+            detail={
+                "category": (
+                    "filter_count_queue_full" if full else "filter_count_queue_timeout"
+                ),
+                "message": error.detail,
+            },
+            headers={"Retry-After": "2"},
+        )
     if isinstance(error, VectorPublicationError):
         status_codes = {
             "reader_rejection": 422,
