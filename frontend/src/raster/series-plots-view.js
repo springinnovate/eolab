@@ -1,6 +1,9 @@
 /** Plot cards and legends for area statistics; calculation state stays with the controller. */
 import { formatSeriesNumber, renderOrdinalSeriesChart } from "../charts/series-chart.js";
 
+// The calculator accepts at most five formulas per raster. The controller
+// assigns each active formula one of these five styles and reuses a freed style
+// when a formula is removed; a growing formula ID is not a palette index.
 const STATISTIC_STYLES = Object.freeze([
     { color: "#0072b2", dash: "none", marker: "circle", symbol: "●" },
     { color: "#d55e00", dash: "7 3", marker: "square", symbol: "■" },
@@ -11,7 +14,7 @@ const STATISTIC_STYLES = Object.freeze([
 
 /** Create the same color, dash and marker sample used by a statistic's plot.
  * @param {Document} documentContext Owning document.
- * @param {number} styleIndex Controller-assigned style, stable for the statistic's lifetime.
+ * @param {number} styleIndex Controller-assigned index from 0 to 4, stable for the statistic's lifetime.
  * @return {SVGElement} Decorative legend sample; its containing control supplies the name.
  */
 export function createStatisticSwatch(documentContext, styleIndex) {

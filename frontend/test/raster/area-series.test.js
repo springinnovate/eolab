@@ -236,6 +236,13 @@ test("formula validation and five-formula limit apply before any raster plan",as
     for(let i=0;i<8;i++)h.controller.addFormula("mean");
     assert.equal(h.controller.formulas.length,5);
     await h.open();
+    assert.deepEqual(h.view.state.statistics.map(statistic=>statistic.styleIndex),[0,1,2,3,4]);
+    h.controller.removeFormula(2);h.controller.addFormula("sum");
+    assert.equal(h.controller.formulas.at(-1).id,6,"formula identities can exceed the number of available styles");
+    assert.deepEqual(h.view.state.statistics.map(statistic=>statistic.styleIndex),[0,2,3,4,1],"reuse the removed formula's style without changing the others");
+    h.controller.addFormula("mean");
+    assert.equal(h.controller.formulas.length,5,"a sixth active formula is not accepted");
+    await h.tick();
     assert.match(h.view.state.message,/Unknown function bad/);
     assert.equal(h.requests.filter(([kind])=>kind==="plan").length,0);h.close();
 });
