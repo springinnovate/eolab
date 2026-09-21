@@ -1,298 +1,255 @@
-/** Atomic Leaflet presentation of one server-composed visible layer stack. */
+/** Present server-composed map tiles and track recovery in the current view. */
 
-const COMPOSITE_TILE_RETRY_DELAYS_MILLISECONDS = Object.freeze([250, 1000]);
+const RETRY_DELAYS_MILLISECONDS = Object.freeze([250, 1000]);
 
-/** Own the single WMS grid used for ordinary multi-layer map rendering. */
+/**
+ * @typedef {Object} MapTileStatus
+ * @property {"idle"|"preparing"|"loading"|"retrying"|"complete"|"incomplete"|"error"} phase Rendering state.
+ * @property {number} total Requested tiles intersecting the current viewport.
+ * @property {number} loaded Successfully loaded visible tiles, including transparent PNGs.
+ * @property {number} failed Visible tiles whose automatic retries are exhausted.
+ * @property {string} [message] Plan preparation error, when present.
+ */
+
+/** Own one composite grid; never retain an old layer stack behind missing tiles. */
 export class CompositeLeafletRenderer {
     /**
-     * Create an empty composite renderer.
-     *
+     * Connect tile presentation to its map and status observer.
      * @param {Object} configuration Collaborators.
      * @param {Object} configuration.leaflet Leaflet namespace.
      * @param {Object} configuration.leafletMap Leaflet map.
-     * @param {{create:(layers:Object[],signal:AbortSignal)=>Promise<Object>}}
-     * configuration.client Composite plan client.
-     * @param {(message:string)=>void} [configuration.onError] Error observer.
+     * @param {{create:(layers:Object[],signal:AbortSignal)=>Promise<Object>}} configuration.client Plan client.
+     * @param {(status:MapTileStatus)=>void} [configuration.onStatus] Current-view status observer.
      */
-    constructor({ leaflet, leafletMap, client, onError = () => {} }) {
+    constructor({ leaflet, leafletMap, client, onStatus = () => {} }) {
         this.leaflet = leaflet;
         this.leafletMap = leafletMap;
         this.client = client;
-        this.onError = onError;
+        this.onStatus = onStatus;
         this.signature = null;
+        this.layers = [];
         this.generation = 0;
         this.abortController = null;
-        this.activeLayer = null;
-        this.pendingLayer = null;
-        this.layerRetryStates = new Map();
+        this.grid = null;
+        this.planFailed = false;
         this.destroyed = false;
+        this.statusScheduled = false;
+        this.onMapMove = () => this.#refreshVisibleTiles();
+        leafletMap.on("moveend zoomend", this.onMapMove);
     }
 
     /**
-     * Publish and atomically present a complete top-first visible stack.
-     *
-     * @param {Object[]} layers Authorized feature render descriptors.
+     * Replace the displayed stack and prepare its new tiles.
+     * Old pixels are removed immediately so a failed replacement cannot imply
+     * that the old layer selection or style is still current.
+     * @param {Object[]} layers Authorized top-first rendering descriptors.
      * @return {void}
      */
     update(layers) {
         if (this.destroyed) return;
         const signature = JSON.stringify(layers);
         if (signature === this.signature) return;
+        this.clear();
         this.signature = signature;
-        this.generation += 1;
+        this.layers = layers;
+        if (layers.length === 0) return;
         const generation = this.generation;
-        this.abortController?.abort();
-        this.abortController = null;
-        this.#removePendingLayer();
-        if (layers.length === 0) {
-            this.#removeActiveLayer();
-            return;
-        }
         const abortController = new AbortController();
         this.abortController = abortController;
+        this.#emitStatus("preparing");
         void this.client.create(layers, abortController.signal).then(
-            (plan) => this.#present(plan, generation),
+            (plan) => {
+                if (generation !== this.generation || this.destroyed) return;
+                this.abortController = null;
+                this.#present(plan);
+            },
             (error) => {
-                if (
-                    error?.name !== "AbortError" &&
-                    generation === this.generation &&
-                    !this.destroyed
-                ) {
-                    this.onError(asErrorMessage(error));
-                }
+                if (generation !== this.generation || this.destroyed) return;
+                this.abortController = null;
+                this.planFailed = true;
+                this.#emitStatus("error", error instanceof Error
+                    ? error.message : "Map layers could not be prepared.");
             },
         );
     }
 
-    /** Remove every composite layer and invalidate pending publication. */
+    /**
+     * Retry exhausted visible tiles, or retry a failed plan publication.
+     * Successful neighbors and requests already in flight are preserved.
+     * @return {void}
+     */
+    retryFailedTiles() {
+        if (this.destroyed) return;
+        if (this.planFailed) {
+            this.signature = null;
+            this.update(this.layers);
+            return;
+        }
+        const grid = this.grid;
+        if (!grid) return;
+        for (const [tile, record] of grid.tiles) {
+            if (record.phase !== "failed" || !this.#isVisible(record)) continue;
+            record.attempts = 0;
+            record.phase = "retrying";
+            tile.src = record.source;
+        }
+        this.#scheduleStatus();
+    }
+
+    /** Remove the grid, cancel retries, and invalidate plan responses. @return {void} */
     clear() {
         this.signature = null;
+        this.layers = [];
         this.generation += 1;
         this.abortController?.abort();
         this.abortController = null;
-        this.#removePendingLayer();
-        this.#removeActiveLayer();
+        this.planFailed = false;
+        const grid = this.grid;
+        this.grid = null;
+        if (grid) {
+            for (const record of grid.tiles.values()) clearTimeout(record.timer);
+            for (const [event, handler] of Object.entries(grid.handlers)) {
+                grid.layer.off(event, handler);
+            }
+            this.leafletMap.removeLayer(grid.layer);
+        }
+        this.#emitStatus("idle");
     }
 
-    /** Permanently detach this renderer. */
+    /** Remove tiles and detach the map observer permanently. @return {void} */
     destroy() {
         if (this.destroyed) return;
         this.clear();
         this.destroyed = true;
+        this.leafletMap.off("moveend zoomend", this.onMapMove);
     }
 
     /**
-     * Attach a prepared grid, retaining the previous grid until load completes.
-     *
-     * @param {{wmsUrl:string}} plan Published composite plan.
-     * @param {number} generation Matching presentation generation.
+     * Attach the current plan and observe public Leaflet tile events.
+     * @param {{wmsUrl:string}} plan Authorized WMS plan.
      * @return {void}
      */
-    #present(plan, generation) {
-        if (generation !== this.generation || this.destroyed) return;
-        this.abortController = null;
+    #present(plan) {
         const layer = this.leaflet.tileLayer.wms(plan.wmsUrl, {
-            layers: "composite",
-            styles: "",
-            format: "image/png",
-            transparent: true,
-            version: "1.1.1",
-            noWrap: true,
+            layers: "composite", styles: "", format: "image/png",
+            transparent: true, version: "1.1.1", noWrap: true,
         });
-        const replacesActiveLayer = this.activeLayer !== null;
-        layer.setOpacity(replacesActiveLayer ? 0 : 1);
-        this.pendingLayer = layer;
-        this.#registerTileRetries(layer);
-        layer.once("load", () => {
-            if (
-                generation !== this.generation ||
-                this.destroyed ||
-                this.pendingLayer !== layer
-            ) {
-                return;
-            }
-            const previous = this.activeLayer;
-            layer.setOpacity(1);
-            this.activeLayer = layer;
-            this.pendingLayer = null;
-            if (previous !== null && previous !== layer) {
-                this.#removeTileRetries(previous);
-                this.leafletMap.removeLayer(previous);
-            }
-        });
-        layer.addTo(this.leafletMap);
-    }
-
-    /**
-     * Register bounded retry handling for every failed tile in one grid.
-     *
-     * @param {Object} layer Leaflet-compatible WMS layer.
-     * @return {void}
-     */
-    #registerTileRetries(layer) {
-        const state = {
-            errorReported: false,
-            retryTimeouts: new Set(),
-            tiles: new WeakMap(),
-            onTileError: null,
-            onTileLoad: null,
-            onTileUnload: null,
+        const grid = { layer, tiles: new Map(), loading: true, handlers: {} };
+        this.grid = grid;
+        grid.handlers = {
+            loading: () => { grid.loading = true; this.#scheduleStatus(); },
+            // Leaflet fires load even when tiles failed. Only tileload records success.
+            load: () => { grid.loading = false; this.#scheduleStatus(); },
+            tileloadstart: ({ tile, coords }) => {
+                grid.tiles.set(tile, { coords, source: tile.src, phase: "loading", attempts: 0, timer: null });
+                this.#scheduleStatus();
+            },
+            tileload: ({ tile }) => {
+                const record = grid.tiles.get(tile);
+                if (!record) return;
+                clearTimeout(record.timer);
+                record.timer = null;
+                record.phase = "loaded";
+                this.#scheduleStatus();
+            },
+            tileerror: ({ tile }) => this.#retryTile(grid, tile),
+            tileunload: ({ tile }) => this.#forgetTile(grid, tile),
+            tileabort: ({ tile }) => this.#forgetTile(grid, tile),
         };
-        state.onTileError = (event) => this.#recordTileError(
-            layer,
-            state,
-            event,
-        );
-        state.onTileLoad = (event) => this.#forgetTileRetry(
-            state,
-            event?.tile,
-        );
-        state.onTileUnload = state.onTileLoad;
-        this.layerRetryStates.set(layer, state);
-        layer.on("tileerror", state.onTileError);
-        layer.on("tileload", state.onTileLoad);
-        layer.on("tileunload", state.onTileUnload);
+        for (const [event, handler] of Object.entries(grid.handlers)) layer.on(event, handler);
+        layer.addTo(this.leafletMap);
+        this.#scheduleStatus();
     }
 
     /**
-     * Schedule the next retry for one failed tile or report exhausted recovery.
-     *
-     * @param {Object} layer Leaflet-compatible WMS layer.
-     * @param {Object} layerState Retry state owned by the layer.
-     * @param {{tile?:Object}|undefined} event Leaflet tile error event.
+     * Schedule bounded recovery of one failed image in the current view.
+     * @param {Object} grid Owning grid and tile records.
+     * @param {HTMLImageElement} tile Failed image.
      * @return {void}
      */
-    #recordTileError(layer, layerState, event) {
-        if (!this.#isPresentedLayer(layer, layerState)) return;
-        const tile = event?.tile;
-        const source = tile?.currentSrc || tile?.src;
-        if (typeof source !== "string" || source.length === 0) {
-            this.#reportExhaustedRetry(layerState);
-            return;
+    #retryTile(grid, tile) {
+        const record = grid.tiles.get(tile);
+        if (grid !== this.grid || !record || record.timer !== null) return;
+        record.phase = "failed";
+        if (this.#isVisible(record) && record.attempts < RETRY_DELAYS_MILLISECONDS.length) {
+            record.phase = "retrying";
+            record.timer = setTimeout(() => {
+                record.timer = null;
+                if (grid !== this.grid || !grid.tiles.has(tile)) return;
+                if (this.#isVisible(record)) tile.src = record.source;
+                else record.phase = "failed";
+                this.#scheduleStatus();
+            }, RETRY_DELAYS_MILLISECONDS[record.attempts++]);
         }
-        let tileState = layerState.tiles.get(tile);
-        if (tileState === undefined) {
-            tileState = {
-                attempts: 0,
-                source,
-                timeoutId: null,
-            };
-            layerState.tiles.set(tile, tileState);
-        }
-        if (tileState.timeoutId !== null) return;
-        if (
-            tileState.attempts >=
-            COMPOSITE_TILE_RETRY_DELAYS_MILLISECONDS.length
-        ) {
-            this.#reportExhaustedRetry(layerState);
-            return;
-        }
-        const delay = COMPOSITE_TILE_RETRY_DELAYS_MILLISECONDS[
-            tileState.attempts
-        ];
-        tileState.attempts += 1;
-        const timeoutId = setTimeout(() => {
-            layerState.retryTimeouts.delete(timeoutId);
-            if (tileState.timeoutId !== timeoutId) return;
-            tileState.timeoutId = null;
-            if (!this.#isPresentedLayer(layer, layerState)) return;
-            // Leaflet retains the failed image, so reloading its authorized URL
-            // retries only this tile without redrawing successful neighbours.
-            tile.src = tileState.source;
-        }, delay);
-        tileState.timeoutId = timeoutId;
-        layerState.retryTimeouts.add(timeoutId);
+        this.#scheduleStatus();
     }
 
     /**
-     * Forget retry state after one tile loads or leaves the visible grid.
-     *
-     * @param {Object} layerState Retry state owned by the layer.
-     * @param {Object|undefined} tile Leaflet tile element.
+     * Release a tile that Leaflet discarded or aborted.
+     * @param {Object} grid Owning grid.
+     * @param {HTMLImageElement} tile Removed image.
      * @return {void}
      */
-    #forgetTileRetry(layerState, tile) {
-        if (tile === undefined) return;
-        const tileState = layerState.tiles.get(tile);
-        if (
-            tileState?.timeoutId !== null &&
-            tileState?.timeoutId !== undefined
-        ) {
-            clearTimeout(tileState.timeoutId);
-            layerState.retryTimeouts.delete(tileState.timeoutId);
-        }
-        layerState.tiles.delete(tile);
+    #forgetTile(grid, tile) {
+        clearTimeout(grid.tiles.get(tile)?.timer);
+        grid.tiles.delete(tile);
+        this.#scheduleStatus();
     }
 
     /**
-     * Report one rendering error after any tile exhausts its retry budget.
-     *
-     * @param {Object} layerState Retry state owned by the layer.
+     * Test tile intersection with the viewport, excluding Leaflet's retained buffer.
+     * @param {{coords:{x:number,y:number,z:number}}} record Tile coordinates.
+     * @return {boolean} Whether the tile belongs to the currently visible zoom and extent.
+     */
+    #isVisible(record) {
+        const { x, y, z } = record.coords;
+        if (z !== Math.round(this.leafletMap.getZoom())) return false;
+        const bounds = this.leafletMap.getPixelBounds();
+        const size = this.grid.layer.getTileSize();
+        return x * size.x < bounds.max.x && (x + 1) * size.x > bounds.min.x &&
+            y * size.y < bounds.max.y && (y + 1) * size.y > bounds.min.y;
+    }
+
+    /** Cancel queued retries outside the new viewport and refresh counts. @return {void} */
+    #refreshVisibleTiles() {
+        if (!this.grid) return;
+        for (const record of this.grid.tiles.values()) {
+            if (!this.#isVisible(record) && record.timer !== null) {
+                clearTimeout(record.timer);
+                record.timer = null;
+                record.phase = "failed";
+            }
+        }
+        this.#scheduleStatus();
+    }
+
+    /** Publish one snapshot after a synchronous burst of Leaflet events. @return {void} */
+    #scheduleStatus() {
+        if (this.statusScheduled) return;
+        this.statusScheduled = true;
+        queueMicrotask(() => {
+            this.statusScheduled = false;
+            if (!this.grid || this.destroyed) return;
+            const tiles = [...this.grid.tiles.values()].filter(record => this.#isVisible(record));
+            const loaded = tiles.filter(record => record.phase === "loaded").length;
+            const failed = tiles.filter(record => record.phase === "failed").length;
+            const retrying = tiles.some(record => record.phase === "retrying");
+            const pending = tiles.length - loaded - failed;
+            let phase = "complete";
+            if (retrying) phase = "retrying";
+            else if (pending || (!tiles.length && this.grid.loading)) phase = "loading";
+            else if (failed) phase = "incomplete";
+            this.onStatus({ phase, total: tiles.length, loaded, failed });
+        });
+    }
+
+    /**
+     * Report a state that has no grid counts yet.
+     * @param {MapTileStatus["phase"]} phase Preparation or lifecycle state.
+     * @param {string} [message] Optional plan error.
      * @return {void}
      */
-    #reportExhaustedRetry(layerState) {
-        if (layerState.errorReported) return;
-        layerState.errorReported = true;
-        this.onError("The composite map could not be rendered.");
+    #emitStatus(phase, message) {
+        this.onStatus({ phase, total: 0, loaded: 0, failed: 0, message });
     }
-
-    /**
-     * Return whether one retry state still belongs to a presented grid.
-     *
-     * @param {Object} layer Leaflet-compatible WMS layer.
-     * @param {Object} layerState Retry state owned by the layer.
-     * @return {boolean} Whether the grid is still pending or visible.
-     */
-    #isPresentedLayer(layer, layerState) {
-        return !this.destroyed &&
-            this.layerRetryStates.get(layer) === layerState &&
-            (this.pendingLayer === layer || this.activeLayer === layer);
-    }
-
-    /**
-     * Cancel retries and detach listeners for one removed grid.
-     *
-     * @param {Object} layer Leaflet-compatible WMS layer.
-     * @return {void}
-     */
-    #removeTileRetries(layer) {
-        const state = this.layerRetryStates.get(layer);
-        if (state === undefined) return;
-        for (const timeoutId of state.retryTimeouts) {
-            clearTimeout(timeoutId);
-        }
-        state.retryTimeouts.clear();
-        layer.off("tileerror", state.onTileError);
-        layer.off("tileload", state.onTileLoad);
-        layer.off("tileunload", state.onTileUnload);
-        this.layerRetryStates.delete(layer);
-    }
-
-    /** Remove the grid still loading for a superseded plan. */
-    #removePendingLayer() {
-        if (this.pendingLayer === null) return;
-        this.#removeTileRetries(this.pendingLayer);
-        this.leafletMap.removeLayer(this.pendingLayer);
-        this.pendingLayer = null;
-    }
-
-    /** Remove the fully loaded current composite grid. */
-    #removeActiveLayer() {
-        if (this.activeLayer === null) return;
-        this.#removeTileRetries(this.activeLayer);
-        this.leafletMap.removeLayer(this.activeLayer);
-        this.activeLayer = null;
-    }
-}
-
-/**
- * Return a browser-safe message for one rejected promise value.
- *
- * @param {unknown} candidate Rejection value.
- * @return {string} Error message or bounded fallback.
- */
-function asErrorMessage(candidate) {
-    return candidate instanceof Error && candidate.message.length > 0
-        ? candidate.message
-        : "The composite map could not be prepared.";
 }

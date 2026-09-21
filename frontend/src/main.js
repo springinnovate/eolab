@@ -63,6 +63,7 @@ import { CompositeMapPlanClient } from "./map-layers/composite-api.js";
 import {
     CompositeLeafletRenderer,
 } from "./map-layers/composite-leaflet-renderer.js";
+import { addMapRenderStatus } from "./map-layers/map-render-status.js";
 import {
     catalogItemsMatch,
     CatalogMapActionRegistry,
@@ -744,11 +745,14 @@ async function initializeCatalog(
     let rasterClickSelected = false;
     let latestHistogramPresentation = null;
     const mapLayerStackView = new MapLayerStackView();
+    const mapRenderStatus = addMapRenderStatus(
+        L, leafletMap, () => compositeLeafletRenderer.retryFailedTiles(),
+    );
     const compositeLeafletRenderer = new CompositeLeafletRenderer({
         leaflet: L,
         leafletMap,
         client: new CompositeMapPlanClient(),
-        onError: (message) => mapLayerStackView.setStatus(message),
+        onStatus: (status) => mapRenderStatus.update(status),
     });
     const mapLayerController = new MapLayerController({
         leafletMap,
