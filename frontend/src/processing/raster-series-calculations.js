@@ -64,12 +64,12 @@ export class RasterSeriesCalculations {
         await Promise.all(clients.map(client => client.start()));
     }
 
-    /** Get an independent executor for one of the product's 50 raster positions.
+    /** Get an independent executor for a selected raster position.
      * Each position retains its own recovery record and waits only for its own
      * previous cancellation. The server decides when calculations execute.
-     * @param {number} index Position from zero through 49.
+     * @param {number} index Nonnegative integer position.
      * @return {import("./calculation-executor.js").CalculationExecutor} Reusable executor.
-     * @throws {TypeError} If the position is outside the product limit.
+     * @throws {TypeError} If the position is not a nonnegative safe integer.
      */
     clientFor(index) {
         if (!this.clients.has(index)) {
@@ -182,9 +182,9 @@ export class RasterSeriesCalculations {
     async calculateRemainingRasters(authorize = true) {
         this.clock.clearTimeout(this.timer);
         if (!this.active || this.validating) return;
-        if (!this.sources.length || this.sources.length > 50 || !this.area) {
+        if (!this.sources.length || !this.area) {
             this.busy = false;
-            this.message = !this.area ? "Choose an area or click the map to calculate." : "Select between 1 and 50 rasters.";
+            this.message = !this.area ? "Choose an area or click the map to calculate." : "Select at least one raster.";
             this.onChange(); return;
         }
         const version = this.version;
@@ -206,7 +206,8 @@ export class RasterSeriesCalculations {
             const additions = [];
             for (const source of this.sources) {
                 if (this.results.has(source.key) || [...this.pending.values()].some(request => request.key === source.key)) continue;
-                const index = Array.from({ length: 50 }, (_, index) => index).find(index => !this.pending.has(index));
+                let index = 0;
+                while (this.pending.has(index)) index++;
                 const client = this.clientFor(index);
                 const request = { key: source.key, intent: calculationIntent({ ...first, source: this.getRasterReference(source) }),
                     startedAt: this.now(), submitted: false, phase: "waiting", message: "Waiting for planning…" };
@@ -276,6 +277,12 @@ export class RasterSeriesCalculations {
             this.results.set(request.key, { intent: request.intent, error: state.message || "No result returned." });
             this.pending.delete(index);
         } else if (state.plan && state.isIdle && matches(state.plannedCalculation)) {
+            // An expired, unsubmitted plan may have been replaced after a capacity
+            // wait. Replace its estimate rather than counting the same raster twice.
+            if (request.budgetCharge) {
+                for (const [key, value] of Object.entries(request.budgetCharge)) this.budget[key] -= value;
+                request.budgetCharge = null;
+            }
             if (!this.canSubmitWithoutConfirmation(state.plan, request.intent)) {
                 request.phase = "confirmation"; request.message = "Waiting for your confirmation.";
                 client.discardPendingCalculation();
@@ -283,9 +290,10 @@ export class RasterSeriesCalculations {
                 request.previousJobId = state.completedJob?.jobId;
                 request.submitted = true;
                 if (!state.plan.cacheHit) {
-                    this.budget.nativeBlocks += state.plan.grid.nativeBlocks;
-                    this.budget.decodedBytes += state.plan.grid.decodedBytes;
-                    this.budget.geometryCells += state.plan.grid.groundArea?.estimatedGeometryCells ?? 0;
+                    request.budgetCharge = { nativeBlocks: state.plan.grid.nativeBlocks,
+                        decodedBytes: state.plan.grid.decodedBytes,
+                        geometryCells: state.plan.grid.groundArea?.estimatedGeometryCells ?? 0 };
+                    for (const [key, value] of Object.entries(request.budgetCharge)) this.budget[key] += value;
                 }
                 client.submit(state.plan.planId, { automatic: !this.authorized, client: "raster-series" });
             }

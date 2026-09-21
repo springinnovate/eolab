@@ -294,6 +294,12 @@ deadline (at most 100 seconds under current limits). It is not replayed: retry
 with a new ID. `plan_queue_full` means the pending queue filled, while
 `plan_record_capacity` means retained records or the session limit filled.
 These limits apply to planning; execution-job admission has separate limits.
+The browser automatically retries `plan_queue_full` and `plan_record_capacity`,
+and starts a new plan after `plan_queue_timeout`. Calculation submissions retry
+`owner_queue_full` and `queue_full` with the same request key. These waits are
+cancellable, honor `Retry-After`, and back off from 5 to 30 seconds plus jitter;
+longer server retry delays take precedence. Retained-input, result-storage and
+job-history exhaustion remain explicit errors requiring attention.
 
 ### Durable calculation and clip queues
 

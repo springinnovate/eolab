@@ -6,7 +6,7 @@ import { CalculationRequests } from "../../src/processing/calculation-requests.j
 import { CalculationSessionStorage } from "../../src/processing/calculation-session.js";
 import { CATALOG_SELECTION } from "../../test-support/raster/fixtures.js";
 import { ProcessingJobs } from "../../src/processing/jobs.js";
-import { ProcessingRequestError } from "../../src/processing/api.js";
+import { ProcessingApiClient, ProcessingRequestError } from "../../src/processing/api.js";
 
 /** @param {number} west Longitude. @return {Object} Valid sampling box. */
 const box = west => ({kind:"selectedArea",selectedBounds:{west,south:0,east:west+1,north:1}});
@@ -42,7 +42,8 @@ function fixture(overrides = {}, data = new Map()) {
         cancelJob:async id=>{requests.push(["cancel",id]);const job={...server.get(id),status:"cancelling"};server.set(id,job);return job;},
         ...overrides,
     };
-    const storage=new CalculationSessionStorage({getItem:key=>data.get(key),setItem:(key,value)=>data.set(key,value),removeItem:key=>data.delete(key)});
+    const storage=new CalculationSessionStorage({get length(){return data.size;},key:index=>[...data.keys()][index]??null,
+        getItem:key=>data.get(key),setItem:(key,value)=>data.set(key,value),removeItem:key=>data.delete(key)});
     const jobs=new ProcessingJobs(api,clock);
     const queue=new CalculationRequests({api,jobs,storage,now:()=>time,requestId:()=>"request-"+String(++serial).padStart(16,"0")});
     const area=new RasterSeriesCalculations({api,requests:queue,clock,now:()=>time});
@@ -265,7 +266,7 @@ test("later raster can plan and finish while the first raster's plan is still in
     assert.equal(h.area.complete,true);h.close();
 });
 
-test("planning overload and execution failure leave actionable gaps, and retry only failed rows",async()=>{
+test("unclassified planning rejection leaves an actionable gap and retries only failed rows",async()=>{
     const h=fixture(), plan=h.api.planCalculation;let full=true;
     h.api.planCalculation=async intent=>{
         if(full&&intent.source.itemId==="1")throw new ProcessingRequestError("Planning queue is full. Try again.",429);
@@ -279,16 +280,93 @@ test("planning overload and execution failure leave actionable gaps, and retry o
     assert.equal(h.requests.filter(([kind])=>kind==="submit").length,2);h.close();
 });
 
-test("50 rasters dispatch without a browser worker limit and one cancel stops all",async()=>{
+test("64 rasters dispatch without a browser worker limit and one cancel stops all",async()=>{
     const h=fixture();
-    h.controller.updateAvailableRasters(Array.from({length:50},(_,i)=>source(String(i+1))));
-    h.area.updateCalculationInputs(Array.from({length:50},(_,i)=>source(String(i+1))),box(0),"Box",[{id:1,label:"Mean",expression:"mean(a)"}]);
+    h.controller.updateAvailableRasters(Array.from({length:64},(_,i)=>source(String(i+1))));
+    h.area.updateCalculationInputs(Array.from({length:64},(_,i)=>source(String(i+1))),box(0),"Box",[{id:1,label:"Mean",expression:"mean(a)"}]);
     h.area.updateCalculationForPanelVisibility(true);await h.tick();
-    assert.equal(h.server.size,50);assert.equal(h.storage.savedClientNames().length,50);
-    assert.equal(h.jobs.listeners.size,50,"all executors share the same observer");
+    assert.equal(h.server.size,64);assert.equal(h.storage.savedClientNames().length,64);
+    assert.equal(h.jobs.listeners.size,64,"all executors share the same observer");
     h.area.cancelRemainingRasters();await flush();
-    assert.equal(h.requests.filter(([kind])=>kind==="cancel").length,50);
+    assert.equal(h.requests.filter(([kind])=>kind==="cancel").length,64);
     h.close();
+});
+
+test("all 64 rasters finish automatically through smaller plan and job queues",async context=>{
+    context.mock.timers.enable({apis:["setTimeout"]});
+    const h=fixture(), heldPlans=new Set(), submit=h.api.submitCalculation, discard=h.api.discardPlan;
+    const attempts=new Map();let planRejections=0,jobRejections=0;
+    const transport=new ProcessingApiClient(async(url,options)=>{
+        if(url.endsWith("/jobs")) return Response.json({jobs:[]});
+        const planId=url.split("/").at(-1);
+        assert.equal(options.method,"POST");
+        if(heldPlans.size>=8 && !heldPlans.has(planId)) {
+            planRejections++;
+            return Response.json({detail:{code:"plan_queue_full",message:"Queue full"}},
+                {status:429,headers:{"Retry-After":"5"}});
+        }
+        const input=JSON.parse(options.body);
+        heldPlans.add(planId);
+        h.plans.set(planId,{source:input.sources.a,calculations:input.calculations});
+        return Response.json({planId,status:"ready",result:{planId,operation:"raster.aggregate.v1",
+            grid:{...h.grid,dtype:"float32",transform:[1,0,0,0,-1,0]},expiresAt:"2099-01-01T00:00:00Z"}});
+    },null);
+    h.api.planCalculation=(...args)=>transport.planCalculation(...args);
+    h.api.discardPlan=async id=>{heldPlans.delete(id);return discard(id);};
+    h.api.submitCalculation=async request=>{
+        const prior=attempts.get(request.planId);
+        if(prior) assert.equal(request.requestId,prior,"capacity retries keep the same request key");
+        attempts.set(request.planId,request.requestId);
+        if([...h.server.values()].filter(job=>job.status==="running").length>=4) {
+            jobRejections++;throw new ProcessingRequestError("Queue full",429,"owner_queue_full",5);
+        }
+        return submit(request);
+    };
+    h.controller.updateAvailableRasters(Array.from({length:64},(_,i)=>source(String(i))));
+    await h.open();
+    assert.equal(h.area.hasErrors,false);
+    assert.equal(h.server.size,4);
+    assert.ok([...h.area.progress.values()].some(value=>/retrying automatically/.test(value.message)));
+    for(let round=0;round<20 && !h.area.complete;round++) {
+        for(const job of [...h.server.values()].filter(job=>job.status==="running")) await h.finish("ready",false,job.sources.a.itemId);
+        context.mock.timers.tick(31000);await flush();
+    }
+    assert.ok(planRejections>0 && jobRejections>0);
+    assert.equal(h.area.complete,true);
+    assert.equal(h.area.hasErrors,false);
+    assert.equal(h.area.results.size,64);
+    assert.equal(h.view.state.rows.length,64);
+    assert.equal(h.server.size,64,"each raster was accepted exactly once");
+    assert.equal(heldPlans.size,0);
+    assert.deepEqual(h.storage.savedClientNames(),[]);
+    assert.equal(h.area.budget.nativeBlocks,64);
+    h.close();
+});
+
+test("reload recovers and cancels all 64 independent submissions",async()=>{
+    const h=fixture();
+    h.controller.updateAvailableRasters(Array.from({length:64},(_,i)=>source(String(i))));
+    await h.open();h.close();
+    const recovered=fixture(h.api,h.data);
+    await recovered.area.recoverAndCancelPreviousCalculation();await flush();
+    assert.equal(h.requests.filter(([kind])=>kind==="cancel").length,64);
+    assert.ok([...h.server.values()].every(job=>job.status==="cancelling"));
+    recovered.close();
+});
+
+test("replacing an expired plan counts that raster only once toward confirmation",async()=>{
+    const h=fixture(), submit=h.api.submitCalculation;h.grid.nativeBlocks=64;
+    let expired=false;
+    h.api.submitCalculation=async request=>{
+        if(!expired && h.plans.get(request.planId).source.itemId==="1") {
+            expired=true;throw new ProcessingRequestError("Plan expired",409,"plan_unavailable");
+        }
+        return submit(request);
+    };
+    await h.open();
+    assert.equal(h.area.confirmation,false);
+    assert.equal(h.area.budget.nativeBlocks,128);
+    await h.finish();await h.finish();assert.equal(h.area.complete,true);h.close();
 });
 
 test("reordering sources before confirming the rest cannot overwrite a running raster",async()=>{

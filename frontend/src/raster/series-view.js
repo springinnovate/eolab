@@ -192,7 +192,7 @@ export class RasterSeriesView {
         this.document.querySelector("#raster-series-area").value = area.areaChoice;
         this.document.querySelector("#raster-series-add-formula").disabled = area.formulas.length >= 5;
         const calculate = this.document.querySelector("#raster-series-calculate");
-        calculate.disabled = (state.busy && !area.confirmation) || !area.sources.length || area.sources.length > 50 || (area.areaChoice !== "whole" && !area.area);
+        calculate.disabled = (state.busy && !area.confirmation) || !area.sources.length || (area.areaChoice !== "whole" && !area.area);
         calculate.hidden = area.complete && !area.hasErrors;
         calculate.textContent = area.confirmation ? "Calculate remaining " + (area.sources.length - area.results.size) + " rasters" : "Calculate";
         this.document.querySelector("#raster-series-cancel").hidden = !state.busy;

@@ -12,7 +12,8 @@ function record() {
 
 /** @param {Map} [data=new Map()] Saved records. @return {Object} Browser storage double. */
 function storage(data = new Map()) {
-    return {getItem:key=>data.get(key)??null,setItem:(key,value)=>data.set(key,value),removeItem:key=>data.delete(key)};
+    return {get length(){return data.size;},key:index=>[...data.keys()][index]??null,
+        getItem:key=>data.get(key)??null,setItem:(key,value)=>data.set(key,value),removeItem:key=>data.delete(key)};
 }
 
 test("independent records preserve each request key and clearing one cannot clear its peers",()=>{
@@ -24,7 +25,11 @@ test("independent records preserve each request key and clearing one cannot clea
     assert.deepEqual(root.savedClientNames(),["summary","raster-series:49"]);
     assert.equal(root.read().pending.requestId,"request-original-summary");
     assert.equal(root.forClient("raster-series:49").read().pending.requestId,"request-original-raster-series-49");
-    assert.throws(()=>root.forClient("raster-series:50"),/Unsupported/);
+    root.forClient("raster-series:500").write(record());
+    assert.deepEqual(root.savedClientNames(),["summary","raster-series:49","raster-series:500"]);
+    for (const name of ["raster-series:-1", "raster-series:01", "raster-series:9007199254740992"]) {
+        assert.throws(()=>root.forClient(name),/Unsupported/);
+    }
     assert.throws(()=>root.forClient("another-user"),/Unsupported/);
 });
 

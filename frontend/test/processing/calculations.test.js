@@ -27,6 +27,76 @@ test("the executor does not import the statistics controller or its view", () =>
     assert.doesNotMatch(source, /(?:from\s*|import\s*\()\s*["'][^"']*summary-statistics-(?:controller|view)/);
 });
 
+test("job queue capacity waits automatically, keeps the request key, and can be cancelled",async context=>{
+    context.mock.timers.enable({apis:["setTimeout"]});
+    for(const cancel of [false,true]) {
+        const h=fixture(), submit=h.api.submitCalculation, attempts=[];
+        h.api.submitCalculation=async request=>{
+            attempts.push(request);
+            if(attempts.length===1) throw new ProcessingRequestError("Queue full",429,"owner_queue_full",5);
+            return submit(request);
+        };
+        await h.run(true);
+        assert.match(h.controller.snapshot.message,/Waiting for server capacity/);
+        assert.equal(h.controller.snapshot.recoverable,false);
+        assert.ok(h.storage.read()?.pending);
+        if(cancel) {
+            h.controller.stop(); await flush();
+            assert.equal(h.storage.read(),null);
+            assert.equal(h.server.size,0);
+            assert.ok(h.requests.some(([kind])=>kind==="discard"));
+        }
+        context.mock.timers.tick(6000); await flush();
+        assert.equal(attempts.length,cancel?1:2);
+        if(!cancel) { assert.deepEqual(attempts[0],attempts[1]); await h.finish(); }
+        h.controller.destroy();h.jobs.destroy();
+    }
+});
+
+test("a plan expiring during capacity wait is replanned through the caller's confirmation policy",async context=>{
+    context.mock.timers.enable({apis:["setTimeout"]});
+    const h=fixture(), submit=h.api.submitCalculation;
+    let attempts=0;
+    h.api.submitCalculation=async request=>{
+        attempts++;
+        if(attempts===1) throw new ProcessingRequestError("Queue full",429,"queue_full");
+        if(attempts===2) throw new ProcessingRequestError("Plan expired",409,"plan_unavailable");
+        return submit(request);
+    };
+    await h.run(true);context.mock.timers.tick(6000);await flush();
+    assert.equal(attempts,3);
+    assert.equal(h.requests.filter(([kind])=>kind==="plan").length,2);
+    await h.finish();assert.equal(h.controller.snapshot.admission,"ready");
+    h.controller.destroy();h.jobs.destroy();
+});
+
+test("cancellation during an in-flight submission still obtains and cancels an accepted job",async()=>{
+    const h=fixture(), submit=h.api.submitCalculation, response=deferred();
+    h.api.submitCalculation=async request=>{const job=await submit(request);await response.promise;return job;};
+    await h.run(true);h.controller.stop();response.resolve();await flush();
+    assert.equal(h.requests.filter(([kind])=>kind==="cancel").length,1);
+    await h.finish("cancelled");h.controller.destroy();h.jobs.destroy();
+});
+
+test("a lost response after a capacity retry preserves the original recoverable request",async context=>{
+    context.mock.timers.enable({apis:["setTimeout"]});
+    const h=fixture(), submit=h.api.submitCalculation, attempts=[];
+    h.api.submitCalculation=async request=>{
+        attempts.push(request);
+        if(attempts.length===1) throw new ProcessingRequestError("Queue full",429,"queue_full");
+        const job=await submit(request);
+        if(attempts.length===2) throw Error("Response lost");
+        return job;
+    };
+    await h.run(true);context.mock.timers.tick(6000);await flush();
+    assert.equal(h.controller.snapshot.recoverable,true);
+    assert.deepEqual(h.storage.read().pending,attempts[0]);
+    await h.controller.retry();await flush();
+    assert.equal(attempts.length,3);
+    assert.ok(attempts.every(request=>JSON.stringify(request)===JSON.stringify(attempts[0])));
+    assert.equal(h.server.size,1);await h.finish();h.controller.destroy();h.jobs.destroy();
+});
+
 /** Connect the executor to real recovery storage and job observation with controlled transport.
  * @param {Object} [overrides={}] API responses for lifecycle and failure scenarios.
  * @param {Map<string,string>} [data=new Map()] Persisted session contents.

@@ -112,13 +112,64 @@ test("an admission that cannot be recovered is cancelled by its stable ID", asyn
     assert.equal(h.requests.at(-1).method, "DELETE");
 });
 
-test("a definitive full-queue response does not allocate a cancellation record", async () => {
+test("cancelling a capacity wait does not allocate a cancellation record", async () => {
     const h = fixture();
     h.api.fetch = async (url, options) => {
         h.requests.push({url, ...options});
         throw new ProcessingRequestError("Queue full", 429, "plan_queue_full");
     };
-    await assert.rejects(h.api.preparePlan("raster-clips", {}, h.abort.signal), /Queue full/);
+    const pending = h.api.preparePlan("raster-clips", {}, h.abort.signal);
+    await flush(); h.abort.abort();
+    await assert.rejects(pending, {name:"AbortError"});
     assert.equal(h.requests.length, 1);
     assert.equal(h.closed, true);
+});
+
+test("planning retries a full queue with Retry-After and the same plan identity", async context => {
+    context.mock.timers.enable({apis:["setTimeout"]});
+    const h=fixture(), fetch=h.api.fetch, progress=[];
+    let attempts=0;
+    h.setState("ready");
+    h.api.fetch=async(url, options)=>{
+        if(options.method==="POST" && ++attempts===1) {
+            h.requests.push({url,...options});
+            return new Response(JSON.stringify({detail:{code:"plan_queue_full",message:"Queue full"}}),
+                {status:429,headers:{"Retry-After":"12"}});
+        }
+        return fetch(url,options);
+    };
+    const pending=h.api.preparePlan("raster-calculations",{},h.abort.signal,status=>progress.push(status));
+    await flush(); assert.deepEqual(progress,["waiting-capacity"]);
+    context.mock.timers.tick(11999); await flush(); assert.equal(attempts,1);
+    context.mock.timers.tick(1001); await pending;
+    assert.equal(attempts,2);
+    assert.equal(h.requests[0].url,h.requests[1].url);
+    assert.ok(h.requests.every(request=>request.method==="POST"));
+});
+
+test("unknown 429 and storage exhaustion remain explicit errors, not automatic retries", async () => {
+    for(const code of ["storage_full","job_input_capacity","job_record_capacity",null]) {
+        const h=fixture();
+        h.api.fetch=async(url,options)=>{h.requests.push({url,...options});throw new ProcessingRequestError("Needs attention",429,code);};
+        await assert.rejects(h.api.preparePlan("raster-calculations",{},h.abort.signal),/Needs attention/);
+        assert.equal(h.requests.length,1);
+    }
+});
+
+test("a server queue timeout releases the old plan and retries with a new identity",async context=>{
+    context.mock.timers.enable({apis:["setTimeout"]});
+    const requests=[];let attempts=0;
+    const api=new ProcessingApiClient(async(url,options)=>{
+        requests.push({url,...options});
+        const id=url.split("/").at(-1);
+        if(options.method==="DELETE") return Response.json({discarded:true});
+        attempts++;
+        return Response.json(attempts===1 ? {planId:id,status:"failed",error:{code:"plan_queue_timeout",detail:"Queue deadline"}}
+            : {planId:id,status:"ready",result:{planId:id,value:42}});
+    },null);
+    const pending=api.preparePlan("raster-calculations",{},new AbortController().signal);
+    await flush();assert.equal(requests.at(-1).method,"DELETE");
+    context.mock.timers.tick(6000);assert.equal((await pending).value,42);
+    assert.notEqual(requests[0].url,requests.at(-1).url);
+    assert.equal(requests.length,3);
 });

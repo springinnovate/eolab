@@ -46,7 +46,8 @@ you later edit its card.
 ## Plotting statistics across rasters
 
 Open **Raster series** from **More** or a raster histogram, then choose
-**Area statistics**. Use the raster checklist to choose up to 50 rasters.
+**Area statistics**. Use the raster checklist to choose the rasters to calculate.
+Area statistics has no fixed raster-count limit.
 The same formulas run independently on each raster's native grid, over the
 current sampling area or each raster's whole extent. This does not align rasters
 or perform pixel-by-pixel arithmetic between different rasters.
@@ -69,7 +70,12 @@ rasters**; cached results do not need this confirmation. Each selected raster
 requests its calculation independently, without waiting for the previous result.
 The server queues planning and execution. Results appear as they finish; the
 table shows each raster's progress or error. Summary cards can run alongside a
-series. A failed raster leaves a gap; **Calculate** retries failed rows.
+series. If the planning or calculation queue is full, affected rasters show
+**Waiting for server capacity; retrying automatically**. They remain pending
+until space becomes available or you cancel. Retries respect the server's wait
+advice and back off; they do not increase server execution concurrency. A plan
+that expires while waiting is prepared again. Storage exhaustion, invalid inputs,
+and execution failures remain explicit errors; **Calculate** retries failed rows.
 Changing inputs, leaving area series, or **Cancel remaining** cancels outstanding
 series work without cancelling summary cards or downloads. After a page reload,
 each unfinished series job is recovered only to cancel it safely; the unsaved

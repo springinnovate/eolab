@@ -2,7 +2,7 @@
 import { normalizeCalculationArea } from "./calculation-area.js";
 const LEGACY_KEY = "eolab.processing.calculation.v1";
 const KEY_PREFIX = "eolab.processing.calculation.v2.";
-const CLIENT = /^(summary|raster-series:([0-9]|[1-4][0-9]))$/;
+const CLIENT = /^(summary|raster-series:(0|[1-9][0-9]{0,15}))$/;
 const ID = /^[A-Za-z0-9_-]{32}$/;
 
 /** Validate the optional total-pixel execution budget. @param {number|null} value Setting. @return {number|null} Budget. */
@@ -35,13 +35,16 @@ export function calculationIntent(value) {
 
 /** Keep idempotency and cancellation intent across reloads, without persisting cookies. */
 export class CalculationSessionStorage {
-    /** Bind one recovery record; the bound is the product's 50-raster limit plus summary.
+    /** Bind one recovery record for summary or a nonnegative raster-series position.
+     * Each record retains its size limit; browser storage bounds total saved data.
      * @param {Storage|null} storage Browser sessionStorage.
      * @param {string} [client="summary"] Caller identity.
      * @throws {TypeError} If the caller identity is unsupported.
      */
     constructor(storage, client = "summary") {
-        if (!CLIENT.test(client)) throw new TypeError("Unsupported calculation caller.");
+        if (!CLIENT.test(client) || (client !== "summary" && !Number.isSafeInteger(Number(client.split(":")[1])))) {
+            throw new TypeError("Unsupported calculation caller.");
+        }
         this.storage = storage;
         this.client = client;
     }
@@ -51,12 +54,24 @@ export class CalculationSessionStorage {
      * @throws {TypeError} If the caller identity is unsupported.
      */
     forClient(client) { return new CalculationSessionStorage(this.storage, client); }
-    /** List valid unfinished records, including the previous single-record format.
+    /** List saved unfinished calculations without assuming a maximum raster count.
+     * Only this component's keys are considered. Invalid records are ignored and
+     * the legacy single-record format remains recoverable by its original caller.
      * @return {string[]} Callers requiring startup recovery.
      */
     savedClientNames() {
-        return ["summary", ...Array.from({ length: 50 }, (_, index) => `raster-series:${index}`)]
-            .filter(client => this.forClient(client).read());
+        const clients = new Set(["summary", "raster-series:0"]);
+        try {
+            for (let index = 0; index < (this.storage?.length ?? 0); index++) {
+                const key = this.storage.key(index);
+                if (key?.startsWith(KEY_PREFIX)) {
+                    const client = key.slice(KEY_PREFIX.length);
+                    if (CLIENT.test(client) && (client === "summary" || Number.isSafeInteger(Number(client.split(":")[1])))) clients.add(client);
+                }
+            }
+        } catch { /* read() also handles browsers denying storage access. */ }
+        return [...clients].filter(client => this.forClient(client).read())
+            .sort((a, b) => a === b ? 0 : a === "summary" ? -1 : b === "summary" ? 1 : Number(a.split(":")[1]) - Number(b.split(":")[1]));
     }
     /** Read the old single record only for the caller that originally owned it.
      * @return {string|null} Matching legacy record, or null.
