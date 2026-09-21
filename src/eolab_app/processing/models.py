@@ -118,6 +118,13 @@ class JobListResponse(BaseModel, Generic[JobResponseType]):
 class ProcessingLimits:
     """Deployment-wide scheduling, execution and retention limits.
 
+    max_owner_plans limits unfinished and ready plans held at once by one
+    Processing browser session, shared across its calculations and clip downloads.
+    It does not limit the number of rasters in a map or series. Releasing a plan
+    frees session capacity; the browser retries remaining requests as space opens.
+    plan_record_capacity separately includes failed and cancelled records retained
+    until expiry so that late retries cannot recreate cancelled work.
+
     Waiting-job limits count only queued work, not the single running attempt.
     max_job_records includes finished jobs and seven-day idempotency records.
     max_job_input_bytes bounds retained job specifications and summaries until
