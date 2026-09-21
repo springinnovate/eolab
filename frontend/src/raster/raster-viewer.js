@@ -48,7 +48,7 @@ import {
     WHOLE_RASTER_SAMPLING_AREA,
 } from "./statistics.js";
 import { RasterStatisticsController } from "./statistics-controller.js";
-import { RasterStatisticsRequestQueue } from "./statistics-request-queue.js";
+import { requestRasterStatistics } from "./statistics-request.js";
 import { getHistogramValueLabel } from "./histogram-axes.js";
 import {
     estimateRasterPairedHistogramPercentile,
@@ -313,16 +313,15 @@ export function initializeRasterViewer(
     ) {
         throw new TypeError("Raster cursor-value view is incomplete");
     }
-    const statisticsRequests = new RasterStatisticsRequestQueue(clock);
     /**
-     * Queue ordinary reads alongside paired reads for this viewer.
+     * Request ordinary statistics independently, retrying temporary server overload.
      * @param {Object} item Catalog raster to analyze.
      * @param {Object} area Normalized whole, bounds, or polygon selection sampling area.
      * @param {AbortSignal} signal Controller-owned cancellation signal.
      * @return {Promise<Object>} Statistics or the final read/abort failure.
      */
-    function loadQueuedStatistics(item, area, signal) {
-        return statisticsRequests.run(() => loadStatistics(item, area, signal), signal);
+    function loadStatisticsWithRetry(item, area, signal) {
+        return requestRasterStatistics(() => loadStatistics(item, area, signal), signal, clock);
     }
     ensureRasterSampleWindowPane(leafletMap);
     const ownsMapLayerController = mapLayerController === null;
@@ -770,7 +769,7 @@ export function initializeRasterViewer(
         renderRasterSampleWindowGuidance
     );
     const rasterStatisticsController = new RasterStatisticsController(
-        loadQueuedStatistics,
+        loadStatisticsWithRetry,
         /**
          * Present the start of the active raster's request in its correct scope.
          *
@@ -829,12 +828,12 @@ export function initializeRasterViewer(
          * @param {AbortSignal} signal Cancellation signal for superseded work.
          * @return {Promise<Object>} Validated paired statistics; rejects on failure.
          */
-        (pair, samplingArea, signal) => statisticsRequests.run(() => loadPairedStatistics(
+        (pair, samplingArea, signal) => requestRasterStatistics(() => loadPairedStatistics(
             pair.xItem,
             pair.yItem,
             samplingArea,
             signal
-        ), signal),
+        ), signal, clock),
         /**
          * Announce a new paired request; target, area, and context are unused.
          *
@@ -1405,7 +1404,7 @@ export function initializeRasterViewer(
      */
     function requireLayerHistogramController(session) {
         session.layerHistogramController ??= new RasterStatisticsController(
-            loadQueuedStatistics,
+            loadStatisticsWithRetry,
             /**
              * Mark this inactive session's requested scope busy and inapplicable.
              *

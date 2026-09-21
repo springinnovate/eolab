@@ -186,6 +186,9 @@ def create_app(
         app_global_configuration.raster_statistics_read_concurrency,
         app_global_configuration.raster_statistics_cache_entries,
         catalog_selection_reader=vector_selection_reader,
+        queue_capacity=app_global_configuration.raster_statistics_queue_capacity,
+        queue_wait_seconds=app_global_configuration.raster_statistics_queue_wait_seconds,
+        max_waiters=app_global_configuration.raster_statistics_max_waiters,
     )
     raster_feature = create_raster_feature(
         RasterPublicationService(
