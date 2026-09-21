@@ -629,7 +629,6 @@
               <div id="raster-series-formulas"></div>
               <div class="raster-series-controls">
                 <label>Add statistic <select id="raster-series-add-formula"><option value="">Choose…</option><option value="mean">Mean</option><option value="min">Minimum</option><option value="max">Maximum</option><option value="sum">Sum</option><option value="area">Area above zero (ha)</option><option value="custom">Custom formula</option></select></label>
-                <label>Plot statistic <select id="raster-series-statistic"></select></label>
               </div>
               <details class="raster-series-help"><summary>Formula reference</summary>
                 <ul>
@@ -639,7 +638,7 @@
                   <li><code>count(a &gt; 10)</code> — Count matching pixels.</li>
                   <li><code>areaha(a &gt; 0)</code> — Matching ground area in hectares.</li>
                 </ul>
-                <p>Use arithmetic to combine functions: <code>(mean(a)-min(a))/(max(a)-min(a))</code>. Use <code>where=</code> to filter: <code>sum(a, where=a &gt; 10)</code>. No-data pixels are excluded. Up to five formulas share one pass through each raster. Unlike units are shown as separate plots.</p>
+                <p>Use arithmetic to combine functions: <code>(mean(a)-min(a))/(max(a)-min(a))</code>. Use <code>where=</code> to filter: <code>sum(a, where=a &gt; 10)</code>. No-data pixels are excluded. Up to five formulas share one pass through each raster. Assign statistics with different units or ranges to separate plots as needed.</p>
               </details>
               <div class="raster-series-actions">
                 <button id="raster-series-calculate" type="button">Calculate</button>
@@ -660,11 +659,13 @@
             </div>
             <p id="raster-series-status" role="status" aria-live="polite"></p>
             <p id="raster-series-chart-note" hidden></p>
+            <button id="raster-series-add-plot" class="secondary-button" type="button" hidden>+ Add plot</button>
+            <div id="raster-series-plots" tabindex="0" role="region" aria-label="Statistic plots; scroll horizontally for more plots" hidden></div>
             <svg id="raster-series-chart" viewBox="0 0 680 360" role="img" hidden></svg>
             <details>
               <summary>Values &amp; download</summary>
               <div class="raster-series-table-scroll">
-                <table><thead><tr><th scope="col">Raster</th><th id="raster-series-value-heading" scope="col">Pixel value</th><th scope="col">Status</th></tr></thead><tbody id="raster-series-table-body"></tbody></table>
+                <table><thead><tr><th scope="col">Raster</th><th id="raster-series-statistic-heading" scope="col" hidden>Statistic</th><th id="raster-series-value-heading" scope="col">Pixel value</th><th scope="col">Status</th></tr></thead><tbody id="raster-series-table-body"></tbody></table>
               </div>
               <div class="raster-series-actions">
                 <button id="raster-series-download" class="secondary-button" type="button" disabled>Download CSV</button>

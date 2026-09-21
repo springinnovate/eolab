@@ -3808,10 +3808,12 @@ article.raster-histogram-summary {
 .vector-time-series-chart[hidden] { display: none; }
 .series-chart-axis { stroke: var(--text-2); stroke-width: 1.2; }
 .series-chart-grid { stroke: var(--border-1); stroke-width: 1; }
-.series-chart-line { fill: none; stroke: var(--brand); stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
-.series-chart-point { cursor: pointer; fill: var(--surface-1); stroke: var(--brand); stroke-width: 2.5; }
+.series-chart-line { fill: none; stroke: var(--series-color, var(--brand)); stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
+.series-chart-line-hit { fill: none; stroke: transparent; stroke-width: 14; pointer-events: stroke; }
+.series-chart-line-hit:focus { outline: none; stroke: var(--series-color, var(--brand)); stroke-opacity: 0.2; }
+.series-chart-point { cursor: pointer; fill: var(--surface-1); stroke: var(--series-color, var(--brand)); stroke-width: 2.5; }
 .series-chart-point:hover,
-.series-chart-point.is-selected { fill: var(--brand); stroke: var(--text-1); }
+.series-chart-point.is-selected { fill: var(--series-color, var(--brand)); stroke: var(--text-1); }
 .series-chart-point:focus { outline: none; stroke: var(--text-1); stroke-width: 4; }
 .series-chart-tick,
 .series-chart-x-tick { fill: var(--text-2); font-size: 11px; }

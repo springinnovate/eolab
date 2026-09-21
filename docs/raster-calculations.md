@@ -59,10 +59,20 @@ Drawing a new map box while area series is active replaces its calculations.
 
 Add up to five formulas. Within each formula, `a` means the current raster in
 the stack. Those formulas share one job and one read/mask pass per raster.
-**Plot statistic** chooses one formula at a time, so hectares and raster-value
-statistics do not share an axis. Missing values and failed rasters leave gaps;
-the table explains their status. Names, chart type and display order can change
-without recalculating.
+Each statistic starts visible in **Plot 1**. Its checkbox shows or hides it;
+the colored line and marker identify it on the graph. **Add plot** creates another
+plot beside the first. Choose a plot beside each statistic to group related values
+or separate different units and ranges. Removing a plot moves its statistics back
+to Plot 1. Scroll horizontally to reach more plots in a narrow panel.
+
+Each plot has its own **Linear / Log** Y-axis control. Log plots omit zero and
+negative values and report how many were omitted. Units come from calculation
+results; unspecified or mixed units are labeled explicitly. Hover a line to see its
+statistic and formula; hover or keyboard-focus a point to see the full raster name
+and all visible values at that position. Focus a legend entry to highlight its line.
+Missing values and failed rasters leave gaps; the table explains their status.
+Previous plots are faded while replacements are pending. Visibility, plot assignment,
+axis scale, names, chart type and display order change without recalculating.
 
 Small boxes calculate after a 700 ms pause. The automatic work budget applies
 to the entire stack. Large areas or stacks pause once for **Calculate remaining
@@ -82,7 +92,7 @@ each unfinished series job is recovered only to cancel it safely; the unsaved
 stack is not restarted. Lost submission responses retain their original request
 keys. **Recover** retries those requests without creating duplicate jobs.
 
-**Values & download** shows the selected statistic and exports all formulas,
+**Values & download** shows every statistic, including hidden or log-excluded values, and exports all formulas,
 exact scalar values, units, source IDs, area descriptors, job IDs and cache
 status as CSV. **Calculation timings** reports each raster's request-to-result
 time and server timings. Raster requests overlap, so their durations must not be

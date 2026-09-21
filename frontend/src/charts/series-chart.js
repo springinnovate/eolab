@@ -6,6 +6,16 @@ const CHART_HEIGHT = 360;
 const CHART_MARGIN = Object.freeze({ top: 20, right: 24, bottom: 92, left: 72 });
 
 /**
+ * @typedef {Object} ChartSeries
+ * @property {string} id Stable series identity.
+ * @property {string} label Human-readable name and optional description.
+ * @property {{xLabel:string,yValue:number|null,xValue?:number}[]} points Aligned observations.
+ * @property {string} [color] CSS stroke color.
+ * @property {string} [dash] SVG line dash pattern.
+ * @property {"circle"|"square"|"diamond"|"triangle"|"cross"} [marker] Point shape.
+ */
+
+/**
  * Return compact finite-number text for axes and accessible details.
  *
  * @param {number} value Finite number.
@@ -74,58 +84,78 @@ function svgElement(documentContext, name, attributes, text = null) {
  * @param {Object} configuration Closed rendering contract.
  * @param {Document} configuration.documentContext Owning document.
  * @param {SVGElement} configuration.chart Empty target SVG element.
- * @param {{xLabel:string,yValue:number|null}[]} configuration.points Ordered points.
+ * @param {{xLabel:string,yValue:number|null,xValue?:number}[]} [configuration.points] Single-series ordered points.
+ * @param {ChartSeries[]} [configuration.series] Multiple series sharing the same ordered X positions; replaces points.
  * @param {"line"|"scatter"} configuration.chartType Plot geometry.
  * @param {"ordinal"|"numeric"} [configuration.xScale="ordinal"] X spacing.
+ * @param {"linear"|"log"} [configuration.yScale="linear"] Y spacing; log excludes non-positive values.
  * @param {string} configuration.xAxisLabel Horizontal-axis title.
  * @param {string} configuration.yAxisLabel Vertical-axis title.
  * @param {string} configuration.ariaLabel Chart-level accessible description.
- * @param {(point:Object)=>string} configuration.pointAccessibleLabel Accessible point label.
- * @param {(point:Object)=>string} configuration.pointTooltip Pointer tooltip text.
+ * @param {(point:Object,series:ChartSeries,index:number)=>string} configuration.pointAccessibleLabel Accessible point label.
+ * @param {((point:Object)=>string)|null} [configuration.pointTooltip=null] Native tooltip text, required unless onInspect is supplied.
  * @param {((point:Object)=>void)|null} [configuration.onPointSelect=null]
  * Optional selection intent callback.
+ * @param {((inspection:{series:ChartSeries,point:Object|null,index:number|null}|null)=>void)|null} [configuration.onInspect=null] Pointer/focus details; when supplied, replaces native tooltips.
  * @return {{pointElements:{circle:SVGElement,point:Object}[]}} Rendered point handles.
+ * @throws {TypeError} If the chart contract or aligned positions are invalid, or no plottable value exists.
  */
 export function renderOrdinalSeriesChart({
     documentContext,
     chart,
     points,
+    series = null,
     chartType,
     xScale = "ordinal",
+    yScale = "linear",
     xAxisLabel,
     yAxisLabel,
     ariaLabel,
     pointAccessibleLabel,
-    pointTooltip,
+    pointTooltip = null,
     onPointSelect = null,
+    onInspect = null,
 }) {
+    const plottedSeries = series ?? [{ id: "series", label: ariaLabel, points }];
+    points = plottedSeries[0]?.points;
     if (
         !Array.isArray(points) || points.length === 0 ||
         !["line", "scatter"].includes(chartType) ||
         !["ordinal", "numeric"].includes(xScale) ||
+        !["linear", "log"].includes(yScale) ||
         typeof xAxisLabel !== "string" || typeof yAxisLabel !== "string" ||
         typeof ariaLabel !== "string" ||
         typeof pointAccessibleLabel !== "function" ||
-        typeof pointTooltip !== "function" ||
-        !(onPointSelect === null || typeof onPointSelect === "function")
+        (onInspect === null && typeof pointTooltip !== "function") ||
+        !(onPointSelect === null || typeof onPointSelect === "function") ||
+        !(onInspect === null || typeof onInspect === "function") ||
+        !plottedSeries.every(item => Array.isArray(item.points) && item.points.length === points.length &&
+            item.points.every((point, index) => point.xLabel === points[index].xLabel && point.xValue === points[index].xValue))
     ) {
         throw new TypeError("Invalid ordinal series chart contract.");
     }
-    const finitePoints = points.filter((point) =>
-        typeof point.yValue === "number" && Number.isFinite(point.yValue)
-    );
+    /** Test whether an observation can appear on this Y scale.
+     * @param {Object} point Observation. @return {boolean} Whether to draw it.
+     */
+    const canPlot = point => typeof point.yValue === "number" && Number.isFinite(point.yValue) &&
+        (yScale !== "log" || point.yValue > 0);
+    const finitePoints = plottedSeries.flatMap(item => item.points.filter(canPlot));
     if (finitePoints.length === 0) {
         throw new TypeError("An ordinal series chart requires a finite Y value.");
     }
     const plotWidth = CHART_WIDTH - CHART_MARGIN.left - CHART_MARGIN.right;
     const plotHeight = CHART_HEIGHT - CHART_MARGIN.top - CHART_MARGIN.bottom;
-    const values = finitePoints.map((point) => point.yValue);
+    const values = finitePoints.map(point => yScale === "log" ? Math.log10(point.yValue) : point.yValue);
     let minimum = Math.min(...values);
     let maximum = Math.max(...values);
     if (minimum === maximum) {
-        const padding = Math.abs(minimum) * 0.1 || 1;
+        const padding = yScale === "log" ? 0.5 : Math.abs(minimum) * 0.1 || 1;
         minimum -= padding;
         maximum += padding;
+    }
+    if (yScale === "log") {
+        minimum = Math.max(Math.log10(Number.MIN_VALUE), minimum);
+        maximum = Math.min(Math.log10(Number.MAX_VALUE), maximum);
     }
     const numericX = xScale === "numeric"
         ? points.map((point) => point.xValue)
@@ -153,7 +183,7 @@ export function renderOrdinalSeriesChart({
         return CHART_MARGIN.left + index * plotWidth / (points.length - 1);
     };
     const y = (value) => CHART_MARGIN.top +
-        (maximum - value) * plotHeight / (maximum - minimum);
+        (maximum - (yScale === "log" ? Math.log10(value) : value)) * plotHeight / (maximum - minimum);
     const xAxisY = CHART_MARGIN.top + plotHeight;
     chart.setAttribute("viewBox", `0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`);
     chart.setAttribute("aria-label", ariaLabel);
@@ -174,7 +204,8 @@ export function renderOrdinalSeriesChart({
         })
     );
     for (let index = 0; index < 5; index += 1) {
-        const value = minimum + (maximum - minimum) * index / 4;
+        const scaledValue = minimum + (maximum - minimum) * index / 4;
+        const value = yScale === "log" ? Math.min(Number.MAX_VALUE, Math.max(Number.MIN_VALUE, 10 ** scaledValue)) : scaledValue;
         const tickY = y(value);
         chart.append(
             svgElement(documentContext, "line", {
@@ -211,55 +242,81 @@ export function renderOrdinalSeriesChart({
             }, formatTickLabel(points[index].xLabel))
         );
     }
-    if (chartType === "line") {
-        let segmentOpen = false;
-        const path = points.map((point, index) => {
-            if (!(typeof point.yValue === "number" && Number.isFinite(point.yValue))) {
-                segmentOpen = false;
-                return "";
-            }
-            const command = segmentOpen ? "L" : "M";
-            segmentOpen = true;
-            return `${command}${x(index)},${y(point.yValue)}`;
-        }).filter(Boolean).join(" ");
-        chart.append(svgElement(documentContext, "path", {
-            class: "series-chart-line",
-            d: path,
-        }));
-    }
     const pointElements = [];
-    points.forEach((point, index) => {
-        if (!(typeof point.yValue === "number" && Number.isFinite(point.yValue))) {
-            return;
-        }
-        const selectable = onPointSelect !== null;
-        const circle = svgElement(documentContext, "circle", {
-            class: "series-chart-point",
-            cx: x(index),
-            cy: y(point.yValue),
-            r: 4.5,
-            tabindex: 0,
-            role: selectable ? "button" : "img",
-            ...(selectable ? { "aria-pressed": "false" } : {}),
-            "aria-label": pointAccessibleLabel(point),
-        });
-        if (selectable) {
-            circle.addEventListener("click", () => onPointSelect(point));
-            circle.addEventListener("keydown", (event) => {
-                if (!["Enter", " "].includes(event.key)) return;
-                event.preventDefault();
-                onPointSelect(point);
+    const pointGroups = [];
+    for (const item of plottedSeries) {
+        const group = series ? svgElement(documentContext, "g", { "data-series-id": item.id }) : chart;
+        if (item.color) group.setAttribute("style", `--series-color: ${item.color}`);
+        if (series) chart.append(group);
+        const pointGroup = series ? svgElement(documentContext, "g", { "data-series-id": item.id }) : chart;
+        if (item.color) pointGroup.setAttribute("style", `--series-color: ${item.color}`);
+        if (series) pointGroups.push(pointGroup);
+        if (chartType === "line") {
+            let segmentOpen = false;
+            const path = item.points.map((point, index) => {
+                if (!canPlot(point)) {
+                    segmentOpen = false;
+                    return "";
+                }
+                const command = segmentOpen ? "L" : "M";
+                segmentOpen = true;
+                return `${command}${x(index)},${y(point.yValue)}`;
+            }).filter(Boolean).join(" ");
+            const line = svgElement(documentContext, "path", {
+                class: "series-chart-line",
+                d: path,
+                "stroke-dasharray": item.dash ?? "none",
             });
+            group.append(line);
+            if (onInspect) {
+                const hit = svgElement(documentContext, "path", {
+                    class: "series-chart-line-hit", d: path, tabindex: 0, role: "img",
+                    "aria-label": item.label, "data-series-line": item.id,
+                });
+                bindInspection(hit, { series: item, point: null, index: null }, onInspect);
+                group.append(hit);
+            }
         }
-        circle.append(svgElement(
-            documentContext,
-            "title",
-            {},
-            pointTooltip(point)
-        ));
-        pointElements.push({ circle, point });
-        chart.append(circle);
-    });
+        item.points.forEach((point, index) => {
+            if (!canPlot(point)) {
+                return;
+            }
+            const selectable = onPointSelect !== null;
+            const markerPaths = { square: "M-4,-4h8v8h-8z", diamond: "M0,-6L5,0L0,6L-5,0z",
+                triangle: "M0,-6L5,4L-5,4z", cross: "M-5,0h10M0,-5v10" };
+            const markerPath = markerPaths[item.marker];
+            const circle = svgElement(documentContext, markerPath ? "path" : "circle", {
+                class: "series-chart-point",
+                cx: x(index),
+                cy: y(point.yValue),
+                r: 4.5,
+                tabindex: 0,
+                role: selectable ? "button" : "img",
+                ...(selectable ? { "aria-pressed": "false" } : {}),
+                ...(markerPath ? { d: markerPath, transform: `translate(${x(index)} ${y(point.yValue)})` } : {}),
+                "data-point-index": index,
+                "aria-label": pointAccessibleLabel(point, item, index),
+            });
+            if (selectable) {
+                circle.addEventListener("click", () => onPointSelect(point));
+                circle.addEventListener("keydown", (event) => {
+                    if (!["Enter", " "].includes(event.key)) return;
+                    event.preventDefault();
+                    onPointSelect(point);
+                });
+            }
+            if (onInspect) bindInspection(circle, { series: item, point, index }, onInspect);
+            else circle.append(svgElement(
+                documentContext,
+                "title",
+                {},
+                pointTooltip(point)
+            ));
+            pointElements.push({ circle, point });
+            pointGroup.append(circle);
+        });
+    }
+    chart.append(...pointGroups);
     chart.append(
         svgElement(documentContext, "text", {
             class: "series-chart-axis-title",
@@ -277,4 +334,17 @@ export function renderOrdinalSeriesChart({
     );
     chart.removeAttribute("hidden");
     return { pointElements };
+}
+
+/**
+ * Give pointer and keyboard users the same details without a second native tooltip.
+ * @param {SVGElement} element Focusable line or point.
+ * @param {Object} inspection Series and optional observation to describe.
+ * @param {(inspection:Object|null)=>void} onInspect Display or clear the details.
+ * @return {void}
+ */
+function bindInspection(element, inspection, onInspect) {
+    for (const event of ["pointerenter", "focus"]) element.addEventListener(event, () => onInspect(inspection));
+    for (const event of ["pointerleave", "blur"]) element.addEventListener(event, () => onInspect(null));
+    element.addEventListener("keydown", event => { if (event.key === "Escape") onInspect(null); });
 }
