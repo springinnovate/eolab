@@ -4,6 +4,23 @@ History
 Unreleased
 ----------
 
+0.6.0 (2026-09-20)
+------------------
+
+* Filter vector layers by their attributes and use filtered features as shared sampling areas for histograms, raster summaries, and clip downloads.
+* Calculate raster formulas such as sum, mean, min, max, and area in hectares over map boxes, polygon areas, or whole rasters, with visible results and CSV downloads.
+* Download raster clips through queued backend processing with progress, cancellation, and temporary result storage.
+* Cache completed summary values, reuse projected polygons, and rasterize polygon masks once per calculation into temporary tiled rasters. Report request-to-result and detailed processing timings.
+* Add a standalone Jobs service and queue calculation planning, histogram sampling, vector selections, and filter counts, with cancellation and automatic client retries when capacity is full.
+* Reuse native worker processes and deliver calculation completion through server-sent events, retaining polling as a fallback.
+* Plot pixel values and area statistics across raster stacks. Show multiple statistics with distinct styles, visibility controls, side-by-side plots, independent linear or logarithmic Y axes, and point details.
+* Create local annotation layers with editable polygons, names and notes, vertex insertion, polygon dragging, and GeoJSON import/export. Use annotation polygons as summary areas.
+* Share annotations within an EOLab site through session codes, with contributor layers, lead controls, combined downloads, and temporary session storage.
+* Add basemap choices, including no basemap, and keep the basemap control visible beside open map tools. Add show-all/hide-all layer controls and undo for the last removed layer.
+* Add histogram axis bounds and linear/logarithmic scales, and clarify the combined raster/feature results from each map click.
+* Correct vector picking at broad zoom levels, preserve raster longitude coverage near the antimeridian, rely on backend pixel coverage, and recover observation after temporary scan-status failures.
+* Remove obsolete calculator and outline pathways, consolidate processing ownership, and add reproducible application-build and database-lifecycle checks.
+
 0.5.0 (2026-09-06)
 ------------------
 
