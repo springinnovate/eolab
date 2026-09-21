@@ -12,8 +12,8 @@ import { describeJobProgress } from "./presentation.js";
  * cancels obsolete work when the inputs change or area statistics is hidden.
  */
 export class RasterSeriesCalculations {
-    /** Register Raster series with Processing and initialize an empty calculation list.
-     * Creating the controller does not validate formulas or submit calculations.
+    /** Initialize raster-series inputs, results and progress tracking.
+     * Creating the controller does not create executors, validate formulas or submit calculations.
      * Composition supplies the area; the Raster series controller supplies selected
      * rasters, formulas and visibility before work can begin.
      * @param {Object} options Providers.
@@ -57,21 +57,21 @@ export class RasterSeriesCalculations {
      * @return {Promise<void>} Initial recovery attempt; cancellation may finish later
      * through the shared job observer.
      */
-    async recoverAndCancelPreviousCalculation() {
+    async recoverAndCancelPreviousSeriesCalculations() {
         const clients = this.requests.savedClientNames().filter(name => name.startsWith("raster-series:"))
-            .map(name => this.clientFor(Number(name.split(":")[1])));
+            .map(name => this.getOrCreateRasterExecutor(Number(name.split(":")[1])));
         for (const client of clients) client.stop();
         await Promise.all(clients.map(client => client.start()));
     }
 
-    /** Get an independent executor for a selected raster position.
+    /** Get the executor for a raster request position, creating it on first use.
      * Each position retains its own recovery record and waits only for its own
      * previous cancellation. The server decides when calculations execute.
      * @param {number} index Nonnegative integer position.
      * @return {import("./calculation-executor.js").CalculationExecutor} Reusable executor.
      * @throws {TypeError} If the position is not a nonnegative safe integer.
      */
-    clientFor(index) {
+    getOrCreateRasterExecutor(index) {
         if (!this.clients.has(index)) {
             const client = this.requests.createClient("raster-series:" + index,
                 state => this.handleCalculationProgress(index, state));
@@ -208,7 +208,7 @@ export class RasterSeriesCalculations {
                 if (this.results.has(source.key) || [...this.pending.values()].some(request => request.key === source.key)) continue;
                 let index = 0;
                 while (this.pending.has(index)) index++;
-                const client = this.clientFor(index);
+                const client = this.getOrCreateRasterExecutor(index);
                 const request = { key: source.key, calculationInputs: calculationIntent({ ...firstCalculationInputs, source: this.getRasterReference(source) }),
                     startedAt: this.now(), submitted: false, phase: "waiting", message: "Waiting for planning…" };
                 this.pending.set(index, request);
@@ -263,12 +263,12 @@ export class RasterSeriesCalculations {
         const request = this.pending.get(index);
         if (!request || request.phase === "confirmation") { this.onChange(); return; }
         const client = this.clients.get(index);
-        /** Match settings rather than a position's previously completed result.
-         * @param {Object|null} value Settings accompanying a plan or result.
-         * @return {boolean} Exact request match.
+        /** Check that a plan or result belongs to the calculation currently at this position.
+         * @param {Object|null} calculationInputs Raster, area and formulas accompanying a plan or result.
+         * @return {boolean} True when all inputs match the current request.
          */
-        const matches = value => JSON.stringify(value) === JSON.stringify(request.calculationInputs);
-        if (state.completedJob && matches(state.completedCalculation) && request.submitted &&
+        const matchesCalculationInputs = calculationInputs => JSON.stringify(calculationInputs) === JSON.stringify(request.calculationInputs);
+        if (state.completedJob && matchesCalculationInputs(state.completedCalculation) && request.submitted &&
             state.completedJob.jobId !== request.previousJobId && !state.unfinishedCalculation && state.isIdle) {
             const elapsedSeconds = (this.now() - request.startedAt) / 1000;
             this.results.set(request.key, { job: state.completedJob, calculationInputs: request.calculationInputs, elapsedSeconds,
@@ -279,7 +279,7 @@ export class RasterSeriesCalculations {
         } else if (state.admission === "retry" || (request.submitted && state.isIdle && !state.plan && !state.unfinishedCalculation)) {
             this.results.set(request.key, { calculationInputs: request.calculationInputs, error: state.message || "No result returned." });
             this.pending.delete(index);
-        } else if (state.plan && state.isIdle && matches(state.plannedCalculation)) {
+        } else if (state.plan && state.isIdle && matchesCalculationInputs(state.plannedCalculation)) {
             // An expired, unsubmitted plan may have been replaced after a capacity
             // wait. Replace its estimate rather than counting the same raster twice.
             if (request.budgetCharge) {
@@ -331,7 +331,7 @@ export class RasterSeriesCalculations {
         this.onChange();
     }
 
-    /** Whether failed rows can be explicitly retried. @return {boolean} */
+    /** Check whether any raster has a failed result. @return {boolean} True if at least one result contains an error. */
     get hasErrors() { return [...this.results.values()].some(result => result.error); }
 
     /** Whether a current or cancelled submission needs safe recovery. @return {boolean} */
@@ -340,7 +340,7 @@ export class RasterSeriesCalculations {
     /** Retry unresolved submissions with their original request keys.
      * @return {Promise<void>} Retry attempts; recovered jobs may still be running.
      */
-    async retryInterruptedCalculation() {
+    async retryInterruptedCalculations() {
         await Promise.all([...this.clients.values()].filter(client => client.snapshot.recoverable).map(client => client.retry()));
         this.updateSeriesProgress();
     }

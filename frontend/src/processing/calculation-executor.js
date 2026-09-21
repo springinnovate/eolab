@@ -1,6 +1,6 @@
 /** Track one submitted calculation at a time, saving enough state to resume after reload. */
 import { ACTIVE_JOB_STATES } from "./jobs.js";
-import { ProcessingRequestError, waitForProcessingCapacity } from "./api.js";
+import { ProcessingRequestError, waitBeforeCapacityRetry } from "./api.js";
 import { calculationIntent } from "./calculation-session.js";
 
 /** Compare calculation settings without relying on object identity.
@@ -251,13 +251,13 @@ export class CalculationExecutor {
         for (let attempt = 0; ; attempt++) {
             try { return await this.api.submitCalculation(saved.pending); }
             catch (error) {
-                if (error instanceof ProcessingRequestError && error.waitingForCapacity) {
-                    const wait = this.#capacityWait = new AbortController();
-                    if (saved.cancelRequested || this.destroyed) wait.abort();
+                if (error instanceof ProcessingRequestError && error.isCapacityRejection) {
+                    const capacityWaitCancellation = this.#capacityWait = new AbortController();
+                    if (saved.cancelRequested || this.destroyed) capacityWaitCancellation.abort();
                     this.#executionStatus.phase = "waiting";
                     this.#executionStatus.message = "Waiting for server capacity; retrying automatically…";
                     this.#notifyListeners();
-                    try { await waitForProcessingCapacity(error, attempt, wait.signal); continue; }
+                    try { await waitBeforeCapacityRetry(error, attempt, capacityWaitCancellation.signal); continue; }
                     catch (cancelled) { if (cancelled.name !== "AbortError") throw cancelled; }
                     finally { this.#capacityWait = null; }
                 } else if (!(error instanceof ProcessingRequestError) || error.status < 400 || error.status >= 500 || error.status === 408) {

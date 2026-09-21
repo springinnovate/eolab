@@ -68,7 +68,7 @@ export class RasterSeriesController {
             onStatistic: id => { this.selectedStatistic = id; this.render(); },
             onCalculate: () => void this.areaStatistics.calculateRemainingRasters(),
             onCancel: () => this.areaStatistics.cancelRemainingRasters(),
-            onRecover: () => void this.areaStatistics.retryInterruptedCalculation(),
+            onRecover: () => void this.areaStatistics.retryInterruptedCalculations(),
             onSelect: (key, selected) => this.selectRaster(key, selected),
             onOrder: (order, direction) => {
                 this.order = order; this.direction = direction; this.render();

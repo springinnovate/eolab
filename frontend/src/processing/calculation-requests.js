@@ -1,7 +1,7 @@
 /** Independent calculation lifecycles sharing one job observer. */
 import { CalculationExecutor } from "./calculation-executor.js";
 
-/** Own request recovery and activity without scheduling server work in the browser. */
+/** Create independent calculation executors and report their combined map activity. */
 export class CalculationRequests {
     /** Connect the existing Processing providers; executors are created on demand.
      * @param {Object} dependencies Execution providers.
@@ -18,7 +18,7 @@ export class CalculationRequests {
         this.activeAreas = new Map();
     }
 
-    /** Create an independent executor with its own durable submission record.
+    /** Create an independent executor with its own saved submission record for reload recovery.
      * The summary caller and all selected series positions can proceed independently.
      * Replacing work in one position still waits for that position's cancellation.
      * @param {string} name "summary" or "raster-series:" followed by a nonnegative integer.

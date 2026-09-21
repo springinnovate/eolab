@@ -19,22 +19,23 @@ export class ProcessingRequestError extends Error {
      * Storage exhaustion and unknown errors require attention instead of automatic retry.
      * @return {boolean} True only for a classified temporary queue/plan limit.
      */
-    get waitingForCapacity() {
+    get isCapacityRejection() {
         return this.status === 429 && ["plan_queue_full", "plan_record_capacity", "owner_queue_full", "queue_full"].includes(this.code);
     }
 }
 
-/** Wait before retrying a request that the server definitively did not admit.
+/** Pause before retrying a request rejected or expired while waiting for capacity.
  * Retry-After sets the minimum delay. Repeated rejections back off to 30 seconds,
  * with jitter so concurrent tabs do not all retry together. The caller retains the
- * request until it succeeds or is cancelled; this wait never submits any work.
- * @param {ProcessingRequestError} error Classified capacity rejection.
+ * request until it succeeds or is cancelled. The timer does not check server
+ * capacity or submit work; its caller must try admission again after the delay.
+ * @param {ProcessingRequestError} error Capacity rejection or planning-queue timeout.
  * @param {number} attempt Number of preceding capacity waits for this request.
  * @param {AbortSignal|undefined} signal Cancel this wait when its calculation changes.
  * @return {Promise<void>} Resolves when the retry delay has elapsed.
  * @throws {DOMException} AbortError when the caller cancels.
  */
-export function waitForProcessingCapacity(error, attempt, signal) {
+export function waitBeforeCapacityRetry(error, attempt, signal) {
     signal?.throwIfAborted();
     const seconds = Math.max(error.retryAfterSeconds ?? 0, Math.min(30, 5 * 2 ** Math.min(attempt, 3)));
     return new Promise((resolve, reject) => {
@@ -307,7 +308,7 @@ export class ProcessingApiClient {
             catch (error) {
                 if (!(error instanceof ProcessingRequestError) || error.code !== "plan_queue_timeout") throw error;
                 onProgress?.("waiting-capacity");
-                await waitForProcessingCapacity(error, attempt, signal);
+                await waitBeforeCapacityRetry(error, attempt, signal);
             }
         }
     }
@@ -343,10 +344,10 @@ export class ProcessingApiClient {
                         snapshot = await this.request(`/${operation}/plans/${id}`, "POST", body, AbortSignal.timeout(10000));
                         break;
                     } catch (error) {
-                        if (!(error instanceof ProcessingRequestError) || !error.waitingForCapacity) throw error;
+                        if (!(error instanceof ProcessingRequestError) || !error.isCapacityRejection) throw error;
                         discardOnExit = false; // No admitted plan to delete while waiting.
                         onProgress?.("waiting-capacity");
-                        await waitForProcessingCapacity(error, attempt, signal);
+                        await waitBeforeCapacityRetry(error, attempt, signal);
                     }
                 }
             } catch (error) {
@@ -462,15 +463,15 @@ export class ProcessingApiClient {
         const data = await response.json().catch(() => null);
         if (!response.ok) {
             const detail = data?.detail;
-            const header = response.headers?.get("Retry-After");
-            const seconds = header == null ? NaN : /^\d+(\.\d+)?$/.test(header)
-                ? Number(header) : (Date.parse(header) - Date.now()) / 1000;
+            const retryAfterHeader = response.headers?.get("Retry-After");
+            const retryAfterSeconds = retryAfterHeader == null ? NaN : /^\d+(\.\d+)?$/.test(retryAfterHeader)
+                ? Number(retryAfterHeader) : (Date.parse(retryAfterHeader) - Date.now()) / 1000;
             throw new ProcessingRequestError(
                 typeof detail === "string" ? detail : Array.isArray(detail)
                     ? detail.map(item => item.msg).join("; ")
                     : detail?.message ?? `Processing request failed (${response.status}).`,
                 response.status, detail?.code ?? null,
-                Number.isFinite(seconds) && seconds >= 0 && seconds <= 86400 ? seconds : null,
+                Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0 && retryAfterSeconds <= 86400 ? retryAfterSeconds : null,
             );
         }
         if (data === null) throw new Error("Processing returned an unreadable response. Retry to recover your jobs.");

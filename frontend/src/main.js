@@ -1035,7 +1035,7 @@ async function initializeCatalog(
         onClose: () => { mapInspection.hideRasterSeries(); leafletMap.getContainer().focus(); },
     });
     rasterSeries.setArea(rasterSeriesArea, rasterSeriesAreaLabel);
-    void rasterAreaSeries.recoverAndCancelPreviousCalculation();
+    void rasterAreaSeries.recoverAndCancelPreviousSeriesCalculations();
     void calculations.start();
     document.querySelector("#open-raster-series-summary").addEventListener("click", () => {
         rasterSeries.setMode("area");

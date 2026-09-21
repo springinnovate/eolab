@@ -73,10 +73,10 @@ export class CalculationSessionStorage {
         return [...clients].filter(client => this.forClient(client).read())
             .sort((a, b) => a === b ? 0 : a === "summary" ? -1 : b === "summary" ? 1 : Number(a.split(":")[1]) - Number(b.split(":")[1]));
     }
-    /** Read the old single record only for the caller that originally owned it.
-     * @return {string|null} Matching legacy record, or null.
+    /** Read the old single-record JSON only for the caller that originally owned it.
+     * @return {string|null} Matching legacy JSON text, or null if absent, unreadable or owned by another caller.
      */
-    legacyRecord() {
+    readLegacyRecord() {
         try {
             const text = this.storage?.getItem(LEGACY_KEY);
             if (!text || text.length > 16384) return null;
@@ -88,7 +88,7 @@ export class CalculationSessionStorage {
     /** Recover validated execution data and caller context without choosing whether to cancel. @return {Object|null} Owned workflow. */
     read() {
         try {
-            const text = this.storage?.getItem(KEY_PREFIX + this.client) ?? this.legacyRecord();
+            const text = this.storage?.getItem(KEY_PREFIX + this.client) ?? this.readLegacyRecord();
             if (!text || text.length > 16384) return null;
             const value = JSON.parse(text);
             if (typeof value.automatic !== "boolean" || typeof value.cancelRequested !== "boolean" ||
@@ -115,11 +115,11 @@ export class CalculationSessionStorage {
         const text = JSON.stringify({ ...execution, automatic: context?.automatic ?? false, ...(context?.client ? { client: context.client } : {}) });
         if (text.length > 16384) throw new Error("Calculation recovery information is too large.");
         this.storage.setItem(KEY_PREFIX + this.client, text);
-        if (this.legacyRecord()) this.storage.removeItem(LEGACY_KEY);
+        if (this.readLegacyRecord()) this.storage.removeItem(LEGACY_KEY);
     }
     /** Remove a confirmed terminal workflow. @return {void} */
     clear() {
         this.storage?.removeItem(KEY_PREFIX + this.client);
-        if (this.legacyRecord()) this.storage.removeItem(LEGACY_KEY);
+        if (this.readLegacyRecord()) this.storage.removeItem(LEGACY_KEY);
     }
 }

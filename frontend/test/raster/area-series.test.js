@@ -17,7 +17,7 @@ const flush = async () => { for (let i=0;i<120;i++) await Promise.resolve(); };
 /** @return {{promise:Promise,resolve:Function,reject:Function}} Controllable transport response. */
 const deferred = () => { let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b;});return {promise,resolve,reject}; };
 
-/** Exercise the real queue/executor/job observer against an observable Processing API.
+/** Exercise independent calculation requests and their shared observer against a controlled Processing API.
  * @param {Object} [overrides={}] API fault injection.
  * @param {Map} [data=new Map()] Saved recovery record.
  * @return {Object} Controllers, captured requests and explicit clock/job completion.
@@ -45,8 +45,8 @@ function fixture(overrides = {}, data = new Map()) {
     const storage=new CalculationSessionStorage({get length(){return data.size;},key:index=>[...data.keys()][index]??null,
         getItem:key=>data.get(key),setItem:(key,value)=>data.set(key,value),removeItem:key=>data.delete(key)});
     const jobs=new ProcessingJobs(api,clock);
-    const queue=new CalculationRequests({api,jobs,storage,now:()=>time,requestId:()=>"request-"+String(++serial).padStart(16,"0")});
-    const area=new RasterSeriesCalculations({api,requests:queue,clock,now:()=>time});
+    const calculationRequests=new CalculationRequests({api,jobs,storage,now:()=>time,requestId:()=>"request-"+String(++serial).padStart(16,"0")});
+    const area=new RasterSeriesCalculations({api,requests:calculationRequests,clock,now:()=>time});
     const view={bind(actions){this.actions=actions;},render(state){this.state=state;},downloadCsv(csv){this.csv=csv;}};
     const controller=new RasterSeriesController({view,areaStatistics:area,samplePoint:async()=>({inBounds:true,value:1}),onClose(){},onEditArea(){}});
     controller.updateAvailableRasters([source("1"),source("2")]); controller.setArea(box(0),"First box");
@@ -59,8 +59,8 @@ function fixture(overrides = {}, data = new Map()) {
         await jobs.refresh();await flush();return old.jobId;
     };
     const open=async()=>{controller.setMode("area");controller.updateSamplingForPanelVisibility(true);await tick();};
-    const close=()=>{area.destroy();queue.destroy();jobs.destroy();};
-    return {api,queue,jobs,storage,data,area,controller,view,requests,plans,server,grid,tick,finish,open,close};
+    const close=()=>{area.destroy();calculationRequests.destroy();jobs.destroy();};
+    return {api,calculationRequests,jobs,storage,data,area,controller,view,requests,plans,server,grid,tick,finish,open,close};
 }
 
 test("formulas share one job per source, retain exact scalar/unit CSV, and presentation edits do not recalculate",async()=>{
@@ -141,7 +141,7 @@ test("per-raster failure leaves a gap and proceeds to the next raster",async()=>
 
 test("summary and series submit independently without receiving each other's results",async()=>{
     const h=fixture();const snapshots=[];
-    const summary=h.queue.createClient("summary",state=>{snapshots.push(state);if(state.isIdle&&state.plan)summary.submit(state.plan.planId);});
+    const summary=h.calculationRequests.createClient("summary",state=>{snapshots.push(state);if(state.isIdle&&state.plan)summary.submit(state.plan.planId);});
     await h.open();
     summary.prepare({source:{collectionId:"catalog",itemId:"summary",label:"Summary"},area:box(0),calculations:[{label:"Mean",expression:"mean(a)"}]});
     await flush();
@@ -172,8 +172,8 @@ test("uncertain submissions keep the original key and cannot leak into summary r
     const saved=h.storage.forClient("raster-series:0").read();
     assert.equal(saved.context.client,"raster-series");
     const observed=[];
-    h.queue.createClient("summary",state=>observed.push(state));
-    await h.area.retryInterruptedCalculation();await flush();
+    h.calculationRequests.createClient("summary",state=>observed.push(state));
+    await h.area.retryInterruptedCalculations();await flush();
     const submissions=h.requests.filter(([kind])=>kind==="submit");
     assert.equal(submissions.length,3);assert.deepEqual(submissions[0][1],submissions[2][1]);
     assert.ok(observed.every(state=>!state.unfinishedCalculation));
@@ -187,9 +187,9 @@ test("reload cancels every saved series job without restarting the stack or summ
     const originals=[...h.server.values()];h.close();
     const recovered=fixture({},h.data);
     for(const job of originals)recovered.server.set(job.jobId,job);
-    const summary=recovered.queue.createClient("summary",()=>{});
+    const summary=recovered.calculationRequests.createClient("summary",()=>{});
     assert.equal(summary.snapshot.unfinishedCalculation,null);
-    await recovered.area.recoverAndCancelPreviousCalculation();await flush();
+    await recovered.area.recoverAndCancelPreviousSeriesCalculations();await flush();
     assert.equal(recovered.requests.filter(([kind])=>kind==="cancel").length,2);
     await recovered.finish("cancelled");await recovered.finish("cancelled");
     assert.equal(recovered.requests.filter(([kind])=>kind==="submit").length,0);
@@ -241,7 +241,7 @@ test("closing and reopening a completed area plot preserves its result and compl
 
 test("one queued caller can replace and cancel its request without cancelling its peer",async()=>{
     const h=fixture();await h.open();
-    const summary=h.queue.createClient("summary",()=>{});
+    const summary=h.calculationRequests.createClient("summary",()=>{});
     const intent={source:{collectionId:"catalog",itemId:"summary",label:"Summary"},area:box(0),calculations:[{label:"Sum",expression:"sum(a)"}]};
     summary.prepare(intent);summary.prepare({...intent,area:box(10)});summary.stop();
     assert.equal(h.requests.filter(([kind])=>kind==="cancel").length,0);
@@ -348,7 +348,7 @@ test("reload recovers and cancels all 64 independent submissions",async()=>{
     h.controller.updateAvailableRasters(Array.from({length:64},(_,i)=>source(String(i))));
     await h.open();h.close();
     const recovered=fixture(h.api,h.data);
-    await recovered.area.recoverAndCancelPreviousCalculation();await flush();
+    await recovered.area.recoverAndCancelPreviousSeriesCalculations();await flush();
     assert.equal(h.requests.filter(([kind])=>kind==="cancel").length,64);
     assert.ok([...h.server.values()].every(job=>job.status==="cancelling"));
     recovered.close();
@@ -382,7 +382,7 @@ test("reordering sources before confirming the rest cannot overwrite a running r
 
 test("cancelling a series leaves concurrent summary and clip jobs running",async()=>{
     const h=fixture();
-    const summary=h.queue.createClient("summary",state=>{if(state.isIdle&&state.plan)summary.submit(state.plan.planId);});
+    const summary=h.calculationRequests.createClient("summary",state=>{if(state.isIdle&&state.plan)summary.submit(state.plan.planId);});
     summary.prepare({source:{collectionId:"catalog",itemId:"summary",label:"Summary"},area:box(0),calculations:[{label:"Mean",expression:"mean(a)"}]});
     const clip={jobId:"c".repeat(32),operation:"raster.clip.v1",status:"running",sources:{a:{itemId:"clip"}}};
     h.server.set(clip.jobId,clip);h.jobs.accept(clip);
@@ -399,7 +399,7 @@ test("cancellation during uncertain concurrent submissions recovers all original
     await h.open();assert.equal(h.area.needsRecovery,true);
     const originals=h.requests.filter(([kind])=>kind==="submit").map(([,input])=>input);
     h.area.cancelRemainingRasters();h.api.submitCalculation=submit;
-    await h.area.retryInterruptedCalculation();await flush();
+    await h.area.retryInterruptedCalculations();await flush();
     for(const input of originals)assert.equal(h.requests.filter(([kind,value])=>kind==="submit"&&value.requestId===input.requestId).length,2);
     assert.equal(h.server.size,2);assert.equal(h.requests.filter(([kind])=>kind==="cancel").length,2);
     await h.finish("cancelled");await h.finish("cancelled");
@@ -423,7 +423,7 @@ test("reload recovers multiple lost submissions with original keys before cancel
     const oldJobs=[...h.server];h.close();
     const restored=fixture({},h.data);
     for(const [id,job]of oldJobs)restored.server.set(id,job);
-    await restored.area.recoverAndCancelPreviousCalculation();await flush();
+    await restored.area.recoverAndCancelPreviousSeriesCalculations();await flush();
     assert.deepEqual(restored.requests.filter(([kind])=>kind==="submit").map(([,input])=>input),originals);
     assert.equal(restored.server.size,2);
     assert.equal(restored.requests.filter(([kind])=>kind==="cancel").length,2);
@@ -446,7 +446,7 @@ test("a full recovery store prevents submission of that raster without losing a 
 
 test("the shared activity indicator stays active until every submitted calculation settles",async()=>{
     const h=fixture(), activity=[];
-    h.queue.dependencies.onActivity=area=>activity.push(area);
+    h.calculationRequests.dependencies.onActivity=area=>activity.push(area);
     await h.open();await h.finish();
     assert.deepEqual(activity.at(-1),box(0));
     await h.finish();assert.equal(activity.at(-1),null);h.close();
