@@ -5,7 +5,6 @@ import re
 
 import httpx2
 from fastapi import APIRouter, HTTPException, Request, Response
-from eolab_app.rendering.render_queue import GeoServerRenderQueue
 
 from eolab_app.diagnostics.tracker import GetMapRequestTracker
 from eolab_app.rendering.errors import (
@@ -13,7 +12,7 @@ from eolab_app.rendering.errors import (
     PublishedLayerNotAuthorizedError,
     PublishedLayerRequestError,
 )
-from eolab_app.rendering.ports import PublishedLayerRegistry
+from eolab_app.rendering.ports import MapRenderQueue, PublishedLayerRegistry
 from eolab_app.routes.geoserver_map import (
     forward_geoserver_get_map,
     geoserver_forward_headers,
@@ -223,7 +222,7 @@ def create_wms_proxy_router(
     geoserver_internal_url: str,
     published_layers: tuple[PublishedLayerRegistry, ...],
     get_map_request_tracker: GetMapRequestTracker,
-    render_queue: GeoServerRenderQueue,
+    render_queue: MapRenderQueue,
 ) -> APIRouter:
     """Create the restricted public WMS proxy.
 
