@@ -138,7 +138,7 @@ export class RasterSeriesView {
         this.chartNote.textContent = showingPrevious ? (areaMode ? "Previous results — calculating replacements." : "Previous plot — reading the new click.") : "";
         this.chart.hidden = areaMode || !plottedRows.some(row => row.state === "value");
         if (this.chart.hidden) this.chart.setAttribute("hidden", "");
-        if (areaMode) this.plotsView.render(state);
+        if (areaMode) this.plotsView.renderPlots(state);
         if (!this.chart.hidden) {
             renderOrdinalSeriesChart({
                 documentContext: this.document, chart: this.chart,

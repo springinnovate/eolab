@@ -79,7 +79,9 @@ export class RasterSeriesPlotsView {
         return { card, scale, legend, note, chart, empty, tooltip, signature: null };
     }
 
-    /** Draw all plots from one result generation, retaining gaps and exact values for inspection.
+    /** Add or remove plot cards and refresh those whose settings or results changed.
+     * All cards use the same current or previous calculation results. Each card
+     * is passed to renderPlot() only when its displayed content needs updating.
      * @param {Object} state Series view snapshot.
      * @param {{id:number,scale:string}[]} state.plots Plot settings.
      * @param {Object[]} state.statistics Formulas, display settings and ordered result rows.
@@ -87,7 +89,7 @@ export class RasterSeriesPlotsView {
      * @param {"line"|"scatter"} state.chartType Plot geometry.
      * @return {void}
      */
-    render(state) {
+    renderPlots(state) {
         for (const [id, elements] of this.cards) {
             if (state.plots.some(plot => plot.id === id)) continue;
             const hadFocus = elements.card.contains(this.document.activeElement);
@@ -102,18 +104,19 @@ export class RasterSeriesPlotsView {
             const signature = JSON.stringify([plot.scale, state.chartType, state.showingPrevious, statistics]);
             if (elements.signature === signature) continue;
             elements.signature = signature;
-            this.drawPlot(elements, plot, statistics, state);
+            this.renderPlot(elements, plot, statistics, state);
         }
     }
 
-    /** Draw one plot and its accessible legend, omitting only values its scale cannot represent.
+    /** Update one existing plot card's chart, legend, value details and empty-state message.
+     * Values its scale cannot represent stay in the result table and CSV.
      * @param {Object} elements Retained card elements.
      * @param {{id:number,scale:string}} plot Plot settings.
      * @param {Object[]} statistics Visible statistics assigned to this plot.
      * @param {{showingPrevious:boolean,chartType:string}} state Current presentation settings.
      * @return {void}
      */
-    drawPlot(elements, plot, statistics, state) {
+    renderPlot(elements, plot, statistics, state) {
         const { chart, tooltip, legend, note, empty } = elements;
         const focused = this.document.activeElement;
         const hadChartFocus = chart.contains(focused);
