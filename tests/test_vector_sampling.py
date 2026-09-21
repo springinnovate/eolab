@@ -165,8 +165,20 @@ def test_selection_reauthorizes_after_restart_without_storage(
     )
 
     async def scenario() -> None:
-        """Exercise the production native selector independently of map outlines."""
-        first = VectorSamplingService(catalog, catalog)
+        """Reauthorize the descriptor after an injected measurement completes."""
+        async def measure(selection: CatalogSelection) -> dict[str, Any]:
+            """Measure the real fixture source for the requested descriptor.
+
+            Args:
+                selection: Expected descriptor passed to the execution boundary.
+
+            Returns:
+                Exact fixture measurements, without simulating job scheduling.
+            """
+            assert selection == source.selection
+            return selection_summary(source)
+
+        first = VectorSamplingService(catalog, catalog, selection_executor=measure)
         response = await first.select(request)
         descriptor = CatalogSelection.model_validate(response["selection"])
         assert not {"id", "expiresAt", "geometry"}.intersection(response)

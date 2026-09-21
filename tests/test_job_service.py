@@ -304,7 +304,10 @@ def test_scheduler_has_only_explicit_operation_registration_edge() -> None:
                 imports = [
                     name
                     for name in imports
-                    if name != "eolab_app.vector.outline_operation"
+                    if name not in {
+                        "eolab_app.vector.outline_operation",
+                        "eolab_app.vector.selection_operation",
+                    }
                 ]
             assert not any(
                 name.startswith(
@@ -335,6 +338,11 @@ def test_scheduler_has_only_explicit_operation_registration_edge() -> None:
     operation = (root / "src/eolab_app/vector/outline_operation.py").read_text()
     assert "VectorSamplingService" not in operation
     assert "geoserver" not in operation.lower()
+    selection_operation = (root / "src/eolab_app/vector/selection_operation.py").read_text()
+    assert "VectorSamplingService" not in selection_operation
+    assert "geoserver" not in selection_operation.lower()
+    sampling = (root / "src/eolab_app/vector/sampling.py").read_text()
+    assert "run_bounded_process" not in sampling and "Semaphore" not in sampling
 
 
 def test_jobs_pins_reuse_reviewed_application_resolution() -> None:

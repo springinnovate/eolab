@@ -16,6 +16,11 @@ from eolab_app.vector.outline_operation import (
     OutlineResult,
     calculate_outline,
 )
+from eolab_app.vector.selection_operation import (
+    SelectionMeasurementInput,
+    SelectionMeasurementResult,
+    measure_selected_features,
+)
 
 
 @dataclass(frozen=True)
@@ -56,5 +61,12 @@ OPERATIONS = {
         OutlineInput,
         OutlineResult,
         calculate_outline,
+    ),
+    "vector.selection-measurement.v1": InstalledOperation(
+        "vector.selection-measurement.v1",
+        "Measure counts and bounds of filtered catalog polygons for an analysis area.",
+        SelectionMeasurementInput,
+        SelectionMeasurementResult,
+        measure_selected_features,
     ),
 }
