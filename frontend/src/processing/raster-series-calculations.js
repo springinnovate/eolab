@@ -198,8 +198,8 @@ export class RasterSeriesCalculations {
         const validation = this.validation = new AbortController();
         try {
             const formulas = this.formulas.map(formula => ({ label: "stat-" + formula.id, expression: formula.expression.trim() }));
-            const first = calculationIntent({ source: this.getRasterReference(this.sources[0]), area: this.area, calculations: formulas });
-            if (!this.validated) await this.api.validateCalculation(first.calculations, validation.signal);
+            const firstCalculationInputs = calculationIntent({ source: this.getRasterReference(this.sources[0]), area: this.area, calculations: formulas });
+            if (!this.validated) await this.api.validateCalculation(firstCalculationInputs.calculations, validation.signal);
             if (version !== this.version || !this.active) return;
             this.validated = true;
             // Record all identities before prepare() can synchronously notify listeners.
@@ -209,12 +209,12 @@ export class RasterSeriesCalculations {
                 let index = 0;
                 while (this.pending.has(index)) index++;
                 const client = this.clientFor(index);
-                const request = { key: source.key, intent: calculationIntent({ ...first, source: this.getRasterReference(source) }),
+                const request = { key: source.key, calculationInputs: calculationIntent({ ...firstCalculationInputs, source: this.getRasterReference(source) }),
                     startedAt: this.now(), submitted: false, phase: "waiting", message: "Waiting for planning…" };
                 this.pending.set(index, request);
                 additions.push([client, request]);
             }
-            for (const [client, request] of additions) client.prepare(request.intent);
+            for (const [client, request] of additions) client.prepare(request.calculationInputs);
             this.validating = false;
             this.refreshProgress();
         } catch (error) {
@@ -238,12 +238,15 @@ export class RasterSeriesCalculations {
      * check this plan plus work already submitted against the automatic stack budget.
      * This check does not charge the budget; submission does.
      * @param {Object} plan Current raster's server plan with cache status and grid estimates.
-     * @param {Object} intent Immutable raster, area and formulas.
+     * @param {Object} calculationInputs Validated, immutable inputs for this raster calculation.
+     * @param {{collectionId:string,itemId:string,label:string}} calculationInputs.source Catalog raster to read.
+     * @param {Object} calculationInputs.area Selected box, polygon reference or whole-raster descriptor.
+     * @param {ReadonlyArray<{label:string,expression:string}>} calculationInputs.calculations Named formulas to evaluate.
      * @return {boolean} True if no additional user confirmation is needed.
      */
-    canSubmitWithoutConfirmation(plan, intent) {
+    canSubmitWithoutConfirmation(plan, calculationInputs) {
         if (this.authorized || plan.cacheHit) return true;
-        if (!canAutomaticallyCalculate(plan, intent)) return false;
+        if (!canAutomaticallyCalculate(plan, calculationInputs)) return false;
         const estimates = { nativeBlocks: plan.grid.nativeBlocks, decodedBytes: plan.grid.decodedBytes,
             geometryCells: plan.grid.groundArea?.estimatedGeometryCells ?? 0 };
         return Object.entries(estimates).every(([key, value]) => (this.budget?.[key] ?? 0) + value <= AUTOMATIC_CALCULATION_LIMITS[key]);
@@ -264,17 +267,17 @@ export class RasterSeriesCalculations {
          * @param {Object|null} value Settings accompanying a plan or result.
          * @return {boolean} Exact request match.
          */
-        const matches = value => JSON.stringify(value) === JSON.stringify(request.intent);
+        const matches = value => JSON.stringify(value) === JSON.stringify(request.calculationInputs);
         if (state.completedJob && matches(state.completedCalculation) && request.submitted &&
             state.completedJob.jobId !== request.previousJobId && !state.unfinishedCalculation && state.isIdle) {
             const elapsedSeconds = (this.now() - request.startedAt) / 1000;
-            this.results.set(request.key, { job: state.completedJob, intent: request.intent, elapsedSeconds,
+            this.results.set(request.key, { job: state.completedJob, calculationInputs: request.calculationInputs, elapsedSeconds,
                 performanceLines: performanceDescription(state.completedJob, elapsedSeconds) });
             this.pending.delete(index);
         } else if (state.recoverable) {
             request.phase = "recovery"; request.message = state.message;
         } else if (state.admission === "retry" || (request.submitted && state.isIdle && !state.plan && !state.unfinishedCalculation)) {
-            this.results.set(request.key, { intent: request.intent, error: state.message || "No result returned." });
+            this.results.set(request.key, { calculationInputs: request.calculationInputs, error: state.message || "No result returned." });
             this.pending.delete(index);
         } else if (state.plan && state.isIdle && matches(state.plannedCalculation)) {
             // An expired, unsubmitted plan may have been replaced after a capacity
@@ -283,7 +286,7 @@ export class RasterSeriesCalculations {
                 for (const [key, value] of Object.entries(request.budgetCharge)) this.budget[key] -= value;
                 request.budgetCharge = null;
             }
-            if (!this.canSubmitWithoutConfirmation(state.plan, request.intent)) {
+            if (!this.canSubmitWithoutConfirmation(state.plan, request.calculationInputs)) {
                 request.phase = "confirmation"; request.message = "Waiting for your confirmation.";
                 client.discardPendingCalculation();
             } else {

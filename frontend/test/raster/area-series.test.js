@@ -119,7 +119,7 @@ test("rapid area changes cancel submitted work and never mix old-area rows",asyn
     assert.equal(planned.area.selectedBounds.west,20);
     await h.finish();await h.finish();
     assert.equal(h.area.results.size,2);
-    for(const result of h.area.results.values())assert.equal(result.intent.area.selectedBounds.west,20);
+    for(const result of h.area.results.values())assert.equal(result.calculationInputs.area.selectedBounds.west,20);
     h.close();
 });
 

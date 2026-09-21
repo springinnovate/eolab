@@ -301,7 +301,7 @@ export class RasterSeriesController {
         const rowsFor = results => sources.map(source => {
             const result = results.get(source.key);
             const row = result?.job?.result?.rows.find(row => row.label === "stat-" + formula.id);
-            const sameFormula = result?.intent.calculations.some(item => item.label === "stat-" + formula.id && item.expression === formula.expression.trim());
+            const sameFormula = result?.calculationInputs.calculations.some(item => item.label === "stat-" + formula.id && item.expression === formula.expression.trim());
             return { ...source, state: row?.state === "ok" && sameFormula ? "value" : result?.error ? "error" : row?.state ?? "waiting",
                 value: row?.value == null ? null : Number(row.value), rawValue: row?.value, unit: row?.unit ?? "",
                 errorMessage: result?.error ?? area.progress.get(source.key)?.message ?? (!result ? "Waiting" : ""), cached: !!result?.job?.result?.cacheHit };
@@ -337,7 +337,7 @@ export class RasterSeriesController {
                 const scalar = row?.value == null ? "" : { scalar: row.value };
                 lines.push([source.label, source.item.collection, source.item.id, formula.label, formula.expression,
                     scalar, row?.unit ?? "", row?.state ?? (result?.error ? "error" : "waiting"), result?.error ?? "",
-                    JSON.stringify(result?.intent.area ?? (this.areaChoice === "whole" ? {kind:"wholeRaster"} : area.area)),
+                    JSON.stringify(result?.calculationInputs.area ?? (this.areaChoice === "whole" ? {kind:"wholeRaster"} : area.area)),
                     result?.job?.jobId ?? "", result?.job?.result?.cacheHit ? "true" : "false"]);
             }
         }
