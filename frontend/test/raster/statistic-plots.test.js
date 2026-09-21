@@ -55,11 +55,19 @@ test("line and point details work on pointer and keyboard without native duplica
     line.dispatchEvent(new Event("focus"));
     assert.equal(result.inspections.at(-1).series.label, "Statistic 0");
     assert.equal(result.inspections.at(-1).point, null);
+    line.dispatchEvent(new Event("blur"));
     const point = result.pointElements[0].circle;
-    point.dispatchEvent(new Event("pointerenter"));
+    point.dispatchEvent(new Event("pointermove"));
     assert.equal(result.inspections.at(-1).index, 0);
-    point.dispatchEvent(new Event("blur"));
+    point.dispatchEvent(new Event("pointerleave"));
     assert.equal(result.inspections.at(-1), null);
+    point.dispatchEvent(new Event("focus"));
+    line.dispatchEvent(new Event("pointerenter"));
+    assert.equal(result.inspections.at(-1).index, 0, "scrolling beneath a stationary pointer must not replace keyboard details");
+    line.dispatchEvent(new Event("pointermove"));
+    assert.equal(result.inspections.at(-1).point, null);
+    line.dispatchEvent(new Event("pointerleave"));
+    assert.equal(result.inspections.at(-1).index, 0, "leaving the line restores the focused point's details");
     assert.equal(point.children.length, 0, "custom inspection has no SVG title fallback");
     const description = RasterSeriesPlotsView.prototype.describePoint([
         {label:"Mean · mean(a)",points:[{xLabel:"Full raster name.tif",yValue:1,rawValue:"1.0000000001",unit:""}]},

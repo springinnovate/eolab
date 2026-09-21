@@ -244,6 +244,7 @@ export function renderOrdinalSeriesChart({
     }
     const pointElements = [];
     const pointGroups = [];
+    const inspectionState = { focused: null, hovered: null };
     for (const item of plottedSeries) {
         const group = series ? svgElement(documentContext, "g", { "data-series-id": item.id }) : chart;
         if (item.color) group.setAttribute("style", `--series-color: ${item.color}`);
@@ -273,7 +274,7 @@ export function renderOrdinalSeriesChart({
                     class: "series-chart-line-hit", d: path, tabindex: 0, role: "img",
                     "aria-label": item.label, "data-series-line": item.id,
                 });
-                bindInspection(hit, { series: item, point: null, index: null }, onInspect);
+                bindInspection(hit, { series: item, point: null, index: null }, onInspect, inspectionState);
                 group.append(hit);
             }
         }
@@ -305,7 +306,7 @@ export function renderOrdinalSeriesChart({
                     onPointSelect(point);
                 });
             }
-            if (onInspect) bindInspection(circle, { series: item, point, index }, onInspect);
+            if (onInspect) bindInspection(circle, { series: item, point, index }, onInspect, inspectionState);
             else circle.append(svgElement(
                 documentContext,
                 "title",
@@ -341,10 +342,24 @@ export function renderOrdinalSeriesChart({
  * @param {SVGElement} element Focusable line or point.
  * @param {Object} inspection Series and optional observation to describe.
  * @param {(inspection:Object|null)=>void} onInspect Display or clear the details.
+ * @param {{focused:Object|null,hovered:Object|null}} state Shared focus and pointer state for this chart.
  * @return {void}
  */
-function bindInspection(element, inspection, onInspect) {
-    for (const event of ["pointerenter", "focus"]) element.addEventListener(event, () => onInspect(inspection));
-    for (const event of ["pointerleave", "blur"]) element.addEventListener(event, () => onInspect(null));
-    element.addEventListener("keydown", event => { if (event.key === "Escape") onInspect(null); });
+function bindInspection(element, inspection, onInspect, state) {
+    element.addEventListener("focus", () => { state.focused = inspection; onInspect(inspection); });
+    // Moving focus can scroll a line under a stationary pointer. Only actual
+    // pointer movement should replace the keyboard user's inspected value.
+    element.addEventListener("pointermove", () => { state.hovered = inspection; onInspect(inspection); });
+    element.addEventListener("pointerleave", () => {
+        if (state.hovered === inspection) state.hovered = null;
+        onInspect(state.focused);
+    });
+    element.addEventListener("blur", () => {
+        if (state.focused === inspection) state.focused = null;
+        onInspect(state.hovered);
+    });
+    element.addEventListener("keydown", event => {
+        if (event.key !== "Escape") return;
+        state.focused = null; state.hovered = null; onInspect(null);
+    });
 }
