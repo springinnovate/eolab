@@ -267,7 +267,15 @@ recovers updates if streaming is unavailable.
 
 Raster calculation and clip planning share a FIFO queue with one native planner.
 The current limits admit 32 unfinished requests, retain 128 plan records, and
-allow each browser session five unfinished or ready plans. A cache hit still
+allow each browser session 32 unfinished or ready plans. This admits a burst of
+independent raster plans from one session within the existing global queue;
+it does not add native workers or limit a map to 32 rasters. Tabs sharing the
+Processing session cookie share this allowance, including calculation and clip
+plans. A 64-raster area series still processes all 64: requests beyond current
+capacity stay pending in the browser and retry automatically as space opens.
+Released plans no longer count against the
+session allowance, but remain in the 128-record budget until expiry so that
+late retries cannot recreate cancelled work. A cache hit still
 checks source access but does not wait for the native planner. Queue waiting has
 its own 60-second limit; active planning retains its 15-second limit. A completed
 estimate is usable for five minutes starting when preparation finishes.
@@ -290,6 +298,12 @@ deadline (at most 100 seconds under current limits). It is not replayed: retry
 with a new ID. `plan_queue_full` means the pending queue filled, while
 `plan_record_capacity` means retained records or the session limit filled.
 These limits apply to planning; execution-job admission has separate limits.
+The browser automatically retries `plan_queue_full` and `plan_record_capacity`,
+and starts a new plan after `plan_queue_timeout`. Calculation submissions retry
+`owner_queue_full` and `queue_full` with the same request key. These waits are
+cancellable, honor `Retry-After`, and back off from 5 to 30 seconds plus jitter;
+longer server retry delays take precedence. Retained-input, result-storage and
+job-history exhaustion remain explicit errors requiring attention.
 
 ### Durable calculation and clip queues
 

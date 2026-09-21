@@ -96,7 +96,7 @@ import { VectorSamplingView } from "./vector/sampling-view.js";
 import { ProcessingApiClient } from "./processing/api.js";
 import { SummaryStatisticsController } from "./processing/summary-statistics-controller.js";
 import { SummaryStatisticsView } from "./processing/summary-statistics-view.js";
-import { CalculationQueue } from "./processing/calculation-queue.js";
+import { CalculationRequests } from "./processing/calculation-requests.js";
 import { CalculationSessionStorage } from "./processing/calculation-session.js";
 import { ProcessingJobs } from "./processing/jobs.js";
 import { DownloadsController } from "./processing/downloads-controller.js";
@@ -800,13 +800,13 @@ async function initializeCatalog(
         document.querySelector("#raster-sampling-vector-disclosure").open = true;
         document.querySelector("#raster-sampling-disclosure summary").focus();
     };
-    const calculationQueue = new CalculationQueue({
+    const calculationRequests = new CalculationRequests({
         api: processingApi, jobs: processingJobs, storage: new CalculationSessionStorage(browserSessionStorage()),
         onActivity: area => rasterVisualization?.setSamplingActivity(area),
     });
     const calculations = new SummaryStatisticsController({
         api: processingApi, jobs: processingJobs, view: new SummaryStatisticsView(),
-        executionQueue: calculationQueue,
+        calculationRequests,
         onAreaChange: updateRasterSeriesArea, getContext: processingContext,
         onOpen: () => mapInspection.showCalculations(), onClose: () => mapInspection.hideCalculations(),
         onEditArea: editProcessingArea,
@@ -1026,7 +1026,7 @@ async function initializeCatalog(
         savedMapViewController?.scheduleRemember()
     );
     const startupMapRestore = savedMapViewController.restoreStartupView(globalThis.location.hash);
-    const rasterAreaSeries = new RasterSeriesCalculations({ api: processingApi, queue: calculationQueue });
+    const rasterAreaSeries = new RasterSeriesCalculations({ api: processingApi, requests: calculationRequests });
     rasterSeries = new RasterSeriesController({
         areaStatistics: rasterAreaSeries,
         onEditArea: () => calculations.open(),
@@ -1035,7 +1035,7 @@ async function initializeCatalog(
         onClose: () => { mapInspection.hideRasterSeries(); leafletMap.getContainer().focus(); },
     });
     rasterSeries.setArea(rasterSeriesArea, rasterSeriesAreaLabel);
-    void rasterAreaSeries.recoverAndCancelPreviousCalculation();
+    void rasterAreaSeries.recoverAndCancelPreviousSeriesCalculations();
     void calculations.start();
     document.querySelector("#open-raster-series-summary").addEventListener("click", () => {
         rasterSeries.setMode("area");

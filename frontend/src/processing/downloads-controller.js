@@ -146,7 +146,8 @@ export class DownloadsController {
             if (sequence !== this.planSequence || this.destroyed) return;
             const plan = await this.api.planClip(this.state.source, this.state.area, this.planAbort.signal, status => {
                 if (sequence !== this.planSequence || this.destroyed) return;
-                this.state.message = status === "queued" ? "Waiting to check clip size…" : "Checking clip size…";
+                this.state.message = status === "waiting-capacity" ? "Waiting for server capacity; retrying automatically…"
+                    : status === "queued" ? "Waiting to check clip size…" : "Checking clip size…";
                 this.render();
             });
             if (sequence === this.planSequence && !this.destroyed) {

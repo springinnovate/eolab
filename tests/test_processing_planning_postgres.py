@@ -11,6 +11,7 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
+from httpx2 import Response
 import psycopg
 import pytest
 
@@ -382,6 +383,92 @@ def test_lost_http_admission_response_can_be_recovered_without_duplicate_work(
     )
     wait_for_plan(client, identifier, {"cancelled"}, headers)
     store.settle_planning(held, "held", None)
+
+
+def test_six_concurrent_calculations_from_one_session_can_repeat(
+    boundary: Any, store: PostgresJobStore
+) -> None:
+    """Six plans queue together and release their session capacity after submission.
+
+    Args:
+        boundary: Real HTTP routes, raster planning and calculation worker.
+        store: Isolated PostgreSQL store using the deployment's default limits.
+    """
+    client, worker, _, _, _ = boundary
+    client.get("/api/processing/jobs").raise_for_status()
+    body = request_body()
+    for batch in range(2):
+        body["calculations"] = [{"label": "Mean", "expression": f"mean(a) + {batch}"}]
+        held = hold_planner(store)
+        identifiers = [uuid4().hex for _ in range(6)]
+
+        def request_plan(identifier: str) -> Response:
+            """Send a plan from the same established browser session.
+
+            Args:
+                identifier: Unique request ID retained for status and cleanup.
+
+            Returns:
+                HTTP response to the asynchronous planning request.
+            """
+            return client.post(
+                f"/api/processing/raster-calculations/plans/{identifier}",
+                json=body,
+                headers=HEADERS,
+            )
+
+        try:
+            with ThreadPoolExecutor(max_workers=6) as pool:
+                responses = list(pool.map(request_plan, identifiers))
+            assert [response.status_code for response in responses] == [202] * 6
+            for identifier in identifiers:
+                wait_for_plan(client, identifier, {"queued"})
+        finally:
+            store.settle_planning(held, "held", None)
+
+        jobs = []
+        for identifier in identifiers:
+            plan = wait_for_plan(client, identifier, {"ready"})["result"]
+            job = submit_calculation(client, plan)
+            jobs.append(job)
+            # CalculationExecutor releases the estimate as soon as submission
+            # succeeds; the queued job retains the calculation it needs.
+            assert (
+                client.delete(
+                    f"/api/processing/plans/{identifier}", headers=HEADERS
+                ).status_code
+                == 200
+            )
+        for _ in jobs:
+            assert asyncio.run(worker.run_once())
+        for job in jobs:
+            result = client.get(f"/api/processing/jobs/{job['jobId']}").json()
+            assert result["status"] == "ready", result
+
+
+def test_ready_plans_still_obey_session_and_record_limits(
+    store: PostgresJobStore,
+) -> None:
+    """Released estimates free the session allowance but retain bounded retry records.
+
+    Args:
+        store: Real PostgreSQL adapter shared by independent browser sessions.
+    """
+    limits = replace(store.limits, max_owner_plans=2, plan_record_capacity=3)
+    adapter = PostgresJobStore(limits, store.conninfo)
+    identifiers = [adapter.reserve_plan("owner", SOURCE) for _ in range(2)]
+    for identifier in identifiers:
+        adapter.settle_planning(identifier, "owner", {"estimate": 1})
+    with pytest.raises(ProcessingError) as rejected:
+        adapter.reserve_plan("owner", SOURCE)
+    assert rejected.value.code == "plan_record_capacity"
+    assert rejected.value.status == 429
+    adapter.discard_plan(identifiers[0], "owner")
+    adapter.reserve_plan("owner", SOURCE)
+    with pytest.raises(ProcessingError) as rejected:
+        adapter.reserve_plan("another", SOURCE)
+    assert rejected.value.code == "plan_record_capacity"
+    assert rejected.value.status == 429
 
 
 def test_planning_capacity_and_fifo_claims_across_database_connections(

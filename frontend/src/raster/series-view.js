@@ -192,14 +192,14 @@ export class RasterSeriesView {
         this.document.querySelector("#raster-series-area").value = area.areaChoice;
         this.document.querySelector("#raster-series-add-formula").disabled = area.formulas.length >= 5;
         const calculate = this.document.querySelector("#raster-series-calculate");
-        calculate.disabled = state.busy || !area.sources.length || area.sources.length > 50 || (area.areaChoice !== "whole" && !area.area);
-        calculate.hidden = area.complete;
+        calculate.disabled = (state.busy && !area.confirmation) || !area.sources.length || (area.areaChoice !== "whole" && !area.area);
+        calculate.hidden = area.complete && !area.hasErrors;
         calculate.textContent = area.confirmation ? "Calculate remaining " + (area.sources.length - area.results.size) + " rasters" : "Calculate";
         this.document.querySelector("#raster-series-cancel").hidden = !state.busy;
         this.document.querySelector("#raster-series-recover").hidden = !area.recoverable;
         this.status.classList.toggle("raster-series-confirmation", area.confirmation);
         const performance = this.document.querySelector("#raster-series-performance");
-        const completedKey = JSON.stringify([...area.results].map(([key, result]) => [key, result.job?.jobId, result.error]));
+        const completedKey = JSON.stringify([area.elapsedSeconds, [...area.results].map(([key, result]) => [key, result.job?.jobId, result.error])]);
         if (this.performanceKey !== completedKey) {
             this.performanceKey = completedKey;
             performance.replaceChildren(...[...area.results].filter(([,result]) => result.job).map(([key, result]) => {
@@ -208,13 +208,19 @@ export class RasterSeriesView {
                 summary.textContent = (area.sources.find(source => source.key === key)?.label ?? key) + " — " + result.elapsedSeconds.toFixed(3) + " s";
                 details.append(summary);
                 const timing = this.document.createElement("p");
-                timing.textContent = "Time for this raster from queue request to received result; excludes earlier formula debounce, validation and other rasters.";
+                timing.textContent = "Time for this raster from its planning request to received result, including server queueing; excludes earlier formula debounce and validation.";
                 details.append(timing);
                 for (const line of result.performanceLines) {
                     const p = this.document.createElement("p"); p.textContent = line; details.append(p);
                 }
                 return details;
             }));
+            if (area.elapsedSeconds != null) {
+                const total = this.document.createElement("p");
+                total.textContent = "Whole series: " + area.elapsedSeconds.toFixed(3) +
+                    " s from requesting the series to the last result or error, including debounce, validation and any confirmation or recovery pauses.";
+                performance.prepend(total);
+            }
         }
     }
 

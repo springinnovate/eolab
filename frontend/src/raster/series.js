@@ -68,7 +68,7 @@ export class RasterSeriesController {
             onStatistic: id => { this.selectedStatistic = id; this.render(); },
             onCalculate: () => void this.areaStatistics.calculateRemainingRasters(),
             onCancel: () => this.areaStatistics.cancelRemainingRasters(),
-            onRecover: () => void this.areaStatistics.retryInterruptedCalculation(),
+            onRecover: () => void this.areaStatistics.retryInterruptedCalculations(),
             onSelect: (key, selected) => this.selectRaster(key, selected),
             onOrder: (order, direction) => {
                 this.order = order; this.direction = direction; this.render();
@@ -301,10 +301,10 @@ export class RasterSeriesController {
         const rowsFor = results => sources.map(source => {
             const result = results.get(source.key);
             const row = result?.job?.result?.rows.find(row => row.label === "stat-" + formula.id);
-            const sameFormula = result?.intent.calculations.some(item => item.label === "stat-" + formula.id && item.expression === formula.expression.trim());
+            const sameFormula = result?.calculationInputs.calculations.some(item => item.label === "stat-" + formula.id && item.expression === formula.expression.trim());
             return { ...source, state: row?.state === "ok" && sameFormula ? "value" : result?.error ? "error" : row?.state ?? "waiting",
                 value: row?.value == null ? null : Number(row.value), rawValue: row?.value, unit: row?.unit ?? "",
-                errorMessage: result?.error ?? (source.key === area.current?.key ? area.message : (!result ? "Waiting" : "")), cached: !!result?.job?.result?.cacheHit };
+                errorMessage: result?.error ?? area.progress.get(source.key)?.message ?? (!result ? "Waiting" : ""), cached: !!result?.job?.result?.cacheHit };
         });
         const rows = rowsFor(area.results);
         const previousRows = area.busy && !rows.some(row => row.state === "value") && area.previousResults ? rowsFor(area.previousResults) : null;
@@ -313,7 +313,8 @@ export class RasterSeriesController {
         this.view.render({
             mode: "area", area: { formulas: this.formulas, sources: area.sources, areaChoice: this.areaChoice,
                 area: area.area, areaLabel: area.areaLabel, results: area.results, complete: area.complete,
-                confirmation: area.confirmation, recoverable: area.needsRecovery }, selectedStatistic: formula.id, axisLabel,
+                confirmation: area.confirmation, recoverable: area.needsRecovery, hasErrors: area.hasErrors,
+                elapsedSeconds: area.elapsedSeconds }, selectedStatistic: formula.id, axisLabel,
             sources: this.sources.map(source => ({ ...source, selected: this.selectedKeys.has(source.key) })),
             rows, previousRows, busy: area.busy, chartType: this.chartType,
             message: area.results.size + " of " + sources.length + " rasters complete. " + area.message,
@@ -336,7 +337,7 @@ export class RasterSeriesController {
                 const scalar = row?.value == null ? "" : { scalar: row.value };
                 lines.push([source.label, source.item.collection, source.item.id, formula.label, formula.expression,
                     scalar, row?.unit ?? "", row?.state ?? (result?.error ? "error" : "waiting"), result?.error ?? "",
-                    JSON.stringify(result?.intent.area ?? (this.areaChoice === "whole" ? {kind:"wholeRaster"} : area.area)),
+                    JSON.stringify(result?.calculationInputs.area ?? (this.areaChoice === "whole" ? {kind:"wholeRaster"} : area.area)),
                     result?.job?.jobId ?? "", result?.job?.result?.cacheHit ? "true" : "false"]);
             }
         }

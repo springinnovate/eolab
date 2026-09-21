@@ -5,12 +5,44 @@ import { chunkPixels } from "./calculation-session.js";
 
 /** Browser-safe HTTP failure; transport failures remain ordinary errors. */
 export class ProcessingRequestError extends Error {
-    /** @param {string} message User-facing detail. @param {number} status HTTP status. @param {string|null} code Stable reason. */
-    constructor(message, status, code = null) {
+    /** @param {string} message User-facing detail. @param {number} status HTTP status.
+     * @param {string|null} [code=null] Stable reason.
+     * @param {number|null} [retryAfterSeconds=null] Server's minimum retry delay.
+     */
+    constructor(message, status, code = null, retryAfterSeconds = null) {
         super(message);
         this.status = status;
         this.code = code;
+        this.retryAfterSeconds = retryAfterSeconds;
     }
+    /** Whether capacity, rather than the calculation's inputs, prevented admission.
+     * Storage exhaustion and unknown errors require attention instead of automatic retry.
+     * @return {boolean} True only for a classified temporary queue/plan limit.
+     */
+    get isCapacityRejection() {
+        return this.status === 429 && ["plan_queue_full", "plan_record_capacity", "owner_queue_full", "queue_full"].includes(this.code);
+    }
+}
+
+/** Pause before retrying a request rejected or expired while waiting for capacity.
+ * Retry-After sets the minimum delay. Repeated rejections back off to 30 seconds,
+ * with jitter so concurrent tabs do not all retry together. The caller retains the
+ * request until it succeeds or is cancelled. The timer does not check server
+ * capacity or submit work; its caller must try admission again after the delay.
+ * @param {ProcessingRequestError} error Capacity rejection or planning-queue timeout.
+ * @param {number} attempt Number of preceding capacity waits for this request.
+ * @param {AbortSignal|undefined} signal Cancel this wait when its calculation changes.
+ * @return {Promise<void>} Resolves when the retry delay has elapsed.
+ * @throws {DOMException} AbortError when the caller cancels.
+ */
+export function waitBeforeCapacityRetry(error, attempt, signal) {
+    signal?.throwIfAborted();
+    const seconds = Math.max(error.retryAfterSeconds ?? 0, Math.min(30, 5 * 2 ** Math.min(attempt, 3)));
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { signal?.removeEventListener("abort", cancel); resolve(); }, seconds * 1000 + Math.random() * 1000);
+        const cancel = () => { clearTimeout(timer); signal?.removeEventListener("abort", cancel); reject(signal.reason); };
+        signal?.addEventListener("abort", cancel, { once: true });
+    });
 }
 
 /** Validate opaque API path identities. @param {string} id Candidate ID. @return {string} Validated ID. */
@@ -260,17 +292,38 @@ export class ProcessingApiClient {
         return plan;
     }
 
+    /** Prepare an estimate, automatically waiting for space in the planning queue.
+     * A request whose server queue deadline expires is released before a fresh
+     * attempt. Actual calculation/planning errors are reported without retry.
+     * @param {"raster-clips"|"raster-calculations"} operation Planning endpoint.
+     * @param {Object} body Validated source, area and expressions.
+     * @param {AbortSignal|undefined} signal Cancels waiting and admitted planning.
+     * @param {function(string):void|undefined} onProgress Planning or capacity-wait status.
+     * @return {Promise<Object>} Completed estimate, ready for explicit submission.
+     * @throws {Error} If planning fails for a non-capacity reason or the caller cancels.
+     */
+    async preparePlan(operation, body, signal, onProgress) {
+        for (let attempt = 0; ; attempt++) {
+            try { return await this.submitAndObservePlan(operation, body, signal, onProgress); }
+            catch (error) {
+                if (!(error instanceof ProcessingRequestError) || error.code !== "plan_queue_timeout") throw error;
+                onProgress?.("waiting-capacity");
+                await waitBeforeCapacityRetry(error, attempt, signal);
+            }
+        }
+    }
+
     /** Submit and observe one queued plan using a stable ID and existing SSE hints.
      * A cancelled or uncertain admission is deleted by ID, including when DELETE
      * reaches the server before POST. Server deadlines bound work after tab closure.
      * @param {"raster-clips"|"raster-calculations"} operation Planning endpoint.
      * @param {Object} body Validated source, area and expressions.
      * @param {AbortSignal|undefined} signal Superseded request.
-     * @param {function(string):void|undefined} onProgress Current planning stage.
+     * @param {function(string):void|undefined} onProgress Planning stage, including waiting-capacity before admission.
      * @return {Promise<Object>} Completed operation plan, ready for explicit submission.
      * @throws {Error} If admission, observation or planning fails, or the caller cancels.
      */
-    async preparePlan(operation, body, signal, onProgress) {
+    async submitAndObservePlan(operation, body, signal, onProgress) {
         signal?.throwIfAborted();
         const id = crypto.randomUUID().replaceAll("-", "");
         let notified = false;
@@ -284,8 +337,21 @@ export class ProcessingApiClient {
             try {
                 // Do not abandon admission when the UI changes: recover or delete
                 // its stable ID even if its response is lost behind a proxy.
-                snapshot = await this.request(`/${operation}/plans/${id}`, "POST", body, AbortSignal.timeout(10000));
+                for (let attempt = 0; ; attempt++) {
+                    signal?.throwIfAborted();
+                    discardOnExit = true;
+                    try {
+                        snapshot = await this.request(`/${operation}/plans/${id}`, "POST", body, AbortSignal.timeout(10000));
+                        break;
+                    } catch (error) {
+                        if (!(error instanceof ProcessingRequestError) || !error.isCapacityRejection) throw error;
+                        discardOnExit = false; // No admitted plan to delete while waiting.
+                        onProgress?.("waiting-capacity");
+                        await waitBeforeCapacityRetry(error, attempt, signal);
+                    }
+                }
             } catch (error) {
+                if (!discardOnExit) throw error;
                 if (error instanceof ProcessingRequestError && error.status < 500 && error.status !== 408) {
                     discardOnExit = false; // Definitive admission rejection created no work.
                     throw error;
@@ -382,6 +448,7 @@ export class ProcessingApiClient {
      * @param {string} path Owned endpoint suffix. @param {string} [method="GET"] HTTP method.
      * @param {Object|undefined} body JSON input. @param {AbortSignal|undefined} signal Planning cancellation.
      * @return {Promise<Object>} Parsed response.
+     * @throws {ProcessingRequestError|Error} HTTP rejection, failed transport, or unreadable JSON.
      */
     async request(path, method = "GET", body, signal) {
         const response = await this.fetch.call(globalThis, `/api/processing${path}`, {
@@ -396,11 +463,15 @@ export class ProcessingApiClient {
         const data = await response.json().catch(() => null);
         if (!response.ok) {
             const detail = data?.detail;
+            const retryAfterHeader = response.headers?.get("Retry-After");
+            const retryAfterSeconds = retryAfterHeader == null ? NaN : /^\d+(\.\d+)?$/.test(retryAfterHeader)
+                ? Number(retryAfterHeader) : (Date.parse(retryAfterHeader) - Date.now()) / 1000;
             throw new ProcessingRequestError(
                 typeof detail === "string" ? detail : Array.isArray(detail)
                     ? detail.map(item => item.msg).join("; ")
                     : detail?.message ?? `Processing request failed (${response.status}).`,
                 response.status, detail?.code ?? null,
+                Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0 && retryAfterSeconds <= 86400 ? retryAfterSeconds : null,
             );
         }
         if (data === null) throw new Error("Processing returned an unreadable response. Retry to recover your jobs.");

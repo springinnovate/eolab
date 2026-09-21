@@ -1,6 +1,6 @@
 /** Track one submitted calculation at a time, saving enough state to resume after reload. */
 import { ACTIVE_JOB_STATES } from "./jobs.js";
-import { ProcessingRequestError } from "./api.js";
+import { ProcessingRequestError, waitBeforeCapacityRetry } from "./api.js";
 import { calculationIntent } from "./calculation-session.js";
 
 /** Compare calculation settings without relying on object identity.
@@ -54,6 +54,8 @@ export class CalculationExecutor {
     #plannedCalculation = null;
     /** Timing of the prepared plan, carried into submission. @type {Object|null} */
     #planTiming = null;
+    /** Cancels a capacity wait, never an in-flight submission with an uncertain outcome. @type {AbortController|null} */
+    #capacityWait = null;
 
     /** Connect execution providers without an editor or DOM dependency.
      * @param {Object} dependencies Execution dependencies.
@@ -138,6 +140,7 @@ export class CalculationExecutor {
     #requestCancellation() {
         if (!this.#savedSubmission) return;
         this.#savedSubmission.cancelRequested = true;
+        this.#capacityWait?.abort();
         try { this.storage.write(this.#savedSubmission); }
         catch (error) { this.#executionStatus.message = error.message; }
         void this.#advanceExecution();
@@ -235,6 +238,48 @@ export class CalculationExecutor {
         this.#notifyListeners();
     }
 
+    /** Submit the saved request, waiting automatically when the server queue is full.
+     * Retain the same request key through retries and lost responses. A known
+     * rejection proves there is no job to cancel; cancellation can then discard
+     * the unused plan immediately. If the plan expires while waiting, prepare it
+     * again and return it to the caller's existing confirmation policy.
+     * @return {Promise<Object|null>} Accepted job, or null after cancellation/replanning.
+     * @throws {Error} Non-capacity failures; uncertain submissions remain recoverable.
+     */
+    async #submitWhenCapacityAvailable() {
+        const saved = this.#savedSubmission;
+        for (let attempt = 0; ; attempt++) {
+            try { return await this.api.submitCalculation(saved.pending); }
+            catch (error) {
+                if (error instanceof ProcessingRequestError && error.isCapacityRejection) {
+                    const capacityWaitCancellation = this.#capacityWait = new AbortController();
+                    if (saved.cancelRequested || this.destroyed) capacityWaitCancellation.abort();
+                    this.#executionStatus.phase = "waiting";
+                    this.#executionStatus.message = "Waiting for server capacity; retrying automatically…";
+                    this.#notifyListeners();
+                    try { await waitBeforeCapacityRetry(error, attempt, capacityWaitCancellation.signal); continue; }
+                    catch (cancelled) { if (cancelled.name !== "AbortError") throw cancelled; }
+                    finally { this.#capacityWait = null; }
+                } else if (!(error instanceof ProcessingRequestError) || error.status < 400 || error.status >= 500 || error.status === 408) {
+                    throw error; // The request might already have created a job.
+                }
+                this.plansToRelease.add(saved.pending.planId);
+                this.storage.clear();
+                this.#savedSubmission = null;
+                if (saved.cancelRequested || this.destroyed) {
+                    this.#executionStatus.phase = "idle";
+                    this.#executionStatus.message = "Calculation cancelled.";
+                    return null;
+                }
+                if (error.code === "plan_unavailable") {
+                    this.#pendingCalculation = { intent: saved.intent, plan: null, abort: new AbortController() };
+                    return null;
+                }
+                throw error;
+            }
+        }
+    }
+
     /**
      * Advance the calculation through planning, submission, cancellation and completion.
      * These are the fixed job lifecycle operations, not user-defined processing steps.
@@ -262,16 +307,14 @@ export class CalculationExecutor {
                 let job;
                 try {
                     if (this.trace) this.trace.submissionStartedAtMs = this.now();
-                    job = await this.api.submitCalculation(this.#savedSubmission.pending);
+                    job = await this.#submitWhenCapacityAvailable();
                     if (this.trace) this.trace.submissionFinishedAtMs = this.now();
                 }
                 catch (error) {
                     this.trace = null; // A lost response prevents measuring the complete submission interval.
-                    if (error instanceof ProcessingRequestError && error.status >= 400 && error.status < 500 && error.status !== 408) {
-                        this.storage.clear(); this.#savedSubmission = null;
-                    }
                     throw error;
                 }
+                if (!job) return;
                 this.#savedSubmission.jobId = job.jobId;
                 this.#savedSubmission.releasePlanId = this.#savedSubmission.pending.planId;
                 this.#savedSubmission.pending = null;
@@ -325,7 +368,9 @@ export class CalculationExecutor {
             const planReused = !!target.plan;
             try { plan = target.plan ?? await this.api.planCalculation(target.intent, target.abort.signal, status => {
                 if (target !== this.#pendingCalculation || this.destroyed) return;
-                this.#executionStatus.message = status === "queued" ? "Waiting to check calculation size…" : "Checking calculation size…";
+                this.#executionStatus.phase = ["queued", "waiting-capacity"].includes(status) ? "waiting" : "planning";
+                this.#executionStatus.message = status === "waiting-capacity" ? "Waiting for server capacity; retrying automatically…"
+                    : status === "queued" ? "Waiting to check calculation size…" : "Checking calculation size…";
                 this.#notifyListeners();
             }); }
             catch (error) { if (target !== this.#pendingCalculation || error.name === "AbortError") return; throw error; }
@@ -410,6 +455,7 @@ export class CalculationExecutor {
      */
     destroy() {
         this.destroyed = true;
+        this.#capacityWait?.abort();
         this.#pendingCalculation?.abort?.abort();
         this.#queuePlanRelease();
         if (this.#pendingCalculation?.plan) this.plansToRelease.add(this.#pendingCalculation.plan.planId);

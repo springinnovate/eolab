@@ -35,7 +35,7 @@ export class SummaryStatisticsController {
      * @param {(area:Object|null,label:string)=>void} [dependencies.onAreaChange] Publish the committed calculation area.
      * @param {Object} [dependencies.clock=globalThis] Debounce timers.
      * @param {()=>number} [dependencies.now] Monotonic milliseconds.
-     * @param {import("./calculation-queue.js").CalculationQueue} dependencies.executionQueue Shared recoverable executor queue.
+     * @param {import("./calculation-requests.js").CalculationRequests} dependencies.calculationRequests Independent recoverable calculation requests.
      * @param {Function} [dependencies.onCancelSelection] Cancel an in-progress area selection.
      */
     constructor(dependencies) {
@@ -47,7 +47,7 @@ export class SummaryStatisticsController {
         this.state = { sources: [], statistics: [], area: null, selectedArea: null, areaChoice: "selection",
             active: false, automatic: true, jobs: [], historyError: "", saved: null, undo: false, targetChunkPixels: null };
         this.state.statistics.push(this.makeStatistic(STATISTIC_PRESETS.mean));
-        this.executor = dependencies.executionQueue.createClient("summary", snapshot => this.receive(snapshot));
+        this.executor = dependencies.calculationRequests.createClient("summary", snapshot => this.receive(snapshot));
         view.bind({ onOpen: () => this.open(), onClose: () => this.close(), onEditArea,
             onArea: choice => this.chooseArea(choice), onAutomatic: value => this.setAutomatic(value),
             onChunkPixels: value => this.setChunkPixels(value),
