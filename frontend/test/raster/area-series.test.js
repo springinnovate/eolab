@@ -74,9 +74,18 @@ test("formulas share one job per source, retain exact scalar/unit CSV, and prese
     h.view.actions.onOrder("name","reverse");
     h.view.actions.onChartType("scatter");
     h.controller.editFormula(1,{label:"Renamed"});
-    h.view.actions.onStatistic(2);
-    assert.match(h.view.state.axisLabel,/ha/);
-    assert.deepEqual(h.view.state.rows.map(row=>row.rawValue),["22","22"]);
+    h.view.actions.onAddPlot();
+    h.view.actions.onStatisticDisplay(2, {plotId:2});
+    h.view.actions.onPlotScale(2,"log");
+    h.view.actions.onStatisticDisplay(1, {visible:false});
+    assert.deepEqual(h.view.state.plots,[{id:1,scale:"linear"},{id:2,scale:"log"}]);
+    assert.deepEqual(h.view.state.statistics.map(row=>[row.id,row.visible,row.plotId,row.styleIndex]),[[1,false,1,0],[2,true,2,1]]);
+    assert.deepEqual(h.view.state.statistics[1].rows.map(row=>[row.rawValue,row.unit]),[["22","ha"],["22","ha"]]);
+    assert.equal(h.view.state.rows.length,4,"table retains hidden statistics");
+    h.view.actions.onRemovePlot(2);
+    h.view.actions.onRemovePlot(1);
+    assert.deepEqual(h.view.state.plots,[{id:1,scale:"linear"}]);
+    assert.equal(h.view.state.statistics[1].plotId,1);
     const csv=h.controller.exportCsv();
     assert.match(csv,/"-123.4567890123456789"/);
     assert.match(csv,/"Renamed","mean\(a\)"/);
@@ -227,6 +236,13 @@ test("formula validation and five-formula limit apply before any raster plan",as
     for(let i=0;i<8;i++)h.controller.addFormula("mean");
     assert.equal(h.controller.formulas.length,5);
     await h.open();
+    assert.deepEqual(h.view.state.statistics.map(statistic=>statistic.styleIndex),[0,1,2,3,4]);
+    h.controller.removeFormula(2);h.controller.addFormula("sum");
+    assert.equal(h.controller.formulas.at(-1).id,6,"formula identities can exceed the number of available styles");
+    assert.deepEqual(h.view.state.statistics.map(statistic=>statistic.styleIndex),[0,2,3,4,1],"reuse the removed formula's style without changing the others");
+    h.controller.addFormula("mean");
+    assert.equal(h.controller.formulas.length,5,"a sixth active formula is not accepted");
+    await h.tick();
     assert.match(h.view.state.message,/Unknown function bad/);
     assert.equal(h.requests.filter(([kind])=>kind==="plan").length,0);h.close();
 });
@@ -248,6 +264,30 @@ test("one queued caller can replace and cancel its request without cancelling it
     await h.finish();await h.finish();
     assert.ok([...h.server.values()].every(job=>job.sources.a.itemId!=="summary"));
     assert.equal(h.area.complete,true);h.close();
+});
+
+test("all statistics keep identities and raster positions through out-of-order results and new areas",async()=>{
+    const h=fixture();h.controller.addFormula("min");h.controller.addFormula("max");await h.open();
+    await h.finish("ready",false,"2");
+    for(const statistic of h.view.state.statistics){
+        assert.equal(statistic.visible,true);
+        assert.equal(statistic.plotId,1);
+        assert.deepEqual(statistic.rows.map(row=>[row.key,row.state]),[["1","waiting"],["2","value"]]);
+    }
+    const styles=h.view.state.statistics.map(statistic=>statistic.styleIndex);
+    await h.finish();h.controller.setArea(box(10),"Next area");await h.tick();
+    assert.equal(h.view.state.showingPrevious,true);
+    assert.ok(h.view.state.statistics.every(statistic=>statistic.previousRows.every(row=>row.state==="value")));
+    await h.finish("ready",false,"2");
+    assert.equal(h.view.state.showingPrevious,false);
+    assert.ok(h.view.state.statistics.every(statistic=>statistic.previousRows===null && statistic.rows[0].state==="waiting"));
+    h.view.actions.onOrder("name","reverse");
+    assert.deepEqual(h.view.state.statistics.map(statistic=>statistic.styleIndex),styles);
+    assert.ok(h.view.state.statistics.every(statistic=>statistic.rows[0].key==="2"));
+    h.controller.removeFormula(2);h.controller.addFormula("sum");
+    assert.equal(h.view.state.statistics.find(statistic=>statistic.id===3).styleIndex,2);
+    assert.equal(new Set(h.view.state.statistics.map(statistic=>statistic.styleIndex)).size,3);
+    h.close();
 });
 
 test("later raster can plan and finish while the first raster's plan is still in flight",async()=>{

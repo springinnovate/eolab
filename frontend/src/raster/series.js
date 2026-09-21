@@ -41,7 +41,9 @@ export class RasterSeriesController {
         this.formulas = [{ id: 1, ...SERIES_STATISTICS.mean }];
         this.formulaSerial = 1;
         this.areaChoice = "selection";
-        this.selectedStatistic = 1;
+        this.plots = [{ id: 1, scale: "linear" }];
+        this.plotSerial = 1;
+        this.statisticDisplay = new Map([[1, { plotId: 1, visible: true, styleIndex: 0 }]]);
         this.selectedArea = null;
         this.selectedAreaLabel = "";
         this.sources = [];
@@ -65,7 +67,10 @@ export class RasterSeriesController {
             onAddFormula: preset => this.addFormula(preset),
             onEditFormula: (id, change) => this.editFormula(id, change),
             onRemoveFormula: id => this.removeFormula(id),
-            onStatistic: id => { this.selectedStatistic = id; this.render(); },
+            onStatisticDisplay: (id, change) => this.changeStatisticDisplay(id, change),
+            onAddPlot: () => this.addPlot(),
+            onRemovePlot: id => this.removePlot(id),
+            onPlotScale: (id, scale) => this.setPlotScale(id, scale),
             onCalculate: () => void this.areaStatistics.calculateRemainingRasters(),
             onCancel: () => this.areaStatistics.cancelRemainingRasters(),
             onRecover: () => void this.areaStatistics.retryInterruptedCalculations(),
@@ -263,6 +268,10 @@ export class RasterSeriesController {
     addFormula(preset) {
         if (!SERIES_STATISTICS[preset] || this.formulas.length === 5) return;
         this.formulas.push({ id: ++this.formulaSerial, ...SERIES_STATISTICS[preset] });
+        const usedStyles = new Set([...this.statisticDisplay.values()].map(display => display.styleIndex));
+        this.statisticDisplay.set(this.formulaSerial, {
+            plotId: 1, visible: true, styleIndex: [0, 1, 2, 3, 4].find(index => !usedStyles.has(index)),
+        });
         this.updateAreaInputs();
     }
 
@@ -285,38 +294,79 @@ export class RasterSeriesController {
     removeFormula(id) {
         if (this.formulas.length === 1) return;
         this.formulas = this.formulas.filter(formula => formula.id !== id);
+        this.statisticDisplay.delete(id);
         this.updateAreaInputs();
     }
 
-    /** Present one statistic at a time so unlike units never share a value axis. @return {void} */
+    /** Change only where a statistic is displayed, without requesting calculations.
+     * @param {number} id Statistic identity.
+     * @param {{visible?:boolean,plotId?:number}} change Visibility or destination plot.
+     * @return {void}
+     */
+    changeStatisticDisplay(id, change) {
+        const display = this.statisticDisplay.get(id);
+        if (!display || (change.plotId !== undefined && !this.plots.some(plot => plot.id === change.plotId))) return;
+        Object.assign(display, change);
+        this.render();
+    }
+
+    /** Add an empty plot with a linear Y axis; retain all calculation results. @return {void} */
+    addPlot() {
+        this.plots.push({ id: ++this.plotSerial, scale: "linear" });
+        this.render();
+    }
+
+    /** Remove a secondary plot and move its statistics to Plot 1.
+     * @param {number} id Plot identity; Plot 1 cannot be removed. @return {void}
+     */
+    removePlot(id) {
+        if (id === 1) return;
+        this.plots = this.plots.filter(plot => plot.id !== id);
+        for (const display of this.statisticDisplay.values()) if (display.plotId === id) display.plotId = 1;
+        this.render();
+    }
+
+    /** Change a plot's Y scale without changing its data or other plots.
+     * @param {number} id Plot identity.
+     * @param {"linear"|"log"} scale Axis scale. @return {void}
+     */
+    setPlotScale(id, scale) {
+        const plot = this.plots.find(item => item.id === id);
+        if (!plot || !["linear", "log"].includes(scale)) return;
+        plot.scale = scale;
+        this.render();
+    }
+
+    /** Present every statistic, keeping previous-area plots separate from current results. @return {void} */
     renderAreaStatistics() {
         const area = this.areaStatistics;
-        const formula = this.formulas.find(item => item.id === this.selectedStatistic) ?? this.formulas[0];
-        this.selectedStatistic = formula.id;
         const sources = this.orderedSources();
         /** Join one result set to plot order without mixing current and previous areas.
          * @param {Map<string,Object>} results Per-source calculation outcomes.
+         * @param {{id:number,label:string,expression:string}} formula Statistic to match.
          * @return {Object[]} Ordered chart/table rows.
          */
-        const rowsFor = results => sources.map(source => {
+        const rowsFor = (results, formula) => sources.map(source => {
             const result = results.get(source.key);
             const row = result?.job?.result?.rows.find(row => row.label === "stat-" + formula.id);
             const sameFormula = result?.calculationInputs.calculations.some(item => item.label === "stat-" + formula.id && item.expression === formula.expression.trim());
-            return { ...source, state: row?.state === "ok" && sameFormula ? "value" : result?.error ? "error" : row?.state ?? "waiting",
-                value: row?.value == null ? null : Number(row.value), rawValue: row?.value, unit: row?.unit ?? "",
+            return { ...source, statisticId: formula.id, statisticLabel: formula.label || formula.expression || "Custom statistic",
+                state: row?.state === "ok" && sameFormula ? "value" : result?.error ? "error" : sameFormula ? row?.state ?? "waiting" : "waiting",
+                value: !sameFormula || row?.value == null ? null : Number(row.value), rawValue: sameFormula ? row?.value : null, unit: row?.unit ?? "",
                 errorMessage: result?.error ?? area.progress.get(source.key)?.message ?? (!result ? "Waiting" : ""), cached: !!result?.job?.result?.cacheHit };
         });
-        const rows = rowsFor(area.results);
-        const previousRows = area.busy && !rows.some(row => row.state === "value") && area.previousResults ? rowsFor(area.previousResults) : null;
-        const unit = [...new Set(rows.filter(row => row.state === "value").map(row => row.unit).filter(Boolean))].join(", ");
-        const axisLabel = (formula.label || formula.expression) + (unit ? " (" + unit + ")" : "");
+        const statistics = this.formulas.map(formula => ({ ...formula, ...this.statisticDisplay.get(formula.id), rows: rowsFor(area.results, formula) }));
+        const rows = sources.flatMap((source, index) => statistics.map(statistic => statistic.rows[index]));
+        const showingPrevious = !!(area.busy && !rows.some(row => row.state === "value") && area.previousResults);
+        for (const statistic of statistics) statistic.previousRows = showingPrevious ? rowsFor(area.previousResults, statistic) : null;
         this.view.render({
             mode: "area", area: { formulas: this.formulas, sources: area.sources, areaChoice: this.areaChoice,
                 area: area.area, areaLabel: area.areaLabel, results: area.results, complete: area.complete,
                 confirmation: area.confirmation, recoverable: area.needsRecovery, hasErrors: area.hasErrors,
-                elapsedSeconds: area.elapsedSeconds }, selectedStatistic: formula.id, axisLabel,
+                elapsedSeconds: area.elapsedSeconds }, statistics, plots: this.plots,
             sources: this.sources.map(source => ({ ...source, selected: this.selectedKeys.has(source.key) })),
-            rows, previousRows, busy: area.busy, chartType: this.chartType,
+            rows, previousRows: showingPrevious ? statistics.flatMap(statistic => statistic.previousRows) : null,
+            showingPrevious, busy: area.busy, chartType: this.chartType,
             message: area.results.size + " of " + sources.length + " rasters complete. " + area.message,
             canDownload: area.results.size > 0 && !area.busy, canRetry: false,
         });
