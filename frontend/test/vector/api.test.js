@@ -4,6 +4,7 @@ import test from "node:test";
 import {
     assessCatalogVector,
     classifyCatalogVectorNumbers,
+    countCatalogVectorFilter,
     publishCatalogVector,
     styleCatalogVector,
     summarizeCatalogVectorCategories,
@@ -13,6 +14,23 @@ import {
 const VECTOR_ITEM = Object.freeze({
     collection: "eolab-mounted-vectors",
     id: "geopackage-0123456789abcdef01234567",
+});
+
+test("filter count distinguishes queue saturation and expiry from incomplete counts", async () => {
+    const controller = new AbortController();
+    for (const [status, category] of [[429, "filter_count_queue_full"], [503, "filter_count_queue_timeout"]]) {
+        await assert.rejects(countCatalogVectorFilter(VECTOR_ITEM, {}, controller.signal, async (url, options) => {
+            assert.equal(url, "/api/vector-rendering/filter-counts");
+            assert.equal(options.signal, controller.signal);
+            return new Response(JSON.stringify({ detail: { category, message: "Apply filter again to retry counting." } }), { status });
+        }), error => error instanceof VectorRenderingRequestError && error.category === category);
+    }
+    const incomplete = { matched: null, total: null, complete: false };
+    assert.deepEqual(await countCatalogVectorFilter(VECTOR_ITEM, {}, undefined, async () =>
+        new Response(JSON.stringify(incomplete))), incomplete);
+    await assert.rejects(countCatalogVectorFilter(VECTOR_ITEM, {}, controller.signal, async () => {
+        throw new DOMException("Canceled", "AbortError");
+    }), { name: "AbortError" });
 });
 
 test("vector assessment sends only the selected Catalog identity", async () => {

@@ -21,7 +21,7 @@ from eolab_app.vector.filters import (
     OGC, SLD, CatalogVectorFilterRequest, VectorFilter, VectorFilterCount,
     filter_ecql, filter_vector_sld, matches_filter, validate_filter,
 )
-from eolab_app.vector.models import CatalogVectorRequest
+from eolab_app.vector.models import CatalogVectorRequest, ResolvedVectorSource
 from eolab_app.vector.publication import VectorPublicationService
 from eolab_app.vector.sources import MountedVectorResolver, PublishedVectorRegistry
 from eolab_app.vector.styles import build_vector_sld, default_vector_style
@@ -248,7 +248,7 @@ def test_filter_wms_boundary_translates_render_inspection_and_highlight(tmp_path
     asyncio.run(client.aclose())
 
 
-def test_count_cancellation_holds_capacity_until_worker_exits(tmp_path):
+def test_count_cancellation_holds_capacity_until_worker_exits(tmp_path: Path) -> None:
     """Keep bounded reader slots occupied during cooperative cancellation.
 
     Args:
@@ -259,7 +259,13 @@ def test_count_cancellation_holds_capacity_until_worker_exits(tmp_path):
     class BlockingReader:
         """Simulate a reader inside a bounded native read when canceled."""
 
-        def count_filter(self, source, candidate, feature_limit, cancel_event):
+        def count_filter(
+            self,
+            source: ResolvedVectorSource,
+            candidate: VectorFilter,
+            feature_limit: int,
+            cancel_event: Event,
+        ) -> VectorFilterCount:
             """Retain the worker until the controlled native read completes.
 
             Args:
@@ -280,7 +286,7 @@ def test_count_cancellation_holds_capacity_until_worker_exits(tmp_path):
     service._filter_slots = asyncio.Semaphore(1)
     request = request_for(item, predicate(("score", "ge", 1)))
 
-    async def exercise():
+    async def exercise() -> None:
         """Cancel the HTTP owner and verify a second caller cannot start a scan.
 
         Returns:
@@ -292,7 +298,12 @@ def test_count_cancellation_holds_capacity_until_worker_exits(tmp_path):
         with pytest.raises(asyncio.CancelledError):
             await task
         assert service._filter_slots.locked()
-        assert await service.count_filter(request) == VectorFilterCount()
+        waiting = asyncio.create_task(service.count_filter(request))
+        await asyncio.sleep(0.05)
+        assert not waiting.done()
+        waiting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiting
         release.set()
         await asyncio.sleep(0.05)
         assert not service._filter_slots.locked()

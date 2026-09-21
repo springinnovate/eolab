@@ -302,6 +302,7 @@ export function createVectorMapLayerAdapter({
                 filter: structuredClone(EMPTY_VECTOR_FILTER),
                 filterCount: null,
                 filterCounting: false,
+                filterCountError: null,
                 filterGeneration: 0,
                 filterApplyAbort: null,
                 filterCountAbort: null,
@@ -394,6 +395,7 @@ export function createVectorMapLayerAdapter({
             record.state.layer?.setParams({ layers: result.layerName });
             record.state.filterCountAbort?.abort();
             record.state.filterCount = null;
+            record.state.filterCountError = null;
             record.state.filterCounting = normalized.enabled && normalized.rules.length > 0;
             onFilterChange(record);
             if (record.state.filterCounting) {
@@ -401,8 +403,11 @@ export function createVectorMapLayerAdapter({
                 record.state.filterCountAbort = counter;
                 void countFilter(record.state.item, normalized, counter.signal).then((count) => {
                     if (!counter.signal.aborted && !record.state.disposed) record.state.filterCount = count;
-                }).catch(() => {
+                }).catch((error) => {
                     // Counts are optional; the rendering predicate stays applied.
+                    if (!counter.signal.aborted && !record.state.disposed) {
+                        record.state.filterCountError = error.category ?? null;
+                    }
                 }).finally(() => {
                     if (counter.signal.aborted || record.state.disposed) return;
                     record.state.filterCounting = false;

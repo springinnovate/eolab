@@ -91,5 +91,11 @@ export function vectorFilterStatus(state) {
     if (!filter.enabled) return "Filter disabled";
     const count = state.filterCount;
     if (count?.complete) return `${count.matched.toLocaleString()} of ${count.total.toLocaleString()} features match`;
+    if (state.filterCountError === "filter_count_queue_full") {
+        return "Filter active · Count queue full; apply filter again to retry";
+    }
+    if (state.filterCountError === "filter_count_queue_timeout") {
+        return "Filter active · Count wait expired; apply filter again to retry";
+    }
     return state.filterCounting ? "Filter active · Counting…" : "Filter active · Count unavailable";
 }
