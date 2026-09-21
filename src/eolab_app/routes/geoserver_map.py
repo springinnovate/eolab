@@ -6,6 +6,10 @@ import httpx2
 from fastapi import HTTPException, Request, Response
 
 from eolab_app.diagnostics.tracker import GetMapRequestTracker
+from eolab_app.rendering.render_queue import (
+    RenderExecutionTimeoutError,
+    RenderQueueUnavailableError,
+)
 from eolab_app.routes.http_disconnect import (
     HttpClientDisconnectedError,
     run_until_http_disconnect,
@@ -53,14 +57,15 @@ async def forward_geoserver_get_map(
 
     Args:
         request: Incoming browser request owning the upstream work.
-        operation: Prepared asynchronous GeoServer request.
+        operation: Asynchronous tile lookup or queued GeoServer request.
         tracker: Bounded GetMap request observer.
 
     Returns:
         GeoServer response with only safe representation headers.
 
     Raises:
-        HTTPException: If the client disconnects or GeoServer is unavailable.
+        HTTPException: If the client disconnects, admission fails, execution
+            expires, or GeoServer is unavailable.
     """
     try:
         with tracker.track() as tracked_request:
@@ -83,6 +88,12 @@ async def forward_geoserver_get_map(
                 geoserver_response.is_success
                 and response_media_type == "image/png"
             )
+    except RenderQueueUnavailableError as error:
+        raise HTTPException(
+            status_code=503, detail=str(error), headers={"Retry-After": "1"},
+        ) from error
+    except RenderExecutionTimeoutError as error:
+        raise HTTPException(status_code=504, detail=str(error)) from error
     except httpx2.RequestError as error:
         raise HTTPException(
             status_code=502,

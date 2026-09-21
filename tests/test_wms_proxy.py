@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from eolab_app.main import create_app
+from eolab_app.rendering.render_queue import GeoServerRenderQueue
 from eolab_app.diagnostics.tracker import GetMapRequestTracker
 from eolab_app.rendering.errors import (
     PublishedLayerNotAuthorizedError,
@@ -98,8 +99,8 @@ class _FixedVectorAuthorization:
             )
 
 
-def test_wms_proxy_cancels_get_map_after_client_disconnect() -> None:
-    """Abandon the upstream render without recording a rendering failure."""
+def test_wms_proxy_drains_get_map_after_client_disconnect() -> None:
+    """Return promptly on disconnect, retain the slot, and close on shutdown."""
 
     async def exercise_disconnect() -> tuple[
         list[dict[str, object]],
@@ -124,7 +125,7 @@ def test_wms_proxy_cancels_get_map_after_client_disconnect() -> None:
                 request: Controlled internal GeoServer request.
 
             Raises:
-                asyncio.CancelledError: When the public client disconnects.
+                asyncio.CancelledError: When application shutdown closes the queue.
                 AssertionError: If the controlled operation resumes normally.
             """
             del request
@@ -140,6 +141,7 @@ def test_wms_proxy_cancels_get_map_after_client_disconnect() -> None:
         geoserver_client = httpx2.AsyncClient(
             transport=httpx2.MockTransport(geoserver_response)
         )
+        render_queue = GeoServerRenderQueue(2)
         application = FastAPI()
         application.include_router(
             create_wms_proxy_router(
@@ -147,6 +149,7 @@ def test_wms_proxy_cancels_get_map_after_client_disconnect() -> None:
                 "http://geoserver:8080/geoserver",
                 (_NoRasterAuthorization(), _FixedVectorAuthorization()),
                 tracker,
+                render_queue,
             )
         )
         query_string = (
@@ -199,6 +202,8 @@ def test_wms_proxy_cancels_get_map_after_client_disconnect() -> None:
         await asyncio.wait_for(upstream_started.wait(), 1)
         await request_messages.put({"type": "http.disconnect"})
         await asyncio.wait_for(request_task, 1)
+        assert not upstream_canceled.is_set()
+        await render_queue.close()
         await geoserver_client.aclose()
         return response_messages, upstream_canceled.is_set(), tracker
 
@@ -246,6 +251,7 @@ def test_wms_proxy_forwards_one_authorized_fixed_style_vector_layer() -> None:
         "http://geoserver:8080/geoserver",
         (_NoRasterAuthorization(), _FixedVectorAuthorization()),
         GetMapRequestTracker(2),
+        GeoServerRenderQueue(2),
     ))
     client = TestClient(application)
     query = (
@@ -320,6 +326,7 @@ def test_wms_proxy_forwards_bounded_json_feature_information() -> None:
         "http://geoserver:8080/geoserver",
         (_NoRasterAuthorization(), _FixedVectorAuthorization()),
         GetMapRequestTracker(2),
+        GeoServerRenderQueue(2),
     ))
     response = TestClient(application).get(
         "/geoserver/eolab/wms?service=WMS&version=1.3.0"
@@ -377,6 +384,7 @@ def test_wms_proxy_rejects_unbounded_feature_information_response(
         "http://geoserver:8080/geoserver",
         (_NoRasterAuthorization(), _FixedVectorAuthorization()),
         GetMapRequestTracker(2),
+        GeoServerRenderQueue(2),
     ))
     response = TestClient(application).get(
         "/geoserver/eolab/wms?service=WMS&version=1.3.0"

@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from eolab_app.diagnostics.tracker import GetMapRequestTracker
+from eolab_app.rendering.render_queue import GeoServerRenderQueue
 from eolab_app.raster.source_identity import RasterSourceIdentity
 from eolab_app.raster.wms_authorization import PublishedRasterAuthorization
 from eolab_app.rendering.composite import (
@@ -23,6 +24,7 @@ from eolab_app.rendering.errors import (
 )
 from eolab_app.rendering.sld import SLD_NAMESPACE
 from eolab_app.routes.composite_map import create_composite_map_router
+from eolab_app.routes.wms_proxy import create_wms_proxy_router
 from eolab_app.vector.styles import default_vector_style
 from eolab_app.vector.wms_authorization import PublishedVectorAuthorization
 
@@ -31,6 +33,20 @@ class _TestAuthorization:
     """Authorize one fixed test style and emit its requested layer identity."""
 
     style_name = "test-style"
+
+    def prepare_query(
+        self, operation: str, query: list[tuple[str, str]],
+    ) -> list[tuple[str, str]]:
+        """Forward a test WMS request without rewriting it.
+
+        Args:
+            operation: Authorized WMS operation.
+            query: Validated parameters.
+
+        Returns:
+            The unchanged query parameters.
+        """
+        return query
 
     def validate_parameters(
         self,
@@ -178,6 +194,7 @@ def test_composite_map_posts_one_bottom_first_get_map_document() -> None:
         httpx2.AsyncClient(transport=httpx2.MockTransport(geoserver_response)),
         "http://geoserver:8080/geoserver",
         tracker,
+        GeoServerRenderQueue(2),
     ))
     client = TestClient(application)
     plan_response = client.post("/api/map-rendering/plans", json={
@@ -240,6 +257,7 @@ def test_composite_map_caches_normalized_tiles_and_preserves_diagnostics() -> No
         httpx2.AsyncClient(transport=httpx2.MockTransport(geoserver_response)),
         "http://geoserver:8080/geoserver",
         tracker,
+        GeoServerRenderQueue(2),
     ))
     client = TestClient(application)
     plan = client.post(
@@ -287,6 +305,7 @@ def test_composite_map_rechecks_currentness_before_a_cache_hit() -> None:
         httpx2.AsyncClient(transport=httpx2.MockTransport(geoserver_response)),
         "http://geoserver:8080/geoserver",
         GetMapRequestTracker(2),
+        GeoServerRenderQueue(2),
     ))
     client = TestClient(application)
     plan = client.post(
@@ -348,6 +367,7 @@ def test_composite_map_does_not_cache_failed_or_non_png_responses(
         httpx2.AsyncClient(transport=httpx2.MockTransport(geoserver_response)),
         "http://geoserver:8080/geoserver",
         GetMapRequestTracker(2),
+        GeoServerRenderQueue(2),
     ))
     client = TestClient(application)
     plan = client.post(
@@ -388,6 +408,7 @@ def test_composite_map_evicts_least_recently_used_tiles_by_bytes() -> None:
         httpx2.AsyncClient(transport=httpx2.MockTransport(geoserver_response)),
         "http://geoserver:8080/geoserver",
         GetMapRequestTracker(2),
+        GeoServerRenderQueue(2),
         maximum_tile_cache_bytes=300,
     ))
     client = TestClient(application)
@@ -469,6 +490,7 @@ def test_composite_map_coalesces_misses_when_one_waiter_is_cancelled() -> None:
             ),
             "http://geoserver:8080/geoserver",
             tracker,
+            GeoServerRenderQueue(2),
         ))
         async with httpx2.AsyncClient(
             transport=httpx2.ASGITransport(app=application),
@@ -503,9 +525,9 @@ def test_composite_map_coalesces_misses_when_one_waiter_is_cancelled() -> None:
 
 
 def test_composite_map_does_not_cache_a_cancelled_render() -> None:
-    """Cancel unneeded upstream work and render the next request afresh."""
+    """Drain an abandoned upstream response without caching it for a new caller."""
     upstream_started = asyncio.Event()
-    upstream_cancelled = asyncio.Event()
+    release_upstream = asyncio.Event()
     upstream_request_count = 0
 
     async def geoserver_response(_: httpx2.Request) -> httpx2.Response:
@@ -521,11 +543,7 @@ def test_composite_map_does_not_cache_a_cancelled_render() -> None:
         upstream_request_count += 1
         if upstream_request_count == 1:
             upstream_started.set()
-            try:
-                await asyncio.Future()
-            except asyncio.CancelledError:
-                upstream_cancelled.set()
-                raise
+            await release_upstream.wait()
         return httpx2.Response(
             200,
             content=b"replacement tile",
@@ -546,6 +564,7 @@ def test_composite_map_does_not_cache_a_cancelled_render() -> None:
             ),
             "http://geoserver:8080/geoserver",
             GetMapRequestTracker(2),
+            GeoServerRenderQueue(2),
         ))
         async with httpx2.AsyncClient(
             transport=httpx2.ASGITransport(app=application),
@@ -562,13 +581,144 @@ def test_composite_map_does_not_cache_a_cancelled_render() -> None:
             abandoned_request.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await abandoned_request
-            await upstream_cancelled.wait()
+            release_upstream.set()
 
             assert (await client.get(tile_url)).content == b"replacement tile"
             assert (await client.get(tile_url)).content == b"replacement tile"
 
     asyncio.run(exercise_requests())
     assert upstream_request_count == 2
+
+
+def test_composite_misses_and_direct_wms_share_capacity_but_cache_hits_do_not() -> None:
+    """Queue both routes together and coalesce duplicate queued composite tiles."""
+    async def scenario() -> None:
+        """Drive concurrent HTTP callers through one controlled upstream slot."""
+        started: asyncio.Queue[httpx2.Request] = asyncio.Queue()
+        release: asyncio.Queue[None] = asyncio.Queue()
+        forwarded: list[httpx2.Request] = []
+
+        async def upstream(request: httpx2.Request) -> httpx2.Response:
+            """Record a dispatch, then hold it until the test permits completion.
+
+            Args:
+                request: Authorized upstream WMS operation.
+
+            Returns:
+                A successful PNG shared by identical callers.
+            """
+            forwarded.append(request)
+            await started.put(request)
+            await release.get()
+            return httpx2.Response(200, content=b"tile", headers={"Content-Type": "image/png"})
+
+        tracker = GetMapRequestTracker(1)
+        registry = _TestRegistry()
+        queue = GeoServerRenderQueue(1, capacity=2)
+        app = FastAPI()
+        async with httpx2.AsyncClient(transport=httpx2.MockTransport(upstream)) as geoserver:
+            app.include_router(create_composite_map_router(
+                CompositeMapRenderingService((registry,)), geoserver,
+                "http://geoserver/geoserver", tracker, queue,
+            ))
+            app.include_router(create_wms_proxy_router(
+                geoserver, "http://geoserver/geoserver", (registry,), tracker, queue,
+            ))
+            async with httpx2.AsyncClient(
+                transport=httpx2.ASGITransport(app=app), base_url="http://test",
+            ) as client:
+                plan = (await client.post("/api/map-rendering/plans", json={
+                    "layers": [_plan_layer("eolab:test-layer", 1)],
+                })).json()
+                cached_url = _tile_url(plan["wmsUrl"])
+                release.put_nowait(None)
+                assert (await client.get(cached_url)).status_code == 200
+                await started.get()
+                direct = asyncio.create_task(client.get(
+                    "/geoserver/eolab/wms?service=WMS&version=1.1.1&request=GetMap"
+                    "&layers=eolab:test-layer&styles=test-style&srs=EPSG:3857"
+                    "&bbox=0,0,256,256&width=256&height=256&format=image/png"
+                ))
+                assert (await started.get()).method == "GET"
+                pending_url = _tile_url(plan["wmsUrl"], "256,0,512,256")
+                duplicate_a = asyncio.create_task(client.get(pending_url))
+                duplicate_b = asyncio.create_task(client.get(pending_url))
+                while tracker.snapshot().active < 3:
+                    await asyncio.sleep(0)
+                assert (await client.get(cached_url)).status_code == 200
+                assert len(forwarded) == 2
+                duplicate_a.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await duplicate_a
+                release.put_nowait(None)
+                assert (await direct).status_code == 200
+                assert (await started.get()).method == "POST"
+                release.put_nowait(None)
+                assert (await duplicate_b).status_code == 200
+                assert (await client.get(pending_url)).status_code == 200
+                assert len(forwarded) == 3
+            await queue.close()
+    asyncio.run(asyncio.wait_for(scenario(), 5))
+
+
+@pytest.mark.parametrize("capacity,wait_seconds,expected", [(0, 1, "busy"), (1, 0.01, "waited too long")])
+def test_composite_admission_failure_has_retry_header(
+    capacity: int, wait_seconds: float, expected: str,
+) -> None:
+    """Expose full/expired queues as explicit 503 responses without dispatch.
+
+    Args:
+        capacity: Whether an additional request may wait.
+        wait_seconds: Wait deadline for the controlled blocked queue.
+        expected: Expected reason reported by the HTTP boundary.
+    """
+    async def scenario() -> None:
+        """Fill the upstream slot and inspect the rejected tile response."""
+        started = asyncio.Event()
+        release = asyncio.Event()
+        calls = 0
+
+        async def upstream(request: httpx2.Request) -> httpx2.Response:
+            """Hold a successful response to occupy rendering capacity.
+
+            Args:
+                request: Ignored upstream HTTP request.
+
+            Returns:
+                A successful PNG after release.
+            """
+            nonlocal calls
+            calls += 1
+            started.set()
+            await release.wait()
+            return httpx2.Response(200, content=b"tile", headers={"Content-Type": "image/png"})
+
+        queue = GeoServerRenderQueue(1, capacity=capacity, wait_seconds=wait_seconds)
+        app = FastAPI()
+        async with httpx2.AsyncClient(transport=httpx2.MockTransport(upstream)) as geoserver:
+            app.include_router(create_composite_map_router(
+                CompositeMapRenderingService((_TestRegistry(),)), geoserver,
+                "http://geoserver/geoserver", GetMapRequestTracker(1), queue,
+            ))
+            async with httpx2.AsyncClient(
+                transport=httpx2.ASGITransport(app=app), base_url="http://test",
+            ) as client:
+                plan = (await client.post("/api/map-rendering/plans", json={
+                    "layers": [_plan_layer("eolab:test-layer", 1)],
+                })).json()
+                first = asyncio.create_task(client.get(_tile_url(plan["wmsUrl"])))
+                await started.wait()
+                rejected = await client.get(_tile_url(plan["wmsUrl"], "256,0,512,256"))
+                assert rejected.status_code == 503
+                assert rejected.headers["retry-after"] == "1"
+                assert expected in rejected.json()["detail"]
+                assert calls == 1
+                release.set()
+                await first
+                assert (await client.get(_tile_url(plan["wmsUrl"], "256,0,512,256"))).status_code == 200
+                assert calls == 2
+            await queue.close()
+    asyncio.run(asyncio.wait_for(scenario(), 5))
 
 
 def test_composite_map_rejects_unapproved_layers_before_rendering() -> None:
@@ -581,6 +731,7 @@ def test_composite_map_rejects_unapproved_layers_before_rendering() -> None:
         )),
         "http://geoserver:8080/geoserver",
         GetMapRequestTracker(1),
+        GeoServerRenderQueue(2),
     ))
     response = TestClient(application).post(
         "/api/map-rendering/plans",

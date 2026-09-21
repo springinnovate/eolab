@@ -110,6 +110,8 @@ class Settings:
         geoserver_metrics_internal_url: Internal GeoServer metrics URL.
         geoserver_wms_render_count: Maximum concurrent WMS renders.
         composite_tile_cache_bytes: Composite PNG response cache capacity.
+        map_render_queue_capacity: Additional upstream GetMap requests allowed to wait.
+        map_render_queue_wait_seconds: Maximum wait before sending a GetMap request.
         raster_pixel_read_concurrency: Maximum concurrent raster pixel reads.
         raster_statistics_read_concurrency: Maximum concurrent statistics reads.
         raster_statistics_cache_entries: Completed statistics cache capacity.
@@ -182,6 +184,8 @@ class Settings:
     raster_statistics_queue_capacity: int = 32
     raster_statistics_queue_wait_seconds: float = 30
     raster_statistics_max_waiters: int = 256
+    map_render_queue_capacity: int = 64
+    map_render_queue_wait_seconds: float = 60
 
     def __post_init__(self) -> None:
         """Validate the application settings contract.
@@ -225,6 +229,13 @@ class Settings:
             raise ValueError("SCAN_WORKER_COUNT must be greater than zero")
         if self.geoserver_wms_render_count < 1:
             raise ValueError("GEOSERVER_WMS_RENDER_COUNT must be greater than zero")
+        if self.map_render_queue_capacity < 0:
+            raise ValueError("MAP_RENDER_QUEUE_CAPACITY must be nonnegative")
+        if (
+            not math.isfinite(self.map_render_queue_wait_seconds)
+            or not 0 < self.map_render_queue_wait_seconds <= 60
+        ):
+            raise ValueError("MAP_RENDER_QUEUE_WAIT_SECONDS must be finite and between 0 (exclusive) and 60")
         if self.composite_tile_cache_bytes < 1:
             raise ValueError(
                 "COMPOSITE_TILE_CACHE_BYTES must be greater than zero"
@@ -435,6 +446,12 @@ def load_settings(
         ),
         raster_statistics_queue_capacity=int(
             os.environ.get("RASTER_STATISTICS_QUEUE_CAPACITY", "32")
+        ),
+        map_render_queue_capacity=int(
+            os.environ.get("MAP_RENDER_QUEUE_CAPACITY", "64")
+        ),
+        map_render_queue_wait_seconds=float(
+            os.environ.get("MAP_RENDER_QUEUE_WAIT_SECONDS", "60")
         ),
         raster_statistics_queue_wait_seconds=float(
             os.environ.get("RASTER_STATISTICS_QUEUE_WAIT_SECONDS", "30")

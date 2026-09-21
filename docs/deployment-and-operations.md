@@ -215,6 +215,8 @@ the deployed workload. The main controls are:
 | `EOLAB_GEOSERVER_WMS_QUEUE_TIMEOUT_SECONDS` | `10` | Seconds a render may wait for capacity |
 | `EOLAB_GEOWEBCACHE_DISK_QUOTA_GIB` | `25` | Persistent tile-cache size before LRU cleanup |
 | `EOLAB_COMPOSITE_TILE_CACHE_BYTES` | `134217728` | Process-local successful composite PNG response bytes |
+| `EOLAB_MAP_RENDER_QUEUE_CAPACITY` | `64` | Additional distinct composite misses and direct WMS GetMap requests waiting per app process; `0` disables waiting |
+| `EOLAB_MAP_RENDER_QUEUE_WAIT_SECONDS` | `60` | Maximum wait before upstream dispatch, greater than zero and at most 60 seconds |
 | `EOLAB_RASTER_PIXEL_READ_CONCURRENCY` | `2` | Concurrent interactive pixel reads |
 | `EOLAB_RASTER_STATISTICS_READ_CONCURRENCY` | `1` | Concurrent bounded statistics reads |
 | `EOLAB_RASTER_STATISTICS_QUEUE_CAPACITY` | `32` | Additional distinct 1D/2D histogram reads waiting per app process |
@@ -223,6 +225,24 @@ the deployed workload. The main controls are:
 | `EOLAB_SCAN_WORKER_COUNT` | `8` | Concurrent metadata workers |
 | `EOLAB_SCAN_WRITER_COUNT` | `4` | Concurrent Catalog bulk writes |
 | `EOLAB_SCAN_BATCH_SIZE` | `100` | Items in each bulk write |
+
+Composite cache misses and direct WMS GetMap requests share one FIFO queue per
+app process, using `EOLAB_GEOSERVER_WMS_RENDER_COUNT` upstream slots. Successful
+composite cache hits bypass the queue; identical composite misses share one
+queued or running request. The default allows 64 additional requests to wait up
+to 60 seconds, followed by at most 30 seconds for the upstream response. Configure
+the reverse proxy to allow this combined wait. Full or expired queues return 503
+with `Retry-After: 1`; the upstream execution deadline returns 504. GeoServer's
+own admission limit remains a final guard for traffic outside this app process.
+Use one app process per GeoServer with these limits; independent replicas do not
+share this queue or its cache.
+
+Disconnecting removes unused queued work. A started HTTP request keeps its slot
+until its response or deadline, even after its last viewer leaves, because closing
+the connection does not prove GeoServer stopped rendering. At timeout or shutdown
+the transport is cancelled; native GeoServer work may continue. Capabilities,
+feature picking and diagnostics do not wait in the GetMap queue. Frontend tile
+loading/recovery feedback is independent of this server-side scheduling.
 
 Ordinary and paired histograms share a FIFO queue in each app process. Identical
 requests share one read; cached results bypass the queue. The defaults permit one
