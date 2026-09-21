@@ -216,7 +216,7 @@ export class RasterSeriesCalculations {
             }
             for (const [client, request] of additions) client.prepare(request.calculationInputs);
             this.validating = false;
-            this.refreshProgress();
+            this.updateSeriesProgress();
         } catch (error) {
             if (version !== this.version || error.name === "AbortError") return;
             this.message = error.message; this.busy = this.validating = false; this.onChange();
@@ -304,14 +304,18 @@ export class RasterSeriesCalculations {
             request.phase = state.phase;
             request.message = state.currentJob ? describeJobProgress(state.currentJob) : state.message;
         }
-        this.refreshProgress();
+        this.updateSeriesProgress();
     }
 
-    /** Combine progress without hiding active peers behind a failed request.
-     * Whole-series time includes debounce, validation and any confirmation/recovery pauses.
+    /** Update per-raster progress, whole-series status and the final elapsed time.
+     * Read the pending requests and finished results to set the busy, confirmation
+     * and completion flags and the overall message, then notify the plot listener.
+     * When every raster has a result or error, record time since the series was
+     * requested, including debounce, validation and confirmation/recovery pauses.
+     * This method uses existing state; it does not request server updates.
      * @return {void}
      */
-    refreshProgress() {
+    updateSeriesProgress() {
         this.progress = new Map([...this.pending.values()].map(request => [request.key, { phase: request.phase, message: request.message }]));
         this.confirmation = [...this.pending.values()].some(request => request.phase === "confirmation");
         this.busy = this.validating || [...this.pending.values()].some(request => !["confirmation", "recovery"].includes(request.phase));
@@ -338,7 +342,7 @@ export class RasterSeriesCalculations {
      */
     async retryInterruptedCalculation() {
         await Promise.all([...this.clients.values()].filter(client => client.snapshot.recoverable).map(client => client.retry()));
-        this.refreshProgress();
+        this.updateSeriesProgress();
     }
 
     /** Detach observers, preserving unfinished submissions for recovery after reload.
