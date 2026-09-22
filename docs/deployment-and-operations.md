@@ -490,7 +490,7 @@ source checks, job ownership, cancellation and output checksum checks are unchan
 
 ## Shared annotation layers
 
-In **Map layers**, under **Annotations**, choose **Create shared** and enter a layer
+In **Map layers**, expand **Annotations**, choose **Create shared** and enter a layer
 name and your name. **Share** on that layer copies its code. Other people choose
 **Join**, enter the code and a name not already used in
 that layer. Creators and joiners have the same controls; there is no facilitator
