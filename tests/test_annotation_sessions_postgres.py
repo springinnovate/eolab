@@ -58,7 +58,7 @@ def store(request: pytest.FixtureRequest) -> AnnotationSessionStore:
 def test_two_browsers_share_with_equal_controls_and_author_only_writes(
     store: AnnotationSessionStore,
 ) -> None:
-    """Share, revise, withdraw and export through actual HTTP/cookie/SQL boundaries.
+    """Verify equal read access and author-only changes through HTTP and PostgreSQL.
 
     Args:
         store: Empty disposable PostgreSQL store.
