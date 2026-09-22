@@ -649,16 +649,17 @@ test("compact bulk visibility buttons sit above the map layer list", () => {
     assert.match(STYLESHEET, /\.map-layer-visibility-actions\s*\{[^}]*flex-wrap: wrap/s);
 });
 
-test("session setup is below the toolbar, with layer creation in Map layers and detailed editing on demand", () => {
+test("shared layer creation and joining live in Map layers without a session toolbar panel", () => {
     const layers = requireElementRange("eomap-map-layers-region");
     const annotations = requireElementRange("annotations-panel");
     const inspection = requireElementRange("map-inspection-panels");
     const header = requireElementRange("app-header");
-    const sessions = requireElementRange("annotation-sessions");
-    assert.match(header.source, /id="open-annotations"/);
-    assert.ok(sessions.start > header.end && sessions.end < layers.start);
+    assert.doesNotMatch(header.source, /id="open-annotations"/);
+    assert.doesNotMatch(MARKUP, /id="annotation-sessions"/);
+    assert.match(layers.source, /id="create-shared-annotation-layer"/);
+    assert.match(layers.source, /id="join-shared-annotation-layer"/);
     assert.doesNotMatch(layers.source, /id="open-annotations"/);
-    assert.match(layers.source, /id="create-annotation-layer"/);
+    assert.doesNotMatch(MARKUP, /id="create-annotation-layer"/);
     assert.match(layers.source, /id="import-annotation-geojson"/);
     assert.ok(annotations.start > inspection.start && annotations.end < inspection.end);
     for (const id of ["annotation-save-status", "annotation-panel-content"]) {

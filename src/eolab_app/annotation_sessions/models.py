@@ -141,11 +141,10 @@ class SessionError(Exception):
 
 
 class SessionSummary(SessionInput):
-    """An unexpired annotation session this browser can reopen."""
+    """A shared annotation layer this browser can reopen."""
 
     id: UUID
     name: str
-    expiresAt: datetime
     joinCode: str
 
 
@@ -154,7 +153,6 @@ class ContributorSummary(SessionInput):
 
     id: UUID
     name: str
-    isOwner: bool
 
 
 class SharedLayerSummary(SessionInput):
@@ -171,9 +169,7 @@ class SharedLayerSummary(SessionInput):
 class SessionSnapshot(SessionSummary):
     """Current session membership and layer revisions, excluding polygon bodies."""
 
-    joinsOpen: bool
     contributorId: UUID
-    isOwner: bool
     contributors: list[ContributorSummary]
     layers: list[SharedLayerSummary]
 

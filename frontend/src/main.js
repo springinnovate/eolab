@@ -31,7 +31,6 @@ import { CatalogSearchSuggestions } from "./catalog-search-suggestions.js";
 import { AnnotationPanelView } from "./annotations/panel-view.js";
 import { AnnotationController } from "./annotations/controller.js";
 import "./annotations/style.css";
-import { SharedAnnotationLayers } from "./annotations/shared-layers.js";
 import { AnnotationSessionsController } from "./annotation-sessions/controller.js";
 import "./annotation-sessions/style.css";
 import { CatalogVisualizationCoordinator } from "./catalog-visualization.js";
@@ -720,7 +719,6 @@ async function initializeCatalog(
 
     let annotations = null;
     let annotationSessions = null;
-    let sharedAnnotations = null;
     let mapInteractionMode = "inspection";
     let rasterVisualization = null;
     let rasterSeries = null;
@@ -780,9 +778,7 @@ async function initializeCatalog(
         onItemZoom: zoomRetainedMapLayer,
         onItemInfo: inspectRetainedMapLayer,
         restoreRemovedLayer: (snapshot, isCurrent) => snapshot.item === null
-            ? snapshot.local.sharedContribution
-                ? annotationSessions.restoreSharedLayer(snapshot.local.sharedContribution, isCurrent)
-                : annotations.restoreRemovedLayer(snapshot, isCurrent)
+            ? annotations.restoreRemovedLayer(snapshot, isCurrent)
             : catalogVisualization.restoreRemovedLayer(snapshot, identity => catalogItemClient.get(identity), isCurrent),
     });
     const processingApi = new ProcessingApiClient();
@@ -870,7 +866,7 @@ async function initializeCatalog(
     vectorFilterControls = new VectorFilterControls({
         inspection: mapInspection,
         getTarget: (key) => {
-            const annotation = annotations?.filterTarget(key) ?? sharedAnnotations?.filterTarget(key);
+            const annotation = annotations?.filterTarget(key);
             if (annotation) return annotation;
             const record = mapLayerController.getRecord(key);
             if (record === null || record.adapter !== vectorMapLayerAdapter) return null;
@@ -923,7 +919,7 @@ async function initializeCatalog(
     });
     summarySampling = new VectorSamplingController({
         view: new VectorSamplingView(document, { root: "#calculations-vector-area", choice: null, disclosure: null }),
-        getTargets: () => [...catalogPolygonTargets(), ...(annotations?.summaryTargets() ?? []), ...(sharedAnnotations?.summaryTargets() ?? [])],
+        getTargets: () => [...catalogPolygonTargets(), ...(annotations?.summaryTargets() ?? [])],
         /** Select catalog features or upload the exact matched annotation polygons.
          * @param {Object|null} item Catalog item, absent for browser-owned annotations.
          * @param {Object} filter Applied field conditions.
@@ -995,7 +991,7 @@ async function initializeCatalog(
         },
     });
     mapLayerController.onStyle = key => {
-        if (!annotations?.openControls(key, "style") && !sharedAnnotations.openControls(key)) layerStyleEditor.open(key);
+        if (!annotations?.openControls(key, "style")) layerStyleEditor.open(key);
     };
     rasterVisualization.syncVisibleLayers();
     const catalogVisualization = new CatalogVisualizationCoordinator(
@@ -1180,15 +1176,12 @@ async function initializeCatalog(
     const annotationPanel = new AnnotationPanelView({ document,
         onOpen: () => mapInspection.showAnnotations(),
         onClose: () => mapInspection.hideAnnotations() });
-    sharedAnnotations = new SharedAnnotationLayers({ leaflet: L, map: leafletMap, mapLayers: mapLayerController, panel: annotationPanel,
-        onChange: () => { summarySampling.refresh(); vectorFilterControls.refresh(); } });
     annotations = new AnnotationController({
         panel: annotationPanel,
         leaflet: L,
         map: leafletMap,
         mapLayers: mapLayerController,
         onShare: id => annotationSessions.shareLayer(id),
-        onLayerCreated: id => annotationSessions?.annotationLayerCreated(id),
         onCommittedChange: () => { annotationSessions?.committedLayersChanged(); summarySampling.refresh(); vectorFilterControls.refresh(); },
         onFilter: key => vectorFilterControls.open(key),
         onEditingChange: editing => {
@@ -1199,16 +1192,13 @@ async function initializeCatalog(
         },
     });
     annotationSessions = new AnnotationSessionsController({
-        root: document.querySelector("#annotation-sessions"),
-        entryButton: document.querySelector("#open-annotations"),
-        revealPanel: onRenderingWorkspaceRequested,
-        revealSetupEntry: onRenderingWorkspaceRequested,
-        createLayer: name => annotations.createLayer(name),
+        document,
+        createLayer: (name, collection) => annotations.restoreSharedContribution(name, collection),
         revealLayer: id => { onRenderingWorkspaceRequested(); annotations.revealDrawing(id); },
         getLayers: () => annotations.sharableLayers(),
-        setShareLabel: (id, label, sessionName) => annotations.setShareLabel(id, label, sessionName),
-        showLayer: (id, label, collection, attribution) => sharedAnnotations.addOrUpdateLayer(id, label, collection, attribution),
-        retainLayers: ids => sharedAnnotations.removeLayersExcept(ids),
+        present: (id, data) => {
+            if (annotations.updateSharedLayer(id, data)) { summarySampling.refresh(); vectorFilterControls.refresh(); }
+        },
     });
     const startupAnnotations = annotations.load();
     void startupAnnotations.then(() => { summarySampling.refresh(); return annotationSessions.start(); });

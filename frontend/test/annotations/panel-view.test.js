@@ -67,7 +67,7 @@ test("removal selects another editor or the empty state without retaining remove
     view.showLayer("a");
     assert.deepEqual(events, []);
     view.show();
-    assert.equal(document.activeElement, document.querySelector("#create-annotation-layer"));
+    assert.equal(document.activeElement, document.querySelector("#toggle-map-layers"));
 });
 
 test("closing the layer editor focuses the map when Map layers is collapsed", () => {

@@ -3,379 +3,136 @@ import assert from "node:assert/strict";
 import { AnnotationSessionsController } from "../../src/annotation-sessions/controller.js";
 import { AnnotationSessionsApi } from "../../src/annotation-sessions/api.js";
 
-/** @return {Object} Independent session metadata for lifecycle tests. */
+const ID = "11111111-1111-4111-8111-111111111111";
+/** @return {Object} One shared layer with two independent contributors. */
 function snapshot() {
-    return { id: "session", contributorId: "me", isOwner: true, joinsOpen: true, name: "Session", joinCode: "ABCDEFGH",
-        contributors: [{ id: "me", name: "Owner" }, { id: "other", name: "Maria" }], layers: [] };
+    return { id: ID, name: "Watersheds", contributorId: "me", joinCode: "ABCDEFGH",
+        contributors: [{ id: "me", name: "Rich" }, { id: "other", name: "Maria" }], layers: [] };
 }
-
-/**
- * Compose the real session controller with an in-memory HTTP boundary and view.
- * @param {(path:string,method:string,body:Object)=>Promise<Object>} request Fake API response function.
- * @return {Object} Controller, committed local data, and observable view/presentation events.
- */
+/** @param {Function} request API boundary. @return {Object} Controller and observable layer state. */
 function setup(request = async () => snapshot()) {
-    const local = [{ id: "local", collection: { name: "Priority areas", features: [] } }];
-    const events = []; const storage = new Map();
-    const view = { showSetupPanel() {}, clearError: text => events.push(["clearError", text]), showDetails() {}, showInvitation: code => events.push(["invitation", code]), setNameBusy() {}, nameSaved() {}, memberships() {}, busy() {}, render: (snapshot, sharing) => events.push(["uploading", [...sharing.values()].some(state => state.uploading)]), setJoiningBusy: busy => events.push(["joiningBusy", busy]), code: {}, message: (...args) => events.push(["message", ...args]) };
-    const controller = new AnnotationSessionsController({ root: {}, getLayers: () => local,
-        revealLayer: id => events.push(["reveal", id]),
-        createLayer: name => {
-            const id = `created-${local.length}`;
-            local.push({ id, collection: { name: "New annotations", features: [] } });
-            events.push(["created", id, name]); return id;
-        },
-        setShareLabel: (...args) => events.push(["label", ...args]),
-        showLayer: (...args) => events.push(["show", ...args]), retainLayers: ids => events.push(["retain", [...ids]]),
-        storage: { getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
-        createView: () => view, api: { request },
-    });
-    controller.snapshot = snapshot();
-    return { controller, local, events, storage };
+    const local = []; const events = []; const stored = new Map();
+    const view = { busy() {}, connected() {}, open: (...args) => events.push(["open", ...args]), message: text => events.push(["error", text]) };
+    const controller = new AnnotationSessionsController({ document: {}, api: { request }, getLayers: () => local,
+        createLayer: async (name, collection) => { const id = `local-${local.length}`; local.push({ id, collection: structuredClone(collection) }); return id; },
+        present: (id, data) => events.push(["display", id, data]), revealLayer: id => events.push(["reveal", id]),
+        storage: { getItem: key => stored.get(key), setItem: (key, value) => stored.set(key, value) }, createView: () => view });
+    return { controller, local, events, stored };
+}
+/** @param {Object} controller Controller under test. @return {void} Attach a known contributor binding. */
+function bind(controller) {
+    controller.bindings.set("local", { localId: "local", sessionId: ID, contributorId: "me", revision: 0, remote: new Map(), retryDelay: 0 });
 }
 
-test("coalesces saved changes and does not send unchanged content", async () => {
-    let release; const writes = [];
-    const { controller, local } = setup(async (path, method, body) => {
-        writes.push(structuredClone(body));
-        if (writes.length === 1) await new Promise(resolve => { release = resolve; });
-        return { revision: writes.length };
-    });
-    controller.shareLayer("local");
-    local[0].collection.name = "Updated";
-    await controller.sendChangedLayers(); assert.equal(writes.length, 1);
-    release(); await controller.sharing.get("local").sending;
-    assert.equal(writes.length, 2); assert.equal(writes[1].revision, 1);
-    assert.equal(writes[1].collection.name, "Updated");
-    await controller.sendChangedLayers(); assert.equal(writes.length, 2);
-    controller.destroy();
+test("creator and joiner both receive one layer and automatically see all shared contributions", async () => {
+    for (const mode of ["create", "join"]) {
+        const metadata = snapshot(); metadata.layers = [{ contributorId: "other", layerId: ID, revision: 1, polygonCount: 1 }];
+        const writes = [];
+        const { controller, local, events } = setup(async (path, method, body) => {
+            if (method === "PUT") { writes.push(body); return { revision: 1 }; }
+            if (path.includes("/contributors/")) return { revision: 1, collection: { type: "FeatureCollection", features: [{ id: "polygon", properties: { name: "River" } }] } };
+            return structuredClone(metadata);
+        });
+        try {
+            await controller.connect(mode, "ABCDEFGH", "Rich");
+            assert.equal(local.length, 1);
+            const data = events.filter(event => event[0] === "display").at(-1)[2];
+            assert.equal(data.collections.length, 1); assert.equal(data.contributors[1].polygonCount, 1);
+            assert.equal(writes[0].collection.features.length, 0, "other contributors are never uploaded as mine");
+            await controller.connect("join", "ABCDEFGH", "Rich");
+            assert.equal(local.length, 1, "rejoining does not duplicate the existing layer");
+        } finally { controller.destroy(); }
+    }
 });
 
-test("lost replies retry the same revision; conflicts preserve local content and stop auto uploads", async () => {
+test("failed joins create no layer and preserve the server's duplicate-name message", async () => {
+    const { controller, local, events } = setup(async () => { throw new Error("That name is already used"); });
+    try { await controller.connect("join", "ABCDEFGH", "Rich"); assert.equal(local.length, 0); assert.deepEqual(events.at(-1), ["error", "That name is already used"]); }
+    finally { controller.destroy(); }
+});
+
+test("changed contributor names refresh authorship without downloading unchanged geometry", async () => {
+    const metadata = snapshot();
+    metadata.layers = [{ contributorId: "other", layerId: ID, revision: 1, polygonCount: 1 }];
+    let downloads = 0;
+    const { controller, events } = setup(async (path, method) => {
+        if (method === "PUT") return { revision: 1 };
+        if (path.includes("/contributors/")) {
+            downloads++;
+            return { revision: 1, collection: { type: "FeatureCollection", features: [{ properties: { name: "River" } }] } };
+        }
+        return structuredClone(metadata);
+    });
+    try {
+        await controller.connect("join", "ABCDEFGH", "Rich");
+        metadata.contributors[1].name = "Maria Updated";
+        await controller.refresh();
+        assert.equal(downloads, 1);
+        assert.equal(events.filter(event => event[0] === "display").at(-1)[2].collections[0].features[0].properties.contributor, "Maria Updated");
+    } finally { controller.destroy(); }
+});
+
+test("lost replies retry the same revision; conflicts preserve edits and stop automatic writes", async () => {
     let count = 0; const writes = [];
-    const { controller, local } = setup(async (path, method, body) => {
-        writes.push(body); count++;
-        if (count === 1) throw new Error("Network unavailable");
+    const { controller, local } = setup(async (_path, method, body) => {
+        if (method !== "PUT") return snapshot();
+        writes.push(structuredClone(body)); count++;
+        if (count === 1) throw new Error("Network interrupted");
         if (count === 3) throw Object.assign(new Error("Changed in another tab"), { status: 409 });
         return { revision: 1 };
     });
-    controller.shareLayer("local"); await controller.sharing.get("local").sending;
-    await controller.sendChangedLayers(); assert.deepEqual(writes[0], writes[1]);
-    local[0].collection.name = "My new name";
-    await controller.sendChangedLayers(); await controller.sendChangedLayers();
-    assert.equal(count, 3); assert.equal(local[0].collection.name, "My new name");
-    assert.equal(controller.sharing.get("local").conflict, true);
-    controller.destroy();
+    local.push({ id: "local", collection: { type: "FeatureCollection", name: "Watersheds", features: [] } }); bind(controller);
+    try {
+        await controller.refresh();
+        local[0].collection.features.push({ id: "new" });
+        await controller.refresh();
+        assert.deepEqual(writes[0], writes[1]);
+        await controller.refresh(); await controller.refresh();
+        assert.equal(count, 3); assert.equal(local[0].collection.features.length, 1);
+        assert.equal(controller.bindings.get("local").conflict, true);
+    } finally { controller.destroy(); }
 });
 
-test("a failed status request keeps observation alive and expiry removes remote presentation", async () => {
-    let fail = true;
-    const { controller, events } = setup(async () => {
-        if (fail) throw new Error("Temporary outage");
-        throw Object.assign(new Error("Expired"), { status: 404 });
+test("a removed map layer stops writes and polling without deleting its shared contents", async () => {
+    const calls = [];
+    const { controller, local } = setup(async (path, method) => { calls.push([path, method]); return method === "PUT" ? { revision: 1 } : snapshot(); });
+    local.push({ id: "local", collection: { features: [] } }); bind(controller);
+    try {
+        await controller.refresh(); calls.length = 0; local.length = 0;
+        await controller.refresh(); assert.deepEqual(calls, []);
+    } finally { controller.destroy(); }
+});
+
+test("in-flight refresh cannot publish or upload a layer removed while waiting", async () => {
+    let release; const writes = [];
+    const { controller, local, events } = setup(async (_path, method) => {
+        if (method === "PUT") { writes.push(method); return { revision: 1 }; }
+        return new Promise(resolve => { release = resolve; });
     });
-    await controller.refreshSession(); assert.ok(controller.timer); assert.equal(controller.delay, 10000);
-    fail = false; await controller.refreshSession(); assert.equal(controller.snapshot, null);
-    assert.ok(events.some(event => event[0] === "retain" && event[1].length === 0));
-    controller.destroy();
+    local.push({ id: "local", collection: { features: [] } }); bind(controller);
+    try {
+        const pending = controller.refresh(); local.length = 0; release(snapshot()); await pending;
+        assert.deepEqual(writes, []); assert.deepEqual(events, []);
+    } finally { controller.destroy(); }
 });
 
-test("late contribution fetch cannot display data after leaving", async () => {
-    let release; const remote = { contributorId: "other", layerId: "remote", revision: 1, name: "Other layer" };
-    const { controller, events } = setup(async path => {
-        if (path.includes("/contributors/")) return new Promise(resolve => { release = resolve; });
-        if (path === "") return [];
-        return { ...snapshot(), layers: [remote] };
-    });
-    controller.showContributions = true;
-    const refreshing = controller.refreshSession(); await Promise.resolve();
-    await controller.leave(); release({ collection: {}, revision: 1 }); await refreshing;
-    assert.equal(events.some(event => event[0] === "show"), false);
-    controller.destroy();
+test("saved contributor identity cannot silently become a different contributor", async () => {
+    const writes = []; const changed = { ...snapshot(), contributorId: "other" };
+    const { controller, local, events } = setup(async (_path, method) => { if (method === "PUT") writes.push(method); return changed; });
+    local.push({ id: "local", collection: { features: [] } }); bind(controller);
+    try {
+        await controller.refresh(); assert.deepEqual(writes, []);
+        assert.match(events.at(-1)[2].status, /different contributor/);
+        await controller.connect("join", "ABCDEFGH", "Maria"); assert.equal(local.length, 1);
+        assert.match(events.at(-1)[1], /different contributor/);
+    } finally { controller.destroy(); }
 });
 
-test("removing a local layer keeps its last contribution; no delete or empty replacement is sent", async () => {
-    const writes = [];
-    const { controller, local } = setup(async (path, method) => { writes.push(method); return { revision: 1 }; });
-    controller.shareLayer("local"); await controller.sharing.get("local").sending;
-    local.length = 0; await controller.sendChangedLayers();
-    assert.deepEqual(writes, ["PUT"]); controller.destroy();
-});
-
-test("only changed contributions are fetched and stale metadata does not fetch local copies", async () => {
-    const metadata = { ...snapshot(), layers: [{ contributorId: "other", layerId: "remote", revision: 2, name: "Shared" }] };
-    let reads = 0;
-    const { controller, events } = setup(async path => {
-        if (path.includes("/contributors/")) { reads++; return { revision: 2, collection: {} }; }
-        return metadata;
-    });
-    controller.showContributions = true;
-    await controller.refreshSession(); await controller.refreshSession();
-    assert.equal(reads, 1); assert.equal(events.filter(event => event[0] === "show").length, 1);
-    controller.destroy();
-});
-
-test("API sends credentials/header and preserves conflict status for lifecycle decisions", async () => {
+test("same-origin API retains private cookie handling and actionable validation errors", async () => {
     const api = new AnnotationSessionsApi(async (url, options) => {
         assert.equal(url, "/api/annotation-sessions/join");
         assert.equal(options.credentials, "same-origin"); assert.equal(options.headers["X-EOLab-Annotations"], "1");
-        return new Response(JSON.stringify({ detail: "Conflict" }), { status: 409 });
+        return { ok: false, status: 409, json: async () => ({ detail: "That name is already used" }) };
     });
-    await assert.rejects(api.request("/join", "POST", {}), error => error.status === 409 && error.message === "Conflict");
-});
-
-test("a contribution withdrawn between metadata and content does not end the session", async () => {
-    const { controller } = setup(async path => {
-        if (path.includes("/contributors/")) throw Object.assign(new Error("Withdrawn"), { status: 404 });
-        return { ...snapshot(), layers: [{ contributorId: "other", layerId: "removed", revision: 1 }] };
-    });
-    controller.showContributions = true;
-    await controller.refreshSession();
-    assert.equal(controller.snapshot.id, "session"); assert.ok(controller.timer);
-    controller.destroy();
-});
-
-test("explicit re-sharing uses the observed revision while automatic reconnect retains its own revision", async () => {
-    const writes = [];
-    const { controller } = setup(async (path, method, body) => { writes.push(body); return { revision: 4 }; });
-    controller.snapshot.layers = [{ contributorId: "me", layerId: "local", revision: 3 }];
-    controller.shareLayer("local"); await controller.sharing.get("local").sending;
-    assert.equal(writes[0].revision, 3);
-    controller.destroy();
-});
-
-test("joining switch uses the requested setting and recovers after a failed save", async () => {
-    let reject; const calls = [];
-    const { controller, events } = setup((path, method) => {
-        calls.push([path, method]); return new Promise((resolve, fail) => { reject = fail; });
-    });
-    const saving = controller.setAllowNewContributors(false);
-    await controller.setAllowNewContributors(true);
-    assert.deepEqual(calls, [["/session/actions/close-joining", "POST"]]);
-    reject(new Error("Offline")); await saving;
-    assert.equal(controller.snapshot.joinsOpen, true);
-    assert.equal(controller.joiningBusy, false);
-    assert.ok(events.some(event => event[0] === "message" && event[1] === "Offline"));
-    controller.api.request = async path => { calls.push([path, "POST"]); };
-    await controller.setAllowNewContributors(false);
-    assert.equal(controller.snapshot.joinsOpen, false);
-    await controller.setAllowNewContributors(true);
-    assert.equal(controller.snapshot.joinsOpen, true);
-    assert.deepEqual(calls.at(-1), ["/session/actions/open-joining", "POST"]);
-    controller.destroy();
-});
-
-test("contributors cannot use the owner switch and late saves do not change a different session", async () => {
-    let finish; let calls = 0;
-    const { controller } = setup(() => { calls++; return new Promise(resolve => { finish = resolve; }); });
-    controller.snapshot.isOwner = false;
-    await controller.setAllowNewContributors(false); assert.equal(calls, 0);
-    controller.snapshot.isOwner = true;
-    const saving = controller.setAllowNewContributors(false);
-    await controller.stopSessionSync(); controller.snapshot = { ...snapshot(), id: "other-session" };
-    finish(); await saving;
-    assert.equal(controller.snapshot.joinsOpen, true);
-    controller.destroy();
-});
-
-for (const command of ["", "/join"]) test(`${command || "create"} starts a shared layer and reopening reuses it without sharing older layers`, async () => {
-    const writes = [];
-    const { controller, events } = setup(async (path, method, body) => {
-        if (method === "PUT") { writes.push([path, body]); return { revision: 1 }; }
-        return snapshot();
-    });
-    await controller.openSession(command, { contributorName: "Maria" });
-    assert.equal(events.filter(event => event[0] === "created").length, 1);
-    assert.equal(controller.sharing.has("local"), false, "older local layers require Share");
-    assert.ok(controller.sharing.has("created-1"));
-    assert.deepEqual(events.find(event => event[0] === "reveal"), ["reveal", "created-1"]);
-    assert.equal(events.find(event => event[0] === "created")[2], "Owner’s annotations");
-    await controller.sendChangedLayers();
-    assert.equal(writes[0][0], "/session/layers/created-1");
-    assert.equal(writes.length, 1);
-    await controller.openSession("/session");
-    assert.equal(events.filter(event => event[0] === "created").length, 1);
-    assert.equal(controller.sharing.get("created-1").revision, 1);
-    assert.equal(events.filter(event => event[0] === "reveal").length, 1, "reload does not steal focus");
-    await controller.openSession("/session", undefined, true);
-    assert.equal(events.filter(event => event[0] === "reveal").length, 2, "explicit recent-session navigation reveals the layer");
-    await controller.openSession(command, { contributorName: "Maria" });
-    assert.equal(events.filter(event => event[0] === "created").length, 1, "repeated join does not add another layer");
-    controller.destroy();
-});
-
-test("new layers wait for device persistence; withdrawn layers and layers created after leaving stay private", async () => {
-    const writes = [];
-    const { controller, local } = setup(async (path, method, body) => {
-        if (method === "PUT") { writes.push(path); return { revision: 1 }; }
-        return path === "" ? [] : snapshot();
-    });
-    controller.annotationLayerCreated("new");
-    await controller.sendChangedLayers(); assert.equal(writes.length, 0);
-    local.push({ id: "new", collection: { name: "Saved", features: [] } });
-    controller.committedLayersChanged(); await controller.sendChangedLayers();
-    assert.deepEqual(writes, ["/session/layers/new"]);
-    await controller.stopSharingLayer("new");
-    local[1].collection.name = "Still private";
-    controller.committedLayersChanged(); await controller.sendChangedLayers();
-    assert.equal(writes.length, 1, "withdrawal is not undone by the next save");
-    controller.annotationLayerCreated("another");
-    assert.ok(controller.sharing.has("another"));
-    await controller.leave();
-    controller.annotationLayerCreated("after-leaving");
-    assert.equal(controller.sharing.size, 0);
-    controller.destroy();
-});
-
-test("failed joins do not create layers and local capacity errors leave the joined session usable", async () => {
-    const { controller, events } = setup(async () => { throw new Error("Joining is closed"); });
-    controller.snapshot = null;
-    await controller.openSession("/join", { contributorName: "Maria" });
-    assert.equal(events.some(event => event[0] === "created"), false);
-    assert.equal(controller.snapshot, null);
-    controller.api.request = async () => snapshot();
-    controller.createLayer = () => { throw new Error("Layer limit reached"); };
-    await controller.openSession("/join", { contributorName: "Maria" });
-    assert.equal(controller.snapshot.id, "session");
-    assert.equal(controller.transitioning, false);
-    assert.ok(controller.timer, "membership observation survives a local layer error");
-    assert.ok(events.some(event => event[0] === "message" && event[1] === "Layer limit reached"));
-    controller.destroy();
-});
-
-test("rejoining with no revision bookmark never silently replaces an existing changed contribution", async () => {
-    const metadata = { ...snapshot(), layers: [{ contributorId: "me", layerId: "local", revision: 5 }] };
-    let requestedRevision;
-    const { controller, events } = setup(async (path, method, body) => {
-        if (method === "PUT") {
-            requestedRevision = body.revision;
-            throw Object.assign(new Error("Changed in another tab"), { status: 409 });
-        }
-        return metadata;
-    });
-    await controller.openSession("/join", { contributorName: "Owner" });
-    await controller.sendChangedLayers();
-    assert.equal(requestedRevision, 0);
-    assert.equal(controller.sharing.get("local").conflict, true);
-    assert.equal(events.some(event => event[0] === "created"), false);
-    controller.destroy();
-});
-
-test("saving a display name preserves identity and ignores a stale status read", async () => {
-    let completeRead; const calls = [];
-    const { controller } = setup(async (path, method, body) => {
-        calls.push([path, method, body]);
-        if (method === "PATCH") return { name: body.name };
-        return new Promise(resolve => { completeRead = resolve; });
-    });
-    const reading = controller.refreshSession();
-    await controller.updateDisplayName("Rosa");
-    completeRead(snapshot()); await reading;
-    assert.equal(controller.snapshot.contributors[0].name, "Rosa");
-    assert.equal(controller.snapshot.contributorId, "me");
-    assert.deepEqual(calls[1], ["/session/profile", "PATCH", { name: "Rosa" }]);
-    controller.destroy();
-});
-
-test("a failed or obsolete name save keeps the current membership intact", async () => {
-    const { controller, events } = setup(async () => { throw new Error("Offline"); });
-    await controller.updateDisplayName("Rosa");
-    assert.equal(controller.snapshot.contributors[0].name, "Owner");
-    assert.ok(events.some(event => event[0] === "message" && event[1] === "Offline"));
-    let finish;
-    controller.api.request = () => new Promise(resolve => { finish = resolve; });
-    const saving = controller.updateDisplayName("Rosa");
-    await controller.stopSessionSync(); controller.snapshot = { ...snapshot(), id: "different" };
-    finish({ name: "Rosa" }); await saving;
-    assert.equal(controller.snapshot.contributors[0].name, "Owner");
-    controller.destroy();
-});
-
-test("a contributor name change updates an already displayed shared layer", async () => {
-    const metadata = { ...snapshot(), layers: [{ contributorId: "other", layerId: "remote", revision: 1, name: "Areas" }] };
-    const { controller, events } = setup(async path => path.includes("/contributors/") ? { revision: 1, collection: {} } : metadata);
-    controller.showContributions = true;
-    await controller.refreshSession();
-    metadata.contributors[1].name = "Rosa";
-    await controller.refreshSession();
-    assert.equal(events.filter(event => event[0] === "show").at(-1)[2], "Areas");
-    assert.equal(events.filter(event => event[0] === "show").at(-1)[4], "Shared by Rosa · Session");
-    controller.destroy();
-});
-
-test("sharing context clears on leave and on session expiration", async () => {
-    for (const expire of [false, true]) {
-        const { controller, events } = setup(async path => {
-            if (expire) throw Object.assign(new Error("Expired"), { status: 404 });
-            return path === "" ? [] : { revision: 1 };
-        });
-        controller.trackSharedLayer("local", 1);
-        assert.ok(events.some(event => event[0] === "label" && event[3] === "Session"));
-        if (expire) await controller.refreshSession(); else await controller.leave();
-        assert.deepEqual(events.filter(event => event[0] === "label").at(-1), ["label", "local", "Share"]);
-        controller.destroy();
-    }
-});
-
-
-test("reloading an invitation for the saved session does not steal focus", async () => {
-    const location = globalThis.location;
-    const { controller, events } = setup(async (path, method) => {
-        if (method === "PUT") return { revision: 1 };
-        return path === undefined ? [snapshot()] : snapshot();
-    });
-    try {
-        await controller.openSession("/join", { contributorName: "Owner" });
-        await controller.sendChangedLayers();
-        globalThis.location = { href: "https://example.test/?annotationSession=ABCDEFGH" };
-        await controller.start();
-        assert.equal(events.filter(event => event[0] === "reveal").length, 1);
-        assert.equal(events.filter(event => event[0] === "created").length, 1);
-        assert.equal(events.some(event => event[0] === "invitation"), false);
-    } finally {
-        controller.destroy();
-        if (location === undefined) delete globalThis.location; else globalThis.location = location;
-    }
-});
-
-test("a new invitation prefills the join form without joining or creating a layer", async () => {
-    const location = globalThis.location;
-    const calls = [];
-    const { controller, events } = setup(async path => { calls.push(path); return []; });
-    controller.snapshot = null;
-    try {
-        globalThis.location = { href: "https://example.test/?annotationSession=abcdefgh" };
-        await controller.start();
-        assert.deepEqual(calls, [undefined]);
-        assert.ok(events.some(event => event[0] === "invitation" && event[1] === "ABCDEFGH"));
-        assert.equal(events.some(event => event[0] === "created" || event[0] === "reveal"), false);
-    } finally {
-        controller.destroy();
-        if (location === undefined) delete globalThis.location; else globalThis.location = location;
-    }
-});
-
-
-test("only a real upload shows syncing; unchanged refreshes keep the saved indicator", async () => {
-    let finish;
-    const { controller, events } = setup(() => new Promise(resolve => { finish = resolve; }));
-    controller.shareLayer("local");
-    assert.ok(events.some(event => event[0] === "uploading" && event[1]));
-    finish({ revision: 1 }); await controller.sharing.get("local").sending;
-    const uploading = events.filter(event => event[0] === "uploading" && event[1]).length;
-    await controller.sendChangedLayers();
-    assert.equal(events.filter(event => event[0] === "uploading" && event[1]).length, uploading);
-    assert.equal(controller.sharing.get("local").uploading, false);
-    controller.destroy();
-});
-
-test("a recovered status request clears its error after a successful refresh", async () => {
-    let failed = true;
-    const { controller, events } = setup(async () => {
-        if (failed) throw new Error("Temporary outage");
-        return snapshot();
-    });
-    await controller.refreshSession(); failed = false; await controller.refreshSession();
-    assert.ok(events.some(event => event[0] === "clearError" && event[1] === "Temporary outage"));
-    controller.destroy();
+    await assert.rejects(api.request("/join", "POST", {}), error => error.status === 409 && /already used/.test(error.message));
 });

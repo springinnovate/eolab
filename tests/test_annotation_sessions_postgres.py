@@ -46,19 +46,19 @@ def store(request: pytest.FixtureRequest) -> AnnotationSessionStore:
         if not connection.info.dbname.startswith("eolab_processing_test"):
             pytest.fail("The connected database must be disposable")
     result = AnnotationSessionStore(dsn)
-    result.initialize_and_remove_expired_sessions()
-    result.initialize_and_remove_expired_sessions()
+    result.initialize_and_clean_join_attempts()
+    result.initialize_and_clean_join_attempts()
     with result.transaction(write=True) as cursor:
         cursor.execute(
-            "TRUNCATE annotation_sessions.sessions, annotation_sessions.contributors, annotation_sessions.layers, annotation_sessions.join_attempts"
+            "TRUNCATE shared_annotation_layers.sessions, shared_annotation_layers.contributors, shared_annotation_layers.layers, shared_annotation_layers.join_attempts"
         )
     return result
 
 
-def test_two_browsers_share_and_owner_permissions(
+def test_two_browsers_share_with_equal_controls_and_author_only_writes(
     store: AnnotationSessionStore,
 ) -> None:
-    """Share, revise, withdraw and export through actual HTTP/cookie/SQL boundaries.
+    """Verify equal read access and author-only changes through HTTP and PostgreSQL.
 
     Args:
         store: Empty disposable PostgreSQL store.
@@ -81,13 +81,13 @@ def test_two_browsers_share_and_owner_permissions(
         BASE + "/join",
         json={"joinCode": session["joinCode"].lower(), "contributorName": "Maria"},
     ).json()
-    assert not joined["isOwner"]
+    assert "isOwner" not in joined and "expiresAt" not in joined
     again = other.post(
         BASE + "/join",
         json={"joinCode": session["joinCode"], "contributorName": "Changed name"},
     ).json()
     assert again["contributorId"] == joined["contributorId"]
-    layer_id = str(uuid4())
+    layer_id = session["id"]
     write = f"{path}/layers/{layer_id}"
     body = {"revision": 0, "collection": collection()}
     assert other.put(write, json=body).json() == {"revision": 1}
@@ -101,62 +101,45 @@ def test_two_browsers_share_and_owner_permissions(
     assert outsider.get(read).status_code == 404
     assert outsider.get(path).status_code == 404
     assert outsider.get(path + "/export").status_code == 404
-    assert other.post(path + "/actions/close-joining").status_code == 403
-    assert owner.post(path + "/actions/close-joining").status_code == 204
-    assert (
-        outsider.post(
-            BASE + "/join",
-            json={"joinCode": session["joinCode"], "contributorName": "New"},
-        ).status_code
-        == 403
-    )
+    assert other.post(path + "/actions/close-joining").status_code == 404
+    assert owner.post(path + "/actions/delete").status_code == 404
     exported = owner.get(path + "/export")
     assert exported.status_code == 200
     feature = exported.json()["features"][0]
     assert feature["properties"]["contributor"] == "Changed name"
     assert feature["properties"]["note"] == "New note"
-    # Owner cannot delete another contributor's copy, even when the local ID is known.
-    assert owner.delete(write + "?revision=2").status_code == 204
-    assert other.get(read).status_code == 200
-    assert other.delete(write + "?revision=1").status_code == 409
-    assert other.delete(write + "?revision=2").status_code == 204
-    assert other.get(read).status_code == 404
+    # Creating the shared layer does not grant access to another author's writes.
+    assert owner.delete(write + "?revision=2").status_code == 405
+    assert other.get(read).json()["revision"] == 2
     assert (
-        other.put(write, json=body).status_code == 409
-    ), "a stale update must not resurrect a withdrawn layer"
+        owner.put(
+            write, json={"revision": 0, "collection": collection("Own")}
+        ).status_code
+        == 200
+    )
+    assert (
+        other.get(read).json()["collection"]["features"][0]["properties"]["note"]
+        == "New note"
+    )
+    assert other.put(f"{path}/layers/{uuid4()}", json=body).status_code == 422
 
 
-def test_expiry_and_cleanup_do_not_depend_on_browser(
-    store: AnnotationSessionStore,
-) -> None:
-    """Reads do not renew sessions; expiration revokes access and deletes all related rows.
+def test_persistent_sessions_survive_maintenance(store: AnnotationSessionStore) -> None:
+    """Maintenance and store reinitialization retain memberships and polygons.
 
     Args:
-        store: Empty disposable PostgreSQL store.
+        store: Disposable PostgreSQL store.
     """
     session_id = store.create_session("owner", "Session", "Owner")
-    initial = store.get_session_snapshot(session_id, "owner")
-    layer = uuid4()
-    request = ShareLayer(revision=0, collection=collection())
-    assert store.save_shared_layer(session_id, "owner", layer, request) == 1
-    expires = store.get_session_snapshot(session_id, "owner")["expiresAt"]
-    store.save_shared_layer(session_id, "owner", layer, request)
-    assert store.get_session_snapshot(session_id, "owner")["expiresAt"] == expires
-    with store.transaction(write=True) as cursor:
-        cursor.execute(
-            "UPDATE annotation_sessions.sessions SET expires_at=now()-interval '1 second' WHERE id=%s",
-            (session_id,),
-        )
-    with pytest.raises(SessionError, match="expired"):
-        store.apply_session_action(session_id, "owner", "extend")
-    with pytest.raises(SessionError, match="expired"):
-        store.read_shared_layer(session_id, "owner", initial["contributorId"], layer)
-    assert store.list_sessions("owner") == []
-    store.initialize_and_remove_expired_sessions()
-    with store.transaction() as cursor:
-        for table in ("sessions", "contributors", "layers"):
-            cursor.execute(f"SELECT count(*) AS count FROM annotation_sessions.{table}")
-            assert cursor.fetchone()["count"] == 0
+    store.save_shared_layer(
+        session_id, "owner", session_id, ShareLayer(revision=0, collection=collection())
+    )
+    before = store.get_session_snapshot(session_id, "owner")
+    restarted = AnnotationSessionStore(store.conninfo)
+    restarted.initialize_and_clean_join_attempts()
+    assert restarted.get_session_snapshot(session_id, "owner") == before
+    assert "expiresAt" not in before
+    assert len(restarted.list_sessions("owner")) == 1
 
 
 def test_concurrent_writers_do_not_overwrite_same_revision(
@@ -168,7 +151,7 @@ def test_concurrent_writers_do_not_overwrite_same_revision(
         store: Empty disposable PostgreSQL store.
     """
     session_id = store.create_session("owner", "Session", "Owner")
-    layer = uuid4()
+    layer = session_id
     store.save_shared_layer(
         session_id, "owner", layer, ShareLayer(revision=0, collection=collection())
     )
@@ -223,7 +206,7 @@ def test_storage_capacity_rejects_growth_without_losing_previous_copy(
     from eolab_app.annotation_sessions import store as storage_module
 
     session = store.create_session("owner", "Session", "Owner")
-    layer = uuid4()
+    layer = session
     store.save_shared_layer(
         session, "owner", layer, ShareLayer(revision=0, collection=collection())
     )
@@ -241,138 +224,57 @@ def test_storage_capacity_rejects_growth_without_losing_previous_copy(
     assert store.read_shared_layer(session, "owner", author, layer) == original
 
 
-def test_members_change_only_their_own_display_names(
+def test_unique_names_and_returning_credentials(store: AnnotationSessionStore) -> None:
+    """Names cannot impersonate an existing contributor; the cookie retains identity.
+
+    Args:
+        store: Disposable PostgreSQL store.
+    """
+    identifier = store.create_session("first", "Layer", "Rich Sharp")
+    first = store.get_session_snapshot(identifier, "first")
+    code = first["joinCode"]
+    with pytest.raises(SessionError, match="already used"):
+        store.join_session("second", code, "rich sharp")
+    store.join_session("second", code, "Maria")
+    second = store.get_session_snapshot(identifier, "second")
+    with pytest.raises(SessionError, match="already used"):
+        store.update_contributor_name(identifier, "second", "RICH SHARP")
+    store.join_session("second", code, "New name")
+    assert (
+        store.get_session_snapshot(identifier, "second")["contributorId"]
+        == second["contributorId"]
+    )
+    assert (
+        store.get_session_snapshot(identifier, "first")["contributorId"]
+        == first["contributorId"]
+    )
+
+
+def test_concurrent_duplicate_names_admit_only_one(
     store: AnnotationSessionStore,
 ) -> None:
-    """Rename through HTTP without changing contributor identity or layer revisions.
+    """The serialized membership boundary rejects simultaneous duplicate names.
 
     Args:
-        store: Empty disposable PostgreSQL annotation store.
+        store: Disposable PostgreSQL store.
     """
-    app = FastAPI()
-    app.include_router(create_annotation_sessions_router(store))
-    owner = TestClient(app, base_url="https://testserver", headers=HEADERS)
-    member = TestClient(app, base_url="https://testserver", headers=HEADERS)
-    outsider = TestClient(app, base_url="https://testserver", headers=HEADERS)
-    session = owner.post(
-        BASE, json={"name": "Workshop", "contributorName": "Session owner"}
-    ).json()
-    path = f"{BASE}/{session['id']}"
-    joined = member.post(
-        BASE + "/join",
-        json={"joinCode": session["joinCode"], "contributorName": "Maria"},
-    ).json()
-    layer_id = str(uuid4())
-    member.put(
-        f"{path}/layers/{layer_id}", json={"revision": 0, "collection": collection()}
-    )
-    assert (
-        outsider.patch(path + "/profile", json={"name": "Impostor"}).status_code == 404
-    )
-    assert (
-        owner.patch(
-            path + "/profile",
-            json={"name": "Rich", "contributorId": joined["contributorId"]},
-        ).status_code
-        == 422
-    )
-    assert owner.patch(path + "/profile", json={"name": "  "}).status_code == 422
-    assert (
-        owner.patch(
-            path + "/profile",
-            json={"name": "Rich"},
-            headers={"Origin": "https://another.example"},
-        ).status_code
-        == 403
-    )
-    assert owner.patch(path + "/profile", json={"name": " Rich "}).json() == {
-        "name": "Rich"
-    }
-    assert member.patch(path + "/profile", json={"name": "Rosa"}).status_code == 200
-    current = owner.get(path).json()
-    assert {p["id"]: p["name"] for p in current["contributors"]} == {
-        session["contributorId"]: "Rich",
-        joined["contributorId"]: "Rosa",
-    }
-    assert current["layers"][0]["revision"] == 1
-    assert current["contributorId"] == session["contributorId"]
-    assert (
-        owner.get(path + "/export").json()["features"][0]["properties"]["contributor"]
-        == "Rosa"
-    )
-    from eolab_app.annotation_sessions.models import MAX_LAYER_BYTES
+    identifier = store.create_session("first", "Layer", "Creator")
+    code = store.get_session_snapshot(identifier, "first")["joinCode"]
 
-    assert (
-        member.patch(
-            path + "/profile", content=b" " * (MAX_LAYER_BYTES + 1)
-        ).status_code
-        == 413
-    )
-    with store.transaction(write=True) as cursor:
-        cursor.execute(
-            "UPDATE annotation_sessions.sessions SET expires_at=now()-interval '1 second'"
-        )
-    assert owner.patch(path + "/profile", json={"name": "Gone"}).status_code == 404
+    def join(browser: str) -> int:
+        """Try to reserve a name from a separate browser.
 
+        Args:
+            browser: Independent credential hash.
 
-@pytest.mark.parametrize("rejoin_as_owner", [False, True])
-@pytest.mark.parametrize("joining_open", [False, True])
-def test_rejoining_uses_entered_name_without_replacing_membership(
-    store: AnnotationSessionStore, rejoin_as_owner: bool, joining_open: bool
-) -> None:
-    """Rejoin with a new name while preserving identity, permissions and shared polygons.
+        Returns:
+            Accepted or duplicate-name HTTP status.
+        """
+        try:
+            store.join_session(browser, code, "Maria")
+            return 200
+        except SessionError as error:
+            return error.status
 
-    Args:
-        store: Empty disposable PostgreSQL annotation store.
-        rejoin_as_owner: Whether the returning browser owns the session.
-        joining_open: Whether new browsers may join the session.
-    """
-    app = FastAPI()
-    app.include_router(create_annotation_sessions_router(store))
-    owner = TestClient(app, base_url="https://testserver", headers=HEADERS)
-    member = TestClient(app, base_url="https://testserver", headers=HEADERS)
-    session = owner.post(
-        BASE, json={"name": "Workshop", "contributorName": "Session lead"}
-    ).json()
-    path = f"{BASE}/{session['id']}"
-    joined = member.post(
-        BASE + "/join",
-        json={"joinCode": session["joinCode"], "contributorName": "Rich Sharp"},
-    ).json()
-    returning = owner if rejoin_as_owner else member
-    contributor_id = (session if rejoin_as_owner else joined)["contributorId"]
-    layer_id = str(uuid4())
-    shared_path = f"{path}/contributors/{contributor_id}/layers/{layer_id}"
-    assert (
-        returning.put(
-            f"{path}/layers/{layer_id}",
-            json={"revision": 0, "collection": collection()},
-        ).status_code
-        == 200
-    )
-    original_layer = owner.get(shared_path).json()
-    if not joining_open:
-        assert owner.post(path + "/actions/close-joining").status_code == 204
-    # Leaving only stops this tab's sharing; its cookie and server membership remain.
-    for _ in range(2):
-        response = returning.post(
-            BASE + "/join",
-            json={"joinCode": session["joinCode"], "contributorName": "  New name  "},
-        )
-        assert response.status_code == 200, response.text
-        current = response.json()
-        assert current["contributorId"] == contributor_id
-        assert current["isOwner"] is rejoin_as_owner
-        assert current["joinsOpen"] is joining_open
-        names = {person["id"]: person["name"] for person in current["contributors"]}
-        assert names == {
-            session["contributorId"]: "New name" if rejoin_as_owner else "Session lead",
-            joined["contributorId"]: "Rich Sharp" if rejoin_as_owner else "New name",
-        }
-    assert owner.get(shared_path).json() == original_layer
-    assert (
-        owner.get(path + "/export").json()["features"][0]["properties"]["contributor"]
-        == "New name"
-    )
-    # Reopening a recent session is a read and must not restore an older name.
-    assert returning.get(path).json()["contributors"] == current["contributors"]
+    with ThreadPoolExecutor(2) as pool:
+        assert sorted(pool.map(join, ["second", "third"])) == [200, 409]

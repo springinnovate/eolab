@@ -26,7 +26,6 @@ export class AnnotationLayerControls {
         this.root.className = "annotation-layer-controls";
         this.name = this.createLabeledInput("Layer name", "text", layer.name, value => {
             layer.name = value.trim() || "Annotations";
-            this.setSessionName(this.sessionName ?? null);
             actions.change(false);
         }, 160);
         this.root.append(this.name);
@@ -34,11 +33,12 @@ export class AnnotationLayerControls {
         buttons.className = "annotation-actions";
         this.edit = this.button("Edit", actions.open);
         this.edit.setAttribute("aria-controls", "annotations-panel");
-        this.draw = this.button("Draw a custom polygon", actions.add);
-        this.draw.className = "annotation-draw-button";
-        this.sharing = document.createElement("p"); this.sharing.className = "annotation-sharing-context"; this.sharing.hidden = true;
+        this.draw = this.button("Draw polygon", actions.add);
         this.drawing = document.createElement("div"); this.drawing.className = "annotation-drawing-action";
-        this.drawing.append(this.draw, this.sharing);
+        this.members = this.details("Contributors"); this.members.className = "shared-annotation-members"; this.members.hidden = true;
+        this.memberList = document.createElement("ul"); this.members.append(this.memberList);
+        this.sharedStatus = document.createElement("span"); this.sharedStatus.className = "shared-annotation-status"; this.sharedStatus.setAttribute("role", "status");
+        this.drawing.append(this.draw, this.members, this.sharedStatus);
         this.share = this.button("Share", actions.share);
         this.share.title = "Share this layer's saved polygons, names and notes in an annotation session.";
         buttons.append(this.share);
@@ -151,12 +151,11 @@ export class AnnotationLayerControls {
             else input.value = this.layer.style[key];
         }
         this.opacity.value = this.layer.opacity;
-        this.setSessionName(this.sessionName ?? null);
         if (this.legacySearch) this.legacySearch.hidden = typeof this.layer.filter !== "string";
         const polygons = matchingAnnotationPolygons(this.layer);
         const filtered = typeof this.layer.filter === "string" ? !!this.layer.filter : this.layer.filter.enabled && !!this.layer.filter.rules.length;
-        this.polygons.querySelector("summary").textContent = filtered
-            ? `${polygons.length} of ${this.layer.polygons.length} polygons` : `${polygons.length} ${polygons.length === 1 ? "polygon" : "polygons"}`;
+        this.polygons.querySelector("summary").textContent = (this.collaborating ? "Your polygons · " : "") + (filtered
+            ? `${polygons.length} of ${this.layer.polygons.length} polygons` : `${polygons.length} ${polygons.length === 1 ? "polygon" : "polygons"}`);
         this.polygonList.replaceChildren(...polygons.map(polygon => this.polygonRow(polygon)));
         if (!polygons.length) {
             const empty = this.document.createElement("li");
@@ -169,14 +168,38 @@ export class AnnotationLayerControls {
         }
     }
 
-    /** Describe where a new polygon will be saved and shared without rebuilding controls.
-     * @param {string|null} sessionName Current session name, or null for a local layer.
+    /** Show compact sharing controls on the layer row and read-only contributor polygons in the editor.
+     * @param {Object} data Contributor list, code and sharing status supplied by composition.
+     * @param {Object[]} polygons Other contributors' polygons, never editable here.
      * @return {void}
      */
-    setSessionName(sessionName) {
-        this.sessionName = sessionName;
-        this.sharing.textContent = sessionName ? `Added to ${this.layer.name} · Shared with ${sessionName}` : "";
-        this.sharing.hidden = !sessionName;
+    setCollaboration(data, polygons) {
+        if (!this.collaborating) { this.collaborating = true; this.refresh(); }
+        this.members.hidden = false;
+        if (this.share.parentElement !== this.drawing) this.drawing.insertBefore(this.share, this.members);
+        this.share.title = data.code ? `Copy share code: ${data.code}` : "Copy this layer's sharing code";
+        this.name.querySelector("input").disabled = true;
+        this.sharedStatus.textContent = data.status;
+        this.sharedStatus.classList.toggle("is-error", !!data.error);
+        const people = JSON.stringify(data.contributors);
+        if (this.peopleSignature !== people) {
+            this.peopleSignature = people;
+            this.members.querySelector("summary").textContent = `${data.contributors.length} ${data.contributors.length === 1 ? "contributor" : "contributors"}`;
+            this.memberList.replaceChildren(...data.contributors.map(person => {
+                const row = this.document.createElement("li");
+                row.textContent = `${person.name}${person.own ? " (you)" : ""} · ${person.polygonCount} ${person.polygonCount === 1 ? "polygon" : "polygons"}`; return row;
+            }));
+        }
+        if (!this.remotePolygons) { this.remotePolygons = this.details("Other contributors' polygons"); this.root.append(this.remotePolygons); }
+        if (this.receivedPolygons !== polygons) {
+            this.receivedPolygons = polygons;
+            const list = this.document.createElement("ul");
+            for (const polygon of polygons) {
+                const row = this.document.createElement("li"); row.textContent = `${polygon.name} — ${polygon.contributor}${polygon.note ? `: ${polygon.note}` : ""}`; list.append(row);
+            }
+            this.remotePolygons.replaceChildren(this.remotePolygons.querySelector("summary"), list);
+            this.remotePolygons.hidden = polygons.length === 0;
+        }
     }
 
     /** Bring the drawing action into view after the user connects to a session.

@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { AnnotationController } from "../../src/annotations/controller.js";
 import { AnnotationModel } from "../../src/annotations/model.js";
+import { exportAnnotationGeoJSON } from "../../src/annotations/geojson.js";
 
 /**
  * Connect controller status behavior to a model and minimal browser/storage substitutes.
@@ -13,12 +14,52 @@ function controller() {
         model: new AnnotationModel(), loaded: true, dirty: false, saving: false, pendingSave: false,
         panel: { open: false, show() { this.open = true; }, showLayer(key) { this.open = true; this.selectedKey = key; } }, status: { textContent: "" },
         fileStatus: { textContent: "", classList: { add() {}, remove() {} } },
-        retryButton: { hidden: true }, createButton: { disabled: true }, importButton: { disabled: true },
+        retryButton: { hidden: true }, importButton: { disabled: true },
         storage: { async load() { return []; }, async save() {} },
         document: { createElement() { return { remove() {} }; } },
     });
     return annotations;
 }
+
+test("combined shared polygons are filterable summary inputs but never become editable or uploaded as mine", async () => {
+    const annotations = controller();
+    const layer = annotations.model.createLayer();
+    annotations.model.beginPolygon(layer.id);
+    [[0, 0], [2, 0], [1, 2]].forEach(point => annotations.model.addVertex(point));
+    annotations.model.savePolygon();
+    const peer = exportAnnotationGeoJSON(layer);
+    peer.features[0].id = "peer-polygon";
+    peer.features[0].properties = { name: "Maria's polygon", note: "River", contributor: "Maria" };
+    let rendered = 0;
+    annotations.shared = new Map();
+    annotations.controls = new Map([[layer.id, { setCollaboration() {} }]]);
+    annotations.layers = new Map([[layer.id, { refresh() { rendered++; } }]]);
+    annotations.mapLayers = { render() {} };
+    const data = { collections: [peer], contributors: [], status: "Saved" };
+    assert.equal(annotations.updateSharedLayer(layer.id, data), true);
+    assert.equal(annotations.updateSharedLayer(layer.id, data), false);
+    assert.equal(rendered, 1, "status polling does not rebuild unchanged polygons");
+    assert.equal(annotations.summaryTargets()[0].polygons.length, 2);
+    assert.match(annotations.filterTarget(`local:annotation:${layer.id}`).status, /2 of 2/);
+    assert.equal(layer.polygons.length, 1);
+    assert.throws(() => annotations.model.beginPolygon(layer.id, "peer-polygon"));
+    await annotations.save();
+    assert.equal(annotations.sharableLayers()[0].collection.features.length, 1);
+    layer.filter = "Maria";
+    assert.match(annotations.filterTarget(`local:annotation:${layer.id}`).status, /1 of 2/);
+});
+
+test("rejoining restores own polygons with safe local identities without retaining supplied IDs", async () => {
+    const annotations = controller();
+    annotations.attachLayer = () => {};
+    const source = { type: "FeatureCollection", name: "Shared", features: [{ type: "Feature", id: 'untrusted"id',
+        properties: { name: "Mine", note: "Keep this" }, geometry: { type: "Polygon", coordinates: [[[0, 0], [2, 0], [1, 2], [0, 0]]] } }] };
+    const id = await annotations.restoreSharedContribution("Shared", source);
+    const restored = annotations.model.layer(id);
+    assert.equal(restored.polygons[0].note, "Keep this");
+    assert.notEqual(restored.polygons[0].id, source.features[0].id);
+    assert.equal(annotations.sharableLayers()[0].collection.features.length, 1);
+});
 
 test("storage failure reveals Retry saving without discarding unsaved annotation data", async () => {
     const annotations = controller();
@@ -44,14 +85,14 @@ test("successful startup leaves panel closed but a storage load failure reveals 
     annotations.loaded = false;
     await annotations.load();
     assert.equal(annotations.panel.open, false);
-    assert.equal(annotations.createButton.disabled, false);
+    assert.equal(annotations.importButton.disabled, false);
     const failed = controller();
     failed.loaded = false;
     failed.storage.load = async () => { throw new Error("Cannot open database"); };
     await failed.load();
     assert.equal(failed.panel.open, true);
     assert.equal(failed.loaded, false);
-    assert.equal(failed.createButton.disabled, true);
+    assert.equal(failed.importButton.disabled, true);
     assert.match(failed.status.textContent, /Cannot open saved annotations/);
 });
 
@@ -150,39 +191,26 @@ test("sharing reads the last device-saved polygons while a new save is pending o
     assert.equal(annotations.sharableLayers()[0].collection.name, "Changed layer");
 });
 
-test("creating a layer announces its identity before saving, while sharing sees only committed data", async () => {
+test("restoring a shared contribution exposes it only after successful device saving", async () => {
     const annotations = controller();
     annotations.savedSharingLayers = [];
     annotations.attachLayer = () => {};
     const events = []; let release;
-    annotations.onLayerCreated = id => events.push(["created", id]);
     annotations.onCommittedChange = () => events.push(["saved", annotations.sharableLayers().map(layer => layer.id)]);
     annotations.storage.save = () => new Promise(resolve => { release = resolve; });
-    const id = annotations.createLayer();
-    assert.deepEqual(events, [["created", id]]);
+    const collection = { type: "FeatureCollection", features: [] };
+    const restoring = annotations.restoreSharedContribution("Shared", collection);
+    assert.deepEqual(events, []);
     assert.deepEqual(annotations.sharableLayers(), []);
-    release(); await annotations.savePromise;
-    assert.deepEqual(events, [["created", id], ["saved", [id]]]);
+    release(); const id = await restoring;
+    assert.deepEqual(events, [["saved", [id]]]);
     annotations.storage.save = async () => { throw new Error("Storage full"); };
-    const unsavedId = annotations.createLayer(); await annotations.savePromise;
-    assert.equal(annotations.sharableLayers().some(layer => layer.id === unsavedId), false);
+    await assert.rejects(annotations.restoreSharedContribution("Unsaved", collection), /Storage full/);
+    assert.deepEqual(annotations.sharableLayers().map(layer => layer.id), [id]);
     annotations.loaded = false;
-    assert.throws(() => annotations.createLayer(), /not available/);
+    await assert.rejects(annotations.restoreSharedContribution("Unavailable", collection), /not available/);
 });
 
-
-test("session guidance updates independently of polygon contents and clears on leave", () => {
-    const annotations = controller();
-    const label = { share: {}, setSessionName(name) { this.sessionName = name; }, revealDrawing() { this.revealed = true; } };
-    annotations.controls = new Map([["layer", label]]);
-    annotations.setShareLabel("layer", "Shared · Saved", "Watershed planning");
-    assert.equal(label.sessionName, "Watershed planning");
-    annotations.revealDrawing("layer");
-    assert.equal(label.revealed, true);
-    assert.equal(annotations.model.draft, null);
-    annotations.setShareLabel("layer", "Share");
-    assert.equal(label.sessionName, null);
-});
 
 test("successful local saves clear the transient status instead of retaining a success paragraph", async () => {
     const annotations = controller();
