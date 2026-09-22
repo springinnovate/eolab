@@ -51,6 +51,27 @@ test("failed joins create no layer and preserve the server's duplicate-name mess
     finally { controller.destroy(); }
 });
 
+test("changed contributor names refresh authorship without downloading unchanged geometry", async () => {
+    const metadata = snapshot();
+    metadata.layers = [{ contributorId: "other", layerId: ID, revision: 1, polygonCount: 1 }];
+    let downloads = 0;
+    const { controller, events } = setup(async (path, method) => {
+        if (method === "PUT") return { revision: 1 };
+        if (path.includes("/contributors/")) {
+            downloads++;
+            return { revision: 1, collection: { type: "FeatureCollection", features: [{ properties: { name: "River" } }] } };
+        }
+        return structuredClone(metadata);
+    });
+    try {
+        await controller.connect("join", "ABCDEFGH", "Rich");
+        metadata.contributors[1].name = "Maria Updated";
+        await controller.refresh();
+        assert.equal(downloads, 1);
+        assert.equal(events.filter(event => event[0] === "display").at(-1)[2].collections[0].features[0].properties.contributor, "Maria Updated");
+    } finally { controller.destroy(); }
+});
+
 test("lost replies retry the same revision; conflicts preserve edits and stop automatic writes", async () => {
     let count = 0; const writes = [];
     const { controller, local } = setup(async (_path, method, body) => {

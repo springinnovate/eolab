@@ -69,6 +69,7 @@ export class AnnotationSessionsController {
             const own = snapshot.layers.find(layer => layer.contributorId === snapshot.contributorId);
             const data = own ? await this.api.request(`/${snapshot.id}/contributors/${own.contributorId}/layers/${own.layerId}`)
                 : { revision: 0, collection: { type: "FeatureCollection", name: snapshot.name, features: [] } };
+            if (this.closed) return;
             if (!localId) localId = await this.createLayer(snapshot.name, data.collection);
             const binding = { localId, sessionId: snapshot.id, contributorId: snapshot.contributorId, revision: data.revision, remote: new Map(), snapshot, retryDelay: 5000 };
             this.bindings.set(localId, binding); this.saveBindings();
@@ -146,10 +147,12 @@ export class AnnotationSessionsController {
                 for (const layer of snapshot.layers) {
                     if (layer.contributorId === snapshot.contributorId) continue;
                     const key = `${layer.contributorId}/${layer.layerId}`; keys.add(key);
-                    if (binding.remote.get(key)?.revision === layer.revision) continue;
-                    const data = await this.api.request(`/${snapshot.id}/contributors/${layer.contributorId}/layers/${layer.layerId}`);
                     const author = snapshot.contributors.find(person => person.id === layer.contributorId);
-                    binding.remote.set(key, { revision: data.revision, collection: { ...data.collection,
+                    const cached = binding.remote.get(key);
+                    if (cached?.revision === layer.revision && cached.authorName === author?.name) continue;
+                    const data = cached?.revision === layer.revision ? cached
+                        : await this.api.request(`/${snapshot.id}/contributors/${layer.contributorId}/layers/${layer.layerId}`);
+                    binding.remote.set(key, { revision: data.revision, authorName: author?.name, collection: { ...data.collection,
                         features: data.collection.features.map((feature, index) => ({ ...feature, id: `${layer.contributorId}-${index}`,
                             properties: { ...feature.properties, contributor: author?.name ?? "Contributor" } })) } });
                 }
