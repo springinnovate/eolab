@@ -442,7 +442,9 @@ export function formatCategoryValue(candidate) {
  *
  * @param {Object} candidate Complete vector style state.
  * @return {Object}
- * Map-layer legend contract.
+ * Geometry symbols and class labels for the map-layer legend. Class colors
+ * replace line strokes or polygon/point fills, matching vector rendering.
+ * @throws {TypeError|RangeError} If the style is invalid.
  */
 export function vectorStyleLegend(candidate) {
     const style = normalizeVectorStyle(candidate);
@@ -450,9 +452,11 @@ export function vectorStyleLegend(candidate) {
         const entries = style.graduated.rules.map((rule) => Object.freeze({
             label: formatNumericRange(rule),
             color: rule.color,
+            symbol: vectorLegendSymbol(style, rule.color),
         }));
         if (style.graduated.missingColor !== null) {
-            entries.push(Object.freeze({ label: "No value", color: style.graduated.missingColor }));
+            entries.push(Object.freeze({ label: "No value", color: style.graduated.missingColor,
+                symbol: vectorLegendSymbol(style, style.graduated.missingColor) }));
         }
         return {
             kind: "graduated",
@@ -464,12 +468,15 @@ export function vectorStyleLegend(candidate) {
         const entries = style.categorical.rules.map((rule) => Object.freeze({
             label: formatCategoryValue(rule.value),
             color: rule.color,
+            symbol: vectorLegendSymbol(style, rule.color),
         }));
         if (style.categorical.otherColor !== null) {
-            entries.push(Object.freeze({ label: "Other", color: style.categorical.otherColor }));
+            entries.push(Object.freeze({ label: "Other", color: style.categorical.otherColor,
+                symbol: vectorLegendSymbol(style, style.categorical.otherColor) }));
         }
         if (style.categorical.missingColor !== null) {
-            entries.push(Object.freeze({ label: "No value", color: style.categorical.missingColor }));
+            entries.push(Object.freeze({ label: "No value", color: style.categorical.missingColor,
+                symbol: vectorLegendSymbol(style, style.categorical.missingColor) }));
         }
         return {
             kind: "categories",
@@ -480,8 +487,25 @@ export function vectorStyleLegend(candidate) {
     return {
         kind: "fixed",
         label: `${style.geometryKind[0].toUpperCase()}${style.geometryKind.slice(1)}`,
-        fill: style.fillColor ?? style.strokeColor,
-        stroke: style.strokeColor,
+        symbol: vectorLegendSymbol(style),
+    };
+}
+
+/**
+ * Describe a vector's rendered symbol without exposing vector style rules to the layer list.
+ * @param {Object} style Validated vector style.
+ * @param {string|null} [classColor=null] Optional color for one category or numeric range.
+ * @return {{shape:string,fill:string|null,fillOpacity:number,stroke:string,strokeOpacity:number,strokeWidth:number,pointSize:number|null}} Fill and stroke appearance before whole-layer opacity.
+ */
+function vectorLegendSymbol(style, classColor = null) {
+    return {
+        shape: style.geometryKind,
+        fill: style.geometryKind === "line" ? null : classColor ?? style.fillColor,
+        fillOpacity: style.fillOpacity ?? 0,
+        stroke: style.geometryKind === "line" ? classColor ?? style.strokeColor : style.strokeColor,
+        strokeOpacity: style.strokeOpacity,
+        strokeWidth: style.strokeWidth,
+        pointSize: style.pointSize,
     };
 }
 

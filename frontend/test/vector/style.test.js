@@ -42,8 +42,7 @@ test("vector styles normalize geometry-specific symbol state", () => {
     assert.deepEqual(vectorStyleLegend(line), {
         kind: "fixed",
         label: "Line",
-        fill: "#fedcba",
-        stroke: "#fedcba",
+        symbol: { shape: "line", fill: null, fillOpacity: 0, stroke: "#fedcba", strokeOpacity: 0.8, strokeWidth: 3.5, pointSize: null },
     });
 });
 
@@ -110,7 +109,8 @@ test("graduated styles normalize server ranges, palettes, and legends", () => {
             { label: "≤ 1", color: "#440154" },
             { label: "> 1", color: "#fde725" },
             { label: "No value", color: "#d1d5db" },
-        ],
+        ].map(entry => ({ ...entry, symbol: { shape: "polygon", fill: entry.color, fillOpacity: 0.38,
+            stroke: "#581c87", strokeOpacity: 1, strokeWidth: 2, pointSize: null } })),
     });
     assert.throws(
         () => normalizeVectorStyle({ ...style, categorical: {
@@ -157,8 +157,22 @@ test("categorical styles preserve explicit value types and qualitative colors", 
             { label: "1", color: "#018700" },
             { label: "Other", color: "#9ca3af" },
             { label: "No value", color: "#d1d5db" },
-        ],
+        ].map(entry => ({ ...entry, symbol: { shape: "polygon", fill: entry.color, fillOpacity: 0.38,
+            stroke: "#581c87", strokeOpacity: 1, strokeWidth: 2, pointSize: null } })),
     });
+});
+
+test("classified line keys color the stroke and point keys retain their outline", () => {
+    const categorical = { field: "name", limit: 1, rules: [{ value: { kind: "string", value: "A" }, color: "#ff00ff" }] };
+    const base = { strokeColor: "#123456", strokeWidth: 3, strokeOpacity: 0.5, categorical };
+    const line = vectorStyleLegend({ ...base, geometryKind: "line" }).entries[0].symbol;
+    assert.equal(line.fill, null);
+    assert.equal(line.stroke, "#ff00ff");
+    const point = vectorStyleLegend({ ...base, geometryKind: "point", fillColor: "#ffffff", fillOpacity: 0.2, pointSize: 12 }).entries[0].symbol;
+    assert.equal(point.fill, "#ff00ff");
+    assert.equal(point.stroke, "#123456");
+    assert.equal(point.fillOpacity, 0.2);
+    assert.equal(point.pointSize, 12);
 });
 
 test("category summaries advertise bounded complete values and eligible fields", () => {
