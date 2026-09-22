@@ -434,13 +434,15 @@
                       id="eomap-map-layers-body"
                       aria-hidden="false"
                     >
-                    <div class="annotation-layer-actions" role="group" aria-label="Annotations">
-                      <span class="annotation-actions-label">Annotations</span>
+                    <details class="annotation-layer-tools">
+                      <summary>Annotations</summary>
+                      <div class="annotation-layer-actions" role="group" aria-label="Annotations">
                       <button class="secondary-button" id="create-shared-annotation-layer" type="button" aria-label="Create shared annotation layer">Create shared</button>
                       <button class="secondary-button" id="join-shared-annotation-layer" type="button" aria-label="Join shared annotation layer">Join</button>
                       <button class="secondary-button" id="import-annotation-geojson" type="button" disabled>Import GeoJSON</button>
                       <input id="annotation-geojson-file" type="file" accept=".geojson,.json,application/geo+json,application/json" aria-label="Import annotation GeoJSON file" hidden>
-                    </div>
+                      </div>
+                    </details>
                     <div class="map-layer-visibility-actions" role="group" aria-label="Map layer visibility">
                       <button class="secondary-button" id="map-layers-show-all" type="button" aria-label="Show all map layers" disabled>Show all</button>
                       <button class="secondary-button" id="map-layers-hide-all" type="button" aria-label="Hide all map layers" disabled>Hide all</button>
