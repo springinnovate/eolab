@@ -754,7 +754,7 @@ export class MapLayerStackView {
 
     /**
      * Draw the compact color key beside a layer's name, including fixed styles.
-     * Class keys preview up to three symbols; their complete list is in Legend.
+     * Class keys include every class color; full symbols and labels are in Legend.
      * @param {LayerLegend|null} legend Adapter-owned appearance.
      * @param {number} opacity Effective whole-layer opacity.
      * @return {HTMLSpanElement|null} Visible key, or null when the adapter has no legend.
@@ -766,18 +766,39 @@ export class MapLayerStackView {
         key.setAttribute("role", "img");
         if (legend.kind === "gradient") {
             key.append(this.#buildGradient(legend, opacity));
-        } else {
-            const symbols = legend.entries?.slice(0, 3).map(entry => entry.symbol)
-                ?? (legend.symbol ? [legend.symbol] : []);
-            for (const symbol of symbols) key.append(this.#buildSymbol(symbol, opacity));
+        } else if (legend.entries?.length) {
+            key.append(this.#buildClassColorStrip(legend.entries, opacity));
+        } else if (legend.symbol) {
+            key.append(this.#buildSymbol(legend.symbol, opacity));
         }
         if (!key.childElementCount) return null;
         const description = legend.description ?? (legend.entries
-            ? `${legend.label}: ${legend.entries.length} classes. Expand Legend for all values.`
+            ? `${legend.label}: ${legend.entries.length} ${legend.entries.length === 1 ? "class" : "classes"}. Expand Legend for all values.`
             : `${legend.label}: fill ${legend.symbol?.fill ?? "none"}, outline ${legend.symbol?.stroke}.`);
         key.title = description;
         key.setAttribute("aria-label", description);
         return key;
+    }
+
+    /**
+     * Show every class color in order, dividing the compact strip into equal parts.
+     * Use stroke colors for lines and fill colors for polygons and points.
+     * @param {{label:string,symbol:LegendSymbol}[]} entries All classified legend entries.
+     * @param {number} opacity Effective whole-layer opacity, from zero through one.
+     * @return {HTMLSpanElement} Decorative palette; full symbols remain in the expanded legend.
+     */
+    #buildClassColorStrip(entries, opacity) {
+        const strip = this.documentContext.createElement("span");
+        strip.className = "map-layer-legend-palette";
+        strip.setAttribute("aria-hidden", "true");
+        for (const { symbol } of entries) {
+            const swatch = this.documentContext.createElement("span");
+            const isLine = symbol.shape === "line";
+            swatch.style.backgroundColor = isLine ? symbol.stroke : symbol.fill;
+            swatch.style.opacity = String((isLine ? symbol.strokeOpacity : symbol.fillOpacity) * opacity);
+            strip.append(swatch);
+        }
+        return strip;
     }
 
     /**

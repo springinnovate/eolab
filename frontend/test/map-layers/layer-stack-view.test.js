@@ -565,6 +565,30 @@ test("fixed symbols stay visible beside names without an empty legend disclosure
   }
 });
 
+test("compact class strips include every color in order, including Other and No value", () => {
+  const doc = new FakeLayerStackDocument();
+  const view = new MapLayerStackView(doc);
+  for (const count of [1, 5, 52]) {
+    for (const shape of ["polygon", "line", "point"]) {
+      const entries = Array.from({ length: count }, (_, index) => ({
+        label: index === count - 1 ? "No value" : index === count - 2 ? "Other" : `Class ${index}`,
+        symbol: { shape, fill: `#${(index + 100).toString(16).padStart(6, "0")}`, fillOpacity: 0.6,
+          stroke: `#${(index + 200).toString(16).padStart(6, "0")}`, strokeOpacity: 0.8, strokeWidth: 2, pointSize: 8 },
+      }));
+      view.render([{ ...LAYERS[0], opacity: 0.5, legend: { kind: "categories", label: "Risk", entries } }], null);
+      const row = doc.querySelector("#raster-layer-list").children[0];
+      const key = elementsByClass(row, "map-layer-color-key")[0];
+      const strip = elementsByClass(key, "map-layer-legend-palette")[0];
+      assert.equal(strip.children.length, count);
+      assert.deepEqual(strip.children.map(swatch => swatch.style.backgroundColor),
+        entries.map(entry => shape === "line" ? entry.symbol.stroke : entry.symbol.fill));
+      assert.ok(strip.children.every(swatch => swatch.style.opacity === (shape === "line" ? "0.4" : "0.3")));
+      assert.equal(elementsByClass(row, "map-layer-legend-swatch").length, count, "full symbols remain available");
+      assert.equal(key.getAttribute("aria-label"), `Risk: ${count} ${count === 1 ? "class" : "classes"}. Expand Legend for all values.`);
+    }
+  }
+});
+
 test("raster ramps expose all three values and use effective opacity", () => {
   const doc = new FakeLayerStackDocument();
   const view = new MapLayerStackView(doc);
