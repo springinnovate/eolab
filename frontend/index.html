@@ -74,11 +74,6 @@
               </svg>
               <span class="panel-header-action-label" id="copy-map-link-label">Copy map link</span>
             </button>
-            <button class="secondary-button" id="open-annotations" type="button"
-              aria-controls="annotation-sessions" aria-expanded="false" title="Annotation sessions">
-              <svg class="panel-header-action-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m4 16 12-12 4 4-12 12H4zM13 7l4 4"></path></svg>
-              <span class="panel-header-action-label">Annotations</span>
-            </button>
             <button
               class="secondary-button"
               id="toggle-operational-status"
@@ -106,7 +101,6 @@
             </button>
           </div>
         </header>
-        <section id="annotation-sessions" class="annotation-sessions" aria-label="Annotation session" hidden></section>
         </div>
 
         <section
@@ -441,7 +435,9 @@
                       aria-hidden="false"
                     >
                     <div class="annotation-layer-actions">
-                      <button class="secondary-button" id="create-annotation-layer" type="button" disabled>Create annotation layer</button>
+                      <button class="secondary-button" id="create-shared-annotation-layer" type="button">Create shared annotation layer</button>
+                      <button class="secondary-button" id="join-shared-annotation-layer" type="button">Join shared annotation layer</button>
+                      <button class="secondary-button" id="create-annotation-layer" type="button" disabled>Create local annotation layer</button>
                       <button class="secondary-button" id="import-annotation-geojson" type="button" disabled>Import GeoJSON</button>
                       <input id="annotation-geojson-file" type="file" accept=".geojson,.json,application/geo+json,application/json" aria-label="Import annotation GeoJSON file" hidden>
                     </div>
@@ -685,7 +681,7 @@
             <label id="annotation-panel-layer-field" class="annotation-field" hidden><span>Layer</span><select id="annotation-panel-layer"></select></label>
             <div id="annotation-panel-content"></div>
             <details class="annotation-help"><summary>Help</summary>
-              <p>Annotation layers are saved on this device. New layers are shared automatically while you are in an annotation session. Use Share for older layers, or Export GeoJSON to save a file. Map links do not include annotations.</p>
+              <p>Local annotations are saved on this device. Shared annotation layers show everyone’s polygons; you can edit only your own. Share copies the joining code. Removing a layer from your map does not delete its shared polygons. Export GeoJSON to keep a file; map links do not include annotations.</p>
               <p>GeoJSON imports polygon names and notes; other attributes and styles are ignored.</p>
             </details>
           </section>

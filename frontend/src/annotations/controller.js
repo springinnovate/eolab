@@ -1,6 +1,6 @@
 /** Local annotation workflow, composed with neutral map-layer services. */
 import { ANNOTATION_FIELDS, annotationFilterRules, annotationSummaryTarget } from "./summary-area.js";
-import { readAnnotationGeoJSONFile, exportAnnotationGeoJSON } from "./geojson.js";
+import { readAnnotationGeoJSONFile, exportAnnotationGeoJSON, parseAnnotationGeoJSON } from "./geojson.js";
 import { AnnotationModel, matchingAnnotationPolygons, validateAnnotationStyle } from "./model.js";
 import { AnnotationStorage } from "./storage.js";
 import { AnnotationMapEditor } from "./map-editor.js";
@@ -20,22 +20,21 @@ export class AnnotationController {
      * @param {Document} [options.document=globalThis.document] Application document.
      * @param {AnnotationStorage} [options.storage] Device persistence provider.
      * @param {(id:string)=>void} [options.onShare] Composition-owned sharing request.
-     * @param {(id:string)=>void} [options.onLayerCreated] Notifies composition of new or imported layers before saving.
      * @param {(key:string)=>void} [options.onFilter] Open the composed field/condition editor.
      * @param {()=>void} [options.onCommittedChange] Notifies composition after successful device persistence.
      */
-    constructor({ leaflet, map, mapLayers, panel, onEditingChange, document = globalThis.document, storage = new AnnotationStorage(), onShare = () => {}, onLayerCreated = () => {}, onCommittedChange = () => {}, onFilter = () => {} }) {
+    constructor({ leaflet, map, mapLayers, panel, onEditingChange, document = globalThis.document, storage = new AnnotationStorage(), onShare = () => {}, onCommittedChange = () => {}, onFilter = () => {} }) {
         this.leaflet = leaflet;
         this.map = map;
         this.mapLayers = mapLayers;
         this.document = document;
         this.storage = storage;
         this.onShare = onShare;
-        this.onLayerCreated = onLayerCreated;
         this.onCommittedChange = onCommittedChange;
         this.onFilter = onFilter;
         this.onEditingChange = onEditingChange;
         this.model = new AnnotationModel();
+        this.shared = new Map();
         this.controls = new Map();
         this.layers = new Map();
         this.loaded = false;
@@ -136,9 +135,55 @@ export class AnnotationController {
         const layer = this.model.createLayer();
         if (name !== null) layer.name = name;
         this.attachLayer(layer);
-        this.onLayerCreated?.(layer.id);
         void this.save();
         return layer.id;
+    }
+
+    /** Restore your server contribution as a local editable layer after joining.
+     * @param {string} name Shared layer name.
+     * @param {Object} collection Server-validated GeoJSON belonging to this contributor.
+     * @return {Promise<string>} Local layer ID after successful device persistence.
+     * @throws {Error} If geometry, capacity or device persistence prevents restoration.
+     */
+    async restoreSharedContribution(name, collection) {
+        if (!this.loaded) throw new Error("Local annotations are not available yet.");
+        const imported = parseAnnotationGeoJSON(JSON.stringify(collection));
+        const layer = this.model.importLayer({ ...imported, name });
+        this.attachLayer(layer);
+        await this.save();
+        if (this.dirty) throw new Error(this.status.textContent);
+        return layer.id;
+    }
+
+    /** Combine own and received polygons for display, filtering and summary areas.
+     * @param {import("./model.js").AnnotationLayer} layer Local editable data.
+     * @return {Object} Layer snapshot containing everyone's committed polygons.
+     */
+    displayLayer(layer) {
+        return { ...layer, polygons: [...layer.polygons, ...(this.shared.get(layer.id)?.polygons ?? [])] };
+    }
+
+    /** Refresh shared polygons and contributor details without replacing local edits.
+     * @param {string} id Local editable layer identity.
+     * @param {Object} data Session-owned contributor metadata, GeoJSON and save status.
+     * @return {boolean} Whether the available summary geometry changed.
+     * @throws {Error} If received polygon geometry is unsupported.
+     */
+    updateSharedLayer(id, data) {
+        const layer = this.model.layers.find(candidate => candidate.id === id);
+        if (!layer) return false;
+        const previous = this.shared.get(id);
+        const signature = JSON.stringify(data.collections);
+        const changed = signature !== previous?.signature;
+        const polygons = changed ? data.collections.flatMap(collection => {
+            const imported = parseAnnotationGeoJSON(JSON.stringify(collection));
+            return imported.polygons.map((polygon, index) => ({ ...polygon, id: collection.features[index].id,
+                contributor: collection.features[index].properties.contributor }));
+        }) : previous.polygons;
+        this.shared.set(id, { ...data, signature, polygons });
+        this.controls.get(id).setCollaboration(data, polygons);
+        if (changed) { this.layers.get(id).refresh(); this.mapLayers.render(); }
+        return changed;
     }
 
     /**
@@ -158,7 +203,6 @@ export class AnnotationController {
             const layer = this.model.importLayer(imported);
             this.attachLayer(layer);
             this.panel.showLayer(`local:annotation:${layer.id}`);
-            this.onLayerCreated?.(layer.id);
             await this.save();
             this.fileStatus.textContent = `Imported ${layer.polygons.length} ${layer.polygons.length === 1 ? "polygon" : "polygons"} into “${layer.name}”.`;
         } catch (error) {
@@ -183,7 +227,14 @@ export class AnnotationController {
         this.fileStatus.classList.remove("is-error");
         try {
             const layer = this.model.layer(layerId);
-            const text = JSON.stringify(exportAnnotationGeoJSON(layer));
+            const sharing = this.shared.get(layerId);
+            const collection = exportAnnotationGeoJSON(this.displayLayer(layer));
+            if (sharing) collection.features.forEach((feature, index) => {
+                feature.properties.contributor = index < layer.polygons.length
+                    ? sharing.contributors.find(person => person.own)?.name ?? "You"
+                    : sharing.polygons[index - layer.polygons.length].contributor;
+            });
+            const text = JSON.stringify(collection);
             url = URL.createObjectURL(new Blob([text], { type: "application/geo+json" }));
             link.href = url;
             link.download = `${layer.name.replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").slice(0, 100) || "annotations"}.geojson`;
@@ -240,15 +291,17 @@ export class AnnotationController {
             opacity: opacity => this.mapLayers.setOpacity(key, opacity),
         });
         this.controls.set(layer.id, controls);
-        const rendering = createAnnotationLeafletLayer(this.leaflet, this.map, layer);
+        const displayLayer = Object.create(layer);
+        Object.defineProperty(displayLayer, "polygons", { get: () => [...layer.polygons, ...(this.shared.get(layer.id)?.polygons ?? [])] });
+        const rendering = createAnnotationLeafletLayer(this.leaflet, this.map, displayLayer);
         this.layers.set(layer.id, rendering);
         const adapter = {
             createState: () => layer,
             createLayer: () => rendering,
-            snapshot: () => ({ datasetKind: "annotation", legend: null, canFilter: true, detailsControl: controls.edit, primaryControl: controls.drawing, stylePanelId: "annotations-panel",
+            snapshot: () => ({ datasetKind: "annotation", typeLabel: this.shared.has(layer.id) ? "Shared annotation" : "Local annotation", legend: null, canFilter: true, detailsControl: controls.edit, primaryControl: controls.drawing, stylePanelId: "annotations-panel",
                 filterActive: typeof layer.filter === "string" ? !!layer.filter.trim() : layer.filter.enabled && !!layer.filter.rules.length,
                 filterStatus: (typeof layer.filter === "string" ? layer.filter.trim() : layer.filter.enabled && layer.filter.rules.length)
-                    ? `${matchingAnnotationPolygons(layer).length} of ${layer.polygons.length} polygons match` : null }),
+                    ? `${matchingAnnotationPolygons(this.displayLayer(layer)).length} of ${this.displayLayer(layer).polygons.length} polygons match` : null }),
             zoom: () => {
                 const bounds = rendering.getBounds();
                 if (bounds.isValid()) this.map.fitBounds(bounds, { padding: [40, 40], maxZoom: 12 });
@@ -332,7 +385,7 @@ export class AnnotationController {
      * @return {Object[]} Layer identities, fields and polygon snapshots.
      */
     summaryTargets() {
-        return this.model.layers.map(layer => annotationSummaryTarget(`local:annotation:${layer.id}`, layer));
+        return this.model.layers.map(layer => annotationSummaryTarget(`local:annotation:${layer.id}`, this.displayLayer(layer)));
     }
 
     /** Return annotation fields and callbacks for the existing filter dialog.
@@ -343,7 +396,7 @@ export class AnnotationController {
         const layer = this.model.layers.find(layer => `local:annotation:${layer.id}` === key);
         if (!layer) return null;
         return { key, label: layer.name, fields: ANNOTATION_FIELDS, filter: annotationFilterRules(layer.filter),
-            status: `${matchingAnnotationPolygons(layer).length} of ${layer.polygons.length} polygons match`,
+            status: `${matchingAnnotationPolygons(this.displayLayer(layer)).length} of ${this.displayLayer(layer).polygons.length} polygons match`,
             apply: candidate => { layer.filter = annotationFilterRules(candidate); this.refreshLayer(layer.id); this.save(); },
             cancelPending: () => {} };
     }
@@ -353,20 +406,6 @@ export class AnnotationController {
      */
     sharableLayers() {
         return this.savedSharingLayers;
-    }
-
-    /**
-     * Show sharing status without rebuilding annotation controls or moving focus.
-     * @param {string} id Local layer identifier.
-     * @param {string} label Share button label supplied by composition.
-     * @param {string|null} [sessionName=null] Current sharing context; null clears the association.
-     * @return {void}
-     */
-    setShareLabel(id, label, sessionName = null) {
-        const control = this.controls.get(id);
-        if (!control) return;
-        control.share.textContent = label;
-        control.setSessionName(sessionName);
     }
 
     /** Focus a local layer's drawing action in Map layers without entering editing mode.

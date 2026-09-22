@@ -7,11 +7,11 @@ import hashlib
 import logging
 import re
 import secrets
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any
 from urllib.parse import urlsplit
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.routing import APIRoute
 from starlette.responses import JSONResponse
 
@@ -121,20 +121,20 @@ def browser_identity(request: Request, response: Response) -> str:
     token = request.cookies.get(COOKIE, "")
     if not re.fullmatch(r"[a-f0-9]{64}", token):
         token = secrets.token_hex(32)
-        response.set_cookie(
-            COOKIE,
-            token,
-            max_age=30 * 86400,
-            secure=True,
-            httponly=True,
-            samesite="strict",
-            path="/",
-        )
+    response.set_cookie(
+        COOKIE,
+        token,
+        max_age=365 * 86400,
+        secure=True,
+        httponly=True,
+        samesite="strict",
+        path="/",
+    )
     return hashlib.sha256(token.encode()).hexdigest()
 
 
 def create_annotation_sessions_router(store: AnnotationSessionStore) -> APIRouter:
-    """Expose session commands and own periodic expired-data cleanup.
+    """Expose session commands and own periodic join-attempt cleanup.
 
     Args:
         store: Annotation sessions' PostgreSQL storage.
@@ -155,7 +155,7 @@ def create_annotation_sessions_router(store: AnnotationSessionStore) -> APIRoute
         """
 
         async def maintain() -> None:
-            """Retry unavailable storage and periodically remove expired contributions.
+            """Retry unavailable storage and periodically remove old join-attempt counters.
 
             Returns:
                 Runs until application shutdown cancels the task.
@@ -163,9 +163,7 @@ def create_annotation_sessions_router(store: AnnotationSessionStore) -> APIRoute
             while True:
                 delay = 300
                 try:
-                    await asyncio.to_thread(
-                        store.initialize_and_remove_expired_sessions
-                    )
+                    await asyncio.to_thread(store.initialize_and_clean_join_attempts)
                 except SessionError:
                     logging.getLogger(__name__).warning(
                         "Annotation-session storage unavailable; retrying in 10 seconds"
@@ -191,7 +189,7 @@ def create_annotation_sessions_router(store: AnnotationSessionStore) -> APIRoute
 
     @router.get("", response_model=list[SessionSummary])
     def list_sessions(browser: Browser) -> list[dict[str, Any]]:
-        """List this browser's unexpired sessions.
+        """List this browser's shared annotation layers.
 
         Args:
             browser: Authenticated cookie hash.
@@ -203,10 +201,10 @@ def create_annotation_sessions_router(store: AnnotationSessionStore) -> APIRoute
 
     @router.post("", status_code=201, response_model=SessionSnapshot)
     def create(payload: CreateSession, browser: Browser) -> dict[str, Any]:
-        """Create a session and its owner membership.
+        """Create a shared layer and its first contributor.
 
         Args:
-            payload: Session and owner display names.
+            payload: Shared-layer and contributor display names.
             browser: Authenticated cookie hash.
 
         Returns:
@@ -252,14 +250,14 @@ def create_annotation_sessions_router(store: AnnotationSessionStore) -> APIRoute
             The name saved for this contributor.
 
         Raises:
-            SessionError: If membership is absent, expired or storage is unavailable.
+            SessionError: If membership is absent or storage is unavailable.
         """
         store.update_contributor_name(session_id, browser, payload.name)
         return payload
 
     @router.get("/{session_id}", response_model=SessionSnapshot)
     def snapshot(session_id: UUID, browser: Browser) -> dict[str, Any]:
-        """Read session metadata without extending its lifetime.
+        """Read contributor identities and shared polygon revisions.
 
         Args:
             session_id: Session identifier.
@@ -309,38 +307,6 @@ def create_annotation_sessions_router(store: AnnotationSessionStore) -> APIRoute
             "revision": store.save_shared_layer(session_id, browser, layer_id, payload)
         }
 
-    @router.delete("/{session_id}/layers/{layer_id}", status_code=204)
-    def withdraw(
-        session_id: UUID,
-        layer_id: UUID,
-        browser: Browser,
-        revision: Annotated[int, Query(ge=1)],
-    ) -> None:
-        """Withdraw the caller's shared copy, leaving local annotations untouched.
-
-        Args:
-            session_id: Session identifier.
-            layer_id: Author's layer identifier.
-            browser: Authenticated author cookie hash.
-            revision: Latest observed layer revision.
-        """
-        store.withdraw_shared_layer(session_id, browser, layer_id, revision)
-
-    @router.post("/{session_id}/actions/{action}", status_code=204)
-    def manage(
-        session_id: UUID,
-        action: Literal["extend", "open-joining", "close-joining", "delete"],
-        browser: Browser,
-    ) -> None:
-        """Extend availability or perform an owner-only session management action.
-
-        Args:
-            session_id: Session identifier.
-            action: Requested session command.
-            browser: Authenticated cookie hash.
-        """
-        store.apply_session_action(session_id, browser, action)
-
     @router.get("/{session_id}/export")
     def export(session_id: UUID, browser: Browser) -> JSONResponse:
         """Download current contributions with contributor names and identifiers.
@@ -350,7 +316,7 @@ def create_annotation_sessions_router(store: AnnotationSessionStore) -> APIRoute
             browser: Authenticated member cookie hash.
 
         Returns:
-            GeoJSON attachment suitable for keeping after session expiration.
+            GeoJSON attachment with the original authorship of every polygon.
         """
         return JSONResponse(
             store.export_session_geojson(session_id, browser),

@@ -468,68 +468,47 @@ changing those records is not a substitute for publishing a new asset. Vector
 source checks, job ownership, cancellation and output checksum checks are unchanged.
 
 
-## Shared annotations
+## Shared annotation layers
 
-The **Annotations** button beside Reset, Copy map link and Status opens session
-setup below the main toolbar. Choose **Enter a code** or **Start a session**.
-Starting asks for a session name and initially identifies the creator as **Session
-owner**. Joining asks for the session code and the name others will see. Members
-can change their own display name under **Session details** without changing
-ownership or renaming layers. Rejoining with a code uses the newly entered
-display name while keeping the existing contributor identity, role and shared
-layers. **Recent sessions** reopens a previous membership without changing its name.
+In **Map layers**, choose **Create shared annotation layer** and enter a layer
+name and your name. **Share** on that layer copies its code. Other people choose
+**Join shared annotation layer**, enter the code and a name not already used in
+that layer. Creators and joiners have the same controls; there is no facilitator
+role or separate session panel.
 
-After joining, contributors see a compact **You’re contributing to [session]**
-row. Session leads initially see management controls and **Collapse session details**.
-Later refreshes preserve the disclosure choice. Expand **Session details** or use
-the toolbar button to manage invitations, contributors, downloads and settings.
-Routine messages stay inside details; sharing errors remain visible when collapsed.
-Disconnected setup takes no space until requested; invitations open it automatically.
+Everyone sees one combined layer containing all contributors' polygons. Expand
+the contributor arrow to see names and polygon counts. **Draw a custom polygon**
+adds your own polygon. **Edit** opens your editable polygons and a read-only list
+of other contributors' polygons. Visibility, style and filters affect only your
+map. Raster summaries use the combined layer and its current filter.
 
-Creating or joining reveals Map layers and focuses **Draw a custom polygon** on
-the user's layer, creating a named empty layer only when necessary. Drawing starts
-only when requested. Shared drawing actions name the destination layer and session.
-Map layers also offers **Create annotation layer** and **Import GeoJSON**. **Edit**
-opens the detailed layer panel for polygons, names, notes, style, sharing and export;
-**Details** opens a read-only received contribution. Received layers show
-**Shared by [contributor] · [session]** above their title. Storage and file-format
-guidance is under **Help** in the layer editor.
-New layers (including GeoJSON imports) are shared automatically with the active
-session once saved on the device; later saved edits are sent automatically too.
-Older local layers remain private until their **Share** button is used. Reloading
-resumes sharing without adding a duplicate layer. Withdrawn layers stay withdrawn;
-use **Share** to send them again.
-Unfinished polygon edits stay local. Map links do not carry annotations or private
-credentials; use **Copy invitation** or **Download annotations** in the session.
+Finished edits and changes to names or notes are saved locally first, then shared
+automatically. Unfinished drawings remain local. Removing a layer from your map
+does not delete its shared contents; join again with the same browser credentials
+to restore your contribution. **Create local annotation layer** and **Import
+GeoJSON** remain available for private layers. Their **Share** action creates a
+new shared layer. **Export GeoJSON** saves the combined polygons with contributor
+names. Ordinary map links do not carry annotations, codes or private credentials.
 
-Contributors can update or withdraw only their own layers. Everyone in the session
-can view contributions and download a combined GeoJSON with contributor and layer
-names/IDs. The owner controls the **Allow new contributors** switch. Turning it off prevents
-new people from joining; existing contributors can keep working. Removing a layer from a map or leaving a
-session keeps the last shared copy; **Withdraw** removes that server copy.
+Shared layers have no automatic expiration. They are stored in the existing
+PostgreSQL database under `shared_annotation_layers`; back up that database to
+preserve them. No new container or environment variable is required. This version
+does not migrate or display the former `annotation_sessions` records; existing
+local polygon copies remain available. Future administrative cleanup is tracked
+separately.
 
-Session data is stored in the existing PostgreSQL database, in the
-`annotation_sessions` schema. No new container or environment variables are needed.
-The application initializes these tables and removes expired sessions every five
-minutes. Access ends at expiration even before cleanup runs. New contributions,
-changed contributions, new contributors and **Keep for another day** extend the
-session for 24 hours. Background refresh and unchanged upload retries do not extend
-it. Download a permanent copy before expiry. Local annotation copies remain on
-their originating device.
-
-The first version supports one active session per browser tab, up to 10 memberships
-per browser, 100 sessions per site, 64 contributors per session and 32 shared layers
-per contributor. Each layer is limited to 8 MiB, each session to 32 MiB, and the site
-to 256 MiB of shared annotation JSON. Polygon limits match the local editor (500
-polygons per layer, 2,000 vertices per polygon, no holes). Five-second metadata
-refreshes back off to 30 seconds after failures; only changed displayed layers
-transfer polygon data. The browser remembers acknowledged revisions and retries
-interrupted uploads without duplicating contributions.
+Limits remain 10 memberships per browser, 100 shared layers per site, 64
+contributors per shared layer, 8 MiB per contributor, 32 MiB per shared layer and
+256 MiB of shared polygon JSON per site. Each contributor can provide up to 500
+polygons, with 2,000 vertices per polygon and no holes. Metadata refreshes every
+five seconds and backs off to 30 seconds after failures. Only changed peer
+contributions transfer polygon data. Interrupted uploads retry the same revision;
+conflicting edits in another tab preserve the local copy and report the conflict.
 
 Membership uses an automatically generated Secure, HttpOnly, same-site cookie;
-only its hash is stored in the database. Serve this feature over HTTPS. Clearing
-site cookies loses that browser's membership/owner permissions. A join code admits
-contributors; it does not grant owner permissions or let someone overwrite another
-contributor's work. Different EOLab deployments have separate sessions. No user
-accounts, cross-site coordinator, or recovery of cleared owner credentials is
-provided by this first version.
+only its hash is stored in the database. Serve the application over HTTPS. The
+cookie is renewed for one year on use. Clearing cookies or using a different
+browser loses access to editing the original contribution: a display name or
+join code cannot restore those edit rights. A code permits joining and reading,
+but all write authorization comes from the private browser credential. Different
+EOLab sites have separate shared layers. Account-based recovery is not provided.

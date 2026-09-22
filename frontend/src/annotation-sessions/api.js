@@ -1,4 +1,4 @@
-/** Same-origin transport for temporary annotation sessions. */
+/** Same-origin transport for persistent shared annotation layers. */
 export class AnnotationSessionsApi {
     /** @param {typeof fetch} [fetcher=globalThis.fetch] Browser HTTP transport. */
     constructor(fetcher = globalThis.fetch.bind(globalThis)) { this.fetcher = fetcher; }

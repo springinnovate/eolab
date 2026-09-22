@@ -144,7 +144,7 @@ def test_session_maintenance_lifespan_does_not_gate_other_routes(
     class MaintenanceStore(IdentityStore):
         """Signal background maintenance without needing a live database."""
 
-        def initialize_and_remove_expired_sessions(self) -> None:
+        def initialize_and_clean_join_attempts(self) -> None:
             """Record the attempt and optionally simulate a database outage.
 
             Raises:

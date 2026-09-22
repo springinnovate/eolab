@@ -1,4 +1,4 @@
-"""Store temporary sessions and enforce contribution ownership in PostgreSQL."""
+"""Store collaborative annotation layers and enforce contribution ownership in PostgreSQL."""
 
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -75,8 +75,8 @@ class AnnotationSessionStore:
                 "Shared annotations are temporarily unavailable. Your local annotations are safe.",
             ) from error
 
-    def initialize_and_remove_expired_sessions(self) -> None:
-        """Install the owned tables and delete expired sessions and old join attempts.
+    def initialize_and_clean_join_attempts(self) -> None:
+        """Create shared-layer tables and remove old join-attempt counters.
 
         Raises:
             SessionError: If the database cannot be reached or updated.
@@ -88,38 +88,35 @@ class AnnotationSessionStore:
                 .read_text()
             )
             cursor.execute(
-                "DELETE FROM annotation_sessions.sessions WHERE expires_at <= now()"
-            )
-            cursor.execute(
-                "DELETE FROM annotation_sessions.join_attempts WHERE started_at < now() - interval '1 hour'"
+                "DELETE FROM shared_annotation_layers.join_attempts WHERE started_at < now() - interval '1 hour'"
             )
 
     def list_sessions(self, browser: str) -> list[dict[str, Any]]:
-        """Find unexpired sessions this browser has joined, without renewing them.
+        """Find shared layers this browser has joined.
 
         Args:
             browser: Hash of the browser's private cookie.
 
         Returns:
-            Session identifiers, names, join codes and expiration timestamps.
+            Shared-layer identifiers, names and join codes.
 
         Raises:
             SessionError: If the database is unavailable.
         """
         with self.transaction() as cursor:
             cursor.execute(
-                'SELECT s.id, s.name, s.join_code AS "joinCode", s.expires_at AS "expiresAt" FROM annotation_sessions.sessions s JOIN annotation_sessions.contributors c ON c.session_id=s.id WHERE c.browser_hash=%s AND s.expires_at>now() ORDER BY s.name, s.id',
+                'SELECT s.id, s.name, s.join_code AS "joinCode" FROM shared_annotation_layers.sessions s JOIN shared_annotation_layers.contributors c ON c.session_id=s.id WHERE c.browser_hash=%s ORDER BY s.name, s.id',
                 (browser,),
             )
             return cursor.fetchall()
 
     def create_session(self, browser: str, name: str, contributor_name: str) -> UUID:
-        """Create a session and register this browser as its owner.
+        """Create a shared layer and register its first contributor.
 
         Args:
             browser: Private browser-cookie hash.
             name: Validated session name.
-            contributor_name: Owner's validated display name.
+            contributor_name: First contributor's validated display name.
 
         Returns:
             New session identifier.
@@ -129,36 +126,35 @@ class AnnotationSessionStore:
         """
         with self.transaction(write=True) as cursor:
             cursor.execute(
-                "DELETE FROM annotation_sessions.sessions WHERE expires_at <= now()"
+                "SELECT count(*) AS total FROM shared_annotation_layers.sessions"
             )
-            cursor.execute("SELECT count(*) AS total FROM annotation_sessions.sessions")
             total = cursor.fetchone()["total"]
             cursor.execute(
-                "SELECT count(*) AS total FROM annotation_sessions.contributors WHERE browser_hash=%s",
+                "SELECT count(*) AS total FROM shared_annotation_layers.contributors WHERE browser_hash=%s",
                 (browser,),
             )
             if total >= 100 or cursor.fetchone()["total"] >= 10:
                 raise SessionError(
                     429,
-                    "The annotation-session limit has been reached. Try again after a session expires.",
+                    "The annotation-session limit has been reached. Contact the site administrator to free storage.",
                 )
             while True:
                 code = "".join(
                     secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(8)
                 )
                 cursor.execute(
-                    "SELECT 1 FROM annotation_sessions.sessions WHERE join_code=%s",
+                    "SELECT 1 FROM shared_annotation_layers.sessions WHERE join_code=%s",
                     (code,),
                 )
                 if not cursor.fetchone():
                     break
             identifier = uuid4()
             cursor.execute(
-                "INSERT INTO annotation_sessions.sessions(id,name,join_code,expires_at) VALUES(%s,%s,%s,now()+interval '24 hours')",
+                "INSERT INTO shared_annotation_layers.sessions(id,name,join_code) VALUES(%s,%s,%s)",
                 (identifier, name, code),
             )
             cursor.execute(
-                "INSERT INTO annotation_sessions.contributors(id,session_id,browser_hash,name,is_owner) VALUES(%s,%s,%s,%s,true)",
+                "INSERT INTO shared_annotation_layers.contributors(id,session_id,browser_hash,name) VALUES(%s,%s,%s,%s)",
                 (uuid4(), identifier, browser, contributor_name),
             )
             return identifier
@@ -166,10 +162,9 @@ class AnnotationSessionStore:
     def join_session(self, browser: str, code: str, name: str) -> UUID:
         """Join a session using the supplied display name, including when returning.
 
-        Returning browsers keep their contributor ID, role and shared layers, but
+        Returning browsers keep their contributor ID and polygons, but
         their display name becomes the name entered on the join form. Existing
-        members can return when joining is closed to new contributors. A successful
-        join renews the session for another day.
+        members can return when joining is closed to new contributors.
 
         Args:
             browser: Private browser-cookie hash.
@@ -185,17 +180,17 @@ class AnnotationSessionStore:
         # Commit failed attempts too; a rejected join must not roll its counter back.
         with self.transaction(write=True) as cursor:
             cursor.execute(
-                "DELETE FROM annotation_sessions.join_attempts WHERE started_at < now()-interval '1 minute'"
+                "DELETE FROM shared_annotation_layers.join_attempts WHERE started_at < now()-interval '1 minute'"
             )
             cursor.execute(
-                "SELECT count(*) AS total FROM annotation_sessions.join_attempts"
+                "SELECT count(*) AS total FROM shared_annotation_layers.join_attempts"
             )
             if cursor.fetchone()["total"] >= 2000:
                 raise SessionError(
                     429, "Too many join attempts. Try again in a minute."
                 )
             cursor.execute(
-                "INSERT INTO annotation_sessions.join_attempts(browser_hash) VALUES(%s) ON CONFLICT(browser_hash) DO UPDATE SET attempts=annotation_sessions.join_attempts.attempts+1 RETURNING attempts",
+                "INSERT INTO shared_annotation_layers.join_attempts(browser_hash) VALUES(%s) ON CONFLICT(browser_hash) DO UPDATE SET attempts=shared_annotation_layers.join_attempts.attempts+1 RETURNING attempts",
                 (browser,),
             )
             attempts = cursor.fetchone()["attempts"]
@@ -203,35 +198,34 @@ class AnnotationSessionStore:
             raise SessionError(429, "Too many join attempts. Try again in a minute.")
         with self.transaction(write=True) as cursor:
             cursor.execute(
-                "SELECT id, joins_open FROM annotation_sessions.sessions WHERE join_code=%s AND expires_at>now()",
+                "SELECT id, joins_open FROM shared_annotation_layers.sessions WHERE join_code=%s",
                 (code,),
             )
             session = cursor.fetchone()
             if not session:
-                raise SessionError(
-                    404, "That join code is unavailable or the session has expired."
-                )
+                raise SessionError(404, "That sharing code is unavailable.")
             cursor.execute(
-                "SELECT id FROM annotation_sessions.contributors WHERE session_id=%s AND browser_hash=%s",
+                "SELECT id FROM shared_annotation_layers.contributors WHERE session_id=%s AND browser_hash=%s",
                 (session["id"], browser),
             )
             contributor = cursor.fetchone()
+            self.check_contributor_name_available(cursor, session["id"], browser, name)
             if contributor:
                 cursor.execute(
-                    "UPDATE annotation_sessions.contributors SET name=%s WHERE id=%s",
+                    "UPDATE shared_annotation_layers.contributors SET name=%s WHERE id=%s",
                     (name, contributor["id"]),
                 )
-                self.extend_session_expiration(cursor, session["id"])
+
                 return session["id"]
             if not session["joins_open"]:
-                raise SessionError(403, "The session owner has closed joining.")
+                raise SessionError(403, "Joining this shared layer is closed.")
             cursor.execute(
-                "SELECT count(*) AS total FROM annotation_sessions.contributors WHERE session_id=%s",
+                "SELECT count(*) AS total FROM shared_annotation_layers.contributors WHERE session_id=%s",
                 (session["id"],),
             )
             count = cursor.fetchone()["total"]
             cursor.execute(
-                "SELECT count(*) AS total FROM annotation_sessions.contributors c JOIN annotation_sessions.sessions s ON s.id=c.session_id WHERE c.browser_hash=%s AND s.expires_at>now()",
+                "SELECT count(*) AS total FROM shared_annotation_layers.contributors c JOIN shared_annotation_layers.sessions s ON s.id=c.session_id WHERE c.browser_hash=%s",
                 (browser,),
             )
             if count >= 64 or cursor.fetchone()["total"] >= 10:
@@ -239,16 +233,16 @@ class AnnotationSessionStore:
                     429, "This session or browser has reached its contributor limit."
                 )
             cursor.execute(
-                "INSERT INTO annotation_sessions.contributors(id,session_id,browser_hash,name) VALUES(%s,%s,%s,%s)",
+                "INSERT INTO shared_annotation_layers.contributors(id,session_id,browser_hash,name) VALUES(%s,%s,%s,%s)",
                 (uuid4(), session["id"], browser, name),
             )
-            self.extend_session_expiration(cursor, session["id"])
+
             return session["id"]
 
     def require_contributor(
         self, cursor: psycopg.Cursor, session_id: UUID, browser: str
     ) -> dict[str, Any]:
-        """Require an unexpired membership before reading or changing session data.
+        """Require membership before reading shared polygons or changing your contribution.
 
         Args:
             cursor: Current transaction cursor.
@@ -259,31 +253,47 @@ class AnnotationSessionStore:
             The caller's contributor record, without the cookie hash.
 
         Raises:
-            SessionError: If the session expired or this browser is not a member.
+            SessionError: If this browser has not joined the shared layer.
         """
         cursor.execute(
-            "SELECT c.id,c.name,c.is_owner FROM annotation_sessions.contributors c JOIN annotation_sessions.sessions s ON s.id=c.session_id WHERE s.id=%s AND c.browser_hash=%s AND s.expires_at>now()",
+            "SELECT c.id,c.name FROM shared_annotation_layers.contributors c JOIN shared_annotation_layers.sessions s ON s.id=c.session_id WHERE s.id=%s AND c.browser_hash=%s",
             (session_id, browser),
         )
         member = cursor.fetchone()
         if not member:
             raise SessionError(
-                404, "This session has expired or this browser has not joined it."
+                404,
+                "This shared layer is unavailable or this browser has not joined it.",
             )
         return member
 
     @staticmethod
-    def extend_session_expiration(cursor: psycopg.Cursor, session_id: UUID) -> None:
-        """Extend a session for 24 hours after an explicit action or changed contribution.
+    def check_contributor_name_available(
+        cursor: psycopg.Cursor, session_id: UUID, browser: str, name: str
+    ) -> None:
+        """Reject a display name already used by another contributor in this layer.
 
         Args:
-            cursor: Current write transaction.
-            session_id: Already authorized session identifier.
+            cursor: Serialized membership-write transaction.
+            session_id: Shared layer being joined or edited.
+            browser: Current contributor's private cookie hash.
+            name: Trimmed, validated display name.
+
+        Raises:
+            SessionError: If another contributor uses the name, ignoring case.
         """
         cursor.execute(
-            "UPDATE annotation_sessions.sessions SET expires_at=now()+interval '24 hours' WHERE id=%s",
-            (session_id,),
+            "SELECT name FROM shared_annotation_layers.contributors WHERE session_id=%s AND browser_hash<>%s",
+            (session_id, browser),
         )
+        if any(
+            row["name"].strip().casefold() == name.strip().casefold()
+            for row in cursor.fetchall()
+        ):
+            raise SessionError(
+                409,
+                "That name is already used in this shared layer. Choose another name.",
+            )
 
     def get_session_snapshot(self, session_id: UUID, browser: str) -> dict[str, Any]:
         """Read membership and layer metadata without loading every polygon.
@@ -296,24 +306,23 @@ class AnnotationSessionStore:
             Session details, caller identity, contributors and layer revisions.
 
         Raises:
-            SessionError: If membership expired or storage is unavailable.
+            SessionError: If membership is missing or storage is unavailable.
         """
         with self.transaction() as cursor:
             member = self.require_contributor(cursor, session_id, browser)
             cursor.execute(
-                'SELECT id,name,join_code AS "joinCode",expires_at AS "expiresAt",joins_open AS "joinsOpen" FROM annotation_sessions.sessions WHERE id=%s',
+                'SELECT id,name,join_code AS "joinCode" FROM shared_annotation_layers.sessions WHERE id=%s',
                 (session_id,),
             )
             result = cursor.fetchone()
             result["contributorId"] = member["id"]
-            result["isOwner"] = member["is_owner"]
             cursor.execute(
-                'SELECT id,name,is_owner AS "isOwner" FROM annotation_sessions.contributors WHERE session_id=%s ORDER BY name,id',
+                "SELECT id,name FROM shared_annotation_layers.contributors WHERE session_id=%s ORDER BY name,id",
                 (session_id,),
             )
             result["contributors"] = cursor.fetchall()
             cursor.execute(
-                'SELECT l.contributor_id AS "contributorId",l.local_id AS "layerId",l.revision,l.updated_at AS "updatedAt",l.collection->>\'name\' AS name,jsonb_array_length(l.collection->\'features\') AS "polygonCount" FROM annotation_sessions.layers l JOIN annotation_sessions.contributors c ON c.id=l.contributor_id WHERE c.session_id=%s ORDER BY c.name,l.local_id',
+                'SELECT l.contributor_id AS "contributorId",l.local_id AS "layerId",l.revision,l.updated_at AS "updatedAt",l.collection->>\'name\' AS name,jsonb_array_length(l.collection->\'features\') AS "polygonCount" FROM shared_annotation_layers.layers l JOIN shared_annotation_layers.contributors c ON c.id=l.contributor_id WHERE c.session_id=%s ORDER BY c.name,l.local_id',
                 (session_id,),
             )
             result["layers"] = cursor.fetchall()
@@ -330,15 +339,15 @@ class AnnotationSessionStore:
             name: Display name validated by the session input model.
 
         Raises:
-            SessionError: If membership expired, access is absent or storage is unavailable.
+            SessionError: If membership is absent or storage is unavailable.
         """
         with self.transaction(write=True) as cursor:
             member = self.require_contributor(cursor, session_id, browser)
+            self.check_contributor_name_available(cursor, session_id, browser, name)
             cursor.execute(
-                "UPDATE annotation_sessions.contributors SET name=%s WHERE id=%s",
+                "UPDATE shared_annotation_layers.contributors SET name=%s WHERE id=%s",
                 (name, member["id"]),
             )
-            self.extend_session_expiration(cursor, session_id)
 
     def read_shared_layer(
         self, session_id: UUID, browser: str, contributor_id: UUID, layer_id: UUID
@@ -349,7 +358,7 @@ class AnnotationSessionStore:
             session_id: Session containing the contribution.
             browser: Reader's private browser-cookie hash.
             contributor_id: Author of the contribution.
-            layer_id: Author's local layer identifier.
+            layer_id: Shared layer identifier, equal to the session ID.
 
         Returns:
             Validated GeoJSON and its current revision.
@@ -360,7 +369,7 @@ class AnnotationSessionStore:
         with self.transaction() as cursor:
             self.require_contributor(cursor, session_id, browser)
             cursor.execute(
-                "SELECT l.collection,l.revision FROM annotation_sessions.layers l JOIN annotation_sessions.contributors c ON c.id=l.contributor_id WHERE c.session_id=%s AND c.id=%s AND l.local_id=%s",
+                "SELECT l.collection,l.revision FROM shared_annotation_layers.layers l JOIN shared_annotation_layers.contributors c ON c.id=l.contributor_id WHERE c.session_id=%s AND c.id=%s AND l.local_id=%s",
                 (session_id, contributor_id, layer_id),
             )
             row = cursor.fetchone()
@@ -379,7 +388,7 @@ class AnnotationSessionStore:
         Args:
             session_id: Session receiving the layer.
             browser: Author's private browser-cookie hash.
-            layer_id: Stable local layer identifier, also used for retry deduplication.
+            layer_id: Shared-layer identifier; each contributor has one collection in it.
             request: Validated GeoJSON and last acknowledged revision (zero for new layers).
 
         Returns:
@@ -388,12 +397,16 @@ class AnnotationSessionStore:
         Raises:
             SessionError: If the revision is stale, membership is invalid or storage is full.
         """
+        if layer_id != session_id:
+            raise SessionError(
+                422, "Use the shared layer identifier for your contribution."
+            )
         collection = request.collection.model_dump(mode="json")
         size = len(json.dumps(collection).encode())
         with self.transaction(write=True) as cursor:
             member = self.require_contributor(cursor, session_id, browser)
             cursor.execute(
-                "SELECT revision,collection,bytes FROM annotation_sessions.layers WHERE contributor_id=%s AND local_id=%s",
+                "SELECT revision,collection,bytes FROM shared_annotation_layers.layers WHERE contributor_id=%s AND local_id=%s",
                 (member["id"], layer_id),
             )
             previous = cursor.fetchone()
@@ -405,19 +418,11 @@ class AnnotationSessionStore:
                     "This shared layer changed in another tab. Export your local copy before reloading to compare it.",
                 )
             cursor.execute(
-                "SELECT count(*) AS total FROM annotation_sessions.layers WHERE contributor_id=%s",
-                (member["id"],),
-            )
-            if not previous and cursor.fetchone()["total"] >= 32:
-                raise SessionError(
-                    429, "A contributor can share at most 32 layers in a session."
-                )
-            cursor.execute(
-                "SELECT coalesce(sum(bytes),0) AS total FROM annotation_sessions.layers"
+                "SELECT coalesce(sum(bytes),0) AS total FROM shared_annotation_layers.layers"
             )
             total = cursor.fetchone()["total"]
             cursor.execute(
-                "SELECT coalesce(sum(l.bytes),0) AS total FROM annotation_sessions.layers l JOIN annotation_sessions.contributors c ON c.id=l.contributor_id WHERE c.session_id=%s",
+                "SELECT coalesce(sum(l.bytes),0) AS total FROM shared_annotation_layers.layers l JOIN shared_annotation_layers.contributors c ON c.id=l.contributor_id WHERE c.session_id=%s",
                 (session_id,),
             )
             growth = size - (previous["bytes"] if previous else 0)
@@ -427,75 +432,15 @@ class AnnotationSessionStore:
             ):
                 raise SessionError(
                     413,
-                    "Shared annotation storage is full (32 MiB per session). Export a copy, then withdraw unneeded layers.",
+                    "Shared annotation storage is full (32 MiB per session). Contact the site administrator; your previous contribution is unchanged.",
                 )
             revision = request.revision + 1
             cursor.execute(
-                "INSERT INTO annotation_sessions.layers(contributor_id,local_id,revision,collection,bytes) VALUES(%s,%s,%s,%s,%s) ON CONFLICT(contributor_id,local_id) DO UPDATE SET revision=excluded.revision,collection=excluded.collection,bytes=excluded.bytes,updated_at=now()",
+                "INSERT INTO shared_annotation_layers.layers(contributor_id,local_id,revision,collection,bytes) VALUES(%s,%s,%s,%s,%s) ON CONFLICT(contributor_id,local_id) DO UPDATE SET revision=excluded.revision,collection=excluded.collection,bytes=excluded.bytes,updated_at=now()",
                 (member["id"], layer_id, revision, Jsonb(collection), size),
             )
-            self.extend_session_expiration(cursor, session_id)
+
             return revision
-
-    def withdraw_shared_layer(
-        self, session_id: UUID, browser: str, layer_id: UUID, revision: int
-    ) -> None:
-        """Remove the caller's contribution if they still have its latest revision.
-
-        Args:
-            session_id: Session containing the contribution.
-            browser: Author's private browser-cookie hash.
-            layer_id: Author's layer identifier.
-            revision: Last observed revision, protecting concurrent edits.
-
-        Raises:
-            SessionError: If membership or the revision no longer matches.
-        """
-        with self.transaction(write=True) as cursor:
-            member = self.require_contributor(cursor, session_id, browser)
-            cursor.execute(
-                "SELECT revision FROM annotation_sessions.layers WHERE contributor_id=%s AND local_id=%s",
-                (member["id"], layer_id),
-            )
-            row = cursor.fetchone()
-            if row and row["revision"] != revision:
-                raise SessionError(
-                    409, "This contribution changed. Refresh before withdrawing it."
-                )
-            cursor.execute(
-                "DELETE FROM annotation_sessions.layers WHERE contributor_id=%s AND local_id=%s",
-                (member["id"], layer_id),
-            )
-            if row:
-                self.extend_session_expiration(cursor, session_id)
-
-    def apply_session_action(self, session_id: UUID, browser: str, action: str) -> None:
-        """Extend a session or let its owner open/close joining or delete it.
-
-        Args:
-            session_id: Session to manage.
-            browser: Private browser-cookie hash.
-            action: One of extend, open-joining, close-joining, or delete.
-
-        Raises:
-            SessionError: If membership or owner permission is missing.
-        """
-        with self.transaction(write=True) as cursor:
-            member = self.require_contributor(cursor, session_id, browser)
-            if action == "extend":
-                self.extend_session_expiration(cursor, session_id)
-            elif not member["is_owner"]:
-                raise SessionError(403, "Only the session owner can do that.")
-            elif action == "delete":
-                cursor.execute(
-                    "DELETE FROM annotation_sessions.sessions WHERE id=%s",
-                    (session_id,),
-                )
-            else:
-                cursor.execute(
-                    "UPDATE annotation_sessions.sessions SET joins_open=%s WHERE id=%s",
-                    (action == "open-joining", session_id),
-                )
 
     def export_session_geojson(self, session_id: UUID, browser: str) -> dict[str, Any]:
         """Collect the current contributions as GeoJSON with server-assigned authorship.
@@ -508,18 +453,18 @@ class AnnotationSessionStore:
             FeatureCollection preserving session, contributor and layer identifiers/names.
 
         Raises:
-            SessionError: If membership expired or storage is unavailable.
+            SessionError: If membership is missing or storage is unavailable.
             ValueError: If a stored contribution is invalid.
         """
         with self.transaction() as cursor:
             self.require_contributor(cursor, session_id, browser)
             cursor.execute(
-                "SELECT name FROM annotation_sessions.sessions WHERE id=%s",
+                "SELECT name FROM shared_annotation_layers.sessions WHERE id=%s",
                 (session_id,),
             )
             name = cursor.fetchone()["name"]
             cursor.execute(
-                "SELECT c.id,c.name,l.local_id,l.collection FROM annotation_sessions.layers l JOIN annotation_sessions.contributors c ON c.id=l.contributor_id WHERE c.session_id=%s ORDER BY c.name,c.id,l.local_id",
+                "SELECT c.id,c.name,l.local_id,l.collection FROM shared_annotation_layers.layers l JOIN shared_annotation_layers.contributors c ON c.id=l.contributor_id WHERE c.session_id=%s ORDER BY c.name,c.id,l.local_id",
                 (session_id,),
             )
             features = []

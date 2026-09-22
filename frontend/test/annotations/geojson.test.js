@@ -200,10 +200,7 @@ test("one invalid feature rejects the entire file and errors survive until anoth
     assert.equal(controller.saved.length, 0);
     assert.equal(controller.importButton.disabled, false);
     controller.panel.open = false;
-    const created = [];
-    controller.onLayerCreated = id => created.push(id);
     await controller.importGeoJSONFile(new File([JSON.stringify(collection())], "good.geojson"));
-    assert.deepEqual(created, [controller.model.layers[0].id]);
     assert.equal(controller.panel.open, true, "successful import reveals its new editor");
     assert.equal(controller.panel.selectedKey, `local:annotation:${controller.model.layers[0].id}`);
     assert.equal(controller.model.layers.length, 2);
