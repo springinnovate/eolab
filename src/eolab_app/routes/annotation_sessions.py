@@ -100,7 +100,7 @@ def browser_identity(request: Request, response: Response) -> str:
 
     Args:
         request: Same-origin browser request.
-        response: Response that receives a new HttpOnly cookie when needed.
+        response: Response that renews the private cookie for one year.
 
     Returns:
         A one-way hash for membership lookups; the cookie is never returned as JSON.

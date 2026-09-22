@@ -26,7 +26,7 @@ TOTAL_BYTES = 256 * 1024 * 1024
 
 
 class AnnotationSessionStore:
-    """Keep session membership and the latest contribution from each local layer."""
+    """Keep shared-layer membership and each contributor's latest polygons."""
 
     def __init__(self, conninfo: str = "") -> None:
         """Configure PostgreSQL without opening a connection.
