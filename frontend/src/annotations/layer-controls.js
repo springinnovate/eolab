@@ -17,6 +17,7 @@ export class AnnotationLayerControls {
      * @param {(opacity:number)=>void} actions.opacity Set the whole layer's opacity.
      * @param {()=>void} actions.exportGeoJSON Download the saved polygons.
      * @param {()=>void} actions.share Share this layer in a session.
+     * @param {(color:string)=>void} actions.color Save your shared polygon color.
      */
     constructor(document, layer, actions) {
         this.document = document;
@@ -51,7 +52,9 @@ export class AnnotationLayerControls {
         for (const [key, label, type] of [["color", "Fill color", "color"], ["outline", "Outline color", "color"],
             ["weight", "Outline width", "number"], ["fillOpacity", "Fill opacity", "number"], ["labels", "Show names", "checkbox"], ["notes", "Show notes", "checkbox"]]) {
             const wrapper = this.createLabeledInput(label, type, layer.style[key], value => {
+                if (key === "color" && this.collaborating) { actions.color(value); return; }
                 layer.style[key] = type === "number" ? Number(value) : value;
+                if (key === "color") for (const polygon of layer.polygons) delete polygon.contributorColor;
                 actions.change();
             });
             const input = wrapper.querySelector("input");
@@ -175,6 +178,10 @@ export class AnnotationLayerControls {
      */
     setCollaboration(data, polygons) {
         if (!this.collaborating) { this.collaborating = true; this.refresh(); }
+        const colorInput = this.styleInputs.color;
+        colorInput.parentElement.querySelector("span").textContent = "Your polygon color";
+        colorInput.value = data.contributors.find(person => person.own)?.color ?? this.layer.style.color;
+        colorInput.parentElement.title = "Shared with everyone. Changes the fill of all your polygons in this layer. Other appearance controls affect only your map.";
         this.members.hidden = false;
         if (this.share.parentElement !== this.drawing) this.drawing.insertBefore(this.share, this.members);
         this.share.title = data.code ? `Copy share code: ${data.code}` : "Copy this layer's sharing code";
@@ -187,7 +194,11 @@ export class AnnotationLayerControls {
             this.members.querySelector("summary").textContent = `${data.contributors.length} ${data.contributors.length === 1 ? "contributor" : "contributors"}`;
             this.memberList.replaceChildren(...data.contributors.map(person => {
                 const row = this.document.createElement("li");
-                row.textContent = `${person.name}${person.own ? " (you)" : ""} · ${person.polygonCount} ${person.polygonCount === 1 ? "polygon" : "polygons"}`; return row;
+                const swatch = this.document.createElement("span");
+                swatch.className = "annotation-contributor-color";
+                swatch.style.backgroundColor = person.color;
+                swatch.setAttribute("aria-hidden", "true");
+                row.append(swatch, `${person.name}${person.own ? " (you)" : ""} · ${person.polygonCount} ${person.polygonCount === 1 ? "polygon" : "polygons"}`); return row;
             }));
         }
         if (!this.remotePolygons) { this.remotePolygons = this.details("Other contributors' polygons"); this.root.append(this.remotePolygons); }

@@ -20,16 +20,18 @@ export class AnnotationController {
      * @param {Document} [options.document=globalThis.document] Application document.
      * @param {AnnotationStorage} [options.storage] Device persistence provider.
      * @param {(id:string)=>void} [options.onShare] Composition-owned sharing request.
+     * @param {(id:string,color:string)=>void} [options.onColor] Save this contributor's shared polygon color through composition.
      * @param {(key:string)=>void} [options.onFilter] Open the composed field/condition editor.
      * @param {()=>void} [options.onCommittedChange] Notifies composition after successful device persistence.
      */
-    constructor({ leaflet, map, mapLayers, panel, onEditingChange, document = globalThis.document, storage = new AnnotationStorage(), onShare = () => {}, onCommittedChange = () => {}, onFilter = () => {} }) {
+    constructor({ leaflet, map, mapLayers, panel, onEditingChange, document = globalThis.document, storage = new AnnotationStorage(), onShare = () => {}, onColor = () => {}, onCommittedChange = () => {}, onFilter = () => {} }) {
         this.leaflet = leaflet;
         this.map = map;
         this.mapLayers = mapLayers;
         this.document = document;
         this.storage = storage;
         this.onShare = onShare;
+        this.onColor = onColor;
         this.onCommittedChange = onCommittedChange;
         this.onFilter = onFilter;
         this.onEditingChange = onEditingChange;
@@ -132,12 +134,19 @@ export class AnnotationController {
         return layer.id;
     }
 
-    /** Combine own and received polygons for display, filtering and summary areas.
+    /** Combine committed polygons and apply the shared colors without changing ownership.
      * @param {import("./model.js").AnnotationLayer} layer Local editable data.
      * @return {Object} Layer snapshot containing everyone's committed polygons.
      */
     displayLayer(layer) {
-        return { ...layer, polygons: [...layer.polygons, ...(this.shared.get(layer.id)?.polygons ?? [])] };
+        const sharing = this.shared.get(layer.id);
+        if (!sharing) return layer;
+        const own = sharing.contributors.find(person => person.own);
+        return { ...layer, polygons: [
+            ...layer.polygons.map(polygon => ({ ...polygon, contributor: own?.name, contributorColor: own?.color ?? layer.style.color })),
+            ...sharing.polygons.map(polygon => ({ ...polygon,
+                contributorColor: sharing.contributors.find(person => person.id === polygon.contributorId)?.color ?? layer.style.color })),
+        ] };
     }
 
     /** Refresh shared polygons and contributor details without replacing local edits.
@@ -157,12 +166,18 @@ export class AnnotationController {
         const polygons = changed ? data.collections.flatMap(collection => {
             const imported = parseAnnotationGeoJSON(JSON.stringify(collection));
             return imported.polygons.map((polygon, index) => ({ ...polygon, id: collection.features[index].id,
-                contributor: collection.features[index].properties.contributor }));
+                contributor: collection.features[index].properties.contributor,
+                contributorId: collection.features[index].properties.contributorId }));
         }) : previous.polygons;
         this.shared.set(id, { ...data, signature, polygons });
+        const color = data.contributors.find(person => person.own)?.color;
+        const ownColorChanged = color && color !== layer.style.color;
+        if (color) layer.style.color = color;
         this.controls.get(id).setCollaboration(data, polygons);
         if (renamed) this.refreshLayer(id, false);
-        if (changed) { this.layers.get(id).refresh(); this.mapLayers.render(); }
+        const colorsChanged = JSON.stringify(data.contributors) !== JSON.stringify(previous?.contributors);
+        if (changed || colorsChanged) { this.layers.get(id).refresh(); this.mapLayers.render(); }
+        if (ownColorChanged && this.model.draft?.layerId === id) this.renderEditor();
         return changed;
     }
 
@@ -207,13 +222,7 @@ export class AnnotationController {
         this.fileStatus.classList.remove("is-error");
         try {
             const layer = this.model.layer(layerId);
-            const sharing = this.shared.get(layerId);
-            const collection = exportAnnotationGeoJSON(this.displayLayer(layer));
-            if (sharing) collection.features.forEach((feature, index) => {
-                feature.properties.contributor = index < layer.polygons.length
-                    ? sharing.contributors.find(person => person.own)?.name ?? "You"
-                    : sharing.polygons[index - layer.polygons.length].contributor;
-            });
+            const collection = exportAnnotationGeoJSON(this.displayLayer(layer), true);
             const text = JSON.stringify(collection);
             url = URL.createObjectURL(new Blob([text], { type: "application/geo+json" }));
             link.href = url;
@@ -260,6 +269,7 @@ export class AnnotationController {
             filter: () => this.onFilter(key),
             add: () => this.beginPolygon(layer.id),
             share: () => this.onShare(layer.id),
+            color: color => this.onColor(layer.id, color),
             exportGeoJSON: () => this.exportGeoJSONFile(layer.id),
             edit: id => this.beginPolygon(layer.id, id),
             removePolygon: id => this.perform(() => this.deletePolygon(layer.id, id)),
@@ -272,17 +282,14 @@ export class AnnotationController {
         });
         this.controls.set(layer.id, controls);
         const displayLayer = Object.create(layer);
-        Object.defineProperty(displayLayer, "polygons", { get: () => [...layer.polygons, ...(this.shared.get(layer.id)?.polygons ?? [])] });
+        Object.defineProperty(displayLayer, "polygons", { get: () => this.displayLayer(layer).polygons });
         const rendering = createAnnotationLeafletLayer(this.leaflet, this.map, displayLayer);
         this.layers.set(layer.id, rendering);
         const adapter = {
             createState: () => layer,
             createLayer: () => rendering,
             snapshot: () => ({ datasetKind: "annotation", typeLabel: this.shared.has(layer.id) ? "Shared annotation" : "Local annotation",
-                legend: { kind: "fixed", label: "Polygon", symbol: {
-                    shape: "polygon", fill: layer.style.color, fillOpacity: layer.style.fillOpacity,
-                    stroke: layer.style.outline, strokeOpacity: 1, strokeWidth: layer.style.weight,
-                } },
+                legend: this.layerLegend(layer),
                 canFilter: true, detailsControl: controls.edit, primaryControl: controls.drawing, stylePanelId: "annotations-panel",
                 filterActive: typeof layer.filter === "string" ? !!layer.filter.trim() : layer.filter.enabled && !!layer.filter.rules.length,
                 filterStatus: (typeof layer.filter === "string" ? layer.filter.trim() : layer.filter.enabled && layer.filter.rules.length)
@@ -304,7 +311,9 @@ export class AnnotationController {
             },
             applySavedState: (_record, saved) => {
                 if (saved?.kind !== "annotation") throw new Error("This style is not an annotation style.");
+                const ownColor = layer.style.color;
                 layer.style = validateAnnotationStyle(saved.style);
+                if (this.shared.has(layer.id)) layer.style.color = ownColor;
                 this.refreshLayer(layer.id);
                 this.save();
             },
@@ -332,6 +341,29 @@ export class AnnotationController {
         };
         this.mapLayers.addLocal({ key, label: layer.name, visible: layer.visible, opacity: layer.opacity }, adapter);
         this.panel.registerLayerControls(key, layer.name, controls.root);
+    }
+
+    /** Describe the layer's polygon colors for the neutral Map layers legend.
+     * @param {import("./model.js").AnnotationLayer} layer Local display settings.
+     * @return {Object} Contributor entries for shared layers and imported color metadata, or one fixed local symbol.
+     */
+    layerLegend(layer) {
+        const symbol = { shape: "polygon", fill: layer.style.color, fillOpacity: layer.style.fillOpacity,
+            stroke: layer.style.outline, strokeOpacity: 1, strokeWidth: layer.style.weight };
+        const sharing = this.shared.get(layer.id);
+        if (sharing) return { kind: "categories", label: "Contributors", entries: sharing.contributors.map(person => ({
+            label: `${person.name}${person.own ? " (you)" : ""}`, symbol: { ...symbol, fill: person.color ?? layer.style.color },
+        })) };
+        if (layer.polygons.some(polygon => polygon.contributorColor)) {
+            const entries = new Map();
+            for (const polygon of layer.polygons) {
+                const label = polygon.contributor ?? "Imported polygons";
+                const fill = polygon.contributorColor ?? layer.style.color;
+                entries.set(JSON.stringify([label, fill]), { label, symbol: { ...symbol, fill } });
+            }
+            return { kind: "categories", label: "Contributors in file", entries: [...entries.values()] };
+        }
+        return { kind: "fixed", label: "Polygon", symbol };
     }
 
     /**

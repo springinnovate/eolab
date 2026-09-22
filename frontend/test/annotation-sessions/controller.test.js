@@ -7,7 +7,7 @@ const ID = "11111111-1111-4111-8111-111111111111";
 /** @return {Object} One shared layer with two independent contributors. */
 function snapshot() {
     return { id: ID, name: "Watersheds", contributorId: "me", joinCode: "ABCDEFGH",
-        contributors: [{ id: "me", name: "Rich" }, { id: "other", name: "Maria" }], layers: [] };
+        contributors: [{ id: "me", name: "Rich", color: "#FFBE0B" }, { id: "other", name: "Maria", color: "#FB5607" }], layers: [] };
 }
 /** @param {Function} request API boundary. @return {Object} Controller and observable layer state. */
 function setup(request = async () => snapshot()) {
@@ -23,6 +23,78 @@ function setup(request = async () => snapshot()) {
 function bind(controller) {
     controller.bindings.set("local", { localId: "local", sessionId: ID, contributorId: "me", revision: 0, remote: new Map(), retryDelay: 0 });
 }
+
+test("shared color changes update presentation without downloading or uploading unchanged polygons", async () => {
+    const metadata = snapshot(); const calls = [];
+    metadata.layers = [{ contributorId: "other", layerId: ID, revision: 1, polygonCount: 1 }];
+    const { controller, events } = setup(async (path, method, body) => {
+        calls.push([path, method]);
+        if (method === "PATCH") { metadata.contributors[0].color = body.color; return { color: body.color }; }
+        if (method === "PUT") return { revision: 1 };
+        if (path.includes("/contributors/")) return { revision: 1, collection: { features: [{ properties: { name: "Other" } }] } };
+        return structuredClone(metadata);
+    });
+    try {
+        await controller.connect("join", "ABCDEFGH", "Rich"); calls.length = 0;
+        await controller.setContributorColor("local-0", "#123456");
+        metadata.contributors[1].color = "#987654";
+        await controller.refresh();
+        assert.equal(calls.filter(([, method]) => method === "PATCH").length, 1);
+        assert.equal(calls.filter(([path, method]) => path.includes("/contributors/") || method === "PUT").length, 0);
+        const display = events.filter(e => e[0] === "display").at(-1)[2];
+        assert.deepEqual(display.contributors.map(p => p.color), ["#123456", "#987654"]);
+        assert.equal(display.collections[0].features[0].properties.contributorId, "other");
+    } finally { controller.destroy(); }
+});
+
+test("a new color chosen during a pending request survives the older reply and reload bookmarks", async () => {
+    const metadata = snapshot(); let release; const sent = [];
+    const { controller, stored, events } = setup(async (_path, method, body) => {
+        if (method === "PUT") return { revision: 1 };
+        if (method === "PATCH") {
+            sent.push(body.color);
+            if (sent.length === 1) await new Promise(resolve => { release = resolve; });
+            metadata.contributors[0].color = body.color; return { color: body.color };
+        }
+        return structuredClone(metadata);
+    });
+    try {
+        await controller.connect("join", "ABCDEFGH", "Rich");
+        const first = controller.setContributorColor("local-0", "#111111");
+        await new Promise(resolve => setImmediate(resolve));
+        const second = controller.setContributorColor("local-0", "#222222");
+        assert.equal(JSON.parse([...stored.values()][0])[0].pendingColor, "#222222");
+        release(); await Promise.all([first, second]);
+        assert.equal(events.filter(e => e[0] === "display").at(-1)[2].contributors[0].color, "#222222");
+        await controller.refresh();
+        assert.deepEqual(sent, ["#111111", "#222222"]);
+        assert.equal(JSON.parse([...stored.values()][0])[0].pendingColor, undefined);
+    } finally { controller.destroy(); }
+});
+
+test("an interrupted color update is retained for reload and retried without affecting other layers", async () => {
+    const first = setup(async (_path, method) => {
+        if (method === "PATCH") throw new Error("Offline");
+        return method === "PUT" ? { revision: 1 } : snapshot();
+    });
+    try {
+        await first.controller.connect("join", "ABCDEFGH", "Rich");
+        await first.controller.setContributorColor("local-0", "#123abc");
+        assert.match(first.events.at(-1)[2].status, /Offline/);
+        const writes = [];
+        const restored = setup(async (path, method, body) => {
+            if (method === "PATCH") { writes.push([path, body]); return body; }
+            return method === "PUT" ? { revision: 1 } : snapshot();
+        });
+        restored.local.push(...structuredClone(first.local));
+        for (const [key, value] of first.stored) restored.stored.set(key, value);
+        try {
+            await restored.controller.start();
+            assert.deepEqual(writes, [[`/${ID}/color`, { color: "#123abc" }]]);
+            assert.equal(restored.events.filter(e => e[0] === "display").at(-1)[2].contributors[0].color, "#123abc");
+        } finally { restored.controller.destroy(); }
+    } finally { first.controller.destroy(); }
+});
 
 test("creator and joiner both receive one layer and automatically see all shared contributions", async () => {
     for (const mode of ["create", "join"]) {

@@ -18,6 +18,112 @@ BASE = "/api/annotation-sessions"
 HEADERS = {"X-EOLab-Annotations": "1"}
 
 
+def test_contributor_colors_are_shared_owned_and_persistent(
+    store: AnnotationSessionStore,
+) -> None:
+    """Exercise palette assignment, custom colors, isolation and exports over the real API.
+
+    Args:
+        store: Empty disposable PostgreSQL store.
+    """
+    app = FastAPI()
+    app.include_router(create_annotation_sessions_router(store))
+    first = TestClient(app, base_url="https://testserver", headers=HEADERS)
+    second = TestClient(app, base_url="https://testserver", headers=HEADERS)
+    outsider = TestClient(app, base_url="https://testserver", headers=HEADERS)
+    session = first.post(
+        BASE, json={"name": "Colors", "contributorName": "First"}
+    ).json()
+    path = f"{BASE}/{session['id']}"
+    joined = second.post(
+        BASE + "/join",
+        json={"joinCode": session["joinCode"], "contributorName": "Second"},
+    ).json()
+    colors = {person["name"]: person["color"] for person in joined["contributors"]}
+    assert colors == {"First": "#FFBE0B", "Second": "#FB5607"}
+    assert (
+        first.put(
+            path + f"/layers/{session['id']}",
+            json={"revision": 0, "collection": collection()},
+        ).status_code
+        == 200
+    )
+    assert first.patch(path + "/color", json={"color": "#ab12ef"}).json() == {
+        "color": "#AB12EF"
+    }
+    assert outsider.patch(path + "/color", json={"color": "#000000"}).status_code == 404
+    assert (
+        second.patch(
+            path + "/color",
+            json={"color": "#000000", "contributorId": session["contributorId"]},
+        ).status_code
+        == 422
+    )
+    for bad in ["red", "#fff", "url(x)", "#1234567", None]:
+        assert second.patch(path + "/color", json={"color": bad}).status_code == 422
+    snapshot = second.get(path).json()
+    assert {p["name"]: p["color"] for p in snapshot["contributors"]} == {
+        "First": "#AB12EF",
+        "Second": "#FB5607",
+    }
+    assert (
+        snapshot["layers"][0]["revision"] == 1
+    ), "color updates do not rewrite polygons"
+    exported = second.get(path + "/export").json()
+    assert exported["eolabAnnotations"] == 1
+    assert exported["features"][0]["properties"]["contributorColor"] == "#AB12EF"
+    rejoined = first.post(
+        BASE + "/join",
+        json={"joinCode": session["joinCode"], "contributorName": "Renamed"},
+    ).json()
+    assert (
+        next(
+            p["color"]
+            for p in rejoined["contributors"]
+            if p["id"] == session["contributorId"]
+        )
+        == "#AB12EF"
+    )
+    other_session = first.post(
+        BASE, json={"name": "Separate", "contributorName": "First"}
+    ).json()
+    assert other_session["contributors"][0]["color"] == "#FFBE0B"
+    store.initialize_and_clean_join_attempts()
+    assert first.get(path).json()["contributors"] == rejoined["contributors"]
+
+
+def test_concurrent_joins_assign_distinct_colors_and_old_rows_have_stable_fallback(
+    store: AnnotationSessionStore,
+) -> None:
+    """Serialize palette assignment and keep pre-color memberships readable without data loss.
+
+    Args:
+        store: Empty disposable PostgreSQL store.
+    """
+    session_id = store.create_session("creator", "Colors", "Creator")
+    code = store.get_session_snapshot(session_id, "creator")["joinCode"]
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(
+            pool.map(
+                lambda index: store.join_session(
+                    f"member-{index}", code, f"Member {index}"
+                ),
+                range(4),
+            )
+        )
+    people = store.get_session_snapshot(session_id, "creator")["contributors"]
+    assert len({p["color"] for p in people}) == 5
+    with store.transaction(write=True) as cursor:
+        cursor.execute(
+            "UPDATE shared_annotation_layers.contributors SET color=NULL WHERE session_id=%s",
+            (session_id,),
+        )
+    before = store.get_session_snapshot(session_id, "creator")["contributors"]
+    store.initialize_and_clean_join_attempts()
+    assert store.get_session_snapshot(session_id, "creator")["contributors"] == before
+    assert all(p["color"].startswith("#") for p in before)
+
+
 @pytest.fixture
 def store(request: pytest.FixtureRequest) -> AnnotationSessionStore:
     """Initialize only an explicitly selected disposable test database.

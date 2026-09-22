@@ -20,6 +20,25 @@ function model() {
     return new AnnotationModel([], () => `id-${++next}`);
 }
 
+test("EOLab file exports preserve contributor colors as metadata, never as upload ownership", () => {
+    const document = collection();
+    document.eolabAnnotations = 1;
+    Object.assign(document.features[0].properties, { contributor: "Maria", contributorColor: "#FF006E", contributorId: "not-an-edit-credential" });
+    const imported = parseAnnotationGeoJSON(JSON.stringify(document));
+    const annotations = model(); const layer = annotations.importLayer(imported);
+    assert.equal(layer.polygons[0].contributorColor, "#FF006E");
+    assert.equal(layer.polygons[0].contributorId, undefined);
+    const exported = exportAnnotationGeoJSON(layer, true);
+    assert.equal(exported.features[0].properties.contributor, "Maria");
+    assert.deepEqual(parseAnnotationGeoJSON(JSON.stringify(exported)), imported);
+    assert.deepEqual(readAnnotationLayers(annotations.document()), annotations.layers);
+    assert.equal(exportAnnotationGeoJSON(layer).features[0].properties.contributorColor, undefined);
+    delete document.eolabAnnotations;
+    assert.equal(parseAnnotationGeoJSON(JSON.stringify(document)).polygons[0].contributorColor, undefined);
+    document.eolabAnnotations = 1; document.features[0].properties.contributorColor = "url(bad)";
+    assert.equal(parseAnnotationGeoJSON(JSON.stringify(document)).polygons[0].contributorColor, undefined);
+});
+
 test("EOLab GeoJSON preserves names, notes and shapes across import, export and device storage", () => {
     const annotations = model();
     const imported = parseAnnotationGeoJSON(JSON.stringify(collection()));

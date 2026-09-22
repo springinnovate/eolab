@@ -119,3 +119,4 @@
 .annotation-sharing-context { margin: 0.2rem 0 0; color: var(--text-3); font-size: 0.85rem; overflow-wrap: anywhere; }
 .annotation-drawing-action { grid-column: 2; min-width: 0; }
 .annotation-drawing-action [hidden] { display: none; }
+.annotation-contributor-color { display: inline-block; width: 0.8em; height: 0.8em; margin-right: 0.4em; border: 1px solid #555; border-radius: 2px; }

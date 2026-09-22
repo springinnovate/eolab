@@ -40,7 +40,7 @@ export function createAnnotationLeafletLayer(leaflet, map, annotation) {
                 shape.setLatLngs(polygon.vertices.map(([lng, lat]) => [lat, lng]));
                 retained.vertices = polygon.vertices;
             }
-            shape.setStyle({ color: annotation.style.outline, fillColor: annotation.style.color,
+            shape.setStyle({ color: annotation.style.outline, fillColor: polygon.contributorColor ?? annotation.style.color,
                 weight: annotation.style.weight, fillOpacity: annotation.style.fillOpacity });
             updatePolygonLabel(shape, polygon, annotation.style, map.getContainer().ownerDocument, pane);
         }

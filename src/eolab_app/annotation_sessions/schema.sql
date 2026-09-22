@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS shared_annotation_layers.layers (
     updated_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY(contributor_id, local_id)
 );
+ALTER TABLE shared_annotation_layers.contributors
+    ADD COLUMN IF NOT EXISTS color text CHECK (color ~ '^#[0-9A-Fa-f]{6}$');
 CREATE TABLE IF NOT EXISTS shared_annotation_layers.join_attempts (
     browser_hash text PRIMARY KEY,
     started_at timestamptz NOT NULL DEFAULT now(),

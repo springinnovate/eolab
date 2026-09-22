@@ -497,21 +497,35 @@ that layer. Creators and joiners have the same controls; there is no facilitator
 role or separate session panel.
 
 Everyone sees one combined layer containing all contributors' polygons. Expand
-the contributor arrow to see names and polygon counts. **Draw polygon**
+the contributor arrow to see names, colors and polygon counts. **Draw polygon**
 adds your own polygon. **Edit** opens your editable polygons and a read-only list
-of other contributors' polygons. Visibility, style and filters affect only your
-map. Raster summaries use the combined layer and its current filter.
+of other contributors' polygons. Under **Annotation style**, **Your polygon color**
+changes the fill of all your existing and future polygons in that shared layer
+for everyone. New members receive the least-used color from the default palette,
+in palette order when tied; the picker accepts any custom color, including one
+already used by someone else. Your colors in other shared layers are independent.
+The layer legend identifies contributors by name and color. Whole-layer opacity,
+fill opacity, outlines, labels, visibility and filters affect only your map.
+Copying another layer's style does not change shared contributor colors.
+Raster summaries use the combined layer and its current filter.
 
 Finished edits and changes to names or notes are saved locally first, then shared
 automatically. Unfinished drawings remain local. Removing a layer from your map
 does not delete its shared contents; join again with the same browser credentials
 to restore your contribution. **Import GeoJSON** adds a private layer from a file. Their **Share** action creates a
 new shared layer. **Export GeoJSON** saves the combined polygons with contributor
-names. Ordinary map links do not carry annotations, codes or private credentials.
+names and colors. EOLab exports mark this metadata with `eolabAnnotations: 1` and
+per-feature `contributor` and `contributorColor` properties. Reimporting retains
+these labels and colors, but never membership or editing rights. Sharing an import
+in a new layer makes all its polygons your contribution, using your color there.
+Ordinary map links do not carry annotations, codes or private credentials.
 
 Shared layers have no automatic expiration. They are stored in the existing
 PostgreSQL database under `shared_annotation_layers`; back up that database to
 preserve them. No new container or environment variable is required. This version
+adds a nullable color column to current memberships automatically; older members
+without saved colors receive a stable palette color derived from their membership
+ID until they choose another color. Existing polygons are not rewritten. This version
 does not migrate or display the former `annotation_sessions` records; existing
 local polygon copies remain available. Future administrative cleanup is tracked
 separately.
