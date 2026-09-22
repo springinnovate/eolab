@@ -2059,6 +2059,9 @@ export function initializeRasterViewer(
                     kind: "gradient",
                     gradient: definition.gradient,
                     description: definition.description,
+                    label: opacityLocked
+                        ? `${record.entry.key === bivariateMode.xKey ? "X" : "Y"} color contribution; combines with the other raster on the map.`
+                        : "Raster values",
                     labels: [
                         presentationStyle.minimum,
                         presentationStyle.midpoint,

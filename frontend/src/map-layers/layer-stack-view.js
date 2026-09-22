@@ -7,6 +7,26 @@
  */
 
 /**
+ * @typedef {Object} LegendSymbol
+ * @property {"polygon"|"line"|"point"} shape Geometry represented by the key.
+ * @property {string|null} fill Fill color; null for lines.
+ * @property {number} fillOpacity Fill opacity before whole-layer opacity.
+ * @property {string} stroke Outline or line color.
+ * @property {number} strokeOpacity Stroke opacity before whole-layer opacity.
+ * @property {number} strokeWidth Stroke width in pixels.
+ * @property {number|null} [pointSize] Point diameter in pixels.
+ *
+ * @typedef {Object} LayerLegend
+ * @property {"fixed"|"gradient"|"categories"|"graduated"} kind Legend presentation.
+ * @property {string} [label] Geometry name, classified field, or raster context.
+ * @property {LegendSymbol} [symbol] Fixed symbol.
+ * @property {{label:string,symbol:LegendSymbol}[]} [entries] Class labels and their symbols.
+ * @property {string} [gradient] CSS color ramp supplied by the raster owner.
+ * @property {number[]} [labels] Minimum, midpoint, and maximum raster values.
+ * @property {string} [description] Accessible description of a raster ramp.
+ */
+
+/**
  * Resolve one required stack element.
  *
  * @param {Document} documentContext Application document.
@@ -91,6 +111,8 @@ export class MapLayerStackView {
         this.pointerDrag = null;
         /** @type {{key:string,originIndex:number}|null} */
         this.keyboardDrag = null;
+        /** @type {Map<string,HTMLDetailsElement>} Last rendered legends, retaining disclosure state. */
+        this.legends = new Map();
     }
 
     /**
@@ -146,6 +168,7 @@ export class MapLayerStackView {
         this.pointerDrag = null;
         this.keyboardDrag = null;
         this.handlers = null;
+        this.legends.clear();
     }
 
     /**
@@ -158,6 +181,10 @@ export class MapLayerStackView {
      * @return {void}
      */
     render(layers, activeKey, requestedFocus = null) {
+        const retainedKeys = new Set(layers.map(layer => layer.key));
+        for (const key of this.legends.keys()) {
+            if (!retainedKeys.has(key)) this.legends.delete(key);
+        }
         this.#renderVisibilityActions(layers);
         this.#renderCounts(layers);
         this.#renderFilters(layers);
@@ -330,7 +357,13 @@ export class MapLayerStackView {
         name.className = "raster-layer-name";
         name.textContent = layer.label;
         name.title = accessibleName;
-        label.append(visibility, name);
+        label.append(visibility);
+        const key = this.#buildLegendKey(layer.legend, layer.effectiveOpacity ?? layer.opacity);
+        if (key) label.append(key);
+        const title = this.documentContext.createElement("span");
+        title.className = "map-layer-title";
+        title.append(name);
+        label.append(title);
         if (layer.roleBadge !== null && layer.roleBadge !== undefined) {
             const roleBadge = this.documentContext.createElement("span");
             roleBadge.className = "map-layer-role-badge";
@@ -344,7 +377,8 @@ export class MapLayerStackView {
         const type = this.documentContext.createElement("span");
         type.className = "map-layer-type";
         type.textContent = typeLabel;
-        primary.append(label, type);
+        title.append(type);
+        primary.append(label);
         const style = this.#button(
             "Style", `Style ${accessibleName}`, layer.key, "style",
             () => this.handlers?.onStyle(layer.key), focusTargets
@@ -446,7 +480,7 @@ export class MapLayerStackView {
             filterStatus.classList.add("map-layer-filter-status");
             row.append(filterStatus);
         }
-        const legend = this.#buildLegend(layer.legend);
+        const legend = this.#buildLegend(layer, focusTargets);
         if (legend !== null) row.append(legend);
         if (layer.controls) row.append(layer.controls);
         if (layer.error) {
@@ -719,40 +753,139 @@ export class MapLayerStackView {
     }
 
     /**
-     * Build one optional neutral multi-entry legend disclosure.
-     *
-     * @param {unknown} legend Adapter-owned legend snapshot.
-     * @return {HTMLDetailsElement|null} Detached legend or null for fixed styles.
+     * Draw the compact color key beside a layer's name, including fixed styles.
+     * Class keys preview up to three symbols; their complete list is in Legend.
+     * @param {LayerLegend|null} legend Adapter-owned appearance.
+     * @param {number} opacity Effective whole-layer opacity.
+     * @return {HTMLSpanElement|null} Visible key, or null when the adapter has no legend.
      */
-    #buildLegend(legend) {
-        if (!Array.isArray(legend?.entries) || legend.entries.length === 0) {
+    #buildLegendKey(legend, opacity) {
+        if (!legend) return null;
+        const key = this.documentContext.createElement("span");
+        key.className = "map-layer-color-key";
+        key.setAttribute("role", "img");
+        if (legend.kind === "gradient") {
+            key.append(this.#buildGradient(legend, opacity));
+        } else {
+            const symbols = legend.entries?.slice(0, 3).map(entry => entry.symbol)
+                ?? (legend.symbol ? [legend.symbol] : []);
+            for (const symbol of symbols) key.append(this.#buildSymbol(symbol, opacity));
+        }
+        if (!key.childElementCount) return null;
+        const description = legend.description ?? (legend.entries
+            ? `${legend.label}: ${legend.entries.length} classes. Expand Legend for all values.`
+            : `${legend.label}: fill ${legend.symbol?.fill ?? "none"}, outline ${legend.symbol?.stroke}.`);
+        key.title = description;
+        key.setAttribute("aria-label", description);
+        return key;
+    }
+
+    /**
+     * Draw a representative polygon, line, or point using its fill and stroke settings.
+     * Large strokes and points are scaled to fit the compact key.
+     * @param {LegendSymbol} symbol Adapter-supplied geometry appearance.
+     * @param {number} opacity Effective layer opacity, from zero through one.
+     * @return {SVGElement} Decorative symbol with independent fill and stroke opacity.
+     */
+    #buildSymbol(symbol, opacity) {
+        const svg = this.documentContext.createElementNS("http://www.w3.org/2000/svg", "svg");
+        svg.setAttribute("viewBox", "0 0 28 22");
+        svg.setAttribute("aria-hidden", "true");
+        svg.setAttribute("focusable", "false");
+        const tag = symbol.shape === "point" ? "circle" : symbol.shape === "line" ? "path" : "rect";
+        const shape = this.documentContext.createElementNS("http://www.w3.org/2000/svg", tag);
+        const dimensions = tag === "circle" ? { cx: 14, cy: 11, r: Math.min(symbol.pointSize / 2, 8) }
+            : tag === "path" ? { d: "M 3 17 L 11 6 L 18 15 L 25 5" }
+            : { x: 4, y: 4, width: 20, height: 14, rx: 1 };
+        for (const [name, value] of Object.entries(dimensions)) shape.setAttribute(name, String(value));
+        shape.setAttribute("fill", symbol.fill ?? "none");
+        shape.setAttribute("fill-opacity", String(symbol.fillOpacity * opacity));
+        shape.setAttribute("stroke", symbol.stroke);
+        shape.setAttribute("stroke-opacity", String(symbol.strokeOpacity * opacity));
+        shape.setAttribute("stroke-width", String(Math.min(symbol.strokeWidth, 6)));
+        shape.setAttribute("stroke-linecap", "round");
+        shape.setAttribute("stroke-linejoin", "round");
+        svg.append(shape);
+        return svg;
+    }
+
+    /**
+     * Draw the raster owner's color ramp over a transparency checkerboard.
+     * @param {LayerLegend} legend Raster gradient and text alternative.
+     * @param {number} opacity Effective layer opacity.
+     * @return {HTMLSpanElement} Decorative gradient strip.
+     */
+    #buildGradient(legend, opacity) {
+        const background = this.documentContext.createElement("span");
+        background.className = "map-layer-legend-gradient";
+        background.setAttribute("aria-hidden", "true");
+        const ramp = this.documentContext.createElement("span");
+        ramp.style.background = legend.gradient;
+        ramp.style.opacity = String(opacity);
+        background.append(ramp);
+        return background;
+    }
+
+    /**
+     * Build an expandable class list or raster range; fixed symbols need no extra row.
+     *
+     * @param {Object} layer Layer identity, legend and effective opacity.
+     * @param {Map<string,Element>} focusTargets Controls retained across style updates.
+     * @return {HTMLDetailsElement|null} Legend details, preserving open state and keyboard focus.
+     */
+    #buildLegend(layer, focusTargets) {
+        const legend = layer.legend;
+        const opacity = layer.effectiveOpacity ?? layer.opacity;
+        if (legend?.kind !== "gradient" && !legend?.entries?.length) {
+            this.legends.delete(layer.key);
             return null;
         }
         const details = this.documentContext.createElement("details");
         details.className = "map-layer-legend";
+        details.open = this.legends.get(layer.key)?.open ?? false;
+        this.legends.set(layer.key, details);
         const summary = this.documentContext.createElement("summary");
         summary.textContent = "Legend";
+        summary.dataset.layerKey = layer.key;
+        summary.dataset.layerAction = "legend";
+        summary.setAttribute("aria-label", `Legend for ${layer.label}`);
+        this.#rememberFocusTarget(focusTargets, summary);
         const field = this.documentContext.createElement("span");
         field.className = "map-layer-legend-field";
         field.textContent = typeof legend.label === "string" ? legend.label : "";
+        details.append(summary, field);
+        if (legend.kind === "gradient") {
+            const ramp = this.#buildGradient(legend, opacity);
+            ramp.title = legend.description;
+            const labels = this.documentContext.createElement("div");
+            labels.className = "map-layer-legend-values";
+            for (const [index, value] of legend.labels.entries()) {
+                const text = this.documentContext.createElement("span");
+                const caption = this.documentContext.createElement("span");
+                caption.className = "map-layer-legend-value-label";
+                caption.textContent = ["Minimum", "Midpoint", "Maximum"][index];
+                const number = this.documentContext.createElement("span");
+                number.textContent = String(value);
+                text.append(caption, number);
+                labels.append(text);
+            }
+            details.append(ramp, labels);
+            return details;
+        }
         const list = this.documentContext.createElement("ul");
         list.className = "map-layer-legend-list";
         for (const entry of legend.entries) {
-            if (typeof entry?.label !== "string" || typeof entry?.color !== "string") {
-                continue;
-            }
             const item = this.documentContext.createElement("li");
             const swatch = this.documentContext.createElement("span");
             swatch.className = "map-layer-legend-swatch";
-            swatch.style.backgroundColor = entry.color;
+            swatch.append(this.#buildSymbol(entry.symbol, opacity));
             swatch.setAttribute("aria-hidden", "true");
             const text = this.documentContext.createElement("span");
             text.textContent = entry.label;
             item.append(swatch, text);
             list.append(item);
         }
-        if (list.childElementCount === 0) return null;
-        details.append(summary, field, list);
+        details.append(list);
         return details;
     }
 

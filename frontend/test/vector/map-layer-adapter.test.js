@@ -153,8 +153,7 @@ test("vector map-layer adapter owns publication, WMS, legend, and optional fit",
     legend: {
       kind: "fixed",
       label: "Polygon",
-      fill: "#fd8d3c",
-      stroke: "#800026",
+      symbol: { shape: "polygon", fill: "#fd8d3c", fillOpacity: 1, stroke: "#800026", strokeOpacity: 0, strokeWidth: 2, pointSize: null },
     },
   });
   fitted.adapter.added(record);
@@ -173,7 +172,7 @@ test("vector map-layer adapter owns publication, WMS, legend, and optional fit",
   assert.deepEqual(layer.styleRequests, [{
     styles: "vector-style-0123456789abcdef01234567-aaaaaaaaaaaa",
   }]);
-  assert.equal(fitted.adapter.snapshot(record).legend.fill, "#00ff00");
+  assert.equal(fitted.adapter.snapshot(record).legend.symbol.fill, "#00ff00");
   const reappliedStyle = {
     ...appliedStyle,
     fillColor: "#ff0000",
@@ -190,7 +189,7 @@ test("vector map-layer adapter owns publication, WMS, legend, and optional fit",
       styles: "vector-style-0123456789abcdef01234567-bbbbbbbbbbbb",
     },
   ]);
-  assert.equal(fitted.adapter.snapshot(record).legend.fill, "#ff0000");
+  assert.equal(fitted.adapter.snapshot(record).legend.symbol.fill, "#ff0000");
   assert.deepEqual(fitted.adapter.exportSavedState(record), {
     kind: "vector",
     definition: reappliedStyle,

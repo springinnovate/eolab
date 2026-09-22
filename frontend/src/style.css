@@ -747,7 +747,8 @@ h5 {
   align-items: start;
   gap: 6px;
 }
-.map-layer-type { max-width: 5rem; color: var(--text-3); font-size: 0.65rem; line-height: 1.3; }
+.map-layer-title { display: grid; flex: 1; min-width: 0; gap: 2px; }
+.map-layer-type { color: var(--text-3); font-size: 0.65rem; line-height: 1.3; }
 .raster-layer-visibility {
   flex: 1;
   display: flex;
@@ -864,7 +865,43 @@ h5 {
   font-size: 0.7rem;
 }
 
-.map-layer-legend summary { cursor: pointer; font-weight: 600; }
+.map-layer-legend summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--brand);
+  font-weight: 600;
+  padding: 3px 0;
+}
+.map-layer-legend summary:hover { text-decoration: underline; }
+.map-layer-legend summary:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.map-layer-color-key {
+  display: flex;
+  flex: none;
+  align-items: center;
+  width: 32px;
+  height: 22px;
+}
+.map-layer-color-key svg { width: 100%; min-width: 0; height: 22px; }
+.map-layer-legend-gradient {
+  display: block;
+  width: 100%;
+  height: 12px;
+  border: 1px solid var(--border-1);
+  border-radius: 2px;
+  overflow: hidden;
+  background: repeating-conic-gradient(#fff 0% 25%, #ddd 0% 50%) 0 0 / 8px 8px;
+}
+.map-layer-legend-gradient > span { display: block; width: 100%; height: 100%; }
+.map-layer-legend-values {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 3px;
+  font-variant-numeric: tabular-nums;
+}
+.map-layer-legend-values > span { display: grid; min-width: 0; overflow-wrap: anywhere; }
+.map-layer-legend-value-label { color: var(--text-3); font-size: 0.65rem; }
+.map-layer-legend-values > span:last-child { text-align: right; }
 .map-layer-legend-field {
   display: block;
   margin: 5px 0;
@@ -882,16 +919,15 @@ h5 {
 }
 .map-layer-legend-list li {
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
+  grid-template-columns: 28px minmax(0, 1fr);
   align-items: center;
   gap: 6px;
 }
 .map-layer-legend-swatch {
-  width: 18px;
-  height: 12px;
-  border: 1px solid rgb(0 0 0 / 25%);
-  border-radius: 2px;
+  width: 28px;
+  height: 22px;
 }
+.map-layer-legend-swatch svg { width: 100%; height: 100%; }
 
 .raster-layer-error,
 .raster-layer-stack-status {

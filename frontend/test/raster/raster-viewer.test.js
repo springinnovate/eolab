@@ -1558,6 +1558,11 @@ test('active 2D analysis follows the top raster pair and exposes X Y badges', as
         h.mapLayers.snapshots().map((layer) => layer.opacityLocked),
         [true, true, false],
     );
+    assert.deepEqual(h.mapLayers.snapshots().map(layer => layer.legend.label), [
+        'X color contribution; combines with the other raster on the map.',
+        'Y color contribution; combines with the other raster on the map.',
+        'Raster values',
+    ]);
     assert.equal(h.mapLayers.getLeafletLayer(bottom.key).opacity, 0.4);
     h.viewer.exploreAt({ lng: -74, lat: 41 });
     await flushPromises();

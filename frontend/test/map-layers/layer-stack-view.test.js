@@ -53,6 +53,9 @@ class FakeLayerStackElement extends EventTarget {
   /** @param {FakeLayerStackElement|null} node Possible descendant. @return {boolean} Whether this subtree contains it. */
   contains(node) { return node === this || this.children.some(child => child.contains(node)); }
 
+  /** Number of child elements, as exposed by the browser DOM. @return {number} Child count. */
+  get childElementCount() { return this.children.length; }
+
   /** Space-separated CSS classes, kept in sync with classList. */
   get className() {
     return [...this._classNames].join(" ");
@@ -202,6 +205,9 @@ class FakeLayerStackDocument {
   createElement(tagName) {
     return new FakeLayerStackElement(tagName, this);
   }
+
+  /** @param {string} _namespace SVG namespace. @param {string} tagName Element tag. @return {FakeLayerStackElement} Test SVG element. */
+  createElementNS(_namespace, tagName) { return this.createElement(tagName); }
 
   /**
    * Create one fake text node.
@@ -507,8 +513,8 @@ test("neutral classified legends render as compact layer disclosures", () => {
       kind: "graduated",
       label: "risk score",
       entries: [
-        { label: "≤ 1", color: "#f7fbff" },
-        { label: "> 1", color: "#08306b" },
+        { label: "≤ 1", symbol: { shape: "polygon", fill: "#f7fbff", fillOpacity: 0.4, stroke: "#222222", strokeOpacity: 0.8, strokeWidth: 2 } },
+        { label: "> 1", symbol: { shape: "polygon", fill: "#08306b", fillOpacity: 0.4, stroke: "#222222", strokeOpacity: 0.8, strokeWidth: 2 } },
       ],
     },
   };
@@ -521,7 +527,56 @@ test("neutral classified legends render as compact layer disclosures", () => {
   assert.equal(legend.tagName, "DETAILS");
   assert.equal(elementsByClass(legend, "map-layer-legend-field")[0].textContent, "risk score");
   assert.equal(swatches.length, 2);
-  assert.equal(swatches[0].style.backgroundColor, "#f7fbff");
+  const polygon = swatches[0].children[0].children[0];
+  assert.equal(polygon.getAttribute("fill"), "#f7fbff");
+  assert.equal(polygon.getAttribute("stroke"), "#222222");
+  assert.equal(polygon.getAttribute("fill-opacity"), String(0.4 * vector.opacity));
+  assert.equal(polygon.getAttribute("stroke-opacity"), String(0.8 * vector.opacity));
+  legend.open = true;
+  actionControl(row, "legend").focus();
+  const updated = { ...vector, opacity: 0.2 };
+  view.render([updated], null);
+  const nextRow = doc.querySelector("#raster-layer-list").children[0];
+  assert.equal(elementsByClass(nextRow, "map-layer-legend")[0].open, true);
+  assert.equal(doc.activeElement, actionControl(nextRow, "legend"));
+  const nextSymbol = elementsByClass(nextRow, "map-layer-legend-swatch")[0].children[0].children[0];
+  assert.equal(nextSymbol.getAttribute("fill-opacity"), String(0.4 * 0.2));
+  view.render([], null);
+  view.render([updated], null);
+  assert.equal(elementsByClass(doc.querySelector("#raster-layer-list"), "map-layer-legend")[0].open, false);
+});
+
+test("fixed symbols stay visible beside names without an empty legend disclosure", () => {
+  const doc = new FakeLayerStackDocument();
+  const view = new MapLayerStackView(doc);
+  for (const [shape, tag] of [["polygon", "RECT"], ["line", "PATH"], ["point", "CIRCLE"]]) {
+    view.render([{ ...LAYERS[0], opacity: 0.5, legend: { kind: "fixed", label: shape, symbol: {
+      shape, fill: shape === "line" ? null : "#ff00ff", fillOpacity: 0.6,
+      stroke: "#333333", strokeOpacity: 0.4, strokeWidth: 2, pointSize: 8,
+    } } }], null);
+    const row = doc.querySelector("#raster-layer-list").children[0];
+    const key = elementsByClass(row, "map-layer-color-key")[0];
+    const symbol = key.children[0].children[0];
+    assert.equal(symbol.tagName, tag);
+    assert.equal(symbol.getAttribute("fill"), shape === "line" ? "none" : "#ff00ff");
+    assert.equal(symbol.getAttribute("stroke-opacity"), "0.2");
+    assert.equal(key.getAttribute("role"), "img");
+    assert.equal(elementsByClass(row, "map-layer-legend").length, 0);
+  }
+});
+
+test("raster ramps expose all three values and use effective opacity", () => {
+  const doc = new FakeLayerStackDocument();
+  const view = new MapLayerStackView(doc);
+  view.render([{ ...LAYERS[0], opacity: 0.3, effectiveOpacity: 1 }], null);
+  const row = doc.querySelector("#raster-layer-list").children[0];
+  const ramps = elementsByClass(row, "map-layer-legend-gradient");
+  assert.equal(ramps.length, 2, "compact key and full ramp");
+  assert.equal(ramps[0].children[0].style.background, LAYERS[0].legend.gradient);
+  assert.equal(ramps[0].children[0].style.opacity, "1");
+  const values = elementsByClass(row, "map-layer-legend-values")[0];
+  assert.deepEqual(values.children.map(child => child.children[0].textContent), ["Minimum", "Midpoint", "Maximum"]);
+  assert.deepEqual(values.children.map(child => child.children[1].textContent), LAYERS[0].legend.labels.map(String));
 });
 
 test("direct row actions forward stable identity", () => {
