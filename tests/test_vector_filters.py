@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from eolab_app.rendering.errors import PublishedLayerChangedError
+from eolab_app.rendering.render_queue import GeoServerRenderQueue
 from eolab_app.diagnostics.tracker import GetMapRequestTracker
 from eolab_app.routes.wms_proxy import create_wms_proxy_router
 from eolab_app.routes.vectors import create_vector_feature
@@ -229,7 +230,7 @@ def test_filter_wms_boundary_translates_render_inspection_and_highlight(tmp_path
 
     app = FastAPI()
     client = httpx2.AsyncClient(transport=httpx2.MockTransport(upstream))
-    app.include_router(create_wms_proxy_router(client, "http://geoserver/geoserver", (registry,), GetMapRequestTracker(2)))
+    app.include_router(create_wms_proxy_router(client, "http://geoserver/geoserver", (registry,), GetMapRequestTracker(2), GeoServerRenderQueue(2)))
     params = {"service": "WMS", "version": "1.1.1", "request": "GetMap", "layers": applied.layerName,
         "styles": publication.style_name, "srs": "EPSG:4326", "bbox": "-1,-1,2,2", "width": "256", "height": "256", "format": "image/png", "tiled": "true"}
     with TestClient(app) as browser:

@@ -43,6 +43,7 @@ from eolab_app.raster.sources import (
 )
 from eolab_app.raster.statistics_service import RasterStatisticsService
 from eolab_app.rendering.composite import CompositeMapRenderingService
+from eolab_app.rendering.render_queue import GeoServerRenderQueue
 from eolab_app.routes.catalog import create_catalog_router
 from eolab_app.routes.composite_map import create_composite_map_router
 from eolab_app.routes.diagnostics import create_diagnostics_router
@@ -250,6 +251,11 @@ def create_app(
     get_map_request_tracker = GetMapRequestTracker(
         app_global_configuration.geoserver_wms_render_count
     )
+    render_queue = GeoServerRenderQueue(
+        app_global_configuration.geoserver_wms_render_count,
+        app_global_configuration.map_render_queue_capacity,
+        app_global_configuration.map_render_queue_wait_seconds,
+    )
     rendering_diagnostics = RenderingDiagnosticsService(
         geoserver_diagnostics_client,
         app_global_configuration.geoserver_metrics_internal_url,
@@ -280,6 +286,7 @@ def create_app(
             ):
                 client_stack.push_async_callback(client.aclose)
             client_stack.push_async_callback(processing_service.close)
+            client_stack.push_async_callback(render_queue.close)
             yield
 
     application = FastAPI(
@@ -379,6 +386,7 @@ def create_app(
             app_global_configuration.geoserver_internal_url,
             (raster_feature.registry, vector_feature.registry),
             get_map_request_tracker,
+            render_queue,
         )
     )
     application.include_router(
@@ -389,6 +397,7 @@ def create_app(
             geoserver_wms_client,
             app_global_configuration.geoserver_internal_url,
             get_map_request_tracker,
+            render_queue,
             app_global_configuration.composite_tile_cache_bytes,
         )
     )

@@ -25,6 +25,7 @@ from eolab_app.rendering.models import (
     PublishedCompositeMapPlan,
 )
 from eolab_app.rendering.sld import build_get_map_document
+from eolab_app.rendering.ports import MapRenderQueue
 from eolab_app.routes.geoserver_map import (
     forward_geoserver_get_map,
     geoserver_forward_headers,
@@ -369,6 +370,7 @@ def create_composite_map_router(
     geoserver_client: httpx2.AsyncClient,
     geoserver_internal_url: str,
     get_map_request_tracker: GetMapRequestTracker,
+    render_queue: MapRenderQueue,
     maximum_tile_cache_bytes: int = DEFAULT_COMPOSITE_TILE_CACHE_BYTES,
 ) -> APIRouter:
     """Create the plan-registration and composite tile delivery boundary.
@@ -378,6 +380,7 @@ def create_composite_map_router(
         geoserver_client: Shared unauthenticated GeoServer WMS client.
         geoserver_internal_url: Internal GeoServer base URL.
         get_map_request_tracker: Bounded GetMap request observer.
+        render_queue: GetMap capacity shared with the direct WMS route.
         maximum_tile_cache_bytes: Maximum process-local composite response bytes.
 
     Returns:
@@ -479,7 +482,7 @@ def create_composite_map_router(
 
         return await forward_geoserver_get_map(
             request,
-            tile_cache.get(tile_key, load_tile),
+            tile_cache.get(tile_key, lambda: render_queue.run(load_tile)),
             get_map_request_tracker,
         )
 
