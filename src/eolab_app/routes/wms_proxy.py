@@ -12,7 +12,7 @@ from eolab_app.rendering.errors import (
     PublishedLayerNotAuthorizedError,
     PublishedLayerRequestError,
 )
-from eolab_app.rendering.ports import PublishedLayerRegistry
+from eolab_app.rendering.ports import MapRenderQueue, PublishedLayerRegistry
 from eolab_app.routes.geoserver_map import (
     forward_geoserver_get_map,
     geoserver_forward_headers,
@@ -222,6 +222,7 @@ def create_wms_proxy_router(
     geoserver_internal_url: str,
     published_layers: tuple[PublishedLayerRegistry, ...],
     get_map_request_tracker: GetMapRequestTracker,
+    render_queue: MapRenderQueue,
 ) -> APIRouter:
     """Create the restricted public WMS proxy.
 
@@ -230,6 +231,7 @@ def create_wms_proxy_router(
         geoserver_internal_url: Internal GeoServer base URL.
         published_layers: Feature-owned current-process layer registries.
         get_map_request_tracker: Bounded GetMap request observer.
+        render_queue: GetMap capacity shared with composite map tiles.
 
     Returns:
         Router exposing only EOLab's validated WMS contract.
@@ -315,11 +317,11 @@ def create_wms_proxy_router(
             if operation == "getmap":
                 return await forward_geoserver_get_map(
                     request,
-                    geoserver_client.get(
+                    render_queue.run(lambda: geoserver_client.get(
                         f"{internal_geoserver_url}/eolab/wms",
                         params=query_entries,
                         headers=forwarded_headers,
-                    ),
+                    )),
                     get_map_request_tracker,
                 )
             else:

@@ -1,7 +1,32 @@
 """Neutral contracts used by the restricted WMS delivery boundary."""
 
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Protocol
+
+import httpx2
+
+
+class MapRenderQueue(Protocol):
+    """Admit an authorized HTTP render without exposing queue implementation."""
+
+    async def run(
+        self, request: Callable[[], Awaitable[httpx2.Response]],
+    ) -> httpx2.Response:
+        """Wait for rendering capacity and then send the supplied request.
+
+        Args:
+            request: Deferred upstream GetMap HTTP operation.
+
+        Returns:
+            Completed HTTP response, including upstream error responses.
+
+        Raises:
+            RenderQueueUnavailableError: If the queue is full, closed, or expires.
+            RenderExecutionTimeoutError: If the admitted render exceeds its deadline.
+            httpx2.RequestError: If the upstream transport fails.
+            asyncio.CancelledError: If the caller cancels or the queue shuts down.
+        """
+        ...
 
 
 class PublishedLayerAuthorization(Protocol):

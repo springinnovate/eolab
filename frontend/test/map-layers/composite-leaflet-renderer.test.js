@@ -1,255 +1,180 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { CompositeLeafletRenderer } from "../../src/map-layers/composite-leaflet-renderer.js";
 
-import {
-    CompositeLeafletRenderer,
-} from "../../src/map-layers/composite-leaflet-renderer.js";
+/** Flush publication promises and tile status. @return {Promise<void>} Settled microtasks. */
+async function flush() { await new Promise(resolve => setImmediate(resolve)); }
 
-/** Flush promise callbacks queued by a plan publication. */
-async function flushPromises() {
-    await new Promise((resolve) => setImmediate(resolve));
-}
-
-/** Create a Leaflet-compatible evented WMS layer. */
-function createLayer(url, options) {
+/** Provide public Leaflet events. @return {Object} Event source. */
+function evented() {
     const handlers = new Map();
-    const addHandler = (event, handler, once) => {
-        if (!handlers.has(event)) handlers.set(event, new Set());
-        handlers.get(event).add({ handler, once });
-    };
     return {
-        url,
-        options,
-        on(event, handler) {
-            addHandler(event, handler, false);
-            return this;
-        },
-        once(event, handler) {
-            addHandler(event, handler, true);
-            return this;
-        },
-        off(event, handler) {
-            const eventHandlers = handlers.get(event);
-            for (const registration of eventHandlers ?? []) {
-                if (registration.handler === handler) {
-                    eventHandlers.delete(registration);
-                }
-            }
-            return this;
-        },
-        emit(event, detail) {
-            const eventHandlers = handlers.get(event);
-            for (const registration of [...(eventHandlers ?? [])]) {
-                if (registration.once) eventHandlers.delete(registration);
-                registration.handler(detail);
+        on(events, handler) {
+            for (const event of events.split(" ")) {
+                if (!handlers.has(event)) handlers.set(event, new Set());
+                handlers.get(event).add(handler);
             }
         },
-        addTo(map) {
-            map.attached.add(this);
-            return this;
+        off(events, handler) {
+            for (const event of events.split(" ")) handlers.get(event)?.delete(handler);
         },
-        setOpacity(opacity) {
-            this.opacity = opacity;
+        emit(event, detail) { for (const handler of handlers.get(event) ?? []) handler(detail); },
+    };
+}
+
+/**
+ * Create a two-tile viewport and observable image source assignments.
+ * @param {Function|null} create Optional plan publication override.
+ * @return {Object} Renderer, map, statuses, and tile factory.
+ */
+function fixture(create = null) {
+    const statuses = [], grids = [], calls = [];
+    const map = Object.assign(evented(), {
+        attached: new Set(), zoom: 1,
+        bounds: { min: { x: 0, y: 0 }, max: { x: 512, y: 256 } },
+        getZoom() { return this.zoom; },
+        getPixelBounds() { return this.bounds; },
+        removeLayer(layer) { this.attached.delete(layer); },
+    });
+    const renderer = new CompositeLeafletRenderer({
+        leaflet: { tileLayer: { wms(url, options) {
+            const layer = Object.assign(evented(), {
+                url, options,
+                getTileSize() { return { x: 256, y: 256 }; },
+                addTo() { map.attached.add(this); },
+            });
+            grids.push(layer);
+            return layer;
+        } } },
+        leafletMap: map,
+        client: { async create(layers, signal) {
+            calls.push({ layers, signal });
+            return create ? create(layers, signal) : { wmsUrl: "/authorized-plan/wms" };
+        } },
+        onStatus: status => statuses.push(status),
+    });
+    return {
+        renderer, map, grids, calls, statuses,
+        status: () => statuses.at(-1),
+        tile(x = 0, z = 1) {
+            const assignments = [];
+            const tile = { assignments, get src() { return `/tile/${x}/${z}`; },
+                set src(source) { assignments.push(source); } };
+            grids.at(-1).emit("tileloadstart", { tile, coords: { x, y: 0, z } });
+            return tile;
         },
     };
 }
 
-/** Create an image-like tile that records retry source assignments. */
-function createTile(source) {
-    const assignments = [];
-    let currentSource = source;
-    return {
-        assignments,
-        currentSrc: "",
-        get src() {
-            return currentSource;
-        },
-        set src(value) {
-            currentSource = value;
-            assignments.push(value);
-        },
-    };
-}
-
-test("composite renderer swaps complete grids only after the replacement loads", async () => {
-    const calls = [];
-    const map = {
-        attached: new Set(),
-        removeLayer(layer) {
-            this.attached.delete(layer);
-        },
-    };
-    const leaflet = {
-        tileLayer: {
-            wms(url, options) {
-                return createLayer(url, options);
-            },
-        },
-    };
-    const client = {
-        async create(layers) {
-            calls.push(layers);
-            const planId = String(calls.length).repeat(64);
-            return {
-                planId,
-                wmsUrl: `/api/map-rendering/plans/${planId}/wms`,
-            };
-        },
-    };
-    const renderer = new CompositeLeafletRenderer({
-        leaflet,
-        leafletMap: map,
-        client,
-    });
-
-    renderer.update([{ layerName: "eolab:first", opacity: 1 }]);
-    await flushPromises();
-    const first = [...map.attached][0];
-    assert.equal(first.options.layers, "composite");
-    first.emit("load");
-
-    renderer.update([{ layerName: "eolab:second", opacity: 0.5 }]);
-    await flushPromises();
-    assert.equal(map.attached.size, 2, "old grid remains during replacement load");
-    const second = [...map.attached].find((layer) => layer !== first);
-    assert.equal(second.opacity, 0);
-    second.emit("load");
-    assert.deepEqual([...map.attached], [second]);
-    assert.equal(second.opacity, 1);
-
-    renderer.update([{ layerName: "eolab:second", opacity: 0.5 }]);
-    await flushPromises();
-    assert.equal(calls.length, 2, "identical presentation is not republished");
-    renderer.clear();
-    assert.equal(map.attached.size, 0);
+test("delayed tiles remain loading; transparent PNG counts as successfully loaded", async () => {
+    const f = fixture();
+    f.renderer.update([{ layerName: "first", opacity: 0.5 }]);
+    assert.equal(f.status().phase, "preparing");
+    await flush();
+    const layer = f.grids[0], first = f.tile(), transparent = f.tile(1);
+    layer.emit("tileload", { tile: first }); await flush();
+    assert.deepEqual(f.status(), { phase: "loading", total: 2, loaded: 1, failed: 0 });
+    layer.emit("tileload", { tile: transparent }); layer.emit("load"); await flush();
+    assert.deepEqual(f.status(), { phase: "complete", total: 2, loaded: 2, failed: 0 });
+    assert.equal(layer.options.transparent, true);
+    f.renderer.update([{ layerName: "first", opacity: 0.5 }]);
+    assert.equal(f.calls.length, 1);
+    f.renderer.destroy();
 });
 
-test("composite renderer keeps the current grid after plan preparation fails", async () => {
-    const messages = [];
-    const map = {
-        attached: new Set(),
-        removeLayer(layer) {
-            this.attached.delete(layer);
-        },
-    };
-    let publication = 0;
-    const renderer = new CompositeLeafletRenderer({
-        leaflet: {
-            tileLayer: { wms: (url, options) => createLayer(url, options) },
-        },
-        leafletMap: map,
-        client: {
-            async create() {
-                publication += 1;
-                if (publication === 2) throw new Error("plan rejected");
-                const planId = "a".repeat(64);
-                return {
-                    planId,
-                    wmsUrl: `/api/map-rendering/plans/${planId}/wms`,
-                };
-            },
-        },
-        onError: (message) => messages.push(message),
-    });
-    renderer.update([{ layerName: "eolab:first" }]);
-    await flushPromises();
-    const current = [...map.attached][0];
-    current.emit("load");
-    renderer.update([{ layerName: "eolab:second" }]);
-    await flushPromises();
-
-    assert.deepEqual([...map.attached], [current]);
-    assert.deepEqual(messages, ["plan rejected"]);
-});
-
-test("composite renderer retries failed tiles with bounded delays", async (context) => {
+test("Leaflet load following tileerror cannot claim completion; transient failure recovers", async context => {
     context.mock.timers.enable({ apis: ["setTimeout"] });
-    const messages = [];
-    const map = {
-        attached: new Set(),
-        removeLayer(layer) {
-            this.attached.delete(layer);
-        },
-    };
-    const renderer = new CompositeLeafletRenderer({
-        leaflet: {
-            tileLayer: { wms: (url, options) => createLayer(url, options) },
-        },
-        leafletMap: map,
-        client: {
-            async create() {
-                return { wmsUrl: "/api/map-rendering/plans/retry/wms" };
-            },
-        },
-        onError: (message) => messages.push(message),
-    });
-    renderer.update([{ layerName: "eolab:raster" }]);
-    await flushPromises();
-    const layer = [...map.attached][0];
-    const firstTile = createTile("/first-tile");
-    const secondTile = createTile("/second-tile");
-
-    layer.emit("tileerror", { tile: firstTile });
-    layer.emit("tileerror", { tile: secondTile });
-    context.mock.timers.tick(249);
-    assert.deepEqual(firstTile.assignments, []);
-    assert.deepEqual(secondTile.assignments, []);
-    context.mock.timers.tick(1);
-    assert.deepEqual(firstTile.assignments, ["/first-tile"]);
-    assert.deepEqual(secondTile.assignments, ["/second-tile"]);
-    assert.deepEqual(messages, []);
-
-    layer.emit("tileload", { tile: secondTile });
-    layer.emit("tileerror", { tile: firstTile });
-    context.mock.timers.tick(999);
-    assert.equal(firstTile.assignments.length, 1);
-    context.mock.timers.tick(1);
-    assert.deepEqual(firstTile.assignments, ["/first-tile", "/first-tile"]);
-    layer.emit("tileerror", { tile: firstTile });
-    layer.emit("tileerror", { tile: firstTile });
-
-    assert.deepEqual(messages, ["The composite map could not be rendered."]);
+    const f = fixture(); f.renderer.update([{}]); await flush();
+    const layer = f.grids[0], tile = f.tile();
+    layer.emit("tileerror", { tile }); layer.emit("load"); await flush();
+    assert.equal(f.status().phase, "retrying");
+    context.mock.timers.tick(250);
+    assert.equal(tile.assignments.length, 1);
+    layer.emit("tileload", { tile }); layer.emit("load"); await flush();
+    assert.equal(f.status().phase, "complete");
+    f.renderer.destroy();
 });
 
-test("composite renderer cancels stale tile retries", async (context) => {
+test("offscreen buffered requests do not prevent visible completion", async () => {
+    const f = fixture(); f.renderer.update([{}]); await flush();
+    const layer = f.grids[0], tile = f.tile();
+    f.tile(3); // Still loading outside the viewport; the grid has not fired load.
+    layer.emit("tileload", { tile }); await flush();
+    assert.deepEqual(f.status(), { phase: "complete", total: 1, loaded: 1, failed: 0 });
+    f.renderer.destroy();
+});
+
+test("exhausted retries stay incomplete; explicit retry preserves successful neighbors", async context => {
     context.mock.timers.enable({ apis: ["setTimeout"] });
-    const map = {
-        attached: new Set(),
-        removeLayer(layer) {
-            this.attached.delete(layer);
-        },
-    };
-    const renderer = new CompositeLeafletRenderer({
-        leaflet: {
-            tileLayer: { wms: (url, options) => createLayer(url, options) },
-        },
-        leafletMap: map,
-        client: {
-            async create() {
-                return { wmsUrl: "/api/map-rendering/plans/cancel/wms" };
-            },
-        },
+    const f = fixture(); f.renderer.update([{}]); await flush();
+    const layer = f.grids[0], failed = f.tile(), good = f.tile(1);
+    layer.emit("tileload", { tile: good });
+    for (const delay of [250, 1000, 5000]) {
+        layer.emit("tileerror", { tile: failed }); layer.emit("load");
+        context.mock.timers.tick(delay);
+    }
+    await flush();
+    assert.deepEqual(f.status(), { phase: "incomplete", total: 2, loaded: 1, failed: 1 });
+    assert.equal(failed.assignments.length, 2);
+    f.renderer.retryFailedTiles(); f.renderer.retryFailedTiles();
+    assert.equal(failed.assignments.length, 3, "double click does not restart in-flight retry");
+    assert.equal(good.assignments.length, 0);
+    layer.emit("tileload", { tile: failed }); layer.emit("load"); await flush();
+    assert.equal(f.status().phase, "complete");
+    f.renderer.destroy();
+});
+
+test("pan/zoom excludes buffered tiles and cancels obsolete retries, including tileabort", async context => {
+    context.mock.timers.enable({ apis: ["setTimeout"] });
+    const f = fixture(); f.renderer.update([{}]); await flush();
+    const layer = f.grids[0], old = f.tile(), next = f.tile(2), aborted = f.tile(1);
+    layer.emit("tileerror", { tile: old }); layer.emit("tileerror", { tile: aborted });
+    layer.emit("tileabort", { tile: aborted });
+    layer.emit("tileload", { tile: next }); layer.emit("load");
+    f.map.bounds = { min: { x: 512, y: 0 }, max: { x: 768, y: 256 } };
+    f.map.emit("moveend"); context.mock.timers.tick(250); await flush();
+    assert.equal(old.assignments.length, 0); assert.equal(aborted.assignments.length, 0);
+    assert.deepEqual(f.status(), { phase: "complete", total: 1, loaded: 1, failed: 0 });
+    f.map.zoom = 2; f.map.emit("zoomend");
+    const zoomed = f.tile(2, 2);
+    layer.emit("tileerror", { tile: zoomed }); layer.emit("tileunload", { tile: zoomed });
+    context.mock.timers.tick(250); await flush();
+    assert.equal(zoomed.assignments.length, 0); assert.equal(f.status().total, 0);
+    f.renderer.destroy();
+});
+
+test("replacement removes old pixels immediately and ignores their events/retries", async context => {
+    context.mock.timers.enable({ apis: ["setTimeout"] });
+    const f = fixture(); f.renderer.update([{ layerName: "first" }]); await flush();
+    const previous = f.grids[0], tile = f.tile();
+    previous.emit("tileerror", { tile });
+    f.renderer.update([{ layerName: "second" }]);
+    assert.equal(f.map.attached.size, 0); await flush();
+    previous.emit("tileload", { tile }); previous.emit("load");
+    context.mock.timers.tick(1000); await flush();
+    assert.equal(tile.assignments.length, 0); assert.equal(f.status().loaded, 0);
+    assert.deepEqual([...f.map.attached], [f.grids[1]]);
+    f.renderer.clear(); await flush();
+    assert.equal(f.status().phase, "idle"); f.renderer.destroy();
+});
+
+test("failed plan is recoverable and late responses cannot replace current layers", async () => {
+    let resolveFirst, count = 0;
+    const f = fixture(() => {
+        count++;
+        if (count === 1) return new Promise(resolve => { resolveFirst = resolve; });
+        if (count === 2) throw new Error("Plan unavailable");
+        return { wmsUrl: "/current" };
     });
-    renderer.update([{ layerName: "eolab:first" }]);
-    await flushPromises();
-    const replacedTile = createTile("/replaced-tile");
-    [...map.attached][0].emit("tileerror", { tile: replacedTile });
-    renderer.update([{ layerName: "eolab:second" }]);
-    await flushPromises();
-    context.mock.timers.tick(250);
-    assert.deepEqual(replacedTile.assignments, []);
-
-    const clearedTile = createTile("/cleared-tile");
-    [...map.attached][0].emit("tileerror", { tile: clearedTile });
-    renderer.clear();
-    context.mock.timers.tick(250);
-    assert.deepEqual(clearedTile.assignments, []);
-
-    renderer.update([{ layerName: "eolab:third" }]);
-    await flushPromises();
-    const destroyedTile = createTile("/destroyed-tile");
-    [...map.attached][0].emit("tileerror", { tile: destroyedTile });
-    renderer.destroy();
-    context.mock.timers.tick(250);
-    assert.deepEqual(destroyedTile.assignments, []);
+    f.renderer.update([{ layerName: "old" }]);
+    f.renderer.update([{ layerName: "new" }]); await flush();
+    assert.equal(f.calls[0].signal.aborted, true);
+    assert.equal(f.status().phase, "error");
+    assert.equal(f.status().message, "Plan unavailable");
+    f.renderer.retryFailedTiles(); await flush();
+    assert.deepEqual(f.calls[2].layers, [{ layerName: "new" }]);
+    resolveFirst({ wmsUrl: "/obsolete" }); await flush();
+    assert.equal(f.grids.length, 1); assert.equal(f.grids[0].url, "/current");
+    f.renderer.destroy(); f.map.emit("moveend"); await flush();
+    assert.equal(f.status().phase, "idle");
 });

@@ -110,6 +110,31 @@ select:hover:not(:disabled) {
   filter: saturate(0.6) contrast(0.86);
 }
 
+.map-render-status {
+  max-width: min(310px, calc(100vw - 48px));
+  padding: 6px 9px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text-2);
+  box-shadow: var(--elevation-control);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+.map-render-status[hidden], .map-render-status button[hidden] { display: none; }
+.map-render-status button {
+  display: block;
+  margin-top: 4px;
+  padding: 2px 5px;
+  border: 1px solid var(--brand);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--brand);
+  cursor: pointer;
+}
+.map-render-status[data-phase="incomplete"], .map-render-status[data-phase="error"] {
+  border-left: 3px solid var(--status-warning);
+}
+
 .leaflet-control-zoom a {
   border-color: var(--border-1) !important;
   background: var(--surface-2) !important;
