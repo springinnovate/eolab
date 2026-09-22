@@ -1,0 +1,38 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { addMapRenderStatus } from "../../src/map-layers/map-render-status.js";
+import { createLeafletDouble } from "../../test-support/fake-basemap-leaflet.js";
+
+test("status reports incomplete tiles accessibly and sends a targeted retry action", () => {
+    const { leaflet, leafletMap, calls } = createLeafletDouble();
+    let retries = 0;
+    const view = addMapRenderStatus(leaflet, leafletMap, () => retries++);
+    const root = calls.controls[0].root;
+    const [message, button] = root.children;
+    assert.equal(root.hidden, true);
+    assert.equal(message.getAttribute("role"), "status");
+    assert.equal(message.getAttribute("aria-atomic"), "true");
+    view.update({ phase: "loading", total: 6, loaded: 2, failed: 0 });
+    assert.match(message.textContent, /Loading.*2 of 6 visible tiles/);
+    assert.equal(button.hidden, true);
+    view.update({ phase: "incomplete", total: 6, loaded: 4, failed: 2 });
+    assert.match(message.textContent, /incomplete.*2 missing/);
+    assert.equal(button.hidden, false);
+    assert.equal(button.textContent, "Retry missing tiles");
+    button.dispatchEvent(new Event("click"));
+    assert.equal(retries, 1);
+    view.update({ phase: "retrying", total: 6, loaded: 4, failed: 0 });
+    assert.match(message.textContent, /Retrying/);
+    assert.equal(button.hidden, true);
+    view.update({ phase: "complete", total: 6, loaded: 6, failed: 0 });
+    assert.equal(message.textContent, "Map layers loaded");
+    view.update({ phase: "error", total: 0, loaded: 0, failed: 0, message: "Try later." });
+    assert.match(message.textContent, /Try later/);
+    assert.equal(button.textContent, "Retry map layers");
+    view.update({ phase: "idle", total: 0, loaded: 0, failed: 0 });
+    assert.equal(root.hidden, true);
+    assert.deepEqual(calls.stoppedClicks, [root]);
+    assert.deepEqual(calls.stoppedScrolls, [root]);
+    view.remove(); button.dispatchEvent(new Event("click"));
+    assert.equal(retries, 1);
+});
