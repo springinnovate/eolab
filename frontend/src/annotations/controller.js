@@ -173,6 +173,8 @@ export class AnnotationController {
         const layer = this.model.layers.find(candidate => candidate.id === id);
         if (!layer) return false;
         const previous = this.shared.get(id);
+        const renamed = data.name && data.name !== layer.name;
+        if (renamed) layer.name = data.name;
         const signature = JSON.stringify(data.collections);
         const changed = signature !== previous?.signature;
         const polygons = changed ? data.collections.flatMap(collection => {
@@ -182,6 +184,7 @@ export class AnnotationController {
         }) : previous.polygons;
         this.shared.set(id, { ...data, signature, polygons });
         this.controls.get(id).setCollaboration(data, polygons);
+        if (renamed) this.refreshLayer(id, false);
         if (changed) { this.layers.get(id).refresh(); this.mapLayers.render(); }
         return changed;
     }
