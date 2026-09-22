@@ -13,7 +13,7 @@ export class AnnotationPanelView {
         this.onOpen = onOpen;
         this.layers = new Map();
         this.selectedKey = null;
-        this.entry = document.querySelector("#create-annotation-layer");
+        this.entry = document.querySelector("#toggle-map-layers");
         this.selector = document.querySelector("#annotation-panel-layer");
         this.layerField = document.querySelector("#annotation-panel-layer-field");
         this.content = document.querySelector("#annotation-panel-content");
@@ -94,6 +94,6 @@ export class AnnotationPanelView {
     /** Reveal annotation tools, keeping the selected layer and any unfinished text. @return {void} */
     show() {
         this.onOpen();
-        (this.selectedKey ? this.selector : this.document.querySelector("#create-annotation-layer")).focus({ preventScroll: true });
+        (this.selectedKey ? this.selector : this.entry).focus({ preventScroll: true });
     }
 }

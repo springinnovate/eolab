@@ -46,7 +46,6 @@ export class AnnotationController {
         this.restoredLayers = new WeakMap();
         this.pendingSave = false;
         this.panel = panel;
-        this.createButton = document.querySelector("#create-annotation-layer");
         this.status = document.querySelector("#annotation-save-status");
         this.undoButton = document.querySelector("#undo-annotation-delete");
         this.retryButton = document.querySelector("#retry-annotation-save");
@@ -62,12 +61,6 @@ export class AnnotationController {
             const file = this.importInput.files[0];
             if (file) void this.importGeoJSONFile(file);
         });
-        this.createButton.disabled = true;
-        this.createButton.addEventListener("click", () => this.perform(() => {
-            const id = this.createLayer();
-            this.panel.showLayer(`local:annotation:${id}`);
-            this.controls.get(id).name.querySelector("input").select();
-        }));
         this.undoButton.addEventListener("click", () => this.perform(() => {
             const layerId = this.model.deleted?.layerId;
             if (!this.model.undoDeletion()) return;
@@ -115,28 +108,12 @@ export class AnnotationController {
             this.savedSharingLayers = this.model.layers.map(layer => ({ id: layer.id, collection: exportAnnotationGeoJSON(layer) }));
             for (const layer of [...this.model.layers].reverse()) this.attachLayer(layer);
             this.loaded = true;
-            this.createButton.disabled = false;
             this.importButton.disabled = false;
             this.status.textContent = "";
         } catch (error) {
             this.status.textContent = `Cannot open saved annotations: ${error.message}`;
             this.panel.show();
         }
-    }
-
-    /**
-     * Add an empty annotation layer to the map and start saving it on this device.
-     * @param {string|null} [name=null] Optional initial layer name supplied by composition, at most 160 characters.
-     * @return {string} New local layer identifier; sharing reads it only after a successful save.
-     * @throws {Error} If local annotations are unavailable or the layer limit is reached.
-     */
-    createLayer(name = null) {
-        if (!this.loaded) throw new Error("Local annotations are not available yet.");
-        const layer = this.model.createLayer();
-        if (name !== null) layer.name = name;
-        this.attachLayer(layer);
-        void this.save();
-        return layer.id;
     }
 
     /** Restore your server contribution as a local editable layer after joining.

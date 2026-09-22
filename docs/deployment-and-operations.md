@@ -470,14 +470,14 @@ source checks, job ownership, cancellation and output checksum checks are unchan
 
 ## Shared annotation layers
 
-In **Map layers**, choose **Create shared annotation layer** and enter a layer
+In **Map layers**, under **Annotations**, choose **Create shared** and enter a layer
 name and your name. **Share** on that layer copies its code. Other people choose
-**Join shared annotation layer**, enter the code and a name not already used in
+**Join**, enter the code and a name not already used in
 that layer. Creators and joiners have the same controls; there is no facilitator
 role or separate session panel.
 
 Everyone sees one combined layer containing all contributors' polygons. Expand
-the contributor arrow to see names and polygon counts. **Draw a custom polygon**
+the contributor arrow to see names and polygon counts. **Draw polygon**
 adds your own polygon. **Edit** opens your editable polygons and a read-only list
 of other contributors' polygons. Visibility, style and filters affect only your
 map. Raster summaries use the combined layer and its current filter.
@@ -485,8 +485,7 @@ map. Raster summaries use the combined layer and its current filter.
 Finished edits and changes to names or notes are saved locally first, then shared
 automatically. Unfinished drawings remain local. Removing a layer from your map
 does not delete its shared contents; join again with the same browser credentials
-to restore your contribution. **Create local annotation layer** and **Import
-GeoJSON** remain available for private layers. Their **Share** action creates a
+to restore your contribution. **Import GeoJSON** adds a private layer from a file. Their **Share** action creates a
 new shared layer. **Export GeoJSON** saves the combined polygons with contributor
 names. Ordinary map links do not carry annotations, codes or private credentials.
 

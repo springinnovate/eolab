@@ -659,7 +659,7 @@ test("shared layer creation and joining live in Map layers without a session too
     assert.match(layers.source, /id="create-shared-annotation-layer"/);
     assert.match(layers.source, /id="join-shared-annotation-layer"/);
     assert.doesNotMatch(layers.source, /id="open-annotations"/);
-    assert.match(layers.source, /id="create-annotation-layer"/);
+    assert.doesNotMatch(MARKUP, /id="create-annotation-layer"/);
     assert.match(layers.source, /id="import-annotation-geojson"/);
     assert.ok(annotations.start > inspection.start && annotations.end < inspection.end);
     for (const id of ["annotation-save-status", "annotation-panel-content"]) {

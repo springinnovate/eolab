@@ -14,7 +14,7 @@ function controller() {
         model: new AnnotationModel(), loaded: true, dirty: false, saving: false, pendingSave: false,
         panel: { open: false, show() { this.open = true; }, showLayer(key) { this.open = true; this.selectedKey = key; } }, status: { textContent: "" },
         fileStatus: { textContent: "", classList: { add() {}, remove() {} } },
-        retryButton: { hidden: true }, createButton: { disabled: true }, importButton: { disabled: true },
+        retryButton: { hidden: true }, importButton: { disabled: true },
         storage: { async load() { return []; }, async save() {} },
         document: { createElement() { return { remove() {} }; } },
     });
@@ -85,14 +85,14 @@ test("successful startup leaves panel closed but a storage load failure reveals 
     annotations.loaded = false;
     await annotations.load();
     assert.equal(annotations.panel.open, false);
-    assert.equal(annotations.createButton.disabled, false);
+    assert.equal(annotations.importButton.disabled, false);
     const failed = controller();
     failed.loaded = false;
     failed.storage.load = async () => { throw new Error("Cannot open database"); };
     await failed.load();
     assert.equal(failed.panel.open, true);
     assert.equal(failed.loaded, false);
-    assert.equal(failed.createButton.disabled, true);
+    assert.equal(failed.importButton.disabled, true);
     assert.match(failed.status.textContent, /Cannot open saved annotations/);
 });
 
@@ -191,23 +191,24 @@ test("sharing reads the last device-saved polygons while a new save is pending o
     assert.equal(annotations.sharableLayers()[0].collection.name, "Changed layer");
 });
 
-test("creating a layer exposes it to sharing only after successful device saving", async () => {
+test("restoring a shared contribution exposes it only after successful device saving", async () => {
     const annotations = controller();
     annotations.savedSharingLayers = [];
     annotations.attachLayer = () => {};
     const events = []; let release;
     annotations.onCommittedChange = () => events.push(["saved", annotations.sharableLayers().map(layer => layer.id)]);
     annotations.storage.save = () => new Promise(resolve => { release = resolve; });
-    const id = annotations.createLayer();
+    const collection = { type: "FeatureCollection", features: [] };
+    const restoring = annotations.restoreSharedContribution("Shared", collection);
     assert.deepEqual(events, []);
     assert.deepEqual(annotations.sharableLayers(), []);
-    release(); await annotations.savePromise;
+    release(); const id = await restoring;
     assert.deepEqual(events, [["saved", [id]]]);
     annotations.storage.save = async () => { throw new Error("Storage full"); };
-    const unsavedId = annotations.createLayer(); await annotations.savePromise;
-    assert.equal(annotations.sharableLayers().some(layer => layer.id === unsavedId), false);
+    await assert.rejects(annotations.restoreSharedContribution("Unsaved", collection), /Storage full/);
+    assert.deepEqual(annotations.sharableLayers().map(layer => layer.id), [id]);
     annotations.loaded = false;
-    assert.throws(() => annotations.createLayer(), /not available/);
+    await assert.rejects(annotations.restoreSharedContribution("Unavailable", collection), /not available/);
 });
 
 

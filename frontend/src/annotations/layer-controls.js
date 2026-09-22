@@ -33,8 +33,7 @@ export class AnnotationLayerControls {
         buttons.className = "annotation-actions";
         this.edit = this.button("Edit", actions.open);
         this.edit.setAttribute("aria-controls", "annotations-panel");
-        this.draw = this.button("Draw a custom polygon", actions.add);
-        this.draw.className = "annotation-draw-button";
+        this.draw = this.button("Draw polygon", actions.add);
         this.drawing = document.createElement("div"); this.drawing.className = "annotation-drawing-action";
         this.members = this.details("Contributors"); this.members.className = "shared-annotation-members"; this.members.hidden = true;
         this.memberList = document.createElement("ul"); this.members.append(this.memberList);
