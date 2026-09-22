@@ -27,6 +27,10 @@
 .annotation-help p { font-size: 0.8rem; line-height: 1.4; }
 .annotation-layer-controls details { margin-top: 0.5rem; }
 .annotation-layer-controls summary { cursor: pointer; }
+.annotation-style-group { min-width: 0; margin: 0; padding: 0; border: 0; }
+.has-shared-color .annotation-style-group { margin-top: 0.6rem; }
+.has-shared-color .annotation-style-group + .annotation-style-group { border-top: 1px solid var(--border-1); padding-top: 0.5rem; }
+.annotation-style-group > legend { padding: 0 0.4rem 0.4rem 0; font-weight: 600; }
 .annotation-layer-controls ul { list-style: none; margin: 0.5rem 0 0; padding: 0; }
 .annotation-layer-controls li + li { border-top: 1px solid #d5d5d5; margin-top: 0.6rem; padding-top: 0.6rem; }
 .annotation-field { display: flex; gap: 0.4rem; align-items: center; margin-bottom: 0.5rem; font-size: 0.85rem; }
