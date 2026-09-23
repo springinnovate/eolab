@@ -555,6 +555,28 @@ Database operations have a 3-second connection/lock wait and a 5-second statemen
 timeout. Stored references do not copy datasets, verify current catalog availability,
 or grant data access. Existing capability APIs still resolve their own sources.
 
+## Simplified shared viewer (preview)
+
+To try the recipient interface before named-map publishing is available, prepare
+a map in the main app, choose **Copy map link**, and insert `?viewer=shared` before
+the link's `#view=` fragment. For example, change `https://your-site/#view=...` to
+`https://your-site/?viewer=shared#view=...`. Keep the complete fragment.
+
+This mode keeps the included layers, navigation, basemaps, visibility, ordering,
+legends, layer details, filters, personal styles, inspection, analysis and downloads.
+Catalog browsing, scanning, operational diagnostics, experimental performance
+tuning, annotation creation/import/joining, and layer removal are omitted.
+It is a presentation choice, not API authorization; the main app and APIs remain
+available at their existing addresses.
+
+**Restore shared map** reloads the opening link's layers, styles, filters, center
+and zoom. It also retries layers that failed to load. **Copy map link** includes
+personal presentation changes and keeps simplified mode. Private map autosave,
+annotation contents and contributor credentials are left alone; this mode does
+not restore private annotation layers. Shared annotation references and named
+`/maps/{slug}` pages will be added separately. The existing portable map format
+does not yet save the basemap selection.
+
 ## Shared annotation layers
 
 In **Map layers**, expand **Annotations**, choose **Create shared** and enter a layer

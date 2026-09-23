@@ -70,8 +70,11 @@ export class MapLayerStackView {
      *
      * @param {Document} [documentContext=globalThis.document] Application
      * document.
+     * @param {Object} [options] Layer-list presentation options.
+     * @param {boolean} [options.allowRemoval=true] Offer removal and its Undo control.
      */
-    constructor(documentContext = globalThis.document) {
+    constructor(documentContext = globalThis.document, { allowRemoval = true } = {}) {
+        this.allowRemoval = allowRemoval;
         this.documentContext = documentContext;
         this.filterIndicators = [
             "#map-filter-indicators", "#map-inspection-filter-indicators",
@@ -123,7 +126,7 @@ export class MapLayerStackView {
      * @return {void}
      */
     showRemoval(removal, busy, error) {
-        this.removalNotice.hidden = removal === null;
+        this.removalNotice.hidden = !this.allowRemoval || removal === null;
         this.removalIndex = removal?.index ?? 0;
         this.undoRemove.disabled = busy;
         this.undoRemove.textContent = busy ? "Restoring…" : "Undo";
@@ -428,17 +431,19 @@ export class MapLayerStackView {
             focusTargets,
             !clipboard.canPaste
         );
-        const remove = this.#button(
-            "×",
-            `Remove from map: ${accessibleName}`,
-            layer.key,
-            "remove",
-            () => this.handlers?.onRemove(layer.key),
-            focusTargets
-        );
-        remove.classList.add("map-layer-remove-button");
-        remove.title = `Remove from map: ${layer.label}`;
-        primary.append(remove);
+        if (this.allowRemoval) {
+            const remove = this.#button(
+                "×",
+                `Remove from map: ${accessibleName}`,
+                layer.key,
+                "remove",
+                () => this.handlers?.onRemove(layer.key),
+                focusTargets
+            );
+            remove.classList.add("map-layer-remove-button");
+            remove.title = `Remove from map: ${layer.label}`;
+            primary.append(remove);
+        }
         const rowActions = this.documentContext.createElement("div");
         rowActions.className = "map-layer-row-actions";
         const filterActions = layer.canFilter ? [this.#button(

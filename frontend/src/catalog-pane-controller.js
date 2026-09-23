@@ -1,9 +1,10 @@
 /**
  * Catalog pane disclosure and progressive-inspector presentation.
  *
- * Catalog search and results remain continuously available. The selected
+ * In authoring mode, Catalog search and results remain available. The selected
  * Item is revealed only when a result is chosen: CSS presents it as an
  * adjacent column when space permits and as a drill-in view otherwise.
+ * A supplied dialog presents only included-layer metadata in a shared viewer.
  */
 
 /**
@@ -30,6 +31,9 @@
  * @param {Document} documentContext Document containing the Catalog workspace.
  * @param {() => void} [onLayoutChange=() => {}] Notifies the composition root
  * when progressive inspector visibility changes the workspace allocation.
+ * @param {Object} [options] Presentation options supplied by composition.
+ * @param {HTMLDialogElement|null} [options.detailsDialog=null] Present included-layer
+ * metadata in this dialog instead of opening the catalog browser.
  * @return {CatalogPaneControls} Narrow presentation contract used by Catalog
  * selection without exposing layout or breakpoint decisions.
  * @throws {TypeError} When the layout-change notifier is not callable.
@@ -37,7 +41,8 @@
  */
 export function initializeCatalogPaneControls(
     documentContext = document,
-    onLayoutChange = () => {}
+    onLayoutChange = () => {},
+    { detailsDialog = null } = {}
 ) {
     if (typeof onLayoutChange !== "function") {
         throw new TypeError("Catalog layout-change notifier must be callable");
@@ -67,6 +72,11 @@ export function initializeCatalogPaneControls(
         );
     }
     let returnFocusTarget = null;
+    if (detailsDialog) {
+        detailsDialog.append(elements.inspectorPane);
+        elements.closeItemDetails.textContent = "Close layer details";
+        elements.closeItemDetails.setAttribute("aria-label", "Close layer details");
+    }
 
     /**
      * Applies selected-Item visibility without deciding its CSS placement.
@@ -92,13 +102,17 @@ export function initializeCatalogPaneControls(
             !isVisible
         );
         elements.inspectorBody.scrollTop = 0;
+        if (detailsDialog) {
+            if (isVisible && !detailsDialog.open) detailsDialog.showModal();
+            if (!isVisible && detailsDialog.open) detailsDialog.close();
+        }
 
         if (moveFocus) {
             const target = isVisible
                 ? elements.inspectorHeading
                 : returnFocusTarget?.isConnected
                     ? returnFocusTarget
-                    : elements.resultsHeading;
+                    : detailsDialog ? documentContext.querySelector("#toggle-map-layers") : elements.resultsHeading;
             target.focus();
         }
         if (visibilityChanged) {
@@ -122,6 +136,10 @@ export function initializeCatalogPaneControls(
     }
 
     setInspectorVisible(!elements.inspectorPane.hidden);
+    detailsDialog?.addEventListener("cancel", (event) => {
+        event.preventDefault();
+        setInspectorVisible(false, { moveFocus: true });
+    });
 
     elements.closeItemDetails.addEventListener("click", () => {
         setInspectorVisible(false, { moveFocus: true });

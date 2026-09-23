@@ -11,6 +11,55 @@ import { createSavedMapView, serializeSavedMapView } from "../../src/saved-map-v
 
 const ZERO_REVISION = `sha256:${"0".repeat(64)}`;
 
+test("shared viewer restores its starting presentation and never reads or writes author autosave", async () => {
+  const view = createView(), storage = createStorage("private map"), applied = [];
+  const saved = emptySavedMap(10, 20, 6);
+  const layer = { catalogItem: { collection: "vectors", id: "included" }, sourceRevision: null,
+    visible: true, opacity: 0.6, style: { kind: "vector", definition: { color: "red" } },
+    filter: { enabled: true, match: "all", rules: [] } };
+  const fragment = await encodeSavedMapViewFragment(serializeSavedMapView({ ...saved, layers: [layer] }), { maximumInputBytes: 512 * 1024 });
+  let position;
+  const records = [];
+  const controller = new SavedMapViewController({ view, storage, restoreSharedMap: true,
+    viewport: { snapshot: () => position, restore: value => { position = value; } },
+    mapLayers: { retainedRecords: records, commitStaged: staged => records.push(...staged.map(item => item.record)) },
+    catalogItems: { get: async identity => identity },
+    catalogVisualization: {
+      clear() { records.length = 0; }, prepare: async item => item, sourceRevision: () => null,
+      stage: async (item, presentation) => ({ record: { entry: { item, ...presentation }, adapter: {
+        applySavedState: (_record, style) => applied.push(style),
+        applyFilterState: (_record, filter) => applied.push(filter),
+      } } }),
+    }, viewerVersion: "0.6.0", viewerOrigin: "https://viewer.example",
+  });
+  await controller.restoreStartupView(fragment);
+  assert.equal(records.length, 1);
+  records[0].entry.visible = false;
+  position = emptySavedMap(0, 0, 2).viewport;
+  controller.scheduleRemember();
+  await controller.resetView();
+  assert.deepEqual(position, saved.viewport);
+  assert.equal(records[0].entry.visible, true);
+  assert.equal(records[0].entry.opacity, 0.6);
+  assert.deepEqual(applied, [layer.style, layer.filter, layer.style, layer.filter]);
+  assert.equal(view.undoVisible, false);
+  assert.deepEqual([storage.reads, storage.writes.length, storage.clears], [0, 0, 0]);
+  assert.equal(storage.serialized, "private map");
+});
+
+test("missing and invalid shared links report errors without falling back to private maps", async () => {
+  for (const fragment of ["", "#view=bad"]) {
+    const view = createView(), storage = createStorage("private map");
+    const controller = new SavedMapViewController({ view, storage, restoreSharedMap: true });
+    await controller.restoreStartupView(fragment);
+    assert.equal(view.errorOperation, "open");
+    await controller.resetView();
+    assert.equal(view.errorOperation, "open");
+    assert.equal(storage.reads, 0);
+    assert.equal(storage.clears, 0);
+  }
+});
+
 test("saved filters restore before commit and invalid filters never expose an unfiltered layer", async () => {
   for (const valid of [true, false]) {
     const state = { enabled: false, match: "all", rules: [{ field: "year", operator: "gt", value: 2020 }] };

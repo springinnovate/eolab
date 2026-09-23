@@ -68,6 +68,8 @@ function requireLayoutElement(documentContext, selector) {
  * @property {Document} [documentContext=globalThis.document] Layout document.
  * @property {(callback: () => void, delay: number) => *} [schedule]
  * Transition scheduler; defaults to the browser timer.
+ * @property {boolean} [allowCatalog=true] Expose the catalog workspace.
+ * @property {boolean} [allowOperationalStatus=true] Expose operational diagnostics.
  */
 
 /** Own the EOMap workspace-sidebar disclosure presentation. */
@@ -84,6 +86,8 @@ export class EomapLayoutController {
         invalidateMapSize,
         documentContext = globalThis.document,
         schedule = globalThis.setTimeout.bind(globalThis),
+        allowCatalog = true,
+        allowOperationalStatus = true,
     }) {
         if (typeof invalidateMapSize !== "function") {
             throw new TypeError("Map-size invalidation must be callable");
@@ -94,6 +98,8 @@ export class EomapLayoutController {
         this.invalidateMapSize = invalidateMapSize;
         this.documentContext = documentContext;
         this.schedule = schedule;
+        this.allowCatalog = allowCatalog;
+        this.allowOperationalStatus = allowOperationalStatus;
         this.appElement = requireLayoutElement(documentContext, "#app");
         this.controlPanelElement = requireLayoutElement(
             documentContext,
@@ -147,6 +153,8 @@ export class EomapLayoutController {
             (configuration, index) =>
                 this.#createWorkspaceDisclosure(configuration, index)
         );
+        if (!allowCatalog) this.workspaceDisclosures[0].isExpanded = false;
+        if (!allowOperationalStatus) this.operationalStatusIsExpanded = false;
         this.#synchronizeOperationalStatusPresentation();
         this.#synchronizeWorkspacePresentation();
         this.#synchronizeControlPanelPresentation();
@@ -190,6 +198,7 @@ export class EomapLayoutController {
      * @throws {RangeError} If the name is outside the static layout contract.
      */
     showWorkspace(name, moveFocus = false) {
+        if (name === "catalog" && !this.allowCatalog) return;
         const index = this.workspaceDisclosures.findIndex(
             ({ configuration }) => configuration.name === name
         );
@@ -312,6 +321,7 @@ export class EomapLayoutController {
             );
         }
         const workspaceDisclosure = this.workspaceDisclosures[index];
+        if (workspaceDisclosure.configuration.name === "catalog" && !this.allowCatalog) return;
         const stateChanged = workspaceDisclosure.isExpanded !== isExpanded;
         workspaceDisclosure.isExpanded = isExpanded;
         this.#synchronizeWorkspacePresentation();
@@ -331,6 +341,7 @@ export class EomapLayoutController {
     #synchronizeWorkspacePresentation() {
         for (const workspaceDisclosure of this.workspaceDisclosures) {
             const { isExpanded } = workspaceDisclosure;
+            workspaceDisclosure.toggle.hidden = workspaceDisclosure.configuration.name === "catalog" && !this.allowCatalog;
             workspaceDisclosure.toggle.setAttribute(
                 "aria-expanded",
                 String(isExpanded)
@@ -353,6 +364,8 @@ export class EomapLayoutController {
      * @return {void}
      */
     #synchronizeOperationalStatusPresentation() {
+        this.operationalToggle.hidden = !this.allowOperationalStatus;
+        this.operationalRegion.hidden = !this.allowOperationalStatus;
         this.operationalRegion.classList.toggle(
             "is-collapsed",
             !this.operationalStatusIsExpanded
@@ -415,6 +428,7 @@ export class EomapLayoutController {
 
     /** Toggle compact operational-status details. @return {void} */
     #handleOperationalToggle() {
+        if (!this.allowOperationalStatus) return;
         this.operationalStatusIsExpanded =
             !this.operationalStatusIsExpanded;
         this.#synchronizeOperationalStatusPresentation();

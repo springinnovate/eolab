@@ -249,6 +249,28 @@ function createLayoutFixture() {
     };
 }
 
+test("shared viewer omits catalog and status while retaining layer and sidebar controls", () => {
+    const fixture = createLayoutFixture();
+    const layout = new EomapLayoutController({
+        documentContext: fixture.document, schedule: fixture.schedule,
+        invalidateMapSize() {}, allowCatalog: false, allowOperationalStatus: false,
+    });
+    layout.showWorkspace("catalog");
+    fixture.catalogTab.dispatchEvent(new Event("click"));
+    fixture.operationalToggle.dispatchEvent(new Event("click"));
+    assert.equal(fixture.catalogTab.hidden, true);
+    assert.equal(fixture.catalogRegion.hidden, true);
+    assert.equal(fixture.operationalRegion.hidden, true);
+    assert.equal(fixture.operationalToggle.hidden, true);
+    layout.showWorkspace("map-layers");
+    assert.equal(fixture.renderingRegion.hidden, false);
+    layout.setControlPanelCollapsed(true);
+    assert.equal(fixture.openPanel.hidden, false);
+    layout.setControlPanelCollapsed(false);
+    assert.equal(fixture.renderingRegion.hidden, false);
+    assert.equal(fixture.catalogRegion.hidden, true);
+});
+
 test("workspace disclosures expose independent initial panel states", () => {
     const fixture = createLayoutFixture();
     const controller = new EomapLayoutController({

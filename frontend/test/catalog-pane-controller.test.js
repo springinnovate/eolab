@@ -83,6 +83,30 @@ function createCatalogPaneFixture() {
   };
 }
 
+test("included-layer details open and close a dialog without revealing catalog results", () => {
+  const fixture = createCatalogPaneFixture();
+  const dialog = new EventTarget();
+  dialog.open = false;
+  dialog.append = element => { dialog.content = element; };
+  dialog.showModal = () => { dialog.open = true; };
+  dialog.close = () => { dialog.open = false; };
+  const controls = initializeCatalogPaneControls(fixture.document, () => {}, { detailsDialog: dialog });
+  const opener = new FakeElement({}, fixture.document);
+  opener.isConnected = true;
+  controls.showInspector({ moveFocus: true, returnFocusTarget: opener });
+  assert.equal(dialog.open, true);
+  assert.equal(dialog.content, fixture.inspectorPane);
+  assert.equal(fixture.document.activeElement, fixture.inspectorHeading);
+  assert.equal(fixture.closeItemDetails.textContent, "Close layer details");
+  fixture.closeItemDetails.dispatchEvent(new Event("click"));
+  assert.equal(dialog.open, false);
+  assert.equal(fixture.document.activeElement, opener);
+  controls.showInspector({ returnFocusTarget: opener });
+  dialog.dispatchEvent(new Event("cancel", { cancelable: true }));
+  assert.equal(dialog.open, false);
+  assert.equal(fixture.inspectorPane.hidden, true);
+});
+
 test("Catalog keeps results visible and reveals selection progressively", () => {
   const fixture = createCatalogPaneFixture();
   let layoutChanges = 0;
