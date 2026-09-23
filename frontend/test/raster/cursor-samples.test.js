@@ -61,6 +61,27 @@ function participant(index) {
   };
 }
 
+test("renaming during dwell, in-flight sampling and after completion never rereads a pixel", async () => {
+  const clock = createClock(), deferred = createDeferred(), snapshots = [];
+  let reads = 0;
+  const controller = new RasterCursorSamplesController(() => { reads++; return deferred.promise; }, value => snapshots.push(value), clock);
+  const original = participant(1);
+  controller.move([original], { longitude: 20, latitude: 40 });
+  controller.synchronize([{ ...original, label: "Before read" }]);
+  assert.equal(clock.pendingCount, 1);
+  clock.runNext();
+  controller.synchronize([{ ...original, label: "During read" }]);
+  assert.equal(snapshots.at(-1).samples[0].label, "During read");
+  deferred.resolve({ inBounds: true, value: 8 });
+  await new Promise(resolve => setImmediate(resolve));
+  controller.synchronize([{ ...original, label: "After read" }]);
+  assert.equal(snapshots.at(-1).samples[0].label, "After read");
+  assert.equal(snapshots.at(-1).samples[0].value, 8);
+  assert.equal(reads, 1);
+  assert.equal(clock.pendingCount, 0);
+  controller.clear();
+});
+
 test("cursor sampling dwells, uses a fixed worker pool, and reports progressively", async () => {
   const clock = createClock();
   const requests = [];

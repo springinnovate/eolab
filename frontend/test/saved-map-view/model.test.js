@@ -31,6 +31,23 @@ test("backend parity fixture preserves the browser saved-map document", () => {
   assert.deepEqual(JSON.parse(serializeSavedMapView(parseSavedMapView(text))), JSON.parse(text));
 });
 
+test("custom catalog names round-trip as bounded presentation text without changing identity", () => {
+  const candidate = savedMapCandidate();
+  const identity = structuredClone(candidate.layers[0].catalogItem);
+  candidate.layers[0].customName = "  Protected areas <custom>  ";
+  let parsed = parseSavedMapView(serializeSavedMapView(createSavedMapView(candidate)));
+  assert.equal(parsed.layers[0].customName, "Protected areas <custom>");
+  assert.deepEqual(parsed.layers[0].catalogItem, identity);
+  for (const invalid of ["", "  ", 4, {}, "x".repeat(161)]) {
+    candidate.layers[0].customName = invalid;
+    assert.throws(() => createSavedMapView(candidate), /1 to 160/);
+  }
+  candidate.layers[0].customName = "🌲".repeat(160);
+  assert.equal(createSavedMapView(candidate).layers[0].customName, candidate.layers[0].customName);
+  candidate.layers[0].customName = null;
+  assert.equal(createSavedMapView(candidate).layers[0].customName, null);
+});
+
 /**
  * Return one valid portable map candidate with one raster layer.
  *

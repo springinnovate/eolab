@@ -583,6 +583,30 @@ test("inspection summaries describe bounded raster participation and asynchronou
     h.destroy();
 });
 
+test("retained custom names reach histograms, click values and paired axes without new calculations", async () => {
+    let reads = 0, pairReads = 0;
+    const h = visibleLayerFixture(async item => { reads++; return createLayerStatistics(item); }, {
+        loadPairedStatistics: async () => { pairReads++; return pairedStatistics(); },
+    });
+    await h.viewer.show(createRasterItem("named-a"));
+    await h.viewer.show(createRasterItem("named-b"));
+    h.viewer.exploreAt({ lng: 78, lat: 22 });
+    await flushPromises();
+    const record = h.mapLayers.retainedRecords[0];
+    const priorReads = reads;
+    h.mapLayers.renameLayer(record.entry.key, "My rainfall");
+    assert.equal(record.state.label, "My rainfall");
+    assert.equal(h.controlsView.pointSamples.samples.find(row => row.key === record.entry.key).label, "My rainfall");
+    assert.equal(reads, priorReads);
+    h.controlsView.handlers.onBivariateModeChange("bivariate");
+    await flushPromises();
+    const priorPairs = pairReads;
+    h.mapLayers.renameLayer(record.entry.key, "Annual rainfall");
+    assert.ok([h.controlsView.pairedPresentation.xLabel, h.controlsView.pairedPresentation.yLabel].includes("Annual rainfall"));
+    assert.equal(pairReads, priorPairs);
+    h.destroy();
+});
+
 test("download intents preserve distinct 1D and 2D boxes without waiting for statistics", async () => {
     const downloads = [];
     const h = visibleLayerFixture(async () => { throw new Error("Statistics busy"); }, {}, {

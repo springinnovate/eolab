@@ -106,9 +106,14 @@ class MapVectorStyle(MapDocumentPart):
 
 
 class MapLayer(MapDocumentPart):
-    """Catalog reference, visibility, style and optional filter for one map layer."""
+    """Catalog reference and map appearance, including an optional display name.
+
+    customName is presentation text; it never replaces the catalog identity or
+    source metadata. Omitted or null means to display the original source name.
+    """
 
     catalogItem: MapCatalogItem
+    customName: Title | None = None
     sourceRevision: Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")] | None
     visible: bool
     opacity: Annotated[float, Field(ge=0, le=1)]

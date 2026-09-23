@@ -459,6 +459,7 @@ export class SavedMapViewController {
             ),
             visible: record.entry.visible,
             opacity: record.entry.opacity,
+            ...(record.entry.customName ? { customName: record.entry.customName } : {}),
             style: record.adapter.exportSavedState(record),
             ...(record.adapter.exportFilterState ? { filter: record.adapter.exportFilterState(record) } : {}),
         };
@@ -543,7 +544,8 @@ export class SavedMapViewController {
                 layer.sourceRevision !== currentRevision;
             const staged = await this.catalogVisualization.stage(
                 preparedItem,
-                { visible: layer.visible, opacity: layer.opacity }
+                { visible: layer.visible, opacity: layer.opacity,
+                    ...(layer.customName ? { customName: layer.customName } : {}) }
             );
             const record = staged.record;
             if (typeof record.adapter.applySavedState !== "function") {

@@ -495,11 +495,16 @@ export class VectorFeatureInspectorController {
 
     /**
      * Close orphaned results after the last visible vector leaves the map.
+     * Refresh display names without repeating feature queries or discarding results.
      *
      * @return {void}
      */
     syncVisibleLayers() {
         const targets = this.visibleTargets();
+        if (this.#refreshResultNames(targets) && this.results.length) {
+            this.showResult(this.resultIndex);
+            if (this.lastSample) this.#publishSample(this.lastSample.state, this.results, this.lastSample.message, this.lastSample.failedLayers);
+        }
         const available = targets.length > 0;
         const signature = this.#targetSignature(targets);
         if (
@@ -718,6 +723,7 @@ export class VectorFeatureInspectorController {
         this.results = targetResults.flatMap((targetResult) =>
             targetResult.results
         );
+        this.#refreshResultNames(this.visibleTargets());
         if (this.results.length > 0) {
             const retainedIndex = previouslySelected === null
                 ? 0
@@ -774,6 +780,24 @@ export class VectorFeatureInspectorController {
     }
 
     /**
+     * Update retained result labels from current visible targets without changing their identities.
+     * @param {VectorFeatureInspectionTarget[]} targets Current map-layer presentation.
+     * @return {boolean} Whether any result name changed.
+     */
+    #refreshResultNames(targets) {
+        const names = new Map(targets.map(target => [target.sourceId, target.label]));
+        let changed = false;
+        for (const result of this.results) {
+            const label = names.get(result.target.sourceId);
+            if (label !== undefined && label !== result.target.label) {
+                result.target = { ...result.target, label };
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    /**
      * Return a stable set identity independent of drawing order and styling.
      *
      * @param {VectorFeatureInspectionTarget[]} targets Visible vector targets.
@@ -798,7 +822,8 @@ export class VectorFeatureInspectorController {
         const observations = Object.freeze(
             results.map(vectorInspectionObservation)
         );
-        this.onSampleChange(Object.freeze({ state, observations, message, failedLayers }));
+        this.lastSample = Object.freeze({ state, observations, message, failedLayers });
+        this.onSampleChange(this.lastSample);
     }
 
     /**

@@ -13,6 +13,7 @@ import { getCatalogItemKey } from "../catalog-item-identity.js";
  * @property {string} key Stable Catalog Item key or local layer identifier.
  * @property {Object|null} item Catalog STAC Item; null for browser-owned layers.
  * @property {string} label Readable layer label.
+ * @property {string|null} [customName] Optional map-specific catalog name; source metadata is unchanged.
  * @property {number} retentionOrder Monotonic add-intent order.
  * @property {boolean} visible Whether the layer is attached to the map.
  * @property {number} opacity Ordinary-overlay opacity from zero through one.

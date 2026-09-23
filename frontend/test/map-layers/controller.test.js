@@ -4,6 +4,53 @@ import test from "node:test";
 import { getCatalogItemKey } from "../../src/catalog-item-identity.js";
 import { MapLayerController } from "../../src/map-layers/controller.js";
 
+test("custom names change presentation and sorting without changing source or renderer identity", async () => {
+    const view = createView();
+    let publications = 0;
+    const adapter = createAdapter("Raster", async item => { publications++; return { id: item.id }; });
+    const controller = new MapLayerController({ leafletMap: createMap(), view });
+    const item = catalogItem("first");
+    await controller.show(item, adapter);
+    await controller.show(catalogItem("second"), adapter);
+    const key = getCatalogItemKey(item), record = controller.getRecord(key);
+    const source = structuredClone(item), renderer = controller.getLeafletLayer(key), state = record.state;
+    controller.renameLayer(key, "  <b>Protected areas</b>  ");
+    assert.equal(record.entry.label, "<b>Protected areas</b>");
+    assert.equal(record.entry.customName, "<b>Protected areas</b>");
+    assert.equal(controller.snapshots().find(layer => layer.key === key).sourceName, "Raster first");
+    controller.sortLayers("name-ascending");
+    assert.equal(controller.snapshots()[0].key, key);
+    assert.deepEqual(item, source);
+    assert.equal(record.state, state);
+    assert.equal(controller.getLeafletLayer(key), renderer);
+    assert.equal(publications, 2);
+    for (const invalid of [" ", "x".repeat(161), 12]) assert.throws(() => controller.renameLayer(key, invalid), /1 to 160/);
+    assert.equal(record.entry.label, "<b>Protected areas</b>");
+    controller.renameLayer(key, null);
+    assert.equal(record.entry.label, "Raster first");
+    assert.equal(record.entry.customName, null);
+    controller.destroy();
+});
+
+test("staged custom names survive attachment and removal Undo snapshots", async () => {
+    const view = createView(), adapter = createAdapter("Vector");
+    adapter.exportSavedState = () => ({ kind: "vector", definition: {} });
+    const controller = new MapLayerController({ leafletMap: createMap(), view });
+    const staged = await controller.stage(catalogItem("boundaries"), adapter, { customName: "Countries" });
+    controller.commitStaged([staged]);
+    const key = staged.key;
+    assert.equal(controller.getRecord(key).entry.customName, "Countries");
+    controller.removeWithUndo(key);
+    assert.equal(controller.removedLayer.customName, "Countries");
+    const restored = await controller.stage(catalogItem("boundaries"), adapter, controller.removedLayer);
+    controller.restoreStagedLayer(restored, 0);
+    assert.equal(controller.snapshots()[0].label, "Countries");
+    assert.equal(controller.snapshots()[0].customName, "Countries");
+    controller.renameLayer(key, null);
+    assert.equal(controller.snapshots()[0].label, "Vector boundaries");
+    controller.destroy();
+});
+
 /** Create a Catalog Item with the identity required by the layer boundary. */
 function catalogItem(id) {
     return { collection: "observations", id };

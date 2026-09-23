@@ -154,6 +154,7 @@ export class RasterCursorSamplesController {
     /**
      * Reapply current map participation at the retained pointer position.
      * Changed order, visibility, or membership restarts the bounded dwell.
+     * Name-only changes relabel pending or completed results without another read.
      *
      * @param {RasterCursorSampleParticipant[]} participants Current candidates.
      * @return {void}
@@ -168,13 +169,16 @@ export class RasterCursorSamplesController {
             normalized.participants.length === this.participants.length &&
             normalized.participants.every(
                 (participant, index) =>
-                    participant.key === this.participants[index].key &&
-                    participant.label === this.participants[index].label
+                    participant.key === this.participants[index].key
             );
         if (!sameParticipants) {
             const position = this.position;
             this.clear();
             this.move(participants, position);
+        } else if (normalized.participants.some((participant, index) => participant.label !== this.participants[index].label)) {
+            this.participants = normalized.participants;
+            this.results = this.results.map((result, index) => ({ ...result, label: this.participants[index].label }));
+            if (this.results.length) this.#emit();
         }
     }
 

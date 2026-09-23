@@ -326,7 +326,7 @@ test("saved map controller copies ordered Catalog layers and current viewport", 
   const view = createView();
   const item = { collection: "vectors", id: "roads" };
   const record = {
-    entry: { item, visible: true, opacity: 0.4, label: "Roads" },
+    entry: { item, visible: true, opacity: 0.4, label: "Workshop roads", customName: "Workshop roads" },
     adapter: {
       exportSavedState: () => ({ kind: "vector", definition: { width: 2 } }),
       exportFilterState: () => ({ enabled: false, match: "all", rules: [{ field: "year", operator: "gt", value: 2020 }] }),
@@ -352,6 +352,7 @@ test("saved map controller copies ordered Catalog layers and current viewport", 
     maximumOutputBytes: 512 * 1024,
   }));
   assert.deepEqual(copied.layers[0].catalogItem, item);
+  assert.equal(copied.layers[0].customName, "Workshop roads");
   assert.equal(copied.layers[0].sourceRevision, ZERO_REVISION);
   assert.deepEqual(copied.layers[0].filter, record.adapter.exportFilterState());
   assert.equal(Object.hasOwn(copied.layers[0].style, "filter"), false);
@@ -401,6 +402,7 @@ test("saved map controller stages concurrently and commits final saved order", a
     layers: [
       {
         catalogItem: { collection: "vectors", id: "top" },
+        customName: "Protected areas",
         sourceRevision: `sha256:${"1".repeat(64)}`,
         visible: true,
         opacity: 0.5,
@@ -442,7 +444,7 @@ test("saved map controller stages concurrently and commits final saved order", a
   ));
 
   assert.deepEqual(calls.filter(([kind]) => kind === "stage"), [
-    ["stage", "top", { visible: true, opacity: 0.5 }],
+    ["stage", "top", { visible: true, opacity: 0.5, customName: "Protected areas" }],
     ["stage", "bottom", { visible: false, opacity: 0.8 }],
   ]);
   assert.deepEqual(calls.filter(([kind]) => kind === "commit"), [
@@ -788,7 +790,7 @@ test("startup discards corrupt remembered content without blocking the map", asy
 test("remembered map persistence coalesces complete validated snapshots", async () => {
   const item = { collection: "vectors", id: "roads" };
   const record = {
-    entry: { item, visible: false, opacity: 0.35, label: "Roads" },
+    entry: { item, visible: false, opacity: 0.35, label: "Workshop roads", customName: "Workshop roads" },
     adapter: {
       exportSavedState: () => ({ kind: "vector", definition: { width: 4 } }),
     },
@@ -830,6 +832,7 @@ test("remembered map persistence coalesces complete validated snapshots", async 
     sourceRevision: null,
     visible: false,
     opacity: 0.35,
+    customName: "Workshop roads",
     style: { kind: "vector", definition: { width: 4 } },
   }]);
   assert.deepEqual(Object.keys(remembered).sort(), [

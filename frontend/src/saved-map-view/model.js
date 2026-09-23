@@ -215,10 +215,21 @@ function validateLayer(candidate) {
     requireExactKeys(
         candidate,
         ["catalogItem", "sourceRevision", "visible", "opacity", "style",
+            ...(Object.hasOwn(candidate, "customName") ? ["customName"] : []),
             ...(Object.hasOwn(candidate, "filter") ? ["filter"] : [])],
         "Saved layer"
     );
     requirePlainObject(candidate.catalogItem, "Catalog Item identity");
+    let customName;
+    if (Object.hasOwn(candidate, "customName")) {
+        customName = candidate.customName;
+        if (customName !== null) {
+            if (typeof customName !== "string" || !customName.trim() || [...customName.trim()].length > 160) {
+                throw new SavedMapViewValidationError("Layer name must contain 1 to 160 characters.");
+            }
+            customName = customName.trim();
+        }
+    }
     requireExactKeys(
         candidate.catalogItem,
         ["collection", "id"],
@@ -275,6 +286,7 @@ function validateLayer(candidate) {
     }
     return Object.freeze({
         catalogItem,
+        ...(customName === undefined ? {} : { customName }),
         sourceRevision: candidate.sourceRevision,
         visible: candidate.visible,
         opacity: candidate.opacity,

@@ -9,6 +9,24 @@ import {
 } from "../../src/vector/feature-inspector.js";
 import { FakeRasterControlDocument } from "../../test-support/raster/fake-controls-document.js";
 
+test("renaming a layer updates inspected feature labels without another query", async () => {
+  let reads = 0;
+  const h = createFixture(async () => {
+    reads++;
+    return { ok: true, json: async () => ({ type: "FeatureCollection", features: [{
+      type: "Feature", id: "parcels.1", geometry: null, properties: { name: "Habitat" },
+    }] }) };
+  });
+  await h.controller.inspect(inspectionEvent(12, 24));
+  const previousReads = reads;
+  h.targets[0] = { ...h.targets[0], label: "Workshop habitats" };
+  h.controller.syncVisibleLayers();
+  assert.equal(h.documentContext.querySelector("#vector-feature-layer").textContent, "Workshop habitats");
+  assert.equal(reads, previousReads);
+  assert.equal(h.controller.results[0].target.sourceId, "catalog|parcels");
+  h.controller.destroy();
+});
+
 /**
  * Create an inspector with a controllable map and recorded UI callbacks.
  *

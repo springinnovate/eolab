@@ -59,6 +59,7 @@ function requireLayerStackElement(documentContext, selector) {
  * @property {(key: string, targetIndex: number) => void} onReorder Move one
  * layer to a zero-based top-first position.
  * @property {(order:"name-ascending"|"name-descending"|"visible-first"|"layer-type")=>void} onSort Sort the drawing stack once.
+ * @property {(key:string,name:string|null)=>void} onRename Set a catalog layer's custom name; null restores its source name.
  * @property {(key: string) => void} onRemove Remove one retained layer.
  * @property {()=>void} onUndoRemove Restore the most recently removed layer.
  * @property {()=>void} onDismissRemoval Forget the layer-removal Undo offer.
@@ -123,6 +124,9 @@ export class MapLayerStackView {
         this.keyboardDrag = null;
         /** @type {Map<string,HTMLDetailsElement>} Last rendered legends, retaining disclosure state. */
         this.legends = new Map();
+        this.renameEditor = null;
+        this.layers = [];
+        this.activeKey = null;
     }
 
     /**
@@ -179,6 +183,7 @@ export class MapLayerStackView {
         this.keyboardDrag = null;
         this.handlers = null;
         this.legends.clear();
+        this.renameEditor = null;
     }
 
     /**
@@ -191,7 +196,10 @@ export class MapLayerStackView {
      * @return {void}
      */
     render(layers, activeKey, requestedFocus = null) {
+        this.layers = layers;
+        this.activeKey = activeKey;
         const retainedKeys = new Set(layers.map(layer => layer.key));
+        if (this.renameEditor && !retainedKeys.has(this.renameEditor.key)) this.renameEditor = null;
         for (const key of this.legends.keys()) {
             if (!retainedKeys.has(key)) this.legends.delete(key);
         }
@@ -207,7 +215,7 @@ export class MapLayerStackView {
         }
         const focusedControl = this.documentContext.activeElement;
         const retainRemovalFocus = !this.removalNotice.hidden && [this.undoRemove, this.dismissRemoval].includes(focusedControl);
-        const retainLocalFocus = !requestedFocus && layers.some(layer => layer.controls?.contains(focusedControl) || layer.primaryControl?.contains(focusedControl) || layer.detailsControl === focusedControl);
+        const retainLocalFocus = !requestedFocus && (this.renameEditor?.form.contains(focusedControl) || layers.some(layer => layer.controls?.contains(focusedControl) || layer.primaryControl?.contains(focusedControl) || layer.detailsControl === focusedControl));
         const retainedFocus = requestedFocus ?? this.#readFocusedAction();
         const focusTargets = new Map();
         const rows = layers.map((layer, index) => this.#buildRow(
@@ -461,6 +469,10 @@ export class MapLayerStackView {
         // Local editors supply their own Edit/Details action instead of the catalog Info action.
         rowActions.append(
             ...(layer.detailsControl ? [layer.detailsControl] : []),
+            ...(layer.item !== null ? [this.#button(
+                "Rename", `Rename ${accessibleName}`, layer.key, "rename",
+                () => this.#openRenameEditor(layer), focusTargets,
+            )] : []),
             style,
             ...filterActions,
             ...(layer.datasetKind === "raster" ? [this.#button(
@@ -485,6 +497,7 @@ export class MapLayerStackView {
         row.append(primary);
         if (layer.primaryControl) row.append(layer.primaryControl);
         row.append(rowActions);
+        if (this.renameEditor?.key === layer.key) row.append(this.renameEditor.form);
         if (layer.filterStatus) {
             const filterStatus = this.#button(
                 layer.filterStatus, `Edit filter for ${accessibleName}: ${layer.filterStatus}`,
@@ -503,6 +516,79 @@ export class MapLayerStackView {
             row.append(error);
         }
         return row;
+    }
+
+    /**
+     * Open a small inline name editor without changing visibility or the selected analysis.
+     * Draft text and focus survive unrelated layer updates until Save, Cancel or removal.
+     * @param {Object} layer Catalog layer snapshot with its current and original names.
+     * @return {void}
+     */
+    #openRenameEditor(layer) {
+        const form = this.documentContext.createElement("form");
+        form.className = "map-layer-name-editor";
+        const label = this.documentContext.createElement("label");
+        label.textContent = "Layer name";
+        const input = this.documentContext.createElement("input");
+        input.type = "text";
+        input.value = layer.label;
+        input.setAttribute("aria-label", "Layer name");
+        label.append(input);
+        const original = this.documentContext.createElement("small");
+        original.textContent = `Source: ${layer.sourceName ?? layer.label}`;
+        const error = this.documentContext.createElement("p");
+        error.setAttribute("role", "alert");
+        error.hidden = true;
+        const actions = this.documentContext.createElement("div");
+        const save = this.documentContext.createElement("button");
+        save.type = "submit";
+        save.textContent = "Save";
+        const reset = this.documentContext.createElement("button");
+        reset.type = "button";
+        reset.textContent = "Use source name";
+        reset.addEventListener("click", () => this.#saveLayerName(null));
+        const cancel = this.documentContext.createElement("button");
+        cancel.type = "button";
+        cancel.textContent = "Cancel";
+        cancel.addEventListener("click", () => this.#closeRenameEditor());
+        for (const button of [save, reset, cancel]) button.className = "secondary-button";
+        actions.append(save, reset, cancel);
+        form.append(label, original, error, actions);
+        form.addEventListener("submit", event => { event.preventDefault(); this.#saveLayerName(input.value); });
+        form.addEventListener("keydown", event => {
+            if (event.key === "Escape") {
+                event.preventDefault(); event.stopPropagation(); this.#closeRenameEditor();
+            }
+        });
+        this.renameEditor = { key: layer.key, form, input, error };
+        this.render(this.layers, this.activeKey);
+        input.focus();
+        input.select?.();
+    }
+
+    /**
+     * Submit a name to the layer owner and retain the editor if validation fails.
+     * @param {string|null} name Entered text, or null to restore the source name.
+     * @return {void}
+     */
+    #saveLayerName(name) {
+        const editor = this.renameEditor;
+        if (!editor) return;
+        try {
+            this.handlers.onRename(editor.key, name);
+            this.#closeRenameEditor();
+        } catch (error) {
+            editor.error.textContent = error.message;
+            editor.error.hidden = false;
+            editor.input.focus();
+        }
+    }
+
+    /** Close the name editor and return focus to its Rename action. @return {void} */
+    #closeRenameEditor() {
+        const key = this.renameEditor?.key;
+        this.renameEditor = null;
+        this.render(this.layers, this.activeKey, key ? { key, action: "rename" } : null);
     }
 
     /**
