@@ -2,6 +2,7 @@
 
 const MAP_LAYOUT_EVENTS = "moveend zoomend resize layeradd layerremove";
 const LABEL_GAP = 4;
+const MIN_POLYGON_SPAN = 24;
 
 /** Keep readable annotation labels without covering tiny polygons or other labels. */
 export class PolygonLabelLayout {
@@ -52,8 +53,9 @@ export class PolygonLabelLayout {
 
     /**
      * Measure labels once, then apply visibility without changing polygons or tooltip content.
-     * A saved polygon needs a screen envelope at least as large as its label. Drafts
-     * take priority; remaining ties use renderer registration and polygon order.
+     * Hide saved labels only when the polygon's longest screen dimension is below
+     * 24 pixels, or the label overlaps an earlier label. Names may extend beyond
+     * their polygon. Drafts take priority; other ties use renderer and polygon order.
      * Hidden labels retain their dimensions so zooming back in can reveal them.
      * @return {void}
      */
@@ -68,11 +70,11 @@ export class PolygonLabelLayout {
                 const bounds = shape.getBounds();
                 const topLeft = this.map.latLngToContainerPoint(bounds.getNorthWest());
                 const bottomRight = this.map.latLngToContainerPoint(bounds.getSouthEast());
-                const fits = Math.abs(bottomRight.x - topLeft.x) >= label.width &&
-                    Math.abs(bottomRight.y - topLeft.y) >= label.height;
+                const polygonSpan = Math.max(Math.abs(bottomRight.x - topLeft.x),
+                    Math.abs(bottomRight.y - topLeft.y));
                 const onScreen = label.right > viewport.left && label.left < viewport.right &&
                     label.bottom > viewport.top && label.top < viewport.bottom;
-                candidates.push({ element, label, editing, eligible: editing || (fits && onScreen) });
+                candidates.push({ element, label, editing, eligible: editing || (polygonSpan >= MIN_POLYGON_SPAN && onScreen) });
             }
         }
         // Stable sorting keeps otherwise equal labels from swapping after pans or refreshes.

@@ -88,18 +88,28 @@ test("labels disabled by style, detached polygons and offscreen labels do not ta
     assert.equal(visible.element.style.visibility, "visible");
 });
 
-test("larger wrapped names and notes need more screen space without shrinking or truncating text", () => {
+test("long names and wrapped notes stay visible even when larger than their polygon", () => {
     const { layout, layers, flush } = setup();
-    const shape = polygon(20);
+    const shape = polygon(20, 40, 30);
     layers.add(shape); layout.register("saved", () => [shape]); flush();
     assert.equal(shape.element.style.visibility, "visible");
     const measure = shape.element.getBoundingClientRect;
-    shape.element.getBoundingClientRect = () => ({ ...measure(), height: 100, bottom: 200 });
+    shape.element.getBoundingClientRect = () => ({ ...measure(), width: 250, right: 270, height: 100, bottom: 200 });
     layout.schedule(); flush();
-    assert.equal(shape.element.style.visibility, "hidden");
+    assert.equal(shape.element.style.visibility, "visible");
     shape.element.getBoundingClientRect = measure;
     layout.schedule(); flush();
     assert.equal(shape.element.style.visibility, "visible");
+});
+
+test("the tiny-polygon threshold uses the longest dimension, including narrow polygons", () => {
+    const { layout, layers, flush } = setup();
+    const tiny = polygon(20, 23, 23), wide = polygon(120, 24, 2), tall = polygon(220, 2, 24);
+    [tiny, wide, tall].forEach(shape => layers.add(shape));
+    layout.register("saved", () => [tiny, wide, tall]); flush();
+    assert.equal(tiny.element.style.visibility, "hidden");
+    assert.equal(wide.element.style.visibility, "visible");
+    assert.equal(tall.element.style.visibility, "visible");
 });
 
 test("refresh bursts use one frame; final removal cancels it and removes all listeners", () => {

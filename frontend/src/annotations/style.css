@@ -116,9 +116,9 @@
 .annotation-vertex.is-first { background: #087fbe; border-radius: 3px; }
 .annotation-vertex:focus-visible { outline: 3px solid #111; outline-offset: 3px; }
 .annotation-polygon-label {
-    background: transparent; border: 0; box-shadow: none; padding: 2px; color: #222;
+    background: rgb(255 255 255 / 90%); border: 1px solid rgb(0 0 0 / 12%);
+    box-shadow: none; padding: 2px 4px; color: #222;
     width: max-content; max-width: 18rem; white-space: normal; overflow-wrap: anywhere;
-    text-shadow: -1px -1px 1px #fff, 1px -1px 1px #fff, -1px 1px 1px #fff, 1px 1px 1px #fff;
     visibility: hidden;
 }
 .annotation-polygon-label::before { display: none; }
