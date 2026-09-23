@@ -43,7 +43,7 @@ export class AnnotationSessionsView {
     }
 
     /** Open create/join, optionally sharing an existing local layer.
-     * @param {"create"|"join"} mode Connection operation.
+     * @param {"create"|"join"|"contribute"} mode Connection operation; contribute uses the map's fixed invitation.
      * @param {string|null} [localId=null] Local layer to share.
      * @param {string} [value=""] Layer name or invitation code.
      * @return {void}
@@ -53,8 +53,8 @@ export class AnnotationSessionsView {
         this.layerName.hidden = mode !== "create"; this.layerName.input.disabled = mode !== "create";
         this.code.hidden = mode !== "join"; this.code.input.disabled = mode !== "join";
         const field = mode === "create" ? this.layerName.input : this.code.input; field.value = value;
-        this.heading.textContent = mode === "create" ? "Create shared annotation layer" : "Join shared annotation layer";
-        this.submit.textContent = mode === "create" ? "Create layer" : "Join layer";
+        this.heading.textContent = mode === "create" ? "Create shared annotation layer" : mode === "contribute" ? "Your name for this annotation layer" : "Join shared annotation layer";
+        this.submit.textContent = mode === "create" ? "Create layer" : mode === "contribute" ? "Join and draw polygon" : "Join layer";
         this.message(""); this.dialog.showModal(); (value ? this.name.input : field).focus();
     }
 

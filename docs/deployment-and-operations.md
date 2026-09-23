@@ -565,7 +565,7 @@ the link's `#view=` fragment. For example, change `https://your-site/#view=...` 
 This mode keeps the included layers, navigation, basemaps, visibility, ordering,
 legends, layer details, filters, personal styles, inspection, analysis and downloads.
 Catalog browsing, scanning, operational diagnostics, experimental performance
-tuning, annotation creation/import/joining, and layer removal are omitted.
+tuning, creation/import/joining of unrelated annotation layers, and layer removal are omitted.
 It is a presentation choice, not API authorization; the main app and APIs remain
 available at their existing addresses.
 
@@ -573,8 +573,11 @@ available at their existing addresses.
 and zoom. It also retries layers that failed to load. **Copy map link** includes
 personal presentation changes and keeps simplified mode. Private map autosave,
 annotation contents and contributor credentials are left alone; this mode does
-not restore private annotation layers. Shared annotation references and named
-`/maps/{slug}` pages will be added separately. The existing portable map format
+not restore private annotation layers. Included shared annotation layers show live
+contributions. The first **Draw polygon** asks for a name and joins that layer;
+returning contributors keep their identity and edit only their own polygons.
+Restoring a map resets presentation without replacing contributions or membership.
+Named `/maps/{slug}` pages will be added separately. The existing portable map format
 does not yet save the basemap selection.
 
 ## Shared annotation layers
@@ -607,7 +610,12 @@ names and colors. EOLab exports mark this metadata with `eolabAnnotations: 1` an
 per-feature `contributor` and `contributorColor` properties. Reimporting retains
 these labels and colors, but never membership or editing rights. Sharing an import
 in a new layer makes all its polygons your contribution, using your color there.
-Ordinary map links do not carry annotations, codes or private credentials.
+Map links include references to shared layers on this site, including their joining
+codes. Anyone with the map link can view those layers and join to contribute.
+Links contain neither polygon copies nor private editing credentials. Private,
+unshared annotation layers are omitted. Version-two saved-map documents support
+these references; version-one catalog-only maps still load. Shared layers from
+another EOLab site are not opened.
 
 Shared layers have no automatic expiration. They are stored in the existing
 PostgreSQL database under `shared_annotation_layers`; back up that database to

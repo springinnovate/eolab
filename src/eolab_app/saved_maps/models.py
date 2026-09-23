@@ -1,4 +1,4 @@
-"""Validate named maps and the existing version-one saved-map document."""
+"""Validate named maps, catalog layers and live shared-annotation references."""
 
 import json
 from datetime import datetime, timezone
@@ -136,15 +136,46 @@ class MapLayer(MapDocumentPart):
         return self
 
 
+class MapAnnotationReference(MapDocumentPart):
+    """Same-site invitation to a live shared layer; contains no edit credentials."""
+
+    id: Annotated[
+        str,
+        Field(
+            pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        ),
+    ]
+    joinCode: Annotated[str, Field(pattern=r"^[A-Z2-9]{8}$")]
+
+
+class MapAnnotationAppearance(MapDocumentPart):
+    """Viewer-local appearance; contributor colors remain owned by the live layer."""
+
+    outline: Annotated[str, Field(pattern=r"^#[0-9A-Fa-f]{6}$")]
+    weight: Annotated[float, Field(ge=0, le=10)]
+    fillOpacity: Annotated[float, Field(ge=0, le=1)]
+    labels: bool
+    notes: bool
+
+
+class MapAnnotationLayer(MapDocumentPart):
+    """Live layer invitation and local appearance, without polygons or membership."""
+
+    sharedAnnotation: MapAnnotationReference
+    visible: bool
+    opacity: Annotated[float, Field(ge=0, le=1)]
+    appearance: MapAnnotationAppearance
+
+
 class SavedMapView(MapDocumentPart):
-    """Version-one map JSON shared with the existing browser saved-map parser."""
+    """Portable map JSON; version two also permits live annotation references."""
 
     format: Literal["eolab-map-view"]
-    schemaVersion: Annotated[int, Field(ge=1, le=1)]
+    schemaVersion: Annotated[int, Field(ge=1, le=2)]
     viewer: MapViewer
     createdAt: str
     viewport: MapViewport
-    layers: Annotated[list[MapLayer], Field(max_length=50)]
+    layers: Annotated[list[MapLayer | MapAnnotationLayer], Field(max_length=50)]
 
     @field_validator("createdAt")
     @classmethod
@@ -171,20 +202,28 @@ class SavedMapView(MapDocumentPart):
 
     @model_validator(mode="after")
     def validate_layer_uniqueness_and_size(self) -> Self:
-        """Reject duplicate catalog layers and documents larger than 512 KiB.
+        """Reject repeated layers, version-one annotation references and oversized maps.
 
         Returns:
             This map if it fits the saved-map format.
 
         Raises:
-            ValueError: If a catalog item appears twice or the map is too large.
+            ValueError: If a layer repeats, needs version two or exceeds the size limit.
         """
-        identities = [
-            (layer.catalogItem.collection, layer.catalogItem.id)
-            for layer in self.layers
-        ]
+        identities = []
+        for layer in self.layers:
+            if isinstance(layer, MapAnnotationLayer):
+                if self.schemaVersion == 1:
+                    raise ValueError(
+                        "Shared annotations require saved-map version two."
+                    )
+                identities.append(("annotation", layer.sharedAnnotation.id))
+            else:
+                identities.append(
+                    ("catalog", layer.catalogItem.collection, layer.catalogItem.id)
+                )
         if len(set(identities)) != len(identities):
-            raise ValueError("A saved map cannot contain duplicate catalog items.")
+            raise ValueError("A saved map cannot contain duplicate layers.")
         if (
             len(self.model_dump_json(exclude_unset=True).encode("utf-8"))
             > MAX_VIEW_BYTES

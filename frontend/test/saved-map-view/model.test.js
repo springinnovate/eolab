@@ -2,6 +2,21 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 
+test("version two accepts only portable annotation references and version one stays unchanged", () => {
+  const fixture = JSON.parse(readFileSync(new URL("../../../tests/fixtures/saved-map-v2.json", import.meta.url), "utf8"));
+  assert.deepEqual(parseSavedMapView(JSON.stringify(fixture)), fixture);
+  const old = JSON.parse(readFileSync(new URL("../../../tests/fixtures/saved-map-v1.json", import.meta.url), "utf8"));
+  assert.deepEqual(parseSavedMapView(JSON.stringify(old)), old);
+  assert.throws(() => parseSavedMapView(JSON.stringify({ ...fixture, schemaVersion: 1 })), /version two/);
+  for (const field of ["features", "credential", "contributorId", "browserHash", "collection"]) {
+    const candidate = structuredClone(fixture);
+    candidate.layers[0].sharedAnnotation[field] = "must not be exported";
+    assert.throws(() => parseSavedMapView(JSON.stringify(candidate)), /unsupported fields/);
+  }
+  fixture.layers.push(structuredClone(fixture.layers[0]));
+  assert.throws(() => parseSavedMapView(JSON.stringify(fixture)), /repeat/);
+});
+
 import {
   createSavedMapView,
   hashSavedMapSourceRevision,
@@ -49,7 +64,7 @@ test("saved map model round trips the versioned bounded contract", () => {
 
   assert.deepEqual(parsed, saved);
   assert.equal(parsed.format, "eolab-map-view");
-  assert.equal(parsed.schemaVersion, 1);
+  assert.equal(parsed.schemaVersion, 2);
   assert.equal(Object.isFrozen(parsed.layers), true);
 });
 
@@ -71,8 +86,8 @@ test("saved map model preserves more than two visible layers", () => {
 test("saved map model rejects incompatible, duplicate, and unbounded input", () => {
   const incompatible = createSavedMapView(savedMapCandidate());
   assert.throws(
-    () => parseSavedMapView(JSON.stringify({ ...incompatible, schemaVersion: 2 })),
-    /schema 2 is not supported/,
+    () => parseSavedMapView(JSON.stringify({ ...incompatible, schemaVersion: 3 })),
+    /schema 3 is not supported/,
   );
 
   const duplicate = savedMapCandidate();

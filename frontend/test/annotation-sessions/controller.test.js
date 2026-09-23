@@ -14,7 +14,12 @@ function setup(request = async () => snapshot()) {
     const local = []; const events = []; const stored = new Map();
     const view = { busy() {}, connected() {}, open: (...args) => events.push(["open", ...args]), message: text => events.push(["error", text]) };
     const controller = new AnnotationSessionsController({ document: {}, api: { request }, getLayers: () => local,
-        createLayer: async (name, collection) => { const id = `local-${local.length}`; local.push({ id, collection: structuredClone(collection) }); return id; },
+        createLayer: async (name, collection, options = {}) => {
+            const existing = local.find(layer => layer.id === options.localId);
+            if (existing) { if (options.replacePolygons) existing.collection = structuredClone(collection); return existing.id; }
+            const id = `local-${local.length}`; local.push({ id, collection: structuredClone(collection) }); return id;
+        },
+        drawAfterJoining: id => events.push(["draw", id]),
         present: (id, data) => events.push(["display", id, data]), revealLayer: id => events.push(["reveal", id]),
         storage: { getItem: key => stored.get(key), setItem: (key, value) => stored.set(key, value) }, createView: () => view });
     return { controller, local, events, stored };
@@ -23,6 +28,99 @@ function setup(request = async () => snapshot()) {
 function bind(controller) {
     controller.bindings.set("local", { localId: "local", sessionId: ID, contributorId: "me", revision: 0, remote: new Map(), retryDelay: 0 });
 }
+
+test("invited visitors see live polygons without joining; first drawing joins only that layer", async () => {
+    const metadata = snapshot(); metadata.contributorId = null;
+    metadata.layers = [{ contributorId: "other", layerId: ID, revision: 1, polygonCount: 1 }];
+    const calls = []; let rejectName = true;
+    const context = setup(async (path, method, body) => {
+        calls.push([path, method, body]);
+        if (path === "/join") {
+            if (rejectName) throw Object.assign(new Error("That name is already used"), { status: 409 });
+            metadata.contributorId = "me";
+        }
+        if (path.includes("/contributors/")) return { revision: metadata.layers[0].revision,
+            collection: { type: "FeatureCollection", features: [{ properties: { name: "Remote" } }] } };
+        if (method === "PUT") return { revision: 1 };
+        return structuredClone(metadata);
+    });
+    const { controller, events, local } = context;
+    try {
+        await controller.start({ restoreBindings: false });
+        const id = await controller.openMapReference({ id: ID, joinCode: "ABCDEFGH" });
+        assert.equal(local.length, 1);
+        assert.equal(local[0].collection.features.length, 0);
+        assert.equal(calls.some(([, method]) => method === "POST" || method === "PUT"), false);
+        assert.equal(events.filter(e => e[0] === "display").at(-1)[2].collections.length, 1);
+        metadata.layers[0].revision = 2;
+        await controller.refresh();
+        assert.equal(calls.filter(([path]) => path.includes("/contributors/")).length, 2, "changed polygons are fetched live");
+        assert.equal(controller.requestDrawing(id), false);
+        assert.deepEqual(events.at(-1), ["open", "contribute", id, "ABCDEFGH"]);
+        await controller.connect("contribute", "ABCDEFGH", "Taken", id);
+        assert.match(events.at(-1)[1], /already used/);
+        assert.equal(controller.getMapReference(id).joinCode, "ABCDEFGH");
+        rejectName = false;
+        await controller.connect("contribute", "ABCDEFGH", "New contributor", id);
+        assert.equal(local.length, 1, "joining upgrades the same layer");
+        assert.deepEqual(events.at(-1), ["draw", id]);
+        assert.equal(controller.requestDrawing(id), true);
+        const upload = calls.find(([, method]) => method === "PUT");
+        assert.equal(upload[2].collection.features.length, 0, "remote polygons never become this contributor's work");
+    } finally { controller.destroy(); }
+});
+
+test("saved-map restoration reuses own unsent edits and preserves unrelated bookmarks", async () => {
+    const metadata = snapshot(); metadata.layers = [{ contributorId: "me", layerId: ID, revision: 3, polygonCount: 1 }];
+    const calls = [];
+    const { controller, local, stored } = setup(async (path, method, body) => {
+        calls.push([path, method, body]);
+        if (path.includes("/contributors/")) return { revision: 3, collection: { type: "FeatureCollection", name: "Watersheds", features: [{ properties: { name: "Server" } }] } };
+        if (method === "PUT") return { revision: 4 };
+        return structuredClone(metadata);
+    });
+    local.push({ id: "mine", collection: { type: "FeatureCollection", name: "Watersheds", features: [{ properties: { name: "Unsent edit" } }] } });
+    local.push({ id: "unrelated", collection: { features: [] } });
+    const privateBinding = { localId: "unrelated", sessionId: "22222222-2222-4222-8222-222222222222", contributorId: "private", revision: 9 };
+    stored.set("eolab-shared-annotation-layers-v1", JSON.stringify([privateBinding, { localId: "mine", sessionId: ID, contributorId: "me", revision: 3 }]));
+    try {
+        await controller.start({ restoreBindings: false });
+        assert.equal(calls.length, 0);
+        assert.equal(await controller.openMapReference({ id: ID, joinCode: "ABCDEFGH" }), "mine");
+        assert.equal(calls.some(([path]) => path.includes(privateBinding.sessionId)), false);
+        assert.equal(local[0].collection.features[0].properties.name, "Unsent edit");
+        assert.equal(calls.find(([, method]) => method === "PUT")[2].revision, 3);
+        assert.deepEqual(JSON.parse([...stored.values()][0]).find(b => b.localId === "unrelated"), privateBinding);
+        const before = structuredClone(local);
+        assert.equal(await controller.openMapReference({ id: ID, joinCode: "ABCDEFGH" }), "mine");
+        assert.deepEqual(local, before, "restore never replaces contributions");
+        assert.equal(calls.some(([path]) => path === "/join"), false, "returning contributors need no prompt or new membership");
+        assert.deepEqual(controller.getMapReference("mine"), { id: ID, joinCode: "ABCDEFGH" });
+    } finally { controller.destroy(); }
+});
+
+test("multiple saved references stay independent and unavailable or obsolete invitations attach nothing", async () => {
+    const secondId = "22222222-2222-4222-8222-222222222222";
+    const context = setup(async path => {
+        if (path.includes("MISSINGX")) throw new Error("This shared annotation layer is unavailable.");
+        return { ...snapshot(), id: path.includes(secondId) ? secondId : ID, contributorId: null,
+            joinCode: path.includes(secondId) ? "BCDEFGHJ" : "ABCDEFGH" };
+    });
+    try {
+        await context.controller.start({ restoreBindings: false });
+        await context.controller.openMapReference({ id: ID, joinCode: "ABCDEFGH" }, () => false);
+        assert.equal(context.local.length, 0);
+        await assert.rejects(context.controller.openMapReference({ id: ID, joinCode: "MISSINGX" }), /unavailable/);
+        assert.equal(context.local.length, 0);
+        const first = await context.controller.openMapReference({ id: ID, joinCode: "ABCDEFGH" });
+        const second = await context.controller.openMapReference({ id: secondId, joinCode: "BCDEFGHJ" });
+        assert.notEqual(first, second);
+        context.controller.requestDrawing(first);
+        assert.deepEqual(context.events.at(-1), ["open", "contribute", first, "ABCDEFGH"]);
+        context.controller.requestDrawing(second);
+        assert.deepEqual(context.events.at(-1), ["open", "contribute", second, "BCDEFGHJ"]);
+    } finally { context.controller.destroy(); }
+});
 
 test("shared color changes update presentation without downloading or uploading unchanged polygons", async () => {
     const metadata = snapshot(); const calls = [];

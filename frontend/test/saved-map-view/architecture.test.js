@@ -22,6 +22,8 @@ test("saved map modules do not import sibling implementations", async () => {
 
     assert.doesNotMatch(source, /\.\.\/raster\//);
     assert.doesNotMatch(source, /\.\.\/vector\//);
+    assert.doesNotMatch(source, /\.\.\/annotations\//);
+    assert.doesNotMatch(source, /\.\.\/annotation-sessions\//);
     assert.doesNotMatch(source, /\.\.\/map-layers\//);
     assert.doesNotMatch(source, /\.\.\/catalog-visualization\.js/);
   }

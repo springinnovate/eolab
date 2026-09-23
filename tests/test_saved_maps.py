@@ -40,6 +40,56 @@ def test_browser_document_round_trip() -> None:
     assert result.model_dump(mode="json", exclude_unset=True) == map_request()
 
 
+def test_shared_annotation_reference_contract() -> None:
+    """Round-trip the browser fixture while rejecting credentials, polygons and v1 references."""
+    view = json.loads(
+        (Path(__file__).parent / "fixtures" / "saved-map-v2.json").read_text()
+    )
+    request = {"title": "Shared map", "slug": "shared-map", "view": view}
+    assert (
+        CreateSavedMap.model_validate(request).model_dump(
+            mode="json", exclude_unset=True
+        )
+        == request
+    )
+    for field in (
+        "features",
+        "credential",
+        "contributorId",
+        "browserHash",
+        "collection",
+    ):
+        candidate = deepcopy(request)
+        candidate["view"]["layers"][0]["sharedAnnotation"][field] = "private"
+        with pytest.raises(ValidationError):
+            CreateSavedMap.model_validate(candidate)
+    candidate = deepcopy(request)
+    candidate["view"]["schemaVersion"] = 1
+    with pytest.raises(ValidationError, match="version two"):
+        CreateSavedMap.model_validate(candidate)
+    candidate = deepcopy(request)
+    candidate["view"]["layers"] *= 2
+    with pytest.raises(ValidationError, match="duplicate"):
+        CreateSavedMap.model_validate(candidate)
+
+
+def test_foreign_annotation_reference_rejected_before_storage() -> None:
+    """Named maps cannot save invitations belonging to a different EOLab site."""
+    view = json.loads(
+        (Path(__file__).parent / "fixtures" / "saved-map-v2.json").read_text()
+    )
+    view["viewer"]["origin"] = "https://another-site.example"
+    app = FastAPI()
+    app.include_router(create_saved_maps_router(object()))
+    response = TestClient(app, base_url="https://testserver").post(
+        BASE,
+        headers=HEADERS,
+        json={"title": "Foreign", "slug": "foreign", "view": view},
+    )
+    assert response.status_code == 422
+    assert "this EOLab site" in response.json()["detail"]
+
+
 @pytest.mark.parametrize(
     "slug", ["", "Uppercase", "../file", "a/b", "a--b", "-a", "a-", "a" * 81]
 )
@@ -80,7 +130,7 @@ def test_origin_is_only_a_site(origin: str) -> None:
     "field,value",
     [
         ("schemaVersion", True),
-        ("schemaVersion", 2),
+        ("schemaVersion", 3),
         ("createdAt", "bad date"),
         ("layers", [{}] * 51),
     ],

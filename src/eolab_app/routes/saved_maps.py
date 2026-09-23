@@ -13,6 +13,7 @@ from starlette.responses import JSONResponse
 
 from eolab_app.saved_maps.models import (
     CreateSavedMap,
+    MapAnnotationLayer,
     MAX_REQUEST_BYTES,
     SavedMap,
     SavedMapError,
@@ -186,6 +187,12 @@ def create_saved_maps_router(store: SavedMapStore) -> APIRouter:
             origin and urlsplit(origin).netloc != request.url.netloc
         ):
             raise HTTPException(403, "Create saved maps from this site.")
+        if any(
+            isinstance(layer, MapAnnotationLayer) for layer in payload.view.layers
+        ) and (urlsplit(payload.view.viewer.origin).netloc != request.url.netloc):
+            raise HTTPException(
+                422, "Shared annotation references must belong to this EOLab site."
+            )
         result = store.create_saved_map(payload)
         response.headers["Location"] = f"/api/saved-maps/{result.slug}"
         return result

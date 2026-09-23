@@ -312,12 +312,54 @@ class AnnotationSessionStore:
                 "That name is already used in this shared layer. Choose another name.",
             )
 
-    def get_session_snapshot(self, session_id: UUID, browser: str) -> dict[str, Any]:
+    def authorize_layer_read(
+        self,
+        cursor: psycopg.Cursor,
+        session_id: UUID,
+        browser: str,
+        join_code: str | None,
+    ) -> dict[str, Any] | None:
+        """Authorize a read through membership or an exact layer invitation.
+
+        Args:
+            cursor: Current read transaction.
+            session_id: Layer named by the request.
+            browser: Private cookie hash, used only to recognize existing membership.
+            join_code: Invitation code, or None for the member-only API.
+
+        Returns:
+            Existing contributor, or None for an invited visitor. Never creates a member.
+
+        Raises:
+            SessionError: If membership or the supplied invitation is invalid.
+        """
+        if join_code is None:
+            return self.require_contributor(cursor, session_id, browser)
+        cursor.execute(
+            "SELECT id FROM shared_annotation_layers.sessions WHERE id=%s AND join_code=%s",
+            (session_id, join_code),
+        )
+        if not cursor.fetchone():
+            raise SessionError(404, "This shared annotation layer is unavailable.")
+        cursor.execute(
+            "SELECT id,name FROM shared_annotation_layers.contributors WHERE session_id=%s AND browser_hash=%s",
+            (session_id, browser),
+        )
+        return cursor.fetchone()
+
+    def get_session_snapshot(
+        self,
+        session_id: UUID,
+        browser: str,
+        *,
+        join_code: str | None = None,
+    ) -> dict[str, Any]:
         """Read membership and layer metadata without loading every polygon.
 
         Args:
             session_id: Session to view.
             browser: Private browser-cookie hash.
+            join_code: Optional read invitation; does not grant permission to write.
 
         Returns:
             Session details, caller identity, contributor names/colors and layer revisions.
@@ -326,13 +368,13 @@ class AnnotationSessionStore:
             SessionError: If membership is missing or storage is unavailable.
         """
         with self.transaction() as cursor:
-            member = self.require_contributor(cursor, session_id, browser)
+            member = self.authorize_layer_read(cursor, session_id, browser, join_code)
             cursor.execute(
                 'SELECT id,name,join_code AS "joinCode" FROM shared_annotation_layers.sessions WHERE id=%s',
                 (session_id,),
             )
             result = cursor.fetchone()
-            result["contributorId"] = member["id"]
+            result["contributorId"] = member["id"] if member else None
             cursor.execute(
                 "SELECT id,name,color FROM shared_annotation_layers.contributors WHERE session_id=%s ORDER BY name,id",
                 (session_id,),
@@ -389,7 +431,13 @@ class AnnotationSessionStore:
             )
 
     def read_shared_layer(
-        self, session_id: UUID, browser: str, contributor_id: UUID, layer_id: UUID
+        self,
+        session_id: UUID,
+        browser: str,
+        contributor_id: UUID,
+        layer_id: UUID,
+        *,
+        join_code: str | None = None,
     ) -> dict[str, Any]:
         """Read one contribution after confirming both parties belong to this session.
 
@@ -398,6 +446,7 @@ class AnnotationSessionStore:
             browser: Reader's private browser-cookie hash.
             contributor_id: Author of the contribution.
             layer_id: Shared layer identifier, equal to the session ID.
+            join_code: Optional read invitation; never authorizes a contribution upload.
 
         Returns:
             Validated GeoJSON and its current revision.
@@ -406,7 +455,7 @@ class AnnotationSessionStore:
             SessionError: If the layer is missing or inaccessible.
         """
         with self.transaction() as cursor:
-            self.require_contributor(cursor, session_id, browser)
+            self.authorize_layer_read(cursor, session_id, browser, join_code)
             cursor.execute(
                 "SELECT l.collection,l.revision FROM shared_annotation_layers.layers l JOIN shared_annotation_layers.contributors c ON c.id=l.contributor_id WHERE c.session_id=%s AND c.id=%s AND l.local_id=%s",
                 (session_id, contributor_id, layer_id),

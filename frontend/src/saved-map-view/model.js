@@ -1,7 +1,7 @@
 /** Versioned, portable saved-map document validation and construction. */
 
 export const SAVED_MAP_VIEW_FORMAT = "eolab-map-view";
-export const SAVED_MAP_VIEW_SCHEMA_VERSION = 1;
+export const SAVED_MAP_VIEW_SCHEMA_VERSION = 2;
 export const MAX_SAVED_MAP_VIEW_BYTES = 512 * 1024;
 export const MAX_SAVED_MAP_VIEW_LAYERS = 50;
 
@@ -116,7 +116,7 @@ function validateSavedMapView(candidate) {
             "This content is not an EOLab saved map."
         );
     }
-    if (candidate.schemaVersion !== SAVED_MAP_VIEW_SCHEMA_VERSION) {
+    if (![1, SAVED_MAP_VIEW_SCHEMA_VERSION].includes(candidate.schemaVersion)) {
         throw new SavedMapViewValidationError(
             `Saved map schema ${String(candidate.schemaVersion)} is not supported.`
         );
@@ -139,28 +139,63 @@ function validateSavedMapView(candidate) {
             `Saved maps may contain at most ${MAX_SAVED_MAP_VIEW_LAYERS} layers.`
         );
     }
-    const layers = candidate.layers.map(validateLayer);
+    const layers = candidate.layers.map(layer => {
+        if (layer?.sharedAnnotation !== undefined) {
+            if (candidate.schemaVersion === 1) throw new SavedMapViewValidationError("Shared annotations require saved-map version two.");
+            return validateAnnotationReference(layer);
+        }
+        return validateLayer(layer);
+    });
     const identities = new Set();
     for (const layer of layers) {
-        const key = JSON.stringify([
+        const key = layer.sharedAnnotation ? `annotation:${layer.sharedAnnotation.id}` : JSON.stringify([
             layer.catalogItem.collection,
             layer.catalogItem.id,
         ]);
         if (identities.has(key)) {
             throw new SavedMapViewValidationError(
-                "Saved map layers cannot repeat a Catalog Item."
+                "Saved map layers cannot repeat a layer."
             );
         }
         identities.add(key);
     }
     return Object.freeze({
         format: SAVED_MAP_VIEW_FORMAT,
-        schemaVersion: SAVED_MAP_VIEW_SCHEMA_VERSION,
+        schemaVersion: candidate.schemaVersion,
         viewer: Object.freeze({ version, origin }),
         createdAt,
         viewport,
         layers: Object.freeze(layers),
     });
+}
+
+/**
+ * Validate a same-site invitation and local appearance without accepting polygons or credentials.
+ * @param {Object} candidate Untrusted annotation layer entry.
+ * @return {Readonly<Object>} Independent portable layer reference.
+ * @throws {SavedMapViewValidationError} If any field is unsupported or invalid.
+ */
+function validateAnnotationReference(candidate) {
+    requirePlainObject(candidate, "Shared annotation layer");
+    requireExactKeys(candidate, ["sharedAnnotation", "visible", "opacity", "appearance"], "Shared annotation layer");
+    const reference = candidate.sharedAnnotation;
+    requirePlainObject(reference, "Shared annotation reference");
+    requireExactKeys(reference, ["id", "joinCode"], "Shared annotation reference");
+    if (typeof reference.id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(reference.id) ||
+        typeof reference.joinCode !== "string" || !/^[A-Z2-9]{8}$/.test(reference.joinCode)) {
+        throw new SavedMapViewValidationError("Shared annotation invitation is invalid.");
+    }
+    const appearance = candidate.appearance;
+    requirePlainObject(appearance, "Annotation appearance");
+    requireExactKeys(appearance, ["outline", "weight", "fillOpacity", "labels", "notes"], "Annotation appearance");
+    if (typeof candidate.visible !== "boolean" || !Number.isFinite(candidate.opacity) || candidate.opacity < 0 || candidate.opacity > 1 ||
+        typeof appearance.outline !== "string" || !/^#[0-9a-f]{6}$/i.test(appearance.outline) ||
+        !Number.isFinite(appearance.weight) || appearance.weight < 0 || appearance.weight > 10 ||
+        !Number.isFinite(appearance.fillOpacity) || appearance.fillOpacity < 0 || appearance.fillOpacity > 1 ||
+        typeof appearance.labels !== "boolean" || typeof appearance.notes !== "boolean") {
+        throw new SavedMapViewValidationError("Shared annotation appearance is invalid.");
+    }
+    return Object.freeze(structuredClone(candidate));
 }
 
 /**

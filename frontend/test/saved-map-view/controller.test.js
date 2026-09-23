@@ -11,6 +11,50 @@ import { createSavedMapView, serializeSavedMapView } from "../../src/saved-map-v
 
 const ZERO_REVISION = `sha256:${"0".repeat(64)}`;
 
+test("mixed shared maps export invitations, preserve layer order and restore presentation only", async () => {
+  const annotation = { sharedAnnotation: { id: "11111111-1111-4111-8111-111111111111", joinCode: "ABCDEFGH" },
+    visible: true, opacity: 0.7, appearance: { outline: "#202020", weight: 1, fillOpacity: 0.25, labels: true, notes: false } };
+  const catalog = { catalogItem: { collection: "vectors", id: "included" }, sourceRevision: null,
+    visible: true, opacity: 1, style: { kind: "vector", definition: {} } };
+  const saved = { ...emptySavedMap(10, 20, 6), layers: [catalog, annotation] };
+  const fragment = await encodeSavedMapViewFragment(serializeSavedMapView(saved), { maximumInputBytes: 512 * 1024 });
+  const view = createView(), records = [], restorations = [], ordered = [];
+  const annotationRecord = { entry: { key: "local:annotation:mine", item: null }, polygons: ["private polygon"] };
+  const controller = new SavedMapViewController({ view, restoreSharedMap: true,
+    viewerVersion: "0.6.0", viewerOrigin: saved.viewer.origin,
+    viewport: { snapshot: () => saved.viewport, restore() {} },
+    mapLayers: { retainedRecords: records,
+      commitStaged(staged) { records.unshift(...staged.map(s => s.record)); }, restoreOrder(keys) { ordered.push(keys); } },
+    catalogItems: { get: async identity => identity },
+    catalogVisualization: { clear() { records.splice(0, records.length, ...records.filter(r => r.entry.item === null)); },
+      prepare: async item => item, sourceRevision: () => null,
+      stage: async item => ({ record: { entry: { key: "catalog", item, visible: true, opacity: 1 }, adapter: {
+        applySavedState() {}, exportSavedState: () => catalog.style,
+      } } }) },
+    exportAnnotation: record => record === annotationRecord ? annotation : null,
+    restoreAnnotation: async (layer, isCurrent) => {
+      assert.equal(isCurrent(), true); restorations.push(layer);
+      if (!records.includes(annotationRecord)) records.push(annotationRecord);
+      return annotationRecord.entry.key;
+    },
+  });
+  await controller.restoreStartupView(fragment);
+  assert.equal(view.result.loaded, 2);
+  assert.deepEqual(ordered.at(-1), ["catalog", "local:annotation:mine"]);
+  records.push({ entry: { key: "local:private", item: null }, polygons: ["do not share"] });
+  await controller.copyMapLink();
+  const exported = JSON.parse(await decodeSavedMapViewFragment(view.fragment, { maximumOutputBytes: 512 * 1024 }));
+  assert.deepEqual(exported.layers, saved.layers);
+  assert.equal(JSON.stringify(exported).includes("private polygon"), false);
+  await controller.resetView();
+  assert.deepEqual(restorations, [annotation, annotation]);
+  assert.deepEqual(annotationRecord.polygons, ["private polygon"]);
+  const foreign = { ...saved, viewer: { ...saved.viewer, origin: "https://another-site.example" } };
+  await controller.openSharedFragment(await encodeSavedMapViewFragment(serializeSavedMapView(foreign), { maximumInputBytes: 512 * 1024 }));
+  assert.match(view.result.details[0], /original EOLab site/);
+  assert.equal(restorations.length, 2, "foreign invitations never reach the annotation API");
+});
+
 test("shared viewer restores its starting presentation and never reads or writes author autosave", async () => {
   const view = createView(), storage = createStorage("private map"), applied = [];
   const saved = emptySavedMap(10, 20, 6);

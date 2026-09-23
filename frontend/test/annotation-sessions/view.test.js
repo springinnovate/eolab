@@ -40,6 +40,19 @@ function setup() {
     return { view, document, calls };
 }
 
+test("first drawing asks only for a name and submits the map's fixed invitation", () => {
+    const { view, document, calls } = setup();
+    view.open("contribute", "included-layer", "ABCDEFGH");
+    assert.equal(view.layerName.hidden, true);
+    assert.equal(view.code.hidden, true);
+    assert.equal(view.code.input.disabled, true);
+    assert.equal(document.activeElement, view.name.input);
+    assert.equal(view.submit.textContent, "Join and draw polygon");
+    view.name.input.value = "Visitor";
+    view.form.dispatchEvent(new Event("submit", { cancelable: true }));
+    assert.deepEqual(calls[0], ["contribute", "ABCDEFGH", "Visitor", "included-layer"]);
+});
+
 test("create and join ask for a real display name and only the relevant connection field", () => {
     const { view, document, calls } = setup();
     document.querySelector("#create-shared-annotation-layer").dispatchEvent(new Event("click"));

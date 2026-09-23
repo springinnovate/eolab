@@ -38,6 +38,8 @@ export class SavedMapViewController {
      * shared fragment, ignore private autosave, and leave personal storage untouched.
      * @param {()=>void} [configuration.beforeRestore] Composition-owned cleanup
      * for transient map presentations excluded from the portable contract.
+     * @param {(record:Object)=>Object|null} [configuration.exportAnnotation] Export a live layer reference through composition.
+     * @param {(layer:Object,isCurrent:()=>boolean)=>Promise<string|null>} [configuration.restoreAnnotation] Restore a live layer and return its map key.
      * @param {()=>Date} [configuration.clock] Creation-time provider.
      * @param {SubtleCrypto} [configuration.subtleCrypto] Revision hasher.
      * @param {(handler:()=>void,delay:number)=>unknown} [configuration.setTimer]
@@ -56,6 +58,8 @@ export class SavedMapViewController {
         initialViewport = null,
         restoreSharedMap = false,
         beforeRestore = () => {},
+        exportAnnotation = () => null,
+        restoreAnnotation = async () => { throw new Error("Shared annotations are unavailable."); },
         clock = () => new Date(),
         subtleCrypto = globalThis.crypto?.subtle,
         setTimer = (handler, delay) => globalThis.setTimeout(handler, delay),
@@ -84,6 +88,8 @@ export class SavedMapViewController {
         this.restoreSharedMap = restoreSharedMap;
         this.startingFragment = null;
         this.beforeRestore = beforeRestore;
+        this.exportAnnotation = exportAnnotation;
+        this.restoreAnnotation = restoreAnnotation;
         this.clock = clock;
         this.subtleCrypto = subtleCrypto;
         this.setTimer = setTimer;
@@ -311,17 +317,17 @@ export class SavedMapViewController {
     }
 
     /**
-     * Capture the viewport and catalog layers for map links and local map restoration.
-     * Annotation contents and their positions are saved separately on this device.
+     * Capture catalog layers and portable live-annotation references in map order.
+     * Annotation polygons and private membership credentials never enter this document.
      *
-     * @return {Promise<Readonly<Object>>} Validated map document containing only catalog layers.
+     * @return {Promise<Readonly<Object>>} Validated portable map document.
      */
     async #snapshotCurrentView() {
-        // Local annotation layers have no catalog item (item is null); leave them out of this snapshot.
-        const records = this.mapLayers.retainedRecords.filter(record => record.entry.item !== null);
+        const records = this.mapLayers.retainedRecords;
         const viewport = this.viewport.snapshot();
         const layers = await Promise.all(
-            records.map(async (record) => this.#exportLayer(record))
+            records.map(async (record) => record.entry.item === null
+                ? this.exportAnnotation(record) : this.#exportLayer(record))
         );
         return createSavedMapView({
             viewer: {
@@ -330,7 +336,7 @@ export class SavedMapViewController {
             },
             createdAt: this.clock().toISOString(),
             viewport,
-            layers,
+            layers: layers.filter(layer => layer !== null),
         });
     }
 
@@ -377,7 +383,18 @@ export class SavedMapViewController {
         const preparations = await mapBounded(
             savedMapView.layers,
             RESTORE_CONCURRENCY,
-            async (layer) => this.#prepareLayer(layer)
+            async (layer) => {
+                if (!layer.sharedAnnotation) return this.#prepareLayer(layer);
+                try {
+                    if (savedMapView.viewer.origin !== this.viewerOrigin) {
+                        throw new Error("Shared annotations can only be opened on their original EOLab site.");
+                    }
+                    const key = await this.restoreAnnotation(layer, () => !this.destroyed && restoreGeneration === this.restoreGeneration);
+                    return { key, staged: null, detail: null };
+                } catch (error) {
+                    return { staged: null, detail: `Shared annotation ${layer.sharedAnnotation.id}: ${asError(error).message}` };
+                }
+            }
         );
         const stagedLayers = preparations
             .filter(({ staged }) => staged !== null)
@@ -387,8 +404,14 @@ export class SavedMapViewController {
         }
         this.viewport.restore(savedMapView.viewport);
         this.mapLayers.commitStaged(stagedLayers, { fitToBounds: false });
+        const keys = preparations.map(result => result.key ?? result.staged?.record.entry.key).filter(Boolean);
+        // Older callers may expose only catalog staging; mixed maps require explicit ordering.
+        if (preparations.some(result => result.key)) {
+            const otherKeys = this.mapLayers.retainedRecords.map(record => record.entry.key).filter(key => !keys.includes(key));
+            this.mapLayers.restoreOrder([...keys, ...otherKeys]);
+        }
         return {
-            loaded: stagedLayers.length,
+            loaded: stagedLayers.length + preparations.filter(result => result.key).length,
             total: savedMapView.layers.length,
             details: preparations
                 .map(({ detail }) => detail)

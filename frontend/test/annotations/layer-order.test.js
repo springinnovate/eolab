@@ -11,7 +11,7 @@ import { MapLayerController } from "../../src/map-layers/controller.js";
 function fixture() {
     const saved = [];
     const annotations = Object.create(AnnotationController.prototype);
-    Object.assign(annotations, { model: new AnnotationModel(), loaded: false, orderRestored: false,
+    Object.assign(annotations, { model: new AnnotationModel(), layers: new Map(), loaded: false, orderRestored: false,
         save() { saved.push(this.model.document()); } });
     const layers = new MapLayerController({
         leafletMap: { removeLayer() {} },
@@ -38,6 +38,7 @@ function loadAnnotations({ annotations, layers, adapter }, document) {
     annotations.model.layers = readAnnotationLayers(document);
     for (const layer of [...annotations.model.layers].reverse()) {
         layers.addLocal({ key: `local:annotation:${layer.id}`, label: layer.name, visible: layer.visible }, adapter);
+        annotations.layers.set(layer.id, {});
     }
     annotations.loaded = true;
 }
