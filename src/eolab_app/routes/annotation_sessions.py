@@ -21,6 +21,7 @@ from eolab_app.annotation_sessions.models import (
     SharedLayerContents,
     CreateSession,
     ContributorProfile,
+    ContributorColor,
     JoinSession,
     SessionError,
     ShareLayer,
@@ -254,6 +255,26 @@ def create_annotation_sessions_router(store: AnnotationSessionStore) -> APIRoute
         """
         store.update_contributor_name(session_id, browser, payload.name)
         return payload
+
+    @router.patch("/{session_id}/color", response_model=ContributorColor)
+    def update_color(
+        session_id: UUID, payload: ContributorColor, browser: Browser
+    ) -> ContributorColor:
+        """Change your polygon color in this shared layer.
+
+        Args:
+            session_id: Shared layer the browser has joined.
+            payload: Validated hexadecimal fill color.
+            browser: Authenticated cookie hash; the request cannot name another author.
+
+        Returns:
+            The saved color, applied to all of this contributor's polygons.
+
+        Raises:
+            SessionError: If membership is absent or storage is unavailable.
+        """
+        store.update_contributor_color(session_id, browser, payload.color)
+        return ContributorColor(color=payload.color.upper())
 
     @router.get("/{session_id}", response_model=SessionSnapshot)
     def snapshot(session_id: UUID, browser: Browser) -> dict[str, Any]:

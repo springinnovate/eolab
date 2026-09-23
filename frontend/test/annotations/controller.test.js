@@ -117,6 +117,24 @@ test("completion text survives failed persistence and deletion dismisses stale c
     assert.equal(layer.polygons.length, 0);
 });
 
+test("contributor colors update rendering and legends without changing summary geometry or edit ownership", () => {
+    const annotations = controller(); const layer = annotations.model.createLayer();
+    annotations.model.beginPolygon(layer.id);
+    [[0, 0], [2, 0], [1, 2]].forEach(point => annotations.model.addVertex(point)); annotations.model.savePolygon();
+    const peer = exportAnnotationGeoJSON(layer); peer.features[0].id = "peer";
+    peer.features[0].properties.contributorId = "other"; peer.features[0].properties.contributor = "Maria";
+    annotations.shared = new Map(); annotations.controls = new Map([[layer.id, { setCollaboration() {} }]]);
+    let redraws = 0; annotations.layers = new Map([[layer.id, { refresh() { redraws++; } }]]); annotations.mapLayers = { render() {} };
+    const data = { collections: [peer], contributors: [{ id: "me", name: "Rich", own: true, color: "#FFBE0B" }, { id: "other", name: "Maria", color: "#FB5607" }] };
+    annotations.updateSharedLayer(layer.id, structuredClone(data));
+    data.contributors[1].color = "#FF006E";
+    assert.equal(annotations.updateSharedLayer(layer.id, data), false, "color changes must not rerun summary calculations");
+    assert.equal(redraws, 2);
+    assert.deepEqual(annotations.displayLayer(layer).polygons.map(p => p.contributorColor), ["#FFBE0B", "#FF006E"]);
+    assert.deepEqual(annotations.layerLegend(layer).entries.map(e => [e.label, e.symbol.fill]), [["Rich (you)", "#FFBE0B"], ["Maria", "#FF006E"]]);
+    assert.equal(layer.polygons.length, 1); assert.throws(() => annotations.model.beginPolygon(layer.id, "peer"));
+});
+
 test("combined shared polygons are filterable summary inputs but never become editable or uploaded as mine", async () => {
     const annotations = controller();
     const layer = annotations.model.createLayer();

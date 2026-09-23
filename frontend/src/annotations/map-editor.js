@@ -141,7 +141,7 @@ export class AnnotationMapEditor {
      * Draw editable vertices and a draggable polygon interior; leave outside-map gestures available.
      * @param {import("./model.js").PolygonDraft|null} draft Polygon draft, or null to return to inspection.
      * @param {string} [message=""] Validation error to show beside the controls.
-     * @param {import("./model.js").AnnotationStyle|null} [style=this.style] Draft label appearance.
+     * @param {import("./model.js").AnnotationStyle|null} [style=this.style] Draft fill color and label appearance; the editing border remains distinct.
      * @param {string} [layerName=this.layerName] Destination layer's display name.
      * @return {void}
      */
@@ -182,7 +182,7 @@ export class AnnotationMapEditor {
         const latlngs = vertices.map(([lng, lat]) => [lat, lng]);
         if (vertices.length > 0) {
             const draggable = vertices.length >= 3;
-            const options = { color: "#087fbe", weight: 2, smoothFactor: 0, fillOpacity: 0.15, dashArray: "5 4",
+            const options = { color: "#087fbe", fillColor: style?.color ?? "#087fbe", weight: 2, smoothFactor: 0, fillOpacity: 0.15, dashArray: "5 4",
                 interactive: draggable, bubblingMouseEvents: false, className: "annotation-draft-polygon" };
             const shape = draggable ? this.leaflet.polygon(latlngs, options) : this.leaflet.polyline(latlngs, options);
             shape.addTo(this.drawing);

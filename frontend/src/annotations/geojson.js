@@ -4,7 +4,7 @@ import { MAX_POLYGON_VERTICES, MAX_POLYGONS_PER_LAYER, MAX_ANNOTATION_DOCUMENT_B
     MAX_ANNOTATION_NAME_LENGTH, MAX_ANNOTATION_NOTE_LENGTH } from "./model.js";
 
 /**
- * @typedef {{name:string,note:string,vertices:number[][]}} ImportedAnnotationPolygon
+ * @typedef {{name:string,note:string,vertices:number[][],contributor?:string,contributorColor?:string}} ImportedAnnotationPolygon
  * @typedef {{name:string,polygons:ImportedAnnotationPolygon[]}} ImportedAnnotationLayer
  */
 
@@ -26,7 +26,8 @@ export async function readAnnotationGeoJSONFile(file) {
 /**
  * Validate an entire GeoJSON document and convert it into editable annotation polygons.
  * Accept a FeatureCollection, Feature or Polygon. Only name/title and note/description
- * strings are imported; other properties, feature IDs and styling are ignored.
+ * strings are imported. EOLab exports also retain contributor labels and colors as
+ * file metadata, never as edit credentials. Other properties and feature IDs are ignored.
  * @param {string} text JSON file contents, limited to 8 MiB.
  * @param {string} [fallbackName="Imported annotations"] Layer name when the collection has none.
  * @return {ImportedAnnotationLayer} Validated data with no local IDs or persistence side effects.
@@ -64,7 +65,14 @@ export function parseAnnotationGeoJSON(text, fallbackName = "Imported annotation
             MAX_ANNOTATION_NAME_LENGTH, `${context} name`);
         const note = importAnnotationText([properties?.note, properties?.description], "",
             MAX_ANNOTATION_NOTE_LENGTH, `${context} note`, true);
-        return { name, note, vertices: importPolygonVertices(feature.geometry, context) };
+        const polygon = { name, note, vertices: importPolygonVertices(feature.geometry, context) };
+        if (document.eolabAnnotations === 1 && typeof properties?.contributor === "string" &&
+            properties.contributor.trim() && properties.contributor.length <= MAX_ANNOTATION_NAME_LENGTH &&
+            /^#[\da-f]{6}$/i.test(properties.contributorColor)) {
+            polygon.contributor = properties.contributor;
+            polygon.contributorColor = properties.contributorColor;
+        }
+        return polygon;
     });
     return { name, polygons };
 }
@@ -136,12 +144,13 @@ function importPolygonVertices(geometry, context) {
 /**
  * Export every committed polygon in a layer, including polygons hidden by its filter.
  * Names and notes are plain GeoJSON properties; the layer name is a collection member.
- * Exterior rings use counterclockwise winding. Drafts and display settings are excluded.
+ * Exterior rings use counterclockwise winding. Drafts and local display settings are excluded.
  * @param {import("./model.js").AnnotationLayer} layer Validated local annotation layer.
+ * @param {boolean} [includeContributors=false] Include contributor names/colors for a file export, never an ownership claim in an upload.
  * @return {Object} Independent GeoJSON FeatureCollection ready for JSON serialization.
  */
-export function exportAnnotationGeoJSON(layer) {
-    return { type: "FeatureCollection", name: layer.name, features: layer.polygons.map(polygon => {
+export function exportAnnotationGeoJSON(layer, includeContributors = false) {
+    return { type: "FeatureCollection", name: layer.name, ...(includeContributors ? { eolabAnnotations: 1 } : {}), features: layer.polygons.map(polygon => {
         const ring = polygon.vertices.map(point => [...point]);
         const signedArea = ring.reduce((sum, point, index) => {
             const next = ring[(index + 1) % ring.length];
@@ -149,7 +158,8 @@ export function exportAnnotationGeoJSON(layer) {
         }, 0);
         ring.push([...ring[0]]);
         if (signedArea < 0) ring.reverse();
-        return { type: "Feature", id: polygon.id, properties: { name: polygon.name, note: polygon.note },
+        return { type: "Feature", id: polygon.id, properties: { name: polygon.name, note: polygon.note,
+            ...(includeContributors && polygon.contributorColor ? { contributor: polygon.contributor, contributorColor: polygon.contributorColor } : {}) },
             geometry: { type: "Polygon", coordinates: [ring] } };
     }) };
 }

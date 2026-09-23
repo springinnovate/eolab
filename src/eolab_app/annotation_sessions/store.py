@@ -13,6 +13,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from .models import AnnotationCollection, SessionError, ShareLayer
+from .colors import choose_contributor_color, get_contributor_color
 
 # Stable, application-chosen identifier for a PostgreSQL advisory transaction lock.
 # The number is a lock name, not a limit, session ID or credential. All annotation
@@ -111,7 +112,7 @@ class AnnotationSessionStore:
             return cursor.fetchall()
 
     def create_session(self, browser: str, name: str, contributor_name: str) -> UUID:
-        """Create a shared layer and register its first contributor.
+        """Create a shared layer and give its first contributor a palette color.
 
         Args:
             browser: Private browser-cookie hash.
@@ -154,8 +155,14 @@ class AnnotationSessionStore:
                 (identifier, name, code),
             )
             cursor.execute(
-                "INSERT INTO shared_annotation_layers.contributors(id,session_id,browser_hash,name) VALUES(%s,%s,%s,%s)",
-                (uuid4(), identifier, browser, contributor_name),
+                "INSERT INTO shared_annotation_layers.contributors(id,session_id,browser_hash,name,color) VALUES(%s,%s,%s,%s,%s)",
+                (
+                    uuid4(),
+                    identifier,
+                    browser,
+                    contributor_name,
+                    choose_contributor_color([]),
+                ),
             )
             return identifier
 
@@ -163,7 +170,9 @@ class AnnotationSessionStore:
         """Join a session using the supplied display name, including when returning.
 
         Returning browsers keep their contributor ID and polygons, but
-        their display name becomes the name entered on the join form. Existing
+        their color stays unchanged and their display name becomes the name entered
+        on the join form. New members receive the least-used palette color while
+        the write lock prevents concurrent joins from choosing the same unused color. Existing
         members can return when joining is closed to new contributors.
 
         Args:
@@ -233,8 +242,16 @@ class AnnotationSessionStore:
                     429, "This session or browser has reached its contributor limit."
                 )
             cursor.execute(
-                "INSERT INTO shared_annotation_layers.contributors(id,session_id,browser_hash,name) VALUES(%s,%s,%s,%s)",
-                (uuid4(), session["id"], browser, name),
+                "SELECT id,color FROM shared_annotation_layers.contributors WHERE session_id=%s",
+                (session["id"],),
+            )
+            color = choose_contributor_color(
+                get_contributor_color(row["id"], row["color"])
+                for row in cursor.fetchall()
+            )
+            cursor.execute(
+                "INSERT INTO shared_annotation_layers.contributors(id,session_id,browser_hash,name,color) VALUES(%s,%s,%s,%s,%s)",
+                (uuid4(), session["id"], browser, name, color),
             )
 
             return session["id"]
@@ -303,7 +320,7 @@ class AnnotationSessionStore:
             browser: Private browser-cookie hash.
 
         Returns:
-            Session details, caller identity, contributors and layer revisions.
+            Session details, caller identity, contributor names/colors and layer revisions.
 
         Raises:
             SessionError: If membership is missing or storage is unavailable.
@@ -317,10 +334,12 @@ class AnnotationSessionStore:
             result = cursor.fetchone()
             result["contributorId"] = member["id"]
             cursor.execute(
-                "SELECT id,name FROM shared_annotation_layers.contributors WHERE session_id=%s ORDER BY name,id",
+                "SELECT id,name,color FROM shared_annotation_layers.contributors WHERE session_id=%s ORDER BY name,id",
                 (session_id,),
             )
             result["contributors"] = cursor.fetchall()
+            for person in result["contributors"]:
+                person["color"] = get_contributor_color(person["id"], person["color"])
             cursor.execute(
                 'SELECT l.contributor_id AS "contributorId",l.local_id AS "layerId",l.revision,l.updated_at AS "updatedAt",l.collection->>\'name\' AS name,jsonb_array_length(l.collection->\'features\') AS "polygonCount" FROM shared_annotation_layers.layers l JOIN shared_annotation_layers.contributors c ON c.id=l.contributor_id WHERE c.session_id=%s ORDER BY c.name,l.local_id',
                 (session_id,),
@@ -347,6 +366,26 @@ class AnnotationSessionStore:
             cursor.execute(
                 "UPDATE shared_annotation_layers.contributors SET name=%s WHERE id=%s",
                 (name, member["id"]),
+            )
+
+    def update_contributor_color(
+        self, session_id: UUID, browser: str, color: str
+    ) -> None:
+        """Save a polygon fill color for only the authenticated contributor.
+
+        Args:
+            session_id: Shared layer this browser has joined.
+            browser: Private cookie hash identifying the contributor.
+            color: Six-digit hexadecimal color validated by ContributorColor.
+
+        Raises:
+            SessionError: If membership is absent or storage is unavailable.
+        """
+        with self.transaction(write=True) as cursor:
+            member = self.require_contributor(cursor, session_id, browser)
+            cursor.execute(
+                "UPDATE shared_annotation_layers.contributors SET color=%s WHERE id=%s",
+                (color.upper(), member["id"]),
             )
 
     def read_shared_layer(
@@ -450,7 +489,8 @@ class AnnotationSessionStore:
             browser: Private browser-cookie hash of a member.
 
         Returns:
-            FeatureCollection preserving session, contributor and layer identifiers/names.
+            FeatureCollection preserving session, contributor and layer identifiers/names,
+            plus contributor colors and an EOLab annotation metadata version.
 
         Raises:
             SessionError: If membership is missing or storage is unavailable.
@@ -464,7 +504,7 @@ class AnnotationSessionStore:
             )
             name = cursor.fetchone()["name"]
             cursor.execute(
-                "SELECT c.id,c.name,l.local_id,l.collection FROM shared_annotation_layers.layers l JOIN shared_annotation_layers.contributors c ON c.id=l.contributor_id WHERE c.session_id=%s ORDER BY c.name,c.id,l.local_id",
+                "SELECT c.id,c.name,c.color,l.local_id,l.collection FROM shared_annotation_layers.layers l JOIN shared_annotation_layers.contributors c ON c.id=l.contributor_id WHERE c.session_id=%s ORDER BY c.name,c.id,l.local_id",
                 (session_id,),
             )
             features = []
@@ -477,10 +517,18 @@ class AnnotationSessionStore:
                         {
                             "contributor": row["name"],
                             "contributorId": str(row["id"]),
+                            "contributorColor": get_contributor_color(
+                                row["id"], row["color"]
+                            ),
                             "layer": collection["name"],
                             "layerId": str(row["local_id"]),
                             "sessionId": str(session_id),
                         }
                     )
                     features.append(feature)
-            return {"type": "FeatureCollection", "name": name, "features": features}
+            return {
+                "type": "FeatureCollection",
+                "name": name,
+                "eolabAnnotations": 1,
+                "features": features,
+            }
