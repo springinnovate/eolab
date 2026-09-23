@@ -16,18 +16,18 @@ export class AnnotationMapEditor {
      * @param {(index:number,point:number[])=>void} options.onInsert Insert a vertex before the index.
      * @param {(index:number,point:number[])=>void} options.onMove Move a vertex.
      * @param {(index:number)=>void} options.onDelete Delete a vertex or the first-vertex polygon.
-     * @param {()=>void} options.onSave Save the current draft.
+     * @param {(drawAnother:boolean)=>void} options.onSave Save the complete polygon, optionally starting another.
+     * @param {()=>void} options.onCloseOutline Close the outline without saving the draft.
      * @param {()=>void} options.onCancel Discard the current draft.
-     * @param {(name:string,note:string,drawAnother:boolean)=>void} options.onSaveText Commit the text, optionally starting another polygon.
-     * @param {()=>void} options.onCancelText Discard text edits without undoing saved geometry.
+     * @param {(name:string,note:string)=>void} options.onTextChange Update private draft text without saving.
      */
-    constructor({ leaflet, map, labelLayout, onAdd, onInsert, onMove, onDelete, onSave, onCancel, onSaveText, onCancelText }) {
+    constructor({ leaflet, map, labelLayout, onAdd, onInsert, onMove, onDelete, onSave, onCancel, onCloseOutline, onTextChange }) {
         this.leaflet = leaflet;
         this.map = map;
         this.onInsert = onInsert;
         this.onMove = onMove;
         this.onDelete = onDelete;
-        this.onSave = onSave;
+        this.onCloseOutline = onCloseOutline;
         this.onCancel = onCancel;
         this.draft = null;
         this.polygonDrag = null;
@@ -51,20 +51,17 @@ export class AnnotationMapEditor {
         this.error.setAttribute("role", "alert");
         const actions = this.document.createElement("div");
         actions.className = "annotation-actions";
-        this.save = this.button("Finish polygon", onSave);
+        this.save = this.button("Save", () => onSave(false));
+        this.saveAndDraw = this.button("Save and draw another", () => onSave(true));
         this.cancel = this.button("Cancel", onCancel);
         this.remove = this.button("Delete polygon", () => onDelete(0));
-        actions.append(this.save, this.cancel, this.remove);
+        actions.append(this.save, this.cancel, this.saveAndDraw, this.remove);
         const help = this.document.createElement("details");
         const summary = this.document.createElement("summary");
         summary.textContent = "Drawing help";
         const text = this.document.createElement("p");
-        text.textContent = "Left-click to add vertices. Hover near an edge and click the preview to insert a vertex. Drag a vertex to reshape, or drag inside the polygon to move it. Drag outside the polygon to pan. Scroll to zoom. Right-click a gray vertex to delete it. Click the blue first vertex to finish; right-click it to delete the polygon and return to inspection. Keyboard: Tab to a vertex, Insert to add one on its next edge, arrows to move it, Delete to remove it, Enter on the first vertex to finish. Escape cancels.";
+        text.textContent = "Left-click to add vertices. Hover near an edge and click the preview to insert a vertex. Drag a vertex to reshape, or drag inside the polygon to move it. Drag outside the polygon to pan. Scroll to zoom. Right-click a gray vertex to delete it. Click the blue first vertex to close the outline without saving; right-click it to delete the polygon and return to inspection. Keyboard: Tab to a vertex, Insert to add one on its next edge, arrows to move it, Delete to remove it, Enter on the first vertex closes the outline. Save commits the shape, name and notes together. Ctrl/Cmd+Enter saves; Escape cancels all edits.";
         help.append(summary, text);
-        this.draftControls = this.document.createElement("div");
-        this.draftControls.append(this.instruction, actions, this.error, help);
-        this.completion = this.document.createElement("div");
-        this.completion.hidden = true;
         const nameField = this.document.createElement("label");
         nameField.className = "annotation-field";
         const nameLabel = this.document.createElement("span");
@@ -81,23 +78,16 @@ export class AnnotationMapEditor {
         this.polygonNote.rows = 2;
         this.polygonNote.maxLength = 10000;
         noteField.append(noteLabel, this.polygonNote);
-        const saveText = drawAnother => onSaveText(this.polygonName.value, this.polygonNote.value, drawAnother);
-        const completedActions = this.document.createElement("div");
-        completedActions.className = "annotation-actions";
-        this.saveAndDraw = this.button("Save and draw another", () => saveText(true));
-        completedActions.append(this.button("Save", () => saveText(false)), this.button("Cancel", onCancelText), this.saveAndDraw);
-        this.textHelp = this.document.createElement("p");
-        this.textHelp.textContent = "Name and notes are shared only when you save. Cancel keeps the saved polygon unchanged.";
-        this.textError = this.document.createElement("p");
-        this.textError.className = "annotation-error";
-        this.textError.setAttribute("role", "alert");
-        this.completion.append(nameField, noteField, completedActions, this.textHelp, this.textError);
-        this.completion.addEventListener("keydown", event => {
+        this.polygonName.addEventListener("input", () => onTextChange(this.polygonName.value, this.polygonNote.value));
+        this.polygonNote.addEventListener("input", () => onTextChange(this.polygonName.value, this.polygonNote.value));
+        const saveHelp = this.document.createElement("p");
+        saveHelp.textContent = "Save shares the shape, name and notes together. Cancel discards all edits.";
+        this.strip.append(this.heading, nameField, noteField, this.instruction, actions, this.error, saveHelp, help);
+        this.strip.addEventListener("keydown", event => {
             if (event.key === "Enter" && (event.ctrlKey || event.metaKey || event.target === this.polygonName)) {
-                event.preventDefault(); event.stopPropagation(); saveText(false);
+                event.preventDefault(); event.stopPropagation(); onSave(false);
             }
         });
-        this.strip.append(this.heading, this.draftControls, this.completion);
         map.getContainer().append(this.strip);
         leaflet.DomEvent.disableClickPropagation(this.strip);
         leaflet.DomEvent.disableScrollPropagation(this.strip);
@@ -105,7 +95,7 @@ export class AnnotationMapEditor {
             if (!this.draft || this.polygonDrag || this.suppressClick) return;
             const insertion = this.findEdgeInsertion(this.map.latLngToContainerPoint(event.latlng));
             if (insertion) this.onInsert(insertion.index, insertion.position);
-            else onAdd([event.latlng.lng, event.latlng.lat]);
+            else if (!this.draft.outlineClosed) onAdd([event.latlng.lng, event.latlng.lat]);
         };
         this.previewEdge = event => this.showEdgePreview(event);
         this.clearPreview = () => this.clearEdgePreview();
@@ -117,10 +107,6 @@ export class AnnotationMapEditor {
                 event.preventDefault();
                 event.stopPropagation();
                 onCancel();
-            } else if (!this.completion.hidden && event.key === "Escape") {
-                event.preventDefault();
-                event.stopPropagation();
-                onCancelText();
             }
         };
         this.cancelDrag = () => {
@@ -159,14 +145,14 @@ export class AnnotationMapEditor {
     render(draft, message = "", style = this.style, layerName = this.layerName) {
         this.style = style;
         this.layerName = layerName;
-        this.completion.hidden = true;
-        this.draftControls.hidden = false;
         const entering = !this.draft && !!draft;
         const leaving = !!this.draft && !draft;
         if (entering) {
             this.restoreDoubleClickZoom = this.map.doubleClickZoom.enabled();
             this.map.doubleClickZoom.disable();
             this.previousFocus = this.document.activeElement;
+            this.polygonName.value = draft.polygon.name;
+            this.polygonNote.value = draft.polygon.note;
         }
         if (leaving && this.restoreDoubleClickZoom) this.map.doubleClickZoom.enable();
         this.finishPolygonDrag(true);
@@ -180,17 +166,22 @@ export class AnnotationMapEditor {
         this.error.textContent = message;
         if (!draft) {
             this.map.removeLayer(this.drawing);
-            if (leaving && this.previousFocus?.isConnected) this.previousFocus.focus();
+            if (leaving) {
+                const target = this.previousFocus?.isConnected && this.previousFocus.getClientRects().length
+                    ? this.previousFocus : this.map.getContainer();
+                target.focus({ preventScroll: true });
+            }
             return;
         }
         this.drawing.addTo(this.map);
         this.heading.textContent = `${draft.isNew ? "Drawing" : "Editing"} in ${layerName}`;
         const vertices = draft.polygon.vertices;
-        this.save.textContent = draft.isNew ? "Finish polygon" : "Save changes";
+        this.saveAndDraw.hidden = !draft.isNew;
         this.remove.disabled = vertices.length === 0;
         this.instruction.textContent = vertices.length === 0 ? "Click on the map to start a polygon."
             : vertices.length < 3 ? `${vertices.length} ${vertices.length === 1 ? "vertex" : "vertices"} — click to add more; drag to adjust.`
-            : "Hover an edge, then click to add a vertex. Click blue to finish; drag inside to move, outside to pan.";
+            : draft.outlineClosed ? "Outline closed. Drag vertices to reshape, or hover an edge to insert one. Save when ready."
+                : "Click blue to close the outline. Drag vertices or the polygon to adjust; Save when ready.";
         const latlngs = vertices.map(([lng, lat]) => [lat, lng]);
         if (vertices.length > 0) {
             const draggable = vertices.length >= 3;
@@ -217,7 +208,7 @@ export class AnnotationMapEditor {
             }
         }
         vertices.forEach((point, index) => this.addVertexMarker(point, index));
-        if (entering) this.cancel.focus({ preventScroll: true });
+        if (entering) this.focusTextField("name");
     }
 
     /**
@@ -235,9 +226,9 @@ export class AnnotationMapEditor {
         }).addTo(this.drawing);
         this.vertexMarkers.push(marker);
         const element = marker.getElement();
-        element.setAttribute("aria-label", index === 0 ? "First vertex: activate to finish; Delete removes polygon" : `Vertex ${index + 1}`);
-        element.title = index === 0 ? "Click to finish. Right-click to delete polygon." : "Drag to move. Right-click to delete vertex.";
-        marker.on("click", event => { this.leaflet.DomEvent.stopPropagation(event); if (index === 0) this.onSave(); });
+        element.setAttribute("aria-label", index === 0 ? "First vertex: activate to close outline; Delete removes polygon" : `Vertex ${index + 1}`);
+        element.title = index === 0 ? "Click to close the outline without saving. Right-click to delete polygon." : "Drag to move. Right-click to delete vertex.";
+        marker.on("click", event => { this.leaflet.DomEvent.stopPropagation(event); if (index === 0) this.onCloseOutline(); });
         marker.on("contextmenu", event => {
             this.leaflet.DomEvent.stop(event.originalEvent);
             this.onDelete(index);
@@ -410,40 +401,26 @@ export class AnnotationMapEditor {
     }
 
     /**
-     * Edit a private copy of a saved polygon's name and notes; typing never changes the polygon.
-     * Select the name once on entry, leaving later cursor placement to the user.
-     * @param {string} layerName Destination layer's display name.
-     * @param {import("./model.js").AnnotationPolygon} polygon Saved polygon to edit.
-     * @param {boolean} [newlyAdded=false] Offer repeat drawing after a new polygon.
+     * Focus a text field without resetting draft values; select the name only on explicit entry.
+     * @param {"name"|"note"} field Field requested by the polygon name/note control.
+     * @param {boolean} [selectName=true] Select the name for easy replacement.
      * @return {void}
      */
-    showPolygonTextEditor(layerName, polygon, newlyAdded = false) {
-        this.previousFocus = this.document.activeElement;
-        this.heading.textContent = newlyAdded ? `Polygon added to ${layerName}` : `Edit name and notes in ${layerName}`;
-        this.draftControls.hidden = true;
-        this.completion.hidden = false;
-        this.strip.hidden = false;
-        this.polygonName.value = polygon.name;
-        this.polygonNote.value = polygon.note;
-        this.originalText = { name: polygon.name, note: polygon.note };
-        this.saveAndDraw.hidden = !newlyAdded;
-        this.textError.textContent = "";
-        this.polygonName.focus({ preventScroll: true });
-        this.polygonName.select();
+    focusTextField(field, selectName = true) {
+        const input = field === "note" ? this.polygonNote : this.polygonName;
+        input.focus({ preventScroll: true });
+        if (field === "name" && selectName) input.select();
     }
 
-    /** Whether text differs from the values copied when this editor opened. @return {boolean} */
-    hasUnsavedText() {
-        return !this.completion.hidden && (this.polygonName.value !== this.originalText.name || this.polygonNote.value !== this.originalText.note);
-    }
-
-    /** Close text editing and return focus to its entry control, or the map. @return {void} */
-    closePolygonTextEditor() {
-        this.completion.hidden = true;
-        this.strip.hidden = true;
-        const target = this.previousFocus?.isConnected && this.previousFocus.getClientRects().length
-            ? this.previousFocus : this.map.getContainer();
-        target.focus({ preventScroll: true });
+    /** Refresh labels from private draft text without rebuilding fields or vertex handles. @return {void} */
+    refreshDraftLabels() {
+        if (!this.draft) return;
+        this.drawing.eachLayer(layer => {
+            if (layer.setLatLngs && this.draft.polygon.vertices.length >= 3) {
+                updatePolygonLabel(layer, this.draft.polygon, this.style, this.document, "tooltipPane");
+            }
+        });
+        this.labelLayout.schedule();
     }
 
     /** Release map listeners, draft markers and editing-mode presentation. @return {void} */

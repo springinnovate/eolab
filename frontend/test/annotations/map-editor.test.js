@@ -3,7 +3,7 @@ import test from "node:test";
 import { AnnotationMapEditor } from "../../src/annotations/map-editor.js";
 import { AnnotationModel } from "../../src/annotations/model.js";
 
-test("text editing selects the name once and only forwards text on Save, including keyboard shortcuts", () => {
+test("one editor forwards private text changes and explicit Save/Cancel intents", () => {
     const document = new EventTarget();
     document.defaultView = new EventTarget();
     document.createElement = tag => Object.assign(new EventTarget(), {
@@ -16,41 +16,31 @@ test("text editing selects the name once and only forwards text on Save, includi
     const map = { getContainer: () => mapElement, on() {} };
     const leaflet = { layerGroup: () => ({}), DomEvent: { disableClickPropagation() {}, disableScrollPropagation() {} } };
     const calls = [];
-    const labelLayout = { register(owner, polygons, editing) { assert.equal(editing, true); } };
-    const editor = new AnnotationMapEditor({ leaflet, map, labelLayout,
-        onAdd() {}, onInsert() {}, onMove() {}, onDelete() {}, onSave() { calls.push("save"); }, onCancel() {},
-        onSaveText: (...text) => calls.push(text), onCancelText: () => calls.push("cancel"),
+    const editor = new AnnotationMapEditor({ leaflet, map, labelLayout: { register() {} },
+        onAdd() {}, onInsert() {}, onMove() {}, onDelete() {}, onCloseOutline() {},
+        onSave: another => calls.push(["save", another]), onCancel: () => calls.push(["cancel"]),
+        onTextChange: (...text) => calls.push(["draft", ...text]),
     });
-    editor.showPolygonTextEditor("Habitat areas", { name: "Polygon 1", note: "" }, true);
-    assert.equal(editor.heading.textContent, "Polygon added to Habitat areas");
-    assert.equal(editor.strip.hidden, false);
-    assert.equal(editor.draftControls.hidden, true);
+    editor.draft = { polygon: { name: "Polygon 1", note: "" } };
+    editor.focusTextField("name");
     assert.equal(document.activeElement, editor.polygonName);
     assert.equal(editor.polygonName.selected, true);
     assert.equal(editor.polygonName.maxLength, 160);
     assert.equal(editor.polygonNote.maxLength, 10000);
     editor.polygonName.value = "Corridor"; editor.polygonNote.value = "Keep connected";
     editor.polygonNote.dispatchEvent(new Event("input"));
-    assert.deepEqual(calls, [], "typing must not reach persistence");
-    assert.equal(editor.hasUnsavedText(), true);
-    const actions = editor.completion.children[2].children;
-    actions.find(button => button.textContent === "Save and draw another").dispatchEvent(new Event("click"));
-    actions.find(button => button.textContent === "Save").dispatchEvent(new Event("click"));
+    assert.deepEqual(calls, [["draft", "Corridor", "Keep connected"]]);
+    editor.saveAndDraw.dispatchEvent(new Event("click"));
+    editor.save.dispatchEvent(new Event("click"));
     const escape = new Event("keydown", { cancelable: true });
     escape.key = "Escape"; document.dispatchEvent(escape);
-    assert.deepEqual(calls, [["Corridor", "Keep connected", true], ["Corridor", "Keep connected", false], "cancel"]);
     const enter = new Event("keydown", { cancelable: true }); enter.key = "Enter"; enter.ctrlKey = true;
-    editor.completion.dispatchEvent(enter);
-    assert.deepEqual(calls.at(-1), ["Corridor", "Keep connected", false]);
+    editor.strip.dispatchEvent(enter);
+    assert.deepEqual(calls.slice(1), [["save", true], ["save", false], ["cancel"], ["save", false]]);
     assert.equal(enter.defaultPrevented, true);
     assert.equal(escape.defaultPrevented, true);
-    editor.closePolygonTextEditor();
-    assert.equal(editor.strip.hidden, true);
-    assert.equal(editor.completion.hidden, true);
-    assert.equal(editor.hasUnsavedText(), false);
-    editor.showPolygonTextEditor("Habitat areas", { name: "Corridor", note: "Keep connected" });
-    assert.equal(editor.saveAndDraw.hidden, true);
-    assert.equal(editor.hasUnsavedText(), false);
+    editor.focusTextField("note");
+    assert.equal(document.activeElement, editor.polygonNote);
 });
 
 /**
