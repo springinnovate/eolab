@@ -57,6 +57,7 @@
 .annotation-field textarea { min-width: 0; width: 100%; font: inherit; padding: 0.3rem; }
 .annotation-field textarea { resize: vertical; }
 .annotation-actions button { font-size: 0.85rem; padding: 0.3rem 0.6rem; }
+.annotation-note-preview { display: block; max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; text-align: left; font: inherit; margin-top: 0.4rem; }
 .annotation-layer-controls [hidden],
 .annotation-layer-actions [hidden],
 .annotation-editor-strip[hidden] { display: none; }

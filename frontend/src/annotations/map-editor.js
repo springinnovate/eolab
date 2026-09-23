@@ -18,11 +18,10 @@ export class AnnotationMapEditor {
      * @param {(index:number)=>void} options.onDelete Delete a vertex or the first-vertex polygon.
      * @param {()=>void} options.onSave Save the current draft.
      * @param {()=>void} options.onCancel Discard the current draft.
-     * @param {(name:string,note:string)=>void} options.onTextChange Autosave the completed polygon's text.
-     * @param {()=>void} options.onDrawAnother Start another polygon in the completed polygon's layer.
-     * @param {()=>void} options.onDone Close completion without undoing the polygon.
+     * @param {(name:string,note:string,drawAnother:boolean)=>void} options.onSaveText Commit the text, optionally starting another polygon.
+     * @param {()=>void} options.onCancelText Discard text edits without undoing saved geometry.
      */
-    constructor({ leaflet, map, labelLayout, onAdd, onInsert, onMove, onDelete, onSave, onCancel, onTextChange, onDrawAnother, onDone }) {
+    constructor({ leaflet, map, labelLayout, onAdd, onInsert, onMove, onDelete, onSave, onCancel, onSaveText, onCancelText }) {
         this.leaflet = leaflet;
         this.map = map;
         this.onInsert = onInsert;
@@ -82,13 +81,22 @@ export class AnnotationMapEditor {
         this.polygonNote.rows = 2;
         this.polygonNote.maxLength = 10000;
         noteField.append(noteLabel, this.polygonNote);
-        const changeText = () => onTextChange(this.polygonName.value, this.polygonNote.value);
-        this.polygonName.addEventListener("input", changeText);
-        this.polygonNote.addEventListener("input", changeText);
+        const saveText = drawAnother => onSaveText(this.polygonName.value, this.polygonNote.value, drawAnother);
         const completedActions = this.document.createElement("div");
         completedActions.className = "annotation-actions";
-        completedActions.append(this.button("Draw another polygon", onDrawAnother), this.button("Done", onDone));
-        this.completion.append(nameField, noteField, completedActions);
+        this.saveAndDraw = this.button("Save and draw another", () => saveText(true));
+        completedActions.append(this.button("Save", () => saveText(false)), this.button("Cancel", onCancelText), this.saveAndDraw);
+        this.textHelp = this.document.createElement("p");
+        this.textHelp.textContent = "Name and notes are shared only when you save. Cancel keeps the saved polygon unchanged.";
+        this.textError = this.document.createElement("p");
+        this.textError.className = "annotation-error";
+        this.textError.setAttribute("role", "alert");
+        this.completion.append(nameField, noteField, completedActions, this.textHelp, this.textError);
+        this.completion.addEventListener("keydown", event => {
+            if (event.key === "Enter" && (event.ctrlKey || event.metaKey || event.target === this.polygonName)) {
+                event.preventDefault(); event.stopPropagation(); saveText(false);
+            }
+        });
         this.strip.append(this.heading, this.draftControls, this.completion);
         map.getContainer().append(this.strip);
         leaflet.DomEvent.disableClickPropagation(this.strip);
@@ -112,7 +120,7 @@ export class AnnotationMapEditor {
             } else if (!this.completion.hidden && event.key === "Escape") {
                 event.preventDefault();
                 event.stopPropagation();
-                onDone();
+                onCancelText();
             }
         };
         this.cancelDrag = () => {
@@ -402,28 +410,39 @@ export class AnnotationMapEditor {
     }
 
     /**
-     * Offer naming and another drawing after geometry has been committed.
-     * The owner ends draft mode before calling this; text changes are autosaved by callbacks.
+     * Edit a private copy of a saved polygon's name and notes; typing never changes the polygon.
+     * Select the name once on entry, leaving later cursor placement to the user.
      * @param {string} layerName Destination layer's display name.
-     * @param {import("./model.js").AnnotationPolygon} polygon Newly committed polygon.
+     * @param {import("./model.js").AnnotationPolygon} polygon Saved polygon to edit.
+     * @param {boolean} [newlyAdded=false] Offer repeat drawing after a new polygon.
      * @return {void}
      */
-    showCompletion(layerName, polygon) {
-        this.heading.textContent = `Polygon added to ${layerName}`;
+    showPolygonTextEditor(layerName, polygon, newlyAdded = false) {
+        this.previousFocus = this.document.activeElement;
+        this.heading.textContent = newlyAdded ? `Polygon added to ${layerName}` : `Edit name and notes in ${layerName}`;
         this.draftControls.hidden = true;
         this.completion.hidden = false;
         this.strip.hidden = false;
         this.polygonName.value = polygon.name;
         this.polygonNote.value = polygon.note;
+        this.originalText = { name: polygon.name, note: polygon.note };
+        this.saveAndDraw.hidden = !newlyAdded;
+        this.textError.textContent = "";
         this.polygonName.focus({ preventScroll: true });
         this.polygonName.select();
     }
 
-    /** Close completion and focus the drawing entry, or the map if that control was replaced. @return {void} */
-    closeCompletion() {
+    /** Whether text differs from the values copied when this editor opened. @return {boolean} */
+    hasUnsavedText() {
+        return !this.completion.hidden && (this.polygonName.value !== this.originalText.name || this.polygonNote.value !== this.originalText.note);
+    }
+
+    /** Close text editing and return focus to its entry control, or the map. @return {void} */
+    closePolygonTextEditor() {
         this.completion.hidden = true;
         this.strip.hidden = true;
-        const target = this.previousFocus?.isConnected ? this.previousFocus : this.map.getContainer();
+        const target = this.previousFocus?.isConnected && this.previousFocus.getClientRects().length
+            ? this.previousFocus : this.map.getContainer();
         target.focus({ preventScroll: true });
     }
 

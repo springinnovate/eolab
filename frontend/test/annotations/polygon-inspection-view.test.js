@@ -17,7 +17,7 @@ test("details preserve plain text, provide only owner actions and allow choosing
     const controls = Object.create(AnnotationLayerControls.prototype);
     controls.document = { createElement: tag => new Element(tag) };
     controls.inspection = new Element("section");
-    controls.actions = { edit: id => actions.push(["edit", id]), removePolygon: id => actions.push(["delete", id]) };
+    controls.actions = { edit: id => actions.push(["edit", id]), editText: id => actions.push(["text", id]), removePolygon: id => actions.push(["delete", id]) };
     const own = { layerId: "l", layerName: "Habitats", canEdit: true, polygon: { id: "p", name: "<b>River</b>", note: "First\nSecond", contributor: "Lee" } };
     const peer = { ...own, canEdit: false, polygon: { ...own.polygon, id: "other", contributor: "Maria" } };
     controls.showPolygonInspection(peer, [peer, own], index => actions.push(["select", index]));
@@ -30,13 +30,28 @@ test("details preserve plain text, provide only owner actions and allow choosing
     assert.deepEqual(actions, [["select", 1]]);
     controls.showPolygonInspection(own, [peer, own], () => {});
     const buttons = controls.inspection.children.find(child => child.tag === "div").children;
-    buttons[0].dispatchEvent(new Event("click")); buttons[2].dispatchEvent(new Event("click"));
-    assert.deepEqual(actions.slice(1), [["edit", "p"], ["delete", "p"]]);
+    buttons[0].dispatchEvent(new Event("click")); buttons[1].dispatchEvent(new Event("click")); buttons[2].dispatchEvent(new Event("click"));
+    assert.deepEqual(actions.slice(1), [["edit", "p"], ["text", "p"], ["delete", "p"]]);
     const retained = controls.inspection.children[0];
     controls.showPolygonInspection(own, [peer, own], () => {});
     assert.equal(controls.inspection.children[0], retained, "unchanged data preserves the focused controls");
     controls.clearPolygonInspection();
     assert.equal(controls.inspection.hidden, true);
+});
+
+test("polygon rows open the same text editor from name and note without directly changing saved data", () => {
+    const actions = [];
+    const controls = Object.create(AnnotationLayerControls.prototype);
+    controls.document = { createElement: tag => Object.assign(new Element(tag), { dataset: {}, classList: { add() {} } }) };
+    controls.actions = { editText: id => actions.push(id) };
+    const polygon = { id: "p", name: "River", note: "First\nSecond" };
+    const before = structuredClone(polygon);
+    const row = controls.polygonRow(polygon);
+    row.children[0].dispatchEvent(new Event("click"));
+    row.children[2].dispatchEvent(new Event("click"));
+    assert.deepEqual(actions, ["p", "p"]);
+    assert.deepEqual(polygon, before);
+    assert.equal(row.children.some(child => child.tag === "input" || child.tag === "textarea"), false);
 });
 
 test("selection emphasis runs only on explicit selection and respects reduced motion", () => {

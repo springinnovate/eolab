@@ -11,6 +11,7 @@ export class AnnotationLayerControls {
      * @param {()=>void} actions.open Reveal this layer in the annotation panel.
      * @param {()=>void} actions.add Start drawing a polygon.
      * @param {(id:string)=>void} actions.edit Edit a saved polygon.
+     * @param {(id:string)=>void} actions.editText Open a private name/note draft for a saved polygon.
      * @param {()=>void} actions.filter Open the layer filter.
      * @param {(id:string)=>void} actions.removePolygon Delete a polygon with Undo.
      * @param {(rebuild?:boolean)=>void} actions.change Save changed fields and update the map.
@@ -134,13 +135,7 @@ export class AnnotationLayerControls {
             const actions = this.document.createElement("div");
             actions.className = "annotation-actions";
             actions.append(this.button("Edit polygon", () => this.actions.edit(polygon.id)),
-                this.button("Edit name or notes", () => {
-                    this.polygons.open = true;
-                    this.refresh(polygon.id);
-                    const row = this.polygonList.querySelector(`[data-polygon-id="${polygon.id}"]`);
-                    row.querySelector("textarea").parentElement.hidden = false;
-                    row.scrollIntoView({ block: "nearest" });
-                }),
+                this.button("Edit name or notes", () => this.actions.editText(polygon.id)),
                 this.button("Delete polygon", () => this.actions.removePolygon(polygon.id)));
             this.inspection.append(actions);
         }
@@ -236,7 +231,7 @@ export class AnnotationLayerControls {
 
     /**
      * Refresh polygon rows and appearance after a committed edit or undo.
-     * @param {string|null} [focusPolygon=null] Polygon whose name should receive focus.
+     * @param {string|null} [focusPolygon=null] Polygon whose name button should receive focus.
      * @return {void}
      */
     refresh(focusPolygon = null) {
@@ -259,7 +254,7 @@ export class AnnotationLayerControls {
         }
         if (focusPolygon) {
             this.polygons.open = true;
-            this.polygonList.querySelector(`[data-polygon-id="${focusPolygon}"] input`)?.focus();
+            this.polygonList.querySelector(`[data-polygon-id="${focusPolygon}"] button`)?.focus();
         }
     }
 
@@ -324,33 +319,22 @@ export class AnnotationLayerControls {
     }
 
     /**
-     * Render a polygon's name, geometry actions and optional text note.
+     * Show saved text with actions to edit name/notes together or edit the polygon shape.
      * @param {import("./model.js").AnnotationPolygon} polygon Saved polygon.
      * @return {HTMLLIElement} Annotation row.
      */
     polygonRow(polygon) {
         const row = this.document.createElement("li");
         row.dataset.polygonId = polygon.id;
-        const name = this.createLabeledInput("Polygon name", "text", polygon.name, value => {
-            polygon.name = value.trim() || "Polygon";
-            this.actions.change(false);
-        }, 160);
+        const name = this.button(polygon.name, () => this.actions.editText(polygon.id));
+        name.title = "Edit polygon name and notes";
         const actions = this.document.createElement("div");
         actions.className = "annotation-actions";
-        const note = this.document.createElement("label");
-        note.className = "annotation-field";
-        note.hidden = !polygon.note;
-        const label = this.document.createElement("span");
-        label.textContent = "Note";
-        const textarea = this.document.createElement("textarea");
-        textarea.rows = 3;
-        textarea.maxLength = 10000;
-        textarea.value = polygon.note;
-        textarea.addEventListener("input", () => { polygon.note = textarea.value; this.actions.change(false); });
-        note.append(label, textarea);
-        actions.append(this.button("Edit", () => this.actions.edit(polygon.id)), this.button(polygon.note ? "Edit note" : "Add note", () => {
-            note.hidden = false; textarea.focus();
-        }), this.button("Delete", () => this.actions.removePolygon(polygon.id)));
+        const note = this.button(polygon.note || "Add note", () => this.actions.editText(polygon.id));
+        note.classList.add("annotation-note-preview");
+        note.title = "Edit polygon name and notes";
+        actions.append(this.button("Edit shape", () => this.actions.edit(polygon.id)),
+            this.button("Delete", () => this.actions.removePolygon(polygon.id)));
         row.append(name, actions, note);
         return row;
     }
